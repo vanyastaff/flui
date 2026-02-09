@@ -2,43 +2,6 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## AI Assistant Guidelines
-
-### Constitution Compliance
-
-**CRITICAL:** All work must align with `.specify/memory/constitution.md` (v1.2.0). Key principles:
-
-1. **Test-First for Public APIs** - Write tests BEFORE implementation, verify red state
-2. **Type Safety First** - Foundation crates MAY use generics, Application crates MUST use concrete types
-3. **Never use println!/eprintln!** - Always use `tracing` for logging
-4. **On-demand rendering** - Use `ControlFlow::Wait`, not constant 60 FPS loops
-5. **Coverage Requirements**: Core ≥80%, Platform ≥70%, Widget ≥85%
-6. **ID Offset Pattern**: Slab uses 0-based, IDs use 1-based (NonZeroUsize)
-
-### Speckit Workflow
-
-**For large changes** (new features, breaking changes, architecture shifts):
-1. Check if similar work exists in `specs/` directory
-2. Create specification with `/speckit.plan` command
-3. Follow spec → plan → tasks → implementation workflow
-4. See `specs/dev/` for current example of complete workflow
-
-### MCP Servers
-
-**Context7** - Library documentation (wgpu, lyon, glam, etc.):
-- `mcp__context7__resolve_library_id(libraryName)` - Get library ID
-- `mcp__context7__get_library_docs(context7CompatibleLibraryID, topic, mode)` - Fetch docs
-- Use proactively when external library is mentioned
-
-**Filesystem MCP** - Advanced operations:
-- `mcp__filesystem__read_multiple_files` - Batch read (preferred for multiple files)
-- `mcp__filesystem__directory_tree` - JSON directory structure
-- `mcp__filesystem__search_files` - Glob-based search
-
-**Sequential Thinking** - Complex problem solving:
-- `mcp__sequential_thinking__sequentialthinking` - Multi-step reasoning
-- Use for architecture decisions, refactorings, debugging
-
 ## Project Overview
 
 FLUI is a modular, Flutter-inspired declarative UI framework for Rust, featuring the proven three-tree architecture (View → Element → Render) with modern Rust idioms. Built with wgpu for high-performance GPU-accelerated rendering.
@@ -57,121 +20,59 @@ View Tree (immutable) → Element Tree (mutable) → Render Tree (layout/paint)
 - **Tools:** `flui-devtools`, `flui-cli`, `flui-build`
 - **Layer System:** `flui-layer` (compositing), `flui-semantics` (accessibility)
 
-### Reference Sources
-
-**Flutter (`.flutter/`)** - UI framework architecture reference:
-- `.flutter/src/rendering/` - RenderObject implementations
-- `.flutter/src/widgets/` - Widget and Element implementations
-- `.flutter/rendering.dart`, `widgets.dart`, `animation.dart` - API overview
-- **Usage:** Three-tree architecture, widget patterns, layout algorithms
-
-**GPUI (`.gpui/`)** - Rust UI framework and platform patterns reference:
-- `.gpui/src/platform/` - Platform abstraction (Windows, macOS, Linux)
-- `.gpui/src/platform.rs` - Platform trait design
-- `.gpui/src/window.rs` - Window management patterns
-- `.gpui/src/executor.rs` - Async executor implementation
-- **Usage:** Platform trait patterns, callback registry, type erasure, interior mutability
-
-**When to reference:**
-- Check Flutter for UI architecture and widget patterns
-- Check GPUI for platform abstraction and Rust-specific patterns
-- Adapt both to FLUI's type-safe idioms (Arity system, Ambassador delegation, no nullability)
-
-### Development Specs and Plans
-
-`specs/` directory contains feature specifications and implementation plans:
-- `specs/dev/` - Current active development (flui-platform MVP)
-  - `spec.md` - Feature specification with user stories and requirements
-  - `plan.md` - Implementation plan with phases and technical approach
-  - `research.md` - Research findings and architectural decisions
-  - `quickstart.md` - Developer quick start guide
-  - `tasks.md` - Detailed task breakdown (125 tasks organized by phase)
-
-**When to check specs:**
-- Before implementing new features
-- When modifying existing platform code
-- To understand current priorities (P1 = MVP critical, P2 = important, P3 = nice-to-have)
-- For task assignment and parallel work opportunities (marked with `[P]`)
-
 ### Current Development Focus
 
 **IMPORTANT:** Workspace in platform integration phase. Many high-level crates temporarily disabled in `Cargo.toml`.
 
-**Active crates (Phase 1-2):**
+**Active crates:**
 - Foundation: `flui-types`, `flui-foundation`, `flui-tree`
 - Platform: `flui-platform` (MVP development - cross-platform support)
 - Core: `flui-layer`, `flui-semantics`, `flui-interaction`, `flui-painting`
 - Framework: `flui-scheduler`, `flui-engine`, `flui-log`, `flui-app`
+- Tools: `flui-build` (async PlatformBuilder)
 
 **Temporarily disabled until integration complete:**
-- `flui-rendering`, `flui-view`, `flui-animation`, `flui-reactivity`, `flui-widgets`, `flui-devtools`, `flui-cli`, `flui-build`
+- `flui-rendering`, `flui-view`, `flui-animation`, `flui-reactivity`, `flui-devtools`, `flui-cli`
 
-**Current Priority**: Complete flui-platform MVP (see `specs/dev/` for detailed plan and tasks)
+**Current Priority**: Complete flui-platform MVP
+
+## Constitution Compliance
+
+**CRITICAL:** All work must align with `.specify/memory/constitution.md` (v1.2.0). Key principles:
+
+1. **Test-First for Public APIs** - Write tests BEFORE implementation, verify red state
+2. **Type Safety First** - Foundation crates MAY use generics, Application crates MUST use concrete types
+3. **Never use println!/eprintln!** - Always use `tracing` for logging
+4. **On-demand rendering** - Use `ControlFlow::Wait`, not constant 60 FPS loops
+5. **Coverage Requirements**: Core ≥80%, Platform ≥70%, Widget ≥85%
+6. **ID Offset Pattern**: Slab uses 0-based, IDs use 1-based (NonZeroUsize)
 
 ## Essential Build Commands
 
 ```bash
-# Quick commands
+# Workspace commands
 cargo build --workspace
 cargo test --workspace
 cargo clippy --workspace -- -D warnings
 cargo fmt --all
-cargo check -p flui-rendering
 
-# Dependency order (Foundation → Core → Rendering)
+# Single crate
+cargo check -p flui-types
+cargo test -p flui-tree
+cargo test -p flui-tree test_name -- --nocapture
+RUST_LOG=debug cargo test -p flui-platform
+
+# Dependency build order (Foundation → Core → Rendering)
 cargo build -p flui-types
 cargo build -p flui-foundation
 cargo build -p flui-tree
-cargo build -p flui-rendering
+cargo build -p flui-platform
 
-# Test specific crate
-cargo test -p flui-rendering test_layout_constraints
-cargo test -p flui-rendering -- --nocapture
-RUST_LOG=debug cargo test -p flui-rendering
-```
+# Clean build
+cargo clean && cargo build --workspace
 
-### Skills (`.claude/skills/`)
-
-**Build & Test (user-invocable):**
-```bash
-/build-crate <name>         # Build crate with dependency ordering
-/test-crate <name> [filter] # Test crate with optional test filter
-/lint [crate-name]          # Run clippy + rustfmt checks
-/check-workspace            # Full workspace health check
-/check-tree                 # Verify three-tree architecture (runs in Explore agent)
-/deps [crate-name]          # Analyze dependencies, detect conflicts
-/profile [crate-name]       # Profile build times and binary sizes
-/run-example <name> [timeout] # Build and run an example
-/fix-warnings [crate-name]  # Auto-fix compiler warnings
-/new-widget <name> [arity]  # Scaffold a new widget (View + Element + RenderObject)
-```
-
-**Auto-loaded knowledge (Claude uses automatically when relevant):**
-- `api-conventions` - FLUI API design patterns (arity, ambassador, ID offset)
-- `render-object` - RenderObject/RenderBox implementation reference
-- `platform-impl` - Platform abstraction patterns and native API reference
-
-### Agents (`.claude/agents/`)
-
-| Agent | Model | Purpose |
-|-------|-------|---------|
-| `rust-expert` | Opus | Rust language: traits, lifetimes, unsafe, generics, borrow checker |
-| `platform-specialist` | Opus | Platform code: Win32, AppKit, windowing, text systems |
-| `flutter-architect` | Opus | Adapt Flutter patterns to FLUI: layout, paint, widget lifecycle |
-| `debugger` | Sonnet | Debug compilation errors, runtime panics, test failures |
-| `code-reviewer` | Sonnet | Code review with FLUI conventions checklist (has persistent memory) |
-| `test-engineer` | Sonnet | Write tests, improve coverage, test-first methodology |
-| `performance-tuner` | Sonnet | Profile and optimize: layout, rendering, memory, build times |
-| `docs-writer` | Haiku | Write rustdoc documentation and API examples |
-
-### Slash Commands (legacy, migrated to skills)
-
-**Speckit workflow (feature planning and specs):**
-```bash
-/speckit.constitution       # Create/update constitution
-/speckit.plan               # Create implementation plan (spec + research + plan)
-/speckit.clarify            # Identify spec ambiguities
-/speckit.tasks              # Generate task breakdown
+# Check workspace membership
+cargo metadata --format-version 1 | grep -A 5 "workspace_members"
 ```
 
 ## Code Architecture
@@ -199,20 +100,18 @@ pub trait RenderBox<A: Arity>: RenderObject {
 }
 ```
 
-**Arity System:**
+**Arity System** (type-safe child count):
 - `Leaf` - No children (Text, Image)
 - `Single` - Exactly one child (Center, Padding)
 - `Optional` - Zero or one child (Container)
 - `Variable` - N children (Row, Column, Stack)
 
-**BoxChild Container:**
 ```rust
 pub struct RenderPadding {
-    child: BoxChild<Single>,  // Type-safe single child
+    child: BoxChild<Single>,     // Type-safe single child
 }
-
 pub struct RenderFlex {
-    children: BoxChild<Variable>,  // Type-safe variable children
+    children: BoxChild<Variable>, // Type-safe variable children
 }
 ```
 
@@ -224,13 +123,18 @@ Three phases: **Build** → **Layout** → **Paint**
 - `LayoutPhase` - Size computation via `RenderTree`
 - `PaintPhase` - Layer generation via `PaintContext`
 
+### RenderTree Lifecycle
+
+**Setup:** Create → `attach(owner)` → Set `parent_data`
+**Layout:** Check `needs_layout()` → `layout(constraints)` → `perform_layout()` → Clear flag
+**Paint:** `paint(context)` → Generate layers → Compositor
+**Teardown:** `detach()` → Drop
+
 ### Platform Abstraction (flui-platform)
 
-**CRITICAL for MVP**: Cross-platform window management, text systems, and event handling.
+Cross-platform window management, text systems, and event handling:
 
-**Architecture:**
 ```rust
-// Platform trait with lifecycle and abstractions
 pub trait Platform {
     fn run(&self, ready: Box<dyn FnOnce()>);
     fn open_window(&self, options: WindowOptions) -> Result<Box<dyn PlatformWindow>>;
@@ -239,54 +143,31 @@ pub trait Platform {
     fn clipboard(&self) -> Arc<dyn PlatformClipboard>;
 }
 
-// Get platform with automatic detection
 let platform = current_platform(); // Windows, macOS, or Headless
 ```
 
 **Implementations:**
-- **WindowsPlatform** - Native Win32 API (100% complete)
-- **MacOSPlatform** - Native AppKit/Cocoa (90% complete, needs hardware testing)
-- **HeadlessPlatform** - Testing/CI without GPU (100% complete)
+- **WindowsPlatform** - Native Win32 API
+- **MacOSPlatform** - Native AppKit/Cocoa
+- **HeadlessPlatform** - Testing/CI without GPU
 - **WinitPlatform** - Cross-platform fallback (in progress)
 
-**Key Patterns (from GPUI):**
-- **Callback registry** - `on_quit()`, `on_window_event()`, `on_reopen()` (see `.gpui/src/platform.rs:166-279`)
-- **Type erasure** - `Box<dyn PlatformWindow>`, `Arc<dyn PlatformTextSystem>` for platform-agnostic code
-- **Interior mutability** - `Arc<Mutex<T>>` for thread-safe `&self` methods (improved from GPUI's `Rc<RefCell<T>>`)
-- **Executor pattern** - Background (tokio) + Foreground (flume channel) split
-- **W3C events** - Use `ui-events` crate for cross-platform consistency (not GPUI-specific)
+**Key patterns:** Callback registry (`on_quit()`, `on_window_event()`), type erasure (`Box<dyn PlatformWindow>`), interior mutability (`Arc<Mutex<T>>`), W3C events via `ui-events` crate.
 
-**Text System Integration:**
-- Windows: DirectWrite for font loading, shaping, metrics
-- macOS: Core Text equivalent
-- Returns glyph positions for flui-painting Canvas API
-- Critical blocker for MVP (1-2 weeks estimated)
+### Build System (flui-build)
 
-See `specs/dev/` for detailed platform MVP plan and tasks.
-
-## Logging and Debugging
-
-**CRITICAL:** Always use `tracing`, NEVER `println!` or `eprintln!`.
+Async cross-platform build pipeline with sealed `PlatformBuilder` trait:
 
 ```rust
-// Initialize
-use tracing_forest::ForestLayer;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-
-tracing_subscriber::registry()
-    .with(ForestLayer::default())
-    .init();
-
-// Use #[instrument] for automatic timing
-#[tracing::instrument]
-fn render_frame(num: u32) {
-    tracing::info!("Starting frame");
+#[allow(async_fn_in_trait)]
+pub trait PlatformBuilder: private::Sealed + Send + Sync {
+    async fn build_rust(&self, ctx: &BuilderContext) -> BuildResult<BuildArtifacts>;
+    async fn build_platform(&self, ctx: &BuilderContext, artifacts: &BuildArtifacts) -> BuildResult<FinalArtifacts>;
+    async fn clean(&self, ctx: &BuilderContext) -> BuildResult<()>;
 }
-
-// Manual logging
-tracing::debug!(count = 1, "Layout complete");
-tracing::warn!("Layout phase skipped");
 ```
+
+Builders: `AndroidBuilder`, `IosBuilder`, `DesktopBuilder`, `WebBuilder`. Uses typestate pattern (`BuilderContextBuilder<P, Pr>`) for compile-time validation.
 
 ## Important Codebase Conventions
 
@@ -295,12 +176,9 @@ tracing::warn!("Layout phase skipped");
 **CRITICAL:** Slab uses 0-based indices, IDs use 1-based (NonZeroUsize):
 
 ```rust
-// Inserting into Slab:
 let slab_index = self.nodes.insert(node);
 let id = ElementId::new(slab_index + 1)  // +1 for NonZeroUsize
-
-// Accessing from Slab:
-self.nodes.get(element_id.get() - 1)  // -1 to get slab index
+self.nodes.get(element_id.get() - 1)     // -1 to get slab index
 ```
 
 Applies to: `ViewId`, `ElementId`, `RenderId`, `LayerId`, `SemanticsId`.
@@ -308,12 +186,8 @@ Applies to: `ViewId`, `ElementId`, `RenderId`, `LayerId`, `SemanticsId`.
 ### Ambassador Delegation Pattern
 
 ```rust
-use ambassador::delegatable_trait;
-
 #[delegatable_trait]
-pub trait RenderObject {
-    fn mark_needs_layout(&mut self);
-}
+pub trait RenderObject { fn mark_needs_layout(&mut self); }
 
 #[derive(Delegate)]
 #[delegate(RenderObject, target = "child")]
@@ -322,162 +196,81 @@ pub struct RenderPadding {
 }
 ```
 
-### RenderTree Lifecycle
+### Logging
 
-**Setup:** Create → `attach(owner)` → Set `parent_data`
-**Layout:** Check `needs_layout()` → `layout(constraints)` → `perform_layout()` → Clear flag
-**Paint:** `paint(context)` → Generate layers → Compositor
-**Teardown:** `detach()` → Drop
-
-### Constraints and Sizing
+**CRITICAL:** Always use `tracing`, NEVER `println!` or `eprintln!`.
 
 ```rust
-// Tight constraints (exact size)
-let tight = Constraints::tight(Size::new(100.0, 100.0));
+tracing_subscriber::registry()
+    .with(ForestLayer::default())
+    .init();
 
-// Loose constraints (max size)
-let loose = Constraints::loose(Size::new(200.0, 200.0));
-
-// Box constraints
-let box_constraints = BoxConstraints::new(
-    min_width: 0.0,
-    max_width: 100.0,
-    min_height: 0.0,
-    max_height: 100.0,
-);
-```
-
-## Common Development Patterns
-
-### Creating a RenderObject
-
-```rust
-use flui_rendering::{RenderObject, RenderBox, BoxChild, Arity};
-use flui_types::{Size, Constraints};
-
-pub struct RenderCustom {
-    child: BoxChild<Single>,
-    size: Size,
-    needs_layout: bool,
-}
-
-impl RenderObject for RenderCustom {
-    fn attach(&mut self, owner: PipelineOwner) {
-        self.child.attach(owner);
-    }
-
-    fn mark_needs_layout(&mut self) {
-        self.needs_layout = true;
-    }
-
-    fn layout(&mut self, constraints: Constraints) {
-        if !self.needs_layout { return; }
-        self.perform_layout();
-        self.needs_layout = false;
-    }
-}
-
-impl RenderBox<Single> for RenderCustom {
-    fn perform_layout(&mut self) {
-        let child_size = self.child.layout(constraints);
-        self.size = constraints.constrain(child_size);
-    }
+#[tracing::instrument]
+fn render_frame(num: u32) {
+    tracing::info!("Starting frame");
 }
 ```
 
-### Hit Testing
+## Reference Sources
 
-```rust
-use flui_interaction::{HitTestResult, HitTestEntry};
+**Flutter (`.flutter/`)** - UI framework architecture reference:
+- `.flutter/src/rendering/` - RenderObject implementations
+- `.flutter/src/widgets/` - Widget and Element implementations
+- **Usage:** Three-tree architecture, widget patterns, layout algorithms
 
-impl RenderCustom {
-    pub fn hit_test(&self, result: &mut HitTestResult, position: Offset) -> bool {
-        if !self.size.contains(position) { return false; }
+**GPUI (`.gpui/`)** - Rust UI framework and platform patterns reference:
+- `.gpui/src/platform/` - Platform abstraction (Windows, macOS, Linux)
+- `.gpui/src/platform.rs` - Platform trait design
+- `.gpui/src/window.rs` - Window management, `.gpui/src/executor.rs` - Async executor
+- **Usage:** Platform trait patterns, callback registry, type erasure, interior mutability
 
-        // Test children first (reverse paint order)
-        if let Some(child) = &self.child {
-            if child.hit_test(result, position) { return true; }
-        }
+**When to reference:**
+- Check Flutter for UI architecture and widget patterns
+- Check GPUI for platform abstraction and Rust-specific patterns
+- Adapt both to FLUI's type-safe idioms (Arity system, Ambassador delegation, no nullability)
 
-        result.add(HitTestEntry::new(self.id()));
-        true
-    }
-}
-```
+## Skills (`.claude/skills/`)
+
+These are Rust-focused audit and optimization skills (user-invocable via `/skill-name`):
+
+- `/rust` - Performance optimization (memory, ownership, iterators, async)
+- `/rust-idioms` - Idiomatic patterns (types, error handling, traits, modules, conversions)
+- `/rust-best-practices` - Apollo GraphQL Rust best practices (borrowing, errors, tests)
+- `/rust-async-patterns` - Async programming with Tokio, concurrent patterns
+- `/rust-pro` - Production-ready Rust 1.75+ (modern async, type system, systems programming)
+- `/rust-systems` - Systems programming patterns (Cargo workspaces, naming, builders)
 
 ## Key Dependencies
 
-**Core dependencies:**
-- **wgpu 25.x** - GPU API (stay on 25.x, 26.0+ has codespan-reporting issues - see https://github.com/gfx-rs/wgpu/issues/7915)
-- **parking_lot 0.12** - High-performance sync primitives (2-3x faster than std)
-- **tokio 1.43** - Async runtime (LTS until March 2026)
-- **tracing** - Structured logging (MANDATORY, never println!)
-- **ambassador 0.4.2** - Trait delegation for RenderObject traits
-- **slab** - Tree node storage with O(1) insert/remove
-- **bon 3.8** - Builder pattern for complex widgets
+**Core:** wgpu 25.x (stay on 25.x, 26.0+ broken), parking_lot 0.12, tokio 1.43, tracing, ambassador 0.4.2, slab, bon 3.8
 
-**Platform dependencies:**
-- **winit 0.30.12** - Cross-platform windowing (fallback implementation)
-- **arboard 3.4** - Cross-platform clipboard
-- **windows 0.52** - Win32 API bindings (WindowsPlatform)
-- **cocoa 0.26.0** - AppKit bindings (MacOSPlatform)
-- **ui-events** - W3C-standard event types
-- **keyboard-types** - Platform-agnostic keyboard events
+**Platform:** winit 0.30.12, arboard 3.4, windows 0.52 (Win32), cocoa 0.26.0 (AppKit), ui-events (W3C events), keyboard-types
 
-**Engine-only dependencies:**
-- **glam 0.30** - GPU math (vectors, matrices)
-- **lyon** - Path tessellation to triangles
-- **glyphon** - SDF text rendering
-- **cosmic-text** - Text layout and shaping
-- **guillotiere** - Texture atlas packing
+**Engine-only:** glam 0.30, lyon, glyphon, cosmic-text, guillotiere
+
+**Minimum Rust version:** 1.91 (set in workspace `rust-version`)
 
 ## Git Workflow
 
-Use conventional commits:
+Conventional commits: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`
+
 ```bash
 git commit -m "feat: Add new widget
-- Implementation details
-- Additional changes"
+- Implementation details"
 ```
 
-Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`
+**NEVER do `git checkout`, `git reset`, `git stash`, or any destructive git operations without explicit user permission.**
 
-### CRITICAL Git Rules
+## Speckit Workflow
 
-**NEVER do `git checkout`, `git reset`, `git stash`, or any destructive git operations without explicit user permission.** Always ask first. Lost uncommitted work is unrecoverable.
+**For large changes** (new features, breaking changes, architecture shifts):
+1. Check if similar work exists in `specs/` directory
+2. Create specification with `/speckit.plan` command
+3. Follow spec → plan → tasks → implementation workflow
 
 ## Troubleshooting
 
-```bash
-# Clean build
-cargo clean && cargo build --workspace
-
-# Check workspace
-cargo metadata --format-version 1 | grep -A 5 "workspace_members"
-
-# Verify crate
-cargo check -p flui-rendering
-cargo clippy -p flui-rendering -- -D warnings
-```
-
-**Common errors:**
-- "package not found" → Check `Cargo.toml` `[workspace.members]`
+- "package not found" → Check `Cargo.toml` `[workspace.members]` (many crates disabled)
 - "trait not in scope" → Check prelude: `use flui_rendering::prelude::*;`
 - "mismatched types" with Arity → Verify `BoxChild<Single>` matches `impl RenderBox<Single>`
-
-**wgpu issues:** Stay on 25.x (see https://github.com/gfx-rs/wgpu/issues/7915)
-
-## Development Workflow Tips
-
-1. **Read constitution first** - `.specify/memory/constitution.md` governs all development
-2. **Check workspace state** - Many crates disabled in `Cargo.toml`, verify before building
-3. **Test-first for public APIs** - Write failing tests BEFORE implementation
-4. **Use tracing, NEVER println** - Constitution requirement, essential for debugging
-5. **Check current specs** - See `specs/dev/` for active development plans
-6. **Enable logging** - `RUST_LOG=debug` or `RUST_LOG=trace` catches issues early
-7. **Build in dependency order** - Foundation → Platform → Core → Rendering → Widget → App
-8. **Reference sources** - Check `.flutter/` for UI patterns, `.gpui/` for platform/Rust patterns
-9. **Use Context7 proactively** - Fetch docs for external libraries (wgpu, winit, etc.)
-10. **Batch file operations** - `read_multiple_files` for efficiency
-11. **Use Speckit for large changes** - New features or breaking changes need spec → plan → tasks workflow
-12. **Follow ID Offset Pattern** - Slab index + 1 = ID, ID - 1 = Slab index (all ID types)
+- **wgpu issues:** Stay on 25.x (see https://github.com/gfx-rs/wgpu/issues/7915)
