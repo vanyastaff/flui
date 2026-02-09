@@ -1,21 +1,45 @@
 //! Windows event conversion to W3C ui-events (0.3 API)
 //!
 //! Converts Win32 messages to W3C-compliant PointerEvent using ui-events 0.3.
+//!
+//! These functions are ready for use but not yet wired into `window_proc`
+//! (Phase 2: event dispatch integration).
 
+// All items in this module are prepared for Phase 2 integration.
+#![allow(dead_code)]
+
+use std::sync::LazyLock;
 use std::time::Instant;
 use windows::Win32::Foundation::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 
 use super::util::*;
-use crate::traits::{
-    device_to_logical, offset_from_coords, Key, KeyboardEvent, Modifiers, PlatformInput, ScrollDelta,
-};
+use crate::traits::{device_to_logical, Key, KeyboardEvent, PlatformInput, ScrollDelta};
 use dpi::{PhysicalPosition, PhysicalSize};
 use keyboard_types::Modifiers as KeyboardModifiers;
 use ui_events::pointer::{
     PointerButton, PointerButtonEvent, PointerEvent, PointerId, PointerInfo, PointerState,
     PointerType, PointerUpdate,
 };
+
+/// Process-start epoch for monotonic event timestamps.
+static PROCESS_START: LazyLock<Instant> = LazyLock::new(Instant::now);
+
+/// Get monotonic timestamp in milliseconds since process start.
+#[inline]
+fn event_timestamp_ms() -> u64 {
+    PROCESS_START.elapsed().as_millis() as u64
+}
+
+/// Create a `PointerInfo` for the primary mouse pointer.
+#[inline]
+fn primary_mouse_info() -> PointerInfo {
+    PointerInfo {
+        pointer_id: Some(PointerId::PRIMARY),
+        pointer_type: PointerType::Mouse,
+        persistent_device_id: None,
+    }
+}
 
 // ============================================================================
 // Keyboard Event Conversion
@@ -132,6 +156,34 @@ unsafe fn get_modifiers() -> KeyboardModifiers {
 // Pointer Event Conversion (W3C ui-events 0.3 API)
 // ============================================================================
 
+/// Build a `PointerState` from LPARAM coordinates and scale factor.
+#[inline]
+fn pointer_state(
+    lparam: LPARAM,
+    scale_factor: f32,
+    pressure: f32,
+) -> (PointerState, KeyboardModifiers) {
+    let x = get_x_lparam(lparam);
+    let y = get_y_lparam(lparam);
+    let modifiers = unsafe { get_modifiers() };
+    let logical_x = device_to_logical(x as f32, scale_factor);
+    let logical_y = device_to_logical(y as f32, scale_factor);
+
+    let state = PointerState {
+        time: event_timestamp_ms(),
+        position: PhysicalPosition::new(logical_x as f64, logical_y as f64),
+        buttons: Default::default(),
+        modifiers,
+        count: 1,
+        contact_geometry: PhysicalSize::new(1.0, 1.0),
+        orientation: Default::default(),
+        pressure,
+        tangential_pressure: 0.0,
+        scale_factor: scale_factor as f64,
+    };
+    (state, modifiers)
+}
+
 /// Convert WM_LBUTTONDOWN/UP to W3C PointerEvent
 pub fn mouse_button_event(
     button: PointerButton,
@@ -139,43 +191,17 @@ pub fn mouse_button_event(
     lparam: LPARAM,
     scale_factor: f32,
 ) -> PlatformInput {
-    let x = get_x_lparam(lparam);
-    let y = get_y_lparam(lparam);
-
-    let modifiers = unsafe { get_modifiers() };
-
-    // Convert to logical pixels then to physical for ui-events
-    let logical_x = device_to_logical(x as f32, scale_factor);
-    let logical_y = device_to_logical(y as f32, scale_factor);
-
-    let pointer_info = PointerInfo {
-        pointer_id: Some(PointerId::PRIMARY),
-        pointer_type: PointerType::Mouse,
-        persistent_device_id: None,
-    };
-
-    let state = PointerState {
-        time: Instant::now().elapsed().as_millis() as u64,
-        position: PhysicalPosition::new(logical_x as f64, logical_y as f64),
-        buttons: Default::default(),
-        modifiers,
-        count: 1,
-        contact_geometry: PhysicalSize::new(1.0, 1.0),
-        orientation: Default::default(),
-        pressure: if is_down { 0.5 } else { 0.0 },
-        tangential_pressure: 0.0,
-        scale_factor: scale_factor as f64,
-    };
+    let (state, _) = pointer_state(lparam, scale_factor, if is_down { 0.5 } else { 0.0 });
 
     let event = if is_down {
         PointerEvent::Down(PointerButtonEvent {
-            pointer: pointer_info,
+            pointer: primary_mouse_info(),
             state,
             button: Some(button),
         })
     } else {
         PointerEvent::Up(PointerButtonEvent {
-            pointer: pointer_info,
+            pointer: primary_mouse_info(),
             state,
             button: Some(button),
         })
@@ -186,35 +212,10 @@ pub fn mouse_button_event(
 
 /// Convert WM_MOUSEMOVE to W3C PointerEvent
 pub fn mouse_move_event(lparam: LPARAM, scale_factor: f32) -> PlatformInput {
-    let x = get_x_lparam(lparam);
-    let y = get_y_lparam(lparam);
-
-    let modifiers = unsafe { get_modifiers() };
-
-    let logical_x = device_to_logical(x as f32, scale_factor);
-    let logical_y = device_to_logical(y as f32, scale_factor);
-
-    let pointer_info = PointerInfo {
-        pointer_id: Some(PointerId::PRIMARY),
-        pointer_type: PointerType::Mouse,
-        persistent_device_id: None,
-    };
-
-    let state = PointerState {
-        time: Instant::now().elapsed().as_millis() as u64,
-        position: PhysicalPosition::new(logical_x as f64, logical_y as f64),
-        buttons: Default::default(),
-        modifiers,
-        count: 1,
-        contact_geometry: PhysicalSize::new(1.0, 1.0),
-        orientation: Default::default(),
-        pressure: 0.0,
-        tangential_pressure: 0.0,
-        scale_factor: scale_factor as f64,
-    };
+    let (state, _) = pointer_state(lparam, scale_factor, 0.0);
 
     let event = PointerEvent::Move(PointerUpdate {
-        pointer: pointer_info,
+        pointer: primary_mouse_info(),
         current: state,
         coalesced: Vec::new(),
         predicted: Vec::new(),
@@ -228,35 +229,10 @@ pub fn mouse_wheel_event(wparam: WPARAM, lparam: LPARAM, scale_factor: f32) -> P
     let delta = ((wparam.0 as i32) >> 16) as i16 as f32;
     let lines = delta / 120.0; // WHEEL_DELTA = 120
 
-    let x = get_x_lparam(lparam);
-    let y = get_y_lparam(lparam);
-
-    let modifiers = unsafe { get_modifiers() };
-
-    let logical_x = device_to_logical(x as f32, scale_factor);
-    let logical_y = device_to_logical(y as f32, scale_factor);
-
-    let pointer_info = PointerInfo {
-        pointer_id: Some(PointerId::PRIMARY),
-        pointer_type: PointerType::Mouse,
-        persistent_device_id: None,
-    };
-
-    let state = PointerState {
-        time: Instant::now().elapsed().as_millis() as u64,
-        position: PhysicalPosition::new(logical_x as f64, logical_y as f64),
-        buttons: Default::default(),
-        modifiers,
-        count: 1,
-        contact_geometry: PhysicalSize::new(1.0, 1.0),
-        orientation: Default::default(),
-        pressure: 0.0,
-        tangential_pressure: 0.0,
-        scale_factor: scale_factor as f64,
-    };
+    let (state, _) = pointer_state(lparam, scale_factor, 0.0);
 
     let event = PointerEvent::Scroll(ui_events::pointer::PointerScrollEvent {
-        pointer: pointer_info,
+        pointer: primary_mouse_info(),
         state,
         delta: ScrollDelta::LineDelta(0.0, lines),
     });
@@ -301,14 +277,9 @@ pub fn key_up_event(wparam: WPARAM, lparam: LPARAM) -> PlatformInput {
     })
 }
 
-/// Convert WM_CHAR to text
-pub fn char_to_text(wparam: WPARAM) -> String {
-    let code_point = wparam.0 as u32;
-    if let Some(c) = char::from_u32(code_point) {
-        c.to_string()
-    } else {
-        String::new()
-    }
+/// Convert WM_CHAR to a character
+pub fn char_from_wparam(wparam: WPARAM) -> Option<char> {
+    char::from_u32(wparam.0 as u32)
 }
 
 #[cfg(test)]

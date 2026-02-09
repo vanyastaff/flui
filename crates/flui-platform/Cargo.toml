@@ -70,6 +70,9 @@ default = ["desktop"]
 # Platform features
 desktop = ["winit"]
 
+# Legacy winit backend (deprecated, optional)
+winit-backend = ["winit"]
+
 # Linux display server protocols
 wayland = []
 x11 = []

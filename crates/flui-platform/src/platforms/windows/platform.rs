@@ -19,13 +19,10 @@ use crate::config::WindowConfiguration;
 use crate::executor::{BackgroundExecutor, ForegroundExecutor};
 use crate::shared::PlatformHandlers;
 use crate::traits::*;
-use flui_types::geometry::{Bounds, DevicePixels, Point, Pixels, Size};
+use flui_types::geometry::{Bounds, DevicePixels, Point, Size};
 
-/// Windows platform window class name
-const WINDOW_CLASS_NAME: PCWSTR = w!("FluiWindowClass");
-
-/// Static flag to ensure window class is registered only once
-static mut WINDOW_CLASS_REGISTERED: bool = false;
+/// Ensures window class is registered exactly once (sound replacement for `static mut bool`).
+static REGISTER_WINDOW_CLASS: std::sync::Once = std::sync::Once::new();
 
 /// Context data stored per window for event dispatch
 pub(super) struct WindowContext {
@@ -75,9 +72,6 @@ pub struct WindowsPlatform {
     /// Platform handlers (callbacks from platform to framework)
     handlers: Arc<Mutex<PlatformHandlers>>,
 
-    /// Current DPI awareness
-    dpi_awareness: DPI_AWARENESS_CONTEXT,
-
     /// Background executor for async tasks
     background_executor: Arc<BackgroundExecutor>,
 
@@ -88,7 +82,7 @@ pub struct WindowsPlatform {
     config: WindowConfiguration,
 }
 
-// SAFETY: HWND and DPI_AWARENESS_CONTEXT are just integer handles and are safe to send/share between threads.
+// SAFETY: HWND is just an integer handle and is safe to send/share between threads.
 // Windows API handles are thread-safe by design.
 unsafe impl Send for WindowsPlatform {}
 unsafe impl Sync for WindowsPlatform {}
@@ -132,11 +126,10 @@ impl WindowsPlatform {
         }
 
         // Set DPI awareness to per-monitor v2 (best quality)
-        let dpi_awareness = unsafe {
+        // Ignore errors - this can fail if already set or on older Windows
+        unsafe {
             let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-            // Ignore errors - this can fail if already set or on older Windows
-            GetThreadDpiAwarenessContext()
-        };
+        }
 
         // Register window class
         unsafe {
@@ -175,43 +168,48 @@ impl WindowsPlatform {
             message_window,
             windows: Arc::new(Mutex::new(HashMap::new())),
             handlers: Arc::new(Mutex::new(PlatformHandlers::default())),
-            dpi_awareness,
             background_executor,
             foreground_executor,
             config,
         })
     }
 
-    /// Register the window class for all FLUI windows
+    /// Register the window class for all FLUI windows (idempotent via `Once`).
     unsafe fn register_window_class() -> Result<()> {
-        if WINDOW_CLASS_REGISTERED {
-            return Ok(());
-        }
+        let mut result: Result<()> = Ok(());
 
-        let hinstance = GetModuleHandleW(None).context("Failed to get module handle")?;
+        REGISTER_WINDOW_CLASS.call_once(|| {
+            let reg = (|| -> Result<()> {
+                let hinstance = GetModuleHandleW(None).context("Failed to get module handle")?;
 
-        let wc = WNDCLASSW {
-            style: CS_HREDRAW | CS_VREDRAW | CS_OWNDC,
-            lpfnWndProc: Some(Self::window_proc),
-            cbClsExtra: 0,
-            cbWndExtra: 0,
-            hInstance: hinstance.into(),
-            hIcon: HICON::default(),
-            hCursor: load_cursor_style(IDC_ARROW)?,
-            hbrBackground: HBRUSH(std::ptr::null_mut()), // No background - allows Mica backdrop to show through
-            lpszMenuName: PCWSTR::null(),
-            lpszClassName: WINDOW_CLASS_NAME,
-        };
+                let wc = WNDCLASSW {
+                    style: CS_HREDRAW | CS_VREDRAW | CS_OWNDC,
+                    lpfnWndProc: Some(Self::window_proc),
+                    cbClsExtra: 0,
+                    cbWndExtra: 0,
+                    hInstance: hinstance.into(),
+                    hIcon: HICON::default(),
+                    hCursor: load_cursor_style(IDC_ARROW)?,
+                    hbrBackground: HBRUSH(std::ptr::null_mut()),
+                    lpszMenuName: PCWSTR::null(),
+                    lpszClassName: WINDOW_CLASS_NAME,
+                };
 
-        let atom = RegisterClassW(&wc);
-        if atom == 0 {
-            return Err(windows::core::Error::from_win32().into());
-        }
+                let atom = RegisterClassW(&wc);
+                if atom == 0 {
+                    return Err(windows::core::Error::from_win32().into());
+                }
 
-        WINDOW_CLASS_REGISTERED = true;
-        tracing::info!("Registered Windows window class");
+                tracing::info!("Registered Windows window class");
+                Ok(())
+            })();
 
-        Ok(())
+            if let Err(e) = reg {
+                result = Err(e);
+            }
+        });
+
+        result
     }
 
     /// Main window procedure for all FLUI windows
@@ -240,7 +238,9 @@ impl WindowsPlatform {
 
                 // Dispatch CloseRequested event
                 if let Some(ctx) = ctx {
-                    ctx.dispatch_event(WindowEvent::CloseRequested { window_id: ctx.window_id });
+                    ctx.dispatch_event(WindowEvent::CloseRequested {
+                        window_id: ctx.window_id,
+                    });
                 }
 
                 // Let the window handle it
@@ -287,18 +287,20 @@ impl WindowsPlatform {
 
                         // Dispatch RedrawRequested event
                         if let Some(ctx) = ctx {
-                            ctx.dispatch_event(WindowEvent::RedrawRequested { window_id: ctx.window_id });
+                            ctx.dispatch_event(WindowEvent::RedrawRequested {
+                                window_id: ctx.window_id,
+                            });
                         }
                     } else {
                         tracing::trace!("⏭️  Skipping render for minimized window");
                     }
-                    EndPaint(hwnd, &ps);
+                    let _ = EndPaint(hwnd, &ps);
                 }
                 LRESULT(0)
             }
 
             WM_SIZE => {
-                use super::util::{SIZE_MINIMIZED, SIZE_MAXIMIZED, SIZE_RESTORED};
+                use super::util::{SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED};
 
                 let width = get_x_lparam(lparam).max(1);
                 let height = get_y_lparam(lparam).max(1);
@@ -328,7 +330,12 @@ impl WindowsPlatform {
                                 if !prev_mode.is_minimized() {
                                     ctx.last_size.set(size);
                                 }
-                                (candidate, Some(WindowEvent::Minimized { window_id: ctx.window_id }))
+                                (
+                                    candidate,
+                                    Some(WindowEvent::Minimized {
+                                        window_id: ctx.window_id,
+                                    }),
+                                )
                             }
                         }
                         SIZE_MAXIMIZED => {
@@ -345,7 +352,13 @@ impl WindowsPlatform {
                                 (prev_mode, None)
                             } else {
                                 ctx.last_size.set(size);
-                                (candidate, Some(WindowEvent::Maximized { window_id: ctx.window_id, size }))
+                                (
+                                    candidate,
+                                    Some(WindowEvent::Maximized {
+                                        window_id: ctx.window_id,
+                                        size,
+                                    }),
+                                )
                             }
                         }
                         SIZE_RESTORED => {
@@ -359,11 +372,18 @@ impl WindowsPlatform {
                                 ctx.last_size.set(size);
 
                                 // Dispatch Restored event only when transitioning FROM minimized or maximized
-                                let event = if prev_mode.is_minimized() || prev_mode.is_maximized() {
-                                    Some(WindowEvent::Restored { window_id: ctx.window_id, size })
+                                let event = if prev_mode.is_minimized() || prev_mode.is_maximized()
+                                {
+                                    Some(WindowEvent::Restored {
+                                        window_id: ctx.window_id,
+                                        size,
+                                    })
                                 } else {
                                     // Normal resize within normal state
-                                    Some(WindowEvent::Resized { window_id: ctx.window_id, size })
+                                    Some(WindowEvent::Resized {
+                                        window_id: ctx.window_id,
+                                        size,
+                                    })
                                 };
                                 (candidate, event)
                             }
@@ -374,7 +394,13 @@ impl WindowsPlatform {
                             if prev_mode.is_normal() {
                                 ctx.last_size.set(size);
                             }
-                            (prev_mode, Some(WindowEvent::Resized { window_id: ctx.window_id, size }))
+                            (
+                                prev_mode,
+                                Some(WindowEvent::Resized {
+                                    window_id: ctx.window_id,
+                                    size,
+                                }),
+                            )
                         }
                     };
 
@@ -397,11 +423,14 @@ impl WindowsPlatform {
 
                 // Dispatch Moved event
                 if let Some(ctx) = ctx {
-                    use flui_types::geometry::{Point, Pixels, px};
-                    let position = Point::new(px(x as f32 / ctx.scale_factor), px(y as f32 / ctx.scale_factor));
+                    use flui_types::geometry::{px, Point};
+                    let position = Point::new(
+                        px(x as f32 / ctx.scale_factor),
+                        px(y as f32 / ctx.scale_factor),
+                    );
                     ctx.dispatch_event(WindowEvent::Moved {
                         id: ctx.window_id,
-                        position
+                        position,
                     });
                 }
 
@@ -418,7 +447,7 @@ impl WindowsPlatform {
                 if let Some(ctx) = ctx {
                     ctx.dispatch_event(WindowEvent::ScaleFactorChanged {
                         window_id: ctx.window_id,
-                        scale_factor: new_scale as f64
+                        scale_factor: new_scale as f64,
                     });
 
                     // Update context scale factor
@@ -437,7 +466,8 @@ impl WindowsPlatform {
                             rect.right - rect.left,
                             rect.bottom - rect.top,
                             SWP_NOZORDER | SWP_NOACTIVATE,
-                        ).ok();
+                        )
+                        .ok();
                     }
                 }
 
@@ -510,7 +540,10 @@ impl WindowsPlatform {
                 if let Some(ctx) = ctx {
                     if let Some(hotkey) = ctx.config.fullscreen_hotkey {
                         if vk == hotkey && !is_repeat {
-                            tracing::info!("🔄 Fullscreen hotkey (VK={:#04x}) pressed - toggling fullscreen", hotkey);
+                            tracing::info!(
+                                "🔄 Fullscreen hotkey (VK={:#04x}) pressed - toggling fullscreen",
+                                hotkey
+                            );
                             WindowsWindow::toggle_fullscreen_for_hwnd(hwnd);
                         }
                     }
@@ -540,7 +573,7 @@ impl WindowsPlatform {
                 if let Some(ctx) = ctx {
                     ctx.dispatch_event(WindowEvent::FocusChanged {
                         window_id: ctx.window_id,
-                        focused: true
+                        focused: true,
                     });
                 }
 
@@ -554,7 +587,7 @@ impl WindowsPlatform {
                 if let Some(ctx) = ctx {
                     ctx.dispatch_event(WindowEvent::FocusChanged {
                         window_id: ctx.window_id,
-                        focused: false
+                        focused: false,
                     });
                 }
 
@@ -576,7 +609,7 @@ impl WindowsPlatform {
                 // Drain foreground executor tasks before processing Windows messages
                 self.foreground_executor.drain_tasks();
 
-                TranslateMessage(&msg);
+                let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
 
@@ -649,9 +682,7 @@ impl Platform for WindowsPlatform {
     }
 
     fn primary_display(&self) -> Option<Arc<dyn PlatformDisplay>> {
-        enumerate_displays()
-            .into_iter()
-            .find(|d| d.is_primary())
+        enumerate_displays().into_iter().find(|d| d.is_primary())
     }
 
     fn open_window(&self, options: WindowOptions) -> Result<Box<dyn PlatformWindow>> {
@@ -702,7 +733,7 @@ impl Platform for WindowsPlatform {
 
     fn app_path(&self) -> Result<std::path::PathBuf> {
         unsafe {
-            let mut buffer = vec![0u16; 512];
+            let mut buffer = [0u16; 260]; // MAX_PATH, stack-allocated
             let len = GetModuleFileNameW(None, &mut buffer);
             if len == 0 {
                 return Err(windows::core::Error::from_win32().into());

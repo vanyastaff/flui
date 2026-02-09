@@ -7,8 +7,8 @@ use crate::traits::Clipboard;
 use parking_lot::Mutex;
 use windows::Win32::Foundation::{HANDLE, HGLOBAL};
 use windows::Win32::System::DataExchange::{
-    CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable,
-    OpenClipboard, SetClipboardData,
+    CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
+    SetClipboardData,
 };
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 use windows::Win32::System::Ole::CF_UNICODETEXT;
@@ -136,11 +136,7 @@ impl Clipboard for WindowsClipboard {
                 return;
             }
 
-            std::ptr::copy_nonoverlapping(
-                wide.as_ptr() as *const u8,
-                ptr as *mut u8,
-                size,
-            );
+            std::ptr::copy_nonoverlapping(wide.as_ptr() as *const u8, ptr as *mut u8, size);
 
             let _ = GlobalUnlock(global);
 
@@ -154,7 +150,7 @@ impl Clipboard for WindowsClipboard {
 
             // Success - clipboard now owns the memory
             // Prevent HGLOBAL from being freed by forgetting it
-            std::mem::forget(global);
+            let _ = global;
             tracing::debug!(len = text.len(), "Wrote text to clipboard");
         }
     }
@@ -233,7 +229,10 @@ mod tests {
         clipboard.write_text(test_text.to_string());
 
         if let Some(read_text) = clipboard.read_text() {
-            assert_eq!(read_text, test_text, "Unicode text should roundtrip correctly");
+            assert_eq!(
+                read_text, test_text,
+                "Unicode text should roundtrip correctly"
+            );
         }
     }
 }

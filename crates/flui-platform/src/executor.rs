@@ -223,17 +223,21 @@ impl ForegroundExecutor {
     /// }
     /// ```
     pub fn drain_tasks(&self) {
-        let receiver = self.receiver.lock();
-        let mut tasks_executed = 0;
+        // Collect all pending tasks while holding the lock, then release
+        // before executing. This prevents deadlocks if a task calls
+        // drain_tasks() or pending_count() recursively.
+        let tasks: Vec<_> = {
+            let receiver = self.receiver.lock();
+            std::iter::from_fn(|| receiver.try_recv().ok()).collect()
+        };
 
-        // Drain all available tasks
-        while let Ok(task) = receiver.try_recv() {
+        let count = tasks.len();
+        for task in tasks {
             task();
-            tasks_executed += 1;
         }
 
-        if tasks_executed > 0 {
-            tracing::trace!("Drained {} foreground tasks", tasks_executed);
+        if count > 0 {
+            tracing::trace!("Drained {} foreground tasks", count);
         }
     }
 

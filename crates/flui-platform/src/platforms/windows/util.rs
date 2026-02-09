@@ -1,10 +1,14 @@
 //! Windows utility functions and helpers
+#![allow(dead_code)]
 
 use anyhow::{anyhow, Result};
 use flui_types::geometry::{device_px, px, DevicePixels, Pixels, Point, Size};
-use windows::core::PCWSTR;
+use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+
+/// Windows platform window class name (shared across platform.rs and window.rs)
+pub const WINDOW_CLASS_NAME: PCWSTR = w!("FluiWindowClass");
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 /// Convert LPARAM to X coordinate

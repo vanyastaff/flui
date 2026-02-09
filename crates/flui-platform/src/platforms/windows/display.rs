@@ -24,7 +24,7 @@ impl WindowsDisplay {
             let mut monitor_info: MONITORINFOEXW = std::mem::zeroed();
             monitor_info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
 
-            GetMonitorInfoW(hmonitor, &mut monitor_info.monitorInfo as *mut _ as *mut _);
+            let _ = GetMonitorInfoW(hmonitor, &mut monitor_info.monitorInfo as *mut _ as *mut _);
 
             let rc = monitor_info.monitorInfo.rcMonitor;
             let rc_work = monitor_info.monitorInfo.rcWork;
@@ -136,7 +136,7 @@ pub fn enumerate_displays() -> Vec<Arc<dyn PlatformDisplay>> {
             TRUE
         }
 
-        EnumDisplayMonitors(
+        let _ = EnumDisplayMonitors(
             None,
             None,
             Some(enum_proc),

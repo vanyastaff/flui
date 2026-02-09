@@ -60,6 +60,8 @@ pub use ui_events::ScrollDelta;
 // Platform-specific utilities
 // ============================================================================
 
+use std::collections::VecDeque;
+
 use flui_types::geometry::{Offset, PixelDelta, Pixels};
 use std::time::Instant;
 
@@ -87,6 +89,7 @@ pub enum PlatformInput {
 
 impl PlatformInput {
     /// Extract pointer event if this is a pointer input
+    #[inline]
     pub fn as_pointer(&self) -> Option<&PointerEvent> {
         match self {
             PlatformInput::Pointer(event) => Some(event),
@@ -95,6 +98,7 @@ impl PlatformInput {
     }
 
     /// Extract keyboard event if this is a keyboard input
+    #[inline]
     pub fn as_keyboard(&self) -> Option<&KeyboardEvent> {
         match self {
             PlatformInput::Keyboard(event) => Some(event),
@@ -162,7 +166,7 @@ pub fn delta_offset_from_coords(dx: f32, dy: f32) -> Offset<PixelDelta> {
 /// For full velocity tracking, use `flui_interaction::processing::VelocityTracker`.
 #[derive(Debug, Clone)]
 pub struct BasicVelocityTracker {
-    samples: Vec<VelocitySample>,
+    samples: VecDeque<VelocitySample>,
     max_samples: usize,
 }
 
@@ -176,21 +180,20 @@ impl BasicVelocityTracker {
     /// Create a new velocity tracker
     pub fn new() -> Self {
         Self {
-            samples: Vec::with_capacity(20),
+            samples: VecDeque::with_capacity(20),
             max_samples: 20,
         }
     }
 
     /// Add a sample
     pub fn add_sample(&mut self, timestamp: Instant, position: Offset<Pixels>) {
-        self.samples.push(VelocitySample {
+        if self.samples.len() >= self.max_samples {
+            self.samples.pop_front(); // O(1) instead of Vec::remove(0) O(n)
+        }
+        self.samples.push_back(VelocitySample {
             timestamp,
             position,
         });
-
-        if self.samples.len() > self.max_samples {
-            self.samples.remove(0);
-        }
     }
 
     /// Calculate velocity (pixels per second)
@@ -201,8 +204,8 @@ impl BasicVelocityTracker {
             return None;
         }
 
-        let first = self.samples.first()?;
-        let last = self.samples.last()?;
+        let first = self.samples.front()?;
+        let last = self.samples.back()?;
 
         let dt = last.timestamp.duration_since(first.timestamp);
         if dt.as_secs_f32() < 0.001 {

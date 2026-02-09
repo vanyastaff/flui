@@ -50,6 +50,7 @@ impl PlatformHandlers {
     }
 
     /// Invoke the quit callback if registered
+    #[inline]
     pub fn invoke_quit(&mut self) {
         if let Some(ref mut handler) = self.quit {
             handler();
@@ -57,6 +58,7 @@ impl PlatformHandlers {
     }
 
     /// Invoke the reopen callback if registered
+    #[inline]
     pub fn invoke_reopen(&mut self) {
         if let Some(ref mut handler) = self.reopen {
             handler();
@@ -64,6 +66,7 @@ impl PlatformHandlers {
     }
 
     /// Invoke the window event callback if registered
+    #[inline]
     pub fn invoke_window_event(&mut self, event: WindowEvent) {
         if let Some(ref mut handler) = self.window_event {
             handler(event);
@@ -71,6 +74,7 @@ impl PlatformHandlers {
     }
 
     /// Invoke the open URLs callback if registered
+    #[inline]
     pub fn invoke_open_urls(&mut self, urls: Vec<String>) {
         if let Some(ref mut handler) = self.open_urls {
             handler(urls);
@@ -78,6 +82,7 @@ impl PlatformHandlers {
     }
 
     /// Invoke the keyboard layout changed callback if registered
+    #[inline]
     pub fn invoke_keyboard_layout_changed(&mut self) {
         if let Some(ref mut handler) = self.keyboard_layout_changed {
             handler();

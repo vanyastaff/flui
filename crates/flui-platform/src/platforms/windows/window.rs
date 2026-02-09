@@ -2,25 +2,22 @@
 
 use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::ptr::NonNull;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 use raw_window_handle::{Win32WindowHandle, WindowsDisplayHandle};
-use windows::core::{HSTRING, PCWSTR};
+use windows::core::HSTRING;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::*;
 use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-use super::util::{logical_to_device, USER_DEFAULT_SCREEN_DPI};
+use super::util::{logical_to_device, USER_DEFAULT_SCREEN_DPI, WINDOW_CLASS_NAME};
 use crate::shared::PlatformHandlers;
 use crate::traits::*;
 use flui_types::geometry::{device_px, px, Bounds, DevicePixels, Pixels, Point, Size};
-
-const WINDOW_CLASS_NAME: PCWSTR = windows::core::w!("FluiWindowClass");
 
 /// Windows window wrapper
 pub struct WindowsWindow {
@@ -166,8 +163,8 @@ impl WindowsWindow {
 
             // Show window if requested
             if options.visible {
-                ShowWindow(hwnd, SW_SHOW);
-                UpdateWindow(hwnd).ok();
+                let _ = ShowWindow(hwnd, SW_SHOW);
+                let _ = UpdateWindow(hwnd);
                 window.state.lock().visible = true;
             }
 
@@ -278,7 +275,8 @@ impl WindowsWindow {
 
         unsafe {
             // Get WindowContext from GWLP_USERDATA
-            let ctx_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut super::platform::WindowContext;
+            let ctx_ptr =
+                GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut super::platform::WindowContext;
             if ctx_ptr.is_null() {
                 tracing::warn!("Cannot toggle fullscreen: no WindowContext");
                 return;
@@ -288,7 +286,10 @@ impl WindowsWindow {
             let current_mode = ctx.mode.get();
 
             match current_mode {
-                WindowMode::Fullscreen { restore_style, restore_bounds } => {
+                WindowMode::Fullscreen {
+                    restore_style,
+                    restore_bounds,
+                } => {
                     // Exit fullscreen - restore previous style and bounds
                     tracing::info!("🪟 Exiting fullscreen mode");
 
@@ -311,7 +312,8 @@ impl WindowsWindow {
                         restore_bounds.size.width.0,
                         restore_bounds.size.height.0,
                         SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOACTIVATE,
-                    ).ok();
+                    )
+                    .ok();
 
                     // Update state
                     ctx.mode.set(WindowMode::Normal);
@@ -338,7 +340,7 @@ impl WindowsWindow {
                         origin: Point::new(DevicePixels(rect.left), DevicePixels(rect.top)),
                         size: Size::new(
                             DevicePixels(rect.right - rect.left),
-                            DevicePixels(rect.bottom - rect.top)
+                            DevicePixels(rect.bottom - rect.top),
                         ),
                     };
 
@@ -348,7 +350,10 @@ impl WindowsWindow {
                         restore_bounds,
                     };
                     if !current_mode.can_transition_to(&candidate) {
-                        tracing::warn!("⚠️  Cannot enter fullscreen: invalid state transition from {:?}", current_mode);
+                        tracing::warn!(
+                            "⚠️  Cannot enter fullscreen: invalid state transition from {:?}",
+                            current_mode
+                        );
                         return;
                     }
 
@@ -358,7 +363,7 @@ impl WindowsWindow {
                         cbSize: std::mem::size_of::<MONITORINFO>() as u32,
                         ..Default::default()
                     };
-                    GetMonitorInfoW(monitor, &mut monitor_info).ok();
+                    let _ = GetMonitorInfoW(monitor, &mut monitor_info);
 
                     let monitor_rect = monitor_info.rcMonitor;
 
@@ -375,7 +380,8 @@ impl WindowsWindow {
                         monitor_rect.right - monitor_rect.left,
                         monitor_rect.bottom - monitor_rect.top,
                         SWP_FRAMECHANGED | SWP_NOACTIVATE,
-                    ).ok();
+                    )
+                    .ok();
 
                     // Update state
                     ctx.mode.set(candidate);
@@ -383,7 +389,7 @@ impl WindowsWindow {
                     // Dispatch Fullscreen event
                     let size = Size::new(
                         flui_types::geometry::DevicePixels(monitor_rect.right - monitor_rect.left),
-                        flui_types::geometry::DevicePixels(monitor_rect.bottom - monitor_rect.top)
+                        flui_types::geometry::DevicePixels(monitor_rect.bottom - monitor_rect.top),
                     );
                     ctx.dispatch_event(crate::traits::WindowEvent::Fullscreen {
                         window_id: ctx.window_id,
@@ -402,7 +408,8 @@ impl WindowsWindow {
     /// Check if the window is currently in fullscreen mode
     pub fn is_fullscreen(&self) -> bool {
         unsafe {
-            let ctx_ptr = GetWindowLongPtrW(self.hwnd, GWLP_USERDATA) as *mut super::platform::WindowContext;
+            let ctx_ptr =
+                GetWindowLongPtrW(self.hwnd, GWLP_USERDATA) as *mut super::platform::WindowContext;
             if ctx_ptr.is_null() {
                 return false;
             }
@@ -430,7 +437,8 @@ impl WindowsWindow {
     /// wastes CPU/GPU resources without any visible output.
     pub fn should_skip_render(hwnd: HWND) -> bool {
         unsafe {
-            let ctx_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut super::platform::WindowContext;
+            let ctx_ptr =
+                GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut super::platform::WindowContext;
             if ctx_ptr.is_null() {
                 return false;
             }
@@ -491,7 +499,7 @@ impl PlatformWindow for WindowsWindow {
 
     fn request_redraw(&self) {
         unsafe {
-            InvalidateRect(Some(self.hwnd), None, false).ok();
+            let _ = InvalidateRect(Some(self.hwnd), None, false);
         }
     }
 
@@ -629,18 +637,16 @@ impl WindowTrait for WindowsWindow {
     }
 
     fn state(&self) -> CrossWindowState {
-        unsafe {
-            let placement = self.get_window_placement();
+        let placement = self.get_window_placement();
 
-            if placement.showCmd == SW_MINIMIZE.0 as u32 {
-                CrossWindowState::Minimized
-            } else if placement.showCmd == SW_MAXIMIZE.0 as u32 {
-                CrossWindowState::Maximized
-            } else if self.is_fullscreen() {
-                CrossWindowState::Fullscreen
-            } else {
-                CrossWindowState::Normal
-            }
+        if placement.showCmd == SW_MINIMIZE.0 as u32 {
+            CrossWindowState::Minimized
+        } else if placement.showCmd == SW_MAXIMIZE.0 as u32 {
+            CrossWindowState::Maximized
+        } else if self.is_fullscreen() {
+            CrossWindowState::Fullscreen
+        } else {
+            CrossWindowState::Normal
         }
     }
 
@@ -651,16 +657,16 @@ impl WindowTrait for WindowsWindow {
                     if self.is_fullscreen() {
                         self.set_fullscreen(false);
                     }
-                    ShowWindow(self.hwnd, SW_RESTORE);
+                    let _ = ShowWindow(self.hwnd, SW_RESTORE);
                 }
                 CrossWindowState::Minimized => {
-                    ShowWindow(self.hwnd, SW_MINIMIZE);
+                    let _ = ShowWindow(self.hwnd, SW_MINIMIZE);
                 }
                 CrossWindowState::Maximized => {
                     if self.is_fullscreen() {
                         self.set_fullscreen(false);
                     }
-                    ShowWindow(self.hwnd, SW_MAXIMIZE);
+                    let _ = ShowWindow(self.hwnd, SW_MAXIMIZE);
                 }
                 CrossWindowState::Fullscreen => {
                     self.set_fullscreen(true);
@@ -676,7 +682,7 @@ impl WindowTrait for WindowsWindow {
     fn set_visible(&mut self, visible: bool) {
         unsafe {
             let cmd = if visible { SW_SHOW } else { SW_HIDE };
-            ShowWindow(self.hwnd, cmd);
+            let _ = ShowWindow(self.hwnd, cmd);
             self.state.lock().visible = visible;
         }
     }
@@ -770,7 +776,7 @@ impl WindowTrait for WindowsWindow {
 
     fn focus(&mut self) {
         unsafe {
-            SetForegroundWindow(self.hwnd).ok();
+            let _ = SetForegroundWindow(self.hwnd);
         }
     }
 
@@ -862,15 +868,17 @@ impl WindowsWindow {
 // ============================================================================
 
 use super::window_ext::{
-    WindowsBackdrop, WindowsWindowExt as WindowsWindowExtTrait, WindowCornerPreference,
-    TaskbarProgressState, WindowsTheme, dwm_attributes,
+    dwm_attributes, TaskbarProgressState, WindowCornerPreference, WindowsBackdrop, WindowsTheme,
+    WindowsWindowExt as WindowsWindowExtTrait,
 };
 
 impl WindowsWindowExtTrait for WindowsWindow {
     fn set_backdrop(&mut self, backdrop: WindowsBackdrop) {
         unsafe {
             let backdrop_value = backdrop.to_dwm_value();
-            if let Err(e) = self.set_dwm_attribute(dwm_attributes::DWMWA_SYSTEMBACKDROP_TYPE, &backdrop_value) {
+            if let Err(e) =
+                self.set_dwm_attribute(dwm_attributes::DWMWA_SYSTEMBACKDROP_TYPE, &backdrop_value)
+            {
                 tracing::warn!("Failed to set backdrop material: {:?}", e);
             } else {
                 tracing::debug!("Set window backdrop to {:?}", backdrop);
@@ -905,9 +913,13 @@ impl WindowsWindowExtTrait for WindowsWindow {
             SetWindowPos(
                 self.hwnd,
                 None,
-                0, 0, 0, 0,
+                0,
+                0,
+                0,
+                0,
                 SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-            ).ok();
+            )
+            .ok();
 
             tracing::debug!("Snap Layouts enabled (via WS_MAXIMIZEBOX)");
         }
@@ -922,9 +934,13 @@ impl WindowsWindowExtTrait for WindowsWindow {
             SetWindowPos(
                 self.hwnd,
                 None,
-                0, 0, 0, 0,
+                0,
+                0,
+                0,
+                0,
                 SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-            ).ok();
+            )
+            .ok();
 
             tracing::debug!("Snap Layouts disabled");
         }
@@ -940,7 +956,10 @@ impl WindowsWindowExtTrait for WindowsWindow {
     fn set_corner_preference(&mut self, preference: WindowCornerPreference) {
         unsafe {
             let corner_value = preference.to_dwm_value();
-            if let Err(e) = self.set_dwm_attribute(dwm_attributes::DWMWA_WINDOW_CORNER_PREFERENCE, &corner_value) {
+            if let Err(e) = self.set_dwm_attribute(
+                dwm_attributes::DWMWA_WINDOW_CORNER_PREFERENCE,
+                &corner_value,
+            ) {
                 tracing::warn!("Failed to set corner preference: {:?}", e);
             } else {
                 tracing::debug!("Set corner preference to {:?}", preference);
@@ -961,7 +980,9 @@ impl WindowsWindowExtTrait for WindowsWindow {
     }
 
     fn enable_blur_behind(&mut self, enable: bool) {
-        use windows::Win32::Graphics::Dwm::{DwmEnableBlurBehindWindow, DWM_BLURBEHIND, DWM_BB_ENABLE};
+        use windows::Win32::Graphics::Dwm::{
+            DwmEnableBlurBehindWindow, DWM_BB_ENABLE, DWM_BLURBEHIND,
+        };
 
         unsafe {
             let bb = DWM_BLURBEHIND {
@@ -998,7 +1019,10 @@ impl WindowsWindowExtTrait for WindowsWindow {
     fn set_dark_mode(&mut self, dark_mode: bool) {
         unsafe {
             let dark_mode_value: i32 = if dark_mode { 1 } else { 0 };
-            if let Err(e) = self.set_dwm_attribute(dwm_attributes::DWMWA_USE_IMMERSIVE_DARK_MODE, &dark_mode_value) {
+            if let Err(e) = self.set_dwm_attribute(
+                dwm_attributes::DWMWA_USE_IMMERSIVE_DARK_MODE,
+                &dark_mode_value,
+            ) {
                 tracing::warn!("Failed to set dark mode: {:?}", e);
             } else {
                 tracing::debug!("Set dark mode: {}", dark_mode);
@@ -1009,7 +1033,8 @@ impl WindowsWindowExtTrait for WindowsWindow {
     fn is_dark_mode(&self) -> bool {
         unsafe {
             self.get_dwm_attribute::<i32>(dwm_attributes::DWMWA_USE_IMMERSIVE_DARK_MODE)
-                .unwrap_or(0) != 0
+                .unwrap_or(0)
+                != 0
         }
     }
 
@@ -1044,7 +1069,9 @@ impl WindowsWindowExtTrait for WindowsWindow {
                 // Windows expects COLORREF format: 0x00BBGGRR
                 let colorref: u32 = ((b as u32) << 16) | ((g as u32) << 8) | (r as u32);
 
-                if let Err(e) = self.set_dwm_attribute(dwm_attributes::DWMWA_CAPTION_COLOR, &colorref) {
+                if let Err(e) =
+                    self.set_dwm_attribute(dwm_attributes::DWMWA_CAPTION_COLOR, &colorref)
+                {
                     tracing::warn!("Failed to set title bar color: {:?}", e);
                 } else {
                     tracing::debug!("Set title bar color: RGB({}, {}, {})", r, g, b);
@@ -1052,7 +1079,8 @@ impl WindowsWindowExtTrait for WindowsWindow {
             } else {
                 // Reset to default (0xFFFFFFFF means use default)
                 let default_color: u32 = 0xFFFFFFFF;
-                self.set_dwm_attribute(dwm_attributes::DWMWA_CAPTION_COLOR, &default_color).ok();
+                self.set_dwm_attribute(dwm_attributes::DWMWA_CAPTION_COLOR, &default_color)
+                    .ok();
             }
         }
     }
@@ -1069,26 +1097,15 @@ impl WindowsWindowExtTrait for WindowsWindow {
     }
 
     fn dpi(&self) -> u32 {
-        unsafe {
-            GetDpiForWindow(self.hwnd)
-        }
+        unsafe { GetDpiForWindow(self.hwnd) }
     }
 
-    fn convert_point_from_device(
-        &self,
-        point: Point<DevicePixels>,
-    ) -> Point<Pixels> {
+    fn convert_point_from_device(&self, point: Point<DevicePixels>) -> Point<Pixels> {
         let scale = self.scale_factor();
-        Point::new(
-            px(point.x.0 as f32 / scale),
-            px(point.y.0 as f32 / scale),
-        )
+        Point::new(px(point.x.0 as f32 / scale), px(point.y.0 as f32 / scale))
     }
 
-    fn convert_point_to_device(
-        &self,
-        point: Point<Pixels>,
-    ) -> Point<DevicePixels> {
+    fn convert_point_to_device(&self, point: Point<Pixels>) -> Point<DevicePixels> {
         let scale = self.scale_factor();
         Point::new(
             device_px((point.x.0 * scale).round() as i32),
