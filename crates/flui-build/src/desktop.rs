@@ -76,7 +76,7 @@ impl PlatformBuilder for DesktopBuilder {
         Ok(())
     }
 
-    fn build_rust(&self, ctx: &BuilderContext) -> BuildResult<BuildArtifacts> {
+    async fn build_rust(&self, ctx: &BuilderContext) -> BuildResult<BuildArtifacts> {
         let target = match &ctx.platform {
             crate::platform::Platform::Desktop { target } => match target {
                 Some(t) => t.clone(),
@@ -103,7 +103,7 @@ impl PlatformBuilder for DesktopBuilder {
             args.push(profile_flag);
         }
 
-        pollster::block_on(process::run_command("cargo", &args))?;
+        process::run_command("cargo", &args).await?;
 
         // Find the library (flui_app builds as a library, not executable)
         let lib_name = if cfg!(target_os = "windows") {
@@ -136,7 +136,7 @@ impl PlatformBuilder for DesktopBuilder {
         })
     }
 
-    fn build_platform(
+    async fn build_platform(
         &self,
         ctx: &BuilderContext,
         artifacts: &BuildArtifacts,
@@ -163,7 +163,7 @@ impl PlatformBuilder for DesktopBuilder {
         })
     }
 
-    fn clean(&self, ctx: &BuilderContext) -> BuildResult<()> {
+    async fn clean(&self, ctx: &BuilderContext) -> BuildResult<()> {
         if ctx.output_dir.exists() {
             std::fs::remove_dir_all(&ctx.output_dir)?;
             tracing::info!("Cleaned output: {:?}", ctx.output_dir);

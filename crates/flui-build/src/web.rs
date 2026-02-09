@@ -51,7 +51,7 @@ impl PlatformBuilder for WebBuilder {
         Ok(())
     }
 
-    fn build_rust(&self, ctx: &BuilderContext) -> BuildResult<BuildArtifacts> {
+    async fn build_rust(&self, ctx: &BuilderContext) -> BuildResult<BuildArtifacts> {
         let crate::platform::Platform::Web { target } = &ctx.platform else {
             return Err(BuildError::InvalidPlatform {
                 reason: "Expected Web platform".to_string(),
@@ -83,11 +83,12 @@ impl PlatformBuilder for WebBuilder {
             args.push("--dev");
         }
 
-        pollster::block_on(process::run_command_in_dir(
+        process::run_command_in_dir(
             "wasm-pack",
             &args,
             &self.workspace_root.join("crates").join("flui_app"),
-        ))?;
+        )
+        .await?;
 
         // Find generated WASM files
         let mut rust_libs = Vec::new();
@@ -111,7 +112,7 @@ impl PlatformBuilder for WebBuilder {
         })
     }
 
-    fn build_platform(
+    async fn build_platform(
         &self,
         ctx: &BuilderContext,
         artifacts: &BuildArtifacts,
@@ -170,7 +171,7 @@ impl PlatformBuilder for WebBuilder {
         })
     }
 
-    fn clean(&self, ctx: &BuilderContext) -> BuildResult<()> {
+    async fn clean(&self, ctx: &BuilderContext) -> BuildResult<()> {
         let dist_dir = self
             .workspace_root
             .join("platforms")

@@ -151,6 +151,8 @@ pub struct FinalArtifacts {
 /// This trait is sealed using the [sealed trait pattern](https://rust-lang.github.io/api-guidelines/future-proofing.html#sealed-traits-protect-against-downstream-implementations-c-sealed).
 /// External crates cannot implement this trait, which allows us to add methods
 /// in the future without breaking changes.
+// Sealed trait — only implemented within this crate, so Send bounds on futures are guaranteed.
+#[allow(async_fn_in_trait)]
 pub trait PlatformBuilder: private::Sealed + Send + Sync {
     /// Platform name
     fn platform_name(&self) -> &str;
@@ -159,15 +161,15 @@ pub trait PlatformBuilder: private::Sealed + Send + Sync {
     fn validate_environment(&self) -> BuildResult<()>;
 
     /// Build Rust libraries
-    fn build_rust(&self, ctx: &BuilderContext) -> BuildResult<BuildArtifacts>;
+    async fn build_rust(&self, ctx: &BuilderContext) -> BuildResult<BuildArtifacts>;
 
     /// Build platform-specific artifacts (APK, WASM, etc.)
-    fn build_platform(
+    async fn build_platform(
         &self,
         ctx: &BuilderContext,
         artifacts: &BuildArtifacts,
     ) -> BuildResult<FinalArtifacts>;
 
     /// Clean build artifacts
-    fn clean(&self, ctx: &BuilderContext) -> BuildResult<()>;
+    async fn clean(&self, ctx: &BuilderContext) -> BuildResult<()>;
 }

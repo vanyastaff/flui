@@ -98,7 +98,7 @@ impl PlatformBuilder for AndroidBuilder {
         Ok(())
     }
 
-    fn build_rust(&self, ctx: &BuilderContext) -> BuildResult<BuildArtifacts> {
+    async fn build_rust(&self, ctx: &BuilderContext) -> BuildResult<BuildArtifacts> {
         let crate::platform::Platform::Android { targets } = &ctx.platform else {
             return Err(BuildError::InvalidPlatform {
                 reason: "Expected Android platform".to_string(),
@@ -142,7 +142,7 @@ impl PlatformBuilder for AndroidBuilder {
                 args.push(profile_flag);
             }
 
-            pollster::block_on(process::run_command("cargo", &args))?;
+            process::run_command("cargo", &args).await?;
 
             // Find the .so file
             let abi_dir = jni_libs_dir.join(target);
@@ -169,7 +169,7 @@ impl PlatformBuilder for AndroidBuilder {
         })
     }
 
-    fn build_platform(
+    async fn build_platform(
         &self,
         ctx: &BuilderContext,
         artifacts: &BuildArtifacts,
@@ -211,11 +211,12 @@ impl PlatformBuilder for AndroidBuilder {
         };
 
         // Use absolute path for gradle wrapper
-        pollster::block_on(process::run_command_in_dir(
+        process::run_command_in_dir(
             gradle_wrapper_path.to_str().unwrap(),
             &[gradle_task],
             &android_dir,
-        ))?;
+        )
+        .await?;
 
         // Find the APK
         let apk_dir = android_dir
@@ -250,7 +251,7 @@ impl PlatformBuilder for AndroidBuilder {
         })
     }
 
-    fn clean(&self, ctx: &BuilderContext) -> BuildResult<()> {
+    async fn clean(&self, ctx: &BuilderContext) -> BuildResult<()> {
         let jni_libs_dir = self
             .workspace_root
             .join("platforms")
@@ -273,11 +274,7 @@ impl PlatformBuilder for AndroidBuilder {
             "./gradlew"
         };
 
-        pollster::block_on(process::run_command_in_dir(
-            gradle_wrapper,
-            &["clean"],
-            &android_dir,
-        ))?;
+        process::run_command_in_dir(gradle_wrapper, &["clean"], &android_dir).await?;
 
         // Clean output directory
         if ctx.output_dir.exists() {

@@ -56,7 +56,7 @@ impl PlatformBuilder for IOSBuilder {
         Ok(())
     }
 
-    fn build_rust(&self, ctx: &BuilderContext) -> BuildResult<BuildArtifacts> {
+    async fn build_rust(&self, ctx: &BuilderContext) -> BuildResult<BuildArtifacts> {
         let crate::platform::Platform::IOS { targets } = &ctx.platform else {
             return Err(BuildError::InvalidPlatform {
                 reason: "Expected iOS platform".to_string(),
@@ -94,7 +94,7 @@ impl PlatformBuilder for IOSBuilder {
                 args.push(profile_flag);
             }
 
-            pollster::block_on(process::run_command("cargo", &args))?;
+            process::run_command("cargo", &args).await?;
 
             // Find the .a static library
             let lib_path = self
@@ -128,7 +128,7 @@ impl PlatformBuilder for IOSBuilder {
         })
     }
 
-    fn build_platform(
+    async fn build_platform(
         &self,
         ctx: &BuilderContext,
         artifacts: &BuildArtifacts,
@@ -174,7 +174,7 @@ impl PlatformBuilder for IOSBuilder {
             "build",
         ];
 
-        pollster::block_on(process::run_command_in_dir("xcodebuild", &args, &ios_dir))?;
+        process::run_command_in_dir("xcodebuild", &args, &ios_dir).await?;
 
         // Find the .app bundle
         let build_dir = ios_dir.join("build").join(configuration).join("iphoneos");
@@ -206,7 +206,7 @@ impl PlatformBuilder for IOSBuilder {
         })
     }
 
-    fn clean(&self, ctx: &BuilderContext) -> BuildResult<()> {
+    async fn clean(&self, ctx: &BuilderContext) -> BuildResult<()> {
         let ios_frameworks_dir = self
             .workspace_root
             .join("platforms")
@@ -223,11 +223,7 @@ impl PlatformBuilder for IOSBuilder {
         let xcodeproj = ios_dir.join("flui.xcodeproj");
 
         if xcodeproj.exists() {
-            pollster::block_on(process::run_command_in_dir(
-                "xcodebuild",
-                &["clean"],
-                &ios_dir,
-            ))?;
+            process::run_command_in_dir("xcodebuild", &["clean"], &ios_dir).await?;
         }
 
         // Clean output directory
