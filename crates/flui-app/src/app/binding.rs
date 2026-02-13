@@ -25,6 +25,7 @@
 //!   └── scheduler: Scheduler           (frame callbacks)
 //! ```
 
+use crate::app::lifecycle::{DefaultLifecycle, LifecycleEvent, LifecycleState, PlatformLifecycle};
 use crate::bindings::RenderingFlutterBinding;
 use flui_engine::wgpu::Renderer;
 use flui_engine::RenderError;
@@ -32,7 +33,7 @@ use flui_foundation::HasInstance;
 use flui_interaction::binding::GestureBinding;
 use flui_interaction::routing::FocusManager;
 use flui_layer::Scene;
-use flui_platform::traits::PlatformInput;
+use flui_platform::traits::{PlatformInput, PlatformWindow};
 use flui_rendering::constraints::BoxConstraints;
 use flui_scheduler::Scheduler;
 use flui_types::geometry::px;
@@ -88,6 +89,12 @@ pub struct AppBinding {
     /// for sharing with elements that need `Arc<RwLock<PipelineOwner>>`.
     shared_pipeline_owner: Arc<RwLock<flui_rendering::pipeline::PipelineOwner>>,
 
+    /// Application lifecycle state tracker.
+    lifecycle: Mutex<DefaultLifecycle>,
+
+    /// Active platform window (set during run_desktop).
+    active_window: Mutex<Option<Box<dyn PlatformWindow>>>,
+
     /// Root element stored for rebuild support.
     /// This is set by `set_root_element()` and rebuilt by `rebuild_root()`.
     root_element: Mutex<Option<Box<dyn ElementBase>>>,
@@ -103,8 +110,8 @@ impl AppBinding {
         let shared_pipeline_owner =
             Arc::new(RwLock::new(flui_rendering::pipeline::PipelineOwner::new()));
 
-        // Create and initialize RendererBinding
-        let renderer = RenderingFlutterBinding::new();
+        // Create RendererBinding sharing the SAME PipelineOwner
+        let renderer = RenderingFlutterBinding::new_with_pipeline(Arc::clone(&shared_pipeline_owner));
 
         // Create WidgetsBinding
         let widgets = WidgetsBinding::new();
@@ -118,6 +125,8 @@ impl AppBinding {
             frames_rendered: AtomicU64::new(0),
             frames_dropped: AtomicU64::new(0),
             shared_pipeline_owner,
+            lifecycle: Mutex::new(DefaultLifecycle::new()),
+            active_window: Mutex::new(None),
             root_element: Mutex::new(None),
         }
     }
@@ -266,6 +275,48 @@ impl AppBinding {
     }
 
     // ========================================================================
+    // Lifecycle Management
+    // ========================================================================
+
+    /// Get the current lifecycle state.
+    pub fn lifecycle_state(&self) -> LifecycleState {
+        self.lifecycle.lock().state()
+    }
+
+    /// Transition the lifecycle via an event.
+    ///
+    /// Delegates to [`DefaultLifecycle::handle_event`] and logs the transition.
+    pub fn transition_lifecycle(&self, event: LifecycleEvent) {
+        self.lifecycle.lock().handle_event(event);
+        tracing::debug!(?event, state = ?self.lifecycle_state(), "Lifecycle transition");
+    }
+
+    /// Check if the lifecycle state allows rendering.
+    pub fn should_render(&self) -> bool {
+        self.lifecycle.lock().should_render()
+    }
+
+    // ========================================================================
+    // Window Access
+    // ========================================================================
+
+    /// Store the active platform window.
+    ///
+    /// Called by the runner after all callbacks have been registered.
+    pub fn set_window(&self, window: Box<dyn PlatformWindow>) {
+        *self.active_window.lock() = Some(window);
+        tracing::debug!("Active window stored in AppBinding");
+    }
+
+    /// Access the active window.
+    ///
+    /// Calls the provided function with a reference to the window.
+    /// Returns `None` if no window is set.
+    pub fn with_window<R>(&self, f: impl FnOnce(&dyn PlatformWindow) -> R) -> Option<R> {
+        self.active_window.lock().as_ref().map(|w| f(w.as_ref()))
+    }
+
+    // ========================================================================
     // Frame Management
     // ========================================================================
 
@@ -401,13 +452,31 @@ impl AppBinding {
         match input {
             PlatformInput::Pointer(pointer_event) => {
                 self.gestures
-                    .handle_pointer_event(&pointer_event, |_position| {
-                        // TODO: Implement proper hit testing through render tree
-                        flui_interaction::routing::HitTestResult::new()
+                    .handle_pointer_event(&pointer_event, |position| {
+                        // Perform rendering-layer hit test through the RenderView
+                        use flui_rendering::binding::HitTestable;
+                        let renderer = self.renderer.read();
+                        let mut render_result = flui_rendering::hit_testing::HitTestResult::new();
+                        let offset = flui_types::Offset::new(position.dx, position.dy);
+                        renderer.hit_test_in_view(&mut render_result, offset, 0);
+
+                        // Bridge to interaction-layer result
+                        // TODO: Convert rendering HitTestEntry targets to interaction targets
+                        // once render objects implement gesture handling
+                        let result = flui_interaction::routing::HitTestResult::new();
+                        if !render_result.is_empty() {
+                            tracing::debug!(
+                                hits = render_result.len(),
+                                "Hit test found targets"
+                            );
+                        }
+                        result
                     });
+                self.request_redraw();
             }
             PlatformInput::Keyboard(keyboard_event) => {
                 FocusManager::global().dispatch_key_event(&keyboard_event);
+                self.request_redraw();
             }
         }
     }

@@ -44,8 +44,8 @@ pub mod theme;
 
 // Primary exports - Flutter naming
 pub use app::{
-    run_app, run_app_with_config, AppConfig, AppLifecycle, RootRenderElement, RootRenderView,
-    WidgetsFlutterBinding,
+    run_app, run_app_with_config, AppConfig, DefaultLifecycle, LifecycleEvent, LifecycleState,
+    RootRenderElement, RootRenderView, WidgetsFlutterBinding,
 };
 
 // Legacy alias
@@ -82,7 +82,7 @@ pub use flui_log::{debug, error, info, trace, warn, Level, Logger};
 /// ```
 pub mod prelude {
     // Application types
-    pub use crate::{run_app, run_app_with_config, AppConfig, AppLifecycle, WidgetsFlutterBinding};
+    pub use crate::{run_app, run_app_with_config, AppConfig, LifecycleState, WidgetsFlutterBinding};
 
     // Bindings
     pub use crate::{

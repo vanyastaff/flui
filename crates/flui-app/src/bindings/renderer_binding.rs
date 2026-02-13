@@ -71,8 +71,8 @@ use flui_types::Offset;
 /// This binding is thread-safe and can be accessed from multiple threads.
 /// Internal state is protected by `RwLock`s.
 pub struct RenderingFlutterBinding {
-    /// Root of the PipelineOwner tree.
-    root_pipeline_owner: RwLock<PipelineOwner>,
+    /// Root of the PipelineOwner tree (shared with AppBinding when used together).
+    root_pipeline_owner: Arc<RwLock<PipelineOwner>>,
 
     /// Render views managed by this binding (viewId → RenderView).
     render_views: RwLock<HashMap<u64, Arc<RwLock<RenderView>>>>,
@@ -120,15 +120,26 @@ impl Default for RenderingFlutterBinding {
 }
 
 impl RenderingFlutterBinding {
-    /// Creates a new rendering binding.
+    /// Creates a new rendering binding with its own PipelineOwner.
+    ///
+    /// Used by the singleton pattern. For sharing a PipelineOwner with
+    /// AppBinding, use [`new_with_pipeline`](Self::new_with_pipeline) instead.
     pub fn new() -> Self {
+        Self::new_with_pipeline(Arc::new(RwLock::new(PipelineOwner::new())))
+    }
+
+    /// Creates a new rendering binding with a shared PipelineOwner.
+    ///
+    /// This allows AppBinding to pass in the same `Arc<RwLock<PipelineOwner>>`
+    /// that elements use, ensuring a single PipelineOwner instance at runtime.
+    pub fn new_with_pipeline(pipeline_owner: Arc<RwLock<PipelineOwner>>) -> Self {
         // Create a dummy hit test callback for now
         // In practice, this gets replaced when the binding is fully initialized
         let hit_test_callback: flui_rendering::input::MouseTrackerHitTest =
             Arc::new(|_position, _view_id| HitTestResult::new());
 
         let mut binding = Self {
-            root_pipeline_owner: RwLock::new(PipelineOwner::new()),
+            root_pipeline_owner: pipeline_owner,
             render_views: RwLock::new(HashMap::new()),
             mouse_tracker: RwLock::new(MouseTracker::new(hit_test_callback)),
             semantics_enabled: AtomicBool::new(false),
@@ -356,7 +367,7 @@ impl HitTestable for RenderingFlutterBinding {
 
 impl RendererBinding for RenderingFlutterBinding {
     fn root_pipeline_owner(&self) -> &RwLock<PipelineOwner> {
-        &self.root_pipeline_owner
+        &*self.root_pipeline_owner
     }
 
     fn render_views(&self) -> &RwLock<HashMap<u64, Arc<RwLock<RenderView>>>> {

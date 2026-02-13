@@ -88,7 +88,7 @@ where
     use crate::embedder::PlatformWindowHandle;
     use flui_engine::wgpu::Renderer;
     use flui_foundation::HasInstance;
-    use flui_platform::traits::{DispatchEventResult, PlatformInput};
+    use flui_platform::traits::{DispatchEventResult, LifecycleEvent, PlatformInput};
     use flui_platform::WindowOptions;
     use flui_scheduler::Scheduler;
     use parking_lot::Mutex;
@@ -140,19 +140,23 @@ where
         // 6. Register frame callback → scheduler + AppBinding::render_frame()
         let renderer_frame = Arc::clone(&renderer);
         window.on_request_frame(Box::new(move || {
+            let binding = AppBinding::instance();
+
+            // On-demand rendering: skip frame if nothing changed
+            if !binding.needs_redraw() && !binding.has_pending_work() {
+                return;
+            }
+
             let now = std::time::Instant::now();
 
             // Scheduler callbacks (animations)
             let scheduler = Scheduler::instance();
             let _frame_id = scheduler.handle_begin_frame(now);
             scheduler.handle_draw_frame();
-            let arc_scheduler = Scheduler::arc_instance();
-            arc_scheduler.handle_begin_frame(now);
-            arc_scheduler.handle_draw_frame();
 
             // Render frame via AppBinding
             let mut r = renderer_frame.lock();
-            AppBinding::instance().render_frame(&mut r);
+            binding.render_frame(&mut r);
         }));
 
         // 7. Register resize callback → renderer.resize()
@@ -164,8 +168,45 @@ where
             AppBinding::instance().request_redraw();
         }));
 
-        // 8. Request initial redraw
+        // 8. Lifecycle callbacks
+
+        // Platform quit → transition to Terminating
+        platform_inner.on_quit(Box::new(|| {
+            tracing::info!("Platform quit");
+            AppBinding::instance().transition_lifecycle(LifecycleEvent::Terminating);
+        }));
+
+        // Window close → request platform quit
+        let platform_for_close = Arc::clone(&platform_inner);
+        window.on_close(Box::new(move || {
+            tracing::info!("Window closed");
+            platform_for_close.quit();
+        }));
+
+        // Window should-close → allow by default
+        window.on_should_close(Box::new(|| {
+            tracing::debug!("Window close requested, allowing");
+            true
+        }));
+
+        // Window active status → lifecycle Activated/Deactivated
+        window.on_active_status_change(Box::new(|active| {
+            let event = if active {
+                LifecycleEvent::Activated
+            } else {
+                LifecycleEvent::Deactivated
+            };
+            AppBinding::instance().transition_lifecycle(event);
+        }));
+
+        // Mark lifecycle as started
+        AppBinding::instance().transition_lifecycle(LifecycleEvent::Started);
+
+        // 9. Request initial redraw
         window.request_redraw();
+
+        // 10. Store window in AppBinding for runtime access
+        AppBinding::instance().set_window(window);
 
         tracing::info!("Desktop platform initialized with callbacks");
     }));
@@ -211,6 +252,19 @@ where
         } else {
             tracing::error!("mount_root: RootRenderElement has no render_id after mount");
         }
+    }
+
+    // Register RenderView with RenderingFlutterBinding for hit testing
+    {
+        use std::sync::Arc;
+
+        use flui_rendering::binding::RendererBinding;
+        use flui_rendering::view::RenderView;
+
+        let renderer = binding.renderer();
+        let view = Arc::new(parking_lot::RwLock::new(RenderView::new()));
+        renderer.add_render_view(0, view);
+        tracing::info!("RenderView registered for hit testing (view_id=0)");
     }
 
     // Store root element in AppBinding for rebuild support
