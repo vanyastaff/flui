@@ -200,18 +200,25 @@ impl ForegroundExecutor {
     /// Tasks are executed in FIFO order. If a task spawns new tasks, they
     /// will be executed in the next drain cycle.
     pub fn drain_tasks(&self) {
-        let tasks: Vec<_> = {
-            let receiver = self.receiver.lock();
-            std::iter::from_fn(|| receiver.try_recv().ok()).collect()
-        };
+        let mut total = 0usize;
+        loop {
+            let tasks: Vec<_> = {
+                let receiver = self.receiver.lock();
+                std::iter::from_fn(|| receiver.try_recv().ok()).collect()
+            };
 
-        let count = tasks.len();
-        for task in tasks {
-            task();
+            if tasks.is_empty() {
+                break;
+            }
+
+            total += tasks.len();
+            for task in tasks {
+                task();
+            }
         }
 
-        if count > 0 {
-            tracing::trace!("Drained {} foreground tasks", count);
+        if total > 0 {
+            tracing::trace!("Drained {} foreground tasks", total);
         }
     }
 

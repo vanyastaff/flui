@@ -29,25 +29,24 @@ fn test_background_executor_runs_on_worker_thread() {
     let task_thread_id = Arc::new(Mutex::new(None));
     let task_thread_id_clone = Arc::clone(&task_thread_id);
 
-    executor.spawn(Box::new(move || {
-        let current_id = thread::current().id();
-        *task_thread_id_clone.lock() = Some(current_id);
-        tracing::debug!("Task executing on thread {:?}", current_id);
-    }));
+    executor
+        .spawn(async move {
+            let current_id = thread::current().id();
+            *task_thread_id_clone.lock() = Some(current_id);
+            tracing::debug!("Task executing on thread {:?}", current_id);
+        })
+        .detach();
 
     // Wait for task to complete
     thread::sleep(Duration::from_millis(100));
 
-    let executed_on = task_thread_id
-        .lock()
-        .clone()
-        .expect("Task should have executed");
+    let executed_on = task_thread_id.lock().expect("Task should have executed");
     assert_ne!(
         executed_on, spawning_thread_id,
         "Background task should NOT run on spawning thread"
     );
 
-    tracing::info!("✓ PASS: Background task executed on worker thread (not UI thread)");
+    tracing::info!("PASS: Background task executed on worker thread (not UI thread)");
 }
 
 /// Test that foreground executor runs tasks on next event loop iteration (not immediately)
@@ -60,9 +59,13 @@ fn test_foreground_executor_deferred_execution() {
     let executed = Arc::new(AtomicBool::new(false));
     let executed_clone = Arc::clone(&executed);
 
-    executor.spawn(Box::new(move || {
-        executed_clone.store(true, Ordering::SeqCst);
-    }));
+    // Use PlatformExecutor trait (Box<dyn FnOnce>) for foreground fire-and-forget
+    PlatformExecutor::spawn(
+        &executor,
+        Box::new(move || {
+            executed_clone.store(true, Ordering::SeqCst);
+        }),
+    );
 
     // Task should NOT execute immediately
     assert!(
@@ -79,7 +82,7 @@ fn test_foreground_executor_deferred_execution() {
         "Task should execute after drain_tasks()"
     );
 
-    tracing::info!("✓ PASS: Foreground task executed on next event loop iteration");
+    tracing::info!("PASS: Foreground task executed on next event loop iteration");
 }
 
 /// Test that background task callbacks can safely update UI state via foreground executor
@@ -96,18 +99,23 @@ fn test_background_callback_updates_ui_safely() {
     let foreground_clone = foreground_executor.clone();
 
     // Simulate background work that updates UI
-    background_executor.spawn(Box::new(move || {
-        tracing::debug!("Background task: processing data...");
-        thread::sleep(Duration::from_millis(50)); // Simulate work
+    background_executor
+        .spawn(async move {
+            tracing::debug!("Background task: processing data...");
+            tokio::time::sleep(Duration::from_millis(50)).await;
 
-        let result = "processed_data".to_string();
+            let result = "processed_data".to_string();
 
-        // Schedule UI update on foreground executor
-        foreground_clone.spawn(Box::new(move || {
-            *ui_state_bg.lock() = result;
-            tracing::debug!("Foreground task: updated UI state");
-        }));
-    }));
+            // Schedule UI update on foreground executor
+            PlatformExecutor::spawn(
+                &foreground_clone,
+                Box::new(move || {
+                    *ui_state_bg.lock() = result;
+                    tracing::debug!("Foreground task: updated UI state");
+                }),
+            );
+        })
+        .detach();
 
     // Wait for background work
     thread::sleep(Duration::from_millis(150));
@@ -121,7 +129,7 @@ fn test_background_callback_updates_ui_safely() {
     // Now UI should be updated
     assert_eq!(*ui_state.lock(), "processed_data");
 
-    tracing::info!("✓ PASS: Background task callback safely updated UI state");
+    tracing::info!("PASS: Background task callback safely updated UI state");
 }
 
 /// Test that multiple background tasks execute in parallel
@@ -138,13 +146,15 @@ fn test_multiple_background_tasks_parallel_execution() {
 
     for i in 0..task_count {
         let completion_times_clone = Arc::clone(&completion_times);
-        executor.spawn(Box::new(move || {
-            tracing::debug!("Task {} starting", i);
-            thread::sleep(Duration::from_millis(100)); // Simulate work
-            let elapsed = start_time.elapsed();
-            completion_times_clone.lock().push(elapsed);
-            tracing::debug!("Task {} completed at {:?}", i, elapsed);
-        }));
+        executor
+            .spawn(async move {
+                tracing::debug!("Task {} starting", i);
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                let elapsed = start_time.elapsed();
+                completion_times_clone.lock().push(elapsed);
+                tracing::debug!("Task {} completed at {:?}", i, elapsed);
+            })
+            .detach();
     }
 
     // Wait for all tasks
@@ -163,7 +173,7 @@ fn test_multiple_background_tasks_parallel_execution() {
     );
 
     tracing::info!(
-        "✓ PASS: {} background tasks executed in parallel ({:?}ms)",
+        "PASS: {} background tasks executed in parallel ({:?}ms)",
         task_count,
         max_time.as_millis()
     );
@@ -178,12 +188,15 @@ fn test_foreground_tasks_fifo_order() {
     let executor = ForegroundExecutor::new();
     let execution_order = Arc::new(Mutex::new(Vec::new()));
 
-    // Spawn tasks in specific order
+    // Spawn tasks in specific order using PlatformExecutor trait
     for i in 0..10 {
         let order_clone = Arc::clone(&execution_order);
-        executor.spawn(Box::new(move || {
-            order_clone.lock().push(i);
-        }));
+        PlatformExecutor::spawn(
+            &executor,
+            Box::new(move || {
+                order_clone.lock().push(i);
+            }),
+        );
     }
 
     // Drain all tasks
@@ -192,7 +205,7 @@ fn test_foreground_tasks_fifo_order() {
     let order = execution_order.lock();
     assert_eq!(*order, vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
 
-    tracing::info!("✓ PASS: Foreground tasks executed in FIFO order");
+    tracing::info!("PASS: Foreground tasks executed in FIFO order");
 }
 
 /// Test that BackgroundExecutor is Send+Sync
@@ -217,9 +230,11 @@ fn test_background_executor_send_sync() {
             let counter_clone = Arc::clone(&counter);
 
             thread::spawn(move || {
-                executor_clone.spawn(Box::new(move || {
-                    counter_clone.fetch_add(1, Ordering::SeqCst);
-                }));
+                executor_clone
+                    .spawn(async move {
+                        counter_clone.fetch_add(1, Ordering::SeqCst);
+                    })
+                    .detach();
             })
         })
         .collect();
@@ -231,13 +246,10 @@ fn test_background_executor_send_sync() {
     thread::sleep(Duration::from_millis(100));
     assert_eq!(counter.load(Ordering::SeqCst), 4);
 
-    tracing::info!("✓ PASS: BackgroundExecutor is Send+Sync and works across threads");
+    tracing::info!("PASS: BackgroundExecutor is Send+Sync and works across threads");
 }
 
-/// Test that ForegroundExecutor sender is Send+Sync but executor itself is !Send
-///
-/// Note: Rust's type system ensures !Send at compile time, so this test
-/// verifies the Send+Sync properties of the sender component.
+/// Test that ForegroundExecutor sender is Send+Sync
 #[test]
 fn test_foreground_executor_thread_safety() {
     init_tracing();
@@ -253,9 +265,12 @@ fn test_foreground_executor_thread_safety() {
             let counter_clone = Arc::clone(&counter);
 
             thread::spawn(move || {
-                executor_clone.spawn(Box::new(move || {
-                    counter_clone.fetch_add(1, Ordering::SeqCst);
-                }));
+                PlatformExecutor::spawn(
+                    &executor_clone,
+                    Box::new(move || {
+                        counter_clone.fetch_add(1, Ordering::SeqCst);
+                    }),
+                );
             })
         })
         .collect();
@@ -268,7 +283,7 @@ fn test_foreground_executor_thread_safety() {
     executor.drain_tasks();
     assert_eq!(counter.load(Ordering::SeqCst), 4);
 
-    tracing::info!("✓ PASS: ForegroundExecutor sender works from multiple threads");
+    tracing::info!("PASS: ForegroundExecutor sender works from multiple threads");
 }
 
 /// Test foreground executor pending count tracking
@@ -281,9 +296,9 @@ fn test_foreground_executor_pending_count() {
 
     assert_eq!(executor.pending_count(), 0);
 
-    // Add tasks
+    // Add tasks using PlatformExecutor trait
     for _ in 0..5 {
-        executor.spawn(Box::new(|| {}));
+        PlatformExecutor::spawn(&executor, Box::new(|| {}));
     }
 
     assert_eq!(executor.pending_count(), 5);
@@ -292,7 +307,7 @@ fn test_foreground_executor_pending_count() {
     executor.drain_tasks();
     assert_eq!(executor.pending_count(), 0);
 
-    tracing::info!("✓ PASS: Pending count tracking works correctly");
+    tracing::info!("PASS: Pending count tracking works correctly");
 }
 
 /// Test that foreground executor handles nested spawns correctly
@@ -306,15 +321,21 @@ fn test_foreground_executor_nested_spawns() {
 
     let log_clone1 = Arc::clone(&execution_log);
     let executor_clone = executor.clone();
-    executor.spawn(Box::new(move || {
-        log_clone1.lock().push("outer");
+    PlatformExecutor::spawn(
+        &executor,
+        Box::new(move || {
+            log_clone1.lock().push("outer");
 
-        // Spawn inner task
-        let log_clone2 = Arc::clone(&log_clone1);
-        executor_clone.spawn(Box::new(move || {
-            log_clone2.lock().push("inner");
-        }));
-    }));
+            // Spawn inner task
+            let log_clone2 = Arc::clone(&log_clone1);
+            PlatformExecutor::spawn(
+                &executor_clone,
+                Box::new(move || {
+                    log_clone2.lock().push("inner");
+                }),
+            );
+        }),
+    );
 
     // Drain all tasks - drain_tasks() continues until queue is empty,
     // so it executes outer (which spawns inner), then immediately executes inner
@@ -327,10 +348,10 @@ fn test_foreground_executor_nested_spawns() {
         "drain_tasks() should execute all tasks including nested spawns"
     );
 
-    tracing::info!("✓ PASS: Nested spawns handled correctly in single drain cycle");
+    tracing::info!("PASS: Nested spawns handled correctly in single drain cycle");
 }
 
-/// Benchmark executor spawn overhead to ensure it's under 100µs
+/// Benchmark executor spawn overhead to ensure it's under 100us
 #[test]
 fn test_executor_spawn_overhead_benchmark() {
     init_tracing();
@@ -344,21 +365,21 @@ fn test_executor_spawn_overhead_benchmark() {
         let start = Instant::now();
 
         for _ in 0..iterations {
-            executor.spawn(Box::new(|| {}));
+            executor.spawn(async {}).detach();
         }
 
         let duration = start.elapsed();
         let avg_micros = duration.as_micros() as f64 / iterations as f64;
 
         tracing::info!(
-            "Background executor: {:.2}µs average spawn overhead ({} iterations)",
+            "Background executor: {:.2}us average spawn overhead ({} iterations)",
             avg_micros,
             iterations
         );
 
         assert!(
             avg_micros < 100.0,
-            "Background spawn overhead ({:.2}µs) exceeds 100µs target",
+            "Background spawn overhead ({:.2}us) exceeds 100us target",
             avg_micros
         );
     }
@@ -369,26 +390,26 @@ fn test_executor_spawn_overhead_benchmark() {
         let start = Instant::now();
 
         for _ in 0..iterations {
-            executor.spawn(Box::new(|| {}));
+            PlatformExecutor::spawn(&executor, Box::new(|| {}));
         }
 
         let duration = start.elapsed();
         let avg_micros = duration.as_micros() as f64 / iterations as f64;
 
         tracing::info!(
-            "Foreground executor: {:.2}µs average spawn overhead ({} iterations)",
+            "Foreground executor: {:.2}us average spawn overhead ({} iterations)",
             avg_micros,
             iterations
         );
 
         assert!(
             avg_micros < 100.0,
-            "Foreground spawn overhead ({:.2}µs) exceeds 100µs target",
+            "Foreground spawn overhead ({:.2}us) exceeds 100us target",
             avg_micros
         );
     }
 
-    tracing::info!("✓ PASS: Executor spawn overhead <100µs for both executors");
+    tracing::info!("PASS: Executor spawn overhead <100us for both executors");
 }
 
 /// Test background executor with actual async/await tasks
@@ -398,20 +419,21 @@ fn test_background_executor_async_integration() {
     tracing::info!("Testing background executor with async tasks");
 
     let executor = BackgroundExecutor::new();
-    let handle = executor.handle();
     let completed = Arc::new(AtomicBool::new(false));
     let completed_clone = Arc::clone(&completed);
 
-    // Spawn native async task
-    handle.spawn(async move {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        completed_clone.store(true, Ordering::SeqCst);
-    });
+    // Spawn async task
+    executor
+        .spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            completed_clone.store(true, Ordering::SeqCst);
+        })
+        .detach();
 
     thread::sleep(Duration::from_millis(150));
     assert!(completed.load(Ordering::SeqCst));
 
-    tracing::info!("✓ PASS: Background executor integrates with async/await");
+    tracing::info!("PASS: Background executor integrates with async/await");
 }
 
 /// Test that background executor handles panic in tasks gracefully
@@ -425,16 +447,20 @@ fn test_background_executor_panic_handling() {
     let post_panic_clone = Arc::clone(&post_panic_executed);
 
     // Spawn task that panics
-    executor.spawn(Box::new(|| {
-        panic!("Intentional panic for testing");
-    }));
+    executor
+        .spawn(async {
+            panic!("Intentional panic for testing");
+        })
+        .detach();
 
     thread::sleep(Duration::from_millis(50));
 
     // Spawn another task after panic
-    executor.spawn(Box::new(move || {
-        post_panic_clone.store(true, Ordering::SeqCst);
-    }));
+    executor
+        .spawn(async move {
+            post_panic_clone.store(true, Ordering::SeqCst);
+        })
+        .detach();
 
     thread::sleep(Duration::from_millis(50));
 
@@ -444,7 +470,7 @@ fn test_background_executor_panic_handling() {
         "Executor should continue working after task panic"
     );
 
-    tracing::info!("✓ PASS: Background executor handles task panics gracefully");
+    tracing::info!("PASS: Background executor handles task panics gracefully");
 }
 
 /// Test foreground executor with high task volume
@@ -461,9 +487,12 @@ fn test_foreground_executor_high_volume() {
 
     for _ in 0..task_count {
         let counter_clone = Arc::clone(&counter);
-        executor.spawn(Box::new(move || {
-            counter_clone.fetch_add(1, Ordering::SeqCst);
-        }));
+        PlatformExecutor::spawn(
+            &executor,
+            Box::new(move || {
+                counter_clone.fetch_add(1, Ordering::SeqCst);
+            }),
+        );
     }
 
     let spawn_duration = start.elapsed();
@@ -484,7 +513,7 @@ fn test_foreground_executor_high_volume() {
     );
 
     tracing::info!(
-        "✓ PASS: Foreground executor handles {} tasks efficiently",
+        "PASS: Foreground executor handles {} tasks efficiently",
         task_count
     );
 }

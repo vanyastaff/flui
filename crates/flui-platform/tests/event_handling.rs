@@ -9,7 +9,6 @@
 use flui_platform::{current_platform, Platform, WindowOptions};
 use flui_types::geometry::{px, Size};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -236,7 +235,7 @@ fn test_mouse_movement_pointer_event() {
         max_size: None,
     };
 
-    let window = platform
+    let _window = platform
         .open_window(options)
         .expect("Failed to create window");
 
@@ -244,7 +243,7 @@ fn test_mouse_movement_pointer_event() {
 
     // Test: Verify PointerEvent types are available
     // (Uses ui_events::pointer::PointerEvent from ui-events crate)
-    use ui_events::pointer::{PointerButton, PointerButtons, PointerEvent, PointerType};
+    use ui_events::pointer::{PointerButton, PointerType};
 
     // Contract: PointerEvent::Move should contain:
     // - position: Offset<Pixels> (logical coordinates)

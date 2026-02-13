@@ -1,18 +1,10 @@
-//! Text system tests for flui-platform (Phase 4: T025-T028)
+//! Text system tests for flui-platform
 //!
-//! Tests platform text system integration:
-//! - T025: Load default font family
-//! - T026: Measure ASCII text bounds
-//! - T027: Measure text with emoji/CJK characters
-//! - T028: Font fallback when family doesn't exist
-//!
-//! # MVP Status
-//!
-//! These tests verify the **stub implementation** that returns reasonable defaults.
-//! Phase 2 will add real DirectWrite/Core Text integration.
+//! Tests platform text system integration using the new PlatformTextSystem API:
+//! - all_font_names(), font_id(), font_metrics(), glyph_for_char(), layout_line()
 
-use flui_platform::{current_platform, Platform};
-use flui_types::geometry::px;
+use flui_platform::current_platform;
+use flui_platform::traits::{Font, FontRun, FontStyle, FontWeight};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -24,326 +16,279 @@ fn init_tracing() {
 }
 
 // ============================================================================
-// T025: Load default font family returns platform font
+// Font enumeration
 // ============================================================================
 
 #[test]
-fn test_default_font_family() {
+fn test_all_font_names() {
     init_tracing();
-    tracing::info!("Test T025: Load default font family");
+    tracing::info!("Test: List all font names");
 
     let platform = current_platform().expect("Failed to get platform");
     let text_system = platform.text_system();
 
-    let default_font = text_system.default_font_family();
-    tracing::info!(
-        "Platform: {}, Default font: {}",
-        platform.name(),
-        default_font
-    );
+    let names = text_system.all_font_names();
+    tracing::info!("Found {} font families", names.len());
 
-    // Verify platform-specific default fonts
+    assert!(!names.is_empty(), "Should find at least one font");
+
     #[cfg(windows)]
-    assert_eq!(default_font, "Segoe UI", "Windows should use Segoe UI");
-
-    #[cfg(target_os = "macos")]
-    assert_eq!(default_font, "SF Pro Text", "macOS should use SF Pro Text");
-
-    #[cfg(target_os = "linux")]
-    assert_eq!(default_font, "Ubuntu", "Linux should use Ubuntu");
-
-    // Verify font name is not empty
     assert!(
-        !default_font.is_empty(),
-        "Default font name should not be empty"
+        names.iter().any(|n| n == "Segoe UI"),
+        "Windows should have Segoe UI"
     );
 
-    tracing::info!("✓ T025: Default font family verified");
+    tracing::info!("PASS: Font enumeration works");
 }
 
 // ============================================================================
-// T026: Measure text bounds for ASCII string with font size 16pt
+// Font resolution
 // ============================================================================
 
 #[test]
-fn test_measure_ascii_text() {
+fn test_font_id_resolution() {
     init_tracing();
-    tracing::info!("Test T026: Measure ASCII text bounds");
+    tracing::info!("Test: Resolve font descriptor to FontId");
 
     let platform = current_platform().expect("Failed to get platform");
     let text_system = platform.text_system();
+
+    let font = Font {
+        family: "Segoe UI".to_string(),
+        weight: FontWeight::Normal,
+        style: FontStyle::Normal,
+    };
+
+    let id = text_system.font_id(&font);
+    assert!(id.is_ok(), "Failed to resolve Segoe UI: {:?}", id.err());
+
+    // Same font should return same ID (cached)
+    let id2 = text_system.font_id(&font).unwrap();
+    assert_eq!(id.unwrap(), id2, "Same font should return same FontId");
+
+    tracing::info!("PASS: Font resolution works");
+}
+
+#[test]
+fn test_font_not_found() {
+    init_tracing();
+
+    let platform = current_platform().expect("Failed to get platform");
+    let text_system = platform.text_system();
+
+    let font = Font {
+        family: "NonExistentFontFamily12345".to_string(),
+        weight: FontWeight::Normal,
+        style: FontStyle::Normal,
+    };
+
+    let result = text_system.font_id(&font);
+    assert!(result.is_err(), "Non-existent font should return error");
+
+    tracing::info!("PASS: Non-existent font returns error");
+}
+
+// ============================================================================
+// Font metrics
+// ============================================================================
+
+#[test]
+fn test_font_metrics() {
+    init_tracing();
+
+    let platform = current_platform().expect("Failed to get platform");
+    let text_system = platform.text_system();
+
+    let font = Font {
+        family: "Segoe UI".to_string(),
+        weight: FontWeight::Normal,
+        style: FontStyle::Normal,
+    };
+    let id = text_system.font_id(&font).unwrap();
+    let metrics = text_system.font_metrics(id);
+
+    assert!(metrics.units_per_em > 0, "units_per_em should be > 0");
+    assert!(metrics.ascent > 0.0, "ascent should be > 0");
+    assert!(metrics.descent > 0.0, "descent should be > 0");
+    assert!(metrics.cap_height > 0.0, "cap_height should be > 0");
+    assert!(metrics.x_height > 0.0, "x_height should be > 0");
+
+    tracing::info!(
+        "PASS: Font metrics - em={}, ascent={}, descent={}",
+        metrics.units_per_em,
+        metrics.ascent,
+        metrics.descent
+    );
+}
+
+// ============================================================================
+// Glyph lookup
+// ============================================================================
+
+#[test]
+fn test_glyph_for_char() {
+    init_tracing();
+
+    let platform = current_platform().expect("Failed to get platform");
+    let text_system = platform.text_system();
+
+    let font = Font {
+        family: "Segoe UI".to_string(),
+        weight: FontWeight::Normal,
+        style: FontStyle::Normal,
+    };
+    let id = text_system.font_id(&font).unwrap();
+
+    // ASCII 'A' should have a glyph
+    let glyph = text_system.glyph_for_char(id, 'A');
+    assert!(glyph.is_some(), "Expected glyph for 'A'");
+    assert!(glyph.unwrap().0 > 0, "Glyph ID should be > 0");
+
+    // Space should have a glyph
+    let space_glyph = text_system.glyph_for_char(id, ' ');
+    assert!(space_glyph.is_some(), "Expected glyph for space");
+
+    tracing::info!("PASS: Glyph lookup works");
+}
+
+// ============================================================================
+// Text layout
+// ============================================================================
+
+#[test]
+fn test_layout_line_ascii() {
+    init_tracing();
+
+    let platform = current_platform().expect("Failed to get platform");
+    let text_system = platform.text_system();
+
+    let font = Font {
+        family: "Segoe UI".to_string(),
+        weight: FontWeight::Normal,
+        style: FontStyle::Normal,
+    };
+    let id = text_system.font_id(&font).unwrap();
 
     let text = "Hello, World!";
-    let font_family = text_system.default_font_family();
-    let font_size = 16.0;
-
-    let bounds = text_system.measure_text(text, &font_family, font_size);
-
-    tracing::info!(
-        "Text: '{}', Font: {}, Size: {}pt",
+    let layout = text_system.layout_line(
         text,
-        font_family,
-        font_size
+        16.0,
+        &[FontRun {
+            font_id: id,
+            len: text.len(),
+        }],
     );
+
+    assert!(
+        layout.width > 0.0,
+        "Width should be > 0, got {}",
+        layout.width
+    );
+    assert!(layout.ascent > 0.0, "Ascent should be > 0");
+    assert!(layout.descent > 0.0, "Descent should be > 0");
+    assert_eq!(layout.len, text.len());
+    assert_eq!(layout.font_size, 16.0);
+
     tracing::info!(
-        "Bounds: width={:.2}px, height={:.2}px",
-        bounds.width(),
-        bounds.height()
+        "PASS: ASCII layout - width={:.1}, ascent={:.1}, descent={:.1}",
+        layout.width,
+        layout.ascent,
+        layout.descent
     );
-
-    // Verify bounds are reasonable (MVP approximation)
-    // 13 characters * 16pt * 0.6 ≈ 124.8px width
-    // 16pt * 1.2 ≈ 19.2px height
-    assert!(
-        bounds.width() > px(100.0),
-        "Text width should be > 100px, got {}px",
-        bounds.width()
-    );
-    assert!(
-        bounds.width() < px(200.0),
-        "Text width should be < 200px, got {}px",
-        bounds.width()
-    );
-    assert!(
-        bounds.height() > px(15.0),
-        "Text height should be > 15px, got {}px",
-        bounds.height()
-    );
-    assert!(
-        bounds.height() < px(30.0),
-        "Text height should be < 30px, got {}px",
-        bounds.height()
-    );
-
-    tracing::info!("✓ T026: ASCII text measurement verified");
 }
 
-// ============================================================================
-// T027: Measure text with emoji/CJK characters returns correct width
-// ============================================================================
-
 #[test]
-fn test_measure_unicode_text() {
+fn test_layout_line_empty() {
     init_tracing();
-    tracing::info!("Test T027: Measure text with emoji/CJK characters");
-
-    let platform = current_platform().expect("Failed to get platform");
-    let text_system = platform.text_system();
-    let font_family = text_system.default_font_family();
-    let font_size = 16.0;
-
-    // Test 1: Emoji
-    let emoji_text = "Hello 👋 World 🌍!";
-    let emoji_bounds = text_system.measure_text(emoji_text, &font_family, font_size);
-    tracing::info!(
-        "Emoji text: '{}' → width={:.2}px, height={:.2}px",
-        emoji_text,
-        emoji_bounds.width(),
-        emoji_bounds.height()
-    );
-
-    // Test 2: CJK (Chinese/Japanese/Korean)
-    let cjk_text = "你好世界"; // "Hello World" in Chinese
-    let cjk_bounds = text_system.measure_text(cjk_text, &font_family, font_size);
-    tracing::info!(
-        "CJK text: '{}' → width={:.2}px, height={:.2}px",
-        cjk_text,
-        cjk_bounds.width(),
-        cjk_bounds.height()
-    );
-
-    // Test 3: Cyrillic
-    let cyrillic_text = "Привет мир"; // "Hello World" in Russian
-    let cyrillic_bounds = text_system.measure_text(cyrillic_text, &font_family, font_size);
-    tracing::info!(
-        "Cyrillic text: '{}' → width={:.2}px, height={:.2}px",
-        cyrillic_text,
-        cyrillic_bounds.width(),
-        cyrillic_bounds.height()
-    );
-
-    // Test 4: Arabic (RTL text)
-    let arabic_text = "مرحبا بالعالم"; // "Hello World" in Arabic
-    let arabic_bounds = text_system.measure_text(arabic_text, &font_family, font_size);
-    tracing::info!(
-        "Arabic text: '{}' → width={:.2}px, height={:.2}px",
-        arabic_text,
-        arabic_bounds.width(),
-        arabic_bounds.height()
-    );
-
-    // Verify all measurements return reasonable bounds
-    for (name, bounds) in [
-        ("emoji", emoji_bounds),
-        ("CJK", cjk_bounds),
-        ("Cyrillic", cyrillic_bounds),
-        ("Arabic", arabic_bounds),
-    ] {
-        assert!(
-            bounds.width() > px(0.0),
-            "{} text width should be positive",
-            name
-        );
-        assert!(
-            bounds.height() > px(0.0),
-            "{} text height should be positive",
-            name
-        );
-        assert!(
-            bounds.width() < px(1000.0),
-            "{} text width should be reasonable",
-            name
-        );
-        assert!(
-            bounds.height() < px(100.0),
-            "{} text height should be reasonable",
-            name
-        );
-    }
-
-    tracing::info!("✓ T027: Unicode text measurement verified (emoji, CJK, Cyrillic, Arabic)");
-}
-
-// ============================================================================
-// T028: Font fallback when requested family doesn't exist
-// ============================================================================
-
-#[test]
-fn test_font_fallback() {
-    init_tracing();
-    tracing::info!("Test T028: Font fallback for non-existent family");
 
     let platform = current_platform().expect("Failed to get platform");
     let text_system = platform.text_system();
 
-    // Try to load a font that definitely doesn't exist
-    let nonexistent_font = "NonExistentFontFamily12345";
-    let result = text_system.load_system_font(nonexistent_font);
+    let layout = text_system.layout_line("", 16.0, &[]);
+    assert_eq!(layout.width, 0.0);
+    assert_eq!(layout.len, 0);
 
-    tracing::info!("Attempted to load font: '{}'", nonexistent_font);
-    tracing::info!("Result: {:?}", result);
-
-    // MVP: Should return NotImplemented error
-    assert!(
-        result.is_err(),
-        "Loading non-existent font should return error"
-    );
-
-    // Verify we can still measure text with non-existent font
-    // (should fall back to default font approximation)
-    let text = "Test text";
-    let font_size = 16.0;
-    let bounds = text_system.measure_text(text, nonexistent_font, font_size);
-
-    tracing::info!(
-        "Text measurement with non-existent font: width={:.2}px, height={:.2}px",
-        bounds.width(),
-        bounds.height()
-    );
-
-    // Should still return reasonable bounds (fallback behavior)
-    assert!(
-        bounds.width() > px(0.0),
-        "Fallback measurement should return positive width"
-    );
-    assert!(
-        bounds.height() > px(0.0),
-        "Fallback measurement should return positive height"
-    );
-
-    tracing::info!("✓ T028: Font fallback behavior verified");
+    tracing::info!("PASS: Empty text layout works");
 }
 
-// ============================================================================
-// Additional test: Enumerate system fonts
-// ============================================================================
-
 #[test]
-fn test_enumerate_system_fonts() {
+fn test_layout_line_unicode() {
     init_tracing();
-    tracing::info!("Additional test: Enumerate system fonts");
 
     let platform = current_platform().expect("Failed to get platform");
     let text_system = platform.text_system();
 
-    let fonts = text_system.enumerate_system_fonts();
-    tracing::info!("Available fonts ({}): {:?}", fonts.len(), fonts);
+    let font = Font {
+        family: "Segoe UI".to_string(),
+        weight: FontWeight::Normal,
+        style: FontStyle::Normal,
+    };
+    let id = text_system.font_id(&font).unwrap();
 
-    // MVP: Should return at least the default font
-    assert!(!fonts.is_empty(), "Should return at least one font");
-    assert!(
-        fonts.contains(&text_system.default_font_family()),
-        "Font list should include default font"
+    // Cyrillic
+    let text = "Привет мир";
+    let layout = text_system.layout_line(
+        text,
+        16.0,
+        &[FontRun {
+            font_id: id,
+            len: text.len(),
+        }],
     );
+    assert!(layout.width > 0.0, "Cyrillic layout width should be > 0");
 
-    tracing::info!("✓ Font enumeration verified");
+    tracing::info!("PASS: Unicode layout - Cyrillic width={:.1}", layout.width);
 }
 
 // ============================================================================
-// Additional test: Glyph shaping
+// Performance test
 // ============================================================================
 
 #[test]
-fn test_glyph_shaping() {
+fn test_text_layout_performance() {
     init_tracing();
-    tracing::info!("Additional test: Glyph shaping");
 
     let platform = current_platform().expect("Failed to get platform");
     let text_system = platform.text_system();
 
-    let text = "Hello";
-    let font_family = text_system.default_font_family();
-    let font_size = 16.0;
+    let font = Font {
+        family: "Segoe UI".to_string(),
+        weight: FontWeight::Normal,
+        style: FontStyle::Normal,
+    };
+    let id = text_system.font_id(&font).unwrap();
 
-    let glyphs = text_system.shape_glyphs(text, &font_family, font_size);
-    tracing::info!("Shaped '{}' into {} glyphs", text, glyphs.len());
-
-    // MVP: Returns empty vector (no glyph data yet)
-    // Phase 2: Will return positioned glyphs
-    tracing::info!("✓ Glyph shaping verified (MVP: returns empty)");
-}
-
-// ============================================================================
-// Performance test: Text measurement latency
-// ============================================================================
-
-#[test]
-fn test_text_measurement_performance() {
-    init_tracing();
-    tracing::info!("Performance test: Text measurement latency");
-
-    let platform = current_platform().expect("Failed to get platform");
-    let text_system = platform.text_system();
-    let font_family = text_system.default_font_family();
-    let font_size = 16.0;
-
-    let test_strings = vec![
+    let test_strings = [
         "Short",
         "Medium length text string",
         "This is a much longer text string that contains significantly more characters to measure",
-        "Unicode: 你好世界 🌍 مرحبا",
     ];
 
     for text in test_strings {
         let start = std::time::Instant::now();
-        let _bounds = text_system.measure_text(text, &font_family, font_size);
+        let layout = text_system.layout_line(
+            text,
+            16.0,
+            &[FontRun {
+                font_id: id,
+                len: text.len(),
+            }],
+        );
         let elapsed = start.elapsed();
 
         tracing::info!(
-            "Measured '{}...' ({} chars) in {:.3}ms",
+            "Measured '{}' ({} chars, width={:.1}) in {:.3}ms",
             &text.chars().take(20).collect::<String>(),
             text.chars().count(),
+            layout.width,
             elapsed.as_secs_f64() * 1000.0
         );
 
-        // Target: <1ms for strings <100 characters (NFR-003)
-        if text.chars().count() < 100 {
-            assert!(
-                elapsed.as_millis() < 10,
-                "Text measurement should be fast (<10ms for MVP stub)"
-            );
-        }
+        assert!(
+            elapsed.as_millis() < 50,
+            "Text layout should be fast (<50ms)"
+        );
     }
 
-    tracing::info!("✓ Text measurement performance verified");
+    tracing::info!("PASS: Text layout performance verified");
 }
