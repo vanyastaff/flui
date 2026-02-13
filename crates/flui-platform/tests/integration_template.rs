@@ -225,31 +225,39 @@ fn test_text_system_integration() {
     let platform = get_test_platform();
     let text_system = platform.text_system();
 
-    // Basic text measurement
+    // Font enumeration
+    let font_names = text_system.all_font_names();
+    assert!(!font_names.is_empty(), "Should have at least one font");
+    tracing::info!("Found {} fonts, first: {}", font_names.len(), font_names[0]);
+
+    // Font resolution
+    let font = flui_platform::Font {
+        family: font_names[0].clone(),
+        ..Default::default()
+    };
+    let id = text_system.font_id(&font).expect("Should resolve font");
+
+    // Text layout
     let text = "Integration Test";
-    let font_family = text_system.default_font_family();
-    let font_size = 16.0;
+    let layout = text_system.layout_line(
+        text,
+        16.0,
+        &[flui_platform::FontRun {
+            font_id: id,
+            len: text.len(),
+        }],
+    );
 
     tracing::info!(
-        "Measuring text '{}' with font '{}' at {}pt",
-        text,
-        font_family,
-        font_size
-    );
-
-    let bounds = text_system.measure_text(text, &font_family, font_size);
-
-    tracing::info!("Text bounds: {}x{}", bounds.width().0, bounds.height().0);
-
-    // Text bounds should be reasonable
-    assert!(
-        bounds.width().0 > 0.0 && bounds.width().0 < 1000.0,
-        "Text width should be reasonable"
+        "Text layout: width={:.1}, ascent={:.1}",
+        layout.width,
+        layout.ascent
     );
 
     assert!(
-        bounds.height().0 > 0.0 && bounds.height().0 < 100.0,
-        "Text height should be reasonable"
+        layout.width > 0.0 && layout.width < 1000.0,
+        "Text width should be reasonable, got {}",
+        layout.width
     );
 
     // TODO: Add actual rendering integration when flui_painting is ready

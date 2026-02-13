@@ -4,4 +4,4 @@
 
 mod handlers;
 
-pub use handlers::PlatformHandlers;
+pub use handlers::{PlatformHandlers, WindowCallbacks};

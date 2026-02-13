@@ -3,7 +3,7 @@
 //! Comprehensive tests for display/monitor enumeration with DPI-aware bounds,
 //! refresh rates, and multi-monitor support.
 
-use flui_platform::{current_platform, Platform, PlatformDisplay};
+use flui_platform::current_platform;
 use std::collections::HashSet;
 
 fn init_tracing() {

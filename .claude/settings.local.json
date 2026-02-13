@@ -15,7 +15,9 @@
       "WebFetch(domain:github.com)",
       "mcp__filesystem__write_file",
       "Skill(rust-best-practices)",
-      "Skill(rust-best-practices:*)"
+      "Skill(rust-best-practices:*)",
+      "mcp__filesystem__search_files",
+      "WebFetch(domain:microsoft.github.io)"
     ]
   }
 }

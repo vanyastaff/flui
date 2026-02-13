@@ -7,6 +7,7 @@ mod clipboard;
 mod display;
 mod events;
 mod platform;
+mod text_system;
 mod util;
 mod window;
 mod window_ext;

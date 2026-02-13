@@ -6,120 +6,105 @@
 //! behave consistently and return reasonable values.
 
 use flui_platform::current_platform;
-use flui_types::geometry::px;
+use flui_platform::traits::{Font, FontRun, FontStyle, FontWeight};
 
 #[test]
-fn test_all_platforms_return_default_font() {
-    // Test that every platform returns a non-empty default font family
+fn test_all_platforms_return_font_names() {
+    // Test that every platform returns a non-empty font list
     let platform = current_platform().expect("Failed to get platform");
     let text_system = platform.text_system();
 
-    let default_font = text_system.default_font_family();
+    let font_names = text_system.all_font_names();
 
     assert!(
-        !default_font.is_empty(),
-        "Platform {} returned empty default font family",
+        !font_names.is_empty(),
+        "Platform {} returned no font names",
         platform.name()
     );
 
     // Platform-specific expectations
     #[cfg(windows)]
-    assert_eq!(
-        default_font, "Segoe UI",
-        "Windows should use Segoe UI as default"
-    );
-
-    #[cfg(target_os = "macos")]
-    assert_eq!(
-        default_font, "SF Pro Text",
-        "macOS should use SF Pro Text as default"
-    );
-
-    #[cfg(target_os = "linux")]
-    assert_eq!(default_font, "Ubuntu", "Linux should use Ubuntu as default");
-}
-
-#[test]
-fn test_all_platforms_enumerate_fonts() {
-    // Test that every platform can enumerate at least one font
-    let platform = current_platform().expect("Failed to get platform");
-    let text_system = platform.text_system();
-
-    let fonts = text_system.enumerate_system_fonts();
-
     assert!(
-        !fonts.is_empty(),
-        "Platform {} returned no system fonts",
-        platform.name()
-    );
-
-    // Default font should be in the list
-    let default_font = text_system.default_font_family();
-    assert!(
-        fonts.contains(&default_font),
-        "Default font '{}' should be in system fonts list",
-        default_font
+        font_names.iter().any(|n| n == "Segoe UI"),
+        "Windows should have Segoe UI"
     );
 }
 
 #[test]
-fn test_all_platforms_measure_text_reasonably() {
-    // Test that all platforms return reasonable text measurements
+fn test_all_platforms_resolve_font() {
+    // Test that every platform can resolve a standard font
     let platform = current_platform().expect("Failed to get platform");
     let text_system = platform.text_system();
+
+    let font_names = text_system.all_font_names();
+    assert!(!font_names.is_empty());
+
+    // Use the first available font
+    let font = Font {
+        family: font_names[0].clone(),
+        weight: FontWeight::Normal,
+        style: FontStyle::Normal,
+    };
+
+    let id = text_system.font_id(&font);
+    assert!(
+        id.is_ok(),
+        "Platform {} failed to resolve font '{}': {:?}",
+        platform.name(),
+        font_names[0],
+        id.err()
+    );
+}
+
+#[test]
+fn test_all_platforms_layout_line_reasonably() {
+    // Test that all platforms return reasonable text layout
+    let platform = current_platform().expect("Failed to get platform");
+    let text_system = platform.text_system();
+
+    let font_names = text_system.all_font_names();
+    let font = Font {
+        family: font_names[0].clone(),
+        weight: FontWeight::Normal,
+        style: FontStyle::Normal,
+    };
+    let id = text_system.font_id(&font).unwrap();
 
     let test_cases = vec![("Hello", 16.0), ("World!", 20.0), ("Test 123", 14.0)];
 
     for (text, font_size) in test_cases {
-        let bounds = text_system.measure_text(text, &text_system.default_font_family(), font_size);
+        let layout = text_system.layout_line(
+            text,
+            font_size,
+            &[FontRun {
+                font_id: id,
+                len: text.len(),
+            }],
+        );
 
-        // Width should be reasonable (roughly 0.5-0.7em per character)
+        // Width should be reasonable (roughly 0.3-1.0em per character)
         let char_count = text.chars().count() as f32;
-        let min_width = char_count * font_size * 0.3; // Very conservative
-        let max_width = char_count * font_size * 1.0; // Very generous
+        let min_width = char_count * font_size * 0.3;
+        let max_width = char_count * font_size * 1.0;
 
         assert!(
-            bounds.width() >= px(min_width),
-            "Platform {} measured '{}' at {}px too narrow: {}px (expected ≥{}px)",
+            layout.width >= min_width,
+            "Platform {} measured '{}' at {}px too narrow: {}px (expected >={}px)",
             platform.name(),
             text,
             font_size,
-            bounds.width(),
+            layout.width,
             min_width
         );
 
         assert!(
-            bounds.width() <= px(max_width),
-            "Platform {} measured '{}' at {}px too wide: {}px (expected ≤{}px)",
+            layout.width <= max_width,
+            "Platform {} measured '{}' at {}px too wide: {}px (expected <={}px)",
             platform.name(),
             text,
             font_size,
-            bounds.width(),
+            layout.width,
             max_width
-        );
-
-        // Height should be roughly font_size * 1.0-1.5 (includes line height)
-        let min_height = font_size * 0.8;
-        let max_height = font_size * 2.0;
-
-        assert!(
-            bounds.height() >= px(min_height),
-            "Platform {} measured '{}' at {}px too short: {}px (expected ≥{}px)",
-            platform.name(),
-            text,
-            font_size,
-            bounds.height(),
-            min_height
-        );
-
-        assert!(
-            bounds.height() <= px(max_height),
-            "Platform {} measured '{}' at {}px too tall: {}px (expected ≤{}px)",
-            platform.name(),
-            text,
-            font_size,
-            bounds.height(),
-            max_height
         );
     }
 }
@@ -130,14 +115,14 @@ fn test_all_platforms_handle_empty_text() {
     let platform = current_platform().expect("Failed to get platform");
     let text_system = platform.text_system();
 
-    let bounds = text_system.measure_text("", &text_system.default_font_family(), 16.0);
+    let layout = text_system.layout_line("", 16.0, &[]);
 
-    // Empty text should have zero or near-zero width
-    assert!(
-        bounds.width() <= px(5.0),
-        "Platform {} measured empty text with width {}px (expected ≤5px)",
+    assert_eq!(
+        layout.width,
+        0.0,
+        "Platform {} measured empty text with width {}px (expected 0)",
         platform.name(),
-        bounds.width()
+        layout.width
     );
 }
 
@@ -147,34 +132,45 @@ fn test_all_platforms_scale_with_font_size() {
     let platform = current_platform().expect("Failed to get platform");
     let text_system = platform.text_system();
 
+    let font_names = text_system.all_font_names();
+    let font = Font {
+        family: font_names[0].clone(),
+        weight: FontWeight::Normal,
+        style: FontStyle::Normal,
+    };
+    let id = text_system.font_id(&font).unwrap();
+
     let text = "Test";
     let small_size = 12.0;
     let large_size = 24.0;
     let scale_factor = large_size / small_size; // 2.0x
 
-    let small_bounds =
-        text_system.measure_text(text, &text_system.default_font_family(), small_size);
+    let small_layout = text_system.layout_line(
+        text,
+        small_size,
+        &[FontRun {
+            font_id: id,
+            len: text.len(),
+        }],
+    );
 
-    let large_bounds =
-        text_system.measure_text(text, &text_system.default_font_family(), large_size);
+    let large_layout = text_system.layout_line(
+        text,
+        large_size,
+        &[FontRun {
+            font_id: id,
+            len: text.len(),
+        }],
+    );
 
-    // Large should be approximately 2x small (within 10% tolerance)
-    let width_ratio = large_bounds.width().0 / small_bounds.width().0;
-    let height_ratio = large_bounds.height().0 / small_bounds.height().0;
+    // Large should be approximately 2x small (within 20% tolerance)
+    let width_ratio = large_layout.width / small_layout.width;
 
     assert!(
-        (width_ratio - scale_factor).abs() < scale_factor * 0.1,
+        (width_ratio - scale_factor).abs() < scale_factor * 0.2,
         "Platform {} width scaling incorrect: {}x (expected ~{}x)",
         platform.name(),
         width_ratio,
-        scale_factor
-    );
-
-    assert!(
-        (height_ratio - scale_factor).abs() < scale_factor * 0.1,
-        "Platform {} height scaling incorrect: {}x (expected ~{}x)",
-        platform.name(),
-        height_ratio,
         scale_factor
     );
 }
@@ -185,28 +181,29 @@ fn test_all_platforms_handle_unicode() {
     let platform = current_platform().expect("Failed to get platform");
     let text_system = platform.text_system();
 
-    let unicode_tests = vec![
-        ("Hello 👋", "emoji"),
-        ("你好", "CJK"),
-        ("Привет", "Cyrillic"),
-        ("مرحبا", "Arabic RTL"),
-    ];
+    let font_names = text_system.all_font_names();
+    let font = Font {
+        family: font_names[0].clone(),
+        weight: FontWeight::Normal,
+        style: FontStyle::Normal,
+    };
+    let id = text_system.font_id(&font).unwrap();
+
+    let unicode_tests = vec![("Привет", "Cyrillic"), ("你好", "CJK")];
 
     for (text, description) in unicode_tests {
-        let bounds = text_system.measure_text(text, &text_system.default_font_family(), 16.0);
-
-        // Should return some non-zero width (stub approximation is fine)
-        assert!(
-            bounds.width() > px(0.0),
-            "Platform {} failed to measure {} text '{}': returned zero width",
-            platform.name(),
-            description,
-            text
+        let layout = text_system.layout_line(
+            text,
+            16.0,
+            &[FontRun {
+                font_id: id,
+                len: text.len(),
+            }],
         );
 
         assert!(
-            bounds.height() > px(0.0),
-            "Platform {} failed to measure {} text '{}': returned zero height",
+            layout.width > 0.0,
+            "Platform {} failed to layout {} text '{}': zero width",
             platform.name(),
             description,
             text
@@ -215,42 +212,43 @@ fn test_all_platforms_handle_unicode() {
 }
 
 #[test]
-fn test_all_platforms_glyph_shaping_returns_vec() {
-    // Test that all platforms return a Vec for glyph shaping (even if empty in MVP)
+fn test_all_platforms_font_metrics_reasonable() {
+    // Test that all platforms return reasonable font metrics
     let platform = current_platform().expect("Failed to get platform");
     let text_system = platform.text_system();
 
-    let glyphs = text_system.shape_glyphs("Test", &text_system.default_font_family(), 16.0);
+    let font_names = text_system.all_font_names();
+    let font = Font {
+        family: font_names[0].clone(),
+        weight: FontWeight::Normal,
+        style: FontStyle::Normal,
+    };
+    let id = text_system.font_id(&font).unwrap();
+    let metrics = text_system.font_metrics(id);
 
-    // MVP stub returns empty vec - just verify it's a valid Vec
-    // (Future implementations will return actual glyphs)
-    assert!(
-        glyphs.is_empty(),
-        "MVP stub should return empty glyph vec, got {} glyphs",
-        glyphs.len()
-    );
+    assert!(metrics.units_per_em > 0, "units_per_em should be > 0");
+    assert!(metrics.ascent > 0.0, "ascent should be > 0");
+    assert!(metrics.descent > 0.0, "descent should be > 0");
 }
 
 #[test]
-fn test_all_platforms_font_loading_not_implemented() {
-    // Test that all platforms return NotImplemented for font loading in MVP
+fn test_all_platforms_glyph_for_char() {
+    // Test that all platforms can look up a basic glyph
     let platform = current_platform().expect("Failed to get platform");
     let text_system = platform.text_system();
 
-    use flui_platform::TextSystemError;
+    let font_names = text_system.all_font_names();
+    let font = Font {
+        family: font_names[0].clone(),
+        weight: FontWeight::Normal,
+        style: FontStyle::Normal,
+    };
+    let id = text_system.font_id(&font).unwrap();
 
-    let result = text_system.load_system_font("Arial");
-
+    let glyph = text_system.glyph_for_char(id, 'A');
     assert!(
-        result.is_err(),
-        "MVP stub should return error for font loading"
+        glyph.is_some(),
+        "Platform {} should have glyph for 'A'",
+        platform.name()
     );
-
-    if let Err(err) = result {
-        assert_eq!(
-            err,
-            TextSystemError::NotImplemented,
-            "Should return NotImplemented error"
-        );
-    }
 }

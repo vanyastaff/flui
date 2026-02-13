@@ -5,7 +5,7 @@
 //! - T062: Event handler demo example (created separately)
 //! - T063: Event dispatch latency benchmarking (<5ms target)
 
-use flui_platform::{current_platform, Platform, WindowOptions};
+use flui_platform::{current_platform, WindowOptions};
 use flui_types::geometry::{px, Size};
 use std::time::Instant;
 use tracing_subscriber::layer::SubscriberExt;

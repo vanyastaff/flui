@@ -74,6 +74,27 @@ pub struct KeyboardEvent {
     pub is_repeat: bool,
 }
 
+/// Result of dispatching an input event through a callback
+///
+/// Indicates whether the event was consumed by the handler and whether
+/// the platform's default behavior should be suppressed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DispatchEventResult {
+    /// If false, the event was consumed and should not propagate further
+    pub propagate: bool,
+    /// If true, the platform's default handling should be suppressed
+    pub default_prevented: bool,
+}
+
+impl Default for DispatchEventResult {
+    fn default() -> Self {
+        Self {
+            propagate: true,
+            default_prevented: false,
+        }
+    }
+}
+
 /// Platform input event wrapper
 ///
 /// This enum wraps ui-events types for platform-specific dispatching.

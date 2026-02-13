@@ -3,7 +3,10 @@
 //! Defines the central Platform trait that all platform implementations must provide.
 //! This trait serves as the main interface between the FLUI framework and platform-specific code.
 
+use super::window::WindowAppearance;
 use super::{PlatformCapabilities, PlatformDisplay, PlatformWindow};
+use crate::cursor::CursorStyle;
+use crate::task::Task;
 use anyhow::Result;
 use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
 use std::path::{Path, PathBuf};
@@ -67,9 +70,10 @@ impl Default for WindowOptions {
 ///     _ => {}
 /// }
 /// ```
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum WindowMode {
     /// Normal windowed state
+    #[default]
     Normal,
 
     /// Window is minimized (iconified)
@@ -130,12 +134,6 @@ impl WindowMode {
     pub fn can_transition_to(&self, new_mode: &WindowMode) -> bool {
         // All transitions allowed except same state
         !std::mem::discriminant(self).eq(&std::mem::discriminant(new_mode))
-    }
-}
-
-impl Default for WindowMode {
-    fn default() -> Self {
-        WindowMode::Normal
     }
 }
 
@@ -236,13 +234,109 @@ pub trait Platform: Send + Sync + 'static {
     /// Get the platform's clipboard interface
     fn clipboard(&self) -> Arc<dyn Clipboard>;
 
-    // ==================== Platform Capabilities ====================
+    // ==================== App Activation (US3) ====================
 
-    /// Get the platform's capabilities descriptor
-    fn capabilities(&self) -> &dyn PlatformCapabilities;
+    /// Activate the application (bring to front)
+    ///
+    /// On Windows: brings the active window to the foreground.
+    /// On macOS: activates the app via NSApp.
+    fn activate(&self, ignoring_other_apps: bool) {
+        let _ = ignoring_other_apps;
+    }
 
-    /// Get the platform's name for debugging/logging
-    fn name(&self) -> &'static str;
+    /// Hide the application
+    fn hide(&self) {}
+
+    /// Hide all other applications
+    fn hide_other_apps(&self) {}
+
+    /// Unhide all other applications
+    fn unhide_other_apps(&self) {}
+
+    // ==================== Appearance (US3) ====================
+
+    /// Get the system window appearance (light/dark theme)
+    fn window_appearance(&self) -> WindowAppearance {
+        WindowAppearance::default()
+    }
+
+    /// Whether scrollbars should auto-hide
+    fn should_auto_hide_scrollbars(&self) -> bool {
+        false
+    }
+
+    // ==================== Cursor (US3) ====================
+
+    /// Set the platform cursor style
+    fn set_cursor_style(&self, style: CursorStyle) {
+        let _ = style;
+    }
+
+    // ==================== Clipboard (US3 Enhanced) ====================
+
+    /// Write a rich clipboard item (text + metadata)
+    fn write_to_clipboard(&self, item: ClipboardItem) {
+        // Default: write first text entry via existing Clipboard trait
+        if let Some(text) = item.text_content() {
+            self.clipboard().write_text(text.to_string());
+        }
+    }
+
+    /// Read a rich clipboard item
+    fn read_from_clipboard(&self) -> Option<ClipboardItem> {
+        // Default: read via existing Clipboard trait
+        self.clipboard().read_text().map(ClipboardItem::text)
+    }
+
+    // ==================== File Operations (US3) ====================
+
+    /// Open a URL with the system's default handler
+    fn open_url(&self, url: &str) {
+        let _ = url;
+    }
+
+    /// Reveal a path in the platform's file manager
+    fn reveal_path(&self, path: &Path) {
+        let _ = path;
+    }
+
+    /// Open a path with the system's default application
+    fn open_path(&self, path: &Path) {
+        let _ = path;
+    }
+
+    /// Show a file/directory picker dialog
+    ///
+    /// Returns selected paths, or `None` if the user cancelled.
+    /// The dialog runs asynchronously on a background thread.
+    fn prompt_for_paths(&self, options: PathPromptOptions) -> Task<Result<Option<Vec<PathBuf>>>> {
+        let _ = options;
+        Task::ready(Ok(None))
+    }
+
+    /// Show a "Save As" dialog for selecting a new file path
+    ///
+    /// Returns the selected path, or `None` if the user cancelled.
+    fn prompt_for_new_path(
+        &self,
+        directory: &Path,
+        suggested_name: Option<&str>,
+    ) -> Task<Result<Option<PathBuf>>> {
+        let _ = (directory, suggested_name);
+        Task::ready(Ok(None))
+    }
+
+    // ==================== Keyboard (US3) ====================
+
+    /// Get the current keyboard layout identifier
+    fn keyboard_layout(&self) -> String {
+        String::new()
+    }
+
+    /// Register a callback for keyboard layout changes
+    fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut() + Send>) {
+        let _ = callback;
+    }
 
     // ==================== Callbacks ====================
 
@@ -251,23 +345,28 @@ pub trait Platform: Send + Sync + 'static {
 
     /// Register a callback for when the application is reopened (macOS)
     fn on_reopen(&self, callback: Box<dyn FnMut() + Send>) {
-        // Default: no-op (desktop platforms don't support this)
         let _ = callback;
     }
 
     /// Register a callback for window events
     fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>);
 
-    // ==================== File System Integration ====================
-
-    /// Reveal a path in the platform's file manager
-    fn reveal_path(&self, path: &Path) {
-        let _ = path; // Default: no-op
+    /// Register a callback for URLs opened by the system
+    fn on_open_urls(&self, callback: Box<dyn FnMut(Vec<String>) + Send>) {
+        let _ = callback;
     }
 
-    /// Open a path with the system's default application
-    fn open_path(&self, path: &Path) {
-        let _ = path; // Default: no-op
+    // ==================== Platform Info ====================
+
+    /// Get the platform's capabilities descriptor
+    fn capabilities(&self) -> &dyn PlatformCapabilities;
+
+    /// Get the platform's name for debugging/logging
+    fn name(&self) -> &'static str;
+
+    /// Get the compositor name (e.g., "DWM" on Windows)
+    fn compositor_name(&self) -> &'static str {
+        ""
     }
 
     /// Get the application's executable path
@@ -362,16 +461,153 @@ pub trait PlatformExecutor: Send + Sync {
     }
 }
 
-/// Platform text rendering system
-///
-/// This trait will be expanded later - for now it's a placeholder.
-/// Real implementation will handle font loading, text shaping, etc.
+// ==================== Font Types (US5) ====================
+
+/// Unique identifier for a loaded font face
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FontId(pub usize);
+
+/// Unique identifier for a glyph within a font
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GlyphId(pub u32);
+
+/// Font descriptor for resolving a specific font face
+#[derive(Debug, Clone, Default)]
+pub struct Font {
+    /// Font family name (e.g., "Segoe UI", "Arial")
+    pub family: String,
+    /// Font weight (Normal, Bold, etc.)
+    pub weight: FontWeight,
+    /// Font style (Normal, Italic, Oblique)
+    pub style: FontStyle,
+}
+
+/// Font weight variants
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum FontWeight {
+    /// Thin (100)
+    Thin,
+    /// Light (300)
+    Light,
+    /// Normal/Regular (400)
+    #[default]
+    Normal,
+    /// Medium (500)
+    Medium,
+    /// SemiBold (600)
+    SemiBold,
+    /// Bold (700)
+    Bold,
+    /// ExtraBold (800)
+    ExtraBold,
+    /// Black (900)
+    Black,
+}
+
+impl FontWeight {
+    /// Convert to DirectWrite/CSS numeric weight
+    pub fn to_numeric(self) -> u16 {
+        match self {
+            FontWeight::Thin => 100,
+            FontWeight::Light => 300,
+            FontWeight::Normal => 400,
+            FontWeight::Medium => 500,
+            FontWeight::SemiBold => 600,
+            FontWeight::Bold => 700,
+            FontWeight::ExtraBold => 800,
+            FontWeight::Black => 900,
+        }
+    }
+}
+
+/// Font style variants
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum FontStyle {
+    /// Upright (normal)
+    #[default]
+    Normal,
+    /// Italic
+    Italic,
+    /// Oblique (slanted)
+    Oblique,
+}
+
+/// A run of text with a specific font
+#[derive(Debug, Clone, Copy)]
+pub struct FontRun {
+    /// Font to use for this run
+    pub font_id: FontId,
+    /// Number of UTF-8 bytes in this run
+    pub len: usize,
+}
+
+/// Font metrics in design units
+#[derive(Debug, Clone, Copy)]
+pub struct FontMetrics {
+    /// Design units per em square
+    pub units_per_em: u16,
+    /// Ascent in design units (positive, above baseline)
+    pub ascent: f32,
+    /// Descent in design units (positive value, below baseline)
+    pub descent: f32,
+    /// Line gap in design units
+    pub line_gap: f32,
+    /// Underline position in design units (negative = below baseline)
+    pub underline_position: f32,
+    /// Underline thickness in design units
+    pub underline_thickness: f32,
+    /// Cap height in design units
+    pub cap_height: f32,
+    /// x-height in design units
+    pub x_height: f32,
+}
+
+/// Result of laying out a single line of text
+#[derive(Debug, Clone)]
+pub struct LineLayout {
+    /// Font size used for layout
+    pub font_size: f32,
+    /// Total width of the line in logical pixels
+    pub width: f32,
+    /// Ascent of the line in logical pixels
+    pub ascent: f32,
+    /// Descent of the line in logical pixels (positive value)
+    pub descent: f32,
+    /// Shaped glyph runs
+    pub runs: Vec<ShapedRun>,
+    /// Total number of UTF-8 bytes in the laid-out text
+    pub len: usize,
+}
+
+/// A run of shaped glyphs with a single font
+#[derive(Debug, Clone)]
+pub struct ShapedRun {
+    /// Font used for this run
+    pub font_id: FontId,
+    /// Shaped glyphs in this run
+    pub glyphs: Vec<ShapedGlyph>,
+}
+
+/// A single shaped glyph with position
+#[derive(Debug, Clone, Copy)]
+pub struct ShapedGlyph {
+    /// Glyph identifier in the font
+    pub id: GlyphId,
+    /// Horizontal position from line start (logical pixels)
+    pub position_x: f32,
+    /// Vertical position from baseline (logical pixels)
+    pub position_y: f32,
+    /// Index of the source character in the original text (byte offset)
+    pub index: usize,
+}
+
+// ==================== PlatformTextSystem Trait (US5) ====================
+
 /// Platform-native text measurement and glyph shaping abstraction
 ///
-/// This trait provides the minimal interface needed for text layout and rendering.
 /// Platform implementations use native APIs:
-/// - Windows: DirectWrite (IDWriteFactory, IDWriteTextLayout)
-/// - macOS: Core Text (CTFont, CTLine, CTRun)
+/// - Windows: DirectWrite (`IDWriteFactory5`, `IDWriteTextLayout`)
+/// - macOS: Core Text (`CTFont`, `CTLine`, `CTRun`)
 /// - Linux: fontconfig + freetype
 ///
 /// # Architecture
@@ -383,191 +619,38 @@ pub trait PlatformExecutor: Send + Sync {
 ///         ↓
 /// flui_painting → GPU rendering with wgpu
 /// ```
-///
-/// # MVP Status
-///
-/// Current implementation provides **stubs** that return reasonable defaults.
-/// Full DirectWrite/Core Text integration is deferred to Phase 2.
-///
-/// See `specs/dev/plan.md` for full architecture design.
 pub trait PlatformTextSystem: Send + Sync {
-    /// Get the system's default font family name
+    /// Load font data from raw bytes (TrueType/OpenType)
     ///
-    /// Returns the OS default font for UI text:
-    /// - Windows: "Segoe UI"
-    /// - macOS: "SF Pro Text" (or ".AppleSystemUIFont")
-    /// - Linux: "sans-serif" or "Ubuntu"
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let text_system = platform.text_system();
-    /// let default_font = text_system.default_font_family();
-    /// assert_eq!(default_font, "Segoe UI"); // On Windows
-    /// ```
-    fn default_font_family(&self) -> String {
-        #[cfg(windows)]
-        return "Segoe UI".to_string();
+    /// Registers custom font data with the platform's font system.
+    /// After loading, fonts can be resolved via `font_id()`.
+    fn add_fonts(&self, fonts: Vec<std::borrow::Cow<'static, [u8]>>) -> anyhow::Result<()>;
 
-        #[cfg(target_os = "macos")]
-        return "SF Pro Text".to_string();
+    /// List all available font family names
+    ///
+    /// Returns names from both system fonts and custom-loaded fonts.
+    fn all_font_names(&self) -> Vec<String>;
 
-        #[cfg(target_os = "linux")]
-        return "Ubuntu".to_string();
+    /// Resolve a font descriptor to a FontId
+    ///
+    /// Matches the requested family/weight/style to the closest available font.
+    fn font_id(&self, descriptor: &Font) -> anyhow::Result<FontId>;
 
-        #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
-        return "sans-serif".to_string();
-    }
+    /// Get metrics for a loaded font
+    ///
+    /// Returns design-unit metrics (ascent, descent, line gap, etc.).
+    fn font_metrics(&self, font_id: FontId) -> FontMetrics;
 
-    /// Enumerate all available system fonts
+    /// Map a character to its glyph ID in a font
     ///
-    /// Returns a list of font family names installed on the system.
-    /// Used for font pickers and fallback chains.
-    ///
-    /// # Implementation Status
-    ///
-    /// **MVP**: Returns only the default font.
-    /// **Phase 2**: Query DirectWrite/Core Text for full font list.
-    ///
-    /// # Platform APIs
-    ///
-    /// - Windows: `IDWriteFontCollection::GetFontFamilyCount()` + iterate
-    /// - macOS: `CTFontManagerCopyAvailableFontFamilyNames()`
-    /// - Linux: `FcConfigGetFonts()` from fontconfig
-    fn enumerate_system_fonts(&self) -> Vec<String> {
-        vec![self.default_font_family()]
-    }
+    /// Returns `None` if the font does not contain a glyph for this character.
+    fn glyph_for_char(&self, font_id: FontId, ch: char) -> Option<GlyphId>;
 
-    /// Load a system font by family name
+    /// Layout a single line of text with font runs
     ///
-    /// Returns the raw font file bytes (TrueType or OpenType) for the given
-    /// font family. This allows flui-text to register system fonts with
-    /// cosmic-text or other text engines.
-    ///
-    /// # Arguments
-    ///
-    /// * `family` - Font family name (e.g., "Arial", "SF Pro Text")
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(Vec<u8>)` - Raw .ttf or .otf file bytes
-    /// * `Err(TextSystemError)` - Font not found or access error
-    ///
-    /// # Implementation Status
-    ///
-    /// **MVP**: Returns `Err(TextSystemError::NotImplemented)`.
-    /// **Phase 2**: Extract font data from DirectWrite/Core Text.
-    ///
-    /// # Platform APIs
-    ///
-    /// - Windows: `IDWriteFont::CreateFontFace()` → `GetFiles()` → read
-    /// - macOS: `CTFontCopyTable()` to extract OpenType tables
-    /// - Linux: `FcConfigSubstitute()` → `FcFontMatch()` → read file path
-    fn load_system_font(&self, family: &str) -> Result<Vec<u8>, TextSystemError> {
-        let _ = family;
-        Err(TextSystemError::NotImplemented)
-    }
-
-    /// Measure text bounding box
-    ///
-    /// Calculates the layout bounds for the given text string with specified
-    /// font and size. Used by layout engine to determine widget sizes.
-    ///
-    /// # Arguments
-    ///
-    /// * `text` - Text to measure (UTF-8, may contain emoji/CJK)
-    /// * `font_family` - Font family name
-    /// * `font_size` - Font size in logical pixels
-    ///
-    /// # Returns
-    ///
-    /// Rectangle containing the text bounds in logical pixels.
-    /// Origin (0, 0) is at the baseline start.
-    ///
-    /// # Implementation Status
-    ///
-    /// **MVP**: Returns approximate bounds (10px per character).
-    /// **Phase 2**: Use DirectWrite/Core Text for accurate measurement.
-    ///
-    /// # Platform APIs
-    ///
-    /// - Windows: `IDWriteTextLayout::GetMetrics()`
-    /// - macOS: `CTLineGetBounds()` or `CTLineGetTypographicBounds()`
-    fn measure_text(
-        &self,
-        text: &str,
-        font_family: &str,
-        font_size: f32,
-    ) -> flui_types::geometry::Rect<flui_types::geometry::Pixels> {
-        let _ = font_family;
-
-        use flui_types::geometry::{px, Point, Rect, Size};
-
-        // Approximate: 0.6em per character width (typical for Latin text)
-        let char_count = text.chars().count() as f32;
-        let approx_width = char_count * font_size * 0.6;
-        let approx_height = font_size * 1.2; // Include line height
-
-        Rect::from_origin_size(
-            Point::new(px(0.0), px(0.0)),
-            Size::new(px(approx_width), px(approx_height)),
-        )
-    }
-
-    /// Shape text to positioned glyphs
-    ///
-    /// Converts text string to a list of glyphs with positions, ready for
-    /// rendering. Handles complex text layout (ligatures, kerning, etc.).
-    ///
-    /// # Arguments
-    ///
-    /// * `text` - Text to shape (UTF-8, may contain emoji/CJK/RTL)
-    /// * `font_family` - Font family name
-    /// * `font_size` - Font size in logical pixels
-    ///
-    /// # Returns
-    ///
-    /// Vector of positioned glyphs with glyph IDs and offsets.
-    ///
-    /// # Implementation Status
-    ///
-    /// **MVP**: Returns empty vector (no glyph data).
-    /// **Phase 2**: Use DirectWrite/Core Text for glyph shaping.
-    ///
-    /// # Platform APIs
-    ///
-    /// - Windows: `IDWriteTextAnalyzer::GetGlyphs()` + `GetGlyphPlacements()`
-    /// - macOS: `CTLineGetGlyphRuns()` → `CTRunGetGlyphs()` + positions
-    fn shape_glyphs(
-        &self,
-        text: &str,
-        font_family: &str,
-        font_size: f32,
-    ) -> Vec<GlyphPosition> {
-        let _ = (text, font_family, font_size);
-
-        // MVP: Return empty - rendering will use fallback
-        Vec::new()
-    }
-}
-
-/// Positioned glyph for rendering
-///
-/// Represents a single glyph with its position offset from the text origin.
-/// Coordinates are in logical pixels.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct GlyphPosition {
-    /// Glyph ID from the font (index into glyph table)
-    pub glyph_id: u32,
-
-    /// Horizontal offset from text origin (logical pixels)
-    pub x_offset: f32,
-
-    /// Vertical offset from text origin (logical pixels)
-    pub y_offset: f32,
-
-    /// Advance width to next glyph (logical pixels)
-    pub x_advance: f32,
+    /// Shapes text into positioned glyphs, handling kerning and ligatures.
+    /// Each `FontRun` specifies a font and byte length for a segment of text.
+    fn layout_line(&self, text: &str, font_size: f32, runs: &[FontRun]) -> LineLayout;
 }
 
 /// Text system errors
@@ -618,5 +701,66 @@ pub trait Clipboard: Send + Sync {
     /// Check if clipboard has text
     fn has_text(&self) -> bool {
         self.read_text().is_some()
+    }
+}
+
+/// Rich clipboard item with text content and optional metadata
+///
+/// Wraps clipboard content for cross-platform exchange. Currently supports
+/// plain text; future versions will add images and custom MIME types.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClipboardItem {
+    /// Plain text content
+    text: Option<String>,
+    /// Optional metadata (e.g., source application, MIME type hints)
+    metadata: Option<String>,
+}
+
+impl ClipboardItem {
+    /// Create a clipboard item from plain text
+    pub fn text(content: String) -> Self {
+        Self {
+            text: Some(content),
+            metadata: None,
+        }
+    }
+
+    /// Create a clipboard item with text and metadata
+    pub fn with_metadata(content: String, metadata: String) -> Self {
+        Self {
+            text: Some(content),
+            metadata: Some(metadata),
+        }
+    }
+
+    /// Get the text content, if any
+    pub fn text_content(&self) -> Option<&str> {
+        self.text.as_deref()
+    }
+
+    /// Get the metadata, if any
+    pub fn metadata(&self) -> Option<&str> {
+        self.metadata.as_deref()
+    }
+}
+
+/// Options for the file/directory picker dialog
+#[derive(Debug, Clone)]
+pub struct PathPromptOptions {
+    /// Allow selecting files
+    pub files: bool,
+    /// Allow selecting directories
+    pub directories: bool,
+    /// Allow selecting multiple items
+    pub multiple: bool,
+}
+
+impl Default for PathPromptOptions {
+    fn default() -> Self {
+        Self {
+            files: true,
+            directories: false,
+            multiple: false,
+        }
     }
 }

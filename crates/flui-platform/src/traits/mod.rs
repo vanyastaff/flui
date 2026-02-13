@@ -25,6 +25,8 @@ pub use input::{
     offset_from_coords,
     // Platform utilities
     BasicVelocityTracker,
+    // Event dispatch result
+    DispatchEventResult,
     // W3C event types (re-exported from ui-events)
     Key,
     KeyboardEvent,
@@ -45,10 +47,11 @@ pub use input::{
 pub use keyboard_types::NamedKey;
 pub use lifecycle::{DefaultLifecycle, LifecycleEvent, LifecycleState, PlatformLifecycle};
 pub use platform::{
-    Clipboard, GlyphPosition, Platform, PlatformExecutor, PlatformTextSystem, TextSystemError,
-    WindowEvent, WindowId, WindowMode, WindowOptions,
+    Clipboard, ClipboardItem, Font, FontId, FontMetrics, FontRun, FontStyle, FontWeight, GlyphId,
+    LineLayout, PathPromptOptions, Platform, PlatformExecutor, PlatformTextSystem, ShapedGlyph,
+    ShapedRun, TextSystemError, WindowEvent, WindowId, WindowMode, WindowOptions,
 };
-pub use window::PlatformWindow;
+pub use window::{PlatformWindow, WindowAppearance, WindowBackgroundAppearance, WindowBounds};
 
 #[cfg(feature = "winit-backend")]
 pub use window::WinitWindow;

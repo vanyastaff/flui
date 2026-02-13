@@ -158,7 +158,8 @@ fn test_t069_all_tests_pass_in_headless_mode() {
 
     // Text system
     let text_system = platform.text_system();
-    let _default_font = text_system.default_font_family();
+    let font_names = text_system.all_font_names();
+    assert!(!font_names.is_empty(), "Should have at least one font");
 
     // Executors
     let _bg_executor = platform.background_executor();
@@ -227,16 +228,31 @@ fn test_headless_text_system() {
     let platform = headless_platform();
     let text_system = platform.text_system();
 
-    let bounds =
-        text_system.measure_text("Hello, World!", &text_system.default_font_family(), 16.0);
+    // Verify font enumeration works
+    let font_names = text_system.all_font_names();
+    assert!(!font_names.is_empty(), "Should have at least one mock font");
 
-    assert!(
-        bounds.width() > px(0.0),
-        "Text measurement should return non-zero width"
+    // Verify font resolution works
+    let font = flui_platform::Font {
+        family: font_names[0].clone(),
+        ..Default::default()
+    };
+    let id = text_system
+        .font_id(&font)
+        .expect("Should resolve mock font");
+
+    // Verify layout works
+    let layout = text_system.layout_line(
+        "Hello, World!",
+        16.0,
+        &[flui_platform::FontRun {
+            font_id: id,
+            len: 13,
+        }],
     );
     assert!(
-        bounds.height() > px(0.0),
-        "Text measurement should return non-zero height"
+        layout.width > 0.0,
+        "Text layout should return non-zero width"
     );
 }
 

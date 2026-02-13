@@ -1,13 +1,57 @@
 //! Platform window trait
 //!
 //! Provides a thin abstraction over platform windows for testability
-//! and flexibility.
+//! and flexibility. Includes per-window callback registration for event delivery.
 
-use flui_types::geometry::{DevicePixels, Pixels, Size};
+use super::input::{DispatchEventResult, Modifiers, PlatformInput};
+use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
 use std::any::Any;
-
-#[cfg(feature = "winit-backend")]
 use std::sync::Arc;
+
+use super::display::PlatformDisplay;
+
+// ==================== Value Types ====================
+
+/// Window appearance (light/dark theme)
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum WindowAppearance {
+    /// Light appearance (default)
+    #[default]
+    Light,
+    /// Dark appearance
+    Dark,
+    /// Vibrant light (macOS-style translucent light)
+    VibrantLight,
+    /// Vibrant dark (macOS-style translucent dark)
+    VibrantDark,
+}
+
+/// Window background appearance (backdrop material)
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum WindowBackgroundAppearance {
+    /// Opaque background (default)
+    #[default]
+    Opaque,
+    /// Transparent background
+    Transparent,
+    /// Blurred background
+    Blurred,
+    /// Windows 11 Mica backdrop
+    MicaBackdrop,
+    /// Windows 11 Mica Alt backdrop
+    MicaAltBackdrop,
+}
+
+/// Window bounds state (windowed, maximized, or fullscreen)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum WindowBounds {
+    /// Normal windowed mode with specific bounds
+    Windowed(Bounds<Pixels>),
+    /// Maximized with bounds
+    Maximized(Bounds<Pixels>),
+    /// Fullscreen with bounds
+    Fullscreen(Bounds<Pixels>),
+}
 
 #[cfg(feature = "winit-backend")]
 use winit::window::Window;
@@ -16,6 +60,15 @@ use winit::window::Window;
 ///
 /// Provides a minimal interface for window operations, enabling
 /// testing and future flexibility (e.g., headless rendering).
+///
+/// # Callback Registration
+///
+/// Per-window callbacks use `&self` (not `&mut self`) with interior mutability.
+/// This allows registering callbacks on shared references (`Arc<dyn PlatformWindow>`).
+/// Callbacks are invoked by the platform's event loop when native events arrive.
+///
+/// The take/restore dispatch pattern ensures reentrancy safety:
+/// the callback storage lock is released before the callback is invoked.
 pub trait PlatformWindow: Send + Sync {
     /// Get the window size in physical pixels (device pixels)
     fn physical_size(&self) -> Size<DevicePixels>;
@@ -34,6 +87,170 @@ pub trait PlatformWindow: Send + Sync {
 
     /// Check if window is visible
     fn is_visible(&self) -> bool;
+
+    // ==================== Query Methods (US2) ====================
+
+    /// Get the window bounds (position + size) in logical pixels
+    fn bounds(&self) -> Bounds<Pixels> {
+        Bounds::default()
+    }
+
+    /// Get the content (client area) size in logical pixels
+    fn content_size(&self) -> Size<Pixels> {
+        self.logical_size()
+    }
+
+    /// Get the window bounds state (windowed, maximized, or fullscreen)
+    fn window_bounds(&self) -> WindowBounds {
+        WindowBounds::Windowed(self.bounds())
+    }
+
+    /// Check if window is maximized
+    fn is_maximized(&self) -> bool {
+        false
+    }
+
+    /// Check if window is in fullscreen mode
+    fn is_fullscreen(&self) -> bool {
+        false
+    }
+
+    /// Check if window is the active (foreground) window
+    fn is_active(&self) -> bool {
+        self.is_focused()
+    }
+
+    /// Check if the mouse cursor is hovering over this window
+    fn is_hovered(&self) -> bool {
+        false
+    }
+
+    /// Get the current mouse position in logical pixels (relative to window)
+    fn mouse_position(&self) -> Point<Pixels> {
+        Point::default()
+    }
+
+    /// Get the currently pressed keyboard modifiers
+    fn modifiers(&self) -> Modifiers {
+        Modifiers::empty()
+    }
+
+    /// Get the window's current appearance (light/dark)
+    fn appearance(&self) -> WindowAppearance {
+        WindowAppearance::default()
+    }
+
+    /// Get the display this window is currently on
+    fn display(&self) -> Option<Arc<dyn PlatformDisplay>> {
+        None
+    }
+
+    /// Get the window title
+    fn get_title(&self) -> String {
+        String::new()
+    }
+
+    // ==================== Control Methods (US2) ====================
+
+    /// Set the window title
+    fn set_title(&self, title: &str) {
+        let _ = title;
+    }
+
+    /// Activate (bring to front / focus) the window
+    fn activate(&self) {}
+
+    /// Minimize the window
+    fn minimize(&self) {}
+
+    /// Maximize the window
+    fn maximize(&self) {}
+
+    /// Restore the window from minimized or maximized state
+    fn restore(&self) {}
+
+    /// Toggle fullscreen mode
+    fn toggle_fullscreen(&self) {}
+
+    /// Resize the window to the given logical size
+    fn resize(&self, size: Size<Pixels>) {
+        let _ = size;
+    }
+
+    /// Close and destroy the window
+    fn close(&self) {}
+
+    /// Set the window's background appearance (backdrop material)
+    fn set_background_appearance(&self, appearance: WindowBackgroundAppearance) {
+        let _ = appearance;
+    }
+
+    // ==================== Callback Registration ====================
+
+    /// Register a callback for input events (pointer, keyboard)
+    ///
+    /// The callback receives a `PlatformInput` and returns a `DispatchEventResult`
+    /// indicating whether the event was consumed.
+    fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult + Send>) {
+        let _ = callback;
+    }
+
+    /// Register a callback for frame rendering requests
+    ///
+    /// Called by the platform when a new frame should be rendered (e.g., after
+    /// `request_redraw()` or when the compositor needs content).
+    fn on_request_frame(&self, callback: Box<dyn FnMut() + Send>) {
+        let _ = callback;
+    }
+
+    /// Register a callback for window resize events
+    ///
+    /// Called with the new logical size and current scale factor.
+    fn on_resize(&self, callback: Box<dyn FnMut(Size<Pixels>, f32) + Send>) {
+        let _ = callback;
+    }
+
+    /// Register a callback for window move events
+    fn on_moved(&self, callback: Box<dyn FnMut() + Send>) {
+        let _ = callback;
+    }
+
+    /// Register a callback for when the window is destroyed
+    ///
+    /// This fires once when the window is actually closed/destroyed.
+    /// Uses `FnOnce` since it can only fire once.
+    fn on_close(&self, callback: Box<dyn FnOnce() + Send>) {
+        let _ = callback;
+    }
+
+    /// Register a callback to query whether the window should close
+    ///
+    /// Return `false` to veto the close request (e.g., unsaved changes dialog).
+    /// If no callback is registered, close is always allowed.
+    fn on_should_close(&self, callback: Box<dyn FnMut() -> bool + Send>) {
+        let _ = callback;
+    }
+
+    /// Register a callback for focus changes
+    ///
+    /// Called with `true` when the window gains focus, `false` when it loses focus.
+    fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        let _ = callback;
+    }
+
+    /// Register a callback for mouse hover changes
+    ///
+    /// Called with `true` when the mouse enters the window, `false` when it leaves.
+    fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        let _ = callback;
+    }
+
+    /// Register a callback for system appearance changes (light/dark theme)
+    fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
+        let _ = callback;
+    }
+
+    // ==================== Utility ====================
 
     /// Get the underlying winit window (if available)
     ///
