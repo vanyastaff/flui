@@ -11,7 +11,7 @@ fn main() {
         .with_max_level(tracing::Level::INFO)
         .init();
 
-    let platform = current_platform();
+    let platform = current_platform().expect("Failed to initialize platform");
     println!("✅ Platform initialized: {:?}", platform.name());
 
     let displays = platform.displays();

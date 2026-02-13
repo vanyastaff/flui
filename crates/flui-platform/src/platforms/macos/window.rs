@@ -10,14 +10,14 @@ use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use cocoa::appkit::{NSWindow, NSWindowStyleMask, NSBackingStoreType};
-use cocoa::base::{id, nil, BOOL, YES, NO};
+use cocoa::appkit::{NSBackingStoreType, NSWindow, NSWindowStyleMask};
+use cocoa::base::{id, nil, BOOL, NO, YES};
 use cocoa::foundation::NSRect;
 use objc::declare::ClassDecl;
 use objc::runtime::{Class, Object, Sel};
 use raw_window_handle::{
-    AppKitDisplayHandle, AppKitWindowHandle, HasDisplayHandle, HasWindowHandle,
-    RawDisplayHandle, RawWindowHandle,
+    AppKitDisplayHandle, AppKitWindowHandle, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
+    RawWindowHandle,
 };
 
 /// macOS window wrapper around NSWindow
@@ -127,11 +127,7 @@ impl MacOSWindow {
             });
 
             // Create content view for input events
-            let content_view = view::create_content_view(
-                frame,
-                scale,
-                Arc::downgrade(&handlers),
-            );
+            let content_view = view::create_content_view(frame, scale, Arc::downgrade(&handlers));
             let _: () = msg_send![ns_window, setContentView: content_view];
 
             // Enable mouse tracking for mouse moved events
@@ -224,10 +220,7 @@ impl PlatformWindow for MacOSWindow {
             let frame: NSRect = msg_send![self.ns_window, frame];
             let new_frame = NSRect::new(
                 frame.origin,
-                cocoa::foundation::NSSize::new(
-                    size.width.0 as f64,
-                    size.height.0 as f64,
-                ),
+                cocoa::foundation::NSSize::new(size.width.0 as f64, size.height.0 as f64),
             );
             let _: () = msg_send![self.ns_window, setFrame: new_frame display: true];
 
@@ -246,20 +239,22 @@ impl PlatformWindow for MacOSWindow {
 
 // Implement raw-window-handle for wgpu integration
 impl HasWindowHandle for MacOSWindow {
-    fn window_handle(&self) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
         use std::ptr::NonNull;
 
         let ns_window = self.ns_window as *mut std::ffi::c_void;
         let handle = AppKitWindowHandle::new(NonNull::new(ns_window).unwrap());
 
-        Ok(unsafe {
-            raw_window_handle::WindowHandle::borrow_raw(RawWindowHandle::AppKit(handle))
-        })
+        Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(RawWindowHandle::AppKit(handle)) })
     }
 }
 
 impl HasDisplayHandle for MacOSWindow {
-    fn display_handle(&self) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+    fn display_handle(
+        &self,
+    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
         let handle = AppKitDisplayHandle::new();
         Ok(unsafe {
             raw_window_handle::DisplayHandle::borrow_raw(RawDisplayHandle::AppKit(handle))
@@ -301,7 +296,10 @@ impl Drop for MacOSWindow {
 // Cross-Platform Window Trait Implementation
 // ============================================================================
 
-use crate::window::{Window as WindowTrait, WindowId as CrossWindowId, WindowState, RawWindowHandle as CrossRawWindowHandle};
+use crate::window::{
+    RawWindowHandle as CrossRawWindowHandle, Window as WindowTrait, WindowId as CrossWindowId,
+    WindowState,
+};
 
 impl WindowTrait for MacOSWindow {
     fn id(&self) -> CrossWindowId {
@@ -405,7 +403,8 @@ impl WindowTrait for MacOSWindow {
                     }
 
                     // Exit fullscreen
-                    let style_mask: cocoa::appkit::NSWindowStyleMask = msg_send![self.ns_window, styleMask];
+                    let style_mask: cocoa::appkit::NSWindowStyleMask =
+                        msg_send![self.ns_window, styleMask];
                     if style_mask.contains(NSWindowStyleMask::NSFullScreenWindowMask) {
                         let _: () = msg_send![self.ns_window, toggleFullScreen: nil];
                     }
@@ -427,7 +426,8 @@ impl WindowTrait for MacOSWindow {
                     }
                 }
                 WindowState::Fullscreen => {
-                    let style_mask: cocoa::appkit::NSWindowStyleMask = msg_send![self.ns_window, styleMask];
+                    let style_mask: cocoa::appkit::NSWindowStyleMask =
+                        msg_send![self.ns_window, styleMask];
                     if !style_mask.contains(NSWindowStyleMask::NSFullScreenWindowMask) {
                         let _: () = msg_send![self.ns_window, toggleFullScreen: nil];
                     }
@@ -462,7 +462,8 @@ impl WindowTrait for MacOSWindow {
 
     fn set_resizable(&mut self, resizable: bool) {
         unsafe {
-            let mut style_mask: cocoa::appkit::NSWindowStyleMask = msg_send![self.ns_window, styleMask];
+            let mut style_mask: cocoa::appkit::NSWindowStyleMask =
+                msg_send![self.ns_window, styleMask];
             if resizable {
                 style_mask |= NSWindowStyleMask::NSResizableWindowMask;
             } else {
@@ -481,7 +482,8 @@ impl WindowTrait for MacOSWindow {
 
     fn set_minimizable(&mut self, minimizable: bool) {
         unsafe {
-            let mut style_mask: cocoa::appkit::NSWindowStyleMask = msg_send![self.ns_window, styleMask];
+            let mut style_mask: cocoa::appkit::NSWindowStyleMask =
+                msg_send![self.ns_window, styleMask];
             if minimizable {
                 style_mask |= NSWindowStyleMask::NSMiniaturizableWindowMask;
             } else {
@@ -500,7 +502,8 @@ impl WindowTrait for MacOSWindow {
 
     fn set_closable(&mut self, closable: bool) {
         unsafe {
-            let mut style_mask: cocoa::appkit::NSWindowStyleMask = msg_send![self.ns_window, styleMask];
+            let mut style_mask: cocoa::appkit::NSWindowStyleMask =
+                msg_send![self.ns_window, styleMask];
             if closable {
                 style_mask |= NSWindowStyleMask::NSClosableWindowMask;
             } else {
@@ -541,10 +544,8 @@ impl WindowTrait for MacOSWindow {
     fn set_min_size(&mut self, size: Option<Size<Pixels>>) {
         unsafe {
             if let Some(size) = size {
-                let ns_size = cocoa::foundation::NSSize::new(
-                    size.width.0 as f64,
-                    size.height.0 as f64,
-                );
+                let ns_size =
+                    cocoa::foundation::NSSize::new(size.width.0 as f64, size.height.0 as f64);
                 let _: () = msg_send![self.ns_window, setMinSize: ns_size];
             } else {
                 // Set to zero to remove constraint
@@ -557,10 +558,8 @@ impl WindowTrait for MacOSWindow {
     fn set_max_size(&mut self, size: Option<Size<Pixels>>) {
         unsafe {
             if let Some(size) = size {
-                let ns_size = cocoa::foundation::NSSize::new(
-                    size.width.0 as f64,
-                    size.height.0 as f64,
-                );
+                let ns_size =
+                    cocoa::foundation::NSSize::new(size.width.0 as f64, size.height.0 as f64);
                 let _: () = msg_send![self.ns_window, setMaxSize: ns_size];
             } else {
                 // Set to max to remove constraint
@@ -584,14 +583,28 @@ impl WindowTrait for MacOSWindow {
             }
         }
     }
+
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        HasWindowHandle::window_handle(self)
+    }
+
+    fn display_handle(
+        &self,
+    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+        HasDisplayHandle::display_handle(self)
+    }
 }
 
 // ============================================================================
 // macOS Window Extension Trait Implementation
 // ============================================================================
 
-use super::window_ext::{MacOSWindowExt as MacOSWindowExtTrait, MacOSWindowLevel, MacOSCollectionBehavior};
 use super::liquid_glass::{LiquidGlassConfig, LiquidGlassMaterial};
+use super::window_ext::{
+    MacOSCollectionBehavior, MacOSWindowExt as MacOSWindowExtTrait, MacOSWindowLevel,
+};
 use super::window_tiling::TilingConfiguration;
 
 impl MacOSWindowExtTrait for MacOSWindow {
@@ -640,8 +653,10 @@ impl MacOSWindowExtTrait for MacOSWindow {
 
             // Make window titlebar transparent if requested
             if config.transparent_titlebar {
-                let style_mask: cocoa::appkit::NSWindowStyleMask = msg_send![self.ns_window, styleMask];
-                let new_style_mask = style_mask | NSWindowStyleMask::NSFullSizeContentViewWindowMask;
+                let style_mask: cocoa::appkit::NSWindowStyleMask =
+                    msg_send![self.ns_window, styleMask];
+                let new_style_mask =
+                    style_mask | NSWindowStyleMask::NSFullSizeContentViewWindowMask;
                 let _: () = msg_send![self.ns_window, setStyleMask: new_style_mask];
                 let _: () = msg_send![self.ns_window, setTitlebarAppearsTransparent: YES];
             }
@@ -791,18 +806,12 @@ impl MacOSWindowExtTrait for MacOSWindow {
 
     fn convert_point_from_backing(&self, point: Point<Pixels>) -> Point<Pixels> {
         let scale = self.backing_scale_factor();
-        Point::new(
-            Pixels(point.x.0 / scale),
-            Pixels(point.y.0 / scale),
-        )
+        Point::new(Pixels(point.x.0 / scale), Pixels(point.y.0 / scale))
     }
 
     fn convert_point_to_backing(&self, point: Point<Pixels>) -> Point<Pixels> {
         let scale = self.backing_scale_factor();
-        Point::new(
-            Pixels(point.x.0 * scale),
-            Pixels(point.y.0 * scale),
-        )
+        Point::new(Pixels(point.x.0 * scale), Pixels(point.y.0 * scale))
     }
 }
 
@@ -1010,11 +1019,7 @@ impl MacOSWindow {
                 state.bounds.origin = new_origin;
             }
 
-            tracing::debug!(
-                "Window moved to ({}, {})",
-                new_origin.x.0,
-                new_origin.y.0
-            );
+            tracing::debug!("Window moved to ({}, {})", new_origin.x.0, new_origin.y.0);
         }
     }
 

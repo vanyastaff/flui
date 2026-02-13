@@ -276,7 +276,7 @@ mod inner {
                         y = run.line_top;
 
                         // Find x position by iterating glyphs
-                        for glyph in &run.glyphs {
+                        for glyph in run.glyphs {
                             if glyph.start <= position.offset && position.offset <= glyph.end {
                                 // Interpolate within glyph if needed
                                 let glyph_progress = if glyph.end > glyph.start {
@@ -341,7 +341,7 @@ mod inner {
                 if run.line_i == target_line {
                     let mut last_offset = run.glyphs.first().map_or(0, |g| g.start);
 
-                    for glyph in &run.glyphs {
+                    for glyph in run.glyphs {
                         let glyph_center = glyph.x + glyph.w / 2.0;
 
                         if x < glyph_center {

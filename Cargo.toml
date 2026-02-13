@@ -4,8 +4,8 @@ members = [
     # === Phase 1: Foundation Layer ===
     "crates/flui-types",          # Base types with Unit system (ACTIVE)
     "crates/flui-foundation",     # Foundation types and utilities (ACTIVE)
-    # "crates/flui-tree",           # Tree abstractions (ACTIVE)
-    # "crates/flui-platform",       # Platform abstraction traits (ACTIVE - Phase 1)
+    "crates/flui-tree",           # Tree abstractions (ACTIVE)
+    "crates/flui-platform",       # Platform abstraction (ACTIVE)
 
     # === Phase 2: Core Framework (Re-enabled for platform integration) ===
     # "crates/flui-layer",          # Layer composition (ACTIVE)
@@ -13,7 +13,7 @@ members = [
     # "crates/flui-interaction",    # Gesture recognition (ACTIVE - Integration)
     # "crates/flui-painting",       # Painting primitives (ACTIVE)
     # "crates/flui-scheduler",      # Frame scheduling (ACTIVE)
-    # "crates/flui-engine",         # GPU rendering engine (ACTIVE)
+    "crates/flui-engine",         # GPU rendering engine (ACTIVE)
     "crates/flui-log",            # Logging utilities (ACTIVE)
     # "crates/flui-app",            # Application framework (ACTIVE - Integration)
 
@@ -191,6 +191,12 @@ flui-foundation = { path = "crates/flui-foundation" }
 
 # === Platform Layer (for examples) ===
 flui-platform = { path = "crates/flui-platform" }
+
+# === Engine Layer (for GPU examples) ===
+flui-engine = { path = "crates/flui-engine", features = ["dx12"] }
+pollster = { workspace = true }
+wgpu = { workspace = true }
+raw-window-handle = "0.6"
 
 # === Logging ===
 tracing.workspace = true

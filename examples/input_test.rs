@@ -33,7 +33,7 @@ fn main() {
     tracing::info!("  - Close the window to exit");
     tracing::info!("");
 
-    let platform = current_platform();
+    let platform = current_platform().expect("Failed to initialize platform");
     tracing::info!("✅ Platform initialized: {}", platform.name());
 
     // Display info

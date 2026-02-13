@@ -250,6 +250,30 @@ pub trait PlatformWindow: Send + Sync {
         let _ = callback;
     }
 
+    // ==================== Window Handles (for GPU integration) ====================
+
+    /// Get a window handle for creating GPU surfaces (wgpu, etc.)
+    ///
+    /// Concrete platform windows (WindowsWindow, MacOSWindow) implement
+    /// `raw_window_handle::HasWindowHandle` and delegate through this method.
+    /// Headless windows return `HandleError::Unavailable`.
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        Err(raw_window_handle::HandleError::Unavailable)
+    }
+
+    /// Get a display handle for creating GPU surfaces (wgpu, etc.)
+    ///
+    /// Concrete platform windows (WindowsWindow, MacOSWindow) implement
+    /// `raw_window_handle::HasDisplayHandle` and delegate through this method.
+    /// Headless windows return `HandleError::Unavailable`.
+    fn display_handle(
+        &self,
+    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+        Err(raw_window_handle::HandleError::Unavailable)
+    }
+
     // ==================== Utility ====================
 
     /// Get the underlying winit window (if available)

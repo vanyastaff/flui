@@ -586,6 +586,18 @@ impl PlatformWindow for Arc<WindowsWindow> {
         PlatformWindow::on_appearance_changed(self.as_ref(), callback)
     }
 
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        PlatformWindow::window_handle(self.as_ref())
+    }
+
+    fn display_handle(
+        &self,
+    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+        PlatformWindow::display_handle(self.as_ref())
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self.as_ref()
     }
@@ -881,6 +893,18 @@ impl PlatformWindow for WindowsWindow {
 
     fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
         *self.callbacks.on_appearance_changed.lock() = Some(callback);
+    }
+
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        HasWindowHandle::window_handle(self)
+    }
+
+    fn display_handle(
+        &self,
+    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+        HasDisplayHandle::display_handle(self)
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
