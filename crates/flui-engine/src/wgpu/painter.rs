@@ -197,6 +197,19 @@ impl WgpuPainter {
         surface_format: wgpu::TextureFormat,
         size: (u32, u32),
     ) -> Self {
+        Self::with_shared_device(Arc::new(device), Arc::new(queue), surface_format, size)
+    }
+
+    /// Create a WgpuPainter with shared device and queue.
+    ///
+    /// Use this when the device/queue are already wrapped in Arc
+    /// (e.g., shared with Renderer).
+    pub fn with_shared_device(
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+        surface_format: wgpu::TextureFormat,
+        size: (u32, u32),
+    ) -> Self {
         #[cfg(debug_assertions)]
         tracing::trace!(
             "WgpuPainter::new: format={:?}, size=({}, {})",
@@ -204,10 +217,6 @@ impl WgpuPainter {
             size.0,
             size.1
         );
-
-        // Wrap device and queue in Arc for sharing
-        let device = Arc::new(device);
-        let queue = Arc::new(queue);
 
         // ===== Viewport Setup (shared by all pipelines) =====
 

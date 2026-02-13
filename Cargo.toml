@@ -174,10 +174,10 @@ flui-foundation = { path = "crates/flui-foundation" }
 # flui-tree = { path = "crates/flui-tree" }
 
 # === Core Layer ===
-# flui-layer = { path = "crates/flui-layer" }  # Temporarily disabled - needs Pixels migration
+flui-layer = { path = "crates/flui-layer" }
+flui-painting = { path = "crates/flui-painting" }
 # flui-semantics = { path = "crates/flui-semantics" }
 # flui-interaction = { path = "crates/flui-interaction" }
-# flui-painting = { path = "crates/flui-painting" }
 
 # === Rendering Layer ===
 # flui-rendering = { path = "crates/flui-rendering" }
@@ -202,6 +202,9 @@ flui-engine = { path = "crates/flui-engine", features = ["dx12"] }
 pollster = { workspace = true }
 wgpu = { workspace = true }
 raw-window-handle.workspace = true
+
+# === Error Handling (for examples) ===
+anyhow.workspace = true
 
 # === Logging ===
 tracing.workspace = true

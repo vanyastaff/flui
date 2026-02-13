@@ -34,6 +34,7 @@
 
 use crate::error::RenderError;
 use anyhow::Result;
+use std::sync::Arc;
 use wgpu;
 
 /// GPU backend capabilities
@@ -119,11 +120,12 @@ impl GpuCapabilities {
 pub struct Renderer {
     instance: wgpu::Instance,
     adapter: wgpu::Adapter,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
     surface: Option<wgpu::Surface<'static>>,
     config: Option<wgpu::SurfaceConfiguration>,
     capabilities: GpuCapabilities,
+    painter: Option<super::painter::WgpuPainter>,
 }
 
 impl Renderer {
@@ -197,6 +199,9 @@ impl Renderer {
             })
             .await?;
 
+        let device = Arc::new(device);
+        let queue = Arc::new(queue);
+
         // Configure surface
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = Self::select_surface_format(&surface_caps, &capabilities);
@@ -214,6 +219,14 @@ impl Renderer {
 
         surface.configure(&device, &config);
 
+        // Create painter for GPU rendering
+        let painter = super::painter::WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            surface_format,
+            (config.width, config.height),
+        );
+
         Ok(Self {
             instance,
             adapter,
@@ -222,6 +235,7 @@ impl Renderer {
             surface: Some(surface),
             config: Some(config),
             capabilities,
+            painter: Some(painter),
         })
     }
 
@@ -259,11 +273,12 @@ impl Renderer {
         Ok(Self {
             instance,
             adapter,
-            device,
-            queue,
+            device: Arc::new(device),
+            queue: Arc::new(queue),
             surface: None,
             config: None,
             capabilities,
+            painter: None,
         })
     }
 
@@ -403,6 +418,10 @@ impl Renderer {
                 config.height = height;
                 surface.configure(&self.device, config);
 
+                if let Some(painter) = &mut self.painter {
+                    painter.resize(width, height);
+                }
+
                 tracing::debug!("Surface resized to {}x{}", width, height);
             }
         }
@@ -445,12 +464,12 @@ impl Renderer {
 
     /// Render a `flui_layer::Scene` to the surface.
     ///
-    /// This is a placeholder that will be fully implemented when the layer
-    /// compositing pipeline is connected. Currently it acquires the surface
-    /// texture, clears it, and presents.
-    pub fn render_scene(&mut self, _scene: &flui_layer::Scene) -> Result<(), RenderError> {
+    /// Traverses the scene's LayerTree depth-first, dispatching each layer's
+    /// DisplayList commands through the GPU backend (WgpuPainter).
+    pub fn render_scene(&mut self, scene: &flui_layer::Scene) -> Result<(), RenderError> {
+        use super::backend::Backend;
+
         let surface = self.surface.as_ref().ok_or(RenderError::SurfaceLost)?;
-        let config = self.config.as_ref().ok_or(RenderError::SurfaceLost)?;
 
         let output = surface.get_current_texture().map_err(|e| match e {
             wgpu::SurfaceError::Lost => RenderError::SurfaceLost,
@@ -470,20 +489,15 @@ impl Renderer {
                 label: Some("FLUI Scene Render Encoder"),
             });
 
-        // Clear pass (placeholder -- full compositing TBD)
+        // 1. Clear pass
         {
-            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("FLUI Clear Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 1.0,
-                            g: 1.0,
-                            b: 1.0,
-                            a: 1.0,
-                        }),
+                        load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -493,11 +507,58 @@ impl Renderer {
             });
         }
 
+        // 2. Render scene content via LayerTree traversal
+        if scene.has_content() {
+            if let Some(painter) = self.painter.take() {
+                let mut backend = Backend::new(painter);
+
+                // Depth-first traversal of layer tree
+                if let Some(root_id) = scene.root() {
+                    Self::render_layer_recursive(scene.layer_tree(), root_id, &mut backend);
+                }
+
+                // Flush painter batches to GPU
+                let mut painter = backend.into_painter();
+                if let Err(e) = painter.render(&view, &mut encoder) {
+                    tracing::error!("Painter render failed: {}", e);
+                }
+
+                // Return painter to Renderer for reuse
+                self.painter = Some(painter);
+            }
+        }
+
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
-
-        let _ = config; // suppress unused warning
         Ok(())
+    }
+
+    /// Recursively render a layer and its children (depth-first).
+    ///
+    /// Each layer's `render()` pushes state (transforms, clips, opacity),
+    /// children are rendered, then `cleanup()` pops the state.
+    fn render_layer_recursive(
+        tree: &flui_layer::LayerTree,
+        layer_id: flui_foundation::LayerId,
+        backend: &mut super::backend::Backend,
+    ) {
+        use super::layer_render::LayerRender;
+
+        let Some(node) = tree.get(layer_id) else {
+            return;
+        };
+
+        // 1. Render this layer (pushes state: transforms, clips, opacity)
+        node.layer().render(backend);
+
+        // 2. Render children depth-first
+        let children: Vec<_> = node.children().to_vec();
+        for child_id in children {
+            Self::render_layer_recursive(tree, child_id, backend);
+        }
+
+        // 3. Cleanup (pops state pushed in step 1)
+        node.layer().cleanup(backend);
     }
 }
 
