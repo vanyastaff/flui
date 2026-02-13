@@ -86,7 +86,7 @@ impl EmbedderScheduler {
     /// - Execute transient callbacks (animations)
     /// - Start frame timing
     pub fn begin_frame(&mut self) -> u64 {
-        let frame_id = self.scheduler.begin_frame();
+        let frame_id = self.scheduler.handle_begin_frame(std::time::Instant::now());
         self.current_frame = frame_id.as_u64();
         self.current_frame
     }
@@ -97,7 +97,7 @@ impl EmbedderScheduler {
     /// - Execute post-frame callbacks
     /// - Update frame statistics
     pub fn end_frame(&self) {
-        self.scheduler.end_frame();
+        self.scheduler.end_of_frame();
     }
 
     /// Schedule a user input task (highest priority)

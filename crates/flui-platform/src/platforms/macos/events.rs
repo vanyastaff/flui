@@ -21,7 +21,7 @@
 //! - NSEventType → PointerEvent / KeyboardEvent
 //! - NSPoint → logical pixels (converted via backingScaleFactor)
 
-use crate::traits::input::{KeyboardEvent, PlatformInput};
+use crate::traits::input::PlatformInput;
 use cocoa::appkit::{NSEvent, NSEventModifierFlags, NSEventType};
 use cocoa::base::id;
 use cocoa::foundation::NSPoint;
@@ -29,6 +29,7 @@ use flui_types::geometry::{Offset, Pixels};
 use keyboard_types::{Key, Modifiers};
 use objc::runtime::Object;
 use objc::*;
+use ui_events::keyboard::{Code, KeyState, KeyboardEvent, Location};
 use ui_events::pointer::{PointerButton, PointerButtons, PointerEvent, PointerId, PointerType};
 
 // ============================================================================
@@ -50,10 +51,13 @@ pub fn convert_ns_event(ns_event: id, scale_factor: f64) -> Option<PlatformInput
                 let is_repeat: bool = msg_send![ns_event, isARepeat];
 
                 Some(PlatformInput::Keyboard(KeyboardEvent {
+                    state: KeyState::Down,
                     key,
+                    code: Code::Unidentified,
+                    location: Location::Standard,
                     modifiers,
-                    is_down: true,
-                    is_repeat,
+                    repeat: is_repeat,
+                    is_composing: false,
                 }))
             }
 
@@ -62,10 +66,13 @@ pub fn convert_ns_event(ns_event: id, scale_factor: f64) -> Option<PlatformInput
                 let modifiers = extract_modifiers(ns_event);
 
                 Some(PlatformInput::Keyboard(KeyboardEvent {
+                    state: KeyState::Up,
                     key,
+                    code: Code::Unidentified,
+                    location: Location::Standard,
                     modifiers,
-                    is_down: false,
-                    is_repeat: false,
+                    repeat: false,
+                    is_composing: false,
                 }))
             }
 
@@ -98,21 +105,15 @@ pub fn convert_ns_event(ns_event: id, scale_factor: f64) -> Option<PlatformInput
             NSEventType::NSMouseMoved
             | NSEventType::NSLeftMouseDragged
             | NSEventType::NSRightMouseDragged
-            | NSEventType::NSOtherMouseDragged => {
-                convert_mouse_move(ns_event, scale_factor)
-            }
+            | NSEventType::NSOtherMouseDragged => convert_mouse_move(ns_event, scale_factor),
 
             // Scroll events
             NSEventType::NSScrollWheel => convert_scroll_event(ns_event, scale_factor),
 
             // Mouse enter/exit
-            NSEventType::NSMouseEntered => {
-                convert_mouse_enter_exit(ns_event, scale_factor, true)
-            }
+            NSEventType::NSMouseEntered => convert_mouse_enter_exit(ns_event, scale_factor, true),
 
-            NSEventType::NSMouseExited => {
-                convert_mouse_enter_exit(ns_event, scale_factor, false)
-            }
+            NSEventType::NSMouseExited => convert_mouse_enter_exit(ns_event, scale_factor, false),
 
             // Unsupported events
             _ => None,

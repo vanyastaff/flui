@@ -1,23 +1,17 @@
-//! Platform embedders for FLUI
+//! Platform embedder utilities for FLUI
 //!
-//! This module contains the embedder implementations that connect
+//! This module provides the adapter types that connect
 //! the FLUI framework to the underlying platform (windowing, GPU, events).
 //!
 //! # Architecture
 //!
 //! ```text
-//! AppBinding (central coordinator - all framework logic)
+//! Platform callbacks → AppBinding (central coordinator)
+//!   ├── GestureBinding (pointer events + hit testing)
+//!   ├── FocusManager (keyboard events)
 //!   ├── WidgetsBinding (build phase)
 //!   ├── RenderPipelineOwner (layout/paint)
-//!   ├── GestureBinding (hit testing)
-//!   ├── SceneCache (hit testing cache)
-//!   └── FrameCoordinator (frame stats)
-//!
-//! embedder/
-//!   ├── desktop.rs        - DesktopEmbedder (Windows/macOS/Linux)
-//!   ├── frame_coordinator.rs - Frame rendering coordination
-//!   ├── pointer_state.rs  - Pointer tracking and coalescing
-//!   └── scene_cache.rs    - Scene caching for hit testing
+//!   └── Renderer (GPU rendering, owned by runner callback)
 //! ```
 //!
 //! # Platform Support
@@ -28,14 +22,10 @@
 //! - **Web**: (future) wasm-bindgen integration
 
 mod desktop;
-mod frame_coordinator;
-mod pointer_state;
-mod scene_cache;
+mod embedder_scheduler;
 
-pub use desktop::{handle_platform_input, DesktopEmbedder, EmbedderError};
-pub use frame_coordinator::{FrameCoordinator, FrameResult};
-pub use pointer_state::PointerState;
-pub use scene_cache::SceneCache;
+pub use desktop::EmbedderError;
+pub(crate) use desktop::PlatformWindowHandle;
 
 // Re-export GestureBinding from flui_interaction (no duplication)
 pub use flui_interaction::binding::GestureBinding;

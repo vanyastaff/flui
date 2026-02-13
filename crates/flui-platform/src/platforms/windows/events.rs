@@ -14,9 +14,10 @@ use windows::Win32::Foundation::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 
 use super::util::*;
-use crate::traits::{device_to_logical, Key, KeyboardEvent, PlatformInput, ScrollDelta};
+use crate::traits::{device_to_logical, Key, PlatformInput, ScrollDelta};
 use dpi::{PhysicalPosition, PhysicalSize};
 use keyboard_types::Modifiers as KeyboardModifiers;
+use ui_events::keyboard::{Code, KeyState, KeyboardEvent, Location};
 use ui_events::pointer::{
     PointerButton, PointerButtonEvent, PointerEvent, PointerId, PointerInfo, PointerState,
     PointerType, PointerUpdate,
@@ -248,7 +249,7 @@ pub fn mouse_wheel_event(wparam: WPARAM, lparam: LPARAM, scale_factor: f32) -> P
 // Keyboard events (simple wrappers)
 // ============================================================================
 
-/// Convert WM_KEYDOWN to KeyboardEvent
+/// Convert WM_KEYDOWN to W3C KeyboardEvent
 pub fn key_down_event(wparam: WPARAM, lparam: LPARAM) -> PlatformInput {
     let vk = VIRTUAL_KEY(wparam.0 as u16);
     let scan_code = ((lparam.0 >> 16) & 0xFF) as u16;
@@ -258,14 +259,17 @@ pub fn key_down_event(wparam: WPARAM, lparam: LPARAM) -> PlatformInput {
     let key = vk_to_key(vk, scan_code);
 
     PlatformInput::Keyboard(KeyboardEvent {
+        state: KeyState::Down,
         key,
+        code: Code::Unidentified,
+        location: Location::Standard,
         modifiers,
-        is_down: true,
-        is_repeat,
+        repeat: is_repeat,
+        is_composing: false,
     })
 }
 
-/// Convert WM_KEYUP to KeyboardEvent
+/// Convert WM_KEYUP to W3C KeyboardEvent
 pub fn key_up_event(wparam: WPARAM, lparam: LPARAM) -> PlatformInput {
     let vk = VIRTUAL_KEY(wparam.0 as u16);
     let scan_code = ((lparam.0 >> 16) & 0xFF) as u16;
@@ -274,10 +278,13 @@ pub fn key_up_event(wparam: WPARAM, lparam: LPARAM) -> PlatformInput {
     let key = vk_to_key(vk, scan_code);
 
     PlatformInput::Keyboard(KeyboardEvent {
+        state: KeyState::Up,
         key,
+        code: Code::Unidentified,
+        location: Location::Standard,
         modifiers,
-        is_down: false,
-        is_repeat: false,
+        repeat: false,
+        is_composing: false,
     })
 }
 

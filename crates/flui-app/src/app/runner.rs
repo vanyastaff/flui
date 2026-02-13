@@ -85,50 +85,89 @@ fn run_desktop<V>(root: V, config: AppConfig)
 where
     V: View + StatelessView + Clone + Send + Sync + 'static,
 {
-    use crate::embedder::DesktopEmbedder;
+    use crate::embedder::PlatformWindowHandle;
+    use flui_engine::wgpu::Renderer;
+    use flui_foundation::HasInstance;
+    use flui_platform::traits::{DispatchEventResult, PlatformInput};
     use flui_platform::WindowOptions;
+    use flui_scheduler::Scheduler;
     use parking_lot::Mutex;
     use std::sync::Arc;
 
     tracing::info!("Starting desktop platform via flui-platform");
 
     let platform = flui_platform::current_platform().expect("Failed to initialize platform");
-
-    // Clone the Arc for use inside the on_ready closure
     let platform_inner = Arc::clone(&platform);
 
     platform.run(Box::new(move || {
-        // 1. Convert AppConfig to WindowOptions and open window
+        // 1. Open window
         let options: WindowOptions = (&config).into();
         let window = platform_inner
             .open_window(options)
             .expect("Failed to create window");
 
-        // 2. Create embedder (GPU renderer + window)
-        let embedder = pollster::block_on(async { DesktopEmbedder::new(window).await });
-        let embedder = match embedder {
-            Ok(emb) => emb,
+        // 2. Create GPU renderer directly (no DesktopEmbedder)
+        let phys_size = window.physical_size();
+        let renderer = pollster::block_on(async {
+            let handle = PlatformWindowHandle(window.as_ref());
+            Renderer::new(&handle).await
+        });
+        let mut renderer = match renderer {
+            Ok(r) => r,
             Err(e) => {
-                tracing::error!("Failed to create embedder: {:?}", e);
+                tracing::error!("GPU init failed: {:?}", e);
                 platform_inner.quit();
                 return;
             }
         };
+        renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
 
         // 3. Mount root widget
-        let (width, height) = embedder.size();
-        mount_root(&root, width as f32, height as f32);
+        mount_root(&root, phys_size.width.0 as f32, phys_size.height.0 as f32);
 
-        // 4. Wrap embedder in Arc<Mutex> for callback sharing
-        let embedder = Arc::new(Mutex::new(embedder));
+        // 4. Wrap renderer for callback sharing
+        let renderer = Arc::new(Mutex::new(renderer));
 
-        // 5. Request initial redraw
-        {
-            let emb = embedder.lock();
-            emb.request_redraw();
-        }
+        // 5. Register input callback → AppBinding::handle_input()
+        window.on_input(Box::new(move |input: PlatformInput| {
+            AppBinding::instance().handle_input(input);
+            DispatchEventResult {
+                propagate: false,
+                default_prevented: true,
+            }
+        }));
 
-        tracing::info!("Desktop embedder initialized, callbacks registered by platform");
+        // 6. Register frame callback → scheduler + AppBinding::render_frame()
+        let renderer_frame = Arc::clone(&renderer);
+        window.on_request_frame(Box::new(move || {
+            let now = std::time::Instant::now();
+
+            // Scheduler callbacks (animations)
+            let scheduler = Scheduler::instance();
+            let _frame_id = scheduler.handle_begin_frame(now);
+            scheduler.handle_draw_frame();
+            let arc_scheduler = Scheduler::arc_instance();
+            arc_scheduler.handle_begin_frame(now);
+            arc_scheduler.handle_draw_frame();
+
+            // Render frame via AppBinding
+            let mut r = renderer_frame.lock();
+            AppBinding::instance().render_frame(&mut r);
+        }));
+
+        // 7. Register resize callback → renderer.resize()
+        let renderer_resize = Arc::clone(&renderer);
+        window.on_resize(Box::new(move |size, scale_factor| {
+            let w = (size.width.0 * scale_factor) as u32;
+            let h = (size.height.0 * scale_factor) as u32;
+            renderer_resize.lock().resize(w, h);
+            AppBinding::instance().request_redraw();
+        }));
+
+        // 8. Request initial redraw
+        window.request_redraw();
+
+        tracing::info!("Desktop platform initialized with callbacks");
     }));
 }
 

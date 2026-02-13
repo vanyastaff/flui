@@ -21,27 +21,25 @@
 //! AppBinding (singleton)
 //!   ├── renderer: RendererBinding      (render tree, pipeline)
 //!   ├── widgets: WidgetsBinding        (element tree, build)
-//!   ├── gestures: GestureBinding       (hit testing, gestures)
-//!   ├── scheduler: Scheduler           (frame callbacks)
-//!   └── pointer_state: PointerState    (event coalescing)
+//!   ├── gestures: GestureBinding       (hit testing, pointer coalescing)
+//!   └── scheduler: Scheduler           (frame callbacks)
 //! ```
 
 use crate::bindings::RenderingFlutterBinding;
-use crate::embedder::{FrameCoordinator, PointerState};
 use flui_engine::wgpu::Renderer;
+use flui_engine::RenderError;
 use flui_foundation::HasInstance;
 use flui_interaction::binding::GestureBinding;
-use flui_interaction::events::{
-    make_pointer_event, Event, PointerButton, PointerEventData, PointerEventKind, PointerType,
-};
+use flui_interaction::routing::FocusManager;
 use flui_layer::Scene;
+use flui_platform::traits::PlatformInput;
 use flui_rendering::constraints::BoxConstraints;
 use flui_scheduler::Scheduler;
 use flui_types::geometry::px;
-use flui_types::{Offset, Size};
+use flui_types::Size;
 use flui_view::{ElementBase, View, WidgetsBinding};
 use parking_lot::{Mutex, RwLock};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 /// Combined application binding.
@@ -50,21 +48,19 @@ use std::sync::{Arc, OnceLock};
 /// It composes all the specialized bindings:
 /// - [`RendererBinding`] - Manages render tree and pipeline
 /// - [`WidgetsBinding`] - Manages element tree and build phase
-/// - [`GestureBinding`] - Manages hit testing and gestures
+/// - [`GestureBinding`] - Manages hit testing, pointer coalescing, and gestures
 /// - [`Scheduler`] - Manages frame scheduling
+///
+/// # Input Handling
+///
+/// Platform events enter through [`handle_input()`](Self::handle_input):
+/// - Pointer events → `GestureBinding::handle_pointer_event()` (with coalescing)
+/// - Keyboard events → `FocusManager::dispatch_key_event()`
 ///
 /// # Thread Safety
 ///
 /// AppBinding is a singleton accessed via `instance()`. It uses internal
 /// locking for thread-safe access to mutable state.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// let binding = AppBinding::instance();
-/// binding.attach_root_widget(&MyApp);
-/// let scene = binding.draw_frame(constraints);
-/// ```
 pub struct AppBinding {
     /// Renderer binding (render tree, layout/paint phases)
     renderer: RwLock<RenderingFlutterBinding>,
@@ -72,20 +68,20 @@ pub struct AppBinding {
     /// Widgets binding (element tree, build phase)
     widgets: RwLock<WidgetsBinding>,
 
-    /// Gesture binding (input handling, hit testing)
+    /// Gesture binding (input handling, hit testing, pointer coalescing)
     gestures: GestureBinding,
-
-    /// Frame coordinator (tracks frame statistics)
-    frame_coordinator: RwLock<FrameCoordinator>,
-
-    /// Pointer state (event coalescing)
-    pointer_state: RwLock<PointerState>,
 
     /// Whether a redraw is needed
     needs_redraw: AtomicBool,
 
     /// Whether the app is initialized
     initialized: AtomicBool,
+
+    /// Total frames rendered successfully
+    frames_rendered: AtomicU64,
+
+    /// Frames dropped due to surface errors
+    frames_dropped: AtomicU64,
 
     /// Shared pipeline owner for elements (wrapped in Arc for sharing)
     /// This is the same PipelineOwner as in RendererBinding, but wrapped
@@ -109,26 +105,18 @@ impl AppBinding {
 
         // Create and initialize RendererBinding
         let renderer = RenderingFlutterBinding::new();
-        // RenderingFlutterBinding::new() already calls init_instances()
 
         // Create WidgetsBinding
-        let mut widgets = WidgetsBinding::new();
-
-        // Wire up frame scheduling: when widgets need rebuild, request redraw
-        let needs_redraw = Arc::new(AtomicBool::new(false));
-        let needs_redraw_clone = needs_redraw.clone();
-        widgets.set_on_need_frame(move || {
-            needs_redraw_clone.store(true, Ordering::Relaxed);
-        });
+        let widgets = WidgetsBinding::new();
 
         Self {
             renderer: RwLock::new(renderer),
             widgets: RwLock::new(widgets),
             gestures: GestureBinding::new(),
-            frame_coordinator: RwLock::new(FrameCoordinator::new()),
-            pointer_state: RwLock::new(PointerState::new()),
             needs_redraw: AtomicBool::new(false),
             initialized: AtomicBool::new(false),
+            frames_rendered: AtomicU64::new(0),
+            frames_dropped: AtomicU64::new(0),
             shared_pipeline_owner,
             root_element: Mutex::new(None),
         }
@@ -164,14 +152,6 @@ impl AppBinding {
         self.renderer.write()
     }
 
-    /// Get the cached scene for hit testing.
-    ///
-    /// Returns the most recent scene if available.
-    /// TODO: Implement scene caching in RenderingFlutterBinding
-    pub fn cached_scene(&self) -> Option<Arc<Scene>> {
-        None // Scene caching not yet implemented in RenderingFlutterBinding
-    }
-
     // ========================================================================
     // Widgets Binding Access
     // ========================================================================
@@ -184,7 +164,7 @@ impl AppBinding {
     ///
     /// Panics if a root widget is already attached.
     pub fn attach_root_widget<V: View>(&self, view: &V) {
-        let mut widgets = self.widgets.write();
+        let widgets = self.widgets.write();
         widgets.attach_root_widget(view);
         self.initialized.store(true, Ordering::Relaxed);
         self.request_redraw();
@@ -304,6 +284,16 @@ impl AppBinding {
         self.needs_redraw.store(false, Ordering::Relaxed);
     }
 
+    /// Get total frames rendered successfully.
+    pub fn frames_rendered(&self) -> u64 {
+        self.frames_rendered.load(Ordering::Relaxed)
+    }
+
+    /// Get frames dropped due to surface errors.
+    pub fn frames_dropped(&self) -> u64 {
+        self.frames_dropped.load(Ordering::Relaxed)
+    }
+
     /// Draw a frame and return Scene for GPU rendering.
     ///
     /// This executes the complete rendering pipeline:
@@ -316,9 +306,9 @@ impl AppBinding {
     pub fn draw_frame(&self, constraints: BoxConstraints) -> Option<Arc<Scene>> {
         // Phase 1: Build (WidgetsBinding)
         {
-            let mut widgets = self.widgets.write();
-            if widgets.has_pending_builds() {
-                widgets.draw_frame();
+            let w = self.widgets.write();
+            if w.has_pending_builds() {
+                w.draw_frame();
             }
         }
 
@@ -333,7 +323,7 @@ impl AppBinding {
 
         // Phase 4: Create Scene from LayerTree
         let size = constraints.constrain(Size::ZERO);
-        let frame_number = self.frame_coordinator.read().frames_rendered() + 1;
+        let frame_number = self.frames_rendered.load(Ordering::Relaxed) + 1;
 
         let mut pipeline = self.shared_pipeline_owner.write();
         if let Some(layer_tree) = pipeline.take_layer_tree() {
@@ -349,11 +339,11 @@ impl AppBinding {
 
     /// Render a complete frame to GPU.
     ///
-    /// Orchestrates: process_events → draw → render → mark_rendered
+    /// Orchestrates: flush_coalesced_moves → draw → render → mark_rendered
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn render_frame(&self, renderer: &mut Renderer) -> Option<Arc<Scene>> {
-        // 1. Process coalesced pointer moves
-        self.process_pending_events();
+        // 1. Flush coalesced pointer moves (GestureBinding handles coalescing)
+        self.gestures.flush_pending_moves();
 
         // 2. Draw frame (build + layout + paint → Scene)
         let (width, height) = renderer.size();
@@ -362,8 +352,26 @@ impl AppBinding {
 
         // 3. Render scene to GPU
         if let Some(ref scene) = scene {
-            let mut coordinator = self.frame_coordinator.write();
-            let _result = coordinator.render_scene(renderer, scene);
+            if scene.has_content() {
+                match renderer.render_scene(scene) {
+                    Ok(()) => {
+                        self.frames_rendered.fetch_add(1, Ordering::Relaxed);
+                        tracing::trace!(
+                            frame = scene.frame_number(),
+                            total = self.frames_rendered.load(Ordering::Relaxed),
+                            "Frame rendered successfully"
+                        );
+                    }
+                    Err(RenderError::SurfaceLost) | Err(RenderError::SurfaceOutdated) => {
+                        self.frames_dropped.fetch_add(1, Ordering::Relaxed);
+                        tracing::debug!("Surface lost/outdated, will retry next frame");
+                    }
+                    Err(e) => {
+                        self.frames_dropped.fetch_add(1, Ordering::Relaxed);
+                        tracing::error!("Render error: {:?}", e);
+                    }
+                }
+            }
         }
 
         // 4. Mark rendered
@@ -379,67 +387,29 @@ impl AppBinding {
     }
 
     // ========================================================================
-    // Event Handling
+    // Input Handling
     // ========================================================================
 
-    /// Process pending coalesced events.
-    fn process_pending_events(&self) {
-        let event = self.pointer_state.write().take_pending_move();
-        if let Some(event) = event {
-            self.route_event(event);
+    /// Handle a platform input event.
+    ///
+    /// This is the single entry point for all input from the platform layer.
+    /// Routes pointer events to `GestureBinding` and keyboard events to `FocusManager`.
+    ///
+    /// Pointer events are coalesced by `GestureBinding` — high-frequency move events
+    /// are stored and flushed once per frame via `flush_pending_moves()` in `render_frame()`.
+    pub fn handle_input(&self, input: PlatformInput) {
+        match input {
+            PlatformInput::Pointer(pointer_event) => {
+                self.gestures
+                    .handle_pointer_event(&pointer_event, |_position| {
+                        // TODO: Implement proper hit testing through render tree
+                        flui_interaction::routing::HitTestResult::new()
+                    });
+            }
+            PlatformInput::Keyboard(keyboard_event) => {
+                FocusManager::global().dispatch_key_event(&keyboard_event);
+            }
         }
-    }
-
-    /// Route event through hit testing.
-    fn route_event(&self, event: Event) {
-        // For pointer events, use GestureBinding's hit test system
-        if let Event::Pointer(ref pointer_event) = event {
-            self.gestures
-                .handle_pointer_event(pointer_event, |_position| {
-                    // TODO: Implement proper hit testing through scene/render tree
-                    flui_interaction::routing::HitTestResult::new()
-                });
-        }
-    }
-
-    /// Handle cursor/touch move (coalesced).
-    pub fn handle_pointer_move(&self, position: Offset, device: PointerType) {
-        self.pointer_state.write().update_position(position, device);
-    }
-
-    /// Handle pointer button (mouse click / touch).
-    pub fn handle_pointer_button(
-        &self,
-        position: Offset,
-        device: PointerType,
-        _button: PointerButton,
-        is_down: bool,
-    ) {
-        let data = PointerEventData::new(position, device);
-
-        let kind = if is_down {
-            self.pointer_state.write().set_down(true);
-            PointerEventKind::Down
-        } else {
-            self.pointer_state.write().set_down(false);
-            PointerEventKind::Up
-        };
-
-        let pointer_event = make_pointer_event(kind, data);
-        let event = Event::Pointer(pointer_event);
-        self.route_event(event);
-    }
-
-    /// Handle keyboard event.
-    pub fn handle_key_event(&self, key_event: flui_interaction::events::KeyboardEvent) {
-        let event = Event::Keyboard(key_event);
-        self.route_event(event);
-    }
-
-    /// Handle scroll event.
-    pub fn handle_scroll_event(&self, scroll_event: flui_interaction::events::ScrollEventData) {
-        let event = Event::Scroll(scroll_event);
-        self.route_event(event);
     }
 }
 

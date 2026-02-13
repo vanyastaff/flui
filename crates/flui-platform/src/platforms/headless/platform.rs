@@ -714,11 +714,14 @@ mod tests {
         }));
 
         // Inject a keyboard event
-        let event = PlatformInput::Keyboard(crate::traits::KeyboardEvent {
+        let event = PlatformInput::Keyboard(ui_events::keyboard::KeyboardEvent {
+            state: ui_events::keyboard::KeyState::Down,
             key: crate::traits::Key::Named(keyboard_types::NamedKey::Enter),
+            code: ui_events::keyboard::Code::Unidentified,
+            location: ui_events::keyboard::Location::Standard,
             modifiers: keyboard_types::Modifiers::empty(),
-            is_down: true,
-            is_repeat: false,
+            repeat: false,
+            is_composing: false,
         });
 
         window.inject_event(event);

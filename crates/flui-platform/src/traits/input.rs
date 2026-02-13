@@ -53,6 +53,9 @@ pub use ui_events::pointer::{
 /// Re-export keyboard types from keyboard-types crate
 pub use keyboard_types::{Key, Modifiers};
 
+/// Re-export W3C keyboard event from ui-events
+pub use ui_events::keyboard::KeyboardEvent;
+
 /// Re-export scroll events
 pub use ui_events::ScrollDelta;
 
@@ -64,15 +67,6 @@ use std::collections::VecDeque;
 
 use flui_types::geometry::{Offset, PixelDelta, Pixels};
 use std::time::Instant;
-
-/// Simple keyboard event (wrapper since ui-events 0.3 doesn't have KeyboardEvent)
-#[derive(Debug, Clone)]
-pub struct KeyboardEvent {
-    pub key: Key,
-    pub modifiers: Modifiers,
-    pub is_down: bool,
-    pub is_repeat: bool,
-}
 
 /// Result of dispatching an input event through a callback
 ///
