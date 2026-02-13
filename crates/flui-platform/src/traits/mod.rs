@@ -25,6 +25,8 @@ pub use input::{
     offset_from_coords,
     // Platform utilities
     BasicVelocityTracker,
+    // Event dispatch result
+    DispatchEventResult,
     // W3C event types (re-exported from ui-events)
     Key,
     KeyboardEvent,

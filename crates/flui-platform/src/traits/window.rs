@@ -1,8 +1,9 @@
 //! Platform window trait
 //!
 //! Provides a thin abstraction over platform windows for testability
-//! and flexibility.
+//! and flexibility. Includes per-window callback registration for event delivery.
 
+use super::input::{DispatchEventResult, PlatformInput};
 use flui_types::geometry::{DevicePixels, Pixels, Size};
 use std::any::Any;
 
@@ -16,6 +17,15 @@ use winit::window::Window;
 ///
 /// Provides a minimal interface for window operations, enabling
 /// testing and future flexibility (e.g., headless rendering).
+///
+/// # Callback Registration
+///
+/// Per-window callbacks use `&self` (not `&mut self`) with interior mutability.
+/// This allows registering callbacks on shared references (`Arc<dyn PlatformWindow>`).
+/// Callbacks are invoked by the platform's event loop when native events arrive.
+///
+/// The take/restore dispatch pattern ensures reentrancy safety:
+/// the callback storage lock is released before the callback is invoked.
 pub trait PlatformWindow: Send + Sync {
     /// Get the window size in physical pixels (device pixels)
     fn physical_size(&self) -> Size<DevicePixels>;
@@ -34,6 +44,73 @@ pub trait PlatformWindow: Send + Sync {
 
     /// Check if window is visible
     fn is_visible(&self) -> bool;
+
+    // ==================== Callback Registration ====================
+
+    /// Register a callback for input events (pointer, keyboard)
+    ///
+    /// The callback receives a `PlatformInput` and returns a `DispatchEventResult`
+    /// indicating whether the event was consumed.
+    fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult + Send>) {
+        let _ = callback;
+    }
+
+    /// Register a callback for frame rendering requests
+    ///
+    /// Called by the platform when a new frame should be rendered (e.g., after
+    /// `request_redraw()` or when the compositor needs content).
+    fn on_request_frame(&self, callback: Box<dyn FnMut() + Send>) {
+        let _ = callback;
+    }
+
+    /// Register a callback for window resize events
+    ///
+    /// Called with the new logical size and current scale factor.
+    fn on_resize(&self, callback: Box<dyn FnMut(Size<Pixels>, f32) + Send>) {
+        let _ = callback;
+    }
+
+    /// Register a callback for window move events
+    fn on_moved(&self, callback: Box<dyn FnMut() + Send>) {
+        let _ = callback;
+    }
+
+    /// Register a callback for when the window is destroyed
+    ///
+    /// This fires once when the window is actually closed/destroyed.
+    /// Uses `FnOnce` since it can only fire once.
+    fn on_close(&self, callback: Box<dyn FnOnce() + Send>) {
+        let _ = callback;
+    }
+
+    /// Register a callback to query whether the window should close
+    ///
+    /// Return `false` to veto the close request (e.g., unsaved changes dialog).
+    /// If no callback is registered, close is always allowed.
+    fn on_should_close(&self, callback: Box<dyn FnMut() -> bool + Send>) {
+        let _ = callback;
+    }
+
+    /// Register a callback for focus changes
+    ///
+    /// Called with `true` when the window gains focus, `false` when it loses focus.
+    fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        let _ = callback;
+    }
+
+    /// Register a callback for mouse hover changes
+    ///
+    /// Called with `true` when the mouse enters the window, `false` when it leaves.
+    fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        let _ = callback;
+    }
+
+    /// Register a callback for system appearance changes (light/dark theme)
+    fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
+        let _ = callback;
+    }
+
+    // ==================== Utility ====================
 
     /// Get the underlying winit window (if available)
     ///

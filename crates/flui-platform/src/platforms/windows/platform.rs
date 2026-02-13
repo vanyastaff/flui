@@ -10,6 +10,7 @@ use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::*;
 use windows::Win32::UI::HiDpi::*;
+use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use super::display::enumerate_displays;
@@ -17,7 +18,7 @@ use super::util::*;
 use super::window::WindowsWindow;
 use crate::config::WindowConfiguration;
 use crate::executor::{BackgroundExecutor, ForegroundExecutor};
-use crate::shared::PlatformHandlers;
+use crate::shared::{PlatformHandlers, WindowCallbacks};
 use crate::traits::*;
 use flui_types::geometry::{Bounds, DevicePixels, Point, Size};
 
@@ -28,8 +29,10 @@ static REGISTER_WINDOW_CLASS: std::sync::Once = std::sync::Once::new();
 pub(super) struct WindowContext {
     /// Window ID for event dispatch
     pub window_id: WindowId,
-    /// Reference to platform handlers
+    /// Reference to platform handlers (global)
     pub handlers: Arc<Mutex<PlatformHandlers>>,
+    /// Per-window callbacks for event delivery
+    pub callbacks: Arc<WindowCallbacks>,
     /// Scale factor for coordinate conversion
     pub scale_factor: f32,
     /// Current window mode (replaces display_state + saved bounds)
@@ -236,23 +239,33 @@ impl WindowsPlatform {
             WM_CLOSE => {
                 tracing::debug!("WM_CLOSE for HWND {:?}", hwnd);
 
-                // Dispatch CloseRequested event
                 if let Some(ctx) = ctx {
-                    ctx.dispatch_event(WindowEvent::CloseRequested {
-                        window_id: ctx.window_id,
-                    });
+                    // Ask per-window callback if close should proceed
+                    let should_close = ctx.callbacks.dispatch_should_close();
+
+                    if should_close {
+                        // Dispatch CloseRequested to global handlers
+                        ctx.dispatch_event(WindowEvent::CloseRequested {
+                            window_id: ctx.window_id,
+                        });
+                        DestroyWindow(hwnd).ok();
+                    }
+                    // If !should_close, the close is vetoed
+                } else {
+                    DestroyWindow(hwnd).ok();
                 }
 
-                // Let the window handle it
-                DestroyWindow(hwnd).ok();
                 LRESULT(0)
             }
 
             WM_DESTROY => {
                 tracing::debug!("WM_DESTROY for HWND {:?}", hwnd);
 
-                // Dispatch Closed event
                 if let Some(ctx) = ctx {
+                    // Fire per-window on_close callback (FnOnce)
+                    ctx.callbacks.dispatch_close();
+
+                    // Dispatch Closed event to global handlers
                     ctx.dispatch_event(WindowEvent::Closed(ctx.window_id));
 
                     // Clean up context - IMPORTANT: Clear pointer BEFORE dropping to avoid dangling pointer
@@ -285,14 +298,17 @@ impl WindowsPlatform {
                             FillRect(hdc, &rect, HBRUSH(black_brush.0));
                         }
 
-                        // Dispatch RedrawRequested event
                         if let Some(ctx) = ctx {
+                            // Fire per-window on_request_frame callback
+                            ctx.callbacks.dispatch_request_frame();
+
+                            // Also dispatch RedrawRequested to global handlers
                             ctx.dispatch_event(WindowEvent::RedrawRequested {
                                 window_id: ctx.window_id,
                             });
                         }
                     } else {
-                        tracing::trace!("⏭️  Skipping render for minimized window");
+                        tracing::trace!("Skipping render for minimized window");
                     }
                     let _ = EndPaint(hwnd, &ps);
                 }
@@ -407,7 +423,23 @@ impl WindowsPlatform {
                     // Update state
                     ctx.mode.set(new_mode);
 
-                    // Dispatch event if any
+                    // Fire per-window on_resize callback (for all size changes except minimize)
+                    if size_type != SIZE_MINIMIZED {
+                        let logical_size = Size::new(
+                            flui_types::geometry::px(super::util::device_to_logical(
+                                width,
+                                ctx.scale_factor,
+                            )),
+                            flui_types::geometry::px(super::util::device_to_logical(
+                                height,
+                                ctx.scale_factor,
+                            )),
+                        );
+                        ctx.callbacks
+                            .dispatch_resize(logical_size, ctx.scale_factor);
+                    }
+
+                    // Dispatch event to global handlers if any
                     if let Some(event) = event {
                         ctx.dispatch_event(event);
                     }
@@ -419,10 +451,13 @@ impl WindowsPlatform {
             WM_MOVE => {
                 let x = get_x_lparam(lparam);
                 let y = get_y_lparam(lparam);
-                tracing::info!("📍 Window Moved: ({}, {})", x, y);
+                tracing::debug!("Window Moved: ({}, {})", x, y);
 
-                // Dispatch Moved event
                 if let Some(ctx) = ctx {
+                    // Fire per-window on_moved callback
+                    ctx.callbacks.dispatch_moved();
+
+                    // Dispatch Moved event to global handlers
                     use flui_types::geometry::{px, Point};
                     let position = Point::new(
                         px(x as f32 / ctx.scale_factor),
@@ -475,102 +510,165 @@ impl WindowsPlatform {
             }
 
             WM_MOUSEMOVE => {
-                let x = get_x_lparam(lparam);
-                let y = get_y_lparam(lparam);
-                tracing::debug!("🖱️  Mouse Move: ({}, {})", x, y);
+                if let Some(ctx) = ctx {
+                    // Request WM_MOUSELEAVE notification for hover tracking
+                    let mut tme = TRACKMOUSEEVENT {
+                        cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                        dwFlags: TME_LEAVE,
+                        hwndTrack: hwnd,
+                        dwHoverTime: 0,
+                    };
+                    let _ = TrackMouseEvent(&mut tme);
+
+                    // Dispatch hover enter (will be cleared on WM_MOUSELEAVE)
+                    ctx.callbacks.dispatch_hover_status_change(true);
+
+                    use super::events::mouse_move_event;
+                    let event = mouse_move_event(lparam, ctx.scale_factor);
+                    ctx.callbacks.dispatch_input(event);
+                }
                 LRESULT(0)
             }
 
             WM_LBUTTONDOWN => {
-                let x = get_x_lparam(lparam);
-                let y = get_y_lparam(lparam);
-                tracing::info!("🖱️  Left Mouse Button Down at ({}, {})", x, y);
+                if let Some(ctx) = ctx {
+                    use super::events::mouse_button_event;
+                    use ui_events::pointer::PointerButton;
+                    let event =
+                        mouse_button_event(PointerButton::Primary, true, lparam, ctx.scale_factor);
+                    ctx.callbacks.dispatch_input(event);
+                }
                 LRESULT(0)
             }
 
             WM_RBUTTONDOWN => {
-                let x = get_x_lparam(lparam);
-                let y = get_y_lparam(lparam);
-                tracing::info!("🖱️  Right Mouse Button Down at ({}, {})", x, y);
+                if let Some(ctx) = ctx {
+                    use super::events::mouse_button_event;
+                    use ui_events::pointer::PointerButton;
+                    let event = mouse_button_event(
+                        PointerButton::Secondary,
+                        true,
+                        lparam,
+                        ctx.scale_factor,
+                    );
+                    ctx.callbacks.dispatch_input(event);
+                }
                 LRESULT(0)
             }
 
             WM_MBUTTONDOWN => {
-                let x = get_x_lparam(lparam);
-                let y = get_y_lparam(lparam);
-                tracing::info!("🖱️  Middle Mouse Button Down at ({}, {})", x, y);
+                if let Some(ctx) = ctx {
+                    use super::events::mouse_button_event;
+                    use ui_events::pointer::PointerButton;
+                    let event = mouse_button_event(
+                        PointerButton::Auxiliary,
+                        true,
+                        lparam,
+                        ctx.scale_factor,
+                    );
+                    ctx.callbacks.dispatch_input(event);
+                }
                 LRESULT(0)
             }
 
             WM_LBUTTONUP => {
-                let x = get_x_lparam(lparam);
-                let y = get_y_lparam(lparam);
-                tracing::info!("🖱️  Left Mouse Button Up at ({}, {})", x, y);
+                if let Some(ctx) = ctx {
+                    use super::events::mouse_button_event;
+                    use ui_events::pointer::PointerButton;
+                    let event =
+                        mouse_button_event(PointerButton::Primary, false, lparam, ctx.scale_factor);
+                    ctx.callbacks.dispatch_input(event);
+                }
                 LRESULT(0)
             }
 
             WM_RBUTTONUP => {
-                let x = get_x_lparam(lparam);
-                let y = get_y_lparam(lparam);
-                tracing::info!("🖱️  Right Mouse Button Up at ({}, {})", x, y);
+                if let Some(ctx) = ctx {
+                    use super::events::mouse_button_event;
+                    use ui_events::pointer::PointerButton;
+                    let event = mouse_button_event(
+                        PointerButton::Secondary,
+                        false,
+                        lparam,
+                        ctx.scale_factor,
+                    );
+                    ctx.callbacks.dispatch_input(event);
+                }
                 LRESULT(0)
             }
 
             WM_MBUTTONUP => {
-                let x = get_x_lparam(lparam);
-                let y = get_y_lparam(lparam);
-                tracing::info!("🖱️  Middle Mouse Button Up at ({}, {})", x, y);
+                if let Some(ctx) = ctx {
+                    use super::events::mouse_button_event;
+                    use ui_events::pointer::PointerButton;
+                    let event = mouse_button_event(
+                        PointerButton::Auxiliary,
+                        false,
+                        lparam,
+                        ctx.scale_factor,
+                    );
+                    ctx.callbacks.dispatch_input(event);
+                }
                 LRESULT(0)
             }
 
             WM_MOUSEWHEEL => {
-                let delta = ((wparam.0 as i32) >> 16) as i16;
-                let x = get_x_lparam(lparam);
-                let y = get_y_lparam(lparam);
-                tracing::info!("🖱️  Mouse Wheel: delta={} at ({}, {})", delta, x, y);
+                if let Some(ctx) = ctx {
+                    use super::events::mouse_wheel_event;
+                    let event = mouse_wheel_event(wparam, lparam, ctx.scale_factor);
+                    ctx.callbacks.dispatch_input(event);
+                }
                 LRESULT(0)
             }
 
             WM_KEYDOWN | WM_SYSKEYDOWN => {
                 let vk = wparam.0 as u16;
                 let is_repeat = (lparam.0 & (1 << 30)) != 0;
-                tracing::info!("⌨️  Key Down: VK={:#04x} (repeat={})", vk, is_repeat);
 
                 // Check if fullscreen hotkey is pressed (configurable, default F11)
                 if let Some(ctx) = ctx {
                     if let Some(hotkey) = ctx.config.fullscreen_hotkey {
                         if vk == hotkey && !is_repeat {
                             tracing::info!(
-                                "🔄 Fullscreen hotkey (VK={:#04x}) pressed - toggling fullscreen",
+                                "Fullscreen hotkey (VK={:#04x}) pressed - toggling fullscreen",
                                 hotkey
                             );
                             WindowsWindow::toggle_fullscreen_for_hwnd(hwnd);
                         }
                     }
+
+                    // Dispatch keyboard event via per-window callback
+                    use super::events::key_down_event;
+                    let event = key_down_event(wparam, lparam);
+                    ctx.callbacks.dispatch_input(event);
                 }
 
                 LRESULT(0)
             }
 
             WM_KEYUP | WM_SYSKEYUP => {
-                let vk = wparam.0 as u16;
-                tracing::info!("⌨️  Key Up: VK={:#04x}", vk);
-                LRESULT(0)
-            }
-
-            WM_CHAR => {
-                let ch = wparam.0 as u32;
-                if let Some(c) = char::from_u32(ch) {
-                    tracing::info!("⌨️  Char: '{}'", c);
+                if let Some(ctx) = ctx {
+                    use super::events::key_up_event;
+                    let event = key_up_event(wparam, lparam);
+                    ctx.callbacks.dispatch_input(event);
                 }
                 LRESULT(0)
             }
 
-            WM_SETFOCUS => {
-                tracing::info!("🎯 Window Focused");
+            WM_CHAR => {
+                // WM_CHAR is handled by the framework via KeyboardEvent
+                // No per-window callback dispatch needed here
+                LRESULT(0)
+            }
 
-                // Dispatch FocusChanged event
+            WM_SETFOCUS => {
+                tracing::debug!("Window Focused");
+
                 if let Some(ctx) = ctx {
+                    // Fire per-window on_active_status_change callback
+                    ctx.callbacks.dispatch_active_status_change(true);
+
+                    // Dispatch FocusChanged to global handlers
                     ctx.dispatch_event(WindowEvent::FocusChanged {
                         window_id: ctx.window_id,
                         focused: true,
@@ -581,10 +679,13 @@ impl WindowsPlatform {
             }
 
             WM_KILLFOCUS => {
-                tracing::info!("💤 Window Unfocused");
+                tracing::debug!("Window Unfocused");
 
-                // Dispatch FocusChanged event
                 if let Some(ctx) = ctx {
+                    // Fire per-window on_active_status_change callback
+                    ctx.callbacks.dispatch_active_status_change(false);
+
+                    // Dispatch FocusChanged to global handlers
                     ctx.dispatch_event(WindowEvent::FocusChanged {
                         window_id: ctx.window_id,
                         focused: false,
@@ -592,6 +693,22 @@ impl WindowsPlatform {
                 }
 
                 LRESULT(0)
+            }
+
+            // T025: Mouse hover tracking — WM_MOUSELEAVE (0x02A3)
+            0x02A3 => {
+                if let Some(ctx) = ctx {
+                    ctx.callbacks.dispatch_hover_status_change(false);
+                }
+                LRESULT(0)
+            }
+
+            // T026: System theme/appearance change
+            WM_SETTINGCHANGE => {
+                if let Some(ctx) = ctx {
+                    ctx.callbacks.dispatch_appearance_changed();
+                }
+                DefWindowProcW(hwnd, msg, wparam, lparam)
             }
 
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),

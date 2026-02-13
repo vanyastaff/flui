@@ -15,7 +15,7 @@ use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use super::util::{logical_to_device, USER_DEFAULT_SCREEN_DPI, WINDOW_CLASS_NAME};
-use crate::shared::PlatformHandlers;
+use crate::shared::{PlatformHandlers, WindowCallbacks};
 use crate::traits::*;
 use flui_types::geometry::{device_px, px, Bounds, DevicePixels, Pixels, Point, Size};
 
@@ -26,6 +26,9 @@ pub struct WindowsWindow {
 
     /// Window state
     state: Arc<Mutex<WindowState>>,
+
+    /// Per-window callbacks for event delivery
+    callbacks: Arc<WindowCallbacks>,
 
     /// Reference to platform's window map (for cleanup)
     windows_map: Arc<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
@@ -125,6 +128,8 @@ impl WindowsWindow {
             );
 
             // Create window state with default bounds (actual bounds will be set after creation)
+            let callbacks = Arc::new(WindowCallbacks::new());
+
             let state = Arc::new(Mutex::new(WindowState {
                 bounds: Bounds {
                     origin: Point::new(px(0.0), px(0.0)),
@@ -139,6 +144,7 @@ impl WindowsWindow {
             let window = Arc::new(Self {
                 hwnd,
                 state,
+                callbacks: Arc::clone(&callbacks),
                 windows_map,
             });
 
@@ -153,6 +159,7 @@ impl WindowsWindow {
             let context = Box::new(WindowContext {
                 window_id,
                 handlers: handlers.clone(),
+                callbacks,
                 scale_factor,
                 mode: std::cell::Cell::new(WindowMode::Normal),
                 last_size: std::cell::Cell::new(initial_size),
@@ -473,6 +480,42 @@ impl PlatformWindow for Arc<WindowsWindow> {
         PlatformWindow::is_visible(self.as_ref())
     }
 
+    fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult + Send>) {
+        PlatformWindow::on_input(self.as_ref(), callback)
+    }
+
+    fn on_request_frame(&self, callback: Box<dyn FnMut() + Send>) {
+        PlatformWindow::on_request_frame(self.as_ref(), callback)
+    }
+
+    fn on_resize(&self, callback: Box<dyn FnMut(Size<Pixels>, f32) + Send>) {
+        PlatformWindow::on_resize(self.as_ref(), callback)
+    }
+
+    fn on_moved(&self, callback: Box<dyn FnMut() + Send>) {
+        PlatformWindow::on_moved(self.as_ref(), callback)
+    }
+
+    fn on_close(&self, callback: Box<dyn FnOnce() + Send>) {
+        PlatformWindow::on_close(self.as_ref(), callback)
+    }
+
+    fn on_should_close(&self, callback: Box<dyn FnMut() -> bool + Send>) {
+        PlatformWindow::on_should_close(self.as_ref(), callback)
+    }
+
+    fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        PlatformWindow::on_active_status_change(self.as_ref(), callback)
+    }
+
+    fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        PlatformWindow::on_hover_status_change(self.as_ref(), callback)
+    }
+
+    fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
+        PlatformWindow::on_appearance_changed(self.as_ref(), callback)
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self.as_ref()
     }
@@ -509,6 +552,44 @@ impl PlatformWindow for WindowsWindow {
 
     fn is_visible(&self) -> bool {
         self.state.lock().visible
+    }
+
+    // ==================== Per-Window Callbacks ====================
+
+    fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult + Send>) {
+        *self.callbacks.on_input.lock() = Some(callback);
+    }
+
+    fn on_request_frame(&self, callback: Box<dyn FnMut() + Send>) {
+        *self.callbacks.on_request_frame.lock() = Some(callback);
+    }
+
+    fn on_resize(&self, callback: Box<dyn FnMut(Size<Pixels>, f32) + Send>) {
+        *self.callbacks.on_resize.lock() = Some(callback);
+    }
+
+    fn on_moved(&self, callback: Box<dyn FnMut() + Send>) {
+        *self.callbacks.on_moved.lock() = Some(callback);
+    }
+
+    fn on_close(&self, callback: Box<dyn FnOnce() + Send>) {
+        *self.callbacks.on_close.lock() = Some(callback);
+    }
+
+    fn on_should_close(&self, callback: Box<dyn FnMut() -> bool + Send>) {
+        *self.callbacks.on_should_close.lock() = Some(callback);
+    }
+
+    fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        *self.callbacks.on_active_status_change.lock() = Some(callback);
+    }
+
+    fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        *self.callbacks.on_hover_status_change.lock() = Some(callback);
+    }
+
+    fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
+        *self.callbacks.on_appearance_changed.lock() = Some(callback);
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -555,6 +636,7 @@ impl Clone for WindowsWindow {
         Self {
             hwnd: self.hwnd,
             state: Arc::clone(&self.state),
+            callbacks: Arc::clone(&self.callbacks),
             windows_map: Arc::clone(&self.windows_map),
         }
     }

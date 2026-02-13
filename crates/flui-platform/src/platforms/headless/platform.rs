@@ -3,10 +3,11 @@
 //! This platform implementation runs without any actual windowing system,
 //! making it ideal for unit tests and CI environments.
 
-use crate::shared::PlatformHandlers;
+use crate::shared::{PlatformHandlers, WindowCallbacks};
 use crate::traits::{
-    Clipboard, DesktopCapabilities, Platform, PlatformCapabilities, PlatformDisplay,
-    PlatformExecutor, PlatformTextSystem, PlatformWindow, WindowEvent, WindowId, WindowOptions,
+    Clipboard, DesktopCapabilities, DispatchEventResult, Platform, PlatformCapabilities,
+    PlatformDisplay, PlatformExecutor, PlatformInput, PlatformTextSystem, PlatformWindow,
+    WindowEvent, WindowId, WindowOptions,
 };
 use anyhow::Result;
 use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
@@ -179,6 +180,9 @@ impl Platform for HeadlessPlatform {
 // ==================== Mock Implementations ====================
 
 /// Mock window for headless testing
+///
+/// Supports per-window callback registration and programmatic event injection
+/// for testing without a display server.
 #[derive(Clone)]
 struct MockWindow {
     id: WindowId,
@@ -186,6 +190,7 @@ struct MockWindow {
     scale_factor: f64,
     focused: bool,
     visible: bool,
+    callbacks: Arc<WindowCallbacks>,
 }
 
 impl MockWindow {
@@ -196,7 +201,43 @@ impl MockWindow {
             scale_factor: 1.0,
             focused: true,
             visible: options.visible,
+            callbacks: Arc::new(WindowCallbacks::new()),
         }
+    }
+
+    /// Inject a platform input event for testing.
+    /// Fires the registered `on_input` callback.
+    #[allow(dead_code)]
+    pub fn inject_event(&self, event: PlatformInput) -> DispatchEventResult {
+        self.callbacks.dispatch_input(event)
+    }
+
+    /// Simulate a resize for testing.
+    /// Fires the registered `on_resize` callback.
+    #[allow(dead_code)]
+    pub fn simulate_resize(&self, width: f32, height: f32) {
+        use flui_types::geometry::px;
+        let size = Size::new(px(width), px(height));
+        self.callbacks
+            .dispatch_resize(size, self.scale_factor as f32);
+    }
+
+    /// Simulate focus change for testing.
+    /// Fires the registered `on_active_status_change` callback.
+    #[allow(dead_code)]
+    pub fn simulate_focus(&self, focused: bool) {
+        self.callbacks.dispatch_active_status_change(focused);
+    }
+
+    /// Simulate close request for testing.
+    /// Fires `on_should_close`, then `on_close` if allowed.
+    #[allow(dead_code)]
+    pub fn simulate_close(&self) -> bool {
+        let should = self.callbacks.dispatch_should_close();
+        if should {
+            self.callbacks.dispatch_close();
+        }
+        should
     }
 }
 
@@ -219,7 +260,7 @@ impl crate::traits::PlatformWindow for MockWindow {
     }
 
     fn request_redraw(&self) {
-        // No-op
+        self.callbacks.dispatch_request_frame();
     }
 
     fn is_focused(&self) -> bool {
@@ -228,6 +269,42 @@ impl crate::traits::PlatformWindow for MockWindow {
 
     fn is_visible(&self) -> bool {
         self.visible
+    }
+
+    fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult + Send>) {
+        *self.callbacks.on_input.lock() = Some(callback);
+    }
+
+    fn on_request_frame(&self, callback: Box<dyn FnMut() + Send>) {
+        *self.callbacks.on_request_frame.lock() = Some(callback);
+    }
+
+    fn on_resize(&self, callback: Box<dyn FnMut(Size<Pixels>, f32) + Send>) {
+        *self.callbacks.on_resize.lock() = Some(callback);
+    }
+
+    fn on_moved(&self, callback: Box<dyn FnMut() + Send>) {
+        *self.callbacks.on_moved.lock() = Some(callback);
+    }
+
+    fn on_close(&self, callback: Box<dyn FnOnce() + Send>) {
+        *self.callbacks.on_close.lock() = Some(callback);
+    }
+
+    fn on_should_close(&self, callback: Box<dyn FnMut() -> bool + Send>) {
+        *self.callbacks.on_should_close.lock() = Some(callback);
+    }
+
+    fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        *self.callbacks.on_active_status_change.lock() = Some(callback);
+    }
+
+    fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        *self.callbacks.on_hover_status_change.lock() = Some(callback);
+    }
+
+    fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
+        *self.callbacks.on_appearance_changed.lock() = Some(callback);
     }
 }
 
@@ -369,5 +446,100 @@ mod tests {
         );
         assert!(window.is_focused());
         assert!(window.is_visible());
+    }
+
+    #[test]
+    fn test_on_input_callback() {
+        use crate::traits::{DispatchEventResult, PlatformInput};
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let window = MockWindow::new(WindowId(0), WindowOptions::default());
+
+        let called = Arc::new(AtomicBool::new(false));
+        let called_clone = called.clone();
+
+        window.on_input(Box::new(move |_event| {
+            called_clone.store(true, Ordering::SeqCst);
+            DispatchEventResult::default()
+        }));
+
+        // Inject a keyboard event
+        let event = PlatformInput::Keyboard(crate::traits::KeyboardEvent {
+            key: crate::traits::Key::Named(keyboard_types::NamedKey::Enter),
+            modifiers: keyboard_types::Modifiers::empty(),
+            is_down: true,
+            is_repeat: false,
+        });
+
+        window.inject_event(event);
+        assert!(called.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_on_resize_callback() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let window = MockWindow::new(WindowId(0), WindowOptions::default());
+
+        let called = Arc::new(AtomicBool::new(false));
+        let called_clone = called.clone();
+
+        window.on_resize(Box::new(move |size, _scale| {
+            assert_eq!(size.width.0, 1024.0);
+            assert_eq!(size.height.0, 768.0);
+            called_clone.store(true, Ordering::SeqCst);
+        }));
+
+        window.simulate_resize(1024.0, 768.0);
+        assert!(called.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_on_should_close_veto() {
+        let window = MockWindow::new(WindowId(0), WindowOptions::default());
+
+        // Register a callback that vetoes close
+        window.on_should_close(Box::new(|| false));
+
+        // Close should be vetoed
+        assert!(!window.simulate_close());
+    }
+
+    #[test]
+    fn test_on_close_callback() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let window = MockWindow::new(WindowId(0), WindowOptions::default());
+
+        let closed = Arc::new(AtomicBool::new(false));
+        let closed_clone = closed.clone();
+
+        window.on_close(Box::new(move || {
+            closed_clone.store(true, Ordering::SeqCst);
+        }));
+
+        // No on_should_close registered → defaults to allow
+        assert!(window.simulate_close());
+        assert!(closed.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_on_active_status_change() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let window = MockWindow::new(WindowId(0), WindowOptions::default());
+
+        let focused = Arc::new(AtomicBool::new(false));
+        let focused_clone = focused.clone();
+
+        window.on_active_status_change(Box::new(move |is_active| {
+            focused_clone.store(is_active, Ordering::SeqCst);
+        }));
+
+        window.simulate_focus(true);
+        assert!(focused.load(Ordering::SeqCst));
+
+        window.simulate_focus(false);
+        assert!(!focused.load(Ordering::SeqCst));
     }
 }

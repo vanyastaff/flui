@@ -160,10 +160,11 @@ pub use executor::{BackgroundExecutor, ForegroundExecutor};
 
 // Re-export core traits
 pub use traits::{
-    Clipboard, DefaultLifecycle, DesktopCapabilities, DisplayId, GlyphPosition, LifecycleEvent,
-    LifecycleState, MobileCapabilities, Platform, PlatformCapabilities, PlatformDisplay,
-    PlatformEmbedder, PlatformExecutor, PlatformLifecycle, PlatformTextSystem, PlatformWindow,
-    TextSystemError, WebCapabilities, WindowEvent, WindowId, WindowMode, WindowOptions,
+    Clipboard, DefaultLifecycle, DesktopCapabilities, DispatchEventResult, DisplayId,
+    GlyphPosition, LifecycleEvent, LifecycleState, MobileCapabilities, Platform,
+    PlatformCapabilities, PlatformDisplay, PlatformEmbedder, PlatformExecutor, PlatformLifecycle,
+    PlatformTextSystem, PlatformWindow, TextSystemError, WebCapabilities, WindowEvent, WindowId,
+    WindowMode, WindowOptions,
 };
 
 // Re-export platform implementations
@@ -195,7 +196,7 @@ pub use platforms::WebPlatform;
 pub use platforms::WinitPlatform;
 
 // Re-export shared infrastructure
-pub use shared::PlatformHandlers;
+pub use shared::{PlatformHandlers, WindowCallbacks};
 
 // ==================== Platform Detection ====================
 
