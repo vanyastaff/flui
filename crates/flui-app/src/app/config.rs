@@ -142,6 +142,20 @@ impl AppConfig {
     }
 }
 
+impl From<&AppConfig> for flui_platform::WindowOptions {
+    fn from(config: &AppConfig) -> Self {
+        flui_platform::WindowOptions {
+            title: config.title.clone(),
+            size: config.size,
+            resizable: config.resizable,
+            visible: true,
+            decorated: config.decorations,
+            min_size: config.min_size,
+            max_size: config.max_size,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

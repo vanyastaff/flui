@@ -82,6 +82,7 @@ tracing-forest = { version = "0.3", features = ["smallvec"] }
 # Staying on wgpu 25.x until upstream fix
 wgpu = { version = "25.0", default-features = false, features = ["wgsl"] }
 winit = "0.30.12"
+raw-window-handle = "0.6"
 pollster = "0.4"
 
 # CLIPBOARD - Cross-platform clipboard access
@@ -200,7 +201,7 @@ flui-platform = { path = "crates/flui-platform" }
 flui-engine = { path = "crates/flui-engine", features = ["dx12"] }
 pollster = { workspace = true }
 wgpu = { workspace = true }
-raw-window-handle = "0.6"
+raw-window-handle.workspace = true
 
 # === Logging ===
 tracing.workspace = true

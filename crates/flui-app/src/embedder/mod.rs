@@ -22,7 +22,7 @@
 //!
 //! # Platform Support
 //!
-//! - **Desktop**: Windows, macOS, Linux via winit + wgpu
+//! - **Desktop**: Windows, macOS, Linux via flui-platform + wgpu
 //! - **Android**: (future) android-activity integration
 //! - **iOS**: (future) UIKit integration
 //! - **Web**: (future) wasm-bindgen integration
@@ -32,7 +32,7 @@ mod frame_coordinator;
 mod pointer_state;
 mod scene_cache;
 
-pub use desktop::{DesktopEmbedder, EmbedderError};
+pub use desktop::{handle_platform_input, DesktopEmbedder, EmbedderError};
 pub use frame_coordinator::{FrameCoordinator, FrameResult};
 pub use pointer_state::PointerState;
 pub use scene_cache::SceneCache;

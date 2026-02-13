@@ -915,13 +915,13 @@ dependencies = [
 name = "flui-app"
 version = "0.1.0"
 dependencies = [
- "dpi",
  "flui-engine",
  "flui-foundation",
  "flui-interaction",
  "flui-layer",
  "flui-log",
  "flui-painting",
+ "flui-platform",
  "flui-rendering",
  "flui-scheduler",
  "flui-semantics",
@@ -929,6 +929,7 @@ dependencies = [
  "flui-view",
  "parking_lot",
  "pollster",
+ "raw-window-handle",
  "thiserror 2.0.17",
  "tracing",
  "ui-events-winit",
