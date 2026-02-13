@@ -10,7 +10,7 @@ members = [
     # === Phase 2: Core Framework (Re-enabled for platform integration) ===
     # "crates/flui-layer",          # Layer composition (ACTIVE)
     # "crates/flui-semantics",      # Accessibility (ACTIVE)
-    # "crates/flui-interaction",    # Gesture recognition (ACTIVE - Integration)
+    "crates/flui-interaction",    # Gesture recognition (ACTIVE)
     # "crates/flui-painting",       # Painting primitives (ACTIVE)
     # "crates/flui-scheduler",      # Frame scheduling (ACTIVE)
     "crates/flui-engine",         # GPU rendering engine (ACTIVE)
