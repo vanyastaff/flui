@@ -211,20 +211,21 @@ impl<'a, P: ParentData + Default> ChildHandle<'a, P> {
 mod tests {
     use super::*;
     use crate::parent_data::BoxParentData;
+    use flui_types::geometry::px;
 
     #[test]
     fn test_child_handle_creation() {
         let mut parent_data = BoxParentData::default();
         let handle: ChildHandle<BoxParentData> = ChildHandle::new(
             RenderId::new(1),
-            Size::new(100.0, 50.0),
-            Offset::new(10.0, 20.0),
+            Size::new(px(100.0), px(50.0)),
+            Offset::new(px(10.0), px(20.0)),
             &mut parent_data,
         );
 
         assert_eq!(handle.id().get(), 1);
-        assert_eq!(handle.size(), Size::new(100.0, 50.0));
-        assert_eq!(handle.offset(), Offset::new(10.0, 20.0));
+        assert_eq!(handle.size(), Size::new(px(100.0), px(50.0)));
+        assert_eq!(handle.offset(), Offset::new(px(10.0), px(20.0)));
     }
 
     #[test]
@@ -232,13 +233,13 @@ mod tests {
         let mut parent_data = BoxParentData::default();
         let mut handle: ChildHandle<BoxParentData> = ChildHandle::new(
             RenderId::new(1),
-            Size::new(100.0, 50.0),
+            Size::new(px(100.0), px(50.0)),
             Offset::ZERO,
             &mut parent_data,
         );
 
-        handle.set_offset(Offset::new(30.0, 40.0));
-        assert_eq!(handle.offset(), Offset::new(30.0, 40.0));
+        handle.set_offset(Offset::new(px(30.0), px(40.0)));
+        assert_eq!(handle.offset(), Offset::new(px(30.0), px(40.0)));
     }
 
     #[test]
@@ -246,19 +247,19 @@ mod tests {
         let mut parent_data = BoxParentData::default();
         let handle: ChildHandle<BoxParentData> = ChildHandle::new(
             RenderId::new(1),
-            Size::new(100.0, 50.0),
-            Offset::new(10.0, 20.0),
+            Size::new(px(100.0), px(50.0)),
+            Offset::new(px(10.0), px(20.0)),
             &mut parent_data,
         );
 
         // Inside bounds
-        assert!(handle.contains_point(Offset::new(50.0, 40.0)));
+        assert!(handle.contains_point(Offset::new(px(50.0), px(40.0))));
 
         // Outside bounds
-        assert!(!handle.contains_point(Offset::new(5.0, 40.0))); // Left of
-        assert!(!handle.contains_point(Offset::new(150.0, 40.0))); // Right of
-        assert!(!handle.contains_point(Offset::new(50.0, 15.0))); // Above
-        assert!(!handle.contains_point(Offset::new(50.0, 100.0))); // Below
+        assert!(!handle.contains_point(Offset::new(px(5.0), px(40.0)))); // Left of
+        assert!(!handle.contains_point(Offset::new(px(150.0), px(40.0)))); // Right of
+        assert!(!handle.contains_point(Offset::new(px(50.0), px(15.0)))); // Above
+        assert!(!handle.contains_point(Offset::new(px(50.0), px(100.0)))); // Below
     }
 
     #[test]
@@ -266,8 +267,8 @@ mod tests {
         let mut parent_data = BoxParentData::default();
         let handle: ChildHandle<BoxParentData> = ChildHandle::new(
             RenderId::new(1),
-            Size::new(100.0, 50.0),
-            Offset::new(10.0, 20.0),
+            Size::new(px(100.0), px(50.0)),
+            Offset::new(px(10.0), px(20.0)),
             &mut parent_data,
         );
 
@@ -283,17 +284,17 @@ mod tests {
         let mut parent_data = BoxParentData::default();
         let handle: ChildHandle<BoxParentData> = ChildHandle::new(
             RenderId::new(1),
-            Size::new(100.0, 50.0),
-            Offset::new(10.0, 20.0),
+            Size::new(px(100.0), px(50.0)),
+            Offset::new(px(10.0), px(20.0)),
             &mut parent_data,
         );
 
         // Global to local
-        let local = handle.global_to_local(Offset::new(50.0, 40.0));
-        assert_eq!(local, Offset::new(40.0, 20.0));
+        let local = handle.global_to_local(Offset::new(px(50.0), px(40.0)));
+        assert_eq!(local, Offset::new(px(40.0), px(20.0)));
 
         // Local to global
-        let global = handle.local_to_global(Offset::new(40.0, 20.0));
-        assert_eq!(global, Offset::new(50.0, 40.0));
+        let global = handle.local_to_global(Offset::new(px(40.0), px(20.0)));
+        assert_eq!(global, Offset::new(px(50.0), px(40.0)));
     }
 }

@@ -276,6 +276,7 @@ pub trait ClipContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
 
     /// Test implementation of ClipContext for unit testing
     struct TestClipContext {
@@ -302,7 +303,7 @@ mod tests {
     #[test]
     fn test_clip_rect_and_paint() {
         let mut ctx = TestClipContext::new();
-        let rect = Rect::from_ltwh(0.0, 0.0, 100.0, 100.0);
+        let rect = Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0));
         let bounds = rect;
 
         let mut painted = false;
@@ -316,7 +317,7 @@ mod tests {
     #[test]
     fn test_clip_none_skips_clipping() {
         let mut ctx = TestClipContext::new();
-        let rect = Rect::from_ltwh(0.0, 0.0, 100.0, 100.0);
+        let rect = Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0));
         let bounds = rect;
 
         let initial_save_count = ctx.canvas.save_count();
@@ -332,8 +333,11 @@ mod tests {
     #[test]
     fn test_clip_rrect_and_paint() {
         let mut ctx = TestClipContext::new();
-        let rrect =
-            RRect::from_rect_elliptical(Rect::from_ltwh(0.0, 0.0, 100.0, 100.0), 10.0, 10.0);
+        let rrect = RRect::from_rect_elliptical(
+            Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0)),
+            px(10.0),
+            px(10.0),
+        );
         let bounds = rrect.bounding_rect();
 
         let mut painted = false;
@@ -348,7 +352,7 @@ mod tests {
     fn test_clip_path_and_paint() {
         let mut ctx = TestClipContext::new();
         let path = Path::new(); // Empty path for testing
-        let bounds = Rect::from_ltwh(0.0, 0.0, 100.0, 100.0);
+        let bounds = Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0));
 
         let mut painted = false;
         ctx.clip_path_and_paint(&path, Clip::AntiAlias, bounds, |_ctx| {

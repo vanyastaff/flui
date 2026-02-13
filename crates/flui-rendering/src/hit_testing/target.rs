@@ -294,10 +294,11 @@ pub enum PointerEventKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
 
     #[test]
     fn test_pointer_event_down() {
-        let event = PointerEvent::down(flui_types::Offset::new(100.0, 200.0));
+        let event = PointerEvent::down(flui_types::Offset::new(px(100.0), px(200.0)));
         assert_eq!(event.kind, PointerEventKind::Down);
         assert_eq!(event.position.dx, 100.0);
         assert_eq!(event.position.dy, 200.0);

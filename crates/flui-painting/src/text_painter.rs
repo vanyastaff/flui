@@ -786,6 +786,7 @@ pub enum TextBaseline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
     use flui_types::typography::TextSpan;
 
     #[test]
@@ -903,11 +904,11 @@ mod tests {
         use flui_types::geometry::Offset;
 
         // Hit test at start
-        let pos = painter.get_position_for_offset(Offset::new(0.0, 5.0));
+        let pos = painter.get_position_for_offset(Offset::new(px(0.0), px(5.0)));
         assert_eq!(pos.offset, 0);
 
         // Hit test past end
-        let pos = painter.get_position_for_offset(Offset::new(1000.0, 5.0));
+        let pos = painter.get_position_for_offset(Offset::new(px(1000.0), px(5.0)));
         assert!(pos.offset <= 5);
     }
 

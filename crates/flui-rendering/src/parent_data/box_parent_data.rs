@@ -106,7 +106,7 @@ impl From<Offset> for BoxParentData {
 
 impl From<(f32, f32)> for BoxParentData {
     fn from((x, y): (f32, f32)) -> Self {
-        Self::new(Offset::new(x, y))
+        Self::new(Offset::new(flui_types::Pixels(x), flui_types::Pixels(y)))
     }
 }
 
@@ -117,10 +117,11 @@ impl From<(f32, f32)> for BoxParentData {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
 
     #[test]
     fn test_new() {
-        let offset = Offset::new(10.0, 20.0);
+        let offset = Offset::new(px(10.0), px(20.0));
         let data = BoxParentData::new(offset);
 
         assert_eq!(data.offset, offset);
@@ -144,7 +145,7 @@ mod tests {
 
     #[test]
     fn test_builder() {
-        let data = BoxParentData::zero().with_offset(Offset::new(5.0, 10.0));
+        let data = BoxParentData::zero().with_offset(Offset::new(px(5.0), px(10.0)));
 
         assert_eq!(data.offset.dx, 5.0);
         assert_eq!(data.offset.dy, 10.0);
@@ -153,7 +154,7 @@ mod tests {
 
     #[test]
     fn test_reset() {
-        let mut data = BoxParentData::new(Offset::new(10.0, 20.0));
+        let mut data = BoxParentData::new(Offset::new(px(10.0), px(20.0)));
         assert!(!data.is_zero());
 
         data.reset();
@@ -164,9 +165,9 @@ mod tests {
     fn test_hash() {
         use std::collections::hash_map::DefaultHasher;
 
-        let data1 = BoxParentData::new(Offset::new(10.0, 20.0));
-        let data2 = BoxParentData::new(Offset::new(10.0, 20.0));
-        let data3 = BoxParentData::new(Offset::new(10.0, 20.1));
+        let data1 = BoxParentData::new(Offset::new(px(10.0), px(20.0)));
+        let data2 = BoxParentData::new(Offset::new(px(10.0), px(20.0)));
+        let data3 = BoxParentData::new(Offset::new(px(10.0), px(20.1)));
 
         let mut hasher1 = DefaultHasher::new();
         data1.hash(&mut hasher1);
@@ -186,9 +187,9 @@ mod tests {
 
     #[test]
     fn test_eq() {
-        let data1 = BoxParentData::new(Offset::new(10.0, 20.0));
-        let data2 = BoxParentData::new(Offset::new(10.0, 20.0));
-        let data3 = BoxParentData::new(Offset::new(10.0, 20.1));
+        let data1 = BoxParentData::new(Offset::new(px(10.0), px(20.0)));
+        let data2 = BoxParentData::new(Offset::new(px(10.0), px(20.0)));
+        let data3 = BoxParentData::new(Offset::new(px(10.0), px(20.1)));
 
         assert_eq!(data1, data2);
         assert_ne!(data1, data3);
@@ -196,7 +197,7 @@ mod tests {
 
     #[test]
     fn test_clone() {
-        let data1 = BoxParentData::new(Offset::new(10.0, 20.0));
+        let data1 = BoxParentData::new(Offset::new(px(10.0), px(20.0)));
         let data2 = data1.clone();
 
         assert_eq!(data1, data2);
@@ -204,7 +205,7 @@ mod tests {
 
     #[test]
     fn test_from_offset() {
-        let offset = Offset::new(15.0, 25.0);
+        let offset = Offset::new(px(15.0), px(25.0));
         let data: BoxParentData = offset.into();
 
         assert_eq!(data.offset, offset);
@@ -220,7 +221,7 @@ mod tests {
 
     #[test]
     fn test_parent_data_trait() {
-        let mut data = BoxParentData::new(Offset::new(10.0, 20.0));
+        let mut data = BoxParentData::new(Offset::new(px(10.0), px(20.0)));
 
         // ParentData::detach should not panic
         data.detach();
@@ -228,7 +229,7 @@ mod tests {
 
     #[test]
     fn test_downcast() {
-        let data = BoxParentData::new(Offset::new(10.0, 20.0));
+        let data = BoxParentData::new(Offset::new(px(10.0), px(20.0)));
         let trait_obj: &dyn ParentData = &data;
 
         let downcasted = trait_obj.downcast_ref::<BoxParentData>();

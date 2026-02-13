@@ -123,6 +123,7 @@ mod tests {
     use flui_foundation::RenderId;
     use flui_rendering::objects::RenderSizedBox;
     use flui_rendering::pipeline::PipelineOwner;
+    use flui_types::geometry::px;
     use parking_lot::RwLock;
     use std::sync::Arc;
 
@@ -138,7 +139,7 @@ mod tests {
         type RenderObject = RenderSizedBox;
 
         fn create_render_object(&self) -> Self::RenderObject {
-            RenderSizedBox::new(Some(self.width), Some(self.height))
+            RenderSizedBox::new(Some(px(self.width)), Some(px(self.height)))
         }
 
         fn update_render_object(&self, _render_object: &mut Self::RenderObject) {

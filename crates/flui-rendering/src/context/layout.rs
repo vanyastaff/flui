@@ -20,7 +20,7 @@
 //!     let child_constraints = ctx.loosen();
 //!     for i in 0..ctx.child_count() {
 //!         let child_size = ctx.layout_child(i, child_constraints.clone());
-//!         ctx.position_child(i, Offset::new(0.0, y_offset));
+//!         ctx.position_child(i, Offset::new(px(0.0), y_offset));
 //!         y_offset += child_size.height;
 //!     }
 //!
@@ -30,7 +30,7 @@
 //! ```
 
 use flui_types::geometry::Offset;
-use flui_types::Size;
+use flui_types::{Pixels, Size};
 
 use crate::arity::Arity;
 use crate::constraints::{BoxConstraints, Constraints};
@@ -199,22 +199,22 @@ where
     // ════════════════════════════════════════════════════════════════════════
 
     /// Gets the minimum width constraint.
-    pub fn min_width(&self) -> f32 {
+    pub fn min_width(&self) -> Pixels {
         self.inner.constraints().min_width
     }
 
     /// Gets the maximum width constraint.
-    pub fn max_width(&self) -> f32 {
+    pub fn max_width(&self) -> Pixels {
         self.inner.constraints().max_width
     }
 
     /// Gets the minimum height constraint.
-    pub fn min_height(&self) -> f32 {
+    pub fn min_height(&self) -> Pixels {
         self.inner.constraints().min_height
     }
 
     /// Gets the maximum height constraint.
-    pub fn max_height(&self) -> f32 {
+    pub fn max_height(&self) -> Pixels {
         self.inner.constraints().max_height
     }
 
@@ -230,12 +230,12 @@ where
     }
 
     /// Returns constraints with only width tightened.
-    pub fn tighten_width(&self, width: f32) -> BoxConstraints {
+    pub fn tighten_width(&self, width: Pixels) -> BoxConstraints {
         self.inner.constraints().tighten(Some(width), None)
     }
 
     /// Returns constraints with only height tightened.
-    pub fn tighten_height(&self, height: f32) -> BoxConstraints {
+    pub fn tighten_height(&self, height: Pixels) -> BoxConstraints {
         self.inner.constraints().tighten(None, Some(height))
     }
 
@@ -270,12 +270,12 @@ where
     }
 
     /// Constrains only width.
-    pub fn constrain_width(&self, width: f32) -> f32 {
+    pub fn constrain_width(&self, width: Pixels) -> Pixels {
         self.inner.constraints().constrain_width(width)
     }
 
     /// Constrains only height.
-    pub fn constrain_height(&self, height: f32) -> f32 {
+    pub fn constrain_height(&self, height: Pixels) -> Pixels {
         self.inner.constraints().constrain_height(height)
     }
 

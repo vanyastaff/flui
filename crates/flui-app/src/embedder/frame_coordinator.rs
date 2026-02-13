@@ -3,7 +3,7 @@
 //! Orchestrates the frame rendering pipeline and handles
 //! surface errors gracefully.
 
-use flui_engine::wgpu::SceneRenderer;
+use flui_engine::wgpu::Renderer;
 use flui_engine::RenderError;
 use flui_layer::Scene;
 
@@ -66,7 +66,7 @@ impl FrameCoordinator {
     /// Handles surface errors gracefully and tracks statistics.
     /// Uses `render_scene` to traverse the full layer tree.
     #[tracing::instrument(level = "trace", skip_all, fields(frame = scene.frame_number()))]
-    pub fn render_scene(&mut self, renderer: &mut SceneRenderer, scene: &Scene) -> FrameResult {
+    pub fn render_scene(&mut self, renderer: &mut Renderer, scene: &Scene) -> FrameResult {
         tracing::debug!(
             "FrameCoordinator::render_scene called, has_content={}",
             scene.has_content()

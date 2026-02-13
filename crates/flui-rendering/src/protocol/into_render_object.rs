@@ -165,6 +165,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
     use crate::arity::Leaf;
     use crate::context::{BoxHitTestContext, BoxLayoutContext};
     use crate::parent_data::BoxParentData;
@@ -203,7 +204,7 @@ mod tests {
     #[test]
     fn test_into_render_entry() {
         let test_box = TestBox {
-            size: Size::new(100.0, 50.0),
+            size: Size::new(px(100.0), px(50.0)),
         };
         let _entry: RenderEntry<BoxProtocol> = test_box.into_render_entry();
         // Entry created successfully
@@ -212,7 +213,7 @@ mod tests {
     #[test]
     fn test_into_render_node() {
         let test_box = TestBox {
-            size: Size::new(100.0, 50.0),
+            size: Size::new(px(100.0), px(50.0)),
         };
         let node = test_box.into_render_node();
         assert!(node.is_box());

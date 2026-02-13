@@ -156,7 +156,11 @@ pub trait HitTestContextApi<'ctx, H: HitTestCapability + ?Sized, A: Arity, P: Pa
 
     /// Adds an offset transform (convenience method).
     fn push_offset(&mut self, offset: Offset) {
-        self.push_transform(flui_types::Matrix4::translation(offset.dx, offset.dy, 0.0));
+        self.push_transform(flui_types::Matrix4::translation(
+            offset.dx.get(),
+            offset.dy.get(),
+            0.0,
+        ));
     }
 }
 

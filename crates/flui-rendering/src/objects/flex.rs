@@ -1,6 +1,7 @@
 //! RenderFlex - lays out children in a row or column.
 
-use flui_types::{Offset, Point, Rect, Size};
+use flui_types::geometry::px;
+use flui_types::{Offset, Pixels, Point, Rect, Size};
 
 use crate::arity::Variable;
 use crate::constraints::BoxConstraints;
@@ -154,7 +155,7 @@ impl RenderFlex {
     }
 
     /// Extracts main axis extent from a size.
-    fn main_size(&self, size: Size) -> f32 {
+    fn main_size(&self, size: Size) -> Pixels {
         match self.direction {
             FlexDirection::Horizontal => size.width,
             FlexDirection::Vertical => size.height,
@@ -162,7 +163,7 @@ impl RenderFlex {
     }
 
     /// Extracts cross axis extent from a size.
-    fn cross_size(&self, size: Size) -> f32 {
+    fn cross_size(&self, size: Size) -> Pixels {
         match self.direction {
             FlexDirection::Horizontal => size.height,
             FlexDirection::Vertical => size.width,
@@ -170,7 +171,7 @@ impl RenderFlex {
     }
 
     /// Creates an offset from main and cross values.
-    fn offset(&self, main: f32, cross: f32) -> Offset {
+    fn offset(&self, main: Pixels, cross: Pixels) -> Offset {
         match self.direction {
             FlexDirection::Horizontal => Offset::new(main, cross),
             FlexDirection::Vertical => Offset::new(cross, main),
@@ -178,7 +179,7 @@ impl RenderFlex {
     }
 
     /// Creates a size from main and cross values.
-    fn size_from_main_cross(&self, main: f32, cross: f32) -> Size {
+    fn size_from_main_cross(&self, main: Pixels, cross: Pixels) -> Size {
         match self.direction {
             FlexDirection::Horizontal => Size::new(main, cross),
             FlexDirection::Vertical => Size::new(cross, main),
@@ -207,23 +208,23 @@ impl RenderBox for RenderFlex {
         // Calculate child constraints based on direction
         let child_constraints = match self.direction {
             FlexDirection::Horizontal => BoxConstraints::new(
-                0.0,
-                f32::INFINITY, // Unbounded main axis
+                Pixels::ZERO,
+                Pixels::INFINITY, // Unbounded main axis
                 constraints.min_height,
                 constraints.max_height,
             ),
             FlexDirection::Vertical => BoxConstraints::new(
                 constraints.min_width,
                 constraints.max_width,
-                0.0,
-                f32::INFINITY, // Unbounded main axis
+                Pixels::ZERO,
+                Pixels::INFINITY, // Unbounded main axis
             ),
         };
 
         // Layout all children and collect sizes
         let mut child_sizes = Vec::with_capacity(child_count);
-        let mut total_main = 0.0f32;
-        let mut max_cross = 0.0f32;
+        let mut total_main = Pixels::ZERO;
+        let mut max_cross = Pixels::ZERO;
 
         for i in 0..child_count {
             let child_size = ctx.layout_child(i, child_constraints.clone());
@@ -233,7 +234,7 @@ impl RenderBox for RenderFlex {
         }
 
         // Add spacing
-        let total_spacing = self.spacing * (child_count - 1).max(0) as f32;
+        let total_spacing = px(self.spacing * (child_count - 1).max(0) as f32);
         total_main += total_spacing;
 
         // Calculate our size
@@ -251,14 +252,14 @@ impl RenderBox for RenderFlex {
         // Calculate starting position based on main axis alignment
         let free_space = main_extent - total_main;
         let (mut main_offset, between_space) = match self.main_axis_alignment {
-            MainAxisAlignment::Start => (0.0, 0.0),
-            MainAxisAlignment::End => (free_space, 0.0),
-            MainAxisAlignment::Center => (free_space / 2.0, 0.0),
+            MainAxisAlignment::Start => (Pixels::ZERO, Pixels::ZERO),
+            MainAxisAlignment::End => (free_space, Pixels::ZERO),
+            MainAxisAlignment::Center => (free_space / 2.0, Pixels::ZERO),
             MainAxisAlignment::SpaceBetween => {
                 if child_count > 1 {
-                    (0.0, free_space / (child_count - 1) as f32)
+                    (Pixels::ZERO, free_space / (child_count - 1) as f32)
                 } else {
-                    (0.0, 0.0)
+                    (Pixels::ZERO, Pixels::ZERO)
                 }
             }
             MainAxisAlignment::SpaceAround => {
@@ -280,17 +281,17 @@ impl RenderBox for RenderFlex {
 
             // Calculate cross axis offset based on alignment
             let cross_offset = match self.cross_axis_alignment {
-                CrossAxisAlignment::Start => 0.0,
+                CrossAxisAlignment::Start => Pixels::ZERO,
                 CrossAxisAlignment::End => cross_extent - self.cross_size(child_size),
                 CrossAxisAlignment::Center => (cross_extent - self.cross_size(child_size)) / 2.0,
-                CrossAxisAlignment::Stretch => 0.0, // Child already stretched via constraints
+                CrossAxisAlignment::Stretch => Pixels::ZERO, // Child already stretched via constraints
             };
 
             let offset = self.offset(main_offset, cross_offset);
             self.child_offsets.push(offset);
             ctx.position_child(i, offset);
 
-            main_offset += self.main_size(child_size) + self.spacing + between_space;
+            main_offset += self.main_size(child_size) + px(self.spacing) + between_space;
         }
 
         ctx.complete_with_size(self.size);

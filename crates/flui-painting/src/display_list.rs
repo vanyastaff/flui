@@ -2334,6 +2334,7 @@ impl IndexMut<usize> for DisplayList {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
 
     #[test]
     fn test_display_list_creation() {
@@ -2346,7 +2347,7 @@ mod tests {
     #[test]
     fn test_display_list_push() {
         let mut display_list = DisplayList::new();
-        let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
+        let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
         let paint = Paint::fill(Color::RED);
 
         display_list.push(DrawCommand::DrawRect {
@@ -2363,7 +2364,7 @@ mod tests {
     fn test_display_list_clear() {
         let mut display_list = DisplayList::new();
         display_list.push(DrawCommand::DrawRect {
-            rect: Rect::from_ltrb(0.0, 0.0, 100.0, 100.0),
+            rect: Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0)),
             paint: Paint::default(),
             transform: Matrix4::identity(),
         });

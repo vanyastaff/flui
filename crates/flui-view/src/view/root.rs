@@ -10,7 +10,9 @@
 
 use flui_foundation::{ElementId, RenderId};
 use flui_rendering::pipeline::PipelineOwner;
-use flui_rendering::view::{RenderView as RenderViewObject, ViewConfiguration};
+use flui_rendering::storage::RenderNode;
+use flui_rendering::view::{RenderView as RenderViewObject, RenderViewAdapter, ViewConfiguration};
+use flui_types::geometry::px;
 use flui_types::Size;
 use parking_lot::RwLock;
 use std::any::{Any, TypeId};
@@ -166,15 +168,16 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
         // Create RenderView and insert into RenderTree
         let (width, height) = self.view.size;
         let mut render_view = RenderViewObject::new();
-        let physical_size = Size::new(width, height);
+        let physical_size = Size::new(px(width), px(height));
         let config = ViewConfiguration::from_size(physical_size, 1.0);
         render_view.set_configuration(config);
 
-        // Insert into PipelineOwner's RenderTree and get RenderId
+        // Insert into PipelineOwner's RenderTree via RenderViewAdapter
         if let Some(ref pipeline_owner) = self.pipeline_owner {
             let mut owner = pipeline_owner.write();
-            // Use PipelineOwner::insert which handles conversion to RenderNode
-            let render_id = owner.insert(Box::new(render_view));
+            let adapter = RenderViewAdapter::new(render_view);
+            let node = RenderNode::new_box(Box::new(adapter));
+            let render_id = owner.insert_render_node(node);
             owner.set_root_id(Some(render_id));
             self.render_id = Some(render_id);
 
@@ -244,7 +247,7 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
                         .downcast_mut::<RenderViewObject>()
                     {
                         let (width, height) = self.view.size;
-                        let physical_size = Size::new(width, height);
+                        let physical_size = Size::new(px(width), px(height));
                         let config = ViewConfiguration::from_size(physical_size, 1.0);
                         render_view.set_configuration(config);
                     }

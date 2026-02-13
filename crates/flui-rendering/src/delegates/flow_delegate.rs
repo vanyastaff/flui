@@ -191,6 +191,7 @@ impl<'a> FlowPaintingContext<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
 
     #[derive(Debug)]
     struct LinearFlowDelegate {
@@ -207,15 +208,15 @@ mod tests {
             _index: usize,
             _constraints: BoxConstraints,
         ) -> BoxConstraints {
-            BoxConstraints::loose(Size::new(100.0, 50.0))
+            BoxConstraints::loose(Size::new(px(100.0), px(50.0)))
         }
 
         fn paint_children(&self, context: &mut FlowPaintingContext) {
-            let mut x = 0.0;
+            let mut x: f32 = 0.0;
             for i in 0..context.child_count() {
                 let transform = Matrix4::translation(x, 0.0, 0.0);
                 context.paint_child(i, transform);
-                x += context.child_size(i).width + self.spacing;
+                x += context.child_size(i).width.get() + self.spacing;
             }
         }
 
@@ -239,16 +240,16 @@ mod tests {
     #[test]
     fn test_flow_painting_context() {
         let child_sizes = vec![
-            Size::new(50.0, 30.0),
-            Size::new(60.0, 40.0),
-            Size::new(70.0, 50.0),
+            Size::new(px(50.0), px(30.0)),
+            Size::new(px(60.0), px(40.0)),
+            Size::new(px(70.0), px(50.0)),
         ];
-        let mut context = FlowPaintingContext::new(Size::new(300.0, 100.0), &child_sizes);
+        let mut context = FlowPaintingContext::new(Size::new(px(300.0), px(100.0)), &child_sizes);
 
         assert_eq!(context.child_count(), 3);
-        assert_eq!(context.child_size(0), Size::new(50.0, 30.0));
-        assert_eq!(context.child_size(1), Size::new(60.0, 40.0));
-        assert_eq!(context.child_size(2), Size::new(70.0, 50.0));
+        assert_eq!(context.child_size(0), Size::new(px(50.0), px(30.0)));
+        assert_eq!(context.child_size(1), Size::new(px(60.0), px(40.0)));
+        assert_eq!(context.child_size(2), Size::new(px(70.0), px(50.0)));
 
         assert!(!context.all_children_painted());
 
@@ -263,10 +264,10 @@ mod tests {
     #[test]
     fn test_linear_flow_delegate() {
         let delegate = LinearFlowDelegate { spacing: 10.0 };
-        let constraints = BoxConstraints::new(0.0, 500.0, 0.0, 200.0);
+        let constraints = BoxConstraints::new(px(0.0), px(500.0), px(0.0), px(200.0));
 
         let size = delegate.get_size(constraints);
-        assert_eq!(size, Size::new(500.0, 200.0));
+        assert_eq!(size, Size::new(px(500.0), px(200.0)));
 
         let child_constraints = delegate.get_constraints_for_child(0, constraints);
         assert_eq!(child_constraints.max_width, 100.0);

@@ -1,5 +1,6 @@
 //! Application configuration.
 
+use flui_types::geometry::px;
 use flui_types::Size;
 
 /// Application configuration.
@@ -54,7 +55,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             title: "FLUI App".to_string(),
-            size: Size::new(800.0, 600.0),
+            size: Size::new(px(800.0), px(600.0)),
             min_size: None,
             max_size: None,
             resizable: true,
@@ -82,19 +83,19 @@ impl AppConfig {
 
     /// Set the initial window size.
     pub fn with_size(mut self, width: u32, height: u32) -> Self {
-        self.size = Size::new(width as f32, height as f32);
+        self.size = Size::new(px(width as f32), px(height as f32));
         self
     }
 
     /// Set the minimum window size.
     pub fn with_min_size(mut self, width: u32, height: u32) -> Self {
-        self.min_size = Some(Size::new(width as f32, height as f32));
+        self.min_size = Some(Size::new(px(width as f32), px(height as f32)));
         self
     }
 
     /// Set the maximum window size.
     pub fn with_max_size(mut self, width: u32, height: u32) -> Self {
-        self.max_size = Some(Size::new(width as f32, height as f32));
+        self.max_size = Some(Size::new(px(width as f32), px(height as f32)));
         self
     }
 

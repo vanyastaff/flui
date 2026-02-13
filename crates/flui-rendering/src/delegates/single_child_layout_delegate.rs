@@ -197,20 +197,21 @@ impl SingleChildLayoutDelegate for AspectRatioDelegate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
 
     #[test]
     fn test_center_delegate() {
         let delegate = CenterLayoutDelegate;
-        let constraints = BoxConstraints::new(0.0, 200.0, 0.0, 100.0);
+        let constraints = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(100.0));
 
         let size = delegate.get_size(constraints);
-        assert_eq!(size, Size::new(200.0, 100.0));
+        assert_eq!(size, Size::new(px(200.0), px(100.0)));
 
         let child_constraints = delegate.get_constraints_for_child(constraints);
         assert_eq!(child_constraints.min_width, 0.0);
         assert_eq!(child_constraints.min_height, 0.0);
 
-        let child_size = Size::new(50.0, 30.0);
+        let child_size = Size::new(px(50.0), px(30.0));
         let position = delegate.get_position_for_child(size, child_size);
         assert_eq!(position.dx, 75.0);
         assert_eq!(position.dy, 35.0);
@@ -219,7 +220,7 @@ mod tests {
     #[test]
     fn test_aspect_ratio_delegate_width_constrained() {
         let delegate = AspectRatioDelegate::new(2.0); // width = 2 * height
-        let constraints = BoxConstraints::new(0.0, 200.0, 0.0, 200.0);
+        let constraints = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0));
 
         let size = delegate.get_size(constraints);
         assert_eq!(size.width, 200.0);
@@ -229,7 +230,7 @@ mod tests {
     #[test]
     fn test_aspect_ratio_delegate_height_constrained() {
         let delegate = AspectRatioDelegate::new(2.0); // width = 2 * height
-        let constraints = BoxConstraints::new(0.0, 200.0, 0.0, 50.0);
+        let constraints = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(50.0));
 
         let size = delegate.get_size(constraints);
         assert_eq!(size.width, 100.0);

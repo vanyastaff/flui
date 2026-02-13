@@ -41,7 +41,7 @@ use super::{Offset, Point, Size, Vec2};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(C)]
-pub struct Rect<T: Unit> {
+pub struct Rect<T: Unit = Pixels> {
     /// Minimum corner (top-left in screen coordinates).
     pub min: Point<T>,
     /// Maximum corner (bottom-right in screen coordinates).

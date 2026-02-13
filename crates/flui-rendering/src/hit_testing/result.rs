@@ -599,6 +599,7 @@ impl IntoIterator for SliverHitTestResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
 
     #[test]
     fn test_hit_test_result_empty() {
@@ -610,7 +611,7 @@ mod tests {
     #[test]
     fn test_hit_test_result_push_pop() {
         let mut result = HitTestResult::new();
-        result.push_offset(Offset::new(10.0, 20.0));
+        result.push_offset(Offset::new(px(10.0), px(20.0)));
         assert_eq!(result.transforms.len(), 1);
 
         result.push_transform(Matrix4::IDENTITY);
@@ -628,7 +629,7 @@ mod tests {
         let mut result = BoxHitTestResult::new();
         assert!(result.is_empty());
 
-        result.add_with_position(Offset::new(10.0, 20.0));
+        result.add_with_position(Offset::new(px(10.0), px(20.0)));
         assert!(!result.is_empty());
         assert_eq!(result.len(), 1);
         assert_eq!(result.entries()[0].local_position.dx, 10.0);
@@ -639,8 +640,8 @@ mod tests {
         let mut result = BoxHitTestResult::new();
 
         let hit = result.add_with_paint_offset(
-            Some(Offset::new(10.0, 10.0)),
-            Offset::new(25.0, 35.0),
+            Some(Offset::new(px(10.0), px(10.0))),
+            Offset::new(px(25.0), px(35.0)),
             |result, position| {
                 // Position should be transformed
                 assert_eq!(position.dx, 15.0);
@@ -696,8 +697,8 @@ mod tests {
         assert!(result.first().is_none());
         assert!(result.last().is_none());
 
-        result.add_with_position(Offset::new(10.0, 20.0));
-        result.add_with_position(Offset::new(30.0, 40.0));
+        result.add_with_position(Offset::new(px(10.0), px(20.0)));
+        result.add_with_position(Offset::new(px(30.0), px(40.0)));
 
         assert!(result.first().is_some());
         assert!(result.last().is_some());
@@ -708,8 +709,8 @@ mod tests {
     #[test]
     fn test_hit_test_result_clear() {
         let mut result = HitTestResult::new();
-        result.add_with_position(Offset::new(10.0, 20.0));
-        result.push_offset(Offset::new(5.0, 5.0));
+        result.add_with_position(Offset::new(px(10.0), px(20.0)));
+        result.push_offset(Offset::new(px(5.0), px(5.0)));
 
         assert!(!result.is_empty());
         assert_eq!(result.transform_depth(), 1);
@@ -728,8 +729,8 @@ mod tests {
     #[test]
     fn test_hit_test_result_iterator() {
         let mut result = HitTestResult::new();
-        result.add_with_position(Offset::new(10.0, 20.0));
-        result.add_with_position(Offset::new(30.0, 40.0));
+        result.add_with_position(Offset::new(px(10.0), px(20.0)));
+        result.add_with_position(Offset::new(px(30.0), px(40.0)));
 
         let positions: Vec<_> = result
             .path()
@@ -744,8 +745,8 @@ mod tests {
         let mut result = BoxHitTestResult::new();
         assert!(result.first().is_none());
 
-        result.add_with_position(Offset::new(10.0, 20.0));
-        result.add_with_position(Offset::new(30.0, 40.0));
+        result.add_with_position(Offset::new(px(10.0), px(20.0)));
+        result.add_with_position(Offset::new(px(30.0), px(40.0)));
 
         assert_eq!(result.first().unwrap().local_position.dx, 10.0);
         assert_eq!(result.last().unwrap().local_position.dx, 30.0);
@@ -754,8 +755,8 @@ mod tests {
     #[test]
     fn test_box_hit_test_result_clear() {
         let mut result = BoxHitTestResult::new();
-        result.add_with_position(Offset::new(10.0, 20.0));
-        result.push_offset(Offset::new(5.0, 5.0));
+        result.add_with_position(Offset::new(px(10.0), px(20.0)));
+        result.push_offset(Offset::new(px(5.0), px(5.0)));
 
         result.clear();
         assert!(result.is_empty());
@@ -765,10 +766,10 @@ mod tests {
     #[test]
     fn test_box_hit_test_result_extend() {
         let mut result1 = BoxHitTestResult::new();
-        result1.add_with_position(Offset::new(10.0, 20.0));
+        result1.add_with_position(Offset::new(px(10.0), px(20.0)));
 
         let mut result2 = BoxHitTestResult::new();
-        result2.add_with_position(Offset::new(30.0, 40.0));
+        result2.add_with_position(Offset::new(px(30.0), px(40.0)));
 
         result1.extend(&result2);
         assert_eq!(result1.len(), 2);
@@ -777,8 +778,8 @@ mod tests {
     #[test]
     fn test_box_hit_test_result_iterator() {
         let mut result = BoxHitTestResult::new();
-        result.add_with_position(Offset::new(10.0, 20.0));
-        result.add_with_position(Offset::new(30.0, 40.0));
+        result.add_with_position(Offset::new(px(10.0), px(20.0)));
+        result.add_with_position(Offset::new(px(30.0), px(40.0)));
 
         let positions: Vec<_> = (&result).into_iter().map(|e| e.local_position.dx).collect();
         assert_eq!(positions, vec![10.0, 30.0]);
@@ -790,7 +791,7 @@ mod tests {
 
         let hit = result.add_with_raw_transform(
             Some(Matrix4::translation(10.0, 20.0, 0.0)),
-            Offset::new(25.0, 35.0),
+            Offset::new(px(25.0), px(35.0)),
             |result, position| {
                 // Position passed as-is (not transformed)
                 assert_eq!(position.dx, 25.0);
@@ -810,9 +811,9 @@ mod tests {
         let mut result = BoxHitTestResult::new();
 
         let hit = result.add_with_out_of_band_position(
-            Some(Offset::new(10.0, 20.0)),
+            Some(Offset::new(px(10.0), px(20.0))),
             None,
-            Offset::new(100.0, 200.0),
+            Offset::new(px(100.0), px(200.0)),
             |result, position| {
                 // Position used directly without transformation
                 assert_eq!(position.dx, 100.0);

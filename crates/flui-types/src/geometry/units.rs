@@ -265,6 +265,20 @@ impl Pixels {
     pub fn map(self, f: impl FnOnce(f32) -> f32) -> Self {
         Pixels(f(self.0))
     }
+
+    /// Returns the raw bits of the underlying f32.
+    ///
+    /// Useful for hashing and bitwise comparisons.
+    #[inline]
+    pub fn to_bits(self) -> u32 {
+        self.0.to_bits()
+    }
+
+    /// Positive infinity.
+    pub const INFINITY: Pixels = Pixels(f32::INFINITY);
+
+    /// Negative infinity.
+    pub const NEG_INFINITY: Pixels = Pixels(f32::NEG_INFINITY);
 }
 
 // ============================================================================
@@ -455,6 +469,68 @@ impl Neg for Pixels {
     #[inline]
     fn neg(self) -> Self::Output {
         Self(-self.0)
+    }
+}
+
+// Cross-type comparisons with f32
+impl PartialEq<f32> for Pixels {
+    #[inline]
+    fn eq(&self, other: &f32) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialEq<Pixels> for f32 {
+    #[inline]
+    fn eq(&self, other: &Pixels) -> bool {
+        *self == other.0
+    }
+}
+
+impl PartialOrd<f32> for Pixels {
+    #[inline]
+    fn partial_cmp(&self, other: &f32) -> Option<std::cmp::Ordering> {
+        self.0.partial_cmp(other)
+    }
+}
+
+impl PartialOrd<Pixels> for f32 {
+    #[inline]
+    fn partial_cmp(&self, other: &Pixels) -> Option<std::cmp::Ordering> {
+        self.partial_cmp(&other.0)
+    }
+}
+
+// Cross-type arithmetic with f32
+impl Add<f32> for Pixels {
+    type Output = Pixels;
+    #[inline]
+    fn add(self, rhs: f32) -> Self::Output {
+        Pixels(self.0 + rhs)
+    }
+}
+
+impl Add<Pixels> for f32 {
+    type Output = Pixels;
+    #[inline]
+    fn add(self, rhs: Pixels) -> Self::Output {
+        Pixels(self + rhs.0)
+    }
+}
+
+impl Sub<f32> for Pixels {
+    type Output = Pixels;
+    #[inline]
+    fn sub(self, rhs: f32) -> Self::Output {
+        Pixels(self.0 - rhs)
+    }
+}
+
+impl Sub<Pixels> for f32 {
+    type Output = Pixels;
+    #[inline]
+    fn sub(self, rhs: Pixels) -> Self::Output {
+        Pixels(self - rhs.0)
     }
 }
 

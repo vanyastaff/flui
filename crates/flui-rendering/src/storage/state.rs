@@ -165,8 +165,10 @@ impl AtomicOffset {
     #[inline]
     const fn new(offset: Offset) -> Self {
         // Pack two f32s into a u64
-        let dx_bits = offset.dx.to_bits() as u64;
-        let dy_bits = offset.dy.to_bits() as u64;
+        // Use .0.to_bits() instead of .to_bits() because Pixels::to_bits()
+        // is not available in const context.
+        let dx_bits = offset.dx.0.to_bits() as u64;
+        let dy_bits = offset.dy.0.to_bits() as u64;
         let packed = (dy_bits << 32) | dx_bits;
 
         Self {
@@ -182,16 +184,16 @@ impl AtomicOffset {
         let dy_bits = (packed >> 32) as u32;
 
         Offset {
-            dx: f32::from_bits(dx_bits),
-            dy: f32::from_bits(dy_bits),
+            dx: flui_types::Pixels(f32::from_bits(dx_bits)),
+            dy: flui_types::Pixels(f32::from_bits(dy_bits)),
         }
     }
 
     /// Stores a new offset atomically.
     #[inline]
     fn store(&self, offset: Offset) {
-        let dx_bits = offset.dx.to_bits() as u64;
-        let dy_bits = offset.dy.to_bits() as u64;
+        let dx_bits = offset.dx.0.to_bits() as u64;
+        let dy_bits = offset.dy.0.to_bits() as u64;
         let packed = (dy_bits << 32) | dx_bits;
 
         self.bits.store(packed, Ordering::Release);
@@ -1401,6 +1403,7 @@ impl RenderState<SliverProtocol> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
@@ -1637,8 +1640,8 @@ mod tests {
     #[test]
     fn test_geometry_write_once() {
         let state = BoxRenderState::new();
-        let size1 = flui_types::Size::new(100.0, 50.0);
-        let size2 = flui_types::Size::new(200.0, 100.0);
+        let size1 = flui_types::Size::new(px(100.0), px(50.0));
+        let size2 = flui_types::Size::new(px(200.0), px(100.0));
 
         // First set succeeds
         state.set_geometry(size1);
@@ -1654,13 +1657,13 @@ mod tests {
     #[test]
     fn test_atomic_offset() {
         let state = BoxRenderState::new();
-        let offset = Offset::new(10.0, 20.0);
+        let offset = Offset::new(px(10.0), px(20.0));
 
         state.set_offset(offset);
         assert_eq!(state.offset(), offset);
 
         // Can update multiple times
-        let offset2 = Offset::new(30.0, 40.0);
+        let offset2 = Offset::new(px(30.0), px(40.0));
         state.set_offset(offset2);
         assert_eq!(state.offset(), offset2);
     }

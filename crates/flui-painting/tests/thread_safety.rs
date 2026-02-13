@@ -4,7 +4,10 @@
 //! for parallel painting and execution.
 
 use flui_painting::prelude::*;
-use flui_types::{geometry::Rect, styling::Color};
+use flui_types::{
+    geometry::{px, Rect},
+    styling::Color,
+};
 use std::sync::Arc;
 use std::thread;
 
@@ -12,7 +15,7 @@ use std::thread;
 fn test_canvas_is_send() {
     // Verify Canvas can be sent across threads
     let mut canvas = Canvas::new();
-    let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
+    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
     let paint = Paint::fill(Color::RED);
     canvas.draw_rect(rect, &paint);
 
@@ -31,7 +34,7 @@ fn test_display_list_is_send() {
     // Verify DisplayList can be sent across threads
     let mut canvas = Canvas::new();
     canvas.draw_rect(
-        Rect::from_ltrb(0.0, 0.0, 100.0, 100.0),
+        Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0)),
         &Paint::fill(Color::RED),
     );
 
@@ -56,7 +59,12 @@ fn test_parallel_canvas_creation() {
             let mut canvas = Canvas::new();
 
             for j in 0..10 {
-                let rect = Rect::from_ltrb((i * 10 + j) as f32, 0.0, (i * 10 + j + 1) as f32, 50.0);
+                let rect = Rect::from_ltrb(
+                    px((i * 10 + j) as f32),
+                    px(0.0),
+                    px((i * 10 + j + 1) as f32),
+                    px(50.0),
+                );
                 let paint = Paint::fill(Color::RED);
                 canvas.draw_rect(rect, &paint);
             }
@@ -85,7 +93,7 @@ fn test_send_to_gpu_thread() {
 
     // Record many commands
     for i in 0..100 {
-        let rect = Rect::from_ltrb(i as f32, 0.0, (i + 1) as f32, 50.0);
+        let rect = Rect::from_ltrb(px(i as f32), px(0.0), px((i + 1) as f32), px(50.0));
         let paint = Paint::fill(Color::RED);
         canvas.draw_rect(rect, &paint);
     }
@@ -111,7 +119,7 @@ fn test_arc_sharing_display_list() {
     // DisplayList can be wrapped in Arc for read-only sharing
     let mut canvas = Canvas::new();
     canvas.draw_rect(
-        Rect::from_ltrb(0.0, 0.0, 100.0, 100.0),
+        Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0)),
         &Paint::fill(Color::RED),
     );
 
@@ -148,7 +156,12 @@ fn test_parallel_build_then_compose() {
         let handle = thread::spawn(move || {
             let mut child_canvas = Canvas::new();
 
-            let rect = Rect::from_ltrb((i * 10) as f32, 0.0, (i * 10 + 10) as f32, 50.0);
+            let rect = Rect::from_ltrb(
+                px((i * 10) as f32),
+                px(0.0),
+                px((i * 10 + 10) as f32),
+                px(50.0),
+            );
             let paint = Paint::fill(Color::RED);
             child_canvas.draw_rect(rect, &paint);
 
@@ -189,8 +202,12 @@ fn test_no_data_races() {
             let mut canvas = Canvas::new();
 
             for j in 0..100 {
-                let rect =
-                    Rect::from_ltrb((i * 100 + j) as f32, 0.0, (i * 100 + j + 1) as f32, 50.0);
+                let rect = Rect::from_ltrb(
+                    px((i * 100 + j) as f32),
+                    px(0.0),
+                    px((i * 100 + j + 1) as f32),
+                    px(50.0),
+                );
                 let paint = Paint::fill(Color::RED);
                 canvas.draw_rect(rect, &paint);
             }
@@ -234,7 +251,7 @@ fn test_display_list_clone_and_send() {
     // DisplayList implements Clone, so we can clone and send to different threads
     let mut canvas = Canvas::new();
     canvas.draw_rect(
-        Rect::from_ltrb(0.0, 0.0, 100.0, 100.0),
+        Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0)),
         &Paint::fill(Color::RED),
     );
 

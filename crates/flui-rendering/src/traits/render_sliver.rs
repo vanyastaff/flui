@@ -1,7 +1,8 @@
 //! RenderSliver trait for scrollable content layout.
 
+use flui_types::geometry::px;
 use flui_types::prelude::AxisDirection;
-use flui_types::{Rect, Size};
+use flui_types::{Pixels, Rect, Size};
 
 use crate::arity::Arity;
 use crate::constraints::{SliverConstraints, SliverGeometry};
@@ -225,10 +226,10 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static 
 
         match constraints.axis_direction {
             AxisDirection::TopToBottom | AxisDirection::BottomToTop => {
-                Size::new(cross_axis_extent, paint_extent)
+                Size::new(px(cross_axis_extent), px(paint_extent))
             }
             AxisDirection::LeftToRight | AxisDirection::RightToLeft => {
-                Size::new(paint_extent, cross_axis_extent)
+                Size::new(px(paint_extent), px(cross_axis_extent))
             }
         }
     }
@@ -307,7 +308,7 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static 
     fn sliver_paint_bounds(&self) -> Rect {
         let geometry = RenderSliver::geometry(self);
         let size = self.get_absolute_size(geometry.paint_extent);
-        Rect::new(0.0, 0.0, size.width, size.height)
+        Rect::new(Pixels::ZERO, Pixels::ZERO, size.width, size.height)
     }
 
     // ========================================================================

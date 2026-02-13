@@ -278,7 +278,12 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     /// Returns the paint bounds of this render box.
     fn box_paint_bounds(&self) -> Rect {
         let size = self.size();
-        Rect::new(0.0, 0.0, size.width, size.height)
+        Rect::new(
+            flui_types::Pixels::ZERO,
+            flui_types::Pixels::ZERO,
+            size.width,
+            size.height,
+        )
     }
 
     // ========================================================================

@@ -112,6 +112,7 @@ impl CustomClipper<Rect> for RectClipper {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
 
     #[derive(Debug)]
     struct InsetClipper {
@@ -121,10 +122,10 @@ mod tests {
     impl CustomClipper<Rect> for InsetClipper {
         fn get_clip(&self, size: Size) -> Rect {
             Rect::from_ltrb(
-                self.inset,
-                self.inset,
-                size.width - self.inset,
-                size.height - self.inset,
+                px(self.inset),
+                px(self.inset),
+                size.width - px(self.inset),
+                size.height - px(self.inset),
             )
         }
 
@@ -144,7 +145,7 @@ mod tests {
     #[test]
     fn test_rect_clipper() {
         let clipper = RectClipper;
-        let size = Size::new(100.0, 200.0);
+        let size = Size::new(px(100.0), px(200.0));
         let clip = clipper.get_clip(size);
 
         assert_eq!(clip.left(), 0.0);
@@ -156,7 +157,7 @@ mod tests {
     #[test]
     fn test_inset_clipper() {
         let clipper = InsetClipper { inset: 10.0 };
-        let size = Size::new(100.0, 200.0);
+        let size = Size::new(px(100.0), px(200.0));
         let clip = clipper.get_clip(size);
 
         assert_eq!(clip.left(), 10.0);

@@ -2,6 +2,7 @@
 
 use std::sync::{Arc, Weak};
 
+use flui_types::geometry::px;
 use flui_types::Offset;
 
 use super::{HitTestTarget, MatrixTransformPart};
@@ -210,9 +211,9 @@ impl SliverHitTestEntry {
     /// For vertical scrolling: main = y, cross = x
     pub fn to_offset(&self, is_horizontal: bool) -> Offset {
         if is_horizontal {
-            Offset::new(self.main_axis_position, self.cross_axis_position)
+            Offset::new(px(self.main_axis_position), px(self.cross_axis_position))
         } else {
-            Offset::new(self.cross_axis_position, self.main_axis_position)
+            Offset::new(px(self.cross_axis_position), px(self.main_axis_position))
         }
     }
 }
@@ -226,10 +227,11 @@ impl Default for SliverHitTestEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
 
     #[test]
     fn test_box_hit_test_entry() {
-        let entry = BoxHitTestEntry::new(Offset::new(10.0, 20.0));
+        let entry = BoxHitTestEntry::new(Offset::new(px(10.0), px(20.0)));
         assert_eq!(entry.local_position.dx, 10.0);
         assert_eq!(entry.local_position.dy, 20.0);
         assert!(entry.transform().is_none());
@@ -238,11 +240,11 @@ mod tests {
     #[test]
     fn test_box_hit_test_entry_with_transform() {
         let transform = MatrixTransformPart::offset(5.0, 10.0);
-        let entry = BoxHitTestEntry::with_transform(Offset::new(10.0, 20.0), transform);
+        let entry = BoxHitTestEntry::with_transform(Offset::new(px(10.0), px(20.0)), transform);
 
         assert!(entry.transform().is_some());
 
-        let local = entry.global_to_local(Offset::new(15.0, 30.0));
+        let local = entry.global_to_local(Offset::new(px(15.0), px(30.0)));
         assert_eq!(local.dx, 10.0);
         assert_eq!(local.dy, 20.0);
     }
@@ -272,7 +274,7 @@ mod tests {
 
     #[test]
     fn test_hit_test_entry_debug() {
-        let entry = HitTestEntry::with_position(Offset::new(10.0, 20.0));
+        let entry = HitTestEntry::with_position(Offset::new(px(10.0), px(20.0)));
         let debug_str = format!("{:?}", entry);
         assert!(debug_str.contains("HitTestEntry"));
         assert!(debug_str.contains("local_position"));

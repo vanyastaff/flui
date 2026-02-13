@@ -5,7 +5,7 @@
 
 use flui_painting::prelude::*;
 use flui_types::{
-    geometry::{Matrix4, Rect, Transform},
+    geometry::{px, Matrix4, Rect, Transform},
     styling::Color,
 };
 use std::f32::consts::PI;
@@ -18,7 +18,7 @@ fn test_transform_with_transform_enum() {
     let transform = Transform::rotate(PI / 4.0);
     canvas.transform(transform);
 
-    let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
+    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
     let paint = Paint::fill(Color::RED);
     canvas.draw_rect(rect, &paint);
 
@@ -34,7 +34,7 @@ fn test_transform_with_matrix4() {
     let matrix = Matrix4::rotation_z(PI / 4.0);
     canvas.transform(matrix);
 
-    let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
+    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
     let paint = Paint::fill(Color::RED);
     canvas.draw_rect(rect, &paint);
 
@@ -53,7 +53,7 @@ fn test_transform_composition() {
 
     canvas.transform(composed);
 
-    let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
+    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
     let paint = Paint::fill(Color::RED);
     canvas.draw_rect(rect, &paint);
 
@@ -69,7 +69,7 @@ fn test_transform_skew() {
     let italic = Transform::skew(0.2, 0.0);
     canvas.transform(italic);
 
-    let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
+    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
     let paint = Paint::fill(Color::RED);
     canvas.draw_rect(rect, &paint);
 
@@ -88,7 +88,7 @@ fn test_transform_rotate_around() {
 
     canvas.transform(rotate_around);
 
-    let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
+    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
     let paint = Paint::fill(Color::RED);
     canvas.draw_rect(rect, &paint);
 
@@ -104,13 +104,13 @@ fn test_transform_with_save_restore() {
     canvas.save();
     canvas.transform(Transform::rotate(PI / 4.0));
 
-    let rect1 = Rect::from_ltrb(0.0, 0.0, 50.0, 50.0);
+    let rect1 = Rect::from_ltrb(px(0.0), px(0.0), px(50.0), px(50.0));
     let paint = Paint::fill(Color::RED);
     canvas.draw_rect(rect1, &paint);
 
     canvas.restore();
 
-    let rect2 = Rect::from_ltrb(50.0, 50.0, 100.0, 100.0);
+    let rect2 = Rect::from_ltrb(px(50.0), px(50.0), px(100.0), px(100.0));
     canvas.draw_rect(rect2, &paint);
 
     let display_list = canvas.finish();
@@ -126,7 +126,7 @@ fn test_transform_multiple_calls() {
     canvas.transform(Transform::rotate(PI / 4.0));
     canvas.transform(Transform::scale(2.0));
 
-    let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
+    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
     let paint = Paint::fill(Color::RED);
     canvas.draw_rect(rect, &paint);
 
@@ -141,7 +141,7 @@ fn test_transform_identity_optimization() {
 
     canvas.transform(Transform::Identity);
 
-    let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
+    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
     let paint = Paint::fill(Color::RED);
     canvas.draw_rect(rect, &paint);
 
@@ -163,7 +163,7 @@ fn test_transform_mixed_with_legacy_methods() {
     // New scale API
     canvas.scale_uniform(2.0);
 
-    let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
+    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
     let paint = Paint::fill(Color::RED);
     canvas.draw_rect(rect, &paint);
 
@@ -182,7 +182,7 @@ fn test_transform_scale_around() {
 
     canvas.transform(scale_around);
 
-    let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
+    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
     let paint = Paint::fill(Color::RED);
     canvas.draw_rect(rect, &paint);
 
@@ -225,10 +225,10 @@ fn test_transform_animation_pattern() {
     canvas.transform(rotation);
 
     let rect = Rect::from_ltrb(
-        button_center_x - 25.0,
-        button_center_y - 25.0,
-        button_center_x + 25.0,
-        button_center_y + 25.0,
+        px(button_center_x - 25.0),
+        px(button_center_y - 25.0),
+        px(button_center_x + 25.0),
+        px(button_center_y + 25.0),
     );
     let paint = Paint::fill(Color::BLUE);
     canvas.draw_rect(rect, &paint);
@@ -248,7 +248,7 @@ fn test_transform_card_flip_pattern() {
 
     canvas.transform(card_flip);
 
-    let rect = Rect::from_ltrb(0.0, 0.0, 200.0, 300.0);
+    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(200.0), px(300.0));
     let paint = Paint::fill(Color::WHITE);
     canvas.draw_rect(rect, &paint);
 
@@ -265,7 +265,7 @@ fn test_transform_parallax_layers() {
     let mut bg = Canvas::new();
     bg.transform(Transform::translate(0.0, 50.0));
     bg.draw_rect(
-        Rect::from_ltrb(0.0, 0.0, 800.0, 600.0),
+        Rect::from_ltrb(px(0.0), px(0.0), px(800.0), px(600.0)),
         &Paint::fill(Color::rgba(200, 200, 255, 255)),
     );
     parent.extend_from(bg);
@@ -274,7 +274,7 @@ fn test_transform_parallax_layers() {
     let mut mg = Canvas::new();
     mg.transform(Transform::translate(0.0, 100.0));
     mg.draw_rect(
-        Rect::from_ltrb(0.0, 0.0, 800.0, 600.0),
+        Rect::from_ltrb(px(0.0), px(0.0), px(800.0), px(600.0)),
         &Paint::fill(Color::rgba(150, 150, 255, 255)),
     );
     parent.extend_from(mg);
@@ -283,7 +283,7 @@ fn test_transform_parallax_layers() {
     let mut fg = Canvas::new();
     fg.transform(Transform::translate(0.0, 150.0));
     fg.draw_rect(
-        Rect::from_ltrb(0.0, 0.0, 800.0, 600.0),
+        Rect::from_ltrb(px(0.0), px(0.0), px(800.0), px(600.0)),
         &Paint::fill(Color::rgba(100, 100, 255, 255)),
     );
     parent.extend_from(fg);

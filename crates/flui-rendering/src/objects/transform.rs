@@ -1,6 +1,6 @@
 //! RenderTransform - applies a transformation matrix to a single child.
 
-use flui_types::{Alignment, Matrix4, Offset, Point, Rect, Size};
+use flui_types::{Alignment, Matrix4, Offset, Pixels, Point, Rect, Size};
 
 use crate::arity::Single;
 use crate::context::{BoxHitTestContext, BoxLayoutContext};
@@ -140,8 +140,8 @@ impl RenderTransform {
             origin
         } else {
             // Compute from alignment
-            let x = (self.alignment.x + 1.0) / 2.0 * self.size.width;
-            let y = (self.alignment.y + 1.0) / 2.0 * self.size.height;
+            let x = self.size.width * ((self.alignment.x + 1.0) / 2.0);
+            let y = self.size.height * ((self.alignment.y + 1.0) / 2.0);
             Offset::new(x, y)
         }
     }
@@ -151,8 +151,8 @@ impl RenderTransform {
         let origin = self.compute_origin();
 
         // Translate to origin, apply transform, translate back
-        let to_origin = Matrix4::translation(-origin.dx, -origin.dy, 0.0);
-        let from_origin = Matrix4::translation(origin.dx, origin.dy, 0.0);
+        let to_origin = Matrix4::translation((-origin.dx).into(), (-origin.dy).into(), 0.0);
+        let from_origin = Matrix4::translation(origin.dx.into(), origin.dy.into(), 0.0);
 
         from_origin * self.transform * to_origin
     }
@@ -236,7 +236,7 @@ impl RenderBox for RenderTransform {
             Point::new(bounds.min.x, bounds.max.y),
         ];
 
-        let transformed: Vec<(f32, f32)> = corners
+        let transformed: Vec<(Pixels, Pixels)> = corners
             .iter()
             .map(|p| effective.transform_point(p.x, p.y))
             .collect();
@@ -244,19 +244,19 @@ impl RenderBox for RenderTransform {
         let min_x = transformed
             .iter()
             .map(|(x, _)| *x)
-            .fold(f32::INFINITY, f32::min);
+            .fold(Pixels::INFINITY, Pixels::min);
         let min_y = transformed
             .iter()
             .map(|(_, y)| *y)
-            .fold(f32::INFINITY, f32::min);
+            .fold(Pixels::INFINITY, Pixels::min);
         let max_x = transformed
             .iter()
             .map(|(x, _)| *x)
-            .fold(f32::NEG_INFINITY, f32::max);
+            .fold(Pixels::NEG_INFINITY, Pixels::max);
         let max_y = transformed
             .iter()
             .map(|(_, y)| *y)
-            .fold(f32::NEG_INFINITY, f32::max);
+            .fold(Pixels::NEG_INFINITY, Pixels::max);
 
         Rect::from_ltrb(min_x, min_y, max_x, max_y)
     }
@@ -270,6 +270,7 @@ impl RenderBox for RenderTransform {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
     use std::f32::consts::PI;
 
     #[test]
@@ -321,7 +322,7 @@ mod tests {
 
     #[test]
     fn test_transform_with_origin() {
-        let origin = Offset::new(50.0, 50.0);
+        let origin = Offset::new(px(50.0), px(50.0));
         let transform = RenderTransform::scale(2.0, 2.0).with_origin(origin);
         assert_eq!(transform.origin(), Some(origin));
     }

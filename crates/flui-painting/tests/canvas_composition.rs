@@ -4,7 +4,10 @@
 //! `DisplayList::append()` method.
 
 use flui_painting::prelude::*;
-use flui_types::{geometry::Rect, styling::Color};
+use flui_types::{
+    geometry::{px, Rect},
+    styling::Color,
+};
 
 #[test]
 fn test_append_canvas_empty_parent() {
@@ -12,7 +15,7 @@ fn test_append_canvas_empty_parent() {
     let mut parent = Canvas::new();
 
     let mut child = Canvas::new();
-    let rect = Rect::from_ltrb(10.0, 10.0, 100.0, 100.0);
+    let rect = Rect::from_ltrb(px(10.0), px(10.0), px(100.0), px(100.0));
     let paint = Paint::fill(Color::RED);
     child.draw_rect(rect, &paint);
 
@@ -35,12 +38,12 @@ fn test_append_canvas_empty_parent() {
 fn test_append_canvas_non_empty_parent() {
     // Test slow path: appending to non-empty canvas
     let mut parent = Canvas::new();
-    let rect1 = Rect::from_ltrb(0.0, 0.0, 50.0, 50.0);
+    let rect1 = Rect::from_ltrb(px(0.0), px(0.0), px(50.0), px(50.0));
     let paint1 = Paint::fill(Color::BLUE);
     parent.draw_rect(rect1, &paint1);
 
     let mut child = Canvas::new();
-    let rect2 = Rect::from_ltrb(10.0, 10.0, 100.0, 100.0);
+    let rect2 = Rect::from_ltrb(px(10.0), px(10.0), px(100.0), px(100.0));
     let paint2 = Paint::fill(Color::RED);
     child.draw_rect(rect2, &paint2);
 
@@ -59,7 +62,12 @@ fn test_append_canvas_multiple_children() {
 
     for i in 0..10 {
         let mut child = Canvas::new();
-        let rect = Rect::from_ltrb(i as f32 * 10.0, 0.0, (i + 1) as f32 * 10.0, 50.0);
+        let rect = Rect::from_ltrb(
+            px(i as f32 * 10.0),
+            px(0.0),
+            px((i + 1) as f32 * 10.0),
+            px(50.0),
+        );
         let paint = Paint::fill(Color::RED);
         child.draw_rect(rect, &paint);
 
@@ -78,26 +86,26 @@ fn test_append_canvas_preserves_order() {
     let mut parent = Canvas::new();
 
     // Background
-    let bg_rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
+    let bg_rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
     let bg_paint = Paint::fill(Color::WHITE);
     parent.draw_rect(bg_rect, &bg_paint);
 
     // Child 1
     let mut child1 = Canvas::new();
-    let rect1 = Rect::from_ltrb(10.0, 10.0, 50.0, 50.0);
+    let rect1 = Rect::from_ltrb(px(10.0), px(10.0), px(50.0), px(50.0));
     let paint1 = Paint::fill(Color::RED);
     child1.draw_rect(rect1, &paint1);
     parent.extend_from(child1);
 
     // Child 2
     let mut child2 = Canvas::new();
-    let rect2 = Rect::from_ltrb(30.0, 30.0, 70.0, 70.0);
+    let rect2 = Rect::from_ltrb(px(30.0), px(30.0), px(70.0), px(70.0));
     let paint2 = Paint::fill(Color::BLUE);
     child2.draw_rect(rect2, &paint2);
     parent.extend_from(child2);
 
     // Foreground
-    let fg_rect = Rect::from_ltrb(40.0, 40.0, 60.0, 60.0);
+    let fg_rect = Rect::from_ltrb(px(40.0), px(40.0), px(60.0), px(60.0));
     let fg_paint = Paint::fill(Color::GREEN);
     parent.draw_rect(fg_rect, &fg_paint);
 
@@ -111,7 +119,7 @@ fn test_append_canvas_preserves_order() {
 fn test_append_empty_canvas() {
     // Appending empty canvas should be no-op
     let mut parent = Canvas::new();
-    let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
+    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
     let paint = Paint::fill(Color::RED);
     parent.draw_rect(rect, &paint);
 
@@ -134,7 +142,7 @@ fn test_append_canvas_with_transforms() {
     child.translate(50.0, 50.0);
     child.rotate(std::f32::consts::PI / 4.0);
 
-    let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
+    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
     let paint = Paint::fill(Color::RED);
     child.draw_rect(rect, &paint);
     child.restore();
@@ -151,12 +159,12 @@ fn test_append_canvas_with_transforms() {
 fn test_bounds_after_append() {
     // Bounds should be union of all appended canvases
     let mut parent = Canvas::new();
-    let rect1 = Rect::from_ltrb(0.0, 0.0, 50.0, 50.0);
+    let rect1 = Rect::from_ltrb(px(0.0), px(0.0), px(50.0), px(50.0));
     let paint = Paint::fill(Color::RED);
     parent.draw_rect(rect1, &paint);
 
     let mut child = Canvas::new();
-    let rect2 = Rect::from_ltrb(100.0, 100.0, 200.0, 200.0);
+    let rect2 = Rect::from_ltrb(px(100.0), px(100.0), px(200.0), px(200.0));
     child.draw_rect(rect2, &paint);
 
     parent.extend_from(child);
@@ -179,14 +187,14 @@ fn test_display_list_append_directly() {
     // Create canvases and get their display lists
     let mut canvas1 = Canvas::new();
     canvas1.draw_rect(
-        Rect::from_ltrb(0.0, 0.0, 50.0, 50.0),
+        Rect::from_ltrb(px(0.0), px(0.0), px(50.0), px(50.0)),
         &Paint::fill(Color::RED),
     );
     let dl1 = canvas1.finish();
 
     let mut canvas2 = Canvas::new();
     canvas2.draw_rect(
-        Rect::from_ltrb(50.0, 50.0, 100.0, 100.0),
+        Rect::from_ltrb(px(50.0), px(50.0), px(100.0), px(100.0)),
         &Paint::fill(Color::BLUE),
     );
     let dl2 = canvas2.finish();
@@ -206,7 +214,12 @@ fn test_large_composition_performance() {
 
         // Each child has multiple commands
         for j in 0..10 {
-            let rect = Rect::from_ltrb((i * 10 + j) as f32, 0.0, (i * 10 + j + 1) as f32, 50.0);
+            let rect = Rect::from_ltrb(
+                px((i * 10 + j) as f32),
+                px(0.0),
+                px((i * 10 + j + 1) as f32),
+                px(50.0),
+            );
             let paint = Paint::fill(Color::RED);
             child.draw_rect(rect, &paint);
         }
@@ -225,20 +238,20 @@ fn test_nested_composition() {
     // Test nested Canvas composition (parent → child → grandchild)
     let mut grandchild = Canvas::new();
     grandchild.draw_rect(
-        Rect::from_ltrb(0.0, 0.0, 10.0, 10.0),
+        Rect::from_ltrb(px(0.0), px(0.0), px(10.0), px(10.0)),
         &Paint::fill(Color::RED),
     );
 
     let mut child = Canvas::new();
     child.draw_rect(
-        Rect::from_ltrb(0.0, 0.0, 20.0, 20.0),
+        Rect::from_ltrb(px(0.0), px(0.0), px(20.0), px(20.0)),
         &Paint::fill(Color::GREEN),
     );
     child.extend_from(grandchild);
 
     let mut parent = Canvas::new();
     parent.draw_rect(
-        Rect::from_ltrb(0.0, 0.0, 30.0, 30.0),
+        Rect::from_ltrb(px(0.0), px(0.0), px(30.0), px(30.0)),
         &Paint::fill(Color::BLUE),
     );
     parent.extend_from(child);

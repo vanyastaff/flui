@@ -274,12 +274,12 @@ impl MainAxisPosition {
 
     /// Creates from an offset assuming vertical scrolling.
     pub fn from_vertical_offset(offset: Offset) -> Self {
-        Self::new(offset.dy, offset.dx)
+        Self::new(offset.dy.get(), offset.dx.get())
     }
 
     /// Creates from an offset assuming horizontal scrolling.
     pub fn from_horizontal_offset(offset: Offset) -> Self {
-        Self::new(offset.dx, offset.dy)
+        Self::new(offset.dx.get(), offset.dy.get())
     }
 }
 
@@ -376,7 +376,7 @@ impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, SliverHitTest, A, P>
 
     fn is_hit(&self, bounds: Rect) -> bool {
         // For slivers, check if main axis position is within bounds height
-        self.position.main_axis >= 0.0 && self.position.main_axis <= bounds.height()
+        self.position.main_axis >= 0.0 && self.position.main_axis <= bounds.height().get()
     }
 
     fn hit_test_child(&mut self, _index: usize, _position: MainAxisPosition) -> bool {

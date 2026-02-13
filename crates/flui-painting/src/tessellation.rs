@@ -442,6 +442,7 @@ pub fn tessellate_stroke(
 mod tests {
     use super::*;
     use flui_types::geometry::{px, Rect};
+    use flui_types::Point;
 
     #[test]
     fn test_tessellate_fill_circle() {

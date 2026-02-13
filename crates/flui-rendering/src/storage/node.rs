@@ -80,6 +80,22 @@ impl RenderNode {
 }
 
 // ============================================================================
+// FROM CONVERSIONS
+// ============================================================================
+
+impl From<Box<dyn RenderObject<BoxProtocol>>> for RenderNode {
+    fn from(render_object: Box<dyn RenderObject<BoxProtocol>>) -> Self {
+        Self::new_box(render_object)
+    }
+}
+
+impl From<Box<dyn RenderObject<SliverProtocol>>> for RenderNode {
+    fn from(render_object: Box<dyn RenderObject<SliverProtocol>>) -> Self {
+        Self::new_sliver(render_object)
+    }
+}
+
+// ============================================================================
 // PROTOCOL CHECK
 // ============================================================================
 
@@ -359,6 +375,7 @@ impl RenderNode {
 mod tests {
     use super::*;
     use crate::objects::RenderColoredBox;
+    use flui_types::geometry::px;
     use flui_types::Size;
 
     #[test]
@@ -403,7 +420,8 @@ mod tests {
 
     #[test]
     fn test_render_node_state_access() {
-        let colored_box = RenderColoredBox::new([1.0, 0.0, 0.0, 1.0], Size::new(100.0, 50.0));
+        let colored_box =
+            RenderColoredBox::new([1.0, 0.0, 0.0, 1.0], Size::new(px(100.0), px(50.0)));
         let node = RenderNode::new_box(Box::new(colored_box));
 
         // Check state access through the node

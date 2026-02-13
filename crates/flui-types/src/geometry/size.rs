@@ -28,7 +28,7 @@ use super::{Point, Vec2};
 /// ```
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[repr(C)]
-pub struct Size<T: Unit> {
+pub struct Size<T: Unit = Pixels> {
     /// Width dimension.
     pub width: T,
     /// Height dimension.

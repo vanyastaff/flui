@@ -33,6 +33,7 @@
 //! ```
 
 use flui_types::geometry::{Matrix4, Offset, Rect};
+use flui_types::Pixels;
 
 use crate::arity::Arity;
 use crate::parent_data::ParentData;
@@ -193,12 +194,12 @@ where
     // ════════════════════════════════════════════════════════════════════════
 
     /// Gets the X coordinate of the hit position.
-    pub fn x(&self) -> f32 {
+    pub fn x(&self) -> Pixels {
         self.inner.position().dx
     }
 
     /// Gets the Y coordinate of the hit position.
-    pub fn y(&self) -> f32 {
+    pub fn y(&self) -> Pixels {
         self.inner.position().dy
     }
 
@@ -209,7 +210,7 @@ where
 
     /// Returns position translated by the given offset.
     pub fn position_minus(&self, offset: Offset) -> Offset {
-        Offset::new(self.x() - offset.dx, self.y() - offset.dy)
+        *self.inner.position() - offset
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -217,7 +218,7 @@ where
     // ════════════════════════════════════════════════════════════════════════
 
     /// Checks if position is within a rectangle at origin with given size.
-    pub fn is_within_size(&self, width: f32, height: f32) -> bool {
+    pub fn is_within_size(&self, width: Pixels, height: Pixels) -> bool {
         let pos = self.inner.position();
         pos.dx >= 0.0 && pos.dx < width && pos.dy >= 0.0 && pos.dy < height
     }

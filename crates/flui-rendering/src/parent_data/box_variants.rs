@@ -509,10 +509,11 @@ impl Hash for MultiChildLayoutParentData {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
 
     #[test]
     fn test_container_box_parent_data() {
-        let data = ContainerBoxParentData::zero().with_offset(Offset::new(10.0, 20.0));
+        let data = ContainerBoxParentData::zero().with_offset(Offset::new(px(10.0), px(20.0)));
 
         assert_eq!(data.offset.dx, 10.0);
         assert!(!data.is_zero());

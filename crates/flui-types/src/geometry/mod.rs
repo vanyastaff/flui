@@ -333,6 +333,11 @@ pub type DeviceOffset = Offset<DevicePixels>;
 /// Offset in raw float coordinates (GPU-ready).
 pub type FloatOffset = Offset<Pixels>;
 
+/// Backward-compatible alias for [`Edges<f32>`].
+///
+/// Used by the rendering layer for padding/margin insets.
+pub type EdgeInsets = Edges<f32>;
+
 // =============================================================================
 // TESTS
 // =============================================================================

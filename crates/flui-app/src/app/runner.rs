@@ -292,7 +292,10 @@ mod tests {
 
     impl View for TestView {
         fn create_element(&self) -> Box<dyn flui_view::ElementBase> {
-            Box::new(flui_view::StatelessElement::new(self))
+            Box::new(flui_view::StatelessElement::new(
+                self,
+                flui_view::element::StatelessBehavior,
+            ))
         }
     }
 

@@ -9,7 +9,7 @@
 
 use flui_painting::text_layout::detect_text_direction;
 use flui_painting::{DisplayListCore, TextPainter};
-use flui_types::geometry::Offset;
+use flui_types::geometry::{px, Offset};
 use flui_types::styling::Color;
 use flui_types::typography::{
     FontStyle, FontWeight, InlineSpan, TextAlign, TextDirection, TextPosition, TextSpan, TextStyle,
@@ -120,9 +120,9 @@ fn example_hit_testing() {
 
     // Simulate clicks at different x positions
     let click_positions = [
-        Offset::new(0.0, 8.0),   // Start of text
-        Offset::new(50.0, 8.0),  // Middle-ish
-        Offset::new(100.0, 8.0), // Further right
+        Offset::new(px(0.0), px(8.0)),   // Start of text
+        Offset::new(px(50.0), px(8.0)),  // Middle-ish
+        Offset::new(px(100.0), px(8.0)), // Further right
     ];
 
     for click in click_positions {
@@ -131,7 +131,7 @@ fn example_hit_testing() {
     }
 
     // Clicking at x=0 should give offset near 0
-    let start_pos = painter.get_position_for_offset(Offset::new(0.0, 8.0));
+    let start_pos = painter.get_position_for_offset(Offset::new(px(0.0), px(8.0)));
     assert!(
         start_pos.offset <= 2,
         "Click at start should be near offset 0"
@@ -382,21 +382,23 @@ fn example_max_lines_ellipsis() {
                      after a certain number of lines. It keeps going and going \
                      to demonstrate the ellipsis feature when max lines is set.";
 
-    let span = TextSpan::new(long_text).with_style(
-        TextStyle::new()
-            .with_font_size(14.0)
-            .with_color(Color::BLACK),
-    );
+    let make_span = || {
+        TextSpan::new(long_text).with_style(
+            TextStyle::new()
+                .with_font_size(14.0)
+                .with_color(Color::BLACK),
+        )
+    };
 
     // Without max lines
     let mut painter_full = TextPainter::new()
-        .with_text(InlineSpan::new(span.clone()))
+        .with_text(InlineSpan::new(make_span()))
         .with_text_direction(TextDirection::Ltr);
     painter_full.layout(0.0, 200.0);
 
     // With max lines = 2
     let mut painter_truncated = TextPainter::new()
-        .with_text(InlineSpan::new(span))
+        .with_text(InlineSpan::new(make_span()))
         .with_text_direction(TextDirection::Ltr)
         .with_max_lines(Some(2))
         .with_ellipsis(Some("…".to_string()));
@@ -422,17 +424,17 @@ fn example_max_lines_ellipsis() {
 /// Demonstrates text scaling for accessibility.
 #[test]
 fn example_accessibility_scaling() {
-    let span = TextSpan::new("Accessible text").with_style(
-        TextStyle::new()
-            .with_font_size(16.0)
-            .with_color(Color::BLACK),
-    );
-
     let scale_factors = [1.0, 1.25, 1.5, 2.0];
 
     for scale in scale_factors {
+        let span = TextSpan::new("Accessible text").with_style(
+            TextStyle::new()
+                .with_font_size(16.0)
+                .with_color(Color::BLACK),
+        );
+
         let mut painter = TextPainter::new()
-            .with_text(InlineSpan::new(span.clone()))
+            .with_text(InlineSpan::new(span))
             .with_text_direction(TextDirection::Ltr)
             .with_text_scale_factor(scale);
 
@@ -465,7 +467,7 @@ fn example_paint_to_canvas() {
 
     // Create canvas and paint
     let mut canvas = Canvas::new();
-    painter.paint(&mut canvas, Offset::new(10.0, 20.0));
+    painter.paint(&mut canvas, Offset::new(px(10.0), px(20.0)));
 
     // Finish to get display list
     let display_list = canvas.finish();

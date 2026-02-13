@@ -312,6 +312,7 @@ mod tests {
     use super::*;
     use crate::action::SemanticsAction;
     use crate::flags::SemanticsFlag;
+    use flui_types::geometry::px;
     use std::sync::Arc;
 
     #[test]
@@ -388,7 +389,7 @@ mod tests {
     fn test_semantics_node_geometry() {
         let mut node = SemanticsNode::new();
 
-        let rect = Rect::from_xywh(10.0, 20.0, 100.0, 50.0);
+        let rect = Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0));
         node.set_rect(rect);
         assert_eq!(node.rect(), rect);
 
@@ -421,12 +422,12 @@ mod tests {
         let mut node1 = SemanticsNode::new();
         node1.config_mut().set_label("First");
         node1.config_mut().set_button(true);
-        node1.set_rect(Rect::from_xywh(0.0, 0.0, 50.0, 50.0));
+        node1.set_rect(Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0)));
 
         let mut node2 = SemanticsNode::new();
         node2.config_mut().set_label("Second");
         node2.config_mut().set_enabled(Some(true));
-        node2.set_rect(Rect::from_xywh(50.0, 0.0, 50.0, 50.0));
+        node2.set_rect(Rect::from_xywh(px(50.0), px(0.0), px(50.0), px(50.0)));
 
         node1.merge(&node2);
 
@@ -441,7 +442,7 @@ mod tests {
         let mut node = SemanticsNode::new();
         node.config_mut().set_label("Test Label");
         node.config_mut().set_button(true);
-        node.set_rect(Rect::from_xywh(10.0, 20.0, 100.0, 50.0));
+        node.set_rect(Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0)));
 
         let id = SemanticsId::new(5);
         let data = node.to_node_data(id);

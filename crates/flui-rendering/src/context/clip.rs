@@ -167,6 +167,7 @@ pub trait ClipContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
 
     #[test]
     fn test_clip_none() {
@@ -223,7 +224,7 @@ mod tests {
             canvas: Canvas::new(),
         };
 
-        let rect = Rect::from_ltwh(0.0, 0.0, 100.0, 100.0);
+        let rect = Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0));
         ctx.clip_rect_and_paint(rect, Clip::None, rect, |canvas| {
             canvas.draw_rect(rect, &Paint::default());
         });
@@ -239,7 +240,7 @@ mod tests {
             canvas: Canvas::new(),
         };
 
-        let rect = Rect::from_ltwh(0.0, 0.0, 100.0, 100.0);
+        let rect = Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0));
         ctx.clip_rect_and_paint(rect, Clip::HardEdge, rect, |canvas| {
             canvas.draw_rect(rect, &Paint::default());
         });
@@ -254,7 +255,7 @@ mod tests {
             canvas: Canvas::new(),
         };
 
-        let rect = Rect::from_ltwh(0.0, 0.0, 100.0, 100.0);
+        let rect = Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0));
         ctx.clip_rect_and_paint(rect, Clip::AntiAlias, rect, |canvas| {
             canvas.draw_rect(rect, &Paint::default());
         });
@@ -269,7 +270,7 @@ mod tests {
             canvas: Canvas::new(),
         };
 
-        let rect = Rect::from_ltwh(0.0, 0.0, 100.0, 100.0);
+        let rect = Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0));
         ctx.clip_rect_and_paint(rect, Clip::AntiAliasWithSaveLayer, rect, |canvas| {
             canvas.draw_rect(rect, &Paint::default());
         });
@@ -285,8 +286,8 @@ mod tests {
             canvas: Canvas::new(),
         };
 
-        let rect = Rect::from_ltwh(0.0, 0.0, 100.0, 100.0);
-        let rrect = RRect::from_rect_xy(rect, 10.0, 10.0);
+        let rect = Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let rrect = RRect::from_rect_xy(rect, px(10.0), px(10.0));
         ctx.clip_rrect_and_paint(rrect, Clip::AntiAlias, rect, |canvas| {
             canvas.draw_rect(rect, &Paint::default());
         });
@@ -303,11 +304,11 @@ mod tests {
             canvas: Canvas::new(),
         };
 
-        let rect = Rect::from_ltwh(0.0, 0.0, 100.0, 100.0);
+        let rect = Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0));
         let mut path = Path::new();
-        path.move_to(Point::new(0.0, 0.0));
-        path.line_to(Point::new(100.0, 0.0));
-        path.line_to(Point::new(100.0, 100.0));
+        path.move_to(Point::new(px(0.0), px(0.0)));
+        path.line_to(Point::new(px(100.0), px(0.0)));
+        path.line_to(Point::new(px(100.0), px(100.0)));
         path.close();
 
         ctx.clip_path_and_paint(&path, Clip::AntiAlias, rect, |canvas| {

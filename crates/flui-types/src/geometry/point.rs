@@ -39,7 +39,7 @@ use super::Vec2;
 /// let ui_pos = Point::<Pixels>::new(px(100.0), px(200.0));
 /// let normalized = Point::<f32>::new(0.5, 0.75);
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Point<T: Unit> {
+pub struct Point<T: Unit = Pixels> {
     /// The x coordinate (horizontal position).
     pub x: T,
     /// The y coordinate (vertical position).

@@ -39,7 +39,7 @@ use super::{Point, Size, Vec2};
 /// assert_eq!(scaled.dx.get(), 20.0);
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Offset<T: Unit> {
+pub struct Offset<T: Unit = Pixels> {
     /// The horizontal component.
     pub dx: T,
 

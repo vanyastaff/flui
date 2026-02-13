@@ -1,6 +1,7 @@
 //! RenderPadding - adds padding around a single child.
 
-use flui_types::{EdgeInsets, Offset, Point, Rect, Size};
+use flui_types::geometry::px;
+use flui_types::{EdgeInsets, Offset, Pixels, Point, Rect, Size};
 
 use crate::arity::Single;
 use crate::constraints::BoxConstraints;
@@ -47,7 +48,7 @@ impl RenderPadding {
 
     /// Creates symmetric padding.
     pub fn symmetric(horizontal: f32, vertical: f32) -> Self {
-        Self::new(EdgeInsets::symmetric(horizontal, vertical))
+        Self::new(EdgeInsets::symmetric(vertical, horizontal))
     }
 
     /// Returns the padding.
@@ -62,14 +63,14 @@ impl RenderPadding {
 
     /// Deflates constraints by padding amount.
     fn deflate_constraints(&self, constraints: &BoxConstraints) -> BoxConstraints {
-        let horizontal = self.padding.horizontal_total();
-        let vertical = self.padding.vertical_total();
+        let horizontal = px(self.padding.horizontal_total());
+        let vertical = px(self.padding.vertical_total());
 
         BoxConstraints::new(
-            (constraints.min_width - horizontal).max(0.0),
-            (constraints.max_width - horizontal).max(0.0),
-            (constraints.min_height - vertical).max(0.0),
-            (constraints.max_height - vertical).max(0.0),
+            (constraints.min_width - horizontal).max(Pixels::ZERO),
+            (constraints.max_width - horizontal).max(Pixels::ZERO),
+            (constraints.min_height - vertical).max(Pixels::ZERO),
+            (constraints.max_height - vertical).max(Pixels::ZERO),
         )
     }
 }
@@ -90,20 +91,20 @@ impl RenderBox for RenderPadding {
             let child_size = ctx.layout_child(0, child_constraints);
 
             // Position child with top-left padding offset
-            self.child_offset = self.padding.top_left();
+            self.child_offset = Offset::new(px(self.padding.left), px(self.padding.top));
             ctx.position_child(0, self.child_offset);
 
             // Our size is child size + padding
             self.size = Size::new(
-                child_size.width + self.padding.horizontal_total(),
-                child_size.height + self.padding.vertical_total(),
+                child_size.width + px(self.padding.horizontal_total()),
+                child_size.height + px(self.padding.vertical_total()),
             );
         } else {
             self.has_child = false;
             // No child - just the padding itself
             self.size = Size::new(
-                self.padding.horizontal_total(),
-                self.padding.vertical_total(),
+                px(self.padding.horizontal_total()),
+                px(self.padding.vertical_total()),
             );
         }
 
@@ -151,7 +152,10 @@ mod tests {
         let insets = EdgeInsets::all(10.0);
         assert_eq!(insets.horizontal_total(), 20.0);
         assert_eq!(insets.vertical_total(), 20.0);
-        assert_eq!(insets.top_left(), Offset::new(10.0, 10.0));
+        // EdgeInsets is Edges<f32>; top_left() is only on Edges<Pixels>,
+        // so construct the expected offset manually.
+        let top_left = Offset::new(px(insets.left), px(insets.top));
+        assert_eq!(top_left, Offset::new(px(10.0), px(10.0)));
     }
 
     #[test]
@@ -163,17 +167,18 @@ mod tests {
     #[test]
     fn test_deflate_constraints() {
         let padding = RenderPadding::symmetric(20.0, 10.0);
-        let constraints = BoxConstraints::new(0.0, 200.0, 0.0, 100.0);
+        let constraints = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(100.0));
         let deflated = padding.deflate_constraints(&constraints);
 
-        assert_eq!(deflated.max_width, 160.0); // 200 - 40
-        assert_eq!(deflated.max_height, 80.0); // 100 - 20
+        assert_eq!(deflated.max_width, px(160.0)); // 200 - 40
+        assert_eq!(deflated.max_height, px(80.0)); // 100 - 20
     }
 
     #[test]
     fn test_edge_insets_symmetric() {
         let insets = EdgeInsets::symmetric(10.0, 20.0);
-        assert_eq!(insets.horizontal_total(), 20.0);
-        assert_eq!(insets.vertical_total(), 40.0);
+        // symmetric(vertical=10.0, horizontal=20.0)
+        assert_eq!(insets.horizontal_total(), 40.0); // left + right = 20.0 + 20.0
+        assert_eq!(insets.vertical_total(), 20.0); // top + bottom = 10.0 + 10.0
     }
 }

@@ -483,6 +483,7 @@ impl MouseTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
 
     fn create_test_tracker() -> MouseTracker {
         let hit_test: MouseTrackerHitTest = Arc::new(|_position, _view_id| HitTestResult::new());
@@ -537,11 +538,11 @@ mod tests {
         let tracker = create_test_tracker();
 
         // Add mouse down event
-        tracker.update_with_event(Offset::new(100.0, 200.0), 0, 0, true);
+        tracker.update_with_event(Offset::new(px(100.0), px(200.0)), 0, 0, true);
         assert!(tracker.mouse_is_connected());
 
         // Update position
-        tracker.update_with_event(Offset::new(150.0, 250.0), 0, 0, false);
+        tracker.update_with_event(Offset::new(px(150.0), px(250.0)), 0, 0, false);
         assert!(tracker.mouse_is_connected());
     }
 
@@ -549,7 +550,7 @@ mod tests {
     fn test_mouse_tracker_remove_device() {
         let tracker = create_test_tracker();
 
-        tracker.update_with_event(Offset::new(100.0, 200.0), 0, 0, true);
+        tracker.update_with_event(Offset::new(px(100.0), px(200.0)), 0, 0, true);
         assert!(tracker.mouse_is_connected());
 
         tracker.remove_device(0);
@@ -560,8 +561,8 @@ mod tests {
     fn test_mouse_tracker_multiple_devices() {
         let tracker = create_test_tracker();
 
-        tracker.update_with_event(Offset::new(100.0, 200.0), 0, 0, true);
-        tracker.update_with_event(Offset::new(200.0, 300.0), 1, 0, true);
+        tracker.update_with_event(Offset::new(px(100.0), px(200.0)), 0, 0, true);
+        tracker.update_with_event(Offset::new(px(200.0), px(300.0)), 1, 0, true);
         assert_eq!(tracker.mouse_states.read().len(), 2);
 
         tracker.remove_device(0);
@@ -574,7 +575,7 @@ mod tests {
 
     #[test]
     fn test_pointer_enter_event() {
-        let event = PointerEnterEvent::new(Offset::new(10.0, 20.0), 0, 0);
+        let event = PointerEnterEvent::new(Offset::new(px(10.0), px(20.0)), 0, 0);
         assert_eq!(event.position.dx, 10.0);
         assert_eq!(event.position.dy, 20.0);
         assert_eq!(event.device, 0);
@@ -582,21 +583,21 @@ mod tests {
 
     #[test]
     fn test_pointer_hover_event() {
-        let event = PointerHoverEvent::new(Offset::new(10.0, 20.0), 0, 0, Offset::new(5.0, 5.0));
+        let event = PointerHoverEvent::new(Offset::new(px(10.0), px(20.0)), 0, 0, Offset::new(px(5.0), px(5.0)));
         assert_eq!(event.position.dx, 10.0);
         assert_eq!(event.delta.dx, 5.0);
     }
 
     #[test]
     fn test_pointer_exit_event() {
-        let event = PointerExitEvent::new(Offset::new(10.0, 20.0), 0, 0);
+        let event = PointerExitEvent::new(Offset::new(px(10.0), px(20.0)), 0, 0);
         assert_eq!(event.position.dx, 10.0);
         assert_eq!(event.device, 0);
     }
 
     #[test]
     fn test_event_local_position_no_transform() {
-        let event = PointerEnterEvent::new(Offset::new(100.0, 200.0), 0, 0);
+        let event = PointerEnterEvent::new(Offset::new(px(100.0), px(200.0)), 0, 0);
         let local = event.local_position();
         assert_eq!(local.dx, 100.0);
         assert_eq!(local.dy, 200.0);
@@ -606,7 +607,7 @@ mod tests {
     fn test_debug_device_active_cursor() {
         let tracker = create_test_tracker();
 
-        tracker.update_with_event(Offset::new(100.0, 200.0), 0, 0, true);
+        tracker.update_with_event(Offset::new(px(100.0), px(200.0)), 0, 0, true);
         let cursor = tracker.debug_device_active_cursor(0);
         assert!(cursor.is_some());
         assert_eq!(cursor.unwrap(), CursorIcon::Default);
@@ -616,7 +617,7 @@ mod tests {
     fn test_dispose() {
         let tracker = create_test_tracker();
 
-        tracker.update_with_event(Offset::new(100.0, 200.0), 0, 0, true);
+        tracker.update_with_event(Offset::new(px(100.0), px(200.0)), 0, 0, true);
         let annotation = Arc::new(TestAnnotation {
             cursor: CursorIcon::Pointer,
         });

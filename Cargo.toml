@@ -7,19 +7,23 @@ members = [
     "crates/flui-tree",           # Tree abstractions (ACTIVE)
     "crates/flui-platform",       # Platform abstraction (ACTIVE)
 
-    # === Phase 2: Core Framework (Re-enabled for platform integration) ===
-    # "crates/flui-layer",          # Layer composition (ACTIVE)
-    # "crates/flui-semantics",      # Accessibility (ACTIVE)
+    # === Phase 2: Core Framework ===
+    "crates/flui-painting",       # Painting primitives (ACTIVE)
+    "crates/flui-semantics",      # Accessibility (ACTIVE)
+    "crates/flui-scheduler",      # Frame scheduling (ACTIVE)
+    "crates/flui-layer",          # Layer composition (ACTIVE)
     "crates/flui-interaction",    # Gesture recognition (ACTIVE)
-    # "crates/flui-painting",       # Painting primitives (ACTIVE)
-    # "crates/flui-scheduler",      # Frame scheduling (ACTIVE)
     "crates/flui-engine",         # GPU rendering engine (ACTIVE)
     "crates/flui-log",            # Logging utilities (ACTIVE)
-    # "crates/flui-app",            # Application framework (ACTIVE - Integration)
 
-    # === Temporarily disabled until integration complete ===
-    # "crates/flui-rendering",
-    # "crates/flui-view",
+    # === Phase 3: Framework Layer ===
+    "crates/flui-rendering",      # Render tree (ACTIVE)
+    "crates/flui-view",           # View/Element tree (ACTIVE)
+
+    # === Phase 4: Application Layer ===
+    "crates/flui-app",            # Application framework (ACTIVE - Migration)
+
+    # === Temporarily disabled ===
     # "crates/flui-animation",
     # "crates/flui-reactivity",
     # "crates/flui-devtools",

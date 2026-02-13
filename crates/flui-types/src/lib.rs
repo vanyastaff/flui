@@ -79,7 +79,7 @@ pub mod typography;
 // Note: Event types moved to flui_interaction (uses ui-events crate)
 
 // Re-exports for convenience - Most commonly used types
-pub use geometry::{Edges, Matrix4, Offset, Pixels, Point, RRect, Rect, Size};
+pub use geometry::{EdgeInsets, Edges, Matrix4, Offset, Pixels, Point, RRect, Rect, Size};
 pub use layout::{Alignment, Axis};
 pub use styling::{Color, Color32};
 

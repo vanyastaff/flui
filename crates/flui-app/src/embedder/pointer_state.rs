@@ -109,6 +109,7 @@ impl PointerState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
 
     #[test]
     fn test_pointer_state_new() {
@@ -122,9 +123,9 @@ mod tests {
     fn test_update_position() {
         let mut state = PointerState::new();
 
-        state.update_position(Offset::new(100.0, 200.0), PointerType::Mouse);
+        state.update_position(Offset::new(px(100.0), px(200.0)), PointerType::Mouse);
 
-        assert_eq!(state.last_position(), Offset::new(100.0, 200.0));
+        assert_eq!(state.last_position(), Offset::new(px(100.0), px(200.0)));
         assert_eq!(state.device_kind(), Some(PointerType::Mouse));
         assert!(state.has_pending_move());
     }
@@ -134,12 +135,12 @@ mod tests {
         let mut state = PointerState::new();
 
         // Multiple updates
-        state.update_position(Offset::new(10.0, 20.0), PointerType::Mouse);
-        state.update_position(Offset::new(15.0, 25.0), PointerType::Mouse);
-        state.update_position(Offset::new(20.0, 30.0), PointerType::Mouse);
+        state.update_position(Offset::new(px(10.0), px(20.0)), PointerType::Mouse);
+        state.update_position(Offset::new(px(15.0), px(25.0)), PointerType::Mouse);
+        state.update_position(Offset::new(px(20.0), px(30.0)), PointerType::Mouse);
 
         // Only last position should be in pending event
-        assert_eq!(state.last_position(), Offset::new(20.0, 30.0));
+        assert_eq!(state.last_position(), Offset::new(px(20.0), px(30.0)));
 
         // Take should consume the pending event
         let event = state.take_pending_move();

@@ -142,6 +142,7 @@ pub trait RenderAbstractViewport: RenderObject<BoxProtocol> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
     use flui_types::Rect;
 
     #[test]
@@ -158,7 +159,7 @@ mod tests {
 
     #[test]
     fn test_revealed_offset_new() {
-        let rect = Rect::from_ltwh(10.0, 20.0, 100.0, 50.0);
+        let rect = Rect::from_ltwh(px(10.0), px(20.0), px(100.0), px(50.0));
         let offset = RevealedOffset::new(100.0, rect);
 
         assert_eq!(offset.offset, 100.0);
@@ -167,8 +168,8 @@ mod tests {
 
     #[test]
     fn test_revealed_offset_clamp_already_visible() {
-        let leading = RevealedOffset::new(50.0, Rect::from_ltwh(0.0, 0.0, 100.0, 100.0));
-        let trailing = RevealedOffset::new(150.0, Rect::from_ltwh(0.0, 0.0, 100.0, 100.0));
+        let leading = RevealedOffset::new(50.0, Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0)));
+        let trailing = RevealedOffset::new(150.0, Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0)));
 
         // Current offset is between leading and trailing - already visible
         let result = RevealedOffset::clamp_offset(leading, trailing, 100.0);
@@ -177,8 +178,8 @@ mod tests {
 
     #[test]
     fn test_revealed_offset_clamp_needs_scroll_down() {
-        let leading = RevealedOffset::new(50.0, Rect::from_ltwh(0.0, 0.0, 100.0, 100.0));
-        let trailing = RevealedOffset::new(150.0, Rect::from_ltwh(0.0, 0.0, 100.0, 100.0));
+        let leading = RevealedOffset::new(50.0, Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0)));
+        let trailing = RevealedOffset::new(150.0, Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0)));
 
         // Current offset is above the visible range - need to scroll down
         let result = RevealedOffset::clamp_offset(leading, trailing, 200.0);
@@ -188,8 +189,8 @@ mod tests {
 
     #[test]
     fn test_revealed_offset_clamp_needs_scroll_up() {
-        let leading = RevealedOffset::new(50.0, Rect::from_ltwh(0.0, 0.0, 100.0, 100.0));
-        let trailing = RevealedOffset::new(150.0, Rect::from_ltwh(0.0, 0.0, 100.0, 100.0));
+        let leading = RevealedOffset::new(50.0, Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0)));
+        let trailing = RevealedOffset::new(150.0, Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0)));
 
         // Current offset is below the visible range - need to scroll up
         let result = RevealedOffset::clamp_offset(leading, trailing, 30.0);
@@ -200,8 +201,8 @@ mod tests {
     #[test]
     fn test_revealed_offset_clamp_inverted() {
         // When leading > trailing (inverted order)
-        let leading = RevealedOffset::new(150.0, Rect::from_ltwh(0.0, 0.0, 100.0, 100.0));
-        let trailing = RevealedOffset::new(50.0, Rect::from_ltwh(0.0, 0.0, 100.0, 100.0));
+        let leading = RevealedOffset::new(150.0, Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0)));
+        let trailing = RevealedOffset::new(50.0, Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0)));
 
         // Current offset is between - already visible
         let result = RevealedOffset::clamp_offset(leading, trailing, 100.0);

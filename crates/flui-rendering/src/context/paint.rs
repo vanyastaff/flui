@@ -149,13 +149,13 @@ impl<'ctx, P: Protocol, A: Arity, PD: ParentData + Default> PaintContext<'ctx, P
     /// Returns the X component of the paint offset.
     #[inline]
     pub fn offset_x(&self) -> f32 {
-        self.offset.dx
+        self.offset.dx.get()
     }
 
     /// Returns the Y component of the paint offset.
     #[inline]
     pub fn offset_y(&self) -> f32 {
-        self.offset.dy
+        self.offset.dy.get()
     }
 
     // ========================================================================
@@ -229,7 +229,7 @@ impl<'ctx, P: Protocol, A: Arity, PD: ParentData + Default> PaintContext<'ctx, P
         self.inner.canvas().save();
         self.inner
             .canvas()
-            .translate(additional_offset.dx, additional_offset.dy);
+            .translate(additional_offset.dx.get(), additional_offset.dy.get());
         let result = f(self);
         self.inner.canvas().restore();
         self.offset = original_offset;
@@ -384,11 +384,12 @@ impl<'ctx, P: Protocol, PD: ParentData + Default> PaintContext<'ctx, P, Variable
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
     use flui_types::Rect;
 
     #[test]
     fn test_canvas_context_new() {
-        let bounds = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
+        let bounds = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
         let ctx = CanvasContext::new(bounds);
         assert_eq!(ctx.estimated_bounds(), bounds);
     }
@@ -396,9 +397,9 @@ mod tests {
     #[test]
     fn test_child_paint_info() {
         let info = ChildPaintInfo {
-            offset: Offset::new(10.0, 20.0),
+            offset: Offset::new(px(10.0), px(20.0)),
         };
-        assert_eq!(info.offset.dx, 10.0);
-        assert_eq!(info.offset.dy, 20.0);
+        assert_eq!(info.offset.dx, px(10.0));
+        assert_eq!(info.offset.dy, px(20.0));
     }
 }

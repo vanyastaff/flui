@@ -4,10 +4,11 @@
 //! Uses `ui-events-winit` for W3C-compliant event translation.
 
 use crate::app::AppBinding;
-use flui_engine::wgpu::SceneRenderer;
+use flui_engine::wgpu::Renderer;
 use flui_foundation::HasInstance;
 use flui_interaction::events::{PointerEvent, ScrollEventData};
 use flui_scheduler::Scheduler;
+use flui_types::geometry::{delta_px, PixelDelta};
 use flui_types::Offset;
 use std::sync::Arc;
 use std::time::Instant;
@@ -28,7 +29,7 @@ use winit::{event::WindowEvent, event_loop::ActiveEventLoop, window::Window};
 /// ```text
 /// DesktopEmbedder (thin platform wrapper)
 ///   ├─ window: Arc<Window> (winit window)
-///   ├─ renderer: SceneRenderer (GPU rendering)
+///   ├─ renderer: Renderer (GPU rendering)
 ///   └─ event_reducer: WindowEventReducer (winit → ui-events)
 ///
 /// AppBinding (all framework logic)
@@ -44,7 +45,7 @@ pub struct DesktopEmbedder {
     window: Arc<Window>,
 
     /// GPU renderer
-    renderer: SceneRenderer,
+    renderer: Renderer,
 
     /// Event reducer for translating winit events to ui-events
     event_reducer: WindowEventReducer,
@@ -76,12 +77,13 @@ impl DesktopEmbedder {
         let size = window.inner_size();
 
         // 2. Initialize GPU renderer
-        let renderer = {
+        let mut renderer = {
             let _span = tracing::info_span!("init_gpu").entered();
-            SceneRenderer::with_window(Arc::clone(&window), size.width, size.height)
+            Renderer::new(window.as_ref())
                 .await
                 .map_err(|e| EmbedderError::GpuInitialization(format!("{:?}", e)))?
         };
+        renderer.resize(size.width, size.height);
 
         tracing::info!(width = size.width, height = size.height, "Window created");
 
@@ -160,12 +162,14 @@ impl DesktopEmbedder {
                     binding.handle_pointer_move(position, device);
                 }
                 PointerEvent::Scroll(scroll) => {
-                    // Convert ScrollDelta enum to Offset
-                    let delta = match scroll.delta {
+                    // Convert ScrollDelta enum to Offset<PixelDelta>
+                    let delta: Offset<PixelDelta> = match scroll.delta {
                         ScrollDelta::LineDelta(x, y) | ScrollDelta::PageDelta(x, y) => {
-                            Offset::new(x, y)
+                            Offset::new(delta_px(x), delta_px(y))
                         }
-                        ScrollDelta::PixelDelta(pos) => Offset::new(pos.x as f32, pos.y as f32),
+                        ScrollDelta::PixelDelta(pos) => {
+                            Offset::new(delta_px(pos.x as f32), delta_px(pos.y as f32))
+                        }
                     };
                     let scroll_event = ScrollEventData {
                         position,

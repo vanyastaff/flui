@@ -131,6 +131,7 @@ pub trait MultiChildLayoutContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
     use std::collections::HashMap;
 
     #[derive(Debug)]
@@ -143,17 +144,17 @@ mod tests {
             if context.has_child("header") {
                 let constraints = BoxConstraints::tight_for(Some(size.width), None);
                 let header_size = context.layout_child("header", constraints);
-                context.position_child("header", Offset::new(0.0, 0.0));
+                context.position_child("header", Offset::new(px(0.0), px(0.0)));
 
                 if context.has_child("body") {
                     let body_constraints = BoxConstraints::tight_for(
                         Some(size.width),
-                        Some(size.height - header_size.height - self.padding),
+                        Some(size.height - header_size.height - px(self.padding)),
                     );
                     context.layout_child("body", body_constraints);
                     context.position_child(
                         "body",
-                        Offset::new(0.0, header_size.height + self.padding),
+                        Offset::new(px(0.0), header_size.height + px(self.padding)),
                     );
                 }
             }
@@ -185,8 +186,8 @@ mod tests {
     impl MockContext {
         fn new() -> Self {
             let mut children = HashMap::new();
-            children.insert("header".to_string(), Size::new(100.0, 50.0));
-            children.insert("body".to_string(), Size::new(100.0, 200.0));
+            children.insert("header".to_string(), Size::new(px(100.0), px(50.0)));
+            children.insert("body".to_string(), Size::new(px(100.0), px(200.0)));
 
             Self {
                 children,
@@ -216,7 +217,7 @@ mod tests {
     fn test_multi_child_layout() {
         let delegate = TestDelegate { padding: 10.0 };
         let mut context = MockContext::new();
-        let size = Size::new(200.0, 300.0);
+        let size = Size::new(px(200.0), px(300.0));
 
         delegate.perform_layout(&mut context, size);
 

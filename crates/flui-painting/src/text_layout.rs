@@ -799,11 +799,11 @@ mod inner {
             let layout = TextLayout::new("Hello", None, 14.0, None, None, TextDirection::Ltr);
 
             // Hit test at start
-            let pos = layout.get_position_for_offset(Offset::new(0.0, 5.0));
+            let pos = layout.get_position_for_offset(Offset::new(px(0.0), px(5.0)));
             assert_eq!(pos.offset, 0);
 
             // Hit test past end should give last position
-            let pos = layout.get_position_for_offset(Offset::new(1000.0, 5.0));
+            let pos = layout.get_position_for_offset(Offset::new(px(1000.0), px(5.0)));
             assert!(pos.offset <= 5);
         }
 

@@ -382,7 +382,10 @@ impl CanvasContext {
         if needs_compositing {
             self.stop_recording_if_needed();
 
-            let offset_clip = clip_rrect.translate_offset(offset);
+            let offset_clip = RRect {
+                rect: clip_rrect.rect.translate_offset(offset),
+                ..clip_rrect
+            };
             let clip_layer = ClipRRectLayer::new(offset_clip, Clip::AntiAlias);
             let layer_id = self.layer_tree.insert(Layer::ClipRRect(clip_layer));
 
@@ -404,8 +407,11 @@ impl CanvasContext {
             self.current_layer = prev_layer;
         } else {
             self.canvas().save();
-            self.canvas()
-                .clip_rrect(clip_rrect.translate_offset(offset));
+            let offset_clip = RRect {
+                rect: clip_rrect.rect.translate_offset(offset),
+                ..clip_rrect
+            };
+            self.canvas().clip_rrect(offset_clip);
             painter(self);
             self.canvas().restore();
         }
@@ -499,9 +505,10 @@ impl CanvasContext {
             Some(layer_id)
         } else {
             self.canvas().save();
-            self.canvas().translate(offset.dx, offset.dy);
+            self.canvas().translate(offset.dx.into(), offset.dy.into());
             self.canvas().transform(*transform);
-            self.canvas().translate(-offset.dx, -offset.dy);
+            self.canvas()
+                .translate((-offset.dx).into(), (-offset.dy).into());
             painter(self);
             self.canvas().restore();
             None
@@ -511,8 +518,8 @@ impl CanvasContext {
     /// Computes the effective transform matrix with offset applied.
     fn compute_effective_transform(offset: Offset, transform: &Matrix4) -> Matrix4 {
         // Translation to offset, apply transform, translate back
-        let translate = Matrix4::translation(offset.dx, offset.dy, 0.0);
-        let translate_back = Matrix4::translation(-offset.dx, -offset.dy, 0.0);
+        let translate = Matrix4::translation(offset.dx.into(), offset.dy.into(), 0.0);
+        let translate_back = Matrix4::translation((-offset.dx).into(), (-offset.dy).into(), 0.0);
         translate * *transform * translate_back
     }
 
@@ -700,11 +707,12 @@ pub use flui_types::painting::{Paint, PaintStyle};
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
     use flui_types::Color;
 
     #[test]
     fn test_painting_context_new() {
-        let bounds = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
+        let bounds = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
         let context = CanvasContext::new(bounds);
 
         assert_eq!(context.estimated_bounds(), bounds);
@@ -713,7 +721,7 @@ mod tests {
 
     #[test]
     fn test_painting_context_canvas() {
-        let bounds = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
+        let bounds = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
         let mut context = CanvasContext::new(bounds);
 
         // Should be able to get canvas
@@ -723,7 +731,7 @@ mod tests {
 
     #[test]
     fn test_painting_context_stop_recording() {
-        let bounds = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
+        let bounds = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
         let mut context = CanvasContext::new(bounds);
 
         // Draw something
@@ -740,7 +748,7 @@ mod tests {
 
     #[test]
     fn test_painting_context_push_opacity() {
-        let bounds = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
+        let bounds = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
         let mut context = CanvasContext::new(bounds);
 
         context.push_opacity(Offset::ZERO, 128, |ctx| {
@@ -754,7 +762,7 @@ mod tests {
 
     #[test]
     fn test_painting_context_push_clip_rect() {
-        let bounds = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
+        let bounds = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
         let mut context = CanvasContext::new(bounds);
 
         context.push_clip_rect(true, Offset::ZERO, bounds, |ctx| {

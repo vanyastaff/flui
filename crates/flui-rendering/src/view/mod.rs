@@ -27,7 +27,7 @@ mod viewport;
 mod viewport_offset;
 
 pub use configuration::ViewConfiguration;
-pub use render_view::{CompositeResult, RenderView};
+pub use render_view::{CompositeResult, RenderView, RenderViewAdapter};
 pub use viewport::{CacheExtentStyle, RenderAbstractViewport, RevealedOffset, SliverPaintOrder};
 pub use viewport_offset::{
     FixedViewportOffset, ScrollDirection, ScrollableViewportOffset, ViewportOffset,

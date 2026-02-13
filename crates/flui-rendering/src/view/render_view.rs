@@ -6,6 +6,7 @@ use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
 
 use crate::hit_testing::{HitTestEntry, HitTestResult, HitTestTarget, PointerEvent};
 
+use flui_types::Pixels;
 use flui_types::{Matrix4, Offset, Rect, Size};
 
 use crate::constraints::BoxConstraints;
@@ -37,7 +38,7 @@ pub struct RenderView {
     configuration: Option<ViewConfiguration>,
 
     /// The current size (in logical pixels).
-    size: Size,
+    pub(crate) size: Size,
 
     /// The root transformation matrix.
     root_transform: Option<Matrix4>,
@@ -331,13 +332,23 @@ impl RenderView {
     pub fn physical_paint_bounds(&self) -> Rect {
         let config = self.configuration();
         let dpr = config.device_pixel_ratio();
-        Rect::from_ltwh(0.0, 0.0, self.size.width * dpr, self.size.height * dpr)
+        Rect::from_ltwh(
+            Pixels::ZERO,
+            Pixels::ZERO,
+            self.size.width * dpr,
+            self.size.height * dpr,
+        )
     }
 
     /// Returns the semantic bounds for this render view.
     pub fn semantic_bounds(&self) -> Rect {
         if let Some(transform) = &self.root_transform {
-            let bounds = Rect::from_ltwh(0.0, 0.0, self.size.width, self.size.height);
+            let bounds = Rect::from_ltwh(
+                Pixels::ZERO,
+                Pixels::ZERO,
+                self.size.width,
+                self.size.height,
+            );
             let scale_x = transform[0];
             let scale_y = transform[5];
             Rect::from_ltwh(
@@ -347,7 +358,12 @@ impl RenderView {
                 bounds.height() * scale_y,
             )
         } else {
-            Rect::from_ltwh(0.0, 0.0, self.size.width, self.size.height)
+            Rect::from_ltwh(
+                Pixels::ZERO,
+                Pixels::ZERO,
+                self.size.width,
+                self.size.height,
+            )
         }
     }
 
@@ -384,7 +400,99 @@ impl RenderView {
 }
 
 // ============================================================================
-// RenderObject Implementation
+// RenderViewAdapter - Storage-compatible wrapper for RenderView
+// ============================================================================
+
+/// Adapter that makes `RenderView` compatible with `RenderObject<BoxProtocol>`
+/// for storage in `RenderTree`.
+///
+/// `RenderView` is the root of the render tree and manages its own layout/paint
+/// lifecycle. This adapter provides the minimal `RenderObject<BoxProtocol>`
+/// implementation needed for `RenderNode::new_box()` storage. The pipeline
+/// drives `RenderView` methods directly rather than through the standard
+/// protocol dispatch.
+pub struct RenderViewAdapter {
+    /// The wrapped RenderView.
+    pub view: RenderView,
+}
+
+impl std::fmt::Debug for RenderViewAdapter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RenderViewAdapter")
+            .field("view", &self.view)
+            .finish()
+    }
+}
+
+impl RenderViewAdapter {
+    /// Creates a new adapter wrapping the given `RenderView`.
+    pub fn new(view: RenderView) -> Self {
+        Self { view }
+    }
+}
+
+impl Diagnosticable for RenderViewAdapter {
+    fn debug_fill_properties(&self, properties: &mut DiagnosticsBuilder) {
+        self.view.debug_fill_properties(properties);
+    }
+}
+
+impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewAdapter {
+    fn perform_layout_raw(
+        &mut self,
+        _constraints: crate::protocol::ProtocolConstraints<crate::protocol::BoxProtocol>,
+    ) -> crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol> {
+        // RenderView manages its own layout via perform_layout()
+        self.view.perform_layout();
+        self.view.size()
+    }
+
+    fn paint(&self, context: &mut CanvasContext, offset: Offset) {
+        self.view.paint_view(context, offset);
+    }
+
+    fn hit_test_raw(
+        &self,
+        _result: &mut crate::protocol::ProtocolHitResult<crate::protocol::BoxProtocol>,
+        _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
+    ) -> bool {
+        // RenderView always hits (it's the root)
+        true
+    }
+
+    fn is_repaint_boundary(&self) -> bool {
+        true
+    }
+
+    fn is_relayout_boundary(&self) -> bool {
+        true
+    }
+
+    fn geometry(&self) -> &crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol> {
+        // Return reference to view's size field
+        // SAFETY: This is a valid reference to the size field in RenderView
+        &self.view.size
+    }
+
+    fn set_geometry(
+        &mut self,
+        geometry: crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>,
+    ) {
+        self.view.size = geometry;
+    }
+
+    fn paint_bounds(&self) -> Rect {
+        Rect::from_ltwh(
+            Pixels::ZERO,
+            Pixels::ZERO,
+            self.view.size.width,
+            self.view.size.height,
+        )
+    }
+}
+
+// ============================================================================
+// RenderObject Implementation (Legacy - commented out)
 // ============================================================================
 
 // impl RenderObject for RenderView {
@@ -609,6 +717,7 @@ pub struct CompositeResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::geometry::px;
 
     #[test]
     fn test_render_view_new() {
@@ -619,7 +728,7 @@ mod tests {
 
     #[test]
     fn test_render_view_with_configuration() {
-        let config = ViewConfiguration::from_size(Size::new(800.0, 600.0), 2.0);
+        let config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 2.0);
         let view = RenderView::with_configuration(config.clone());
         assert!(view.has_configuration());
         assert_eq!(view.configuration(), &config);
@@ -627,10 +736,13 @@ mod tests {
 
     #[test]
     fn test_render_view_constraints() {
-        let config = ViewConfiguration::from_size(Size::new(1920.0, 1080.0), 2.0);
+        let config = ViewConfiguration::from_size(Size::new(px(1920.0), px(1080.0)), 2.0);
         let view = RenderView::with_configuration(config);
         let constraints = view.constraints();
-        assert_eq!(constraints, BoxConstraints::tight(Size::new(960.0, 540.0)));
+        assert_eq!(
+            constraints,
+            BoxConstraints::tight(Size::new(px(960.0), px(540.0)))
+        );
     }
 
     #[test]
@@ -662,7 +774,7 @@ mod tests {
 
     #[test]
     fn test_apply_paint_transform() {
-        let config = ViewConfiguration::from_size(Size::new(800.0, 600.0), 2.0);
+        let config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 2.0);
         let mut view = RenderView::with_configuration(config);
         view.prepare_initial_frame_internal();
 

@@ -351,6 +351,27 @@ impl PipelineOwner {
         Some(child_id)
     }
 
+    /// Inserts a raw `RenderNode` directly into the tree.
+    ///
+    /// This bypasses the `RenderObject<P>` trait requirement and is used for
+    /// special nodes like `RenderView` that manage their own layout/paint
+    /// lifecycle outside the standard protocol dispatch.
+    ///
+    /// # Returns
+    ///
+    /// The `RenderId` of the inserted node.
+    pub fn insert_render_node(&mut self, node: crate::storage::RenderNode) -> RenderId {
+        use flui_tree::traits::TreeWrite;
+
+        let id = self.render_tree.insert(node);
+        let depth = self.render_tree.depth(id).unwrap_or(0) as usize;
+
+        self.add_node_needing_layout(id.get(), depth);
+        self.add_node_needing_paint(id.get(), depth);
+
+        id
+    }
+
     /// Sets the root render object and marks it as needing layout.
     ///
     /// This is a convenience method that:

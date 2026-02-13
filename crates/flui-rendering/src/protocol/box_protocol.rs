@@ -433,6 +433,7 @@ impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, BoxHitTest, A, P>
 mod tests {
     use super::*;
     use crate::arity::Leaf;
+    use flui_types::geometry::px;
 
     #[test]
     fn test_box_protocol_name() {
@@ -458,32 +459,32 @@ mod tests {
     #[test]
     fn test_box_hit_test_context() {
         let ctx: BoxHitTestCtx<'_, Leaf, BoxParentData> =
-            BoxHitTestCtx::new(Offset::new(50.0, 50.0));
+            BoxHitTestCtx::new(Offset::new(px(50.0), px(50.0)));
 
-        let bounds = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
+        let bounds = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
         assert!(ctx.is_hit(bounds));
 
-        let outside = Rect::from_ltrb(100.0, 100.0, 200.0, 200.0);
+        let outside = Rect::from_ltrb(px(100.0), px(100.0), px(200.0), px(200.0));
         assert!(!ctx.is_hit(outside));
     }
 
     #[test]
     fn test_box_layout_context() {
-        let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
+        let constraints = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
         let mut ctx: BoxLayoutCtx<'_, Leaf, BoxParentData> = BoxLayoutCtx::new(constraints);
 
         assert!(!ctx.is_complete());
         assert_eq!(ctx.constraints().max_width, 100.0);
 
-        ctx.complete_layout(Size::new(100.0, 100.0));
+        ctx.complete_layout(Size::new(px(100.0), px(100.0)));
         assert!(ctx.is_complete());
     }
 
     #[test]
     fn test_box_constraints_cache_key_equality() {
-        let c1 = BoxConstraints::tight(Size::new(100.0, 100.0));
-        let c2 = BoxConstraints::tight(Size::new(100.0, 100.0));
-        let c3 = BoxConstraints::tight(Size::new(200.0, 100.0));
+        let c1 = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
+        let c2 = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
+        let c3 = BoxConstraints::tight(Size::new(px(200.0), px(100.0)));
 
         let key1 = BoxConstraintsCacheKey::from_constraints(&c1).unwrap();
         let key2 = BoxConstraintsCacheKey::from_constraints(&c2).unwrap();
@@ -495,15 +496,15 @@ mod tests {
 
     #[test]
     fn test_box_constraints_cache_key_nan() {
-        let c = BoxConstraints::new(f32::NAN, 100.0, 0.0, 100.0);
+        let c = BoxConstraints::new(px(f32::NAN), px(100.0), px(0.0), px(100.0));
         assert!(BoxConstraintsCacheKey::from_constraints(&c).is_none());
     }
 
     #[test]
     fn test_box_constraints_cache_key_negative_zero() {
         // -0.0 and +0.0 should produce different cache keys (bit-exact)
-        let c1 = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
-        let c2 = BoxConstraints::new(-0.0, 100.0, 0.0, 100.0);
+        let c1 = BoxConstraints::new(px(0.0), px(100.0), px(0.0), px(100.0));
+        let c2 = BoxConstraints::new(px(-0.0), px(100.0), px(0.0), px(100.0));
 
         let key1 = BoxConstraintsCacheKey::from_constraints(&c1).unwrap();
         let key2 = BoxConstraintsCacheKey::from_constraints(&c2).unwrap();
@@ -516,9 +517,9 @@ mod tests {
     fn test_box_constraints_cache_key_hash() {
         use std::collections::HashSet;
 
-        let c1 = BoxConstraints::tight(Size::new(100.0, 100.0));
-        let c2 = BoxConstraints::tight(Size::new(100.0, 100.0));
-        let c3 = BoxConstraints::tight(Size::new(200.0, 100.0));
+        let c1 = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
+        let c2 = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
+        let c3 = BoxConstraints::tight(Size::new(px(200.0), px(100.0)));
 
         let key1 = BoxConstraintsCacheKey::from_constraints(&c1).unwrap();
         let key2 = BoxConstraintsCacheKey::from_constraints(&c2).unwrap();

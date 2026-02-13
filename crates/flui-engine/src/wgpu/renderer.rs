@@ -32,6 +32,7 @@
 //! renderer.render(display_list)?;
 //! ```
 
+use crate::error::RenderError;
 use anyhow::Result;
 use wgpu;
 
@@ -430,6 +431,73 @@ impl Renderer {
     /// Get current surface configuration (if available)
     pub fn surface_config(&self) -> Option<&wgpu::SurfaceConfiguration> {
         self.config.as_ref()
+    }
+
+    /// Get current surface size as `(width, height)`.
+    ///
+    /// Returns `(0, 0)` if no surface is configured (e.g., offscreen renderer).
+    pub fn size(&self) -> (u32, u32) {
+        self.config
+            .as_ref()
+            .map(|c| (c.width, c.height))
+            .unwrap_or((0, 0))
+    }
+
+    /// Render a `flui_layer::Scene` to the surface.
+    ///
+    /// This is a placeholder that will be fully implemented when the layer
+    /// compositing pipeline is connected. Currently it acquires the surface
+    /// texture, clears it, and presents.
+    pub fn render_scene(&mut self, _scene: &flui_layer::Scene) -> Result<(), RenderError> {
+        let surface = self.surface.as_ref().ok_or(RenderError::SurfaceLost)?;
+        let config = self.config.as_ref().ok_or(RenderError::SurfaceLost)?;
+
+        let output = surface.get_current_texture().map_err(|e| match e {
+            wgpu::SurfaceError::Lost => RenderError::SurfaceLost,
+            wgpu::SurfaceError::OutOfMemory => RenderError::OutOfMemory,
+            wgpu::SurfaceError::Outdated => RenderError::SurfaceOutdated,
+            wgpu::SurfaceError::Timeout => RenderError::Timeout,
+            _ => RenderError::SurfaceLost,
+        })?;
+
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("FLUI Scene Render Encoder"),
+            });
+
+        // Clear pass (placeholder -- full compositing TBD)
+        {
+            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("FLUI Clear Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 1.0,
+                            g: 1.0,
+                            b: 1.0,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+        }
+
+        self.queue.submit(std::iter::once(encoder.finish()));
+        output.present();
+
+        let _ = config; // suppress unused warning
+        Ok(())
     }
 }
 
