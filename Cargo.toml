@@ -23,12 +23,33 @@ members = [
     # === Phase 4: Application Layer ===
     "crates/flui-app",            # Application framework (ACTIVE - Migration)
 
+    # === Examples (platform-specific) ===
+    "examples/android_demo",      # Android GPU demo (cdylib) — build with: cargo ndk -t arm64-v8a build -p flui-android-demo
+
     # === Temporarily disabled ===
     # "crates/flui-animation",
     # "crates/flui-reactivity",
     # "crates/flui-devtools",
     # "crates/flui-cli",
     # "crates/flui-build",
+]
+
+# Default members exclude Android-only crates (ndk-sys won't compile on host)
+default-members = [
+    "crates/flui-types",
+    "crates/flui-foundation",
+    "crates/flui-tree",
+    "crates/flui-platform",
+    "crates/flui-painting",
+    "crates/flui-semantics",
+    "crates/flui-scheduler",
+    "crates/flui-layer",
+    "crates/flui-interaction",
+    "crates/flui-engine",
+    "crates/flui-log",
+    "crates/flui-rendering",
+    "crates/flui-view",
+    "crates/flui-app",
 ]
 
 [workspace.package]

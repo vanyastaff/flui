@@ -15,6 +15,9 @@ pub use config::AppConfig;
 pub use lifecycle::{DefaultLifecycle, LifecycleEvent, LifecycleState};
 pub use runner::{run_app_impl as run_app, run_app_with_config_impl as run_app_with_config};
 
+#[cfg(target_os = "android")]
+pub use runner::{run_app_android, run_app_android_with_config};
+
 /// Alias for AppBinding matching Flutter naming convention.
 pub type WidgetsFlutterBinding = AppBinding;
 

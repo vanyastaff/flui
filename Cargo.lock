@@ -915,9 +915,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "flui-android-demo"
+version = "0.1.0"
+dependencies = [
+ "android-activity",
+ "flui-engine",
+ "flui-foundation",
+ "flui-layer",
+ "flui-log",
+ "flui-platform",
+ "flui-types",
+ "log",
+ "ndk",
+ "pollster",
+ "raw-window-handle",
+ "tracing",
+]
+
+[[package]]
 name = "flui-app"
 version = "0.1.0"
 dependencies = [
+ "android-activity",
  "flui-engine",
  "flui-foundation",
  "flui-interaction",
@@ -1058,6 +1077,7 @@ dependencies = [
 name = "flui-platform"
 version = "0.1.0"
 dependencies = [
+ "android-activity",
  "anyhow",
  "bitflags 2.10.0",
  "block",
@@ -1070,6 +1090,9 @@ dependencies = [
  "flume",
  "foreign-types",
  "keyboard-types",
+ "libc",
+ "log",
+ "ndk",
  "num_cpus",
  "objc",
  "parking_lot",

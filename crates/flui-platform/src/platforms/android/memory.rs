@@ -22,7 +22,20 @@
 //! ```
 
 use std::alloc::{alloc, dealloc, Layout};
+use std::fmt;
 use std::ptr::NonNull;
+
+/// Error returned when page-aligned allocation fails.
+#[derive(Debug, Clone, Copy)]
+pub struct PageAllocError;
+
+impl fmt::Display for PageAllocError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "page-aligned memory allocation failed")
+    }
+}
+
+impl std::error::Error for PageAllocError {}
 
 // ============================================================================
 // Page Size Detection
@@ -42,8 +55,11 @@ pub fn get_page_size() -> usize {
     #[cfg(target_os = "android")]
     {
         // SAFETY: sysconf is a standard POSIX function
-        // _SC_PAGESIZE always returns a valid value
-        unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize }
+        // _SC_PAGESIZE always returns a valid value on Android
+        #[allow(unsafe_code)]
+        unsafe {
+            libc::sysconf(libc::_SC_PAGESIZE) as usize
+        }
     }
 
     #[cfg(not(target_os = "android"))]
@@ -89,21 +105,20 @@ pub fn is_16kb_page_size() -> bool {
 /// // Use memory...
 /// unsafe { dealloc_page_aligned(ptr, 8192); }
 /// ```
-pub fn alloc_page_aligned(size: usize) -> Result<NonNull<u8>, std::alloc::AllocError> {
+pub fn alloc_page_aligned(size: usize) -> Result<NonNull<u8>, PageAllocError> {
     let page_size = get_page_size();
 
     // Round up to page boundary
     let aligned_size = (size + page_size - 1) & !(page_size - 1);
 
     // Create aligned layout
-    let layout =
-        Layout::from_size_align(aligned_size, page_size).map_err(|_| std::alloc::AllocError)?;
+    let layout = Layout::from_size_align(aligned_size, page_size).map_err(|_| PageAllocError)?;
 
     // Allocate aligned memory
     // SAFETY: Layout is valid (verified above)
     let ptr = unsafe { alloc(layout) };
 
-    NonNull::new(ptr).ok_or(std::alloc::AllocError)
+    NonNull::new(ptr).ok_or(PageAllocError)
 }
 
 /// Deallocate page-aligned memory.

@@ -490,9 +490,11 @@ impl Matrix4 {
             let remainder = chunks.remainder();
 
             for chunk in chunks {
-                // Points are already f32, use directly
-                let x_vec = vld1q_f32([chunk[0].x, chunk[1].x, chunk[2].x, chunk[3].x].as_ptr());
-                let y_vec = vld1q_f32([chunk[0].y, chunk[1].y, chunk[2].y, chunk[3].y].as_ptr());
+                // Extract inner f32 from Pixels newtype
+                let x_vec =
+                    vld1q_f32([chunk[0].x.0, chunk[1].x.0, chunk[2].x.0, chunk[3].x.0].as_ptr());
+                let y_vec =
+                    vld1q_f32([chunk[0].y.0, chunk[1].y.0, chunk[2].y.0, chunk[3].y.0].as_ptr());
 
                 // x_out = m00 * x + m10 * y + m30
                 let x_out = vmlaq_f32(vmlaq_f32(m30, m00, x_vec), m10, y_vec);
@@ -507,7 +509,7 @@ impl Matrix4 {
                 vst1q_f32(y_array.as_mut_ptr(), y_out);
 
                 for i in 0..4 {
-                    result.push(Point::new(x_array[i], y_array[i]));
+                    result.push(Point::new(Pixels(x_array[i]), Pixels(y_array[i])));
                 }
             }
 

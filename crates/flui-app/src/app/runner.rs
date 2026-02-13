@@ -45,7 +45,11 @@ where
 
     #[cfg(target_os = "android")]
     {
-        run_android(config);
+        let _ = (root, config);
+        panic!(
+            "On Android, use flui_app::run_app_android() from android_main() \
+             instead of run_app(). AndroidApp must be provided by the system."
+        );
     }
 
     #[cfg(target_os = "ios")]
@@ -276,10 +280,180 @@ where
 // Android Implementation
 // ============================================================================
 
+/// Run a FLUI application on Android with default configuration.
+///
+/// This is the primary entry point for Android apps. Call this from your
+/// `android_main()` function:
+///
+/// ```rust,ignore
+/// #[no_mangle]
+/// fn android_main(app: AndroidApp) {
+///     flui_app::run_app_android(app, MyRootView);
+/// }
+/// ```
 #[cfg(target_os = "android")]
-fn run_android(_config: AppConfig) {
-    tracing::info!("Android platform - not yet implemented");
-    // TODO: Implement android-activity integration
+pub fn run_app_android<V>(app: android_activity::AndroidApp, root: V)
+where
+    V: View + StatelessView + Clone + Send + Sync + 'static,
+{
+    run_app_android_with_config(app, root, AppConfig::default());
+}
+
+/// Run a FLUI application on Android with custom configuration.
+///
+/// Like [`run_app_android`] but allows specifying app configuration.
+///
+/// ```rust,ignore
+/// #[no_mangle]
+/// fn android_main(app: AndroidApp) {
+///     let config = AppConfig::new()
+///         .with_title("My App")
+///         .with_size(800, 600);
+///     flui_app::run_app_android_with_config(app, MyRootView, config);
+/// }
+/// ```
+#[cfg(target_os = "android")]
+pub fn run_app_android_with_config<V>(
+    app: android_activity::AndroidApp,
+    root: V,
+    config: AppConfig,
+) where
+    V: View + StatelessView + Clone + Send + Sync + 'static,
+{
+    init_logging();
+
+    tracing::info!(
+        title = %config.title,
+        "Starting FLUI application on Android"
+    );
+
+    run_android(root, config, app);
+}
+
+#[cfg(target_os = "android")]
+fn run_android<V>(root: V, config: AppConfig, app: android_activity::AndroidApp)
+where
+    V: View + StatelessView + Clone + Send + Sync + 'static,
+{
+    use crate::embedder::PlatformWindowHandle;
+    use flui_engine::wgpu::Renderer;
+    use flui_foundation::HasInstance;
+    use flui_platform::traits::{DispatchEventResult, LifecycleEvent, PlatformInput};
+    use flui_platform::{AndroidPlatform, Platform, WindowOptions};
+    use flui_scheduler::Scheduler;
+    use parking_lot::Mutex;
+    use std::sync::Arc;
+
+    tracing::info!("Starting Android platform via flui-platform");
+
+    let platform = Arc::new(AndroidPlatform::new(app));
+    let platform_inner = Arc::clone(&platform);
+
+    platform.run(Box::new(move || {
+        // 1. Open window (wraps the existing ANativeWindow)
+        let options: WindowOptions = (&config).into();
+        let window = platform_inner
+            .open_window(options)
+            .expect("Failed to create Android window");
+
+        // 2. Create GPU renderer (Vulkan backend on Android)
+        let phys_size = window.physical_size();
+        let renderer = pollster::block_on(async {
+            let handle = PlatformWindowHandle(window.as_ref());
+            Renderer::new(&handle).await
+        });
+        let mut renderer = match renderer {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!("GPU init failed: {:?}", e);
+                platform_inner.quit();
+                return;
+            }
+        };
+        renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
+
+        // 3. Mount root widget
+        mount_root(&root, phys_size.width.0 as f32, phys_size.height.0 as f32);
+
+        // 4. Wrap renderer for callback sharing
+        let renderer = Arc::new(Mutex::new(renderer));
+
+        // 5. Register input callback → AppBinding::handle_input()
+        window.on_input(Box::new(move |input: PlatformInput| {
+            AppBinding::instance().handle_input(input);
+            DispatchEventResult {
+                propagate: false,
+                default_prevented: true,
+            }
+        }));
+
+        // 6. Register frame callback → scheduler + AppBinding::render_frame()
+        let renderer_frame = Arc::clone(&renderer);
+        window.on_request_frame(Box::new(move || {
+            let binding = AppBinding::instance();
+
+            // On-demand rendering: skip frame if nothing changed
+            if !binding.needs_redraw() && !binding.has_pending_work() {
+                return;
+            }
+
+            let now = std::time::Instant::now();
+
+            // Scheduler callbacks (animations)
+            let scheduler = Scheduler::instance();
+            let _frame_id = scheduler.handle_begin_frame(now);
+            scheduler.handle_draw_frame();
+
+            // Render frame via AppBinding
+            let mut r = renderer_frame.lock();
+            binding.render_frame(&mut r);
+        }));
+
+        // 7. Register resize callback → renderer.resize()
+        let renderer_resize = Arc::clone(&renderer);
+        window.on_resize(Box::new(move |size, scale_factor| {
+            let w = (size.width.0 * scale_factor) as u32;
+            let h = (size.height.0 * scale_factor) as u32;
+            renderer_resize.lock().resize(w, h);
+            AppBinding::instance().request_redraw();
+        }));
+
+        // 8. Lifecycle callbacks
+
+        // Platform quit → transition to Terminating
+        platform_inner.on_quit(Box::new(|| {
+            tracing::info!("Platform quit");
+            AppBinding::instance().transition_lifecycle(LifecycleEvent::Terminating);
+        }));
+
+        // Window close (fired by Android Destroy event)
+        let platform_for_close = Arc::clone(&platform_inner);
+        window.on_close(Box::new(move || {
+            tracing::info!("Window closed");
+            platform_for_close.quit();
+        }));
+
+        // Window active status → lifecycle Activated/Deactivated
+        window.on_active_status_change(Box::new(|active| {
+            let event = if active {
+                LifecycleEvent::Activated
+            } else {
+                LifecycleEvent::Deactivated
+            };
+            AppBinding::instance().transition_lifecycle(event);
+        }));
+
+        // Mark lifecycle as started
+        AppBinding::instance().transition_lifecycle(LifecycleEvent::Started);
+
+        // 9. Request initial redraw
+        window.request_redraw();
+
+        // 10. Store window in AppBinding for runtime access
+        AppBinding::instance().set_window(window);
+
+        tracing::info!("Android platform initialized with callbacks");
+    }));
 }
 
 // ============================================================================

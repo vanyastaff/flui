@@ -58,6 +58,9 @@ pub struct GpuCapabilities {
     /// Supports compute shaders
     pub supports_compute: bool,
 
+    /// Supports push constants (not available on all mobile GPUs)
+    pub supports_push_constants: bool,
+
     /// Supports BC texture compression (DX)
     pub supports_bc_compression: bool,
 
@@ -82,6 +85,7 @@ impl GpuCapabilities {
             max_texture_size: limits.max_texture_dimension_2d,
             supports_hdr: Self::check_hdr_support(info.backend),
             supports_compute: true, // Compute shaders are supported by default in wgpu
+            supports_push_constants: features.contains(wgpu::Features::PUSH_CONSTANTS),
             supports_bc_compression: features.contains(wgpu::Features::TEXTURE_COMPRESSION_BC),
             supports_astc_compression: features.contains(wgpu::Features::TEXTURE_COMPRESSION_ASTC),
             supports_etc2_compression: features.contains(wgpu::Features::TEXTURE_COMPRESSION_ETC2),
@@ -334,33 +338,33 @@ impl Renderer {
         }
     }
 
-    /// Required GPU features based on capabilities
+    /// Required GPU features based on capabilities and adapter support
     fn required_features(capabilities: &GpuCapabilities) -> wgpu::Features {
         let mut features = wgpu::Features::empty();
 
         // Always enable texture adapter-specific formats
         features |= wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
 
-        // Enable push constants if available (useful for uniforms)
-        features |= wgpu::Features::PUSH_CONSTANTS;
-
-        // Enable compute shaders if supported
-        if capabilities.supports_compute {
-            // Already included in Features::COMPUTE_SHADER check
+        // Push constants: only request if adapter supports them.
+        // Some mobile GPUs (especially older Android devices) don't support this.
+        if capabilities.supports_push_constants {
+            features |= wgpu::Features::PUSH_CONSTANTS;
         }
 
         features
     }
 
-    /// Required GPU limits based on capabilities
+    /// Required GPU limits based on capabilities and adapter support
     fn required_limits(capabilities: &GpuCapabilities) -> wgpu::Limits {
         let mut limits = wgpu::Limits::default();
 
         // Ensure we can handle reasonably large textures
         limits.max_texture_dimension_2d = capabilities.max_texture_size.min(16384);
 
-        // Push constant size (if supported)
-        limits.max_push_constant_size = 128;
+        // Push constant size — only set if adapter supports push constants
+        if capabilities.supports_push_constants {
+            limits.max_push_constant_size = 128;
+        }
 
         limits
     }

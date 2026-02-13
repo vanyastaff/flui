@@ -1,0 +1,35 @@
+[package]
+name = "flui-android-demo"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "FLUI Android demo — colored rectangles via GPU compositor"
+
+[lib]
+crate-type = ["cdylib"]
+# Output library name matches AndroidManifest.xml android.app.lib_name
+name = "flui_app"
+
+[dependencies]
+# FLUI crates
+flui-platform = { path = "../../crates/flui-platform", default-features = false }
+flui-engine = { path = "../../crates/flui-engine", features = ["vulkan"] }
+flui-layer = { path = "../../crates/flui-layer" }
+flui-types = { path = "../../crates/flui-types" }
+flui-log = { path = "../../crates/flui-log" }
+flui-foundation = { path = "../../crates/flui-foundation" }
+
+# Android glue
+android-activity = { version = "0.6", features = ["native-activity"] }
+ndk = { version = "0.9", features = ["rwh_06"] }
+
+# Logging
+tracing = "0.1"
+log = "0.4"
+
+# GPU
+raw-window-handle = "0.6"
+pollster = "0.4"
+
+[lints]
+workspace = true

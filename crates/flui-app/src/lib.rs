@@ -48,6 +48,10 @@ pub use app::{
     RootRenderElement, RootRenderView, WidgetsFlutterBinding,
 };
 
+// Android-specific entry points
+#[cfg(target_os = "android")]
+pub use app::{run_app_android, run_app_android_with_config};
+
 // Legacy alias
 pub use app::AppBinding;
 

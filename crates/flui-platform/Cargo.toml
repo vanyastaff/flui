@@ -68,6 +68,13 @@ objc = "0.2"
 foreign-types = "0.5"
 block = "0.1"
 
+# Android platform
+[target.'cfg(target_os = "android")'.dependencies]
+android-activity = { version = "0.6", features = ["native-activity"] }
+ndk = { version = "0.9", features = ["rwh_06"] }
+libc = "0.2"
+log = "0.4"
+
 [features]
 default = ["desktop"]
 

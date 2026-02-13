@@ -337,7 +337,11 @@ pub fn current_platform() -> anyhow::Result<Arc<dyn Platform>> {
         not(any(windows, target_os = "macos", target_os = "linux"))
     ))]
     {
-        Ok(Arc::new(AndroidPlatform::new()?))
+        // On Android, use AndroidPlatform::new(app) directly from android_main().
+        // current_platform() cannot be used because AndroidApp is required.
+        anyhow::bail!(
+            "On Android, use AndroidPlatform::new(app) from android_main() instead of current_platform()"
+        )
     }
 
     #[cfg(all(
