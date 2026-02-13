@@ -1048,6 +1048,131 @@ impl Platform for WindowsPlatform {
         }
     }
 
+    // ==================== File Dialogs (US3 T042-T043) ====================
+
+    fn prompt_for_paths(
+        &self,
+        options: crate::traits::PathPromptOptions,
+    ) -> crate::task::Task<Result<Option<Vec<std::path::PathBuf>>>> {
+        let executor = self.background_executor.clone();
+        executor.spawn(async move {
+            // COM file dialogs must run on an STA thread
+            let result = std::thread::spawn(move || -> Result<Option<Vec<std::path::PathBuf>>> {
+                unsafe {
+                    use windows::Win32::System::Com::*;
+                    use windows::Win32::UI::Shell::*;
+
+                    let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+
+                    let dialog: IFileOpenDialog =
+                        CoCreateInstance(&FileOpenDialog, None, CLSCTX_ALL)?;
+
+                    let mut flags = FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST;
+                    if options.multiple {
+                        flags |= FOS_ALLOWMULTISELECT;
+                    }
+                    if options.directories {
+                        flags |= FOS_PICKFOLDERS;
+                    }
+                    dialog.SetOptions(flags)?;
+
+                    match dialog.Show(None) {
+                        Ok(()) => {}
+                        Err(e)
+                            if e.code()
+                                == windows::core::HRESULT::from_win32(ERROR_CANCELLED.0) =>
+                        {
+                            return Ok(None);
+                        }
+                        Err(e) => return Err(e.into()),
+                    }
+
+                    let results = dialog.GetResults()?;
+                    let count = results.GetCount()?;
+                    let mut paths = Vec::with_capacity(count as usize);
+                    for i in 0..count {
+                        let item = results.GetItemAt(i)?;
+                        let name = item.GetDisplayName(SIGDN_FILESYSPATH)?;
+                        let path_str = name.to_string()?;
+                        paths.push(std::path::PathBuf::from(path_str));
+                        CoTaskMemFree(Some(name.as_ptr() as *const _));
+                    }
+                    Ok(Some(paths))
+                }
+            })
+            .join()
+            .map_err(|_| anyhow::anyhow!("File dialog thread panicked"))??;
+            Ok(result)
+        })
+    }
+
+    fn prompt_for_new_path(
+        &self,
+        directory: &std::path::Path,
+        suggested_name: Option<&str>,
+    ) -> crate::task::Task<Result<Option<std::path::PathBuf>>> {
+        let dir = directory.to_path_buf();
+        let name = suggested_name.map(|s| s.to_string());
+        let executor = self.background_executor.clone();
+        executor.spawn(async move {
+            let result = std::thread::spawn(move || -> Result<Option<std::path::PathBuf>> {
+                unsafe {
+                    use windows::Win32::System::Com::*;
+                    use windows::Win32::UI::Shell::*;
+
+                    let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+
+                    let dialog: IFileSaveDialog =
+                        CoCreateInstance(&FileSaveDialog, None, CLSCTX_ALL)?;
+
+                    dialog.SetOptions(
+                        FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST | FOS_OVERWRITEPROMPT,
+                    )?;
+
+                    // Set initial directory
+                    let dir_wide: Vec<u16> = dir
+                        .to_string_lossy()
+                        .encode_utf16()
+                        .chain(std::iter::once(0))
+                        .collect();
+                    if let Ok(folder) = SHCreateItemFromParsingName::<PCWSTR, _, IShellItem>(
+                        PCWSTR(dir_wide.as_ptr()),
+                        None,
+                    ) {
+                        let _ = dialog.SetFolder(&folder);
+                    }
+
+                    // Set suggested file name
+                    if let Some(ref name) = name {
+                        let name_hstring = windows::core::HSTRING::from(name.as_str());
+                        let _ = dialog.SetFileName(&name_hstring);
+                    }
+
+                    match dialog.Show(None) {
+                        Ok(()) => {}
+                        Err(e)
+                            if e.code()
+                                == windows::core::HRESULT::from_win32(ERROR_CANCELLED.0) =>
+                        {
+                            return Ok(None);
+                        }
+                        Err(e) => return Err(e.into()),
+                    }
+
+                    let result = dialog.GetResult()?;
+                    let name = result.GetDisplayName(SIGDN_FILESYSPATH)?;
+                    let path_str = name.to_string()?;
+                    let path = std::path::PathBuf::from(path_str);
+                    CoTaskMemFree(Some(name.as_ptr() as *const _));
+                    Ok(Some(path))
+                }
+            })
+            .join()
+            .map_err(|_| anyhow::anyhow!("File dialog thread panicked"))??;
+            Ok(result)
+        })
+    }
+
     // ==================== Keyboard (US3 T045) ====================
 
     fn keyboard_layout(&self) -> String {

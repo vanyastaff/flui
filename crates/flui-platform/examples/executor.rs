@@ -46,20 +46,22 @@ fn example_background_cpu_work() {
 
     let start = Instant::now();
 
-    // Spawn CPU-intensive task
+    // Spawn CPU-intensive task using async
     let completed_clone = Arc::clone(&completed);
-    executor.spawn(Box::new(move || {
-        println!(
-            "Background task started on thread {:?}",
-            thread::current().id()
-        );
+    executor
+        .spawn(async move {
+            println!(
+                "Background task started on thread {:?}",
+                thread::current().id()
+            );
 
-        // Simulate CPU-intensive work (e.g., image processing, data analysis)
-        let result = (0..10_000_000).fold(0u64, |acc, x| acc.wrapping_add(x));
+            // Simulate CPU-intensive work
+            let result = (0..10_000_000).fold(0u64, |acc, x| acc.wrapping_add(x));
 
-        println!("Background work complete: result = {}", result);
-        completed_clone.store(1, Ordering::SeqCst);
-    }));
+            println!("Background work complete: result = {}", result);
+            completed_clone.store(1, Ordering::SeqCst);
+        })
+        .detach();
 
     // Main thread continues immediately
     println!("Main thread continues (non-blocking)");
@@ -84,18 +86,23 @@ fn example_background_with_ui_update() {
     let foreground_clone = foreground_executor.clone();
 
     // Simulate loading data in background
-    background_executor.spawn(Box::new(move || {
-        println!("Background: Loading data...");
-        thread::sleep(Duration::from_millis(100)); // Simulate network/disk I/O
+    background_executor
+        .spawn(async move {
+            println!("Background: Loading data...");
+            tokio::time::sleep(Duration::from_millis(100)).await;
 
-        let data = 42; // Simulated loaded data
+            let data = 42u32; // Simulated loaded data
 
-        // Schedule UI update on foreground thread
-        foreground_clone.spawn(Box::new(move || {
-            println!("Foreground: Updating UI with loaded data: {}", data);
-            ui_state_bg.store(data, Ordering::SeqCst);
-        }));
-    }));
+            // Schedule UI update on foreground thread via PlatformExecutor trait
+            PlatformExecutor::spawn(
+                &foreground_clone,
+                Box::new(move || {
+                    println!("Foreground: Updating UI with loaded data: {}", data);
+                    ui_state_bg.store(data, Ordering::SeqCst);
+                }),
+            );
+        })
+        .detach();
 
     // Simulate event loop draining foreground tasks
     thread::sleep(Duration::from_millis(150));
@@ -116,15 +123,14 @@ fn example_parallel_background_tasks() {
     // Spawn multiple independent tasks
     for i in 0..4 {
         let count_clone = Arc::clone(&completed_count);
-        executor.spawn(Box::new(move || {
-            println!("Task {} started", i);
-
-            // Simulate work (e.g., processing different image tiles)
-            thread::sleep(Duration::from_millis(100));
-
-            println!("Task {} completed", i);
-            count_clone.fetch_add(1, Ordering::SeqCst);
-        }));
+        executor
+            .spawn(async move {
+                println!("Task {} started", i);
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                println!("Task {} completed", i);
+                count_clone.fetch_add(1, Ordering::SeqCst);
+            })
+            .detach();
     }
 
     // Wait for all tasks
@@ -138,7 +144,7 @@ fn example_parallel_background_tasks() {
         elapsed
     );
     println!(
-        "Sequential would take ~400ms, parallel took ~{:?}ms",
+        "Sequential would take ~400ms, parallel took ~{}ms",
         elapsed.as_millis()
     );
 }
@@ -150,12 +156,15 @@ fn example_foreground_task_batching() {
     let executor = ForegroundExecutor::new();
     let execution_order = Arc::new(std::sync::Mutex::new(Vec::new()));
 
-    // Queue multiple UI updates
+    // Queue multiple UI updates via PlatformExecutor trait
     for i in 0..5 {
         let order_clone = Arc::clone(&execution_order);
-        executor.spawn(Box::new(move || {
-            order_clone.lock().unwrap().push(i);
-        }));
+        PlatformExecutor::spawn(
+            &executor,
+            Box::new(move || {
+                order_clone.lock().unwrap().push(i);
+            }),
+        );
     }
 
     println!(
@@ -177,25 +186,26 @@ fn example_async_await_integration() {
     println!("\n--- Example 5: Async/Await Integration ---");
 
     let executor = BackgroundExecutor::new();
-    let handle = executor.handle();
 
     let completed = Arc::new(AtomicU32::new(0));
     let completed_clone = Arc::clone(&completed);
 
-    // Spawn native async task
-    handle.spawn(async move {
-        println!("Async task started");
+    // Spawn async task that uses Task<T> for awaiting results
+    executor
+        .spawn(async move {
+            println!("Async task started");
 
-        // Use Tokio's async primitives
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        println!("Async task: after sleep");
+            // Use Tokio's async primitives
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            println!("Async task: after sleep");
 
-        // Simulate async I/O
-        let result = async_compute().await;
-        println!("Async task: computed result = {}", result);
+            // Simulate async I/O
+            let result = async_compute().await;
+            println!("Async task: computed result = {}", result);
 
-        completed_clone.store(1, Ordering::SeqCst);
-    });
+            completed_clone.store(1, Ordering::SeqCst);
+        })
+        .detach();
 
     // Wait for async task
     while completed.load(Ordering::SeqCst) == 0 {
@@ -209,76 +219,4 @@ fn example_async_await_integration() {
 async fn async_compute() -> u32 {
     tokio::task::yield_now().await;
     42
-}
-
-/// Example 6: Practical use case - Image loading with progress updates
-#[allow(dead_code)]
-fn example_practical_image_loading() {
-    println!("\n--- Example 6: Practical Image Loading ---");
-
-    let background_executor = BackgroundExecutor::new();
-    let foreground_executor = ForegroundExecutor::new();
-
-    let progress = Arc::new(AtomicU32::new(0));
-    let progress_bg = Arc::clone(&progress);
-    let foreground_clone = foreground_executor.clone();
-
-    // Simulate loading multiple images
-    background_executor.spawn(Box::new(move || {
-        let total_images = 5;
-
-        for i in 1..=total_images {
-            // Simulate loading one image
-            println!("Background: Loading image {}/{}", i, total_images);
-            thread::sleep(Duration::from_millis(50));
-
-            // Update progress on UI thread
-            let progress_update = Arc::clone(&progress_bg);
-            let foreground_update = foreground_clone.clone();
-            foreground_update.spawn(Box::new(move || {
-                let percent = (i * 100) / total_images;
-                progress_update.store(percent, Ordering::SeqCst);
-                println!("Foreground: Progress updated to {}%", percent);
-            }));
-        }
-    }));
-
-    // Simulate event loop processing updates
-    for _ in 0..10 {
-        thread::sleep(Duration::from_millis(30));
-        foreground_executor.drain_tasks();
-    }
-
-    println!("Loading complete: {}%", progress.load(Ordering::SeqCst));
-}
-
-/// Example 7: Error handling and resilience
-#[allow(dead_code)]
-fn example_error_handling() {
-    println!("\n--- Example 7: Error Handling ---");
-
-    let executor = BackgroundExecutor::new();
-
-    // Spawn task that panics
-    executor.spawn(Box::new(|| {
-        println!("Task 1: This will panic");
-        panic!("Intentional panic for demonstration");
-    }));
-
-    thread::sleep(Duration::from_millis(50));
-
-    // Executor continues working after panic
-    let completed = Arc::new(AtomicU32::new(0));
-    let completed_clone = Arc::clone(&completed);
-
-    executor.spawn(Box::new(move || {
-        println!("Task 2: This task runs successfully after previous panic");
-        completed_clone.store(1, Ordering::SeqCst);
-    }));
-
-    thread::sleep(Duration::from_millis(50));
-
-    if completed.load(Ordering::SeqCst) == 1 {
-        println!("✓ Executor remains functional after task panic");
-    }
 }

@@ -150,6 +150,7 @@ pub mod cursor;
 pub mod executor;
 pub mod platforms;
 pub mod shared;
+pub mod task;
 pub mod traits;
 pub mod window;
 
@@ -159,14 +160,18 @@ pub use config::{FullscreenMonitor, WindowConfiguration};
 // Re-export executor types
 pub use executor::{BackgroundExecutor, ForegroundExecutor};
 
+// Re-export task types
+pub use task::{Priority, Task, TaskLabel};
+
 // Re-export core traits
 pub use traits::{
     Clipboard, ClipboardItem, DefaultLifecycle, DesktopCapabilities, DispatchEventResult,
     DisplayId, Font, FontId, FontMetrics, FontRun, FontStyle, FontWeight, GlyphId, LifecycleEvent,
-    LifecycleState, LineLayout, MobileCapabilities, Platform, PlatformCapabilities,
-    PlatformDisplay, PlatformEmbedder, PlatformExecutor, PlatformLifecycle, PlatformTextSystem,
-    PlatformWindow, ShapedGlyph, ShapedRun, TextSystemError, WebCapabilities, WindowAppearance,
-    WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId, WindowMode, WindowOptions,
+    LifecycleState, LineLayout, MobileCapabilities, PathPromptOptions, Platform,
+    PlatformCapabilities, PlatformDisplay, PlatformEmbedder, PlatformExecutor, PlatformLifecycle,
+    PlatformTextSystem, PlatformWindow, ShapedGlyph, ShapedRun, TextSystemError, WebCapabilities,
+    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId, WindowMode,
+    WindowOptions,
 };
 
 // Re-export cursor types

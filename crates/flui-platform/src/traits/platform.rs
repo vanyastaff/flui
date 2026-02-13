@@ -6,6 +6,7 @@
 use super::window::WindowAppearance;
 use super::{PlatformCapabilities, PlatformDisplay, PlatformWindow};
 use crate::cursor::CursorStyle;
+use crate::task::Task;
 use anyhow::Result;
 use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
 use std::path::{Path, PathBuf};
@@ -304,6 +305,27 @@ pub trait Platform: Send + Sync + 'static {
         let _ = path;
     }
 
+    /// Show a file/directory picker dialog
+    ///
+    /// Returns selected paths, or `None` if the user cancelled.
+    /// The dialog runs asynchronously on a background thread.
+    fn prompt_for_paths(&self, options: PathPromptOptions) -> Task<Result<Option<Vec<PathBuf>>>> {
+        let _ = options;
+        Task::ready(Ok(None))
+    }
+
+    /// Show a "Save As" dialog for selecting a new file path
+    ///
+    /// Returns the selected path, or `None` if the user cancelled.
+    fn prompt_for_new_path(
+        &self,
+        directory: &Path,
+        suggested_name: Option<&str>,
+    ) -> Task<Result<Option<PathBuf>>> {
+        let _ = (directory, suggested_name);
+        Task::ready(Ok(None))
+    }
+
     // ==================== Keyboard (US3) ====================
 
     /// Get the current keyboard layout identifier
@@ -450,7 +472,7 @@ pub struct FontId(pub usize);
 pub struct GlyphId(pub u32);
 
 /// Font descriptor for resolving a specific font face
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Font {
     /// Font family name (e.g., "Segoe UI", "Arial")
     pub family: String,
@@ -719,5 +741,26 @@ impl ClipboardItem {
     /// Get the metadata, if any
     pub fn metadata(&self) -> Option<&str> {
         self.metadata.as_deref()
+    }
+}
+
+/// Options for the file/directory picker dialog
+#[derive(Debug, Clone)]
+pub struct PathPromptOptions {
+    /// Allow selecting files
+    pub files: bool,
+    /// Allow selecting directories
+    pub directories: bool,
+    /// Allow selecting multiple items
+    pub multiple: bool,
+}
+
+impl Default for PathPromptOptions {
+    fn default() -> Self {
+        Self {
+            files: true,
+            directories: false,
+            multiple: false,
+        }
     }
 }

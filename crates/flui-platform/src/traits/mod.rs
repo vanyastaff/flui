@@ -48,8 +48,8 @@ pub use keyboard_types::NamedKey;
 pub use lifecycle::{DefaultLifecycle, LifecycleEvent, LifecycleState, PlatformLifecycle};
 pub use platform::{
     Clipboard, ClipboardItem, Font, FontId, FontMetrics, FontRun, FontStyle, FontWeight, GlyphId,
-    LineLayout, Platform, PlatformExecutor, PlatformTextSystem, ShapedGlyph, ShapedRun,
-    TextSystemError, WindowEvent, WindowId, WindowMode, WindowOptions,
+    LineLayout, PathPromptOptions, Platform, PlatformExecutor, PlatformTextSystem, ShapedGlyph,
+    ShapedRun, TextSystemError, WindowEvent, WindowId, WindowMode, WindowOptions,
 };
 pub use window::{PlatformWindow, WindowAppearance, WindowBackgroundAppearance, WindowBounds};
 

@@ -10,7 +10,6 @@
 
 use flui_platform::{current_platform, WindowOptions};
 use flui_types::geometry::{px, Size};
-use std::sync::Arc;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -41,7 +40,6 @@ fn main() -> anyhow::Result<()> {
         capabilities.supports_multiple_windows()
     );
     tracing::info!("  - Touch input: {}", capabilities.supports_touch());
-    tracing::info!("  - Transparency: {}", capabilities.supports_transparency());
 
     // Create main window
     let window_options = WindowOptions {
