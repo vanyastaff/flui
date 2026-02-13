@@ -3,12 +3,13 @@
 //! This platform implementation runs without any actual windowing system,
 //! making it ideal for unit tests and CI environments.
 
+use crate::cursor::CursorStyle;
 use crate::shared::{PlatformHandlers, WindowCallbacks};
 use crate::traits::{
-    Clipboard, DesktopCapabilities, DispatchEventResult, Platform, PlatformCapabilities,
-    PlatformDisplay, PlatformExecutor, PlatformInput, PlatformTextSystem, PlatformWindow,
-    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId,
-    WindowOptions,
+    Clipboard, ClipboardItem, DesktopCapabilities, DispatchEventResult, Platform,
+    PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformInput, PlatformTextSystem,
+    PlatformWindow, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent,
+    WindowId, WindowOptions,
 };
 use anyhow::Result;
 use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
@@ -37,6 +38,11 @@ struct HeadlessState {
     active_window: Option<WindowId>,
     is_running: bool,
     windows: Vec<MockWindow>,
+    // US3 state
+    cursor_style: CursorStyle,
+    appearance: WindowAppearance,
+    keyboard_layout: String,
+    opened_urls: Vec<String>,
 }
 
 impl HeadlessPlatform {
@@ -52,6 +58,10 @@ impl HeadlessPlatform {
             active_window: None,
             is_running: false,
             windows: Vec::new(),
+            cursor_style: CursorStyle::default(),
+            appearance: WindowAppearance::default(),
+            keyboard_layout: "en-US".to_string(),
+            opened_urls: Vec::new(),
         };
 
         Self {
@@ -170,6 +180,50 @@ impl Platform for HeadlessPlatform {
     fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>) {
         self.with_state(|state| {
             state.handlers.window_event = Some(callback);
+        });
+    }
+
+    // ==================== US3 Methods ====================
+
+    fn activate(&self, _ignoring_other_apps: bool) {
+        // No-op in headless mode
+    }
+
+    fn window_appearance(&self) -> WindowAppearance {
+        self.with_state(|state| state.appearance)
+    }
+
+    fn set_cursor_style(&self, style: CursorStyle) {
+        self.with_state(|state| {
+            state.cursor_style = style;
+        });
+    }
+
+    fn write_to_clipboard(&self, item: ClipboardItem) {
+        if let Some(text) = item.text_content() {
+            self.with_state(|state| {
+                state.clipboard.write_text(text.to_string());
+            });
+        }
+    }
+
+    fn read_from_clipboard(&self) -> Option<ClipboardItem> {
+        self.with_state(|state| state.clipboard.read_text().map(ClipboardItem::text))
+    }
+
+    fn open_url(&self, url: &str) {
+        self.with_state(|state| {
+            state.opened_urls.push(url.to_string());
+        });
+    }
+
+    fn keyboard_layout(&self) -> String {
+        self.with_state(|state| state.keyboard_layout.clone())
+    }
+
+    fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut() + Send>) {
+        self.with_state(|state| {
+            state.handlers.keyboard_layout_changed = Some(callback);
         });
     }
 
@@ -777,5 +831,70 @@ mod tests {
         let display = window.display();
         assert!(display.is_some());
         assert!(display.unwrap().is_primary());
+    }
+
+    // ==================== US3 Tests ====================
+
+    #[test]
+    fn test_window_appearance() {
+        let platform = HeadlessPlatform::new();
+        assert_eq!(platform.window_appearance(), WindowAppearance::Light);
+    }
+
+    #[test]
+    fn test_set_cursor_style() {
+        let platform = HeadlessPlatform::new();
+        platform.set_cursor_style(CursorStyle::IBeam);
+        platform.with_state(|state| {
+            assert_eq!(state.cursor_style, CursorStyle::IBeam);
+        });
+    }
+
+    #[test]
+    fn test_clipboard_item_roundtrip() {
+        let platform = HeadlessPlatform::new();
+        let item = ClipboardItem::text("hello world".to_string());
+        platform.write_to_clipboard(item);
+        let read = platform.read_from_clipboard();
+        assert!(read.is_some());
+        assert_eq!(read.unwrap().text_content(), Some("hello world"));
+    }
+
+    #[test]
+    fn test_open_url_tracking() {
+        let platform = HeadlessPlatform::new();
+        platform.open_url("https://example.com");
+        platform.open_url("https://rust-lang.org");
+        platform.with_state(|state| {
+            assert_eq!(state.opened_urls.len(), 2);
+            assert_eq!(state.opened_urls[0], "https://example.com");
+            assert_eq!(state.opened_urls[1], "https://rust-lang.org");
+        });
+    }
+
+    #[test]
+    fn test_keyboard_layout() {
+        let platform = HeadlessPlatform::new();
+        assert_eq!(platform.keyboard_layout(), "en-US");
+    }
+
+    #[test]
+    fn test_keyboard_layout_change_callback() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let platform = HeadlessPlatform::new();
+        let called = Arc::new(AtomicBool::new(false));
+        let called_clone = called.clone();
+
+        platform.on_keyboard_layout_change(Box::new(move || {
+            called_clone.store(true, Ordering::SeqCst);
+        }));
+
+        // Simulate a keyboard layout change by invoking the handler
+        platform.with_state(|state| {
+            state.handlers.invoke_keyboard_layout_changed();
+        });
+
+        assert!(called.load(Ordering::SeqCst));
     }
 }

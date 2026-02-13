@@ -727,6 +727,19 @@ impl WindowsPlatform {
                 DefWindowProcW(hwnd, msg, wparam, lparam)
             }
 
+            // T046: Keyboard layout change
+            WM_INPUTLANGCHANGE => {
+                if let Some(ctx) = ctx {
+                    // Dispatch keyboard layout change via take/restore pattern
+                    let handler = ctx.handlers.lock().keyboard_layout_changed.take();
+                    if let Some(mut handler) = handler {
+                        handler();
+                        ctx.handlers.lock().keyboard_layout_changed = Some(handler);
+                    }
+                }
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
         }
     }
@@ -860,6 +873,179 @@ impl Platform for WindowsPlatform {
 
     fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>) {
         self.handlers.lock().window_event = Some(callback);
+    }
+
+    fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut() + Send>) {
+        self.handlers.lock().keyboard_layout_changed = Some(callback);
+    }
+
+    // ==================== App Activation (US3 T038) ====================
+
+    fn activate(&self, _ignoring_other_apps: bool) {
+        unsafe {
+            // Bring the foreground window to front
+            let hwnd = GetForegroundWindow();
+            if !hwnd.is_invalid() {
+                let _ = SetForegroundWindow(hwnd);
+            }
+        }
+    }
+
+    // ==================== Appearance (US3 T040) ====================
+
+    fn window_appearance(&self) -> WindowAppearance {
+        // Read system theme from registry: AppsUseLightTheme
+        use windows::Win32::System::Registry::*;
+        unsafe {
+            let mut hkey = HKEY::default();
+            let subkey: Vec<u16> =
+                "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize\0"
+                    .encode_utf16()
+                    .collect();
+            let value_name: Vec<u16> = "AppsUseLightTheme\0".encode_utf16().collect();
+
+            let status = RegOpenKeyExW(
+                HKEY_CURRENT_USER,
+                PCWSTR(subkey.as_ptr()),
+                Some(0),
+                KEY_READ,
+                &mut hkey,
+            );
+            if status.is_err() {
+                return WindowAppearance::Light;
+            }
+
+            let mut data: u32 = 1;
+            let mut data_size = std::mem::size_of::<u32>() as u32;
+            let status = RegQueryValueExW(
+                hkey,
+                PCWSTR(value_name.as_ptr()),
+                None,
+                None,
+                Some(&mut data as *mut u32 as *mut u8),
+                Some(&mut data_size),
+            );
+            let _ = RegCloseKey(hkey);
+
+            if status.is_err() {
+                return WindowAppearance::Light;
+            }
+
+            if data == 0 {
+                WindowAppearance::Dark
+            } else {
+                WindowAppearance::Light
+            }
+        }
+    }
+
+    // ==================== Cursor (US3 T039) ====================
+
+    fn set_cursor_style(&self, style: crate::cursor::CursorStyle) {
+        use crate::cursor::CursorStyle;
+        let cursor_id = match style {
+            CursorStyle::Arrow => IDC_ARROW,
+            CursorStyle::IBeam => IDC_IBEAM,
+            CursorStyle::Crosshair => IDC_CROSS,
+            CursorStyle::ClosedHand | CursorStyle::OpenHand => IDC_HAND,
+            CursorStyle::PointingHand => IDC_HAND,
+            CursorStyle::ResizeLeft | CursorStyle::ResizeRight | CursorStyle::ResizeLeftRight => {
+                IDC_SIZEWE
+            }
+            CursorStyle::ResizeUp | CursorStyle::ResizeDown | CursorStyle::ResizeUpDown => {
+                IDC_SIZENS
+            }
+            CursorStyle::ResizeUpLeftDownRight => IDC_SIZENWSE,
+            CursorStyle::ResizeUpRightDownLeft => IDC_SIZENESW,
+            CursorStyle::ResizeColumn => IDC_SIZEWE,
+            CursorStyle::ResizeRow => IDC_SIZENS,
+            CursorStyle::OperationNotAllowed => IDC_NO,
+            CursorStyle::DragLink | CursorStyle::DragCopy => IDC_HAND,
+            CursorStyle::ContextualMenu => IDC_ARROW,
+            CursorStyle::None => {
+                // Hide cursor
+                unsafe {
+                    SetCursor(None);
+                }
+                return;
+            }
+        };
+        unsafe {
+            if let Ok(cursor) = LoadCursorW(None, cursor_id) {
+                SetCursor(Some(cursor));
+            }
+        }
+    }
+
+    // ==================== File Operations (US3 T041) ====================
+
+    fn open_url(&self, url: &str) {
+        use windows::Win32::UI::Shell::ShellExecuteW;
+        let wide_url: Vec<u16> = url.encode_utf16().chain(std::iter::once(0)).collect();
+        unsafe {
+            ShellExecuteW(
+                None,
+                w!("open"),
+                PCWSTR(wide_url.as_ptr()),
+                None,
+                None,
+                SW_SHOWNORMAL,
+            );
+        }
+    }
+
+    fn reveal_path(&self, path: &std::path::Path) {
+        use windows::Win32::UI::Shell::ShellExecuteW;
+        // Use "explorer /select,<path>" to reveal in Explorer
+        let path_str = path.to_string_lossy();
+        let arg = format!("/select,{}", path_str);
+        let wide_arg: Vec<u16> = arg.encode_utf16().chain(std::iter::once(0)).collect();
+        let explorer: Vec<u16> = "explorer\0".encode_utf16().collect();
+        unsafe {
+            ShellExecuteW(
+                None,
+                w!("open"),
+                PCWSTR(explorer.as_ptr()),
+                PCWSTR(wide_arg.as_ptr()),
+                None,
+                SW_SHOWNORMAL,
+            );
+        }
+    }
+
+    fn open_path(&self, path: &std::path::Path) {
+        use windows::Win32::UI::Shell::ShellExecuteW;
+        let wide_path: Vec<u16> = path
+            .to_string_lossy()
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        unsafe {
+            ShellExecuteW(
+                None,
+                w!("open"),
+                PCWSTR(wide_path.as_ptr()),
+                None,
+                None,
+                SW_SHOWNORMAL,
+            );
+        }
+    }
+
+    // ==================== Keyboard (US3 T045) ====================
+
+    fn keyboard_layout(&self) -> String {
+        use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyboardLayoutNameW;
+        unsafe {
+            let mut buffer = [0u16; 9]; // KL_NAMELENGTH = 9
+            if GetKeyboardLayoutNameW(&mut buffer).is_ok() {
+                String::from_utf16_lossy(
+                    &buffer[..buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len())],
+                )
+            } else {
+                String::new()
+            }
+        }
     }
 
     // ==================== File System Integration ====================

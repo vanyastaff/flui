@@ -121,6 +121,7 @@ impl std::fmt::Debug for PlatformHandlers {
 // Per-Window Callbacks
 // ============================================================================
 
+#[allow(clippy::type_complexity)]
 /// Per-window callback storage using Mutex-based take/restore pattern
 ///
 /// Each callback is stored in a `Mutex<Option<Box<dyn FnMut/FnOnce + Send>>>`.

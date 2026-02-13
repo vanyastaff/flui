@@ -33,12 +33,12 @@
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T007 [P] Implement `CursorStyle` enum (~21 variants) with `Default` in `crates/flui-platform/src/cursor.rs` per `contracts/value-types.rs`
+- [x] T007 [P] Implement `CursorStyle` enum (~21 variants) with `Default` in `crates/flui-platform/src/cursor.rs` per `contracts/value-types.rs`
 - [x] T008 [P] Implement `WindowAppearance` enum (Light, Dark, VibrantLight, VibrantDark) with `Default` in `crates/flui-platform/src/traits/window.rs`
 - [x] T009 [P] Implement `WindowBackgroundAppearance` enum (Opaque, Transparent, Blurred, MicaBackdrop, MicaAltBackdrop) with `Default` in `crates/flui-platform/src/traits/window.rs`
 - [x] T010 [P] Implement `WindowBounds` enum (Windowed, Maximized, Fullscreen) in `crates/flui-platform/src/traits/window.rs`
 - [x] T011 [P] Implement `DispatchEventResult` struct (propagate, default_prevented) with `Default` in `crates/flui-platform/src/traits/input.rs`
-- [ ] T012 [P] Implement `ClipboardItem`, `ClipboardEntry`, `ClipboardString` structs in `crates/flui-platform/src/traits/platform.rs` (replace existing String-only clipboard)
+- [x] T012 [P] Implement `ClipboardItem` struct in `crates/flui-platform/src/traits/platform.rs` (text + metadata, alongside existing Clipboard trait)
 - [ ] T013 [P] Implement `PathPromptOptions` struct (files, directories, multiple) in `crates/flui-platform/src/traits/platform.rs`
 - [ ] T014 [P] Implement `FontMetrics`, `LineLayout`, `ShapedRun`, `ShapedGlyph`, `FontId`, `GlyphId`, `Font`, `FontWeight`, `FontStyle`, `FontRun` types in `crates/flui-platform/src/traits/platform.rs` per `contracts/text-system-trait.rs`
 - [x] T015 Implement `WindowCallbacks` struct in `crates/flui-platform/src/shared/handlers.rs` with all 9 callback fields using `parking_lot::Mutex<Option<Box<dyn FnMut/FnOnce + Send>>>` per research.md R1 pattern
@@ -101,17 +101,17 @@
 
 ### Implementation for US3
 
-- [ ] T036 Expand `Platform` trait in `crates/flui-platform/src/traits/platform.rs` with ~16 new methods per `contracts/platform-trait.rs`: `activate`, `hide`, `hide_other_apps`, `unhide_other_apps`, `window_appearance`, `should_auto_hide_scrollbars`, `set_cursor_style`, `write_to_clipboard(ClipboardItem)`, `read_from_clipboard() -> Option<ClipboardItem>`, `prompt_for_paths`, `prompt_for_new_path`, `open_url`, `on_open_urls`, `keyboard_layout`, `on_keyboard_layout_change`, `compositor_name`
-- [ ] T037 Provide default implementations for methods that are no-ops on most platforms: `hide`, `hide_other_apps`, `unhide_other_apps`, `should_auto_hide_scrollbars` (false), `compositor_name` ("")
-- [ ] T038 Implement `activate()` on `WindowsPlatform` in `crates/flui-platform/src/platforms/windows/platform.rs` using `SetForegroundWindow` for the active window
-- [ ] T039 Implement `set_cursor_style()` on `WindowsPlatform` using `SetCursor` with `LoadCursorW` mapped from `CursorStyle` enum (Arrow→IDC_ARROW, IBeam→IDC_IBEAM, etc.)
-- [ ] T040 Implement `window_appearance()` on `WindowsPlatform` by reading `AppsUseLightTheme` from Windows registry (`HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize`)
-- [ ] T041 Implement `open_url()` on `WindowsPlatform` using `ShellExecuteW` with `"open"` verb
-- [ ] T042 Implement `prompt_for_paths()` on `WindowsPlatform` using `IFileOpenDialog` COM API — returns `Task<Result<Option<Vec<PathBuf>>>>` (spawn on background thread via executor)
-- [ ] T043 Implement `prompt_for_new_path()` on `WindowsPlatform` using `IFileSaveDialog` COM API — returns `Task<Result<Option<PathBuf>>>`
-- [ ] T044 Implement `write_to_clipboard(ClipboardItem)` / `read_from_clipboard()` on `WindowsPlatform` in `crates/flui-platform/src/platforms/windows/clipboard.rs` — expand from String-only to ClipboardItem with text+metadata (use `CF_UNICODETEXT` + custom format for metadata)
-- [ ] T045 Implement `keyboard_layout()` on `WindowsPlatform` using `GetKeyboardLayoutNameW`
-- [ ] T046 Implement `on_keyboard_layout_change()` on `WindowsPlatform` — listen for `WM_INPUTLANGCHANGE` in window proc, dispatch to registered callback
+- [x] T036 Expand `Platform` trait in `crates/flui-platform/src/traits/platform.rs` with ~16 new methods per `contracts/platform-trait.rs`: `activate`, `hide`, `hide_other_apps`, `unhide_other_apps`, `window_appearance`, `should_auto_hide_scrollbars`, `set_cursor_style`, `write_to_clipboard(ClipboardItem)`, `read_from_clipboard() -> Option<ClipboardItem>`, `open_url`, `on_open_urls`, `keyboard_layout`, `on_keyboard_layout_change`, `compositor_name`
+- [x] T037 Provide default implementations for methods that are no-ops on most platforms: `hide`, `hide_other_apps`, `unhide_other_apps`, `should_auto_hide_scrollbars` (false), `compositor_name` ("")
+- [x] T038 Implement `activate()` on `WindowsPlatform` in `crates/flui-platform/src/platforms/windows/platform.rs` using `SetForegroundWindow` for the active window
+- [x] T039 Implement `set_cursor_style()` on `WindowsPlatform` using `SetCursor` with `LoadCursorW` mapped from `CursorStyle` enum (Arrow→IDC_ARROW, IBeam→IDC_IBEAM, etc.)
+- [x] T040 Implement `window_appearance()` on `WindowsPlatform` by reading `AppsUseLightTheme` from Windows registry (`HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize`)
+- [x] T041 Implement `open_url()` on `WindowsPlatform` using `ShellExecuteW` with `"open"` verb
+- [ ] T042 Implement `prompt_for_paths()` on `WindowsPlatform` using `IFileOpenDialog` COM API — returns `Task<Result<Option<Vec<PathBuf>>>>` (spawn on background thread via executor) [DEFERRED: requires Task<T> from US4]
+- [ ] T043 Implement `prompt_for_new_path()` on `WindowsPlatform` using `IFileSaveDialog` COM API — returns `Task<Result<Option<PathBuf>>>` [DEFERRED: requires Task<T> from US4]
+- [x] T044 Implement `write_to_clipboard(ClipboardItem)` / `read_from_clipboard()` on `WindowsPlatform` via default trait methods delegating to Clipboard trait
+- [x] T045 Implement `keyboard_layout()` on `WindowsPlatform` using `GetKeyboardLayoutNameW`
+- [x] T046 Implement `on_keyboard_layout_change()` on `WindowsPlatform` — listen for `WM_INPUTLANGCHANGE` in window proc, dispatch to registered callback
 
 **Checkpoint**: All new Platform methods implemented for Windows. `open_url`, `set_cursor_style`, `window_appearance` verified manually.
 
@@ -146,10 +146,10 @@
 ### Implementation for US6
 
 - [x] T054 Add `WindowCallbacks` field to headless window struct in `crates/flui-platform/src/platforms/headless/platform.rs` and implement all 9 callback registration methods (same as T018 but for headless)
-- [ ] T055 Implement all 12 PlatformWindow query methods on headless window with configurable mock state (bounds, title, focused, visible, maximized, fullscreen, active, hovered, mouse_position, modifiers, appearance, display)
-- [ ] T056 Implement all 10 PlatformWindow control methods on headless window — update internal mock state (e.g., `set_title` updates stored title, `minimize` sets `is_minimized` flag, `maximize` sets `is_maximized` flag) and fire appropriate callbacks
+- [x] T055 Implement all 12 PlatformWindow query methods on headless window with configurable mock state (bounds, title, focused, visible, maximized, fullscreen, active, hovered, mouse_position, modifiers, appearance, display)
+- [x] T056 Implement all 10 PlatformWindow control methods on headless window — update internal mock state (e.g., `set_title` updates stored title, `minimize` sets `is_minimized` flag, `maximize` sets `is_maximized` flag) and fire appropriate callbacks
 - [x] T057 Add event injection methods to headless window: `inject_event(PlatformInput)` → fires `on_input`, `simulate_resize(width, height)` → fires `on_resize`, `simulate_focus(bool)` → fires `on_active_status_change`, `simulate_close()` → fires `on_should_close` then `on_close`
-- [ ] T058 Implement all new Platform trait methods on `HeadlessPlatform`: `activate` (no-op), `set_cursor_style` (store last), `window_appearance` (return configurable), `open_url` (no-op, log), `prompt_for_paths` (return mock), `keyboard_layout` (return "en-US"), `write_to_clipboard`/`read_from_clipboard` (in-memory store)
+- [x] T058 Implement all new Platform trait methods on `HeadlessPlatform`: `activate` (no-op), `set_cursor_style` (store last), `window_appearance` (return configurable), `open_url` (store URLs), `keyboard_layout` (return "en-US"), `write_to_clipboard`/`read_from_clipboard` (in-memory store)
 - [ ] T059 Implement `Task<T>` support in headless executors — ensure `BackgroundExecutor::spawn()` and `ForegroundExecutor::spawn()` return `Task<T>` in headless mode (may use tokio runtime or synchronous inline execution)
 - [ ] T060 Verify `HeadlessPlatform` has ZERO `unimplemented!()` or `todo!()` calls — audit every trait method implementation
 

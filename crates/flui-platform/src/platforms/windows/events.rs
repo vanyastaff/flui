@@ -259,7 +259,7 @@ pub fn key_down_event(wparam: WPARAM, lparam: LPARAM) -> PlatformInput {
 
     PlatformInput::Keyboard(KeyboardEvent {
         key,
-        modifiers: modifiers.into(),
+        modifiers,
         is_down: true,
         is_repeat,
     })
@@ -275,7 +275,7 @@ pub fn key_up_event(wparam: WPARAM, lparam: LPARAM) -> PlatformInput {
 
     PlatformInput::Keyboard(KeyboardEvent {
         key,
-        modifiers: modifiers.into(),
+        modifiers,
         is_down: false,
         is_repeat: false,
     })

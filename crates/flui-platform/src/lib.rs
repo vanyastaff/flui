@@ -146,6 +146,7 @@
 //! ```
 
 pub mod config;
+pub mod cursor;
 pub mod executor;
 pub mod platforms;
 pub mod shared;
@@ -160,12 +161,15 @@ pub use executor::{BackgroundExecutor, ForegroundExecutor};
 
 // Re-export core traits
 pub use traits::{
-    Clipboard, DefaultLifecycle, DesktopCapabilities, DispatchEventResult, DisplayId,
-    GlyphPosition, LifecycleEvent, LifecycleState, MobileCapabilities, Platform,
+    Clipboard, ClipboardItem, DefaultLifecycle, DesktopCapabilities, DispatchEventResult,
+    DisplayId, GlyphPosition, LifecycleEvent, LifecycleState, MobileCapabilities, Platform,
     PlatformCapabilities, PlatformDisplay, PlatformEmbedder, PlatformExecutor, PlatformLifecycle,
     PlatformTextSystem, PlatformWindow, TextSystemError, WebCapabilities, WindowAppearance,
     WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId, WindowMode, WindowOptions,
 };
+
+// Re-export cursor types
+pub use cursor::CursorStyle;
 
 // Re-export platform implementations
 pub use platforms::HeadlessPlatform;

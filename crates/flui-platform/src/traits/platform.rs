@@ -3,7 +3,9 @@
 //! Defines the central Platform trait that all platform implementations must provide.
 //! This trait serves as the main interface between the FLUI framework and platform-specific code.
 
+use super::window::WindowAppearance;
 use super::{PlatformCapabilities, PlatformDisplay, PlatformWindow};
+use crate::cursor::CursorStyle;
 use anyhow::Result;
 use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
 use std::path::{Path, PathBuf};
@@ -67,9 +69,10 @@ impl Default for WindowOptions {
 ///     _ => {}
 /// }
 /// ```
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum WindowMode {
     /// Normal windowed state
+    #[default]
     Normal,
 
     /// Window is minimized (iconified)
@@ -130,12 +133,6 @@ impl WindowMode {
     pub fn can_transition_to(&self, new_mode: &WindowMode) -> bool {
         // All transitions allowed except same state
         !std::mem::discriminant(self).eq(&std::mem::discriminant(new_mode))
-    }
-}
-
-impl Default for WindowMode {
-    fn default() -> Self {
-        WindowMode::Normal
     }
 }
 
@@ -236,13 +233,88 @@ pub trait Platform: Send + Sync + 'static {
     /// Get the platform's clipboard interface
     fn clipboard(&self) -> Arc<dyn Clipboard>;
 
-    // ==================== Platform Capabilities ====================
+    // ==================== App Activation (US3) ====================
 
-    /// Get the platform's capabilities descriptor
-    fn capabilities(&self) -> &dyn PlatformCapabilities;
+    /// Activate the application (bring to front)
+    ///
+    /// On Windows: brings the active window to the foreground.
+    /// On macOS: activates the app via NSApp.
+    fn activate(&self, ignoring_other_apps: bool) {
+        let _ = ignoring_other_apps;
+    }
 
-    /// Get the platform's name for debugging/logging
-    fn name(&self) -> &'static str;
+    /// Hide the application
+    fn hide(&self) {}
+
+    /// Hide all other applications
+    fn hide_other_apps(&self) {}
+
+    /// Unhide all other applications
+    fn unhide_other_apps(&self) {}
+
+    // ==================== Appearance (US3) ====================
+
+    /// Get the system window appearance (light/dark theme)
+    fn window_appearance(&self) -> WindowAppearance {
+        WindowAppearance::default()
+    }
+
+    /// Whether scrollbars should auto-hide
+    fn should_auto_hide_scrollbars(&self) -> bool {
+        false
+    }
+
+    // ==================== Cursor (US3) ====================
+
+    /// Set the platform cursor style
+    fn set_cursor_style(&self, style: CursorStyle) {
+        let _ = style;
+    }
+
+    // ==================== Clipboard (US3 Enhanced) ====================
+
+    /// Write a rich clipboard item (text + metadata)
+    fn write_to_clipboard(&self, item: ClipboardItem) {
+        // Default: write first text entry via existing Clipboard trait
+        if let Some(text) = item.text_content() {
+            self.clipboard().write_text(text.to_string());
+        }
+    }
+
+    /// Read a rich clipboard item
+    fn read_from_clipboard(&self) -> Option<ClipboardItem> {
+        // Default: read via existing Clipboard trait
+        self.clipboard().read_text().map(ClipboardItem::text)
+    }
+
+    // ==================== File Operations (US3) ====================
+
+    /// Open a URL with the system's default handler
+    fn open_url(&self, url: &str) {
+        let _ = url;
+    }
+
+    /// Reveal a path in the platform's file manager
+    fn reveal_path(&self, path: &Path) {
+        let _ = path;
+    }
+
+    /// Open a path with the system's default application
+    fn open_path(&self, path: &Path) {
+        let _ = path;
+    }
+
+    // ==================== Keyboard (US3) ====================
+
+    /// Get the current keyboard layout identifier
+    fn keyboard_layout(&self) -> String {
+        String::new()
+    }
+
+    /// Register a callback for keyboard layout changes
+    fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut() + Send>) {
+        let _ = callback;
+    }
 
     // ==================== Callbacks ====================
 
@@ -251,23 +323,28 @@ pub trait Platform: Send + Sync + 'static {
 
     /// Register a callback for when the application is reopened (macOS)
     fn on_reopen(&self, callback: Box<dyn FnMut() + Send>) {
-        // Default: no-op (desktop platforms don't support this)
         let _ = callback;
     }
 
     /// Register a callback for window events
     fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>);
 
-    // ==================== File System Integration ====================
-
-    /// Reveal a path in the platform's file manager
-    fn reveal_path(&self, path: &Path) {
-        let _ = path; // Default: no-op
+    /// Register a callback for URLs opened by the system
+    fn on_open_urls(&self, callback: Box<dyn FnMut(Vec<String>) + Send>) {
+        let _ = callback;
     }
 
-    /// Open a path with the system's default application
-    fn open_path(&self, path: &Path) {
-        let _ = path; // Default: no-op
+    // ==================== Platform Info ====================
+
+    /// Get the platform's capabilities descriptor
+    fn capabilities(&self) -> &dyn PlatformCapabilities;
+
+    /// Get the platform's name for debugging/logging
+    fn name(&self) -> &'static str;
+
+    /// Get the compositor name (e.g., "DWM" on Windows)
+    fn compositor_name(&self) -> &'static str {
+        ""
     }
 
     /// Get the application's executable path
@@ -538,12 +615,7 @@ pub trait PlatformTextSystem: Send + Sync {
     ///
     /// - Windows: `IDWriteTextAnalyzer::GetGlyphs()` + `GetGlyphPlacements()`
     /// - macOS: `CTLineGetGlyphRuns()` → `CTRunGetGlyphs()` + positions
-    fn shape_glyphs(
-        &self,
-        text: &str,
-        font_family: &str,
-        font_size: f32,
-    ) -> Vec<GlyphPosition> {
+    fn shape_glyphs(&self, text: &str, font_family: &str, font_size: f32) -> Vec<GlyphPosition> {
         let _ = (text, font_family, font_size);
 
         // MVP: Return empty - rendering will use fallback
@@ -618,5 +690,45 @@ pub trait Clipboard: Send + Sync {
     /// Check if clipboard has text
     fn has_text(&self) -> bool {
         self.read_text().is_some()
+    }
+}
+
+/// Rich clipboard item with text content and optional metadata
+///
+/// Wraps clipboard content for cross-platform exchange. Currently supports
+/// plain text; future versions will add images and custom MIME types.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClipboardItem {
+    /// Plain text content
+    text: Option<String>,
+    /// Optional metadata (e.g., source application, MIME type hints)
+    metadata: Option<String>,
+}
+
+impl ClipboardItem {
+    /// Create a clipboard item from plain text
+    pub fn text(content: String) -> Self {
+        Self {
+            text: Some(content),
+            metadata: None,
+        }
+    }
+
+    /// Create a clipboard item with text and metadata
+    pub fn with_metadata(content: String, metadata: String) -> Self {
+        Self {
+            text: Some(content),
+            metadata: Some(metadata),
+        }
+    }
+
+    /// Get the text content, if any
+    pub fn text_content(&self) -> Option<&str> {
+        self.text.as_deref()
+    }
+
+    /// Get the metadata, if any
+    pub fn metadata(&self) -> Option<&str> {
+        self.metadata.as_deref()
     }
 }

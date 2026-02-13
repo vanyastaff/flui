@@ -47,8 +47,8 @@ pub use input::{
 pub use keyboard_types::NamedKey;
 pub use lifecycle::{DefaultLifecycle, LifecycleEvent, LifecycleState, PlatformLifecycle};
 pub use platform::{
-    Clipboard, GlyphPosition, Platform, PlatformExecutor, PlatformTextSystem, TextSystemError,
-    WindowEvent, WindowId, WindowMode, WindowOptions,
+    Clipboard, ClipboardItem, GlyphPosition, Platform, PlatformExecutor, PlatformTextSystem,
+    TextSystemError, WindowEvent, WindowId, WindowMode, WindowOptions,
 };
 pub use window::{PlatformWindow, WindowAppearance, WindowBackgroundAppearance, WindowBounds};
 
