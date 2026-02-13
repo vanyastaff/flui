@@ -125,6 +125,9 @@ pub use element::{
     SizeChangedNotification,
 };
 
+// Behavior types
+pub use element::{StatefulBehavior, StatelessBehavior};
+
 // Root element
 pub use element::{RootElement, RootElementImpl};
 

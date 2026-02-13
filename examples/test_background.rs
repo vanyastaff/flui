@@ -5,15 +5,15 @@
 
 #![cfg(target_os = "windows")]
 
-use flui_platform::traits::{Platform, PlatformWindow};
-use flui_platform::{WindowOptions, WindowsPlatform};
+use flui_platform::{Platform, WindowOptions, WindowsPlatform};
 use flui_types::geometry::{px, Size};
+use std::sync::Arc;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🧪 Testing Background Handling");
+    println!("Testing Background Handling");
     println!();
 
-    let platform = WindowsPlatform::new()?;
+    let platform: Arc<dyn Platform> = Arc::new(WindowsPlatform::new()?);
 
     let options = WindowOptions {
         title: "Background Test - Should be BLACK not white".to_string(),
@@ -25,18 +25,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         max_size: None,
     };
 
-    let window = platform.open_window(options)?;
+    let platform_clone = platform.clone();
 
-    println!("✅ Window created");
-    println!();
-    println!("If background is:");
-    println!("  - WHITE = WM_ERASEBKGND not working (Windows default)");
-    println!("  - BLACK = WM_ERASEBKGND working! (no background drawn)");
-    println!();
-    println!("Close window to exit");
-
-    platform.run(Box::new(|| {
-        println!("Platform ready!");
+    platform.run(Box::new(move || {
+        match platform_clone.open_window(options) {
+            Ok(_window) => {
+                println!("Window created");
+                println!();
+                println!("If background is:");
+                println!("  - WHITE = WM_ERASEBKGND not working (Windows default)");
+                println!("  - BLACK = WM_ERASEBKGND working! (no background drawn)");
+                println!();
+                println!("Window will stay open for 10 seconds...");
+                std::thread::sleep(std::time::Duration::from_secs(10));
+            }
+            Err(e) => {
+                eprintln!("Failed to create window: {}", e);
+            }
+        }
+        platform_clone.quit();
     }));
 
     Ok(())

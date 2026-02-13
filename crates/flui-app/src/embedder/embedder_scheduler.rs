@@ -12,6 +12,8 @@ use std::sync::{
 };
 
 /// Scheduler statistics snapshot
+// TODO: Will be used when EmbedderScheduler is integrated into the app binding
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct SchedulerStats {
     /// Target frames per second
@@ -33,6 +35,8 @@ pub struct SchedulerStats {
 ///
 /// This is embedder-specific glue code, not to be confused with
 /// `flui_scheduler::SchedulerBinding` trait.
+// TODO: Will be used when runner.rs switches from direct Scheduler calls to EmbedderScheduler
+#[allow(dead_code)]
 pub struct EmbedderScheduler {
     scheduler: Arc<Scheduler>,
     current_frame: u64,
@@ -46,6 +50,7 @@ impl std::fmt::Debug for EmbedderScheduler {
     }
 }
 
+#[allow(dead_code)]
 impl EmbedderScheduler {
     /// Create a new embedder scheduler
     pub fn new(scheduler: Arc<Scheduler>) -> Self {

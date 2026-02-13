@@ -253,6 +253,8 @@ mod tests {
     use super::*;
     use flui_view::{BuildContext, View};
 
+    // TODO: Will be used in future integration tests for run_app_impl
+    #[allow(dead_code)]
     #[derive(Clone)]
     struct TestView;
 

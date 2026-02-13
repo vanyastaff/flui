@@ -17,8 +17,8 @@ use flui_platform::{current_platform, WindowOptions};
 use flui_types::geometry::{px, Size};
 
 fn main() -> anyhow::Result<()> {
-    println!("🪟 FLUI Window Features Demo");
-    println!("═══════════════════════════════");
+    println!("FLUI Window Features Demo");
+    println!("=========================");
     println!();
 
     // Initialize logging
@@ -26,14 +26,14 @@ fn main() -> anyhow::Result<()> {
         .with_max_level(tracing::Level::DEBUG)
         .init();
 
-    let platform = current_platform();
+    let platform = current_platform()?;
     println!("Platform: {}", platform.name());
     println!("OS: {}", std::env::consts::OS);
     println!();
 
     // Display information
     let displays = platform.displays();
-    println!("📺 Displays:");
+    println!("Displays:");
     for (i, display) in displays.iter().enumerate() {
         println!(
             "  {}. {} - {}x{} @ {:.1}x",
@@ -63,7 +63,7 @@ fn main() -> anyhow::Result<()> {
     platform.run(Box::new(move || {
         match platform_clone.open_window(window_options) {
             Ok(window) => {
-                println!("✅ Window created!");
+                println!("Window created!");
                 println!();
                 println!("Window Information:");
                 println!("  Logical size:  {:?}", window.logical_size());
@@ -78,7 +78,7 @@ fn main() -> anyhow::Result<()> {
                 println!();
 
                 // Test window states
-                println!("1️⃣  Testing window states...");
+                println!("1. Testing window states...");
                 std::thread::sleep(std::time::Duration::from_secs(2));
 
                 // Note: Actual state changes would require mutable access
@@ -89,8 +89,8 @@ fn main() -> anyhow::Result<()> {
                 // Platform-specific features
                 #[cfg(target_os = "windows")]
                 {
-                    use flui_platform::windows::WindowsWindowExt;
-                    println!("🪟 Windows-specific features available:");
+                    // WindowsWindowExt is available for concrete WindowsWindow
+                    println!("Windows-specific features available:");
                     println!("   - Mica backdrop");
                     println!("   - Snap Layouts");
                     println!("   - Rounded corners");
@@ -101,8 +101,7 @@ fn main() -> anyhow::Result<()> {
 
                 #[cfg(target_os = "macos")]
                 {
-                    use flui_platform::macos::MacOSWindowExt;
-                    println!("🍎 macOS-specific features available:");
+                    println!("macOS-specific features available:");
                     println!("   - Liquid Glass materials");
                     println!("   - Window tiling (Sequoia 15+)");
                     println!("   - Tabbed windows");
@@ -113,8 +112,7 @@ fn main() -> anyhow::Result<()> {
 
                 #[cfg(target_os = "linux")]
                 {
-                    use flui_platform::linux::LinuxWindowExt;
-                    println!("🐧 Linux-specific features available:");
+                    println!("Linux-specific features available:");
                     println!("   - Wayland layer surfaces");
                     println!("   - X11 window hints");
                     println!("   - Client/server decorations");
@@ -128,13 +126,13 @@ fn main() -> anyhow::Result<()> {
                 println!("Closing window...");
             }
             Err(e) => {
-                eprintln!("❌ Failed to create window: {}", e);
+                eprintln!("Failed to create window: {}", e);
             }
         }
 
         platform_clone.quit();
     }));
 
-    println!("👋 Demo finished!");
+    println!("Demo finished!");
     Ok(())
 }

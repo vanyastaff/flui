@@ -2,7 +2,6 @@
 //!
 //! Run with: cargo run --example profiler_demo
 
-use flui_devtools::prelude::*;
 use flui_devtools::profiler::{FramePhase, Profiler};
 use std::thread;
 use std::time::Duration;

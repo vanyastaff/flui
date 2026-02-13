@@ -5,8 +5,8 @@
 
 use flui_foundation::ElementId;
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementTree, Lifecycle, StatelessBehavior,
-    StatelessElement, StatelessView, View,
+    BuildContext, BuildOwner, ElementBase, ElementTree, StatelessBehavior, StatelessElement,
+    StatelessView, View,
 };
 use std::any::TypeId;
 
