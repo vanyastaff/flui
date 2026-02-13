@@ -439,16 +439,153 @@ pub trait PlatformExecutor: Send + Sync {
     }
 }
 
-/// Platform text rendering system
-///
-/// This trait will be expanded later - for now it's a placeholder.
-/// Real implementation will handle font loading, text shaping, etc.
+// ==================== Font Types (US5) ====================
+
+/// Unique identifier for a loaded font face
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FontId(pub usize);
+
+/// Unique identifier for a glyph within a font
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GlyphId(pub u32);
+
+/// Font descriptor for resolving a specific font face
+#[derive(Debug, Clone)]
+pub struct Font {
+    /// Font family name (e.g., "Segoe UI", "Arial")
+    pub family: String,
+    /// Font weight (Normal, Bold, etc.)
+    pub weight: FontWeight,
+    /// Font style (Normal, Italic, Oblique)
+    pub style: FontStyle,
+}
+
+/// Font weight variants
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum FontWeight {
+    /// Thin (100)
+    Thin,
+    /// Light (300)
+    Light,
+    /// Normal/Regular (400)
+    #[default]
+    Normal,
+    /// Medium (500)
+    Medium,
+    /// SemiBold (600)
+    SemiBold,
+    /// Bold (700)
+    Bold,
+    /// ExtraBold (800)
+    ExtraBold,
+    /// Black (900)
+    Black,
+}
+
+impl FontWeight {
+    /// Convert to DirectWrite/CSS numeric weight
+    pub fn to_numeric(self) -> u16 {
+        match self {
+            FontWeight::Thin => 100,
+            FontWeight::Light => 300,
+            FontWeight::Normal => 400,
+            FontWeight::Medium => 500,
+            FontWeight::SemiBold => 600,
+            FontWeight::Bold => 700,
+            FontWeight::ExtraBold => 800,
+            FontWeight::Black => 900,
+        }
+    }
+}
+
+/// Font style variants
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum FontStyle {
+    /// Upright (normal)
+    #[default]
+    Normal,
+    /// Italic
+    Italic,
+    /// Oblique (slanted)
+    Oblique,
+}
+
+/// A run of text with a specific font
+#[derive(Debug, Clone, Copy)]
+pub struct FontRun {
+    /// Font to use for this run
+    pub font_id: FontId,
+    /// Number of UTF-8 bytes in this run
+    pub len: usize,
+}
+
+/// Font metrics in design units
+#[derive(Debug, Clone, Copy)]
+pub struct FontMetrics {
+    /// Design units per em square
+    pub units_per_em: u16,
+    /// Ascent in design units (positive, above baseline)
+    pub ascent: f32,
+    /// Descent in design units (positive value, below baseline)
+    pub descent: f32,
+    /// Line gap in design units
+    pub line_gap: f32,
+    /// Underline position in design units (negative = below baseline)
+    pub underline_position: f32,
+    /// Underline thickness in design units
+    pub underline_thickness: f32,
+    /// Cap height in design units
+    pub cap_height: f32,
+    /// x-height in design units
+    pub x_height: f32,
+}
+
+/// Result of laying out a single line of text
+#[derive(Debug, Clone)]
+pub struct LineLayout {
+    /// Font size used for layout
+    pub font_size: f32,
+    /// Total width of the line in logical pixels
+    pub width: f32,
+    /// Ascent of the line in logical pixels
+    pub ascent: f32,
+    /// Descent of the line in logical pixels (positive value)
+    pub descent: f32,
+    /// Shaped glyph runs
+    pub runs: Vec<ShapedRun>,
+    /// Total number of UTF-8 bytes in the laid-out text
+    pub len: usize,
+}
+
+/// A run of shaped glyphs with a single font
+#[derive(Debug, Clone)]
+pub struct ShapedRun {
+    /// Font used for this run
+    pub font_id: FontId,
+    /// Shaped glyphs in this run
+    pub glyphs: Vec<ShapedGlyph>,
+}
+
+/// A single shaped glyph with position
+#[derive(Debug, Clone, Copy)]
+pub struct ShapedGlyph {
+    /// Glyph identifier in the font
+    pub id: GlyphId,
+    /// Horizontal position from line start (logical pixels)
+    pub position_x: f32,
+    /// Vertical position from baseline (logical pixels)
+    pub position_y: f32,
+    /// Index of the source character in the original text (byte offset)
+    pub index: usize,
+}
+
+// ==================== PlatformTextSystem Trait (US5) ====================
+
 /// Platform-native text measurement and glyph shaping abstraction
 ///
-/// This trait provides the minimal interface needed for text layout and rendering.
 /// Platform implementations use native APIs:
-/// - Windows: DirectWrite (IDWriteFactory, IDWriteTextLayout)
-/// - macOS: Core Text (CTFont, CTLine, CTRun)
+/// - Windows: DirectWrite (`IDWriteFactory5`, `IDWriteTextLayout`)
+/// - macOS: Core Text (`CTFont`, `CTLine`, `CTRun`)
 /// - Linux: fontconfig + freetype
 ///
 /// # Architecture
@@ -460,186 +597,38 @@ pub trait PlatformExecutor: Send + Sync {
 ///         ↓
 /// flui_painting → GPU rendering with wgpu
 /// ```
-///
-/// # MVP Status
-///
-/// Current implementation provides **stubs** that return reasonable defaults.
-/// Full DirectWrite/Core Text integration is deferred to Phase 2.
-///
-/// See `specs/dev/plan.md` for full architecture design.
 pub trait PlatformTextSystem: Send + Sync {
-    /// Get the system's default font family name
+    /// Load font data from raw bytes (TrueType/OpenType)
     ///
-    /// Returns the OS default font for UI text:
-    /// - Windows: "Segoe UI"
-    /// - macOS: "SF Pro Text" (or ".AppleSystemUIFont")
-    /// - Linux: "sans-serif" or "Ubuntu"
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let text_system = platform.text_system();
-    /// let default_font = text_system.default_font_family();
-    /// assert_eq!(default_font, "Segoe UI"); // On Windows
-    /// ```
-    fn default_font_family(&self) -> String {
-        #[cfg(windows)]
-        return "Segoe UI".to_string();
+    /// Registers custom font data with the platform's font system.
+    /// After loading, fonts can be resolved via `font_id()`.
+    fn add_fonts(&self, fonts: Vec<std::borrow::Cow<'static, [u8]>>) -> anyhow::Result<()>;
 
-        #[cfg(target_os = "macos")]
-        return "SF Pro Text".to_string();
+    /// List all available font family names
+    ///
+    /// Returns names from both system fonts and custom-loaded fonts.
+    fn all_font_names(&self) -> Vec<String>;
 
-        #[cfg(target_os = "linux")]
-        return "Ubuntu".to_string();
+    /// Resolve a font descriptor to a FontId
+    ///
+    /// Matches the requested family/weight/style to the closest available font.
+    fn font_id(&self, descriptor: &Font) -> anyhow::Result<FontId>;
 
-        #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
-        return "sans-serif".to_string();
-    }
+    /// Get metrics for a loaded font
+    ///
+    /// Returns design-unit metrics (ascent, descent, line gap, etc.).
+    fn font_metrics(&self, font_id: FontId) -> FontMetrics;
 
-    /// Enumerate all available system fonts
+    /// Map a character to its glyph ID in a font
     ///
-    /// Returns a list of font family names installed on the system.
-    /// Used for font pickers and fallback chains.
-    ///
-    /// # Implementation Status
-    ///
-    /// **MVP**: Returns only the default font.
-    /// **Phase 2**: Query DirectWrite/Core Text for full font list.
-    ///
-    /// # Platform APIs
-    ///
-    /// - Windows: `IDWriteFontCollection::GetFontFamilyCount()` + iterate
-    /// - macOS: `CTFontManagerCopyAvailableFontFamilyNames()`
-    /// - Linux: `FcConfigGetFonts()` from fontconfig
-    fn enumerate_system_fonts(&self) -> Vec<String> {
-        vec![self.default_font_family()]
-    }
+    /// Returns `None` if the font does not contain a glyph for this character.
+    fn glyph_for_char(&self, font_id: FontId, ch: char) -> Option<GlyphId>;
 
-    /// Load a system font by family name
+    /// Layout a single line of text with font runs
     ///
-    /// Returns the raw font file bytes (TrueType or OpenType) for the given
-    /// font family. This allows flui-text to register system fonts with
-    /// cosmic-text or other text engines.
-    ///
-    /// # Arguments
-    ///
-    /// * `family` - Font family name (e.g., "Arial", "SF Pro Text")
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(Vec<u8>)` - Raw .ttf or .otf file bytes
-    /// * `Err(TextSystemError)` - Font not found or access error
-    ///
-    /// # Implementation Status
-    ///
-    /// **MVP**: Returns `Err(TextSystemError::NotImplemented)`.
-    /// **Phase 2**: Extract font data from DirectWrite/Core Text.
-    ///
-    /// # Platform APIs
-    ///
-    /// - Windows: `IDWriteFont::CreateFontFace()` → `GetFiles()` → read
-    /// - macOS: `CTFontCopyTable()` to extract OpenType tables
-    /// - Linux: `FcConfigSubstitute()` → `FcFontMatch()` → read file path
-    fn load_system_font(&self, family: &str) -> Result<Vec<u8>, TextSystemError> {
-        let _ = family;
-        Err(TextSystemError::NotImplemented)
-    }
-
-    /// Measure text bounding box
-    ///
-    /// Calculates the layout bounds for the given text string with specified
-    /// font and size. Used by layout engine to determine widget sizes.
-    ///
-    /// # Arguments
-    ///
-    /// * `text` - Text to measure (UTF-8, may contain emoji/CJK)
-    /// * `font_family` - Font family name
-    /// * `font_size` - Font size in logical pixels
-    ///
-    /// # Returns
-    ///
-    /// Rectangle containing the text bounds in logical pixels.
-    /// Origin (0, 0) is at the baseline start.
-    ///
-    /// # Implementation Status
-    ///
-    /// **MVP**: Returns approximate bounds (10px per character).
-    /// **Phase 2**: Use DirectWrite/Core Text for accurate measurement.
-    ///
-    /// # Platform APIs
-    ///
-    /// - Windows: `IDWriteTextLayout::GetMetrics()`
-    /// - macOS: `CTLineGetBounds()` or `CTLineGetTypographicBounds()`
-    fn measure_text(
-        &self,
-        text: &str,
-        font_family: &str,
-        font_size: f32,
-    ) -> flui_types::geometry::Rect<flui_types::geometry::Pixels> {
-        let _ = font_family;
-
-        use flui_types::geometry::{px, Point, Rect, Size};
-
-        // Approximate: 0.6em per character width (typical for Latin text)
-        let char_count = text.chars().count() as f32;
-        let approx_width = char_count * font_size * 0.6;
-        let approx_height = font_size * 1.2; // Include line height
-
-        Rect::from_origin_size(
-            Point::new(px(0.0), px(0.0)),
-            Size::new(px(approx_width), px(approx_height)),
-        )
-    }
-
-    /// Shape text to positioned glyphs
-    ///
-    /// Converts text string to a list of glyphs with positions, ready for
-    /// rendering. Handles complex text layout (ligatures, kerning, etc.).
-    ///
-    /// # Arguments
-    ///
-    /// * `text` - Text to shape (UTF-8, may contain emoji/CJK/RTL)
-    /// * `font_family` - Font family name
-    /// * `font_size` - Font size in logical pixels
-    ///
-    /// # Returns
-    ///
-    /// Vector of positioned glyphs with glyph IDs and offsets.
-    ///
-    /// # Implementation Status
-    ///
-    /// **MVP**: Returns empty vector (no glyph data).
-    /// **Phase 2**: Use DirectWrite/Core Text for glyph shaping.
-    ///
-    /// # Platform APIs
-    ///
-    /// - Windows: `IDWriteTextAnalyzer::GetGlyphs()` + `GetGlyphPlacements()`
-    /// - macOS: `CTLineGetGlyphRuns()` → `CTRunGetGlyphs()` + positions
-    fn shape_glyphs(&self, text: &str, font_family: &str, font_size: f32) -> Vec<GlyphPosition> {
-        let _ = (text, font_family, font_size);
-
-        // MVP: Return empty - rendering will use fallback
-        Vec::new()
-    }
-}
-
-/// Positioned glyph for rendering
-///
-/// Represents a single glyph with its position offset from the text origin.
-/// Coordinates are in logical pixels.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct GlyphPosition {
-    /// Glyph ID from the font (index into glyph table)
-    pub glyph_id: u32,
-
-    /// Horizontal offset from text origin (logical pixels)
-    pub x_offset: f32,
-
-    /// Vertical offset from text origin (logical pixels)
-    pub y_offset: f32,
-
-    /// Advance width to next glyph (logical pixels)
-    pub x_advance: f32,
+    /// Shapes text into positioned glyphs, handling kerning and ligatures.
+    /// Each `FontRun` specifies a font and byte length for a segment of text.
+    fn layout_line(&self, text: &str, font_size: f32, runs: &[FontRun]) -> LineLayout;
 }
 
 /// Text system errors

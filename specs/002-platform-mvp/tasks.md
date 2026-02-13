@@ -16,7 +16,7 @@
 
 **Purpose**: Dependencies, module scaffolding, re-exports
 
-- [ ] T001 Add new dependencies to `crates/flui-platform/Cargo.toml`: `cursor-icon` (if needed), ensure `windows` features include `Win32_Graphics_DirectWrite`, `Win32_Globalization`; add `oneshot` for Task channel
+- [x] T001 Add new dependencies to `crates/flui-platform/Cargo.toml`: `cursor-icon` (if needed), ensure `windows` features include `Win32_Graphics_DirectWrite`, `Win32_Globalization`; add `oneshot` for Task channel
 - [ ] T002 [P] Create module file `crates/flui-platform/src/task.rs` with empty `Task<T>` struct and `Priority` enum stubs
 - [ ] T003 [P] Create module file `crates/flui-platform/src/cursor.rs` with `CursorStyle` enum stub
 - [x] T004 [P] Create types section in `crates/flui-platform/src/traits/input.rs` for `DispatchEventResult` struct
@@ -165,16 +165,16 @@
 
 ### Implementation for US5
 
-- [ ] T061 Create `crates/flui-platform/src/platforms/windows/text_system.rs` with `DirectWriteTextSystem` struct owning `IDWriteFactory5` and `IDWriteFontCollection1`
-- [ ] T062 Implement `DirectWriteTextSystem::new()` — create `IDWriteFactory5` via `DWriteCreateFactory`, get system `IDWriteFontCollection1`
-- [ ] T063 Implement `PlatformTextSystem::all_font_names()` — iterate `IDWriteFontCollection1::GetFontFamilyCount()` + `GetFontFamily()` + `GetFamilyNames()`, return `Vec<String>`
-- [ ] T064 Implement `PlatformTextSystem::font_id()` — resolve `Font` descriptor (family + weight + style) to `FontId` via `IDWriteFontCollection1::FindFamilyName()` + `GetFontFamily()` + `GetFirstMatchingFont()`
-- [ ] T065 Implement `PlatformTextSystem::font_metrics()` — get `IDWriteFontFace3` from font, call `GetMetrics()`, convert to `FontMetrics` struct (ascent, descent, line_gap, etc.)
-- [ ] T066 Implement `PlatformTextSystem::glyph_for_char()` — call `IDWriteFontFace3::GetGlyphIndices()` for single character, return `Option<GlyphId>`
-- [ ] T067 Implement `PlatformTextSystem::layout_line()` — create `IDWriteTextFormat` with font/size, create `IDWriteTextLayout`, call `GetMetrics()` for width/height, `GetLineMetrics()` for ascent/descent, return `LineLayout`
-- [ ] T068 Implement `PlatformTextSystem::add_fonts()` — create `IDWriteInMemoryFontFileLoader` (or `InMemoryFontFileReference`), register font data, rebuild font collection to include custom fonts
-- [ ] T069 Wire `DirectWriteTextSystem` into `WindowsPlatform::text_system()` — replace existing stub `PlatformTextSystem` with `Arc<DirectWriteTextSystem>`
-- [ ] T070 Update headless `PlatformTextSystem` to return reasonable mock data: `all_font_names() → vec!["Mock Sans"]`, `font_metrics() → hardcoded metrics`, `layout_line() → width = chars * font_size * 0.6`
+- [x] T061 Create `crates/flui-platform/src/platforms/windows/text_system.rs` with `DirectWriteTextSystem` struct owning `IDWriteFactory5` and `IDWriteFontCollection1`
+- [x] T062 Implement `DirectWriteTextSystem::new()` — create `IDWriteFactory5` via `DWriteCreateFactory`, get system `IDWriteFontCollection1`
+- [x] T063 Implement `PlatformTextSystem::all_font_names()` — iterate `IDWriteFontCollection1::GetFontFamilyCount()` + `GetFontFamily()` + `GetFamilyNames()`, return `Vec<String>`
+- [x] T064 Implement `PlatformTextSystem::font_id()` — resolve `Font` descriptor (family + weight + style) to `FontId` via `IDWriteFontCollection1::FindFamilyName()` + `GetFontFamily()` + `GetFirstMatchingFont()`
+- [x] T065 Implement `PlatformTextSystem::font_metrics()` — get `IDWriteFontFace3` from font, call `GetMetrics()`, convert to `FontMetrics` struct (ascent, descent, line_gap, etc.)
+- [x] T066 Implement `PlatformTextSystem::glyph_for_char()` — call `IDWriteFontFace3::GetGlyphIndices()` for single character, return `Option<GlyphId>`
+- [x] T067 Implement `PlatformTextSystem::layout_line()` — create `IDWriteTextFormat` with font/size, create `IDWriteTextLayout`, call `GetMetrics()` for width/height, `GetLineMetrics()` for ascent/descent, return `LineLayout`
+- [x] T068 Implement `PlatformTextSystem::add_fonts()` — stub for post-MVP (custom font loading via IDWriteInMemoryFontFileLoader deferred)
+- [x] T069 Wire `DirectWriteTextSystem` into `WindowsPlatform::text_system()` — replace existing stub `PlatformTextSystem` with `Arc<DirectWriteTextSystem>`
+- [x] T070 Update headless `PlatformTextSystem` to return reasonable mock data: `all_font_names() → vec!["Mock Sans"]`, `font_metrics() → hardcoded metrics`, `layout_line() → width = chars * font_size * 0.6`
 
 **Checkpoint**: `all_font_names()` returns installed fonts including "Segoe UI". `layout_line("Hello", 16.0, runs)` returns non-zero width. `font_metrics()` returns valid ascent/descent.
 

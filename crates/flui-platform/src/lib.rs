@@ -162,9 +162,10 @@ pub use executor::{BackgroundExecutor, ForegroundExecutor};
 // Re-export core traits
 pub use traits::{
     Clipboard, ClipboardItem, DefaultLifecycle, DesktopCapabilities, DispatchEventResult,
-    DisplayId, GlyphPosition, LifecycleEvent, LifecycleState, MobileCapabilities, Platform,
-    PlatformCapabilities, PlatformDisplay, PlatformEmbedder, PlatformExecutor, PlatformLifecycle,
-    PlatformTextSystem, PlatformWindow, TextSystemError, WebCapabilities, WindowAppearance,
+    DisplayId, Font, FontId, FontMetrics, FontRun, FontStyle, FontWeight, GlyphId, LifecycleEvent,
+    LifecycleState, LineLayout, MobileCapabilities, Platform, PlatformCapabilities,
+    PlatformDisplay, PlatformEmbedder, PlatformExecutor, PlatformLifecycle, PlatformTextSystem,
+    PlatformWindow, ShapedGlyph, ShapedRun, TextSystemError, WebCapabilities, WindowAppearance,
     WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId, WindowMode, WindowOptions,
 };
 
