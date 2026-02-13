@@ -164,6 +164,8 @@ impl WindowsWindow {
                 mode: std::cell::Cell::new(WindowMode::Normal),
                 last_size: std::cell::Cell::new(initial_size),
                 config,
+                is_hovered: std::cell::Cell::new(false),
+                modifiers: std::cell::Cell::new(keyboard_types::Modifiers::empty()),
             });
             let context_ptr = Box::into_raw(context);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, context_ptr as isize);
@@ -480,6 +482,74 @@ impl PlatformWindow for Arc<WindowsWindow> {
         PlatformWindow::is_visible(self.as_ref())
     }
 
+    // Query methods (US2)
+    fn bounds(&self) -> Bounds<Pixels> {
+        PlatformWindow::bounds(self.as_ref())
+    }
+    fn content_size(&self) -> Size<Pixels> {
+        PlatformWindow::content_size(self.as_ref())
+    }
+    fn window_bounds(&self) -> WindowBounds {
+        PlatformWindow::window_bounds(self.as_ref())
+    }
+    fn is_maximized(&self) -> bool {
+        PlatformWindow::is_maximized(self.as_ref())
+    }
+    fn is_fullscreen(&self) -> bool {
+        PlatformWindow::is_fullscreen(self.as_ref())
+    }
+    fn is_active(&self) -> bool {
+        PlatformWindow::is_active(self.as_ref())
+    }
+    fn is_hovered(&self) -> bool {
+        PlatformWindow::is_hovered(self.as_ref())
+    }
+    fn mouse_position(&self) -> Point<Pixels> {
+        PlatformWindow::mouse_position(self.as_ref())
+    }
+    fn modifiers(&self) -> keyboard_types::Modifiers {
+        PlatformWindow::modifiers(self.as_ref())
+    }
+    fn appearance(&self) -> WindowAppearance {
+        PlatformWindow::appearance(self.as_ref())
+    }
+    fn display(&self) -> Option<Arc<dyn PlatformDisplay>> {
+        PlatformWindow::display(self.as_ref())
+    }
+    fn get_title(&self) -> String {
+        PlatformWindow::get_title(self.as_ref())
+    }
+
+    // Control methods (US2)
+    fn set_title(&self, title: &str) {
+        PlatformWindow::set_title(self.as_ref(), title)
+    }
+    fn activate(&self) {
+        PlatformWindow::activate(self.as_ref())
+    }
+    fn minimize(&self) {
+        PlatformWindow::minimize(self.as_ref())
+    }
+    fn maximize(&self) {
+        PlatformWindow::maximize(self.as_ref())
+    }
+    fn restore(&self) {
+        PlatformWindow::restore(self.as_ref())
+    }
+    fn toggle_fullscreen(&self) {
+        PlatformWindow::toggle_fullscreen(self.as_ref())
+    }
+    fn resize(&self, size: Size<Pixels>) {
+        PlatformWindow::resize(self.as_ref(), size)
+    }
+    fn close(&self) {
+        PlatformWindow::close(self.as_ref())
+    }
+    fn set_background_appearance(&self, appearance: WindowBackgroundAppearance) {
+        PlatformWindow::set_background_appearance(self.as_ref(), appearance)
+    }
+
+    // Callbacks (US1)
     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult + Send>) {
         PlatformWindow::on_input(self.as_ref(), callback)
     }
@@ -552,6 +622,227 @@ impl PlatformWindow for WindowsWindow {
 
     fn is_visible(&self) -> bool {
         self.state.lock().visible
+    }
+
+    // ==================== Query Methods (US2) ====================
+
+    fn bounds(&self) -> Bounds<Pixels> {
+        self.state.lock().bounds
+    }
+
+    fn content_size(&self) -> Size<Pixels> {
+        unsafe {
+            let mut rect = RECT::default();
+            if GetClientRect(self.hwnd, &mut rect).is_ok() {
+                let scale = self.state.lock().scale_factor;
+                Size::new(
+                    px((rect.right - rect.left) as f32 / scale),
+                    px((rect.bottom - rect.top) as f32 / scale),
+                )
+            } else {
+                self.state.lock().bounds.size
+            }
+        }
+    }
+
+    fn window_bounds(&self) -> WindowBounds {
+        let bounds = self.bounds();
+        unsafe {
+            let ctx_ptr =
+                GetWindowLongPtrW(self.hwnd, GWLP_USERDATA) as *mut super::platform::WindowContext;
+            if !ctx_ptr.is_null() {
+                let ctx = &*ctx_ptr;
+                if ctx.mode.get().is_fullscreen() {
+                    return WindowBounds::Fullscreen(bounds);
+                }
+            }
+        }
+        if PlatformWindow::is_maximized(self) {
+            WindowBounds::Maximized(bounds)
+        } else {
+            WindowBounds::Windowed(bounds)
+        }
+    }
+
+    fn is_maximized(&self) -> bool {
+        unsafe { IsZoomed(self.hwnd).as_bool() }
+    }
+
+    fn is_fullscreen(&self) -> bool {
+        // Delegate to the existing method on WindowsWindow
+        WindowsWindow::is_fullscreen(self)
+    }
+
+    fn is_active(&self) -> bool {
+        unsafe { GetForegroundWindow() == self.hwnd }
+    }
+
+    fn is_hovered(&self) -> bool {
+        unsafe {
+            let ctx_ptr =
+                GetWindowLongPtrW(self.hwnd, GWLP_USERDATA) as *mut super::platform::WindowContext;
+            if ctx_ptr.is_null() {
+                return false;
+            }
+            (*ctx_ptr).is_hovered.get()
+        }
+    }
+
+    fn mouse_position(&self) -> Point<Pixels> {
+        unsafe {
+            let mut cursor_pos = POINT::default();
+            if GetCursorPos(&mut cursor_pos).is_ok()
+                && ScreenToClient(self.hwnd, &mut cursor_pos).as_bool()
+            {
+                let scale = self.state.lock().scale_factor;
+                Point::new(
+                    px(cursor_pos.x as f32 / scale),
+                    px(cursor_pos.y as f32 / scale),
+                )
+            } else {
+                Point::default()
+            }
+        }
+    }
+
+    fn modifiers(&self) -> keyboard_types::Modifiers {
+        unsafe {
+            let ctx_ptr =
+                GetWindowLongPtrW(self.hwnd, GWLP_USERDATA) as *mut super::platform::WindowContext;
+            if ctx_ptr.is_null() {
+                return keyboard_types::Modifiers::empty();
+            }
+            (*ctx_ptr).modifiers.get()
+        }
+    }
+
+    fn appearance(&self) -> WindowAppearance {
+        unsafe {
+            let ctx_ptr =
+                GetWindowLongPtrW(self.hwnd, GWLP_USERDATA) as *mut super::platform::WindowContext;
+            if ctx_ptr.is_null() {
+                return WindowAppearance::default();
+            }
+            // Check DWM dark mode attribute
+            use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWINDOWATTRIBUTE};
+            let mut dark_mode: i32 = 0;
+            let result = DwmGetWindowAttribute(
+                self.hwnd,
+                DWMWINDOWATTRIBUTE(20), // DWMWA_USE_IMMERSIVE_DARK_MODE
+                &mut dark_mode as *mut i32 as *mut std::ffi::c_void,
+                std::mem::size_of::<i32>() as u32,
+            );
+            if result.is_ok() && dark_mode != 0 {
+                WindowAppearance::Dark
+            } else {
+                WindowAppearance::Light
+            }
+        }
+    }
+
+    fn display(&self) -> Option<Arc<dyn PlatformDisplay>> {
+        unsafe {
+            let monitor = MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTOPRIMARY);
+            if monitor.is_invalid() {
+                return None;
+            }
+            // Use the display enumeration to find matching monitor
+            let displays = super::display::enumerate_displays();
+            displays.into_iter().find(|d| {
+                // Match by checking if this is the same monitor handle
+                // The display enumeration uses HMONITOR internally
+                d.is_primary() // Fallback: return primary
+            })
+        }
+    }
+
+    fn get_title(&self) -> String {
+        self.state.lock().title.clone()
+    }
+
+    // ==================== Control Methods (US2) ====================
+
+    fn set_title(&self, title: &str) {
+        unsafe {
+            let title_str = HSTRING::from(title);
+            let _ = SetWindowTextW(self.hwnd, &title_str);
+            self.state.lock().title = title.to_string();
+        }
+    }
+
+    fn activate(&self) {
+        unsafe {
+            let _ = SetForegroundWindow(self.hwnd);
+        }
+    }
+
+    fn minimize(&self) {
+        unsafe {
+            let _ = ShowWindow(self.hwnd, SW_MINIMIZE);
+        }
+    }
+
+    fn maximize(&self) {
+        unsafe {
+            let _ = ShowWindow(self.hwnd, SW_MAXIMIZE);
+        }
+    }
+
+    fn restore(&self) {
+        unsafe {
+            let _ = ShowWindow(self.hwnd, SW_RESTORE);
+        }
+    }
+
+    fn toggle_fullscreen(&self) {
+        WindowsWindow::toggle_fullscreen(self)
+    }
+
+    fn resize(&self, size: Size<Pixels>) {
+        unsafe {
+            let scale = self.state.lock().scale_factor;
+            let width = logical_to_device(size.width.0, scale);
+            let height = logical_to_device(size.height.0, scale);
+
+            let _ = SetWindowPos(
+                self.hwnd,
+                None,
+                0,
+                0,
+                width,
+                height,
+                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+
+            self.state.lock().bounds.size = size;
+        }
+    }
+
+    fn close(&self) {
+        unsafe {
+            let _ = DestroyWindow(self.hwnd);
+        }
+    }
+
+    fn set_background_appearance(&self, appearance: WindowBackgroundAppearance) {
+        unsafe {
+            use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWINDOWATTRIBUTE};
+
+            let backdrop_value: i32 = match appearance {
+                WindowBackgroundAppearance::Opaque => 1,       // DWMSBT_NONE
+                WindowBackgroundAppearance::Transparent => 1,  // No native transparent, use NONE
+                WindowBackgroundAppearance::Blurred => 3,      // DWMSBT_TRANSIENTWINDOW (Acrylic)
+                WindowBackgroundAppearance::MicaBackdrop => 2, // DWMSBT_MAINWINDOW (Mica)
+                WindowBackgroundAppearance::MicaAltBackdrop => 4, // DWMSBT_TABBEDWINDOW (Mica Alt)
+            };
+
+            let _ = DwmSetWindowAttribute(
+                self.hwnd,
+                DWMWINDOWATTRIBUTE(38), // DWMWA_SYSTEMBACKDROP_TYPE
+                &backdrop_value as *const i32 as *const std::ffi::c_void,
+                std::mem::size_of::<i32>() as u32,
+            );
+        }
     }
 
     // ==================== Per-Window Callbacks ====================

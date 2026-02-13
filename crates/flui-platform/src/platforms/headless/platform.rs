@@ -7,7 +7,8 @@ use crate::shared::{PlatformHandlers, WindowCallbacks};
 use crate::traits::{
     Clipboard, DesktopCapabilities, DispatchEventResult, Platform, PlatformCapabilities,
     PlatformDisplay, PlatformExecutor, PlatformInput, PlatformTextSystem, PlatformWindow,
-    WindowEvent, WindowId, WindowOptions,
+    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId,
+    WindowOptions,
 };
 use anyhow::Result;
 use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
@@ -186,21 +187,60 @@ impl Platform for HeadlessPlatform {
 #[derive(Clone)]
 struct MockWindow {
     id: WindowId,
-    size: Size<Pixels>,
+    state: Arc<Mutex<MockWindowState>>,
+    callbacks: Arc<WindowCallbacks>,
+}
+
+/// Mutable state for headless MockWindow
+struct MockWindowState {
+    title: String,
+    bounds: Bounds<Pixels>,
     scale_factor: f64,
     focused: bool,
     visible: bool,
-    callbacks: Arc<WindowCallbacks>,
+    maximized: bool,
+    fullscreen: bool,
+    hovered: bool,
+    modifiers: keyboard_types::Modifiers,
+    appearance: WindowAppearance,
+}
+
+impl Clone for MockWindowState {
+    fn clone(&self) -> Self {
+        Self {
+            title: self.title.clone(),
+            bounds: self.bounds,
+            scale_factor: self.scale_factor,
+            focused: self.focused,
+            visible: self.visible,
+            maximized: self.maximized,
+            fullscreen: self.fullscreen,
+            hovered: self.hovered,
+            modifiers: self.modifiers,
+            appearance: self.appearance,
+        }
+    }
 }
 
 impl MockWindow {
     fn new(id: WindowId, options: WindowOptions) -> Self {
         Self {
             id,
-            size: options.size,
-            scale_factor: 1.0,
-            focused: true,
-            visible: options.visible,
+            state: Arc::new(Mutex::new(MockWindowState {
+                title: options.title.clone(),
+                bounds: Bounds {
+                    origin: Point::default(),
+                    size: options.size,
+                },
+                scale_factor: 1.0,
+                focused: true,
+                visible: options.visible,
+                maximized: false,
+                fullscreen: false,
+                hovered: false,
+                modifiers: keyboard_types::Modifiers::empty(),
+                appearance: WindowAppearance::default(),
+            })),
             callbacks: Arc::new(WindowCallbacks::new()),
         }
     }
@@ -218,14 +258,16 @@ impl MockWindow {
     pub fn simulate_resize(&self, width: f32, height: f32) {
         use flui_types::geometry::px;
         let size = Size::new(px(width), px(height));
-        self.callbacks
-            .dispatch_resize(size, self.scale_factor as f32);
+        let scale = self.state.lock().scale_factor as f32;
+        self.state.lock().bounds.size = size;
+        self.callbacks.dispatch_resize(size, scale);
     }
 
     /// Simulate focus change for testing.
     /// Fires the registered `on_active_status_change` callback.
     #[allow(dead_code)]
     pub fn simulate_focus(&self, focused: bool) {
+        self.state.lock().focused = focused;
         self.callbacks.dispatch_active_status_change(focused);
     }
 
@@ -245,18 +287,19 @@ impl crate::traits::PlatformWindow for MockWindow {
     fn physical_size(&self) -> Size<DevicePixels> {
         use flui_types::geometry::device_px;
 
+        let state = self.state.lock();
         Size::new(
-            device_px((self.size.width.0 * self.scale_factor as f32) as i32),
-            device_px((self.size.height.0 * self.scale_factor as f32) as i32),
+            device_px((state.bounds.size.width.0 * state.scale_factor as f32) as i32),
+            device_px((state.bounds.size.height.0 * state.scale_factor as f32) as i32),
         )
     }
 
     fn logical_size(&self) -> Size<Pixels> {
-        self.size
+        self.state.lock().bounds.size
     }
 
     fn scale_factor(&self) -> f64 {
-        self.scale_factor
+        self.state.lock().scale_factor
     }
 
     fn request_redraw(&self) {
@@ -264,12 +307,119 @@ impl crate::traits::PlatformWindow for MockWindow {
     }
 
     fn is_focused(&self) -> bool {
-        self.focused
+        self.state.lock().focused
     }
 
     fn is_visible(&self) -> bool {
-        self.visible
+        self.state.lock().visible
     }
+
+    // ==================== Query Methods (US2) ====================
+
+    fn bounds(&self) -> Bounds<Pixels> {
+        self.state.lock().bounds
+    }
+
+    fn content_size(&self) -> Size<Pixels> {
+        self.state.lock().bounds.size
+    }
+
+    fn window_bounds(&self) -> WindowBounds {
+        let state = self.state.lock();
+        if state.fullscreen {
+            WindowBounds::Fullscreen(state.bounds)
+        } else if state.maximized {
+            WindowBounds::Maximized(state.bounds)
+        } else {
+            WindowBounds::Windowed(state.bounds)
+        }
+    }
+
+    fn is_maximized(&self) -> bool {
+        self.state.lock().maximized
+    }
+
+    fn is_fullscreen(&self) -> bool {
+        self.state.lock().fullscreen
+    }
+
+    fn is_active(&self) -> bool {
+        self.state.lock().focused
+    }
+
+    fn is_hovered(&self) -> bool {
+        self.state.lock().hovered
+    }
+
+    fn mouse_position(&self) -> Point<Pixels> {
+        Point::default()
+    }
+
+    fn modifiers(&self) -> keyboard_types::Modifiers {
+        self.state.lock().modifiers
+    }
+
+    fn appearance(&self) -> WindowAppearance {
+        self.state.lock().appearance
+    }
+
+    fn display(&self) -> Option<Arc<dyn PlatformDisplay>> {
+        Some(Arc::new(MockDisplay::primary()))
+    }
+
+    fn get_title(&self) -> String {
+        self.state.lock().title.clone()
+    }
+
+    // ==================== Control Methods (US2) ====================
+
+    fn set_title(&self, title: &str) {
+        self.state.lock().title = title.to_string();
+    }
+
+    fn activate(&self) {
+        self.state.lock().focused = true;
+    }
+
+    fn minimize(&self) {
+        let mut state = self.state.lock();
+        state.maximized = false;
+        state.fullscreen = false;
+    }
+
+    fn maximize(&self) {
+        let mut state = self.state.lock();
+        state.maximized = true;
+        state.fullscreen = false;
+    }
+
+    fn restore(&self) {
+        let mut state = self.state.lock();
+        state.maximized = false;
+        state.fullscreen = false;
+    }
+
+    fn toggle_fullscreen(&self) {
+        let mut state = self.state.lock();
+        state.fullscreen = !state.fullscreen;
+        if state.fullscreen {
+            state.maximized = false;
+        }
+    }
+
+    fn resize(&self, size: Size<Pixels>) {
+        self.state.lock().bounds.size = size;
+    }
+
+    fn close(&self) {
+        self.callbacks.dispatch_close();
+    }
+
+    fn set_background_appearance(&self, _appearance: WindowBackgroundAppearance) {
+        // No-op in headless mode
+    }
+
+    // ==================== Callbacks (US1) ====================
 
     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult + Send>) {
         *self.callbacks.on_input.lock() = Some(callback);
@@ -541,5 +691,91 @@ mod tests {
 
         window.simulate_focus(false);
         assert!(!focused.load(Ordering::SeqCst));
+    }
+
+    // ==================== US2 Tests ====================
+
+    #[test]
+    fn test_set_title_get_title() {
+        let window = MockWindow::new(
+            WindowId(0),
+            WindowOptions {
+                title: "Original".to_string(),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(window.get_title(), "Original");
+        window.set_title("Updated");
+        assert_eq!(window.get_title(), "Updated");
+    }
+
+    #[test]
+    fn test_window_bounds_query() {
+        use flui_types::geometry::px;
+
+        let window = MockWindow::new(
+            WindowId(0),
+            WindowOptions {
+                size: Size::new(px(800.0), px(600.0)),
+                ..Default::default()
+            },
+        );
+
+        let bounds = window.bounds();
+        assert_eq!(bounds.size.width.0, 800.0);
+        assert_eq!(bounds.size.height.0, 600.0);
+
+        assert_eq!(window.content_size(), Size::new(px(800.0), px(600.0)));
+
+        match window.window_bounds() {
+            WindowBounds::Windowed(b) => assert_eq!(b.size.width.0, 800.0),
+            _ => panic!("Expected Windowed"),
+        }
+    }
+
+    #[test]
+    fn test_maximize_restore_fullscreen() {
+        let window = MockWindow::new(WindowId(0), WindowOptions::default());
+
+        assert!(!window.is_maximized());
+        assert!(!window.is_fullscreen());
+
+        window.maximize();
+        assert!(window.is_maximized());
+        assert!(!window.is_fullscreen());
+        assert!(matches!(window.window_bounds(), WindowBounds::Maximized(_)));
+
+        window.restore();
+        assert!(!window.is_maximized());
+        assert!(matches!(window.window_bounds(), WindowBounds::Windowed(_)));
+
+        window.toggle_fullscreen();
+        assert!(window.is_fullscreen());
+        assert!(!window.is_maximized());
+        assert!(matches!(
+            window.window_bounds(),
+            WindowBounds::Fullscreen(_)
+        ));
+
+        window.toggle_fullscreen();
+        assert!(!window.is_fullscreen());
+    }
+
+    #[test]
+    fn test_resize() {
+        use flui_types::geometry::px;
+
+        let window = MockWindow::new(WindowId(0), WindowOptions::default());
+        window.resize(Size::new(px(1920.0), px(1080.0)));
+        assert_eq!(window.logical_size(), Size::new(px(1920.0), px(1080.0)));
+    }
+
+    #[test]
+    fn test_display_query() {
+        let window = MockWindow::new(WindowId(0), WindowOptions::default());
+        let display = window.display();
+        assert!(display.is_some());
+        assert!(display.unwrap().is_primary());
     }
 }

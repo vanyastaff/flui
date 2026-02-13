@@ -3,12 +3,55 @@
 //! Provides a thin abstraction over platform windows for testability
 //! and flexibility. Includes per-window callback registration for event delivery.
 
-use super::input::{DispatchEventResult, PlatformInput};
-use flui_types::geometry::{DevicePixels, Pixels, Size};
+use super::input::{DispatchEventResult, Modifiers, PlatformInput};
+use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
 use std::any::Any;
-
-#[cfg(feature = "winit-backend")]
 use std::sync::Arc;
+
+use super::display::PlatformDisplay;
+
+// ==================== Value Types ====================
+
+/// Window appearance (light/dark theme)
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum WindowAppearance {
+    /// Light appearance (default)
+    #[default]
+    Light,
+    /// Dark appearance
+    Dark,
+    /// Vibrant light (macOS-style translucent light)
+    VibrantLight,
+    /// Vibrant dark (macOS-style translucent dark)
+    VibrantDark,
+}
+
+/// Window background appearance (backdrop material)
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum WindowBackgroundAppearance {
+    /// Opaque background (default)
+    #[default]
+    Opaque,
+    /// Transparent background
+    Transparent,
+    /// Blurred background
+    Blurred,
+    /// Windows 11 Mica backdrop
+    MicaBackdrop,
+    /// Windows 11 Mica Alt backdrop
+    MicaAltBackdrop,
+}
+
+/// Window bounds state (windowed, maximized, or fullscreen)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum WindowBounds {
+    /// Normal windowed mode with specific bounds
+    Windowed(Bounds<Pixels>),
+    /// Maximized with bounds
+    Maximized(Bounds<Pixels>),
+    /// Fullscreen with bounds
+    Fullscreen(Bounds<Pixels>),
+}
 
 #[cfg(feature = "winit-backend")]
 use winit::window::Window;
@@ -44,6 +87,103 @@ pub trait PlatformWindow: Send + Sync {
 
     /// Check if window is visible
     fn is_visible(&self) -> bool;
+
+    // ==================== Query Methods (US2) ====================
+
+    /// Get the window bounds (position + size) in logical pixels
+    fn bounds(&self) -> Bounds<Pixels> {
+        Bounds::default()
+    }
+
+    /// Get the content (client area) size in logical pixels
+    fn content_size(&self) -> Size<Pixels> {
+        self.logical_size()
+    }
+
+    /// Get the window bounds state (windowed, maximized, or fullscreen)
+    fn window_bounds(&self) -> WindowBounds {
+        WindowBounds::Windowed(self.bounds())
+    }
+
+    /// Check if window is maximized
+    fn is_maximized(&self) -> bool {
+        false
+    }
+
+    /// Check if window is in fullscreen mode
+    fn is_fullscreen(&self) -> bool {
+        false
+    }
+
+    /// Check if window is the active (foreground) window
+    fn is_active(&self) -> bool {
+        self.is_focused()
+    }
+
+    /// Check if the mouse cursor is hovering over this window
+    fn is_hovered(&self) -> bool {
+        false
+    }
+
+    /// Get the current mouse position in logical pixels (relative to window)
+    fn mouse_position(&self) -> Point<Pixels> {
+        Point::default()
+    }
+
+    /// Get the currently pressed keyboard modifiers
+    fn modifiers(&self) -> Modifiers {
+        Modifiers::empty()
+    }
+
+    /// Get the window's current appearance (light/dark)
+    fn appearance(&self) -> WindowAppearance {
+        WindowAppearance::default()
+    }
+
+    /// Get the display this window is currently on
+    fn display(&self) -> Option<Arc<dyn PlatformDisplay>> {
+        None
+    }
+
+    /// Get the window title
+    fn get_title(&self) -> String {
+        String::new()
+    }
+
+    // ==================== Control Methods (US2) ====================
+
+    /// Set the window title
+    fn set_title(&self, title: &str) {
+        let _ = title;
+    }
+
+    /// Activate (bring to front / focus) the window
+    fn activate(&self) {}
+
+    /// Minimize the window
+    fn minimize(&self) {}
+
+    /// Maximize the window
+    fn maximize(&self) {}
+
+    /// Restore the window from minimized or maximized state
+    fn restore(&self) {}
+
+    /// Toggle fullscreen mode
+    fn toggle_fullscreen(&self) {}
+
+    /// Resize the window to the given logical size
+    fn resize(&self, size: Size<Pixels>) {
+        let _ = size;
+    }
+
+    /// Close and destroy the window
+    fn close(&self) {}
+
+    /// Set the window's background appearance (backdrop material)
+    fn set_background_appearance(&self, appearance: WindowBackgroundAppearance) {
+        let _ = appearance;
+    }
 
     // ==================== Callback Registration ====================
 

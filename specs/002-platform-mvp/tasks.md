@@ -34,9 +34,9 @@
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
 - [ ] T007 [P] Implement `CursorStyle` enum (~21 variants) with `Default` in `crates/flui-platform/src/cursor.rs` per `contracts/value-types.rs`
-- [ ] T008 [P] Implement `WindowAppearance` enum (Light, Dark, VibrantLight, VibrantDark) with `Default` in `crates/flui-platform/src/traits/window.rs`
-- [ ] T009 [P] Implement `WindowBackgroundAppearance` enum (Opaque, Transparent, Blurred, MicaBackdrop, MicaAltBackdrop) with `Default` in `crates/flui-platform/src/traits/window.rs`
-- [ ] T010 [P] Implement `WindowBounds` enum (Windowed, Maximized, Fullscreen) in `crates/flui-platform/src/traits/window.rs`
+- [x] T008 [P] Implement `WindowAppearance` enum (Light, Dark, VibrantLight, VibrantDark) with `Default` in `crates/flui-platform/src/traits/window.rs`
+- [x] T009 [P] Implement `WindowBackgroundAppearance` enum (Opaque, Transparent, Blurred, MicaBackdrop, MicaAltBackdrop) with `Default` in `crates/flui-platform/src/traits/window.rs`
+- [x] T010 [P] Implement `WindowBounds` enum (Windowed, Maximized, Fullscreen) in `crates/flui-platform/src/traits/window.rs`
 - [x] T011 [P] Implement `DispatchEventResult` struct (propagate, default_prevented) with `Default` in `crates/flui-platform/src/traits/input.rs`
 - [ ] T012 [P] Implement `ClipboardItem`, `ClipboardEntry`, `ClipboardString` structs in `crates/flui-platform/src/traits/platform.rs` (replace existing String-only clipboard)
 - [ ] T013 [P] Implement `PathPromptOptions` struct (files, directories, multiple) in `crates/flui-platform/src/traits/platform.rs`
@@ -80,14 +80,14 @@
 
 ### Implementation for US2
 
-- [ ] T028 Expand `PlatformWindow` trait in `crates/flui-platform/src/traits/window.rs` with 12 query methods: `bounds`, `content_size`, `window_bounds`, `is_maximized`, `is_fullscreen`, `is_active`, `is_hovered`, `mouse_position`, `modifiers`, `appearance`, `display`, `get_title` per `contracts/platform-window-trait.rs`
-- [ ] T029 Expand `PlatformWindow` trait with 10 control methods: `set_title`, `activate`, `minimize`, `maximize`, `restore`, `toggle_fullscreen`, `resize`, `close`, `request_redraw` (already exists), `set_background_appearance` per `contracts/platform-window-trait.rs`
-- [ ] T030 Implement 12 query methods on `WindowsWindow` in `crates/flui-platform/src/platforms/windows/window.rs` using Win32 APIs: `GetWindowRect`, `GetClientRect`, `IsZoomed`, `IsIconic`, `GetForegroundWindow`, `GetCursorPos`, `ScreenToClient`, `GetKeyboardState`, `DwmGetWindowAttribute`
-- [ ] T031 Implement 10 control methods on `WindowsWindow` in `crates/flui-platform/src/platforms/windows/window.rs` using Win32 APIs: `SetWindowTextW`, `SetForegroundWindow`, `ShowWindow(SW_MINIMIZE/SW_MAXIMIZE/SW_RESTORE)`, `SetWindowPos`, `DestroyWindow`, `DwmSetWindowAttribute`
-- [ ] T032 Implement `toggle_fullscreen()` on `WindowsWindow` — save/restore window placement, set `WS_POPUP` + monitor bounds for fullscreen, restore `WS_OVERLAPPEDWINDOW` for windowed (use existing fullscreen logic if present)
-- [ ] T033 Implement `set_background_appearance()` on `WindowsWindow` — wire Mica/MicaAlt/Transparent backdrop via `DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE)` (existing Mica code may be reusable from `window_ext.rs`)
-- [ ] T034 Track `is_hovered` state in `WindowsWindow` using `TrackMouseEvent(TME_LEAVE)` — set flag on mouse enter, clear on `WM_MOUSELEAVE`
-- [ ] T035 Track `modifiers` state in `WindowsWindow` — update on `WM_KEYDOWN/UP` for Shift/Ctrl/Alt/Meta, expose via `modifiers()` method
+- [x] T028 Expand `PlatformWindow` trait in `crates/flui-platform/src/traits/window.rs` with 12 query methods: `bounds`, `content_size`, `window_bounds`, `is_maximized`, `is_fullscreen`, `is_active`, `is_hovered`, `mouse_position`, `modifiers`, `appearance`, `display`, `get_title` per `contracts/platform-window-trait.rs`
+- [x] T029 Expand `PlatformWindow` trait with 10 control methods: `set_title`, `activate`, `minimize`, `maximize`, `restore`, `toggle_fullscreen`, `resize`, `close`, `request_redraw` (already exists), `set_background_appearance` per `contracts/platform-window-trait.rs`
+- [x] T030 Implement 12 query methods on `WindowsWindow` in `crates/flui-platform/src/platforms/windows/window.rs` using Win32 APIs: `GetWindowRect`, `GetClientRect`, `IsZoomed`, `IsIconic`, `GetForegroundWindow`, `GetCursorPos`, `ScreenToClient`, `GetKeyboardState`, `DwmGetWindowAttribute`
+- [x] T031 Implement 10 control methods on `WindowsWindow` in `crates/flui-platform/src/platforms/windows/window.rs` using Win32 APIs: `SetWindowTextW`, `SetForegroundWindow`, `ShowWindow(SW_MINIMIZE/SW_MAXIMIZE/SW_RESTORE)`, `SetWindowPos`, `DestroyWindow`, `DwmSetWindowAttribute`
+- [x] T032 Implement `toggle_fullscreen()` on `WindowsWindow` — save/restore window placement, set `WS_POPUP` + monitor bounds for fullscreen, restore `WS_OVERLAPPEDWINDOW` for windowed (use existing fullscreen logic if present)
+- [x] T033 Implement `set_background_appearance()` on `WindowsWindow` — wire Mica/MicaAlt/Transparent backdrop via `DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE)` (existing Mica code may be reusable from `window_ext.rs`)
+- [x] T034 Track `is_hovered` state in `WindowsWindow` using `TrackMouseEvent(TME_LEAVE)` — set flag on mouse enter, clear on `WM_MOUSELEAVE`
+- [x] T035 Track `modifiers` state in `WindowsWindow` — update on `WM_KEYDOWN/UP` for Shift/Ctrl/Alt/Meta, expose via `modifiers()` method
 
 **Checkpoint**: All PlatformWindow query/control methods work on Windows. `cargo test -p flui-platform` passes. set_title → get_title roundtrip works.
 

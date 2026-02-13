@@ -50,7 +50,7 @@ pub use platform::{
     Clipboard, GlyphPosition, Platform, PlatformExecutor, PlatformTextSystem, TextSystemError,
     WindowEvent, WindowId, WindowMode, WindowOptions,
 };
-pub use window::PlatformWindow;
+pub use window::{PlatformWindow, WindowAppearance, WindowBackgroundAppearance, WindowBounds};
 
 #[cfg(feature = "winit-backend")]
 pub use window::WinitWindow;

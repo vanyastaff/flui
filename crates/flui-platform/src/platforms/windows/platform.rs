@@ -41,6 +41,10 @@ pub(super) struct WindowContext {
     pub last_size: std::cell::Cell<Size<DevicePixels>>,
     /// Window configuration (hotkeys, debouncing, etc.)
     pub config: WindowConfiguration,
+    /// Is mouse hovering over this window? (T034)
+    pub is_hovered: std::cell::Cell<bool>,
+    /// Current keyboard modifiers (T035)
+    pub modifiers: std::cell::Cell<keyboard_types::Modifiers>,
 }
 
 impl WindowContext {
@@ -520,6 +524,9 @@ impl WindowsPlatform {
                     };
                     let _ = TrackMouseEvent(&mut tme);
 
+                    // Track hover state (T034)
+                    ctx.is_hovered.set(true);
+
                     // Dispatch hover enter (will be cleared on WM_MOUSELEAVE)
                     ctx.callbacks.dispatch_hover_status_change(true);
 
@@ -637,6 +644,9 @@ impl WindowsPlatform {
                         }
                     }
 
+                    // Track modifiers (T035)
+                    ctx.modifiers.set(current_modifiers());
+
                     // Dispatch keyboard event via per-window callback
                     use super::events::key_down_event;
                     let event = key_down_event(wparam, lparam);
@@ -648,6 +658,9 @@ impl WindowsPlatform {
 
             WM_KEYUP | WM_SYSKEYUP => {
                 if let Some(ctx) = ctx {
+                    // Track modifiers (T035)
+                    ctx.modifiers.set(current_modifiers());
+
                     use super::events::key_up_event;
                     let event = key_up_event(wparam, lparam);
                     ctx.callbacks.dispatch_input(event);
@@ -698,6 +711,9 @@ impl WindowsPlatform {
             // T025: Mouse hover tracking — WM_MOUSELEAVE (0x02A3)
             0x02A3 => {
                 if let Some(ctx) = ctx {
+                    // Track hover state (T034)
+                    ctx.is_hovered.set(false);
+
                     ctx.callbacks.dispatch_hover_status_change(false);
                 }
                 LRESULT(0)
@@ -882,6 +898,34 @@ impl Drop for WindowsPlatform {
 }
 
 // PlatformHandlers is imported from crate::shared
+
+// ==================== Helper Functions ====================
+
+/// Read current keyboard modifier state from Win32 (T035)
+fn current_modifiers() -> keyboard_types::Modifiers {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        GetKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+    };
+
+    unsafe {
+        let mut mods = keyboard_types::Modifiers::empty();
+        if (GetKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0 {
+            mods |= keyboard_types::Modifiers::SHIFT;
+        }
+        if (GetKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000) != 0 {
+            mods |= keyboard_types::Modifiers::CONTROL;
+        }
+        if (GetKeyState(VK_MENU.0 as i32) as u16 & 0x8000) != 0 {
+            mods |= keyboard_types::Modifiers::ALT;
+        }
+        if (GetKeyState(VK_LWIN.0 as i32) as u16 & 0x8000) != 0
+            || (GetKeyState(VK_RWIN.0 as i32) as u16 & 0x8000) != 0
+        {
+            mods |= keyboard_types::Modifiers::META;
+        }
+        mods
+    }
+}
 
 // ==================== Dummy Implementations ====================
 

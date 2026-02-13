@@ -163,8 +163,8 @@ pub use traits::{
     Clipboard, DefaultLifecycle, DesktopCapabilities, DispatchEventResult, DisplayId,
     GlyphPosition, LifecycleEvent, LifecycleState, MobileCapabilities, Platform,
     PlatformCapabilities, PlatformDisplay, PlatformEmbedder, PlatformExecutor, PlatformLifecycle,
-    PlatformTextSystem, PlatformWindow, TextSystemError, WebCapabilities, WindowEvent, WindowId,
-    WindowMode, WindowOptions,
+    PlatformTextSystem, PlatformWindow, TextSystemError, WebCapabilities, WindowAppearance,
+    WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId, WindowMode, WindowOptions,
 };
 
 // Re-export platform implementations
