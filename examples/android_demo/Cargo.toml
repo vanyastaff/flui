@@ -18,6 +18,7 @@ flui-layer = { path = "../../crates/flui-layer" }
 flui-types = { path = "../../crates/flui-types" }
 flui-log = { path = "../../crates/flui-log" }
 flui-foundation = { path = "../../crates/flui-foundation" }
+flui-hot-reload = { path = "../../crates/flui-hot-reload" }
 
 # Android glue
 android-activity = { version = "0.6", features = ["native-activity"] }
@@ -30,6 +31,8 @@ log = "0.4"
 # GPU
 raw-window-handle = "0.6"
 pollster = "0.4"
+
+
 
 [lints]
 workspace = true

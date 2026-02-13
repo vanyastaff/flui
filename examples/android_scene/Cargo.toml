@@ -1,0 +1,19 @@
+[package]
+name = "flui-android-scene"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Hot-reloadable scene plugin for FLUI Android demo"
+
+[lib]
+crate-type = ["cdylib"]
+name = "flui_scene"
+
+[dependencies]
+flui-hot-reload = { path = "../../crates/flui-hot-reload" }
+flui-layer = { path = "../../crates/flui-layer" }
+flui-types = { path = "../../crates/flui-types" }
+flui-painting = { path = "../../crates/flui-painting" }
+
+[lints]
+workspace = true

@@ -125,6 +125,23 @@ enum Commands {
         #[arg(long, default_value = "true")]
         hot_reload: bool,
 
+        /// Scene-only hot-reload mode (Android): rebuild and push scene plugin
+        /// without restarting the app. Much faster than full rebuild.
+        #[arg(long)]
+        scene: bool,
+
+        /// Scene plugin crate name (used with --scene)
+        #[arg(long, default_value = "flui-android-scene")]
+        scene_crate: String,
+
+        /// Android package name (used with --scene)
+        #[arg(long, default_value = "com.vanya.flui.counter")]
+        package: String,
+
+        /// Android target ABI (used with --scene)
+        #[arg(long, default_value = "arm64-v8a")]
+        target: String,
+
         /// Build profile (dev, release, bench)
         #[arg(long)]
         profile: Option<String>,
@@ -560,9 +577,19 @@ fn main() {
             device,
             release,
             hot_reload,
+            scene,
+            scene_crate,
+            package,
+            target,
             profile,
             verbose,
-        } => commands::run::execute(device, release, hot_reload, profile, verbose),
+        } => {
+            if scene {
+                commands::run::execute_scene(&scene_crate, &package, &target, release, verbose)
+            } else {
+                commands::run::execute(device, release, hot_reload, profile, verbose)
+            }
+        }
 
         Commands::Build {
             platform,

@@ -15,6 +15,7 @@ members = [
     "crates/flui-interaction",    # Gesture recognition (ACTIVE)
     "crates/flui-engine",         # GPU rendering engine (ACTIVE)
     "crates/flui-log",            # Logging utilities (ACTIVE)
+    "crates/flui-hot-reload",     # Hot-reload scene plugins via dlopen (ACTIVE)
 
     # === Phase 3: Framework Layer ===
     "crates/flui-rendering",      # Render tree (ACTIVE)
@@ -25,6 +26,8 @@ members = [
 
     # === Examples (platform-specific) ===
     "examples/android_demo",      # Android GPU demo (cdylib) — build with: cargo ndk -t arm64-v8a build -p flui-android-demo
+    "examples/android_scene",     # Hot-reloadable scene plugin (cdylib) — loaded via dlopen
+    "examples/android_app",       # Widget-based hot-reloadable plugin (cdylib) — app_plugin! macro
 
     # === Temporarily disabled ===
     # "crates/flui-animation",
@@ -47,6 +50,7 @@ default-members = [
     "crates/flui-interaction",
     "crates/flui-engine",
     "crates/flui-log",
+    "crates/flui-hot-reload",
     "crates/flui-rendering",
     "crates/flui-view",
     "crates/flui-app",

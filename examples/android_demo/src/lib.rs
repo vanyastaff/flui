@@ -5,6 +5,11 @@
 //!
 //! This is the Android equivalent of `examples/scene_render.rs`.
 //!
+//! Supports hot-reload via `flui-hot-reload`: if a scene plugin `.so` is present
+//! in the app's internal data directory, it will be loaded and used for rendering.
+//! The plugin is checked for updates every 500ms — edit, recompile, push, and
+//! the scene updates without restarting the app.
+//!
 //! # Build & Run
 //!
 //! ```bash
@@ -16,12 +21,16 @@
 
 use android_activity::{AndroidApp, InputStatus, MainEvent, PollEvent};
 use flui_engine::wgpu::Renderer;
+use flui_hot_reload::ScenePlugin;
 use flui_layer::{CanvasLayer, Layer, LayerTree, Scene};
 use flui_types::geometry::{px, Rect, Size};
 use flui_types::painting::Paint;
 use flui_types::styling::Color;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
+
+const SCENE_LIB_NAME: &str = "libflui_scene.so";
 
 /// Wrapper for raw-window-handle bridging (AndroidApp -> wgpu surface)
 ///
@@ -60,20 +69,18 @@ impl raw_window_handle::HasDisplayHandle for AndroidWindowHandle {
     }
 }
 
-/// Build a scene with colored rectangles to prove the compositor works.
+/// Build a fallback scene with colored rectangles (used when no plugin is loaded).
 fn build_test_scene(width: f32, height: f32) -> Scene {
     let mut tree = LayerTree::new();
-
     let mut canvas_layer = CanvasLayer::new();
     let canvas = canvas_layer.canvas_mut();
 
-    // Background — bright orange (hot-reload test!)
+    // Background — bright orange
     canvas.draw_rect(
         Rect::from_ltrb(px(0.0), px(0.0), px(width), px(height)),
         &Paint::fill(Color::rgb(255, 140, 0)),
     );
 
-    // Scale rectangles proportionally to screen size
     let scale_x = width / 800.0;
     let scale_y = height / 600.0;
 
@@ -133,11 +140,10 @@ fn build_test_scene(width: f32, height: f32) -> Scene {
     );
 
     let root_id = tree.insert(Layer::Canvas(canvas_layer));
-
     Scene::new(Size::new(px(width), px(height)), tree, Some(root_id), 1)
 }
 
-/// Android entry point — called by NativeActivity when the library is loaded
+/// Android entry point — called by NativeActivity when the library is loaded.
 #[no_mangle]
 fn android_main(app: AndroidApp) {
     // Initialize logging to Android logcat
@@ -146,12 +152,31 @@ fn android_main(app: AndroidApp) {
         .with_level(flui_log::Level::DEBUG)
         .init();
 
-    tracing::info!("FLUI Android Demo starting — Scene Render");
+    tracing::info!("FLUI Android Demo starting — Scene Render (hot-reload enabled)");
+
+    // Build plugin path from app's internal data directory (SELinux allows dlopen from here)
+    let scene_lib_path: PathBuf = if let Some(data_dir) = app.internal_data_path() {
+        data_dir.join(SCENE_LIB_NAME)
+    } else {
+        PathBuf::from(format!("/data/local/tmp/{SCENE_LIB_NAME}"))
+    };
+    tracing::info!("Scene plugin path: {}", scene_lib_path.display());
 
     let mut renderer: Option<Mutex<Renderer>> = None;
     let mut running = true;
     let mut resumed = false;
     let mut needs_render = false;
+    let mut plugin: Option<ScenePlugin> = ScenePlugin::load(&scene_lib_path);
+    let mut last_plugin_check = std::time::Instant::now();
+
+    if plugin.is_some() {
+        tracing::info!("Scene plugin available — using hot-reload mode");
+    } else {
+        tracing::info!(
+            "No scene plugin at {} — using built-in scene",
+            scene_lib_path.display()
+        );
+    }
 
     loop {
         if !running {
@@ -160,12 +185,12 @@ fn android_main(app: AndroidApp) {
 
         let mut surface_lost = false;
 
-        // Block indefinitely when idle (no pending render), wake on events.
-        // Use 16ms timeout only when we need to render (animation-ready).
+        // Poll interval: 16ms when rendering, 500ms when checking for plugin updates.
+        // Always poll (never block forever) so we can detect a plugin appearing on disk.
         let timeout = if needs_render {
             Some(Duration::from_millis(16))
         } else {
-            None // Block until next system event — prevents ANR
+            Some(Duration::from_millis(500))
         };
 
         app.poll_events(timeout, |event| match event {
@@ -188,9 +213,7 @@ fn android_main(app: AndroidApp) {
                     tracing::info!("Window resized");
                     needs_render = true;
                 }
-                MainEvent::InputAvailable => {
-                    // Drain input queue to keep the input dispatcher happy
-                }
+                MainEvent::InputAvailable => {}
                 _ => {}
             },
             _ => {}
@@ -208,7 +231,7 @@ fn android_main(app: AndroidApp) {
             continue;
         }
 
-        // Create renderer once native window is available (may lag behind Resume)
+        // Create renderer once native window is available
         if resumed && renderer.is_none() && app.native_window().is_some() {
             tracing::info!("Native window ready — creating renderer");
             let handle = AndroidWindowHandle { app: app.clone() };
@@ -236,6 +259,28 @@ fn android_main(app: AndroidApp) {
             }
         }
 
+        // Check for plugin hot-reload (every 500ms)
+        if resumed && last_plugin_check.elapsed() >= Duration::from_millis(500) {
+            last_plugin_check = std::time::Instant::now();
+
+            if let Some(ref p) = plugin {
+                if p.has_update() {
+                    tracing::info!("Scene plugin updated — reloading!");
+                    let old = plugin.take().unwrap();
+                    old.unload();
+                    plugin = ScenePlugin::load(&scene_lib_path);
+                    needs_render = true;
+                }
+            } else {
+                // Try to load plugin if it wasn't available before
+                plugin = ScenePlugin::load(&scene_lib_path);
+                if plugin.is_some() {
+                    tracing::info!("Scene plugin now available — switching to hot-reload mode");
+                    needs_render = true;
+                }
+            }
+        }
+
         // Render frame
         if needs_render {
             if let Some(ref renderer_mutex) = renderer {
@@ -243,11 +288,15 @@ fn android_main(app: AndroidApp) {
                     let w = native_window.width() as f32;
                     let h = native_window.height() as f32;
 
-                    let scene = build_test_scene(w, h);
+                    // Use plugin scene if available, otherwise built-in fallback
+                    let scene = if let Some(ref p) = plugin {
+                        p.build_scene(w, h)
+                    } else {
+                        build_test_scene(w, h)
+                    };
 
                     let mut r = renderer_mutex.lock().unwrap();
 
-                    // Handle resize
                     let (cur_w, cur_h) = r.size();
                     if cur_w != w as u32 || cur_h != h as u32 {
                         r.resize(w as u32, h as u32);
@@ -265,6 +314,11 @@ fn android_main(app: AndroidApp) {
                 }
             }
         }
+    }
+
+    // Cleanup plugin
+    if let Some(p) = plugin {
+        p.unload();
     }
 
     tracing::info!("FLUI Android Demo finished");
