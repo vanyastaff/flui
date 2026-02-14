@@ -21,7 +21,7 @@
 
 use android_activity::{AndroidApp, InputStatus, MainEvent, PollEvent};
 use flui_engine::wgpu::Renderer;
-use flui_hot_reload::ScenePlugin;
+use flui_hot_reload::HotReloadDriver;
 use flui_layer::{CanvasLayer, Layer, LayerTree, Scene};
 use flui_types::geometry::{px, Rect, Size};
 use flui_types::painting::Paint;
@@ -166,17 +166,7 @@ fn android_main(app: AndroidApp) {
     let mut running = true;
     let mut resumed = false;
     let mut needs_render = false;
-    let mut plugin: Option<ScenePlugin> = ScenePlugin::load(&scene_lib_path);
-    let mut last_plugin_check = std::time::Instant::now();
-
-    if plugin.is_some() {
-        tracing::info!("Scene plugin available — using hot-reload mode");
-    } else {
-        tracing::info!(
-            "No scene plugin at {} — using built-in scene",
-            scene_lib_path.display()
-        );
-    }
+    let mut hot_reload = HotReloadDriver::new(&scene_lib_path);
 
     loop {
         if !running {
@@ -259,23 +249,12 @@ fn android_main(app: AndroidApp) {
             }
         }
 
-        // Check for plugin hot-reload (every 500ms)
-        if resumed && last_plugin_check.elapsed() >= Duration::from_millis(500) {
-            last_plugin_check = std::time::Instant::now();
-
-            if let Some(ref p) = plugin {
-                if p.has_update() {
-                    tracing::info!("Scene plugin updated — reloading!");
-                    let old = plugin.take().unwrap();
-                    old.unload();
-                    plugin = ScenePlugin::load(&scene_lib_path);
-                    needs_render = true;
-                }
-            } else {
-                // Try to load plugin if it wasn't available before
-                plugin = ScenePlugin::load(&scene_lib_path);
-                if plugin.is_some() {
-                    tracing::info!("Scene plugin now available — switching to hot-reload mode");
+        // Poll for plugin hot-reload (handles mtime check + unload/reload)
+        if resumed {
+            if let Some(native_window) = app.native_window() {
+                let w = native_window.width() as f32;
+                let h = native_window.height() as f32;
+                if hot_reload.poll(w, h).is_some() {
                     needs_render = true;
                 }
             }
@@ -288,12 +267,7 @@ fn android_main(app: AndroidApp) {
                     let w = native_window.width() as f32;
                     let h = native_window.height() as f32;
 
-                    // Use plugin scene if available, otherwise built-in fallback
-                    let scene = if let Some(ref p) = plugin {
-                        p.build_scene(w, h)
-                    } else {
-                        build_test_scene(w, h)
-                    };
+                    let scene = hot_reload.build_scene_or(w, h, build_test_scene);
 
                     let mut r = renderer_mutex.lock().unwrap();
 
@@ -314,11 +288,6 @@ fn android_main(app: AndroidApp) {
                 }
             }
         }
-    }
-
-    // Cleanup plugin
-    if let Some(p) = plugin {
-        p.unload();
     }
 
     tracing::info!("FLUI Android Demo finished");

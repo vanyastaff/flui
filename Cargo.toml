@@ -28,6 +28,7 @@ members = [
     "examples/android_demo",      # Android GPU demo (cdylib) — build with: cargo ndk -t arm64-v8a build -p flui-android-demo
     "examples/android_scene",     # Hot-reloadable scene plugin (cdylib) — loaded via dlopen
     "examples/android_app",       # Widget-based hot-reloadable plugin (cdylib) — app_plugin! macro
+    "examples/desktop_scene",     # Hot-reloadable scene plugin for desktop — loaded via HotReloadDriver
 
     # === Temporarily disabled ===
     # "crates/flui-animation",
@@ -221,6 +222,9 @@ flui-painting = { path = "crates/flui-painting" }
 
 # === Platform Layer (for examples) ===
 flui-platform = { path = "crates/flui-platform" }
+
+# === Hot-Reload (for examples) ===
+flui-hot-reload = { path = "crates/flui-hot-reload" }
 
 # === Engine Layer (for GPU examples) ===
 flui-engine = { path = "crates/flui-engine", features = ["dx12"] }

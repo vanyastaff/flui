@@ -6,9 +6,30 @@
 //! This proves that flui-engine's `render_scene()` correctly traverses the
 //! LayerTree and dispatches DisplayList commands through the GPU backend.
 //!
+//! # Hot-Reload Support
+//!
+//! Set the `FLUI_SCENE_PLUGIN` environment variable to point to a scene plugin
+//! shared library (`.dll`/`.so`/`.dylib`). The example will load and render
+//! the plugin's scene, polling for updates every 500ms.
+//!
+//! ```bash
+//! # Build the desktop scene plugin:
+//! cargo build -p flui-desktop-scene
+//!
+//! # Run with hot-reload (Linux/macOS):
+//! FLUI_SCENE_PLUGIN=target/debug/libflui_scene.so cargo run --example scene_render
+//!
+//! # Run with hot-reload (Windows):
+//! set FLUI_SCENE_PLUGIN=target\debug\flui_scene.dll
+//! cargo run --example scene_render
+//! ```
+//!
+//! Without the env var, the built-in scene (colored rectangles) is used.
+//!
 //! Run with: cargo run --example scene_render
 
 use flui_engine::wgpu::Renderer;
+use flui_hot_reload::HotReloadDriver;
 use flui_layer::{CanvasLayer, Layer, LayerTree, Scene};
 use flui_platform::traits::PlatformWindow;
 use flui_platform::{current_platform, WindowOptions};
@@ -38,11 +59,10 @@ impl raw_window_handle::HasDisplayHandle for PlatformWindowHandle {
     }
 }
 
-/// Build a scene with colored rectangles to prove the compositor works.
+/// Build a scene with colored rectangles (fallback when no plugin is loaded).
 fn build_test_scene(width: f32, height: f32) -> Scene {
     let mut tree = LayerTree::new();
 
-    // Create a CanvasLayer with drawing commands
     let mut canvas_layer = CanvasLayer::new();
     let canvas = canvas_layer.canvas_mut();
 
@@ -83,7 +103,6 @@ fn build_test_scene(width: f32, height: f32) -> Scene {
     );
 
     let root_id = tree.insert(Layer::Canvas(canvas_layer));
-
     Scene::new(Size::new(px(width), px(height)), tree, Some(root_id), 1)
 }
 
@@ -94,14 +113,26 @@ fn main() {
 
     tracing::info!("Scene render example — proving GPU compositor pipeline");
 
+    // Check for hot-reload plugin path
+    let hot_reload = std::env::var("FLUI_SCENE_PLUGIN").ok().map(|path| {
+        tracing::info!("Hot-reload enabled: {}", path);
+        Arc::new(Mutex::new(HotReloadDriver::new(path)))
+    });
+
     let platform = current_platform().expect("Failed to initialize platform");
     tracing::info!("Platform: {}", platform.name());
 
     let platform_for_ready = platform.clone();
 
     platform.run(Box::new(move || {
+        let title = if hot_reload.is_some() {
+            "FLUI Scene Render — Hot-Reload Active"
+        } else {
+            "FLUI Scene Render — GPU Compositor Proof"
+        };
+
         let options = WindowOptions {
-            title: "FLUI Scene Render — GPU Compositor Proof".to_string(),
+            title: title.to_string(),
             size: Size::new(px(800.0), px(600.0)),
             resizable: true,
             visible: true,
@@ -144,13 +175,20 @@ fn main() {
         // Register frame callback — build scene and render each frame
         let renderer_frame = Arc::clone(&renderer);
         let window_for_frame = window.clone();
+        let hot_reload_frame = hot_reload.clone();
         window.on_request_frame(Box::new(move || {
             let size = window_for_frame.physical_size();
             let w = size.width.0 as f32;
             let h = size.height.0 as f32;
 
-            // Build scene with colored rectangles
-            let scene = build_test_scene(w, h);
+            // If hot-reload is enabled, poll for plugin updates and use plugin scene
+            let scene = if let Some(ref hr) = hot_reload_frame {
+                let mut driver = hr.lock().unwrap();
+                driver.poll(w, h);
+                driver.build_scene_or(w, h, build_test_scene)
+            } else {
+                build_test_scene(w, h)
+            };
 
             // Render scene through the full pipeline
             let mut r = renderer_frame.lock().unwrap();
@@ -170,7 +208,13 @@ fn main() {
         // Request first frame
         window.request_redraw();
 
-        tracing::info!("Scene render pipeline active — you should see colored rectangles");
+        if hot_reload.is_some() {
+            tracing::info!("Scene render with hot-reload — edit plugin and rebuild to see changes");
+        } else {
+            tracing::info!(
+                "Scene render pipeline active — set FLUI_SCENE_PLUGIN for hot-reload"
+            );
+        }
     }));
 
     tracing::info!("Application finished");

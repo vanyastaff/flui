@@ -1,0 +1,21 @@
+[package]
+name = "flui-android-app"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Widget-based hot-reloadable plugin for FLUI Android demo (app_plugin!)"
+
+[lib]
+crate-type = ["cdylib"]
+name = "flui_scene"
+
+[dependencies]
+flui-hot-reload = { path = "../../crates/flui-hot-reload" }
+flui-layer = { path = "../../crates/flui-layer" }
+flui-view = { path = "../../crates/flui-view" }
+flui-rendering = { path = "../../crates/flui-rendering" }
+flui-types = { path = "../../crates/flui-types" }
+flui-foundation = { path = "../../crates/flui-foundation" }
+
+[lints]
+workspace = true

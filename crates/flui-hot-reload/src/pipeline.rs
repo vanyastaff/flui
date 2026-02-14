@@ -17,6 +17,32 @@ use flui_view::{
 use parking_lot::RwLock;
 use std::sync::Arc;
 
+/// Log error messages via Android logcat (or stderr on other platforms).
+///
+/// The tracing subscriber from the host doesn't propagate into dlopen'd plugins,
+/// so we use `android_log_sys` directly on Android and `eprintln` elsewhere.
+/// Reserved for unexpected error conditions only.
+#[allow(unused_variables)]
+fn log_error(msg: &str) {
+    #[cfg(target_os = "android")]
+    {
+        let tag = c"PluginPipeline";
+        let msg_c = std::ffi::CString::new(msg).unwrap_or_default();
+        #[allow(unsafe_code)]
+        unsafe {
+            android_log_sys::__android_log_write(
+                android_log_sys::LogPriority::ERROR as i32,
+                tag.as_ptr(),
+                msg_c.as_ptr(),
+            );
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        eprintln!("[PluginPipeline] ERROR: {msg}");
+    }
+}
+
 /// A self-contained rendering pipeline for use inside hot-reload plugins.
 ///
 /// Encapsulates `WidgetsBinding` (element tree) and `PipelineOwner` (render tree),
@@ -66,12 +92,12 @@ impl PluginPipeline {
             .downcast_mut::<RootRenderElement<V>>()
         {
             rre.set_pipeline_owner(Arc::clone(&pipeline_owner));
+        } else {
+            log_error("failed to downcast to RootRenderElement");
         }
 
         // Mount the element tree (creates RenderViewObject, inserts into RenderTree)
         root_element.mount(None, 0);
-
-        tracing::info!("PluginPipeline: root widget mounted");
 
         Self {
             widgets,
@@ -87,18 +113,29 @@ impl PluginPipeline {
     /// 2. **Layout** — Compute sizes via `flush_layout()`
     /// 3. **Paint** — Generate display lists via `flush_paint()`
     /// 4. **Scene** — Extract `LayerTree` and create `Scene`
+    ///
     pub fn draw_frame(&mut self, width: f32, height: f32) -> Scene {
         // Phase 1: Build (rebuild dirty elements)
-        // WidgetsBinding.draw_frame() processes elements marked dirty via
-        // mark_needs_build(). On first frame after mount(), the root element
-        // is already built by mount() → perform_build().
         if self.widgets.has_pending_builds() {
             self.widgets.draw_frame();
         }
 
         // Phase 2 & 3: Layout + Compositing + Paint
+        //
+        // Always mark the root as needing paint so we produce a fresh LayerTree.
+        // Unlike AppBinding (which skips frames when nothing is dirty and the
+        // previous frame is still on-screen), the plugin must return a Scene
+        // every time it's called — the host expects a new opaque pointer.
         {
             let mut pipeline = self.pipeline_owner.write();
+
+            // Force repaint: mark root dirty so flush_paint() always produces a LayerTree.
+            // Without this, subsequent calls after the first frame return an empty scene
+            // because take_layer_tree() consumes the tree and nodes are no longer dirty.
+            if let Some(root_id) = pipeline.root_id() {
+                pipeline.add_node_needing_paint(root_id.get(), 0);
+            }
+
             pipeline.flush_layout();
             pipeline.flush_compositing_bits();
             pipeline.flush_paint();
@@ -112,8 +149,8 @@ impl PluginPipeline {
             let root = layer_tree.root();
             Scene::new(size, layer_tree, root, 1)
         } else {
-            // No layer tree produced — return empty scene
-            tracing::warn!("PluginPipeline: no LayerTree produced, returning empty scene");
+            // Should not happen since we force-marked root dirty above
+            log_error("draw_frame: no LayerTree produced after force-repaint");
             let tree = flui_layer::LayerTree::new();
             Scene::new(size, tree, None, 1)
         }

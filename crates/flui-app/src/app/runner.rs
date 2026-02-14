@@ -313,11 +313,8 @@ where
 /// }
 /// ```
 #[cfg(target_os = "android")]
-pub fn run_app_android_with_config<V>(
-    app: android_activity::AndroidApp,
-    root: V,
-    config: AppConfig,
-) where
+pub fn run_app_android_with_config<V>(app: android_activity::AndroidApp, root: V, config: AppConfig)
+where
     V: View + StatelessView + Clone + Send + Sync + 'static,
 {
     init_logging();
@@ -338,13 +335,23 @@ where
     use crate::embedder::PlatformWindowHandle;
     use flui_engine::wgpu::Renderer;
     use flui_foundation::HasInstance;
+    use flui_hot_reload::HotReloadDriver;
     use flui_platform::traits::{DispatchEventResult, LifecycleEvent, PlatformInput};
     use flui_platform::{AndroidPlatform, Platform, WindowOptions};
     use flui_scheduler::Scheduler;
     use parking_lot::Mutex;
+    use std::path::PathBuf;
     use std::sync::Arc;
 
     tracing::info!("Starting Android platform via flui-platform");
+
+    // Hot-reload: build plugin path from app's internal data directory
+    let plugin_path: PathBuf = app
+        .internal_data_path()
+        .map(|p| p.join("libflui_scene.so"))
+        .unwrap_or_else(|| PathBuf::from("/data/local/tmp/libflui_scene.so"));
+
+    let hot_reload = Arc::new(Mutex::new(HotReloadDriver::new(&plugin_path)));
 
     let platform = Arc::new(AndroidPlatform::new(app));
     let platform_inner = Arc::clone(&platform);
@@ -372,7 +379,7 @@ where
         };
         renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
 
-        // 3. Mount root widget
+        // 3. Mount root widget (used when no plugin is active)
         mount_root(&root, phys_size.width.0 as f32, phys_size.height.0 as f32);
 
         // 4. Wrap renderer for callback sharing
@@ -387,24 +394,39 @@ where
             }
         }));
 
-        // 6. Register frame callback → scheduler + AppBinding::render_frame()
+        // 6. Register frame callback — with hot-reload plugin override
         let renderer_frame = Arc::clone(&renderer);
+        let hot_reload_frame = Arc::clone(&hot_reload);
         window.on_request_frame(Box::new(move || {
-            let binding = AppBinding::instance();
+            let mut r = renderer_frame.lock();
+            let (w, h) = r.size();
+            let mut hr = hot_reload_frame.lock();
 
-            // On-demand rendering: skip frame if nothing changed
+            // Poll for plugin updates (mtime check, auto-reload)
+            hr.poll(w as f32, h as f32);
+
+            // If plugin is active, use its Scene instead of AppBinding's pipeline
+            if let Some(scene) = hr.build_scene(w as f32, h as f32) {
+                drop(hr);
+                if let Err(e) = r.render_scene(&scene) {
+                    tracing::error!("Plugin render failed: {:?}", e);
+                }
+                return;
+            }
+            drop(hr);
+            drop(r);
+
+            // Normal path: use AppBinding's widget pipeline
+            let binding = AppBinding::instance();
             if !binding.needs_redraw() && !binding.has_pending_work() {
                 return;
             }
 
             let now = std::time::Instant::now();
-
-            // Scheduler callbacks (animations)
             let scheduler = Scheduler::instance();
             let _frame_id = scheduler.handle_begin_frame(now);
             scheduler.handle_draw_frame();
 
-            // Render frame via AppBinding
             let mut r = renderer_frame.lock();
             binding.render_frame(&mut r);
         }));
@@ -452,7 +474,7 @@ where
         // 10. Store window in AppBinding for runtime access
         AppBinding::instance().set_window(window);
 
-        tracing::info!("Android platform initialized with callbacks");
+        tracing::info!("Android platform initialized with callbacks (hot-reload enabled)");
     }));
 }
 

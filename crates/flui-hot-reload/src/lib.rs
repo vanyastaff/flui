@@ -84,7 +84,13 @@ pub use pipeline::PluginPipeline;
 pub mod dynlib;
 
 #[cfg(not(target_arch = "wasm32"))]
+mod driver;
+
+#[cfg(not(target_arch = "wasm32"))]
 mod host;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use driver::HotReloadDriver;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use host::{PluginKind, ScenePlugin};

@@ -902,6 +902,7 @@ dependencies = [
  "anyhow",
  "flui-engine",
  "flui-foundation",
+ "flui-hot-reload",
  "flui-layer",
  "flui-painting",
  "flui-platform",
@@ -962,6 +963,7 @@ dependencies = [
  "android-activity",
  "flui-engine",
  "flui-foundation",
+ "flui-hot-reload",
  "flui-interaction",
  "flui-layer",
  "flui-log",
@@ -979,6 +981,15 @@ dependencies = [
  "tracing",
  "ui-events-winit",
  "winit",
+]
+
+[[package]]
+name = "flui-desktop-scene"
+version = "0.1.0"
+dependencies = [
+ "flui-hot-reload",
+ "flui-layer",
+ "flui-types",
 ]
 
 [[package]]
@@ -1039,6 +1050,7 @@ dependencies = [
 name = "flui-hot-reload"
 version = "0.1.0"
 dependencies = [
+ "android_log-sys",
  "flui-layer",
  "flui-rendering",
  "flui-types",
