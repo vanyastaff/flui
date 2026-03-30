@@ -33,6 +33,11 @@ members = [
     # "examples/android_app",       # Widget-based hot-reloadable plugin (cdylib)
     "examples/desktop_scene",     # Hot-reloadable scene plugin for desktop — loaded via HotReloadDriver
 
+    # NOTE: Web examples are excluded from default workspace members because they
+    # require wasm32 target. Build with:
+    #   cd examples/web_demo && wasm-pack build --target web --out-dir pkg
+    "examples/web_demo",          # Web/WASM platform demo (cdylib)
+
     # === Temporarily disabled ===
     # "crates/flui-animation",
     # "crates/flui-reactivity",
