@@ -212,19 +212,31 @@ impl CommandRenderer for Backend {
 
     fn render_text_span(
         &mut self,
-        _span: &flui_types::typography::InlineSpan,
+        span: &flui_types::typography::InlineSpan,
         offset: Offset<Pixels>,
-        _text_scale_factor: f64,
+        text_scale_factor: f64,
         transform: &Matrix4,
     ) {
-        // TODO: Implement rich text span rendering
-        // For now, just log that we received a text span
-        self.with_transform(transform, |_painter| {
-            tracing::debug!(
-                offset_x = offset.dx.0,
-                offset_y = offset.dy.0,
-                "render_text_span: rich text span rendering not yet implemented"
-            );
+        let text = span.to_plain_text();
+        if text.is_empty() {
+            return;
+        }
+
+        let style = span.style();
+        #[allow(clippy::cast_possible_truncation)]
+        let base_font_size = style
+            .and_then(|s| s.font_size)
+            .unwrap_or(14.0) as f32;
+        #[allow(clippy::cast_possible_truncation)]
+        let font_size = base_font_size * (text_scale_factor as f32);
+        let color = style
+            .and_then(|s| s.color)
+            .unwrap_or(Color::BLACK);
+        let paint = Paint::fill(color);
+        let position = Point::new(offset.dx, offset.dy);
+
+        self.with_transform(transform, |painter| {
+            painter.text_styled(&text, position, font_size, &paint);
         });
     }
 
