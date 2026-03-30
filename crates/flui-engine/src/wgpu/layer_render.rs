@@ -203,25 +203,14 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for ClipPathLayer {
     }
 }
 
-#[allow(clippy::similar_names)] // rect/rrect are intentionally similar
 impl<R: CommandRenderer + ?Sized> LayerRender<R> for flui_layer::ClipSuperellipseLayer {
     fn render(&self, renderer: &mut R) {
         if !self.clips() {
             return;
         }
-        // Superellipse clipping - fallback to RRect approximation
-        // TODO: Implement native superellipse clipping with proper squircle curve
         let superellipse = self.clip_superellipse();
-        let rect = superellipse.outer_rect();
-        // Use the corner radii from superellipse to create an approximate RRect
-        let rrect = flui_types::geometry::RRect::from_rect_and_corners(
-            rect,
-            superellipse.tl_radius(),
-            superellipse.tr_radius(),
-            superellipse.br_radius(),
-            superellipse.bl_radius(),
-        );
-        renderer.push_clip_rrect(&rrect, self.clip_behavior());
+        let path = generate_superellipse_path(superellipse);
+        renderer.push_clip_path(&path, self.clip_behavior());
     }
 
     fn cleanup(&self, renderer: &mut R) {
@@ -229,6 +218,142 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for flui_layer::ClipSuperellips
             renderer.pop_clip();
         }
     }
+}
+
+/// Generates a proper superellipse (squircle) path from an `RSuperellipse`.
+///
+/// Uses the parametric superellipse equation with `n = 4` (iOS squircle):
+/// ```text
+/// x(t) = a * sign(cos(t)) * |cos(t)|^(2/n)
+/// y(t) = b * sign(sin(t)) * |sin(t)|^(2/n)
+/// ```
+///
+/// Each corner is generated independently using its own radii, with straight
+/// edges connecting the corners. 64 points per corner ensure a smooth curve.
+fn generate_superellipse_path(
+    superellipse: &flui_types::geometry::RSuperellipse,
+) -> flui_types::painting::Path {
+    use flui_types::geometry::{Pixels, Point, px};
+
+    let rect = superellipse.outer_rect();
+    let tl = superellipse.tl_radius();
+    let tr = superellipse.tr_radius();
+    let br = superellipse.br_radius();
+    let bl = superellipse.bl_radius();
+
+    let mut path = flui_types::painting::Path::new();
+
+    // iOS squircle exponent
+    let n: f32 = 4.0;
+    let two_over_n = 2.0 / n;
+
+    // Number of sample points per corner quarter-arc
+    let segments_per_corner: usize = 16;
+
+    let left = rect.left().0;
+    let top = rect.top().0;
+    let right = rect.right().0;
+    let bottom = rect.bottom().0;
+
+    // Helper: compute superellipse point for a corner quadrant.
+    // `cx`, `cy` is the corner center, `rx`, `ry` are the radii,
+    // `t` sweeps through the quarter, `sx`/`sy` select the quadrant direction.
+    let se_point = |cx: f32, cy: f32, rx: f32, ry: f32, t: f32, sx: f32, sy: f32| -> Point<Pixels> {
+        let cos_t = t.cos();
+        let sin_t = t.sin();
+        let x = cx + sx * rx * cos_t.abs().powf(two_over_n);
+        let y = cy + sy * ry * sin_t.abs().powf(two_over_n);
+        Point::new(px(x), px(y))
+    };
+
+    // Start at top edge, after top-left corner
+    // Top-left corner: center at (left + tl.x, top + tl.y)
+    // Sweep from PI (left) to PI/2 (top), i.e. t goes PI -> PI/2
+    // Direction: sx = -1 (left of center), sy = -1 (above center)
+    {
+        let cx = left + tl.x.0;
+        let cy = top + tl.y.0;
+        let rx = tl.x.0;
+        let ry = tl.y.0;
+        if rx > 0.0 && ry > 0.0 {
+            for i in 0..=segments_per_corner {
+                // Sweep from PI/2 to 0 (parametric), mapping to top-left quadrant
+                let t = std::f32::consts::FRAC_PI_2
+                    * (1.0 - i as f32 / segments_per_corner as f32);
+                let p = se_point(cx, cy, rx, ry, t, -1.0, -1.0);
+                if i == 0 {
+                    path.move_to(p);
+                } else {
+                    path.line_to(p);
+                }
+            }
+        } else {
+            path.move_to(Point::new(px(left), px(top)));
+        }
+    }
+
+    // Top edge -> top-right corner
+    // Top-right corner: center at (right - tr.x, top + tr.y)
+    // Direction: sx = +1 (right of center), sy = -1 (above center)
+    {
+        let cx = right - tr.x.0;
+        let cy = top + tr.y.0;
+        let rx = tr.x.0;
+        let ry = tr.y.0;
+        if rx > 0.0 && ry > 0.0 {
+            for i in 0..=segments_per_corner {
+                let t = std::f32::consts::FRAC_PI_2
+                    * (i as f32 / segments_per_corner as f32);
+                let p = se_point(cx, cy, rx, ry, t, 1.0, -1.0);
+                path.line_to(p);
+            }
+        } else {
+            path.line_to(Point::new(px(right), px(top)));
+        }
+    }
+
+    // Right edge -> bottom-right corner
+    // Bottom-right corner: center at (right - br.x, bottom - br.y)
+    // Direction: sx = +1, sy = +1
+    {
+        let cx = right - br.x.0;
+        let cy = bottom - br.y.0;
+        let rx = br.x.0;
+        let ry = br.y.0;
+        if rx > 0.0 && ry > 0.0 {
+            for i in 0..=segments_per_corner {
+                let t = std::f32::consts::FRAC_PI_2
+                    * (1.0 - i as f32 / segments_per_corner as f32);
+                let p = se_point(cx, cy, rx, ry, t, 1.0, 1.0);
+                path.line_to(p);
+            }
+        } else {
+            path.line_to(Point::new(px(right), px(bottom)));
+        }
+    }
+
+    // Bottom edge -> bottom-left corner
+    // Bottom-left corner: center at (left + bl.x, bottom - bl.y)
+    // Direction: sx = -1, sy = +1
+    {
+        let cx = left + bl.x.0;
+        let cy = bottom - bl.y.0;
+        let rx = bl.x.0;
+        let ry = bl.y.0;
+        if rx > 0.0 && ry > 0.0 {
+            for i in 0..=segments_per_corner {
+                let t = std::f32::consts::FRAC_PI_2
+                    * (i as f32 / segments_per_corner as f32);
+                let p = se_point(cx, cy, rx, ry, t, -1.0, 1.0);
+                path.line_to(p);
+            }
+        } else {
+            path.line_to(Point::new(px(left), px(bottom)));
+        }
+    }
+
+    path.close();
+    path
 }
 
 // ============================================================================
