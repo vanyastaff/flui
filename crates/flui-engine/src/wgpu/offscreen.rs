@@ -68,6 +68,9 @@ pub struct OffscreenRenderer {
 
     /// Cached blur pipelines (downsample, upsample)
     blur_pipelines: Option<BlurPipelines>,
+
+    /// Cached morphological filter pipelines (dilate, erode)
+    morph_pipelines: Option<MorphPipelines>,
 }
 
 impl OffscreenRenderer {
@@ -96,6 +99,7 @@ impl OffscreenRenderer {
             bind_group_layout,
             blur_bind_group_layout,
             blur_pipelines: None,
+            morph_pipelines: None,
         }
     }
 
@@ -120,6 +124,7 @@ impl OffscreenRenderer {
             bind_group_layout,
             blur_bind_group_layout,
             blur_pipelines: None,
+            morph_pipelines: None,
         }
     }
 
@@ -863,6 +868,358 @@ impl OffscreenRenderer {
         result
     }
 
+    /// Get or create the morphological filter pipelines (dilate + erode)
+    ///
+    /// Lazily creates both pipelines on first call, then caches them.
+    /// Reuses `blur_bind_group_layout` since bindings are identical
+    /// (uniform + texture + sampler).
+    fn get_or_create_morph_pipelines(&mut self) -> &MorphPipelines {
+        if self.morph_pipelines.is_none() {
+            tracing::debug!("Creating morphological filter pipelines");
+
+            let pipeline_layout =
+                self.device
+                    .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("Morph Pipeline Layout"),
+                        bind_group_layouts: &[&self.blur_bind_group_layout],
+                        push_constant_ranges: &[],
+                    });
+
+            let vertex_buffer_layout = wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<FullscreenVertex>() as wgpu::BufferAddress,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &[
+                    // position: vec2<f32>
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x2,
+                        offset: 0,
+                        shader_location: 0,
+                    },
+                    // uv: vec2<f32>
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x2,
+                        offset: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
+                        shader_location: 1,
+                    },
+                ],
+            };
+
+            // Dilate pipeline
+            let dilate_shader = self
+                .shader_cache
+                .get_or_compile_module(ShaderType::MorphDilate, &self.device);
+            let dilate_module = dilate_shader
+                .module
+                .as_ref()
+                .expect("Dilate shader module should be compiled");
+
+            let dilate_pipeline =
+                self.device
+                    .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                        label: Some("Morphological Dilate Pipeline"),
+                        layout: Some(&pipeline_layout),
+                        vertex: wgpu::VertexState {
+                            module: dilate_module,
+                            entry_point: Some("vs_main"),
+                            buffers: &[vertex_buffer_layout.clone()],
+                            compilation_options: wgpu::PipelineCompilationOptions::default(),
+                        },
+                        fragment: Some(wgpu::FragmentState {
+                            module: dilate_module,
+                            entry_point: Some("fs_main"),
+                            targets: &[Some(wgpu::ColorTargetState {
+                                format: self.surface_format,
+                                blend: Some(wgpu::BlendState::REPLACE),
+                                write_mask: wgpu::ColorWrites::ALL,
+                            })],
+                            compilation_options: wgpu::PipelineCompilationOptions::default(),
+                        }),
+                        primitive: wgpu::PrimitiveState {
+                            topology: wgpu::PrimitiveTopology::TriangleList,
+                            strip_index_format: None,
+                            front_face: wgpu::FrontFace::Ccw,
+                            cull_mode: None,
+                            unclipped_depth: false,
+                            polygon_mode: wgpu::PolygonMode::Fill,
+                            conservative: false,
+                        },
+                        depth_stencil: None,
+                        multisample: wgpu::MultisampleState {
+                            count: 1,
+                            mask: !0,
+                            alpha_to_coverage_enabled: false,
+                        },
+                        multiview: None,
+                        cache: None,
+                    });
+
+            // Erode pipeline
+            let erode_shader = self
+                .shader_cache
+                .get_or_compile_module(ShaderType::MorphErode, &self.device);
+            let erode_module = erode_shader
+                .module
+                .as_ref()
+                .expect("Erode shader module should be compiled");
+
+            let erode_pipeline =
+                self.device
+                    .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                        label: Some("Morphological Erode Pipeline"),
+                        layout: Some(&pipeline_layout),
+                        vertex: wgpu::VertexState {
+                            module: erode_module,
+                            entry_point: Some("vs_main"),
+                            buffers: &[vertex_buffer_layout],
+                            compilation_options: wgpu::PipelineCompilationOptions::default(),
+                        },
+                        fragment: Some(wgpu::FragmentState {
+                            module: erode_module,
+                            entry_point: Some("fs_main"),
+                            targets: &[Some(wgpu::ColorTargetState {
+                                format: self.surface_format,
+                                blend: Some(wgpu::BlendState::REPLACE),
+                                write_mask: wgpu::ColorWrites::ALL,
+                            })],
+                            compilation_options: wgpu::PipelineCompilationOptions::default(),
+                        }),
+                        primitive: wgpu::PrimitiveState {
+                            topology: wgpu::PrimitiveTopology::TriangleList,
+                            strip_index_format: None,
+                            front_face: wgpu::FrontFace::Ccw,
+                            cull_mode: None,
+                            unclipped_depth: false,
+                            polygon_mode: wgpu::PolygonMode::Fill,
+                            conservative: false,
+                        },
+                        depth_stencil: None,
+                        multisample: wgpu::MultisampleState {
+                            count: 1,
+                            mask: !0,
+                            alpha_to_coverage_enabled: false,
+                        },
+                        multiview: None,
+                        cache: None,
+                    });
+
+            self.morph_pipelines = Some(MorphPipelines {
+                dilate: Arc::new(dilate_pipeline),
+                erode: Arc::new(erode_pipeline),
+            });
+        }
+
+        self.morph_pipelines
+            .as_ref()
+            .expect("Morph pipelines were just created")
+    }
+
+    /// Apply morphological filter (dilate or erode) to an input texture
+    ///
+    /// Uses a two-pass separable approach (horizontal then vertical) for O(N)
+    /// per pixel instead of O(N²).
+    ///
+    /// # Arguments
+    ///
+    /// * `input` - Source texture to filter
+    /// * `radius` - Kernel radius in pixels
+    /// * `is_dilate` - `true` for dilate (max filter), `false` for erode (min filter)
+    ///
+    /// # Returns
+    ///
+    /// A new `PooledTexture` containing the filtered result at the original resolution.
+    pub fn render_morphological(
+        &mut self,
+        input: &PooledTexture,
+        radius: f32,
+        is_dilate: bool,
+    ) -> PooledTexture {
+        let filter_name = if is_dilate { "dilate" } else { "erode" };
+
+        tracing::debug!(
+            "Rendering morphological {}: radius={}, input={}x{}",
+            filter_name,
+            radius,
+            input.width(),
+            input.height()
+        );
+
+        // Ensure morph pipelines exist and pick the right one
+        let pipelines = self.get_or_create_morph_pipelines();
+        let pipeline = if is_dilate {
+            Arc::clone(&pipelines.dilate)
+        } else {
+            Arc::clone(&pipelines.erode)
+        };
+
+        // Acquire intermediate texture for horizontal pass result
+        let temp = self
+            .texture_pool
+            .acquire(input.width(), input.height(), self.surface_format);
+
+        // Acquire output texture for vertical pass result
+        let output = self
+            .texture_pool
+            .acquire(input.width(), input.height(), self.surface_format);
+
+        // Create shared resources
+        let vertices = FullscreenVertex::fullscreen_quad();
+        let vertex_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Morph Vertex Buffer"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+
+        let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Morph Sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        let tex_w = input.width() as f32;
+        let tex_h = input.height() as f32;
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Morph Command Encoder"),
+            });
+
+        // === Pass 1: Horizontal (input → temp) ===
+        {
+            let params = MorphParams {
+                texture_size: [tex_w, tex_h],
+                radius,
+                direction: 0.0, // horizontal
+            };
+
+            let uniform_buffer =
+                self.device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Morph Horizontal Params"),
+                        contents: bytemuck::bytes_of(&params),
+                        usage: wgpu::BufferUsages::UNIFORM,
+                    });
+
+            let src_view = input.view();
+            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Morph Horizontal Bind Group"),
+                layout: &self.blur_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: uniform_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(src_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                ],
+            });
+
+            let dst_view = temp.view();
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Morph Horizontal Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: dst_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            render_pass.set_pipeline(&pipeline);
+            render_pass.set_bind_group(0, &bind_group, &[]);
+            render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+            render_pass.draw(0..6, 0..1);
+        }
+
+        // === Pass 2: Vertical (temp → output) ===
+        {
+            let params = MorphParams {
+                texture_size: [tex_w, tex_h],
+                radius,
+                direction: 1.0, // vertical
+            };
+
+            let uniform_buffer =
+                self.device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Morph Vertical Params"),
+                        contents: bytemuck::bytes_of(&params),
+                        usage: wgpu::BufferUsages::UNIFORM,
+                    });
+
+            let src_view = temp.view();
+            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Morph Vertical Bind Group"),
+                layout: &self.blur_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: uniform_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(src_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                ],
+            });
+
+            let dst_view = output.view();
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Morph Vertical Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: dst_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            render_pass.set_pipeline(&pipeline);
+            render_pass.set_bind_group(0, &bind_group, &[]);
+            render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+            render_pass.draw(0..6, 0..1);
+        }
+
+        // Submit both passes
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        tracing::debug!(
+            "Morphological {} rendering complete: radius={}",
+            filter_name,
+            radius
+        );
+
+        // temp texture is dropped here, returned to pool automatically
+        output
+    }
+
     /// Access the wgpu device
     pub fn device(&self) -> &Arc<wgpu::Device> {
         &self.device
@@ -946,6 +1303,28 @@ pub struct BlurParams {
 struct BlurPipelines {
     downsample: Arc<wgpu::RenderPipeline>,
     upsample: Arc<wgpu::RenderPipeline>,
+}
+
+/// Uniform parameters for morphological filter shaders (dilate/erode)
+///
+/// Same alignment as [`BlurParams`] (16 bytes, 4 floats) so it can reuse
+/// the `blur_bind_group_layout`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+pub struct MorphParams {
+    /// Size of the source texture in pixels
+    pub texture_size: [f32; 2],
+    /// Kernel radius in pixels
+    pub radius: f32,
+    /// Pass direction: 0.0 = horizontal, 1.0 = vertical
+    pub direction: f32,
+}
+
+/// Cached morphological filter pipelines (dilate + erode)
+#[allow(missing_debug_implementations)]
+struct MorphPipelines {
+    dilate: Arc<wgpu::RenderPipeline>,
+    erode: Arc<wgpu::RenderPipeline>,
 }
 
 /// GPU pipeline manager for shader masks
