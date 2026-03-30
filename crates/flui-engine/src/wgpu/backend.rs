@@ -725,15 +725,57 @@ impl CommandRenderer for Backend {
         self.painter.restore_layer();
     }
 
-    fn push_color_filter(&mut self, _filter: &flui_types::painting::ColorMatrix) {
-        // TODO: Implement color filter via GPU shader
-        // For now, save state to maintain push/pop balance
-        self.painter.save();
-        tracing::trace!("push_color_filter: GPU color matrix filter not yet implemented");
+    fn push_color_filter(&mut self, filter: &flui_types::painting::ColorMatrix) {
+        // Check if the matrix is identity (no transformation needed)
+        let identity = flui_types::painting::ColorMatrix::identity();
+        if filter.values == identity.values {
+            // Identity matrix: use a plain save so pop_color_filter stays balanced
+            self.painter.save_layer(None, &Paint::fill(Color::WHITE));
+            tracing::trace!("push_color_filter: identity matrix, no-op layer");
+            return;
+        }
+
+        // Pragmatic approximation: extract opacity and tint from the color matrix.
+        //
+        // A full GPU color matrix filter requires render-to-texture + post-processing
+        // which needs offscreen rendering infrastructure not yet available.
+        //
+        // Instead, we approximate the color matrix effect:
+        // 1. Alpha scaling from the matrix's alpha row (a3 = alpha scale factor)
+        // 2. Color tint by applying the matrix to white [1,1,1,1] to derive
+        //    the dominant output color, then using it as a Multiply blend layer.
+
+        // Extract alpha from matrix row 4 (indices 15-19): A' = a0*R + a1*G + a2*B + a3*A + a4
+        // For typical filters, a3 is the alpha scale and a4 is the alpha offset.
+        let alpha_scale = filter.values[18].clamp(0.0, 1.0); // a3
+        let alpha_offset = filter.values[19].clamp(0.0, 1.0); // a4
+        let effective_alpha = (alpha_scale + alpha_offset).clamp(0.0, 1.0);
+
+        // Apply the matrix to white to derive the tint color
+        let tinted = filter.apply([1.0, 1.0, 1.0, 1.0]);
+
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let tint_color = Color::rgba(
+            (tinted[0] * 255.0) as u8,
+            (tinted[1] * 255.0) as u8,
+            (tinted[2] * 255.0) as u8,
+            (effective_alpha * 255.0) as u8,
+        );
+
+        let paint = Paint::fill(tint_color);
+        self.painter.save_layer(None, &paint);
+
+        tracing::debug!(
+            "push_color_filter: approximation tint=({},{},{}) alpha={:.2}",
+            tint_color.r,
+            tint_color.g,
+            tint_color.b,
+            effective_alpha
+        );
     }
 
     fn pop_color_filter(&mut self) {
-        self.painter.restore();
+        self.painter.restore_layer();
     }
 
     fn push_image_filter(&mut self, filter: &flui_painting::display_list::ImageFilter) {
