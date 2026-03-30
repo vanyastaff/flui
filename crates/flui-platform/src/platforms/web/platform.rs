@@ -1,9 +1,13 @@
 //! Web platform core implementation
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use anyhow::Result;
 use parking_lot::Mutex;
+use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
 
 use crate::{
     shared::PlatformHandlers,
@@ -15,8 +19,10 @@ use super::{
     display::WebDisplay,
     executor::WebExecutor,
     text_system::WebTextSystem,
+    window::WebWindow,
 };
 
+/// Web/WASM platform implementation
 pub struct WebPlatform {
     state: Arc<Mutex<WebState>>,
 }
@@ -30,12 +36,15 @@ struct WebState {
     is_running: bool,
 }
 
+// SAFETY: WASM is single-threaded — no data races possible
 unsafe impl Send for WebPlatform {}
 unsafe impl Sync for WebPlatform {}
 
 impl WebPlatform {
+    /// Create a new Web platform instance
     pub fn new() -> Result<Self> {
         console_error_panic_hook::set_once();
+
         let state = WebState {
             handlers: PlatformHandlers::new(),
             foreground_executor: Arc::new(WebExecutor::new()),
@@ -44,6 +53,7 @@ impl WebPlatform {
             clipboard: Arc::new(WebClipboard::new()),
             is_running: false,
         };
+
         Ok(Self {
             state: Arc::new(Mutex::new(state)),
         })
@@ -54,6 +64,36 @@ impl WebPlatform {
         F: FnOnce(&mut WebState) -> R,
     {
         f(&mut self.state.lock())
+    }
+
+    /// Start the requestAnimationFrame render loop
+    fn start_raf_loop(&self) {
+        let state = Arc::clone(&self.state);
+
+        // Recursive RAF pattern: closure references itself via Rc<RefCell>
+        let f: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
+        let g = Rc::clone(&f);
+
+        let window = web_sys::window().expect("no global window");
+
+        *g.borrow_mut() = Some(Closure::new(move || {
+            let is_running = state.lock().is_running;
+            if !is_running {
+                return;
+            }
+
+            // Request next frame before any work (ensures smooth loop)
+            if let Some(w) = web_sys::window() {
+                let _ = w.request_animation_frame(
+                    f.borrow().as_ref().unwrap().as_ref().unchecked_ref(),
+                );
+            }
+        }));
+
+        // Kick off the first frame
+        let _ = window.request_animation_frame(
+            g.borrow().as_ref().unwrap().as_ref().unchecked_ref(),
+        );
     }
 }
 
@@ -72,23 +112,50 @@ impl Platform for WebPlatform {
 
     fn run(&self, on_ready: Box<dyn FnOnce()>) {
         tracing::info!("Starting web platform");
+
         self.with_state(|s| s.is_running = true);
+
+        // Call on_ready synchronously — browser event loop is already running
         on_ready();
+
+        // Start the RAF loop
+        self.start_raf_loop();
+
         tracing::info!("Web platform ready");
     }
 
     fn quit(&self) {
-        tracing::info!("Web platform quit");
+        tracing::info!("Web platform quit requested");
         self.with_state(|s| {
             s.is_running = false;
             s.handlers.invoke_quit();
         });
     }
 
-    fn request_frame(&self) {}
+    fn request_frame(&self) {
+        // RAF loop is always running — this is a no-op hint
+    }
 
-    fn open_window(&self, _options: WindowOptions) -> Result<Box<dyn PlatformWindow>> {
-        anyhow::bail!("WebWindow not yet implemented — see Task 7")
+    fn open_window(&self, options: WindowOptions) -> Result<Box<dyn PlatformWindow>> {
+        tracing::info!(title = %options.title, "Creating web window (canvas)");
+
+        let window = WebWindow::new(
+            WindowId(0), // Single window in browser
+            &options.title,
+            options.size.width.0,
+            options.size.height.0,
+        )?;
+
+        // Register DOM event listeners on the canvas
+        super::events::register_event_listeners(&window);
+
+        // Notify window created
+        self.with_state(|s| {
+            s.handlers
+                .invoke_window_event(WindowEvent::Created(WindowId(0)));
+        });
+
+        Ok(Box::new(window))
     }
 
     fn active_window(&self) -> Option<WindowId> {
@@ -119,6 +186,31 @@ impl Platform for WebPlatform {
         "Web (WASM)"
     }
 
+    fn compositor_name(&self) -> &'static str {
+        "Browser"
+    }
+
+    fn window_appearance(&self) -> WindowAppearance {
+        if let Some(w) = web_sys::window() {
+            if let Ok(Some(mql)) = w.match_media("(prefers-color-scheme: dark)") {
+                if mql.matches() {
+                    return WindowAppearance::Dark;
+                }
+            }
+        }
+        WindowAppearance::Light
+    }
+
+    fn open_url(&self, url: &str) {
+        if let Some(w) = web_sys::window() {
+            let _ = w.open_with_url_and_target(url, "_blank");
+        }
+    }
+
+    fn keyboard_layout(&self) -> String {
+        "en-US".to_string()
+    }
+
     fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
         self.with_state(|s| s.handlers.quit = Some(callback));
     }
@@ -128,6 +220,11 @@ impl Platform for WebPlatform {
     }
 
     fn app_path(&self) -> Result<std::path::PathBuf> {
+        if let Some(w) = web_sys::window() {
+            if let Ok(origin) = w.location().origin() {
+                return Ok(std::path::PathBuf::from(origin));
+            }
+        }
         Ok(std::path::PathBuf::from("/"))
     }
 }
