@@ -19,12 +19,28 @@ use flui_types::{
 use wgpu::util::DeviceExt;
 
 use super::{
-    pipeline::{PipelineCache, PipelineKey},
+    pipeline::{self, PipelineCache, PipelineKey},
     tessellator::Tessellator,
     text::TextRenderer,
     vertex::Vertex,
 };
 use crate::traits::Painter;
+
+/// A recorded batch of tessellated geometry sharing the same pipeline key.
+///
+/// During a frame, each call to [`WgpuPainter::add_tessellated`] appends
+/// vertices/indices to the global buffers.  When the pipeline key changes
+/// a new batch is started so that the render pass can switch pipelines at
+/// the correct index boundary.
+#[derive(Debug, Clone)]
+struct TessellatedBatch {
+    /// Pipeline variant to use for this batch
+    pipeline_key: PipelineKey,
+    /// First index (inclusive) into the shared index buffer
+    index_start: u32,
+    /// Number of indices in this batch
+    index_count: u32,
+}
 
 /// GPU painter for hardware-accelerated 2D rendering
 ///
@@ -69,6 +85,11 @@ pub struct WgpuPainter {
 
     /// Current pipeline key (for batching draws with same pipeline)
     current_pipeline_key: Option<PipelineKey>,
+
+    /// Recorded tessellated batches for the current frame.
+    /// Each batch stores a pipeline key and an index range so the render
+    /// pass can switch pipelines only when necessary.
+    tess_batches: Vec<TessellatedBatch>,
 
     // ===== Instanced Rendering =====
     /// Instanced rectangle pipeline (100x faster for UI)
@@ -673,6 +694,7 @@ impl WgpuPainter {
             vertices: Vec::new(),
             indices: Vec::new(),
             current_pipeline_key: None,
+            tess_batches: Vec::new(),
             instanced_rect_pipeline,
             viewport_buffer,
             viewport_bind_group,
@@ -748,7 +770,7 @@ impl WgpuPainter {
         self.flush_gradient_batches(encoder, view);
 
         // ===== Render Tessellated Shapes LAST (on top of instanced) =====
-        if !self.vertices.is_empty() {
+        if !self.vertices.is_empty() && !self.tess_batches.is_empty() {
             // Upload vertices to GPU
             let vertex_buffer = self
                 .device
@@ -767,17 +789,7 @@ impl WgpuPainter {
                     usage: wgpu::BufferUsages::INDEX,
                 });
 
-            // Get specialized pipeline (default to alpha blend for compatibility)
-            // TODO: Track pipeline key per draw call for optimal batching
-            let pipeline_key = self
-                .current_pipeline_key
-                .unwrap_or(PipelineKey::alpha_blend());
-
-            let pipeline = self
-                .pipeline_cache
-                .get_or_create(&self.device, pipeline_key);
-
-            // Render shapes in single pass
+            // Render shapes in single pass, switching pipelines per batch
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Shape Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -793,8 +805,7 @@ impl WgpuPainter {
                 occlusion_query_set: None,
             });
 
-            render_pass.set_pipeline(pipeline);
-            render_pass.set_bind_group(0, &self.viewport_bind_group, &[]); // Use same bind group as instanced (they share layout now)
+            render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
             render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
             render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
 
@@ -803,7 +814,23 @@ impl WgpuPainter {
                 render_pass.set_scissor_rect(x, y, width, height);
             }
 
-            render_pass.draw_indexed(0..self.indices.len() as u32, 0, 0..1);
+            // Iterate over recorded batches, switching pipeline only when the
+            // key changes.  This keeps a single render pass while still using
+            // the correct blend mode / MSAA variant for each group of draws.
+            let mut active_key: Option<PipelineKey> = None;
+            for batch in &self.tess_batches {
+                if active_key != Some(batch.pipeline_key) {
+                    let pipeline = self
+                        .pipeline_cache
+                        .get_or_create(&self.device, batch.pipeline_key);
+                    render_pass.set_pipeline(pipeline);
+                    active_key = Some(batch.pipeline_key);
+                }
+
+                let start = batch.index_start;
+                let end = start + batch.index_count;
+                render_pass.draw_indexed(start..end, 0, 0..1);
+            }
         }
 
         // ===== Render Text =====
@@ -813,6 +840,8 @@ impl WgpuPainter {
         // ===== Clear buffers for next frame =====
         self.vertices.clear();
         self.indices.clear();
+        self.tess_batches.clear();
+        self.current_pipeline_key = None;
 
         // Reset buffer pool for next frame (enables buffer reuse)
         self.buffer_pool.reset();
@@ -882,15 +911,56 @@ impl WgpuPainter {
         Point::new(px(p.x), px(p.y))
     }
 
-    /// Add tessellated shape from vertices/indices
-    fn add_tessellated(&mut self, vertices: Vec<Vertex>, indices: &[u32]) {
+    /// Add tessellated shape from vertices/indices with pipeline key tracking.
+    ///
+    /// When the requested `key` matches the current batch's pipeline key the
+    /// indices are simply appended.  When the key differs a new
+    /// [`TessellatedBatch`] is started so the render pass can switch pipelines
+    /// at the correct boundary.
+    fn add_tessellated_with_key(
+        &mut self,
+        vertices: Vec<Vertex>,
+        indices: &[u32],
+        key: PipelineKey,
+    ) {
+        if indices.is_empty() {
+            return;
+        }
+
         let base_index = self.vertices.len() as u32;
+        let index_start = self.indices.len() as u32;
 
         // Add vertices (already transformed by tessellator if needed)
         self.vertices.extend(vertices);
 
         // Add indices with offset
         self.indices.extend(indices.iter().map(|&i| i + base_index));
+
+        let index_count = indices.len() as u32;
+
+        // Try to extend the current batch if the pipeline key matches
+        if let Some(last) = self.tess_batches.last_mut() {
+            if last.pipeline_key == key {
+                last.index_count += index_count;
+                return;
+            }
+        }
+
+        // Pipeline key changed (or first batch) — start a new batch
+        self.current_pipeline_key = Some(key);
+        self.tess_batches.push(TessellatedBatch {
+            pipeline_key: key,
+            index_start,
+            index_count,
+        });
+    }
+
+    /// Add tessellated shape using alpha-blend pipeline (convenience wrapper).
+    ///
+    /// Used by callers that don't have a [`Paint`] reference (e.g.
+    /// `draw_vertices`, `draw_shadow`).
+    fn add_tessellated(&mut self, vertices: Vec<Vertex>, indices: &[u32]) {
+        self.add_tessellated_with_key(vertices, indices, PipelineKey::alpha_blend());
     }
 
     /// Flush all instanced batches using SINGLE render pass (Phase 9
@@ -1315,7 +1385,7 @@ impl Painter for WgpuPainter {
             // Paint already contains stroke information (stroke_width, stroke_cap,
             // stroke_join)
             if let Ok((vertices, indices)) = self.tessellator.tessellate_rect_stroke(rect, paint) {
-                self.add_tessellated(vertices, &indices);
+                self.add_tessellated_with_key(vertices, &indices, pipeline::pipeline_key_from_paint(paint));
             }
         }
     }
@@ -1350,7 +1420,7 @@ impl Painter for WgpuPainter {
         } else {
             // Stroked rounded rect - use tessellator (fallback)
             if let Ok((vertices, indices)) = self.tessellator.tessellate_rrect(rrect, paint) {
-                self.add_tessellated(vertices, &indices);
+                self.add_tessellated_with_key(vertices, &indices, pipeline::pipeline_key_from_paint(paint));
             }
         }
     }
@@ -1386,7 +1456,7 @@ impl Painter for WgpuPainter {
             if let Ok((vertices, indices)) =
                 self.tessellator.tessellate_circle(center, radius, paint)
             {
-                self.add_tessellated(vertices, &indices);
+                self.add_tessellated_with_key(vertices, &indices, pipeline::pipeline_key_from_paint(paint));
             }
         }
     }
@@ -1400,7 +1470,7 @@ impl Painter for WgpuPainter {
         let radii = Point::new(rect.width() / 2.0, rect.height() / 2.0);
 
         if let Ok((vertices, indices)) = self.tessellator.tessellate_ellipse(center, radii, paint) {
-            self.add_tessellated(vertices, &indices);
+            self.add_tessellated_with_key(vertices, &indices, pipeline::pipeline_key_from_paint(paint));
         }
     }
 
@@ -1458,7 +1528,7 @@ impl Painter for WgpuPainter {
                     paint,
                 ) {
                     Ok((vertices, indices)) => {
-                        self.add_tessellated(vertices, &indices);
+                        self.add_tessellated_with_key(vertices, &indices, pipeline::pipeline_key_from_paint(paint));
                     }
                     Err(e) => {
                         #[cfg(debug_assertions)]
@@ -1481,7 +1551,7 @@ impl Painter for WgpuPainter {
         // Tessellate the DRRect (ring with inner cutout)
         match self.tessellator.tessellate_drrect(&outer, &inner, paint) {
             Ok((vertices, indices)) => {
-                self.add_tessellated(vertices, &indices);
+                self.add_tessellated_with_key(vertices, &indices, pipeline::pipeline_key_from_paint(paint));
             }
             Err(e) => {
                 #[cfg(debug_assertions)]
@@ -1509,7 +1579,7 @@ impl Painter for WgpuPainter {
                     vertices.len(),
                     indices.len()
                 );
-                self.add_tessellated(vertices, &indices);
+                self.add_tessellated_with_key(vertices, &indices, pipeline::pipeline_key_from_paint(paint));
             }
             Err(e) => {
                 #[cfg(debug_assertions)]
@@ -1585,7 +1655,7 @@ impl Painter for WgpuPainter {
 
         match result {
             Ok((vertices, indices)) => {
-                self.add_tessellated(vertices, &indices);
+                self.add_tessellated_with_key(vertices, &indices, pipeline::pipeline_key_from_paint(paint));
             }
             Err(e) => {
                 tracing::warn!("Failed to tessellate path: {}", e);
@@ -1757,7 +1827,7 @@ impl Painter for WgpuPainter {
 
         // Add to tessellated geometry (bypassing tessellator since we already have
         // triangles)
-        self.add_tessellated(our_vertices, &our_indices);
+        self.add_tessellated_with_key(our_vertices, &our_indices, pipeline::pipeline_key_from_paint(paint));
     }
 
     fn draw_atlas(
