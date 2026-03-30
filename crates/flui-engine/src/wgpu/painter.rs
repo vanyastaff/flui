@@ -66,6 +66,9 @@ struct PendingOffscreenTexture {
     bounds: Rect<Pixels>,
 }
 
+/// GPU painter for wgpu-based rendering.
+///
+/// Manages instanced batching, tessellation, text rendering, and offscreen compositing.
 pub struct WgpuPainter {
     // ===== GPU State =====
     /// wgpu device (Arc for sharing with text renderer)
