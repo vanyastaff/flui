@@ -7,7 +7,7 @@
 //! - RTL and bidirectional text
 //! - Line metrics
 
-use flui_painting::{DisplayListCore, TextPainter, text_layout::detect_text_direction};
+use flui_painting::{DisplayListCore, TextPainter, detect_text_direction};
 use flui_types::{
     geometry::{Offset, px},
     styling::Color,

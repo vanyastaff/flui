@@ -196,7 +196,9 @@ pub use display_list::{
     HitRegionHandler,
 };
 pub use error::{PaintingError, Result};
-pub use text_layout::measure_text;
+pub use text_layout::{
+    LineInfo, TextLayout, TextLayoutResult, detect_text_direction, measure_inline_span, measure_text,
+};
 pub use text_painter::{DEFAULT_FONT_SIZE, TextBaseline, TextPainter};
 
 // Flutter compatibility: Picture is our DisplayList
@@ -284,6 +286,7 @@ pub mod prelude {
     pub use crate::{
         canvas::Canvas,
         display_list::{DisplayList, DisplayListCore, DisplayListExt, DrawCommand},
+        text_layout::{TextLayoutResult, detect_text_direction, measure_inline_span, measure_text},
         text_painter::{TextBaseline, TextPainter},
     };
 }
