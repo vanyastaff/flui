@@ -1,0 +1,1 @@
+//! DOM event handling (placeholder)

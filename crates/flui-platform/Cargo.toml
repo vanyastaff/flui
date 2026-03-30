@@ -24,12 +24,8 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
-# Synchronization & Async
+# Synchronization
 parking_lot = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
-num_cpus = "1.16"
-flume = "0.11"              # Better MPSC channels for UI thread communication
-waker-fn = "1.2"            # Simplified async waker creation
 
 # Window handle abstraction
 raw-window-handle = "0.6"
@@ -75,6 +71,42 @@ ndk = { version = "0.9", features = ["rwh_06"] }
 libc = "0.2"
 log = "0.4"
 
+# Native-only async dependencies (not available on wasm32)
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
+num_cpus = "1.16"
+flume = "0.11"              # Better MPSC channels for UI thread communication
+waker-fn = "1.2"            # Simplified async waker creation
+
+# Web/WASM platform
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    # Core DOM
+    "Window", "Document", "Element", "HtmlCanvasElement", "HtmlElement",
+    # Events
+    "Event", "EventTarget", "AddEventListenerOptions",
+    "PointerEvent", "KeyboardEvent", "WheelEvent", "MouseEvent",
+    "FocusEvent", "UiEvent",
+    # Rendering
+    "CanvasRenderingContext2d", "DomRect",
+    # Display
+    "Screen", "MediaQueryList", "MediaQueryListEvent",
+    # Observers
+    "ResizeObserver", "ResizeObserverEntry", "ResizeObserverSize",
+    # Animation
+    "Performance",
+    # Clipboard
+    "Clipboard", "Navigator",
+    # Visibility
+    "VisibilityState",
+    # Console
+    "console",
+] }
+console_error_panic_hook = "0.1"
+
 [features]
 default = ["desktop"]
 
@@ -83,6 +115,9 @@ desktop = ["winit"]
 
 # Legacy winit backend (deprecated, optional)
 winit-backend = ["winit"]
+
+# Web platform
+web = []
 
 # Linux display server protocols
 wayland = []
