@@ -126,6 +126,7 @@ pub struct Renderer {
     config: Option<wgpu::SurfaceConfiguration>,
     capabilities: GpuCapabilities,
     painter: Option<super::painter::WgpuPainter>,
+    offscreen: Option<Arc<parking_lot::Mutex<super::offscreen::OffscreenRenderer>>>,
 }
 
 impl Renderer {
@@ -228,6 +229,14 @@ impl Renderer {
             (config.width, config.height),
         );
 
+        // Create offscreen renderer for shader mask / backdrop filter effects
+        let offscreen = super::offscreen::OffscreenRenderer::new(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            surface_format,
+        );
+        let offscreen = Some(Arc::new(parking_lot::Mutex::new(offscreen)));
+
         Ok(Self {
             instance,
             adapter,
@@ -237,6 +246,7 @@ impl Renderer {
             config: Some(config),
             capabilities,
             painter: Some(painter),
+            offscreen,
         })
     }
 
@@ -280,6 +290,7 @@ impl Renderer {
             config: None,
             capabilities,
             painter: None,
+            offscreen: None,
         })
     }
 
@@ -509,7 +520,11 @@ impl Renderer {
         if scene.has_content()
             && let Some(painter) = self.painter.take()
         {
-            let mut backend = Backend::new(painter);
+            let mut backend = if let Some(ref offscreen) = self.offscreen {
+                Backend::with_offscreen(painter, Arc::clone(offscreen))
+            } else {
+                Backend::new(painter)
+            };
 
             // Depth-first traversal of layer tree
             if let Some(root_id) = scene.root() {

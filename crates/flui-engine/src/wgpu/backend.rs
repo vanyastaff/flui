@@ -11,6 +11,8 @@ use flui_types::{
     typography::TextStyle,
 };
 
+use std::sync::Arc;
+
 use super::{commands::dispatch_command, painter::WgpuPainter};
 use crate::traits::{CommandRenderer, Painter};
 
@@ -21,12 +23,34 @@ use crate::traits::{CommandRenderer, Painter};
 #[allow(missing_debug_implementations)]
 pub struct Backend {
     painter: WgpuPainter,
+    offscreen: Option<Arc<parking_lot::Mutex<super::offscreen::OffscreenRenderer>>>,
 }
 
 impl Backend {
     /// Create a new Backend with the given painter.
     pub fn new(painter: WgpuPainter) -> Self {
-        Self { painter }
+        Self {
+            painter,
+            offscreen: None,
+        }
+    }
+
+    /// Create a new Backend with the given painter and offscreen renderer.
+    pub fn with_offscreen(
+        painter: WgpuPainter,
+        offscreen: Arc<parking_lot::Mutex<super::offscreen::OffscreenRenderer>>,
+    ) -> Self {
+        Self {
+            painter,
+            offscreen: Some(offscreen),
+        }
+    }
+
+    /// Access the offscreen renderer (for shader mask, backdrop filter).
+    pub fn offscreen(
+        &self,
+    ) -> Option<&Arc<parking_lot::Mutex<super::offscreen::OffscreenRenderer>>> {
+        self.offscreen.as_ref()
     }
 
     /// Get a reference to the underlying painter.
@@ -39,7 +63,9 @@ impl Backend {
         &mut self.painter
     }
 
-    /// Consume the renderer and return the underlying painter
+    /// Consume the renderer and return the underlying painter.
+    ///
+    /// The offscreen `Arc` is dropped here; ref-counting keeps it alive in Renderer.
     pub fn into_painter(self) -> WgpuPainter {
         self.painter
     }
