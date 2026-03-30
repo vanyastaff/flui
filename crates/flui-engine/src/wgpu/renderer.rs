@@ -116,6 +116,18 @@ impl GpuCapabilities {
     }
 }
 
+/// GPU context available during layer tree rendering.
+///
+/// Provides access to device, queue, and surface format for mid-frame
+/// operations like backdrop blur (flush -> copy -> blur -> composite).
+struct RenderContext {
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
+    surface_format: wgpu::TextureFormat,
+    /// Whether the surface supports COPY_SRC (for backdrop filter)
+    supports_copy_src: bool,
+}
+
 /// Cross-platform GPU renderer
 pub struct Renderer {
     instance: wgpu::Instance,
@@ -127,6 +139,8 @@ pub struct Renderer {
     capabilities: GpuCapabilities,
     painter: Option<super::painter::WgpuPainter>,
     offscreen: Option<Arc<parking_lot::Mutex<super::offscreen::OffscreenRenderer>>>,
+    /// Whether the surface supports COPY_SRC (for mid-frame texture copies)
+    supports_copy_src: bool,
 }
 
 impl Renderer {
@@ -208,8 +222,24 @@ impl Renderer {
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = Self::select_surface_format(&surface_caps, &capabilities);
 
+        // Check if the surface supports COPY_SRC (needed for backdrop blur)
+        let supports_copy_src = surface_caps
+            .usages
+            .contains(wgpu::TextureUsages::COPY_SRC);
+        if !supports_copy_src {
+            tracing::warn!(
+                "Surface does not support COPY_SRC; backdrop blur will use fallback path"
+            );
+        }
+
+        let surface_usage = if supports_copy_src {
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC
+        } else {
+            wgpu::TextureUsages::RENDER_ATTACHMENT
+        };
+
         let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: surface_usage,
             format: surface_format,
             width: 800, // Will be updated on resize
             height: 600,
@@ -247,6 +277,7 @@ impl Renderer {
             capabilities,
             painter: Some(painter),
             offscreen,
+            supports_copy_src,
         })
     }
 
@@ -291,6 +322,7 @@ impl Renderer {
             capabilities,
             painter: None,
             offscreen: None,
+            supports_copy_src: false,
         })
     }
 
@@ -476,6 +508,10 @@ impl Renderer {
     ///
     /// Traverses the scene's LayerTree depth-first, dispatching each layer's
     /// DisplayList commands through the GPU backend (WgpuPainter).
+    ///
+    /// For scenes containing `BackdropFilterLayer`, the render flow supports
+    /// mid-frame flush: painter batches are submitted early so the surface
+    /// texture can be copied, blurred, and composited before continuing.
     pub fn render_scene(&mut self, scene: &flui_layer::Scene) -> Result<(), RenderError> {
         use super::backend::Backend;
 
@@ -492,31 +528,47 @@ impl Renderer {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("FLUI Scene Render Encoder"),
-            });
-
-        // 1. Clear pass
+        // 1. Clear pass — submit immediately so the surface is ready for
+        //    mid-frame copy operations (backdrop blur needs pixels on the surface).
         {
-            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("FLUI Clear Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
+            let mut clear_encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("FLUI Clear Encoder"),
+                });
+            {
+                let _pass = clear_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("FLUI Clear Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+            }
+            self.queue.submit(std::iter::once(clear_encoder.finish()));
         }
 
-        // 2. Render scene content via LayerTree traversal
+        // 2. Build render context for backdrop filter support
+        let surface_format = self
+            .config
+            .as_ref()
+            .map_or(wgpu::TextureFormat::Bgra8UnormSrgb, |c| c.format);
+
+        let ctx = RenderContext {
+            device: Arc::clone(&self.device),
+            queue: Arc::clone(&self.queue),
+            surface_format,
+            supports_copy_src: self.supports_copy_src,
+        };
+
+        // 3. Render scene content via LayerTree traversal
         if scene.has_content()
             && let Some(painter) = self.painter.take()
         {
@@ -528,20 +580,32 @@ impl Renderer {
 
             // Depth-first traversal of layer tree
             if let Some(root_id) = scene.root() {
-                Self::render_layer_recursive(scene.layer_tree(), root_id, &mut backend);
+                Self::render_layer_recursive(
+                    scene.layer_tree(),
+                    root_id,
+                    &mut backend,
+                    &ctx,
+                    &output.texture,
+                    &view,
+                );
             }
 
-            // Flush painter batches to GPU
+            // 4. Final flush — submit remaining painter batches
             let mut painter = backend.into_painter();
-            if let Err(e) = painter.render(&view, &mut encoder) {
+            let mut final_encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("FLUI Final Render Encoder"),
+                });
+            if let Err(e) = painter.render(&view, &mut final_encoder) {
                 tracing::error!("Painter render failed: {}", e);
             }
+            self.queue.submit(std::iter::once(final_encoder.finish()));
 
             // Return painter to Renderer for reuse
             self.painter = Some(painter);
         }
 
-        self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
         Ok(())
     }
@@ -550,10 +614,16 @@ impl Renderer {
     ///
     /// Each layer's `render()` pushes state (transforms, clips, opacity),
     /// children are rendered, then `cleanup()` pops the state.
+    ///
+    /// `BackdropFilterLayer` is handled specially at the Renderer level when
+    /// the surface supports `COPY_SRC`, enabling mid-frame flush + blur.
     fn render_layer_recursive(
         tree: &flui_layer::LayerTree,
         layer_id: flui_foundation::LayerId,
         backend: &mut super::backend::Backend,
+        ctx: &RenderContext,
+        surface_texture: &wgpu::Texture,
+        surface_view: &wgpu::TextureView,
     ) {
         use super::layer_render::LayerRender;
 
@@ -561,17 +631,137 @@ impl Renderer {
             return;
         };
 
-        // 1. Render this layer (pushes state: transforms, clips, opacity)
-        node.layer().render(backend);
-
-        // 2. Render children depth-first
-        let children: Vec<_> = node.children().to_vec();
-        for child_id in children {
-            Self::render_layer_recursive(tree, child_id, backend);
+        // Special handling for BackdropFilter — requires mid-frame flush + copy
+        if let flui_layer::Layer::BackdropFilter(bf_layer) = node.layer() {
+            if ctx.supports_copy_src {
+                Self::handle_backdrop_filter(
+                    bf_layer,
+                    node,
+                    tree,
+                    backend,
+                    ctx,
+                    surface_texture,
+                    surface_view,
+                );
+                return;
+            }
+            // Fall through to normal LayerRender path (clip + filter fallback)
         }
 
-        // 3. Cleanup (pops state pushed in step 1)
+        // Normal path: render → children → cleanup
+        node.layer().render(backend);
+
+        let children: Vec<_> = node.children().to_vec();
+        for child_id in children {
+            Self::render_layer_recursive(tree, child_id, backend, ctx, surface_texture, surface_view);
+        }
+
         node.layer().cleanup(backend);
+    }
+
+    /// Handle a `BackdropFilterLayer` via mid-frame flush and Dual Kawase blur.
+    ///
+    /// Flow:
+    /// 1. Flush current painter batches to the surface
+    /// 2. Copy the backdrop region from the surface to an offscreen texture
+    /// 3. Apply Dual Kawase blur via `OffscreenRenderer::render_blur`
+    /// 4. Queue blurred result for compositing back to the surface
+    /// 5. Render children on top
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    fn handle_backdrop_filter(
+        bf_layer: &flui_layer::BackdropFilterLayer,
+        node: &flui_layer::tree::LayerNode,
+        tree: &flui_layer::LayerTree,
+        backend: &mut super::backend::Backend,
+        ctx: &RenderContext,
+        surface_texture: &wgpu::Texture,
+        surface_view: &wgpu::TextureView,
+    ) {
+        use flui_types::painting::ImageFilter;
+
+        let bounds = bf_layer.bounds();
+
+        // Extract sigma from blur filter; other filter types fall back to
+        // normal child rendering (no GPU blur support yet).
+        let sigma = match bf_layer.filter() {
+            ImageFilter::Blur { sigma_x, sigma_y } => (*sigma_x + *sigma_y) / 2.0,
+            _ => {
+                tracing::warn!("Backdrop filter type not supported for GPU blur, rendering children only");
+                let children: Vec<_> = node.children().to_vec();
+                for child_id in children {
+                    Self::render_layer_recursive(
+                        tree, child_id, backend, ctx, surface_texture, surface_view,
+                    );
+                }
+                return;
+            }
+        };
+
+        // 1. Flush current painter batches to the surface so pixels are available
+        let mut flush_encoder =
+            ctx.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Backdrop Flush Encoder"),
+                });
+        if let Err(e) = backend.painter_mut().render(surface_view, &mut flush_encoder) {
+            tracing::error!("Backdrop flush failed: {}", e);
+        }
+
+        // 2. Copy region from surface to offscreen texture for blur input
+        let x = bounds.left().0.max(0.0) as u32;
+        let y = bounds.top().0.max(0.0) as u32;
+        let w = bounds.width().0.max(1.0) as u32;
+        let h = bounds.height().0.max(1.0) as u32;
+
+        if let Some(offscreen_arc) = backend.offscreen().cloned() {
+            let blur_input = {
+                let offscreen = offscreen_arc.lock();
+                offscreen.texture_pool().acquire(w, h, ctx.surface_format)
+            };
+
+            flush_encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: surface_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x, y, z: 0 },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: blur_input.texture(),
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+            );
+            ctx.queue.submit(std::iter::once(flush_encoder.finish()));
+
+            // 3. Apply Dual Kawase blur
+            let blurred = {
+                let mut offscreen = offscreen_arc.lock();
+                offscreen.render_blur(&blur_input, sigma)
+            };
+
+            // 4. Queue blurred result for compositing
+            backend.painter_mut().queue_offscreen_result(blurred, bounds);
+        } else {
+            // No offscreen renderer available — just submit the flush
+            ctx.queue.submit(std::iter::once(flush_encoder.finish()));
+            tracing::warn!("Backdrop blur skipped: no offscreen renderer available");
+        }
+
+        // 5. Render children on top of the blurred backdrop
+        let children: Vec<_> = node.children().to_vec();
+        for child_id in children {
+            Self::render_layer_recursive(
+                tree, child_id, backend, ctx, surface_texture, surface_view,
+            );
+        }
+        // No cleanup needed — backdrop filter has no push/pop state in this path
     }
 }
 
