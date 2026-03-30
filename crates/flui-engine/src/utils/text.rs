@@ -329,3 +329,470 @@ pub enum VectorTextError {
     #[error("Path tessellation failed")]
     TessellationFailed,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flui_types::geometry::px;
+
+    /// Load the bundled Roboto font for testing.
+    fn load_test_font() -> Vec<u8> {
+        include_bytes!("../../assets/fonts/Roboto-Regular.ttf").to_vec()
+    }
+
+    /// Helper to create default render params with identity transform.
+    fn default_params<'a>(
+        text: &'a str,
+        font_size: f32,
+        transform: &'a Mat4,
+    ) -> TextRenderParams<'a> {
+        TextRenderParams::new(
+            text,
+            Point::new(px(0.0), px(0.0)),
+            font_size,
+            Color::BLACK,
+            transform,
+        )
+    }
+
+    // ===== Construction Tests =====
+
+    #[test]
+    fn create_renderer_with_valid_font() {
+        let renderer = VectorTextRenderer::new(load_test_font());
+        assert!(
+            !renderer.font_data().is_empty(),
+            "font data should not be empty after construction"
+        );
+    }
+
+    #[test]
+    fn load_font_replaces_data() {
+        let mut renderer = VectorTextRenderer::new(load_test_font());
+        let original_len = renderer.font_data().len();
+
+        // Load a different (same) font to verify the method works
+        let new_data = load_test_font();
+        renderer.load_font(new_data.clone());
+        assert_eq!(
+            renderer.font_data().len(),
+            original_len,
+            "font data length should match after reload"
+        );
+    }
+
+    // ===== Render: Basic ASCII =====
+
+    #[test]
+    fn render_basic_ascii_produces_geometry() {
+        let mut renderer = VectorTextRenderer::new(load_test_font());
+        let identity = Mat4::IDENTITY;
+        let params = default_params("Hello", 24.0, &identity);
+
+        let (vertices, indices) = renderer
+            .render(&params)
+            .expect("rendering basic ASCII should succeed");
+
+        assert!(
+            !vertices.is_empty(),
+            "vertices should not be empty for visible text"
+        );
+        assert!(
+            !indices.is_empty(),
+            "indices should not be empty for visible text"
+        );
+        // Indices must be valid triangle list (multiple of 3)
+        assert_eq!(
+            indices.len() % 3,
+            0,
+            "index count should be a multiple of 3 for triangle list"
+        );
+    }
+
+    #[test]
+    fn render_single_character() {
+        let mut renderer = VectorTextRenderer::new(load_test_font());
+        let identity = Mat4::IDENTITY;
+        let params = default_params("A", 16.0, &identity);
+
+        let (vertices, indices) = renderer
+            .render(&params)
+            .expect("rendering single character should succeed");
+
+        assert!(!vertices.is_empty(), "single visible glyph should produce vertices");
+        assert!(!indices.is_empty(), "single visible glyph should produce indices");
+    }
+
+    // ===== Render: Empty and Whitespace =====
+
+    #[test]
+    fn render_empty_string_produces_no_geometry() {
+        let mut renderer = VectorTextRenderer::new(load_test_font());
+        let identity = Mat4::IDENTITY;
+        let params = default_params("", 24.0, &identity);
+
+        let (vertices, indices) = renderer
+            .render(&params)
+            .expect("rendering empty string should succeed");
+
+        assert!(vertices.is_empty(), "empty string should produce no vertices");
+        assert!(indices.is_empty(), "empty string should produce no indices");
+    }
+
+    #[test]
+    fn render_spaces_only_produces_no_geometry() {
+        let mut renderer = VectorTextRenderer::new(load_test_font());
+        let identity = Mat4::IDENTITY;
+        let params = default_params("   ", 24.0, &identity);
+
+        let (vertices, indices) = renderer
+            .render(&params)
+            .expect("rendering spaces should succeed");
+
+        assert!(
+            vertices.is_empty(),
+            "space-only string should produce no visible geometry"
+        );
+        assert!(
+            indices.is_empty(),
+            "space-only string should produce no visible indices"
+        );
+    }
+
+    // ===== Render: Font Size Variations =====
+
+    #[test]
+    fn larger_font_size_produces_larger_extents() {
+        let mut renderer = VectorTextRenderer::new(load_test_font());
+        let identity = Mat4::IDENTITY;
+
+        let params_small = default_params("W", 12.0, &identity);
+        let (verts_small, _) = renderer
+            .render(&params_small)
+            .expect("small font render should succeed");
+
+        let params_large = default_params("W", 48.0, &identity);
+        let (verts_large, _) = renderer
+            .render(&params_large)
+            .expect("large font render should succeed");
+
+        // Compute bounding box width for each
+        let extent = |verts: &[TextVertex]| -> f32 {
+            let xs: Vec<f32> = verts.iter().map(|v| v.x).collect();
+            let min = xs.iter().copied().reduce(f32::min).unwrap_or(0.0);
+            let max = xs.iter().copied().reduce(f32::max).unwrap_or(0.0);
+            max - min
+        };
+
+        assert!(
+            extent(&verts_large) > extent(&verts_small),
+            "larger font size should produce wider glyph geometry"
+        );
+    }
+
+    #[test]
+    fn more_characters_produce_more_vertices() {
+        let mut renderer = VectorTextRenderer::new(load_test_font());
+        let identity = Mat4::IDENTITY;
+
+        let params_one = default_params("A", 24.0, &identity);
+        let (v1, _) = renderer
+            .render(&params_one)
+            .expect("single char render should succeed");
+
+        let params_three = default_params("ABC", 24.0, &identity);
+        let (v3, _) = renderer
+            .render(&params_three)
+            .expect("three char render should succeed");
+
+        assert!(
+            v3.len() > v1.len(),
+            "more characters should produce more vertices"
+        );
+    }
+
+    // ===== Render: Vertex Color =====
+
+    #[test]
+    fn vertices_carry_specified_color() {
+        let mut renderer = VectorTextRenderer::new(load_test_font());
+        let identity = Mat4::IDENTITY;
+        let color = Color::rgba(255, 0, 0, 255);
+        let params = TextRenderParams::new(
+            "R",
+            Point::new(px(0.0), px(0.0)),
+            24.0,
+            color,
+            &identity,
+        );
+
+        let (vertices, _) = renderer
+            .render(&params)
+            .expect("colored render should succeed");
+
+        for v in &vertices {
+            assert_eq!(v.color, color, "every vertex should carry the specified color");
+        }
+    }
+
+    // ===== Render: Position Offset =====
+
+    #[test]
+    fn position_offset_shifts_vertices() {
+        let mut renderer = VectorTextRenderer::new(load_test_font());
+        let identity = Mat4::IDENTITY;
+
+        let params_origin = default_params("T", 24.0, &identity);
+        let (verts_origin, _) = renderer
+            .render(&params_origin)
+            .expect("origin render should succeed");
+
+        let offset_x = 100.0_f32;
+        let params_offset = TextRenderParams::new(
+            "T",
+            Point::new(px(offset_x), px(0.0)),
+            24.0,
+            Color::BLACK,
+            &identity,
+        );
+        let (verts_offset, _) = renderer
+            .render(&params_offset)
+            .expect("offset render should succeed");
+
+        let avg_x = |verts: &[TextVertex]| -> f32 {
+            verts.iter().map(|v| v.x).sum::<f32>() / verts.len() as f32
+        };
+
+        let diff = avg_x(&verts_offset) - avg_x(&verts_origin);
+        assert!(
+            (diff - offset_x).abs() < 1.0,
+            "x position offset should shift vertices by approximately {offset_x}, got diff={diff}"
+        );
+    }
+
+    // ===== Render: Letter and Word Spacing =====
+
+    #[test]
+    fn letter_spacing_increases_total_width() {
+        let mut renderer = VectorTextRenderer::new(load_test_font());
+        let identity = Mat4::IDENTITY;
+
+        let params_normal = default_params("AB", 24.0, &identity);
+        let (verts_normal, _) = renderer
+            .render(&params_normal)
+            .expect("normal spacing render should succeed");
+
+        let params_spaced = TextRenderParams::new(
+            "AB",
+            Point::new(px(0.0), px(0.0)),
+            24.0,
+            Color::BLACK,
+            &identity,
+        )
+        .with_letter_spacing(20.0);
+        let (verts_spaced, _) = renderer
+            .render(&params_spaced)
+            .expect("letter-spaced render should succeed");
+
+        let width = |verts: &[TextVertex]| -> f32 {
+            let xs: Vec<f32> = verts.iter().map(|v| v.x).collect();
+            xs.iter().copied().reduce(f32::max).unwrap_or(0.0)
+                - xs.iter().copied().reduce(f32::min).unwrap_or(0.0)
+        };
+
+        assert!(
+            width(&verts_spaced) > width(&verts_normal),
+            "letter spacing should increase total rendered width"
+        );
+    }
+
+    #[test]
+    fn word_spacing_increases_width_for_text_with_spaces() {
+        let mut renderer = VectorTextRenderer::new(load_test_font());
+        let identity = Mat4::IDENTITY;
+
+        let params_normal = default_params("A B", 24.0, &identity);
+        let (verts_normal, _) = renderer
+            .render(&params_normal)
+            .expect("normal word spacing render should succeed");
+
+        let params_spaced = TextRenderParams::new(
+            "A B",
+            Point::new(px(0.0), px(0.0)),
+            24.0,
+            Color::BLACK,
+            &identity,
+        )
+        .with_word_spacing(50.0);
+        let (verts_spaced, _) = renderer
+            .render(&params_spaced)
+            .expect("word-spaced render should succeed");
+
+        let max_x = |verts: &[TextVertex]| -> f32 {
+            verts.iter().map(|v| v.x).fold(f32::NEG_INFINITY, f32::max)
+        };
+
+        assert!(
+            max_x(&verts_spaced) > max_x(&verts_normal),
+            "word spacing should push later glyphs further right"
+        );
+    }
+
+    // ===== Render: Transform =====
+
+    #[test]
+    fn scale_transform_affects_vertex_positions() {
+        let mut renderer = VectorTextRenderer::new(load_test_font());
+        let identity = Mat4::IDENTITY;
+        let scale_2x = Mat4::from_scale(glam::Vec3::new(2.0, 2.0, 1.0));
+
+        let params_identity = default_params("X", 24.0, &identity);
+        let (verts_id, _) = renderer
+            .render(&params_identity)
+            .expect("identity render should succeed");
+
+        let params_scaled = default_params("X", 24.0, &scale_2x);
+        let (verts_sc, _) = renderer
+            .render(&params_scaled)
+            .expect("scaled render should succeed");
+
+        let extent_x = |verts: &[TextVertex]| -> f32 {
+            let xs: Vec<f32> = verts.iter().map(|v| v.x).collect();
+            xs.iter().copied().reduce(f32::max).unwrap_or(0.0)
+                - xs.iter().copied().reduce(f32::min).unwrap_or(0.0)
+        };
+
+        // With 2x scale transform, extent should roughly double
+        let ratio = extent_x(&verts_sc) / extent_x(&verts_id);
+        assert!(
+            (ratio - 2.0).abs() < 0.5,
+            "2x scale transform should roughly double glyph extent, got ratio={ratio}"
+        );
+    }
+
+    // ===== Error Handling =====
+
+    #[test]
+    fn invalid_font_data_returns_error() {
+        let mut renderer = VectorTextRenderer::new(vec![0, 1, 2, 3]);
+        let identity = Mat4::IDENTITY;
+        let params = default_params("A", 24.0, &identity);
+
+        let result = renderer.render(&params);
+        assert!(
+            result.is_err(),
+            "invalid font data should return an error"
+        );
+        assert!(
+            matches!(result, Err(VectorTextError::InvalidFont)),
+            "error should be InvalidFont variant"
+        );
+    }
+
+    // ===== needs_vector_rendering =====
+
+    #[test]
+    fn identity_does_not_need_vector_rendering() {
+        assert!(
+            !VectorTextRenderer::needs_vector_rendering(&Mat4::IDENTITY),
+            "identity transform should not require vector rendering"
+        );
+    }
+
+    #[test]
+    fn uniform_scale_does_not_need_vector_rendering() {
+        let uniform = Mat4::from_scale(glam::Vec3::new(3.0, 3.0, 1.0));
+        assert!(
+            !VectorTextRenderer::needs_vector_rendering(&uniform),
+            "uniform scale should not require vector rendering"
+        );
+    }
+
+    #[test]
+    fn non_uniform_scale_needs_vector_rendering() {
+        let non_uniform = Mat4::from_scale(glam::Vec3::new(2.0, 1.0, 1.0));
+        assert!(
+            VectorTextRenderer::needs_vector_rendering(&non_uniform),
+            "non-uniform scale should require vector rendering"
+        );
+    }
+
+    #[test]
+    fn skew_transform_needs_vector_rendering() {
+        // Create a skew matrix by modifying the identity
+        let mut skew = Mat4::IDENTITY;
+        let cols = skew.to_cols_array_2d();
+        let mut m = cols;
+        m[1][0] = 0.5; // skew X by Y
+        skew = Mat4::from_cols_array_2d(&m);
+
+        assert!(
+            VectorTextRenderer::needs_vector_rendering(&skew),
+            "skew transform should require vector rendering"
+        );
+    }
+
+    #[test]
+    fn perspective_transform_needs_vector_rendering() {
+        let mut perspective = Mat4::IDENTITY;
+        let mut m = perspective.to_cols_array_2d();
+        m[0][3] = 0.01; // perspective component
+        perspective = Mat4::from_cols_array_2d(&m);
+
+        assert!(
+            VectorTextRenderer::needs_vector_rendering(&perspective),
+            "perspective transform should require vector rendering"
+        );
+    }
+
+    #[test]
+    fn pure_translation_does_not_need_vector_rendering() {
+        let translation = Mat4::from_translation(glam::Vec3::new(100.0, 200.0, 0.0));
+        assert!(
+            !VectorTextRenderer::needs_vector_rendering(&translation),
+            "pure translation should not require vector rendering"
+        );
+    }
+
+    #[test]
+    fn pure_rotation_does_not_need_vector_rendering() {
+        // Pure rotation is uniform scale with zero skew - raster is fine
+        let rotation = Mat4::from_rotation_z(std::f32::consts::FRAC_PI_4);
+        assert!(
+            !VectorTextRenderer::needs_vector_rendering(&rotation),
+            "pure rotation (uniform scale, no skew) should not require vector rendering"
+        );
+    }
+
+    #[test]
+    fn rotation_with_non_uniform_scale_needs_vector_rendering() {
+        let rotation = Mat4::from_rotation_z(std::f32::consts::FRAC_PI_4);
+        let non_uniform = Mat4::from_scale(glam::Vec3::new(2.0, 1.0, 1.0));
+        let combined = rotation * non_uniform;
+        assert!(
+            VectorTextRenderer::needs_vector_rendering(&combined),
+            "rotation combined with non-uniform scale should require vector rendering"
+        );
+    }
+
+    // ===== TextRenderParams Builder =====
+
+    #[test]
+    fn text_render_params_builder_methods() {
+        let identity = Mat4::IDENTITY;
+        let params = TextRenderParams::new(
+            "test",
+            Point::new(px(10.0), px(20.0)),
+            16.0,
+            Color::WHITE,
+            &identity,
+        )
+        .with_letter_spacing(2.0)
+        .with_word_spacing(5.0);
+
+        assert_eq!(params.text, "test");
+        assert_eq!(params.font_size, 16.0);
+        assert!((params.letter_spacing - 2.0).abs() < f32::EPSILON);
+        assert!((params.word_spacing - 5.0).abs() < f32::EPSILON);
+    }
+}
