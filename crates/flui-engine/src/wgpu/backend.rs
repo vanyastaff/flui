@@ -779,17 +779,109 @@ impl CommandRenderer for Backend {
     }
 
     fn push_image_filter(&mut self, filter: &flui_painting::display_list::ImageFilter) {
-        // TODO: Implement image filter via GPU compute shader
-        // For now, save state to maintain push/pop balance
-        self.painter.save();
-        tracing::trace!(
-            "push_image_filter: GPU image filter not yet implemented - filter={:?}",
-            filter
-        );
+        use flui_painting::display_list::ImageFilter;
+
+        // Pragmatic approximation: full GPU image filters (blur, dilate, erode)
+        // require render-to-texture + compute shader post-processing which needs
+        // offscreen infrastructure not yet available. Instead, we use save_layer
+        // to isolate the filtered content for future GPU pass integration.
+        match filter {
+            ImageFilter::Blur { sigma_x, sigma_y } => {
+                // Capture content in a layer; actual Gaussian blur requires
+                // a two-pass separable compute shader on the layer texture.
+                let paint = Paint::fill(Color::WHITE);
+                self.painter.save_layer(None, &paint);
+                tracing::debug!(
+                    "push_image_filter(Blur): save_layer for blur sigma_x={:.2}, sigma_y={:.2} \
+                     (GPU blur not yet implemented)",
+                    sigma_x,
+                    sigma_y,
+                );
+            }
+            ImageFilter::Dilate { radius } => {
+                let paint = Paint::fill(Color::WHITE);
+                self.painter.save_layer(None, &paint);
+                tracing::debug!(
+                    "push_image_filter(Dilate): save_layer for dilate radius={:.2} \
+                     (GPU morphology not yet implemented)",
+                    radius,
+                );
+            }
+            ImageFilter::Erode { radius } => {
+                let paint = Paint::fill(Color::WHITE);
+                self.painter.save_layer(None, &paint);
+                tracing::debug!(
+                    "push_image_filter(Erode): save_layer for erode radius={:.2} \
+                     (GPU morphology not yet implemented)",
+                    radius,
+                );
+            }
+            ImageFilter::Matrix(matrix) => {
+                // Color matrix can be approximated the same way as push_color_filter.
+                // Extract tint and alpha from the matrix applied to white.
+                let alpha_scale = matrix.values[18].clamp(0.0, 1.0);
+                let alpha_offset = matrix.values[19].clamp(0.0, 1.0);
+                let effective_alpha = (alpha_scale + alpha_offset).clamp(0.0, 1.0);
+                let tinted = matrix.apply([1.0, 1.0, 1.0, 1.0]);
+
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let tint_color = Color::rgba(
+                    (tinted[0] * 255.0) as u8,
+                    (tinted[1] * 255.0) as u8,
+                    (tinted[2] * 255.0) as u8,
+                    (effective_alpha * 255.0) as u8,
+                );
+                let paint = Paint::fill(tint_color);
+                self.painter.save_layer(None, &paint);
+                tracing::debug!(
+                    "push_image_filter(Matrix): approximation tint=({},{},{}) alpha={:.2}",
+                    tint_color.r,
+                    tint_color.g,
+                    tint_color.b,
+                    effective_alpha,
+                );
+            }
+            ImageFilter::ColorAdjust(adjustment) => {
+                // Color adjustments are approximated via an opacity layer.
+                let paint = Paint::fill(Color::WHITE);
+                self.painter.save_layer(None, &paint);
+                tracing::debug!(
+                    "push_image_filter(ColorAdjust): save_layer for {:?} \
+                     (GPU color adjust not yet implemented)",
+                    adjustment,
+                );
+            }
+            ImageFilter::Compose(filters) => {
+                // For composed filters, we save a single layer. In the future,
+                // each sub-filter would chain as successive compute passes.
+                let paint = Paint::fill(Color::WHITE);
+                self.painter.save_layer(None, &paint);
+                tracing::debug!(
+                    "push_image_filter(Compose): save_layer for {} chained filters \
+                     (GPU compose not yet implemented)",
+                    filters.len(),
+                );
+            }
+            #[cfg(debug_assertions)]
+            ImageFilter::OverflowIndicator {
+                overflow_h,
+                overflow_v,
+                ..
+            } => {
+                // Debug-only overflow visualization; save layer for balance.
+                let paint = Paint::fill(Color::WHITE);
+                self.painter.save_layer(None, &paint);
+                tracing::debug!(
+                    "push_image_filter(OverflowIndicator): h={:.1}, v={:.1}",
+                    overflow_h,
+                    overflow_v,
+                );
+            }
+        }
     }
 
     fn pop_image_filter(&mut self) {
-        self.painter.restore();
+        self.painter.restore_layer();
     }
 
     fn add_performance_overlay(
