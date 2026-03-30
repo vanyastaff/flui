@@ -294,6 +294,9 @@ impl Tessellator {
 
     /// Tessellate an arc (pie slice or arc stroke)
     ///
+    /// Uses lyon's `Arc` geometry primitive to generate accurate cubic Bezier
+    /// curves instead of a manual line-segment approximation.
+    ///
     /// # Arguments
     /// * `rect` - Bounding rectangle of the ellipse
     /// * `start_angle` - Start angle in radians
@@ -314,41 +317,52 @@ impl Tessellator {
         let mut path_builder = Path::builder();
 
         let center = rect.center();
-        let radii = lyon::geom::vector((rect.width() / 2.0).0, (rect.height() / 2.0).0);
+        let rx = (rect.width() / 2.0).0;
+        let ry = (rect.height() / 2.0).0;
 
-        // Calculate number of segments based on sweep angle for smooth curves
-        #[allow(clippy::cast_possible_truncation)]
-        let num_segments =
-            ((sweep_angle.abs() / (std::f32::consts::PI / 12.0)).ceil() as i32).max(8);
-        let angle_step = sweep_angle / num_segments as f32;
+        // Handle near-zero sweep: emit a degenerate path (just the start point)
+        if sweep_angle.abs() < 1e-6 {
+            let start_x = center.x.0 + rx * start_angle.cos();
+            let start_y = center.y.0 + ry * start_angle.sin();
+            path_builder.begin(lyon::geom::point(start_x, start_y));
+            path_builder.end(false);
+            let path = path_builder.build();
+            return if paint.style == flui_painting::PaintStyle::Fill {
+                self.tessellate_fill(&path, paint)
+            } else {
+                self.tessellate_stroke(&path, paint)
+            };
+        }
 
-        // Start point on the arc
-        let start_x = center.x.0 + radii.x * start_angle.cos();
-        let start_y = center.y.0 + radii.y * start_angle.sin();
+        // Build a lyon Arc and convert to cubic Bezier curves
+        let arc = lyon::geom::Arc {
+            center: lyon::geom::point(center.x.0, center.y.0),
+            radii: lyon::geom::vector(rx, ry),
+            start_angle: lyon::geom::Angle::radians(start_angle),
+            sweep_angle: lyon::geom::Angle::radians(sweep_angle),
+            x_rotation: lyon::geom::Angle::radians(0.0),
+        };
+
+        let arc_start = arc.from();
 
         if use_center {
-            // Pie slice: start from center
+            // Pie slice: start from center, line to arc start
             path_builder.begin(lyon::geom::point(center.x.0, center.y.0));
-            path_builder.line_to(lyon::geom::point(start_x, start_y));
+            path_builder.line_to(arc_start);
         } else {
-            // Arc only: start from arc edge
-            path_builder.begin(lyon::geom::point(start_x, start_y));
+            path_builder.begin(arc_start);
         }
 
-        // Draw arc segments
-        for i in 1..=num_segments {
-            let angle = start_angle + angle_step * i as f32;
-            let x = center.x.0 + radii.x * angle.cos();
-            let y = center.y.0 + radii.y * angle.sin();
-            path_builder.line_to(lyon::geom::point(x, y));
-        }
+        // Emit the arc as a series of cubic Bezier curves
+        arc.for_each_cubic_bezier(&mut |cubic| {
+            path_builder.cubic_bezier_to(cubic.ctrl1, cubic.ctrl2, cubic.to);
+        });
 
         if use_center {
             // Pie slice: close back to center
             path_builder.line_to(lyon::geom::point(center.x.0, center.y.0));
             path_builder.close();
         } else {
-            // Arc only: don't close
             path_builder.end(false);
         }
 
@@ -797,37 +811,32 @@ impl IntoLyonPath for flui_types::painting::path::Path {
                 }
 
                 PathCommand::AddArc(rect, start_angle, sweep_angle) => {
-                    // Start new subpath for arc
+                    // Start new subpath for arc using lyon Arc primitive
                     if has_begun {
                         builder.end(false);
                     }
                     let center = rect.center();
-                    let radii = lyon::geom::vector((rect.width() / 2.0).0, (rect.height() / 2.0).0);
+                    let rx = (rect.width() / 2.0).0;
+                    let ry = (rect.height() / 2.0).0;
 
-                    // Approximate arc with line segments
-                    // Use more segments for larger sweep angles
-                    #[allow(clippy::cast_possible_truncation)]
-                    let num_segments =
-                        ((sweep_angle.abs() / (std::f32::consts::PI / 6.0)).ceil() as i32).max(4);
-                    let angle_step = sweep_angle / num_segments as f32;
+                    let arc = lyon::geom::Arc {
+                        center: lyon::geom::point(center.x.0, center.y.0),
+                        radii: lyon::geom::vector(rx, ry),
+                        start_angle: lyon::geom::Angle::radians(*start_angle),
+                        sweep_angle: lyon::geom::Angle::radians(*sweep_angle),
+                        x_rotation: lyon::geom::Angle::radians(0.0),
+                    };
 
-                    let start_x = center.x.0 + radii.x * start_angle.cos();
-                    let start_y = center.y.0 + radii.y * start_angle.sin();
-
-                    builder.begin(lyon::geom::point(start_x, start_y));
+                    let arc_start = arc.from();
+                    builder.begin(arc_start);
                     has_begun = true;
 
-                    for i in 1..=num_segments {
-                        let angle = start_angle + angle_step * i as f32;
-                        let x = center.x.0 + radii.x * angle.cos();
-                        let y = center.y.0 + radii.y * angle.sin();
-                        builder.line_to(lyon::geom::point(x, y));
-                    }
+                    arc.for_each_cubic_bezier(&mut |cubic| {
+                        builder.cubic_bezier_to(cubic.ctrl1, cubic.ctrl2, cubic.to);
+                    });
 
-                    let end_angle = start_angle + sweep_angle;
-                    let end_x = center.x.0 + radii.x * end_angle.cos();
-                    let end_y = center.y.0 + radii.y * end_angle.sin();
-                    _current_pos = Some(Point::new(Pixels(end_x), Pixels(end_y)));
+                    let arc_end = arc.to();
+                    _current_pos = Some(Point::new(Pixels(arc_end.x), Pixels(arc_end.y)));
                 }
             }
         }
@@ -946,5 +955,162 @@ mod tests {
         // Path should be created successfully
         // We can't easily test the internal structure, but we can verify it
         // doesn't panic
+    }
+
+    // ===== Arc tessellation tests =====
+
+    /// Helper: creates a square bounding rect centered at (50, 50) with radius 25
+    fn arc_rect() -> Rect<Pixels> {
+        Rect::from_ltrb(px(25.0), px(25.0), px(75.0), px(75.0))
+    }
+
+    #[test]
+    fn test_tessellate_arc_full_circle() {
+        let mut tessellator = Tessellator::new();
+        let rect = arc_rect();
+        let paint = Paint::fill(Color::RED);
+
+        // Full circle: sweep_angle = 2*PI
+        let result = tessellator.tessellate_arc(
+            rect,
+            0.0,
+            std::f32::consts::TAU,
+            false,
+            &paint,
+        );
+        assert!(result.is_ok(), "full circle arc should tessellate");
+
+        let (vertices, indices) = result.expect("full circle arc tessellation should succeed");
+        assert!(!vertices.is_empty(), "full circle should produce vertices");
+        assert!(!indices.is_empty(), "full circle should produce indices");
+        assert_eq!(indices.len() % 3, 0, "indices should form triangles");
+    }
+
+    #[test]
+    fn test_tessellate_arc_semicircle() {
+        let mut tessellator = Tessellator::new();
+        let rect = arc_rect();
+        let paint = Paint::fill(Color::GREEN);
+
+        // Semicircle: sweep_angle = PI
+        let result = tessellator.tessellate_arc(
+            rect,
+            0.0,
+            std::f32::consts::PI,
+            true, // pie slice
+            &paint,
+        );
+        assert!(result.is_ok(), "semicircle arc should tessellate");
+
+        let (vertices, indices) = result.expect("semicircle tessellation should succeed");
+        assert!(!vertices.is_empty(), "semicircle should produce vertices");
+        assert!(!indices.is_empty(), "semicircle should produce indices");
+        assert_eq!(indices.len() % 3, 0, "indices should form triangles");
+    }
+
+    #[test]
+    fn test_tessellate_arc_quarter_circle() {
+        let mut tessellator = Tessellator::new();
+        let rect = arc_rect();
+        let paint = Paint::fill(Color::BLUE);
+
+        // Quarter circle: sweep_angle = PI/2
+        let result = tessellator.tessellate_arc(
+            rect,
+            0.0,
+            std::f32::consts::FRAC_PI_2,
+            true, // pie slice
+            &paint,
+        );
+        assert!(result.is_ok(), "quarter circle arc should tessellate");
+
+        let (vertices, indices) = result.expect("quarter circle tessellation should succeed");
+        assert!(!vertices.is_empty(), "quarter circle should produce vertices");
+        assert!(!indices.is_empty(), "quarter circle should produce indices");
+        assert_eq!(indices.len() % 3, 0, "indices should form triangles");
+    }
+
+    #[test]
+    fn test_tessellate_arc_negative_sweep() {
+        let mut tessellator = Tessellator::new();
+        let rect = arc_rect();
+        let paint = Paint::fill(Color::RED);
+
+        // Negative sweep (clockwise arc)
+        let result = tessellator.tessellate_arc(
+            rect,
+            std::f32::consts::PI,
+            -std::f32::consts::FRAC_PI_2,
+            false,
+            &paint,
+        );
+        assert!(result.is_ok(), "negative sweep arc should tessellate");
+
+        let (vertices, indices) = result.expect("negative sweep tessellation should succeed");
+        assert!(!vertices.is_empty(), "negative sweep should produce vertices");
+        assert!(!indices.is_empty(), "negative sweep should produce indices");
+        assert_eq!(indices.len() % 3, 0, "indices should form triangles");
+    }
+
+    #[test]
+    fn test_tessellate_arc_near_zero_sweep() {
+        let mut tessellator = Tessellator::new();
+        let rect = arc_rect();
+        let paint = Paint::fill(Color::GREEN);
+
+        // Very small sweep (near zero) — should not panic
+        let result = tessellator.tessellate_arc(
+            rect,
+            0.0,
+            1e-8,
+            false,
+            &paint,
+        );
+        // Near-zero sweep produces a degenerate path; tessellation may produce
+        // empty geometry but must not error or panic.
+        assert!(result.is_ok(), "near-zero sweep arc should not error");
+    }
+
+    #[test]
+    fn test_tessellate_arc_stroke_mode() {
+        let mut tessellator = Tessellator::new();
+        let rect = arc_rect();
+        let paint = Paint::stroke(Color::RED, 2.0);
+
+        // Stroke-mode arc (quarter circle)
+        let result = tessellator.tessellate_arc(
+            rect,
+            0.0,
+            std::f32::consts::FRAC_PI_2,
+            false,
+            &paint,
+        );
+        assert!(result.is_ok(), "stroke-mode arc should tessellate");
+
+        let (vertices, indices) = result.expect("stroke arc tessellation should succeed");
+        assert!(!vertices.is_empty(), "stroke arc should produce vertices");
+        assert!(!indices.is_empty(), "stroke arc should produce indices");
+    }
+
+    #[test]
+    fn test_tessellate_arc_elliptical() {
+        let mut tessellator = Tessellator::new();
+        // Non-square bounding rect for an elliptical arc
+        let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(50.0));
+        let paint = Paint::fill(Color::BLUE);
+
+        let result = tessellator.tessellate_arc(
+            rect,
+            0.0,
+            std::f32::consts::PI,
+            true,
+            &paint,
+        );
+        assert!(result.is_ok(), "elliptical arc should tessellate");
+
+        let (vertices, indices) = result.expect("elliptical arc tessellation should succeed");
+        assert!(!vertices.is_empty(), "elliptical arc should produce vertices");
+        assert!(!indices.is_empty(), "elliptical arc should produce indices");
+        assert_eq!(indices.len() % 3, 0, "indices should form triangles");
     }
 }
