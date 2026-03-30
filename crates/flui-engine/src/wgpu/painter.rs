@@ -87,6 +87,9 @@ struct DrawSegment {
     /// Radial gradient instance batch
     radial_gradient_batch:
         super::instancing::InstanceBatch<super::instancing::RadialGradientInstance>,
+    /// Sweep gradient instance batch
+    sweep_gradient_batch:
+        super::instancing::InstanceBatch<super::instancing::SweepGradientInstance>,
     /// Accumulated gradient stops for this segment
     current_gradient_stops: Vec<super::effects::GradientStop>,
     /// Batched vertices for tessellation path
@@ -109,6 +112,7 @@ impl DrawSegment {
             shadow_batch: super::instancing::InstanceBatch::new(1024),
             linear_gradient_batch: super::instancing::InstanceBatch::new(512),
             radial_gradient_batch: super::instancing::InstanceBatch::new(512),
+            sweep_gradient_batch: super::instancing::InstanceBatch::new(512),
             current_gradient_stops: Vec::new(),
             vertices: Vec::new(),
             indices: Vec::new(),
@@ -125,6 +129,7 @@ impl DrawSegment {
             && self.shadow_batch.is_empty()
             && self.linear_gradient_batch.is_empty()
             && self.radial_gradient_batch.is_empty()
+            && self.sweep_gradient_batch.is_empty()
             && self.vertices.is_empty()
             && self.tess_batches.is_empty()
     }
@@ -201,6 +206,7 @@ pub struct WgpuPainter {
 
     /// Radial gradient pipeline (GPU-accelerated radial gradients)
     radial_gradient_pipeline: wgpu::RenderPipeline,
+    sweep_gradient_pipeline: wgpu::RenderPipeline,
 
     /// Shadow pipeline (analytical shadows with single-pass rendering)
     shadow_pipeline: wgpu::RenderPipeline,
@@ -714,6 +720,16 @@ impl WgpuPainter {
 
         // (Radial gradient batch moved to DrawSegment)
 
+        // Create sweep gradient pipeline
+        let sweep_gradient_pipeline = super::effects_pipeline::create_sweep_gradient_pipeline(
+            &device,
+            surface_format,
+            pipeline_cache.viewport_bind_group_layout(),
+            &gradient_bind_group_layout,
+        );
+
+        // (Sweep gradient batch moved to DrawSegment)
+
         // Create shadow pipeline
         let shadow_pipeline = super::effects_pipeline::create_shadow_pipeline(
             &device,
@@ -752,6 +768,7 @@ impl WgpuPainter {
             texture_bind_group_layout,
             linear_gradient_pipeline,
             radial_gradient_pipeline,
+            sweep_gradient_pipeline,
             shadow_pipeline,
             gradient_stops_buffer,
             gradient_bind_group_layout,
@@ -1307,16 +1324,18 @@ impl WgpuPainter {
         // Check if we have any gradients to render
         let has_linear = !self.current_segment.linear_gradient_batch.is_empty();
         let has_radial = !self.current_segment.radial_gradient_batch.is_empty();
+        let has_sweep = !self.current_segment.sweep_gradient_batch.is_empty();
 
-        if !has_linear && !has_radial {
+        if !has_linear && !has_radial && !has_sweep {
             return;
         }
 
         #[cfg(debug_assertions)]
         tracing::trace!(
-            "WgpuPainter::flush_gradient_batches: linear={}, radial={}, stops={}",
+            "WgpuPainter::flush_gradient_batches: linear={}, radial={}, sweep={}, stops={}",
             self.current_segment.linear_gradient_batch.len(),
             self.current_segment.radial_gradient_batch.len(),
+            self.current_segment.sweep_gradient_batch.len(),
             self.current_segment.current_gradient_stops.len()
         );
 
@@ -1345,9 +1364,11 @@ impl WgpuPainter {
             * std::mem::size_of::<super::instancing::LinearGradientInstance>();
         let radial_size = self.current_segment.radial_gradient_batch.len()
             * std::mem::size_of::<super::instancing::RadialGradientInstance>();
+        let sweep_size = self.current_segment.sweep_gradient_batch.len()
+            * std::mem::size_of::<super::instancing::SweepGradientInstance>();
 
         // Build combined instance buffer
-        let mut combined_buffer = Vec::with_capacity(linear_size + radial_size);
+        let mut combined_buffer = Vec::with_capacity(linear_size + radial_size + sweep_size);
 
         let linear_offset = 0;
         if has_linear {
@@ -1357,6 +1378,11 @@ impl WgpuPainter {
         let radial_offset = combined_buffer.len();
         if has_radial {
             combined_buffer.extend_from_slice(self.current_segment.radial_gradient_batch.as_bytes());
+        }
+
+        let sweep_offset = combined_buffer.len();
+        if has_sweep {
+            combined_buffer.extend_from_slice(self.current_segment.sweep_gradient_batch.as_bytes());
         }
 
         // Upload combined buffer (zero-copy via queue.write_buffer)
@@ -1416,12 +1442,24 @@ impl WgpuPainter {
             render_pass.draw_indexed(0..6, 0, 0..self.current_segment.radial_gradient_batch.len() as u32);
         }
 
+        // ===== Draw Sweep Gradients (if any) =====
+        if has_sweep {
+            render_pass.set_pipeline(&self.sweep_gradient_pipeline);
+
+            let sweep_start = sweep_offset as u64;
+            let sweep_end = sweep_start + sweep_size as u64;
+            render_pass.set_vertex_buffer(1, instance_buffer.slice(sweep_start..sweep_end));
+
+            render_pass.draw_indexed(0..6, 0, 0..self.current_segment.sweep_gradient_batch.len() as u32);
+        }
+
         // Drop render pass
         drop(render_pass);
 
         // Clear batches for next frame
         self.current_segment.linear_gradient_batch.clear();
         self.current_segment.radial_gradient_batch.clear();
+        self.current_segment.sweep_gradient_batch.clear();
         self.current_segment.current_gradient_stops.clear();
     }
 
@@ -2491,6 +2529,50 @@ impl WgpuPainter {
         );
 
         if self.current_segment.radial_gradient_batch.add(instance) {
+            // Batch full, flush will happen in render()
+        }
+    }
+
+    /// Draw a rectangle with a sweep (angular/conic) gradient
+    ///
+    /// # Arguments
+    /// * `bounds` - Rectangle bounds
+    /// * `center` - Gradient center point (local coordinates)
+    /// * `start_angle` - Start angle in radians
+    /// * `end_angle` - End angle in radians
+    /// * `stops` - Gradient color stops (max 8)
+    /// * `corner_radius` - Corner radius (uniform, 0.0 = sharp corners)
+    pub fn sweep_gradient_rect(
+        &mut self,
+        bounds: Rect<Pixels>,
+        center: glam::Vec2,
+        start_angle: f32,
+        end_angle: f32,
+        stops: &[super::effects::GradientStop],
+        corner_radius: f32,
+    ) {
+        use super::instancing::SweepGradientInstance;
+
+        // Append gradient stops to global buffer (max 8 per gradient)
+        let stop_count = stops.len().min(8);
+        self.current_segment.current_gradient_stops
+            .extend_from_slice(&stops[..stop_count]);
+
+        let instance = SweepGradientInstance::new(
+            [
+                bounds.left().0,
+                bounds.top().0,
+                bounds.width().0,
+                bounds.height().0,
+            ],
+            center,
+            start_angle,
+            end_angle,
+            [corner_radius; 4],
+            stop_count as u32,
+        );
+
+        if self.current_segment.sweep_gradient_batch.add(instance) {
             // Batch full, flush will happen in render()
         }
     }

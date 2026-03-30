@@ -171,6 +171,72 @@ pub fn create_radial_gradient_pipeline(
     })
 }
 
+/// Create sweep (angular/conic) gradient rendering pipeline
+pub fn create_sweep_gradient_pipeline(
+    device: &wgpu::Device,
+    surface_format: wgpu::TextureFormat,
+    viewport_bind_group_layout: &wgpu::BindGroupLayout,
+    gradient_bind_group_layout: &wgpu::BindGroupLayout,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Sweep Gradient Shader"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("shaders/gradients/sweep.wgsl").into()),
+    });
+
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Sweep Gradient Pipeline Layout"),
+        bind_group_layouts: &[viewport_bind_group_layout, gradient_bind_group_layout],
+        push_constant_ranges: &[],
+    });
+
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Sweep Gradient Pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            buffers: &[
+                // Vertex buffer (shared unit quad)
+                wgpu::VertexBufferLayout {
+                    array_stride: 8, // 2 floats (vec2)
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x2],
+                },
+                // Instance buffer
+                super::instancing::SweepGradientInstance::desc(),
+            ],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: surface_format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            unclipped_depth: false,
+            conservative: false,
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState {
+            count: 1,
+            mask: !0,
+            alpha_to_coverage_enabled: false,
+        },
+        multiview: None,
+        cache: None,
+    })
+}
+
 /// Create shadow rendering pipeline
 pub fn create_shadow_pipeline(
     device: &wgpu::Device,

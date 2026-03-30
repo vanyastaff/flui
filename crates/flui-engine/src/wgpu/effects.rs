@@ -183,6 +183,67 @@ impl RadialGradientInstance {
     }
 }
 
+/// Sweep (angular/conic) gradient instance data for GPU instancing
+///
+/// Layout matches the sweep.wgsl InstanceInput struct.
+/// Each instance represents one sweep-gradient-filled rectangle.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+pub struct SweepGradientInstance {
+    /// Rectangle bounds [x, y, width, height]
+    pub bounds: [f32; 4],
+    /// Gradient center point (local coordinates)
+    pub center: [f32; 2],
+    /// Start and end angles in radians [start_angle, end_angle]
+    pub angles: [f32; 2],
+    /// Corner radii [top-left, top-right, bottom-right, bottom-left]
+    pub corner_radii: [f32; 4],
+    /// Number of gradient stops (1-8)
+    pub stop_count: u32,
+    /// Padding for GPU alignment
+    pub padding: [u32; 3],
+}
+
+impl SweepGradientInstance {
+    /// Create a new sweep gradient instance
+    pub fn new(
+        bounds: [f32; 4],
+        center: Vec2,
+        start_angle: f32,
+        end_angle: f32,
+        corner_radii: [f32; 4],
+        stop_count: u32,
+    ) -> Self {
+        Self {
+            bounds,
+            center: [center.x, center.y],
+            angles: [start_angle, end_angle],
+            corner_radii,
+            stop_count: stop_count.min(8),
+            padding: [0; 3],
+        }
+    }
+
+    /// Create a full-circle sweep gradient (0 to 2*PI) centered in the rectangle
+    pub fn full_circle(
+        bounds: [f32; 4],
+        corner_radii: [f32; 4],
+        stop_count: u32,
+    ) -> Self {
+        let width = bounds[2];
+        let height = bounds[3];
+        let center = Vec2::new(width * 0.5, height * 0.5);
+        Self::new(
+            bounds,
+            center,
+            0.0,
+            std::f32::consts::TAU,
+            corner_radii,
+            stop_count,
+        )
+    }
+}
+
 // =============================================================================
 // Shadow Types
 // =============================================================================

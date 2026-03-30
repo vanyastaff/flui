@@ -252,13 +252,31 @@ pub trait CommandRenderer {
     // ===== Clipping =====
 
     /// Set rectangular clip region
-    fn clip_rect(&mut self, rect: Rect<Pixels>, transform: &Matrix4);
+    fn clip_rect(
+        &mut self,
+        rect: Rect<Pixels>,
+        clip_op: flui_types::painting::ClipOp,
+        clip_behavior: flui_types::painting::Clip,
+        transform: &Matrix4,
+    );
 
     /// Set rounded rectangular clip region
-    fn clip_rrect(&mut self, rrect: RRect, transform: &Matrix4);
+    fn clip_rrect(
+        &mut self,
+        rrect: RRect,
+        clip_op: flui_types::painting::ClipOp,
+        clip_behavior: flui_types::painting::Clip,
+        transform: &Matrix4,
+    );
 
     /// Set arbitrary path clip region
-    fn clip_path(&mut self, path: &Path, transform: &Matrix4);
+    fn clip_path(
+        &mut self,
+        path: &Path,
+        clip_op: flui_types::painting::ClipOp,
+        clip_behavior: flui_types::painting::Clip,
+        transform: &Matrix4,
+    );
 
     // ===== Viewport Information =====
 

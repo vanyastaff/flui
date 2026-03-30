@@ -459,6 +459,38 @@ impl RadialGradientInstance {
 }
 
 // =============================================================================
+// Sweep Gradient Instances
+// =============================================================================
+
+/// Sweep gradient instance data for GPU instancing
+pub use super::effects::SweepGradientInstance;
+
+impl SweepGradientInstance {
+    /// Get wgpu vertex buffer layout for instance data
+    #[must_use]
+    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
+        const ATTRIBUTES: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
+            // Bounds (location 2)
+            2 => Float32x4,
+            // Center (location 3)
+            3 => Float32x2,
+            // Angles [start, end] (location 4)
+            4 => Float32x2,
+            // Corner radii (location 5)
+            5 => Float32x4,
+            // Stop count (location 6)
+            6 => Uint32,
+        ];
+
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<SweepGradientInstance>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: ATTRIBUTES,
+        }
+    }
+}
+
+// =============================================================================
 // Shadow Instances
 // =============================================================================
 

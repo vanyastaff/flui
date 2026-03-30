@@ -69,7 +69,7 @@ impl PointerEvent {
 
 // Re-export types that are part of the public API
 pub use flui_types::painting::{
-    BlendMode, FilterQuality, Paint, PointMode, Shader, TextureId,
+    BlendMode, Clip, ClipOp, FilterQuality, Paint, PointMode, Shader, TextureId,
     effects::ImageFilter,
     image::{ColorFilter, ImageRepeat},
 };
@@ -996,6 +996,10 @@ pub enum DrawCommand {
     ClipRect {
         /// Rectangle to clip to
         rect: Rect<Pixels>,
+        /// Set operation (Intersect or Difference)
+        clip_op: ClipOp,
+        /// Anti-aliasing behavior
+        clip_behavior: Clip,
         /// Transform at recording time
         transform: Matrix4,
     },
@@ -1004,6 +1008,10 @@ pub enum DrawCommand {
     ClipRRect {
         /// Rounded rectangle to clip to
         rrect: RRect,
+        /// Set operation (Intersect or Difference)
+        clip_op: ClipOp,
+        /// Anti-aliasing behavior
+        clip_behavior: Clip,
         /// Transform at recording time
         transform: Matrix4,
     },
@@ -1012,6 +1020,10 @@ pub enum DrawCommand {
     ClipPath {
         /// Path to clip to
         path: Path,
+        /// Set operation (Intersect or Difference)
+        clip_op: ClipOp,
+        /// Anti-aliasing behavior
+        clip_behavior: Clip,
         /// Transform at recording time
         transform: Matrix4,
     },

@@ -24,6 +24,9 @@ use crate::traits::{CommandRenderer, Painter};
 pub struct Backend {
     painter: WgpuPainter,
     offscreen: Option<Arc<parking_lot::Mutex<super::offscreen::OffscreenRenderer>>>,
+    /// Cached offscreen painter reused across shader mask invocations.
+    /// Lazily created on first use, resized when dimensions change.
+    offscreen_painter: Option<WgpuPainter>,
 }
 
 impl Backend {
@@ -32,6 +35,7 @@ impl Backend {
         Self {
             painter,
             offscreen: None,
+            offscreen_painter: None,
         }
     }
 
@@ -43,6 +47,7 @@ impl Backend {
         Self {
             painter,
             offscreen: Some(offscreen),
+            offscreen_painter: None,
         }
     }
 
@@ -85,6 +90,40 @@ impl Backend {
     /// Used to restore state after rendering layer children.
     pub fn restore(&mut self) {
         self.painter.restore();
+    }
+
+    /// Get or create a cached offscreen painter for shader mask rendering.
+    ///
+    /// On first call, creates a new `WgpuPainter` with shared device/queue.
+    /// On subsequent calls, returns the cached painter, resizing if needed.
+    fn get_or_create_offscreen_painter(
+        &mut self,
+        device: &Arc<wgpu::Device>,
+        queue: &Arc<wgpu::Queue>,
+        format: wgpu::TextureFormat,
+        size: (u32, u32),
+    ) -> &mut WgpuPainter {
+        if let Some(ref painter) = self.offscreen_painter {
+            if painter.size() != size {
+                // Size changed — drop and recreate
+                self.offscreen_painter = None;
+            }
+        }
+
+        self.offscreen_painter.get_or_insert_with(|| {
+            tracing::debug!(
+                "Creating cached offscreen painter: size={}x{}, format={:?}",
+                size.0,
+                size.1,
+                format
+            );
+            super::painter::WgpuPainter::with_shared_device(
+                Arc::clone(device),
+                Arc::clone(queue),
+                format,
+                size,
+            )
+        })
     }
 
     fn with_transform<F>(&mut self, transform: &Matrix4, draw_fn: F)
@@ -378,15 +417,17 @@ impl CommandRenderer for Backend {
             };
             // Lock released here
 
-            // Step 2: Create temporary painter for child rendering
-            let mut temp_painter = super::painter::WgpuPainter::with_shared_device(
-                Arc::clone(&device),
-                Arc::clone(&queue),
+            // Step 2: Get or create cached offscreen painter (avoids per-call allocation)
+            // Ensure the cache is populated (creates or resizes as needed), then take
+            // it out temporarily so we can wrap it in a Backend for command dispatch.
+            let _ = self.get_or_create_offscreen_painter(
+                &device,
+                &queue,
                 format,
                 (width, height),
             );
-
-            // Step 3: Dispatch child commands through temporary backend
+            let mut temp_painter = self.offscreen_painter.take()
+                .expect("offscreen_painter was just populated by get_or_create");
             {
                 let mut temp_backend = Backend::new(temp_painter);
                 for command in child.commands() {
@@ -422,6 +463,9 @@ impl CommandRenderer for Backend {
                 tracing::error!("Failed to render shader mask child content: {}", e);
             }
             queue.submit(std::iter::once(encoder.finish()));
+
+            // Put the cached painter back for reuse
+            self.offscreen_painter = Some(temp_painter);
 
             // Step 5: Apply shader mask via GPU pipeline
             let masked_texture = {
@@ -550,15 +594,56 @@ impl CommandRenderer for Backend {
                         0.0, // No corner radius for rect
                     );
                 }
-                flui_painting::Shader::SweepGradient { colors, .. } => {
-                    // Fallback to center color for sweep gradients (not yet implemented)
-                    if let Some(color) = colors.first() {
-                        let paint = Paint::fill(*color);
-                        painter.rect(rect, &paint);
+                flui_painting::Shader::SweepGradient {
+                    center,
+                    start_angle,
+                    end_angle,
+                    colors,
+                    stops,
+                    ..
+                } => {
+                    if colors.is_empty() {
+                        return;
                     }
+
+                    // Convert colors and stops to GradientStop array
+                    let gradient_stops: Vec<GradientStop> = if let Some(stop_positions) = stops {
+                        colors
+                            .iter()
+                            .zip(stop_positions.iter())
+                            .map(|(color, pos)| GradientStop::new(*color, *pos))
+                            .collect()
+                    } else {
+                        let count = colors.len();
+                        colors
+                            .iter()
+                            .enumerate()
+                            .map(|(i, color)| {
+                                let pos = if count > 1 {
+                                    i as f32 / (count - 1) as f32
+                                } else {
+                                    0.0
+                                };
+                                GradientStop::new(*color, pos)
+                            })
+                            .collect()
+                    };
+
+                    painter.sweep_gradient_rect(
+                        rect,
+                        glam::Vec2::new(center.dx.0, center.dy.0),
+                        *start_angle,
+                        *end_angle,
+                        &gradient_stops,
+                        0.0, // No corner radius for rect
+                    );
                 }
                 _ => {
-                    // Unknown shader type - fallback to transparent
+                    // Image and other non-gradient shader types are not applicable
+                    // for gradient rendering; skip silently.
+                    tracing::debug!(
+                        "render_gradient: unsupported shader variant, skipping"
+                    );
                 }
             }
         });
@@ -665,15 +750,53 @@ impl CommandRenderer for Backend {
                         corner_radius,
                     );
                 }
-                flui_painting::Shader::SweepGradient { colors, .. } => {
-                    // Fallback to center color for sweep gradients (not yet implemented)
-                    if let Some(color) = colors.first() {
-                        let paint = Paint::fill(*color);
-                        painter.rrect(rrect, &paint);
+                flui_painting::Shader::SweepGradient {
+                    center,
+                    start_angle,
+                    end_angle,
+                    colors,
+                    stops,
+                    ..
+                } => {
+                    if colors.is_empty() {
+                        return;
                     }
+
+                    let gradient_stops: Vec<GradientStop> = if let Some(stop_positions) = stops {
+                        colors
+                            .iter()
+                            .zip(stop_positions.iter())
+                            .map(|(color, pos)| GradientStop::new(*color, *pos))
+                            .collect()
+                    } else {
+                        let count = colors.len();
+                        colors
+                            .iter()
+                            .enumerate()
+                            .map(|(i, color)| {
+                                let pos = if count > 1 {
+                                    i as f32 / (count - 1) as f32
+                                } else {
+                                    0.0
+                                };
+                                GradientStop::new(*color, pos)
+                            })
+                            .collect()
+                    };
+
+                    painter.sweep_gradient_rect(
+                        rrect.rect,
+                        glam::Vec2::new(center.dx.0, center.dy.0),
+                        *start_angle,
+                        *end_angle,
+                        &gradient_stops,
+                        corner_radius,
+                    );
                 }
                 _ => {
-                    // Unknown shader type - fallback to transparent
+                    tracing::debug!(
+                        "render_gradient_rrect: unsupported shader variant, skipping"
+                    );
                 }
             }
         });
@@ -732,19 +855,40 @@ impl CommandRenderer for Backend {
         });
     }
 
-    fn clip_rect(&mut self, rect: Rect<Pixels>, transform: &Matrix4) {
+    fn clip_rect(
+        &mut self,
+        rect: Rect<Pixels>,
+        _clip_op: flui_types::painting::ClipOp,
+        _clip_behavior: flui_types::painting::Clip,
+        transform: &Matrix4,
+    ) {
+        // ClipOp and Clip are stored in DrawCommand and available here for future
+        // GPU-accelerated clip modes (e.g. stencil-based Difference, MSAA anti-aliased edges).
+        // Current implementation uses simple scissor clipping (Intersect + HardEdge).
         self.with_transform(transform, |painter| {
             painter.clip_rect(rect);
         });
     }
 
-    fn clip_rrect(&mut self, rrect: RRect, transform: &Matrix4) {
+    fn clip_rrect(
+        &mut self,
+        rrect: RRect,
+        _clip_op: flui_types::painting::ClipOp,
+        _clip_behavior: flui_types::painting::Clip,
+        transform: &Matrix4,
+    ) {
         self.with_transform(transform, |painter| {
             painter.clip_rrect(rrect);
         });
     }
 
-    fn clip_path(&mut self, path: &Path, transform: &Matrix4) {
+    fn clip_path(
+        &mut self,
+        path: &Path,
+        _clip_op: flui_types::painting::ClipOp,
+        _clip_behavior: flui_types::painting::Clip,
+        transform: &Matrix4,
+    ) {
         self.with_transform(transform, |painter| {
             painter.clip_path(path);
         });

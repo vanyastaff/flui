@@ -671,9 +671,9 @@ mod tests {
         }
 
         // ===== Clipping (no-ops) =====
-        fn clip_rect(&mut self, _rect: Rect<Pixels>, _transform: &Matrix4) {}
-        fn clip_rrect(&mut self, _rrect: RRect, _transform: &Matrix4) {}
-        fn clip_path(&mut self, _path: &Path, _transform: &Matrix4) {}
+        fn clip_rect(&mut self, _rect: Rect<Pixels>, _clip_op: flui_types::painting::ClipOp, _clip_behavior: flui_types::painting::Clip, _transform: &Matrix4) {}
+        fn clip_rrect(&mut self, _rrect: RRect, _clip_op: flui_types::painting::ClipOp, _clip_behavior: flui_types::painting::Clip, _transform: &Matrix4) {}
+        fn clip_path(&mut self, _path: &Path, _clip_op: flui_types::painting::ClipOp, _clip_behavior: flui_types::painting::Clip, _transform: &Matrix4) {}
 
         // ===== Viewport =====
         fn viewport_bounds(&self) -> Rect<Pixels> {

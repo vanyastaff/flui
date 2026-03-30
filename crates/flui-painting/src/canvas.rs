@@ -552,6 +552,8 @@ impl Canvas {
         self.clip_stack.push(ClipShape::Rect(rect));
         self.display_list.push(DrawCommand::ClipRect {
             rect,
+            clip_op: ClipOp::default(),
+            clip_behavior: Clip::default(),
             transform: self.transform,
         });
     }
@@ -563,6 +565,8 @@ impl Canvas {
         self.clip_stack.push(ClipShape::RRect(rrect));
         self.display_list.push(DrawCommand::ClipRRect {
             rrect,
+            clip_op: ClipOp::default(),
+            clip_behavior: Clip::default(),
             transform: self.transform,
         });
     }
@@ -575,6 +579,8 @@ impl Canvas {
             .push(ClipShape::Path(Box::new((*path).clone())));
         self.display_list.push(DrawCommand::ClipPath {
             path: (*path).clone(),
+            clip_op: ClipOp::default(),
+            clip_behavior: Clip::default(),
             transform: self.transform,
         });
     }
@@ -604,21 +610,37 @@ impl Canvas {
     /// // Fast clip without anti-aliasing
     /// canvas.clip_rect_ext(rect, ClipOp::Intersect, Clip::HardEdge);
     /// ```
-    pub fn clip_rect_ext(&mut self, rect: Rect<Pixels>, _clip_op: ClipOp, _clip_behavior: Clip) {
-        // TODO: Store clip_op and clip_behavior in DrawCommand when engine supports it
-        self.clip_rect(rect);
+    pub fn clip_rect_ext(&mut self, rect: Rect<Pixels>, clip_op: ClipOp, clip_behavior: Clip) {
+        self.clip_stack.push(ClipShape::Rect(rect));
+        self.display_list.push(DrawCommand::ClipRect {
+            rect,
+            clip_op,
+            clip_behavior,
+            transform: self.transform,
+        });
     }
 
     /// Clips to a rounded rectangle with explicit options.
-    pub fn clip_rrect_ext(&mut self, rrect: RRect, _clip_op: ClipOp, _clip_behavior: Clip) {
-        // TODO: Store options in DrawCommand when engine supports it
-        self.clip_rrect(rrect);
+    pub fn clip_rrect_ext(&mut self, rrect: RRect, clip_op: ClipOp, clip_behavior: Clip) {
+        self.clip_stack.push(ClipShape::RRect(rrect));
+        self.display_list.push(DrawCommand::ClipRRect {
+            rrect,
+            clip_op,
+            clip_behavior,
+            transform: self.transform,
+        });
     }
 
     /// Clips to a path with explicit options.
-    pub fn clip_path_ext(&mut self, path: &Path, _clip_op: ClipOp, _clip_behavior: Clip) {
-        // TODO: Store options in DrawCommand when engine supports it
-        self.clip_path(path);
+    pub fn clip_path_ext(&mut self, path: &Path, clip_op: ClipOp, clip_behavior: Clip) {
+        self.clip_stack
+            .push(ClipShape::Path(Box::new((*path).clone())));
+        self.display_list.push(DrawCommand::ClipPath {
+            path: (*path).clone(),
+            clip_op,
+            clip_behavior,
+            transform: self.transform,
+        });
     }
 
     // ===== Clip Query Methods =====

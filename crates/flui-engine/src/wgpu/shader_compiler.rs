@@ -18,6 +18,8 @@ pub enum ShaderType {
     LinearGradientMask,
     /// Radial gradient mask shader
     RadialGradientMask,
+    /// Sweep (angular/conic) gradient mask shader
+    SweepGradientMask,
     /// Gaussian blur horizontal pass shader (compute)
     GaussianBlurHorizontal,
     /// Gaussian blur vertical pass shader (compute)
@@ -39,6 +41,7 @@ impl ShaderType {
             ShaderType::SolidMask => include_str!("shaders/masks/solid.wgsl"),
             ShaderType::LinearGradientMask => include_str!("shaders/masks/linear_gradient.wgsl"),
             ShaderType::RadialGradientMask => include_str!("shaders/masks/radial_gradient.wgsl"),
+            ShaderType::SweepGradientMask => include_str!("shaders/masks/sweep_gradient.wgsl"),
             ShaderType::GaussianBlurHorizontal => {
                 include_str!("shaders/effects/blur_horizontal.wgsl")
             }
@@ -62,6 +65,7 @@ impl ShaderType {
             ShaderType::SolidMask => "Solid Mask Shader",
             ShaderType::LinearGradientMask => "Linear Gradient Mask Shader",
             ShaderType::RadialGradientMask => "Radial Gradient Mask Shader",
+            ShaderType::SweepGradientMask => "Sweep Gradient Mask Shader",
             ShaderType::GaussianBlurHorizontal => "Gaussian Blur Horizontal Shader",
             ShaderType::GaussianBlurVertical => "Gaussian Blur Vertical Shader",
             ShaderType::DualKawaseDownsample => "Dual Kawase Downsample",
@@ -76,9 +80,17 @@ impl ShaderType {
         match shader {
             Shader::LinearGradient { .. } => ShaderType::LinearGradientMask,
             Shader::RadialGradient { .. } => ShaderType::RadialGradientMask,
+            Shader::SweepGradient { .. } => ShaderType::SweepGradientMask,
             Shader::Solid { .. } => ShaderType::SolidMask,
-            // SweepGradient, Image, and any future variants fall back to solid mask
-            _ => ShaderType::SolidMask,
+            // Image shader masks use full-opacity (white) solid mask because texture-based
+            // masking requires a separate texture binding slot that the current mask pipeline
+            // does not support. A dedicated image-mask pipeline is future work.
+            _ => {
+                tracing::debug!(
+                    "ShaderType::from_shader: unsupported shader variant, using SolidMask (full opacity)"
+                );
+                ShaderType::SolidMask
+            }
         }
     }
 }
@@ -216,6 +228,7 @@ impl ShaderCache {
         let _ = self.get_or_compile(ShaderType::SolidMask);
         let _ = self.get_or_compile(ShaderType::LinearGradientMask);
         let _ = self.get_or_compile(ShaderType::RadialGradientMask);
+        let _ = self.get_or_compile(ShaderType::SweepGradientMask);
     }
 
     /// Clear the cache
@@ -325,6 +338,45 @@ impl RadialGradientUniforms {
     }
 }
 
+/// Uniform data for sweep gradient mask shader
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+pub struct SweepGradientUniforms {
+    pub center: [f32; 2],
+    pub start_angle: f32,
+    pub end_angle: f32,
+    pub start_color: [f32; 4],
+    pub end_color: [f32; 4],
+}
+
+impl SweepGradientUniforms {
+    pub fn new(
+        center: (f32, f32),
+        start_angle: f32,
+        end_angle: f32,
+        start_color: Color,
+        end_color: Color,
+    ) -> Self {
+        Self {
+            center: [center.0, center.1],
+            start_angle,
+            end_angle,
+            start_color: [
+                f32::from(start_color.r) / 255.0,
+                f32::from(start_color.g) / 255.0,
+                f32::from(start_color.b) / 255.0,
+                f32::from(start_color.a) / 255.0,
+            ],
+            end_color: [
+                f32::from(end_color.r) / 255.0,
+                f32::from(end_color.g) / 255.0,
+                f32::from(end_color.b) / 255.0,
+                f32::from(end_color.a) / 255.0,
+            ],
+        }
+    }
+}
+
 /// Create uniform buffer data from Shader
 ///
 /// Uses `bytemuck` for safe type-to-bytes conversion without unsafe code.
@@ -372,8 +424,31 @@ pub fn create_uniforms_from_shader(
             let uniforms = RadialGradientUniforms::new((cx, cy), nr, center_color, edge_color);
             bytemuck::bytes_of(&uniforms).to_vec()
         }
-        // Fallback for SweepGradient, Image, and any future variants
+        Shader::SweepGradient { center, start_angle, end_angle, colors, .. } => {
+            let w = bounds.width().0;
+            let h = bounds.height().0;
+            let bx = bounds.left().0;
+            let by = bounds.top().0;
+            let cx = if w > 0.0 { (center.dx.0 - bx) / w } else { 0.5 };
+            let cy = if h > 0.0 { (center.dy.0 - by) / h } else { 0.5 };
+            let start_color = colors.first().copied().unwrap_or(Color::WHITE);
+            let end_color = colors.last().copied().unwrap_or(Color::BLACK);
+            let uniforms = SweepGradientUniforms::new(
+                (cx, cy),
+                *start_angle,
+                *end_angle,
+                start_color,
+                end_color,
+            );
+            bytemuck::bytes_of(&uniforms).to_vec()
+        }
+        // Image shader masks use full-opacity (white) solid mask because texture-based
+        // masking requires a separate texture binding slot that the current mask pipeline
+        // does not support. A dedicated image-mask pipeline is future work.
         _ => {
+            tracing::debug!(
+                "create_uniforms_from_shader: unsupported shader variant, using white solid mask"
+            );
             let uniforms = SolidMaskUniforms::from_color(Color::WHITE);
             bytemuck::bytes_of(&uniforms).to_vec()
         }
