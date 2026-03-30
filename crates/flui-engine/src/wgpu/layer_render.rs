@@ -900,10 +900,10 @@ mod tests {
 
     #[test]
     fn test_shader_mask_layer_saves_and_clips() {
-        use flui_types::{painting::BlendMode as TBlendMode, styling::Color32};
+        use flui_types::{painting::BlendMode as TBlendMode, painting::Shader as TShader, styling::Color};
 
         let mut renderer = MockRenderer::new();
-        let shader = flui_types::painting::ShaderSpec::Solid(Color32::WHITE);
+        let shader = TShader::solid(Color::WHITE);
         let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
         let layer = ShaderMaskLayer::new(shader, TBlendMode::SrcOver, bounds);
 

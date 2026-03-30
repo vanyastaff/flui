@@ -8,7 +8,7 @@ use std::{collections::HashMap, sync::Arc};
 use flui_types::{
     Size,
     geometry::{Pixels, Rect},
-    painting::{BlendMode, ShaderSpec},
+    painting::{BlendMode, Shader},
 };
 use wgpu::util::DeviceExt;
 
@@ -35,7 +35,7 @@ use super::{
 /// │  │ Pool        │→ │ Cache        │→ │ Manager        │ │
 /// │  └─────────────┘  └──────────────┘  └────────────────┘ │
 /// │                                                          │
-/// │  Input: Child Canvas + ShaderSpec                       │
+/// │  Input: Child Canvas + Shader                            │
 /// │  Output: Masked Canvas                                  │
 /// └──────────────────────────────────────────────────────────┘
 /// ```
@@ -270,7 +270,7 @@ impl OffscreenRenderer {
     /// # Arguments
     ///
     /// * `child_bounds` - Bounding rectangle of child content
-    /// * `shader_spec` - Shader specification (gradient, solid, etc.)
+    /// * `shader` - Shader (gradient, solid, etc.)
     /// * `blend_mode` - Blend mode for compositing
     /// * `child_texture` - Pre-rendered child content texture
     ///
@@ -288,12 +288,12 @@ impl OffscreenRenderer {
     pub fn render_masked(
         &mut self,
         child_bounds: Rect<Pixels>,
-        shader_spec: &ShaderSpec,
+        shader: &Shader,
         blend_mode: BlendMode,
         child_texture: &wgpu::Texture,
     ) -> MaskedRenderResult {
-        // Get shader type for this spec
-        let shader_type = ShaderType::from_spec(shader_spec);
+        // Get shader type for this shader
+        let shader_type = ShaderType::from_shader(shader);
 
         tracing::trace!(
             "Rendering shader mask: {:?}, bounds: {:?}",
@@ -319,7 +319,7 @@ impl OffscreenRenderer {
             });
 
         // Create uniform buffer with shader-specific data
-        let uniform_data = shader_spec.to_uniform_data();
+        let uniform_data = shader.to_mask_uniform_data(child_bounds);
         let uniform_buffer = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {

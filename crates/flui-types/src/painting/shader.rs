@@ -1,9 +1,9 @@
 //! Shader types for painting.
 
 use crate::{
-    geometry::{NumericUnit, Offset, Pixels, Size, px},
+    geometry::{Offset, Pixels, px},
     painting::{BlurStyle, TileMode},
-    styling::{Color, Color32},
+    styling::Color,
 };
 
 /// A shader (or gradient) to use when filling a shape.
@@ -76,6 +76,12 @@ pub enum Shader {
         end_angle: f32,
     },
 
+    /// A solid color shader (useful for masks and testing).
+    Solid {
+        /// The solid color.
+        color: Color,
+    },
+
     /// An image shader.
     Image(ImageShader),
 }
@@ -143,6 +149,13 @@ impl Shader {
             start_angle,
             end_angle,
         }
+    }
+
+    /// Creates a solid color shader.
+    #[inline]
+    #[must_use]
+    pub fn solid(color: Color) -> Self {
+        Shader::Solid { color }
     }
 
     /// Creates an image shader.
@@ -235,6 +248,7 @@ impl Shader {
             Shader::LinearGradient { colors, .. }
             | Shader::RadialGradient { colors, .. }
             | Shader::SweepGradient { colors, .. } => colors.len(),
+            Shader::Solid { .. } => 1,
             Shader::Image(_) => 0,
         }
     }
@@ -247,7 +261,109 @@ impl Shader {
             Shader::LinearGradient { stops, .. }
             | Shader::RadialGradient { stops, .. }
             | Shader::SweepGradient { stops, .. } => stops.is_some(),
-            Shader::Image(_) => false,
+            Shader::Solid { .. } | Shader::Image(_) => false,
+        }
+    }
+
+    /// Convert to GPU-ready uniform bytes for shader mask rendering.
+    ///
+    /// For gradient shaders, coordinates are normalized relative to `bounds`
+    /// to produce 0.0-1.0 relative values. For solid shaders, bounds is ignored.
+    ///
+    /// # Uniform Layout
+    ///
+    /// **LinearGradient:**
+    /// - `vec2<f32>` start (8 bytes)
+    /// - `vec2<f32>` end (8 bytes)
+    /// - `vec4<f32>` color0 (16 bytes)
+    /// - `vec4<f32>` color1 (16 bytes)
+    ///
+    /// **RadialGradient:**
+    /// - `vec2<f32>` center (8 bytes)
+    /// - `f32` radius (4 bytes)
+    /// - `f32` padding (4 bytes)
+    /// - `vec4<f32>` color0 (16 bytes)
+    /// - `vec4<f32>` color1 (16 bytes)
+    ///
+    /// **Solid:**
+    /// - `vec4<f32>` color (16 bytes)
+    #[must_use]
+    #[inline]
+    pub fn to_mask_uniform_data(&self, bounds: crate::geometry::Rect<Pixels>) -> Vec<u8> {
+        fn color_to_f32x4(c: &Color) -> [f32; 4] {
+            [
+                c.r as f32 / 255.0,
+                c.g as f32 / 255.0,
+                c.b as f32 / 255.0,
+                c.a as f32 / 255.0,
+            ]
+        }
+
+        match self {
+            Shader::LinearGradient { from, to, colors, .. } => {
+                let mut data = Vec::with_capacity(48);
+                let w: f32 = bounds.width().0;
+                let h: f32 = bounds.height().0;
+                let bx: f32 = bounds.left().0;
+                let by: f32 = bounds.top().0;
+
+                // Normalize to 0.0-1.0 relative to bounds
+                let sx = if w > 0.0 { (from.dx.0 - bx) / w } else { 0.0 };
+                let sy = if h > 0.0 { (from.dy.0 - by) / h } else { 0.0 };
+                let ex = if w > 0.0 { (to.dx.0 - bx) / w } else { 0.0 };
+                let ey = if h > 0.0 { (to.dy.0 - by) / h } else { 0.0 };
+
+                data.extend_from_slice(&sx.to_le_bytes());
+                data.extend_from_slice(&sy.to_le_bytes());
+                data.extend_from_slice(&ex.to_le_bytes());
+                data.extend_from_slice(&ey.to_le_bytes());
+
+                let c0 = colors.first().map_or([0.0, 0.0, 0.0, 1.0], color_to_f32x4);
+                for v in &c0 { data.extend_from_slice(&v.to_le_bytes()); }
+
+                let c1 = colors.get(1).map_or(c0, |c| color_to_f32x4(c));
+                for v in &c1 { data.extend_from_slice(&v.to_le_bytes()); }
+
+                data
+            }
+            Shader::RadialGradient { center, radius, colors, .. } => {
+                let mut data = Vec::with_capacity(48);
+                let w: f32 = bounds.width().0;
+                let h: f32 = bounds.height().0;
+                let bx: f32 = bounds.left().0;
+                let by: f32 = bounds.top().0;
+
+                let cx = if w > 0.0 { (center.dx.0 - bx) / w } else { 0.5 };
+                let cy = if h > 0.0 { (center.dy.0 - by) / h } else { 0.5 };
+                // Normalize radius relative to average of width/height
+                let avg = (w + h) / 2.0;
+                let nr = if avg > 0.0 { *radius / avg } else { 0.5 };
+
+                data.extend_from_slice(&cx.to_le_bytes());
+                data.extend_from_slice(&cy.to_le_bytes());
+                data.extend_from_slice(&nr.to_le_bytes());
+                data.extend_from_slice(&0.0f32.to_le_bytes()); // padding
+
+                let c0 = colors.first().map_or([0.0, 0.0, 0.0, 1.0], color_to_f32x4);
+                for v in &c0 { data.extend_from_slice(&v.to_le_bytes()); }
+
+                let c1 = colors.get(1).map_or(c0, |c| color_to_f32x4(c));
+                for v in &c1 { data.extend_from_slice(&v.to_le_bytes()); }
+
+                data
+            }
+            Shader::Solid { color } => {
+                let mut data = Vec::with_capacity(16);
+                let c = color_to_f32x4(color);
+                for v in &c { data.extend_from_slice(&v.to_le_bytes()); }
+                data
+            }
+            // SweepGradient and Image fall back to white solid
+            _ => {
+                let mut data = Vec::with_capacity(16);
+                for v in &[1.0f32, 1.0, 1.0, 1.0] { data.extend_from_slice(&v.to_le_bytes()); }
+                data
+            }
         }
     }
 }
@@ -411,245 +527,6 @@ impl MaskFilter {
     }
 }
 
-/// Shader specification for shader mask effects
-///
-/// Defines the type of shader to apply as a mask using relative coordinates
-/// (0.0-1.0). This is a unified type used across flui_rendering, flui_painting,
-/// and flui_engine.
-///
-/// # Coordinate System
-///
-/// All positions and sizes are specified as relative values (0.0-1.0) that get
-/// converted to absolute coordinates based on the target region size.
-///
-/// # Examples
-///
-/// ```
-/// use flui_types::{painting::ShaderSpec, styling::Color32};
-///
-/// // Linear gradient from left to right
-/// let gradient = ShaderSpec::LinearGradient {
-///     start: (0.0, 0.0),
-///     end: (1.0, 0.0),
-///     colors: vec![Color32::WHITE, Color32::BLACK],
-/// };
-///
-/// // Radial gradient from center
-/// let radial = ShaderSpec::RadialGradient {
-///     center: (0.5, 0.5),
-///     radius: 0.5,
-///     colors: vec![Color32::RED, Color32::TRANSPARENT],
-/// };
-/// ```
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[non_exhaustive]
-pub enum ShaderSpec {
-    /// Linear gradient shader
-    LinearGradient {
-        /// Start point (relative to size, 0.0-1.0)
-        start: (f32, f32),
-        /// End point (relative to size, 0.0-1.0)
-        end: (f32, f32),
-        /// Colors (at least 2 recommended)
-        colors: Vec<Color32>,
-    },
-    /// Radial gradient shader
-    RadialGradient {
-        /// Center point (relative to size, 0.0-1.0)
-        center: (f32, f32),
-        /// Radius (relative to size, 0.0-1.0)
-        radius: f32,
-        /// Colors (at least 2 recommended)
-        colors: Vec<Color32>,
-    },
-    /// Solid color (for testing and simple masks)
-    Solid(Color32),
-}
-
-impl ShaderSpec {
-    /// Convert ShaderSpec to Shader with absolute coordinates
-    ///
-    /// Converts relative coordinates (0.0-1.0) to absolute offsets based on the
-    /// size.
-    ///
-    /// # Arguments
-    ///
-    /// * `size` - Size of the region for absolute positioning
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_types::{Size, painting::ShaderSpec, styling::Color32};
-    ///
-    /// let spec = ShaderSpec::LinearGradient {
-    ///     start: (0.0, 0.0),
-    ///     end: (1.0, 0.0),
-    ///     colors: vec![Color32::WHITE, Color32::BLACK],
-    /// };
-    /// let shader = spec.to_shader(Size::new(100.0, 100.0));
-    /// ```
-    #[must_use]
-    #[inline]
-    pub fn to_shader<T>(&self, size: Size<T>) -> Shader
-    where
-        T: NumericUnit + Into<f32>,
-    {
-        match self {
-            ShaderSpec::LinearGradient { start, end, colors } => {
-                // Convert relative positions to absolute offsets
-                let from = Offset::new(
-                    Pixels(start.0 * size.width.into()),
-                    Pixels(start.1 * size.height.into()),
-                );
-                let to = Offset::new(
-                    Pixels(end.0 * size.width.into()),
-                    Pixels(end.1 * size.height.into()),
-                );
-
-                // Convert Color32 to Color
-                let converted_colors: Vec<Color> = colors
-                    .iter()
-                    .map(|c| Color::rgba(c.r(), c.g(), c.b(), c.a()))
-                    .collect();
-
-                Shader::simple_linear(from, to, converted_colors)
-            }
-            ShaderSpec::RadialGradient {
-                center,
-                radius,
-                colors,
-            } => {
-                // Convert relative position to absolute offset
-                let center_offset = Offset::new(
-                    Pixels(center.0 * size.width.into()),
-                    Pixels(center.1 * size.height.into()),
-                );
-
-                // Convert relative radius to absolute (use average of width/height for circular
-                // radius)
-                let absolute_radius = *radius * (size.width.into() + size.height.into()) / 2.0;
-
-                // Convert Color32 to Color
-                let converted_colors: Vec<Color> = colors
-                    .iter()
-                    .map(|c| Color::rgba(c.r(), c.g(), c.b(), c.a()))
-                    .collect();
-
-                Shader::simple_radial(center_offset, absolute_radius, converted_colors)
-            }
-            ShaderSpec::Solid(color) => {
-                // For solid color, create a simple linear gradient with same color
-                let c = Color::rgba(color.r(), color.g(), color.b(), color.a());
-                Shader::simple_linear(
-                    Offset::ZERO,
-                    Offset::new(px(size.width.into()), px(0.0)),
-                    vec![c, c],
-                )
-            }
-        }
-    }
-
-    /// Convert shader spec to uniform data buffer for GPU
-    ///
-    /// Returns a byte array containing the shader uniform data in the format
-    /// expected by the GPU shader.
-    ///
-    /// # Uniform Layout
-    ///
-    /// Different shader types have different uniform layouts:
-    ///
-    /// **LinearGradient:**
-    /// - `vec2<f32>` start (8 bytes)
-    /// - `vec2<f32>` end (8 bytes)
-    /// - `vec4<f32>` color0 (16 bytes)
-    /// - `vec4<f32>` color1 (16 bytes)
-    ///
-    /// **RadialGradient:**
-    /// - `vec2<f32>` center (8 bytes)
-    /// - `f32` radius (4 bytes)
-    /// - `f32` padding (4 bytes)
-    /// - `vec4<f32>` color0 (16 bytes)
-    /// - `vec4<f32>` color1 (16 bytes)
-    ///
-    /// **Solid:**
-    /// - `vec4<f32>` color (16 bytes)
-    #[must_use]
-    #[inline]
-    pub fn to_uniform_data(&self) -> Vec<u8> {
-        match self {
-            ShaderSpec::LinearGradient { start, end, colors } => {
-                let mut data = Vec::with_capacity(48);
-
-                // Start point
-                data.extend_from_slice(&start.0.to_le_bytes());
-                data.extend_from_slice(&start.1.to_le_bytes());
-
-                // End point
-                data.extend_from_slice(&end.0.to_le_bytes());
-                data.extend_from_slice(&end.1.to_le_bytes());
-
-                // Color 0 (RGBA normalized to 0.0-1.0)
-                let c0 = colors.first().copied().unwrap_or(Color32::BLACK);
-                data.extend_from_slice(&(c0.r() as f32 / 255.0).to_le_bytes());
-                data.extend_from_slice(&(c0.g() as f32 / 255.0).to_le_bytes());
-                data.extend_from_slice(&(c0.b() as f32 / 255.0).to_le_bytes());
-                data.extend_from_slice(&(c0.a() as f32 / 255.0).to_le_bytes());
-
-                // Color 1
-                let c1 = colors.get(1).copied().unwrap_or(c0);
-                data.extend_from_slice(&(c1.r() as f32 / 255.0).to_le_bytes());
-                data.extend_from_slice(&(c1.g() as f32 / 255.0).to_le_bytes());
-                data.extend_from_slice(&(c1.b() as f32 / 255.0).to_le_bytes());
-                data.extend_from_slice(&(c1.a() as f32 / 255.0).to_le_bytes());
-
-                data
-            }
-            ShaderSpec::RadialGradient {
-                center,
-                radius,
-                colors,
-            } => {
-                let mut data = Vec::with_capacity(48);
-
-                // Center point
-                data.extend_from_slice(&center.0.to_le_bytes());
-                data.extend_from_slice(&center.1.to_le_bytes());
-
-                // Radius + padding
-                data.extend_from_slice(&radius.to_le_bytes());
-                data.extend_from_slice(&0.0f32.to_le_bytes()); // padding
-
-                // Color 0
-                let c0 = colors.first().copied().unwrap_or(Color32::BLACK);
-                data.extend_from_slice(&(c0.r() as f32 / 255.0).to_le_bytes());
-                data.extend_from_slice(&(c0.g() as f32 / 255.0).to_le_bytes());
-                data.extend_from_slice(&(c0.b() as f32 / 255.0).to_le_bytes());
-                data.extend_from_slice(&(c0.a() as f32 / 255.0).to_le_bytes());
-
-                // Color 1
-                let c1 = colors.get(1).copied().unwrap_or(c0);
-                data.extend_from_slice(&(c1.r() as f32 / 255.0).to_le_bytes());
-                data.extend_from_slice(&(c1.g() as f32 / 255.0).to_le_bytes());
-                data.extend_from_slice(&(c1.b() as f32 / 255.0).to_le_bytes());
-                data.extend_from_slice(&(c1.a() as f32 / 255.0).to_le_bytes());
-
-                data
-            }
-            ShaderSpec::Solid(color) => {
-                let mut data = Vec::with_capacity(16);
-
-                // Single color (RGBA normalized)
-                data.extend_from_slice(&(color.r() as f32 / 255.0).to_le_bytes());
-                data.extend_from_slice(&(color.g() as f32 / 255.0).to_le_bytes());
-                data.extend_from_slice(&(color.b() as f32 / 255.0).to_le_bytes());
-                data.extend_from_slice(&(color.a() as f32 / 255.0).to_le_bytes());
-
-                data
-            }
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {

@@ -6,7 +6,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use bytemuck::{Pod, Zeroable};
-use flui_types::{painting::ShaderSpec, styling::Color32};
+use flui_types::{painting::Shader, styling::Color};
 use parking_lot::RwLock;
 
 /// Shader type identifier
@@ -51,12 +51,13 @@ impl ShaderType {
         }
     }
 
-    /// Get the shader type from a ShaderSpec
-    pub fn from_spec(spec: &ShaderSpec) -> Self {
-        match spec {
-            ShaderSpec::LinearGradient { .. } => ShaderType::LinearGradientMask,
-            ShaderSpec::RadialGradient { .. } => ShaderType::RadialGradientMask,
-            // Solid and any future ShaderSpec variants fall back to solid mask
+    /// Get the shader type from a Shader
+    pub fn from_shader(shader: &Shader) -> Self {
+        match shader {
+            Shader::LinearGradient { .. } => ShaderType::LinearGradientMask,
+            Shader::RadialGradient { .. } => ShaderType::RadialGradientMask,
+            Shader::Solid { .. } => ShaderType::SolidMask,
+            // SweepGradient, Image, and any future variants fall back to solid mask
             _ => ShaderType::SolidMask,
         }
     }
@@ -218,13 +219,13 @@ pub struct SolidMaskUniforms {
 }
 
 impl SolidMaskUniforms {
-    pub fn from_color(color: Color32) -> Self {
+    pub fn from_color(color: Color) -> Self {
         Self {
             mask_color: [
-                f32::from(color.r()) / 255.0,
-                f32::from(color.g()) / 255.0,
-                f32::from(color.b()) / 255.0,
-                f32::from(color.a()) / 255.0,
+                f32::from(color.r) / 255.0,
+                f32::from(color.g) / 255.0,
+                f32::from(color.b) / 255.0,
+                f32::from(color.a) / 255.0,
             ],
         }
     }
@@ -244,23 +245,23 @@ impl LinearGradientUniforms {
     pub fn new(
         start: (f32, f32),
         end: (f32, f32),
-        start_color: Color32,
-        end_color: Color32,
+        start_color: Color,
+        end_color: Color,
     ) -> Self {
         Self {
             start: [start.0, start.1],
             end: [end.0, end.1],
             start_color: [
-                f32::from(start_color.r()) / 255.0,
-                f32::from(start_color.g()) / 255.0,
-                f32::from(start_color.b()) / 255.0,
-                f32::from(start_color.a()) / 255.0,
+                f32::from(start_color.r) / 255.0,
+                f32::from(start_color.g) / 255.0,
+                f32::from(start_color.b) / 255.0,
+                f32::from(start_color.a) / 255.0,
             ],
             end_color: [
-                f32::from(end_color.r()) / 255.0,
-                f32::from(end_color.g()) / 255.0,
-                f32::from(end_color.b()) / 255.0,
-                f32::from(end_color.a()) / 255.0,
+                f32::from(end_color.r) / 255.0,
+                f32::from(end_color.g) / 255.0,
+                f32::from(end_color.b) / 255.0,
+                f32::from(end_color.a) / 255.0,
             ],
         }
     }
@@ -281,58 +282,79 @@ impl RadialGradientUniforms {
     pub fn new(
         center: (f32, f32),
         radius: f32,
-        center_color: Color32,
-        edge_color: Color32,
+        center_color: Color,
+        edge_color: Color,
     ) -> Self {
         Self {
             center: [center.0, center.1],
             radius,
             _padding: 0.0,
             center_color: [
-                f32::from(center_color.r()) / 255.0,
-                f32::from(center_color.g()) / 255.0,
-                f32::from(center_color.b()) / 255.0,
-                f32::from(center_color.a()) / 255.0,
+                f32::from(center_color.r) / 255.0,
+                f32::from(center_color.g) / 255.0,
+                f32::from(center_color.b) / 255.0,
+                f32::from(center_color.a) / 255.0,
             ],
             edge_color: [
-                f32::from(edge_color.r()) / 255.0,
-                f32::from(edge_color.g()) / 255.0,
-                f32::from(edge_color.b()) / 255.0,
-                f32::from(edge_color.a()) / 255.0,
+                f32::from(edge_color.r) / 255.0,
+                f32::from(edge_color.g) / 255.0,
+                f32::from(edge_color.b) / 255.0,
+                f32::from(edge_color.a) / 255.0,
             ],
         }
     }
 }
 
-/// Create uniform buffer data from ShaderSpec
+/// Create uniform buffer data from Shader
 ///
 /// Uses `bytemuck` for safe type-to-bytes conversion without unsafe code.
+/// Coordinates in the Shader are absolute (typed Pixels); this function
+/// normalizes them relative to `bounds` for the GPU.
 #[must_use]
-pub fn create_uniforms_from_spec(spec: &ShaderSpec) -> Vec<u8> {
-    match spec {
-        ShaderSpec::Solid(color) => {
+pub fn create_uniforms_from_shader(
+    shader: &Shader,
+    bounds: flui_types::geometry::Rect<flui_types::geometry::Pixels>,
+) -> Vec<u8> {
+    match shader {
+        Shader::Solid { color } => {
             let uniforms = SolidMaskUniforms::from_color(*color);
             bytemuck::bytes_of(&uniforms).to_vec()
         }
-        ShaderSpec::LinearGradient { start, end, colors } => {
-            let start_color = colors.first().copied().unwrap_or(Color32::WHITE);
-            let end_color = colors.last().copied().unwrap_or(Color32::BLACK);
-            let uniforms = LinearGradientUniforms::new(*start, *end, start_color, end_color);
+        Shader::LinearGradient { from, to, colors, .. } => {
+            let w = bounds.width().0;
+            let h = bounds.height().0;
+            let bx = bounds.left().0;
+            let by = bounds.top().0;
+            let start = (
+                if w > 0.0 { (from.dx.0 - bx) / w } else { 0.0 },
+                if h > 0.0 { (from.dy.0 - by) / h } else { 0.0 },
+            );
+            let end = (
+                if w > 0.0 { (to.dx.0 - bx) / w } else { 0.0 },
+                if h > 0.0 { (to.dy.0 - by) / h } else { 0.0 },
+            );
+            let start_color = colors.first().copied().unwrap_or(Color::WHITE);
+            let end_color = colors.last().copied().unwrap_or(Color::BLACK);
+            let uniforms = LinearGradientUniforms::new(start, end, start_color, end_color);
             bytemuck::bytes_of(&uniforms).to_vec()
         }
-        ShaderSpec::RadialGradient {
-            center,
-            radius,
-            colors,
-        } => {
-            let center_color = colors.first().copied().unwrap_or(Color32::WHITE);
-            let edge_color = colors.last().copied().unwrap_or(Color32::BLACK);
-            let uniforms = RadialGradientUniforms::new(*center, *radius, center_color, edge_color);
+        Shader::RadialGradient { center, radius, colors, .. } => {
+            let w = bounds.width().0;
+            let h = bounds.height().0;
+            let bx = bounds.left().0;
+            let by = bounds.top().0;
+            let cx = if w > 0.0 { (center.dx.0 - bx) / w } else { 0.5 };
+            let cy = if h > 0.0 { (center.dy.0 - by) / h } else { 0.5 };
+            let avg = (w + h) / 2.0;
+            let nr = if avg > 0.0 { *radius / avg } else { 0.5 };
+            let center_color = colors.first().copied().unwrap_or(Color::WHITE);
+            let edge_color = colors.last().copied().unwrap_or(Color::BLACK);
+            let uniforms = RadialGradientUniforms::new((cx, cy), nr, center_color, edge_color);
             bytemuck::bytes_of(&uniforms).to_vec()
         }
-        // Fallback for future ShaderSpec variants
+        // Fallback for SweepGradient, Image, and any future variants
         _ => {
-            let uniforms = SolidMaskUniforms::from_color(Color32::WHITE);
+            let uniforms = SolidMaskUniforms::from_color(Color::WHITE);
             bytemuck::bytes_of(&uniforms).to_vec()
         }
     }
@@ -343,27 +365,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_shader_type_from_spec() {
-        let solid = ShaderSpec::Solid(Color32::WHITE);
-        assert_eq!(ShaderType::from_spec(&solid), ShaderType::SolidMask);
+    fn test_shader_type_from_shader() {
+        use flui_types::geometry::{Offset, px};
 
-        let linear = ShaderSpec::LinearGradient {
-            start: (0.0, 0.0),
-            end: (1.0, 1.0),
-            colors: vec![Color32::RED, Color32::BLUE],
-        };
+        let solid = Shader::solid(Color::WHITE);
+        assert_eq!(ShaderType::from_shader(&solid), ShaderType::SolidMask);
+
+        let linear = Shader::simple_linear(
+            Offset::ZERO,
+            Offset::new(px(1.0), px(1.0)),
+            vec![Color::RED, Color::BLUE],
+        );
         assert_eq!(
-            ShaderType::from_spec(&linear),
+            ShaderType::from_shader(&linear),
             ShaderType::LinearGradientMask
         );
 
-        let radial = ShaderSpec::RadialGradient {
-            center: (0.5, 0.5),
-            radius: 1.0,
-            colors: vec![Color32::WHITE, Color32::BLACK],
-        };
+        let radial = Shader::simple_radial(
+            Offset::new(px(0.5), px(0.5)),
+            1.0,
+            vec![Color::WHITE, Color::BLACK],
+        );
         assert_eq!(
-            ShaderType::from_spec(&radial),
+            ShaderType::from_shader(&radial),
             ShaderType::RadialGradientMask
         );
     }
@@ -417,7 +441,7 @@ mod tests {
 
     #[test]
     fn test_solid_mask_uniforms() {
-        let color = Color32::from_rgba_unmultiplied(255, 128, 64, 200);
+        let color = Color::rgba(255, 128, 64, 200);
         let uniforms = SolidMaskUniforms::from_color(color);
 
         // Test that conversion to normalized floats works
@@ -427,7 +451,7 @@ mod tests {
         assert!(uniforms.mask_color[3] >= 0.0 && uniforms.mask_color[3] <= 1.0); // A
 
         // Also test with simple white color
-        let white = Color32::WHITE;
+        let white = Color::WHITE;
         let white_uniforms = SolidMaskUniforms::from_color(white);
         assert!((white_uniforms.mask_color[0] - 1.0).abs() < 0.01);
         assert!((white_uniforms.mask_color[1] - 1.0).abs() < 0.01);
@@ -437,8 +461,8 @@ mod tests {
 
     #[test]
     fn test_linear_gradient_uniforms() {
-        let start_color = Color32::RED;
-        let end_color = Color32::BLUE;
+        let start_color = Color::RED;
+        let end_color = Color::BLUE;
         let uniforms = LinearGradientUniforms::new((0.0, 0.0), (1.0, 1.0), start_color, end_color);
 
         assert_eq!(uniforms.start, [0.0, 0.0]);
@@ -449,8 +473,8 @@ mod tests {
 
     #[test]
     fn test_radial_gradient_uniforms() {
-        let center_color = Color32::WHITE;
-        let edge_color = Color32::BLACK;
+        let center_color = Color::WHITE;
+        let edge_color = Color::BLACK;
         let uniforms = RadialGradientUniforms::new((0.5, 0.5), 1.0, center_color, edge_color);
 
         assert_eq!(uniforms.center, [0.5, 0.5]);
@@ -458,25 +482,29 @@ mod tests {
     }
 
     #[test]
-    fn test_create_uniforms_from_spec() {
-        let solid = ShaderSpec::Solid(Color32::WHITE);
-        let data = create_uniforms_from_spec(&solid);
+    fn test_create_uniforms_from_shader() {
+        use flui_types::geometry::{Offset, Rect, px};
+
+        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+
+        let solid = Shader::solid(Color::WHITE);
+        let data = create_uniforms_from_shader(&solid, bounds);
         assert_eq!(data.len(), std::mem::size_of::<SolidMaskUniforms>());
 
-        let linear = ShaderSpec::LinearGradient {
-            start: (0.0, 0.0),
-            end: (1.0, 1.0),
-            colors: vec![Color32::RED, Color32::BLUE],
-        };
-        let data = create_uniforms_from_spec(&linear);
+        let linear = Shader::simple_linear(
+            Offset::ZERO,
+            Offset::new(px(100.0), px(100.0)),
+            vec![Color::RED, Color::BLUE],
+        );
+        let data = create_uniforms_from_shader(&linear, bounds);
         assert_eq!(data.len(), std::mem::size_of::<LinearGradientUniforms>());
 
-        let radial = ShaderSpec::RadialGradient {
-            center: (0.5, 0.5),
-            radius: 1.0,
-            colors: vec![Color32::WHITE, Color32::BLACK],
-        };
-        let data = create_uniforms_from_spec(&radial);
+        let radial = Shader::simple_radial(
+            Offset::new(px(50.0), px(50.0)),
+            50.0,
+            vec![Color::WHITE, Color::BLACK],
+        );
+        let data = create_uniforms_from_shader(&radial, bounds);
         assert_eq!(data.len(), std::mem::size_of::<RadialGradientUniforms>());
     }
 }

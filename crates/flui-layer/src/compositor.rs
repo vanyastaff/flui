@@ -41,7 +41,7 @@ use flui_foundation::LayerId;
 use flui_types::{
     geometry::{Pixels, RRect, Rect},
     painting::{
-        effects::ColorMatrix, BlendMode, Clip, FilterQuality, ImageFilter, Path, ShaderSpec,
+        effects::ColorMatrix, BlendMode, Clip, FilterQuality, ImageFilter, Path, Shader,
         TextureId,
     },
     Matrix4,
@@ -324,7 +324,7 @@ impl<'a> SceneBuilder<'a> {
     /// * `bounds` - The bounds for the shader
     pub fn push_shader_mask(
         &mut self,
-        shader: ShaderSpec,
+        shader: Shader,
         blend_mode: BlendMode,
         bounds: Rect<Pixels>,
     ) -> LayerId {

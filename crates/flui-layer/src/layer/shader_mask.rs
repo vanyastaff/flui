@@ -6,7 +6,7 @@
 
 use flui_types::{
     geometry::{Pixels, Rect},
-    painting::{BlendMode, ShaderSpec},
+    painting::{BlendMode, Shader},
 };
 
 /// Layer that applies a shader as a mask to its child
@@ -30,26 +30,26 @@ use flui_types::{
 /// ```rust
 /// use flui_layer::ShaderMaskLayer;
 /// use flui_types::{
-///     geometry::Rect,
-///     painting::{BlendMode, ShaderSpec},
-///     styling::Color32,
+///     geometry::{Offset, Rect, px},
+///     painting::{BlendMode, Shader},
+///     styling::Color,
 /// };
 ///
 /// // Create gradient fade mask
 /// let mask_layer = ShaderMaskLayer::new(
-///     ShaderSpec::LinearGradient {
-///         start: (0.0, 0.0),
-///         end: (1.0, 0.0),
-///         colors: vec![Color32::TRANSPARENT, Color32::WHITE],
-///     },
+///     Shader::simple_linear(
+///         Offset::ZERO,
+///         Offset::new(px(100.0), px(0.0)),
+///         vec![Color::TRANSPARENT, Color::WHITE],
+///     ),
 ///     BlendMode::SrcOver,
 ///     Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
 /// );
 /// ```
 #[derive(Debug, Clone)]
 pub struct ShaderMaskLayer {
-    /// Shader specification (gradient, pattern, etc.)
-    shader: ShaderSpec,
+    /// Shader (gradient, solid, etc.)
+    shader: Shader,
 
     /// Blend mode for compositing masked result
     blend_mode: BlendMode,
@@ -63,11 +63,10 @@ impl ShaderMaskLayer {
     ///
     /// # Arguments
     ///
-    /// * `shader` - Shader specification (linear gradient, radial gradient,
-    ///   etc.)
+    /// * `shader` - Shader (linear gradient, radial gradient, solid, etc.)
     /// * `blend_mode` - Blend mode for compositing
     /// * `bounds` - Bounding rectangle for rendering
-    pub fn new(shader: ShaderSpec, blend_mode: BlendMode, bounds: Rect<Pixels>) -> Self {
+    pub fn new(shader: Shader, blend_mode: BlendMode, bounds: Rect<Pixels>) -> Self {
         Self {
             shader,
             blend_mode,
@@ -75,8 +74,8 @@ impl ShaderMaskLayer {
         }
     }
 
-    /// Get the shader specification.
-    pub fn shader(&self) -> &ShaderSpec {
+    /// Get the shader.
+    pub fn shader(&self) -> &Shader {
         &self.shader
     }
 
@@ -102,13 +101,16 @@ unsafe impl Sync for ShaderMaskLayer {}
 
 #[cfg(test)]
 mod tests {
-    use flui_types::{geometry::px, styling::Color32};
+    use flui_types::{
+        geometry::{Offset, px},
+        styling::Color,
+    };
 
     use super::*;
 
     #[test]
     fn test_shader_mask_layer_new() {
-        let shader = ShaderSpec::Solid(Color32::WHITE);
+        let shader = Shader::solid(Color::WHITE);
         let blend_mode = BlendMode::SrcOver;
         let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
 
@@ -120,7 +122,7 @@ mod tests {
 
     #[test]
     fn test_shader_mask_layer_bounds() {
-        let shader = ShaderSpec::Solid(Color32::BLACK);
+        let shader = Shader::solid(Color::BLACK);
         let bounds = Rect::from_xywh(px(10.0), px(20.0), px(200.0), px(150.0));
 
         let layer = ShaderMaskLayer::new(shader, BlendMode::SrcOver, bounds);
@@ -133,20 +135,20 @@ mod tests {
 
     #[test]
     fn test_shader_mask_layer_linear_gradient() {
-        let shader = ShaderSpec::LinearGradient {
-            start: (0.0, 0.0),
-            end: (1.0, 1.0),
-            colors: vec![Color32::RED, Color32::BLUE],
-        };
+        let shader = Shader::simple_linear(
+            Offset::ZERO,
+            Offset::new(px(50.0), px(50.0)),
+            vec![Color::RED, Color::BLUE],
+        );
         let bounds = Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0));
 
         let layer = ShaderMaskLayer::new(shader, BlendMode::Multiply, bounds);
 
         assert_eq!(layer.blend_mode(), BlendMode::Multiply);
         match layer.shader() {
-            ShaderSpec::LinearGradient { start, end, .. } => {
-                assert_eq!(*start, (0.0, 0.0));
-                assert_eq!(*end, (1.0, 1.0));
+            Shader::LinearGradient { from, to, .. } => {
+                assert_eq!(*from, Offset::ZERO);
+                assert_eq!(*to, Offset::new(px(50.0), px(50.0)));
             }
             _ => panic!("Expected LinearGradient"),
         }
@@ -154,20 +156,20 @@ mod tests {
 
     #[test]
     fn test_shader_mask_layer_radial_gradient() {
-        let shader = ShaderSpec::RadialGradient {
-            center: (0.5, 0.5),
-            radius: 1.0,
-            colors: vec![Color32::WHITE, Color32::BLACK],
-        };
+        let shader = Shader::simple_radial(
+            Offset::new(px(50.0), px(50.0)),
+            50.0,
+            vec![Color::WHITE, Color::BLACK],
+        );
         let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
 
         let layer = ShaderMaskLayer::new(shader, BlendMode::Screen, bounds);
 
         assert_eq!(layer.blend_mode(), BlendMode::Screen);
         match layer.shader() {
-            ShaderSpec::RadialGradient { center, radius, .. } => {
-                assert_eq!(*center, (0.5, 0.5));
-                assert_eq!(*radius, 1.0);
+            Shader::RadialGradient { center, radius, .. } => {
+                assert_eq!(*center, Offset::new(px(50.0), px(50.0)));
+                assert_eq!(*radius, 50.0);
             }
             _ => panic!("Expected RadialGradient"),
         }
@@ -184,7 +186,7 @@ mod tests {
 
     #[test]
     fn test_shader_mask_layer_clone() {
-        let shader = ShaderSpec::Solid(Color32::RED);
+        let shader = Shader::solid(Color::RED);
         let bounds = Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0));
         let layer = ShaderMaskLayer::new(shader, BlendMode::SrcOver, bounds);
 
