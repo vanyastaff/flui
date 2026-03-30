@@ -360,26 +360,49 @@ impl CommandRenderer for Backend {
         blend_mode: BlendMode,
         _transform: &Matrix4,
     ) {
-        // Try GPU shader mask pipeline via OffscreenRenderer
+        // Try GPU shader mask pipeline
         if let Some(offscreen_arc) = self.offscreen.clone() {
-            let mut offscreen = offscreen_arc.lock();
-
-            // Step 1: Acquire a texture from the pool to render child content into
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let width = bounds.width().0.max(1.0) as u32;
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let height = bounds.height().0.max(1.0) as u32;
-            let format = offscreen.surface_format();
-            let child_tex = offscreen.texture_pool().acquire(width, height, format);
 
-            // Step 2: Clear the child texture (preparing it as a render target)
-            let mut encoder = offscreen.device().create_command_encoder(
-                &wgpu::CommandEncoderDescriptor {
-                    label: Some("ShaderMask Child Encoder"),
-                },
+            // Step 1: Get GPU resources from offscreen renderer
+            let (device, queue, format, child_tex) = {
+                let offscreen = offscreen_arc.lock();
+                let device = Arc::clone(offscreen.device());
+                let queue = Arc::clone(offscreen.queue());
+                let format = offscreen.surface_format();
+                let child_tex = offscreen.texture_pool().acquire(width, height, format);
+                (device, queue, format, child_tex)
+            };
+            // Lock released here
+
+            // Step 2: Create temporary painter for child rendering
+            let mut temp_painter = super::painter::WgpuPainter::with_shared_device(
+                Arc::clone(&device),
+                Arc::clone(&queue),
+                format,
+                (width, height),
             );
+
+            // Step 3: Dispatch child commands through temporary backend
             {
-                let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                let mut temp_backend = Backend::new(temp_painter);
+                for command in child.commands() {
+                    dispatch_command(command, &mut temp_backend);
+                }
+                temp_painter = temp_backend.into_painter();
+            }
+
+            // Step 4: Flush child content to offscreen texture
+            let mut encoder =
+                device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("ShaderMask Child Render"),
+                });
+            // Clear the child texture first
+            {
+                let _clear_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("ShaderMask Child Clear"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: child_tex.view(),
@@ -394,34 +417,38 @@ impl CommandRenderer for Backend {
                     occlusion_query_set: None,
                 });
             }
-            offscreen.queue().submit(std::iter::once(encoder.finish()));
+            // Render child batches to offscreen texture
+            if let Err(e) = temp_painter.render(child_tex.view(), &mut encoder) {
+                tracing::error!("Failed to render shader mask child content: {}", e);
+            }
+            queue.submit(std::iter::once(encoder.finish()));
 
-            // Step 3: Apply shader mask via the GPU pipeline
-            let result = offscreen.render_masked(bounds, shader, blend_mode, child_tex.texture());
+            // Step 5: Apply shader mask via GPU pipeline
+            let masked_texture = {
+                let mut offscreen = offscreen_arc.lock();
+                let result = offscreen.render_masked(
+                    bounds,
+                    shader,
+                    blend_mode,
+                    child_tex.texture(),
+                );
+                result.into_texture()
+            };
 
-            // Step 4: The masked result texture is ready for compositing.
-            // TODO: Composite result.texture back to main render target
-            // For now, we log the successful pipeline execution and let
-            // the fallback child rendering below provide visible output.
+            // Step 6: Queue masked result for compositing on main target
+            self.painter.queue_offscreen_result(masked_texture, bounds);
+
             tracing::debug!(
-                "ShaderMask GPU pipeline executed: shader={:?}, bounds={:?}, result_size={}x{}",
-                result.shader_type,
+                "ShaderMask GPU pipeline complete: bounds={:?}, child_size={}x{}",
                 bounds,
-                result.size().0,
-                result.size().1,
+                width,
+                height
             );
-
-            // Drop GPU resources before we need &mut self for dispatch_command
-            drop(result);
-            drop(child_tex);
-            drop(offscreen);
-        } else {
-            tracing::warn!(
-                "ShaderMask: no OffscreenRenderer available, rendering child without mask"
-            );
+            return;
         }
 
-        // Render child content to main target (fallback until offscreen compositing is wired)
+        // Fallback: render child content without masking
+        tracing::warn!("ShaderMask: no OffscreenRenderer, rendering child without mask");
         for command in child.commands() {
             dispatch_command(command, self);
         }

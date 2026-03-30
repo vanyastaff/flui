@@ -481,6 +481,11 @@ impl MaskedRenderResult {
     pub fn size(&self) -> (u32, u32) {
         (self.texture.width(), self.texture.height())
     }
+
+    /// Consume the result and extract the pooled texture for compositing.
+    pub fn into_texture(self) -> PooledTexture {
+        self.texture
+    }
 }
 
 /// GPU pipeline manager for shader masks
