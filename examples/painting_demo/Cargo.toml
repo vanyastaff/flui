@@ -1,0 +1,25 @@
+[package]
+name = "flui-painting-demo"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
+[dependencies]
+wasm-bindgen = "0.2.109"
+wasm-bindgen-futures = "0.4.49"
+web-sys = { version = "0.3.86", features = [
+    "Window", "Document", "HtmlCanvasElement", "Element",
+    "console",
+] }
+console_error_panic_hook = "0.1"
+wgpu = { workspace = true, features = ["webgpu", "wgsl"] }
+flui-painting = { path = "../../crates/flui-painting" }
+flui-engine = { path = "../../crates/flui-engine", features = ["wgpu-backend", "webgpu"] }
+flui-types = { path = "../../crates/flui-types" }
+flui-layer = { path = "../../crates/flui-layer" }
