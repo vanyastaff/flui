@@ -436,8 +436,7 @@ pub trait Identifier:
     + Debug
     + Display
     + Into<Index>
-    + Send
-    + Sync
+    + WasmNotSendSync
     + 'static
 {
     /// Returns the underlying index value.
