@@ -350,17 +350,15 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for ShaderMaskLayer {
 }
 
 impl<R: CommandRenderer + ?Sized> LayerRender<R> for BackdropFilterLayer {
-    fn render(&self, renderer: &mut R) {
-        // Clip to layer bounds so the filter only affects the target area,
-        // then apply the image filter (blur, color adjust, etc.) to the backdrop
-        renderer.push_clip_rect(&self.bounds(), flui_types::painting::Clip::AntiAlias);
-        renderer.push_image_filter(self.filter());
+    fn render(&self, _renderer: &mut R) {
+        // Backdrop blur is handled at the Renderer level in render_layer_recursive,
+        // which has access to the surface texture for mid-frame flush + copy + blur.
+        // This LayerRender impl is a no-op; the Renderer intercepts Layer::BackdropFilter
+        // before calling render()/cleanup().
     }
 
-    fn cleanup(&self, renderer: &mut R) {
-        // Pop in reverse order: first image filter, then clip
-        renderer.pop_image_filter();
-        renderer.pop_clip();
+    fn cleanup(&self, _renderer: &mut R) {
+        // No-op — see render() comment above.
     }
 }
 
@@ -922,7 +920,10 @@ mod tests {
     // ========================================================================
 
     #[test]
-    fn test_backdrop_filter_layer_clips_and_filters() {
+    fn test_backdrop_filter_layer_is_noop() {
+        // BackdropFilterLayer rendering is handled at the Renderer level
+        // (render_layer_recursive intercepts it for mid-frame flush + blur).
+        // The LayerRender impl is intentionally a no-op.
         let mut renderer = MockRenderer::new();
         let filter = ImageFilter::blur(5.0);
         let bounds = Rect::from_xywh(px(0.0), px(0.0), px(200.0), px(150.0));
@@ -933,18 +934,10 @@ mod tests {
         );
 
         layer.render(&mut renderer);
-        assert_eq!(renderer.calls, vec!["push_clip_rect", "push_image_filter"]);
+        assert_eq!(renderer.calls, Vec::<String>::new());
 
         layer.cleanup(&mut renderer);
-        assert_eq!(
-            renderer.calls,
-            vec![
-                "push_clip_rect",
-                "push_image_filter",
-                "pop_image_filter",
-                "pop_clip"
-            ]
-        );
+        assert_eq!(renderer.calls, Vec::<String>::new());
     }
 
     // ========================================================================
