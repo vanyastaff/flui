@@ -1123,6 +1123,8 @@ impl WgpuPainter {
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
     ) {
+        use super::multi_draw::{MultiDrawBatcher, PipelineId};
+
         // Check if we have any batches to flush
         let has_rects = !self.current_segment.rect_batch.is_empty();
         let has_circles = !self.current_segment.circle_batch.is_empty();
@@ -1133,16 +1135,7 @@ impl WgpuPainter {
             return;
         }
 
-        #[cfg(debug_assertions)]
-        tracing::trace!(
-            "WgpuPainter::flush_all_instanced_batches (single pass): rects={}, circles={}, arcs={}, shadows={}",
-            self.current_segment.rect_batch.len(),
-            self.current_segment.circle_batch.len(),
-            self.current_segment.arc_batch.len(),
-            self.current_segment.shadow_batch.len()
-        );
-
-        // Calculate total buffer size and offsets
+        // Calculate instance data sizes
         let rect_size =
             self.current_segment.rect_batch.len() * std::mem::size_of::<super::instancing::RectInstance>();
         let circle_size =
@@ -1156,26 +1149,64 @@ impl WgpuPainter {
         let mut combined_buffer =
             Vec::with_capacity(shadow_size + rect_size + circle_size + arc_size);
 
+        // Collect draw commands via MultiDrawBatcher
+        let mut batcher = MultiDrawBatcher::new();
+
         // Append shadows first (render behind shapes)
-        let shadow_offset = 0;
+        let shadow_offset = combined_buffer.len() as u64;
         if has_shadows {
             combined_buffer.extend_from_slice(self.current_segment.shadow_batch.as_bytes());
+            batcher.add_quad_draw(
+                PipelineId::Rectangle, // Shadow pipeline (rendered first for z-order)
+                self.current_segment.shadow_batch.len() as u32,
+                shadow_offset,
+                shadow_size as u64,
+            );
         }
 
         // Then append shapes (render on top of shadows)
-        let rect_offset = combined_buffer.len();
+        let rect_offset = combined_buffer.len() as u64;
         if has_rects {
             combined_buffer.extend_from_slice(self.current_segment.rect_batch.as_bytes());
+            batcher.add_quad_draw(
+                PipelineId::Rectangle,
+                self.current_segment.rect_batch.len() as u32,
+                rect_offset,
+                rect_size as u64,
+            );
         }
 
-        let circle_offset = combined_buffer.len();
+        let circle_offset = combined_buffer.len() as u64;
         if has_circles {
             combined_buffer.extend_from_slice(self.current_segment.circle_batch.as_bytes());
+            batcher.add_quad_draw(
+                PipelineId::Circle,
+                self.current_segment.circle_batch.len() as u32,
+                circle_offset,
+                circle_size as u64,
+            );
         }
 
-        let arc_offset = combined_buffer.len();
+        let arc_offset = combined_buffer.len() as u64;
         if has_arcs {
             combined_buffer.extend_from_slice(self.current_segment.arc_batch.as_bytes());
+            batcher.add_quad_draw(
+                PipelineId::Arc,
+                self.current_segment.arc_batch.len() as u32,
+                arc_offset,
+                arc_size as u64,
+            );
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            let stats = batcher.stats();
+            tracing::trace!(
+                "WgpuPainter::flush_all_instanced_batches: draws={}, instances={}, buffer={}B",
+                stats.active_draws,
+                stats.active_instances,
+                combined_buffer.len()
+            );
         }
 
         // Upload combined buffer (using buffer pool with zero-copy)
@@ -1216,49 +1247,45 @@ impl WgpuPainter {
             render_pass.set_scissor_rect(x, y, width, height);
         }
 
-        // ===== Draw Shadows FIRST (if any) =====
-        // Shadows render behind shapes for correct z-ordering (background → foreground)
-        if has_shadows {
-            render_pass.set_pipeline(&self.shadow_pipeline);
+        // Execute draw commands from the batcher
+        // Each command tracks its pipeline and instance buffer slice.
+        // We iterate the batcher's command list and dispatch draws with
+        // the correct pipeline. Different pipeline types require different
+        // wgpu pipelines, so we switch per-command.
+        for (i, cmd) in batcher.commands().iter().enumerate() {
+            // Select pipeline based on draw order:
+            // - Command 0 with shadows present -> shadow pipeline
+            // - Otherwise by PipelineId
+            let is_shadow_draw = i == 0 && has_shadows;
+            if is_shadow_draw {
+                render_pass.set_pipeline(&self.shadow_pipeline);
+            } else {
+                match cmd.pipeline_id {
+                    PipelineId::Rectangle => {
+                        render_pass.set_pipeline(&self.instanced_rect_pipeline);
+                    }
+                    PipelineId::Circle => {
+                        render_pass.set_pipeline(&self.instanced_circle_pipeline);
+                    }
+                    PipelineId::Arc => {
+                        render_pass.set_pipeline(&self.instanced_arc_pipeline);
+                    }
+                    PipelineId::Texture => {
+                        // Texture pipeline not yet wired; skip
+                        continue;
+                    }
+                }
+            }
 
-            let shadow_start = shadow_offset as u64;
-            let shadow_end = shadow_start + shadow_size as u64;
-            render_pass.set_vertex_buffer(1, instance_buffer.slice(shadow_start..shadow_end));
+            let buf_start = cmd.instance_buffer_offset;
+            let buf_end = buf_start + cmd.instance_buffer_size;
+            render_pass.set_vertex_buffer(1, instance_buffer.slice(buf_start..buf_end));
 
-            render_pass.draw_indexed(0..6, 0, 0..self.current_segment.shadow_batch.len() as u32);
-        }
-
-        // ===== Draw Rectangles (if any) =====
-        if has_rects {
-            render_pass.set_pipeline(&self.instanced_rect_pipeline);
-
-            let rect_start = rect_offset as u64;
-            let rect_end = rect_start + rect_size as u64;
-            render_pass.set_vertex_buffer(1, instance_buffer.slice(rect_start..rect_end));
-
-            render_pass.draw_indexed(0..6, 0, 0..self.current_segment.rect_batch.len() as u32);
-        }
-
-        // ===== Draw Circles (if any) =====
-        if has_circles {
-            render_pass.set_pipeline(&self.instanced_circle_pipeline);
-
-            let circle_start = circle_offset as u64;
-            let circle_end = circle_start + circle_size as u64;
-            render_pass.set_vertex_buffer(1, instance_buffer.slice(circle_start..circle_end));
-
-            render_pass.draw_indexed(0..6, 0, 0..self.current_segment.circle_batch.len() as u32);
-        }
-
-        // ===== Draw Arcs (if any) =====
-        if has_arcs {
-            render_pass.set_pipeline(&self.instanced_arc_pipeline);
-
-            let arc_start = arc_offset as u64;
-            let arc_end = arc_start + arc_size as u64;
-            render_pass.set_vertex_buffer(1, instance_buffer.slice(arc_start..arc_end));
-
-            render_pass.draw_indexed(0..6, 0, 0..self.current_segment.arc_batch.len() as u32);
+            render_pass.draw_indexed(
+                0..cmd.args.index_count,
+                0,
+                0..cmd.args.instance_count,
+            );
         }
 
         // Drop render pass (explicit for clarity)

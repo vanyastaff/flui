@@ -66,7 +66,6 @@ mod instancing;
 // Pixels/DevicePixels API
 #[cfg(target_os = "macos")]
 pub mod metal;
-#[allow(dead_code)]
 mod multi_draw;
 mod offscreen;
 mod painter;
@@ -114,6 +113,8 @@ pub use debug::DebugBackend;
 pub use external_texture_registry::{ExternalTextureEntry, ExternalTextureRegistry};
 // Layer rendering
 pub use layer_render::LayerRender;
+// Multi-draw indirect batching
+pub use multi_draw::{DrawCommand, DrawIndexedIndirectArgs, MultiDrawBatcher, MultiDrawStats, PipelineId};
 // Offscreen rendering
 pub use offscreen::{MaskedRenderResult, OffscreenRenderer, PipelineManager};
 pub use painter::WgpuPainter;

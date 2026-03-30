@@ -206,8 +206,8 @@ impl MultiDrawBatcher {
 
     /// Clear all batched commands
     pub fn clear(&mut self) {
-        self.commands.clear();
         self.total_draws += self.commands.len();
+        self.commands.clear();
         self.total_instances = 0;
     }
 
