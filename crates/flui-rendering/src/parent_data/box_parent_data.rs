@@ -1,7 +1,8 @@
 //! BoxParentData - Cartesian positioning metadata for box layout children.
 
-use flui_types::Offset;
 use std::hash::{Hash, Hasher};
+
+use flui_types::Offset;
 
 use super::base::ParentData;
 
@@ -116,8 +117,9 @@ impl From<(f32, f32)> for BoxParentData {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::px;
+
+    use super::*;
 
     #[test]
     fn test_new() {

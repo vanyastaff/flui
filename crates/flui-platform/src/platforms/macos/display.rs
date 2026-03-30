@@ -1,12 +1,15 @@
 //! macOS display (NSScreen) implementation
 
-use crate::traits::{DisplayId, PlatformDisplay};
-use flui_types::geometry::{Bounds, DevicePixels, Point, Size};
 use std::sync::Arc;
 
-use cocoa::appkit::NSScreen;
-use cocoa::base::{id, nil};
-use cocoa::foundation::{NSArray, NSRect};
+use cocoa::{
+    appkit::NSScreen,
+    base::{id, nil},
+    foundation::{NSArray, NSRect},
+};
+use flui_types::geometry::{Bounds, DevicePixels, Point, Size};
+
+use crate::traits::{DisplayId, PlatformDisplay};
 
 /// macOS display wrapper around NSScreen
 pub struct MacOSDisplay {
@@ -33,7 +36,8 @@ impl MacOSDisplay {
 
             // Get device description for display ID
             let description: id = msg_send![screen, deviceDescription];
-            let display_id_key: id = msg_send![class!(NSString), stringWithUTF8String: "NSScreenNumber".as_ptr()];
+            let display_id_key: id =
+                msg_send![class!(NSString), stringWithUTF8String: "NSScreenNumber".as_ptr()];
             let display_id_value: id = msg_send![description, objectForKey: display_id_key];
             let display_id: u64 = msg_send![display_id_value, unsignedLongLongValue];
 

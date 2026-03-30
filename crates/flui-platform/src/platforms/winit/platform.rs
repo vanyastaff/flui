@@ -14,31 +14,39 @@
 //! The architecture uses winit 0.30's `ApplicationHandler` trait to manage
 //! the event loop without consuming ownership.
 
-use super::clipboard::ArboardClipboard;
-use super::display::WinitDisplay;
-use super::window_requests::{WindowRequest, WindowRequestQueue};
-use crate::shared::PlatformHandlers;
-use crate::traits::{
-    Clipboard, DesktopCapabilities, Platform, PlatformCapabilities, PlatformDisplay,
-    PlatformExecutor, PlatformTextSystem, PlatformWindow, WindowEvent, WindowId, WindowOptions,
-    WinitWindow,
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use anyhow::Result;
 use parking_lot::Mutex;
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use winit::{
+    application::ApplicationHandler,
+    event::WindowEvent as WinitWindowEvent,
+    event_loop::{ActiveEventLoop, EventLoop},
+    window::{WindowAttributes, WindowId as WinitWindowId},
+};
 
-use winit::application::ApplicationHandler;
-use winit::event::WindowEvent as WinitWindowEvent;
-use winit::event_loop::{ActiveEventLoop, EventLoop};
-use winit::window::{WindowAttributes, WindowId as WinitWindowId};
+use super::{
+    clipboard::ArboardClipboard,
+    display::WinitDisplay,
+    window_requests::{WindowRequest, WindowRequestQueue},
+};
+use crate::{
+    shared::PlatformHandlers,
+    traits::{
+        Clipboard, DesktopCapabilities, Platform, PlatformCapabilities, PlatformDisplay,
+        PlatformExecutor, PlatformTextSystem, PlatformWindow, WindowEvent, WindowId, WindowOptions,
+        WinitWindow,
+    },
+};
 
 /// Winit-based platform implementation
 ///
-/// This is the primary cross-platform implementation using winit for window management.
-/// It supports Windows, macOS, and Linux desktop environments.
+/// This is the primary cross-platform implementation using winit for window
+/// management. It supports Windows, macOS, and Linux desktop environments.
 ///
 /// # Usage
 ///
@@ -193,8 +201,8 @@ impl WinitPlatform {
 
     /// Create and run the event loop
     ///
-    /// This is the main entry point for the platform. It creates the event loop,
-    /// initializes the platform, and runs until quit is requested.
+    /// This is the main entry point for the platform. It creates the event
+    /// loop, initializes the platform, and runs until quit is requested.
     pub fn run_event_loop(self: Arc<Self>, on_ready: Box<dyn FnOnce()>) -> Result<()> {
         tracing::info!("Creating winit event loop");
 
@@ -213,7 +221,8 @@ impl WinitPlatform {
 
 /// Application handler for winit event loop
 ///
-/// Implements `ApplicationHandler` to receive events from winit without consuming the event loop.
+/// Implements `ApplicationHandler` to receive events from winit without
+/// consuming the event loop.
 struct WinitApp {
     platform: Arc<WinitPlatform>,
     on_ready: Option<Box<dyn FnOnce()>>,
@@ -273,7 +282,7 @@ impl ApplicationHandler for WinitApp {
                 event_loop.exit();
             }
             WinitWindowEvent::Resized(physical_size) => {
-                use flui_types::geometry::{device_px, Size};
+                use flui_types::geometry::{Size, device_px};
 
                 let size = Size::new(
                     device_px(physical_size.width as i32),
@@ -429,7 +438,8 @@ impl Platform for WinitPlatform {
 
         tracing::debug!("Waiting for window creation response");
 
-        // Wait for the response (this will block until the event loop processes the request)
+        // Wait for the response (this will block until the event loop processes the
+        // request)
         let window_id = response_rx
             .recv()
             .map_err(|_| anyhow::anyhow!("Failed to receive window creation response"))??;

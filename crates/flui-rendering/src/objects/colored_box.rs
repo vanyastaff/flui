@@ -1,13 +1,14 @@
 //! RenderColoredBox - a simple colored rectangle.
 
 use flui_painting::Paint;
-use flui_types::geometry::px;
-use flui_types::{Color, Point, Rect, Size};
+use flui_types::{Color, Point, Rect, Size, geometry::px};
 
-use crate::arity::Leaf;
-use crate::context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext};
-use crate::parent_data::BoxParentData;
-use crate::traits::RenderBox;
+use crate::{
+    arity::Leaf,
+    context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext},
+    parent_data::BoxParentData,
+    traits::RenderBox,
+};
 
 /// A render object that paints a colored rectangle.
 #[derive(Debug, Clone)]
@@ -102,8 +103,9 @@ impl RenderBox for RenderColoredBox {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::px;
+
+    use super::*;
 
     #[test]
     fn test_colored_box_creation() {

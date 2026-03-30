@@ -3,8 +3,7 @@
 //! [`SingleChildLayoutDelegate`] allows users to implement custom layout
 //! behavior for render objects with a single child.
 
-use std::any::Any;
-use std::fmt::Debug;
+use std::{any::Any, fmt::Debug};
 
 use flui_types::{Offset, Size};
 
@@ -196,8 +195,9 @@ impl SingleChildLayoutDelegate for AspectRatioDelegate {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::px;
+
+    use super::*;
 
     #[test]
     fn test_center_delegate() {

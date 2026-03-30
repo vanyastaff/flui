@@ -22,7 +22,7 @@
 //! # Example
 //!
 //! ```rust
-//! use flui_layer::{Scene, LayerTree, CanvasLayer, Layer};
+//! use flui_layer::{CanvasLayer, Layer, LayerTree, Scene};
 //! use flui_types::Size;
 //!
 //! // Create scene from a single layer
@@ -37,11 +37,9 @@
 //! ```
 
 use flui_foundation::LayerId;
-
-use crate::layer::Layer;
-use crate::link_registry::LinkRegistry;
-use crate::tree::LayerTree;
 use flui_types::{Pixels, Size};
+
+use crate::{layer::Layer, link_registry::LinkRegistry, tree::LayerTree};
 
 // ============================================================================
 // SCENE
@@ -231,7 +229,7 @@ impl crate::compositor::SceneBuilder<'_> {
     /// # Example
     ///
     /// ```rust
-    /// use flui_layer::{LayerTree, SceneBuilder, CanvasLayer, Scene};
+    /// use flui_layer::{CanvasLayer, LayerTree, Scene, SceneBuilder};
     /// use flui_types::Size;
     ///
     /// let mut tree = LayerTree::new();
@@ -262,10 +260,10 @@ impl crate::compositor::SceneBuilder<'_> {
 
 #[cfg(test)]
 mod tests {
+    use flui_types::{geometry::px, Offset};
+
     use super::*;
     use crate::CanvasLayer;
-    use flui_types::geometry::px;
-    use flui_types::Offset;
 
     #[test]
     fn test_scene_empty() {

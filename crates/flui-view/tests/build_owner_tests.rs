@@ -3,12 +3,13 @@
 //! Tests dirty element tracking, build scheduling, GlobalKey registry,
 //! and InheritedElement lookup.
 
+use std::any::TypeId;
+
 use flui_foundation::ElementId;
 use flui_view::{
     BuildContext, BuildOwner, ElementBase, ElementTree, StatelessBehavior, StatelessElement,
     StatelessView, View,
 };
-use std::any::TypeId;
 
 // ============================================================================
 // Test View

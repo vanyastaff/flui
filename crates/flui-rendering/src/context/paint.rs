@@ -1,7 +1,8 @@
 //! PaintContext - high-level painting context with offset and children access.
 //!
-//! This module provides [`PaintContext`], a wrapper around [`CanvasContext`] that
-//! adds offset tracking and type-safe children access for painting operations.
+//! This module provides [`PaintContext`], a wrapper around [`CanvasContext`]
+//! that adds offset tracking and type-safe children access for painting
+//! operations.
 //!
 //! # Architecture
 //!
@@ -38,12 +39,12 @@
 
 use flui_types::Offset;
 
-use crate::arity::{Arity, Leaf, Optional, Single, Variable};
-use crate::parent_data::ParentData;
-use crate::protocol::Protocol;
-
-use super::canvas::CanvasContext;
-use super::Canvas;
+use super::{Canvas, canvas::CanvasContext};
+use crate::{
+    arity::{Arity, Leaf, Optional, Single, Variable},
+    parent_data::ParentData,
+    protocol::Protocol,
+};
 
 // ============================================================================
 // PaintChildCallback - Function type for painting children
@@ -185,7 +186,8 @@ impl<'ctx, P: Protocol, A: Arity, PD: ParentData + Default> PaintContext<'ctx, P
 
     /// Returns a mutable reference to the underlying canvas context.
     ///
-    /// Use this for advanced layer operations like `push_opacity`, `push_transform`, etc.
+    /// Use this for advanced layer operations like `push_opacity`,
+    /// `push_transform`, etc.
     #[inline]
     pub fn canvas_context_mut(&mut self) -> &mut CanvasContext {
         self.inner
@@ -312,7 +314,8 @@ impl<'ctx, P: Protocol, PD: ParentData + Default> PaintContext<'ctx, P, Single, 
 
     /// Paints the single child with a custom offset.
     ///
-    /// This ignores the child's stored offset and uses the provided one instead.
+    /// This ignores the child's stored offset and uses the provided one
+    /// instead.
     pub fn paint_child_at(&mut self, offset: Offset) {
         let absolute_offset = self.offset + offset;
         (self.paint_child_callback)(0, absolute_offset);
@@ -383,9 +386,9 @@ impl<'ctx, P: Protocol, PD: ParentData + Default> PaintContext<'ctx, P, Variable
 
 #[cfg(test)]
 mod tests {
+    use flui_types::{Rect, geometry::px};
+
     use super::*;
-    use flui_types::geometry::px;
-    use flui_types::Rect;
 
     #[test]
     fn test_canvas_context_new() {

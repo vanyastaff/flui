@@ -3,8 +3,10 @@
 //! This module provides the `Paint` type and related styling information
 //! for controlling how shapes and paths are rendered.
 
-use crate::painting::{BlendMode, Shader, StrokeCap, StrokeJoin};
-use crate::styling::Color;
+use crate::{
+    painting::{BlendMode, Shader, StrokeCap, StrokeJoin},
+    styling::Color,
+};
 
 /// Paint style and properties for rendering shapes and paths.
 ///

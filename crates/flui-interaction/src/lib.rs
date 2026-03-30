@@ -1,25 +1,30 @@
 //! Event routing, interaction handling, and gesture recognition for FLUI
 //!
-//! This crate provides the complete event handling and gesture infrastructure for FLUI:
+//! This crate provides the complete event handling and gesture infrastructure
+//! for FLUI:
 //!
 //! - **EventRouter**: Routes pointer/keyboard events via hit testing
 //! - **HitTest**: Determines which UI elements are under cursor/touch
 //! - **FocusManager**: Manages keyboard focus (global singleton)
 //! - **FocusScope**: Groups focusable elements for keyboard navigation
 //! - **FocusTraversalPolicy**: Determines Tab/Shift+Tab navigation order
-//! - **GestureRecognizers**: High-level gesture detection (Tap, Drag, Scale, etc.)
+//! - **GestureRecognizers**: High-level gesture detection (Tap, Drag, Scale,
+//!   etc.)
 //! - **GestureArena**: Resolves conflicts between competing gesture recognizers
 //!
 //! # Type System Features
 //!
 //! This crate makes extensive use of Rust's advanced type system:
 //!
-//! - **Sealed traits**: `HitTestable` and `GestureArenaMember` cannot be implemented
-//!   outside this crate, allowing API evolution without breaking changes
-//! - **Newtype pattern**: Type-safe IDs (`PointerId`, `FocusNodeId`, `HandlerId`)
-//!   prevent mixing up different ID types at compile time
-//! - **Niche optimization**: `Option<FocusNodeId>` is the same size as `FocusNodeId`
-//! - **Extension traits**: Add methods to `PointerEvent` without modifying the type
+//! - **Sealed traits**: `HitTestable` and `GestureArenaMember` cannot be
+//!   implemented outside this crate, allowing API evolution without breaking
+//!   changes
+//! - **Newtype pattern**: Type-safe IDs (`PointerId`, `FocusNodeId`,
+//!   `HandlerId`) prevent mixing up different ID types at compile time
+//! - **Niche optimization**: `Option<FocusNodeId>` is the same size as
+//!   `FocusNodeId`
+//! - **Extension traits**: Add methods to `PointerEvent` without modifying the
+//!   type
 //! - **RAII guards**: Transform stack management with automatic cleanup
 //!
 //! # Architecture
@@ -175,12 +180,45 @@ pub mod signal_resolver;
 // Re-exports: IDs
 // ============================================================================
 
-pub use ids::{FocusNodeId, HandlerId, PointerId};
+// ============================================================================
+// Re-exports: Gesture Recognition
+// ============================================================================
+pub use arena::{
+    DEFAULT_DISAMBIGUATION_TIMEOUT, GestureArena, GestureArenaEntry, GestureArenaMember,
+    GestureDisposition,
+};
+// ============================================================================
+// Re-exports: Other
+// ============================================================================
+pub use binding::GestureBinding;
+// ============================================================================
+// Re-exports: Events (W3C-compliant types)
+// ============================================================================
 
+// Re-export commonly used event types at crate root
+pub use events::{CursorIcon, KeyboardEvent, PointerEvent};
+// ============================================================================
+// Re-exports: Geometry from flui_types
+// ============================================================================
+pub use flui_types::geometry::{Offset, Rect};
+pub use ids::{FocusNodeId, HandlerId, PointerId};
+pub use mouse_tracker::{CursorChangeCallback, MouseTracker, MouseTrackerAnnotation};
+// ============================================================================
+// Re-exports: Input Processing
+// ============================================================================
+pub use processing::{
+    InputMode, InputPredictor, PointerEventResampler, PredictedPosition, PredictionConfig,
+    RawInputHandler, RawPointerEvent, Velocity, VelocityEstimate, VelocityEstimationStrategy,
+    VelocityTracker,
+};
+pub use recognizers::{
+    DoubleTapGestureRecognizer, DragGestureRecognizer, ForcePressGestureRecognizer,
+    GestureRecognizer, LongPressGestureRecognizer, MultiTapGestureRecognizer,
+    ScaleGestureRecognizer, TapGestureRecognizer,
+};
 // ============================================================================
 // Re-exports: Event Routing
 // ============================================================================
-
 pub use routing::{
     DirectionalFocusPolicy, EventPropagation, EventRouter, FocusManager, FocusNode, FocusScopeNode,
     FocusTraversalPolicy, GlobalPointerHandler, HitTestBehavior, HitTestEntry, HitTestResult,
@@ -188,80 +226,29 @@ pub use routing::{
     PointerEventHandler, PointerRouteHandler, PointerRouter, ReadingOrderPolicy, RenderId,
     ScrollEventHandler, TransformGuard, TraversalDirection,
 };
-
-// ============================================================================
-// Re-exports: Gesture Recognition
-// ============================================================================
-
-pub use arena::{
-    GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition,
-    DEFAULT_DISAMBIGUATION_TIMEOUT,
+pub use sealed::{CustomGestureRecognizer, CustomHitTestable};
+pub use settings::{
+    DEFAULT_DOUBLE_TAP_SLOP, DEFAULT_DOUBLE_TAP_TIMEOUT, DEFAULT_LONG_PRESS_TIMEOUT,
+    DEFAULT_MAX_FLING_VELOCITY, DEFAULT_MIN_FLING_VELOCITY, DEFAULT_MOUSE_SLOP, DEFAULT_PAN_SLOP,
+    DEFAULT_PEN_SLOP, DEFAULT_SCALE_SLOP, DEFAULT_TOUCH_SLOP, GestureSettings,
 };
-
+pub use signal_resolver::{PointerSignalResolver, SignalPriority};
 pub use team::{GestureArenaTeam, TeamEntry};
-
-pub use timer::{global_timer_service, GestureTimer, GestureTimerService, TimerId};
-
-pub use recognizers::{
-    DoubleTapGestureRecognizer, DragGestureRecognizer, ForcePressGestureRecognizer,
-    GestureRecognizer, LongPressGestureRecognizer, MultiTapGestureRecognizer,
-    ScaleGestureRecognizer, TapGestureRecognizer,
-};
-
-// ============================================================================
-// Re-exports: Input Processing
-// ============================================================================
-
-pub use processing::{
-    InputMode, InputPredictor, PointerEventResampler, PredictedPosition, PredictionConfig,
-    RawInputHandler, RawPointerEvent, Velocity, VelocityEstimate, VelocityEstimationStrategy,
-    VelocityTracker,
-};
-
 // ============================================================================
 // Re-exports: Testing Utilities
 // ============================================================================
-
 pub use testing::{
     GestureBuilder, GesturePlayer, GestureRecorder, GestureRecording, ModifiersBuilder,
     RecordedEvent, RecordedEventType,
 };
-
-// ============================================================================
-// Re-exports: Other
-// ============================================================================
-
-pub use binding::GestureBinding;
-pub use mouse_tracker::{CursorChangeCallback, MouseTracker, MouseTrackerAnnotation};
-pub use sealed::{CustomGestureRecognizer, CustomHitTestable};
-pub use settings::{
-    GestureSettings, DEFAULT_DOUBLE_TAP_SLOP, DEFAULT_DOUBLE_TAP_TIMEOUT,
-    DEFAULT_LONG_PRESS_TIMEOUT, DEFAULT_MAX_FLING_VELOCITY, DEFAULT_MIN_FLING_VELOCITY,
-    DEFAULT_MOUSE_SLOP, DEFAULT_PAN_SLOP, DEFAULT_PEN_SLOP, DEFAULT_SCALE_SLOP, DEFAULT_TOUCH_SLOP,
-};
-pub use signal_resolver::{PointerSignalResolver, SignalPriority};
-
+pub use timer::{GestureTimer, GestureTimerService, TimerId, global_timer_service};
 // ============================================================================
 // Re-exports: Traits
 // ============================================================================
-
 pub use traits::{
     Disposable, DragAxis, GestureCallback, GestureRecognizerExt, HitTestTarget,
     PointerEventExtTrait as PointerEventExt,
 };
-
-// ============================================================================
-// Re-exports: Geometry from flui_types
-// ============================================================================
-
-pub use flui_types::geometry::{Offset, Rect};
-
-// ============================================================================
-// Re-exports: Events (W3C-compliant types)
-// ============================================================================
-
-// Re-export commonly used event types at crate root
-pub use events::{CursorIcon, KeyboardEvent, PointerEvent};
 
 // ============================================================================
 // Prelude
@@ -276,48 +263,42 @@ pub use events::{CursorIcon, KeyboardEvent, PointerEvent};
 /// ```
 pub mod prelude {
     // IDs
-    pub use crate::ids::{DeviceId, FocusNodeId, HandlerId, PointerId, RegionId};
+    // Geometry from flui_types
+    pub use flui_types::geometry::{Offset, Rect};
 
-    // Traits
-    pub use crate::traits::{
-        Disposable, DragAxis, GestureCallback, GestureRecognizerExt, HitTestTarget,
-        PointerEventExtTrait as PointerEventExt,
-    };
-
-    // Extension traits for custom types
-    pub use crate::sealed::{CustomGestureRecognizer, CustomHitTestable};
-
+    // Gesture recognition
+    #[allow(ambiguous_glob_reexports)]
+    pub use crate::arena::*;
+    // Events (W3C-compliant)
+    pub use crate::events::{CursorIcon, KeyboardEvent, PointerEvent};
+    // Advanced interaction
+    pub use crate::mouse_tracker::{MouseTracker, MouseTrackerAnnotation};
+    // Input processing
+    pub use crate::processing::{InputPredictor, PointerEventResampler, Velocity, VelocityTracker};
     // Event routing
     pub use crate::routing::{
         EventPropagation, EventRouter, FocusManager, HitTestBehavior, HitTestEntry, HitTestResult,
         HitTestable, PointerEventHandler, PointerRouter, RenderId, TransformGuard,
     };
-
-    // Gesture recognition
-    #[allow(ambiguous_glob_reexports)]
-    pub use crate::arena::*;
-    pub use crate::recognizers::{
-        double_tap::*, drag::*, force_press::*, long_press::*, multi_tap::*, scale::*, tap::*,
-        DoubleTapGestureRecognizer, DragGestureRecognizer, ForcePressGestureRecognizer,
-        LongPressGestureRecognizer, MultiTapGestureRecognizer, ScaleGestureRecognizer,
-        TapGestureRecognizer,
-    };
-
-    // Input processing
-    pub use crate::processing::{InputPredictor, PointerEventResampler, Velocity, VelocityTracker};
-
+    // Extension traits for custom types
+    pub use crate::sealed::{CustomGestureRecognizer, CustomHitTestable};
     // Testing
     pub use crate::testing::{GestureBuilder, GesturePlayer, GestureRecorder};
-
-    // Advanced interaction
-    pub use crate::mouse_tracker::{MouseTracker, MouseTrackerAnnotation};
-    pub use crate::signal_resolver::{PointerSignalResolver, SignalPriority};
-
-    // Events (W3C-compliant)
-    pub use crate::events::{CursorIcon, KeyboardEvent, PointerEvent};
-
-    // Geometry from flui_types
-    pub use flui_types::geometry::{Offset, Rect};
+    // Traits
+    pub use crate::traits::{
+        Disposable, DragAxis, GestureCallback, GestureRecognizerExt, HitTestTarget,
+        PointerEventExtTrait as PointerEventExt,
+    };
+    pub use crate::{
+        ids::{DeviceId, FocusNodeId, HandlerId, PointerId, RegionId},
+        recognizers::{
+            DoubleTapGestureRecognizer, DragGestureRecognizer, ForcePressGestureRecognizer,
+            LongPressGestureRecognizer, MultiTapGestureRecognizer, ScaleGestureRecognizer,
+            TapGestureRecognizer, double_tap::*, drag::*, force_press::*, long_press::*,
+            multi_tap::*, scale::*, tap::*,
+        },
+        signal_resolver::{PointerSignalResolver, SignalPriority},
+    };
 }
 
 // ============================================================================

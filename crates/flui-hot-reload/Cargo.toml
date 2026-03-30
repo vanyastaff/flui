@@ -6,12 +6,16 @@ rust-version.workspace = true
 license.workspace = true
 description = "Hot-reload support for FLUI scene plugins via dynamic library loading"
 
+[features]
+default = []
+app-plugin = ["dep:flui-view", "dep:flui-rendering", "dep:flui-types", "dep:parking_lot"]
+
 [dependencies]
 flui-layer = { path = "../flui-layer" }
-flui-view = { path = "../flui-view" }
-flui-rendering = { path = "../flui-rendering" }
-flui-types = { path = "../flui-types" }
-parking_lot = { workspace = true }
+flui-view = { path = "../flui-view", optional = true }
+flui-rendering = { path = "../flui-rendering", optional = true }
+flui-types = { path = "../flui-types", optional = true }
+parking_lot = { workspace = true, optional = true }
 tracing = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dependencies]

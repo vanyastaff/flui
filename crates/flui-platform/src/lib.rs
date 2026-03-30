@@ -28,8 +28,8 @@
 //!
 //! ## Platform Trait
 //!
-//! The [`Platform`] trait is the central abstraction that all platform implementations
-//! must provide. It covers:
+//! The [`Platform`] trait is the central abstraction that all platform
+//! implementations must provide. It covers:
 //!
 //! - **Lifecycle**: Event loop, quit, frame requests
 //! - **Windows**: Creation, management, events
@@ -41,7 +41,8 @@
 //!
 //! ## Platform Selection
 //!
-//! Use [`current_platform()`] to get the appropriate platform for the current environment:
+//! Use [`current_platform()`] to get the appropriate platform for the current
+//! environment:
 //!
 //! ```rust,ignore
 //! use flui_platform::current_platform;
@@ -54,13 +55,13 @@
 //!
 //! ## Testing with Headless Mode
 //!
-//! The [`HeadlessPlatform`] provides a mock implementation perfect for CI/testing without
-//! requiring a display server, GPU, or OS windowing system.
+//! The [`HeadlessPlatform`] provides a mock implementation perfect for
+//! CI/testing without requiring a display server, GPU, or OS windowing system.
 //!
 //! ### Direct Usage
 //!
 //! ```rust
-//! use flui_platform::{headless_platform, Platform};
+//! use flui_platform::{Platform, headless_platform};
 //!
 //! let platform = headless_platform();
 //! assert_eq!(platform.name(), "Headless");
@@ -91,20 +92,22 @@
 //!
 //! ### What Headless Mode Provides
 //!
-//! - **Mock Windows**: `open_window()` returns mock windows (no OS windows created)
+//! - **Mock Windows**: `open_window()` returns mock windows (no OS windows
+//!   created)
 //! - **In-Memory Clipboard**: Full clipboard API with in-memory storage
 //! - **Mock Text System**: Text measurement and font APIs (estimates)
 //! - **Mock Displays**: Single virtual display at 1920x1080
 //! - **Background Executor**: Async task execution with tokio runtime
 //! - **Foreground Executor**: Channel-based task queue for main thread
 //! - **Fast Tests**: <100ms overhead, suitable for rapid test iteration
-//! - **Parallel Safe**: Thread-safe, no race conditions in parallel test execution
+//! - **Parallel Safe**: Thread-safe, no race conditions in parallel test
+//!   execution
 //!
 //! ### Example Test
 //!
 //! ```rust
-//! use flui_platform::{headless_platform, WindowOptions};
-//! use flui_types::geometry::{px, Size};
+//! use flui_platform::{WindowOptions, headless_platform};
+//! use flui_types::geometry::{Size, px};
 //!
 //! fn test_window_creation() {
 //!     let platform = headless_platform();
@@ -116,7 +119,9 @@
 //!         ..Default::default()
 //!     };
 //!
-//!     let window = platform.open_window(options).expect("Failed to create window");
+//!     let window = platform
+//!         .open_window(options)
+//!         .expect("Failed to create window");
 //!     // Window is a mock, no actual OS resources allocated
 //! }
 //! ```
@@ -155,14 +160,38 @@ pub mod traits;
 pub mod window;
 
 // Re-export configuration types
-pub use config::{FullscreenMonitor, WindowConfiguration};
+// ==================== Platform Detection ====================
+use std::sync::Arc;
 
+pub use config::{FullscreenMonitor, WindowConfiguration};
+// Re-export cursor types
+pub use cursor::CursorStyle;
 // Re-export executor types
 pub use executor::{BackgroundExecutor, ForegroundExecutor};
-
+// Mobile platforms
+#[cfg(target_os = "android")]
+pub use platforms::AndroidPlatform;
+// Re-export platform implementations
+pub use platforms::HeadlessPlatform;
+#[cfg(target_os = "ios")]
+pub use platforms::IOSPlatform;
+#[cfg(target_os = "linux")]
+pub use platforms::LinuxPlatform;
+#[cfg(target_os = "macos")]
+pub use platforms::MacOSPlatform;
+// Web platform
+#[cfg(target_arch = "wasm32")]
+pub use platforms::WebPlatform;
+// Desktop platforms
+#[cfg(windows)]
+pub use platforms::WindowsPlatform;
+// Legacy backend
+#[cfg(feature = "winit-backend")]
+pub use platforms::WinitPlatform;
+// Re-export shared infrastructure
+pub use shared::{PlatformHandlers, WindowCallbacks};
 // Re-export task types
 pub use task::{Priority, Task, TaskLabel};
-
 // Re-export core traits
 pub use traits::{
     Clipboard, ClipboardItem, DefaultLifecycle, DesktopCapabilities, DispatchEventResult,
@@ -174,48 +203,11 @@ pub use traits::{
     WindowOptions,
 };
 
-// Re-export cursor types
-pub use cursor::CursorStyle;
-
-// Re-export platform implementations
-pub use platforms::HeadlessPlatform;
-
-// Desktop platforms
-#[cfg(windows)]
-pub use platforms::WindowsPlatform;
-
-#[cfg(target_os = "macos")]
-pub use platforms::MacOSPlatform;
-
-#[cfg(target_os = "linux")]
-pub use platforms::LinuxPlatform;
-
-// Mobile platforms
-#[cfg(target_os = "android")]
-pub use platforms::AndroidPlatform;
-
-#[cfg(target_os = "ios")]
-pub use platforms::IOSPlatform;
-
-// Web platform
-#[cfg(target_arch = "wasm32")]
-pub use platforms::WebPlatform;
-
-// Legacy backend
-#[cfg(feature = "winit-backend")]
-pub use platforms::WinitPlatform;
-
-// Re-export shared infrastructure
-pub use shared::{PlatformHandlers, WindowCallbacks};
-
-// ==================== Platform Detection ====================
-
-use std::sync::Arc;
-
 /// Get the current platform implementation
 ///
-/// Automatically selects the correct platform based on the target OS at compile time.
-/// This is the recommended way to obtain a platform instance in cross-platform code.
+/// Automatically selects the correct platform based on the target OS at compile
+/// time. This is the recommended way to obtain a platform instance in
+/// cross-platform code.
 ///
 /// # Detection Logic
 ///
@@ -241,17 +233,23 @@ use std::sync::Arc;
 ///
 /// # Environment Variables
 ///
-/// - **FLUI_HEADLESS=1**: Forces headless mode for CI/testing (overrides OS detection)
+/// - **FLUI_HEADLESS=1**: Forces headless mode for CI/testing (overrides OS
+///   detection)
 ///
 /// # Platform Selection
 ///
-/// - **Headless** (if `FLUI_HEADLESS=1`): Returns `HeadlessPlatform` - testing mode
+/// - **Headless** (if `FLUI_HEADLESS=1`): Returns `HeadlessPlatform` - testing
+///   mode
 /// - **Windows**: Returns `WindowsPlatform` - fully implemented with Win32 API
-/// - **macOS**: Returns `MacOSPlatform` - stub (unimplemented, roadmap available)
-/// - **Linux**: Returns `LinuxPlatform` - stub (unimplemented, roadmap available)
-/// - **Android**: Returns `AndroidPlatform` - stub (unimplemented, roadmap available)
+/// - **macOS**: Returns `MacOSPlatform` - stub (unimplemented, roadmap
+///   available)
+/// - **Linux**: Returns `LinuxPlatform` - stub (unimplemented, roadmap
+///   available)
+/// - **Android**: Returns `AndroidPlatform` - stub (unimplemented, roadmap
+///   available)
 /// - **iOS**: Returns `IOSPlatform` - stub (unimplemented, roadmap available)
-/// - **Web/WASM**: Returns `WebPlatform` - stub (unimplemented, roadmap available)
+/// - **Web/WASM**: Returns `WebPlatform` - stub (unimplemented, roadmap
+///   available)
 ///
 /// # Platform Status
 ///

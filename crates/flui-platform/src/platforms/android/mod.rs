@@ -1,7 +1,8 @@
 //! Android platform implementation
 //!
-//! Native Android platform using `android-activity` crate for NativeActivity integration.
-//! Provides window management, event handling, and lifecycle support via ANativeWindow + Vulkan.
+//! Native Android platform using `android-activity` crate for NativeActivity
+//! integration. Provides window management, event handling, and lifecycle
+//! support via ANativeWindow + Vulkan.
 //!
 //! # Architecture
 //!
@@ -17,28 +18,33 @@
 //!
 //! # Surface Lifecycle
 //!
-//! On Android, the native window (ANativeWindow) is only valid between `Resumed` and `Paused`
-//! events. The wgpu surface must be created on Resume and dropped on Pause.
+//! On Android, the native window (ANativeWindow) is only valid between
+//! `Resumed` and `Paused` events. The wgpu surface must be created on Resume
+//! and dropped on Pause.
 
 pub mod input;
 pub mod memory;
 pub mod window;
 
-pub use memory::{
-    align_to_page_size, align_to_page_size_u64, get_page_size, is_16kb_page_size, PageAlignedVec,
-    PageAllocError,
+use std::{
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
 };
-pub use window::AndroidWindow;
 
-use crate::shared::PlatformHandlers;
-use crate::traits::*;
 use android_activity::{AndroidApp, InputStatus, MainEvent, PollEvent};
 use anyhow::Result;
+pub use memory::{
+    PageAlignedVec, PageAllocError, align_to_page_size, align_to_page_size_u64, get_page_size,
+    is_16kb_page_size,
+};
 use parking_lot::Mutex;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
+pub use window::AndroidWindow;
+
+use crate::{shared::PlatformHandlers, traits::*};
 
 /// Android platform implementation using `android-activity`
 ///
@@ -68,7 +74,8 @@ pub struct AndroidPlatform {
 }
 
 impl AndroidPlatform {
-    /// Create a new Android platform from the `AndroidApp` provided by `android_main()`
+    /// Create a new Android platform from the `AndroidApp` provided by
+    /// `android_main()`
     pub fn new(app: AndroidApp) -> Self {
         Self {
             app,
@@ -115,8 +122,7 @@ impl AndroidPlatform {
 
                     let handled = match event {
                         InputEvent::MotionEvent(motion) => {
-                            let events =
-                                input::convert_motion_event(motion, scale_factor);
+                            let events = input::convert_motion_event(motion, scale_factor);
                             let mut any_handled = false;
                             for platform_input in events {
                                 let result = callbacks.dispatch_input(platform_input);
@@ -131,9 +137,7 @@ impl AndroidPlatform {
                             any_handled
                         }
                         InputEvent::KeyEvent(key) => {
-                            if let Some(platform_input) =
-                                input::convert_key_event(key)
-                            {
+                            if let Some(platform_input) = input::convert_key_event(key) {
                                 let result = callbacks.dispatch_input(platform_input);
                                 result.default_prevented
                             } else {
@@ -443,7 +447,7 @@ impl PlatformDisplay for AndroidDisplay {
     }
 
     fn bounds(&self) -> flui_types::geometry::Bounds<flui_types::geometry::DevicePixels> {
-        use flui_types::geometry::{device_px, Bounds, Point, Size};
+        use flui_types::geometry::{Bounds, Point, Size, device_px};
         Bounds::new(
             Point::new(device_px(0), device_px(0)),
             Size::new(device_px(1080), device_px(2340)),

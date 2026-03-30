@@ -19,8 +19,9 @@
 //! assert_eq!(mouse_settings.touch_slop(), 1.0);
 //! ```
 
-use flui_types::geometry::Pixels;
 use std::time::Duration;
+
+use flui_types::geometry::Pixels;
 use ui_events::pointer::PointerType;
 
 /// Default touch slop for touch devices (18 logical pixels).
@@ -60,9 +61,9 @@ pub const DEFAULT_MAX_FLING_VELOCITY: f32 = 8000.0;
 
 /// Device-specific gesture settings.
 ///
-/// These settings control how gestures are recognized based on the input device.
-/// Different devices have different precision levels, so the tolerance values
-/// need to be adjusted accordingly.
+/// These settings control how gestures are recognized based on the input
+/// device. Different devices have different precision levels, so the tolerance
+/// values need to be adjusted accordingly.
 ///
 /// # Device Differences
 ///

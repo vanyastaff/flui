@@ -78,10 +78,11 @@ impl Color {
     ///
     /// # Errors
     ///
-    /// Returns [`ParseColorError::InvalidLength`] if the string is not 6 or 8 characters
-    /// (excluding the optional `#` prefix).
+    /// Returns [`ParseColorError::InvalidLength`] if the string is not 6 or 8
+    /// characters (excluding the optional `#` prefix).
     ///
-    /// Returns [`ParseColorError::InvalidHex`] if the string contains non-hexadecimal characters.
+    /// Returns [`ParseColorError::InvalidHex`] if the string contains
+    /// non-hexadecimal characters.
     ///
     /// # Examples
     ///
@@ -319,7 +320,8 @@ impl Color {
     #[must_use]
     #[inline]
     pub fn to_hex(&self) -> String {
-        // Lookup table avoids format! machinery (no padding, no Display trait dispatch).
+        // Lookup table avoids format! machinery (no padding, no Display trait
+        // dispatch).
         const HEX: &[u8; 16] = b"0123456789ABCDEF";
 
         if self.is_opaque() {
@@ -490,7 +492,8 @@ impl Color {
                 background.r as f32,
             );
 
-            // Blend formula: (src * alpha_src + dst * alpha_dst * (1 - alpha_src)) / alpha_out
+            // Blend formula: (src * alpha_src + dst * alpha_dst * (1 - alpha_src)) /
+            // alpha_out
             let alpha_src_vec = _mm_set1_ps(alpha_src);
             let alpha_dst_factor = _mm_set1_ps(alpha_dst * (1.0 - alpha_src));
             let alpha_out_vec = _mm_set1_ps(alpha_out);
@@ -546,7 +549,8 @@ impl Color {
                 .as_ptr(),
             );
 
-            // Blend formula: (src * alpha_src + dst * alpha_dst * (1 - alpha_src)) / alpha_out
+            // Blend formula: (src * alpha_src + dst * alpha_dst * (1 - alpha_src)) /
+            // alpha_out
             let alpha_src_vec = vdupq_n_f32(alpha_src);
             let alpha_dst_factor = vdupq_n_f32(alpha_dst * (1.0 - alpha_src));
             let alpha_out_vec = vdupq_n_f32(alpha_out);
@@ -781,15 +785,14 @@ impl crate::geometry::ApproxEq for Color {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::Color;
-    /// use flui_types::geometry::ApproxEq;
+    /// use flui_types::{Color, geometry::ApproxEq};
     ///
     /// let c1 = Color::rgb(100, 150, 200);
     /// let c2 = Color::rgb(100, 150, 200);
-    /// let c3 = Color::rgb(100, 151, 200);  // 1 unit difference
+    /// let c3 = Color::rgb(100, 151, 200); // 1 unit difference
     ///
     /// assert!(c1.approx_eq(&c2));
-    /// assert!(c1.approx_eq(&c3));  // Within default epsilon
+    /// assert!(c1.approx_eq(&c3)); // Within default epsilon
     /// ```
     #[inline]
     fn approx_eq_eps(&self, other: &Self, epsilon: f32) -> bool {

@@ -1,6 +1,7 @@
 //! wgpu rendering backend for FLUI
 //!
-//! This module provides GPU-accelerated rendering using wgpu (Vulkan/Metal/DX12/WebGPU).
+//! This module provides GPU-accelerated rendering using wgpu
+//! (Vulkan/Metal/DX12/WebGPU).
 //!
 //! # Architecture
 //!
@@ -61,7 +62,8 @@ mod effects_pipeline;
 mod external_texture_registry;
 #[allow(dead_code)]
 mod instancing;
-// NOTE: integration_tests.rs removed - needs rewrite for new Pixels/DevicePixels API
+// NOTE: integration_tests.rs removed - needs rewrite for new
+// Pixels/DevicePixels API
 #[cfg(target_os = "macos")]
 pub mod metal;
 #[allow(dead_code)]
@@ -96,56 +98,41 @@ mod layer_render;
 // ============================================================================
 
 // Scene types
-pub use scene::{Scene, SceneBuilder};
-
-// Layer rendering
-pub use layer_render::LayerRender;
-
-// Command rendering (re-exported from crate root)
-pub use commands::{dispatch_command, dispatch_commands, CommandRenderer};
-
-// Backend
-pub use backend::Backend;
-#[cfg(debug_assertions)]
-pub use debug::DebugBackend;
-
-// Painter (WgpuPainter is the concrete implementation, Painter trait from crate::traits)
-pub use crate::traits::Painter;
-pub use painter::WgpuPainter;
-
-// Vertex types
-pub use vertex::{ImageInstance, PathVertex, RectInstance, RectVertex, Vertex};
-
-// Tessellator
-pub use tessellator::Tessellator;
-
-// External texture registry
-pub use external_texture_registry::{ExternalTextureEntry, ExternalTextureRegistry};
-
-// Offscreen rendering
-pub use offscreen::{MaskedRenderResult, OffscreenRenderer, PipelineManager};
-
-// Shader compilation
-pub use shader_compiler::{ShaderCache, ShaderType};
-
-// Texture pool
-pub use texture_pool::{PooledTexture, TextureDesc, TexturePool};
-
-// Buffer management
-pub use buffers::{BufferManager, DynamicBuffer};
-
-// Pipeline management
-pub use pipelines::{PipelineBuilder, PipelineCache};
-
 // Texture atlas
 pub use atlas::{AtlasEntry, AtlasRect, TextureAtlas};
-
+// Backend
+pub use backend::Backend;
+// Buffer management
+pub use buffers::{BufferManager, DynamicBuffer};
+// Command rendering (re-exported from crate root)
+pub use commands::{CommandRenderer, dispatch_command, dispatch_commands};
 // Compositor
 pub use compositor::{Compositor, RenderContext, TransformStack};
-
+#[cfg(debug_assertions)]
+pub use debug::DebugBackend;
+// External texture registry
+pub use external_texture_registry::{ExternalTextureEntry, ExternalTextureRegistry};
+// Layer rendering
+pub use layer_render::LayerRender;
+// Offscreen rendering
+pub use offscreen::{MaskedRenderResult, OffscreenRenderer, PipelineManager};
+pub use painter::WgpuPainter;
+// Pipeline management
+pub use pipelines::{PipelineBuilder, PipelineCache};
 // Renderer (cross-platform GPU renderer)
 pub use renderer::{GpuCapabilities, Renderer};
-
+pub use scene::{Scene, SceneBuilder};
+// Shader compilation
+pub use shader_compiler::{ShaderCache, ShaderType};
+// Tessellator
+pub use tessellator::Tessellator;
 // Text rendering (feature-gated)
 #[cfg(feature = "wgpu-backend")]
 pub use text_renderer::{TextRenderingSystem, TextRun};
+// Texture pool
+pub use texture_pool::{PooledTexture, TextureDesc, TexturePool};
+// Vertex types
+pub use vertex::{ImageInstance, PathVertex, RectInstance, RectVertex, Vertex};
+
+// Painter (WgpuPainter is the concrete implementation, Painter trait from crate::traits)
+pub use crate::traits::Painter;

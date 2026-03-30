@@ -5,13 +5,18 @@
 //!
 //! Run with: `cargo run --example vsync_scheduling -p flui-scheduler`
 
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    },
+    time::Duration,
+};
+
 use flui_scheduler::{
     scheduler::Scheduler,
     vsync::{VsyncDrivenScheduler, VsyncMode, VsyncScheduler},
 };
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
 
 fn main() {
     println!("=== FLUI VSync Scheduling Example ===\n");

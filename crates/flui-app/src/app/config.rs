@@ -1,7 +1,6 @@
 //! Application configuration.
 
-use flui_types::geometry::px;
-use flui_types::Size;
+use flui_types::{Size, geometry::px};
 
 /// Application configuration.
 ///

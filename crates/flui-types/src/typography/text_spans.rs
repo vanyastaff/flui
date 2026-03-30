@@ -1,7 +1,8 @@
 //! Text span types for rich text.
 
-use super::{TextBaseline, TextStyle};
 use std::sync::Arc;
+
+use super::{TextBaseline, TextStyle};
 
 /// Trait for inline spans that can be embedded in text.
 ///

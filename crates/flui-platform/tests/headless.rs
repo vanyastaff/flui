@@ -2,15 +2,16 @@
 //!
 //! Tests for headless platform used in CI/testing environments.
 
-use flui_platform::{current_platform, headless_platform, WindowOptions};
-use flui_types::geometry::{px, Size};
+use flui_platform::{WindowOptions, current_platform, headless_platform};
+use flui_types::geometry::{Size, px};
 
 #[test]
 fn test_t064_flui_headless_environment_variable() {
     // T064: current_platform() returns HeadlessPlatform when FLUI_HEADLESS=1
 
     // Set environment variable
-    std::env::set_var("FLUI_HEADLESS", "1");
+    // SAFETY: Tests run serially for env var manipulation
+    unsafe { std::env::set_var("FLUI_HEADLESS", "1") };
 
     let platform = current_platform().expect("Failed to get platform");
 
@@ -21,7 +22,7 @@ fn test_t064_flui_headless_environment_variable() {
     );
 
     // Clean up
-    std::env::remove_var("FLUI_HEADLESS");
+    unsafe { std::env::remove_var("FLUI_HEADLESS") };
 }
 
 #[test]
@@ -70,8 +71,10 @@ fn test_t066_headless_clipboard_roundtrip() {
 fn test_t067_headless_executor_immediate_execution() {
     // T067: Headless executor runs tasks immediately on calling thread
 
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
 
     let platform = headless_platform();
     let executor = platform.background_executor();
@@ -96,8 +99,10 @@ fn test_t067_headless_executor_immediate_execution() {
 fn test_t068_parallel_test_execution() {
     // T068: Parallel test execution has no race conditions
 
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     let counter = Arc::new(AtomicUsize::new(0));
     let mut handles = vec![];
@@ -149,7 +154,8 @@ fn test_t069_all_tests_pass_in_headless_mode() {
     // T069: Verify all existing tests pass in headless mode
     // This is a meta-test that verifies headless mode doesn't break other tests
 
-    std::env::set_var("FLUI_HEADLESS", "1");
+    // SAFETY: Tests run serially for env var manipulation
+    unsafe { std::env::set_var("FLUI_HEADLESS", "1") };
 
     let platform = current_platform().expect("Failed to get platform");
 
@@ -177,7 +183,7 @@ fn test_t069_all_tests_pass_in_headless_mode() {
     clipboard.write_text("test".to_string());
     assert_eq!(clipboard.read_text(), Some("test".to_string()));
 
-    std::env::remove_var("FLUI_HEADLESS");
+    unsafe { std::env::remove_var("FLUI_HEADLESS") };
 }
 
 #[test]
@@ -218,7 +224,8 @@ fn test_headless_multiple_windows() {
         .open_window(options2)
         .expect("Failed to create window 2");
 
-    // Both windows created successfully (PlatformWindow trait doesn't expose id())
+    // Both windows created successfully (PlatformWindow trait doesn't expose
+    // id())
 }
 
 #[test]

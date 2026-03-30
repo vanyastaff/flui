@@ -1,7 +1,7 @@
 //! External Texture Registry for GPU texture management
 //!
-//! Provides a registry for external GPU textures (video frames, camera previews,
-//! platform views) that can be rendered by FLUI.
+//! Provides a registry for external GPU textures (video frames, camera
+//! previews, platform views) that can be rendered by FLUI.
 //!
 //! # Architecture
 //!
@@ -37,9 +37,9 @@
 //! registry.unregister(texture_id);
 //! ```
 
+use std::{collections::HashMap, sync::Arc};
+
 use flui_types::painting::TextureId;
-use std::collections::HashMap;
-use std::sync::Arc;
 use wgpu::{
     AddressMode, BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout,
     BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingResource, BindingType, Device,
@@ -152,12 +152,15 @@ impl ExternalTextureRegistry {
     ///
     /// # Arguments
     ///
-    /// * `texture_id` - The public texture ID from `flui_types::painting::TextureId`
+    /// * `texture_id` - The public texture ID from
+    ///   `flui_types::painting::TextureId`
     /// * `texture` - The GPU texture
     /// * `width` - Texture width in pixels
     /// * `height` - Texture height in pixels
-    /// * `is_dynamic` - Whether this texture changes frequently (e.g., video frames)
-    /// * `use_linear_filter` - Use linear filtering (true) or nearest neighbor (false)
+    /// * `is_dynamic` - Whether this texture changes frequently (e.g., video
+    ///   frames)
+    /// * `use_linear_filter` - Use linear filtering (true) or nearest neighbor
+    ///   (false)
     pub fn register(
         &mut self,
         texture_id: TextureId,
@@ -167,7 +170,7 @@ impl ExternalTextureRegistry {
         is_dynamic: bool,
         use_linear_filter: bool,
     ) {
-        let view = texture.create_view(&Default::default());
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let sampler = if use_linear_filter {
             &self.linear_sampler
@@ -220,7 +223,7 @@ impl ExternalTextureRegistry {
     pub fn update(&mut self, texture_id: TextureId, new_texture: Texture) -> bool {
         if let Some(entry) = self.textures.get_mut(&texture_id.get()) {
             // Create new view for the new texture
-            let view = new_texture.create_view(&Default::default());
+            let view = new_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
             // Recreate bind group with new texture view
             let sampler = &self.linear_sampler; // Use linear for dynamic textures

@@ -407,8 +407,9 @@ impl BoxHitTestResult {
 
     /// Executes hit test with a raw transform matrix.
     ///
-    /// Unlike `add_with_paint_transform`, this method does not invert the transform
-    /// to compute the local position - the caller provides the transformed position.
+    /// Unlike `add_with_paint_transform`, this method does not invert the
+    /// transform to compute the local position - the caller provides the
+    /// transformed position.
     ///
     /// # Flutter Equivalence
     ///
@@ -436,7 +437,8 @@ impl BoxHitTestResult {
     ///
     /// This method allows manual management of the position transformation.
     /// The `paint_offset` and `paint_transform` are pushed onto the transform
-    /// stack, but the `hit_test_position` is used directly without transformation.
+    /// stack, but the `hit_test_position` is used directly without
+    /// transformation.
     ///
     /// # Flutter Equivalence
     ///
@@ -598,8 +600,9 @@ impl IntoIterator for SliverHitTestResult {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::px;
+
+    use super::*;
 
     #[test]
     fn test_hit_test_result_empty() {

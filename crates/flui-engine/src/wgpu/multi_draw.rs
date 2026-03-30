@@ -55,8 +55,9 @@
 //! batcher.execute(&mut render_pass);
 //! ```
 
-use bytemuck::{Pod, Zeroable};
 use std::mem;
+
+use bytemuck::{Pod, Zeroable};
 
 /// Indirect draw command for GPU
 ///

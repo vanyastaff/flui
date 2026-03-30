@@ -32,15 +32,11 @@
 //! # Usage
 //!
 //! ```
-//! use flui_tree::TreePath;
 //! use flui_foundation::ElementId;
+//! use flui_tree::TreePath;
 //!
 //! // Create a path from a slice of IDs (root -> child -> grandchild)
-//! let path = TreePath::from_slice(&[
-//!     ElementId::new(1),
-//!     ElementId::new(2),
-//!     ElementId::new(5),
-//! ]);
+//! let path = TreePath::from_slice(&[ElementId::new(1), ElementId::new(2), ElementId::new(5)]);
 //! assert_eq!(path.len(), 3);
 //!
 //! // Navigate path
@@ -59,12 +55,10 @@
 //! assert!(parent.is_ancestor_of(&ipath));
 //! ```
 
-use std::fmt;
-use std::ops::Index;
-
-use smallvec::SmallVec;
+use std::{fmt, ops::Index};
 
 use flui_foundation::Identifier;
+use smallvec::SmallVec;
 
 use crate::traits::TreeNav;
 
@@ -89,8 +83,8 @@ use crate::traits::TreeNav;
 /// # Examples
 ///
 /// ```
-/// use flui_tree::TreePath;
 /// use flui_foundation::ElementId;
+/// use flui_tree::TreePath;
 ///
 /// // Create from a slice of IDs
 /// let path = TreePath::from_slice(&[ElementId::new(1), ElementId::new(2), ElementId::new(5)]);
@@ -166,7 +160,8 @@ impl<I: Identifier> TreePath<I> {
         }
     }
 
-    /// Creates a path by collecting IDs from an iterator (root-to-target order).
+    /// Creates a path by collecting IDs from an iterator (root-to-target
+    /// order).
     ///
     /// This is a convenience method. You can also use `TreePath::from_iter()`
     /// via the `FromIterator` trait.
@@ -379,7 +374,8 @@ impl<I: Identifier> TreePath<I> {
 
     // === RESOLUTION ===
 
-    /// Validates that the path exists in the tree and relationships are correct.
+    /// Validates that the path exists in the tree and relationships are
+    /// correct.
     ///
     /// Returns `true` if every segment is a child of the previous segment.
     pub fn validate<T: TreeNav<I>>(&self, tree: &T) -> bool {
@@ -402,10 +398,10 @@ impl<I: Identifier> TreePath<I> {
         }
 
         // Check last node exists
-        if let Some(last) = self.target() {
-            if !tree.contains(last) {
-                return false;
-            }
+        if let Some(last) = self.target()
+            && !tree.contains(last)
+        {
+            return false;
         }
 
         true
@@ -546,7 +542,7 @@ impl<'a, I: Identifier> IntoIterator for &'a TreePath<I> {
 /// ```
 /// use flui_tree::IndexPath;
 ///
-/// let path = IndexPath::new(&[0, 2, 1]);  // root -> 1st child -> 3rd child -> 2nd child
+/// let path = IndexPath::new(&[0, 2, 1]); // root -> 1st child -> 3rd child -> 2nd child
 ///
 /// // Navigate
 /// let parent = path.parent().unwrap();
@@ -853,7 +849,8 @@ impl Index<usize> for IndexPath {
 
 /// Extension trait adding path operations to `TreeNav`.
 ///
-/// This trait is automatically implemented for all types that implement `TreeNav`.
+/// This trait is automatically implemented for all types that implement
+/// `TreeNav`.
 pub trait TreeNavPathExt<I: Identifier>: TreeNav<I> {
     /// Creates a `TreePath` from a node.
     #[inline]
@@ -875,7 +872,8 @@ pub trait TreeNavPathExt<I: Identifier>: TreeNav<I> {
 
     /// Computes the index of a child within its parent.
     ///
-    /// Returns `None` if the child has no parent or if the index exceeds `u32::MAX`.
+    /// Returns `None` if the child has no parent or if the index exceeds
+    /// `u32::MAX`.
     fn child_index(&self, child: I) -> Option<u32> {
         let parent = self.parent(child)?;
         self.children(parent)
@@ -900,8 +898,9 @@ impl<I: Identifier, T: TreeNav<I>> TreeNavPathExt<I> for T {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_foundation::ElementId;
+
+    use super::*;
 
     // === TREE PATH TESTS ===
 

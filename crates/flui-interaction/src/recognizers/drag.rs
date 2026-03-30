@@ -9,19 +9,22 @@
 //!
 //! Flutter reference: https://api.flutter.dev/flutter/gestures/DragGestureRecognizer-class.html
 
-use super::recognizer::{GestureRecognizer, GestureRecognizerState};
-use flui_types::geometry::PixelDelta;
-use flui_types::geometry::Pixels;
+use std::{sync::Arc, time::Instant};
 
-use crate::arena::GestureArenaMember;
-use crate::events::{PointerEvent, PointerEventExt, PointerType};
-use crate::ids::PointerId;
-use crate::processing::VelocityTracker;
-use crate::settings::GestureSettings;
-use flui_types::Offset;
+use flui_types::{
+    Offset,
+    geometry::{PixelDelta, Pixels},
+};
 use parking_lot::Mutex;
-use std::sync::Arc;
-use std::time::Instant;
+
+use super::recognizer::{GestureRecognizer, GestureRecognizerState};
+use crate::{
+    arena::GestureArenaMember,
+    events::{PointerEvent, PointerEventExt, PointerType},
+    ids::PointerId,
+    processing::VelocityTracker,
+    settings::GestureSettings,
+};
 
 /// Drag axis constraint
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -242,7 +245,8 @@ impl DragGestureRecognizer {
         self.settings.lock().min_fling_velocity()
     }
 
-    /// Set the drag down callback (called on pointer contact before drag starts)
+    /// Set the drag down callback (called on pointer contact before drag
+    /// starts)
     ///
     /// This is called when a pointer contacts the screen with a primary button
     /// and might begin to move. Unlike `on_start`, this is called before any
@@ -524,8 +528,7 @@ impl GestureArenaMember for DragGestureRecognizer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arena::GestureArena;
-    use crate::events::make_move_event;
+    use crate::{arena::GestureArena, events::make_move_event};
 
     #[test]
     fn test_drag_recognizer_creation() {

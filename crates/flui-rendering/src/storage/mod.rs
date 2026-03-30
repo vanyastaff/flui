@@ -72,7 +72,6 @@ pub use flags::{AtomicRenderFlags, RenderFlags};
 pub use links::NodeLinks;
 pub use node::RenderNode;
 pub use state::RenderState;
-pub use tree::RenderTree;
-
 // Type aliases for convenience
 pub use state::{BoxRenderState, SliverRenderState};
+pub use tree::RenderTree;

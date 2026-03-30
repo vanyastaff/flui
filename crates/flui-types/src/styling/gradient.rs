@@ -1,10 +1,8 @@
 //! Gradient types for styling
 
-use crate::layout::Alignment;
-use crate::styling::Color;
-
 // Re-export TileMode from painting module
 pub use crate::painting::TileMode;
+use crate::{layout::Alignment, styling::Color};
 
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -74,12 +72,14 @@ pub struct LinearGradient {
     /// The colors the gradient should obtain at each of the stops.
     pub colors: Vec<Color>,
 
-    /// A list of values from 0.0 to 1.0 that denote fractions along the gradient.
+    /// A list of values from 0.0 to 1.0 that denote fractions along the
+    /// gradient.
     ///
     /// If None, the colors are evenly spaced.
     pub stops: Option<Vec<f32>>,
 
-    /// How this gradient should tile the plane beyond the region defined by begin and end.
+    /// How this gradient should tile the plane beyond the region defined by
+    /// begin and end.
     pub tile_mode: TileMode,
 }
 
@@ -128,14 +128,16 @@ impl LinearGradient {
 
     /// Creates a simple two-color linear gradient.
     ///
-    /// A common pattern for basic gradients. Transitions from `start_color` to `end_color`
-    /// along the specified alignment axis.
+    /// A common pattern for basic gradients. Transitions from `start_color` to
+    /// `end_color` along the specified alignment axis.
     ///
     /// # Examples
     ///
     /// ```
-    /// use flui_types::styling::{LinearGradient, Color};
-    /// use flui_types::layout::Alignment;
+    /// use flui_types::{
+    ///     layout::Alignment,
+    ///     styling::{Color, LinearGradient},
+    /// };
     ///
     /// // Simple fade from red to blue, left to right
     /// let gradient = LinearGradient::simple(
@@ -163,7 +165,7 @@ impl LinearGradient {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::styling::{LinearGradient, Color};
+    /// use flui_types::styling::{Color, LinearGradient};
     ///
     /// let gradient = LinearGradient::diagonal(vec![Color::RED, Color::YELLOW, Color::BLUE]);
     /// ```
@@ -222,25 +224,29 @@ pub struct RadialGradient {
     /// The center of the gradient.
     pub center: Alignment,
 
-    /// The radius of the gradient, as a fraction of the shortest side of the paint box.
+    /// The radius of the gradient, as a fraction of the shortest side of the
+    /// paint box.
     pub radius: f32,
 
     /// The colors the gradient should obtain at each of the stops.
     pub colors: Vec<Color>,
 
-    /// A list of values from 0.0 to 1.0 that denote fractions along the gradient.
+    /// A list of values from 0.0 to 1.0 that denote fractions along the
+    /// gradient.
     pub stops: Option<Vec<f32>>,
 
-    /// How this gradient should tile the plane beyond the region defined by center and radius.
+    /// How this gradient should tile the plane beyond the region defined by
+    /// center and radius.
     pub tile_mode: TileMode,
 
     /// The focal point of the gradient.
     ///
-    /// If specified, the gradient will appear to be focused along the vector from
-    /// center to focal.
+    /// If specified, the gradient will appear to be focused along the vector
+    /// from center to focal.
     pub focal: Option<Alignment>,
 
-    /// The radius of the focal point of gradient, as a fraction of the shortest side.
+    /// The radius of the focal point of gradient, as a fraction of the shortest
+    /// side.
     pub focal_radius: Option<f32>,
 }
 
@@ -283,13 +289,14 @@ impl RadialGradient {
 
     /// Creates a circular radial gradient that fills the entire box.
     ///
-    /// Uses radius of 0.5, which ensures the gradient reaches from center to edges.
-    /// Common pattern for spotlight effects, vignettes, and circular buttons.
+    /// Uses radius of 0.5, which ensures the gradient reaches from center to
+    /// edges. Common pattern for spotlight effects, vignettes, and circular
+    /// buttons.
     ///
     /// # Examples
     ///
     /// ```
-    /// use flui_types::styling::{RadialGradient, Color};
+    /// use flui_types::styling::{Color, RadialGradient};
     ///
     /// // White center fading to black edges
     /// let gradient = RadialGradient::circular(vec![Color::WHITE, Color::BLACK]);
@@ -364,7 +371,8 @@ pub struct SweepGradient {
     /// The colors the gradient should obtain at each of the stops.
     pub colors: Vec<Color>,
 
-    /// A list of values from 0.0 to 1.0 that denote fractions along the gradient.
+    /// A list of values from 0.0 to 1.0 that denote fractions along the
+    /// gradient.
     pub stops: Option<Vec<f32>>,
 
     /// How this gradient should tile the plane beyond the region.
@@ -398,7 +406,8 @@ impl SweepGradient {
         }
     }
 
-    /// Creates a simple sweep gradient centered in the box that goes full circle.
+    /// Creates a simple sweep gradient centered in the box that goes full
+    /// circle.
     #[inline]
     pub fn centered(colors: Vec<Color>) -> Self {
         Self::new(

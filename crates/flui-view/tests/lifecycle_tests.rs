@@ -1,13 +1,17 @@
 //! Integration tests for Element lifecycle.
 //!
-//! Tests the lifecycle states and transitions: Initial → Active ⇄ Inactive → Defunct
+//! Tests the lifecycle states and transitions: Initial → Active ⇄ Inactive →
+//! Defunct
+
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+};
 
 use flui_view::{
     BuildContext, ElementBase, ElementTree, Lifecycle, StatefulBehavior, StatefulElement,
     StatefulView, StatelessBehavior, StatelessElement, StatelessView, View, ViewState,
 };
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
 
 // ============================================================================
 // Test Views with lifecycle tracking

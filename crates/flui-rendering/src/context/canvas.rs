@@ -27,12 +27,12 @@ use flui_layer::{
     OpacityLayer, PictureLayer, TransformLayer,
 };
 use flui_painting::DisplayListCore;
-use flui_types::painting::{effects::ColorMatrix, Clip, Path};
+use flui_types::{
+    Matrix4, Offset, RRect, Rect,
+    painting::{Clip, Path, effects::ColorMatrix},
+};
 
-use crate::protocol::BoxProtocol;
-use flui_types::{Matrix4, Offset, RRect, Rect};
-
-use crate::traits::RenderObject;
+use crate::{protocol::BoxProtocol, traits::RenderObject};
 
 // ============================================================================
 // CanvasContext
@@ -41,15 +41,17 @@ use crate::traits::RenderObject;
 /// Low-level context for canvas recording and layer tree management.
 ///
 /// `CanvasContext` handles the mechanics of painting - recording draw commands
-/// to a canvas, managing layer push/pop operations, and building the layer tree.
+/// to a canvas, managing layer push/pop operations, and building the layer
+/// tree.
 ///
-/// For high-level painting with offset and children access, use [`PaintContext`]
-/// which wraps this type.
+/// For high-level painting with offset and children access, use
+/// [`PaintContext`] which wraps this type.
 ///
 /// # Flutter Equivalence
 ///
-/// This corresponds to the internal implementation of Flutter's `PaintingContext`
-/// class - specifically the canvas and layer management parts.
+/// This corresponds to the internal implementation of Flutter's
+/// `PaintingContext` class - specifically the canvas and layer management
+/// parts.
 ///
 /// # Usage
 ///
@@ -149,8 +151,8 @@ impl CanvasContext {
     ///
     /// The render object must be attached to a [`PipelineOwner`], must have a
     /// composited layer, and must be in need of painting. The render object's
-    /// layer, if any, is re-used, along with any layers in the subtree that don't
-    /// need to be repainted.
+    /// layer, if any, is re-used, along with any layers in the subtree that
+    /// don't need to be repainted.
     ///
     /// # Flutter Equivalence
     ///
@@ -184,8 +186,9 @@ impl CanvasContext {
 
     /// Update the layer properties of a composited child without repainting.
     ///
-    /// This is used when a render object's layer properties (like offset or opacity)
-    /// have changed but the content itself doesn't need to be repainted.
+    /// This is used when a render object's layer properties (like offset or
+    /// opacity) have changed but the content itself doesn't need to be
+    /// repainted.
     ///
     /// # Flutter Equivalence
     ///
@@ -198,10 +201,10 @@ impl CanvasContext {
     /// * `offset` - The new offset for the layer
     pub fn update_layer_properties(tree: &mut LayerTree, layer_id: LayerId, offset: Offset) {
         tracing::debug!("update_layer_properties offset={:?}", offset);
-        if let Some(layer) = tree.get_layer_mut(layer_id) {
-            if let Some(offset_layer) = layer.as_offset_mut() {
-                offset_layer.set_offset(offset);
-            }
+        if let Some(layer) = tree.get_layer_mut(layer_id)
+            && let Some(offset_layer) = layer.as_offset_mut()
+        {
+            offset_layer.set_offset(offset);
         }
     }
 
@@ -217,7 +220,8 @@ impl CanvasContext {
         }
     }
 
-    /// Stops recording if currently recording and adds the picture to the layer tree.
+    /// Stops recording if currently recording and adds the picture to the layer
+    /// tree.
     pub fn stop_recording_if_needed(&mut self) {
         if self.is_recording {
             self.is_recording = false;
@@ -291,7 +295,8 @@ impl CanvasContext {
 
     /// Pushes an opacity layer.
     ///
-    /// All painting within the callback will be rendered with the given opacity.
+    /// All painting within the callback will be rendered with the given
+    /// opacity.
     pub fn push_opacity<F>(&mut self, offset: Offset, alpha: u8, painter: F)
     where
         F: FnOnce(&mut CanvasContext),
@@ -369,7 +374,8 @@ impl CanvasContext {
 
     /// Pushes a clip rounded rect layer.
     ///
-    /// All painting within the callback will be clipped to the given rounded rect.
+    /// All painting within the callback will be clipped to the given rounded
+    /// rect.
     pub fn push_clip_rrect<F>(
         &mut self,
         needs_compositing: bool,
@@ -465,7 +471,8 @@ impl CanvasContext {
     ///
     /// All painting within the callback will have the transform applied.
     ///
-    /// Returns the layer ID if `needs_compositing` is true, for reuse in subsequent frames.
+    /// Returns the layer ID if `needs_compositing` is true, for reuse in
+    /// subsequent frames.
     pub fn push_transform<F>(
         &mut self,
         needs_compositing: bool,
@@ -618,20 +625,22 @@ impl CanvasContext {
     // Hints
     // ========================================================================
 
-    /// Hints that the painting in the current layer is complex and would benefit
-    /// from caching.
+    /// Hints that the painting in the current layer is complex and would
+    /// benefit from caching.
     ///
     /// If this hint is not set, the compositor will apply its own heuristics to
-    /// decide whether the current layer is complex enough to benefit from caching.
+    /// decide whether the current layer is complex enough to benefit from
+    /// caching.
     pub fn set_is_complex_hint(&mut self) {
         self.start_recording();
         // In full implementation, this would set a flag on the current layer
     }
 
-    /// Hints that the painting in the current layer is likely to change next frame.
+    /// Hints that the painting in the current layer is likely to change next
+    /// frame.
     ///
-    /// This hint tells the compositor not to cache the current layer because the
-    /// cache will not be used in the future.
+    /// This hint tells the compositor not to cache the current layer because
+    /// the cache will not be used in the future.
     pub fn set_will_change_hint(&mut self) {
         self.start_recording();
         // In full implementation, this would set a flag on the current layer
@@ -694,9 +703,7 @@ impl super::ClipContext for CanvasContext {
 // ============================================================================
 
 // Re-export from flui_painting
-pub use flui_painting::Canvas;
-pub use flui_painting::Picture;
-
+pub use flui_painting::{Canvas, Picture};
 // Re-export from flui_types::painting
 pub use flui_types::painting::{Paint, PaintStyle};
 
@@ -706,9 +713,9 @@ pub use flui_types::painting::{Paint, PaintStyle};
 
 #[cfg(test)]
 mod tests {
+    use flui_types::{Color, geometry::px};
+
     use super::*;
-    use flui_types::geometry::px;
-    use flui_types::Color;
 
     #[test]
     fn test_painting_context_new() {

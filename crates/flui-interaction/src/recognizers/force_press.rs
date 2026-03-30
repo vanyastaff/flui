@@ -10,17 +10,15 @@
 //!
 //! Flutter reference: https://api.flutter.dev/flutter/gestures/ForcePressGestureRecognizer-class.html
 
-use super::recognizer::{GestureRecognizer, GestureRecognizerState};
-use flui_types::geometry::Pixels;
-
-use crate::arena::GestureArenaMember;
-use crate::events::PointerEvent;
-use crate::ids::PointerId;
-use crate::settings::GestureSettings;
-use flui_types::gestures::ForcePressDetails;
-use flui_types::Offset;
-use parking_lot::Mutex;
 use std::sync::Arc;
+
+use flui_types::{Offset, geometry::Pixels, gestures::ForcePressDetails};
+use parking_lot::Mutex;
+
+use super::recognizer::{GestureRecognizer, GestureRecognizerState};
+use crate::{
+    arena::GestureArenaMember, events::PointerEvent, ids::PointerId, settings::GestureSettings,
+};
 
 /// Default pressure threshold to start force press (40%)
 pub const FORCE_PRESS_START_PRESSURE: f32 = 0.4;

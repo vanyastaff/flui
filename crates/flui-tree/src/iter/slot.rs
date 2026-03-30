@@ -15,14 +15,14 @@
 //! # Usage
 //!
 //! ```
-//! use flui_tree::{Slot, Depth};
 //! use flui_foundation::ElementId;
+//! use flui_tree::{Depth, Slot};
 //!
 //! // Create slot for second child
 //! let slot = Slot::new(
-//!     ElementId::new(10),  // parent
-//!     1,                   // second child (0-indexed)
-//!     Depth::new(2),       // at depth 2
+//!     ElementId::new(10), // parent
+//!     1,                  // second child (0-indexed)
+//!     Depth::new(2),      // at depth 2
 //! );
 //!
 //! assert_eq!(slot.index(), 1);
@@ -31,8 +31,9 @@
 
 use std::fmt;
 
-use crate::depth::Depth;
 use flui_foundation::Identifier;
+
+use crate::depth::Depth;
 
 // ============================================================================
 // SLOT
@@ -312,14 +313,10 @@ impl<I: Identifier> fmt::Display for Slot<I> {
 /// # Example
 ///
 /// ```
-/// use flui_tree::{Slot, Depth};
 /// use flui_foundation::ElementId;
+/// use flui_tree::{Depth, Slot};
 ///
-/// let slot = Slot::builder(
-///     ElementId::new(1),
-///     2,
-///     Depth::new(3),
-/// )
+/// let slot = Slot::builder(ElementId::new(1), 2, Depth::new(3))
 ///     .with_previous_sibling(ElementId::new(5))
 ///     .with_next_sibling(ElementId::new(7))
 ///     .build();
@@ -407,8 +404,8 @@ impl<I: Identifier> SlotBuilder<I> {
 /// # Example
 ///
 /// ```
-/// use flui_tree::IndexedSlot;
 /// use flui_foundation::ElementId;
+/// use flui_tree::IndexedSlot;
 ///
 /// // Start with first slot
 /// let slot = IndexedSlot::<ElementId>::first();
@@ -543,8 +540,8 @@ impl<I: Identifier> From<usize> for IndexedSlot<I> {
 /// # Example
 ///
 /// ```
-/// use flui_tree::SlotIter;
 /// use flui_foundation::ElementId;
+/// use flui_tree::SlotIter;
 ///
 /// let mut slots = SlotIter::<ElementId>::new();
 /// assert_eq!(slots.index(), 0);
@@ -627,8 +624,9 @@ impl<I: Identifier> Default for SlotIter<I> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_foundation::ElementId;
+
+    use super::*;
 
     // === SLOT TESTS ===
 

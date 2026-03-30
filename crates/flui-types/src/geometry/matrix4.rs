@@ -1,7 +1,8 @@
 //! 4x4 transformation matrix for 2D and 3D transformations.
 //!
-//! Matrix4 represents a 4x4 matrix stored in column-major order (like OpenGL/egui).
-//! Used for affine transformations: translation, rotation, scaling, skewing, perspective.
+//! Matrix4 represents a 4x4 matrix stored in column-major order (like
+//! OpenGL/egui). Used for affine transformations: translation, rotation,
+//! scaling, skewing, perspective.
 //!
 //! # Design Philosophy
 //!
@@ -9,7 +10,8 @@
 //! - **Memory Safety**: No unsafe code, bounds-checked access
 //! - **Type Safety**: Strong typing with `#[must_use]` annotations
 //! - **Zero Allocations**: All operations use stack-allocated arrays
-//! - **Idiomatic Rust**: Implements standard traits (`From`, `Into`, `Index`, etc.)
+//! - **Idiomatic Rust**: Implements standard traits (`From`, `Into`, `Index`,
+//!   etc.)
 //! - **Performance**: Inline functions, const methods, zero-copy conversions
 //! - **Mathematical Correctness**: Extensively tested with edge cases
 //!
@@ -94,16 +96,19 @@
 //! assert!(m1.approx_eq_eps(&m2, 0.001));
 //! ```
 
-use super::Pixels;
-use std::fmt;
-use std::ops::{Index, IndexMut, Mul, MulAssign};
+use std::{
+    fmt,
+    ops::{Index, IndexMut, Mul, MulAssign},
+};
 
+use super::Pixels;
 use crate::geometry::{Point, Rect};
 
 /// A 4x4 transformation matrix stored in column-major order.
 ///
-/// Used for affine transformations including translation, rotation, scaling, and skewing.
-/// The matrix is stored in column-major order to match OpenGL and egui conventions.
+/// Used for affine transformations including translation, rotation, scaling,
+/// and skewing. The matrix is stored in column-major order to match OpenGL and
+/// egui conventions.
 ///
 /// # Memory Layout
 ///
@@ -123,7 +128,8 @@ pub struct Matrix4 {
 impl Matrix4 {
     /// Identity matrix constant (no transformation).
     ///
-    /// This is a compile-time constant that can be used anywhere a `Matrix4` is needed.
+    /// This is a compile-time constant that can be used anywhere a `Matrix4` is
+    /// needed.
     ///
     /// # Example
     ///
@@ -155,7 +161,8 @@ impl Matrix4 {
 impl Matrix4 {
     /// Creates a new matrix from 16 elements in column-major order.
     ///
-    /// Parameters are named as `mRC` where R is row and C is column (0-indexed).
+    /// Parameters are named as `mRC` where R is row and C is column
+    /// (0-indexed).
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         m00: f32,
@@ -231,7 +238,8 @@ impl Matrix4 {
 
     /// Creates a rotation matrix around the X axis.
     ///
-    /// Angle is in radians. Positive values rotate counter-clockwise when looking down the axis.
+    /// Angle is in radians. Positive values rotate counter-clockwise when
+    /// looking down the axis.
     #[inline]
     pub fn rotation_x(angle: f32) -> Self {
         let (sin, cos) = angle.sin_cos();
@@ -248,7 +256,8 @@ impl Matrix4 {
 
     /// Creates a rotation matrix around the Y axis.
     ///
-    /// Angle is in radians. Positive values rotate counter-clockwise when looking down the axis.
+    /// Angle is in radians. Positive values rotate counter-clockwise when
+    /// looking down the axis.
     #[inline]
     pub fn rotation_y(angle: f32) -> Self {
         let (sin, cos) = angle.sin_cos();
@@ -303,7 +312,8 @@ impl Matrix4 {
         self.is_translation_only_with_epsilon(f32::EPSILON)
     }
 
-    /// Returns whether this matrix represents only a translation with custom epsilon.
+    /// Returns whether this matrix represents only a translation with custom
+    /// epsilon.
     ///
     /// Checks that the 3x3 upper-left submatrix is identity (within epsilon)
     /// and the perspective row is [0, 0, 0, 1].
@@ -364,7 +374,8 @@ impl Matrix4 {
         *self = Matrix4::rotation_z(angle) * *self;
     }
 
-    /// Applies a Z-axis rotation to this matrix (type-safe version, modifies in place).
+    /// Applies a Z-axis rotation to this matrix (type-safe version, modifies in
+    /// place).
     #[inline]
     pub fn rotate_z_radians(&mut self, angle: crate::geometry::Radians) {
         self.rotate_z(angle.0);
@@ -528,7 +539,8 @@ impl Matrix4 {
         }
     }
 
-    /// Transforms a rectangle by this matrix, returning the bounding box of the result.
+    /// Transforms a rectangle by this matrix, returning the bounding box of the
+    /// result.
     ///
     /// Transforms all four corners and computes the axis-aligned bounding box.
     #[must_use]
@@ -612,7 +624,8 @@ impl Matrix4 {
         self.m[col * 4 + row]
     }
 
-    /// Gets a mutable reference to the matrix element at the specified row and column.
+    /// Gets a mutable reference to the matrix element at the specified row and
+    /// column.
     ///
     /// # Panics
     /// Panics if row or column is >= 4.
@@ -795,9 +808,11 @@ impl Matrix4 {
 
                 // For each row, calculate the dot product
                 // We need: self[0][row] * rhs[col][0] + self[1][row] * rhs[col][1] + ...
-                // Which is: self.m[0*4 + row] * rhs.m[col*4 + 0] + self.m[1*4 + row] * rhs.m[col*4 + 1] + ...
+                // Which is: self.m[0*4 + row] * rhs.m[col*4 + 0] + self.m[1*4 + row] *
+                // rhs.m[col*4 + 1] + ...
 
-                // Load rows from self as columns (since we need self.m[k*4 + row] for all rows at once)
+                // Load rows from self as columns (since we need self.m[k*4 + row] for all rows
+                // at once)
                 let self_col0 = _mm_loadu_ps(&raw const self.m[0]); // self[0][0..3]
                 let self_col1 = _mm_loadu_ps(&raw const self.m[4]); // self[1][0..3]
                 let self_col2 = _mm_loadu_ps(&raw const self.m[8]); // self[2][0..3]
@@ -861,7 +876,8 @@ impl Matrix4 {
 
 /// Matrix multiplication: C = A * B
 ///
-/// Matrices are applied right-to-left: (A * B) transforms first by B, then by A.
+/// Matrices are applied right-to-left: (A * B) transforms first by B, then by
+/// A.
 ///
 /// Uses SIMD acceleration when the `simd` feature is enabled for 3-4x speedup.
 impl Mul for Matrix4 {
@@ -911,8 +927,8 @@ impl MulAssign for Matrix4 {
 /// ```
 /// use flui_types::Matrix4;
 /// let m = Matrix4::identity();
-/// assert_eq!(m[0], 1.0);  // m00
-/// assert_eq!(m[5], 1.0);  // m11
+/// assert_eq!(m[0], 1.0); // m00
+/// assert_eq!(m[5], 1.0); // m11
 /// ```
 impl Index<usize> for Matrix4 {
     type Output = f32;
@@ -923,7 +939,8 @@ impl Index<usize> for Matrix4 {
     }
 }
 
-/// Mutably access matrix elements by linear index (0..16) in column-major order.
+/// Mutably access matrix elements by linear index (0..16) in column-major
+/// order.
 impl IndexMut<usize> for Matrix4 {
     #[inline]
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {

@@ -2,13 +2,15 @@
 
 use flui_types::{Offset, Point, Rect, Size};
 
-use crate::arity::Arity;
-use crate::constraints::BoxConstraints;
-use crate::context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext, CanvasContext};
-use crate::hit_testing::HitTestBehavior;
-use crate::parent_data::ParentData;
-use crate::protocol::BoxProtocol;
-use crate::traits::RenderObject;
+use crate::{
+    arity::Arity,
+    constraints::BoxConstraints,
+    context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext, CanvasContext},
+    hit_testing::HitTestBehavior,
+    parent_data::ParentData,
+    protocol::BoxProtocol,
+    traits::RenderObject,
+};
 
 // ============================================================================
 // RenderBox Trait with Arity and ParentData
@@ -94,7 +96,8 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     ///
     /// The context provides:
     /// - Constraints from parent via `ctx.constraints()`
-    /// - Type-safe child access via `ctx.layout_child()`, `ctx.position_child()`
+    /// - Type-safe child access via `ctx.layout_child()`,
+    ///   `ctx.position_child()`
     /// - Completion via `ctx.complete_with_size()`
     ///
     /// # Example
@@ -164,7 +167,8 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
 
     /// Creates default parent data for a child.
     ///
-    /// Called when a child is adopted. Override if you need custom initialization.
+    /// Called when a child is adopted. Override if you need custom
+    /// initialization.
     fn create_default_parent_data() -> Self::ParentData {
         Self::ParentData::default()
     }
@@ -354,26 +358,32 @@ pub enum TextBaseline {
 // Blanket Implementation of RenderObject<BoxProtocol> for RenderBox
 // ============================================================================
 
-/// Automatic implementation of RenderObject<BoxProtocol> for all RenderBox types.
+/// Automatic implementation of RenderObject<BoxProtocol> for all RenderBox
+/// types.
 ///
 /// This blanket impl bridges the typed RenderBox API (with Arity/ParentData)
 /// and the protocol-specific RenderObject<P> trait needed for storage.
 ///
 /// # Architecture Note
 ///
-/// The `perform_layout_raw` and `hit_test_raw` methods are **protocol bridges only**.
-/// They exist to satisfy trait bounds for storing `dyn RenderObject<BoxProtocol>`.
+/// The `perform_layout_raw` and `hit_test_raw` methods are **protocol bridges
+/// only**. They exist to satisfy trait bounds for storing `dyn
+/// RenderObject<BoxProtocol>`.
 ///
 /// **Actual layout and hit testing flow:**
 /// 1. Pipeline creates `BoxLayoutContext` with children access
-/// 2. Pipeline calls `RenderBox::perform_layout()` directly (not through this blanket impl)
-/// 3. The typed method receives proper context with `layout_child()`, `position_child()` etc.
+/// 2. Pipeline calls `RenderBox::perform_layout()` directly (not through this
+///    blanket impl)
+/// 3. The typed method receives proper context with `layout_child()`,
+///    `position_child()` etc.
 ///
 /// The blanket impl methods return placeholder values because:
-/// - `perform_layout_raw` can't create BoxLayoutContext (needs external children access)
+/// - `perform_layout_raw` can't create BoxLayoutContext (needs external
+///   children access)
 /// - `hit_test_raw` can't create BoxHitTestContext (needs external state)
 ///
-/// Note: This requires T to also implement Diagnosticable since RenderObject<P> requires it.
+/// Note: This requires T to also implement Diagnosticable since RenderObject<P>
+/// requires it.
 impl<T> RenderObject<BoxProtocol> for T
 where
     T: RenderBox + flui_foundation::Diagnosticable,
@@ -391,7 +401,8 @@ where
         // Protocol bridge only - no-op.
         // Real painting flows through RenderBox::paint() with BoxPaintContext,
         // which provides children access and paint_child() callbacks.
-        // The pipeline creates the proper context and calls RenderBox::paint() directly.
+        // The pipeline creates the proper context and calls RenderBox::paint()
+        // directly.
     }
 
     fn hit_test_raw(
@@ -432,5 +443,6 @@ mod tests {
         assert_eq!(behavior, HitTestBehavior::DeferToChild);
     }
 
-    // BoxHitTestResult and BoxHitTestEntry tests are now in hit_testing/result.rs
+    // BoxHitTestResult and BoxHitTestEntry tests are now in
+    // hit_testing/result.rs
 }

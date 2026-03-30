@@ -3,23 +3,29 @@
 //! Provides clipboard access using the Windows Clipboard API.
 //! Thread-safe wrapper with proper clipboard lifecycle management.
 
-use crate::traits::Clipboard;
 use parking_lot::Mutex;
-use windows::Win32::Foundation::{HANDLE, HGLOBAL};
-use windows::Win32::System::DataExchange::{
-    CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
-    SetClipboardData,
+use windows::Win32::{
+    Foundation::{HANDLE, HGLOBAL},
+    System::{
+        DataExchange::{
+            CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable,
+            OpenClipboard, SetClipboardData,
+        },
+        Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock},
+        Ole::CF_UNICODETEXT,
+    },
 };
-use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
-use windows::Win32::System::Ole::CF_UNICODETEXT;
+
+use crate::traits::Clipboard;
 
 /// Windows clipboard implementation
 ///
 /// Thread-safe wrapper around Windows Clipboard API.
-/// Opens and closes the clipboard for each operation to avoid blocking other applications.
+/// Opens and closes the clipboard for each operation to avoid blocking other
+/// applications.
 pub struct WindowsClipboard {
-    /// Dummy HWND for clipboard operations (we use None which means current thread)
-    /// Mutex is used to ensure thread-safe access
+    /// Dummy HWND for clipboard operations (we use None which means current
+    /// thread) Mutex is used to ensure thread-safe access
     _lock: Mutex<()>,
 }
 

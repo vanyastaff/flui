@@ -10,7 +10,7 @@ crate-type = ["cdylib"]
 name = "flui_scene"
 
 [dependencies]
-flui-hot-reload = { path = "../../crates/flui-hot-reload" }
+flui-hot-reload = { path = "../../crates/flui-hot-reload", features = ["app-plugin"] }
 flui-layer = { path = "../../crates/flui-layer" }
 flui-view = { path = "../../crates/flui-view" }
 flui-rendering = { path = "../../crates/flui-rendering" }

@@ -1,16 +1,19 @@
 //! # FLUI Foundation
 //!
-//! This crate provides fundamental types, utilities, and abstractions used throughout
-//! the FLUI UI framework ecosystem. It contains zero-dependency or minimal-dependency
-//! building blocks that other FLUI crates depend on.
+//! This crate provides fundamental types, utilities, and abstractions used
+//! throughout the FLUI UI framework ecosystem. It contains zero-dependency or
+//! minimal-dependency building blocks that other FLUI crates depend on.
 //!
 //! ## Overview
 //!
 //! FLUI Foundation contains:
-//! - **Tree IDs**: `ViewId`, `ElementId`, `RenderId`, `LayerId`, `SemanticsId` for the 5-tree architecture
-//! - **Keys**: `Key`, `ValueKey`, `UniqueKey` for widget identity (ObjectKey/GlobalKey in flui-view)
+//! - **Tree IDs**: `ViewId`, `ElementId`, `RenderId`, `LayerId`, `SemanticsId`
+//!   for the 5-tree architecture
+//! - **Keys**: `Key`, `ValueKey`, `UniqueKey` for widget identity
+//!   (ObjectKey/GlobalKey in flui-view)
 //! - **Change Notification**: Observable patterns for reactive UI updates
-//! - **Callbacks**: `VoidCallback`, `ValueChanged`, and other callback type aliases
+//! - **Callbacks**: `VoidCallback`, `ValueChanged`, and other callback type
+//!   aliases
 //! - **Platform**: `TargetPlatform` for platform detection
 //! - **Observer Lists**: Efficient observer/listener collections
 //! - **Diagnostics**: Debugging and introspection utilities
@@ -21,15 +24,17 @@
 //!
 //! 1. **Minimal Dependencies**: Only essential external crates
 //! 2. **Zero-Cost Abstractions**: Performance-critical paths have no overhead
-//! 3. **Thread Safety**: All types are designed to work in multi-threaded contexts
+//! 3. **Thread Safety**: All types are designed to work in multi-threaded
+//!    contexts
 //! 4. **Composability**: Types work well together and with external code
 //! 5. **Stability**: Strong backwards compatibility guarantees
 //!
 //! ## Quick Start
 //!
 //! ```rust
-//! use flui_foundation::{ElementId, Key, ChangeNotifier, Listenable};
 //! use std::sync::Arc;
+//!
+//! use flui_foundation::{ChangeNotifier, ElementId, Key, Listenable};
 //!
 //! // Create unique identifiers
 //! let element_id = ElementId::new(1);
@@ -78,8 +83,9 @@
 //! ### Change Notification
 //!
 //! ```rust
-//! use flui_foundation::{ChangeNotifier, ValueNotifier, Listenable};
 //! use std::sync::Arc;
+//!
+//! use flui_foundation::{ChangeNotifier, Listenable, ValueNotifier};
 //!
 //! // Basic change notification
 //! let mut notifier = ChangeNotifier::new();
@@ -152,9 +158,28 @@ pub mod error;
 // ============================================================================
 
 // Core types - IDs for all tree levels
+// Assertions and error handling
+pub use assert::FluiError;
+// Binding infrastructure
+pub use binding::{BindingBase, HasInstance, check_instance};
+// Callbacks
+pub use callbacks::{
+    FallibleCallback, Predicate, ValueChanged, ValueGetter, ValueSetter, ValueTransformer,
+    VoidCallback,
+};
+// Constants
+pub use consts::{
+    DEBUG_MODE, EPSILON, EPSILON_F32, IS_DESKTOP, IS_MOBILE, IS_WEB, RELEASE_MODE, approx_equal,
+    approx_equal_f32, is_near_zero, is_near_zero_f32,
+};
+// Diagnostics
+pub use debug::{
+    DiagnosticLevel, Diagnosticable, DiagnosticsBuilder, DiagnosticsNode, DiagnosticsProperty,
+    DiagnosticsTreeStyle,
+};
+// Error handling
+pub use error::{FoundationError, Result};
 pub use id::{
-    // Marker types module
-    markers,
     // Animation/Scheduler IDs
     AnimationId,
     // Platform/System IDs
@@ -195,47 +220,18 @@ pub use id::{
     TextureId,
     VendorId,
     ViewId,
+    // Marker types module
+    markers,
 };
 pub use key::{Key, KeyRef, Keyed, UniqueKey, ValueKey, ViewKey, WithKey};
-
-// Constants
-pub use consts::{
-    approx_equal, approx_equal_f32, is_near_zero, is_near_zero_f32, DEBUG_MODE, EPSILON,
-    EPSILON_F32, IS_DESKTOP, IS_MOBILE, IS_WEB, RELEASE_MODE,
-};
-
-// Binding infrastructure
-pub use binding::{check_instance, BindingBase, HasInstance};
-
-// Assertions and error handling
-pub use assert::FluiError;
-
-// Callbacks
-pub use callbacks::{
-    FallibleCallback, Predicate, ValueChanged, ValueGetter, ValueSetter, ValueTransformer,
-    VoidCallback,
-};
-
-// Platform
-pub use platform::TargetPlatform;
-
-// Observer lists
-pub use observer::{HashedObserverList, ObserverList, SyncObserverList};
-
 // Change notification (Listenable pattern)
 pub use notifier::{
     ChangeNotifier, Listenable, ListenerCallback, MergedListenable, ValueListenable, ValueNotifier,
 };
-
-// Diagnostics
-pub use debug::{
-    DiagnosticLevel, Diagnosticable, DiagnosticsBuilder, DiagnosticsNode, DiagnosticsProperty,
-    DiagnosticsTreeStyle,
-};
-
-// Error handling
-pub use error::{FoundationError, Result};
-
+// Observer lists
+pub use observer::{HashedObserverList, ObserverList, SyncObserverList};
+// Platform
+pub use platform::TargetPlatform;
 // WASM compatibility
 pub use wasm::{WasmNotSend, WasmNotSendSync};
 
@@ -257,9 +253,12 @@ pub mod prelude {
         BindingBase,
         // Change notification
         ChangeNotifier,
+        // Constants
+        DEBUG_MODE,
         // Diagnostics
         DiagnosticLevel,
         Diagnosticable,
+        EPSILON,
         // IDs
         ElementId,
         // Callbacks
@@ -270,6 +269,9 @@ pub mod prelude {
         HasInstance,
         // Observer lists
         HashedObserverList,
+        IS_DESKTOP,
+        IS_MOBILE,
+        IS_WEB,
         // Generic ID system
         Id,
         Identifier,
@@ -285,6 +287,7 @@ pub mod prelude {
         ObserverId,
         ObserverList,
         Predicate,
+        RELEASE_MODE,
         RenderId,
         SemanticsId,
         SyncObserverList,
@@ -302,15 +305,7 @@ pub mod prelude {
         ViewKey,
         VoidCallback,
         WithKey,
-        // Constants
-        DEBUG_MODE,
-        EPSILON,
-        IS_DESKTOP,
-        IS_MOBILE,
-        IS_WEB,
-        RELEASE_MODE,
     };
-
     // Re-export assertion macros
     pub use crate::{
         debug_assert_finite, debug_assert_not_nan, debug_assert_range, debug_assert_valid,

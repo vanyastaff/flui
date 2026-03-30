@@ -5,12 +5,15 @@
 //!
 //! Run with: `cargo run --example basic_scheduler -p flui-scheduler`
 
+use std::sync::{
+    Arc,
+    atomic::{AtomicU32, Ordering},
+};
+
 use flui_scheduler::{
     scheduler::Scheduler,
     task::{Priority, TaskQueue},
 };
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
 
 fn main() {
     println!("=== FLUI Scheduler Basic Example ===\n");

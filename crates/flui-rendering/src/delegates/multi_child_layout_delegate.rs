@@ -1,10 +1,10 @@
-//! Multi-child layout delegate for custom layout algorithms with multiple children.
+//! Multi-child layout delegate for custom layout algorithms with multiple
+//! children.
 //!
 //! [`MultiChildLayoutDelegate`] allows users to implement custom layout
 //! behavior for render objects with multiple children identified by IDs.
 
-use std::any::Any;
-use std::fmt::Debug;
+use std::{any::Any, fmt::Debug};
 
 use flui_types::{Offset, Size};
 
@@ -130,9 +130,11 @@ pub trait MultiChildLayoutContext {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use flui_types::geometry::px;
     use std::collections::HashMap;
+
+    use flui_types::geometry::px;
+
+    use super::*;
 
     #[derive(Debug)]
     struct TestDelegate {

@@ -3,9 +3,12 @@
 //! This example demonstrates the reactive change notification system,
 //! similar to Flutter's ChangeNotifier pattern.
 
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
+
 use flui_foundation::{ChangeNotifier, Listenable, MergedListenable, ValueNotifier};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 
 fn main() {
     println!("=== FLUI Foundation: Change Notification Example ===\n");

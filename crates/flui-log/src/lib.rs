@@ -1,7 +1,8 @@
 //! Cross-platform logging for FLUI
 //!
 //! Provides automatic logging configuration for:
-//! - **Desktop**: stdout via `tracing_subscriber::fmt` (or `tracing-forest` with "pretty" feature)
+//! - **Desktop**: stdout via `tracing_subscriber::fmt` (or `tracing-forest`
+//!   with "pretty" feature)
 //! - **Android**: logcat via `android_log-sys`
 //! - **iOS**: `os_log` via `tracing-oslog`
 //! - **WASM**: browser console via `tracing-wasm`
@@ -22,7 +23,7 @@
 //! # Custom Configuration
 //!
 //! ```rust,no_run
-//! use flui_log::{Logger, Level};
+//! use flui_log::{Level, Logger};
 //!
 //! Logger::new()
 //!     .with_filter("debug,wgpu=error,flui_core=trace")
@@ -85,9 +86,7 @@ mod logger;
 pub mod android_layer;
 
 pub use logger::{InitError, Logger};
-
-// Re-export tracing macros for convenience
-pub use tracing::{debug, error, info, trace, warn, Level};
-
 // Re-export common types
-pub use tracing::{event, span, Instrument, Span};
+pub use tracing::{Instrument, Span, event, span};
+// Re-export tracing macros for convenience
+pub use tracing::{Level, debug, error, info, trace, warn};

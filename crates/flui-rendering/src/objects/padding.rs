@@ -1,13 +1,14 @@
 //! RenderPadding - adds padding around a single child.
 
-use flui_types::geometry::px;
-use flui_types::{EdgeInsets, Offset, Pixels, Point, Rect, Size};
+use flui_types::{EdgeInsets, Offset, Pixels, Point, Rect, Size, geometry::px};
 
-use crate::arity::Single;
-use crate::constraints::BoxConstraints;
-use crate::context::{BoxHitTestContext, BoxLayoutContext};
-use crate::parent_data::BoxParentData;
-use crate::traits::RenderBox;
+use crate::{
+    arity::Single,
+    constraints::BoxConstraints,
+    context::{BoxHitTestContext, BoxLayoutContext},
+    parent_data::BoxParentData,
+    traits::RenderBox,
+};
 
 /// A render object that adds padding around its child.
 ///
@@ -81,7 +82,7 @@ impl RenderBox for RenderPadding {
     type ParentData = BoxParentData;
 
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) {
-        let constraints = ctx.constraints().clone();
+        let constraints = *ctx.constraints();
 
         if ctx.child_count() > 0 {
             self.has_child = true;

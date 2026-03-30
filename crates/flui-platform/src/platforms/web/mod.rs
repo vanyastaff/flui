@@ -1,7 +1,8 @@
 //! Web/WASM platform implementation (stub)
 //!
-//! This module provides a stub implementation of the Platform trait for Web browsers
-//! via WebAssembly. It serves as a placeholder for future web integration using:
+//! This module provides a stub implementation of the Platform trait for Web
+//! browsers via WebAssembly. It serves as a placeholder for future web
+//! integration using:
 //!
 //! - **wasm-bindgen**: Rust ↔ JavaScript interop
 //! - **web-sys**: Web APIs bindings (DOM, Canvas, WebGL, etc.)
@@ -11,7 +12,8 @@
 //!
 //! # Current Status
 //!
-//! ⚠️ **NOT IMPLEMENTED** - This is a stub that returns `unimplemented!()` for all operations.
+//! ⚠️ **NOT IMPLEMENTED** - This is a stub that returns `unimplemented!()` for
+//! all operations.
 //!
 //! # Implementation Roadmap
 //!
@@ -138,9 +140,11 @@
 //! - `console_error_panic_hook` - Better panic messages
 //! - `wee_alloc` - Small allocator for WASM
 
-use crate::traits::*;
-use anyhow::Result;
 use std::sync::Arc;
+
+use anyhow::Result;
+
+use crate::traits::*;
 
 /// Web/WASM platform implementation (stub)
 ///
@@ -170,7 +174,9 @@ impl WebPlatform {
     ///
     /// Always panics with "Web platform not yet implemented"
     pub fn new() -> Result<Self> {
-        unimplemented!("Web/WASM platform not yet implemented - use winit backend or wait for native web-sys implementation")
+        unimplemented!(
+            "Web/WASM platform not yet implemented - use winit backend or wait for native web-sys implementation"
+        )
     }
 
     /// Initialize from canvas element ID

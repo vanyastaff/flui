@@ -1,15 +1,16 @@
 //! PipelineOwner manages the rendering pipeline.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+};
 
 use flui_foundation::RenderId;
 use flui_layer::LayerTree;
 use flui_types::Offset;
 use parking_lot::RwLock;
 
-use crate::context::CanvasContext;
-use crate::storage::RenderTree;
+use crate::{context::CanvasContext, storage::RenderTree};
 
 // ============================================================================
 // Pipeline ID Counter
@@ -63,15 +64,17 @@ impl DirtyNode {
 /// Call these methods in order during each frame:
 ///
 /// 1. [`flush_layout`](Self::flush_layout) - Update layout
-/// 2. [`flush_compositing_bits`](Self::flush_compositing_bits) - Update layer needs
+/// 2. [`flush_compositing_bits`](Self::flush_compositing_bits) - Update layer
+///    needs
 /// 3. [`flush_paint`](Self::flush_paint) - Generate paint commands
 /// 4. [`flush_semantics`](Self::flush_semantics) - Update accessibility tree
 ///
 /// # Hierarchical Pipelines
 ///
-/// Pipeline owners can be organized in a tree using [`adopt_child`](Self::adopt_child)
-/// and [`drop_child`](Self::drop_child). During flush operations, parent pipelines
-/// flush their own nodes first, then recursively flush children.
+/// Pipeline owners can be organized in a tree using
+/// [`adopt_child`](Self::adopt_child) and [`drop_child`](Self::drop_child).
+/// During flush operations, parent pipelines flush their own nodes first, then
+/// recursively flush children.
 pub struct PipelineOwner {
     /// Unique identifier for this pipeline owner.
     id: u64,
@@ -97,7 +100,8 @@ pub struct PipelineOwner {
     /// Nodes needing layout (sorted shallow-first during flush).
     nodes_needing_layout: Vec<DirtyNode>,
 
-    /// Nodes needing compositing bits update (sorted shallow-first during flush).
+    /// Nodes needing compositing bits update (sorted shallow-first during
+    /// flush).
     nodes_needing_compositing_bits_update: Vec<DirtyNode>,
 
     /// Nodes needing paint (sorted deep-first during flush).
@@ -285,7 +289,8 @@ impl PipelineOwner {
     /// 2. Adds the node to the dirty layout list (since new nodes need layout)
     /// 3. Adds the node to the dirty paint list (since new nodes need paint)
     ///
-    /// Use this instead of `render_tree_mut().insert()` to ensure proper dirty tracking.
+    /// Use this instead of `render_tree_mut().insert()` to ensure proper dirty
+    /// tracking.
     ///
     /// # Returns
     ///
@@ -317,7 +322,8 @@ impl PipelineOwner {
     /// 3. Adds the node to the dirty paint list
     /// 4. Marks the parent as needing layout (since child structure changed)
     ///
-    /// Use this instead of `render_tree_mut().insert_child()` to ensure proper dirty tracking.
+    /// Use this instead of `render_tree_mut().insert_child()` to ensure proper
+    /// dirty tracking.
     ///
     /// # Arguments
     ///
@@ -516,14 +522,16 @@ impl PipelineOwner {
     /// Sets whether semantics are enabled.
     pub fn set_semantics_enabled(&self, enabled: bool) {
         let was_enabled = self.semantics_enabled.swap(enabled, Ordering::Relaxed);
-        if enabled && !was_enabled {
-            if let Some(callback) = &self.on_semantics_owner_created {
-                callback();
-            }
-        } else if !enabled && was_enabled {
-            if let Some(callback) = &self.on_semantics_owner_disposed {
-                callback();
-            }
+        if enabled
+            && !was_enabled
+            && let Some(callback) = &self.on_semantics_owner_created
+        {
+            callback();
+        } else if !enabled
+            && was_enabled
+            && let Some(callback) = &self.on_semantics_owner_disposed
+        {
+            callback();
         }
     }
 
@@ -542,9 +550,10 @@ impl PipelineOwner {
     ///
     /// # Synchronous Child Layout
     ///
-    /// With interior mutability (RwLock on RenderNode), parent's `perform_layout`
-    /// can call `layout_child()` which triggers synchronous child layout through
-    /// the RenderTree. The child is laid out immediately and returns its size.
+    /// With interior mutability (RwLock on RenderNode), parent's
+    /// `perform_layout` can call `layout_child()` which triggers
+    /// synchronous child layout through the RenderTree. The child is laid
+    /// out immediately and returns its size.
     ///
     /// After processing own nodes, recursively flushes child pipeline owners.
     pub fn flush_layout(&mut self) {
@@ -660,10 +669,11 @@ impl PipelineOwner {
 
     /// Propagates constraints from parent to child.
     ///
-    /// This is called before laying out a child to ensure it has proper constraints.
-    /// We pass loose constraints (same max, zero min) so children can size themselves
-    /// within the parent's bounds. This matches Flutter's typical behavior where
-    /// parents like Center/Align give children loose constraints.
+    /// This is called before laying out a child to ensure it has proper
+    /// constraints. We pass loose constraints (same max, zero min) so
+    /// children can size themselves within the parent's bounds. This
+    /// matches Flutter's typical behavior where parents like Center/Align
+    /// give children loose constraints.
     fn propagate_constraints_to_child(&self, _parent_id: RenderId, _child_id: RenderId) {}
 
     /// Syncs a child's size to its parent's ChildState.
@@ -761,24 +771,24 @@ impl PipelineOwner {
 
             // Paint render tree recursively starting from root.
             // Each parent paints itself, then paints children with accumulated offset.
-            if let Some(root_id) = self.root_id {
-                if let Some(root_node) = self.render_tree.get(root_id) {
-                    let paint_bounds = root_node.paint_bounds();
-                    tracing::debug!("flush_paint: painting root with bounds {:?}", paint_bounds);
+            if let Some(root_id) = self.root_id
+                && let Some(root_node) = self.render_tree.get(root_id)
+            {
+                let paint_bounds = root_node.paint_bounds();
+                tracing::debug!("flush_paint: painting root with bounds {:?}", paint_bounds);
 
-                    // Create CanvasContext
-                    let mut context = CanvasContext::new(paint_bounds);
+                // Create CanvasContext
+                let mut context = CanvasContext::new(paint_bounds);
 
-                    // Paint recursively from root with offset accumulation
-                    self.paint_node_recursive(&mut context, root_id, Offset::ZERO);
+                // Paint recursively from root with offset accumulation
+                self.paint_node_recursive(&mut context, root_id, Offset::ZERO);
 
-                    // Store the resulting layer tree
-                    self.last_layer_tree = Some(context.into_layer_tree());
-                    tracing::debug!(
-                        "flush_paint: layer tree has {} layers",
-                        self.last_layer_tree.as_ref().map(|t| t.len()).unwrap_or(0)
-                    );
-                }
+                // Store the resulting layer tree
+                self.last_layer_tree = Some(context.into_layer_tree());
+                tracing::debug!(
+                    "flush_paint: layer tree has {} layers",
+                    self.last_layer_tree.as_ref().map(|t| t.len()).unwrap_or(0)
+                );
             }
 
             self.debug_doing_paint = false;
@@ -818,7 +828,8 @@ impl PipelineOwner {
             if let Some(render_node) = self.render_tree.get(node_id) {
                 let render_object = render_node.box_render_object();
 
-                // Get children from tree structure (RenderNode stores parent-child relationships)
+                // Get children from tree structure (RenderNode stores parent-child
+                // relationships)
                 let tree_children = render_node.children();
 
                 let is_boundary = render_object.is_repaint_boundary();
@@ -936,11 +947,9 @@ impl PipelineOwner {
         }
 
         // Track that this was a repaint boundary for future reference
-        if is_repaint_boundary {
-            if let Some(render_node) = self.render_tree.get(node_id) {
-                let mut render_object = render_node.box_render_object_mut();
-                render_object.set_was_repaint_boundary(true);
-            }
+        if is_repaint_boundary && let Some(render_node) = self.render_tree.get(node_id) {
+            let mut render_object = render_node.box_render_object_mut();
+            render_object.set_was_repaint_boundary(true);
         }
     }
 
@@ -956,7 +965,8 @@ impl PipelineOwner {
     ///
     /// Nodes are sorted by depth (shallow first) for top-down traversal.
     /// The geometries of children depend on ancestors' transforms and clips,
-    /// so parents must be processed first. This matches Flutter's `flushSemantics`.
+    /// so parents must be processed first. This matches Flutter's
+    /// `flushSemantics`.
     ///
     /// After processing own nodes, recursively flushes child pipeline owners.
     pub fn flush_semantics(&mut self) {

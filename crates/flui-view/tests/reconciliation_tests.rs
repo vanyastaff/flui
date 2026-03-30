@@ -4,8 +4,8 @@
 //! efficiently using keys and position matching.
 
 use flui_view::{
-    reconcile_children, BuildContext, ElementBase, ElementTree, Lifecycle, StatelessBehavior,
-    StatelessElement, StatelessView, View,
+    BuildContext, ElementBase, ElementTree, Lifecycle, StatelessBehavior, StatelessElement,
+    StatelessView, View, reconcile_children,
 };
 
 // ============================================================================

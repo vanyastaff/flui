@@ -33,7 +33,8 @@
 //! flui-tree provides ONLY generic tree iterators. Domain-specific
 //! iterators live in their respective crates:
 //!
-//! - **`flui_rendering`**: `RenderChildren`, `RenderAncestors`, `RenderDescendants`
+//! - **`flui_rendering`**: `RenderChildren`, `RenderAncestors`,
+//!   `RenderDescendants`
 //! - **flui-element**: Element-specific iterators
 //!
 //! # Example

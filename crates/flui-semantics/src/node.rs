@@ -5,9 +5,10 @@
 //! semantics into the nearest boundary ancestor.
 
 use flui_foundation::{ElementId, SemanticsId};
-use flui_types::geometry::Pixels;
-use flui_types::geometry::Rect;
-use flui_types::Matrix4;
+use flui_types::{
+    geometry::{Pixels, Rect},
+    Matrix4,
+};
 
 // Use our optimized types from flui-semantics
 use crate::configuration::SemanticsConfiguration;
@@ -34,13 +35,15 @@ use crate::update::SemanticsNodeData;
 /// # Example
 ///
 /// ```rust
-/// use flui_semantics::{SemanticsNode, SemanticsConfiguration, SemanticsAction};
 /// use std::sync::Arc;
+///
+/// use flui_semantics::{SemanticsAction, SemanticsConfiguration, SemanticsNode};
 ///
 /// let mut node = SemanticsNode::new();
 /// node.config_mut().set_label("Submit");
 /// node.config_mut().set_button(true);
-/// node.config_mut().add_action(SemanticsAction::Tap, Arc::new(|_, _| {}));
+/// node.config_mut()
+///     .add_action(SemanticsAction::Tap, Arc::new(|_, _| {}));
 ///
 /// assert!(node.has_content());
 /// assert!(node.config().has_action(SemanticsAction::Tap));
@@ -309,11 +312,12 @@ impl SemanticsNode {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::action::SemanticsAction;
-    use crate::flags::SemanticsFlag;
-    use flui_types::geometry::px;
     use std::sync::Arc;
+
+    use flui_types::geometry::px;
+
+    use super::*;
+    use crate::{action::SemanticsAction, flags::SemanticsFlag};
 
     #[test]
     fn test_semantics_node_new() {

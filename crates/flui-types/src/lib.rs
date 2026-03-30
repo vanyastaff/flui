@@ -1,25 +1,34 @@
 //! Core types for Flui framework
 //!
 //! This crate provides fundamental types used throughout Flui:
-//! - **Geometry**: Point, Rect, Size, Offset, RRect, Matrix4, Edges (with typed units)
-//! - **Layout**: Axis, Alignment, MainAxisAlignment, CrossAxisAlignment, MainAxisSize
-//! - **Styling**: Color, HSLColor, HSVColor, Border, Shadow, Gradient, Decoration (all generic over Unit type)
+//! - **Geometry**: Point, Rect, Size, Offset, RRect, Matrix4, Edges (with typed
+//!   units)
+//! - **Layout**: Axis, Alignment, MainAxisAlignment, CrossAxisAlignment,
+//!   MainAxisSize
+//! - **Styling**: Color, HSLColor, HSVColor, Border, Shadow, Gradient,
+//!   Decoration (all generic over Unit type)
 //! - **Typography**: TextStyle, TextAlign, TextDecoration, TextSpan, and more
-//! - **Painting**: BlendMode, BoxFit, ImageRepeat, Clip, TileMode, Shader, and more
+//! - **Painting**: BlendMode, BoxFit, ImageRepeat, Clip, TileMode, Shader, and
+//!   more
 //! - **Gestures**: TapDetails, DragDetails, ScaleDetails, Velocity, PointerData
-//! - **Physics**: SpringSimulation, FrictionSimulation, GravitySimulation, Tolerance
-//! - **Semantics**: SemanticsData, SemanticsAction, SemanticsRole, SemanticsEvent
+//! - **Physics**: SpringSimulation, FrictionSimulation, GravitySimulation,
+//!   Tolerance
+//! - **Semantics**: SemanticsData, SemanticsAction, SemanticsRole,
+//!   SemanticsEvent
 //! - **Platform**: TargetPlatform, Brightness, DeviceOrientation, Locale
 //!
-//! Note: Animation types (Curves, Tweens, AnimationStatus) have been moved to `flui_animation`.
+//! Note: Animation types (Curves, Tweens, AnimationStatus) have been moved to
+//! `flui_animation`.
 //!
 //! # Design Philosophy
 //!
 //! All types in this crate follow strict design principles to ensure:
 //!
 //! ## Memory Safety
-//! - **Minimal unsafe code** - SIMD optimizations use unsafe in controlled manner (color, matrix)
-//! - **Primarily stack-allocated** - Core geometry/layout types avoid heap allocations
+//! - **Minimal unsafe code** - SIMD optimizations use unsafe in controlled
+//!   manner (color, matrix)
+//! - **Primarily stack-allocated** - Core geometry/layout types avoid heap
+//!   allocations
 //! - **Bounds checking** - Safe array access with validation
 //!
 //! ## Type Safety
@@ -28,42 +37,51 @@
 //! - **Const constructors** - Compile-time evaluation where possible
 //!
 //! ## Performance-Focused Allocation Strategy
-//! - **Zero-allocation core** - Geometry and layout types are `Copy` (no heap usage)
-//! - **Selective allocations** - Typography and caching use heap when beneficial for performance
-//! - **Const methods** - Identity matrices, zero values computed at compile-time
-//! - **In-place operations** - Methods like `transpose_in_place()` avoid temporaries
-//! - **Zero-copy conversions** - `From`/`Into` traits without allocation where possible
+//! - **Zero-allocation core** - Geometry and layout types are `Copy` (no heap
+//!   usage)
+//! - **Selective allocations** - Typography and caching use heap when
+//!   beneficial for performance
+//! - **Const methods** - Identity matrices, zero values computed at
+//!   compile-time
+//! - **In-place operations** - Methods like `transpose_in_place()` avoid
+//!   temporaries
+//! - **Zero-copy conversions** - `From`/`Into` traits without allocation where
+//!   possible
 //!
 //! ## Idiomatic Rust APIs
 //! - **Standard traits** - `Add`, `Sub`, `Mul`, `Div`, `Index`, `From`, `Into`
 //! - **Ergonomic methods** - Fluent APIs, method chaining where appropriate
-//! - **Consistent naming** - `try_*` for fallible operations, `is_*` for predicates
+//! - **Consistent naming** - `try_*` for fallible operations, `is_*` for
+//!   predicates
 //! - **Documentation** - Comprehensive docs with examples for all public APIs
 //!
 //! ## Performance
 //! - **`#[inline]`** - Hot-path methods are inlined
 //! - **Const evaluation** - Constants computed at compile-time
 //! - **SIMD-ready** - Data layouts compatible with future SIMD optimizations
-//! - **No over-engineering** - Simple, direct implementations without unnecessary abstraction
+//! - **No over-engineering** - Simple, direct implementations without
+//!   unnecessary abstraction
 //!
 //! ## Mathematical Correctness
 //! - **Extensive testing** - 575+ unit tests covering edge cases
 //! - **Precision handling** - Proper epsilon comparisons for floating-point
-//! - **Validation methods** - `is_finite()`, `is_valid()` prevent NaN/Infinity bugs
+//! - **Validation methods** - `is_finite()`, `is_valid()` prevent NaN/Infinity
+//!   bugs
 //!
 //! ## Cross-Layer Compatibility
 //! - **Stable ABI** - Simple `#[repr(Rust)]` structs, no complex layouts
 //! - **Feature flags** - Optional serde support, no forced dependencies
 //! - **No circular deps** - Base crate with zero flui dependencies
-//! - **Interoperability** - Compatible with egui, glam, mint (via feature flags)
+//! - **Interoperability** - Compatible with egui, glam, mint (via feature
+//!   flags)
 //!
 //! This is the base crate with NO dependencies on other flui crates.
 //!
 //! # Note on Constraints
 //!
-//! Layout constraints (`BoxConstraints`, `SliverConstraints`, `SliverGeometry`, etc.)
-//! have been moved to `flui_rendering::constraints` as they are part of the rendering
-//! protocol rather than basic types.
+//! Layout constraints (`BoxConstraints`, `SliverConstraints`, `SliverGeometry`,
+//! etc.) have been moved to `flui_rendering::constraints` as they are part of
+//! the rendering protocol rather than basic types.
 
 #![allow(missing_docs)] // TODO: Add comprehensive docs (486 items remaining - ongoing improvement)
 pub mod geometry;
@@ -88,26 +106,22 @@ pub use styling::{Color, Color32};
 /// Import with `use flui_types::prelude::*;` to get all commonly-used types.
 pub mod prelude {
     // Geometry - Essential types
-    pub use crate::geometry::{Matrix4, Offset, Point, RRect, Rect, Size, Vec2};
-
+    // Geometry - Edges and Pixels for layout
+    pub use crate::geometry::{Edges, Matrix4, Offset, Pixels, Point, RRect, Rect, Size, Vec2, px};
     // Layout - Common types
     pub use crate::layout::{
         Alignment, Axis, AxisDirection, CrossAxisAlignment, MainAxisAlignment, MainAxisSize,
         Orientation, VerticalDirection,
     };
-
-    // Geometry - Edges and Pixels for layout
-    pub use crate::geometry::{px, Edges, Pixels};
-
     // Styling - Essential
     pub use crate::styling::{Color, Color32, HSLColor, HSVColor};
-
     // Typography - Common
     pub use crate::typography::{
         FontStyle, FontWeight, TextAlign, TextBaseline, TextDirection, TextStyle,
     };
 
-    // Note: Animation types (Curve, Curves, Tween) moved to flui_animation::prelude
+    // Note: Animation types (Curve, Curves, Tween) moved to
+    // flui_animation::prelude
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

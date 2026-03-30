@@ -170,7 +170,8 @@ impl<S> State<S> {
 
     /// Transitions to a new state.
     ///
-    /// This consumes the current state, ensuring you can't use it after transition.
+    /// This consumes the current state, ensuring you can't use it after
+    /// transition.
     #[inline]
     pub fn transition<T>(self) -> State<T> {
         State {

@@ -1,7 +1,7 @@
 //! Hello World - Minimal FLUI application
 
-use flui_platform::{current_platform, WindowOptions};
-use flui_types::geometry::{px, Size};
+use flui_platform::{WindowOptions, current_platform};
+use flui_types::geometry::{Size, px};
 
 fn main() {
     println!("🚀 FLUI Hello World!");

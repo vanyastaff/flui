@@ -3,8 +3,6 @@
 //! This module adds GPU rendering capabilities to the core layer types
 //! from flui-layer.
 
-use super::commands::dispatch_commands;
-use super::commands::CommandRenderer;
 use flui_layer::{
     BackdropFilterLayer, CanvasLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer,
     ColorFilterLayer, FollowerLayer, ImageFilterLayer, Layer, LeaderLayer, OffsetLayer,
@@ -12,6 +10,8 @@ use flui_layer::{
     TextureLayer, TransformLayer,
 };
 use flui_painting::DisplayListCore;
+
+use super::commands::{CommandRenderer, dispatch_commands};
 
 // ============================================================================
 // LAYER RENDER TRAIT
@@ -203,6 +203,7 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for ClipPathLayer {
     }
 }
 
+#[allow(clippy::similar_names)] // rect/rrect are intentionally similar
 impl<R: CommandRenderer + ?Sized> LayerRender<R> for flui_layer::ClipSuperellipseLayer {
     fn render(&self, renderer: &mut R) {
         if !self.clips() {

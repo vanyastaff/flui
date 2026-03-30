@@ -1,6 +1,7 @@
 //! Integration tests for typed geometry system
 //!
-//! Tests the complete flow: unit types, conversions, operations, GPU integration
+//! Tests the complete flow: unit types, conversions, operations, GPU
+//! integration
 
 use flui_types::geometry::*;
 
@@ -129,8 +130,8 @@ fn test_vector_operations() {
     assert!((n.length() - 1.0).abs() < 0.001);
 
     // Dot and cross products - return f32 for Pixels
-    assert_eq!(v1.dot(&v2), 3.0);
-    assert_eq!(v1.cross(&v2), -4.0);
+    assert_eq!(v1.dot(v2), 3.0);
+    assert_eq!(v1.cross(v2), -4.0);
 
     // Angle
     let angle = v1.angle();

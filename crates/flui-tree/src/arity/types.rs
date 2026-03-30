@@ -12,9 +12,11 @@
 
 use std::marker::PhantomData;
 
-use super::accessors::{FixedChildren, NeverAccessor, NoChildren, OptionalChild, SliceChildren};
-use super::runtime::RuntimeArity;
-use super::traits::Arity;
+use super::{
+    accessors::{FixedChildren, NeverAccessor, NoChildren, OptionalChild, SliceChildren},
+    runtime::RuntimeArity,
+    traits::Arity,
+};
 
 // ============================================================================
 // LEAF (0 children)
@@ -27,7 +29,7 @@ use super::traits::Arity;
 /// # Example
 ///
 /// ```
-/// use flui_tree::arity::{Arity, Leaf, ChildrenAccess};
+/// use flui_tree::arity::{Arity, ChildrenAccess, Leaf};
 ///
 /// let children: &[u32] = &[];
 /// let accessor = Leaf::from_slice(children);
@@ -289,7 +291,7 @@ impl<const N: usize> Arity for AtLeast<N> {
 /// # Example
 ///
 /// ```
-/// use flui_tree::arity::{Arity, Variable, ChildrenAccess};
+/// use flui_tree::arity::{Arity, ChildrenAccess, Variable};
 ///
 /// let children: &[u32] = &[1, 2, 3];
 /// let accessor = Variable::from_slice(children);
@@ -341,7 +343,7 @@ impl Arity for Variable {
 /// # Example
 ///
 /// ```
-/// use flui_tree::arity::{Arity, Range, ChildrenAccess};
+/// use flui_tree::arity::{Arity, ChildrenAccess, Range};
 ///
 /// let children: &[u32] = &[1, 2, 3];
 /// let accessor = Range::<2, 5>::from_slice(children);

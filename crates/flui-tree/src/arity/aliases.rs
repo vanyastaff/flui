@@ -3,8 +3,10 @@
 //! This module provides convenient type aliases for the most commonly used
 //! arity storage configurations.
 
-use super::arity_storage::ArityStorage;
-use super::types::{Exact, Leaf, Optional, Variable};
+use super::{
+    arity_storage::ArityStorage,
+    types::{Exact, Leaf, Optional, Variable},
+};
 
 /// Type alias for single-child storage (`Exact<1>`).
 ///
@@ -14,7 +16,7 @@ use super::types::{Exact, Leaf, Optional, Variable};
 /// # Example
 ///
 /// ```
-/// use flui_tree::arity::{SingleChildStorage, ChildrenStorage};
+/// use flui_tree::arity::{ChildrenStorage, SingleChildStorage};
 ///
 /// let mut storage: SingleChildStorage<u32> = SingleChildStorage::new();
 /// storage.set_single_child(42).unwrap();
@@ -30,7 +32,7 @@ pub type SingleChildStorage<T> = ArityStorage<T, Exact<1>>;
 /// # Example
 ///
 /// ```
-/// use flui_tree::arity::{OptionalChildStorage, ChildrenStorage};
+/// use flui_tree::arity::{ChildrenStorage, OptionalChildStorage};
 ///
 /// let mut storage: OptionalChildStorage<u32> = OptionalChildStorage::new();
 /// assert!(storage.is_empty());
@@ -47,7 +49,7 @@ pub type OptionalChildStorage<T> = ArityStorage<T, Optional>;
 /// # Example
 ///
 /// ```
-/// use flui_tree::arity::{VariableChildrenStorage, ChildrenStorage};
+/// use flui_tree::arity::{ChildrenStorage, VariableChildrenStorage};
 ///
 /// let mut storage: VariableChildrenStorage<u32> = VariableChildrenStorage::new();
 /// storage.add_child(1).unwrap();
@@ -65,7 +67,7 @@ pub type VariableChildrenStorage<T> = ArityStorage<T, Variable>;
 /// # Example
 ///
 /// ```
-/// use flui_tree::arity::{LeafStorage, ChildrenStorage};
+/// use flui_tree::arity::{ChildrenStorage, LeafStorage};
 ///
 /// let storage: LeafStorage<u32> = LeafStorage::new();
 /// assert!(storage.is_empty());

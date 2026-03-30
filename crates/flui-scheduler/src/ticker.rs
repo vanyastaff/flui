@@ -1,21 +1,23 @@
 //! Animation ticker - frame-perfect animation timing
 //!
-//! Tickers provide a way to receive callbacks on every frame for driving animations.
-//! They coordinate with the scheduler to ensure animations stay synchronized with
-//! the display refresh rate.
+//! Tickers provide a way to receive callbacks on every frame for driving
+//! animations. They coordinate with the scheduler to ensure animations stay
+//! synchronized with the display refresh rate.
 //!
 //! ## Ticker Types
 //!
 //! This module provides multiple ticker implementations:
 //!
 //! - **`Ticker`**: Manual ticking, you call `tick()` each frame
-//! - **`ScheduledTicker`**: Auto-schedules with scheduler, Flutter-like behavior
-//! - **`TypestateTicker`**: Compile-time state checking (see `typestate` module)
+//! - **`ScheduledTicker`**: Auto-schedules with scheduler, Flutter-like
+//!   behavior
+//! - **`TypestateTicker`**: Compile-time state checking (see `typestate`
+//!   module)
 //!
 //! ## Manual Ticker Example
 //!
 //! ```rust
-//! use flui_scheduler::{Ticker, TickerProvider, Scheduler};
+//! use flui_scheduler::{Scheduler, Ticker, TickerProvider};
 //!
 //! let scheduler = Scheduler::new();
 //! let mut ticker = Ticker::new();
@@ -31,8 +33,9 @@
 //! ## Scheduled Ticker Example (Flutter-like)
 //!
 //! ```rust
-//! use flui_scheduler::{Scheduler, ScheduledTicker};
 //! use std::sync::Arc;
+//!
+//! use flui_scheduler::{ScheduledTicker, Scheduler};
 //!
 //! let scheduler = Arc::new(Scheduler::new());
 //! let mut ticker = ScheduledTicker::new(scheduler.clone());
@@ -46,14 +49,17 @@
 //! // No need to manually call tick()
 //! ```
 
-use crate::duration::Seconds;
-use crate::id::{TickerIdMarker, TypedId};
-use parking_lot::Mutex;
 use std::sync::Arc;
-use web_time::Instant;
 
+use parking_lot::Mutex;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
+use web_time::Instant;
+
+use crate::{
+    duration::Seconds,
+    id::{TickerIdMarker, TypedId},
+};
 
 /// Unique ticker identifier
 pub type TickerId = TypedId<TickerIdMarker>;
@@ -137,7 +143,8 @@ struct TickerInner {
 /// A Ticker provides callbacks on every frame, allowing you to drive animations
 /// in sync with the display refresh rate.
 ///
-/// For compile-time state safety, see `TypestateTicker` in the `typestate` module.
+/// For compile-time state safety, see `TypestateTicker` in the `typestate`
+/// module.
 ///
 /// # Examples
 ///
@@ -545,20 +552,21 @@ struct ScheduledTickerInner {
 /// A Flutter-like ticker that automatically schedules with the scheduler
 ///
 /// Unlike `Ticker` which requires manual `tick()` calls, `ScheduledTicker`
-/// automatically registers transient callbacks with the scheduler on each frame.
-/// This is the recommended approach for animations.
+/// automatically registers transient callbacks with the scheduler on each
+/// frame. This is the recommended approach for animations.
 ///
 /// # Flutter Comparison
 ///
-/// In Flutter, a `Ticker` is provided by a `TickerProvider` (usually a `State` mixin)
-/// and automatically receives vsync callbacks. `ScheduledTicker` provides the same
-/// behavior in Rust.
+/// In Flutter, a `Ticker` is provided by a `TickerProvider` (usually a `State`
+/// mixin) and automatically receives vsync callbacks. `ScheduledTicker`
+/// provides the same behavior in Rust.
 ///
 /// # Examples
 ///
 /// ```rust
-/// use flui_scheduler::{Scheduler, ScheduledTicker};
 /// use std::sync::Arc;
+///
+/// use flui_scheduler::{ScheduledTicker, Scheduler};
 ///
 /// let scheduler = Arc::new(Scheduler::new());
 /// let mut ticker = ScheduledTicker::new(scheduler.clone());
@@ -578,19 +586,21 @@ struct ScheduledTickerInner {
 ///
 /// `ScheduledTicker` intentionally does not implement `Clone` because:
 ///
-/// 1. **Unique Identity**: Each ticker has a unique `TickerId`. Cloning would create
-///    ambiguity about which ticker is "the real one".
+/// 1. **Unique Identity**: Each ticker has a unique `TickerId`. Cloning would
+///    create ambiguity about which ticker is "the real one".
 ///
-/// 2. **Shared Mutable Callback**: The callback is `FnMut`, which mutates state on
-///    each invocation. Sharing it between clones would cause race conditions.
+/// 2. **Shared Mutable Callback**: The callback is `FnMut`, which mutates state
+///    on each invocation. Sharing it between clones would cause race
+///    conditions.
 ///
-/// 3. **Scheduling Conflicts**: Multiple tickers sharing the same `scheduled` flag
-///    would interfere with each other's frame scheduling.
+/// 3. **Scheduling Conflicts**: Multiple tickers sharing the same `scheduled`
+///    flag would interfere with each other's frame scheduling.
 ///
-/// 4. **Flutter Semantics**: In Flutter, `Ticker` objects are not cloneable either.
-///    Each animation controller owns exactly one ticker.
+/// 4. **Flutter Semantics**: In Flutter, `Ticker` objects are not cloneable
+///    either. Each animation controller owns exactly one ticker.
 ///
-/// If you need multiple tickers, create them individually with `ScheduledTicker::new()`.
+/// If you need multiple tickers, create them individually with
+/// `ScheduledTicker::new()`.
 pub struct ScheduledTicker {
     /// Unique identifier
     id: TickerId,
@@ -750,8 +760,9 @@ impl ScheduledTicker {
     /// Tick callback and reschedule for next frame if still active.
     ///
     /// This is the single code path for all scheduled ticker frame callbacks.
-    /// Uses take-invoke-restore to avoid holding the lock during callback invocation
-    /// and avoids the extra Arc<Mutex> wrapper that was previously on the callback.
+    /// Uses take-invoke-restore to avoid holding the lock during callback
+    /// invocation and avoids the extra Arc<Mutex> wrapper that was
+    /// previously on the callback.
     fn tick_and_reschedule(
         inner: Arc<Mutex<ScheduledTickerInner>>,
         scheduler: Arc<crate::scheduler::Scheduler>,
@@ -820,10 +831,13 @@ impl std::fmt::Debug for ScheduledTicker {
 // TickerFuture and TickerCanceled - Flutter-compatible async ticker support
 // ============================================================================
 
+use std::{
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll},
+};
+
 use event_listener::{Event, Listener};
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
 
 /// Completion state of a ticker future
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -846,8 +860,8 @@ struct TickerFutureInner {
 
 /// A future representing an ongoing ticker sequence.
 ///
-/// `TickerFuture` is returned by ticker start methods and completes when the ticker
-/// is stopped. It provides two ways to await completion:
+/// `TickerFuture` is returned by ticker start methods and completes when the
+/// ticker is stopped. It provides two ways to await completion:
 ///
 /// - Awaiting the future directly completes when the ticker stops normally
 /// - Using [`or_cancel`](Self::or_cancel) returns a future that also completes
@@ -856,7 +870,7 @@ struct TickerFutureInner {
 /// # Example
 ///
 /// ```rust
-/// use flui_scheduler::ticker::{TickerFuture, TickerCanceled};
+/// use flui_scheduler::ticker::{TickerCanceled, TickerFuture};
 ///
 /// // Create a pre-completed future
 /// let future = TickerFuture::complete();
@@ -902,7 +916,8 @@ impl TickerFuture {
 
     /// Mark the future as complete (ticker stopped normally)
     ///
-    /// Reserved for future use when ScheduledTicker integrates with TickerFuture.
+    /// Reserved for future use when ScheduledTicker integrates with
+    /// TickerFuture.
     #[allow(dead_code)]
     pub(crate) fn set_complete(&self) {
         let mut state = self.inner.state.lock();
@@ -916,7 +931,8 @@ impl TickerFuture {
 
     /// Mark the future as canceled
     ///
-    /// Reserved for future use when ScheduledTicker integrates with TickerFuture.
+    /// Reserved for future use when ScheduledTicker integrates with
+    /// TickerFuture.
     #[allow(dead_code)]
     pub(crate) fn set_canceled(&self) {
         let mut state = self.inner.state.lock();
@@ -948,12 +964,13 @@ impl TickerFuture {
     ///
     /// If this property is never accessed, then canceling the ticker does not
     /// throw any exceptions. Once this property is accessed, if the ticker is
-    /// canceled, the returned future will complete with a [`TickerCanceled`] error.
+    /// canceled, the returned future will complete with a [`TickerCanceled`]
+    /// error.
     ///
     /// # Example
     ///
     /// ```rust
-    /// use flui_scheduler::ticker::{TickerFuture, TickerCanceled};
+    /// use flui_scheduler::ticker::{TickerCanceled, TickerFuture};
     ///
     /// async fn example() {
     ///     let future = TickerFuture::new();
@@ -978,13 +995,14 @@ impl TickerFuture {
     /// This is useful for cleanup operations that should run regardless of
     /// how the ticker ends.
     ///
-    /// If the future is already resolved when this method is called, the callback
-    /// is invoked immediately on the current thread. Otherwise, a lightweight
-    /// listener is registered that invokes the callback when the state changes.
+    /// If the future is already resolved when this method is called, the
+    /// callback is invoked immediately on the current thread. Otherwise, a
+    /// lightweight listener is registered that invokes the callback when
+    /// the state changes.
     ///
     /// **Note**: If the future is still pending, this method blocks the current
-    /// thread until the ticker completes or is canceled. For non-blocking usage,
-    /// use [`or_cancel`](Self::or_cancel) with async/await instead.
+    /// thread until the ticker completes or is canceled. For non-blocking
+    /// usage, use [`or_cancel`](Self::or_cancel) with async/await instead.
     pub fn when_complete_or_cancel<F>(&self, callback: F)
     where
         F: FnOnce() + Send + 'static,
@@ -1141,8 +1159,9 @@ impl std::error::Error for TickerCanceled {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    use super::*;
 
     struct MockProvider;
 

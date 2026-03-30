@@ -1,18 +1,19 @@
 //! Scene compositor for building layer hierarchies
 //!
-//! This module provides a stack-based compositor API similar to Flutter's SceneBuilder.
-//! It allows building complex layer trees using push/pop operations.
+//! This module provides a stack-based compositor API similar to Flutter's
+//! SceneBuilder. It allows building complex layer trees using push/pop
+//! operations.
 //!
 //! # Architecture
 //!
-//! The compositor maintains a stack of layer IDs. Each `push_*` operation creates
-//! a new layer and pushes it onto the stack. Content is added to the current
-//! top-of-stack layer. `pop()` removes the top layer from the stack.
+//! The compositor maintains a stack of layer IDs. Each `push_*` operation
+//! creates a new layer and pushes it onto the stack. Content is added to the
+//! current top-of-stack layer. `pop()` removes the top layer from the stack.
 //!
 //! # Example
 //!
 //! ```rust
-//! use flui_layer::{LayerTree, SceneBuilder, OpacityLayer, CanvasLayer, OffsetLayer};
+//! use flui_layer::{CanvasLayer, LayerTree, OffsetLayer, OpacityLayer, SceneBuilder};
 //! use flui_types::Offset;
 //!
 //! let mut tree = LayerTree::new();
@@ -37,18 +38,23 @@
 //! ```
 
 use flui_foundation::LayerId;
-use flui_types::geometry::{Pixels, RRect, Rect};
-use flui_types::painting::{
-    effects::ColorMatrix, BlendMode, Clip, FilterQuality, ImageFilter, Path, ShaderSpec, TextureId,
+use flui_types::{
+    geometry::{Pixels, RRect, Rect},
+    painting::{
+        effects::ColorMatrix, BlendMode, Clip, FilterQuality, ImageFilter, Path, ShaderSpec,
+        TextureId,
+    },
+    Matrix4,
 };
-use flui_types::Matrix4;
 
-use crate::layer::{
-    BackdropFilterLayer, CanvasLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer,
-    ColorFilterLayer, ImageFilterLayer, Layer, OffsetLayer, OpacityLayer, ShaderMaskLayer,
-    TextureLayer, TransformLayer,
+use crate::{
+    layer::{
+        BackdropFilterLayer, CanvasLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer,
+        ColorFilterLayer, ImageFilterLayer, Layer, OffsetLayer, OpacityLayer, ShaderMaskLayer,
+        TextureLayer, TransformLayer,
+    },
+    tree::LayerTree,
 };
-use crate::tree::LayerTree;
 
 // ============================================================================
 // SCENE BUILDER
@@ -63,13 +69,14 @@ use crate::tree::LayerTree;
 /// # Design
 ///
 /// - **Stack-based**: Maintains a stack of LayerIds for nested operations
-/// - **Automatic parenting**: Children are automatically added to current parent
+/// - **Automatic parenting**: Children are automatically added to current
+///   parent
 /// - **Type-safe**: Each push method creates the appropriate layer type
 ///
 /// # Example
 ///
 /// ```rust
-/// use flui_layer::{LayerTree, SceneBuilder, CanvasLayer};
+/// use flui_layer::{CanvasLayer, LayerTree, SceneBuilder};
 /// use flui_types::Offset;
 ///
 /// let mut tree = LayerTree::new();
@@ -369,7 +376,7 @@ impl<'a> SceneBuilder<'a> {
     /// # Example
     ///
     /// ```rust
-    /// use flui_layer::{LayerTree, SceneBuilder, CanvasLayer};
+    /// use flui_layer::{CanvasLayer, LayerTree, SceneBuilder};
     ///
     /// let mut tree = LayerTree::new();
     /// let mut builder = SceneBuilder::new(&mut tree);
@@ -385,8 +392,9 @@ impl<'a> SceneBuilder<'a> {
 
     /// Adds a picture layer with recorded drawing commands.
     ///
-    /// This is the primary method for adding cached/recorded content to the scene.
-    /// The picture is an immutable DisplayList that was previously recorded via Canvas.
+    /// This is the primary method for adding cached/recorded content to the
+    /// scene. The picture is an immutable DisplayList that was previously
+    /// recorded via Canvas.
     ///
     /// # Architecture
     ///
@@ -403,15 +411,13 @@ impl<'a> SceneBuilder<'a> {
     /// ```rust
     /// use flui_layer::{LayerTree, SceneBuilder};
     /// use flui_painting::Canvas;
-    /// use flui_types::{Rect, Color};
-    /// use flui_types::painting::Paint;
-    /// use flui_types::geometry::px;
+    /// use flui_types::{geometry::px, painting::Paint, Color, Rect};
     ///
     /// // Record drawing commands
     /// let mut canvas = Canvas::new();
     /// canvas.draw_rect(
     ///     Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0)),
-    ///     &Paint::fill(Color::RED)
+    ///     &Paint::fill(Color::RED),
     /// );
     /// let picture = canvas.finish();
     ///
@@ -567,7 +573,7 @@ impl<'a> SceneBuilder<'a> {
     /// # Example
     ///
     /// ```rust
-    /// use flui_layer::{LayerTree, SceneBuilder, CanvasLayer};
+    /// use flui_layer::{CanvasLayer, LayerTree, SceneBuilder};
     ///
     /// let mut tree = LayerTree::new();
     /// let mut builder = SceneBuilder::new(&mut tree);
@@ -681,9 +687,9 @@ impl SceneCompositor {
 
 #[cfg(test)]
 mod tests {
+    use flui_types::{geometry::px, Offset};
+
     use super::*;
-    use flui_types::geometry::px;
-    use flui_types::Offset;
 
     #[test]
     fn test_scene_builder_new() {
@@ -757,8 +763,7 @@ mod tests {
     #[test]
     fn test_scene_builder_add_picture() {
         use flui_painting::Canvas;
-        use flui_types::painting::Paint;
-        use flui_types::{Color, Rect};
+        use flui_types::{painting::Paint, Color, Rect};
 
         let mut tree = LayerTree::new();
         let mut builder = SceneBuilder::new(&mut tree);

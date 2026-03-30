@@ -1,12 +1,14 @@
 //! Text system tests for flui-platform
 //!
 //! Tests platform text system integration using the new PlatformTextSystem API:
-//! - all_font_names(), font_id(), font_metrics(), glyph_for_char(), layout_line()
+//! - all_font_names(), font_id(), font_metrics(), glyph_for_char(),
+//!   layout_line()
 
-use flui_platform::current_platform;
-use flui_platform::traits::{Font, FontRun, FontStyle, FontWeight};
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
+use flui_platform::{
+    current_platform,
+    traits::{Font, FontRun, FontStyle, FontWeight},
+};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Initialize tracing for tests
 fn init_tracing() {

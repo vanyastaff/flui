@@ -25,13 +25,15 @@
 //! }
 //! ```
 
-use crate::events::{PointerEvent, PointerEventData, PointerType};
-use flui_types::geometry::Pixels;
-
-use crate::ids::PointerId;
-use flui_types::Offset;
 use std::time::{Duration, Instant};
+
+use flui_types::{Offset, geometry::Pixels};
 use ui_events::pointer::{PointerButton, PointerButtons};
+
+use crate::{
+    events::{PointerEvent, PointerEventData, PointerType},
+    ids::PointerId,
+};
 
 /// A recorded pointer event with timing information
 #[derive(Debug, Clone)]

@@ -11,7 +11,8 @@
 //!
 //! # Current Status
 //!
-//! ⚠️ **NOT IMPLEMENTED** - This is a stub that returns `unimplemented!()` for all operations.
+//! ⚠️ **NOT IMPLEMENTED** - This is a stub that returns `unimplemented!()` for
+//! all operations.
 //!
 //! # Implementation Roadmap
 //!
@@ -118,9 +119,11 @@
 //! - `core-graphics = "0.22"` - Core Graphics bindings
 //! - `icrate` - Modern Objective-C 2.0 bindings
 
-use crate::traits::*;
-use anyhow::Result;
 use std::sync::Arc;
+
+use anyhow::Result;
+
+use crate::traits::*;
 
 /// iOS platform implementation (stub)
 ///
@@ -153,7 +156,9 @@ impl IOSPlatform {
     ///
     /// Always panics with "iOS platform not yet implemented"
     pub fn new() -> Result<Self> {
-        unimplemented!("iOS platform not yet implemented - use winit backend or wait for native UIKit implementation")
+        unimplemented!(
+            "iOS platform not yet implemented - use winit backend or wait for native UIKit implementation"
+        )
     }
 
     /// Initialize from UIApplication

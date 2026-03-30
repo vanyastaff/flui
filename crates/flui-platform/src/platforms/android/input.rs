@@ -14,16 +14,17 @@
 //! MotionAction::HoverExit           → PointerEvent::Leave
 //! ```
 
-use crate::traits::{
-    PlatformInput, PointerButton, PointerButtons, PointerEvent, PointerType,
-};
 use android_activity::input::{KeyAction, MotionAction, ToolType};
 use dpi::PhysicalPosition;
 use keyboard_types::{Key, KeyState, Modifiers, NamedKey};
-use ui_events::keyboard::KeyboardEvent;
-use ui_events::pointer::{
-    ContactGeometry, PointerButtonEvent, PointerId, PointerInfo, PointerState, PointerUpdate,
+use ui_events::{
+    keyboard::KeyboardEvent,
+    pointer::{
+        ContactGeometry, PointerButtonEvent, PointerId, PointerInfo, PointerState, PointerUpdate,
+    },
 };
+
+use crate::traits::{PlatformInput, PointerButton, PointerButtons, PointerEvent, PointerType};
 
 /// Convert an Android `MotionEvent` to one or more `PlatformInput` events.
 ///
@@ -136,9 +137,7 @@ pub fn convert_motion_event(
 }
 
 /// Convert an Android `KeyEvent` to a `PlatformInput`.
-pub fn convert_key_event(
-    event: &android_activity::input::KeyEvent<'_>,
-) -> Option<PlatformInput> {
+pub fn convert_key_event(event: &android_activity::input::KeyEvent<'_>) -> Option<PlatformInput> {
     let action = event.action();
     let state = match action {
         KeyAction::Down => KeyState::Down,
@@ -283,7 +282,8 @@ fn convert_meta_state(meta: android_activity::input::MetaState) -> Modifiers {
     mods
 }
 
-/// Map Android keycode to a character, for keys that produce printable characters.
+/// Map Android keycode to a character, for keys that produce printable
+/// characters.
 fn keycode_to_character(keycode: i32) -> Option<char> {
     use ui_events::keyboard::android::*;
 

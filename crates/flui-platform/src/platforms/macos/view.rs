@@ -23,16 +23,21 @@
 //! PlatformHandlers.on_input
 //! ```
 
-use super::events::convert_ns_event;
-use crate::shared::PlatformHandlers;
-use crate::traits::input::PlatformInput;
-use cocoa::appkit::{NSEvent, NSView};
-use cocoa::base::{id, nil, BOOL, YES, NO};
-use cocoa::foundation::NSRect;
-use objc::declare::ClassDecl;
-use objc::runtime::{Class, Object, Sel};
-use parking_lot::Mutex;
 use std::sync::{Arc, Weak};
+
+use cocoa::{
+    appkit::{NSEvent, NSView},
+    base::{BOOL, NO, YES, id, nil},
+    foundation::NSRect,
+};
+use objc::{
+    declare::ClassDecl,
+    runtime::{Class, Object, Sel},
+};
+use parking_lot::Mutex;
+
+use super::events::convert_ns_event;
+use crate::{shared::PlatformHandlers, traits::input::PlatformInput};
 
 // ============================================================================
 // FLUIContentView Creation
@@ -262,9 +267,8 @@ fn get_or_create_view_class() -> &'static Class {
 
             // Call super dealloc
             let superclass = class!(NSView);
-            let dealloc: extern "C" fn(&Object, Sel) = std::mem::transmute(
-                msg_send![super(this, superclass), dealloc]
-            );
+            let dealloc: extern "C" fn(&Object, Sel) =
+                std::mem::transmute(msg_send![super(this, superclass), dealloc]);
         }
 
         // =================================================================
@@ -299,14 +303,8 @@ fn get_or_create_view_class() -> &'static Class {
             );
 
             // Keyboard events
-            decl.add_method(
-                sel!(keyDown:),
-                key_down as extern "C" fn(&Object, Sel, id),
-            );
-            decl.add_method(
-                sel!(keyUp:),
-                key_up as extern "C" fn(&Object, Sel, id),
-            );
+            decl.add_method(sel!(keyDown:), key_down as extern "C" fn(&Object, Sel, id));
+            decl.add_method(sel!(keyUp:), key_up as extern "C" fn(&Object, Sel, id));
             decl.add_method(
                 sel!(flagsChanged:),
                 flags_changed as extern "C" fn(&Object, Sel, id),
@@ -317,10 +315,7 @@ fn get_or_create_view_class() -> &'static Class {
                 sel!(mouseDown:),
                 mouse_down as extern "C" fn(&Object, Sel, id),
             );
-            decl.add_method(
-                sel!(mouseUp:),
-                mouse_up as extern "C" fn(&Object, Sel, id),
-            );
+            decl.add_method(sel!(mouseUp:), mouse_up as extern "C" fn(&Object, Sel, id));
             decl.add_method(
                 sel!(mouseMoved:),
                 mouse_moved as extern "C" fn(&Object, Sel, id),
@@ -375,10 +370,7 @@ fn get_or_create_view_class() -> &'static Class {
             );
 
             // Lifecycle
-            decl.add_method(
-                sel!(dealloc),
-                dealloc as extern "C" fn(&Object, Sel),
-            );
+            decl.add_method(sel!(dealloc), dealloc as extern "C" fn(&Object, Sel));
 
             // Properties
             decl.add_method(
@@ -441,8 +433,7 @@ pub fn update_view_scale_factor(view: id, new_scale_factor: f64) {
 /// Enable mouse tracking for mouse moved events
 pub fn enable_mouse_tracking(view: id) {
     unsafe {
-        use cocoa::appkit::NSTrackingArea;
-        use cocoa::foundation::NSRect;
+        use cocoa::{appkit::NSTrackingArea, foundation::NSRect};
 
         // Get view bounds
         let bounds: NSRect = msg_send![view, bounds];

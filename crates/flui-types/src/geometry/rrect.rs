@@ -2,9 +2,10 @@
 //!
 //! API design inspired by Flutter and kurbo.
 
-use super::traits::{NumericUnit, Unit};
-use super::{px, Pixels};
-use super::{Point, Rect, Size};
+use super::{
+    Pixels, Point, Rect, Size, px,
+    traits::{NumericUnit, Unit},
+};
 
 /// A radius value with separate horizontal and vertical components.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -62,7 +63,8 @@ impl<T: Unit> Radius<T> {
         Self::new(r, r)
     }
 
-    /// Creates an elliptical radius with separate horizontal and vertical values.
+    /// Creates an elliptical radius with separate horizontal and vertical
+    /// values.
     #[inline]
     #[must_use]
     pub const fn elliptical(x: T, y: T) -> Self {

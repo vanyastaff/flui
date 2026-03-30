@@ -1,15 +1,18 @@
 //! Base traits and types for gesture recognizers
 //!
-//! Defines the core `GestureRecognizer` trait and common types used by all recognizers.
+//! Defines the core `GestureRecognizer` trait and common types used by all
+//! recognizers.
 
-use crate::arena::{GestureArena, GestureArenaMember};
-use flui_types::geometry::Pixels;
-
-use crate::events::PointerEvent;
-use crate::ids::PointerId;
-use flui_types::Offset;
-use parking_lot::Mutex;
 use std::sync::Arc;
+
+use flui_types::{Offset, geometry::Pixels};
+use parking_lot::Mutex;
+
+use crate::{
+    arena::{GestureArena, GestureArenaMember},
+    events::PointerEvent,
+    ids::PointerId,
+};
 
 /// Base trait for all gesture recognizers
 ///

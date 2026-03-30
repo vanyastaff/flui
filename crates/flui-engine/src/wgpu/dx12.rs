@@ -1,7 +1,7 @@
 //! DirectX 12 backend-specific features for Windows
 //!
-//! This module provides access to DirectX 12 features that are not exposed through wgpu's
-//! cross-platform API, including:
+//! This module provides access to DirectX 12 features that are not exposed
+//! through wgpu's cross-platform API, including:
 //! - Work Graphs (DX12 Ultimate)
 //! - Shader Execution Reordering (SER)
 //! - Auto HDR configuration
@@ -31,9 +31,9 @@
 //!     .with_target_luminance(1000.0);  // 1000 nits
 //! ```
 
+use anyhow::Result;
 #[cfg(not(target_os = "windows"))]
 use anyhow::anyhow;
-use anyhow::Result;
 
 // ============================================================================
 // DirectX 12 Feature Detection
@@ -174,7 +174,8 @@ pub enum ShaderModel {
 /// Work Graphs configuration for GPU-driven rendering.
 ///
 /// Work Graphs (Shader Model 6.7+) enable GPU-driven rendering pipelines where
-/// the GPU can schedule its own work without CPU intervention. This is useful for:
+/// the GPU can schedule its own work without CPU intervention. This is useful
+/// for:
 /// - GPU culling and LOD selection
 /// - Particle systems
 /// - Procedural generation
@@ -400,7 +401,8 @@ impl Default for HdrMetadata {
 /// Variable Rate Shading configuration.
 ///
 /// VRS allows rendering different parts of the screen at different rates,
-/// improving performance by reducing shading in less important areas (e.g., periphery).
+/// improving performance by reducing shading in less important areas (e.g.,
+/// periphery).
 #[derive(Debug, Clone)]
 pub struct VrsConfig {
     /// Enable Variable Rate Shading.
@@ -464,8 +466,8 @@ pub enum ShadingRate {
 
 /// DirectStorage configuration for fast SSD asset loading.
 ///
-/// DirectStorage enables GPU-direct I/O from NVMe SSDs, bypassing CPU decompression
-/// and memory copies. This can provide 2-3x faster asset loading.
+/// DirectStorage enables GPU-direct I/O from NVMe SSDs, bypassing CPU
+/// decompression and memory copies. This can provide 2-3x faster asset loading.
 ///
 /// Requires Windows 10 2004+ and NVMe SSD.
 #[derive(Debug, Clone)]

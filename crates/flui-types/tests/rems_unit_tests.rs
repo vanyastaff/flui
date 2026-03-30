@@ -1,9 +1,9 @@
 //! Unit tests for Rems (root em units) implementation
 //!
-//! Tests the Rems type for font-relative sizing, fulfilling User Story 4 requirements.
+//! Tests the Rems type for font-relative sizing, fulfilling User Story 4
+//! requirements.
 
-use flui_types::geometry::traits::Unit;
-use flui_types::geometry::{px, rems, Pixels, Rems};
+use flui_types::geometry::{IsZero, Pixels, Rems, px, rems, traits::Unit};
 
 // ============================================================================
 // T055: Rems::new() and arithmetic tests

@@ -7,8 +7,8 @@ use super::color::Color;
 
 /// Material Design color palette.
 ///
-/// This struct provides access to all Material Design colors organized by hue and shade.
-/// Each color has variants from 50 (lightest) to 900 (darkest).
+/// This struct provides access to all Material Design colors organized by hue
+/// and shade. Each color has variants from 50 (lightest) to 900 (darkest).
 ///
 /// # Examples
 ///

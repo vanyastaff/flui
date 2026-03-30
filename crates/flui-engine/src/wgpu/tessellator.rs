@@ -3,19 +3,22 @@
 //! Converts vector paths (curves, lines, arcs) into triangle meshes
 //! suitable for GPU rendering.
 
-use super::vertex::Vertex;
 use flui_painting::{Paint, StrokeCap, StrokeJoin};
 use flui_types::{
+    Point, Rect,
     geometry::{Pixels, RRect},
     styling::Color,
-    Point, Rect,
 };
-use lyon::path::Path;
-use lyon::tessellation::{
-    BuffersBuilder, FillOptions, FillTessellator, FillVertex, StrokeOptions, StrokeTessellator,
-    StrokeVertex, VertexBuffers,
+use lyon::{
+    path::Path,
+    tessellation::{
+        BuffersBuilder, FillOptions, FillTessellator, FillVertex, StrokeOptions, StrokeTessellator,
+        StrokeVertex, VertexBuffers,
+    },
 };
 use thiserror::Error;
+
+use super::vertex::Vertex;
 
 /// Errors that can occur during tessellation
 #[derive(Debug, Error)]
@@ -133,11 +136,12 @@ impl Tessellator {
         path: &Path,
         paint: &Paint,
     ) -> Result<(Vec<Vertex>, Vec<u32>)> {
+        use lyon::tessellation::{LineCap, LineJoin};
+
         self.geometry.vertices.clear();
         self.geometry.indices.clear();
 
         // Extract stroke info from Paint
-        use lyon::tessellation::{LineCap, LineJoin};
         let options = StrokeOptions::default()
             .with_line_width(paint.stroke_width)
             .with_line_cap(match paint.stroke_cap {
@@ -313,6 +317,7 @@ impl Tessellator {
         let radii = lyon::geom::vector((rect.width() / 2.0).0, (rect.height() / 2.0).0);
 
         // Calculate number of segments based on sweep angle for smooth curves
+        #[allow(clippy::cast_possible_truncation)]
         let num_segments =
             ((sweep_angle.abs() / (std::f32::consts::PI / 12.0)).ceil() as i32).max(8);
         let angle_step = sweep_angle / num_segments as f32;
@@ -359,8 +364,9 @@ impl Tessellator {
 
     /// Tessellate a double rounded rectangle (ring/border with inner cutout)
     ///
-    /// Creates a path with two contours: outer (positive winding) and inner (negative winding).
-    /// The result is a ring or border where the inner RRect is cut out from the outer RRect.
+    /// Creates a path with two contours: outer (positive winding) and inner
+    /// (negative winding). The result is a ring or border where the inner
+    /// RRect is cut out from the outer RRect.
     ///
     /// # Arguments
     /// * `outer` - Outer rounded rectangle
@@ -369,6 +375,7 @@ impl Tessellator {
     ///
     /// # Returns
     /// Tuple of (vertices, indices) ready for GPU upload
+    #[allow(clippy::similar_names)] // tl_x/tl_y, tr_x/tr_y, etc. are intentional corner names
     pub fn tessellate_drrect(
         &mut self,
         outer: &RRect,
@@ -653,11 +660,11 @@ impl IntoLyonPath for flui_types::painting::path::Path {
 
                 PathCommand::LineTo(point) => {
                     // Auto-begin if no move_to was called
-                    if !has_begun {
+                    if has_begun {
+                        builder.line_to(lyon::geom::point(point.x.0, point.y.0));
+                    } else {
                         builder.begin(lyon::geom::point(point.x.0, point.y.0));
                         has_begun = true;
-                    } else {
-                        builder.line_to(lyon::geom::point(point.x.0, point.y.0));
                     }
                     _current_pos = Some(*point);
                 }
@@ -750,6 +757,7 @@ impl IntoLyonPath for flui_types::painting::path::Path {
 
                     // Approximate arc with line segments
                     // Use more segments for larger sweep angles
+                    #[allow(clippy::cast_possible_truncation)]
                     let num_segments =
                         ((sweep_angle.abs() / (std::f32::consts::PI / 6.0)).ceil() as i32).max(4);
                     let angle_step = sweep_angle / num_segments as f32;
@@ -841,6 +849,7 @@ mod tests {
 
         let _path = Tessellator::create_polyline_path(&points, false);
         // Path should be created successfully
-        // We can't easily test the internal structure, but we can verify it doesn't panic
+        // We can't easily test the internal structure, but we can verify it
+        // doesn't panic
     }
 }

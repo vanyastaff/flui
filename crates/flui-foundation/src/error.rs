@@ -1,9 +1,11 @@
 //! Error types for FLUI Foundation
 //!
 //! This module provides standardized error handling for foundation operations.
-//! All errors are designed to be composable and provide rich debugging information.
+//! All errors are designed to be composable and provide rich debugging
+//! information.
 
 use std::fmt;
+
 use thiserror::Error;
 
 /// The main error type for FLUI Foundation operations.
@@ -19,7 +21,7 @@ use thiserror::Error;
 /// fn example_operation() -> Result<()> {
 ///     Err(FoundationError::InvalidId {
 ///         id: 0,
-///         context: "ElementId cannot be zero".into()
+///         context: "ElementId cannot be zero".into(),
 ///     })
 /// }
 /// ```
@@ -215,14 +217,16 @@ pub trait ErrorContext<T> {
     ///
     /// # Errors
     ///
-    /// Returns a `FoundationError::Generic` with the context prepended to the original error.
+    /// Returns a `FoundationError::Generic` with the context prepended to the
+    /// original error.
     fn with_context(self, context: impl Into<String>) -> Result<T>;
 
     /// Adds context to an error result using a closure.
     ///
     /// # Errors
     ///
-    /// Returns a `FoundationError::Generic` with the context prepended to the original error.
+    /// Returns a `FoundationError::Generic` with the context prepended to the
+    /// original error.
     fn with_context_fn<F>(self, f: F) -> Result<T>
     where
         F: FnOnce() -> String;

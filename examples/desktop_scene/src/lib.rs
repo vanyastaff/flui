@@ -24,9 +24,11 @@
 
 use flui_hot_reload::scene_plugin;
 use flui_layer::{CanvasLayer, Layer, LayerTree, Scene};
-use flui_types::geometry::{px, Rect, Size};
-use flui_types::painting::Paint;
-use flui_types::styling::Color;
+use flui_types::{
+    geometry::{px, Rect, Size},
+    painting::Paint,
+    styling::Color,
+};
 
 fn my_scene(width: f32, height: f32) -> Scene {
     let mut tree = LayerTree::new();

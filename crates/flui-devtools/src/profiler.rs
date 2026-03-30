@@ -1,12 +1,12 @@
 //! Performance profiler for FLUI applications
 //!
-//! Tracks frame timing, build/layout/paint phases, and detects performance issues.
-//! Provides detailed metrics and history for performance analysis.
+//! Tracks frame timing, build/layout/paint phases, and detects performance
+//! issues. Provides detailed metrics and history for performance analysis.
 //!
 //! # Example
 //!
 //! ```rust
-//! use flui_devtools::profiler::{Profiler, FramePhase};
+//! use flui_devtools::profiler::{FramePhase, Profiler};
 //!
 //! let mut profiler = Profiler::new();
 //!
@@ -46,11 +46,12 @@
 //! profiler.print_frame_summary();
 //! ```
 
-use crate::common::DevToolsConfig;
+use std::{collections::VecDeque, sync::Arc};
+
 use parking_lot::Mutex;
-use std::collections::VecDeque;
-use std::sync::Arc;
 use web_time::{Duration, Instant};
+
+use crate::common::DevToolsConfig;
 
 /// Frame rendering phase
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -327,7 +328,8 @@ impl Profiler {
 
     /// Profile a phase with RAII guard
     ///
-    /// Returns a guard that automatically records the phase duration when dropped.
+    /// Returns a guard that automatically records the phase duration when
+    /// dropped.
     ///
     /// # Example
     ///
@@ -339,6 +341,7 @@ impl Profiler {
     ///     let _guard = profiler.profile_phase(FramePhase::Build);
     ///     // Your code here
     /// } // Phase duration recorded here
+    /// //
     /// # profiler.end_frame();
     /// ```
     pub fn profile_phase(&self, phase: FramePhase) -> PhaseGuard {
@@ -430,8 +433,9 @@ impl std::fmt::Debug for Profiler {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::thread;
+
+    use super::*;
 
     #[test]
     fn test_basic_profiling() {

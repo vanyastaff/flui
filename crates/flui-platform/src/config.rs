@@ -1,7 +1,7 @@
 //! Platform configuration types
 //!
-//! This module provides configuration structures for customizing platform behavior,
-//! including window management, hotkeys, and display selection.
+//! This module provides configuration structures for customizing platform
+//! behavior, including window management, hotkeys, and display selection.
 
 /// Configuration for window behavior across platforms
 ///
@@ -12,7 +12,7 @@
 /// # Examples
 ///
 /// ```rust
-/// use flui_platform::{WindowConfiguration, FullscreenMonitor};
+/// use flui_platform::{FullscreenMonitor, WindowConfiguration};
 ///
 /// // Default configuration (F11 toggles fullscreen on current monitor)
 /// let default = WindowConfiguration::default();
@@ -59,8 +59,9 @@ pub struct WindowConfiguration {
 
     /// Which monitor to use when entering fullscreen mode.
     ///
-    /// Controls the display selection behavior when transitioning to fullscreen.
-    /// Different strategies work better for different applications:
+    /// Controls the display selection behavior when transitioning to
+    /// fullscreen. Different strategies work better for different
+    /// applications:
     /// - Games typically use `Current` (fullscreen where window is)
     /// - Presentations often use `Primary` (fullscreen on main display)
     /// - Multi-monitor tools may use `Index(n)` (specific display)
@@ -86,15 +87,17 @@ impl Default for WindowConfiguration {
 ///
 /// # Strategies
 ///
-/// - **Current**: Use the monitor that currently contains the most of the window.
-///   Best for games and immersive applications where users position windows deliberately.
+/// - **Current**: Use the monitor that currently contains the most of the
+///   window. Best for games and immersive applications where users position
+///   windows deliberately.
 ///
-/// - **Primary**: Always use the primary/main display (as configured in OS settings).
-///   Best for presentations, video players, and single-monitor workflows.
+/// - **Primary**: Always use the primary/main display (as configured in OS
+///   settings). Best for presentations, video players, and single-monitor
+///   workflows.
 ///
-/// - **Index**: Use a specific monitor by index (0-based).
-///   Best for multi-monitor setups where the application needs control over display selection.
-///   Note: If the index is out of range, falls back to `Current`.
+/// - **Index**: Use a specific monitor by index (0-based). Best for
+///   multi-monitor setups where the application needs control over display
+///   selection. Note: If the index is out of range, falls back to `Current`.
 ///
 /// # Examples
 ///
@@ -175,7 +178,7 @@ impl WindowConfiguration {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_platform::{WindowConfiguration, FullscreenMonitor};
+    /// use flui_platform::{FullscreenMonitor, WindowConfiguration};
     ///
     /// // Always fullscreen on primary display
     /// let config = WindowConfiguration::with_fullscreen_monitor(FullscreenMonitor::Primary);

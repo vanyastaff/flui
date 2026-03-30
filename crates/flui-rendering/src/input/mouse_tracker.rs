@@ -1,8 +1,6 @@
 //! Mouse tracking for hover events.
 
-use std::collections::HashMap;
-use std::fmt::Debug;
-use std::sync::Arc;
+use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
 use flui_interaction::CursorIcon;
 use flui_types::{Matrix4, Offset};
@@ -405,10 +403,10 @@ impl MouseTracker {
             let exit_event = PointerExitEvent::new(state.latest_position, device, state.view_id);
 
             for (id, transform) in &state.annotations {
-                if let Some(annotation) = annotations.get(id) {
-                    if annotation.valid_for_mouse_tracker() {
-                        annotation.on_exit(&exit_event.transformed(Some(*transform)));
-                    }
+                if let Some(annotation) = annotations.get(id)
+                    && annotation.valid_for_mouse_tracker()
+                {
+                    annotation.on_exit(&exit_event.transformed(Some(*transform)));
                 }
             }
         }
@@ -482,8 +480,9 @@ impl MouseTracker {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::px;
+
+    use super::*;
 
     fn create_test_tracker() -> MouseTracker {
         let hit_test: MouseTrackerHitTest = Arc::new(|_position, _view_id| HitTestResult::new());
@@ -583,7 +582,12 @@ mod tests {
 
     #[test]
     fn test_pointer_hover_event() {
-        let event = PointerHoverEvent::new(Offset::new(px(10.0), px(20.0)), 0, 0, Offset::new(px(5.0), px(5.0)));
+        let event = PointerHoverEvent::new(
+            Offset::new(px(10.0), px(20.0)),
+            0,
+            0,
+            Offset::new(px(5.0), px(5.0)),
+        );
         assert_eq!(event.position.dx, 10.0);
         assert_eq!(event.delta.dx, 5.0);
     }

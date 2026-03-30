@@ -4,8 +4,8 @@
 //!
 //! Run with: cargo test -p flui-platform --test window_lifecycle
 
-use flui_platform::{current_platform, WindowOptions};
-use flui_types::geometry::{px, Size};
+use flui_platform::{WindowOptions, current_platform};
+use flui_types::geometry::{Size, px};
 
 /// T011: Test window creation with WindowOptions
 #[test]

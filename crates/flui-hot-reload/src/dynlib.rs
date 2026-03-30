@@ -17,8 +17,10 @@
 //! };
 //! ```
 
-use std::ffi::c_void;
-use std::path::{Path, PathBuf};
+use std::{
+    ffi::c_void,
+    path::{Path, PathBuf},
+};
 
 /// A loaded dynamic library handle with automatic cleanup on drop.
 ///
@@ -90,8 +92,10 @@ pub fn file_mtime(path: impl AsRef<Path>) -> u64 {
 
 #[cfg(unix)]
 mod sys {
-    use std::ffi::{c_void, CStr, CString};
-    use std::path::Path;
+    use std::{
+        ffi::{CStr, CString, c_void},
+        path::Path,
+    };
 
     pub(super) fn load_library(path: &Path) -> Option<*mut c_void> {
         let path_str = path.to_str()?;
@@ -102,7 +106,12 @@ mod sys {
             // Clear previous error
             libc::dlerror();
 
-            let handle = libc::dlopen(c_path.as_ptr(), libc::RTLD_NOW);
+            // RTLD_LOCAL prevents the plugin's symbols from polluting the global
+            // symbol table. Without it, duplicate symbols between the host and
+            // plugin (e.g., from shared crate dependencies like flui-types) cause
+            // SIGBUS/SIGSEGV crashes during hot-reload when the old .so is
+            // unloaded and a new one is loaded.
+            let handle = libc::dlopen(c_path.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
             if handle.is_null() {
                 let err = libc::dlerror();
                 if !err.is_null() {
@@ -121,11 +130,7 @@ mod sys {
         #[allow(unsafe_code)]
         unsafe {
             let ptr = libc::dlsym(handle, c_name.as_ptr());
-            if ptr.is_null() {
-                None
-            } else {
-                Some(ptr)
-            }
+            if ptr.is_null() { None } else { Some(ptr) }
         }
     }
 
@@ -139,11 +144,16 @@ mod sys {
 
 #[cfg(windows)]
 mod sys {
-    use std::ffi::{c_void, CString};
-    use std::os::windows::ffi::OsStrExt;
-    use std::path::Path;
-    use windows::Win32::Foundation::{FreeLibrary, HMODULE};
-    use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+    use std::{
+        ffi::{CString, c_void},
+        os::windows::ffi::OsStrExt,
+        path::Path,
+    };
+
+    use windows::Win32::{
+        Foundation::{FreeLibrary, HMODULE},
+        System::LibraryLoader::{GetProcAddress, LoadLibraryW},
+    };
 
     pub(super) fn load_library(path: &Path) -> Option<*mut c_void> {
         let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
@@ -171,7 +181,9 @@ mod sys {
     /// `handle` must be a valid library handle returned by `load_library`.
     #[allow(unsafe_code)]
     pub(super) unsafe fn close_library(handle: *mut c_void) {
-        let module = HMODULE(handle.cast());
-        let _ = FreeLibrary(module);
+        unsafe {
+            let module = HMODULE(handle.cast());
+            let _ = FreeLibrary(module);
+        }
     }
 }

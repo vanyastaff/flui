@@ -1,4 +1,5 @@
-//! Protocol-specific render state storage with Flutter-compliant dirty tracking.
+//! Protocol-specific render state storage with Flutter-compliant dirty
+//! tracking.
 //!
 //! This module provides lock-free state management for render objects following
 //! Flutter's exact dirty propagation semantics:
@@ -9,7 +10,8 @@
 //!
 //! # Design Philosophy
 //!
-//! - **Flutter-compatible**: Exact Flutter RenderObject dirty tracking semantics
+//! - **Flutter-compatible**: Exact Flutter RenderObject dirty tracking
+//!   semantics
 //! - **Lock-free when possible**: Atomic operations for hot paths
 //! - **Smart propagation**: Boundary-aware upward propagation
 //! - **Cache-friendly**: Optimized memory layout for performance
@@ -123,17 +125,19 @@
 //! // → Parent unaffected (huge performance win!)
 //! ```
 
-use std::marker::PhantomData;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    marker::PhantomData,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use flui_foundation::ElementId;
 use flui_types::Offset;
 use once_cell::sync::OnceCell;
 
 use super::flags::{AtomicRenderFlags, RenderFlags};
-use crate::constraints::{Constraints, SliverGeometry};
-use crate::protocol::{
-    BoxProtocol, Protocol, ProtocolConstraints, ProtocolGeometry, SliverProtocol,
+use crate::{
+    constraints::{Constraints, SliverGeometry},
+    protocol::{BoxProtocol, Protocol, ProtocolConstraints, ProtocolGeometry, SliverProtocol},
 };
 
 // ============================================================================
@@ -143,7 +147,8 @@ use crate::protocol::{
 /// Render state for Box protocol (uses Size and BoxConstraints).
 pub type BoxRenderState = RenderState<BoxProtocol>;
 
-/// Render state for Sliver protocol (uses SliverGeometry and SliverConstraints).
+/// Render state for Sliver protocol (uses SliverGeometry and
+/// SliverConstraints).
 pub type SliverRenderState = RenderState<SliverProtocol>;
 
 // ============================================================================
@@ -207,8 +212,8 @@ impl AtomicOffset {
 /// Minimal trait for tree operations needed by Flutter-style dirty propagation.
 ///
 /// This trait provides the tree operations needed for boundary-aware dirty
-/// propagation following Flutter's exact `markNeedsLayout()` and `markNeedsPaint()`
-/// semantics.
+/// propagation following Flutter's exact `markNeedsLayout()` and
+/// `markNeedsPaint()` semantics.
 ///
 /// # Why This Trait?
 ///
@@ -219,8 +224,8 @@ impl AtomicOffset {
 ///
 /// # Note on Naming
 ///
-/// This trait is intentionally named differently from `flui_tree::DirtyTracking`
-/// because they serve different purposes:
+/// This trait is intentionally named differently from
+/// `flui_tree::DirtyTracking` because they serve different purposes:
 /// - `flui_tree::DirtyTracking` - Generic per-element flag operations
 /// - `RenderDirtyPropagation` - Flutter-style boundary-aware propagation
 pub trait RenderDirtyPropagation {
@@ -268,7 +273,8 @@ pub trait RenderDirtyPropagation {
 // RENDER STATE
 // ============================================================================
 
-/// Protocol-specific render state storage with Flutter-compliant dirty tracking.
+/// Protocol-specific render state storage with Flutter-compliant dirty
+/// tracking.
 ///
 /// This struct provides efficient storage for render object state with:
 /// - Lock-free dirty flags using atomic operations
@@ -435,11 +441,14 @@ impl<P: Protocol> RenderState<P> {
     ///
     /// This method implements Flutter's exact `markNeedsLayout()` semantics:
     ///
-    /// 1. **Early return if already dirty** - Optimization to avoid redundant work
-    /// 2. **Mark self as needing layout and paint** - Layout changes affect paint
+    /// 1. **Early return if already dirty** - Optimization to avoid redundant
+    ///    work
+    /// 2. **Mark self as needing layout and paint** - Layout changes affect
+    ///    paint
     /// 3. **Smart propagation**:
     ///    - If NOT a relayout boundary → propagate to parent recursively
-    ///    - If IS a relayout boundary → register with pipeline owner for next frame
+    ///    - If IS a relayout boundary → register with pipeline owner for next
+    ///      frame
     ///
     /// # Flutter Protocol
     ///
@@ -537,10 +546,12 @@ impl<P: Protocol> RenderState<P> {
         }
     }
 
-    /// Marks this render object's parent as needing layout (for intrinsic changes).
+    /// Marks this render object's parent as needing layout (for intrinsic
+    /// changes).
     ///
-    /// This is a specialized version of `markNeedsLayout()` that ALWAYS propagates
-    /// to the parent, even if this element is a relayout boundary. This is used when:
+    /// This is a specialized version of `markNeedsLayout()` that ALWAYS
+    /// propagates to the parent, even if this element is a relayout
+    /// boundary. This is used when:
     ///
     /// - Intrinsic size changes (minIntrinsicWidth, maxIntrinsicHeight, etc.)
     /// - Baseline position changes
@@ -567,7 +578,8 @@ impl<P: Protocol> RenderState<P> {
     /// # Performance
     ///
     /// - Always O(log n) to nearest parent's relayout boundary
-    /// - More expensive than `mark_needs_layout()` because it ignores boundaries
+    /// - More expensive than `mark_needs_layout()` because it ignores
+    ///   boundaries
     /// - Use sparingly - only when parent truly needs notification
     ///
     /// # Example
@@ -732,11 +744,14 @@ impl<P: Protocol> RenderState<P> {
         self.flags.set(RenderFlags::NEEDS_COMPOSITING);
     }
 
-    /// Marks this render object as needing compositing bits update (Flutter-compliant).
+    /// Marks this render object as needing compositing bits update
+    /// (Flutter-compliant).
     ///
-    /// This method implements Flutter's exact `markNeedsCompositingBitsUpdate()` semantics:
+    /// This method implements Flutter's exact
+    /// `markNeedsCompositingBitsUpdate()` semantics:
     ///
-    /// 1. **Early return if already dirty** - Optimization to avoid redundant work
+    /// 1. **Early return if already dirty** - Optimization to avoid redundant
+    ///    work
     /// 2. **Mark self as needing compositing bits update**
     /// 3. **Smart propagation**:
     ///    - Propagates to parent unless parent is a repaint boundary
@@ -794,10 +809,10 @@ impl<P: Protocol> RenderState<P> {
         // Check parent for propagation
         if let Some(parent_id) = tree.parent(element_id) {
             // Check if parent already marked
-            if let Some(parent_state) = tree.get_render_state::<P>(parent_id) {
-                if parent_state.flags.needs_compositing() {
-                    return; // Parent already dirty, no need to propagate
-                }
+            if let Some(parent_state) = tree.get_render_state::<P>(parent_id)
+                && parent_state.flags.needs_compositing()
+            {
+                return; // Parent already dirty, no need to propagate
             }
 
             // Determine if we should propagate or stop
@@ -1204,9 +1219,11 @@ impl<P: Protocol> RenderState<P> {
 // ============================================================================
 
 impl RenderState<BoxProtocol> {
-    /// Computes and updates the relayout boundary status based on layout parameters.
+    /// Computes and updates the relayout boundary status based on layout
+    /// parameters.
     ///
-    /// This implements Flutter's exact relayout boundary detection logic for Box protocol:
+    /// This implements Flutter's exact relayout boundary detection logic for
+    /// Box protocol:
     ///
     /// ```text
     /// is_boundary = !parent_uses_size || sized_by_parent || constraints.is_tight() || has_no_parent
@@ -1228,9 +1245,11 @@ impl RenderState<BoxProtocol> {
     ///
     /// # Parameters
     ///
-    /// - `parent_uses_size`: Whether parent's layout depends on this element's size
+    /// - `parent_uses_size`: Whether parent's layout depends on this element's
+    ///   size
     /// - `sized_by_parent`: Whether size is determined purely by constraints
-    /// - `has_parent`: Whether this element has a parent (root is always a boundary)
+    /// - `has_parent`: Whether this element has a parent (root is always a
+    ///   boundary)
     ///
     /// # When Each Condition Triggers
     ///
@@ -1281,7 +1300,8 @@ impl RenderState<BoxProtocol> {
         has_parent: bool,
     ) {
         // Flutter's exact logic:
-        // is_boundary = !parent_uses_size || sized_by_parent || constraints.is_tight() || !has_parent
+        // is_boundary = !parent_uses_size || sized_by_parent || constraints.is_tight()
+        // || !has_parent
 
         let constraints_are_tight = self.constraints().map(|c| c.is_tight()).unwrap_or(false);
 
@@ -1402,10 +1422,14 @@ impl RenderState<SliverProtocol> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex},
+    };
+
     use flui_types::geometry::px;
-    use std::collections::HashMap;
-    use std::sync::{Arc, Mutex};
+
+    use super::*;
 
     // Mock tree for testing dirty propagation
     struct MockTree {
@@ -1628,7 +1652,8 @@ mod tests {
         // Make child a relayout boundary
         tree.set_relayout_boundary(child_id, true);
 
-        // Mark parent needs layout (should propagate despite boundary) - clone to avoid borrow conflict
+        // Mark parent needs layout (should propagate despite boundary) - clone to avoid
+        // borrow conflict
         let child_state = tree.states.get(&child_id).unwrap().clone();
         child_state.mark_parent_needs_layout(child_id, &mut tree);
 

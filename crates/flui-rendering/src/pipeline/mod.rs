@@ -9,18 +9,14 @@
 mod owner;
 
 // Re-export Clip from flui_types
+// Re-export layer types from flui-layer
+pub use flui_layer::{Layer, LayerId, LayerTree, OffsetLayer, SceneBuilder};
 pub use flui_types::painting::Clip;
-
+// Re-export additional types from flui_types::painting for convenience
+pub use flui_types::painting::{BlendMode, ClipOp, FilterQuality, ImageFilter, PointMode, Shader};
+// Re-export canvas types from flui_types
+pub use flui_types::painting::{BlurStyle, StrokeCap, StrokeJoin, TileMode};
 pub use owner::{DirtyNode, PipelineOwner};
 
 // Re-export contexts from context module (canonical location)
 pub use crate::context::{Canvas, CanvasContext, ClipContext, Paint, PaintStyle, Picture};
-
-// Re-export additional types from flui_types::painting for convenience
-pub use flui_types::painting::{BlendMode, ClipOp, FilterQuality, ImageFilter, PointMode, Shader};
-
-// Re-export canvas types from flui_types
-pub use flui_types::painting::{BlurStyle, StrokeCap, StrokeJoin, TileMode};
-
-// Re-export layer types from flui-layer
-pub use flui_layer::{Layer, LayerId, LayerTree, OffsetLayer, SceneBuilder};

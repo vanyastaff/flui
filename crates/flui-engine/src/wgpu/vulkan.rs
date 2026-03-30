@@ -1,7 +1,7 @@
 //! Vulkan 1.4 backend-specific features for Linux and Android
 //!
-//! This module provides access to Vulkan 1.4 features that are not exposed through wgpu's
-//! cross-platform API, including:
+//! This module provides access to Vulkan 1.4 features that are not exposed
+//! through wgpu's cross-platform API, including:
 //! - Pipeline binary caching for faster startup
 //! - NVIDIA explicit sync for Wayland compositors
 //! - Mesa 25.x optimizations
@@ -31,9 +31,9 @@
 //! }
 //! ```
 
-use anyhow::{anyhow, Result};
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
+
+use anyhow::{Result, anyhow};
 
 // ============================================================================
 // Vulkan Feature Detection
@@ -211,7 +211,8 @@ impl MesaVersion {
 ///
 /// # Security Considerations
 ///
-/// Pipeline caches are driver-specific and include GPU-specific code. They should:
+/// Pipeline caches are driver-specific and include GPU-specific code. They
+/// should:
 /// - Be stored in user-specific cache directories (XDG_CACHE_HOME)
 /// - Be invalidated when driver version changes
 /// - Be readable only by the current user

@@ -3,8 +3,9 @@
 //! This module provides platform-agnostic entry points that delegate
 //! to platform-specific implementations via flui-platform.
 
-use super::{AppBinding, AppConfig};
 use flui_view::{RootRenderView, StatelessView, View};
+
+use super::{AppBinding, AppConfig};
 
 /// Run a FLUI application with default configuration.
 ///
@@ -89,14 +90,18 @@ fn run_desktop<V>(root: V, config: AppConfig)
 where
     V: View + StatelessView + Clone + Send + Sync + 'static,
 {
-    use crate::embedder::PlatformWindowHandle;
+    use std::sync::Arc;
+
     use flui_engine::wgpu::Renderer;
     use flui_foundation::HasInstance;
-    use flui_platform::traits::{DispatchEventResult, LifecycleEvent, PlatformInput};
-    use flui_platform::WindowOptions;
+    use flui_platform::{
+        WindowOptions,
+        traits::{DispatchEventResult, LifecycleEvent, PlatformInput},
+    };
     use flui_scheduler::Scheduler;
     use parking_lot::Mutex;
-    use std::sync::Arc;
+
+    use crate::embedder::PlatformWindowHandle;
 
     tracing::info!("Starting desktop platform via flui-platform");
 
@@ -262,8 +267,7 @@ where
     {
         use std::sync::Arc;
 
-        use flui_rendering::binding::RendererBinding;
-        use flui_rendering::view::RenderView;
+        use flui_rendering::{binding::RendererBinding, view::RenderView};
 
         let renderer = binding.renderer();
         let view = Arc::new(parking_lot::RwLock::new(RenderView::new()));
@@ -332,16 +336,19 @@ fn run_android<V>(root: V, config: AppConfig, app: android_activity::AndroidApp)
 where
     V: View + StatelessView + Clone + Send + Sync + 'static,
 {
-    use crate::embedder::PlatformWindowHandle;
+    use std::{path::PathBuf, sync::Arc};
+
     use flui_engine::wgpu::Renderer;
     use flui_foundation::HasInstance;
     use flui_hot_reload::HotReloadDriver;
-    use flui_platform::traits::{DispatchEventResult, LifecycleEvent, PlatformInput};
-    use flui_platform::{AndroidPlatform, Platform, WindowOptions};
+    use flui_platform::{
+        AndroidPlatform, Platform, WindowOptions,
+        traits::{DispatchEventResult, LifecycleEvent, PlatformInput},
+    };
     use flui_scheduler::Scheduler;
     use parking_lot::Mutex;
-    use std::path::PathBuf;
-    use std::sync::Arc;
+
+    use crate::embedder::PlatformWindowHandle;
 
     tracing::info!("Starting Android platform via flui-platform");
 
@@ -500,8 +507,9 @@ fn run_web(_config: AppConfig) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_view::{BuildContext, View};
+
+    use super::*;
 
     // TODO: Will be used in future integration tests for run_app_impl
     #[allow(dead_code)]

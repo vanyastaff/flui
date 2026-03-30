@@ -3,10 +3,14 @@
 //! Provides rectangular constraints for 2D box-based layout with
 //! comprehensive query and transformation operations.
 
-use super::Constraints;
+use std::{
+    fmt,
+    hash::{Hash, Hasher},
+};
+
 use flui_types::{EdgeInsets, Pixels, Size};
-use std::fmt;
-use std::hash::{Hash, Hasher};
+
+use super::Constraints;
 
 /// Immutable layout constraints for rectangular (box) layout.
 ///
@@ -646,9 +650,7 @@ impl Constraints for BoxConstraints {
         self.min_width >= 0.0
             && self.min_height >= 0.0
             && self.min_width <= self.max_width
-            && self.max_width >= self.min_width
             && self.min_height <= self.max_height
-            && self.max_height >= self.min_height
             && !self.min_width.is_nan()
             && !self.max_width.is_nan()
             && !self.min_height.is_nan()
@@ -755,9 +757,11 @@ impl From<BoxConstraints> for (Pixels, Pixels, Pixels, Pixels) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use flui_types::geometry::px;
     use std::collections::HashSet;
+
+    use flui_types::geometry::px;
+
+    use super::*;
 
     #[test]
     fn test_hash_equality() {

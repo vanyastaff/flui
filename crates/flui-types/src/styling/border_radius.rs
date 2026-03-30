@@ -1,20 +1,23 @@
 //! Border radius types for styling
 //!
-//! This module provides [`BorderRadius`] as a type alias to [`Corners<Radius<Pixels>>`](crate::geometry::Corners),
-//! offering ergonomic constructors and methods for defining corner radii in UI elements.
+//! This module provides [`BorderRadius`] as a type alias to
+//! [`Corners<Radius<Pixels>>`](crate::geometry::Corners), offering ergonomic
+//! constructors and methods for defining corner radii in UI elements.
 
 use crate::geometry::{Corners, Pixels, Radius};
 
 /// Border radius for all four corners of a rectangle.
 ///
-/// This is a type alias to [`Corners<Radius<Pixels>>`](Corners), providing convenient
-/// constructors for common border radius patterns.
+/// This is a type alias to [`Corners<Radius<Pixels>>`](Corners), providing
+/// convenient constructors for common border radius patterns.
 ///
 /// # Examples
 ///
 /// ```
-/// use flui_types::styling::BorderRadius;
-/// use flui_types::geometry::{Radius, px};
+/// use flui_types::{
+///     geometry::{Radius, px},
+///     styling::BorderRadius,
+/// };
 ///
 /// // All corners with the same circular radius
 /// let radius = BorderRadius::circular(px(16.0));
@@ -24,38 +27,39 @@ use crate::geometry::{Corners, Pixels, Radius};
 ///
 /// // Custom per-corner
 /// let radius = BorderRadius::only(
-///     Radius::circular(px(8.0)),   // top-left
-///     Radius::circular(px(16.0)),  // top-right
-///     Radius::circular(px(8.0)),   // bottom-right
-///     Radius::circular(px(16.0)),  // bottom-left
+///     Radius::circular(px(8.0)),  // top-left
+///     Radius::circular(px(16.0)), // top-right
+///     Radius::circular(px(8.0)),  // bottom-right
+///     Radius::circular(px(16.0)), // bottom-left
 /// );
 /// ```
 pub type BorderRadius = Corners<Radius<Pixels>>;
 
 /// Extension trait providing BorderRadius-specific constructors and methods.
 ///
-/// This trait is automatically implemented for [`BorderRadius`] (which is [`Corners<Radius<Pixels>>`](Corners))
-/// to provide ergonomic APIs that match Flutter's BorderRadius.
+/// This trait is automatically implemented for [`BorderRadius`] (which is
+/// [`Corners<Radius<Pixels>>`](Corners)) to provide ergonomic APIs that match
+/// Flutter's BorderRadius.
 pub trait BorderRadiusExt {
-    /// Creates a border radius with all corners having the same circular radius.
+    /// Creates a border radius with all corners having the same circular
+    /// radius.
     ///
     /// # Examples
     ///
     /// ```
-    /// use flui_types::styling::BorderRadius;
-    /// use flui_types::geometry::px;
+    /// use flui_types::{geometry::px, styling::BorderRadius};
     ///
     /// let radius = BorderRadius::circular(px(16.0));
     /// ```
     fn circular(radius: Pixels) -> Self;
 
-    /// Creates a border radius with all corners having the same elliptical radius.
+    /// Creates a border radius with all corners having the same elliptical
+    /// radius.
     ///
     /// # Examples
     ///
     /// ```
-    /// use flui_types::styling::BorderRadius;
-    /// use flui_types::geometry::px;
+    /// use flui_types::{geometry::px, styling::BorderRadius};
     ///
     /// let radius = BorderRadius::elliptical(px(20.0), px(10.0));
     /// ```
@@ -66,8 +70,10 @@ pub trait BorderRadiusExt {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::styling::BorderRadius;
-    /// use flui_types::geometry::{Radius, px};
+    /// use flui_types::{
+    ///     geometry::{Radius, px},
+    ///     styling::BorderRadius,
+    /// };
     ///
     /// let r = Radius::elliptical(px(20.0), px(10.0));
     /// let radius = BorderRadius::all(r);
@@ -88,27 +94,34 @@ pub trait BorderRadiusExt {
     /// Creates a border radius with only the top-right corner having a radius.
     fn top_right_only(radius: Radius<Pixels>) -> Self;
 
-    /// Creates a border radius with only the bottom-left corner having a radius.
+    /// Creates a border radius with only the bottom-left corner having a
+    /// radius.
     fn bottom_left_only(radius: Radius<Pixels>) -> Self;
 
-    /// Creates a border radius with only the bottom-right corner having a radius.
+    /// Creates a border radius with only the bottom-right corner having a
+    /// radius.
     fn bottom_right_only(radius: Radius<Pixels>) -> Self;
 
-    /// Creates a border radius with vertical (top and bottom) corners having the same radius.
+    /// Creates a border radius with vertical (top and bottom) corners having
+    /// the same radius.
     fn vertical(top: Radius<Pixels>, bottom: Radius<Pixels>) -> Self;
 
-    /// Creates a border radius with horizontal (left and right) corners having the same radius.
+    /// Creates a border radius with horizontal (left and right) corners having
+    /// the same radius.
     fn horizontal(left: Radius<Pixels>, right: Radius<Pixels>) -> Self;
 
     /// Creates a border radius for the top corners only.
     ///
-    /// Bottom corners will have zero radius. Common pattern for cards, modals, and sheets.
+    /// Bottom corners will have zero radius. Common pattern for cards, modals,
+    /// and sheets.
     ///
     /// # Examples
     ///
     /// ```
-    /// use flui_types::styling::BorderRadius;
-    /// use flui_types::geometry::{Radius, px};
+    /// use flui_types::{
+    ///     geometry::{Radius, px},
+    ///     styling::BorderRadius,
+    /// };
     ///
     /// let radius = BorderRadius::top(Radius::circular(px(16.0)));
     /// ```
@@ -116,13 +129,16 @@ pub trait BorderRadiusExt {
 
     /// Creates a border radius for the bottom corners only.
     ///
-    /// Top corners will have zero radius. Common for bottom sheets and dropdowns.
+    /// Top corners will have zero radius. Common for bottom sheets and
+    /// dropdowns.
     ///
     /// # Examples
     ///
     /// ```
-    /// use flui_types::styling::BorderRadius;
-    /// use flui_types::geometry::{Radius, px};
+    /// use flui_types::{
+    ///     geometry::{Radius, px},
+    ///     styling::BorderRadius,
+    /// };
     ///
     /// let radius = BorderRadius::bottom(Radius::circular(px(16.0)));
     /// ```
@@ -155,10 +171,12 @@ pub trait BorderRadiusExt {
     /// Returns a copy of this border radius with the top-right corner replaced.
     fn with_top_right(self, top_right: Radius<Pixels>) -> Self;
 
-    /// Returns a copy of this border radius with the bottom-left corner replaced.
+    /// Returns a copy of this border radius with the bottom-left corner
+    /// replaced.
     fn with_bottom_left(self, bottom_left: Radius<Pixels>) -> Self;
 
-    /// Returns a copy of this border radius with the bottom-right corner replaced.
+    /// Returns a copy of this border radius with the bottom-right corner
+    /// replaced.
     fn with_bottom_right(self, bottom_right: Radius<Pixels>) -> Self;
 }
 
@@ -281,21 +299,23 @@ impl BorderRadiusExt for BorderRadius {
 
 /// Directional border radius that supports both LTR and RTL text directions.
 ///
-/// Unlike [`BorderRadius`] which uses physical corners (top-left, top-right, etc.),
-/// `BorderRadiusDirectional` uses logical corners (top-start, top-end) that adapt
-/// to text direction.
+/// Unlike [`BorderRadius`] which uses physical corners (top-left, top-right,
+/// etc.), `BorderRadiusDirectional` uses logical corners (top-start, top-end)
+/// that adapt to text direction.
 ///
 /// # Examples
 ///
 /// ```
-/// use flui_types::styling::BorderRadiusDirectional;
-/// use flui_types::geometry::{Radius, px};
+/// use flui_types::{
+///     geometry::{Radius, px},
+///     styling::BorderRadiusDirectional,
+/// };
 ///
 /// let directional = BorderRadiusDirectional::circular(px(16.0));
 ///
 /// // Resolve to physical corners based on text direction
-/// let ltr_radius = directional.resolve(true);   // LTR
-/// let rtl_radius = directional.resolve(false);  // RTL
+/// let ltr_radius = directional.resolve(true); // LTR
+/// let rtl_radius = directional.resolve(false); // RTL
 /// ```
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -314,19 +334,22 @@ pub struct BorderRadiusDirectional {
 }
 
 impl BorderRadiusDirectional {
-    /// Creates a directional border radius with all corners having the same circular radius.
+    /// Creates a directional border radius with all corners having the same
+    /// circular radius.
     #[inline]
     pub fn circular(radius: Pixels) -> Self {
         Self::all(Radius::circular(radius))
     }
 
-    /// Creates a directional border radius with all corners having the same elliptical radius.
+    /// Creates a directional border radius with all corners having the same
+    /// elliptical radius.
     #[inline]
     pub fn elliptical(x: Pixels, y: Pixels) -> Self {
         Self::all(Radius::elliptical(x, y))
     }
 
-    /// Creates a directional border radius with all corners having the same radius.
+    /// Creates a directional border radius with all corners having the same
+    /// radius.
     #[inline]
     pub const fn all(radius: Radius<Pixels>) -> Self {
         Self {
@@ -337,7 +360,8 @@ impl BorderRadiusDirectional {
         }
     }
 
-    /// Creates a directional border radius with only the specified corners having radii.
+    /// Creates a directional border radius with only the specified corners
+    /// having radii.
     #[inline]
     pub const fn only(
         top_start: Radius<Pixels>,
@@ -365,7 +389,8 @@ impl BorderRadiusDirectional {
     ///
     /// # Arguments
     ///
-    /// * `ltr` - If true, uses left-to-right layout. If false, uses right-to-left.
+    /// * `ltr` - If true, uses left-to-right layout. If false, uses
+    ///   right-to-left.
     #[inline]
     pub const fn resolve(self, ltr: bool) -> BorderRadius {
         if ltr {

@@ -1,8 +1,9 @@
 //! Children access layer for type-safe child iteration.
 //!
-//! This module provides `ChildrenAccess`, which provides closure-based iteration
-//! over children with type-safe `ChildHandle` instances. This design solves borrow
-//! checker issues by avoiding iterator return types that would hold mutable borrows.
+//! This module provides `ChildrenAccess`, which provides closure-based
+//! iteration over children with type-safe `ChildHandle` instances. This design
+//! solves borrow checker issues by avoiding iterator return types that would
+//! hold mutable borrows.
 //!
 //! # Design Rationale
 //!
@@ -32,9 +33,11 @@ use std::marker::PhantomData;
 use flui_foundation::RenderId;
 use flui_types::{Offset, Size};
 
-use crate::arity::{Arity, Leaf, Optional, Single, Variable};
-use crate::child_handle::ChildHandle;
-use crate::parent_data::ParentData;
+use crate::{
+    arity::{Arity, Leaf, Optional, Single, Variable},
+    child_handle::ChildHandle,
+    parent_data::ParentData,
+};
 
 // ============================================================================
 // ChildState - Per-child state storage
@@ -88,7 +91,8 @@ impl<P: ParentData + Default> ChildState<P> {
 ///
 /// Different methods are available depending on the Arity type.
 /// Phase-specific behavior is now determined by the context type that
-/// contains this `ChildrenAccess` (e.g., `BoxLayoutContext`, `BoxPaintContext`).
+/// contains this `ChildrenAccess` (e.g., `BoxLayoutContext`,
+/// `BoxPaintContext`).
 ///
 /// # Design
 ///
@@ -196,11 +200,13 @@ impl<'a, P: ParentData + Default> ChildrenAccess<'a, Optional, P> {
 impl<'a, P: ParentData + Default> ChildrenAccess<'a, Single, P> {
     /// Returns a handle to the single child.
     ///
-    /// This method always succeeds because Single arity guarantees exactly 1 child.
+    /// This method always succeeds because Single arity guarantees exactly 1
+    /// child.
     ///
     /// # Panics
     ///
-    /// Panics if invariant is violated (should never happen if arity is enforced).
+    /// Panics if invariant is violated (should never happen if arity is
+    /// enforced).
     ///
     /// # Example
     ///
@@ -400,12 +406,12 @@ impl<'a, P: ParentData + Default> ChildrenAccess<'a, Variable, P> {
     /// ```ignore
     /// let total_flex: f32 = ctx.children.sum(|child| child.parent_data().flex);
     /// ```
-    pub fn sum<T, F>(&mut self, mut f: F) -> T
+    pub fn sum<T, F>(&mut self, f: F) -> T
     where
         T: std::iter::Sum + Default,
         F: FnMut(ChildHandle<'_, P>) -> T,
     {
-        self.map(|child| f(child)).into_iter().sum()
+        self.map(f).into_iter().sum()
     }
 }
 

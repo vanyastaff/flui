@@ -9,18 +9,15 @@
 //!
 //! Flutter reference: https://api.flutter.dev/flutter/gestures/ScaleGestureRecognizer-class.html
 
-use super::recognizer::{GestureRecognizer, GestureRecognizerState};
-use flui_types::geometry::Pixels;
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
-use crate::arena::GestureArenaMember;
-use crate::events::PointerEvent;
-use crate::ids::PointerId;
-use crate::processing::VelocityTracker;
-use flui_types::Offset;
+use flui_types::{Offset, geometry::Pixels};
 use parking_lot::Mutex;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Instant;
+
+use super::recognizer::{GestureRecognizer, GestureRecognizerState};
+use crate::{
+    arena::GestureArenaMember, events::PointerEvent, ids::PointerId, processing::VelocityTracker,
+};
 
 /// Callback for scale start events
 pub type ScaleStartCallback = Arc<dyn Fn(ScaleStartDetails) + Send + Sync>;
@@ -397,7 +394,8 @@ impl ScaleGestureRecognizer {
                 let rotation = state.current_rotation;
 
                 // Calculate scale velocity from tracker
-                // The velocity is in scale units per second (e.g., 0.5 means scaling at 50% per second)
+                // The velocity is in scale units per second (e.g., 0.5 means scaling at 50% per
+                // second)
                 let velocity = state
                     .scale_velocity_tracker
                     .velocity()
@@ -537,7 +535,8 @@ impl ScaleGestureRecognizer {
     /// Calculate rotation angle between pointers (in radians)
     ///
     /// For 2 pointers, returns the angle of the line between them.
-    /// For more pointers, returns the average angle from the focal point to each pointer.
+    /// For more pointers, returns the average angle from the focal point to
+    /// each pointer.
     fn calculate_rotation(&self, pointers: &HashMap<PointerId, Offset<Pixels>>) -> f32 {
         if pointers.len() < 2 {
             return 0.0;

@@ -15,7 +15,8 @@ use flui_types::prelude::AxisDirection;
 // Sliver Simulation: SliverFixedExtentList
 // ============================================================================
 
-/// Simulates a sliver that displays items with fixed extent (height in vertical scroll).
+/// Simulates a sliver that displays items with fixed extent (height in vertical
+/// scroll).
 struct SliverFixedExtentList {
     /// Number of items.
     item_count: usize,

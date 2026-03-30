@@ -5,9 +5,10 @@
 
 #![cfg(target_os = "windows")]
 
-use flui_platform::{Platform, WindowOptions, WindowsPlatform};
-use flui_types::geometry::{px, Size};
 use std::sync::Arc;
+
+use flui_platform::{Platform, WindowOptions, WindowsPlatform};
+use flui_types::geometry::{Size, px};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Testing Background Handling");

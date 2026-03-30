@@ -1,8 +1,12 @@
 //! Border types for styling
 
-use crate::geometry::traits::{NumericUnit, Unit};
-use crate::geometry::Pixels;
-use crate::styling::Color;
+use crate::{
+    geometry::{
+        Pixels,
+        traits::{NumericUnit, Unit},
+    },
+    styling::Color,
+};
 
 /// Style of a border.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
@@ -34,13 +38,16 @@ impl BorderStyle {
 
 /// A single side of a border.
 ///
-/// Generic over unit type `T` for full type safety. Use `BorderSide<Pixels>` for UI borders.
+/// Generic over unit type `T` for full type safety. Use `BorderSide<Pixels>`
+/// for UI borders.
 ///
 /// # Examples
 ///
 /// ```
-/// use flui_types::styling::{BorderSide, BorderStyle, Color};
-/// use flui_types::geometry::px;
+/// use flui_types::{
+///     geometry::px,
+///     styling::{BorderSide, BorderStyle, Color},
+/// };
 ///
 /// // Simple solid border
 /// let side = BorderSide::new(Color::BLACK, px(2.0), BorderStyle::Solid);
@@ -161,7 +168,8 @@ impl BorderSide<Pixels> {
 
     /// Returns true if this border side is effectively visible.
     ///
-    /// A border is visible if its style is solid and its width is greater than 0.
+    /// A border is visible if its style is solid and its width is greater than
+    /// 0.
     #[inline]
     pub fn is_visible(&self) -> bool {
         use crate::geometry::px;

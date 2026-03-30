@@ -1,6 +1,7 @@
 //! Compile-time constants for build modes and platform detection.
 //!
-//! These constants are resolved at compile time, enabling dead code elimination.
+//! These constants are resolved at compile time, enabling dead code
+//! elimination.
 //!
 //! # Example
 //!

@@ -4,7 +4,7 @@
 //! - Color::lerp (mix): <20ns
 //! - Color::blend_over: <20ns
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use flui_types::styling::Color;
 
 fn color_lerp_benchmark(c: &mut Criterion) {

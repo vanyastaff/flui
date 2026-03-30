@@ -10,7 +10,7 @@
 //! `self` and return a new type with different state.
 //!
 //! ```rust
-//! use flui_scheduler::typestate::{TypestateTicker, Idle, Active};
+//! use flui_scheduler::typestate::{Active, Idle, TypestateTicker};
 //!
 //! // Create an idle ticker
 //! let ticker: TypestateTicker<Idle> = TypestateTicker::new();
@@ -27,9 +27,9 @@
 //! let ticker: TypestateTicker<Idle> = ticker.stop();
 //! ```
 
+use std::{marker::PhantomData, sync::Arc};
+
 use parking_lot::Mutex;
-use std::marker::PhantomData;
-use std::sync::Arc;
 use web_time::Instant;
 
 // =============================================================================
@@ -319,8 +319,9 @@ impl<State: TickerState> std::fmt::Debug for TypestateTicker<State> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    use super::*;
 
     #[test]
     fn test_typestate_lifecycle() {

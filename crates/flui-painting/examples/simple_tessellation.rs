@@ -8,11 +8,15 @@
 //! cargo run --example simple_tessellation -p flui_painting --features tessellation
 //! ```
 
-use flui_painting::prelude::*;
-use flui_painting::tessellation::{tessellate_fill, tessellate_stroke, TessellationOptions};
-use flui_types::geometry::{px, Point, Rect};
-use flui_types::painting::Path;
-use flui_types::styling::Color;
+use flui_painting::{
+    prelude::*,
+    tessellation::{TessellationOptions, tessellate_fill, tessellate_stroke},
+};
+use flui_types::{
+    geometry::{Point, Rect, px},
+    painting::Path,
+    styling::Color,
+};
 
 fn main() {
     println!("===========================================");

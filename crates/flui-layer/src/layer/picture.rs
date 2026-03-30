@@ -1,7 +1,8 @@
 //! Picture layer - leaf layer with recorded drawing commands
 //!
 //! PictureLayer is Flutter's standard layer for caching drawing commands.
-//! It stores an immutable Picture (DisplayList) that can be replayed efficiently.
+//! It stores an immutable Picture (DisplayList) that can be replayed
+//! efficiently.
 
 use flui_painting::{DisplayListCore, Picture};
 use flui_types::geometry::{Pixels, Rect};
@@ -170,11 +171,10 @@ impl Default for PictureLayer {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_painting::Canvas;
-    use flui_types::geometry::px;
-    use flui_types::painting::Paint;
-    use flui_types::{Color, Point, Rect};
+    use flui_types::{geometry::px, painting::Paint, Color, Point, Rect};
+
+    use super::*;
 
     #[test]
     fn test_picture_layer_creation() {

@@ -1,14 +1,13 @@
 //! Shader compilation and caching for shader mask effects
 //!
-//! This module provides shader compilation, caching, and uniform buffer management
-//! for ShaderMaskLayer rendering.
+//! This module provides shader compilation, caching, and uniform buffer
+//! management for ShaderMaskLayer rendering.
+
+use std::{collections::HashMap, sync::Arc};
 
 use bytemuck::{Pod, Zeroable};
-use flui_types::painting::ShaderSpec;
-use flui_types::styling::Color32;
+use flui_types::{painting::ShaderSpec, styling::Color32};
 use parking_lot::RwLock;
-use std::collections::HashMap;
-use std::sync::Arc;
 
 /// Shader type identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -55,10 +54,10 @@ impl ShaderType {
     /// Get the shader type from a ShaderSpec
     pub fn from_spec(spec: &ShaderSpec) -> Self {
         match spec {
-            ShaderSpec::Solid(_) => ShaderType::SolidMask,
             ShaderSpec::LinearGradient { .. } => ShaderType::LinearGradientMask,
             ShaderSpec::RadialGradient { .. } => ShaderType::RadialGradientMask,
-            _ => ShaderType::SolidMask, // Fallback for future variants
+            // Solid and any future ShaderSpec variants fall back to solid mask
+            _ => ShaderType::SolidMask,
         }
     }
 }
@@ -158,10 +157,10 @@ impl SolidMaskUniforms {
     pub fn from_color(color: Color32) -> Self {
         Self {
             mask_color: [
-                color.r() as f32 / 255.0,
-                color.g() as f32 / 255.0,
-                color.b() as f32 / 255.0,
-                color.a() as f32 / 255.0,
+                f32::from(color.r()) / 255.0,
+                f32::from(color.g()) / 255.0,
+                f32::from(color.b()) / 255.0,
+                f32::from(color.a()) / 255.0,
             ],
         }
     }
@@ -188,16 +187,16 @@ impl LinearGradientUniforms {
             start: [start.0, start.1],
             end: [end.0, end.1],
             start_color: [
-                start_color.r() as f32 / 255.0,
-                start_color.g() as f32 / 255.0,
-                start_color.b() as f32 / 255.0,
-                start_color.a() as f32 / 255.0,
+                f32::from(start_color.r()) / 255.0,
+                f32::from(start_color.g()) / 255.0,
+                f32::from(start_color.b()) / 255.0,
+                f32::from(start_color.a()) / 255.0,
             ],
             end_color: [
-                end_color.r() as f32 / 255.0,
-                end_color.g() as f32 / 255.0,
-                end_color.b() as f32 / 255.0,
-                end_color.a() as f32 / 255.0,
+                f32::from(end_color.r()) / 255.0,
+                f32::from(end_color.g()) / 255.0,
+                f32::from(end_color.b()) / 255.0,
+                f32::from(end_color.a()) / 255.0,
             ],
         }
     }
@@ -226,16 +225,16 @@ impl RadialGradientUniforms {
             radius,
             _padding: 0.0,
             center_color: [
-                center_color.r() as f32 / 255.0,
-                center_color.g() as f32 / 255.0,
-                center_color.b() as f32 / 255.0,
-                center_color.a() as f32 / 255.0,
+                f32::from(center_color.r()) / 255.0,
+                f32::from(center_color.g()) / 255.0,
+                f32::from(center_color.b()) / 255.0,
+                f32::from(center_color.a()) / 255.0,
             ],
             edge_color: [
-                edge_color.r() as f32 / 255.0,
-                edge_color.g() as f32 / 255.0,
-                edge_color.b() as f32 / 255.0,
-                edge_color.a() as f32 / 255.0,
+                f32::from(edge_color.r()) / 255.0,
+                f32::from(edge_color.g()) / 255.0,
+                f32::from(edge_color.b()) / 255.0,
+                f32::from(edge_color.a()) / 255.0,
             ],
         }
     }
@@ -307,15 +306,21 @@ mod tests {
 
     #[test]
     fn test_shader_source_code() {
-        assert!(ShaderType::SolidMask
-            .source_code()
-            .contains("Solid Color Mask"));
-        assert!(ShaderType::LinearGradientMask
-            .source_code()
-            .contains("Linear Gradient"));
-        assert!(ShaderType::RadialGradientMask
-            .source_code()
-            .contains("Radial Gradient"));
+        assert!(
+            ShaderType::SolidMask
+                .source_code()
+                .contains("Solid Color Mask")
+        );
+        assert!(
+            ShaderType::LinearGradientMask
+                .source_code()
+                .contains("Linear Gradient")
+        );
+        assert!(
+            ShaderType::RadialGradientMask
+                .source_code()
+                .contains("Radial Gradient")
+        );
     }
 
     #[test]

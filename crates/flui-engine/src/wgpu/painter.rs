@@ -10,6 +10,14 @@
 
 use std::sync::Arc;
 
+use flui_painting::{Paint, PaintStyle};
+use flui_types::{
+    Offset, Point, Rect,
+    geometry::{Pixels, RRect, px},
+    painting::{Path, TextureId},
+};
+use wgpu::util::DeviceExt;
+
 use super::{
     pipeline::{PipelineCache, PipelineKey},
     tessellator::Tessellator,
@@ -17,14 +25,6 @@ use super::{
     vertex::Vertex,
 };
 use crate::traits::Painter;
-use flui_painting::{Paint, PaintStyle};
-use flui_types::{
-    geometry::{px, Pixels, RRect},
-    painting::Path,
-    painting::TextureId,
-    Offset, Point, Rect,
-};
-use wgpu::util::DeviceExt;
 
 /// GPU painter for hardware-accelerated 2D rendering
 ///
@@ -60,7 +60,8 @@ pub struct WgpuPainter {
     /// Pipeline cache for specialized rendering pipelines
     pipeline_cache: PipelineCache,
 
-    /// Batched vertices for current frame (tessellation path for complex shapes)
+    /// Batched vertices for current frame (tessellation path for complex
+    /// shapes)
     vertices: Vec<Vertex>,
 
     /// Batched indices for current frame (tessellation path for complex shapes)
@@ -183,6 +184,13 @@ pub struct WgpuPainter {
     current_opacity: f32,
 }
 
+// GPU rendering routinely converts between numeric types for pixel coordinates,
+// color channels, buffer indices, and instance counts.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
 impl WgpuPainter {
     /// Create a new GPU painter
     ///
@@ -253,7 +261,8 @@ impl WgpuPainter {
         );
 
         // Now create bind group using layout FROM pipeline_cache
-        // This ensures the bind group uses the EXACT SAME layout object as shape pipeline
+        // This ensures the bind group uses the EXACT SAME layout object as shape
+        // pipeline
         let viewport_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Viewport Bind Group"),
             layout: pipeline_cache.viewport_bind_group_layout(),
@@ -296,7 +305,7 @@ impl WgpuPainter {
                         // Instance buffer
                         super::instancing::RectInstance::desc(),
                     ],
-                    compilation_options: Default::default(),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &instanced_shader,
@@ -306,7 +315,7 @@ impl WgpuPainter {
                         blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
-                    compilation_options: Default::default(),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
                 }),
                 primitive: wgpu::PrimitiveState {
                     topology: wgpu::PrimitiveTopology::TriangleList,
@@ -383,7 +392,7 @@ impl WgpuPainter {
                         // Instance buffer
                         super::instancing::CircleInstance::desc(),
                     ],
-                    compilation_options: Default::default(),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &circle_shader,
@@ -393,7 +402,7 @@ impl WgpuPainter {
                         blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
-                    compilation_options: Default::default(),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
                 }),
                 primitive: wgpu::PrimitiveState {
                     topology: wgpu::PrimitiveTopology::TriangleList,
@@ -443,7 +452,7 @@ impl WgpuPainter {
                         // Instance buffer
                         super::instancing::ArcInstance::desc(),
                     ],
-                    compilation_options: Default::default(),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &arc_shader,
@@ -453,7 +462,7 @@ impl WgpuPainter {
                         blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
-                    compilation_options: Default::default(),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
                 }),
                 primitive: wgpu::PrimitiveState {
                     topology: wgpu::PrimitiveTopology::TriangleList,
@@ -556,7 +565,7 @@ impl WgpuPainter {
                         // Instance buffer
                         super::instancing::TextureInstance::desc(),
                     ],
-                    compilation_options: Default::default(),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &texture_shader,
@@ -566,7 +575,7 @@ impl WgpuPainter {
                         blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
-                    compilation_options: Default::default(),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
                 }),
                 primitive: wgpu::PrimitiveState {
                     topology: wgpu::PrimitiveTopology::TriangleList,
@@ -731,7 +740,8 @@ impl WgpuPainter {
         );
 
         // ===== Render All Instanced Primitives FIRST =====
-        // (Background rects, circles, etc. render first, then tessellated shapes on top)
+        // (Background rects, circles, etc. render first, then tessellated shapes on
+        // top)
         self.flush_all_instanced_batches(encoder, view);
 
         // ===== Render Gradients (Linear + Radial) =====
@@ -837,8 +847,8 @@ impl WgpuPainter {
 
     /// Get a reference to the external texture registry
     ///
-    /// Use this to register external textures (video frames, camera preview, etc.)
-    /// that can be rendered via `Canvas::draw_texture()`.
+    /// Use this to register external textures (video frames, camera preview,
+    /// etc.) that can be rendered via `Canvas::draw_texture()`.
     ///
     /// # Example
     ///
@@ -873,7 +883,7 @@ impl WgpuPainter {
     }
 
     /// Add tessellated shape from vertices/indices
-    fn add_tessellated(&mut self, vertices: Vec<Vertex>, indices: Vec<u32>) {
+    fn add_tessellated(&mut self, vertices: Vec<Vertex>, indices: &[u32]) {
         let base_index = self.vertices.len() as u32;
 
         // Add vertices (already transformed by tessellator if needed)
@@ -883,17 +893,20 @@ impl WgpuPainter {
         self.indices.extend(indices.iter().map(|&i| i + base_index));
     }
 
-    /// Flush all instanced batches using SINGLE render pass (Phase 9 optimization)
+    /// Flush all instanced batches using SINGLE render pass (Phase 9
+    /// optimization)
     ///
-    /// This method combines all instance data AND renders them in a SINGLE render pass
-    /// by switching pipelines dynamically, reducing CPU overhead by an additional 2-3x.
+    /// This method combines all instance data AND renders them in a SINGLE
+    /// render pass by switching pipelines dynamically, reducing CPU
+    /// overhead by an additional 2-3x.
     ///
     /// # Performance Impact
     ///
     /// **Before (Phase 8):** 1 buffer upload + 3 render passes + 3 draw calls
     /// **After (Phase 9):** 1 buffer upload + 1 render pass + 3 draw calls
     ///
-    /// **Benefit:** Massive reduction in render pass overhead (3x fewer begin_render_pass calls)
+    /// **Benefit:** Massive reduction in render pass overhead (3x fewer
+    /// begin_render_pass calls)
     fn flush_all_instanced_batches(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
@@ -1265,6 +1278,14 @@ impl WgpuPainter {
 
 // ===== Painter Trait Implementation =====
 
+// GPU rendering routinely converts between f32/u8/u32/i32 for pixel
+// coordinates, color channels, and buffer indices. These truncations are
+// intentional.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
 impl Painter for WgpuPainter {
     fn rect(&mut self, rect: Rect<Pixels>, paint: &Paint) {
         #[cfg(debug_assertions)]
@@ -1279,7 +1300,7 @@ impl Painter for WgpuPainter {
 
             // Apply current opacity to color
             let color = if self.current_opacity < 1.0 {
-                let alpha = (paint.color.a as f32 * self.current_opacity) as u8;
+                let alpha = (f32::from(paint.color.a) * self.current_opacity) as u8;
                 flui_types::Color::rgba(paint.color.r, paint.color.g, paint.color.b, alpha)
             } else {
                 paint.color
@@ -1291,9 +1312,10 @@ impl Painter for WgpuPainter {
             // Note: Auto-flush happens in render() - no need to flush here
         } else {
             // Stroked rect - use tessellator (less common, fallback path)
-            // Paint already contains stroke information (stroke_width, stroke_cap, stroke_join)
+            // Paint already contains stroke information (stroke_width, stroke_cap,
+            // stroke_join)
             if let Ok((vertices, indices)) = self.tessellator.tessellate_rect_stroke(rect, paint) {
-                self.add_tessellated(vertices, indices);
+                self.add_tessellated(vertices, &indices);
             }
         }
     }
@@ -1309,7 +1331,7 @@ impl Painter for WgpuPainter {
 
             // Apply current opacity to color
             let color = if self.current_opacity < 1.0 {
-                let alpha = (paint.color.a as f32 * self.current_opacity) as u8;
+                let alpha = (f32::from(paint.color.a) * self.current_opacity) as u8;
                 flui_types::Color::rgba(paint.color.r, paint.color.g, paint.color.b, alpha)
             } else {
                 paint.color
@@ -1328,7 +1350,7 @@ impl Painter for WgpuPainter {
         } else {
             // Stroked rounded rect - use tessellator (fallback)
             if let Ok((vertices, indices)) = self.tessellator.tessellate_rrect(rrect, paint) {
-                self.add_tessellated(vertices, indices);
+                self.add_tessellated(vertices, &indices);
             }
         }
     }
@@ -1348,7 +1370,7 @@ impl Painter for WgpuPainter {
 
             // Apply current opacity to color
             let color = if self.current_opacity < 1.0 {
-                let alpha = (paint.color.a as f32 * self.current_opacity) as u8;
+                let alpha = (f32::from(paint.color.a) * self.current_opacity) as u8;
                 flui_types::Color::rgba(paint.color.r, paint.color.g, paint.color.b, alpha)
             } else {
                 paint.color
@@ -1364,7 +1386,7 @@ impl Painter for WgpuPainter {
             if let Ok((vertices, indices)) =
                 self.tessellator.tessellate_circle(center, radius, paint)
             {
-                self.add_tessellated(vertices, indices);
+                self.add_tessellated(vertices, &indices);
             }
         }
     }
@@ -1378,7 +1400,7 @@ impl Painter for WgpuPainter {
         let radii = Point::new(rect.width() / 2.0, rect.height() / 2.0);
 
         if let Ok((vertices, indices)) = self.tessellator.tessellate_ellipse(center, radii, paint) {
-            self.add_tessellated(vertices, indices);
+            self.add_tessellated(vertices, &indices);
         }
     }
 
@@ -1436,7 +1458,7 @@ impl Painter for WgpuPainter {
                     paint,
                 ) {
                     Ok((vertices, indices)) => {
-                        self.add_tessellated(vertices, indices);
+                        self.add_tessellated(vertices, &indices);
                     }
                     Err(e) => {
                         #[cfg(debug_assertions)]
@@ -1459,7 +1481,7 @@ impl Painter for WgpuPainter {
         // Tessellate the DRRect (ring with inner cutout)
         match self.tessellator.tessellate_drrect(&outer, &inner, paint) {
             Ok((vertices, indices)) => {
-                self.add_tessellated(vertices, indices);
+                self.add_tessellated(vertices, &indices);
             }
             Err(e) => {
                 #[cfg(debug_assertions)]
@@ -1487,7 +1509,7 @@ impl Painter for WgpuPainter {
                     vertices.len(),
                     indices.len()
                 );
-                self.add_tessellated(vertices, indices);
+                self.add_tessellated(vertices, &indices);
             }
             Err(e) => {
                 #[cfg(debug_assertions)]
@@ -1563,7 +1585,7 @@ impl Painter for WgpuPainter {
 
         match result {
             Ok((vertices, indices)) => {
-                self.add_tessellated(vertices, indices);
+                self.add_tessellated(vertices, &indices);
             }
             Err(e) => {
                 tracing::warn!("Failed to tessellate path: {}", e);
@@ -1636,7 +1658,7 @@ impl Painter for WgpuPainter {
             return;
         }
 
-        let alpha_per_layer = color.a as f32 / num_layers as f32;
+        let alpha_per_layer = f32::from(color.a) / num_layers as f32;
 
         for i in 0..num_layers {
             let offset_scale = (i as f32 + 1.0) / num_layers as f32;
@@ -1662,7 +1684,7 @@ impl Painter for WgpuPainter {
                 .tessellate_flui_path_fill(path, &shadow_paint)
             {
                 Ok((vertices, indices)) => {
-                    self.add_tessellated(vertices, indices);
+                    self.add_tessellated(vertices, &indices);
                 }
                 Err(e) => {
                     #[cfg(debug_assertions)]
@@ -1679,7 +1701,7 @@ impl Painter for WgpuPainter {
         &mut self,
         vertices: &[Point<Pixels>],
         colors: Option<&[flui_types::styling::Color]>,
-        _tex_coords: Option<&[Point<Pixels>]>, // TODO: Support texture coordinates
+        tex_coords: Option<&[Point<Pixels>]>, // TODO: Full texture coordinate support
         indices: &[u16],
         paint: &Paint,
     ) {
@@ -1695,16 +1717,16 @@ impl Painter for WgpuPainter {
             return;
         }
 
-        if let Some(colors_arr) = colors {
-            if colors_arr.len() != vertices.len() {
-                #[cfg(debug_assertions)]
-                tracing::error!(
-                    "DrawVertices: color count ({}) doesn't match vertex count ({})",
-                    colors_arr.len(),
-                    vertices.len()
-                );
-                return;
-            }
+        if let Some(colors_arr) = colors
+            && colors_arr.len() != vertices.len()
+        {
+            #[cfg(debug_assertions)]
+            tracing::error!(
+                "DrawVertices: color count ({}) doesn't match vertex count ({})",
+                colors_arr.len(),
+                vertices.len()
+            );
+            return;
         }
 
         // Convert to our Vertex format
@@ -1718,10 +1740,9 @@ impl Painter for WgpuPainter {
                     .copied()
                     .unwrap_or(default_color);
 
-                let uv = _tex_coords
+                let uv = tex_coords
                     .and_then(|tc| tc.get(i))
-                    .map(|p| [p.x.0, p.y.0])
-                    .unwrap_or([0.0, 0.0]);
+                    .map_or([0.0, 0.0], |p| [p.x.0, p.y.0]);
 
                 super::vertex::Vertex {
                     position: [pos.x.0, pos.y.0],
@@ -1732,10 +1753,11 @@ impl Painter for WgpuPainter {
             .collect();
 
         // Convert indices to u32
-        let our_indices: Vec<u32> = indices.iter().map(|&i| i as u32).collect();
+        let our_indices: Vec<u32> = indices.iter().map(|&i| u32::from(i)).collect();
 
-        // Add to tessellated geometry (bypassing tessellator since we already have triangles)
-        self.add_tessellated(our_vertices, our_indices);
+        // Add to tessellated geometry (bypassing tessellator since we already have
+        // triangles)
+        self.add_tessellated(our_vertices, &our_indices);
     }
 
     fn draw_atlas(
@@ -1764,16 +1786,16 @@ impl Painter for WgpuPainter {
             return;
         }
 
-        if let Some(colors_arr) = colors {
-            if colors_arr.len() != sprites.len() {
-                #[cfg(debug_assertions)]
-                tracing::error!(
-                    "DrawAtlas: color count ({}) doesn't match sprite count ({})",
-                    colors_arr.len(),
-                    sprites.len()
-                );
-                return;
-            }
+        if let Some(colors_arr) = colors
+            && colors_arr.len() != sprites.len()
+        {
+            #[cfg(debug_assertions)]
+            tracing::error!(
+                "DrawAtlas: color count ({}) doesn't match sprite count ({})",
+                colors_arr.len(),
+                sprites.len()
+            );
+            return;
         }
 
         // Load texture into cache
@@ -1943,11 +1965,11 @@ impl Painter for WgpuPainter {
 
             // Restore scissor state
             // Pop from scissor stack if there was a saved scissor
-            if !self.scissor_stack.is_empty() {
-                self.current_scissor = self.scissor_stack.pop();
-            } else {
+            if self.scissor_stack.is_empty() {
                 // No scissor was saved, clear current
                 self.current_scissor = None;
+            } else {
+                self.current_scissor = self.scissor_stack.pop();
             }
 
             #[cfg(debug_assertions)]
@@ -2093,7 +2115,7 @@ impl Painter for WgpuPainter {
         self.opacity_stack.push(self.current_opacity);
 
         // Apply the paint's alpha to current opacity
-        let paint_alpha = paint.color.a as f32 / 255.0;
+        let paint_alpha = f32::from(paint.color.a) / 255.0;
         self.current_opacity *= paint_alpha;
 
         #[cfg(debug_assertions)]
@@ -2124,6 +2146,7 @@ impl Painter for WgpuPainter {
 // Advanced Effects API (Gradients, Shadows, Blur)
 // =============================================================================
 
+#[allow(clippy::cast_possible_truncation)]
 impl WgpuPainter {
     /// Draw a rectangle with a linear gradient
     ///
@@ -2240,7 +2263,8 @@ impl WgpuPainter {
     /// Draw a shadow for a rectangle
     ///
     /// Renders an analytical shadow using Evan Wallace's technique.
-    /// Single-pass O(1) rendering with quality indistinguishable from real Gaussian.
+    /// Single-pass O(1) rendering with quality indistinguishable from real
+    /// Gaussian.
     ///
     /// # Arguments
     /// * `rect_pos` - Rectangle position [x, y]

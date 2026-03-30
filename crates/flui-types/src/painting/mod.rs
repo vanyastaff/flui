@@ -1,7 +1,8 @@
 //! Painting types for Flui.
 //!
 //! This module contains low-level painting primitives used for rendering,
-//! including blend modes, image handling, clipping, canvas primitives, and shaders.
+//! including blend modes, image handling, clipping, canvas primitives, and
+//! shaders.
 
 #![allow(unused)] // Painting API for future implementation
 

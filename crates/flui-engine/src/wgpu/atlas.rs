@@ -4,6 +4,7 @@
 //! into a single GPU texture, reducing draw calls and improving performance.
 
 use std::collections::HashMap;
+
 use wgpu::{
     Device, Extent3d, Queue, Texture, TextureDescriptor, TextureDimension, TextureFormat,
     TextureUsages,

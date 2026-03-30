@@ -1,18 +1,17 @@
 //! RenderEntry - Protocol-specific render node storage.
 //!
-//! This module provides `RenderEntry<P>`, which stores a render object along with
-//! its protocol-specific state and tree links. This is the internal storage unit
-//! that gets wrapped by `RenderNode` enum for heterogeneous tree storage.
+//! This module provides `RenderEntry<P>`, which stores a render object along
+//! with its protocol-specific state and tree links. This is the internal
+//! storage unit that gets wrapped by `RenderNode` enum for heterogeneous tree
+//! storage.
 
 use std::fmt::Debug;
 
 use flui_foundation::RenderId;
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
+use super::{links::NodeLinks, state::RenderState};
 use crate::protocol::{Protocol, ProtocolConstraints, ProtocolGeometry, RenderObject};
-
-use super::links::NodeLinks;
-use super::state::RenderState;
 
 /// Protocol-specific render entry.
 ///
@@ -230,7 +229,8 @@ impl<P: Protocol> RenderEntry<P> {
     /// Performs layout on this entry.
     ///
     /// This acquires a write lock on the render object, calls `perform_layout`,
-    /// stores the resulting geometry in state, and clears the needs_layout flag.
+    /// stores the resulting geometry in state, and clears the needs_layout
+    /// flag.
     ///
     /// Returns the computed geometry.
     pub fn layout(&self, constraints: ProtocolConstraints<P>) -> ProtocolGeometry<P>

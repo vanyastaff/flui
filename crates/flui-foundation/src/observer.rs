@@ -5,8 +5,10 @@
 //!
 //! # Features
 //!
-//! - `ObserverList<T>` - Observer management with O(1) add/remove via `HashMap` index
-//! - `HashedObserverList<T>` - Hash-based for unique observers with O(1) operations
+//! - `ObserverList<T>` - Observer management with O(1) add/remove via `HashMap`
+//!   index
+//! - `HashedObserverList<T>` - Hash-based for unique observers with O(1)
+//!   operations
 //!
 //! # Examples
 //!
@@ -27,9 +29,12 @@
 //! observers.remove(id1);
 //! ```
 
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::atomic::{AtomicUsize, Ordering},
+};
+
 use parking_lot::RwLock;
-use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::id::ObserverId;
 
@@ -194,8 +199,9 @@ impl<T: Clone> Clone for ObserverList<T> {
 /// # Examples
 ///
 /// ```rust
-/// use flui_foundation::SyncObserverList;
 /// use std::sync::Arc;
+///
+/// use flui_foundation::SyncObserverList;
 ///
 /// let observers: Arc<SyncObserverList<i32>> = Arc::new(SyncObserverList::new());
 ///
@@ -273,8 +279,9 @@ impl<T> SyncObserverList<T> {
 /// # Examples
 ///
 /// ```rust
-/// use flui_foundation::HashedObserverList;
 /// use std::sync::Arc;
+///
+/// use flui_foundation::HashedObserverList;
 ///
 /// let observers: HashedObserverList<String> = HashedObserverList::new();
 ///

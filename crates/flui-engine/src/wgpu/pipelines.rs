@@ -5,8 +5,9 @@
 
 use wgpu::{
     BlendState, ColorTargetState, ColorWrites, Device, FragmentState, FrontFace, MultisampleState,
-    PipelineLayoutDescriptor, PolygonMode, PrimitiveState, PrimitiveTopology, RenderPipeline,
-    RenderPipelineDescriptor, ShaderModule, TextureFormat, VertexState,
+    PipelineCompilationOptions, PipelineLayoutDescriptor, PolygonMode, PrimitiveState,
+    PrimitiveTopology, RenderPipeline, RenderPipelineDescriptor, ShaderModule, TextureFormat,
+    VertexState,
 };
 
 use super::vertex::{ImageInstance, PathVertex, RectInstance, RectVertex};
@@ -95,7 +96,7 @@ impl PipelineCache {
                 module: shader,
                 entry_point: Some("vs_main"),
                 buffers: &[RectVertex::desc(), RectInstance::desc()],
-                compilation_options: Default::default(),
+                compilation_options: PipelineCompilationOptions::default(),
             },
             fragment: Some(FragmentState {
                 module: shader,
@@ -105,7 +106,7 @@ impl PipelineCache {
                     blend: Some(BlendState::ALPHA_BLENDING),
                     write_mask: ColorWrites::ALL,
                 })],
-                compilation_options: Default::default(),
+                compilation_options: PipelineCompilationOptions::default(),
             }),
             primitive: PrimitiveState {
                 topology: PrimitiveTopology::TriangleList,
@@ -146,7 +147,7 @@ impl PipelineCache {
                 module: shader,
                 entry_point: Some("vs_main"),
                 buffers: &[PathVertex::desc()],
-                compilation_options: Default::default(),
+                compilation_options: PipelineCompilationOptions::default(),
             },
             fragment: Some(FragmentState {
                 module: shader,
@@ -156,7 +157,7 @@ impl PipelineCache {
                     blend: Some(BlendState::ALPHA_BLENDING),
                     write_mask: ColorWrites::ALL,
                 })],
-                compilation_options: Default::default(),
+                compilation_options: PipelineCompilationOptions::default(),
             }),
             primitive: PrimitiveState {
                 topology: PrimitiveTopology::TriangleList,
@@ -197,7 +198,7 @@ impl PipelineCache {
                 module: shader,
                 entry_point: Some("vs_main"),
                 buffers: &[ImageInstance::desc()],
-                compilation_options: Default::default(),
+                compilation_options: PipelineCompilationOptions::default(),
             },
             fragment: Some(FragmentState {
                 module: shader,
@@ -207,7 +208,7 @@ impl PipelineCache {
                     blend: Some(BlendState::ALPHA_BLENDING),
                     write_mask: ColorWrites::ALL,
                 })],
-                compilation_options: Default::default(),
+                compilation_options: PipelineCompilationOptions::default(),
             }),
             primitive: PrimitiveState {
                 topology: PrimitiveTopology::TriangleList,
@@ -320,7 +321,7 @@ impl<'a> PipelineBuilder<'a> {
                     module: self.shader,
                     entry_point: Some(self.vertex_entry),
                     buffers: &[], // Caller should set vertex buffers separately
-                    compilation_options: Default::default(),
+                    compilation_options: PipelineCompilationOptions::default(),
                 },
                 fragment: Some(FragmentState {
                     module: self.shader,
@@ -330,7 +331,7 @@ impl<'a> PipelineBuilder<'a> {
                         blend: Some(self.blend_state),
                         write_mask: ColorWrites::ALL,
                     })],
-                    compilation_options: Default::default(),
+                    compilation_options: PipelineCompilationOptions::default(),
                 }),
                 primitive: PrimitiveState {
                     topology: self.topology,

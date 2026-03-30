@@ -3,15 +3,19 @@
 //! Uses Windows DirectWrite API (IDWriteFactory5) for font enumeration,
 //! text measurement, and glyph shaping. Requires Windows 10 1703+.
 
+use std::borrow::Cow;
+
+use anyhow::{Context, Result};
+use parking_lot::Mutex;
+use windows::{
+    Win32::Graphics::DirectWrite::*,
+    core::{HSTRING, Interface},
+};
+
 use crate::traits::{
     Font, FontId, FontMetrics, FontRun, FontStyle, FontWeight, GlyphId, LineLayout,
     PlatformTextSystem, ShapedRun,
 };
-use anyhow::{Context, Result};
-use parking_lot::Mutex;
-use std::borrow::Cow;
-use windows::core::{Interface, HSTRING};
-use windows::Win32::Graphics::DirectWrite::*;
 
 /// Font face info stored per FontId
 struct FontInfo {
@@ -24,7 +28,8 @@ struct FontInfo {
 /// DirectWrite-based text system for Windows
 ///
 /// Provides font enumeration, metrics, glyph lookup, and text layout
-/// using the DirectWrite API. Each `FontId` maps to a cached `IDWriteFontFace3`.
+/// using the DirectWrite API. Each `FontId` maps to a cached
+/// `IDWriteFontFace3`.
 pub struct DirectWriteTextSystem {
     factory: IDWriteFactory5,
     system_collection: IDWriteFontCollection1,
@@ -36,9 +41,9 @@ struct DirectWriteState {
     fonts: Vec<FontInfo>,
 }
 
-// SAFETY: DirectWrite COM objects are thread-safe (apartment-threaded COM initialized).
-// The factory and collections are immutable after creation. Font face access is
-// synchronized via the Mutex on DirectWriteState.
+// SAFETY: DirectWrite COM objects are thread-safe (apartment-threaded COM
+// initialized). The factory and collections are immutable after creation. Font
+// face access is synchronized via the Mutex on DirectWriteState.
 unsafe impl Send for DirectWriteTextSystem {}
 unsafe impl Sync for DirectWriteTextSystem {}
 
@@ -134,7 +139,8 @@ impl DirectWriteTextSystem {
 
 impl PlatformTextSystem for DirectWriteTextSystem {
     fn add_fonts(&self, _fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
-        // Custom font loading deferred to post-MVP (requires IDWriteInMemoryFontFileLoader)
+        // Custom font loading deferred to post-MVP (requires
+        // IDWriteInMemoryFontFileLoader)
         tracing::warn!("add_fonts: custom font loading not yet implemented");
         Ok(())
     }
@@ -144,12 +150,11 @@ impl PlatformTextSystem for DirectWriteTextSystem {
         unsafe {
             let count = self.system_collection.GetFontFamilyCount();
             for i in 0..count {
-                if let Ok(family) = self.system_collection.GetFontFamily(i) {
-                    if let Ok(localized_names) = family.GetFamilyNames() {
-                        if let Some(name) = get_localized_name(&localized_names, &self.locale) {
-                            names.push(name);
-                        }
-                    }
+                if let Ok(family) = self.system_collection.GetFontFamily(i)
+                    && let Ok(localized_names) = family.GetFamilyNames()
+                    && let Some(name) = get_localized_name(&localized_names, &self.locale)
+                {
+                    names.push(name);
                 }
             }
         }
@@ -304,85 +309,87 @@ impl DirectWriteTextSystem {
         text: &str,
         runs: &[FontRun],
     ) -> Result<LineLayout> {
-        let family_hstring = HSTRING::from(family_name);
-        let locale_hstring = HSTRING::from(&self.locale);
+        unsafe {
+            let family_hstring = HSTRING::from(family_name);
+            let locale_hstring = HSTRING::from(&self.locale);
 
-        // Create text format
-        let format = self
-            .factory
-            .CreateTextFormat(
-                &family_hstring,
-                None, // Use default font collection
-                weight,
-                style,
-                DWRITE_FONT_STRETCH_NORMAL,
-                font_size,
-                &locale_hstring,
-            )
-            .context("CreateTextFormat")?;
+            // Create text format
+            let format = self
+                .factory
+                .CreateTextFormat(
+                    &family_hstring,
+                    None, // Use default font collection
+                    weight,
+                    style,
+                    DWRITE_FONT_STRETCH_NORMAL,
+                    font_size,
+                    &locale_hstring,
+                )
+                .context("CreateTextFormat")?;
 
-        // Create text layout
-        let layout = self
-            .factory
-            .CreateTextLayout(text_wide, &format, f32::MAX, f32::MAX)
-            .context("CreateTextLayout")?;
+            // Create text layout
+            let layout = self
+                .factory
+                .CreateTextLayout(text_wide, &format, f32::MAX, f32::MAX)
+                .context("CreateTextLayout")?;
 
-        // Apply per-run font settings if multiple runs
-        if runs.len() > 1 {
-            let state = self.state.lock();
-            let mut utf16_offset = 0u32;
-            let mut byte_offset = 0usize;
+            // Apply per-run font settings if multiple runs
+            if runs.len() > 1 {
+                let state = self.state.lock();
+                let mut utf16_offset = 0u32;
+                let mut byte_offset = 0usize;
 
-            for run in runs {
-                let run_text = &text[byte_offset..byte_offset + run.len];
-                let run_utf16_len = run_text.encode_utf16().count() as u32;
+                for run in runs {
+                    let run_text = &text[byte_offset..byte_offset + run.len];
+                    let run_utf16_len = run_text.encode_utf16().count() as u32;
 
-                if let Some(run_info) = state.fonts.get(run.font_id.0) {
-                    let range = DWRITE_TEXT_RANGE {
-                        startPosition: utf16_offset,
-                        length: run_utf16_len,
-                    };
-                    let run_family = HSTRING::from(&run_info.family);
-                    let _ = layout.SetFontFamilyName(&run_family, range);
-                    let _ = layout.SetFontWeight(run_info.weight, range);
-                    let _ = layout.SetFontStyle(run_info.style, range);
-                    let _ = layout.SetFontSize(font_size, range);
+                    if let Some(run_info) = state.fonts.get(run.font_id.0) {
+                        let range = DWRITE_TEXT_RANGE {
+                            startPosition: utf16_offset,
+                            length: run_utf16_len,
+                        };
+                        let run_family = HSTRING::from(&run_info.family);
+                        let _ = layout.SetFontFamilyName(&run_family, range);
+                        let _ = layout.SetFontWeight(run_info.weight, range);
+                        let _ = layout.SetFontStyle(run_info.style, range);
+                        let _ = layout.SetFontSize(font_size, range);
+                    }
+
+                    utf16_offset += run_utf16_len;
+                    byte_offset += run.len;
                 }
-
-                utf16_offset += run_utf16_len;
-                byte_offset += run.len;
             }
+
+            // Get overall metrics
+            let mut metrics = std::mem::zeroed::<DWRITE_TEXT_METRICS>();
+            layout.GetMetrics(&mut metrics).context("GetMetrics")?;
+
+            // Get line metrics for ascent/descent
+            let mut line_metrics = [DWRITE_LINE_METRICS::default(); 4];
+            let mut line_count = 0u32;
+            layout
+                .GetLineMetrics(Some(&mut line_metrics), &mut line_count)
+                .context("GetLineMetrics")?;
+
+            let (ascent, descent) = if line_count > 0 {
+                let lm = &line_metrics[0];
+                (lm.baseline, lm.height - lm.baseline)
+            } else {
+                (font_size * 0.8, font_size * 0.2)
+            };
+
+            // Build shaped runs from the font runs
+            let shaped_runs = build_shaped_runs(runs, text);
+
+            Ok(LineLayout {
+                font_size,
+                width: metrics.width,
+                ascent,
+                descent,
+                runs: shaped_runs,
+                len: text.len(),
+            })
         }
-
-        // Get overall metrics
-        let mut metrics = std::mem::zeroed::<DWRITE_TEXT_METRICS>();
-        layout.GetMetrics(&mut metrics).context("GetMetrics")?;
-
-        // Get line metrics for ascent/descent
-        let mut line_metrics = [DWRITE_LINE_METRICS::default(); 4];
-        let mut line_count = 0u32;
-        layout
-            .GetLineMetrics(Some(&mut line_metrics), &mut line_count)
-            .context("GetLineMetrics")?;
-
-        let (ascent, descent) = if line_count > 0 {
-            let lm = &line_metrics[0];
-            (lm.baseline, lm.height - lm.baseline)
-        } else {
-            (font_size * 0.8, font_size * 0.2)
-        };
-
-        // Build shaped runs from the font runs
-        let shaped_runs = build_shaped_runs(runs, text);
-
-        Ok(LineLayout {
-            font_size,
-            width: metrics.width,
-            ascent,
-            descent,
-            runs: shaped_runs,
-            len: text.len(),
-        })
     }
 }
 
@@ -390,7 +397,8 @@ impl DirectWriteTextSystem {
 ///
 /// For MVP, we don't extract individual glyph positions from DirectWrite's
 /// text renderer callback. Instead, we create runs with empty glyph lists.
-/// The accurate width/ascent/descent from GetMetrics() is what matters for layout.
+/// The accurate width/ascent/descent from GetMetrics() is what matters for
+/// layout.
 fn build_shaped_runs(runs: &[FontRun], _text: &str) -> Vec<ShapedRun> {
     runs.iter()
         .map(|run| ShapedRun {
@@ -469,7 +477,7 @@ mod tests {
     fn test_directwrite_creation() {
         // Requires COM to be initialized (WindowsPlatform::new() does this)
         unsafe {
-            use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+            use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         }
 
@@ -484,7 +492,7 @@ mod tests {
     #[test]
     fn test_all_font_names() {
         unsafe {
-            use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+            use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         }
 
@@ -501,7 +509,7 @@ mod tests {
     #[test]
     fn test_font_id_resolution() {
         unsafe {
-            use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+            use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         }
 
@@ -522,7 +530,7 @@ mod tests {
     #[test]
     fn test_font_metrics() {
         unsafe {
-            use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+            use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         }
 
@@ -543,7 +551,7 @@ mod tests {
     #[test]
     fn test_glyph_for_char() {
         unsafe {
-            use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+            use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         }
 
@@ -564,7 +572,7 @@ mod tests {
     #[test]
     fn test_layout_line() {
         unsafe {
-            use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+            use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         }
 
@@ -599,7 +607,7 @@ mod tests {
     #[test]
     fn test_layout_empty_string() {
         unsafe {
-            use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+            use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         }
 
@@ -613,7 +621,7 @@ mod tests {
     #[test]
     fn test_font_not_found() {
         unsafe {
-            use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+            use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         }
 

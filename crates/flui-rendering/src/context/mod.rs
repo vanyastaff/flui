@@ -1,12 +1,14 @@
 //! Rich context implementations for layout and hit testing.
 //!
-//! This module provides high-level context types that wrap the capability traits
-//! and provide ergonomic APIs for common operations.
+//! This module provides high-level context types that wrap the capability
+//! traits and provide ergonomic APIs for common operations.
 //!
 //! # Context Types
 //!
-//! - [`LayoutContext`]: Rich layout API with constraint helpers and child operations
-//! - [`HitTestContext`]: Rich hit testing API with position helpers and child testing
+//! - [`LayoutContext`]: Rich layout API with constraint helpers and child
+//!   operations
+//! - [`HitTestContext`]: Rich hit testing API with position helpers and child
+//!   testing
 //!
 //! For painting, use [`CanvasContext`] for low-level canvas operations.
 //!
@@ -71,7 +73,6 @@ pub use paint::{ChildPaintInfo, PaintChildCallback, PaintContext};
 // ============================================================================
 // Protocol Type Aliases
 // ============================================================================
-
 use crate::protocol::{BoxProtocol, SliverProtocol};
 
 // ────────────────────────────────────────────────────────────────────────────

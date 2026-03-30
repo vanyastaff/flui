@@ -4,8 +4,9 @@
 //! - [`Siblings`]: Directional iteration (forward or backward from a node)
 //! - [`AllSiblings`]: All siblings of a node (excluding self)
 
-use crate::traits::TreeNav;
 use flui_foundation::Identifier;
+
+use crate::traits::TreeNav;
 
 /// Direction for sibling iteration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -328,10 +329,13 @@ impl<I: Identifier, T: TreeNav<I>> std::iter::FusedIterator for AllSiblings<'_, 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::iter::{Ancestors, DescendantsWithDepth};
-    use crate::traits::TreeRead;
     use flui_foundation::ElementId;
+
+    use super::*;
+    use crate::{
+        iter::{Ancestors, DescendantsWithDepth},
+        traits::TreeRead,
+    };
 
     struct TestNode {
         parent: Option<ElementId>,

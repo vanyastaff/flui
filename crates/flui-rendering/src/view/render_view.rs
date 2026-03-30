@@ -3,19 +3,17 @@
 use std::fmt::Debug;
 
 use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
-
-use crate::hit_testing::{HitTestEntry, HitTestResult, HitTestTarget, PointerEvent};
-
-use flui_types::Pixels;
-use flui_types::{Matrix4, Offset, Rect, Size};
-
-use crate::constraints::BoxConstraints;
-use crate::parent_data::ParentData;
+use flui_layer::TransformLayer;
+use flui_types::{Matrix4, Offset, Pixels, Rect, Size};
 
 use super::ViewConfiguration;
-use crate::context::CanvasContext;
-use crate::pipeline::PipelineOwner;
-use flui_layer::TransformLayer;
+use crate::{
+    constraints::BoxConstraints,
+    context::CanvasContext,
+    hit_testing::{HitTestEntry, HitTestResult, HitTestTarget, PointerEvent},
+    parent_data::ParentData,
+    pipeline::PipelineOwner,
+};
 
 /// The root of the render tree.
 ///
@@ -27,8 +25,10 @@ use flui_layer::TransformLayer;
 /// This object must be bootstrapped in a specific order:
 ///
 /// 1. First, set the [`configuration`](Self::set_configuration)
-/// 2. Second, [`attach`](RenderObject::attach) the object to a [`PipelineOwner`]
-/// 3. Third, use [`prepare_initial_frame`](Self::prepare_initial_frame) to bootstrap
+/// 2. Second, [`attach`](RenderObject::attach) the object to a
+///    [`PipelineOwner`]
+/// 3. Third, use [`prepare_initial_frame`](Self::prepare_initial_frame) to
+///    bootstrap
 ///
 /// # Flutter Equivalence
 ///
@@ -601,8 +601,8 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
 //         self.needs_compositing_bits_update = false;
 //     }
 //
-//     fn layout(&mut self, constraints: BoxConstraints, _parent_uses_size: bool) {
-//         self.cached_constraints = Some(constraints);
+//     fn layout(&mut self, constraints: BoxConstraints, _parent_uses_size:
+// bool) {         self.cached_constraints = Some(constraints);
 //         self.perform_layout();
 //     }
 //
@@ -682,8 +682,8 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
 //         // No children
 //     }
 //
-//     fn visit_children_mut(&mut self, _visitor: &mut dyn FnMut(&mut dyn RenderObject)) {
-//         // No children
+//     fn visit_children_mut(&mut self, _visitor: &mut dyn FnMut(&mut dyn
+// RenderObject)) {         // No children
 //     }
 //
 //     fn paint_bounds(&self) -> Rect {
@@ -716,8 +716,9 @@ pub struct CompositeResult {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::px;
+
+    use super::*;
 
     #[test]
     fn test_render_view_new() {

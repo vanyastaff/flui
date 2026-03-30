@@ -10,7 +10,8 @@
 //!
 //! 1. **AnnotationEntry<T>** - A single annotation with its local position
 //! 2. **AnnotationResult<T>** - A collection of found annotations
-//! 3. **FindAnnotations trait** - Implemented by layers to participate in search
+//! 3. **FindAnnotations trait** - Implemented by layers to participate in
+//!    search
 //!
 //! # Example
 //!
@@ -22,16 +23,23 @@
 //! let mut result = AnnotationResult::<String>::new();
 //!
 //! // Add annotations found during search
-//! result.add(AnnotationEntry::new("button".to_string(), Offset::new(px(10.0), px(20.0))));
-//! result.add(AnnotationEntry::new("container".to_string(), Offset::new(px(0.0), px(0.0))));
+//! result.add(AnnotationEntry::new(
+//!     "button".to_string(),
+//!     Offset::new(px(10.0), px(20.0)),
+//! ));
+//! result.add(AnnotationEntry::new(
+//!     "container".to_string(),
+//!     Offset::new(px(0.0), px(0.0)),
+//! ));
 //!
 //! // Access annotations
 //! assert_eq!(result.len(), 2);
 //! assert_eq!(result.entries()[0].annotation(), &"button".to_string());
 //! ```
 
-use flui_types::geometry::{Offset, Pixels};
 use std::fmt;
+
+use flui_types::geometry::{Offset, Pixels};
 
 /// Information about a single annotation found in the layer tree.
 ///
@@ -104,8 +112,8 @@ impl<T: PartialEq> PartialEq for AnnotationEntry<T> {
 
 /// A collection of annotations found during a layer tree search.
 ///
-/// Entries are added in order from most specific (leaf) to least specific (root),
-/// typically during an upward walk of the tree.
+/// Entries are added in order from most specific (leaf) to least specific
+/// (root), typically during an upward walk of the tree.
 #[derive(Clone)]
 pub struct AnnotationResult<T> {
     /// The collected entries.
@@ -259,8 +267,9 @@ impl AnnotationSearchOptions {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::px;
+
+    use super::*;
 
     #[test]
     fn test_annotation_entry_new() {

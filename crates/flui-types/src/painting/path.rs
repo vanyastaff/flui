@@ -1,10 +1,14 @@
 //! Path types for vector drawing.
 //!
-//! Provides Path structure for creating complex shapes with lines, curves, and arcs.
+//! Provides Path structure for creating complex shapes with lines, curves, and
+//! arcs.
 
-use crate::geometry::{px, NumericUnit, Offset, Pixels, Point, Rect, Vec2};
-use crate::painting::PathFillType;
 use smallvec::SmallVec;
+
+use crate::{
+    geometry::{NumericUnit, Offset, Pixels, Point, Rect, Vec2, px},
+    painting::PathFillType,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -43,7 +47,8 @@ pub enum PathCommand {
 
     /// Add an arc.
     ///
-    /// Arguments: bounding rectangle, start angle (radians), sweep angle (radians)
+    /// Arguments: bounding rectangle, start angle (radians), sweep angle
+    /// (radians)
     AddArc(Rect<Pixels>, f32, f32),
 }
 
@@ -318,7 +323,8 @@ impl Path {
         self.compute_bounds_internal()
     }
 
-    /// Internal bounds computation (shared between bounds() and compute_bounds())
+    /// Internal bounds computation (shared between bounds() and
+    /// compute_bounds())
     #[inline]
     fn compute_bounds_internal(&self) -> Rect<Pixels> {
         let mut min_x = f32::INFINITY;
@@ -346,9 +352,7 @@ impl Path {
                     max_x = max_x.max(c1.x.0).max(c2.x.0).max(e.x.0);
                     max_y = max_y.max(c1.y.0).max(c2.y.0).max(e.y.0);
                 }
-                PathCommand::AddRect(r)
-                | PathCommand::AddOval(r)
-                | PathCommand::AddArc(r, _, _) => {
+                PathCommand::AddRect(r) | PathCommand::AddOval(r) | PathCommand::AddArc(r, ..) => {
                     min_x = min_x.min(r.left().0);
                     min_y = min_y.min(r.top().0);
                     max_x = max_x.max(r.right().0);
@@ -482,7 +486,7 @@ impl Path {
                         crossings += 1;
                     }
                 }
-                PathCommand::AddArc(_, _, _) => {
+                PathCommand::AddArc(..) => {
                     // TODO: Implement arc containment
                     // For now, skip arcs (conservative - may miss some points)
                 }
@@ -544,7 +548,7 @@ impl Path {
                         winding += 1;
                     }
                 }
-                PathCommand::AddArc(_, _, _) => {
+                PathCommand::AddArc(..) => {
                     // TODO: Implement arc winding
                 }
             }

@@ -1,14 +1,15 @@
 //! wgpu Window - Platform-driven GPU rendering integration test
 //!
 //! Demonstrates the full integration path:
-//! flui-platform (Platform::run + PlatformWindow) -> raw-window-handle -> wgpu -> GPU
+//! flui-platform (Platform::run + PlatformWindow) -> raw-window-handle -> wgpu
+//! -> GPU
 //!
 //! Run with: cargo run --example wgpu_window
 
-use flui_platform::traits::PlatformWindow;
-use flui_platform::{current_platform, WindowOptions};
-use flui_types::geometry::{px, Size};
 use std::sync::{Arc, Mutex};
+
+use flui_platform::{WindowOptions, current_platform, traits::PlatformWindow};
+use flui_types::geometry::{Size, px};
 
 /// Wrapper that implements HasWindowHandle + HasDisplayHandle
 /// by delegating to PlatformWindow trait methods.

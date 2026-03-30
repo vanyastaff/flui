@@ -132,8 +132,8 @@ pub trait ElementExt: ElementBase + Sized {
     }
 }
 
-// Note: Can't impl ElementExt for all ElementBase because ElementBase is not Sized
-// Users should use BoxedElement::new() instead
+// Note: Can't impl ElementExt for all ElementBase because ElementBase is not
+// Sized Users should use BoxedElement::new() instead
 
 /// A boxed View for type erasure.
 ///

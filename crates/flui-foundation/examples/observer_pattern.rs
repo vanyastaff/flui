@@ -3,10 +3,15 @@
 //! This example demonstrates the efficient observer list implementations
 //! for managing event listeners and callbacks.
 
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    thread,
+};
+
 use flui_foundation::{HashedObserverList, ObserverList, SyncObserverList};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::thread;
 
 fn main() {
     println!("=== FLUI Foundation: Observer Pattern Example ===\n");

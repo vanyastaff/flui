@@ -6,8 +6,8 @@
 //! Run with: `cargo run --example frame_budget -p flui-scheduler`
 
 use flui_scheduler::{
-    duration::{FrameDuration, Milliseconds},
     FrameBudget, FrameBudgetBuilder,
+    duration::{FrameDuration, Milliseconds},
 };
 
 fn main() {

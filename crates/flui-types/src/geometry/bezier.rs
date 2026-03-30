@@ -9,11 +9,12 @@
 //! - Vector graphics
 //! - UI transitions
 
-use super::Pixels;
 use std::fmt;
 
-use super::traits::{NumericUnit, Unit};
-use super::{Line, Point, Rect, Vec2};
+use super::{
+    Line, Pixels, Point, Rect, Vec2,
+    traits::{NumericUnit, Unit},
+};
 
 // ============================================================================
 // Quadratic Bézier
@@ -21,7 +22,8 @@ use super::{Line, Point, Rect, Vec2};
 
 /// Quadratic Bézier curve with generic unit type.
 ///
-/// A quadratic Bézier curve is defined by three points: start (p0), control (p1), and end (p2).
+/// A quadratic Bézier curve is defined by three points: start (p0), control
+/// (p1), and end (p2).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct QuadBez<T: Unit> {
@@ -209,8 +211,8 @@ impl QuadBez<Pixels> {
         }
     }
 
-    /// Finds the nearest point on the curve to the given point using binary search.
-    /// Reserved for future curve operations API.
+    /// Finds the nearest point on the curve to the given point using binary
+    /// search. Reserved for future curve operations API.
     #[allow(dead_code)]
     #[must_use]
     fn nearest_t(&self, point: Point<Pixels>, t0: f32, t1: f32, iterations: u32) -> Point<Pixels> {
@@ -270,7 +272,8 @@ where
 
 /// Cubic Bézier curve with generic unit type.
 ///
-/// A cubic Bézier curve is defined by four points: start (p0), control points (p1, p2), and end (p3).
+/// A cubic Bézier curve is defined by four points: start (p0), control points
+/// (p1, p2), and end (p3).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CubicBez<T: Unit> {
@@ -537,7 +540,8 @@ impl CubicBez<Pixels> {
         self.nearest_point_subdivision(point, new_t0, new_t1, subdivisions - 1)
     }
 
-    /// Flattens the curve into a series of line segments within the given tolerance.
+    /// Flattens the curve into a series of line segments within the given
+    /// tolerance.
     #[inline]
     #[must_use]
     pub fn flatten(&self, tolerance: f32) -> Vec<Point<Pixels>> {

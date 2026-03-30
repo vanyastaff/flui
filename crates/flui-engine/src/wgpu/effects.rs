@@ -27,7 +27,7 @@ pub struct GradientStop {
     /// Position along gradient (0.0 = start, 1.0 = end)
     pub position: f32,
     /// Padding for GPU alignment
-    pub _padding: [f32; 3],
+    pub padding: [f32; 3],
 }
 
 impl GradientStop {
@@ -36,7 +36,7 @@ impl GradientStop {
         Self {
             color: color.to_rgba_f32().into(),
             position: position.clamp(0.0, 1.0),
-            _padding: [0.0; 3],
+            padding: [0.0; 3],
         }
     }
 
@@ -69,7 +69,7 @@ pub struct LinearGradientInstance {
     /// Number of gradient stops (1-8)
     pub stop_count: u32,
     /// Padding for GPU alignment
-    pub _padding: [u32; 3],
+    pub padding: [u32; 3],
 }
 
 impl LinearGradientInstance {
@@ -87,7 +87,7 @@ impl LinearGradientInstance {
             gradient_end: [end.x, end.y],
             corner_radii,
             stop_count: stop_count.min(8), // Max 8 stops
-            _padding: [0; 3],
+            padding: [0; 3],
         }
     }
 
@@ -140,13 +140,13 @@ pub struct RadialGradientInstance {
     /// Gradient radius
     pub radius: f32,
     /// Padding
-    pub _padding1: f32,
+    pub padding1: f32,
     /// Corner radii [top-left, top-right, bottom-right, bottom-left]
     pub corner_radii: [f32; 4],
     /// Number of gradient stops (1-8)
     pub stop_count: u32,
     /// Padding for GPU alignment
-    pub _padding2: [u32; 3],
+    pub padding2: [u32; 3],
 }
 
 impl RadialGradientInstance {
@@ -162,10 +162,10 @@ impl RadialGradientInstance {
             bounds,
             center: [center.x, center.y],
             radius,
-            _padding1: 0.0,
+            padding1: 0.0,
             corner_radii,
             stop_count: stop_count.min(8),
-            _padding2: [0; 3],
+            padding2: [0; 3],
         }
     }
 
@@ -267,13 +267,13 @@ pub struct ShadowInstance {
     /// Corner radius (uniform for now)
     pub corner_radius: f32,
     /// Padding
-    pub _padding1: [f32; 3],
+    pub padding1: [f32; 3],
     /// Shadow offset
     pub shadow_offset: [f32; 2],
     /// Blur sigma
     pub blur_sigma: f32,
     /// Padding
-    pub _padding2: f32,
+    pub padding2: f32,
     /// Shadow color
     pub shadow_color: [f32; 4],
 }
@@ -302,10 +302,10 @@ impl ShadowInstance {
             rect_pos,
             rect_size,
             corner_radius,
-            _padding1: [0.0; 3],
+            padding1: [0.0; 3],
             shadow_offset: [params.offset.x, params.offset.y],
             blur_sigma: params.blur_sigma,
-            _padding2: 0.0,
+            padding2: 0.0,
             shadow_color: params.color.to_rgba_f32().into(),
         }
     }
@@ -324,7 +324,7 @@ pub struct BlurParams {
     /// Sample offset multiplier
     pub offset: f32,
     /// Padding for GPU alignment
-    pub _padding: f32,
+    pub padding: f32,
 }
 
 impl BlurParams {
@@ -333,7 +333,7 @@ impl BlurParams {
         Self {
             texture_size,
             offset,
-            _padding: 0.0,
+            padding: 0.0,
         }
     }
 }

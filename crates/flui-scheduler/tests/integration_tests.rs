@@ -3,7 +3,16 @@
 //! These tests verify the complete scheduler system works correctly
 //! across multiple components working together.
 
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    },
+    time::Duration,
+};
+
 use flui_scheduler::{
+    FrameBudget,
     config::PerformanceMode,
     duration::{FrameDuration, Milliseconds},
     frame::{AppLifecycleState, SchedulerPhase},
@@ -11,11 +20,7 @@ use flui_scheduler::{
     task::{Priority, TaskQueue},
     ticker::{ScheduledTicker, Ticker, TickerCanceled, TickerFuture, TickerState},
     vsync::{VsyncDrivenScheduler, VsyncMode, VsyncScheduler},
-    FrameBudget,
 };
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
 
 // ============================================================================
 // Scheduler Integration Tests
@@ -980,8 +985,7 @@ fn test_priority_ext_skip_threshold() {
 
 #[test]
 fn test_frame_timing_ext() {
-    use flui_scheduler::frame::FrameTiming;
-    use flui_scheduler::traits::FrameTimingExt;
+    use flui_scheduler::{frame::FrameTiming, traits::FrameTimingExt};
 
     let timing = FrameTiming::new(60);
 
@@ -1537,8 +1541,9 @@ fn test_typed_id_raw() {
 
 #[test]
 fn test_typed_id_from_raw() {
-    use flui_scheduler::id::TypedFrameId;
     use std::num::NonZeroU64;
+
+    use flui_scheduler::id::TypedFrameId;
 
     let raw = NonZeroU64::new(42).unwrap();
     let id = TypedFrameId::from_raw(raw);
@@ -1603,8 +1608,9 @@ fn test_typed_id_ordering() {
 
 #[test]
 fn test_typed_id_hash() {
-    use flui_scheduler::id::TypedFrameId;
     use std::collections::HashSet;
+
+    use flui_scheduler::id::TypedFrameId;
 
     let id1 = TypedFrameId::new();
     let id2 = TypedFrameId::new();
@@ -1622,28 +1628,28 @@ fn test_typed_id_hash() {
 fn test_id_generator() {
     use flui_scheduler::id::{FrameIdMarker, IdGenerator};
 
-    let gen = IdGenerator::<FrameIdMarker>::new();
+    let generator = IdGenerator::<FrameIdMarker>::new();
 
-    let id1 = gen.next();
-    let id2 = gen.next();
-    let id3 = gen.next();
+    let id1 = generator.next();
+    let id2 = generator.next();
+    let id3 = generator.next();
 
     assert_eq!(id1.as_u64(), 1);
     assert_eq!(id2.as_u64(), 2);
     assert_eq!(id3.as_u64(), 3);
 
     // Test current
-    assert_eq!(gen.current(), 4);
+    assert_eq!(generator.current(), 4);
 }
 
 #[test]
 fn test_id_generator_starting_from() {
     use flui_scheduler::id::{IdGenerator, TaskIdMarker};
 
-    let gen = IdGenerator::<TaskIdMarker>::starting_from(100);
+    let generator = IdGenerator::<TaskIdMarker>::starting_from(100);
 
-    let id1 = gen.next();
-    let id2 = gen.next();
+    let id1 = generator.next();
+    let id2 = generator.next();
 
     assert_eq!(id1.as_u64(), 100);
     assert_eq!(id2.as_u64(), 101);
@@ -1654,9 +1660,9 @@ fn test_id_generator_starting_from_zero() {
     use flui_scheduler::id::{IdGenerator, TaskIdMarker};
 
     // Starting from 0 should be converted to 1
-    let gen = IdGenerator::<TaskIdMarker>::starting_from(0);
+    let generator = IdGenerator::<TaskIdMarker>::starting_from(0);
 
-    let id = gen.next();
+    let id = generator.next();
     assert_eq!(id.as_u64(), 1);
 }
 
@@ -1664,18 +1670,18 @@ fn test_id_generator_starting_from_zero() {
 fn test_id_generator_reset() {
     use flui_scheduler::id::{FrameIdMarker, IdGenerator};
 
-    let gen = IdGenerator::<FrameIdMarker>::new();
+    let generator = IdGenerator::<FrameIdMarker>::new();
 
-    gen.next();
-    gen.next();
-    gen.next();
+    generator.next();
+    generator.next();
+    generator.next();
 
-    assert_eq!(gen.current(), 4);
+    assert_eq!(generator.current(), 4);
 
-    gen.reset();
-    assert_eq!(gen.current(), 1);
+    generator.reset();
+    assert_eq!(generator.current(), 1);
 
-    let id = gen.next();
+    let id = generator.next();
     assert_eq!(id.as_u64(), 1);
 }
 
@@ -1683,8 +1689,8 @@ fn test_id_generator_reset() {
 fn test_id_generator_default() {
     use flui_scheduler::id::{FrameIdMarker, IdGenerator};
 
-    let gen: IdGenerator<FrameIdMarker> = Default::default();
-    assert_eq!(gen.current(), 1);
+    let generator: IdGenerator<FrameIdMarker> = Default::default();
+    assert_eq!(generator.current(), 1);
 }
 
 #[test]
@@ -2411,8 +2417,7 @@ fn test_task_debug() {
 
 #[test]
 fn test_typed_task() {
-    use flui_scheduler::task::TypedTask;
-    use flui_scheduler::traits::UserInputPriority;
+    use flui_scheduler::{task::TypedTask, traits::UserInputPriority};
 
     let task = TypedTask::<UserInputPriority>::new(|| {});
 
@@ -2421,8 +2426,7 @@ fn test_typed_task() {
 
 #[test]
 fn test_typed_task_execute() {
-    use flui_scheduler::task::TypedTask;
-    use flui_scheduler::traits::AnimationPriority;
+    use flui_scheduler::{task::TypedTask, traits::AnimationPriority};
 
     let executed = Arc::new(AtomicU32::new(0));
     let e = Arc::clone(&executed);
@@ -2438,8 +2442,7 @@ fn test_typed_task_execute() {
 
 #[test]
 fn test_typed_task_id() {
-    use flui_scheduler::task::TypedTask;
-    use flui_scheduler::traits::BuildPriority;
+    use flui_scheduler::{task::TypedTask, traits::BuildPriority};
 
     let task = TypedTask::<BuildPriority>::new(|| {});
     let id = task.id();
@@ -2450,8 +2453,7 @@ fn test_typed_task_id() {
 
 #[test]
 fn test_typed_task_debug() {
-    use flui_scheduler::task::TypedTask;
-    use flui_scheduler::traits::IdlePriority;
+    use flui_scheduler::{task::TypedTask, traits::IdlePriority};
 
     let task = TypedTask::<IdlePriority>::new(|| {});
     let debug = format!("{:?}", task);
@@ -2560,8 +2562,7 @@ fn test_budget_policy_all() {
 
 #[test]
 fn test_phase_stats() {
-    use flui_scheduler::budget::PhaseStats;
-    use flui_scheduler::duration::Percentage;
+    use flui_scheduler::{budget::PhaseStats, duration::Percentage};
 
     let stats = PhaseStats::new(Milliseconds::new(5.0), Percentage::new(30.0));
 
@@ -2698,8 +2699,7 @@ fn test_frame_budget_jank_percentage_empty() {
 
 #[test]
 fn test_priority_ext_should_skip_all_policies() {
-    use flui_scheduler::budget::BudgetPolicy;
-    use flui_scheduler::traits::PriorityExt;
+    use flui_scheduler::{budget::BudgetPolicy, traits::PriorityExt};
 
     // Continue policy - nothing skipped
     assert!(!Priority::UserInput.should_skip(BudgetPolicy::Continue));
@@ -3039,8 +3039,7 @@ fn test_scheduler_adjust_for_epoch() {
 
 #[test]
 fn test_frame_timing_ext_elapsed() {
-    use flui_scheduler::frame::FrameTimingBuilder;
-    use flui_scheduler::traits::FrameTimingExt;
+    use flui_scheduler::{frame::FrameTimingBuilder, traits::FrameTimingExt};
 
     let timing = FrameTimingBuilder::new().target_fps(60).build();
 
@@ -3055,8 +3054,7 @@ fn test_frame_timing_ext_elapsed() {
 
 #[test]
 fn test_frame_timing_ext_remaining() {
-    use flui_scheduler::frame::FrameTimingBuilder;
-    use flui_scheduler::traits::FrameTimingExt;
+    use flui_scheduler::{frame::FrameTimingBuilder, traits::FrameTimingExt};
 
     let timing = FrameTimingBuilder::new().target_fps(60).build();
 
@@ -3068,8 +3066,7 @@ fn test_frame_timing_ext_remaining() {
 
 #[test]
 fn test_frame_timing_ext_frame_duration() {
-    use flui_scheduler::frame::FrameTimingBuilder;
-    use flui_scheduler::traits::FrameTimingExt;
+    use flui_scheduler::{frame::FrameTimingBuilder, traits::FrameTimingExt};
 
     let timing = FrameTimingBuilder::new().target_fps(60).build();
 
@@ -3082,8 +3079,7 @@ fn test_frame_timing_ext_frame_duration() {
 
 #[test]
 fn test_frame_timing_ext_utilization() {
-    use flui_scheduler::frame::FrameTimingBuilder;
-    use flui_scheduler::traits::FrameTimingExt;
+    use flui_scheduler::{frame::FrameTimingBuilder, traits::FrameTimingExt};
 
     let timing = FrameTimingBuilder::new().target_fps(60).build();
 
@@ -3095,8 +3091,7 @@ fn test_frame_timing_ext_utilization() {
 
 #[test]
 fn test_frame_budget_ext_elapsed() {
-    use flui_scheduler::budget::FrameBudget;
-    use flui_scheduler::traits::FrameBudgetExt;
+    use flui_scheduler::{budget::FrameBudget, traits::FrameBudgetExt};
 
     let budget = FrameBudget::new(60);
 
@@ -3107,8 +3102,7 @@ fn test_frame_budget_ext_elapsed() {
 
 #[test]
 fn test_frame_budget_ext_remaining() {
-    use flui_scheduler::budget::FrameBudget;
-    use flui_scheduler::traits::FrameBudgetExt;
+    use flui_scheduler::{budget::FrameBudget, traits::FrameBudgetExt};
 
     let budget = FrameBudget::new(60);
 
@@ -3120,8 +3114,7 @@ fn test_frame_budget_ext_remaining() {
 
 #[test]
 fn test_frame_budget_ext_frame_duration() {
-    use flui_scheduler::budget::FrameBudget;
-    use flui_scheduler::traits::FrameBudgetExt;
+    use flui_scheduler::{budget::FrameBudget, traits::FrameBudgetExt};
 
     let budget = FrameBudget::new(60);
 
@@ -3133,8 +3126,7 @@ fn test_frame_budget_ext_frame_duration() {
 
 #[test]
 fn test_frame_budget_ext_utilization_percent() {
-    use flui_scheduler::budget::FrameBudget;
-    use flui_scheduler::traits::FrameBudgetExt;
+    use flui_scheduler::{budget::FrameBudget, traits::FrameBudgetExt};
 
     let budget = FrameBudget::new(60);
 
@@ -3146,13 +3138,12 @@ fn test_frame_budget_ext_utilization_percent() {
 
 #[test]
 fn test_frame_budget_ext_should_execute() {
-    use flui_scheduler::budget::FrameBudget;
-    use flui_scheduler::task::Priority;
-    use flui_scheduler::traits::FrameBudgetExt;
+    use flui_scheduler::{budget::FrameBudget, task::Priority, traits::FrameBudgetExt};
 
     let budget = FrameBudget::new(60);
 
-    // Use UFCS to call trait method - with low utilization, all priorities should execute
+    // Use UFCS to call trait method - with low utilization, all priorities should
+    // execute
     assert!(FrameBudgetExt::should_execute(&budget, Priority::Idle));
     assert!(FrameBudgetExt::should_execute(&budget, Priority::Animation));
     assert!(FrameBudgetExt::should_execute(&budget, Priority::UserInput));
@@ -3160,12 +3151,12 @@ fn test_frame_budget_ext_should_execute() {
 
 #[test]
 fn test_ticker_provider_schedule_tick_typed() {
-    use flui_scheduler::duration::Seconds;
-    use flui_scheduler::ticker::TickerProvider;
     use std::sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     };
+
+    use flui_scheduler::{duration::Seconds, ticker::TickerProvider};
 
     struct MockProvider {
         called: Arc<AtomicBool>,
@@ -3237,8 +3228,9 @@ fn test_ticker_toggle_mute_no_op_from_stopped() {
 
 #[test]
 fn test_ticker_tick_skipped_when_muted() {
-    use flui_scheduler::ticker::TickerProvider;
     use std::sync::atomic::AtomicU32;
+
+    use flui_scheduler::ticker::TickerProvider;
 
     struct MockProvider;
     impl TickerProvider for MockProvider {
@@ -3361,8 +3353,9 @@ fn test_ticker_group_default_empty() {
 
 #[test]
 fn test_scheduled_ticker_start_typed_works() {
-    use flui_scheduler::duration::Seconds;
     use std::sync::atomic::AtomicBool;
+
+    use flui_scheduler::duration::Seconds;
 
     let scheduler = Arc::new(Scheduler::new());
     let mut ticker = ScheduledTicker::new(scheduler.clone());
@@ -3425,9 +3418,11 @@ fn test_ticker_future_debug_complete_state() {
 
 #[test]
 fn test_ticker_future_poll_new_pending() {
-    use std::future::Future;
-    use std::pin::Pin;
-    use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+    use std::{
+        future::Future,
+        pin::Pin,
+        task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
+    };
 
     let mut future = TickerFuture::new();
 
@@ -3447,9 +3442,11 @@ fn test_ticker_future_poll_new_pending() {
 
 #[test]
 fn test_ticker_future_poll_complete_ready() {
-    use std::future::Future;
-    use std::pin::Pin;
-    use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+    use std::{
+        future::Future,
+        pin::Pin,
+        task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
+    };
 
     let mut future = TickerFuture::complete();
 
@@ -3472,9 +3469,11 @@ fn test_ticker_future_poll_complete_ready() {
 
 #[test]
 fn test_ticker_future_or_cancel_poll_pending() {
-    use std::future::Future;
-    use std::pin::Pin;
-    use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+    use std::{
+        future::Future,
+        pin::Pin,
+        task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
+    };
 
     let future = TickerFuture::new();
     let mut or_cancel = future.or_cancel();
@@ -3498,9 +3497,11 @@ fn test_ticker_future_or_cancel_poll_pending() {
 
 #[test]
 fn test_ticker_future_or_cancel_poll_complete() {
-    use std::future::Future;
-    use std::pin::Pin;
-    use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+    use std::{
+        future::Future,
+        pin::Pin,
+        task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
+    };
 
     let future = TickerFuture::complete();
     let mut or_cancel = future.or_cancel();

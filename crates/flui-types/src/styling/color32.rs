@@ -1,7 +1,8 @@
 //! Packed 32-bit color representation with premultiplied alpha.
 //!
 //! This module provides [`Color32`], a space-efficient color type that stores
-//! colors as a packed 32-bit value with premultiplied alpha in sRGB gamma space.
+//! colors as a packed 32-bit value with premultiplied alpha in sRGB gamma
+//! space.
 //!
 //! ## Premultiplied Alpha
 //!
@@ -16,8 +17,8 @@
 //!
 //! ## Gamma Space Operations
 //!
-//! All operations on `Color32` are performed in gamma space (sRGB), not linear space.
-//! This is:
+//! All operations on `Color32` are performed in gamma space (sRGB), not linear
+//! space. This is:
 //! - Faster than linear space operations
 //! - Perceptually more even for UI colors
 //! - Standard for web and most UI frameworks
@@ -259,7 +260,8 @@ impl Color32 {
 
     /// Blends this color on top of another (gamma-space alpha blending).
     ///
-    /// This uses the standard Porter-Duff "source over" operation in gamma space.
+    /// This uses the standard Porter-Duff "source over" operation in gamma
+    /// space.
     ///
     /// # Examples
     ///

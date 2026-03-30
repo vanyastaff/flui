@@ -1,7 +1,8 @@
 //! Scene Render - End-to-end GPU compositor proof
 //!
 //! Demonstrates the full rendering pipeline:
-//! Canvas (draw commands) -> DisplayList -> CanvasLayer -> Scene -> Renderer -> GPU -> pixels
+//! Canvas (draw commands) -> DisplayList -> CanvasLayer -> Scene -> Renderer ->
+//! GPU -> pixels
 //!
 //! This proves that flui-engine's `render_scene()` correctly traverses the
 //! LayerTree and dispatches DisplayList commands through the GPU backend.
@@ -28,15 +29,17 @@
 //!
 //! Run with: cargo run --example scene_render
 
+use std::sync::{Arc, Mutex};
+
 use flui_engine::wgpu::Renderer;
 use flui_hot_reload::HotReloadDriver;
 use flui_layer::{CanvasLayer, Layer, LayerTree, Scene};
-use flui_platform::traits::PlatformWindow;
-use flui_platform::{current_platform, WindowOptions};
-use flui_types::geometry::{px, Rect, Size};
-use flui_types::painting::Paint;
-use flui_types::styling::Color;
-use std::sync::{Arc, Mutex};
+use flui_platform::{WindowOptions, current_platform, traits::PlatformWindow};
+use flui_types::{
+    geometry::{Rect, Size, px},
+    painting::Paint,
+    styling::Color,
+};
 
 /// Wrapper for raw-window-handle bridging
 struct PlatformWindowHandle {
@@ -211,9 +214,7 @@ fn main() {
         if hot_reload.is_some() {
             tracing::info!("Scene render with hot-reload — edit plugin and rebuild to see changes");
         } else {
-            tracing::info!(
-                "Scene render pipeline active — set FLUI_SCENE_PLUGIN for hot-reload"
-            );
+            tracing::info!("Scene render pipeline active — set FLUI_SCENE_PLUGIN for hot-reload");
         }
     }));
 

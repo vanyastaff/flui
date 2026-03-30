@@ -9,16 +9,18 @@
 //!
 //! Flutter reference: https://api.flutter.dev/flutter/gestures/TapGestureRecognizer-class.html
 
-use super::recognizer::{GestureRecognizer, GestureRecognizerState};
-use flui_types::geometry::Pixels;
-
-use crate::arena::GestureArenaMember;
-use crate::events::{PointerEvent, PointerType};
-use crate::ids::PointerId;
-use crate::settings::GestureSettings;
-use flui_types::Offset;
-use parking_lot::Mutex;
 use std::sync::Arc;
+
+use flui_types::{Offset, geometry::Pixels};
+use parking_lot::Mutex;
+
+use super::recognizer::{GestureRecognizer, GestureRecognizerState};
+use crate::{
+    arena::GestureArenaMember,
+    events::{PointerEvent, PointerType},
+    ids::PointerId,
+    settings::GestureSettings,
+};
 
 /// Callback for tap events
 pub type TapCallback = Arc<dyn Fn(TapDetails) + Send + Sync>;

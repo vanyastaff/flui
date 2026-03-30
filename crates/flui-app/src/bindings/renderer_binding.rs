@@ -30,23 +30,28 @@
 //! includes this binding plus widgets support. Use `RenderingFlutterBinding`
 //! directly only when working with the rendering layer without widgets.
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU32, Ordering},
+    },
+};
 
-use parking_lot::RwLock;
-
-use flui_foundation::{impl_binding_singleton, BindingBase, HasInstance};
+use flui_foundation::{BindingBase, HasInstance, impl_binding_singleton};
 use flui_interaction::binding::GestureBinding;
 use flui_painting::PaintingBinding;
-use flui_rendering::binding::{HitTestable, PipelineManifold, RendererBinding};
-use flui_rendering::hit_testing::HitTestResult;
-use flui_rendering::input::MouseTracker;
-use flui_rendering::pipeline::PipelineOwner;
-use flui_rendering::view::{RenderView, ViewConfiguration};
+use flui_rendering::{
+    binding::{HitTestable, PipelineManifold, RendererBinding},
+    hit_testing::HitTestResult,
+    input::MouseTracker,
+    pipeline::PipelineOwner,
+    view::{RenderView, ViewConfiguration},
+};
 use flui_scheduler::Scheduler;
 use flui_semantics::{Assertiveness, SemanticsAction, SemanticsBinding};
 use flui_types::Offset;
+use parking_lot::RwLock;
 
 // ============================================================================
 // RenderingFlutterBinding
@@ -71,7 +76,8 @@ use flui_types::Offset;
 /// This binding is thread-safe and can be accessed from multiple threads.
 /// Internal state is protected by `RwLock`s.
 pub struct RenderingFlutterBinding {
-    /// Root of the PipelineOwner tree (shared with AppBinding when used together).
+    /// Root of the PipelineOwner tree (shared with AppBinding when used
+    /// together).
     root_pipeline_owner: Arc<RwLock<PipelineOwner>>,
 
     /// Render views managed by this binding (viewId → RenderView).
@@ -84,6 +90,7 @@ pub struct RenderingFlutterBinding {
     semantics_enabled: AtomicBool,
 
     /// Listeners for semantics enabled changes.
+    #[allow(clippy::type_complexity)]
     semantics_listeners: RwLock<Vec<Arc<dyn Fn(bool) + Send + Sync>>>,
 
     /// Counter for deferred first frame.
@@ -171,7 +178,8 @@ impl RenderingFlutterBinding {
     // ========================================================================
 
     /// Tell the framework to not send the first frames to the engine until
-    /// there is a corresponding call to [`allow_first_frame`](Self::allow_first_frame).
+    /// there is a corresponding call to
+    /// [`allow_first_frame`](Self::allow_first_frame).
     ///
     /// Call this to perform asynchronous initialization work before the first
     /// frame is rendered (which takes down the splash screen). The framework
@@ -367,7 +375,7 @@ impl HitTestable for RenderingFlutterBinding {
 
 impl RendererBinding for RenderingFlutterBinding {
     fn root_pipeline_owner(&self) -> &RwLock<PipelineOwner> {
-        &*self.root_pipeline_owner
+        &self.root_pipeline_owner
     }
 
     fn render_views(&self) -> &RwLock<HashMap<u64, Arc<RwLock<RenderView>>>> {

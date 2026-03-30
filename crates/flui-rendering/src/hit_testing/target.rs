@@ -293,8 +293,9 @@ pub enum PointerEventKind {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::px;
+
+    use super::*;
 
     #[test]
     fn test_pointer_event_down() {

@@ -13,14 +13,13 @@
 //! let up = pointer_up(Offset::new(Pixels(100.0), Pixels(100.0)), PointerType::Mouse);
 //! ```
 
-use crate::events::{
-    make_cancel_event, make_down_event, make_move_event, make_up_event, Code, Key, KeyState,
-    KeyboardEvent, Modifiers, NamedKey, PointerEvent, PointerType,
-};
-use flui_types::geometry::Pixels;
-
-use flui_types::geometry::Offset;
+use flui_types::geometry::{Offset, Pixels};
 use ui_events::keyboard::Location;
+
+use crate::events::{
+    Code, Key, KeyState, KeyboardEvent, Modifiers, NamedKey, PointerEvent, PointerType,
+    make_cancel_event, make_down_event, make_move_event, make_up_event,
+};
 
 // ============================================================================
 // Device Kind Helpers

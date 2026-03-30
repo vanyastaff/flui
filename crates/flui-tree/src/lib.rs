@@ -30,8 +30,11 @@
 //! ## Example
 //!
 //! ```
-//! use flui_tree::{Mounted, Unmounted, Mountable, Unmountable, NodeState, Depth, ElementId, Identifier};
 //! use std::marker::PhantomData;
+//!
+//! use flui_tree::{
+//!     Depth, ElementId, Identifier, Mountable, Mounted, NodeState, Unmountable, Unmounted,
+//! };
 //!
 //! struct MyNode<S: NodeState> {
 //!     depth: Depth,
@@ -41,7 +44,11 @@
 //!
 //! impl MyNode<Unmounted> {
 //!     fn new() -> Self {
-//!         MyNode { depth: Depth::root(), parent: None, _state: PhantomData }
+//!         MyNode {
+//!             depth: Depth::root(),
+//!             parent: None,
+//!             _state: PhantomData,
+//!         }
 //!     }
 //! }
 //!
@@ -51,7 +58,11 @@
 //!
 //!     fn mount(self, parent: Option<ElementId>, parent_depth: Depth) -> MyNode<Mounted> {
 //!         MyNode {
-//!             depth: if parent.is_some() { parent_depth.child_depth() } else { Depth::root() },
+//!             depth: if parent.is_some() {
+//!                 parent_depth.child_depth()
+//!             } else {
+//!                 Depth::root()
+//!             },
 //!             parent,
 //!             _state: PhantomData,
 //!         }
@@ -62,10 +73,18 @@
 //!     type Id = ElementId;
 //!     type Unmounted = MyNode<Unmounted>;
 //!
-//!     fn parent(&self) -> Option<ElementId> { self.parent }
-//!     fn depth(&self) -> Depth { self.depth }
+//!     fn parent(&self) -> Option<ElementId> {
+//!         self.parent
+//!     }
+//!     fn depth(&self) -> Depth {
+//!         self.depth
+//!     }
 //!     fn unmount(self) -> MyNode<Unmounted> {
-//!         MyNode { depth: Depth::root(), parent: None, _state: PhantomData }
+//!         MyNode {
+//!             depth: Depth::root(),
+//!             parent: None,
+//!             _state: PhantomData,
+//!         }
 //!     }
 //! }
 //!
@@ -97,66 +116,16 @@ pub mod visitor;
 // RE-EXPORTS - Core Traits
 // ============================================================================
 
-pub use traits::{TreeNav, TreeNavExt, TreeRead, TreeReadExt, TreeWrite, TreeWriteNav};
-
-// ============================================================================
-// RE-EXPORTS - Node State & Lifecycle (Typestate)
-// ============================================================================
-
-pub use state::{Mountable, MountableExt, Mounted, NodeState, Unmountable, Unmounted};
-
 // ============================================================================
 // RE-EXPORTS - Arity System
 // ============================================================================
-
 pub use arity::{
     Arity, ArityError, AtLeast, ChildrenAccess, Exact, FixedChildren, Leaf, NoChildren, Optional,
     OptionalChild, Range, RuntimeArity, Single, SliceChildren, Variable,
 };
-
-// ============================================================================
-// RE-EXPORTS - Node System
-// ============================================================================
-
-pub use traits::{
-    collect_matching_nodes, count_matching_nodes, Node, NodeExt, NodePredicate, NodeTypeInfo,
-    NodeVisitor,
-};
-
-// ============================================================================
-// RE-EXPORTS - Depth System
-// ============================================================================
-
-pub use depth::{AtomicDepth, Depth, DepthAware, DepthError, MAX_TREE_DEPTH, ROOT_DEPTH};
-
-// ============================================================================
-// RE-EXPORTS - Slot System
-// ============================================================================
-
-pub use iter::{IndexedSlot, Slot, SlotBuilder, SlotIter};
-
-// ============================================================================
-// RE-EXPORTS - Path System
-// ============================================================================
-
-pub use iter::{IndexPath, TreeNavPathExt, TreePath};
-
-// ============================================================================
-// RE-EXPORTS - Cursor System
-// ============================================================================
-
-pub use iter::TreeCursor;
-
-// ============================================================================
-// RE-EXPORTS - Diff System
-// ============================================================================
-
-pub use diff::{ChildDiff, ChildOp, DiffOp, DiffStats, TreeDiff};
-
 // ============================================================================
 // RE-EXPORTS - Children System
 // ============================================================================
-
 pub use arity::{
     ArityStorage,
     ArityStorageView,
@@ -168,37 +137,61 @@ pub use arity::{
     SingleChildStorage,
     VariableChildrenStorage,
 };
-
+// ============================================================================
+// RE-EXPORTS - Depth System
+// ============================================================================
+pub use depth::{AtomicDepth, Depth, DepthAware, DepthError, MAX_TREE_DEPTH, ROOT_DEPTH};
+// ============================================================================
+// RE-EXPORTS - Diff System
+// ============================================================================
+pub use diff::{ChildDiff, ChildOp, DiffOp, DiffStats, TreeDiff};
+// ============================================================================
+// RE-EXPORTS - Errors
+// ============================================================================
+pub use error::{TreeError, TreeResult};
+// ============================================================================
+// RE-EXPORTS - Foundation Types
+// ============================================================================
+pub use flui_foundation::{ElementId, Identifier};
+// ============================================================================
+// RE-EXPORTS - Cursor System
+// ============================================================================
+pub use iter::TreeCursor;
 // ============================================================================
 // RE-EXPORTS - Iterators
 // ============================================================================
-
 pub use iter::{
     AllSiblings, Ancestors, AncestorsWithDepth, BreadthFirstIter, DepthFirstIter, DepthFirstOrder,
     Descendants, DescendantsWithDepth, Siblings, SiblingsDirection,
 };
-
+// ============================================================================
+// RE-EXPORTS - Path System
+// ============================================================================
+pub use iter::{IndexPath, TreeNavPathExt, TreePath};
+// ============================================================================
+// RE-EXPORTS - Slot System
+// ============================================================================
+pub use iter::{IndexedSlot, Slot, SlotBuilder, SlotIter};
+// ============================================================================
+// RE-EXPORTS - Node State & Lifecycle (Typestate)
+// ============================================================================
+pub use state::{Mountable, MountableExt, Mounted, NodeState, Unmountable, Unmounted};
+// ============================================================================
+// RE-EXPORTS - Node System
+// ============================================================================
+pub use traits::{
+    Node, NodeExt, NodePredicate, NodeTypeInfo, NodeVisitor, collect_matching_nodes,
+    count_matching_nodes,
+};
+pub use traits::{TreeNav, TreeNavExt, TreeRead, TreeReadExt, TreeWrite, TreeWriteNav};
 // ============================================================================
 // RE-EXPORTS - Visitor Pattern
 // ============================================================================
-
 pub use visitor::{
-    collect_all, count_all, find_first, for_each, max_depth, visit_breadth_first,
-    visit_depth_first, CollectVisitor, CountVisitor, FindVisitor, ForEachVisitor, MaxDepthVisitor,
-    TreeVisitor, TreeVisitorMut, VisitorResult,
+    CollectVisitor, CountVisitor, FindVisitor, ForEachVisitor, MaxDepthVisitor, TreeVisitor,
+    TreeVisitorMut, VisitorResult, collect_all, count_all, find_first, for_each, max_depth,
+    visit_breadth_first, visit_depth_first,
 };
-
-// ============================================================================
-// RE-EXPORTS - Errors
-// ============================================================================
-
-pub use error::{TreeError, TreeResult};
-
-// ============================================================================
-// RE-EXPORTS - Foundation Types
-// ============================================================================
-
-pub use flui_foundation::{ElementId, Identifier};
 
 // ============================================================================
 // PRELUDE
@@ -210,13 +203,9 @@ pub use flui_foundation::{ElementId, Identifier};
 /// use flui_tree::prelude::*;
 /// ```
 pub mod prelude {
+    pub use flui_foundation::ElementId;
+
     pub use crate::{
-        // Convenience functions
-        collect_all,
-        count_all,
-        find_first,
-        for_each,
-        max_depth,
         // Iterators
         Ancestors,
         // Arity types
@@ -281,9 +270,13 @@ pub mod prelude {
         Variable,
         VariableChildrenStorage,
         VisitorResult,
+        // Convenience functions
+        collect_all,
+        count_all,
+        find_first,
+        for_each,
+        max_depth,
     };
-
-    pub use flui_foundation::ElementId;
 }
 
 // ============================================================================

@@ -30,25 +30,18 @@ pub mod web;
 pub mod winit;
 
 // Re-exports
-pub use headless::HeadlessPlatform;
-
-#[cfg(windows)]
-pub use windows::WindowsPlatform;
-
-#[cfg(target_os = "macos")]
-pub use macos::MacOSPlatform;
-
-#[cfg(target_os = "linux")]
-pub use linux::LinuxPlatform;
-
 #[cfg(target_os = "android")]
 pub use android::AndroidPlatform;
-
+pub use headless::HeadlessPlatform;
 #[cfg(target_os = "ios")]
 pub use ios::IOSPlatform;
-
+#[cfg(target_os = "linux")]
+pub use linux::LinuxPlatform;
+#[cfg(target_os = "macos")]
+pub use macos::MacOSPlatform;
 #[cfg(target_arch = "wasm32")]
 pub use web::WebPlatform;
-
+#[cfg(windows)]
+pub use windows::WindowsPlatform;
 #[cfg(feature = "winit-backend")]
 pub use winit::WinitPlatform;

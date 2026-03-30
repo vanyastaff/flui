@@ -1,7 +1,7 @@
 //! Cross-platform GPU renderer with automatic backend selection
 //!
-//! This module provides a unified renderer that automatically selects the appropriate
-//! GPU backend based on the target platform:
+//! This module provides a unified renderer that automatically selects the
+//! appropriate GPU backend based on the target platform:
 //!
 //! - **macOS/iOS**: Metal 4
 //! - **Windows**: DirectX 12 (Agility SDK)
@@ -32,10 +32,12 @@
 //! renderer.render(display_list)?;
 //! ```
 
-use crate::error::RenderError;
-use anyhow::Result;
 use std::sync::Arc;
+
+use anyhow::Result;
 use wgpu;
+
+use crate::error::RenderError;
 
 /// GPU backend capabilities
 #[derive(Debug, Clone)]
@@ -100,21 +102,15 @@ impl GpuCapabilities {
             0x106B => "Apple".to_string(),
             0x1414 => "Microsoft (WARP)".to_string(),
             0x5143 => "Qualcomm".to_string(),
-            _ => format!("Unknown (0x{:04X})", vendor_id),
+            _ => format!("Unknown (0x{vendor_id:04X})"),
         }
     }
 
     fn check_hdr_support(backend: wgpu::Backend) -> bool {
         match backend {
-            wgpu::Backend::Metal => {
-                // macOS EDR (Extended Dynamic Range) support
-                // Available on XDR displays
-                true
-            }
-            wgpu::Backend::Dx12 => {
-                // Windows Auto HDR (Windows 11 24H2+)
-                true
-            }
+            // macOS EDR (Extended Dynamic Range) on XDR displays,
+            // Windows Auto HDR (Windows 11 24H2+)
+            wgpu::Backend::Metal | wgpu::Backend::Dx12 => true,
             _ => false,
         }
     }
@@ -167,7 +163,8 @@ impl Renderer {
             ..Default::default()
         });
 
-        // Create surface — requires unsafe: wgpu surface creation from raw window handle
+        // Create surface — requires unsafe: wgpu surface creation from raw window
+        // handle
         #[allow(unsafe_code)]
         let surface = unsafe {
             instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::from_window(window)?)
@@ -199,7 +196,7 @@ impl Renderer {
                 required_features: Self::required_features(&capabilities),
                 required_limits: Self::required_limits(&capabilities),
                 memory_hints: wgpu::MemoryHints::default(),
-                trace: Default::default(),
+                trace: wgpu::Trace::default(),
             })
             .await?;
 
@@ -269,8 +266,8 @@ impl Renderer {
                 label: Some("FLUI Offscreen Device"),
                 required_features: Self::required_features(&capabilities),
                 required_limits: Self::required_limits(&capabilities),
-                memory_hints: Default::default(),
-                trace: Default::default(),
+                memory_hints: wgpu::MemoryHints::default(),
+                trace: wgpu::Trace::default(),
             })
             .await?;
 
@@ -356,10 +353,10 @@ impl Renderer {
 
     /// Required GPU limits based on capabilities and adapter support
     fn required_limits(capabilities: &GpuCapabilities) -> wgpu::Limits {
-        let mut limits = wgpu::Limits::default();
-
-        // Ensure we can handle reasonably large textures
-        limits.max_texture_dimension_2d = capabilities.max_texture_size.min(16384);
+        let mut limits = wgpu::Limits {
+            max_texture_dimension_2d: capabilities.max_texture_size.min(16384),
+            ..wgpu::Limits::default()
+        };
 
         // Push constant size — only set if adapter supports push constants
         if capabilities.supports_push_constants {
@@ -416,18 +413,19 @@ impl Renderer {
 
     /// Resize the surface
     pub fn resize(&mut self, width: u32, height: u32) {
-        if let (Some(config), Some(surface)) = (&mut self.config, &self.surface) {
-            if width > 0 && height > 0 {
-                config.width = width;
-                config.height = height;
-                surface.configure(&self.device, config);
+        if let (Some(config), Some(surface)) = (&mut self.config, &self.surface)
+            && width > 0
+            && height > 0
+        {
+            config.width = width;
+            config.height = height;
+            surface.configure(&self.device, config);
 
-                if let Some(painter) = &mut self.painter {
-                    painter.resize(width, height);
-                }
-
-                tracing::debug!("Surface resized to {}x{}", width, height);
+            if let Some(painter) = &mut self.painter {
+                painter.resize(width, height);
             }
+
+            tracing::debug!("Surface resized to {}x{}", width, height);
         }
     }
 
@@ -460,10 +458,7 @@ impl Renderer {
     ///
     /// Returns `(0, 0)` if no surface is configured (e.g., offscreen renderer).
     pub fn size(&self) -> (u32, u32) {
-        self.config
-            .as_ref()
-            .map(|c| (c.width, c.height))
-            .unwrap_or((0, 0))
+        self.config.as_ref().map_or((0, 0), |c| (c.width, c.height))
     }
 
     /// Render a `flui_layer::Scene` to the surface.
@@ -476,11 +471,10 @@ impl Renderer {
         let surface = self.surface.as_ref().ok_or(RenderError::SurfaceLost)?;
 
         let output = surface.get_current_texture().map_err(|e| match e {
-            wgpu::SurfaceError::Lost => RenderError::SurfaceLost,
+            wgpu::SurfaceError::Lost | wgpu::SurfaceError::Other => RenderError::SurfaceLost,
             wgpu::SurfaceError::OutOfMemory => RenderError::OutOfMemory,
             wgpu::SurfaceError::Outdated => RenderError::SurfaceOutdated,
             wgpu::SurfaceError::Timeout => RenderError::Timeout,
-            _ => RenderError::SurfaceLost,
         })?;
 
         let view = output
@@ -512,24 +506,24 @@ impl Renderer {
         }
 
         // 2. Render scene content via LayerTree traversal
-        if scene.has_content() {
-            if let Some(painter) = self.painter.take() {
-                let mut backend = Backend::new(painter);
+        if scene.has_content()
+            && let Some(painter) = self.painter.take()
+        {
+            let mut backend = Backend::new(painter);
 
-                // Depth-first traversal of layer tree
-                if let Some(root_id) = scene.root() {
-                    Self::render_layer_recursive(scene.layer_tree(), root_id, &mut backend);
-                }
-
-                // Flush painter batches to GPU
-                let mut painter = backend.into_painter();
-                if let Err(e) = painter.render(&view, &mut encoder) {
-                    tracing::error!("Painter render failed: {}", e);
-                }
-
-                // Return painter to Renderer for reuse
-                self.painter = Some(painter);
+            // Depth-first traversal of layer tree
+            if let Some(root_id) = scene.root() {
+                Self::render_layer_recursive(scene.layer_tree(), root_id, &mut backend);
             }
+
+            // Flush painter batches to GPU
+            let mut painter = backend.into_painter();
+            if let Err(e) = painter.render(&view, &mut encoder) {
+                tracing::error!("Painter render failed: {}", e);
+            }
+
+            // Return painter to Renderer for reuse
+            self.painter = Some(painter);
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));

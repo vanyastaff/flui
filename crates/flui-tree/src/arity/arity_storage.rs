@@ -1,11 +1,13 @@
 //! Arity-aware storage enum for children management.
 //!
 //! This module provides `ArityStorage<T, A>` - a compile-time arity-validated
-//! storage enum that adapts its internal representation based on arity constraints.
+//! storage enum that adapts its internal representation based on arity
+//! constraints.
 //!
 //! # Design
 //!
-//! `ArityStorage` uses an enum to provide optimal storage for different arity types:
+//! `ArityStorage` uses an enum to provide optimal storage for different arity
+//! types:
 //!
 //! | Arity | Storage | Size (Box<dyn RenderBox>) |
 //! |-------|---------|---------------------------|
@@ -19,7 +21,9 @@
 //! # Usage
 //!
 //! ```
-//! use flui_tree::arity::{ArityStorage, Exact, Optional, Variable, ChildrenStorage, ChildrenStorageExt};
+//! use flui_tree::arity::{
+//!     ArityStorage, ChildrenStorage, ChildrenStorageExt, Exact, Optional, Variable,
+//! };
 //!
 //! // Single child storage
 //! let mut storage: ArityStorage<u32, Exact<1>> = ArityStorage::new();
@@ -40,14 +44,17 @@
 //! assert_eq!(sum, 3);
 //! ```
 
-use smallvec::SmallVec;
 use std::marker::PhantomData;
 
-use super::accessors::{NoChildren, OptionalChild, SliceChildren};
-use super::error::ArityError;
-use super::runtime::RuntimeArity;
-use super::storage::ChildrenStorage;
-use super::traits::Arity;
+use smallvec::SmallVec;
+
+use super::{
+    accessors::{NoChildren, OptionalChild, SliceChildren},
+    error::ArityError,
+    runtime::RuntimeArity,
+    storage::ChildrenStorage,
+    traits::Arity,
+};
 
 // ============================================================================
 // ARITY STORAGE ENUM
@@ -118,7 +125,7 @@ impl<T, A: Arity> ArityStorage<T, A> {
             RuntimeArity::Optional => ArityStorage::Optional(None),
             RuntimeArity::Exact(_) => ArityStorage::Exact(SmallVec::new()),
             RuntimeArity::Variable | RuntimeArity::AtLeast(_) => ArityStorage::Variable(Vec::new()),
-            RuntimeArity::Range(_, _) => ArityStorage::Range(Vec::new()),
+            RuntimeArity::Range(..) => ArityStorage::Range(Vec::new()),
         }
     }
 
@@ -133,7 +140,7 @@ impl<T, A: Arity> ArityStorage<T, A> {
             RuntimeArity::Variable | RuntimeArity::AtLeast(_) => {
                 ArityStorage::Variable(Vec::with_capacity(capacity))
             }
-            RuntimeArity::Range(_, _) => ArityStorage::Range(Vec::with_capacity(capacity)),
+            RuntimeArity::Range(..) => ArityStorage::Range(Vec::with_capacity(capacity)),
         }
     }
 }
@@ -154,7 +161,7 @@ impl<T, A: Arity> ArityStorage<T, A> {
         match self {
             ArityStorage::Leaf(_) => &[],
             ArityStorage::Optional(opt) => match opt {
-                Some(ref child) => std::slice::from_ref(child),
+                Some(child) => std::slice::from_ref(child),
                 None => &[],
             },
             ArityStorage::Exact(vec) => vec.as_slice(),
@@ -219,7 +226,7 @@ impl<T: Send + Sync, A: Arity> ChildrenStorage<T> for ArityStorage<T, A> {
         match self {
             ArityStorage::Leaf(_) => &mut [],
             ArityStorage::Optional(opt) => {
-                if let Some(ref mut child) = opt {
+                if let Some(child) = opt {
                     std::slice::from_mut(child)
                 } else {
                     &mut []
@@ -564,7 +571,7 @@ impl<T, A: Arity> ArityStorage<T, A> {
         match self {
             ArityStorage::Leaf(_) => ArityStorageView::Leaf(NoChildren(PhantomData)),
             ArityStorage::Optional(opt) => {
-                let slice = if let Some(ref child) = opt {
+                let slice = if let Some(child) = opt {
                     std::slice::from_ref(child)
                 } else {
                     &[]
@@ -599,7 +606,7 @@ impl<T, A: Arity> ArityStorage<T, A> {
             RuntimeArity::Variable | RuntimeArity::AtLeast(_) => {
                 ArityStorage::Variable(iter.into_iter().collect())
             }
-            RuntimeArity::Range(_, _) => ArityStorage::Range(iter.into_iter().collect()),
+            RuntimeArity::Range(..) => ArityStorage::Range(iter.into_iter().collect()),
             _ => {
                 // For other arities, create empty and try to add
                 let mut storage = Self::new();
@@ -623,10 +630,10 @@ impl<T, A: Arity> ArityStorage<T, A> {
         match self {
             ArityStorage::Leaf(_) => Ok(()),
             ArityStorage::Optional(opt) => {
-                if let Some(ref child) = opt {
-                    if !f(child) {
-                        *opt = None;
-                    }
+                if let Some(child) = opt
+                    && !f(child)
+                {
+                    *opt = None;
                 }
                 Ok(())
             }

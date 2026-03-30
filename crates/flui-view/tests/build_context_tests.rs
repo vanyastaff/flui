@@ -3,14 +3,14 @@
 //! Tests the BuildContext trait implementation, dependency tracking,
 //! ancestor lookups, and rebuild scheduling.
 
+use std::{any::TypeId, sync::Arc};
+
 use flui_view::{
     BuildContext, BuildContextExt, BuildOwner, ElementBase, ElementBuildContext,
     ElementBuildContextBuilder, ElementTree, Lifecycle, StatelessBehavior, StatelessElement,
     StatelessView, View,
 };
 use parking_lot::RwLock;
-use std::any::TypeId;
-use std::sync::Arc;
 
 // ============================================================================
 // Test Views

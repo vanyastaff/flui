@@ -25,23 +25,26 @@
 //!   └── scheduler: Scheduler           (frame callbacks)
 //! ```
 
-use crate::app::lifecycle::{DefaultLifecycle, LifecycleEvent, LifecycleState, PlatformLifecycle};
-use crate::bindings::RenderingFlutterBinding;
-use flui_engine::wgpu::Renderer;
-use flui_engine::RenderError;
+use std::sync::{
+    Arc, OnceLock,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+};
+
+use flui_engine::{RenderError, wgpu::Renderer};
 use flui_foundation::HasInstance;
-use flui_interaction::binding::GestureBinding;
-use flui_interaction::routing::FocusManager;
+use flui_interaction::{binding::GestureBinding, routing::FocusManager};
 use flui_layer::Scene;
 use flui_platform::traits::{PlatformInput, PlatformWindow};
 use flui_rendering::constraints::BoxConstraints;
 use flui_scheduler::Scheduler;
-use flui_types::geometry::px;
-use flui_types::Size;
+use flui_types::{Size, geometry::px};
 use flui_view::{ElementBase, View, WidgetsBinding};
 use parking_lot::{Mutex, RwLock};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+
+use crate::{
+    app::lifecycle::{DefaultLifecycle, LifecycleEvent, LifecycleState, PlatformLifecycle},
+    bindings::RenderingFlutterBinding,
+};
 
 /// Combined application binding.
 ///
@@ -55,7 +58,8 @@ use std::sync::{Arc, OnceLock};
 /// # Input Handling
 ///
 /// Platform events enter through [`handle_input()`](Self::handle_input):
-/// - Pointer events → `GestureBinding::handle_pointer_event()` (with coalescing)
+/// - Pointer events → `GestureBinding::handle_pointer_event()` (with
+///   coalescing)
 /// - Keyboard events → `FocusManager::dispatch_key_event()`
 ///
 /// # Thread Safety
@@ -111,7 +115,8 @@ impl AppBinding {
             Arc::new(RwLock::new(flui_rendering::pipeline::PipelineOwner::new()));
 
         // Create RendererBinding sharing the SAME PipelineOwner
-        let renderer = RenderingFlutterBinding::new_with_pipeline(Arc::clone(&shared_pipeline_owner));
+        let renderer =
+            RenderingFlutterBinding::new_with_pipeline(Arc::clone(&shared_pipeline_owner));
 
         // Create WidgetsBinding
         let widgets = WidgetsBinding::new();
@@ -353,7 +358,8 @@ impl AppBinding {
     /// 3. Paint phase - generate display lists
     /// 4. Create Scene from LayerTree
     ///
-    /// Returns `Some(Scene)` if a new scene was produced, or cached scene otherwise.
+    /// Returns `Some(Scene)` if a new scene was produced, or cached scene
+    /// otherwise.
     pub fn draw_frame(&self, constraints: BoxConstraints) -> Option<Arc<Scene>> {
         // Phase 1: Build (WidgetsBinding)
         {
@@ -402,25 +408,25 @@ impl AppBinding {
         let scene = self.draw_frame(constraints);
 
         // 3. Render scene to GPU
-        if let Some(ref scene) = scene {
-            if scene.has_content() {
-                match renderer.render_scene(scene) {
-                    Ok(()) => {
-                        self.frames_rendered.fetch_add(1, Ordering::Relaxed);
-                        tracing::trace!(
-                            frame = scene.frame_number(),
-                            total = self.frames_rendered.load(Ordering::Relaxed),
-                            "Frame rendered successfully"
-                        );
-                    }
-                    Err(RenderError::SurfaceLost) | Err(RenderError::SurfaceOutdated) => {
-                        self.frames_dropped.fetch_add(1, Ordering::Relaxed);
-                        tracing::debug!("Surface lost/outdated, will retry next frame");
-                    }
-                    Err(e) => {
-                        self.frames_dropped.fetch_add(1, Ordering::Relaxed);
-                        tracing::error!("Render error: {:?}", e);
-                    }
+        if let Some(ref scene) = scene
+            && scene.has_content()
+        {
+            match renderer.render_scene(scene) {
+                Ok(()) => {
+                    self.frames_rendered.fetch_add(1, Ordering::Relaxed);
+                    tracing::trace!(
+                        frame = scene.frame_number(),
+                        total = self.frames_rendered.load(Ordering::Relaxed),
+                        "Frame rendered successfully"
+                    );
+                }
+                Err(RenderError::SurfaceLost) | Err(RenderError::SurfaceOutdated) => {
+                    self.frames_dropped.fetch_add(1, Ordering::Relaxed);
+                    tracing::debug!("Surface lost/outdated, will retry next frame");
+                }
+                Err(e) => {
+                    self.frames_dropped.fetch_add(1, Ordering::Relaxed);
+                    tracing::error!("Render error: {:?}", e);
                 }
             }
         }
@@ -444,10 +450,12 @@ impl AppBinding {
     /// Handle a platform input event.
     ///
     /// This is the single entry point for all input from the platform layer.
-    /// Routes pointer events to `GestureBinding` and keyboard events to `FocusManager`.
+    /// Routes pointer events to `GestureBinding` and keyboard events to
+    /// `FocusManager`.
     ///
-    /// Pointer events are coalesced by `GestureBinding` — high-frequency move events
-    /// are stored and flushed once per frame via `flush_pending_moves()` in `render_frame()`.
+    /// Pointer events are coalesced by `GestureBinding` — high-frequency move
+    /// events are stored and flushed once per frame via
+    /// `flush_pending_moves()` in `render_frame()`.
     pub fn handle_input(&self, input: PlatformInput) {
         match input {
             PlatformInput::Pointer(pointer_event) => {
@@ -465,10 +473,7 @@ impl AppBinding {
                         // once render objects implement gesture handling
                         let result = flui_interaction::routing::HitTestResult::new();
                         if !render_result.is_empty() {
-                            tracing::debug!(
-                                hits = render_result.len(),
-                                "Hit test found targets"
-                            );
+                            tracing::debug!(hits = render_result.len(), "Hit test found targets");
                         }
                         result
                     });
@@ -520,7 +525,8 @@ mod tests {
     #[test]
     fn test_renderer_initialized() {
         let binding = AppBinding::instance();
-        // Verify the renderer sub-binding is accessible (created during AppBinding::new)
+        // Verify the renderer sub-binding is accessible (created during
+        // AppBinding::new)
         let _renderer = binding.renderer();
     }
 }

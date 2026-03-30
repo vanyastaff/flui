@@ -18,7 +18,8 @@ pub enum TileMode {
 
     /// Edge colors are rendered as transparent.
     ///
-    /// Outside the bounds of the gradient or shader, transparent pixels are rendered.
+    /// Outside the bounds of the gradient or shader, transparent pixels are
+    /// rendered.
     Decal,
 }
 
@@ -30,7 +31,8 @@ pub enum BlurStyle {
 
     /// Draw solid inside the shape, blur outside.
     ///
-    /// The interior of the shape is drawn opaque, while the exterior is blurred.
+    /// The interior of the shape is drawn opaque, while the exterior is
+    /// blurred.
     Solid,
 
     /// Draw nothing inside the shape, blur outside.
@@ -93,7 +95,8 @@ pub enum PathOperation {
     /// This is equivalent to a boolean AND operation.
     Intersect,
 
-    /// Create a path that includes the areas covered by either path, but not both.
+    /// Create a path that includes the areas covered by either path, but not
+    /// both.
     ///
     /// This is equivalent to a boolean XOR operation.
     Xor,

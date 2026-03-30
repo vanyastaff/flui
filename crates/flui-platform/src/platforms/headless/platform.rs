@@ -3,24 +3,27 @@
 //! This platform implementation runs without any actual windowing system,
 //! making it ideal for unit tests and CI environments.
 
-use crate::cursor::CursorStyle;
-use crate::shared::{PlatformHandlers, WindowCallbacks};
-use crate::traits::{
-    Clipboard, ClipboardItem, DesktopCapabilities, DispatchEventResult, Platform,
-    PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformInput, PlatformTextSystem,
-    PlatformWindow, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent,
-    WindowId, WindowOptions,
-};
+use std::{path::PathBuf, sync::Arc};
+
 use anyhow::Result;
 use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
 use parking_lot::Mutex;
-use std::path::PathBuf;
-use std::sync::Arc;
+
+use crate::{
+    cursor::CursorStyle,
+    shared::{PlatformHandlers, WindowCallbacks},
+    traits::{
+        Clipboard, ClipboardItem, DesktopCapabilities, DispatchEventResult, Platform,
+        PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformInput, PlatformTextSystem,
+        PlatformWindow, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent,
+        WindowId, WindowOptions,
+    },
+};
 
 /// Headless platform for testing
 ///
-/// This platform implementation doesn't create any real windows or graphics contexts.
-/// It's designed for:
+/// This platform implementation doesn't create any real windows or graphics
+/// contexts. It's designed for:
 /// - Unit tests that need a Platform implementation
 /// - CI environments without display servers
 /// - Benchmarking without rendering overhead
@@ -700,8 +703,9 @@ mod tests {
 
     #[test]
     fn test_on_input_callback() {
-        use crate::traits::{DispatchEventResult, PlatformInput};
         use std::sync::atomic::{AtomicBool, Ordering};
+
+        use crate::traits::{DispatchEventResult, PlatformInput};
 
         let window = MockWindow::new(WindowId(0), WindowOptions::default());
 

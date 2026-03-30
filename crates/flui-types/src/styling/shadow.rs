@@ -1,19 +1,25 @@
 //! Shadow types for styling
 
-use crate::geometry::traits::{NumericUnit, Unit};
-use crate::geometry::{Offset, Pixels};
-use crate::styling::Color;
+use crate::{
+    geometry::{
+        Offset, Pixels,
+        traits::{NumericUnit, Unit},
+    },
+    styling::Color,
+};
 
 /// A single shadow cast by a shape.
 ///
-/// Generic over unit type `T` for full type safety. Use `Shadow<Pixels>` for UI shadows.
+/// Generic over unit type `T` for full type safety. Use `Shadow<Pixels>` for UI
+/// shadows.
 ///
 /// # Examples
 ///
 /// ```
-/// use flui_types::styling::Shadow;
-/// use flui_types::geometry::{Offset, px};
-/// use flui_types::styling::Color;
+/// use flui_types::{
+///     geometry::{Offset, px},
+///     styling::{Color, Shadow},
+/// };
 ///
 /// let shadow = Shadow::new(Color::BLACK, Offset::new(px(2.0), px(2.0)), px(4.0));
 /// ```
@@ -26,7 +32,8 @@ pub struct Shadow<T: Unit> {
     /// The displacement of the shadow from the casting element.
     pub offset: Offset<T>,
 
-    /// The standard deviation of the Gaussian to convolve with the shadow's shape.
+    /// The standard deviation of the Gaussian to convolve with the shadow's
+    /// shape.
     ///
     /// A blur radius of 0.0 means the shadow has a sharp edge.
     pub blur_radius: T,
@@ -72,7 +79,8 @@ impl<T: Unit> Shadow<T> {
 }
 
 impl Shadow<Pixels> {
-    /// Converts a blur radius in pixels to sigma units for use in Gaussian blur.
+    /// Converts a blur radius in pixels to sigma units for use in Gaussian
+    /// blur.
     ///
     /// This follows the same conversion that Flutter uses.
     #[inline]
@@ -156,7 +164,8 @@ impl<T: Unit> Default for Shadow<T> {
 
 /// A shadow cast by a box.
 ///
-/// Generic over unit type `T` for full type safety. Use `BoxShadow<Pixels>` for UI shadows.
+/// Generic over unit type `T` for full type safety. Use `BoxShadow<Pixels>` for
+/// UI shadows.
 ///
 /// BoxShadow extends Shadow with a spread radius, which causes the shadow to
 /// expand or contract before being blurred. It also supports inner shadows.
@@ -164,9 +173,10 @@ impl<T: Unit> Default for Shadow<T> {
 /// # Examples
 ///
 /// ```
-/// use flui_types::styling::BoxShadow;
-/// use flui_types::geometry::{Offset, px};
-/// use flui_types::styling::Color;
+/// use flui_types::{
+///     geometry::{Offset, px},
+///     styling::{BoxShadow, Color},
+/// };
 ///
 /// // Standard drop shadow
 /// let shadow = BoxShadow::new(
@@ -193,7 +203,8 @@ pub struct BoxShadow<T: Unit> {
     /// The displacement of the shadow from the casting element.
     pub offset: Offset<T>,
 
-    /// The standard deviation of the Gaussian to convolve with the shadow's shape.
+    /// The standard deviation of the Gaussian to convolve with the shadow's
+    /// shape.
     pub blur_radius: T,
 
     /// The amount the box should be inflated prior to applying the blur.
@@ -294,7 +305,8 @@ impl<T: Unit> BoxShadow<T> {
 }
 
 impl BoxShadow<Pixels> {
-    /// Converts a blur radius in pixels to sigma units for use in Gaussian blur.
+    /// Converts a blur radius in pixels to sigma units for use in Gaussian
+    /// blur.
     #[inline]
     pub fn convert_radius_to_sigma(radius: Pixels) -> f32 {
         Shadow::<Pixels>::convert_radius_to_sigma(radius)
@@ -355,7 +367,8 @@ where
         result
     }
 
-    /// Scales the shadow's offset, blur radius, and spread radius by the given factor.
+    /// Scales the shadow's offset, blur radius, and spread radius by the given
+    /// factor.
     #[inline]
     pub fn scale(&self, factor: f32) -> Self {
         Self {

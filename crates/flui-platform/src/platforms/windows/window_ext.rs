@@ -1,7 +1,8 @@
 //! Windows-specific window extensions
 //!
-//! This module provides Windows-specific features that extend the core `Window` trait.
-//! These features are only available on Windows and use Microsoft's Win32/WinRT APIs.
+//! This module provides Windows-specific features that extend the core `Window`
+//! trait. These features are only available on Windows and use Microsoft's
+//! Win32/WinRT APIs.
 //!
 //! # Usage
 //!
@@ -192,8 +193,8 @@ pub enum WindowsBackdrop {
 
     /// Mica material - subtle translucent effect (Windows 11).
     ///
-    /// Mica is a subtle, semi-transparent material that shows the desktop wallpaper.
-    /// Best for app backgrounds.
+    /// Mica is a subtle, semi-transparent material that shows the desktop
+    /// wallpaper. Best for app backgrounds.
     Mica,
 
     /// Mica Alt material - darker variant (Windows 11).
@@ -216,14 +217,15 @@ pub enum WindowsBackdrop {
 impl WindowsBackdrop {
     /// Convert to DWM_SYSTEMBACKDROP_TYPE value.
     ///
-    /// Maps to the Windows 11 DwmSetWindowAttribute DWMWA_SYSTEMBACKDROP_TYPE values.
+    /// Maps to the Windows 11 DwmSetWindowAttribute DWMWA_SYSTEMBACKDROP_TYPE
+    /// values.
     pub fn to_dwm_value(self) -> i32 {
         match self {
-            WindowsBackdrop::None => 1,      // DWMSBT_NONE
-            WindowsBackdrop::Mica => 2,      // DWMSBT_MAINWINDOW (Mica)
-            WindowsBackdrop::MicaAlt => 4,   // DWMSBT_TABBEDWINDOW (Mica Alt)
-            WindowsBackdrop::Acrylic => 3,   // DWMSBT_TRANSIENTWINDOW (Acrylic)
-            WindowsBackdrop::Tabbed => 4,    // DWMSBT_TABBEDWINDOW
+            WindowsBackdrop::None => 1,    // DWMSBT_NONE
+            WindowsBackdrop::Mica => 2,    // DWMSBT_MAINWINDOW (Mica)
+            WindowsBackdrop::MicaAlt => 4, // DWMSBT_TABBEDWINDOW (Mica Alt)
+            WindowsBackdrop::Acrylic => 3, // DWMSBT_TRANSIENTWINDOW (Acrylic)
+            WindowsBackdrop::Tabbed => 4,  // DWMSBT_TABBEDWINDOW
         }
     }
 
@@ -259,10 +261,10 @@ impl WindowCornerPreference {
     /// Convert to DWM_WINDOW_CORNER_PREFERENCE value.
     pub fn to_dwm_value(self) -> i32 {
         match self {
-            WindowCornerPreference::Default => 0,       // DWMWCP_DEFAULT
-            WindowCornerPreference::DoNotRound => 1,    // DWMWCP_DONOTROUND
-            WindowCornerPreference::Round => 2,         // DWMWCP_ROUND
-            WindowCornerPreference::RoundSmall => 3,    // DWMWCP_ROUNDSMALL
+            WindowCornerPreference::Default => 0,    // DWMWCP_DEFAULT
+            WindowCornerPreference::DoNotRound => 1, // DWMWCP_DONOTROUND
+            WindowCornerPreference::Round => 2,      // DWMWCP_ROUND
+            WindowCornerPreference::RoundSmall => 3, // DWMWCP_ROUNDSMALL
         }
     }
 }
@@ -296,11 +298,11 @@ impl TaskbarProgressState {
     /// Convert to TBPF_* flags.
     pub fn to_tbpf_value(self) -> u32 {
         match self {
-            TaskbarProgressState::NoProgress => 0x0,        // TBPF_NOPROGRESS
-            TaskbarProgressState::Normal => 0x2,            // TBPF_NORMAL
-            TaskbarProgressState::Indeterminate => 0x1,     // TBPF_INDETERMINATE
-            TaskbarProgressState::Error => 0x4,             // TBPF_ERROR
-            TaskbarProgressState::Paused => 0x8,            // TBPF_PAUSED
+            TaskbarProgressState::NoProgress => 0x0, // TBPF_NOPROGRESS
+            TaskbarProgressState::Normal => 0x2,     // TBPF_NORMAL
+            TaskbarProgressState::Indeterminate => 0x1, // TBPF_INDETERMINATE
+            TaskbarProgressState::Error => 0x4,      // TBPF_ERROR
+            TaskbarProgressState::Paused => 0x8,     // TBPF_PAUSED
         }
     }
 }

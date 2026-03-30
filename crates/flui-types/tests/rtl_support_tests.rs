@@ -3,8 +3,10 @@
 //! This module tests bidirectional layout support for EdgeInsets/Edges,
 //! including start/end semantics and automatic mirroring for RTL languages.
 
-use flui_types::geometry::{px, Edges, Rect};
-use flui_types::typography::TextDirection;
+use flui_types::{
+    geometry::{Edges, Rect, px},
+    typography::TextDirection,
+};
 
 // ============================================================================
 // TextDirection Basic Tests

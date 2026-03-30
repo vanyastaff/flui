@@ -23,7 +23,8 @@
 //!
 //! # Node vs Identifier
 //!
-//! - **`Identifier`** (flui-foundation): Trait for ID types (`ViewId`, `ElementId`, etc.)
+//! - **`Identifier`** (flui-foundation): Trait for ID types (`ViewId`,
+//!   `ElementId`, etc.)
 //! - **`Node`** (this module): Trait for node types that can be stored in trees
 //!
 //! The relationship is: `Node::Id: Identifier`
@@ -31,8 +32,7 @@
 //! # Usage
 //!
 //! ```
-//! use flui_tree::Node;
-//! use flui_tree::ElementId;
+//! use flui_tree::{ElementId, Node};
 //!
 //! // Define a node type
 //! struct Element {
@@ -43,7 +43,9 @@
 //!     type Id = ElementId;
 //! }
 //!
-//! let node = Element { name: "child".into() };
+//! let node = Element {
+//!     name: "child".into(),
+//! };
 //! ```
 //!
 //! # Design Philosophy
@@ -76,8 +78,8 @@ use flui_foundation::Identifier;
 ///
 /// # Type Parameters
 ///
-/// - `Id`: The identifier type used to reference this node in a tree.
-///   Must be `Copy + Send + Sync + Eq + Debug + 'static`.
+/// - `Id`: The identifier type used to reference this node in a tree. Must be
+///   `Copy + Send + Sync + Eq + Debug + 'static`.
 ///
 /// # Requirements
 ///
@@ -91,8 +93,7 @@ use flui_foundation::Identifier;
 /// ## Basic Implementation
 ///
 /// ```
-/// use flui_tree::Node;
-/// use flui_tree::ElementId;
+/// use flui_tree::{ElementId, Node};
 ///
 /// struct MyElement {
 ///     data: String,
@@ -106,8 +107,7 @@ use flui_foundation::Identifier;
 /// ## With Generic Node
 ///
 /// ```
-/// use flui_tree::Node;
-/// use flui_tree::ElementId;
+/// use flui_tree::{ElementId, Node};
 ///
 /// struct GenericNode<T: Send + Sync + 'static> {
 ///     value: T,
@@ -121,8 +121,7 @@ use flui_foundation::Identifier;
 /// ## Using `NodeExt` and `NodeTypeInfo`
 ///
 /// ```
-/// use flui_tree::{Node, NodeExt, NodeTypeInfo};
-/// use flui_tree::ElementId;
+/// use flui_tree::{ElementId, Node, NodeExt, NodeTypeInfo};
 ///
 /// struct MyNode {
 ///     value: i32,

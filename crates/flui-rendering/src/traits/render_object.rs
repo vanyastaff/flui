@@ -1,7 +1,8 @@
 //! RenderObject<P> trait - Protocol-aware base trait for render objects.
 //!
 //! This module defines the core `RenderObject<P>` trait that all concrete
-//! render objects implement through their protocol-specific traits (RenderBox, RenderSliver).
+//! render objects implement through their protocol-specific traits (RenderBox,
+//! RenderSliver).
 //!
 //! # Architecture
 //!
@@ -12,7 +13,8 @@
 //! ```
 //!
 //! The render tree is built from protocol-aware render objects that use the
-//! `RenderObject<P>` trait, where `P` is either `BoxProtocol` or `SliverProtocol`.
+//! `RenderObject<P>` trait, where `P` is either `BoxProtocol` or
+//! `SliverProtocol`.
 //!
 //! # Protocol System
 //!
@@ -21,7 +23,8 @@
 //! - `RenderSliver` for scrollable content (lists, grids)
 //!
 //! These traits provide better APIs with typed contexts, Arity support, and
-//! ParentData handling. Protocol adapters automatically bridge to the storage layer.
+//! ParentData handling. Protocol adapters automatically bridge to the storage
+//! layer.
 //!
 //! # Storage Integration
 //!
@@ -30,14 +33,16 @@
 //! - Dirty state via `RenderState<P>` (needs_layout, needs_paint, etc)
 //! - Thread-safe access via `RwLock`
 
-use downcast_rs::{impl_downcast, DowncastSync};
+use downcast_rs::{DowncastSync, impl_downcast};
 use flui_foundation::Diagnosticable;
 use flui_types::{Offset, Rect};
 
-use crate::protocol::{
-    Protocol, ProtocolConstraints, ProtocolGeometry, ProtocolHitResult, ProtocolPosition,
+use crate::{
+    protocol::{
+        Protocol, ProtocolConstraints, ProtocolGeometry, ProtocolHitResult, ProtocolPosition,
+    },
+    semantics::SemanticsConfiguration,
 };
-use crate::semantics::SemanticsConfiguration;
 
 /// Base trait for all render objects in the render tree.
 ///
@@ -68,9 +73,9 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
     ///
     /// Called by `RenderEntry::layout()`. Returns the computed geometry.
     ///
-    /// **Users don't implement this directly.** Protocol traits like `RenderBox`
-    /// provide blanket implementations that create typed contexts and call
-    /// the typed `perform_layout()` method.
+    /// **Users don't implement this directly.** Protocol traits like
+    /// `RenderBox` provide blanket implementations that create typed
+    /// contexts and call the typed `perform_layout()` method.
     fn perform_layout_raw(&mut self, constraints: ProtocolConstraints<P>) -> ProtocolGeometry<P>;
 
     /// Paints this render object.
@@ -100,9 +105,9 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
 
     /// Returns whether this is a repaint boundary.
     ///
-    /// Repaint boundaries create compositing layers for caching painted content.
-    /// Use for widgets that change frequently (animations) or have expensive
-    /// paint operations.
+    /// Repaint boundaries create compositing layers for caching painted
+    /// content. Use for widgets that change frequently (animations) or have
+    /// expensive paint operations.
     ///
     /// Default: `false` (no caching)
     fn is_repaint_boundary(&self) -> bool {
@@ -168,8 +173,9 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
 
     /// Returns the transform matrix to apply to children.
     ///
-    /// If Some(matrix), the painting pipeline wraps children in a TransformLayer.
-    /// Used by `RenderTransform` to implement transform animations.
+    /// If Some(matrix), the painting pipeline wraps children in a
+    /// TransformLayer. Used by `RenderTransform` to implement transform
+    /// animations.
     ///
     /// Default: `None` (no transform effect)
     fn paint_transform(&self) -> Option<flui_types::Matrix4> {
@@ -217,7 +223,8 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
     /// Returns the number of children for painting.
     ///
     /// Note: This is separate from tree children. Render objects may have
-    /// different numbers of logical vs tree children (e.g., MultiChildRenderObjectWidget).
+    /// different numbers of logical vs tree children (e.g.,
+    /// MultiChildRenderObjectWidget).
     ///
     /// Default: 0 (leaf nodes)
     fn child_count(&self) -> usize {
@@ -227,7 +234,8 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
     /// Returns the paint offset for the child at the given index.
     ///
     /// Called during painting to position children. The offset is relative
-    /// to this node's origin and is typically set during layout via position_child().
+    /// to this node's origin and is typically set during layout via
+    /// position_child().
     ///
     /// Default: Offset::ZERO
     fn child_offset(&self, _index: usize) -> Offset {

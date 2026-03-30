@@ -69,7 +69,7 @@ struct MyApp;
 
 impl StatelessView for MyApp {
     fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
-        // Purple background — change this color and rebuild to test hot-reload!
+        // Purple background — edit this color and hot-reload!
         Box::new(ColoredBoxView::new(
             [0.5, 0.0, 0.5, 1.0], // RGBA: purple
             4096.0,               // large enough to fill any screen

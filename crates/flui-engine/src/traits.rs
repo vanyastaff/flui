@@ -1,8 +1,8 @@
 //! Abstract rendering traits
 //!
-//! This module defines the abstract traits that rendering backends must implement.
-//! These traits enable multiple backend implementations (wgpu, skia, vello, software)
-//! without changing the high-level rendering code.
+//! This module defines the abstract traits that rendering backends must
+//! implement. These traits enable multiple backend implementations (wgpu, skia,
+//! vello, software) without changing the high-level rendering code.
 //!
 //! # Design Principles
 //!
@@ -318,8 +318,9 @@ pub trait CommandRenderer {
 
     /// Add a performance overlay to the scene
     ///
-    /// This is the equivalent of Flutter's `SceneBuilder.addPerformanceOverlay()`.
-    /// Renders FPS counter and frame timing statistics at the specified location.
+    /// This is the equivalent of Flutter's
+    /// `SceneBuilder.addPerformanceOverlay()`. Renders FPS counter and
+    /// frame timing statistics at the specified location.
     ///
     /// # Arguments
     ///
@@ -411,9 +412,11 @@ pub trait Painter {
 
     // ===== Gradient Helpers =====
 
-    /// Sample a gradient shader at the center of a rect to get a representative color
+    /// Sample a gradient shader at the center of a rect to get a representative
+    /// color
     ///
-    /// This is a fallback for when full GPU gradient rendering is not available.
+    /// This is a fallback for when full GPU gradient rendering is not
+    /// available.
     fn sample_gradient_center(shader: &flui_painting::Shader, rect: Rect<Pixels>) -> Color
     where
         Self: Sized,
@@ -512,7 +515,7 @@ pub trait Painter {
 
                 Self::interpolate_gradient_color(colors, stops.as_deref(), t)
             }
-            Shader::Image(_) => Color::WHITE,
+            // Image and other non-gradient shaders fall back to white
             _ => Color::WHITE,
         }
     }
@@ -558,11 +561,13 @@ pub trait Painter {
         let c1 = &colors[idx - 1];
         let c2 = &colors[idx.min(colors.len() - 1)];
 
+        // Color channel interpolation — values are clamped to [0, 255] range
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         Color::rgba(
-            (c1.r as f32 + (c2.r as f32 - c1.r as f32) * local_t) as u8,
-            (c1.g as f32 + (c2.g as f32 - c1.g as f32) * local_t) as u8,
-            (c1.b as f32 + (c2.b as f32 - c1.b as f32) * local_t) as u8,
-            (c1.a as f32 + (c2.a as f32 - c1.a as f32) * local_t) as u8,
+            (f32::from(c1.r) + (f32::from(c2.r) - f32::from(c1.r)) * local_t) as u8,
+            (f32::from(c1.g) + (f32::from(c2.g) - f32::from(c1.g)) * local_t) as u8,
+            (f32::from(c1.b) + (f32::from(c2.b) - f32::from(c1.b)) * local_t) as u8,
+            (f32::from(c1.a) + (f32::from(c2.a) - f32::from(c1.a)) * local_t) as u8,
         )
     }
 

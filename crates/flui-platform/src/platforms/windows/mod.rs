@@ -13,7 +13,7 @@ mod window;
 mod window_ext;
 
 pub use clipboard::WindowsClipboard;
-pub use display::{enumerate_displays, WindowsDisplay};
+pub use display::{WindowsDisplay, enumerate_displays};
 pub use platform::WindowsPlatform;
 pub use window::WindowsWindow;
 pub use window_ext::{
@@ -23,9 +23,9 @@ pub use window_ext::{
 // Re-export Windows types for examples
 #[cfg(target_os = "windows")]
 pub mod win32 {
-    pub use windows::Win32::Foundation::HWND;
-    pub use windows::Win32::Graphics::Dwm::{
-        DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMWINDOWATTRIBUTE,
+    pub use windows::Win32::{
+        Foundation::HWND,
+        Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmExtendFrameIntoClientArea, DwmSetWindowAttribute},
+        UI::Controls::MARGINS,
     };
-    pub use windows::Win32::UI::Controls::MARGINS;
 }

@@ -8,9 +8,11 @@
 //!
 //! Run with: cargo bench
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use flui_types::geometry::{px, Pixels, Point, Rect, Size};
-use flui_types::styling::Color;
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use flui_types::{
+    geometry::{Pixels, Point, Rect, Size, px},
+    styling::Color,
+};
 
 // ============================================================================
 // Geometry Benchmarks

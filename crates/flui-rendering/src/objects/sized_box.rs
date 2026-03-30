@@ -2,10 +2,12 @@
 
 use flui_types::{Pixels, Point, Rect, Size};
 
-use crate::arity::Leaf;
-use crate::context::{BoxHitTestContext, BoxLayoutContext};
-use crate::parent_data::BoxParentData;
-use crate::traits::RenderBox;
+use crate::{
+    arity::Leaf,
+    context::{BoxHitTestContext, BoxLayoutContext},
+    parent_data::BoxParentData,
+    traits::RenderBox,
+};
 
 /// A render object that forces a specific size.
 ///
@@ -121,8 +123,9 @@ impl RenderBox for RenderSizedBox {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::px;
+
+    use super::*;
 
     #[test]
     fn test_sized_box_fixed_creation() {

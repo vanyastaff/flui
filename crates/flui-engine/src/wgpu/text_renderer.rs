@@ -3,16 +3,14 @@
 //! This module integrates glyphon for GPU-accelerated text rendering.
 //! Handles font loading, glyph atlas management, and text layout.
 
-use wgpu::{Device, MultisampleState, Queue, TextureFormat};
-
-#[cfg(feature = "wgpu-backend")]
-use glyphon::{Cache, FontSystem, SwashCache, TextAtlas, TextRenderer as GlyphonRenderer};
-
 use flui_types::{
     geometry::{DevicePixels, Point},
     styling::Color,
     typography::TextStyle,
 };
+#[cfg(feature = "wgpu-backend")]
+use glyphon::{Cache, FontSystem, SwashCache, TextAtlas, TextRenderer as GlyphonRenderer};
+use wgpu::{Device, MultisampleState, Queue, TextureFormat};
 
 /// Text rendering system
 ///

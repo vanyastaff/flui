@@ -25,9 +25,12 @@ members = [
     "crates/flui-app",            # Application framework (ACTIVE - Migration)
 
     # === Examples (platform-specific) ===
-    "examples/android_demo",      # Android GPU demo (cdylib) — build with: cargo ndk -t arm64-v8a build -p flui-android-demo
-    "examples/android_scene",     # Hot-reloadable scene plugin (cdylib) — loaded via dlopen
-    "examples/android_app",       # Widget-based hot-reloadable plugin (cdylib) — app_plugin! macro
+    # NOTE: Android examples are excluded from workspace.members because they
+    # require Android NDK toolchain. Build them with:
+    #   cargo ndk -t arm64-v8a build -p flui-android-demo
+    # "examples/android_demo",      # Android GPU demo (cdylib)
+    # "examples/android_scene",     # Hot-reloadable scene plugin (cdylib)
+    # "examples/android_app",       # Widget-based hot-reloadable plugin (cdylib)
     "examples/desktop_scene",     # Hot-reloadable scene plugin for desktop — loaded via HotReloadDriver
 
     # === Temporarily disabled ===
@@ -59,11 +62,11 @@ default-members = [
 
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
-rust-version = "1.91"
+edition = "2024"
+rust-version = "1.94"
 license = "MIT OR Apache-2.0"
 authors = ["Flui Contributors"]
-repository = "https://github.com/yourusername/flui"
+repository = "https://github.com/vanyastaff/flui"
 
 [workspace.dependencies]
 # ASYNC RUNTIME (Stable: 1.43 LTS - March 2026)

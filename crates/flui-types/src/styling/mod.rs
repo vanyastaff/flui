@@ -1,6 +1,7 @@
 //! Styling types for Flui.
 //!
-//! This module contains types for colors, borders, shadows, and other visual styling.
+//! This module contains types for colors, borders, shadows, and other visual
+//! styling.
 
 pub mod border;
 pub mod border_radius;
@@ -30,6 +31,7 @@ pub use gradient::{
 pub use hsl_hsv::{HSLColor, HSVColor};
 pub use material_colors::MaterialColors;
 pub use physical_model::{Elevation, MaterialType, PhysicalShape};
+pub use shadow::{BoxShadow, Shadow, ShadowQuality};
+
 // Re-export Radius and Corners from geometry module for styling convenience
 pub use crate::geometry::{Corners, Radius};
-pub use shadow::{BoxShadow, Shadow, ShadowQuality};

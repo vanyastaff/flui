@@ -12,7 +12,8 @@ use raw_window_handle::{
 // PlatformWindowHandle adapter
 // ============================================================================
 
-/// Adapter bridging `dyn PlatformWindow` to `HasWindowHandle + HasDisplayHandle`.
+/// Adapter bridging `dyn PlatformWindow` to `HasWindowHandle +
+/// HasDisplayHandle`.
 ///
 /// `Renderer::new()` requires `W: HasWindowHandle + HasDisplayHandle`.
 /// `PlatformWindow` has the methods but traits can't be implemented on `dyn`.

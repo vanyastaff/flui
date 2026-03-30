@@ -14,9 +14,8 @@
 #![cfg(target_os = "windows")]
 #![allow(unused)]
 
-use flui_platform::traits::Platform;
-use flui_platform::{WindowOptions, WindowsPlatform};
-use flui_types::geometry::{px, Size};
+use flui_platform::{WindowOptions, WindowsPlatform, traits::Platform};
+use flui_types::geometry::{Size, px};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging

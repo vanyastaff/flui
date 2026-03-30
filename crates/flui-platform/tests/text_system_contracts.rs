@@ -5,8 +5,10 @@
 //! These tests verify that all platform implementations of PlatformTextSystem
 //! behave consistently and return reasonable values.
 
-use flui_platform::current_platform;
-use flui_platform::traits::{Font, FontRun, FontStyle, FontWeight};
+use flui_platform::{
+    current_platform,
+    traits::{Font, FontRun, FontStyle, FontWeight},
+};
 
 #[test]
 fn test_all_platforms_return_font_names() {

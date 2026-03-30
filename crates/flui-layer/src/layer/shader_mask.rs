@@ -1,7 +1,8 @@
 //! ShaderMaskLayer - Applies a shader as a mask to child content
 //!
-//! This layer type enables advanced masking effects like gradient fades and vignettes
-//! by rendering child content to an offscreen texture and applying a GPU shader as a mask.
+//! This layer type enables advanced masking effects like gradient fades and
+//! vignettes by rendering child content to an offscreen texture and applying a
+//! GPU shader as a mask.
 
 use flui_types::{
     geometry::{Pixels, Rect},
@@ -28,9 +29,11 @@ use flui_types::{
 ///
 /// ```rust
 /// use flui_layer::ShaderMaskLayer;
-/// use flui_types::painting::{BlendMode, ShaderSpec};
-/// use flui_types::styling::Color32;
-/// use flui_types::geometry::Rect;
+/// use flui_types::{
+///     geometry::Rect,
+///     painting::{BlendMode, ShaderSpec},
+///     styling::Color32,
+/// };
 ///
 /// // Create gradient fade mask
 /// let mask_layer = ShaderMaskLayer::new(
@@ -60,7 +63,8 @@ impl ShaderMaskLayer {
     ///
     /// # Arguments
     ///
-    /// * `shader` - Shader specification (linear gradient, radial gradient, etc.)
+    /// * `shader` - Shader specification (linear gradient, radial gradient,
+    ///   etc.)
     /// * `blend_mode` - Blend mode for compositing
     /// * `bounds` - Bounding rectangle for rendering
     pub fn new(shader: ShaderSpec, blend_mode: BlendMode, bounds: Rect<Pixels>) -> Self {
@@ -98,9 +102,9 @@ unsafe impl Sync for ShaderMaskLayer {}
 
 #[cfg(test)]
 mod tests {
+    use flui_types::{geometry::px, styling::Color32};
+
     use super::*;
-    use flui_types::geometry::px;
-    use flui_types::styling::Color32;
 
     #[test]
     fn test_shader_mask_layer_new() {

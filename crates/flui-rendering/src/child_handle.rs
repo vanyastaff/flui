@@ -5,8 +5,8 @@
 //!
 //! # Context-Based API
 //!
-//! Child handles provide read/write access to child state. For actual operations
-//! (layout, paint, hit test), use the Context API methods:
+//! Child handles provide read/write access to child state. For actual
+//! operations (layout, paint, hit test), use the Context API methods:
 //!
 //! - **Layout**: `ctx.layout_child(index, constraints)` via `LayoutContext`
 //! - **Paint**: `ctx.paint_child(index)` via `PaintContext`
@@ -209,9 +209,10 @@ impl<'a, P: ParentData + Default> ChildHandle<'a, P> {
 
 #[cfg(test)]
 mod tests {
+    use flui_types::geometry::px;
+
     use super::*;
     use crate::parent_data::BoxParentData;
-    use flui_types::geometry::px;
 
     #[test]
     fn test_child_handle_creation() {

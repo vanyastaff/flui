@@ -2,6 +2,13 @@
 // that don't implement Debug, and many fields/constants are reserved for future
 // rendering paths not yet wired up.
 #![allow(dead_code, missing_debug_implementations)]
+// GPU capability structs legitimately use many bools; field name postfixes
+// are unavoidable when wrapping distinct pipeline/stack types.
+#![allow(
+    clippy::struct_excessive_bools,
+    clippy::struct_field_names,
+    clippy::large_enum_variant
+)]
 
 //! FLUI Rendering Engine - GPU-accelerated rendering for FLUI
 //!
@@ -84,20 +91,16 @@ pub mod wgpu;
 // Abstract traits and errors
 pub use commands::{dispatch_command, dispatch_commands};
 pub use error::{RenderError, RenderResult};
-pub use traits::{CommandRenderer, Painter};
-
-// wgpu backend exports
-#[cfg(feature = "wgpu-backend")]
-pub use wgpu::{Backend, LayerRender, WgpuPainter};
-
-#[cfg(all(feature = "wgpu-backend", debug_assertions))]
-pub use wgpu::DebugBackend;
-
 // Re-export layer types from flui-layer
 pub use flui_layer::{
     CanvasLayer, Layer, LayerId, LayerTree, LinkRegistry, Scene, SceneBuilder, SceneCompositor,
     ShaderMaskLayer,
 };
-
 // Re-export Paint from flui_painting
 pub use flui_painting::Paint;
+pub use traits::{CommandRenderer, Painter};
+#[cfg(all(feature = "wgpu-backend", debug_assertions))]
+pub use wgpu::DebugBackend;
+// wgpu backend exports
+#[cfg(feature = "wgpu-backend")]
+pub use wgpu::{Backend, LayerRender, WgpuPainter};

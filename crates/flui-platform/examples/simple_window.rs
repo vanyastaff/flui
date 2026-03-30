@@ -1,4 +1,5 @@
-//! Simple window example - demonstrates basic window creation with flui-platform
+//! Simple window example - demonstrates basic window creation with
+//! flui-platform
 //!
 //! This example shows:
 //! - Platform initialization
@@ -13,7 +14,7 @@
 //! RUST_LOG=debug cargo run --example simple_window -p flui-platform
 //! ```
 
-use flui_platform::{current_platform, WindowOptions};
+use flui_platform::{WindowOptions, current_platform};
 use flui_types::geometry::px;
 
 fn main() {

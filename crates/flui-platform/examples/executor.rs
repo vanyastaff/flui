@@ -1,15 +1,22 @@
 //! Executor System Example
 //!
-//! Demonstrates background and foreground executor usage for async task execution.
-//! Shows how to run CPU-intensive work on background threads and update UI safely
-//! on the foreground thread.
+//! Demonstrates background and foreground executor usage for async task
+//! execution. Shows how to run CPU-intensive work on background threads and
+//! update UI safely on the foreground thread.
 
-use flui_platform::executor::{BackgroundExecutor, ForegroundExecutor};
-use flui_platform::PlatformExecutor;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
-use std::thread;
-use std::time::{Duration, Instant};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    },
+    thread,
+    time::{Duration, Instant},
+};
+
+use flui_platform::{
+    PlatformExecutor,
+    executor::{BackgroundExecutor, ForegroundExecutor},
+};
 
 fn main() {
     // Initialize tracing for observability

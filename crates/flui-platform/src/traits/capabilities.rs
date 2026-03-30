@@ -127,11 +127,7 @@ impl MobileCapabilities {
 
 impl PlatformCapabilities for MobileCapabilities {
     fn platform_name(&self) -> &'static str {
-        if self.is_ios {
-            "iOS"
-        } else {
-            "Android"
-        }
+        if self.is_ios { "iOS" } else { "Android" }
     }
 
     fn has_lifecycle_management(&self) -> bool {

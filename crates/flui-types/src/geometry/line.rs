@@ -7,11 +7,12 @@
 //! `Line<T>` is generic over unit type `T`, preventing accidental mixing
 //! of coordinate systems.
 
-use super::{px, Pixels};
 use std::fmt;
 
-use super::traits::{NumericUnit, Unit};
-use super::{Point, Vec2};
+use super::{
+    Pixels, Point, Vec2, px,
+    traits::{NumericUnit, Unit},
+};
 
 /// A line segment defined by two endpoints with generic unit type.
 #[repr(C)]
@@ -144,14 +145,16 @@ impl<T: NumericUnit> Line<T>
 where
     T: Into<f32> + From<f32> + PartialEq + std::ops::Sub<Output = T> + Clone + fmt::Debug + Default,
 {
-    /// Returns true if the line segment has zero length (both points are equal).
+    /// Returns true if the line segment has zero length (both points are
+    /// equal).
     #[inline]
     #[must_use]
     pub fn is_zero_length(&self) -> bool {
         self.p0 == self.p1
     }
 
-    /// Returns true if the line segment is horizontal (y-coordinates are equal within epsilon).
+    /// Returns true if the line segment is horizontal (y-coordinates are equal
+    /// within epsilon).
     #[inline]
     #[must_use]
     pub fn is_horizontal(&self) -> bool {
@@ -160,7 +163,8 @@ where
         (y0 - y1).abs() < f32::EPSILON
     }
 
-    /// Returns true if the line segment is vertical (x-coordinates are equal within epsilon).
+    /// Returns true if the line segment is vertical (x-coordinates are equal
+    /// within epsilon).
     #[inline]
     #[must_use]
     pub fn is_vertical(&self) -> bool {
@@ -171,7 +175,8 @@ where
 
     /// Returns the nearest point on the line segment to the given point.
     ///
-    /// If the nearest point falls outside the segment, returns the closest endpoint.
+    /// If the nearest point falls outside the segment, returns the closest
+    /// endpoint.
     #[inline]
     #[must_use]
     pub fn nearest_point(&self, point: Point<T>) -> Point<T>
@@ -208,14 +213,16 @@ where
         point.distance(self.nearest_point(point))
     }
 
-    /// Returns the squared distance from a point to the line segment (faster than distance_to_point).
+    /// Returns the squared distance from a point to the line segment (faster
+    /// than distance_to_point).
     #[inline]
     #[must_use]
     pub fn distance_squared_to_point(&self, point: Point<T>) -> f32 {
         point.distance_squared(self.nearest_point(point))
     }
 
-    /// Returns true if a point is within the specified tolerance distance of the line segment.
+    /// Returns true if a point is within the specified tolerance distance of
+    /// the line segment.
     #[inline]
     #[must_use]
     pub fn is_point_near(&self, point: Point<T>, tolerance: f32) -> bool {
@@ -278,7 +285,8 @@ impl<T: Unit> Line<T>
 where
     T: Into<f32>,
 {
-    /// Converts the line segment to an array `[x0, y0, x1, y1]` for GPU buffers.
+    /// Converts the line segment to an array `[x0, y0, x1, y1]` for GPU
+    /// buffers.
     #[inline]
     #[must_use]
     pub fn to_array(&self) -> [f32; 4] {
@@ -299,7 +307,8 @@ impl Line<Pixels> {
     /// Computes the intersection point of this line with another line segment.
     ///
     /// Returns `Some(point)` if the lines intersect, `None` otherwise.
-    /// This only works for `Line<Pixels>` due to the complex mathematical operations.
+    /// This only works for `Line<Pixels>` due to the complex mathematical
+    /// operations.
     #[inline]
     #[must_use]
     pub fn intersect_segment(&self, other: &Line<Pixels>) -> Option<Point<Pixels>> {
@@ -409,7 +418,8 @@ impl Line<Pixels> {
         }
     }
 
-    /// Returns a perpendicular line segment of the same length, centered at the midpoint.
+    /// Returns a perpendicular line segment of the same length, centered at the
+    /// midpoint.
     #[inline]
     #[must_use]
     pub fn perpendicular(&self) -> Self {

@@ -30,8 +30,7 @@
 //! ## Example
 //!
 //! ```rust
-//! use flui_scheduler::{Scheduler, Priority};
-//! use flui_scheduler::traits::AnimationPriority;
+//! use flui_scheduler::{Priority, Scheduler, traits::AnimationPriority};
 //!
 //! let scheduler = Scheduler::new();
 //!
@@ -51,34 +50,41 @@
 //! scheduler.handle_draw_frame();
 //! ```
 
-use crate::budget::FrameBudget;
-use crate::config::{
-    adjust_duration_for_epoch, time_dilation, PerformanceMode, PerformanceModeRequestHandle,
-    TimingsCallback,
+use std::{
+    collections::VecDeque,
+    future::Future,
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering},
+    },
+    task::{Context, Poll, Waker},
 };
-use crate::duration::{FrameDuration, Milliseconds};
-use crate::frame::{
-    AppLifecycleState, FrameCallback, FrameId, FramePhase, FrameTiming, OneShotFrameCallback,
-    PostFrameCallback, RecurringFrameCallback, SchedulerPhase,
-};
-use crate::id::{CallbackIdMarker, IdGenerator, TypedId};
-use crate::task::{Priority, TaskQueue};
-use crate::ticker::TickerProvider;
-use crate::traits::PriorityLevel;
-use crate::vsync::VsyncScheduler;
-use dashmap::DashMap;
-use flui_foundation::{impl_binding_singleton, BindingBase};
-use parking_lot::Mutex;
-use std::collections::VecDeque;
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
-use std::sync::Arc;
-use std::task::{Context, Poll, Waker};
-use web_time::{Duration, Instant};
 
+use dashmap::DashMap;
+use flui_foundation::{BindingBase, impl_binding_singleton};
+use parking_lot::Mutex;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
+use web_time::{Duration, Instant};
+
+use crate::{
+    budget::FrameBudget,
+    config::{
+        PerformanceMode, PerformanceModeRequestHandle, TimingsCallback, adjust_duration_for_epoch,
+        time_dilation,
+    },
+    duration::{FrameDuration, Milliseconds},
+    frame::{
+        AppLifecycleState, FrameCallback, FrameId, FramePhase, FrameTiming, OneShotFrameCallback,
+        PostFrameCallback, RecurringFrameCallback, SchedulerPhase,
+    },
+    id::{CallbackIdMarker, IdGenerator, TypedId},
+    task::{Priority, TaskQueue},
+    ticker::TickerProvider,
+    traits::PriorityLevel,
+    vsync::VsyncScheduler,
+};
 
 /// Unique identifier for callbacks (transient, persistent, post-frame)
 pub type CallbackId = TypedId<CallbackIdMarker>;
@@ -130,9 +136,11 @@ struct FrameCompletionState {
 ///     let timing = scheduler.end_of_frame().await;
 ///
 ///     // Now safe to do post-frame cleanup
-///     println!("Frame {} completed in {}ms",
+///     println!(
+///         "Frame {} completed in {}ms",
 ///         timing.id.as_u64(),
-///         timing.elapsed().value());
+///         timing.elapsed().value()
+///     );
 /// }
 /// ```
 pub struct FrameCompletionFuture {
@@ -179,8 +187,8 @@ struct FrameCompletionNotifier {
 /// Frame skip policy - determines behavior when catching up from frame drops
 ///
 /// When the application falls behind (missing vsync signals), this policy
-/// determines whether to render every frame (potentially falling further behind)
-/// or skip frames to catch up.
+/// determines whether to render every frame (potentially falling further
+/// behind) or skip frames to catch up.
 ///
 /// # Flutter Comparison
 ///
@@ -395,7 +403,8 @@ struct BindingState {
 ///
 /// ## Callback Cancellation
 ///
-/// All callback registration methods return a `CallbackId` that can be used to cancel:
+/// All callback registration methods return a `CallbackId` that can be used to
+/// cancel:
 ///
 /// ```rust
 /// use flui_scheduler::Scheduler;
@@ -514,7 +523,8 @@ impl Scheduler {
     /// Handle begin frame - called when vsync signal arrives
     ///
     /// This corresponds to Flutter's `handleBeginFrame`.
-    /// Executes transient callbacks (animation tickers) with the vsync timestamp.
+    /// Executes transient callbacks (animation tickers) with the vsync
+    /// timestamp.
     #[tracing::instrument(skip(self))]
     pub fn handle_begin_frame(&self, vsync_time: Instant) -> FrameId {
         // Store vsync time for all tickers to use
@@ -699,10 +709,12 @@ impl Scheduler {
 
     /// Schedule a transient frame callback (animation)
     ///
-    /// The callback receives the vsync timestamp and fires during TransientCallbacks phase.
-    /// This is the correct way for tickers to receive frame timing.
+    /// The callback receives the vsync timestamp and fires during
+    /// TransientCallbacks phase. This is the correct way for tickers to
+    /// receive frame timing.
     ///
-    /// Returns a `CallbackId` that can be used to cancel the callback before it fires.
+    /// Returns a `CallbackId` that can be used to cancel the callback before it
+    /// fires.
     pub fn schedule_frame_callback(&self, callback: OneShotFrameCallback) -> CallbackId {
         let id = self.callbacks.id_gen.next();
         self.callbacks
@@ -716,8 +728,8 @@ impl Scheduler {
 
     /// Cancel a transient frame callback by ID
     ///
-    /// Returns `true` if the callback was found and cancelled, `false` if it was
-    /// already executed or not found.
+    /// Returns `true` if the callback was found and cancelled, `false` if it
+    /// was already executed or not found.
     ///
     /// # Example
     ///
@@ -1059,8 +1071,8 @@ impl Scheduler {
 
     /// Check if current frame should be skipped and record skip if so
     ///
-    /// Returns `true` if this frame should be skipped, `false` if it should be rendered.
-    /// If skipping, increments the skipped frame counter.
+    /// Returns `true` if this frame should be skipped, `false` if it should be
+    /// rendered. If skipping, increments the skipped frame counter.
     pub fn check_and_skip_frame(&self) -> bool {
         let skip_count = self.should_skip_frames();
 
@@ -1111,7 +1123,7 @@ impl Scheduler {
     /// # Example
     ///
     /// ```rust
-    /// use flui_scheduler::{Scheduler, AppLifecycleState};
+    /// use flui_scheduler::{AppLifecycleState, Scheduler};
     ///
     /// let scheduler = Scheduler::new();
     ///
@@ -1156,8 +1168,9 @@ impl Scheduler {
     /// # Example
     ///
     /// ```rust
-    /// use flui_scheduler::{Scheduler, AppLifecycleState};
     /// use std::sync::Arc;
+    ///
+    /// use flui_scheduler::{AppLifecycleState, Scheduler};
     ///
     /// let scheduler = Scheduler::new();
     ///
@@ -1225,9 +1238,11 @@ impl Scheduler {
     ///     // Wait for the current/next frame to complete
     ///     let timing = scheduler.end_of_frame().await;
     ///
-    ///     println!("Frame {} completed in {}ms",
+    ///     println!(
+    ///         "Frame {} completed in {}ms",
     ///         timing.id.as_u64(),
-    ///         timing.elapsed().value());
+    ///         timing.elapsed().value()
+    ///     );
     /// }
     /// ```
     ///
@@ -1301,7 +1316,8 @@ impl Scheduler {
 
     /// Ensure a visual update is scheduled
     ///
-    /// Calls `schedule_frame_if_enabled()` to guarantee a frame will be processed.
+    /// Calls `schedule_frame_if_enabled()` to guarantee a frame will be
+    /// processed.
     pub fn ensure_visual_update(&self) {
         self.schedule_frame_if_enabled();
     }
@@ -1439,7 +1455,8 @@ impl Scheduler {
     /// 2. The task queue is empty
     /// 3. The app is in `Resumed` state
     ///
-    /// The event loop calls `execute_idle_callbacks()` when it has no other work.
+    /// The event loop calls `execute_idle_callbacks()` when it has no other
+    /// work.
     ///
     /// # Example
     ///
@@ -1525,12 +1542,14 @@ static ARC_INSTANCE: std::sync::OnceLock<Arc<Scheduler>> = std::sync::OnceLock::
 impl Scheduler {
     /// Get Arc-wrapped singleton instance.
     ///
-    /// This is needed for APIs that require `Arc<Scheduler>` (e.g., AnimationController).
-    /// The Arc wraps a new Scheduler instance that is separate from the static singleton,
-    /// but both will be ticked by the same event loop since they share the same thread.
+    /// This is needed for APIs that require `Arc<Scheduler>` (e.g.,
+    /// AnimationController). The Arc wraps a new Scheduler instance that is
+    /// separate from the static singleton, but both will be ticked by the
+    /// same event loop since they share the same thread.
     ///
-    /// **Important:** The caller must ensure this scheduler is ticked by calling
-    /// `handle_begin_frame()` and `handle_draw_frame()` in the event loop.
+    /// **Important:** The caller must ensure this scheduler is ticked by
+    /// calling `handle_begin_frame()` and `handle_draw_frame()` in the
+    /// event loop.
     pub fn arc_instance() -> Arc<Scheduler> {
         ARC_INSTANCE
             .get_or_init(|| Arc::new(Scheduler::new()))

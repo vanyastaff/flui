@@ -1,18 +1,19 @@
 //! Clip utilities for painting contexts.
 //!
-//! This module provides the [`ClipContext`] trait which abstracts clipping operations
-//! for painting. It mirrors Flutter's `ClipContext` from `painting/clip.dart`.
-
-use flui_types::painting::Path;
-use flui_types::{RRect, Rect};
+//! This module provides the [`ClipContext`] trait which abstracts clipping
+//! operations for painting. It mirrors Flutter's `ClipContext` from
+//! `painting/clip.dart`.
 
 use flui_painting::Canvas;
-use flui_types::painting::{Clip, ClipOp, Paint};
+use flui_types::{
+    RRect, Rect,
+    painting::{Clip, ClipOp, Paint, Path},
+};
 
 /// Clip utilities used by [`CanvasContext`](super::CanvasContext).
 ///
-/// This trait provides convenience methods for clipping and painting in one operation.
-/// After painting, the canvas is restored to its pre-clip state.
+/// This trait provides convenience methods for clipping and painting in one
+/// operation. After painting, the canvas is restored to its pre-clip state.
 ///
 /// # Example
 ///
@@ -70,7 +71,8 @@ pub trait ClipContext {
         canvas.restore();
     }
 
-    /// Clip canvas with a [`Path`] according to [`Clip`] behavior and then paint.
+    /// Clip canvas with a [`Path`] according to [`Clip`] behavior and then
+    /// paint.
     ///
     /// The canvas is restored to its pre-clip status afterwards.
     ///
@@ -78,7 +80,8 @@ pub trait ClipContext {
     ///
     /// * `path` - The path to clip to
     /// * `clip_behavior` - How to perform the clipping
-    /// * `bounds` - The saveLayer bounds used for [`Clip::AntiAliasWithSaveLayer`]
+    /// * `bounds` - The saveLayer bounds used for
+    ///   [`Clip::AntiAliasWithSaveLayer`]
     /// * `painter` - The painting callback
     fn clip_path_and_paint<F>(&mut self, path: &Path, clip_behavior: Clip, bounds: Rect, painter: F)
     where
@@ -100,7 +103,8 @@ pub trait ClipContext {
         );
     }
 
-    /// Clip canvas with an [`RRect`] according to [`Clip`] behavior and then paint.
+    /// Clip canvas with an [`RRect`] according to [`Clip`] behavior and then
+    /// paint.
     ///
     /// The canvas is restored to its pre-clip status afterwards.
     ///
@@ -108,7 +112,8 @@ pub trait ClipContext {
     ///
     /// * `rrect` - The rounded rectangle to clip to
     /// * `clip_behavior` - How to perform the clipping
-    /// * `bounds` - The saveLayer bounds used for [`Clip::AntiAliasWithSaveLayer`]
+    /// * `bounds` - The saveLayer bounds used for
+    ///   [`Clip::AntiAliasWithSaveLayer`]
     /// * `painter` - The painting callback
     fn clip_rrect_and_paint<F>(
         &mut self,
@@ -134,7 +139,8 @@ pub trait ClipContext {
         );
     }
 
-    /// Clip canvas with a [`Rect`] according to [`Clip`] behavior and then paint.
+    /// Clip canvas with a [`Rect`] according to [`Clip`] behavior and then
+    /// paint.
     ///
     /// The canvas is restored to its pre-clip status afterwards.
     ///
@@ -142,7 +148,8 @@ pub trait ClipContext {
     ///
     /// * `rect` - The rectangle to clip to
     /// * `clip_behavior` - How to perform the clipping
-    /// * `bounds` - The saveLayer bounds used for [`Clip::AntiAliasWithSaveLayer`]
+    /// * `bounds` - The saveLayer bounds used for
+    ///   [`Clip::AntiAliasWithSaveLayer`]
     /// * `painter` - The painting callback
     fn clip_rect_and_paint<F>(&mut self, rect: Rect, clip_behavior: Clip, bounds: Rect, painter: F)
     where
@@ -166,8 +173,9 @@ pub trait ClipContext {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::px;
+
+    use super::*;
 
     #[test]
     fn test_clip_none() {

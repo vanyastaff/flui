@@ -5,10 +5,10 @@
 
 use flui_foundation::Identifier;
 
-use crate::depth::Depth;
-use crate::iter::cursor::TreeCursor;
-use crate::iter::path::TreePath;
-use crate::iter::slot::Slot;
+use crate::{
+    depth::Depth,
+    iter::{cursor::TreeCursor, path::TreePath, slot::Slot},
+};
 
 /// Tree navigation with RPITIT and HRTB support.
 ///
@@ -140,7 +140,8 @@ pub trait TreeNav<I: Identifier>: super::TreeRead<I> {
     ///
     /// # Returns
     ///
-    /// `Some(Slot<I>)` with full position context, `None` if node is root or not found.
+    /// `Some(Slot<I>)` with full position context, `None` if node is root or
+    /// not found.
     ///
     /// # Default Implementation
     ///
@@ -298,10 +299,10 @@ pub trait TreeNavExt<I: Identifier>: TreeNav<I> {
         P: for<'a> FnMut(&'a Self::Node) -> bool,
     {
         for child_id in self.children(parent) {
-            if let Some(child_node) = self.get(child_id) {
-                if predicate(child_node) {
-                    return Some(child_id);
-                }
+            if let Some(child_node) = self.get(child_id)
+                && predicate(child_node)
+            {
+                return Some(child_id);
             }
         }
         None
@@ -315,10 +316,10 @@ pub trait TreeNavExt<I: Identifier>: TreeNav<I> {
         P: for<'a> FnMut(&'a Self::Node) -> bool,
     {
         for (id, _depth) in self.descendants(root) {
-            if let Some(node) = self.get(id) {
-                if predicate(node) {
-                    return Some(id);
-                }
+            if let Some(node) = self.get(id)
+                && predicate(node)
+            {
+                return Some(id);
             }
         }
         None
@@ -441,7 +442,8 @@ pub trait TreeNavExt<I: Identifier>: TreeNav<I> {
     /// let mut cursor = tree.cursor_with_history(root, 10);
     /// cursor.go_child(0);
     /// cursor.go_child(1);
-    /// cursor.go_back();  // Returns to previous position
+    /// cursor.go_back(); // Returns to previous position
+    /// //
     /// # }
     /// ```
     fn cursor_with_history(&self, position: I, max_history: usize) -> TreeCursor<'_, Self, I>
@@ -578,10 +580,13 @@ impl<I: Identifier, T: TreeNav<I> + ?Sized> TreeNav<I> for Box<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::iter::{Ancestors, DescendantsWithDepth};
-    use crate::traits::TreeRead;
     use flui_foundation::ElementId;
+
+    use super::*;
+    use crate::{
+        iter::{Ancestors, DescendantsWithDepth},
+        traits::TreeRead,
+    };
 
     // Test implementation
     struct TestNode {

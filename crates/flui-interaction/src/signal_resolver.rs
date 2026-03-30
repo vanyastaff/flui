@@ -6,8 +6,9 @@
 //!
 //! # Purpose
 //!
-//! When multiple widgets listen to the same signal (e.g., nested scroll regions),
-//! the resolver determines which widget should actually receive the signal.
+//! When multiple widgets listen to the same signal (e.g., nested scroll
+//! regions), the resolver determines which widget should actually receive the
+//! signal.
 //!
 //! # Architecture
 //!
@@ -37,12 +38,14 @@
 //! resolver.resolve(pointer_id, signal_event);
 //! ```
 
-use parking_lot::Mutex;
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
-use crate::events::PointerEvent;
-use crate::ids::{HandlerId, PointerId};
+use parking_lot::Mutex;
+
+use crate::{
+    events::PointerEvent,
+    ids::{HandlerId, PointerId},
+};
 
 /// Callback for handling pointer signals
 pub type SignalCallback = Arc<dyn Fn(PointerEvent) + Send + Sync>;
@@ -247,10 +250,12 @@ impl Default for PointerSignalResolver {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    use flui_types::geometry::{Offset, px};
+
     use super::*;
     use crate::ids::PointerId;
-    use flui_types::geometry::{px, Offset};
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     #[test]
     fn test_resolver_creation() {

@@ -40,11 +40,11 @@
 //! }
 //! ```
 
-use crate::arena::GestureArenaMember;
-use crate::ids::PointerId;
-use crate::settings::GestureSettings;
-use flui_types::geometry::Matrix4;
 use std::sync::Arc;
+
+use flui_types::geometry::Matrix4;
+
+use crate::{arena::GestureArenaMember, ids::PointerId, settings::GestureSettings};
 
 /// Trait for gesture recognizers that track a single pointer sequence.
 ///

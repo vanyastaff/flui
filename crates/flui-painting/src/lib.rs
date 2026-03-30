@@ -1,12 +1,13 @@
 //! High-performance Canvas API for recording 2D drawing commands.
 //!
-//! `flui_painting` provides a backend-agnostic drawing abstraction layer that records
-//! drawing commands into an immutable [`DisplayList`] for later GPU execution, leveraging
-//! Rust's type system for safety and performance.
+//! `flui_painting` provides a backend-agnostic drawing abstraction layer that
+//! records drawing commands into an immutable [`DisplayList`] for later GPU
+//! execution, leveraging Rust's type system for safety and performance.
 //!
 //! # Architecture
 //!
-//! The crate implements the **Command Pattern** to separate recording from execution:
+//! The crate implements the **Command Pattern** to separate recording from
+//! execution:
 //!
 //! ```text
 //! RenderObject (flui_rendering)
@@ -64,7 +65,8 @@
 //! ## Zero-Cost Abstractions
 //!
 //! - All operations compile to efficient machine code
-//! - Transform API accepts both high-level `Transform` and low-level `Matrix4` types
+//! - Transform API accepts both high-level `Transform` and low-level `Matrix4`
+//!   types
 //! - Extension traits provide convenience methods with no overhead
 //!
 //! ## Thread Safety
@@ -117,7 +119,8 @@
 //!
 //! 1. **Reuse DisplayLists** - Cache for repeated content
 //! 2. **Batch Similar Commands** - Group by paint/transform
-//! 3. **Use Scoped Operations** - `with_save`, `with_translate` for auto cleanup
+//! 3. **Use Scoped Operations** - `with_save`, `with_translate` for auto
+//!    cleanup
 //! 4. **Culling** - Check `would_be_clipped()` before drawing
 //!
 //! # Extension Traits
@@ -177,14 +180,14 @@ pub mod tessellation;
 //
 // Re-export all public types at the crate root for convenient access.
 // This allows changing internal module structure without breaking user code.
-// Users can write `use flui_painting::Canvas` instead of `use flui_painting::canvas::Canvas`.
+// Users can write `use flui_painting::Canvas` instead of `use
+// flui_painting::canvas::Canvas`.
 
 // Binding
 pub use binding::{
-    image_cache, CachedImage, DefaultShaderWarmUp, ImageCache, ImageHandle, PaintingBinding,
-    ShaderWarmUp, SystemFontsNotifier, WarmUpCanvas,
+    CachedImage, DefaultShaderWarmUp, ImageCache, ImageHandle, PaintingBinding, ShaderWarmUp,
+    SystemFontsNotifier, WarmUpCanvas, image_cache,
 };
-
 // Primary API types
 pub use canvas::Canvas;
 pub use clip_context::ClipContext;
@@ -194,7 +197,7 @@ pub use display_list::{
 };
 pub use error::{PaintingError, Result};
 pub use text_layout::measure_text;
-pub use text_painter::{TextBaseline, TextPainter, DEFAULT_FONT_SIZE};
+pub use text_painter::{DEFAULT_FONT_SIZE, TextBaseline, TextPainter};
 
 // Flutter compatibility: Picture is our DisplayList
 /// A Picture is an immutable recording of drawing commands.
@@ -234,7 +237,8 @@ pub use text_painter::{TextBaseline, TextPainter, DEFAULT_FONT_SIZE};
 pub type Picture = DisplayList;
 
 // Re-export essential painting types from flui_types for user convenience
-// This creates a cohesive API where users don't need to import from multiple crates
+// This creates a cohesive API where users don't need to import from multiple
+// crates
 pub use flui_types::painting::{
     BlendMode, Paint, PaintBuilder, PaintStyle, PointMode, Shader, StrokeCap, StrokeJoin,
 };
@@ -253,7 +257,8 @@ pub mod prelude {
     //! - **Main Types**: [`Canvas`], [`DisplayList`], [`DrawCommand`]
     //! - **Traits**: [`DisplayListCore`], [`DisplayListExt`]
     //! - **Styling**: [`Paint`], [`BlendMode`], [`Shader`]
-    //! - **Paint Properties**: [`PaintStyle`], [`StrokeCap`], [`StrokeJoin`], [`PointMode`]
+    //! - **Paint Properties**: [`PaintStyle`], [`StrokeCap`], [`StrokeJoin`],
+    //!   [`PointMode`]
     //!
     //! # Examples
     //!
@@ -271,11 +276,14 @@ pub mod prelude {
     //! }
     //! ```
 
-    pub use crate::canvas::Canvas;
-    pub use crate::display_list::{DisplayList, DisplayListCore, DisplayListExt, DrawCommand};
-    pub use crate::text_painter::{TextBaseline, TextPainter};
-    pub use crate::Picture; // Flutter compatibility
     pub use flui_types::painting::{
         BlendMode, Paint, PaintStyle, PointMode, Shader, StrokeCap, StrokeJoin,
+    };
+
+    pub use crate::Picture; // Flutter compatibility
+    pub use crate::{
+        canvas::Canvas,
+        display_list::{DisplayList, DisplayListCore, DisplayListExt, DrawCommand},
+        text_painter::{TextBaseline, TextPainter},
     };
 }

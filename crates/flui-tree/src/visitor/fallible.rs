@@ -6,9 +6,10 @@
 //! # Example
 //!
 //! ```
-//! use flui_tree::visitor::fallible::validate_depth;
-//! use flui_tree::visitor::fallible::try_for_each;
-//! use flui_tree::ElementId;
+//! use flui_tree::{
+//!     ElementId,
+//!     visitor::fallible::{try_for_each, validate_depth},
+//! };
 //!
 //! // Use the built-in validate_depth for depth limit checking,
 //! // or try_for_each for custom fallible logic.
@@ -18,13 +19,12 @@
 //! // (requires a tree implementing TreeNav; see tests for full examples)
 //! ```
 
-use super::{sealed, VisitorResult};
-use crate::TreeNav;
+use std::{collections::VecDeque, error::Error, fmt, marker::PhantomData};
+
 use flui_foundation::Identifier;
-use std::collections::VecDeque;
-use std::error::Error;
-use std::fmt;
-use std::marker::PhantomData;
+
+use super::{VisitorResult, sealed};
+use crate::TreeNav;
 
 // ============================================================================
 // FALLIBLE VISITOR TRAIT
@@ -35,7 +35,8 @@ use std::marker::PhantomData;
 /// Unlike [`TreeVisitor`](super::TreeVisitor), this visitor returns
 /// `Result<VisitorResult, E>`, allowing proper error handling.
 ///
-/// Generic over both the ID type and tree type to support any tree implementation.
+/// Generic over both the ID type and tree type to support any tree
+/// implementation.
 pub trait FallibleVisitor<I: Identifier, T: TreeNav<I>>: sealed::Sealed {
     /// The error type returned by this visitor.
     type Error: Error + Send + Sync + 'static;
@@ -590,8 +591,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_foundation::ElementId;
+
+    use super::*;
 
     #[test]
     fn test_depth_limit_exceeded() {

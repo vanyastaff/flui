@@ -3,13 +3,14 @@
 //! Connects the embedder to flui-scheduler for frame lifecycle
 //! and task scheduling.
 
+use std::sync::{
+    Arc, Weak,
+    atomic::{AtomicBool, Ordering},
+};
+
 use flui_rendering::pipeline::PipelineOwner;
 use flui_scheduler::{Priority, Scheduler};
 use parking_lot::RwLock;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Weak,
-};
 
 /// Scheduler statistics snapshot
 // TODO: Will be used when EmbedderScheduler is integrated into the app binding
@@ -67,7 +68,8 @@ impl EmbedderScheduler {
     ///
     /// # Why Weak Reference?
     ///
-    /// Uses `Weak<RwLock<PipelineOwner>>` to prevent circular reference memory leaks.
+    /// Uses `Weak<RwLock<PipelineOwner>>` to prevent circular reference memory
+    /// leaks.
     pub fn wire_up_pipeline(
         &self,
         pipeline_weak: Weak<RwLock<PipelineOwner>>,

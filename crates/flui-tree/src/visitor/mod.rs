@@ -8,22 +8,20 @@ pub mod composition;
 pub mod fallible;
 
 // Re-exports from submodules
+use std::{collections::VecDeque, fmt, marker::PhantomData};
+
 pub use composition::{
     ComposedVisitor, ConditionalVisitor, DynVisitor, MappedVisitor, TripleComposedVisitor,
     VisitorExt, VisitorVec,
 };
 pub use fallible::{
-    try_collect, try_for_each, validate_depth, visit_fallible, visit_fallible_breadth_first,
-    visit_fallible_with_path, DepthLimitExceeded, DepthLimitVisitor, FallibleVisitor,
-    FallibleVisitorMut, TryCollectVisitor, TryForEachVisitor, VisitorError,
+    DepthLimitExceeded, DepthLimitVisitor, FallibleVisitor, FallibleVisitorMut, TryCollectVisitor,
+    TryForEachVisitor, VisitorError, try_collect, try_for_each, validate_depth, visit_fallible,
+    visit_fallible_breadth_first, visit_fallible_with_path,
 };
-
-use std::collections::VecDeque;
-use std::fmt;
-use std::marker::PhantomData;
+use flui_foundation::Identifier;
 
 use super::TreeNav;
-use flui_foundation::Identifier;
 
 // ============================================================================
 // VISITOR RESULT WITH ENHANCED CONTROL
@@ -225,7 +223,8 @@ pub(crate) mod sealed {
 
 /// Internal traversal control signal.
 ///
-/// Richer than `bool` to distinguish "stop everything" from "skip remaining siblings."
+/// Richer than `bool` to distinguish "stop everything" from "skip remaining
+/// siblings."
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TraversalSignal {
     /// Continue normal traversal.
@@ -604,10 +603,10 @@ impl<I: Identifier, T: TreeNav<I>> TreeVisitor<I, T> for MaxDepthVisitor {
             self.max_depth = depth;
         }
 
-        if let Some(threshold) = self.termination_threshold {
-            if depth >= threshold {
-                return VisitorResult::Stop;
-            }
+        if let Some(threshold) = self.termination_threshold
+            && depth >= threshold
+        {
+            return VisitorResult::Stop;
         }
 
         VisitorResult::Continue
@@ -843,9 +842,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use flui_foundation::ElementId;
+
     use super::*;
     use crate::traits::TreeRead;
-    use flui_foundation::ElementId;
 
     // Test tree implementation
     struct TestNode {
@@ -1079,8 +1079,9 @@ mod tests {
 
         assert!(completed, "traversal should not be stopped");
         // root is visited, then child1 triggers SkipSiblings.
-        // child1's children (gc1) are NOT visited because SkipSiblings skips children too.
-        // child2 and child3 are NOT visited because they are siblings of child1.
+        // child1's children (gc1) are NOT visited because SkipSiblings skips children
+        // too. child2 and child3 are NOT visited because they are siblings of
+        // child1.
         assert!(visitor.visited.contains(&root));
         assert!(visitor.visited.contains(&child1));
         assert!(

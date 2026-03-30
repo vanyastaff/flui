@@ -1,14 +1,18 @@
 //! Android window implementation
 //!
 //! Wraps `AndroidApp` to provide the `PlatformWindow` trait, delegating
-//! to the native ANativeWindow for size queries and raw-window-handle for GPU surface creation.
+//! to the native ANativeWindow for size queries and raw-window-handle for GPU
+//! surface creation.
 
-use crate::shared::WindowCallbacks;
-use crate::traits::*;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+
 use android_activity::AndroidApp;
-use flui_types::geometry::{device_px, px, DevicePixels, Pixels, Point, Size};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use flui_types::geometry::{DevicePixels, Pixels, Point, Size, device_px, px};
+
+use crate::{shared::WindowCallbacks, traits::*};
 
 /// Android window wrapping the native ANativeWindow via `AndroidApp`
 ///
@@ -36,7 +40,8 @@ impl AndroidWindow {
         }
     }
 
-    /// Access the callback storage (used by `AndroidPlatform` to dispatch events)
+    /// Access the callback storage (used by `AndroidPlatform` to dispatch
+    /// events)
     pub fn callbacks(&self) -> &WindowCallbacks {
         &self.callbacks
     }
@@ -46,7 +51,8 @@ impl AndroidWindow {
         self.redraw_requested.swap(false, Ordering::SeqCst)
     }
 
-    /// Get native window dimensions, returning (0, 0) if window is not available
+    /// Get native window dimensions, returning (0, 0) if window is not
+    /// available
     fn native_size(&self) -> (i32, i32) {
         if let Some(native_window) = self.app.native_window() {
             (native_window.width(), native_window.height())
@@ -136,18 +142,20 @@ impl PlatformWindow for AndroidWindow {
     fn window_handle(
         &self,
     ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
-        // Get the ANativeWindow pointer from the AndroidApp and construct the handle manually.
-        // We can't delegate to NativeWindow::window_handle() because that borrows a temporary.
+        // Get the ANativeWindow pointer from the AndroidApp and construct the handle
+        // manually. We can't delegate to NativeWindow::window_handle() because
+        // that borrows a temporary.
         let native_window = self
             .app
             .native_window()
             .ok_or(raw_window_handle::HandleError::Unavailable)?;
-        // NativeWindow::ptr() returns NonNull<ANativeWindow>; cast to NonNull<c_void> for rwh
+        // NativeWindow::ptr() returns NonNull<ANativeWindow>; cast to NonNull<c_void>
+        // for rwh
         let ptr = native_window.ptr().cast();
         let handle = raw_window_handle::AndroidNdkWindowHandle::new(ptr);
         let raw = raw_window_handle::RawWindowHandle::AndroidNdk(handle);
-        // SAFETY: The ANativeWindow pointer is valid as long as we are between Resume and Pause.
-        // AndroidWindow is only used within that lifecycle window.
+        // SAFETY: The ANativeWindow pointer is valid as long as we are between Resume
+        // and Pause. AndroidWindow is only used within that lifecycle window.
         #[allow(unsafe_code)]
         Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(raw) })
     }

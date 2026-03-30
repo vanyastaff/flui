@@ -13,29 +13,25 @@
 //! 3. Ancestor's `insertRenderObjectChild()` adds child to render tree
 //! 4. RenderTreeRootElement sets `pipelineOwner.rootNode = renderObject`
 
-use crate::view::ElementBase;
+use std::{any::Any, sync::Arc};
+
 use flui_foundation::ElementId;
-use std::any::Any;
-use std::sync::Arc;
+
+use crate::view::ElementBase;
 
 /// Slot identifier for render object children.
 ///
 /// Used by `insertRenderObjectChild` and `removeRenderObjectChild` to identify
 /// which child slot is being modified.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub enum RenderSlot {
     /// Single child slot (for SingleChildRenderObjectElement)
+    #[default]
     Single,
     /// Indexed slot (for MultiChildRenderObjectElement)
     Index(usize),
     /// Named slot (for custom layouts)
     Named(String),
-}
-
-impl Default for RenderSlot {
-    fn default() -> Self {
-        Self::Single
-    }
 }
 
 /// Trait for elements that manage RenderObjects.
@@ -80,7 +76,8 @@ pub trait RenderObjectElement: ElementBase {
 
     /// Detach this element's RenderObject from the render tree.
     ///
-    /// This calls `removeRenderObjectChild` on the ancestor RenderObjectElement.
+    /// This calls `removeRenderObjectChild` on the ancestor
+    /// RenderObjectElement.
     fn detach_render_object(&mut self);
 
     /// Insert a child RenderObject into this element's RenderObject.
@@ -116,7 +113,8 @@ pub trait RenderObjectElement: ElementBase {
 
     /// Find the nearest ancestor RenderObjectElement.
     ///
-    /// Used by `attach_render_object` to find where to insert this RenderObject.
+    /// Used by `attach_render_object` to find where to insert this
+    /// RenderObject.
     fn find_ancestor_render_object_element(&self) -> Option<ElementId>;
 
     /// Set the ancestor RenderObjectElement reference.

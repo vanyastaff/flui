@@ -12,8 +12,7 @@
 //! element type (`ElementId`, `Element`, etc.) while maintaining
 //! zero-cost abstractions.
 
-use std::fmt::Debug;
-use std::marker::PhantomData;
+use std::{fmt::Debug, marker::PhantomData};
 
 // ============================================================================
 // CHILDREN ACCESS TRAIT
@@ -726,7 +725,7 @@ impl<'a, T> SliceChildren<'a, T> {
 /// # Example
 ///
 /// ```
-/// use flui_tree::arity::{Arity, Variable, ChildrenAccess};
+/// use flui_tree::arity::{Arity, ChildrenAccess, Variable};
 ///
 /// let ids: &[u32] = &[10, 20, 30];
 /// let accessor = Variable::from_slice(ids);
@@ -810,7 +809,7 @@ impl<'a, T: Copy> SliceChildren<'a, T> {
     /// # Example
     ///
     /// ```
-    /// use flui_tree::arity::{Arity, Variable, ChildrenAccess};
+    /// use flui_tree::arity::{Arity, ChildrenAccess, Variable};
     ///
     /// let ids: &[u32] = &[10, 20, 30];
     /// let accessor = Variable::from_slice(ids);

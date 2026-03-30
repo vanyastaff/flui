@@ -26,6 +26,5 @@ mod embedder_scheduler;
 
 pub use desktop::EmbedderError;
 pub(crate) use desktop::PlatformWindowHandle;
-
 // Re-export GestureBinding from flui_interaction (no duplication)
 pub use flui_interaction::binding::GestureBinding;

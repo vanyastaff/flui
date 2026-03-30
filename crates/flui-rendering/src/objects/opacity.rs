@@ -2,16 +2,18 @@
 
 use flui_types::{Offset, Point, Rect, Size};
 
-use crate::arity::Single;
-use crate::context::{BoxHitTestContext, BoxLayoutContext};
-use crate::parent_data::BoxParentData;
-use crate::traits::RenderBox;
+use crate::{
+    arity::Single,
+    context::{BoxHitTestContext, BoxLayoutContext},
+    parent_data::BoxParentData,
+    traits::RenderBox,
+};
 
 /// A render object that applies transparency to its child.
 ///
 /// The opacity value ranges from 0.0 (fully transparent) to 1.0 (fully opaque).
-/// When opacity is 0.0, the child is completely invisible but still takes up space
-/// and can receive hit tests.
+/// When opacity is 0.0, the child is completely invisible but still takes up
+/// space and can receive hit tests.
 ///
 /// # Performance
 ///
@@ -47,8 +49,8 @@ impl RenderOpacity {
     ///
     /// # Arguments
     ///
-    /// * `opacity` - Opacity value (0.0 = transparent, 1.0 = opaque).
-    ///               Values outside [0.0, 1.0] are clamped.
+    /// * `opacity` - Opacity value (0.0 = transparent, 1.0 = opaque). Values
+    ///   outside [0.0, 1.0] are clamped.
     pub fn new(opacity: f32) -> Self {
         let clamped = opacity.clamp(0.0, 1.0);
         Self {
@@ -97,14 +99,16 @@ impl RenderOpacity {
     /// Sets whether this render object always needs compositing.
     ///
     /// When true, an opacity layer is always created even when opacity is 1.0.
-    /// This can be useful for animations where you want consistent compositing behavior.
+    /// This can be useful for animations where you want consistent compositing
+    /// behavior.
     pub fn set_always_needs_compositing(&mut self, value: bool) {
         self.always_needs_compositing = value;
     }
 
     /// Returns whether compositing is needed.
     ///
-    /// Returns true if opacity is not 1.0 or if always_needs_compositing is set.
+    /// Returns true if opacity is not 1.0 or if always_needs_compositing is
+    /// set.
     pub fn needs_compositing(&self) -> bool {
         self.always_needs_compositing || self.alpha != 255
     }
@@ -127,7 +131,7 @@ impl RenderBox for RenderOpacity {
     type ParentData = BoxParentData;
 
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) {
-        let constraints = ctx.constraints().clone();
+        let constraints = *ctx.constraints();
 
         if ctx.child_count() > 0 {
             self.has_child = true;

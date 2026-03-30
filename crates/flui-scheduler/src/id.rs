@@ -10,25 +10,28 @@
 //! where a FrameId is expected.
 //!
 //! ```rust
-//! use flui_scheduler::id::{TypedId, FrameIdMarker, TaskIdMarker};
+//! use flui_scheduler::id::{FrameIdMarker, TaskIdMarker, TypedId};
 //!
 //! type FrameId = TypedId<FrameIdMarker>;
 //! type TaskId = TypedId<TaskIdMarker>;
 //!
-//! fn process_frame(id: FrameId) { /* ... */ }
+//! fn process_frame(id: FrameId) { /* ... */
+//! }
 //!
 //! let frame_id = FrameId::new();
 //! let task_id = TaskId::new();
 //!
-//! process_frame(frame_id);  // OK
+//! process_frame(frame_id); // OK
 //! // process_frame(task_id);  // Compile error!
 //! ```
 
-use std::fmt;
-use std::hash::Hash;
-use std::marker::PhantomData;
-use std::num::NonZeroU64;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    fmt,
+    hash::Hash,
+    marker::PhantomData,
+    num::NonZeroU64,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 // =============================================================================
 // ID Marker Traits (Sealed)
@@ -102,7 +105,7 @@ impl IdMarker for CallbackIdMarker {
 /// ## Example
 ///
 /// ```rust
-/// use flui_scheduler::id::{TypedId, FrameIdMarker, TaskIdMarker};
+/// use flui_scheduler::id::{FrameIdMarker, TaskIdMarker, TypedId};
 ///
 /// // Create type aliases for clarity
 /// type FrameId = TypedId<FrameIdMarker>;
@@ -112,7 +115,10 @@ impl IdMarker for CallbackIdMarker {
 /// let task = TaskId::new();
 ///
 /// // These are different types - can't be mixed!
-/// assert_ne!(std::any::TypeId::of::<FrameId>(), std::any::TypeId::of::<TaskId>());
+/// assert_ne!(
+///     std::any::TypeId::of::<FrameId>(),
+///     std::any::TypeId::of::<TaskId>()
+/// );
 /// ```
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TypedId<M: IdMarker> {
@@ -409,18 +415,18 @@ mod tests {
 
     #[test]
     fn test_id_generator() {
-        let gen = IdGenerator::<FrameIdMarker>::new();
+        let generator = IdGenerator::<FrameIdMarker>::new();
 
-        let id1 = gen.next();
-        let id2 = gen.next();
-        let id3 = gen.next();
+        let id1 = generator.next();
+        let id2 = generator.next();
+        let id3 = generator.next();
 
         assert_eq!(id1.as_u64(), 1);
         assert_eq!(id2.as_u64(), 2);
         assert_eq!(id3.as_u64(), 3);
 
-        gen.reset();
-        let id4 = gen.next();
+        generator.reset();
+        let id4 = generator.next();
         assert_eq!(id4.as_u64(), 1);
     }
 

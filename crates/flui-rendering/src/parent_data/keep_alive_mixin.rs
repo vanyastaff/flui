@@ -14,7 +14,8 @@ use std::fmt::Debug;
 /// # Fields
 ///
 /// - `keep_alive` - Whether child should be kept alive (set by child)
-/// - `kept_alive` - Whether child is currently being kept alive (managed by parent)
+/// - `kept_alive` - Whether child is currently being kept alive (managed by
+///   parent)
 ///
 /// # Usage
 ///

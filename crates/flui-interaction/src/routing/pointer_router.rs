@@ -32,11 +32,11 @@
 //! router.remove_route(pointer_id, handler);
 //! ```
 
-use crate::events::PointerEvent;
-use crate::ids::PointerId;
+use std::{collections::HashMap, sync::Arc};
+
 use parking_lot::RwLock;
-use std::collections::HashMap;
-use std::sync::Arc;
+
+use crate::{events::PointerEvent, ids::PointerId};
 
 /// Handler for routed pointer events.
 ///
@@ -56,7 +56,8 @@ pub type GlobalPointerHandler = Arc<dyn Fn(&PointerEvent) + Send + Sync>;
 /// # Thread Safety
 ///
 /// PointerRouter uses `parking_lot::RwLock` for efficient concurrent access.
-/// Multiple readers can check routes simultaneously, while writes are exclusive.
+/// Multiple readers can check routes simultaneously, while writes are
+/// exclusive.
 ///
 /// # Example
 ///
@@ -299,11 +300,13 @@ fn get_pointer_id(event: &PointerEvent) -> PointerId {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::events::{make_move_event, PointerType};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use flui_types::geometry::{Offset, Pixels};
     use parking_lot::Mutex;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+    use crate::events::{PointerType, make_move_event};
 
     fn make_event(device: i32, position: Offset<Pixels>) -> PointerEvent {
         // For testing, use make_move_event with the position

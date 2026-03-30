@@ -19,8 +19,10 @@
 //! ## Type-Safe Task Creation
 //!
 //! ```rust
-//! use flui_scheduler::task::{TypedTask, Priority};
-//! use flui_scheduler::traits::UserInputPriority;
+//! use flui_scheduler::{
+//!     task::{Priority, TypedTask},
+//!     traits::UserInputPriority,
+//! };
 //!
 //! // Type-safe task creation with compile-time priority
 //! let task = TypedTask::<UserInputPriority>::new(|| {
@@ -30,16 +32,16 @@
 //! assert_eq!(task.priority(), Priority::UserInput);
 //! ```
 
-use crate::id::{TaskIdMarker, TypedId};
-use crate::traits::PriorityLevel;
-use parking_lot::Mutex;
-use std::cmp::Ordering;
-use std::collections::BinaryHeap;
-use std::marker::PhantomData;
-use std::sync::Arc;
+use std::{cmp::Ordering, collections::BinaryHeap, marker::PhantomData, sync::Arc};
 
+use parking_lot::Mutex;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
+
+use crate::{
+    id::{TaskIdMarker, TypedId},
+    traits::PriorityLevel,
+};
 
 /// Task priority levels (higher value = higher priority)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -199,8 +201,10 @@ impl std::fmt::Debug for Task {
 /// ## Example
 ///
 /// ```rust
-/// use flui_scheduler::task::TypedTask;
-/// use flui_scheduler::traits::{UserInputPriority, IdlePriority};
+/// use flui_scheduler::{
+///     task::TypedTask,
+///     traits::{IdlePriority, UserInputPriority},
+/// };
 ///
 /// fn process_input_task(task: TypedTask<UserInputPriority>) {
 ///     task.execute();
@@ -310,8 +314,7 @@ impl Ord for PriorityTask {
 /// ## Type-Safe Task Addition
 ///
 /// ```rust
-/// use flui_scheduler::task::TaskQueue;
-/// use flui_scheduler::traits::AnimationPriority;
+/// use flui_scheduler::{task::TaskQueue, traits::AnimationPriority};
 ///
 /// let queue = TaskQueue::new();
 ///

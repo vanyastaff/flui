@@ -8,7 +8,8 @@
 //!
 //! # Input Events
 //!
-//! The [`InputEvent`] enum wraps W3C-compliant events and adds device lifecycle:
+//! The [`InputEvent`] enum wraps W3C-compliant events and adds device
+//! lifecycle:
 //!
 //! ```rust,ignore
 //! use flui_interaction::events::{InputEvent, PointerEvent};
@@ -47,9 +48,7 @@
 //! let text_cursor = CursorIcon::Text; // I-beam for text selection
 //! ```
 
-use flui_types::geometry::Offset;
-use flui_types::geometry::PixelDelta;
-use flui_types::geometry::Pixels;
+use flui_types::geometry::{Offset, PixelDelta, Pixels};
 
 // ============================================================================
 // Re-exports from ui-events (W3C UI Events specification)
@@ -72,13 +71,9 @@ pub mod keyboard {
     };
 }
 
-/// Scroll delta types.
-pub use ui_events::ScrollDelta;
-
 // ============================================================================
 // Re-exports from cursor-icon (W3C CSS specification)
 // ============================================================================
-
 /// Cursor icon following W3C CSS cursor specification.
 ///
 /// Standard cursor appearances for different interaction states.
@@ -98,7 +93,8 @@ pub use ui_events::ScrollDelta;
 /// - [`CursorIcon::NsResize`] - Vertical resize
 /// - [`CursorIcon::NwseResize`] / [`CursorIcon::NeswResize`] - Diagonal resize
 pub use cursor_icon::CursorIcon;
-
+// Keyboard types from ui-events
+pub use keyboard::{Code, Key, KeyState, KeyboardEvent, Modifiers, NamedKey};
 // ============================================================================
 // Convenience re-exports at module level
 // ============================================================================
@@ -108,9 +104,8 @@ pub use pointer::{
     PointerButton, PointerButtonEvent, PointerButtons, PointerEvent, PointerId, PointerInfo,
     PointerScrollEvent, PointerState, PointerType, PointerUpdate,
 };
-
-// Keyboard types from ui-events
-pub use keyboard::{Code, Key, KeyState, KeyboardEvent, Modifiers, NamedKey};
+/// Scroll delta types.
+pub use ui_events::ScrollDelta;
 
 /// Alias for KeyboardEvent for compatibility
 pub type KeyEvent = KeyboardEvent;

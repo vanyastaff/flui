@@ -3,10 +3,10 @@
 //! Similar to Flutter's `RelativeRect`. Used for `Positioned` widget
 //! and animations like `RelativeRectTween`.
 
-use crate::{Offset, Size};
+use std::ops::{Add, Mul, Neg, Sub};
 
 use super::traits::{NumericUnit, Unit};
-use std::ops::{Add, Mul, Neg, Sub};
+use crate::{Offset, Size};
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RelativeRect<T: Unit> {
@@ -16,7 +16,8 @@ pub struct RelativeRect<T: Unit> {
     pub top: T,
     /// Offset from the right edge of the parent (parent.width - child.right).
     pub right: T,
-    /// Offset from the bottom edge of the parent (parent.height - child.bottom).
+    /// Offset from the bottom edge of the parent (parent.height -
+    /// child.bottom).
     pub bottom: T,
 }
 

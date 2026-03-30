@@ -7,9 +7,10 @@
 //! - [`PlatformHandlers`]: Global platform-level callbacks (quit, reopen, etc.)
 //! - [`WindowCallbacks`]: Per-window callbacks (input, resize, close, etc.)
 
-use crate::traits::{DispatchEventResult, PlatformInput, WindowEvent};
 use flui_types::geometry::{Pixels, Size};
 use parking_lot::Mutex;
+
+use crate::traits::{DispatchEventResult, PlatformInput, WindowEvent};
 
 /// Platform callback handlers registry
 ///
@@ -133,20 +134,23 @@ impl std::fmt::Debug for PlatformHandlers {
 /// This prevents deadlocks when a callback tries to interact with the window
 /// (which would require the same lock if stored differently).
 pub struct WindowCallbacks {
-    /// Called when an input event (pointer, keyboard) is delivered to this window.
-    /// Returns `DispatchEventResult` indicating if the event was consumed.
+    /// Called when an input event (pointer, keyboard) is delivered to this
+    /// window. Returns `DispatchEventResult` indicating if the event was
+    /// consumed.
     pub on_input: Mutex<Option<Box<dyn FnMut(PlatformInput) -> DispatchEventResult + Send>>>,
 
     /// Called when the platform requests a new frame to be rendered.
     pub on_request_frame: Mutex<Option<Box<dyn FnMut() + Send>>>,
 
-    /// Called when the window is resized. Parameters: new size (logical), scale factor.
+    /// Called when the window is resized. Parameters: new size (logical), scale
+    /// factor.
     pub on_resize: Mutex<Option<Box<dyn FnMut(Size<Pixels>, f32) + Send>>>,
 
     /// Called when the window is moved.
     pub on_moved: Mutex<Option<Box<dyn FnMut() + Send>>>,
 
-    /// Called when the window is about to be destroyed. Only fires once (FnOnce).
+    /// Called when the window is about to be destroyed. Only fires once
+    /// (FnOnce).
     pub on_close: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 
     /// Called to ask if the window should close. Return `false` to veto.
@@ -155,7 +159,8 @@ pub struct WindowCallbacks {
     /// Called when the window gains or loses focus. Parameter: is_active.
     pub on_active_status_change: Mutex<Option<Box<dyn FnMut(bool) + Send>>>,
 
-    /// Called when the mouse enters or leaves the window. Parameter: is_hovered.
+    /// Called when the mouse enters or leaves the window. Parameter:
+    /// is_hovered.
     pub on_hover_status_change: Mutex<Option<Box<dyn FnMut(bool) + Send>>>,
 
     /// Called when the system appearance (light/dark) changes.
@@ -178,7 +183,8 @@ impl WindowCallbacks {
         }
     }
 
-    /// Dispatch an input event. Returns `DispatchEventResult::default()` if no callback.
+    /// Dispatch an input event. Returns `DispatchEventResult::default()` if no
+    /// callback.
     pub fn dispatch_input(&self, event: PlatformInput) -> DispatchEventResult {
         let cb = self.on_input.lock().take();
         if let Some(mut cb) = cb {
@@ -226,7 +232,8 @@ impl WindowCallbacks {
         }
     }
 
-    /// Query whether the window should close. Returns `true` if no callback registered.
+    /// Query whether the window should close. Returns `true` if no callback
+    /// registered.
     pub fn dispatch_should_close(&self) -> bool {
         let cb = self.on_should_close.lock().take();
         if let Some(mut cb) = cb {

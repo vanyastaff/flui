@@ -1,7 +1,8 @@
 //! macOS-specific window extensions
 //!
-//! This module provides macOS-specific features that extend the core `Window` trait.
-//! These features are only available on macOS and use Apple's AppKit APIs.
+//! This module provides macOS-specific features that extend the core `Window`
+//! trait. These features are only available on macOS and use Apple's AppKit
+//! APIs.
 //!
 //! # Usage
 //!
@@ -17,8 +18,10 @@
 //! window.enable_tiling(TilingConfiguration::new());
 //! ```
 
-use super::liquid_glass::{LiquidGlassConfig, LiquidGlassMaterial};
-use super::window_tiling::TilingConfiguration;
+use super::{
+    liquid_glass::{LiquidGlassConfig, LiquidGlassMaterial},
+    window_tiling::TilingConfiguration,
+};
 
 // ============================================================================
 // macOS Window Extension Trait
@@ -31,7 +34,8 @@ use super::window_tiling::TilingConfiguration;
 ///
 /// # Platform Availability
 ///
-/// - **Liquid Glass Materials:** macOS 14.0+ (Sonoma), full support in macOS 26+ (Tahoe)
+/// - **Liquid Glass Materials:** macOS 14.0+ (Sonoma), full support in macOS
+///   26+ (Tahoe)
 /// - **Window Tiling:** macOS 15.0+ (Sequoia)
 /// - **Tabbed Windows:** macOS 10.12+ (Sierra)
 /// - **Full Screen Transitions:** macOS 10.7+ (Lion)
@@ -63,8 +67,8 @@ pub trait MacOSWindowExt {
 
     /// Enable window tiling with the specified configuration.
     ///
-    /// Window tiling allows the window to suggest tile layouts for multi-window workflows,
-    /// similar to Windows Snap Layouts.
+    /// Window tiling allows the window to suggest tile layouts for multi-window
+    /// workflows, similar to Windows Snap Layouts.
     ///
     /// # Platform Requirements
     ///
@@ -91,7 +95,8 @@ pub trait MacOSWindowExt {
 
     /// Enable tabbed window mode.
     ///
-    /// When enabled, multiple windows can be grouped into tabs within a single window frame.
+    /// When enabled, multiple windows can be grouped into tabs within a single
+    /// window frame.
     ///
     /// # Platform Requirements
     ///
@@ -120,7 +125,8 @@ pub trait MacOSWindowExt {
 
     /// Set the window level (z-ordering).
     ///
-    /// Controls whether the window floats above other windows, appears as a modal, etc.
+    /// Controls whether the window floats above other windows, appears as a
+    /// modal, etc.
     fn set_window_level(&mut self, level: MacOSWindowLevel);
 
     /// Get the window level.
@@ -128,7 +134,8 @@ pub trait MacOSWindowExt {
 
     /// Set the window's collection behavior.
     ///
-    /// Controls how the window behaves with Spaces, Exposé, and fullscreen modes.
+    /// Controls how the window behaves with Spaces, Exposé, and fullscreen
+    /// modes.
     fn set_collection_behavior(&mut self, behavior: MacOSCollectionBehavior);
 
     /// Enable/disable window shadow.
@@ -145,12 +152,16 @@ pub trait MacOSWindowExt {
     fn backing_scale_factor(&self) -> f32;
 
     /// Convert point from backing (pixel) coordinates to window coordinates.
-    fn convert_point_from_backing(&self, point: flui_types::geometry::Point<flui_types::Pixels>)
-        -> flui_types::geometry::Point<flui_types::Pixels>;
+    fn convert_point_from_backing(
+        &self,
+        point: flui_types::geometry::Point<flui_types::Pixels>,
+    ) -> flui_types::geometry::Point<flui_types::Pixels>;
 
     /// Convert point from window coordinates to backing (pixel) coordinates.
-    fn convert_point_to_backing(&self, point: flui_types::geometry::Point<flui_types::Pixels>)
-        -> flui_types::geometry::Point<flui_types::Pixels>;
+    fn convert_point_to_backing(
+        &self,
+        point: flui_types::geometry::Point<flui_types::Pixels>,
+    ) -> flui_types::geometry::Point<flui_types::Pixels>;
 }
 
 // ============================================================================
@@ -289,8 +300,8 @@ mod tests {
 
     #[test]
     fn test_collection_behavior_bits() {
-        let behavior = MacOSCollectionBehavior::CAN_FULLSCREEN
-            .with(MacOSCollectionBehavior::MANAGED);
+        let behavior =
+            MacOSCollectionBehavior::CAN_FULLSCREEN.with(MacOSCollectionBehavior::MANAGED);
 
         assert_eq!(behavior.bits(), (1 << 7) | (1 << 2));
     }

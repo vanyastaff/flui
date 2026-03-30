@@ -3,11 +3,15 @@
 //! Slivers are scrollable content boxes that handle viewport-aware layout
 //! with features like infinite scrolling, lazy loading, and cache regions.
 
+use std::{
+    fmt,
+    hash::{Hash, Hasher},
+};
+
+use flui_types::layout::{Axis, AxisDirection};
+
 use super::{Constraints, GrowthDirection};
 use crate::view::ScrollDirection;
-use flui_types::layout::{Axis, AxisDirection};
-use std::fmt;
-use std::hash::{Hash, Hasher};
 
 /// Layout constraints for sliver (scrollable) content.
 ///
@@ -34,7 +38,8 @@ use std::hash::{Hash, Hasher};
 ///
 /// # Flutter Equivalence
 ///
-/// Maps directly to Flutter's `SliverConstraints` class with identical semantics.
+/// Maps directly to Flutter's `SliverConstraints` class with identical
+/// semantics.
 #[derive(Clone, Copy, PartialEq)]
 pub struct SliverConstraints {
     /// Direction along the main axis (e.g., Down for vertical scroll).
@@ -67,7 +72,8 @@ pub struct SliverConstraints {
     /// Total extent of the viewport along the main axis.
     pub viewport_main_axis_extent: f32,
 
-    /// Remaining extent available for caching (typically larger than paint extent).
+    /// Remaining extent available for caching (typically larger than paint
+    /// extent).
     pub remaining_cache_extent: f32,
 
     /// Offset from scroll position where caching starts (typically negative).
@@ -145,9 +151,9 @@ impl SliverConstraints {
 
     /// Normalizes constraints for use as cache keys.
     ///
-    /// Rounds finite floating-point values to 0.01 precision (2 decimal places).
-    /// This precision matches typical display requirements and prevents cache
-    /// misses due to floating-point rounding errors.
+    /// Rounds finite floating-point values to 0.01 precision (2 decimal
+    /// places). This precision matches typical display requirements and
+    /// prevents cache misses due to floating-point rounding errors.
     ///
     /// Infinite values are preserved unchanged.
     #[inline]
@@ -381,8 +387,9 @@ impl fmt::Display for SliverConstraints {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::collections::HashSet;
+
+    use super::*;
 
     #[test]
     fn test_hash_equality() {

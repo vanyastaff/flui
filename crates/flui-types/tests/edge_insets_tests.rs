@@ -5,7 +5,7 @@
 //! - Rect inset operations
 //! - Padding and margin applications
 
-use flui_types::geometry::{px, Edges, Rect, Size};
+use flui_types::geometry::{Edges, Rect, Size, px};
 
 // ============================================================================
 // T075: Edges::all() and Edges::symmetric()

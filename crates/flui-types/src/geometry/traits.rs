@@ -3,9 +3,12 @@
 //! This module provides helper traits that enable ergonomic operations on
 //! geometry types. Inspired by GPUI's design patterns.
 
+use std::{
+    fmt::Debug,
+    ops::{Add, Mul, Neg, Sub},
+};
+
 use super::{DevicePixels, PixelDelta, Pixels, Radians, Rems, ScaledPixels};
-use std::fmt::Debug;
-use std::ops::{Add, Mul, Neg, Sub};
 
 // ============================================================================
 // AXIS - 2D cartesian axes
@@ -71,9 +74,10 @@ impl Axis {
 /// This trait enables generic geometry types to work with different
 /// coordinate systems in a type-safe manner.
 ///
-/// **Note:** This trait requires `Eq` and `Hash` to prevent using raw floating-point
-/// types (like `f32`) which don't implement these traits due to NaN semantics.
-/// Use wrapper types like `Pixels` instead, which implement `Eq` and `Hash` manually.
+/// **Note:** This trait requires `Eq` and `Hash` to prevent using raw
+/// floating-point types (like `f32`) which don't implement these traits due to
+/// NaN semantics. Use wrapper types like `Pixels` instead, which implement `Eq`
+/// and `Hash` manually.
 pub trait Unit:
     Copy + Clone + Debug + Default + PartialEq + Eq + PartialOrd + std::hash::Hash
 {
@@ -101,9 +105,9 @@ pub trait Unit:
 /// type safety. All operations preserve the unit type.
 ///
 /// **Note:** This trait requires standard operator traits (`Add`, `Sub`)
-/// and provides additional utility methods (`abs`, `min`, `max`) for common operations.
-/// Prefer using operators directly for clarity; utility methods are provided for
-/// generic programming contexts.
+/// and provides additional utility methods (`abs`, `min`, `max`) for common
+/// operations. Prefer using operators directly for clarity; utility methods are
+/// provided for generic programming contexts.
 pub trait NumericUnit: Unit + Add<Output = Self> + Sub<Output = Self> {
     /// Returns the absolute value.
     fn abs(self) -> Self;
@@ -115,8 +119,8 @@ pub trait NumericUnit: Unit + Add<Output = Self> + Sub<Output = Self> {
     fn max(self, other: Self) -> Self;
 }
 
-// Note: f32 impl removed - f32 cannot implement Unit due to Eq + Hash requirements.
-// Use wrapper types like Pixels, PixelDelta, etc. instead.
+// Note: f32 impl removed - f32 cannot implement Unit due to Eq + Hash
+// requirements. Use wrapper types like Pixels, PixelDelta, etc. instead.
 
 // ============================================================================
 // ALONG - Axis-based value access
@@ -125,7 +129,8 @@ pub trait NumericUnit: Unit + Add<Output = Self> + Sub<Output = Self> {
 /// Access values along a specific axis.
 ///
 /// This trait provides a unified interface for accessing components
-/// of geometry types along the horizontal (x/width) or vertical (y/height) axis.
+/// of geometry types along the horizontal (x/width) or vertical (y/height)
+/// axis.
 ///
 /// # Examples
 ///
@@ -160,7 +165,7 @@ pub trait Along {
 /// # Examples
 ///
 /// ```rust
-/// use flui_types::geometry::{Pixels, Half, px};
+/// use flui_types::geometry::{Half, Pixels, px};
 ///
 /// let width = px(100.0);
 /// assert_eq!(width.half(), px(50.0));
@@ -219,7 +224,7 @@ impl Half for DevicePixels {
 /// # Examples
 ///
 /// ```rust
-/// use flui_types::geometry::{Pixels, Double, px};
+/// use flui_types::geometry::{Double, Pixels, px};
 ///
 /// let width = px(50.0);
 /// assert_eq!(width.double(), px(100.0));
@@ -278,7 +283,7 @@ impl Double for DevicePixels {
 /// # Examples
 ///
 /// ```rust
-/// use flui_types::geometry::{Pixels, IsZero, px};
+/// use flui_types::geometry::{IsZero, Pixels, px};
 ///
 /// assert!(px(0.0).is_zero());
 /// assert!(!px(1.0).is_zero());
@@ -350,9 +355,9 @@ impl IsZero for DevicePixels {
 ///
 /// # Note on `signum()` method conflicts
 ///
-/// **Important:** Some types (like `Pixels`) also have inherent `signum_raw()` methods
-/// that return `f32` instead of `Self`. Use the trait method `Sign::signum(value)` when
-/// you need the result in the same type.
+/// **Important:** Some types (like `Pixels`) also have inherent `signum_raw()`
+/// methods that return `f32` instead of `Self`. Use the trait method
+/// `Sign::signum(value)` when you need the result in the same type.
 ///
 /// ```rust
 /// use flui_types::geometry::{Pixels, Sign, px};
@@ -513,10 +518,10 @@ impl Sign for DevicePixels {
 /// # Examples
 ///
 /// ```rust
-/// use flui_types::geometry::{Pixels, ApproxEq, px};
+/// use flui_types::geometry::{ApproxEq, Pixels, px};
 ///
 /// let a = px(100.0);
-/// let b = px(100.0 + 1e-8);  // Very close but not exactly equal
+/// let b = px(100.0 + 1e-8); // Very close but not exactly equal
 ///
 /// assert!(a.approx_eq(&b));
 /// assert!(a.approx_eq_eps(&b, 1e-6));
@@ -528,12 +533,14 @@ pub trait ApproxEq {
     /// Default epsilon for approximate equality.
     const DEFAULT_EPSILON: f32 = 1e-6;
 
-    /// Returns true if self and other are approximately equal using the default epsilon.
+    /// Returns true if self and other are approximately equal using the default
+    /// epsilon.
     fn approx_eq(&self, other: &Self) -> bool {
         self.approx_eq_eps(other, Self::DEFAULT_EPSILON)
     }
 
-    /// Returns true if self and other are approximately equal using the given epsilon.
+    /// Returns true if self and other are approximately equal using the given
+    /// epsilon.
     fn approx_eq_eps(&self, other: &Self, epsilon: f32) -> bool;
 }
 
@@ -587,7 +594,7 @@ impl ApproxEq for DevicePixels {
 /// # Examples
 ///
 /// ```rust
-/// use flui_types::geometry::{Pixels, GeometryOps, px};
+/// use flui_types::geometry::{GeometryOps, Pixels, px};
 ///
 /// let a = px(-100.0);
 /// assert_eq!(a.abs(), px(100.0));
@@ -625,7 +632,7 @@ pub trait GeometryOps: NumericUnit {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_types::geometry::{Pixels, GeometryOps, px};
+    /// use flui_types::geometry::{GeometryOps, Pixels, px};
     ///
     /// let start = px(0.0);
     /// let end = px(100.0);

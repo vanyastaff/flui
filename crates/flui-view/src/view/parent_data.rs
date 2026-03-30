@@ -54,10 +54,12 @@
 //! impl_parent_data_view!(Positioned);
 //! ```
 
+use std::any::TypeId;
+
+use flui_foundation::ElementId;
+
 use super::view::{ElementBase, View};
 use crate::element::Lifecycle;
-use flui_foundation::ElementId;
-use std::any::TypeId;
 
 /// Marker trait for types that can be used as ParentData.
 ///
@@ -75,14 +77,14 @@ impl ParentData for () {}
 ///
 /// # Type Parameter
 ///
-/// - `ParentData`: The type of data this View provides to the parent.
-///   Must implement `Clone + Default + Send + Sync + 'static`.
+/// - `ParentData`: The type of data this View provides to the parent. Must
+///   implement `Clone + Default + Send + Sync + 'static`.
 ///
 /// # How It Works
 ///
 /// 1. ParentDataView wraps a child View
-/// 2. When the child creates a RenderObject, the ParentDataElement
-///    attaches the parent data to it
+/// 2. When the child creates a RenderObject, the ParentDataElement attaches the
+///    parent data to it
 /// 3. The parent RenderObject reads this data during layout
 ///
 /// # Example Widgets Using ParentData

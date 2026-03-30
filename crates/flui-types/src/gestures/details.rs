@@ -3,10 +3,13 @@
 //! This module provides detail types for various gestures like tap, drag,
 //! scale, long press, and force press.
 
-use super::pointer::{OffsetPair, PointerDeviceKind};
-use super::velocity::Velocity;
-use crate::geometry::{Offset, Pixels};
 use std::time::Duration;
+
+use super::{
+    pointer::{OffsetPair, PointerDeviceKind},
+    velocity::Velocity,
+};
+use crate::geometry::{Offset, Pixels};
 
 // ============================================================================
 // Tap Gesture Details

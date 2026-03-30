@@ -1,11 +1,12 @@
 //! Windows utility functions and helpers
 #![allow(dead_code)]
 
-use anyhow::{anyhow, Result};
-use flui_types::geometry::{device_px, px, DevicePixels, Pixels, Point, Size};
-use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::*;
-use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+use anyhow::{Result, anyhow};
+use flui_types::geometry::{DevicePixels, Pixels, Point, Size, device_px, px};
+use windows::{
+    Win32::{Foundation::*, UI::Input::KeyboardAndMouse::GetAsyncKeyState},
+    core::{PCWSTR, w},
+};
 
 /// Windows platform window class name (shared across platform.rs and window.rs)
 pub const WINDOW_CLASS_NAME: PCWSTR = w!("FluiWindowClass");
@@ -79,13 +80,13 @@ pub fn to_wide(s: &str) -> Vec<u16> {
 
 /// Load a cursor by style
 pub unsafe fn load_cursor_style(style: PCWSTR) -> Result<HCURSOR> {
-    LoadCursorW(None, style).map_err(|e| anyhow!("Failed to load cursor: {}", e))
+    unsafe { LoadCursorW(None, style).map_err(|e| anyhow!("Failed to load cursor: {}", e)) }
 }
 
 /// Check if a key is pressed
 #[inline]
 pub unsafe fn is_key_pressed(vkey: i32) -> bool {
-    (GetAsyncKeyState(vkey) as i32 & 0x8000) != 0
+    unsafe { (GetAsyncKeyState(vkey) as i32 & 0x8000) != 0 }
 }
 
 /// DPI constants

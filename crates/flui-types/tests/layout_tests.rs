@@ -6,10 +6,12 @@
 //! - Alignment (constants, lerp, arithmetic)
 //! - Axis utilities (perpendicular, direction)
 
-use flui_types::geometry::{px, Edges, Offset, Point, Rect, Size};
-use flui_types::layout::{
-    Alignment, Axis, AxisDirection, BoxConstraints, CrossAxisAlignment, MainAxisAlignment,
-    MainAxisSize, Orientation,
+use flui_types::{
+    geometry::{Edges, Offset, Point, Rect, Size, px},
+    layout::{
+        Alignment, Axis, AxisDirection, BoxConstraints, CrossAxisAlignment, MainAxisAlignment,
+        MainAxisSize, Orientation,
+    },
 };
 
 // ============================================================================

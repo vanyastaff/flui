@@ -16,34 +16,40 @@
 //! 2. **Immutable commands**: Once recorded, DisplayList is immutable
 //! 3. **Intuitive API**: Consistent with common 2D graphics APIs
 //! 4. **Transform tracking**: Maintains current transform matrix
-//! 5. **Save/restore stack**: Supports save() and restore() for state management
-//! 6. **Thread-safe**: Canvas and DisplayList are Send (can be sent across threads)
+//! 5. **Save/restore stack**: Supports save() and restore() for state
+//!    management
+//! 6. **Thread-safe**: Canvas and DisplayList are Send (can be sent across
+//!    threads)
 //!
 //! # Thread Safety
 //!
-//! Canvas is designed for **single-threaded recording** but **multi-threaded execution**:
+//! Canvas is designed for **single-threaded recording** but **multi-threaded
+//! execution**:
 //!
 //! - Each RenderObject creates its own Canvas during `paint()`
 //! - Canvases are composed via `append_canvas()` (zero-copy move)
 //! - Final DisplayList can be sent to GPU thread for execution
 //! - All types are `Send` but not `Sync` (no shared mutable state)
 //!
-//! This design enables efficient parallel painting in FLUI's parallel build pipeline.
+//! This design enables efficient parallel painting in FLUI's parallel build
+//! pipeline.
 
-use crate::display_list::{
-    BlendMode, DisplayList, DisplayListCore, DrawCommand, ImageFilter, Paint,
-};
 use flui_types::{
-    geometry::{px, Matrix4, Offset, Pixels, Point, RRect, Rect, Size},
+    geometry::{Matrix4, Offset, Pixels, Point, RRect, Rect, Size, px},
     painting::{Clip, ClipOp, Image, Path},
     styling::Color,
     typography::{InlineSpan, TextStyle},
 };
 
+use crate::display_list::{
+    BlendMode, DisplayList, DisplayListCore, DrawCommand, ImageFilter, Paint,
+};
+
 /// High-level drawing canvas with intuitive API
 ///
 /// Canvas records drawing commands into a DisplayList without performing
-/// any actual rendering. Rendering happens later in flui_engine via WgpuPainter.
+/// any actual rendering. Rendering happens later in flui_engine via
+/// WgpuPainter.
 ///
 /// # Examples
 ///
@@ -183,7 +189,8 @@ impl Canvas {
 
     /// Rotates the coordinate system around a specified pivot point.
     ///
-    /// This is equivalent to translating to the pivot, rotating, then translating back.
+    /// This is equivalent to translating to the pivot, rotating, then
+    /// translating back.
     ///
     /// # Arguments
     ///
@@ -239,8 +246,9 @@ impl Canvas {
 
     /// Applies a transform to the current coordinate system
     ///
-    /// This method accepts both `Transform` and `Matrix4` types via the `Into` trait,
-    /// allowing for idiomatic Rust usage with the high-level Transform API.
+    /// This method accepts both `Transform` and `Matrix4` types via the `Into`
+    /// trait, allowing for idiomatic Rust usage with the high-level
+    /// Transform API.
     ///
     /// # Arguments
     ///
@@ -358,7 +366,8 @@ impl Canvas {
 
     /// Restores the canvas state to a specific save count.
     ///
-    /// This pops states from the save stack until the stack reaches the specified count.
+    /// This pops states from the save stack until the stack reaches the
+    /// specified count.
     ///
     /// # Arguments
     ///
@@ -390,19 +399,23 @@ impl Canvas {
 
     /// Saves the canvas state and creates a new compositing layer
     ///
-    /// This is similar to `save()` but creates an offscreen buffer for subsequent
-    /// drawing commands. When `restore()` is called, the layer is composited back
-    /// using the specified paint settings (opacity, blend mode, color filter, etc.).
+    /// This is similar to `save()` but creates an offscreen buffer for
+    /// subsequent drawing commands. When `restore()` is called, the layer
+    /// is composited back using the specified paint settings (opacity,
+    /// blend mode, color filter, etc.).
     ///
     /// # Arguments
     ///
-    /// * `bounds` - Optional bounds for the layer. If None, uses current clip bounds.
-    /// * `paint` - Paint to apply when compositing (for opacity, blend mode, etc.)
+    /// * `bounds` - Optional bounds for the layer. If None, uses current clip
+    ///   bounds.
+    /// * `paint` - Paint to apply when compositing (for opacity, blend mode,
+    ///   etc.)
     ///
     /// # Use Cases
     ///
     /// - **Opacity effects**: Apply uniform transparency to a group of drawings
-    /// - **Blend modes**: Apply complex blending to multiple overlapping elements
+    /// - **Blend modes**: Apply complex blending to multiple overlapping
+    ///   elements
     /// - **Anti-aliasing**: Get clean edges when clipping overlapping content
     ///
     /// # Performance
@@ -483,12 +496,14 @@ impl Canvas {
 
     /// Saves the canvas state with a layer that applies float opacity
     ///
-    /// This is a convenience method for applying opacity to a group of drawings.
+    /// This is a convenience method for applying opacity to a group of
+    /// drawings.
     ///
     /// # Arguments
     ///
     /// * `bounds` - Optional bounds for the layer
-    /// * `opacity` - Opacity value (0.0 = fully transparent, 1.0 = fully opaque)
+    /// * `opacity` - Opacity value (0.0 = fully transparent, 1.0 = fully
+    ///   opaque)
     ///
     /// # Examples
     ///
@@ -571,7 +586,8 @@ impl Canvas {
     /// # Arguments
     ///
     /// * `rect` - Rectangle to clip to
-    /// * `clip_op` - How to combine with existing clips (Intersect or Difference)
+    /// * `clip_op` - How to combine with existing clips (Intersect or
+    ///   Difference)
     /// * `clip_behavior` - Anti-aliasing behavior
     ///
     /// # Examples
@@ -631,7 +647,8 @@ impl Canvas {
         })
     }
 
-    /// Returns the device-space (transformed) bounds of the current clip, if available.
+    /// Returns the device-space (transformed) bounds of the current clip, if
+    /// available.
     ///
     /// This applies the current transformation matrix to the clip bounds.
     /// Returns `None` if:
@@ -654,14 +671,16 @@ impl Canvas {
             .map(|local_bounds| self.transform.transform_rect(&local_bounds))
     }
 
-    /// Checks if the given rectangle is completely outside the current clip bounds.
+    /// Checks if the given rectangle is completely outside the current clip
+    /// bounds.
     ///
     /// Use this for culling optimizations - if this returns `true`, you can
     /// skip drawing operations that would be completely clipped anyway.
     ///
     /// # Returns
     ///
-    /// - `Some(true)` - The rect is definitely outside the clip (can skip drawing)
+    /// - `Some(true)` - The rect is definitely outside the clip (can skip
+    ///   drawing)
     /// - `Some(false)` - The rect may be visible (should draw)
     /// - `None` - Cannot determine (no clip active or clip is a Path)
     ///
@@ -867,13 +886,15 @@ impl Canvas {
 
     /// Draws an image with tiling/repeat
     ///
-    /// Tiles the image to fill the destination rectangle based on the repeat mode.
+    /// Tiles the image to fill the destination rectangle based on the repeat
+    /// mode.
     ///
     /// # Arguments
     ///
     /// * `image` - Image to tile
     /// * `dst` - Destination rectangle to fill
-    /// * `repeat` - How to repeat the image (Repeat, RepeatX, RepeatY, NoRepeat)
+    /// * `repeat` - How to repeat the image (Repeat, RepeatX, RepeatY,
+    ///   NoRepeat)
     /// * `paint` - Optional paint (for tinting, opacity, etc.)
     ///
     /// # Examples
@@ -907,16 +928,19 @@ impl Canvas {
 
     /// Draws an image with 9-slice/9-patch scaling
     ///
-    /// The center slice defines the stretchable region of the image. Areas outside
-    /// the center slice (corners and edges) are drawn at their natural size, while
-    /// the center slice stretches to fill the remaining space.
+    /// The center slice defines the stretchable region of the image. Areas
+    /// outside the center slice (corners and edges) are drawn at their
+    /// natural size, while the center slice stretches to fill the remaining
+    /// space.
     ///
-    /// This is useful for resizable UI elements like buttons, panels, and chat bubbles.
+    /// This is useful for resizable UI elements like buttons, panels, and chat
+    /// bubbles.
     ///
     /// # Arguments
     ///
     /// * `image` - Image to draw
-    /// * `center_slice` - Rectangle defining the stretchable center region (in image coordinates)
+    /// * `center_slice` - Rectangle defining the stretchable center region (in
+    ///   image coordinates)
     /// * `dst` - Destination rectangle
     /// * `paint` - Optional paint (for tinting, opacity, etc.)
     ///
@@ -953,8 +977,9 @@ impl Canvas {
 
     /// Draws an image with a color filter applied
     ///
-    /// Applies a color transformation to the image when drawing. This can be used
-    /// for effects like grayscale, sepia, tinting, and color matrix transformations.
+    /// Applies a color transformation to the image when drawing. This can be
+    /// used for effects like grayscale, sepia, tinting, and color matrix
+    /// transformations.
     ///
     /// # Arguments
     ///
@@ -1005,15 +1030,16 @@ impl Canvas {
 
     /// Draws a GPU texture referenced by ID
     ///
-    /// This method renders an external GPU texture (e.g., video frame, camera preview,
-    /// platform view) to the destination rectangle. The texture must be registered
-    /// with the rendering engine before use.
+    /// This method renders an external GPU texture (e.g., video frame, camera
+    /// preview, platform view) to the destination rectangle. The texture
+    /// must be registered with the rendering engine before use.
     ///
     /// # Arguments
     ///
     /// * `texture_id` - GPU texture identifier
     /// * `dst` - Destination rectangle where the texture will be drawn
-    /// * `src` - Optional source rectangle within the texture (None = entire texture)
+    /// * `src` - Optional source rectangle within the texture (None = entire
+    ///   texture)
     /// * `filter_quality` - Quality of texture sampling (bilinear, etc.)
     /// * `opacity` - Opacity of the texture (0.0 = transparent, 1.0 = opaque)
     ///
@@ -1058,7 +1084,8 @@ impl Canvas {
     ///
     /// * `path` - Path casting the shadow
     /// * `color` - Shadow color
-    /// * `elevation` - Shadow blur radius (elevation above surface, must be non-negative)
+    /// * `elevation` - Shadow blur radius (elevation above surface, must be
+    ///   non-negative)
     ///
     /// # Panics
     ///
@@ -1242,7 +1269,8 @@ impl Canvas {
     ///
     /// * `vertices` - Vertex positions
     /// * `colors` - Optional vertex colors (must match vertices length)
-    /// * `tex_coords` - Optional texture coordinates (must match vertices length)
+    /// * `tex_coords` - Optional texture coordinates (must match vertices
+    ///   length)
     /// * `indices` - Triangle indices (groups of 3)
     /// * `paint` - Paint style
     pub fn draw_vertices(
@@ -1280,7 +1308,8 @@ impl Canvas {
     /// Fills entire canvas with a paint (respects clipping).
     ///
     /// Useful for solid backgrounds or full-screen effects.
-    /// Fills the canvas with the paint, which can include colors, gradients, or patterns.
+    /// Fills the canvas with the paint, which can include colors, gradients, or
+    /// patterns.
     ///
     /// # Examples
     ///
@@ -1357,8 +1386,9 @@ impl Canvas {
 
     /// Apply a shader as a mask to child content
     ///
-    /// This method wraps child drawing commands and applies a shader as an alpha mask.
-    /// The shader determines the opacity at each pixel, creating effects like:
+    /// This method wraps child drawing commands and applies a shader as an
+    /// alpha mask. The shader determines the opacity at each pixel,
+    /// creating effects like:
     /// - Gradient fades
     /// - Vignettes
     /// - Custom masking effects
@@ -1366,7 +1396,8 @@ impl Canvas {
     /// # Arguments
     ///
     /// * `bounds` - Bounding rectangle for the masked region
-    /// * `shader` - Shader specification (linear gradient, radial gradient, solid color)
+    /// * `shader` - Shader specification (linear gradient, radial gradient,
+    ///   solid color)
     /// * `blend_mode` - Blend mode for final compositing (default: SrcOver)
     /// * `draw_child` - Closure that records child drawing commands
     ///
@@ -1550,20 +1581,22 @@ impl Canvas {
 
     /// Extends this canvas with all commands from another canvas
     ///
-    /// Takes ownership of the child canvas and moves all its commands into this canvas.
-    /// This is useful for parent RenderObjects that need to draw their own content
-    /// and then draw their children on top.
+    /// Takes ownership of the child canvas and moves all its commands into this
+    /// canvas. This is useful for parent RenderObjects that need to draw
+    /// their own content and then draw their children on top.
     ///
     /// # Naming
     ///
     /// Uses `extend_from` (not `append`) to follow Rust API conventions:
     /// - `append(&mut other)` in std takes a mutable reference and drains it
-    /// - `extend_from(other)` takes ownership (consuming), matching our use case
+    /// - `extend_from(other)` takes ownership (consuming), matching our use
+    ///   case
     ///
     /// # Performance
     ///
     /// This method uses **zero-copy move semantics**:
-    /// - Commands are moved, not cloned (O(N) pointer moves, not O(N) deep copies)
+    /// - Commands are moved, not cloned (O(N) pointer moves, not O(N) deep
+    ///   copies)
     /// - If parent canvas is empty, this is O(1) (vector swap)
     /// - No allocations if capacity is sufficient
     ///
@@ -1692,7 +1725,8 @@ impl Canvas {
 
         // Append cloned commands - they will inherit our current transform
         // Note: We need to re-record commands with the new transform
-        // For simplicity, we clone the display list (commands retain their original transforms)
+        // For simplicity, we clone the display list (commands retain their original
+        // transforms)
         self.display_list.append(display_list.clone());
 
         self.restore();
@@ -1701,7 +1735,8 @@ impl Canvas {
     /// Appends a cached DisplayList directly (no offset)
     ///
     /// This is a zero-cost operation when the DisplayList can be moved.
-    /// For cached DisplayLists that need to be reused, use `append_display_list_at_offset`.
+    /// For cached DisplayLists that need to be reused, use
+    /// `append_display_list_at_offset`.
     ///
     /// # Arguments
     ///
@@ -1784,7 +1819,8 @@ impl Default for Canvas {
 
 /// Allow zero-cost conversion from Canvas to DisplayList reference
 ///
-/// This enables generic functions that accept `impl AsRef<DisplayList>` to work with Canvas.
+/// This enables generic functions that accept `impl AsRef<DisplayList>` to work
+/// with Canvas.
 ///
 /// # Examples
 ///
@@ -1883,7 +1919,8 @@ impl Canvas {
         self.save_stack.clear();
     }
 
-    /// Clears all recorded drawing commands but preserves transform and clip state.
+    /// Clears all recorded drawing commands but preserves transform and clip
+    /// state.
     ///
     /// Use this when you want to re-record commands but keep the current
     /// coordinate system setup.
@@ -1908,9 +1945,10 @@ impl Canvas {
 
     /// Executes a closure with automatic save/restore.
     ///
-    /// This is a safer and more ergonomic alternative to manual `save()`/`restore()` calls.
-    /// The canvas state (transform, clip) is automatically saved before the closure
-    /// and restored after, even if the closure panics.
+    /// This is a safer and more ergonomic alternative to manual
+    /// `save()`/`restore()` calls. The canvas state (transform, clip) is
+    /// automatically saved before the closure and restored after, even if
+    /// the closure panics.
     ///
     /// # Examples
     ///
@@ -1944,8 +1982,8 @@ impl Canvas {
 
     /// Executes a closure with a translated coordinate system.
     ///
-    /// Combines `save()`, `translate()`, closure execution, and `restore()` into
-    /// a single ergonomic call.
+    /// Combines `save()`, `translate()`, closure execution, and `restore()`
+    /// into a single ergonomic call.
     ///
     /// # Examples
     ///
@@ -1999,7 +2037,8 @@ impl Canvas {
         })
     }
 
-    /// Executes a closure with a rotated coordinate system around a pivot point.
+    /// Executes a closure with a rotated coordinate system around a pivot
+    /// point.
     ///
     /// # Arguments
     ///
@@ -2112,7 +2151,8 @@ impl Canvas {
 
     /// Executes a closure with a clipping rectangle applied.
     ///
-    /// All drawing within the closure will be clipped to the specified rectangle.
+    /// All drawing within the closure will be clipped to the specified
+    /// rectangle.
     ///
     /// # Examples
     ///
@@ -2246,7 +2286,8 @@ impl Canvas {
         result
     }
 
-    /// Creates a new Canvas, executes a closure on it, and returns the finished DisplayList.
+    /// Creates a new Canvas, executes a closure on it, and returns the finished
+    /// DisplayList.
     ///
     /// This is useful for creating isolated drawing contexts.
     ///
@@ -2276,7 +2317,8 @@ impl Canvas {
 
     /// Builds a Canvas using a closure and returns it (not consumed).
     ///
-    /// Unlike `record()`, this returns the Canvas itself for further operations.
+    /// Unlike `record()`, this returns the Canvas itself for further
+    /// operations.
     ///
     /// # Examples
     ///
@@ -2759,7 +2801,8 @@ impl Canvas {
 // ===== Chaining API =====
 //
 // These methods return `&mut Self` for fluent method chaining.
-// Unlike the standard methods, they allow building complex drawings in a single expression.
+// Unlike the standard methods, they allow building complex drawings in a single
+// expression.
 
 impl Canvas {
     /// Translates and returns self for chaining.
@@ -2862,7 +2905,8 @@ impl Canvas {
         self
     }
 
-    /// Draws a rectangle with uniform corner radius and returns self for chaining.
+    /// Draws a rectangle with uniform corner radius and returns self for
+    /// chaining.
     #[inline]
     pub fn rounded_rect(&mut self, rect: Rect<Pixels>, radius: f32, paint: &Paint) -> &mut Self {
         self.draw_rounded_rect(rect, Pixels(radius), paint);
@@ -2917,7 +2961,8 @@ impl Canvas {
     ///
     /// * `texture_id` - The ID of the texture to draw
     /// * `dst` - Destination rectangle where the texture will be drawn
-    /// * `src` - Optional source rectangle for texture cropping (None = entire texture)
+    /// * `src` - Optional source rectangle for texture cropping (None = entire
+    ///   texture)
     /// * `filter_quality` - Quality of texture filtering
     /// * `opacity` - Opacity of the texture (0.0 to 1.0)
     #[inline]
@@ -3022,7 +3067,8 @@ impl Canvas {
         self
     }
 
-    /// Draws difference between two rounded rectangles and returns self for chaining.
+    /// Draws difference between two rounded rectangles and returns self for
+    /// chaining.
     #[inline]
     pub fn drrect(&mut self, outer: RRect, inner: RRect, paint: &Paint) -> &mut Self {
         self.draw_drrect(outer, inner, paint);
@@ -3096,11 +3142,7 @@ impl Canvas {
     where
         F: FnOnce(&mut Self) -> &mut Self,
     {
-        if condition {
-            f(self)
-        } else {
-            self
-        }
+        if condition { f(self) } else { self }
     }
 
     /// Conditionally executes one of two closures.
@@ -3148,8 +3190,9 @@ enum ClipShape {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::Point;
+
+    use super::*;
 
     #[test]
     fn test_canvas_creation() {

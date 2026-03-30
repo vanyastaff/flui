@@ -1,6 +1,7 @@
 //! macOS platform implementation using AppKit/Cocoa
 //!
-//! This module provides a native macOS implementation using AppKit (Cocoa) APIs.
+//! This module provides a native macOS implementation using AppKit (Cocoa)
+//! APIs.
 //!
 //! # Architecture
 //!
@@ -48,9 +49,11 @@ mod window_tiling;
 pub use clipboard::MacOSClipboard;
 pub use display::MacOSDisplay;
 pub use events::convert_ns_event;
-pub use liquid_glass::{LiquidGlassMaterial, LiquidGlassConfig, BlendingMode};
+pub use liquid_glass::{BlendingMode, LiquidGlassConfig, LiquidGlassMaterial};
 pub use platform::MacOSPlatform;
 pub use window::MacOSWindow;
-pub use window_ext::{MacOSWindowExt, MacOSWindowLevel, MacOSCollectionBehavior};
-pub use window_manager::{GroupId, SharedWindowManager, WindowId, WindowInfo, WindowLevel, WindowManager, WindowOptions};
+pub use window_ext::{MacOSCollectionBehavior, MacOSWindowExt, MacOSWindowLevel};
+pub use window_manager::{
+    GroupId, SharedWindowManager, WindowId, WindowInfo, WindowLevel, WindowManager, WindowOptions,
+};
 pub use window_tiling::{TilePosition, TilingConfiguration, TilingLayout, TilingState};

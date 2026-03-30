@@ -4,7 +4,8 @@ use tracing_subscriber::util::{SubscriberInitExt, TryInitError};
 /// Error returned when logging initialization fails.
 ///
 /// This is a thin wrapper around [`tracing_subscriber::util::TryInitError`],
-/// returned by [`Logger::try_init`] when the global subscriber has already been set.
+/// returned by [`Logger::try_init`] when the global subscriber has already been
+/// set.
 #[derive(Debug)]
 pub struct InitError(TryInitError);
 
@@ -43,11 +44,13 @@ impl std::error::Error for InitError {
 /// - Logs to Android's logcat system via native FFI
 /// - View with: `adb logcat`, `adb logcat -s flui:*`, or Android Studio Logcat
 /// - Tag format: module path (e.g., `flui_core::pipeline`)
-/// - Priority mapping: TRACE→VERBOSE, DEBUG→DEBUG, INFO→INFO, WARN→WARN, ERROR→ERROR
+/// - Priority mapping: TRACE→VERBOSE, DEBUG→DEBUG, INFO→INFO, WARN→WARN,
+///   ERROR→ERROR
 ///
 /// ## iOS
 /// - Integrates with Apple's unified logging system (`os_log`)
-/// - View with: Xcode Console, Console.app, or `log stream --predicate 'subsystem == "com.flui.app"'`
+/// - View with: Xcode Console, Console.app, or `log stream --predicate
+///   'subsystem == "com.flui.app"'`
 /// - Subsystem: "com.flui.app" (configurable in source)
 /// - Privacy-preserving by default, efficient structured logging
 ///
@@ -87,9 +90,7 @@ impl std::error::Error for InitError {
 /// use flui_log::Logger;
 ///
 /// // For a game called "space_shooter"
-/// Logger::new()
-///     .with_app_name("space_shooter")
-///     .init();
+/// Logger::new().with_app_name("space_shooter").init();
 ///
 /// // Results in:
 /// // - Android: logcat tag "space_shooter" (when module path unavailable)
@@ -120,7 +121,8 @@ impl std::error::Error for InitError {
 pub struct Logger {
     /// Application name used for platform-specific logging
     ///
-    /// - **Android**: Used as fallback logcat tag when module path is unavailable
+    /// - **Android**: Used as fallback logcat tag when module path is
+    ///   unavailable
     /// - **iOS**: Used as subsystem identifier (e.g., `"com.{app_name}.app"`)
     /// - **WASM**: Could be used for console grouping (future enhancement)
     /// - **Desktop**: Not currently used, reserved for future features
@@ -204,7 +206,7 @@ impl Logger {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_log::{Logger, Level};
+    /// use flui_log::{Level, Logger};
     ///
     /// let logger = Logger::new();
     /// assert_eq!(logger.level(), &Level::INFO);
@@ -247,8 +249,7 @@ impl Logger {
     /// ```rust
     /// use flui_log::Logger;
     ///
-    /// let logger = Logger::new()
-    ///     .with_app_name("my_game");
+    /// let logger = Logger::new().with_app_name("my_game");
     /// ```
     #[inline]
     #[must_use]
@@ -264,8 +265,7 @@ impl Logger {
     /// ```rust
     /// use flui_log::Logger;
     ///
-    /// let logger = Logger::new()
-    ///     .with_filter("debug,wgpu=warn,flui_core=trace");
+    /// let logger = Logger::new().with_filter("debug,wgpu=warn,flui_core=trace");
     /// ```
     #[inline]
     #[must_use]
@@ -279,10 +279,9 @@ impl Logger {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_log::{Logger, Level};
+    /// use flui_log::{Level, Logger};
     ///
-    /// let logger = Logger::new()
-    ///     .with_level(Level::DEBUG);
+    /// let logger = Logger::new().with_level(Level::DEBUG);
     /// ```
     #[inline]
     #[must_use]
@@ -301,8 +300,7 @@ impl Logger {
     /// ```rust
     /// use flui_log::Logger;
     ///
-    /// let logger = Logger::new()
-    ///     .with_pretty(true);  // Requires "pretty" feature
+    /// let logger = Logger::new().with_pretty(true); // Requires "pretty" feature
     /// ```
     #[cfg(feature = "pretty")]
     #[inline]
@@ -314,12 +312,14 @@ impl Logger {
 
     /// Initialize the logging system
     ///
-    /// This should be called once at application startup, before any logging occurs.
-    /// The appropriate backend will be selected based on the target platform.
+    /// This should be called once at application startup, before any logging
+    /// occurs. The appropriate backend will be selected based on the target
+    /// platform.
     ///
     /// # Platform Selection
     ///
-    /// - **Desktop**: Uses `tracing-forest` (if "pretty" feature enabled) or `fmt` layer
+    /// - **Desktop**: Uses `tracing-forest` (if "pretty" feature enabled) or
+    ///   `fmt` layer
     /// - **Android**: Uses `android_log-sys` → logcat
     /// - **iOS**: Uses `tracing-oslog` → `os_log`
     /// - **WASM**: Uses `tracing-wasm` → browser console
@@ -338,9 +338,7 @@ impl Logger {
     /// Logger::default().init();
     ///
     /// // With custom config
-    /// Logger::new()
-    ///     .with_filter("debug,wgpu=error")
-    ///     .init();
+    /// Logger::new().with_filter("debug,wgpu=error").init();
     /// ```
     pub fn init(&self) {
         self.try_init().expect("Failed to initialize logger");
@@ -361,10 +359,12 @@ impl Logger {
     /// let _ = Logger::default().try_init();
     ///
     /// // In applications — handle the error
-    /// Logger::default().try_init().expect("logging already initialized");
+    /// Logger::default()
+    ///     .try_init()
+    ///     .expect("logging already initialized");
     /// ```
     pub fn try_init(&self) -> Result<(), InitError> {
-        use tracing_subscriber::{layer::SubscriberExt, Registry};
+        use tracing_subscriber::{Registry, layer::SubscriberExt};
 
         // Create filter layer from environment or config
         let filter_layer = tracing_subscriber::EnvFilter::try_from_default_env()
@@ -377,7 +377,7 @@ impl Logger {
             // Pretty hierarchical logging with tracing-forest (if feature enabled)
             #[cfg(feature = "pretty")]
             if self.use_pretty {
-                use tracing_forest::{util::LevelFilter, ForestLayer};
+                use tracing_forest::{ForestLayer, util::LevelFilter};
 
                 let subscriber = Registry::default()
                     .with(filter_layer)

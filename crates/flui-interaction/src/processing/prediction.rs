@@ -1,7 +1,8 @@
 //! Input prediction for low-latency interaction
 //!
-//! This module provides pointer position prediction to reduce perceived latency.
-//! Essential for games and real-time applications where responsiveness is critical.
+//! This module provides pointer position prediction to reduce perceived
+//! latency. Essential for games and real-time applications where responsiveness
+//! is critical.
 //!
 //! # How it works
 //!
@@ -30,11 +31,11 @@
 //! - Medium accuracy: 16-32ms (one to two frames)
 //! - Low accuracy: 32-50ms (use with caution)
 
-use super::velocity::{Velocity, VelocityEstimationStrategy, VelocityTracker};
-use flui_types::geometry::Pixels;
-
-use flui_types::geometry::Offset;
 use std::time::{Duration, Instant};
+
+use flui_types::geometry::{Offset, Pixels};
+
+use super::velocity::{Velocity, VelocityEstimationStrategy, VelocityTracker};
 
 // ============================================================================
 // Constants
@@ -60,7 +61,8 @@ pub struct PredictionConfig {
     pub max_prediction_time: Duration,
     /// Whether to use acceleration in prediction (quadratic extrapolation).
     pub use_acceleration: bool,
-    /// Smoothing factor for predictions (0.0 = no smoothing, 1.0 = max smoothing).
+    /// Smoothing factor for predictions (0.0 = no smoothing, 1.0 = max
+    /// smoothing).
     pub smoothing: f32,
     /// Velocity estimation strategy.
     pub velocity_strategy: VelocityEstimationStrategy,
@@ -88,7 +90,8 @@ impl PredictionConfig {
         }
     }
 
-    /// Create a config optimized for UI (more smoothing, conservative prediction).
+    /// Create a config optimized for UI (more smoothing, conservative
+    /// prediction).
     pub fn for_ui() -> Self {
         Self {
             max_prediction_time: Duration::from_millis(16),
@@ -283,22 +286,21 @@ impl InputPredictor {
         );
 
         // Add acceleration term if enabled
-        if self.config.use_acceleration {
-            if let (Some(prev_vel), Some(prev_time), Some(last_time)) =
+        if self.config.use_acceleration
+            && let (Some(prev_vel), Some(prev_time), Some(last_time)) =
                 (self.prev_velocity, self.prev_velocity_time, self.last_time)
-            {
-                let vel_dt = last_time.duration_since(prev_time).as_secs_f32();
-                if vel_dt > 0.001 {
-                    // Acceleration = (v2 - v1) / dt
-                    let accel_x =
-                        (velocity.pixels_per_second.dx - prev_vel.pixels_per_second.dx) / vel_dt;
-                    let accel_y =
-                        (velocity.pixels_per_second.dy - prev_vel.pixels_per_second.dy) / vel_dt;
+        {
+            let vel_dt = last_time.duration_since(prev_time).as_secs_f32();
+            if vel_dt > 0.001 {
+                // Acceleration = (v2 - v1) / dt
+                let accel_x =
+                    (velocity.pixels_per_second.dx - prev_vel.pixels_per_second.dx) / vel_dt;
+                let accel_y =
+                    (velocity.pixels_per_second.dy - prev_vel.pixels_per_second.dy) / vel_dt;
 
-                    // Add 0.5 * a * t^2 term
-                    predicted.dx += Pixels((0.5 * accel_x * dt * dt).0);
-                    predicted.dy += Pixels((0.5 * accel_y * dt * dt).0);
-                }
+                // Add 0.5 * a * t^2 term
+                predicted.dx += Pixels((0.5 * accel_x * dt * dt).0);
+                predicted.dy += Pixels((0.5 * accel_y * dt * dt).0);
             }
         }
 

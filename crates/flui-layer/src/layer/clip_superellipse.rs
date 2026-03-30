@@ -4,8 +4,10 @@
 //! the smooth corner transitions used in iOS/SwiftUI design.
 //! Corresponds to Flutter's `ClipRSuperellipseLayer`.
 
-use flui_types::geometry::{Pixels, RSuperellipse, Rect};
-use flui_types::painting::Clip;
+use flui_types::{
+    geometry::{Pixels, RSuperellipse, Rect},
+    painting::Clip,
+};
 
 /// Layer that clips children to a superellipse (squircle) shape.
 ///
@@ -27,14 +29,13 @@ use flui_types::painting::Clip;
 ///
 /// ```rust
 /// use flui_layer::ClipSuperellipseLayer;
-/// use flui_types::geometry::{RSuperellipse, Rect, Radius};
-/// use flui_types::painting::Clip;
+/// use flui_types::{
+///     geometry::{RSuperellipse, Radius, Rect},
+///     painting::Clip,
+/// };
 ///
 /// // Create superellipse with 20px corner radius
-/// let squircle = RSuperellipse::from_rect_circular(
-///     Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
-///     20.0,
-/// );
+/// let squircle = RSuperellipse::from_rect_circular(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), 20.0);
 /// let layer = ClipSuperellipseLayer::new(squircle, Clip::AntiAlias);
 ///
 /// assert_eq!(layer.clip_superellipse().width(), 100.0);
@@ -212,8 +213,9 @@ impl Default for ClipSuperellipseLayer {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::{px, Radius};
+
+    use super::*;
 
     #[test]
     fn test_clip_superellipse_layer_new() {

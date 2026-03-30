@@ -90,8 +90,8 @@
 //! - `tracing-support`: Integration with `tracing` crate
 //! - `full`: All features enabled
 //!
-//! **Note**: This crate has NO dependency on `flui_core` to avoid circular dependencies.
-//! Widget inspection is available through separate tools.
+//! **Note**: This crate has NO dependency on `flui_core` to avoid circular
+//! dependencies. Widget inspection is available through separate tools.
 
 #![warn(missing_docs)]
 #![warn(missing_debug_implementations)]
@@ -115,7 +115,6 @@ pub mod timeline;
 
 // Re-exports
 pub use common::*;
-
 #[cfg(feature = "profiling")]
 pub use profiler::Profiler;
 
@@ -128,14 +127,12 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// use flui_devtools::prelude::*;
 /// ```
 pub mod prelude {
-    #[cfg(feature = "profiling")]
-    pub use crate::profiler::{FramePhase, FrameStats, Profiler};
-
-    #[cfg(feature = "timeline")]
-    pub use crate::timeline::{Timeline, TimelineEvent};
-
     #[cfg(feature = "hot-reload")]
     pub use crate::hot_reload::HotReloader;
+    #[cfg(feature = "profiling")]
+    pub use crate::profiler::{FramePhase, FrameStats, Profiler};
+    #[cfg(feature = "timeline")]
+    pub use crate::timeline::{Timeline, TimelineEvent};
 
     // TODO: Add memory profiler re-exports
     // #[cfg(feature = "memory-profiler")]

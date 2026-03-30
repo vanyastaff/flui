@@ -3,8 +3,10 @@
 //! This layer displays an external GPU texture (video, camera, platform view)
 //! at a specific location. Corresponds to Flutter's `TextureLayer`.
 
-use flui_types::geometry::{Pixels, Rect};
-use flui_types::painting::{FilterQuality, TextureId};
+use flui_types::{
+    geometry::{Pixels, Rect},
+    painting::{FilterQuality, TextureId},
+};
 
 /// Layer that displays an external GPU texture.
 ///
@@ -32,8 +34,10 @@ use flui_types::painting::{FilterQuality, TextureId};
 ///
 /// ```rust
 /// use flui_layer::TextureLayer;
-/// use flui_types::geometry::Rect;
-/// use flui_types::painting::{TextureId, FilterQuality};
+/// use flui_types::{
+///     geometry::Rect,
+///     painting::{FilterQuality, TextureId},
+/// };
 ///
 /// // Create a texture layer for video playback
 /// let texture_id = TextureId::new(42);
@@ -41,8 +45,7 @@ use flui_types::painting::{FilterQuality, TextureId};
 /// let layer = TextureLayer::new(texture_id, rect);
 ///
 /// // With custom filter quality
-/// let hq_layer = TextureLayer::new(texture_id, rect)
-///     .with_filter_quality(FilterQuality::High);
+/// let hq_layer = TextureLayer::new(texture_id, rect).with_filter_quality(FilterQuality::High);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TextureLayer {
@@ -210,8 +213,9 @@ unsafe impl Sync for TextureLayer {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::px;
+
+    use super::*;
 
     #[test]
     fn test_texture_layer_new() {

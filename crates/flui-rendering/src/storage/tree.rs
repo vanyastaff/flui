@@ -1,20 +1,23 @@
 //! RenderTree - Slab-based render object storage.
 //!
-//! This module provides efficient storage and tree operations for render objects.
-//! Implements `flui-tree` traits for unified tree interface.
+//! This module provides efficient storage and tree operations for render
+//! objects. Implements `flui-tree` traits for unified tree interface.
 
 use std::sync::Arc;
 
 use flui_foundation::RenderId;
-use flui_tree::iter::{AllSiblings, Ancestors, DescendantsWithDepth};
-use flui_tree::traits::{TreeNav, TreeRead, TreeWrite};
+use flui_tree::{
+    iter::{AllSiblings, Ancestors, DescendantsWithDepth},
+    traits::{TreeNav, TreeRead, TreeWrite},
+};
 use parking_lot::RwLock;
 use slab::Slab;
 
-use crate::pipeline::PipelineOwner;
-use crate::protocol::{BoxProtocol, RenderObject, SliverProtocol};
-
 use super::node::RenderNode;
+use crate::{
+    pipeline::PipelineOwner,
+    protocol::{BoxProtocol, RenderObject, SliverProtocol},
+};
 
 // ============================================================================
 // RenderTree
@@ -22,7 +25,8 @@ use super::node::RenderNode;
 
 /// Slab-based storage for render objects.
 ///
-/// Provides O(1) render object access by RenderId and tree navigation operations.
+/// Provides O(1) render object access by RenderId and tree navigation
+/// operations.
 ///
 /// # Thread Safety
 ///
@@ -109,7 +113,8 @@ impl RenderTree {
     /// 3. Notifying the owner about all existing dirty nodes
     pub fn set_owner(&mut self, owner: Option<Arc<RwLock<PipelineOwner>>>) {
         // Note: Full attach/detach lifecycle for existing nodes is not yet implemented.
-        // This would require iterating all nodes and calling render_object.attach(owner).
+        // This would require iterating all nodes and calling
+        // render_object.attach(owner).
         self.owner = owner;
     }
 
@@ -203,7 +208,7 @@ impl RenderTree {
 
         // Create child node
         let child_node =
-            RenderNode::new_box_with_parent(render_object, parent_id, (parent_depth + 1) as u16);
+            RenderNode::new_box_with_parent(render_object, parent_id, parent_depth + 1);
         let child_slab_index = self.nodes.insert(child_node);
         let child_id = RenderId::new(child_slab_index + 1);
 
@@ -224,7 +229,7 @@ impl RenderTree {
         let parent_depth = self.get(parent_id)?.depth();
 
         let child_node =
-            RenderNode::new_sliver_with_parent(render_object, parent_id, (parent_depth + 1) as u16);
+            RenderNode::new_sliver_with_parent(render_object, parent_id, parent_depth + 1);
         let child_slab_index = self.nodes.insert(child_node);
         let child_id = RenderId::new(child_slab_index + 1);
 
@@ -239,7 +244,8 @@ impl RenderTree {
     ///
     /// Returns the removed node, or None if it didn't exist.
     ///
-    /// **Note:** This does NOT remove children. Use `remove_recursive` for that.
+    /// **Note:** This does NOT remove children. Use `remove_recursive` for
+    /// that.
     pub fn remove(&mut self, id: RenderId) -> Option<RenderNode> {
         // Update root if removing root
         if self.root == Some(id) {
@@ -247,10 +253,10 @@ impl RenderTree {
         }
 
         // Get parent and remove from parent's children
-        if let Some(parent_id) = self.get(id).and_then(|n| n.parent()) {
-            if let Some(parent) = self.get_mut(parent_id) {
-                parent.remove_child(id);
-            }
+        if let Some(parent_id) = self.get(id).and_then(|n| n.parent())
+            && let Some(parent) = self.get_mut(parent_id)
+        {
+            parent.remove_child(id);
         }
 
         self.nodes.try_remove(id.get() - 1)
@@ -456,7 +462,8 @@ impl RenderTree {
     /// Visits all nodes mutably in depth-first pre-order starting from root.
     ///
     /// **Note:** The callback receives only RenderId since we can't provide
-    /// mutable references during traversal. Use `get_mut()` inside the callback.
+    /// mutable references during traversal. Use `get_mut()` inside the
+    /// callback.
     pub fn visit_depth_first_mut<F>(&mut self, mut f: F)
     where
         F: FnMut(&mut Self, RenderId),
@@ -466,7 +473,8 @@ impl RenderTree {
         }
     }
 
-    /// Visits all nodes mutably in depth-first pre-order starting from a given node.
+    /// Visits all nodes mutably in depth-first pre-order starting from a given
+    /// node.
     fn visit_depth_first_mut_from<F>(&mut self, id: RenderId, f: &mut F)
     where
         F: FnMut(&mut Self, RenderId),
@@ -543,10 +551,10 @@ impl TreeWrite<RenderId> for RenderTree {
         }
 
         // Get parent and remove from parent's children
-        if let Some(parent_id) = self.get(id).and_then(|n| n.parent()) {
-            if let Some(parent) = self.nodes.get_mut(parent_id.get() - 1) {
-                parent.remove_child(id);
-            }
+        if let Some(parent_id) = self.get(id).and_then(|n| n.parent())
+            && let Some(parent) = self.nodes.get_mut(parent_id.get() - 1)
+        {
+            parent.remove_child(id);
         }
 
         self.nodes.try_remove(id.get() - 1)

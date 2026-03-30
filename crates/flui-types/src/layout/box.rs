@@ -26,7 +26,8 @@ pub enum BoxFit {
     /// distorting the aspect ratio if necessary.
     Fill,
 
-    /// As large as possible while still containing the source entirely within the target box.
+    /// As large as possible while still containing the source entirely within
+    /// the target box.
     ///
     /// Maintains aspect ratio. May leave empty space.
     ///
@@ -267,7 +268,8 @@ pub enum BoxShape {
     /// A circle.
     ///
     /// The box will be clipped to a circle that fits within the box's bounds.
-    /// If the box is not square, the circle will be inscribed in the shorter dimension.
+    /// If the box is not square, the circle will be inscribed in the shorter
+    /// dimension.
     Circle,
 }
 
@@ -288,7 +290,8 @@ impl BoxShape {
 
     /// Returns true if this shape requires clipping.
     ///
-    /// Circle shapes always need clipping, rectangles may need it for rounded corners.
+    /// Circle shapes always need clipping, rectangles may need it for rounded
+    /// corners.
     #[inline]
     #[must_use]
     pub const fn requires_clipping(&self) -> bool {
@@ -304,8 +307,10 @@ impl BoxShape {
 /// # Example
 ///
 /// ```
-/// use flui_types::layout::{BoxFit, FittedSizes};
-/// use flui_types::geometry::Size;
+/// use flui_types::{
+///     geometry::Size,
+///     layout::{BoxFit, FittedSizes},
+/// };
 ///
 /// let input = Size::new(200.0, 100.0);
 /// let output = Size::new(100.0, 100.0);

@@ -2,10 +2,12 @@
 
 use flui_types::{Offset, Point, Rect, Size};
 
-use crate::arity::Single;
-use crate::context::{BoxHitTestContext, BoxLayoutContext};
-use crate::parent_data::BoxParentData;
-use crate::traits::RenderBox;
+use crate::{
+    arity::Single,
+    context::{BoxHitTestContext, BoxLayoutContext},
+    parent_data::BoxParentData,
+    traits::RenderBox,
+};
 
 /// A render object that centers its child within the available space.
 ///
@@ -23,7 +25,8 @@ use crate::traits::RenderBox;
 pub struct RenderCenter {
     /// Width factor (0.0-1.0) to shrink available width, None for full width.
     width_factor: Option<f32>,
-    /// Height factor (0.0-1.0) to shrink available height, None for full height.
+    /// Height factor (0.0-1.0) to shrink available height, None for full
+    /// height.
     height_factor: Option<f32>,
     /// Size after layout.
     size: Size,
@@ -76,7 +79,7 @@ impl RenderBox for RenderCenter {
     type ParentData = BoxParentData;
 
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) {
-        let constraints = ctx.constraints().clone();
+        let constraints = *ctx.constraints();
 
         tracing::debug!(
             "RenderCenter::perform_layout: constraints={:?}, child_count={}",

@@ -9,9 +9,11 @@
 
 use std::fmt;
 
-use super::traits::{NumericUnit, Unit};
-use super::units::Pixels;
-use super::{Offset, Point, Size, Vec2};
+use super::{
+    Offset, Point, Size, Vec2,
+    traits::{NumericUnit, Unit},
+    units::Pixels,
+};
 
 /// An axis-aligned rectangle.
 ///
@@ -25,7 +27,7 @@ use super::{Offset, Point, Size, Vec2};
 /// # Examples
 ///
 /// ```
-/// use flui_types::geometry::{Rect, Point, Size, point, size};
+/// use flui_types::geometry::{Point, Rect, Size, point, size};
 ///
 /// // Create from origin and size
 /// let rect = Rect::from_origin_size(point(0.0, 0.0), size(100.0, 50.0));
@@ -173,7 +175,8 @@ where
 impl Rect<Pixels> {
     /// Creates a rectangle from raw coordinates.
     ///
-    /// Note: Does not normalize — if `x0 > x1` or `y0 > y1`, the rect is inverted.
+    /// Note: Does not normalize — if `x0 > x1` or `y0 > y1`, the rect is
+    /// inverted.
     #[inline]
     #[must_use]
     pub const fn new(x0: Pixels, y0: Pixels, x1: Pixels, y1: Pixels) -> Self {
@@ -505,7 +508,8 @@ impl<T: NumericUnit> Rect<T>
 where
     T: PartialOrd + std::ops::Sub<Output = T> + Clone + fmt::Debug + Default + PartialEq,
 {
-    /// Returns the intersection of two rectangles, or `None` if they don't overlap.
+    /// Returns the intersection of two rectangles, or `None` if they don't
+    /// overlap.
     #[must_use]
     #[inline]
     pub fn intersect(&self, other: &Self) -> Option<Self> {
@@ -751,7 +755,8 @@ impl Rect<Pixels> {
 
     /// Contracts to integer bounds (ceils min, floors max).
     ///
-    /// This ensures the resulting rectangle is fully contained within the original.
+    /// This ensures the resulting rectangle is fully contained within the
+    /// original.
     #[inline]
     #[must_use]
     pub fn contract_to_int(&self) -> Self {
@@ -791,9 +796,12 @@ impl Rect<Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Rect, Point, Size, ScaleFactor, Pixels, DevicePixels, px};
+    /// use flui_types::geometry::{DevicePixels, Pixels, Point, Rect, ScaleFactor, Size, px};
     ///
-    /// let logical = Rect::new(Point::new(px(10.0), px(20.0)), Size::new(px(100.0), px(200.0)));
+    /// let logical = Rect::new(
+    ///     Point::new(px(10.0), px(20.0)),
+    ///     Size::new(px(100.0), px(200.0)),
+    /// );
     /// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
     /// let device = logical.scale_with(scale);
     /// assert_eq!(device.origin().x.get(), 20);
@@ -818,9 +826,14 @@ impl Rect<super::units::DevicePixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Rect, Point, Size, ScaleFactor, Pixels, DevicePixels, device_px, px};
+    /// use flui_types::geometry::{
+    ///     DevicePixels, Pixels, Point, Rect, ScaleFactor, Size, device_px, px,
+    /// };
     ///
-    /// let device = Rect::new(Point::new(device_px(20.0), device_px(40.0)), Size::new(device_px(200.0), device_px(400.0)));
+    /// let device = Rect::from_origin_size(
+    ///     Point::new(device_px(20), device_px(40)),
+    ///     Size::new(device_px(200), device_px(400)),
+    /// );
     /// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
     /// let logical = device.unscale(scale);
     /// assert_eq!(logical.origin().x, px(10.0));
@@ -922,7 +935,7 @@ pub fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect<Pixels> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::{point, px, size, Pixels};
+    use crate::geometry::{Pixels, point, px, size};
 
     #[test]
     fn test_construction() {

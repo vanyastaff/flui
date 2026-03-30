@@ -23,8 +23,7 @@
 //! // process(focus); // Compile error!
 //! ```
 
-use std::fmt;
-use std::num::NonZeroU64;
+use std::{fmt, num::NonZeroU64};
 
 // ============================================================================
 // PointerId - Identifier for pointer devices
@@ -103,7 +102,8 @@ impl From<PointerId> for i32 {
 
 /// Unique identifier for a focusable UI element.
 ///
-/// Uses `NonZeroU64` for niche optimization: `Option<FocusNodeId>` is same size.
+/// Uses `NonZeroU64` for niche optimization: `Option<FocusNodeId>` is same
+/// size.
 ///
 /// # Example
 ///

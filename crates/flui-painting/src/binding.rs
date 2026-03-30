@@ -4,7 +4,8 @@
 //!
 //! # Flutter Equivalence
 //!
-//! Corresponds to Flutter's `PaintingBinding` mixin from `painting/binding.dart`.
+//! Corresponds to Flutter's `PaintingBinding` mixin from
+//! `painting/binding.dart`.
 //!
 //! # Features
 //!
@@ -13,15 +14,20 @@
 //! - System font change notifications
 //! - Memory pressure handling
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
+use flui_foundation::{BindingBase, HasInstance, impl_binding_singleton};
+use flui_types::{
+    Size,
+    geometry::{Half, Pixels, Radius, px},
+};
 use parking_lot::RwLock;
-
-use flui_foundation::{impl_binding_singleton, BindingBase, HasInstance};
-use flui_types::geometry::{px, Half, Pixels, Radius};
-use flui_types::Size;
 
 // ============================================================================
 // ImageCache
@@ -35,7 +41,8 @@ use flui_types::Size;
 ///
 /// # Flutter Equivalence
 ///
-/// Corresponds to Flutter's `ImageCache` class from `painting/image_cache.dart`.
+/// Corresponds to Flutter's `ImageCache` class from
+/// `painting/image_cache.dart`.
 #[derive(Debug)]
 pub struct ImageCache {
     /// Cached images: key -> (image data, size in bytes)
@@ -69,7 +76,8 @@ pub struct CachedImage {
 
 /// Opaque handle to an image.
 ///
-/// In a real implementation, this would reference GPU texture or decoded pixels.
+/// In a real implementation, this would reference GPU texture or decoded
+/// pixels.
 #[derive(Debug, Clone)]
 pub struct ImageHandle {
     /// Unique identifier for this image.
@@ -241,7 +249,8 @@ impl ImageCache {
 ///
 /// # Flutter Equivalence
 ///
-/// Corresponds to Flutter's `ShaderWarmUp` class from `painting/shader_warm_up.dart`.
+/// Corresponds to Flutter's `ShaderWarmUp` class from
+/// `painting/shader_warm_up.dart`.
 pub trait ShaderWarmUp: Send + Sync {
     /// The size of the canvas to use for warm-up.
     ///
@@ -483,7 +492,8 @@ impl_binding_singleton!(PaintingBinding);
 
 /// Returns the global image cache.
 ///
-/// This is a convenience function equivalent to `PaintingBinding.instance.imageCache`.
+/// This is a convenience function equivalent to
+/// `PaintingBinding.instance.imageCache`.
 pub fn image_cache() -> &'static ImageCache {
     PaintingBinding::instance().image_cache()
 }

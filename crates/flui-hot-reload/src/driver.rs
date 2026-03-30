@@ -27,10 +27,14 @@
 //! }
 //! ```
 
-use crate::host::{PluginKind, ScenePlugin};
+use std::{
+    path::{Path, PathBuf},
+    time::{Duration, Instant},
+};
+
 use flui_layer::Scene;
-use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+
+use crate::host::{PluginKind, ScenePlugin};
 
 /// Default polling interval for mtime checks.
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(500);
@@ -41,8 +45,8 @@ const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// reload. Call [`poll()`](Self::poll) from your event loop — it returns
 /// `Some(Scene)` when a plugin was (re)loaded and a new scene is available.
 ///
-/// When no plugin is loaded, [`build_scene()`](Self::build_scene) returns `None`,
-/// allowing the caller to fall back to a built-in scene.
+/// When no plugin is loaded, [`build_scene()`](Self::build_scene) returns
+/// `None`, allowing the caller to fall back to a built-in scene.
 #[allow(missing_debug_implementations)]
 pub struct HotReloadDriver {
     plugin: Option<ScenePlugin>,
@@ -62,10 +66,7 @@ impl HotReloadDriver {
         let plugin = ScenePlugin::load(&lib_path);
 
         if plugin.is_some() {
-            tracing::info!(
-                "HotReloadDriver: plugin loaded from {}",
-                lib_path.display()
-            );
+            tracing::info!("HotReloadDriver: plugin loaded from {}", lib_path.display());
         } else {
             tracing::info!(
                 "HotReloadDriver: no plugin at {} (will retry on poll)",
@@ -88,7 +89,8 @@ impl HotReloadDriver {
         self
     }
 
-    /// Poll for plugin updates and return a new scene if the plugin was (re)loaded.
+    /// Poll for plugin updates and return a new scene if the plugin was
+    /// (re)loaded.
     ///
     /// This method should be called from your event loop. It:
     /// 1. Checks if enough time has elapsed since the last poll
@@ -97,7 +99,8 @@ impl HotReloadDriver {
     /// 4. If a reload happened, builds and returns a new scene
     ///
     /// Returns `Some(Scene)` when a reload happened (caller should re-render).
-    /// Returns `None` when no update was detected or the poll interval hasn't elapsed.
+    /// Returns `None` when no update was detected or the poll interval hasn't
+    /// elapsed.
     pub fn poll(&mut self, width: f32, height: f32) -> Option<Scene> {
         if self.last_poll.elapsed() < self.poll_interval {
             return None;
@@ -141,11 +144,10 @@ impl HotReloadDriver {
 
     /// Build a scene using the currently loaded plugin.
     ///
-    /// Returns `None` if no plugin is loaded (caller should use a fallback scene).
+    /// Returns `None` if no plugin is loaded (caller should use a fallback
+    /// scene).
     pub fn build_scene(&self, width: f32, height: f32) -> Option<Scene> {
-        self.plugin
-            .as_ref()
-            .map(|p| p.build_scene(width, height))
+        self.plugin.as_ref().map(|p| p.build_scene(width, height))
     }
 
     /// Whether a plugin is currently loaded.
@@ -163,7 +165,8 @@ impl HotReloadDriver {
         self.plugin.as_ref().map(ScenePlugin::version)
     }
 
-    /// How many times the plugin has been reloaded since the driver was created.
+    /// How many times the plugin has been reloaded since the driver was
+    /// created.
     pub fn reload_count(&self) -> u32 {
         self.reload_count
     }

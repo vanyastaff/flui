@@ -21,16 +21,20 @@
 //! - NSEventType → PointerEvent / KeyboardEvent
 //! - NSPoint → logical pixels (converted via backingScaleFactor)
 
-use crate::traits::input::PlatformInput;
-use cocoa::appkit::{NSEvent, NSEventModifierFlags, NSEventType};
-use cocoa::base::id;
-use cocoa::foundation::NSPoint;
+use cocoa::{
+    appkit::{NSEvent, NSEventModifierFlags, NSEventType},
+    base::id,
+    foundation::NSPoint,
+};
 use flui_types::geometry::{Offset, Pixels};
 use keyboard_types::{Key, Modifiers};
-use objc::runtime::Object;
-use objc::*;
-use ui_events::keyboard::{Code, KeyState, KeyboardEvent, Location};
-use ui_events::pointer::{PointerButton, PointerButtons, PointerEvent, PointerId, PointerType};
+use objc::{runtime::Object, *};
+use ui_events::{
+    keyboard::{Code, KeyState, KeyboardEvent, Location},
+    pointer::{PointerButton, PointerButtons, PointerEvent, PointerId, PointerType},
+};
+
+use crate::traits::input::PlatformInput;
 
 // ============================================================================
 // NSEvent Conversion

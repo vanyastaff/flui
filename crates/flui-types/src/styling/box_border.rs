@@ -1,32 +1,37 @@
 //! Box border types for styling
 
-use crate::geometry::traits::{NumericUnit, Unit};
-use crate::styling::BorderSide;
+use crate::{
+    geometry::traits::{NumericUnit, Unit},
+    styling::BorderSide,
+};
 
 /// A border for a box, with a separate side for each edge.
 ///
-/// Generic over unit type `T` for full type safety. Use `Border<Pixels>` for UI borders.
+/// Generic over unit type `T` for full type safety. Use `Border<Pixels>` for UI
+/// borders.
 ///
 /// # Examples
 ///
 /// ```
-/// use flui_types::styling::{Border, BorderSide, BorderStyle, Color};
-/// use flui_types::geometry::px;
+/// use flui_types::{
+///     geometry::px,
+///     styling::{Border, BorderSide, BorderStyle, Color},
+/// };
 ///
 /// // All sides the same
 /// let border = Border::all(BorderSide::new(Color::BLACK, px(2.0), BorderStyle::Solid));
 ///
 /// // Symmetric horizontal/vertical
 /// let border = Border::symmetric(
-///     Some(BorderSide::new(Color::BLACK, px(1.0), BorderStyle::Solid)),  // top/bottom
-///     Some(BorderSide::new(Color::GRAY, px(2.0), BorderStyle::Solid)),   // left/right
+///     Some(BorderSide::new(Color::BLACK, px(1.0), BorderStyle::Solid)), // top/bottom
+///     Some(BorderSide::new(Color::GRAY, px(2.0), BorderStyle::Solid)),  // left/right
 /// );
 ///
 /// // Custom per-side
 /// let border = Border::new(
-///     Some(BorderSide::new(Color::RED, px(2.0), BorderStyle::Solid)),    // top
-///     Some(BorderSide::new(Color::BLUE, px(2.0), BorderStyle::Solid)),   // right
-///     Some(BorderSide::new(Color::GREEN, px(2.0), BorderStyle::Solid)),  // bottom
+///     Some(BorderSide::new(Color::RED, px(2.0), BorderStyle::Solid)), // top
+///     Some(BorderSide::new(Color::BLUE, px(2.0), BorderStyle::Solid)), // right
+///     Some(BorderSide::new(Color::GREEN, px(2.0), BorderStyle::Solid)), // bottom
 ///     Some(BorderSide::new(Color::YELLOW, px(2.0), BorderStyle::Solid)), // left
 /// );
 /// ```
@@ -166,14 +171,16 @@ where
 /// # Examples
 ///
 /// ```
-/// use flui_types::styling::{BorderDirectional, BorderSide, BorderStyle, Color};
-/// use flui_types::geometry::px;
+/// use flui_types::{
+///     geometry::px,
+///     styling::{BorderDirectional, BorderSide, BorderStyle, Color},
+/// };
 ///
 /// let border = BorderDirectional::all(BorderSide::new(Color::BLACK, px(2.0), BorderStyle::Solid));
 ///
 /// // Resolve to physical border based on text direction
-/// let ltr_border = border.resolve(true);   // left-to-right
-/// let rtl_border = border.resolve(false);  // right-to-left
+/// let ltr_border = border.resolve(true); // left-to-right
+/// let rtl_border = border.resolve(false); // right-to-left
 /// ```
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -230,11 +237,13 @@ impl<T: Unit> BorderDirectional<T> {
         }
     }
 
-    /// Resolves this directional border to a regular border based on text direction.
+    /// Resolves this directional border to a regular border based on text
+    /// direction.
     ///
     /// # Arguments
     ///
-    /// * `ltr` - If true, uses left-to-right layout. If false, uses right-to-left.
+    /// * `ltr` - If true, uses left-to-right layout. If false, uses
+    ///   right-to-left.
     #[inline]
     pub const fn resolve(self, ltr: bool) -> Border<T> {
         if ltr {

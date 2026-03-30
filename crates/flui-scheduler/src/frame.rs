@@ -16,14 +16,16 @@
 //! assert_ne!(frame1, frame2);
 //! ```
 
-use crate::duration::{FrameDuration, Milliseconds, Percentage, Seconds};
-use crate::id::{FrameIdMarker, TypedId};
-use std::fmt;
-use std::sync::Arc;
-use web_time::Instant;
+use std::{fmt, sync::Arc};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
+use web_time::Instant;
+
+use crate::{
+    duration::{FrameDuration, Milliseconds, Percentage, Seconds},
+    id::{FrameIdMarker, TypedId},
+};
 
 /// Unique frame identifier using type-safe ID
 ///
@@ -40,8 +42,10 @@ pub type FrameId = TypedId<FrameIdMarker>;
 /// Idle → TransientCallbacks → MidFrameMicrotasks → PersistentCallbacks → PostFrameCallbacks → Idle
 /// ```
 ///
-/// - **TransientCallbacks**: Animation tickers fire here (one-time frame callbacks)
-/// - **MidFrameMicrotasks**: Microtask queue flushes between animations and rendering
+/// - **TransientCallbacks**: Animation tickers fire here (one-time frame
+///   callbacks)
+/// - **MidFrameMicrotasks**: Microtask queue flushes between animations and
+///   rendering
 /// - **PersistentCallbacks**: Rendering pipeline runs here (build/layout/paint)
 /// - **PostFrameCallbacks**: Cleanup and post-frame work
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -525,8 +529,10 @@ impl fmt::Display for FramePhase {
 /// # Examples
 ///
 /// ```
-/// use flui_scheduler::frame::{FrameTiming, FramePhase};
-/// use flui_scheduler::duration::FrameDuration;
+/// use flui_scheduler::{
+///     duration::FrameDuration,
+///     frame::{FramePhase, FrameTiming},
+/// };
 ///
 /// let timing = FrameTiming::new(60);
 /// assert_eq!(timing.phase, FramePhase::Idle);
@@ -682,7 +688,8 @@ impl Default for FrameTiming {
 /// Receives the vsync timestamp for synchronized timing.
 pub type OneShotFrameCallback = Box<dyn FnOnce(Instant) + Send>;
 
-/// Frame callback - executed at frame boundaries (legacy, prefer OneShotFrameCallback)
+/// Frame callback - executed at frame boundaries (legacy, prefer
+/// OneShotFrameCallback)
 pub type FrameCallback = Box<dyn FnOnce(&FrameTiming) + Send>;
 
 /// Recurring frame callback (runs every frame)

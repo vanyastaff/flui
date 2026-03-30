@@ -1,8 +1,8 @@
 //! Lock-free render state flags with Flutter compliance.
 //!
 //! This module implements Flutter's RenderObject dirty flag system using atomic
-//! operations for thread-safe, lock-free access. All operations are single atomic
-//! instructions with no locks or contention.
+//! operations for thread-safe, lock-free access. All operations are single
+//! atomic instructions with no locks or contention.
 //!
 //! # Flutter RenderObject Flags
 //!
@@ -90,9 +90,12 @@
 //! }
 //! ```
 
+use std::{
+    fmt,
+    sync::atomic::{AtomicU32, Ordering},
+};
+
 use bitflags::bitflags;
-use std::fmt;
-use std::sync::atomic::{AtomicU32, Ordering};
 
 bitflags! {
     /// Per-render-node state flags stored in a compact bitset.
@@ -336,8 +339,9 @@ impl fmt::Display for RenderFlags {
 
 /// Atomic wrapper for RenderFlags providing lock-free operations.
 ///
-/// This wrapper provides thread-safe flag operations using atomic compare-and-swap
-/// operations. It's 10-50x faster than RwLock for hot-path checks.
+/// This wrapper provides thread-safe flag operations using atomic
+/// compare-and-swap operations. It's 10-50x faster than RwLock for hot-path
+/// checks.
 ///
 /// # Performance
 ///
@@ -409,9 +413,7 @@ impl AtomicRenderFlags {
     /// ```rust
     /// use flui_rendering::core::{AtomicRenderFlags, RenderFlags};
     ///
-    /// let flags = AtomicRenderFlags::new(
-    ///     RenderFlags::NEEDS_LAYOUT | RenderFlags::NEEDS_PAINT
-    /// );
+    /// let flags = AtomicRenderFlags::new(RenderFlags::NEEDS_LAYOUT | RenderFlags::NEEDS_PAINT);
     /// assert!(flags.needs_layout());
     /// ```
     pub const fn new(flags: RenderFlags) -> Self {
@@ -579,9 +581,7 @@ impl AtomicRenderFlags {
     /// ```rust
     /// use flui_rendering::core::{AtomicRenderFlags, RenderFlags};
     ///
-    /// let flags = AtomicRenderFlags::new(
-    ///     RenderFlags::NEEDS_LAYOUT | RenderFlags::NEEDS_PAINT
-    /// );
+    /// let flags = AtomicRenderFlags::new(RenderFlags::NEEDS_LAYOUT | RenderFlags::NEEDS_PAINT);
     /// flags.clear();
     /// assert!(flags.is_clean());
     /// ```

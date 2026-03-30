@@ -23,7 +23,7 @@
 //! # Usage with `ArityStorage`
 //!
 //! ```
-//! use flui_tree::arity::{ArityStorage, Variable, ChildrenStorage};
+//! use flui_tree::arity::{ArityStorage, ChildrenStorage, Variable};
 //!
 //! let mut storage: ArityStorage<u32, Variable> = ArityStorage::new();
 //! storage.add_child(1).unwrap();
@@ -34,9 +34,7 @@
 
 use ambassador::delegatable_trait;
 
-use super::accessors::SliceChildren;
-use super::error::ArityError;
-use super::runtime::RuntimeArity;
+use super::{accessors::SliceChildren, error::ArityError, runtime::RuntimeArity};
 
 // ============================================================================
 // CHILDREN STORAGE TRAIT (Ambassador-compatible)
@@ -59,7 +57,7 @@ use super::runtime::RuntimeArity;
 /// simple (no generics, no `impl Trait` returns) to ensure compatibility.
 ///
 /// ```
-/// use flui_tree::arity::{ArityStorage, Variable, ChildrenStorage};
+/// use flui_tree::arity::{ArityStorage, ChildrenStorage, Variable};
 ///
 /// // ArityStorage implements ChildrenStorage
 /// let mut storage: ArityStorage<u32, Variable> = ArityStorage::new();
@@ -165,7 +163,8 @@ pub trait ChildrenStorage<T> {
     ///
     /// # Errors
     ///
-    /// May return `ArityError` if the arity requires minimum children (e.g., Exact<1>).
+    /// May return `ArityError` if the arity requires minimum children (e.g.,
+    /// Exact<1>).
     fn clear_children(&mut self) -> Result<(), ArityError>;
 
     // ========================================================================
@@ -372,19 +371,11 @@ impl<T: Send + Sync> ChildrenStorage<T> for Vec<T> {
 
 impl<T: Send + Sync> ChildrenStorage<T> for Option<T> {
     fn get_child(&self, index: usize) -> Option<&T> {
-        if index == 0 {
-            self.as_ref()
-        } else {
-            None
-        }
+        if index == 0 { self.as_ref() } else { None }
     }
 
     fn get_child_mut(&mut self, index: usize) -> Option<&mut T> {
-        if index == 0 {
-            self.as_mut()
-        } else {
-            None
-        }
+        if index == 0 { self.as_mut() } else { None }
     }
 
     fn child_count(&self) -> usize {
@@ -397,14 +388,14 @@ impl<T: Send + Sync> ChildrenStorage<T> for Option<T> {
 
     fn children_slice(&self) -> &[T] {
         match self {
-            Some(ref child) => std::slice::from_ref(child),
+            Some(child) => std::slice::from_ref(child),
             None => &[],
         }
     }
 
     fn children_slice_mut(&mut self) -> &mut [T] {
         match self {
-            Some(ref mut child) => std::slice::from_mut(child),
+            Some(child) => std::slice::from_mut(child),
             None => &mut [],
         }
     }
@@ -449,11 +440,7 @@ impl<T: Send + Sync> ChildrenStorage<T> for Option<T> {
     }
 
     fn remove_child(&mut self, index: usize) -> Option<T> {
-        if index == 0 {
-            self.take()
-        } else {
-            None
-        }
+        if index == 0 { self.take() } else { None }
     }
 
     fn pop_child(&mut self) -> Option<T> {

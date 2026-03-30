@@ -20,7 +20,7 @@
 //! # Examples
 //!
 //! ```rust
-//! use flui_types::geometry::{Pixels, DevicePixels, ScaledPixels, px, device_px};
+//! use flui_types::geometry::{DevicePixels, Pixels, ScaledPixels, device_px, px};
 //!
 //! // Type-safe logical pixels
 //! let width = px(100.0);
@@ -34,11 +34,11 @@
 //! assert_eq!(device, device_px(200));
 //! ```
 
-use std::fmt::{self, Debug, Display};
-use std::iter::Sum;
-use std::marker::PhantomData;
-use std::ops::{
-    Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Rem, RemAssign, Sub, SubAssign,
+use std::{
+    fmt::{self, Debug, Display},
+    iter::Sum,
+    marker::PhantomData,
+    ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Rem, RemAssign, Sub, SubAssign},
 };
 
 use super::traits::{NumericUnit, Unit};
@@ -49,7 +49,8 @@ use super::traits::{NumericUnit, Unit};
 
 /// Logical pixels used for layout and UI measurements.
 ///
-/// This is the primary unit for UI layout calculations, independent of device pixel density.
+/// This is the primary unit for UI layout calculations, independent of device
+/// pixel density.
 #[derive(Copy, Clone, Default, PartialEq)]
 #[repr(transparent)]
 pub struct Pixels(pub f32);
@@ -187,21 +188,13 @@ impl Pixels {
     /// Returns the maximum of two values (const version).
     #[must_use]
     pub const fn max_const(self, other: Self) -> Self {
-        if self.0 > other.0 {
-            self
-        } else {
-            other
-        }
+        if self.0 > other.0 { self } else { other }
     }
 
     /// Returns the minimum of two values (const version).
     #[must_use]
     pub const fn min_const(self, other: Self) -> Self {
-        if self.0 < other.0 {
-            self
-        } else {
-            other
-        }
+        if self.0 < other.0 { self } else { other }
     }
 
     /// Clamps the value between min and max.
@@ -238,7 +231,8 @@ impl Pixels {
 
     /// Converts logical pixels to device pixels using a raw scale factor.
     ///
-    /// Prefer [`Pixels::to_device`] with a typed [`ScaleFactor`] for compile-time safety.
+    /// Prefer [`Pixels::to_device`] with a typed [`ScaleFactor`] for
+    /// compile-time safety.
     #[must_use]
     pub fn to_device_pixels(self, scale_factor: f32) -> DevicePixels {
         DevicePixels((self.0 * scale_factor).round() as i32)
@@ -246,7 +240,8 @@ impl Pixels {
 
     /// Converts device pixels to logical pixels using a raw scale factor.
     ///
-    /// Prefer [`DevicePixels::to_logical`] with a typed [`ScaleFactor`] for compile-time safety.
+    /// Prefer [`DevicePixels::to_logical`] with a typed [`ScaleFactor`] for
+    /// compile-time safety.
     #[must_use]
     pub fn from_device_pixels(device: DevicePixels, scale_factor: f32) -> Self {
         Pixels(device.0 as f32 / scale_factor)
@@ -1082,21 +1077,13 @@ impl DevicePixels {
     /// Returns the maximum of two values (const version).
     #[must_use]
     pub const fn max_const(self, other: Self) -> Self {
-        if self.0 > other.0 {
-            self
-        } else {
-            other
-        }
+        if self.0 > other.0 { self } else { other }
     }
 
     /// Returns the minimum of two values (const version).
     #[must_use]
     pub const fn min_const(self, other: Self) -> Self {
-        if self.0 < other.0 {
-            self
-        } else {
-            other
-        }
+        if self.0 < other.0 { self } else { other }
     }
 
     /// Converts device pixels to logical pixels using a scale factor.
@@ -1118,7 +1105,8 @@ impl DevicePixels {
     }
 }
 
-// Arithmetic operators for DevicePixels (using saturating arithmetic to prevent overflow)
+// Arithmetic operators for DevicePixels (using saturating arithmetic to prevent
+// overflow)
 impl Add for DevicePixels {
     type Output = Self;
     #[inline]
@@ -1847,7 +1835,8 @@ impl Radians {
 
     /// Interpolates between two angles along the shortest arc.
     ///
-    /// Takes the shortest path around the circle, handling the 0/2π wrap-around.
+    /// Takes the shortest path around the circle, handling the 0/2π
+    /// wrap-around.
     #[inline]
     pub fn lerp(self, other: Self, t: f32) -> Self {
         let diff = (other.0 - self.0).rem_euclid(std::f32::consts::TAU);
@@ -2077,8 +2066,9 @@ impl std::str::FromStr for Radians {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::Radians;
     /// use std::f32::consts::PI;
+    ///
+    /// use flui_types::geometry::Radians;
     ///
     /// let r: Radians = "1.57".parse().unwrap();
     /// assert!((r.get() - 1.57).abs() < 0.01);
@@ -2124,13 +2114,13 @@ impl std::str::FromStr for Radians {
 
 /// Scale factor for converting between unit types
 ///
-/// Represents a multiplicative conversion factor from source units to destination units.
-/// Ensures type-safe scaling operations at compile time.
+/// Represents a multiplicative conversion factor from source units to
+/// destination units. Ensures type-safe scaling operations at compile time.
 ///
 /// # Examples
 ///
 /// ```
-/// use flui_types::geometry::{Pixels, DevicePixels, ScaleFactor, px};
+/// use flui_types::geometry::{DevicePixels, Pixels, ScaleFactor, px};
 ///
 /// // 2x scale factor (e.g., Retina display)
 /// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);

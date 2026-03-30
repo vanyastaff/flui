@@ -19,15 +19,16 @@
 //!         uses HitTestDispatcher
 //! ```
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use parking_lot::RwLock;
 
-use crate::hit_testing::{HitTestResult, PointerEvent};
-use crate::input::MouseTracker;
-use crate::pipeline::PipelineOwner;
-use crate::view::{RenderView, ViewConfiguration};
+use crate::{
+    hit_testing::{HitTestResult, PointerEvent},
+    input::MouseTracker,
+    pipeline::PipelineOwner,
+    view::{RenderView, ViewConfiguration},
+};
 
 // ============================================================================
 // PipelineManifold
@@ -112,7 +113,8 @@ pub trait HitTestable: Send + Sync {
 ///
 /// # Flutter Equivalence
 ///
-/// Corresponds to Flutter's `RendererBinding` mixin from `rendering/binding.dart`.
+/// Corresponds to Flutter's `RendererBinding` mixin from
+/// `rendering/binding.dart`.
 ///
 /// # Responsibilities
 ///
@@ -126,10 +128,12 @@ pub trait HitTestable: Send + Sync {
 ///
 /// Each frame consists of these phases (in order):
 ///
-/// 1. **Animation** - Tickers and animations update (handled by SchedulerBinding)
+/// 1. **Animation** - Tickers and animations update (handled by
+///    SchedulerBinding)
 /// 2. **Build** - Widget tree rebuilds (handled by WidgetsBinding)
 /// 3. **Layout** - [`flush_layout`](PipelineOwner::flush_layout)
-/// 4. **Compositing bits** - [`flush_compositing_bits`](PipelineOwner::flush_compositing_bits)
+/// 4. **Compositing bits** -
+///    [`flush_compositing_bits`](PipelineOwner::flush_compositing_bits)
 /// 5. **Paint** - [`flush_paint`](PipelineOwner::flush_paint)
 /// 6. **Compositing** - Send layers to GPU
 /// 7. **Semantics** - [`flush_semantics`](PipelineOwner::flush_semantics)
@@ -392,16 +396,15 @@ pub fn debug_dump_semantics_tree<B: RendererBinding + ?Sized>(
         return "No render tree root was added to the binding.".to_string();
     }
 
-    const EXPLANATION: &str =
-        "For performance reasons, the framework only generates semantics when asked to do so by the platform.\n\
+    const EXPLANATION: &str = "For performance reasons, the framework only generates semantics when asked to do so by the platform.\n\
          Usually, platforms only ask for semantics when assistive technologies (like screen readers) are running.\n\
          To generate semantics, try turning on an assistive technology (like VoiceOver or TalkBack) on your device.";
 
     let mut printed_explanation = false;
 
     views
-        .iter()
-        .map(|(id, _view)| {
+        .keys()
+        .map(|id| {
             // Note: Semantics tree integration is not yet implemented.
             // This would require:
             // 1. View to expose its PipelineOwner

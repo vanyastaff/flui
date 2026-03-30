@@ -4,8 +4,10 @@
 //! Corresponds to Flutter's `OffsetLayer`, which is the base class
 //! for repaint boundary layers.
 
-use flui_types::geometry::{Pixels, Rect, Vec2};
-use flui_types::Offset;
+use flui_types::{
+    geometry::{Pixels, Rect, Vec2},
+    Offset,
+};
 
 /// Layer that applies a simple offset to its children.
 ///
@@ -133,8 +135,9 @@ unsafe impl Sync for OffsetLayer {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::px;
+
+    use super::*;
 
     #[test]
     fn test_offset_layer_new() {

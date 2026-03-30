@@ -1,16 +1,19 @@
 //! Core platform abstraction trait
 //!
-//! Defines the central Platform trait that all platform implementations must provide.
-//! This trait serves as the main interface between the FLUI framework and platform-specific code.
+//! Defines the central Platform trait that all platform implementations must
+//! provide. This trait serves as the main interface between the FLUI framework
+//! and platform-specific code.
 
-use super::window::WindowAppearance;
-use super::{PlatformCapabilities, PlatformDisplay, PlatformWindow};
-use crate::cursor::CursorStyle;
-use crate::task::Task;
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+
 use anyhow::Result;
 use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+
+use super::{PlatformCapabilities, PlatformDisplay, PlatformWindow, window::WindowAppearance};
+use crate::{cursor::CursorStyle, task::Task};
 
 /// Window creation options
 #[derive(Debug, Clone)]
@@ -50,8 +53,8 @@ impl Default for WindowOptions {
 /// Window display mode with restoration data
 ///
 /// Combines window state (normal/minimized/maximized/fullscreen) with the data
-/// needed to restore from each state. This design ensures type-safety: restoration
-/// data is only available when in the corresponding state.
+/// needed to restore from each state. This design ensures type-safety:
+/// restoration data is only available when in the corresponding state.
 ///
 /// # Platform-specific notes
 ///
@@ -129,8 +132,9 @@ impl WindowMode {
 
     /// Validate if transition to new mode is allowed
     ///
-    /// All transitions are currently allowed except transitioning to the same state.
-    /// This method exists as a hook for adding transition restrictions in the future.
+    /// All transitions are currently allowed except transitioning to the same
+    /// state. This method exists as a hook for adding transition
+    /// restrictions in the future.
     pub fn can_transition_to(&self, new_mode: &WindowMode) -> bool {
         // All transitions allowed except same state
         !std::mem::discriminant(self).eq(&std::mem::discriminant(new_mode))
@@ -144,16 +148,18 @@ pub struct WindowId(pub u64);
 /// Core platform abstraction trait
 ///
 /// This trait provides the complete interface for platform-specific operations.
-/// All platform implementations (Winit, native Windows/macOS/Linux, headless testing)
-/// must implement this trait.
+/// All platform implementations (Winit, native Windows/macOS/Linux, headless
+/// testing) must implement this trait.
 ///
 /// # Architecture
 ///
 /// The Platform trait follows several key design principles from GPUI:
 ///
 /// - **Unified API**: Single trait for all platform operations
-/// - **Callback registry**: Framework can register handlers without tight coupling
-/// - **Interior mutability**: Implementations use Mutex/RwLock for thread-safe &self methods
+/// - **Callback registry**: Framework can register handlers without tight
+///   coupling
+/// - **Interior mutability**: Implementations use Mutex/RwLock for thread-safe
+///   &self methods
 /// - **Type erasure**: Returns `Box<dyn Trait>` for flexibility
 ///
 /// # Example
@@ -186,16 +192,17 @@ pub trait Platform: Send + Sync + 'static {
 
     /// Run the platform event loop
     ///
-    /// This function takes ownership of the current thread and runs the platform's
-    /// event loop. The `on_ready` callback is invoked once the platform is initialized
-    /// and ready to create windows.
+    /// This function takes ownership of the current thread and runs the
+    /// platform's event loop. The `on_ready` callback is invoked once the
+    /// platform is initialized and ready to create windows.
     ///
     /// This function only returns when the application quits.
     fn run(&self, on_ready: Box<dyn FnOnce()>);
 
     /// Request the application to quit
     ///
-    /// This may not quit immediately - the platform will clean up and then exit.
+    /// This may not quit immediately - the platform will clean up and then
+    /// exit.
     fn quit(&self);
 
     /// Request a new frame to be rendered

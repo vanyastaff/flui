@@ -8,9 +8,9 @@
 //!
 //! Run with: cargo run --example basic_usage
 
-use flui_foundation::prelude::*;
-use flui_foundation::{DiagnosticsNode, FoundationError};
 use std::sync::Arc;
+
+use flui_foundation::{DiagnosticsNode, FoundationError, prelude::*};
 
 fn main() {
     println!("🏗️  FLUI Foundation - Basic Usage Example\n");

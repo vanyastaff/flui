@@ -3,8 +3,10 @@
 //! This layer clips its children to an arbitrary path shape.
 //! Corresponds to Flutter's `ClipPathLayer`.
 
-use flui_types::geometry::{Pixels, Rect};
-use flui_types::painting::{Clip, Path};
+use flui_types::{
+    geometry::{Pixels, Rect},
+    painting::{Clip, Path},
+};
 
 /// Layer that clips children to an arbitrary path.
 ///
@@ -30,8 +32,10 @@ use flui_types::painting::{Clip, Path};
 ///
 /// ```rust
 /// use flui_layer::ClipPathLayer;
-/// use flui_types::painting::{Path, Clip};
-/// use flui_types::geometry::Point;
+/// use flui_types::{
+///     geometry::Point,
+///     painting::{Clip, Path},
+/// };
 ///
 /// // Create a triangular clip path
 /// let path = Path::polygon(&[
@@ -165,8 +169,9 @@ unsafe impl Sync for ClipPathLayer {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::{px, Point};
+
+    use super::*;
 
     #[test]
     fn test_clip_path_layer_new() {

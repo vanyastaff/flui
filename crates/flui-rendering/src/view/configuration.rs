@@ -11,7 +11,8 @@ use crate::constraints::BoxConstraints;
 ///
 /// # Flutter Equivalence
 ///
-/// Corresponds to Flutter's `ViewConfiguration` class from `rendering/view.dart`.
+/// Corresponds to Flutter's `ViewConfiguration` class from
+/// `rendering/view.dart`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ViewConfiguration {
     /// The constraints of the output surface in physical pixels.
@@ -58,7 +59,8 @@ impl ViewConfiguration {
         }
     }
 
-    /// Creates a view configuration from a physical size and device pixel ratio.
+    /// Creates a view configuration from a physical size and device pixel
+    /// ratio.
     ///
     /// This is a convenience constructor that derives logical constraints
     /// from physical constraints and the device pixel ratio.
@@ -79,7 +81,8 @@ impl ViewConfiguration {
 
     /// Creates a view configuration with flexible constraints.
     ///
-    /// This allows the root render object to size itself within the given bounds.
+    /// This allows the root render object to size itself within the given
+    /// bounds.
     pub fn flexible(
         min_physical_size: Size,
         max_physical_size: Size,
@@ -115,7 +118,8 @@ impl ViewConfiguration {
 
     /// Returns the constraints in physical pixels.
     ///
-    /// These are enforced when translating back to physical pixels for rendering.
+    /// These are enforced when translating back to physical pixels for
+    /// rendering.
     #[inline]
     pub fn physical_constraints(&self) -> BoxConstraints {
         self.physical_constraints
@@ -166,8 +170,9 @@ impl ViewConfiguration {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::px;
+
+    use super::*;
 
     #[test]
     fn test_view_configuration_default() {
@@ -199,7 +204,11 @@ mod tests {
 
     #[test]
     fn test_view_configuration_flexible() {
-        let config = ViewConfiguration::flexible(Size::new(px(0.0), px(0.0)), Size::new(px(800.0), px(600.0)), 1.0);
+        let config = ViewConfiguration::flexible(
+            Size::new(px(0.0), px(0.0)),
+            Size::new(px(800.0), px(600.0)),
+            1.0,
+        );
         let logical = config.logical_constraints();
         assert_eq!(logical.min_width, 0.0);
         assert_eq!(logical.max_width, 800.0);

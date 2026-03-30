@@ -3,12 +3,15 @@
 //! Provides clipboard access using the macOS Cocoa NSPasteboard API.
 //! Thread-safe wrapper with proper Objective-C object lifetime management.
 
-use crate::traits::Clipboard;
-use cocoa::appkit::NSPasteboard;
-use cocoa::base::{id, nil};
-use cocoa::foundation::{NSArray, NSString};
+use cocoa::{
+    appkit::NSPasteboard,
+    base::{id, nil},
+    foundation::{NSArray, NSString},
+};
 use objc::runtime::Object;
 use parking_lot::Mutex;
+
+use crate::traits::Clipboard;
 
 /// macOS NSPasteboard-based clipboard implementation
 ///
@@ -196,7 +199,10 @@ mod tests {
         clipboard.write_text("Test".to_string());
 
         // Check if text is available
-        assert!(clipboard.has_text(), "Clipboard should have text after write");
+        assert!(
+            clipboard.has_text(),
+            "Clipboard should have text after write"
+        );
     }
 
     #[test]

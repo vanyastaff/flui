@@ -3,9 +3,10 @@
 //! This module provides the [`TreeWrite`] trait for modifying
 //! tree structure (insert, remove, reparent).
 
+use flui_foundation::Identifier;
+
 use super::TreeRead;
 use crate::error::{TreeError, TreeResult};
-use flui_foundation::Identifier;
 
 /// Mutable access to tree nodes and structure.
 ///
@@ -44,7 +45,8 @@ pub trait TreeWrite<I: Identifier>: TreeRead<I> {
     /// Inserts a new node into the tree.
     ///
     /// The node is inserted without a parent (as a potential root).
-    /// Use [`TreeWriteNav::set_parent`] to establish parent-child relationships.
+    /// Use [`TreeWriteNav::set_parent`] to establish parent-child
+    /// relationships.
     ///
     /// # Arguments
     ///
@@ -333,10 +335,13 @@ impl<I: Identifier, T: TreeWrite<I> + ?Sized> TreeWrite<I> for Box<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::iter::{Ancestors, DescendantsWithDepth};
-    use crate::traits::{TreeNav, TreeRead};
     use flui_foundation::ElementId;
+
+    use super::*;
+    use crate::{
+        iter::{Ancestors, DescendantsWithDepth},
+        traits::{TreeNav, TreeRead},
+    };
 
     // Test implementation
     #[derive(Default)]

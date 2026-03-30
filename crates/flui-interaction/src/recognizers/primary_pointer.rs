@@ -43,13 +43,15 @@
 //! }
 //! ```
 
-use crate::ids::PointerId;
-use flui_types::geometry::Pixels;
-
-use crate::recognizers::one_sequence::{OneSequenceGestureRecognizer, OneSequenceState};
-use crate::settings::GestureSettings;
-use flui_types::geometry::Offset;
 use std::time::{Duration, Instant};
+
+use flui_types::geometry::{Offset, Pixels};
+
+use crate::{
+    ids::PointerId,
+    recognizers::one_sequence::{OneSequenceGestureRecognizer, OneSequenceState},
+    settings::GestureSettings,
+};
 
 /// State of a gesture recognizer.
 ///

@@ -1,14 +1,16 @@
 //! O(N) Linear child reconciliation.
 //!
-//! Flutter insight: "Contrary to popular belief, Flutter does not employ a tree-diffing algorithm"
+//! Flutter insight: "Contrary to popular belief, Flutter does not employ a
+//! tree-diffing algorithm"
 //!
 //! This module provides O(N) linear reconciliation for children, matching
 //! old and new Views efficiently using keys and position.
 
-use crate::tree::ElementTree;
-use crate::view::View;
-use flui_foundation::ElementId;
 use std::collections::HashMap;
+
+use flui_foundation::ElementId;
+
+use crate::{tree::ElementTree, view::View};
 
 /// Result of reconciling a single child.
 #[derive(Debug)]
@@ -153,19 +155,19 @@ pub fn reconcile_children(
             hash_type_id(&new_view.view_type_id())
         };
 
-        if let Some(&old_id) = old_keyed.get(&key_hash) {
-            if can_update_element(tree, old_id, new_view) {
-                // Found match, update and reuse
-                tree.update(old_id, new_view);
-                result.push(old_id);
-                old_keyed.remove(&key_hash);
+        if let Some(&old_id) = old_keyed.get(&key_hash)
+            && can_update_element(tree, old_id, new_view)
+        {
+            // Found match, update and reuse
+            tree.update(old_id, new_view);
+            result.push(old_id);
+            old_keyed.remove(&key_hash);
 
-                // Mark as used
-                if let Some(idx) = old_children.iter().position(|&id| id == old_id) {
-                    used_old[idx] = true;
-                }
-                continue;
+            // Mark as used
+            if let Some(idx) = old_children.iter().position(|&id| id == old_id) {
+                used_old[idx] = true;
             }
+            continue;
         }
 
         // No match found, create new element

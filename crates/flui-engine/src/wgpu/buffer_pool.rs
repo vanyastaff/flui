@@ -37,8 +37,10 @@
 //! pool.reset();  // Call at end of frame
 //! ```
 
-use wgpu::util::{BufferInitDescriptor, DeviceExt};
-use wgpu::{Buffer, BufferUsages, Device};
+use wgpu::{
+    Buffer, BufferUsages, Device,
+    util::{BufferInitDescriptor, DeviceExt},
+};
 
 /// Buffer pool entry
 struct PooledBuffer {
@@ -51,9 +53,9 @@ struct PooledBuffer {
 
 /// GPU buffer pool for efficient buffer reuse
 ///
-/// Maintains separate pools for different buffer types (vertex, index, uniform).
-/// Buffers are matched by size - if requested size matches pooled buffer size,
-/// the buffer is reused. Otherwise, a new buffer is created.
+/// Maintains separate pools for different buffer types (vertex, index,
+/// uniform). Buffers are matched by size - if requested size matches pooled
+/// buffer size, the buffer is reused. Otherwise, a new buffer is created.
 #[derive(Default)]
 pub struct BufferPool {
     vertex_buffers: Vec<PooledBuffer>,
@@ -73,8 +75,8 @@ impl BufferPool {
 
     /// Get or create a vertex buffer
     ///
-    /// If a vertex buffer of the same size is available in the pool, it will be reused.
-    /// Otherwise, a new buffer will be created.
+    /// If a vertex buffer of the same size is available in the pool, it will be
+    /// reused. Otherwise, a new buffer will be created.
     ///
     /// # Arguments
     /// * `device` - WGPU device

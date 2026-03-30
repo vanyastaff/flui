@@ -1,13 +1,15 @@
 //! Layout constraints system for FLUI rendering pipeline.
 //!
-//! This module provides constraint types that follow Flutter's proven constraint model
-//! while leveraging Rust's type system and performance characteristics.
+//! This module provides constraint types that follow Flutter's proven
+//! constraint model while leveraging Rust's type system and performance
+//! characteristics.
 //!
 //! # Core Concepts
 //!
 //! ## Constraint Types
 //!
-//! - [`BoxConstraints`] - Rectangular constraints for box-based layout (min/max width/height)
+//! - [`BoxConstraints`] - Rectangular constraints for box-based layout (min/max
+//!   width/height)
 //! - [`SliverConstraints`] - Viewport-aware constraints for scrollable content
 //! - [`SliverGeometry`] - Layout results describing space occupied by slivers
 //!
@@ -22,7 +24,8 @@
 //!
 //! # Performance Features
 //!
-//! All constraint types are optimized for performance-critical layout operations:
+//! All constraint types are optimized for performance-critical layout
+//! operations:
 //!
 //! - **Hash + Eq** - Enable efficient constraint-based caching
 //! - **Normalization** - Consistent floating-point comparison for cache keys
@@ -31,7 +34,8 @@
 //!
 //! ## Layout Caching
 //!
-//! Constraints can be used as cache keys to avoid redundant layout calculations:
+//! Constraints can be used as cache keys to avoid redundant layout
+//! calculations:
 //!
 //! ```ignore
 //! use std::collections::HashMap;
@@ -46,7 +50,8 @@
 //!
 //! ## Batch Operations
 //!
-//! BoxConstraints supports SIMD-accelerated batch operations when the `simd` feature is enabled:
+//! BoxConstraints supports SIMD-accelerated batch operations when the `simd`
+//! feature is enabled:
 //!
 //! ```ignore
 //! #[cfg(feature = "simd")]
@@ -82,13 +87,13 @@ mod scroll_metrics;
 mod sliver_constraints;
 mod sliver_geometry;
 
+use std::fmt;
+
 pub use box_constraints::BoxConstraints;
 pub use direction::GrowthDirection;
 pub use scroll_metrics::{FixedExtentMetrics, FixedScrollMetrics, ScrollMetrics};
 pub use sliver_constraints::SliverConstraints;
 pub use sliver_geometry::SliverGeometry;
-
-use std::fmt;
 
 /// Abstract constraint trait following Flutter's protocol.
 ///
@@ -111,8 +116,8 @@ pub trait Constraints: Clone + PartialEq + fmt::Debug + Send + Sync + 'static {
     ///
     /// # Parameters
     ///
-    /// - `is_applied_constraint`: Whether these constraints are being passed
-    ///   to a child during layout (enables stricter validation)
+    /// - `is_applied_constraint`: Whether these constraints are being passed to
+    ///   a child during layout (enables stricter validation)
     #[cfg(debug_assertions)]
     fn debug_assert_is_valid(&self, is_applied_constraint: bool) -> bool {
         debug_assert!(

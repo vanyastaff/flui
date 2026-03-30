@@ -3,14 +3,17 @@
 //! Ensures frames are presented at the right time to avoid tearing and
 //! maintain smooth animation.
 //!
-//! **Note**: `wait_for_vsync()` currently uses `thread::sleep` for timing simulation.
-//! Real platform VSync integration comes from `flui-platform` via `VsyncDrivenScheduler::on_vsync()`.
+//! **Note**: `wait_for_vsync()` currently uses `thread::sleep` for timing
+//! simulation. Real platform VSync integration comes from `flui-platform` via
+//! `VsyncDrivenScheduler::on_vsync()`.
 //!
 //! ## Type-Safe Timing
 //!
 //! ```rust
-//! use flui_scheduler::vsync::{VsyncScheduler, VsyncMode};
-//! use flui_scheduler::duration::Microseconds;
+//! use flui_scheduler::{
+//!     duration::Microseconds,
+//!     vsync::{VsyncMode, VsyncScheduler},
+//! };
 //!
 //! let vsync = VsyncScheduler::new(60);
 //! let interval = vsync.frame_interval();
@@ -18,15 +21,14 @@
 //! assert_eq!(interval.value(), 16666); // ~16.67ms in microseconds
 //! ```
 
-use crate::duration::{Microseconds, Milliseconds};
-use parking_lot::Mutex;
-use std::collections::VecDeque;
-use std::sync::Arc;
-use std::time::Duration;
-use web_time::Instant;
+use std::{collections::VecDeque, sync::Arc, time::Duration};
 
+use parking_lot::Mutex;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
+use web_time::Instant;
+
+use crate::duration::{Microseconds, Milliseconds};
 
 /// VSync callback - called when vsync signal arrives
 pub type VsyncCallback = Box<dyn FnMut(Instant) + Send>;
@@ -108,7 +110,8 @@ impl VsyncStats {
     }
 }
 
-/// Mutable state consolidated behind a single lock (reduces 6 Arc allocations to 1)
+/// Mutable state consolidated behind a single lock (reduces 6 Arc allocations
+/// to 1)
 struct VsyncInner {
     mode: VsyncMode,
     last_vsync: Option<Instant>,
@@ -127,7 +130,7 @@ struct VsyncInner {
 /// # Examples
 ///
 /// ```
-/// use flui_scheduler::vsync::{VsyncScheduler, VsyncMode};
+/// use flui_scheduler::vsync::{VsyncMode, VsyncScheduler};
 ///
 /// let vsync = VsyncScheduler::new(60);
 /// assert_eq!(vsync.refresh_rate(), 60);
@@ -378,7 +381,8 @@ impl Default for VsyncScheduler {
 // VsyncDriverdScheduler - Integrates VsyncScheduler with Scheduler
 // =============================================================================
 
-/// A VSync-driven scheduler that automatically calls handleBeginFrame/handleDrawFrame
+/// A VSync-driven scheduler that automatically calls
+/// handleBeginFrame/handleDrawFrame
 ///
 /// This provides Flutter-like integration where vsync signals automatically
 /// drive the frame execution pipeline.
@@ -386,8 +390,9 @@ impl Default for VsyncScheduler {
 /// # Examples
 ///
 /// ```rust
-/// use flui_scheduler::{Scheduler, VsyncDrivenScheduler};
 /// use std::sync::Arc;
+///
+/// use flui_scheduler::{Scheduler, VsyncDrivenScheduler};
 ///
 /// let scheduler = Arc::new(Scheduler::new());
 /// let vsync_driven = VsyncDrivenScheduler::new(scheduler.clone(), 60);
@@ -559,8 +564,9 @@ impl std::fmt::Debug for VsyncScheduler {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    use super::*;
 
     #[test]
     fn test_vsync_modes() {
@@ -625,7 +631,8 @@ mod tests {
         vsync.signal_vsync();
 
         let stats = vsync.stats();
-        // signal_count is incremented only when there's a previous vsync to measure interval
+        // signal_count is incremented only when there's a previous vsync to measure
+        // interval
         assert!(stats.signal_count >= 2);
         assert!(stats.avg_interval.value() > 0);
     }

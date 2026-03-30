@@ -1,24 +1,26 @@
 //! macOS window (NSWindow) implementation
 
-use super::view;
-use crate::config::WindowConfiguration;
-use crate::shared::PlatformHandlers;
-use crate::traits::*;
-use anyhow::{Context, Result};
-use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
-use parking_lot::Mutex;
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
-use cocoa::appkit::{NSBackingStoreType, NSWindow, NSWindowStyleMask};
-use cocoa::base::{id, nil, BOOL, NO, YES};
-use cocoa::foundation::NSRect;
-use objc::declare::ClassDecl;
-use objc::runtime::{Class, Object, Sel};
+use anyhow::{Context, Result};
+use cocoa::{
+    appkit::{NSBackingStoreType, NSWindow, NSWindowStyleMask},
+    base::{BOOL, NO, YES, id, nil},
+    foundation::NSRect,
+};
+use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
+use objc::{
+    declare::ClassDecl,
+    runtime::{Class, Object, Sel},
+};
+use parking_lot::Mutex;
 use raw_window_handle::{
     AppKitDisplayHandle, AppKitWindowHandle, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
     RawWindowHandle,
 };
+
+use super::view;
+use crate::{config::WindowConfiguration, shared::PlatformHandlers, traits::*};
 
 /// macOS window wrapper around NSWindow
 pub struct MacOSWindow {
@@ -601,11 +603,13 @@ impl WindowTrait for MacOSWindow {
 // macOS Window Extension Trait Implementation
 // ============================================================================
 
-use super::liquid_glass::{LiquidGlassConfig, LiquidGlassMaterial};
-use super::window_ext::{
-    MacOSCollectionBehavior, MacOSWindowExt as MacOSWindowExtTrait, MacOSWindowLevel,
+use super::{
+    liquid_glass::{LiquidGlassConfig, LiquidGlassMaterial},
+    window_ext::{
+        MacOSCollectionBehavior, MacOSWindowExt as MacOSWindowExtTrait, MacOSWindowLevel,
+    },
+    window_tiling::TilingConfiguration,
 };
-use super::window_tiling::TilingConfiguration;
 
 impl MacOSWindowExtTrait for MacOSWindow {
     fn set_liquid_glass(&mut self, material: LiquidGlassMaterial) {

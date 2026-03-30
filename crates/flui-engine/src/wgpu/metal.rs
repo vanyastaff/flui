@@ -1,7 +1,7 @@
 //! Metal 4 backend-specific features for macOS/iOS
 //!
-//! This module provides access to Metal 4 features that are not exposed through wgpu's
-//! cross-platform API, including:
+//! This module provides access to Metal 4 features that are not exposed through
+//! wgpu's cross-platform API, including:
 //! - MetalFX spatial/temporal upscaling
 //! - Extended Dynamic Range (EDR) support
 //! - Ray tracing acceleration structures
@@ -32,9 +32,10 @@
 //!     .with_reference_white(200.0);  // 200 nits SDR white
 //! ```
 
-use anyhow::{anyhow, Result};
-use flui_types::geometry::Size;
 use std::sync::Arc;
+
+use anyhow::{Result, anyhow};
+use flui_types::geometry::Size;
 
 // ============================================================================
 // MetalFX Upscaling
@@ -43,8 +44,8 @@ use std::sync::Arc;
 /// MetalFX upscaling mode.
 ///
 /// MetalFX is Apple's AI-powered upscaling technology, similar to NVIDIA DLSS
-/// or AMD FSR. It renders at a lower resolution and upscales to native resolution
-/// with minimal quality loss.
+/// or AMD FSR. It renders at a lower resolution and upscales to native
+/// resolution with minimal quality loss.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UpscaleMode {
     /// Spatial upscaling (no temporal history).
@@ -79,15 +80,17 @@ impl UpscaleMode {
 
 /// MetalFX upscaler for AI-powered resolution upscaling.
 ///
-/// This struct wraps Metal's MTLFXSpatialScaler or MTLFXTemporalScaler to provide
-/// high-quality upscaling from a lower render resolution to native display resolution.
+/// This struct wraps Metal's MTLFXSpatialScaler or MTLFXTemporalScaler to
+/// provide high-quality upscaling from a lower render resolution to native
+/// display resolution.
 ///
 /// # Performance Impact
 ///
 /// Spatial upscaling adds ~0.5-1ms per frame at 1440p.
 /// Temporal upscaling adds ~1-2ms per frame at 1440p.
 ///
-/// However, rendering at lower resolution can save 2-5ms, resulting in net performance gain.
+/// However, rendering at lower resolution can save 2-5ms, resulting in net
+/// performance gain.
 #[derive(Debug)]
 pub struct MetalFxUpscaler {
     mode: UpscaleMode,
@@ -138,7 +141,8 @@ impl MetalFxUpscaler {
         }
 
         // TODO: Check device features for MetalFX support
-        // This requires accessing the underlying MTLDevice and checking supportsFamily(MTLGPUFamilyMetal3)
+        // This requires accessing the underlying MTLDevice and checking
+        // supportsFamily(MTLGPUFamilyMetal3)
 
         Ok(Self {
             mode,
@@ -190,7 +194,8 @@ impl MetalFxUpscaler {
     ///
     /// - `input_texture` - Rendered frame at input_size resolution
     /// - `output_texture` - Target texture at output_size resolution
-    /// - `motion_vectors` - Optional motion vector texture (required for temporal mode)
+    /// - `motion_vectors` - Optional motion vector texture (required for
+    ///   temporal mode)
     /// - `depth` - Optional depth texture (improves quality for temporal mode)
     ///
     /// # Errors
@@ -224,8 +229,8 @@ impl MetalFxUpscaler {
 
 /// Extended Dynamic Range configuration for HDR content on macOS.
 ///
-/// EDR allows content to exceed the standard 0-1 SDR range on compatible displays,
-/// enabling HDR highlights up to 1600 nits on Pro Display XDR.
+/// EDR allows content to exceed the standard 0-1 SDR range on compatible
+/// displays, enabling HDR highlights up to 1600 nits on Pro Display XDR.
 ///
 /// # Display Support
 ///
@@ -378,8 +383,8 @@ pub struct RayTracingConfig {
 
     /// Maximum ray recursion depth.
     ///
-    /// Higher values enable more realistic inter-reflections but cost more performance.
-    /// Typical values: 1-4
+    /// Higher values enable more realistic inter-reflections but cost more
+    /// performance. Typical values: 1-4
     pub max_recursion_depth: u32,
 }
 

@@ -35,17 +35,22 @@
 //! handler.handle_event(&pointer_event);
 //! ```
 
-use crate::events::{PointerEvent, PointerType};
-use flui_types::geometry::PixelDelta;
-use flui_types::geometry::{px, Pixels};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Instant,
+};
 
-use crate::ids::PointerId;
-use flui_types::geometry::Offset;
+use flui_types::geometry::{Offset, PixelDelta, Pixels, px};
 use parking_lot::Mutex;
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::Instant;
+
+use crate::{
+    events::{PointerEvent, PointerType},
+    ids::PointerId,
+};
 
 // ============================================================================
 // RawPointerEvent
@@ -297,10 +302,10 @@ impl RawInputHandler {
 
         let raw_event = self.convert_event(event);
 
-        if let Some(ref raw) = raw_event {
-            if let Some(callback) = self.callback.lock().clone() {
-                callback(raw.clone());
-            }
+        if let Some(ref raw) = raw_event
+            && let Some(callback) = self.callback.lock().clone()
+        {
+            callback(raw.clone());
         }
 
         raw_event

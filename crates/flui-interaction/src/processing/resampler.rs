@@ -44,17 +44,19 @@
 //! });
 //! ```
 
-use flui_types::geometry::Pixels;
+use std::{
+    collections::VecDeque,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
+use flui_types::geometry::{Offset, Pixels};
 use parking_lot::Mutex;
 
-use std::collections::VecDeque;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
-use crate::events::{PointerEvent, PointerEventExt};
-use flui_types::geometry::Offset;
-
-use crate::ids::PointerId;
+use crate::{
+    events::{PointerEvent, PointerEventExt},
+    ids::PointerId,
+};
 
 /// Maximum number of events to buffer (prevents unbounded memory growth)
 const MAX_BUFFERED_EVENTS: usize = 100;
@@ -120,7 +122,8 @@ impl PointerEventResampler {
 
     /// Adds a pointer event to the resampling queue
     ///
-    /// Events are buffered and will be processed during the next `sample()` call.
+    /// Events are buffered and will be processed during the next `sample()`
+    /// call.
     pub fn add_event(&self, event: PointerEvent) {
         let mut inner = self.inner.lock();
 
@@ -153,7 +156,8 @@ impl PointerEventResampler {
         }
     }
 
-    /// Samples events at the specified time and invokes callback with resampled events
+    /// Samples events at the specified time and invokes callback with resampled
+    /// events
     ///
     /// # Arguments
     ///
@@ -179,10 +183,10 @@ impl PointerEventResampler {
         }
 
         // Enforce minimum sample interval
-        if let Some(last_time) = inner.last_sample_time {
-            if sample_time.duration_since(last_time) < MIN_SAMPLE_INTERVAL {
-                return;
-            }
+        if let Some(last_time) = inner.last_sample_time
+            && sample_time.duration_since(last_time) < MIN_SAMPLE_INTERVAL
+        {
+            return;
         }
 
         inner.last_sample_time = Some(sample_time);
@@ -205,36 +209,35 @@ impl PointerEventResampler {
         }
 
         // Interpolate if we have move events pending
-        if !inner.event_queue.is_empty() && inner.last_position.is_some() {
-            if let Some(next_event) = inner.event_queue.front() {
-                if matches!(next_event.event, PointerEvent::Move(..)) {
-                    // Interpolate between last position and next event
-                    if let Some(last_pos) = inner.last_position {
-                        let next_pos = next_event.event.position();
-                        let total_duration = next_event.timestamp.duration_since(sample_time);
-                        let sample_duration = next_sample_time.duration_since(sample_time);
+        if !inner.event_queue.is_empty()
+            && inner.last_position.is_some()
+            && let Some(next_event) = inner.event_queue.front()
+            && matches!(next_event.event, PointerEvent::Move(..))
+            && let Some(last_pos) = inner.last_position
+        {
+            let next_pos = next_event.event.position();
+            let total_duration = next_event.timestamp.duration_since(sample_time);
+            let sample_duration = next_sample_time.duration_since(sample_time);
 
-                        if total_duration > Duration::ZERO {
-                            let t = sample_duration.as_secs_f64() / total_duration.as_secs_f64();
-                            let t = t.clamp(0.0, 1.0);
+            if total_duration > Duration::ZERO {
+                let t = sample_duration.as_secs_f64() / total_duration.as_secs_f64();
+                let t = t.clamp(0.0, 1.0);
 
-                            let interpolated_pos = Offset::new(
-                                last_pos.dx + (next_pos.dx - last_pos.dx) * t as f32,
-                                last_pos.dy + (next_pos.dy - last_pos.dy) * t as f32,
-                            );
+                let interpolated_pos = Offset::new(
+                    last_pos.dx + (next_pos.dx - last_pos.dx) * t as f32,
+                    last_pos.dy + (next_pos.dy - last_pos.dy) * t as f32,
+                );
 
-                            // Only emit if position actually changed
-                            if interpolated_pos != last_pos {
-                                // For interpolated events, we clone the original and update position
-                                // This is a simplified version - in production we'd create proper
-                                // interpolated PointerUpdate events
-                                inner.last_position = Some(interpolated_pos);
-                                // Note: We skip emitting interpolated events for now since
-                                // creating new PointerUpdate requires complex state copying.
-                                // The resampler primarily helps with timing alignment.
-                            }
-                        }
-                    }
+                // Only emit if position actually changed
+                if interpolated_pos != last_pos {
+                    // For interpolated events, we clone the original and update position
+                    // This is a simplified version - in production we'd create proper
+                    // interpolated PointerUpdate events
+                    inner.last_position = Some(interpolated_pos);
+                    // Note: We skip emitting interpolated events for now since
+                    // creating new PointerUpdate requires complex state
+                    // copying. The resampler primarily
+                    // helps with timing alignment.
                 }
             }
         }
@@ -292,7 +295,7 @@ impl PointerEventResampler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::{make_down_event, make_move_event, PointerType};
+    use crate::events::{PointerType, make_down_event, make_move_event};
 
     #[test]
     fn test_resampler_basic() {

@@ -45,28 +45,23 @@
 // Re-exports from ui-events (W3C compliant)
 // ============================================================================
 
+// ============================================================================
+// Platform-specific utilities
+// ============================================================================
+use std::collections::VecDeque;
+use std::time::Instant;
+
+use flui_types::geometry::{Offset, PixelDelta, Pixels};
+/// Re-export keyboard types from keyboard-types crate
+pub use keyboard_types::{Key, Modifiers};
+/// Re-export scroll events
+pub use ui_events::ScrollDelta;
+/// Re-export W3C keyboard event from ui-events
+pub use ui_events::keyboard::KeyboardEvent;
 /// Re-export W3C pointer events
 pub use ui_events::pointer::{
     PointerButton, PointerButtons, PointerEvent, PointerId, PointerType, PointerUpdate,
 };
-
-/// Re-export keyboard types from keyboard-types crate
-pub use keyboard_types::{Key, Modifiers};
-
-/// Re-export W3C keyboard event from ui-events
-pub use ui_events::keyboard::KeyboardEvent;
-
-/// Re-export scroll events
-pub use ui_events::ScrollDelta;
-
-// ============================================================================
-// Platform-specific utilities
-// ============================================================================
-
-use std::collections::VecDeque;
-
-use flui_types::geometry::{Offset, PixelDelta, Pixels};
-use std::time::Instant;
 
 /// Result of dispatching an input event through a callback
 ///
@@ -178,7 +173,8 @@ pub fn delta_offset_from_coords(dx: f32, dy: f32) -> Offset<PixelDelta> {
 /// types from `flui_types::gestures::Velocity`. We keep this minimal
 /// version for platform layer only.
 ///
-/// For full velocity tracking, use `flui_interaction::processing::VelocityTracker`.
+/// For full velocity tracking, use
+/// `flui_interaction::processing::VelocityTracker`.
 #[derive(Debug, Clone)]
 pub struct BasicVelocityTracker {
     samples: VecDeque<VelocitySample>,

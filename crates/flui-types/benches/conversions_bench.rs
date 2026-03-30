@@ -2,8 +2,8 @@
 //!
 //! Performance targets: Conversions should be zero-cost or near-zero-cost
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use flui_types::geometry::{device_px, px, Pixels};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use flui_types::geometry::{Pixels, device_px, px};
 
 fn pixels_to_device_pixels_benchmark(c: &mut Criterion) {
     let logical = px(100.0);

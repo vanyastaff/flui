@@ -1,6 +1,7 @@
 //! Window Features Demo
 //!
-//! Demonstrates cross-platform window features and platform-specific extensions.
+//! Demonstrates cross-platform window features and platform-specific
+//! extensions.
 //!
 //! This example shows:
 //! - Cross-platform Window trait API
@@ -13,8 +14,8 @@
 //! cargo run --example window_features
 //! ```
 
-use flui_platform::{current_platform, WindowOptions};
-use flui_types::geometry::{px, Size};
+use flui_platform::{WindowOptions, current_platform};
+use flui_types::geometry::{Size, px};
 
 fn main() -> anyhow::Result<()> {
     println!("FLUI Window Features Demo");

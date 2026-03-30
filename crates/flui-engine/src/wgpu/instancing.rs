@@ -27,12 +27,13 @@
 //! ```
 
 use bytemuck::{Pod, Zeroable};
-use flui_types::{geometry::Pixels, styling::Color, Point, Rect};
+use flui_types::{Point, Rect, geometry::Pixels, styling::Color};
 
 /// Instance data for a rectangle
 ///
-/// This is uploaded to GPU as an instance buffer. Each rectangle gets one instance.
-/// The GPU shader reads this data per-instance and transforms a shared quad.
+/// This is uploaded to GPU as an instance buffer. Each rectangle gets one
+/// instance. The GPU shader reads this data per-instance and transforms a
+/// shared quad.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct RectInstance {
@@ -45,8 +46,9 @@ pub struct RectInstance {
     /// Corner radii [top_left, top_right, bottom_right, bottom_left]
     pub corner_radii: [f32; 4],
 
-    /// Transform matrix (simplified 2D: [scale_x, scale_y, translate_x, translate_y])
-    /// Full matrix would be 16 floats, but for UI we only need 2D affine
+    /// Transform matrix (simplified 2D: [scale_x, scale_y, translate_x,
+    /// translate_y]) Full matrix would be 16 floats, but for UI we only
+    /// need 2D affine
     pub transform: [f32; 4],
 }
 
@@ -196,14 +198,16 @@ pub struct ArcInstance {
     pub center_radius: [f32; 4],
 
     /// Angles in radians [start_angle, sweep_angle, _padding, _padding]
-    /// start_angle: where the arc begins (0 = right, π/2 = bottom, π = left, 3π/2 = top)
-    /// sweep_angle: how much to sweep (positive = clockwise, negative = counter-clockwise)
+    /// start_angle: where the arc begins (0 = right, π/2 = bottom, π = left,
+    /// 3π/2 = top) sweep_angle: how much to sweep (positive = clockwise,
+    /// negative = counter-clockwise)
     pub angles: [f32; 4],
 
     /// Color [r, g, b, a] in 0-1 range
     pub color: [f32; 4],
 
-    /// Transform (for elliptical arcs: scale_x, scale_y, translate_x, translate_y)
+    /// Transform (for elliptical arcs: scale_x, scale_y, translate_x,
+    /// translate_y)
     pub transform: [f32; 4],
 }
 
@@ -397,7 +401,8 @@ impl TextureInstance {
 
 /// Linear gradient instance data for GPU instancing
 ///
-/// See `crate::painter::effects::LinearGradientInstance` for full documentation.
+/// See `crate::painter::effects::LinearGradientInstance` for full
+/// documentation.
 pub use super::effects::LinearGradientInstance;
 
 impl LinearGradientInstance {
@@ -555,7 +560,8 @@ impl<T> Default for InstanceBatch<T> {
     }
 }
 
-// NOTE: Tests temporarily disabled - need update for Pixels/DevicePixels migration
+// NOTE: Tests temporarily disabled - need update for Pixels/DevicePixels
+// migration
 #[cfg(all(test, feature = "disabled-tests"))]
 mod tests {
     use super::*;

@@ -7,7 +7,7 @@
 //! - Round-trip conversions
 
 use flui_types::geometry::{
-    device_px, px, rems, scaled_px, DevicePixels, Pixels, Rems, ScaledPixels,
+    DevicePixels, Pixels, Rems, ScaledPixels, device_px, px, rems, scaled_px,
 };
 
 // ============================================================================
@@ -214,7 +214,8 @@ fn test_round_trip_pixels_device_pixels_precision_loss() {
 
     // 10.4 * 2.0 = 20.8 (rounds to 21)
     // 21 / 2.0 = 10.5 (lost precision, difference of 0.1)
-    // This is expected behavior - rounding can cause up to 0.5 / scale_factor precision loss
+    // This is expected behavior - rounding can cause up to 0.5 / scale_factor
+    // precision loss
     let max_precision_loss = px(0.5 / scale);
     assert!(
         (back - original).abs() <= max_precision_loss,

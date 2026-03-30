@@ -1,7 +1,8 @@
 //! Base ParentData trait for child metadata storage.
 
-use downcast_rs::{impl_downcast, DowncastSync};
 use std::fmt::Debug;
+
+use downcast_rs::{DowncastSync, impl_downcast};
 
 // ============================================================================
 // PARENT DATA TRAIT

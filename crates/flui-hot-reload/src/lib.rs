@@ -74,9 +74,11 @@
     clippy::missing_panics_doc
 )]
 
+#[cfg(feature = "app-plugin")]
 mod pipeline;
 mod plugin;
 
+#[cfg(feature = "app-plugin")]
 pub use pipeline::PluginPipeline;
 
 // Dynamic library loading is not available on wasm32
@@ -91,6 +93,5 @@ mod host;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use driver::HotReloadDriver;
-
 #[cfg(not(target_arch = "wasm32"))]
 pub use host::{PluginKind, ScenePlugin};

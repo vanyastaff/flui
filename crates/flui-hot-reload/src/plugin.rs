@@ -2,9 +2,11 @@
 //!
 //! Provides two macros:
 //!
-//! - [`scene_plugin!`] — wraps a raw `fn(f32, f32) -> Scene` function (low-level)
-//! - [`app_plugin!`] — wraps a `View + StatelessView` widget in a self-contained
-//!   pipeline that runs Build → Layout → Paint → Scene internally (high-level)
+//! - [`scene_plugin!`] — wraps a raw `fn(f32, f32) -> Scene` function
+//!   (low-level)
+//! - [`app_plugin!`] — wraps a `View + StatelessView` widget in a
+//!   self-contained pipeline that runs Build → Layout → Paint → Scene
+//!   internally (high-level)
 
 /// Generates the `extern "C"` FFI wrappers for a scene-building function.
 ///
@@ -13,9 +15,12 @@
 ///
 /// # Generated Symbols
 ///
-/// - `flui_scene_build(width, height) -> *mut c_void` — builds a Scene, returns owned pointer
-/// - `flui_scene_version() -> u32` — returns plugin version (for reload detection)
-/// - `flui_scene_drop(ptr)` — drops a Scene previously returned by `flui_scene_build`
+/// - `flui_scene_build(width, height) -> *mut c_void` — builds a Scene, returns
+///   owned pointer
+/// - `flui_scene_version() -> u32` — returns plugin version (for reload
+///   detection)
+/// - `flui_scene_drop(ptr)` — drops a Scene previously returned by
+///   `flui_scene_build`
 ///
 /// # Example
 ///
@@ -49,7 +54,7 @@ macro_rules! scene_plugin {
         ///
         /// The returned pointer must be passed to `flui_scene_drop` when no longer
         /// needed, or taken ownership of via `Box::from_raw`.
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn flui_scene_build(width: f32, height: f32) -> *mut ::std::ffi::c_void {
             let scene = $build_fn(width, height);
             let boxed = ::std::boxed::Box::new(scene);
@@ -59,7 +64,7 @@ macro_rules! scene_plugin {
         /// Returns the plugin version number.
         ///
         /// The host uses this to confirm the plugin loaded successfully.
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn flui_scene_version() -> u32 {
             1
         }
@@ -70,7 +75,7 @@ macro_rules! scene_plugin {
         ///
         /// `ptr` must be a valid pointer returned by `flui_scene_build` that has
         /// not already been dropped. Passing null is safe (no-op).
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn flui_scene_drop(ptr: *mut ::std::ffi::c_void) {
             if !ptr.is_null() {
                 #[allow(unsafe_code)]
@@ -84,19 +89,24 @@ macro_rules! scene_plugin {
 
 /// Generates `extern "C"` FFI wrappers for a widget-based hot-reload plugin.
 ///
-/// Unlike [`scene_plugin!`] which wraps a raw scene-building function, this macro
-/// wraps a `View + StatelessView` widget in a self-contained rendering pipeline
-/// ([`PluginPipeline`]) that runs the full Build → Layout → Paint → Scene cycle.
+/// Unlike [`scene_plugin!`] which wraps a raw scene-building function, this
+/// macro wraps a `View + StatelessView` widget in a self-contained rendering
+/// pipeline ([`PluginPipeline`]) that runs the full Build → Layout → Paint →
+/// Scene cycle.
 ///
-/// The widget tree is mounted on the first call and rebuilt on subsequent calls.
-/// On hot-reload (new `.so` loaded), the `OnceLock` is fresh — the pipeline
-/// re-mounts from scratch, giving "hot restart" semantics (code updated, state lost).
+/// The widget tree is mounted on the first call and rebuilt on subsequent
+/// calls. On hot-reload (new `.so` loaded), the `OnceLock` is fresh — the
+/// pipeline re-mounts from scratch, giving "hot restart" semantics (code
+/// updated, state lost).
 ///
 /// # Generated Symbols
 ///
-/// - `flui_app_build(width, height) -> *mut c_void` — runs pipeline, returns owned Scene pointer
-/// - `flui_app_version() -> u32` — returns plugin version (for reload detection)
-/// - `flui_app_drop(ptr)` — drops a Scene previously returned by `flui_app_build`
+/// - `flui_app_build(width, height) -> *mut c_void` — runs pipeline, returns
+///   owned Scene pointer
+/// - `flui_app_version() -> u32` — returns plugin version (for reload
+///   detection)
+/// - `flui_app_drop(ptr)` — drops a Scene previously returned by
+///   `flui_app_build`
 ///
 /// # Example
 ///
@@ -123,6 +133,9 @@ macro_rules! scene_plugin {
 ///
 /// app_plugin!(MyApp);
 /// ```
+///
+/// Requires the `app-plugin` feature on `flui-hot-reload`.
+#[cfg(feature = "app-plugin")]
 #[macro_export]
 macro_rules! app_plugin {
     ($root_view:expr) => {

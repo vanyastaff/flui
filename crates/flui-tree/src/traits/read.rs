@@ -35,8 +35,7 @@ use flui_foundation::Identifier;
 /// # Example
 ///
 /// ```
-/// use flui_tree::TreeRead;
-/// use flui_tree::ElementId;
+/// use flui_tree::{ElementId, TreeRead};
 ///
 /// struct SimpleTree {
 ///     nodes: Vec<Option<String>>,
@@ -198,10 +197,10 @@ pub trait TreeReadExt<I: Identifier>: TreeRead<I> {
         P: for<'a> FnMut(&'a Self::Node) -> bool,
     {
         for id in self.node_ids() {
-            if let Some(node) = self.get(id) {
-                if predicate(node) {
-                    return Some(id);
-                }
+            if let Some(node) = self.get(id)
+                && predicate(node)
+            {
+                return Some(id);
             }
         }
         None
@@ -226,10 +225,10 @@ pub trait TreeReadExt<I: Identifier>: TreeRead<I> {
         let mut result = Vec::with_capacity(Self::INLINE_THRESHOLD.min(self.len()));
 
         for id in self.node_ids() {
-            if let Some(node) = self.get(id) {
-                if predicate(node) {
-                    result.push(id);
-                }
+            if let Some(node) = self.get(id)
+                && predicate(node)
+            {
+                result.push(id);
             }
         }
 
@@ -429,8 +428,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_foundation::ElementId;
+
+    use super::*;
 
     // Simple test implementation with sealed trait
     struct TestTree {

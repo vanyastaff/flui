@@ -1,29 +1,30 @@
 //! Self-contained rendering pipeline for hot-reload plugins.
 //!
-//! `PluginPipeline` runs the full three-tree architecture (View → Element → Render)
-//! inside a plugin, producing a [`Scene`] that can be passed back to the host
-//! via the `app_plugin!` macro.
+//! `PluginPipeline` runs the full three-tree architecture (View → Element →
+//! Render) inside a plugin, producing a [`Scene`] that can be passed back to
+//! the host via the `app_plugin!` macro.
 //!
 //! This is intentionally independent of `AppBinding` — the plugin owns its own
-//! `WidgetsBinding` and `PipelineOwner`, avoiding singleton conflicts with the host.
+//! `WidgetsBinding` and `PipelineOwner`, avoiding singleton conflicts with the
+//! host.
+
+use std::sync::Arc;
 
 use flui_layer::Scene;
 use flui_rendering::pipeline::PipelineOwner;
-use flui_types::geometry::px;
-use flui_types::Size;
+use flui_types::{Size, geometry::px};
 use flui_view::{
     ElementBase, RootRenderElement, RootRenderView, StatelessView, View, WidgetsBinding,
 };
 use parking_lot::RwLock;
-use std::sync::Arc;
 
-/// Log error messages via Android logcat (or stderr on other platforms).
+/// Log messages via Android logcat (or stderr on other platforms).
 ///
-/// The tracing subscriber from the host doesn't propagate into dlopen'd plugins,
-/// so we use `android_log_sys` directly on Android and `eprintln` elsewhere.
-/// Reserved for unexpected error conditions only.
+/// The tracing subscriber from the host doesn't propagate into dlopen'd
+/// plugins, so we use `android_log_sys` directly on Android and `eprintln`
+/// elsewhere.
 #[allow(unused_variables)]
-fn log_error(msg: &str) {
+fn log(msg: &str) {
     #[cfg(target_os = "android")]
     {
         let tag = c"PluginPipeline";
@@ -31,7 +32,7 @@ fn log_error(msg: &str) {
         #[allow(unsafe_code)]
         unsafe {
             android_log_sys::__android_log_write(
-                android_log_sys::LogPriority::ERROR as i32,
+                android_log_sys::LogPriority::INFO as i32,
                 tag.as_ptr(),
                 msg_c.as_ptr(),
             );
@@ -39,14 +40,15 @@ fn log_error(msg: &str) {
     }
     #[cfg(not(target_os = "android"))]
     {
-        eprintln!("[PluginPipeline] ERROR: {msg}");
+        eprintln!("[PluginPipeline] {msg}");
     }
 }
 
 /// A self-contained rendering pipeline for use inside hot-reload plugins.
 ///
-/// Encapsulates `WidgetsBinding` (element tree) and `PipelineOwner` (render tree),
-/// mounts a root widget, and produces `Scene` objects on each `draw_frame()` call.
+/// Encapsulates `WidgetsBinding` (element tree) and `PipelineOwner` (render
+/// tree), mounts a root widget, and produces `Scene` objects on each
+/// `draw_frame()` call.
 ///
 /// # Usage
 ///
@@ -61,8 +63,9 @@ fn log_error(msg: &str) {
 pub struct PluginPipeline {
     widgets: WidgetsBinding,
     pipeline_owner: Arc<RwLock<PipelineOwner>>,
-    /// Kept alive so the element tree isn't dropped while the pipeline is active.
-    /// The element tree holds references into the render tree (via RenderId).
+    /// Kept alive so the element tree isn't dropped while the pipeline is
+    /// active. The element tree holds references into the render tree (via
+    /// RenderId).
     #[allow(dead_code)]
     root_element: Option<Box<dyn ElementBase>>,
 }
@@ -71,7 +74,8 @@ impl PluginPipeline {
     /// Mount a root widget and create the rendering pipeline.
     ///
     /// This mirrors the `mount_root()` logic in `flui-app`'s runner,
-    /// but uses a standalone `WidgetsBinding` instead of the global `AppBinding`.
+    /// but uses a standalone `WidgetsBinding` instead of the global
+    /// `AppBinding`.
     pub fn mount<V>(root: V, width: f32, height: f32) -> Self
     where
         V: View + StatelessView + Clone + Send + Sync + 'static,
@@ -93,11 +97,22 @@ impl PluginPipeline {
         {
             rre.set_pipeline_owner(Arc::clone(&pipeline_owner));
         } else {
-            log_error("failed to downcast to RootRenderElement");
+            log("ERROR: failed to downcast to RootRenderElement");
         }
 
         // Mount the element tree (creates RenderViewObject, inserts into RenderTree)
         root_element.mount(None, 0);
+
+        // Diagnostic: verify pipeline state after mount
+        {
+            let owner = pipeline_owner.read();
+            let has_root = owner.root_id().is_some();
+            let tree_len = owner.render_tree().len();
+            log(&format!(
+                "mount complete: root_id={}, render_tree_len={}, size={}x{}",
+                has_root, tree_len, width, height
+            ));
+        }
 
         Self {
             widgets,
@@ -113,7 +128,6 @@ impl PluginPipeline {
     /// 2. **Layout** — Compute sizes via `flush_layout()`
     /// 3. **Paint** — Generate display lists via `flush_paint()`
     /// 4. **Scene** — Extract `LayerTree` and create `Scene`
-    ///
     pub fn draw_frame(&mut self, width: f32, height: f32) -> Scene {
         // Phase 1: Build (rebuild dirty elements)
         if self.widgets.has_pending_builds() {
@@ -134,6 +148,8 @@ impl PluginPipeline {
             // because take_layer_tree() consumes the tree and nodes are no longer dirty.
             if let Some(root_id) = pipeline.root_id() {
                 pipeline.add_node_needing_paint(root_id.get(), 0);
+            } else {
+                log("draw_frame: WARNING — no root_id in pipeline");
             }
 
             pipeline.flush_layout();
@@ -149,8 +165,7 @@ impl PluginPipeline {
             let root = layer_tree.root();
             Scene::new(size, layer_tree, root, 1)
         } else {
-            // Should not happen since we force-marked root dirty above
-            log_error("draw_frame: no LayerTree produced after force-repaint");
+            log("draw_frame: no LayerTree produced after force-repaint");
             let tree = flui_layer::LayerTree::new();
             Scene::new(size, tree, None, 1)
         }

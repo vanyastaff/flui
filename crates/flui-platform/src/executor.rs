@@ -1,16 +1,18 @@
 //! Platform executor implementations
 //!
 //! Provides async executors for background and foreground task execution.
-//! Background executor uses Tokio runtime, foreground executor uses flume channels.
-//! Both return [`Task<T>`] handles for awaiting results.
+//! Background executor uses Tokio runtime, foreground executor uses flume
+//! channels. Both return [`Task<T>`] handles for awaiting results.
 
-use crate::task::{Priority, Task};
-use crate::traits::PlatformExecutor;
+use std::{future::Future, sync::Arc, time::Duration};
+
 use parking_lot::Mutex;
-use std::future::Future;
-use std::sync::Arc;
-use std::time::Duration;
 use tokio::runtime::Runtime;
+
+use crate::{
+    task::{Priority, Task},
+    traits::PlatformExecutor,
+};
 
 /// Background executor for multi-threaded async tasks
 ///
@@ -114,8 +116,8 @@ impl Default for BackgroundExecutor {
 /// Foreground executor for UI thread task execution
 ///
 /// Executes tasks on the main UI thread using a message queue pattern.
-/// Tasks are submitted via an unbounded flume channel and must be polled/drained
-/// by the platform's message loop.
+/// Tasks are submitted via an unbounded flume channel and must be
+/// polled/drained by the platform's message loop.
 ///
 /// # Architecture
 ///
@@ -245,8 +247,9 @@ impl Default for ForegroundExecutor {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    use super::*;
 
     #[test]
     fn test_background_executor_spawn() {

@@ -7,10 +7,13 @@
 //!
 //! Run with: cargo run --example input_test
 
-use flui_platform::{current_platform, WindowOptions};
-use flui_types::geometry::{px, Size};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+
+use flui_platform::{WindowOptions, current_platform};
+use flui_types::geometry::{Size, px};
 
 fn main() {
     // Initialize logging with detailed trace output

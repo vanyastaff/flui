@@ -3,8 +3,7 @@
 //! This module provides types for debugging and introspection,
 //! similar to Flutter's diagnostics system.
 
-use std::fmt;
-use std::str::FromStr;
+use std::{fmt, str::FromStr};
 
 /// The level of importance of a diagnostic message.
 ///
@@ -25,7 +24,8 @@ use std::str::FromStr;
 pub enum DiagnosticLevel {
     /// Hidden diagnostic level.
     Hidden,
-    /// A diagnostic that is likely to be low-value but may provide debugging value.
+    /// A diagnostic that is likely to be low-value but may provide debugging
+    /// value.
     Fine,
     /// A diagnostic useful for debugging.
     Debug,
@@ -667,7 +667,9 @@ impl fmt::Display for DiagnosticsNode {
 /// # Examples
 ///
 /// ```rust
-/// use flui_foundation::{Diagnosticable, DiagnosticsBuilder, DiagnosticsNode, DiagnosticsProperty};
+/// use flui_foundation::{
+///     Diagnosticable, DiagnosticsBuilder, DiagnosticsNode, DiagnosticsProperty,
+/// };
 ///
 /// #[derive(Debug)]
 /// struct MyView {

@@ -20,17 +20,6 @@ pub mod child_storage;
 pub mod generic;
 pub mod unified;
 
-pub use lifecycle::Lifecycle;
-pub use notification::{
-    BoxedNotification, DragEndNotification, DragStartNotification, FocusNotification,
-    KeepAliveNotification, LayoutChangedNotification, NotifiableElement, Notification,
-    NotificationCallback, NotificationHandler, NotificationNode, ScrollNotification,
-    SizeChangedNotification,
-};
-pub use render_object_element::{RenderObjectElement, RenderSlot, RenderTreeRootElement};
-pub use root::{RootElement, RootElementImpl};
-pub use slot::{ElementSlot, IndexedSlot, IndexedSlotBuilder};
-
 // Re-export commonly used arity and generic types
 pub use arity::{ElementArity, Leaf, Optional, Single, Variable};
 pub use behavior::{
@@ -42,6 +31,16 @@ pub use child_storage::{
     VariableChildStorage,
 };
 pub use generic::ElementCore;
+pub use lifecycle::Lifecycle;
+pub use notification::{
+    BoxedNotification, DragEndNotification, DragStartNotification, FocusNotification,
+    KeepAliveNotification, LayoutChangedNotification, NotifiableElement, Notification,
+    NotificationCallback, NotificationHandler, NotificationNode, ScrollNotification,
+    SizeChangedNotification,
+};
+pub use render_object_element::{RenderObjectElement, RenderSlot, RenderTreeRootElement};
+pub use root::{RootElement, RootElementImpl};
+pub use slot::{ElementSlot, IndexedSlot, IndexedSlotBuilder};
 pub use unified::Element;
 
 // ============================================================================

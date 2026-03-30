@@ -7,18 +7,26 @@
 //! - ElementCore<V, A> for common element logic
 //! - B: ElementBehavior<V, A> for view-specific build logic
 
-use super::arity::ElementArity;
-use super::behavior::{ElementBehavior, InheritedBehavior, RenderBehavior, StatefulBehavior};
-use super::generic::ElementCore;
-use super::{RenderObjectElement, RenderSlot, Single, Variable};
-use crate::element::Lifecycle;
-use crate::view::{ElementBase, InheritedView, RenderView, StatefulView, View};
+use std::{
+    any::{Any, TypeId},
+    marker::PhantomData,
+    sync::Arc,
+};
+
 use flui_foundation::{ElementId, RenderId};
 use flui_rendering::pipeline::PipelineOwner;
 use parking_lot::RwLock;
-use std::any::{Any, TypeId};
-use std::marker::PhantomData;
-use std::sync::Arc;
+
+use super::{
+    RenderObjectElement, RenderSlot, Single, Variable,
+    arity::ElementArity,
+    behavior::{ElementBehavior, InheritedBehavior, RenderBehavior, StatefulBehavior},
+    generic::ElementCore,
+};
+use crate::{
+    element::Lifecycle,
+    view::{ElementBase, InheritedView, RenderView, StatefulView, View},
+};
 
 // ============================================================================
 // Unified Element
@@ -182,7 +190,8 @@ where
 }
 
 // ============================================================================
-// RenderObjectElement Implementation for Element<V, Variable, RenderBehavior<V>>
+// RenderObjectElement Implementation for Element<V, Variable,
+// RenderBehavior<V>>
 // ============================================================================
 
 impl<V> RenderObjectElement for Element<V, Variable, RenderBehavior<V>>
@@ -228,18 +237,18 @@ where
                 slot
             );
 
-            if let Some(parent_id) = self.behavior.render_id() {
-                if let Some(ref pipeline_owner) = self.core.pipeline_owner() {
-                    let mut owner = pipeline_owner.write();
-                    let render_tree = owner.render_tree_mut();
+            if let Some(parent_id) = self.behavior.render_id()
+                && let Some(pipeline_owner) = self.core.pipeline_owner()
+            {
+                let mut owner = pipeline_owner.write();
+                let render_tree = owner.render_tree_mut();
 
-                    if let Some(child_node) = render_tree.get_mut(*child_render_id) {
-                        child_node.set_parent(Some(parent_id));
-                    }
+                if let Some(child_node) = render_tree.get_mut(*child_render_id) {
+                    child_node.set_parent(Some(parent_id));
+                }
 
-                    if let Some(parent_node) = render_tree.get_mut(parent_id) {
-                        parent_node.add_child(*child_render_id);
-                    }
+                if let Some(parent_node) = render_tree.get_mut(parent_id) {
+                    parent_node.add_child(*child_render_id);
                 }
             }
         }
@@ -266,18 +275,18 @@ where
                 slot
             );
 
-            if let Some(parent_id) = self.behavior.render_id() {
-                if let Some(ref pipeline_owner) = self.core.pipeline_owner() {
-                    let mut owner = pipeline_owner.write();
-                    let render_tree = owner.render_tree_mut();
+            if let Some(parent_id) = self.behavior.render_id()
+                && let Some(pipeline_owner) = self.core.pipeline_owner()
+            {
+                let mut owner = pipeline_owner.write();
+                let render_tree = owner.render_tree_mut();
 
-                    if let Some(parent_node) = render_tree.get_mut(parent_id) {
-                        parent_node.remove_child(*child_render_id);
-                    }
+                if let Some(parent_node) = render_tree.get_mut(parent_id) {
+                    parent_node.remove_child(*child_render_id);
+                }
 
-                    if let Some(child_node) = render_tree.get_mut(*child_render_id) {
-                        child_node.set_parent(None);
-                    }
+                if let Some(child_node) = render_tree.get_mut(*child_render_id) {
+                    child_node.set_parent(None);
                 }
             }
         }

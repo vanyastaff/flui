@@ -112,19 +112,23 @@ macro_rules! impl_inherited_view {
     };
 }
 
-// NOTE: InheritedElement implementation has been moved to unified Element architecture.
-// See crates/flui-view/src/element/unified.rs and element/behavior.rs
-// The type alias is exported from element/mod.rs:
+// NOTE: InheritedElement implementation has been moved to unified Element
+// architecture. See crates/flui-view/src/element/unified.rs and
+// element/behavior.rs The type alias is exported from element/mod.rs:
 //   pub type InheritedElement<V> = Element<V, Single, InheritedBehavior<V>>;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::element::{InheritedBehavior, Lifecycle};
-    use crate::view::{ElementBase, View};
-    use crate::InheritedElement;
-    use flui_foundation::ElementId;
     use std::any::TypeId;
+
+    use flui_foundation::ElementId;
+
+    use super::*;
+    use crate::{
+        InheritedElement,
+        element::{InheritedBehavior, Lifecycle},
+        view::{ElementBase, View},
+    };
 
     #[derive(Clone, Debug, PartialEq)]
     struct TestTheme {

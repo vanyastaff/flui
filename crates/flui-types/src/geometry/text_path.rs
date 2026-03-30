@@ -1,8 +1,8 @@
 //! Text path transformation helpers
 //!
-//! This module provides mathematical utilities for calculating character positions
-//! along various paths (arc, wave, spiral, etc.). These are low-level primitives
-//! for developers to build custom text effects.
+//! This module provides mathematical utilities for calculating character
+//! positions along various paths (arc, wave, spiral, etc.). These are low-level
+//! primitives for developers to build custom text effects.
 //!
 //! # Design Philosophy
 //!
@@ -35,11 +35,13 @@
 //! }
 //! ```
 
-use super::{px, Pixels};
 use std::f64::consts::{PI, TAU};
 
-use crate::geometry::traits::{NumericUnit, Unit};
-use crate::Point;
+use super::{Pixels, px};
+use crate::{
+    Point,
+    geometry::traits::{NumericUnit, Unit},
+};
 
 #[derive(Debug, Clone, Copy)]
 pub struct CharTransform<T: Unit> {

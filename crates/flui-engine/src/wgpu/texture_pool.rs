@@ -3,10 +3,10 @@
 //! Manages GPU texture allocation and reuse to minimize allocation overhead
 //! during shader mask rendering.
 
-use flui_types::{geometry::Pixels, Size};
+use std::{collections::HashMap, sync::Arc};
+
+use flui_types::{Size, geometry::Pixels};
 use parking_lot::Mutex;
-use std::collections::HashMap;
-use std::sync::Arc;
 
 /// Texture descriptor for identifying pooled textures
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -21,6 +21,7 @@ pub struct TextureDesc {
 
 impl TextureDesc {
     /// Create texture descriptor from size
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn from_size(size: Size<Pixels>) -> Self {
         Self {
             width: size.width.0.ceil() as u32,
@@ -49,7 +50,7 @@ pub enum TextureFormat {
 
 impl TextureFormat {
     /// Get bytes per pixel for this format
-    pub fn bytes_per_pixel(&self) -> usize {
+    pub fn bytes_per_pixel(self) -> usize {
         match self {
             TextureFormat::Rgba8 => 4,       // 4 bytes (8 bits × 4 channels)
             TextureFormat::Rgba16Float => 8, // 8 bytes (16 bits × 4 channels)
@@ -130,11 +131,11 @@ impl TexturePoolInner {
     }
 
     fn acquire_texture(&mut self, desc: TextureDesc) -> Option<TextureDesc> {
-        if let Some(textures) = self.available.get_mut(&desc) {
-            if let Some(texture_desc) = textures.pop() {
-                tracing::trace!("Texture pool hit: {:?}", desc);
-                return Some(texture_desc);
-            }
+        if let Some(textures) = self.available.get_mut(&desc)
+            && let Some(texture_desc) = textures.pop()
+        {
+            tracing::trace!("Texture pool hit: {:?}", desc);
+            return Some(texture_desc);
         }
         None
     }
@@ -167,7 +168,7 @@ impl TexturePoolInner {
     }
 
     fn clear(&mut self) {
-        let total_textures: usize = self.available.values().map(|v| v.len()).sum();
+        let total_textures: usize = self.available.values().map(std::vec::Vec::len).sum();
         self.available.clear();
         self.total_allocated -= total_textures;
         self.total_memory_bytes = 0;
@@ -243,7 +244,7 @@ impl TexturePool {
         PoolStats {
             total_allocated: pool.total_allocated,
             total_memory_bytes: pool.total_memory_bytes,
-            available_count: pool.available.values().map(|v| v.len()).sum(),
+            available_count: pool.available.values().map(std::vec::Vec::len).sum(),
         }
     }
 

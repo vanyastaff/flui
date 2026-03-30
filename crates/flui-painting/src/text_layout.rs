@@ -5,14 +5,17 @@
 
 #[cfg(feature = "text")]
 mod inner {
+    use std::sync::OnceLock;
+
     use cosmic_text::{Attrs, Buffer, Cursor, Family, FontSystem, Metrics, Shaping, Style, Weight};
-    use flui_types::geometry::{px, Offset, Pixels, Rect, Size};
-    use flui_types::typography::{
-        FontStyle, FontWeight, LineMetrics, TextAffinity, TextBox, TextDirection, TextPosition,
-        TextRange, TextStyle,
+    use flui_types::{
+        geometry::{Offset, Pixels, Rect, Size, px},
+        typography::{
+            FontStyle, FontWeight, LineMetrics, TextAffinity, TextBox, TextDirection, TextPosition,
+            TextRange, TextStyle,
+        },
     };
     use parking_lot::Mutex;
-    use std::sync::OnceLock;
 
     /// Global font system instance.
     ///
@@ -419,8 +422,8 @@ mod inner {
             let mut info = Vec::new();
 
             for run in self.buffer.layout_runs() {
-                let start_index = run.glyphs.first().map(|g| g.start).unwrap_or(0);
-                let end_index = run.glyphs.last().map(|g| g.end).unwrap_or(start_index);
+                let start_index = run.glyphs.first().map_or(0, |g| g.start);
+                let end_index = run.glyphs.last().map_or(start_index, |g| g.end);
 
                 info.push(LineInfo {
                     line_number: run.line_i,
@@ -480,6 +483,7 @@ mod inner {
         /// Returns bounding boxes for the given text range.
         ///
         /// Used for rendering text selection highlights.
+        #[allow(clippy::needless_pass_by_value)] // TextRange is small (2 usize), pass by value is idiomatic
         pub fn get_boxes_for_range(&self, range: TextRange) -> Vec<TextBox> {
             let mut boxes = Vec::new();
 
@@ -487,7 +491,7 @@ mod inner {
                 let mut line_start_x: Option<f32> = None;
                 let mut line_end_x = 0.0f32;
 
-                for glyph in run.glyphs.iter() {
+                for glyph in run.glyphs {
                     // Check if glyph overlaps with range
                     if glyph.end > range.start && glyph.start < range.end {
                         if line_start_x.is_none() {
@@ -536,7 +540,7 @@ mod inner {
             let mut char_positions: Vec<usize> = Vec::new();
 
             for run in self.buffer.layout_runs() {
-                for glyph in run.glyphs.iter() {
+                for glyph in run.glyphs {
                     // Each glyph represents a character range
                     // This is simplified - real implementation would need actual text
                     char_positions.push(glyph.start);
@@ -951,8 +955,10 @@ pub use inner::*;
 /// Fallback implementation when text feature is disabled.
 #[cfg(not(feature = "text"))]
 mod fallback {
-    use flui_types::geometry::{px, Pixels, Size};
-    use flui_types::typography::TextDirection;
+    use flui_types::{
+        geometry::{Pixels, Size, px},
+        typography::TextDirection,
+    };
 
     /// Text layout result (stub).
     #[derive(Debug, Clone)]

@@ -3,15 +3,20 @@
 //! These tests verify that all components work together correctly
 //! in realistic usage scenarios.
 
-use flui_foundation::{
-    error::ErrorContext, ChangeNotifier, DiagnosticLevel, Diagnosticable, DiagnosticsBuilder,
-    DiagnosticsNode, ElementId, FoundationError, HashedObserverList, Key, LayerId, Listenable,
-    ListenerId, MergedListenable, ObserverId, ObserverList, RenderId, Result, SemanticsId,
-    SyncObserverList, TargetPlatform, ValueNotifier, ViewId,
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+
+use flui_foundation::{
+    ChangeNotifier, DiagnosticLevel, Diagnosticable, DiagnosticsBuilder, DiagnosticsNode,
+    ElementId, FoundationError, HashedObserverList, Key, LayerId, Listenable, ListenerId,
+    MergedListenable, ObserverId, ObserverList, RenderId, Result, SemanticsId, SyncObserverList,
+    TargetPlatform, ValueNotifier, ViewId, error::ErrorContext,
+};
 
 // ============================================================================
 // ID System Integration Tests

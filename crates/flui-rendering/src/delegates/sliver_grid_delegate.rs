@@ -3,8 +3,7 @@
 //! [`SliverGridDelegate`] allows users to define grid layout algorithms
 //! for slivers, controlling the number of columns, spacing, and child sizes.
 
-use std::any::Any;
-use std::fmt::Debug;
+use std::{any::Any, fmt::Debug};
 
 use crate::constraints::SliverConstraints;
 
@@ -54,7 +53,8 @@ impl SliverGridLayout {
         }
     }
 
-    /// Returns the minimum index of children visible at the given scroll offset.
+    /// Returns the minimum index of children visible at the given scroll
+    /// offset.
     pub fn get_min_child_index_for_scroll_offset(&self, scroll_offset: f32) -> usize {
         if self.main_axis_stride <= 0.0 {
             return 0;
@@ -63,7 +63,8 @@ impl SliverGridLayout {
         row * self.cross_axis_count
     }
 
-    /// Returns the maximum index of children visible at the given scroll offset.
+    /// Returns the maximum index of children visible at the given scroll
+    /// offset.
     pub fn get_max_child_index_for_scroll_offset(&self, scroll_offset: f32) -> usize {
         if self.main_axis_stride <= 0.0 {
             return 0;

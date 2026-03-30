@@ -49,16 +49,20 @@
 //! binding.draw_frame();
 //! ```
 
-use crate::owner::BuildOwner;
-use crate::tree::ElementTree;
-use crate::view::View;
-use flui_foundation::{impl_binding_singleton, BindingBase, ElementId};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU32, Ordering},
+    },
+};
+
+use flui_foundation::{BindingBase, ElementId, impl_binding_singleton};
 use flui_rendering::pipeline::PipelineOwner;
 use parking_lot::RwLock;
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::Arc;
+
+use crate::{owner::BuildOwner, tree::ElementTree, view::View};
 
 // ============================================================================
 // Route Information
@@ -252,8 +256,9 @@ pub trait WidgetsBindingObserver: Send + Sync {
 
     /// Called at the start of a predictive back gesture.
     ///
-    /// Return `true` to handle the gesture (start animation), `false` otherwise.
-    /// If `true`, subsequent gesture events will be sent to this observer.
+    /// Return `true` to handle the gesture (start animation), `false`
+    /// otherwise. If `true`, subsequent gesture events will be sent to this
+    /// observer.
     ///
     /// # Flutter Equivalent
     ///
@@ -307,7 +312,8 @@ pub trait WidgetsBindingObserver: Send + Sync {
     /// Corresponds to `WidgetsBindingObserver.didChangeViewFocus()`.
     fn did_change_view_focus(&self, _event: ViewFocusEvent) {}
 
-    /// Called when a request is received from the system to exit the application.
+    /// Called when a request is received from the system to exit the
+    /// application.
     ///
     /// Return `AppExitResponse::Cancel` to prevent exit.
     /// All observers are asked before exiting.
@@ -470,9 +476,10 @@ impl WidgetsBinding {
 
     /// Set the PipelineOwner for render tree management.
     ///
-    /// This should be called by the application binding (e.g., WidgetsFlutterBinding)
-    /// before attaching the root widget. The PipelineOwner will be propagated
-    /// to elements during mounting so they can create their RenderObjects.
+    /// This should be called by the application binding (e.g.,
+    /// WidgetsFlutterBinding) before attaching the root widget. The
+    /// PipelineOwner will be propagated to elements during mounting so they
+    /// can create their RenderObjects.
     ///
     /// # Flutter Equivalent
     ///
@@ -600,8 +607,8 @@ impl WidgetsBinding {
 
     /// Schedule the root element and all its descendants for rebuild.
     ///
-    /// This is useful for animation demos where the entire tree needs to rebuild
-    /// each frame to reflect updated animation values.
+    /// This is useful for animation demos where the entire tree needs to
+    /// rebuild each frame to reflect updated animation values.
     pub fn schedule_root_rebuild(&self) {
         let mut inner = self.inner.write();
         if let Some(root_id) = inner.root_element {
@@ -654,15 +661,14 @@ impl WidgetsBinding {
         #[cfg(debug_assertions)]
         {
             let inner = self.inner.read();
-            if inner.debug_building_dirty_elements {
-                panic!(
-                    "Build scheduled during frame.\n\
-                     While the widget tree was being built, laid out, and painted, \
-                     a new frame was scheduled to rebuild the widget tree.\n\
-                     This might be because setState() was called from a layout or \
-                     paint callback."
-                );
-            }
+            assert!(
+                !inner.debug_building_dirty_elements,
+                "Build scheduled during frame.\n\
+                 While the widget tree was being built, laid out, and painted, \
+                 a new frame was scheduled to rebuild the widget tree.\n\
+                 This might be because setState() was called from a layout or \
+                 paint callback."
+            );
         }
 
         // Request a frame from the scheduler (ensureVisualUpdate)
@@ -687,8 +693,9 @@ impl WidgetsBinding {
 
     /// Pump the build and rendering pipeline to generate a frame.
     ///
-    /// This method is called by `handleDrawFrame`, which is called automatically
-    /// by the engine when it is time to lay out and paint a frame.
+    /// This method is called by `handleDrawFrame`, which is called
+    /// automatically by the engine when it is time to lay out and paint a
+    /// frame.
     ///
     /// # Frame phases
     ///
@@ -699,8 +706,8 @@ impl WidgetsBinding {
     ///
     /// 3. **Paint phase**: (handled by RendererBinding.drawFrame)
     ///
-    /// 4. **Finalization phase**: Inactive elements are unmounted.
-    ///    This causes [State.dispose] to be invoked on removed widgets.
+    /// 4. **Finalization phase**: Inactive elements are unmounted. This causes
+    ///    [State.dispose] to be invoked on removed widgets.
     ///
     /// # Panics
     ///
@@ -934,8 +941,8 @@ impl WidgetsBinding {
 
     /// Handle a pop route request from the system.
     ///
-    /// Notifies observers until one returns `true`, meaning it handled the request.
-    /// If none return `true`, the application may quit.
+    /// Notifies observers until one returns `true`, meaning it handled the
+    /// request. If none return `true`, the application may quit.
     ///
     /// # Flutter Equivalent
     ///
@@ -988,11 +995,11 @@ impl WidgetsBinding {
             }
         }
 
-        if !handling_observers.is_empty() {
+        if handling_observers.is_empty() {
+            false
+        } else {
             self.inner.write().back_gesture_observers = handling_observers;
             true
-        } else {
-            false
         }
     }
 
@@ -1006,7 +1013,8 @@ impl WidgetsBinding {
 
     /// Handle commit of a predictive back gesture.
     ///
-    /// If no observer was handling the gesture, falls back to `handle_pop_route`.
+    /// If no observer was handling the gesture, falls back to
+    /// `handle_pop_route`.
     pub async fn handle_commit_back_gesture(&self) {
         let observers: Vec<_> = self.inner.read().back_gesture_observers.clone();
         if observers.is_empty() {
@@ -1110,11 +1118,14 @@ pub fn create_shared_binding() -> Arc<RwLock<WidgetsBinding>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use flui_foundation::HasInstance;
     use std::any::TypeId;
 
-    /// A leaf element that doesn't create children (prevents infinite recursion)
+    use flui_foundation::HasInstance;
+
+    use super::*;
+
+    /// A leaf element that doesn't create children (prevents infinite
+    /// recursion)
     struct LeafElement {
         depth: usize,
         lifecycle: crate::Lifecycle,

@@ -1,7 +1,8 @@
 //! Configurable depth-first iterator.
 
-use crate::traits::TreeNav;
 use flui_foundation::Identifier;
+
+use crate::traits::TreeNav;
 
 /// Depth-first traversal order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -189,10 +190,13 @@ impl<I: Identifier, T: TreeNav<I>> std::iter::FusedIterator for DepthFirstIter<'
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::iter::{Ancestors, DescendantsWithDepth};
-    use crate::traits::TreeRead;
     use flui_foundation::ElementId;
+
+    use super::*;
+    use crate::{
+        iter::{Ancestors, DescendantsWithDepth},
+        traits::TreeRead,
+    };
 
     struct TestNode {
         parent: Option<ElementId>,

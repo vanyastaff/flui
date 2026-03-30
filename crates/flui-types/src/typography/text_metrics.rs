@@ -63,7 +63,8 @@ impl Default for TextPosition {
 
 /// Range of text specified by start and end offsets.
 ///
-/// Represents a contiguous span of text characters. Start is inclusive, end is exclusive.
+/// Represents a contiguous span of text characters. Start is inclusive, end is
+/// exclusive.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextRange {
     /// Start offset (inclusive).
@@ -185,8 +186,9 @@ impl Default for TextRange {
 
 /// Text selection with base and extent positions.
 ///
-/// Represents a text selection with separate tracking of where it started (base)
-/// and where it currently ends (extent). This allows for directional selections.
+/// Represents a text selection with separate tracking of where it started
+/// (base) and where it currently ends (extent). This allows for directional
+/// selections.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextSelection {
     /// Base position (where selection started).

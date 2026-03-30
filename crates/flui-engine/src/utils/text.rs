@@ -6,9 +6,10 @@
 //!
 //! This is slower than raster text but supports arbitrary transformations.
 
-use flui_types::{geometry::px, Color, Pixels, Point};
-use glam::Mat4;
 use std::sync::Arc;
+
+use flui_types::{Color, Pixels, Point, geometry::px};
+use glam::Mat4;
 use thiserror::Error;
 
 /// Simple 2D vertex with position and color
@@ -79,7 +80,8 @@ impl<'a> TextRenderParams<'a> {
 
 /// Vector text renderer that converts glyphs to paths and tessellates them
 ///
-/// Note: Debug is not derived because `FillTessellator` doesn't implement Debug.
+/// Note: Debug is not derived because `FillTessellator` doesn't implement
+/// Debug.
 #[allow(missing_debug_implementations)]
 pub struct VectorTextRenderer {
     /// Cached font face data
@@ -133,7 +135,7 @@ impl VectorTextRenderer {
                 .ok_or(VectorTextError::GlyphNotFound(ch))?;
 
             // Calculate scale for this glyph
-            let scale = params.font_size / face.units_per_em() as f32;
+            let scale = params.font_size / f32::from(face.units_per_em());
 
             // Create a new path builder for this glyph
             let mut path_builder = lyon::path::Builder::new();
@@ -152,7 +154,7 @@ impl VectorTextRenderer {
             if !has_outline {
                 // No outline (e.g., space character) - skip rendering but advance cursor
                 if let Some(advance) = face.glyph_hor_advance(glyph_id) {
-                    x_offset += px(advance as f32 * scale);
+                    x_offset += px(f32::from(advance) * scale);
                 }
                 x_offset += px(params.letter_spacing);
                 if ch.is_whitespace() {
@@ -180,9 +182,10 @@ impl VectorTextRenderer {
                 .map_err(|_| VectorTextError::TessellationFailed)?;
 
             // Convert vertices with transform applied
+            #[allow(clippy::cast_possible_truncation)]
             let vertex_offset = vertices.len() as u32;
 
-            for point in buffers.vertices.iter() {
+            for point in &buffers.vertices {
                 let local_x = point.x + x_offset.0;
                 let local_y = point.y + params.position.y.0;
 
@@ -208,13 +211,13 @@ impl VectorTextRenderer {
             }
 
             // Add indices with offset
-            for index in buffers.indices.iter() {
-                indices.push(vertex_offset + (*index as u32));
+            for index in &buffers.indices {
+                indices.push(vertex_offset + u32::from(*index));
             }
 
             // Advance cursor
             if let Some(advance) = face.glyph_hor_advance(glyph_id) {
-                x_offset += px(advance as f32 * scale);
+                x_offset += px(f32::from(advance) * scale);
             }
 
             x_offset += px(params.letter_spacing);
@@ -229,7 +232,8 @@ impl VectorTextRenderer {
 
     /// Check if vector rendering is needed based on transform
     ///
-    /// Returns true if the transform has skew, perspective, or non-uniform scale
+    /// Returns true if the transform has skew, perspective, or non-uniform
+    /// scale
     #[must_use]
     pub fn needs_vector_rendering(transform: &Mat4) -> bool {
         let m = transform.to_cols_array_2d();

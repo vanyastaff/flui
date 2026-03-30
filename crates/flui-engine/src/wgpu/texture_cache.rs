@@ -30,11 +30,11 @@
 //!   Reuse GPU texture             ← Zero overhead!
 //! ```
 //!
-//! **Result:** 100% reuse after first load, ~1000x faster for repeated textures!
+//! **Result:** 100% reuse after first load, ~1000x faster for repeated
+//! textures!
 
-use std::collections::HashMap;
-use std::path::Path;
-use std::sync::Arc;
+use std::{collections::HashMap, path::Path, sync::Arc};
+
 use wgpu::{
     AddressMode, Device, Extent3d, FilterMode, Origin3d, Queue, Sampler, SamplerDescriptor,
     TexelCopyBufferLayout, TexelCopyTextureInfo, Texture, TextureDescriptor, TextureDimension,
@@ -60,8 +60,10 @@ impl TextureId {
 
     /// Create from raw bytes with hash
     pub fn from_data(data: &[u8]) -> Self {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
+        use std::{
+            collections::hash_map::DefaultHasher,
+            hash::{Hash, Hasher},
+        };
 
         let mut hasher = DefaultHasher::new();
         data.hash(&mut hasher);
@@ -223,10 +225,10 @@ impl TextureCache {
         let texture = match &id {
             TextureId::Path(path) => self.load_from_file(path)?,
             TextureId::Data(_) => {
-                return Err("Cannot load TextureId::Data without explicit data".to_string())
+                return Err("Cannot load TextureId::Data without explicit data".to_string());
             }
             TextureId::Named(_) => {
-                return Err("Cannot load TextureId::Named without explicit data".to_string())
+                return Err("Cannot load TextureId::Named without explicit data".to_string());
             }
         };
 
@@ -251,6 +253,8 @@ impl TextureCache {
         height: u32,
         data: &[u8],
     ) -> Result<&CachedTexture, String> {
+        use std::collections::hash_map::Entry;
+
         // Validate data size
         let expected_size = (width * height * 4) as usize;
         if data.len() != expected_size {
@@ -260,8 +264,6 @@ impl TextureCache {
                 data.len()
             ));
         }
-
-        use std::collections::hash_map::Entry;
 
         // Use entry API to avoid double lookup
         match self.textures.entry(id) {
@@ -314,7 +316,7 @@ impl TextureCache {
                     },
                 );
 
-                let view = texture.create_view(&Default::default());
+                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
                 let cached_texture = CachedTexture::new(texture, view, width, height);
 
                 Ok(entry.insert(cached_texture))
@@ -332,9 +334,9 @@ impl TextureCache {
 
         // Load and decode image
         let img = ImageReader::open(path)
-            .map_err(|e| format!("Failed to open image file '{}': {}", path, e))?
+            .map_err(|e| format!("Failed to open image file '{path}': {e}"))?
             .decode()
-            .map_err(|e| format!("Failed to decode image '{}': {}", path, e))?;
+            .map_err(|e| format!("Failed to decode image '{path}': {e}"))?;
 
         // Convert to RGBA8
         let rgba = img.to_rgba8();
@@ -346,7 +348,7 @@ impl TextureCache {
         let queue = &self.queue;
 
         let texture = device.create_texture(&TextureDescriptor {
-            label: Some(&format!("Texture: {}", path)),
+            label: Some(&format!("Texture: {path}")),
             size: Extent3d {
                 width,
                 height,
@@ -381,7 +383,7 @@ impl TextureCache {
             },
         );
 
-        let view = texture.create_view(&Default::default());
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         Ok(CachedTexture::new(texture, view, width, height))
     }
 

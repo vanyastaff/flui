@@ -1,15 +1,15 @@
 //! Android page-aligned memory allocator for 16KB page size support
 //!
-//! This module provides page-aligned memory allocation to support Android devices
-//! with 16KB page sizes (Pixel 9, Galaxy S25, etc.). This is required for Play Store
-//! compliance with API 35+ (Android 16).
+//! This module provides page-aligned memory allocation to support Android
+//! devices with 16KB page sizes (Pixel 9, Galaxy S25, etc.). This is required
+//! for Play Store compliance with API 35+ (Android 16).
 //!
 //! # Background
 //!
 //! Traditional Android devices use 4KB page sizes, but newer flagship devices
-//! (starting with Pixel 9 in Sept 2024) use 16KB page sizes for better performance.
-//! Vulkan buffer allocations must be aligned to the system page size, or the app
-//! will crash with SIGBUS errors.
+//! (starting with Pixel 9 in Sept 2024) use 16KB page sizes for better
+//! performance. Vulkan buffer allocations must be aligned to the system page
+//! size, or the app will crash with SIGBUS errors.
 //!
 //! # Usage
 //!
@@ -21,9 +21,11 @@
 //! assert_eq!(buffer.as_ptr() as usize % get_page_size(), 0);
 //! ```
 
-use std::alloc::{alloc, dealloc, Layout};
-use std::fmt;
-use std::ptr::NonNull;
+use std::{
+    alloc::{Layout, alloc, dealloc},
+    fmt,
+    ptr::NonNull,
+};
 
 /// Error returned when page-aligned allocation fails.
 #[derive(Debug, Clone, Copy)]

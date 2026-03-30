@@ -3,7 +3,7 @@
 //! Demonstrates the PlatformTextSystem API for font enumeration,
 //! font resolution, metrics, glyph lookup, and text layout.
 
-use flui_platform::{current_platform, Font, FontRun, FontWeight};
+use flui_platform::{Font, FontRun, FontWeight, current_platform};
 
 fn main() {
     // Initialize tracing

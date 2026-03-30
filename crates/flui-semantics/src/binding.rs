@@ -1,16 +1,18 @@
 //! Semantics binding for platform integration.
 //!
-//! This module provides the binding between the semantics system and the platform.
-//! It manages when semantics are enabled/disabled and handles accessibility features.
+//! This module provides the binding between the semantics system and the
+//! platform. It manages when semantics are enabled/disabled and handles
+//! accessibility features.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+    Arc,
+};
 
 use flui_foundation::{impl_binding_singleton, BindingBase};
 use parking_lot::RwLock;
 
-use crate::event::SemanticsEvent;
-use crate::role::Assertiveness;
+use crate::{event::SemanticsEvent, role::Assertiveness};
 
 // ============================================================================
 // AccessibilityFeatures
@@ -24,6 +26,7 @@ use crate::role::Assertiveness;
 /// # Flutter Equivalence
 ///
 /// Corresponds to Flutter's `AccessibilityFeatures` from dart:ui.
+#[allow(clippy::struct_excessive_bools)] // Mirrors Flutter's AccessibilityFeatures flags
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AccessibilityFeatures {
     /// Whether accessible navigation is enabled.
@@ -151,9 +154,11 @@ pub struct SemanticsBinding {
     accessibility_features: RwLock<AccessibilityFeatures>,
 
     /// Callback for accessibility announcements.
+    #[allow(clippy::type_complexity)]
     announce_callback: RwLock<Option<Arc<dyn Fn(&str, Assertiveness) + Send + Sync>>>,
 
     /// Callback for semantics action events.
+    #[allow(clippy::type_complexity)]
     action_callback: RwLock<Option<Arc<dyn Fn(SemanticsActionEvent) + Send + Sync>>>,
 }
 
@@ -400,6 +405,7 @@ impl SemanticsService {
     }
 
     /// Sends a semantics event to the platform.
+    #[allow(clippy::needless_pass_by_value)] // Will be consumed when routed to platform API
     pub fn send_event(event: SemanticsEvent) {
         tracing::debug!(event = ?event, "SemanticsService::send_event");
         // TODO: Route to platform accessibility API

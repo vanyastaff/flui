@@ -5,10 +5,8 @@
 
 use flui_foundation::RenderId;
 
+use super::{entry::RenderEntry, links::NodeLinks};
 use crate::protocol::{BoxProtocol, RenderObject, SliverProtocol};
-
-use super::entry::RenderEntry;
-use super::links::NodeLinks;
 
 /// Render node enum for heterogeneous tree storage.
 ///
@@ -153,7 +151,8 @@ impl RenderNode {
         self.as_box().expect("Expected Box protocol node")
     }
 
-    /// Returns a mutable reference to the Box entry, panics if this is not a Box node.
+    /// Returns a mutable reference to the Box entry, panics if this is not a
+    /// Box node.
     #[inline]
     pub fn as_box_unchecked_mut(&mut self) -> &mut RenderEntry<BoxProtocol> {
         self.as_box_mut().expect("Expected Box protocol node")
@@ -168,7 +167,8 @@ impl RenderNode {
         }
     }
 
-    /// Returns a mutable reference to the Sliver entry, if this is a Sliver node.
+    /// Returns a mutable reference to the Sliver entry, if this is a Sliver
+    /// node.
     #[inline]
     pub fn as_sliver_mut(&mut self) -> Option<&mut RenderEntry<SliverProtocol>> {
         match self {
@@ -324,12 +324,14 @@ impl RenderNode {
         }
     }
 
-    /// Returns the geometry for this node (Size for Box, SliverGeometry for Sliver).
+    /// Returns the geometry for this node (Size for Box, SliverGeometry for
+    /// Sliver).
     pub fn geometry_box(&self) -> Option<flui_types::Size> {
         self.as_box().and_then(|entry| entry.state().geometry())
     }
 
-    /// Returns the sliver geometry for Sliver protocol nodes (None for Box nodes).
+    /// Returns the sliver geometry for Sliver protocol nodes (None for Box
+    /// nodes).
     pub fn geometry_sliver(&self) -> Option<crate::constraints::SliverGeometry> {
         self.as_sliver().and_then(|entry| entry.state().geometry())
     }
@@ -373,10 +375,10 @@ impl RenderNode {
 
 #[cfg(test)]
 mod tests {
+    use flui_types::{Size, geometry::px};
+
     use super::*;
     use crate::objects::RenderColoredBox;
-    use flui_types::geometry::px;
-    use flui_types::Size;
 
     #[test]
     fn test_render_node_box_creation() {

@@ -26,9 +26,10 @@ impl Default for OverlayId {
 }
 
 /// Position of an overlay relative to the screen or anchor.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum OverlayPosition {
     /// Centered on screen.
+    #[default]
     Center,
     /// At specific screen coordinates.
     Absolute {
@@ -69,18 +70,13 @@ pub enum OverlayPosition {
     Fill,
 }
 
-impl Default for OverlayPosition {
-    fn default() -> Self {
-        Self::Center
-    }
-}
-
 /// Priority level for overlay stacking.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum OverlayPriority {
     /// Background overlays (below normal content).
     Background = 0,
     /// Normal priority (default).
+    #[default]
     Normal = 100,
     /// Above normal content.
     High = 200,
@@ -90,12 +86,6 @@ pub enum OverlayPriority {
     Tooltip = 400,
     /// Debug overlays (always on top).
     Debug = 500,
-}
-
-impl Default for OverlayPriority {
-    fn default() -> Self {
-        Self::Normal
-    }
 }
 
 /// A single overlay entry that can be added to the overlay manager.

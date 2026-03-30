@@ -1,21 +1,23 @@
 //! Wgpu-based CommandRenderer implementation
 //!
-//! Production rendering backend executing drawing commands via GPU acceleration.
+//! Production rendering backend executing drawing commands via GPU
+//! acceleration.
 
-use super::commands::dispatch_command;
-use super::painter::WgpuPainter;
-use crate::traits::{CommandRenderer, Painter};
 use flui_painting::{BlendMode, DisplayListCore, Paint, PointMode};
 use flui_types::{
-    geometry::{px, Matrix4, Offset, Pixels, Point, RRect, Rect, Transform},
+    geometry::{Matrix4, Offset, Pixels, Point, RRect, Rect, Transform, px},
     painting::{Image, Path},
     styling::Color,
     typography::TextStyle,
 };
 
+use super::{commands::dispatch_command, painter::WgpuPainter};
+use crate::traits::{CommandRenderer, Painter};
+
 /// wgpu backend implementation of CommandRenderer.
 ///
-/// Note: Debug is not derived because `WgpuPainter` contains wgpu types that don't implement Debug.
+/// Note: Debug is not derived because `WgpuPainter` contains wgpu types that
+/// don't implement Debug.
 #[allow(missing_debug_implementations)]
 pub struct Backend {
     painter: WgpuPainter,
@@ -199,6 +201,7 @@ impl CommandRenderer for Backend {
         transform: &Matrix4,
     ) {
         self.with_transform(transform, |painter| {
+            #[allow(clippy::cast_possible_truncation)]
             let font_size = style.font_size.unwrap_or(14.0) as f32;
             let color = style.color.unwrap_or(Color::BLACK);
             let paint = Paint::fill(color);
@@ -699,7 +702,8 @@ impl CommandRenderer for Backend {
     }
 
     fn push_opacity(&mut self, alpha: f32) {
-        // Create a layer with opacity
+        // Create a layer with opacity (clamped to [0, 255])
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let alpha_u8 = (alpha.clamp(0.0, 1.0) * 255.0) as u8;
         let paint = Paint::fill(Color::WHITE).with_alpha(alpha_u8);
         self.painter.save_layer(None, &paint);
@@ -771,7 +775,7 @@ impl CommandRenderer for Backend {
             Color::rgba(255, 130, 130, 255) // Light red
         };
         self.painter.text(
-            &format!("{:.0}", fps),
+            &format!("{fps:.0}"),
             Point::new(x_val, y),
             11.0,
             &Paint::fill(fps_color),
@@ -797,7 +801,7 @@ impl CommandRenderer for Backend {
 
         let white = Color::rgba(220, 220, 220, 255);
         self.painter.text(
-            &format!("{:.1}", frame_time_ms),
+            &format!("{frame_time_ms:.1}"),
             Point::new(x_val, y),
             10.0,
             &Paint::fill(white),

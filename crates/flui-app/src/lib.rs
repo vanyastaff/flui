@@ -43,35 +43,28 @@ pub mod overlay;
 pub mod theme;
 
 // Primary exports - Flutter naming
+// Legacy alias
 pub use app::{
-    run_app, run_app_with_config, AppConfig, DefaultLifecycle, LifecycleEvent, LifecycleState,
-    RootRenderElement, RootRenderView, WidgetsFlutterBinding,
+    AppBinding, AppConfig, DefaultLifecycle, LifecycleEvent, LifecycleState, RootRenderElement,
+    RootRenderView, WidgetsFlutterBinding, run_app, run_app_with_config,
 };
-
 // Android-specific entry points
 #[cfg(target_os = "android")]
 pub use app::{run_app_android, run_app_android_with_config};
-
-// Legacy alias
-pub use app::AppBinding;
-
-// Debug exports
-pub use debug::DebugFlags;
-
 // Bindings re-exports
 pub use bindings::{
     GestureBinding, PaintingBinding, PipelineOwner, RenderingFlutterBinding, Scheduler,
     SemanticsBinding, WidgetsBinding,
 };
-
+// Debug exports
+pub use debug::DebugFlags;
+// Convenience re-exports from flui_log
+pub use flui_log::{Level, Logger, debug, error, info, trace, warn};
 // Convenience re-exports from flui-view
 pub use flui_view::{
     BuildContext, BuildContextExt, BuildOwner, ElementBase, ElementTree, StatefulView,
     StatelessElement, StatelessView, View,
 };
-
-// Convenience re-exports from flui_log
-pub use flui_log::{debug, error, info, trace, warn, Level, Logger};
 
 // ============================================================================
 // PRELUDE
@@ -86,17 +79,17 @@ pub use flui_log::{debug, error, info, trace, warn, Level, Logger};
 /// ```
 pub mod prelude {
     // Application types
-    pub use crate::{run_app, run_app_with_config, AppConfig, LifecycleState, WidgetsFlutterBinding};
+    // Logging
+    pub use flui_log::{debug, error, info, trace, warn};
 
+    // Debug
+    pub use crate::DebugFlags;
+    pub use crate::{
+        AppConfig, LifecycleState, WidgetsFlutterBinding, run_app, run_app_with_config,
+    };
     // Bindings
     pub use crate::{
         GestureBinding, PaintingBinding, PipelineOwner, RenderingFlutterBinding, Scheduler,
         SemanticsBinding, WidgetsBinding,
     };
-
-    // Debug
-    pub use crate::DebugFlags;
-
-    // Logging
-    pub use flui_log::{debug, error, info, trace, warn};
 }

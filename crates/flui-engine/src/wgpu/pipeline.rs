@@ -11,9 +11,9 @@
 //! - Cache eliminates pipeline recreation overhead
 
 use std::collections::HashMap;
-use wgpu::RenderPipeline;
 
 use flui_painting::Paint;
+use wgpu::RenderPipeline;
 
 /// Pipeline key identifying a specific pipeline variant
 ///
@@ -89,17 +89,17 @@ impl PipelineKey {
     }
 
     /// Check if pipeline requires alpha blending
-    pub fn is_alpha_blended(&self) -> bool {
+    pub fn is_alpha_blended(self) -> bool {
         self.bits & Self::ALPHA_BLEND != 0
     }
 
     /// Check if pipeline uses textures
-    pub fn is_textured(&self) -> bool {
+    pub fn is_textured(self) -> bool {
         self.bits & Self::TEXTURED != 0
     }
 
     /// Get MSAA sample count
-    pub fn msaa_samples(&self) -> u32 {
+    pub fn msaa_samples(self) -> u32 {
         if self.bits & Self::MSAA_8X != 0 {
             8
         } else if self.bits & Self::MSAA_4X != 0 {
@@ -157,7 +157,8 @@ impl PipelineCache {
 
     /// Get or create a pipeline for the given key
     ///
-    /// Returns cached pipeline if available, otherwise creates and caches new one.
+    /// Returns cached pipeline if available, otherwise creates and caches new
+    /// one.
     pub fn get_or_create(&mut self, device: &wgpu::Device, key: PipelineKey) -> &RenderPipeline {
         // Check if pipeline exists
         if !self.cache.contains_key(&key) {
@@ -200,7 +201,7 @@ impl PipelineCache {
                 module: &self.shader,
                 entry_point: Some("vs_main"),
                 buffers: &[super::vertex::Vertex::desc()],
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &self.shader,
@@ -210,7 +211,7 @@ impl PipelineCache {
                     blend: blend_state,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,

@@ -25,7 +25,7 @@
 //! # Usage
 //!
 //! ```
-//! use flui_tree::{Depth, AtomicDepth, DepthAware};
+//! use flui_tree::{AtomicDepth, Depth, DepthAware};
 //!
 //! // Basic depth operations
 //! let root = Depth::root();
@@ -45,8 +45,10 @@
 //! - `Depth`: `Copy + Send + Sync` (value type)
 //! - `AtomicDepth`: `Send + Sync` (atomic operations)
 
-use std::fmt;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{
+    fmt,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use thiserror::Error;
 
@@ -389,8 +391,9 @@ impl From<Depth> for usize {
 impl Depth {
     /// Validated constructor returning a `Result`.
     ///
-    /// Equivalent to [`new_checked`](Self::new_checked) but returns a typed error
-    /// instead of `Option`, making it suitable for `?`-based error propagation.
+    /// Equivalent to [`new_checked`](Self::new_checked) but returns a typed
+    /// error instead of `Option`, making it suitable for `?`-based error
+    /// propagation.
     ///
     /// # Errors
     ///
@@ -503,7 +506,8 @@ impl AtomicDepth {
     ///
     /// This method does not check against [`MAX_TREE_DEPTH`]. Use
     /// [`try_increment`](Self::try_increment) or
-    /// [`saturating_increment`](Self::saturating_increment) for bounded variants.
+    /// [`saturating_increment`](Self::saturating_increment) for bounded
+    /// variants.
     #[inline]
     pub fn increment(&self) -> Depth {
         let new_val = self.0.fetch_add(1, Ordering::AcqRel) + 1;
@@ -582,7 +586,8 @@ impl AtomicDepth {
     ///
     /// # Errors
     ///
-    /// Returns `Err(actual_depth)` if the current value doesn't match `current`.
+    /// Returns `Err(actual_depth)` if the current value doesn't match
+    /// `current`.
     #[inline]
     pub fn compare_exchange(&self, current: Depth, new: Depth) -> Result<Depth, Depth> {
         self.0
@@ -1005,8 +1010,7 @@ mod tests {
 
     #[test]
     fn test_atomic_depth_concurrent_increments() {
-        use std::sync::Arc;
-        use std::thread;
+        use std::{sync::Arc, thread};
 
         let atomic = Arc::new(AtomicDepth::new(0));
         let mut handles = Vec::new();
@@ -1050,8 +1054,7 @@ mod tests {
 
     #[test]
     fn test_atomic_depth_concurrent_try_increment_at_boundary() {
-        use std::sync::Arc;
-        use std::thread;
+        use std::{sync::Arc, thread};
 
         let atomic = Arc::new(AtomicDepth::new(MAX_TREE_DEPTH - 1));
         let mut handles = Vec::new();

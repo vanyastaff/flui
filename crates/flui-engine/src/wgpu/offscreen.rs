@@ -3,16 +3,19 @@
 //! Manages GPU pipelines, render passes, and offscreen texture rendering
 //! for ShaderMaskLayer effects.
 
-use super::shader_compiler::{ShaderCache, ShaderType};
-use super::texture_pool::{PooledTexture, TexturePool};
+use std::{collections::HashMap, sync::Arc};
+
 use flui_types::{
+    Size,
     geometry::{Pixels, Rect},
     painting::{BlendMode, ShaderSpec},
-    Size,
 };
-use std::collections::HashMap;
-use std::sync::Arc;
 use wgpu::util::DeviceExt;
+
+use super::{
+    shader_compiler::{ShaderCache, ShaderType},
+    texture_pool::{PooledTexture, TexturePool},
+};
 
 /// Offscreen renderer for shader mask effects
 ///
@@ -36,7 +39,6 @@ use wgpu::util::DeviceExt;
 /// │  Output: Masked Canvas                                  │
 /// └──────────────────────────────────────────────────────────┘
 /// ```
-///
 #[allow(missing_debug_implementations)]
 pub struct OffscreenRenderer {
     /// Texture pool for offscreen rendering
@@ -221,7 +223,7 @@ impl OffscreenRenderer {
                                 ],
                             },
                         ],
-                        compilation_options: Default::default(),
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
                     },
                     fragment: Some(wgpu::FragmentState {
                         module: &shader_module,
@@ -231,7 +233,7 @@ impl OffscreenRenderer {
                             blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                             write_mask: wgpu::ColorWrites::ALL,
                         })],
-                        compilation_options: Default::default(),
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
                     }),
                     primitive: wgpu::PrimitiveState {
                         topology: wgpu::PrimitiveTopology::TriangleList,
@@ -362,6 +364,7 @@ impl OffscreenRenderer {
         });
 
         // Create texture descriptor for offscreen target
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let texture_desc = wgpu::TextureDescriptor {
             label: Some("Shader Mask Offscreen Texture"),
             size: wgpu::Extent3d {
@@ -600,8 +603,8 @@ impl FullscreenVertex {
 mod tests {
     use super::*;
 
-    // Note: OffscreenRenderer tests are ignored because they require wgpu Device/Queue
-    // These would need GPU resources to run properly.
+    // Note: OffscreenRenderer tests are ignored because they require wgpu
+    // Device/Queue These would need GPU resources to run properly.
     // The functionality is tested via integration tests with actual GPU.
 
     #[test]

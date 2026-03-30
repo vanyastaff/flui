@@ -10,9 +10,11 @@
 //!
 //! This corresponds to Flutter's `RootElementMixin`.
 
-use crate::owner::BuildOwner;
-use flui_foundation::ElementId;
 use std::sync::Arc;
+
+use flui_foundation::ElementId;
+
+use crate::owner::BuildOwner;
 
 /// Trait for root elements that sit at the top of an element tree.
 ///

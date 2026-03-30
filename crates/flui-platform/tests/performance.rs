@@ -2,8 +2,7 @@
 //!
 //! Tests to ensure test suite execution meets performance targets.
 
-use std::process::Command;
-use std::time::Instant;
+use std::{process::Command, time::Instant};
 
 #[test]
 #[ignore] // Run explicitly: cargo test -p flui-platform --test performance -- --ignored
@@ -66,8 +65,8 @@ fn test_headless_platform_startup_under_10ms() {
 fn test_headless_window_creation_under_1ms() {
     // Verify headless window creation has minimal overhead
 
-    use flui_platform::{headless_platform, WindowOptions};
-    use flui_types::geometry::{px, Size};
+    use flui_platform::{WindowOptions, headless_platform};
+    use flui_types::geometry::{Size, px};
 
     let platform = headless_platform();
 
@@ -100,9 +99,12 @@ fn test_headless_window_creation_under_1ms() {
 fn test_parallel_test_execution_scales() {
     // Verify parallel test execution provides speedup
 
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
     use flui_platform::headless_platform;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
 
     let counter = Arc::new(AtomicUsize::new(0));
     let num_threads = 8;
@@ -192,9 +194,12 @@ fn test_clipboard_operations_performance() {
 fn test_executor_spawn_performance() {
     // Verify executor spawn has minimal overhead
 
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
     use flui_platform::headless_platform;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
 
     let platform = headless_platform();
     let executor = platform.background_executor();

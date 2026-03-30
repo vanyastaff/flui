@@ -1,12 +1,13 @@
 //! Timeline event tracking for FLUI applications
 //!
-//! Records and visualizes events over time for performance analysis and debugging.
-//! Supports exporting to Chrome DevTools trace format for advanced visualization.
+//! Records and visualizes events over time for performance analysis and
+//! debugging. Supports exporting to Chrome DevTools trace format for advanced
+//! visualization.
 //!
 //! # Example
 //!
 //! ```rust
-//! use flui_devtools::timeline::{Timeline, EventCategory};
+//! use flui_devtools::timeline::{EventCategory, Timeline};
 //!
 //! let mut timeline = Timeline::new();
 //!
@@ -33,10 +34,11 @@
 //! // Load trace.json in chrome://tracing
 //! ```
 
+use std::sync::Arc;
+
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::sync::Arc;
 use web_time::{Duration, Instant};
 
 /// Category for timeline events
@@ -226,7 +228,8 @@ impl Timeline {
 
     /// Record an event with RAII guard
     ///
-    /// Returns a guard that automatically records the event duration when dropped.
+    /// Returns a guard that automatically records the event duration when
+    /// dropped.
     ///
     /// # Example
     ///
@@ -252,7 +255,8 @@ impl Timeline {
 
     /// Record an instant event (duration = 0)
     ///
-    /// Use this for events that happen at a point in time rather than over a duration.
+    /// Use this for events that happen at a point in time rather than over a
+    /// duration.
     pub fn record_instant(&self, name: impl Into<String>, category: EventCategory) {
         let mut inner = self.inner.lock();
         let event_index = inner.start_event(name.into(), category);
@@ -307,7 +311,8 @@ impl Timeline {
 
     /// Export events to Chrome DevTools trace format
     ///
-    /// Returns a JSON string that can be loaded in chrome://tracing for visualization.
+    /// Returns a JSON string that can be loaded in chrome://tracing for
+    /// visualization.
     ///
     /// # Example
     ///
@@ -366,7 +371,8 @@ impl Timeline {
 
     /// Export events to a simple JSON format
     ///
-    /// This is a simpler format than Chrome trace, useful for custom visualization.
+    /// This is a simpler format than Chrome trace, useful for custom
+    /// visualization.
     pub fn export_json(&self) -> String {
         let events = self.get_events();
         serde_json::to_string_pretty(&events).unwrap_or_default()
@@ -430,8 +436,9 @@ impl std::fmt::Debug for Timeline {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::thread;
+
+    use super::*;
 
     #[test]
     fn test_timeline_creation() {

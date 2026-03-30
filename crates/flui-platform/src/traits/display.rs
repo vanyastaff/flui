@@ -66,7 +66,8 @@ pub trait PlatformDisplay: Send + Sync {
 
     /// Get logical size (bounds.size / scale_factor)
     ///
-    /// Converts device pixels to logical pixels by dividing by the scale factor.
+    /// Converts device pixels to logical pixels by dividing by the scale
+    /// factor.
     fn logical_size(&self) -> Size<Pixels> {
         use flui_types::geometry::px;
 

@@ -3,12 +3,13 @@
 //! This module provides the LayerTree struct and LayerNode
 //! for managing the compositor layer hierarchy.
 
-use slab::Slab;
-
 use flui_foundation::{ElementId, LayerId};
-use flui_types::geometry::{Pixels, RRect, Rect};
-use flui_types::painting::{Clip, Path};
-use flui_types::{Matrix4, Offset};
+use flui_types::{
+    geometry::{Pixels, RRect, Rect},
+    painting::{Clip, Path},
+    Matrix4, Offset,
+};
+use slab::Slab;
 
 use crate::layer::Layer;
 
@@ -179,8 +180,8 @@ impl LayerNode {
 
 /// LayerTree - Slab-based storage for compositor layers.
 ///
-/// This is the fourth of FLUI's five trees, corresponding to Flutter's Layer tree
-/// used for composition and GPU rendering.
+/// This is the fourth of FLUI's five trees, corresponding to Flutter's Layer
+/// tree used for composition and GPU rendering.
 ///
 /// # Architecture
 ///
@@ -198,7 +199,7 @@ impl LayerNode {
 /// # Example
 ///
 /// ```rust
-/// use flui_layer::{LayerTree, Layer, CanvasLayer, LayerNode};
+/// use flui_layer::{CanvasLayer, Layer, LayerNode, LayerTree};
 /// use flui_tree::TreeRead;
 ///
 /// let mut tree = LayerTree::new();
@@ -282,7 +283,7 @@ impl LayerTree {
     /// # Example
     ///
     /// ```rust
-    /// use flui_layer::{LayerTree, Layer, CanvasLayer};
+    /// use flui_layer::{CanvasLayer, Layer, LayerTree};
     ///
     /// let mut tree = LayerTree::new();
     /// let layer = Layer::Canvas(CanvasLayer::new());
@@ -333,7 +334,8 @@ impl LayerTree {
     ///
     /// Returns the removed node, or None if it didn't exist.
     ///
-    /// **Note:** This does NOT remove children. Caller must handle tree cleanup.
+    /// **Note:** This does NOT remove children. Caller must handle tree
+    /// cleanup.
     pub fn remove(&mut self, id: LayerId) -> Option<LayerNode> {
         // Update root if removing root
         if self.root == Some(id) {
@@ -427,8 +429,9 @@ impl LayerTree {
 
     /// Appends a layer as a child of a container layer.
     ///
-    /// This is the core operation used by Flutter's PaintingContext when composing
-    /// layers during painting. It's typically called in two scenarios:
+    /// This is the core operation used by Flutter's PaintingContext when
+    /// composing layers during painting. It's typically called in two
+    /// scenarios:
     ///
     /// 1. **After stopRecordingIfNeeded()**: Append the finished PictureLayer
     /// 2. **In pushLayer()**: Append a container layer before painting into it
@@ -520,11 +523,13 @@ impl LayerTree {
 
     // ========== Clip Layer Helpers (Flutter PaintingContext Pattern) ==========
 
-    /// Pushes a clip rect layer - convenience for Flutter's `pushClipRect` pattern.
+    /// Pushes a clip rect layer - convenience for Flutter's `pushClipRect`
+    /// pattern.
     ///
-    /// This is a convenience method that combines insert + append for clip rect layers.
-    /// It creates a ClipRectLayer, inserts it into the tree, appends it to the container,
-    /// and returns the LayerId for use as a new container.
+    /// This is a convenience method that combines insert + append for clip rect
+    /// layers. It creates a ClipRectLayer, inserts it into the tree,
+    /// appends it to the container, and returns the LayerId for use as a
+    /// new container.
     ///
     /// # Flutter Equivalence
     ///
@@ -584,8 +589,8 @@ impl LayerTree {
     ///
     /// # Returns
     ///
-    /// The LayerId of the newly created clip layer, which can be used as a container
-    /// for painting clipped content.
+    /// The LayerId of the newly created clip layer, which can be used as a
+    /// container for painting clipped content.
     pub fn push_clip_rect(
         &mut self,
         container_id: LayerId,
@@ -600,11 +605,13 @@ impl LayerTree {
         layer_id
     }
 
-    /// Pushes a clip rounded rect layer - convenience for Flutter's `pushClipRRect` pattern.
+    /// Pushes a clip rounded rect layer - convenience for Flutter's
+    /// `pushClipRRect` pattern.
     ///
-    /// This is a convenience method that combines insert + append for clip rounded rect layers.
-    /// It creates a ClipRRectLayer, inserts it into the tree, appends it to the container,
-    /// and returns the LayerId for use as a new container.
+    /// This is a convenience method that combines insert + append for clip
+    /// rounded rect layers. It creates a ClipRRectLayer, inserts it into
+    /// the tree, appends it to the container, and returns the LayerId for
+    /// use as a new container.
     ///
     /// # Flutter Equivalence
     ///
@@ -639,8 +646,8 @@ impl LayerTree {
     ///
     /// # Returns
     ///
-    /// The LayerId of the newly created clip layer, which can be used as a container
-    /// for painting clipped content with rounded corners.
+    /// The LayerId of the newly created clip layer, which can be used as a
+    /// container for painting clipped content with rounded corners.
     pub fn push_clip_rrect(
         &mut self,
         container_id: LayerId,
@@ -655,11 +662,13 @@ impl LayerTree {
         layer_id
     }
 
-    /// Pushes a clip path layer - convenience for Flutter's `pushClipPath` pattern.
+    /// Pushes a clip path layer - convenience for Flutter's `pushClipPath`
+    /// pattern.
     ///
-    /// This is a convenience method that combines insert + append for clip path layers.
-    /// It creates a ClipPathLayer, inserts it into the tree, appends it to the container,
-    /// and returns the LayerId for use as a new container.
+    /// This is a convenience method that combines insert + append for clip path
+    /// layers. It creates a ClipPathLayer, inserts it into the tree,
+    /// appends it to the container, and returns the LayerId for use as a
+    /// new container.
     ///
     /// # Performance
     ///
@@ -696,8 +705,8 @@ impl LayerTree {
     ///
     /// # Returns
     ///
-    /// The LayerId of the newly created clip layer, which can be used as a container
-    /// for painting clipped content with an arbitrary shape.
+    /// The LayerId of the newly created clip layer, which can be used as a
+    /// container for painting clipped content with an arbitrary shape.
     pub fn push_clip_path(
         &mut self,
         container_id: LayerId,
@@ -712,13 +721,16 @@ impl LayerTree {
         layer_id
     }
 
-    // ========== Transform & Opacity Helpers (Flutter PaintingContext Pattern) ==========
+    // ========== Transform & Opacity Helpers (Flutter PaintingContext Pattern)
+    // ==========
 
-    /// Pushes a transform layer - convenience for Flutter's `pushTransform` pattern.
+    /// Pushes a transform layer - convenience for Flutter's `pushTransform`
+    /// pattern.
     ///
-    /// This is a convenience method that combines insert + append for transform layers.
-    /// It creates a TransformLayer, inserts it into the tree, appends it to the container,
-    /// and returns the LayerId for use as a new container.
+    /// This is a convenience method that combines insert + append for transform
+    /// layers. It creates a TransformLayer, inserts it into the tree,
+    /// appends it to the container, and returns the LayerId for use as a
+    /// new container.
     ///
     /// # Flutter Equivalence
     ///
@@ -773,13 +785,14 @@ impl LayerTree {
     ///
     /// # Performance
     ///
-    /// TransformLayer is more expensive than OffsetLayer. Use OffsetLayer for simple
-    /// translations when rotation, scaling, or other transformations are not needed.
+    /// TransformLayer is more expensive than OffsetLayer. Use OffsetLayer for
+    /// simple translations when rotation, scaling, or other transformations
+    /// are not needed.
     ///
     /// # Returns
     ///
-    /// The LayerId of the newly created transform layer, which can be used as a container
-    /// for painting transformed content.
+    /// The LayerId of the newly created transform layer, which can be used as a
+    /// container for painting transformed content.
     pub fn push_transform(&mut self, container_id: LayerId, transform: Matrix4) -> LayerId {
         use crate::layer::TransformLayer;
 
@@ -789,11 +802,13 @@ impl LayerTree {
         layer_id
     }
 
-    /// Pushes an opacity layer - convenience for Flutter's `pushOpacity` pattern.
+    /// Pushes an opacity layer - convenience for Flutter's `pushOpacity`
+    /// pattern.
     ///
-    /// This is a convenience method that combines insert + append for opacity layers.
-    /// It creates an OpacityLayer, inserts it into the tree, appends it to the container,
-    /// and returns the LayerId for use as a new container.
+    /// This is a convenience method that combines insert + append for opacity
+    /// layers. It creates an OpacityLayer, inserts it into the tree,
+    /// appends it to the container, and returns the LayerId for use as a
+    /// new container.
     ///
     /// # Flutter Equivalence
     ///
@@ -847,19 +862,21 @@ impl LayerTree {
     ///
     /// # Performance
     ///
-    /// Opacity layers require offscreen rendering, which has a performance cost.
-    /// For static opacity, consider using `Color.withOpacity()` directly on
-    /// paint operations when possible.
+    /// Opacity layers require offscreen rendering, which has a performance
+    /// cost. For static opacity, consider using `Color.withOpacity()`
+    /// directly on paint operations when possible.
     ///
     /// # Optimization
     ///
-    /// - If `alpha == 0.0`, children can be skipped entirely (fully transparent)
-    /// - If `alpha == 1.0`, the layer is a no-op and can be skipped (fully opaque)
+    /// - If `alpha == 0.0`, children can be skipped entirely (fully
+    ///   transparent)
+    /// - If `alpha == 1.0`, the layer is a no-op and can be skipped (fully
+    ///   opaque)
     ///
     /// # Returns
     ///
-    /// The LayerId of the newly created opacity layer, which can be used as a container
-    /// for painting content with transparency.
+    /// The LayerId of the newly created opacity layer, which can be used as a
+    /// container for painting content with transparency.
     pub fn push_opacity(
         &mut self,
         container_id: LayerId,
@@ -916,9 +933,10 @@ impl Default for LayerTree {
 
 #[cfg(test)]
 mod tests {
+    use flui_types::geometry::px;
+
     use super::*;
     use crate::layer::CanvasLayer;
-    use flui_types::geometry::px;
 
     #[test]
     fn test_layer_tree_new() {
@@ -1240,9 +1258,9 @@ mod tests {
 
     #[test]
     fn test_push_clip_rect() {
+        use flui_types::{geometry::Rect, painting::Clip};
+
         use crate::layer::OffsetLayer;
-        use flui_types::geometry::Rect;
-        use flui_types::painting::Clip;
 
         let mut tree = LayerTree::new();
 
@@ -1283,9 +1301,12 @@ mod tests {
 
     #[test]
     fn test_push_clip_rrect() {
+        use flui_types::{
+            geometry::{Pixels, RRect, Rect},
+            painting::Clip,
+        };
+
         use crate::layer::OffsetLayer;
-        use flui_types::geometry::{Pixels, RRect, Rect};
-        use flui_types::painting::Clip;
 
         let mut tree = LayerTree::new();
 
@@ -1325,9 +1346,12 @@ mod tests {
 
     #[test]
     fn test_push_clip_path() {
+        use flui_types::{
+            geometry::Point,
+            painting::{Clip, Path},
+        };
+
         use crate::layer::OffsetLayer;
-        use flui_types::geometry::Point;
-        use flui_types::painting::{Clip, Path};
 
         let mut tree = LayerTree::new();
 
@@ -1364,9 +1388,9 @@ mod tests {
     #[test]
     fn test_clip_layers_as_containers() {
         // Test that clip layers can act as containers for child layers
+        use flui_types::{geometry::Rect, painting::Clip};
+
         use crate::layer::{CanvasLayer, OffsetLayer};
-        use flui_types::geometry::Rect;
-        use flui_types::painting::Clip;
 
         let mut tree = LayerTree::new();
 
@@ -1399,9 +1423,12 @@ mod tests {
     #[test]
     fn test_nested_clip_layers() {
         // Test Flutter's pattern of nested clip layers
+        use flui_types::{
+            geometry::{Pixels, RRect, Rect},
+            painting::Clip,
+        };
+
         use crate::layer::OffsetLayer;
-        use flui_types::geometry::{Pixels, RRect, Rect};
-        use flui_types::painting::Clip;
 
         let mut tree = LayerTree::new();
 
@@ -1441,9 +1468,11 @@ mod tests {
 
     #[test]
     fn test_push_transform() {
-        use crate::layer::OffsetLayer;
-        use flui_types::Matrix4;
         use std::f32::consts::PI;
+
+        use flui_types::Matrix4;
+
+        use crate::layer::OffsetLayer;
 
         let mut tree = LayerTree::new();
 
@@ -1477,8 +1506,9 @@ mod tests {
 
     #[test]
     fn test_push_opacity() {
-        use crate::layer::OffsetLayer;
         use flui_types::Offset;
+
+        use crate::layer::OffsetLayer;
 
         let mut tree = LayerTree::new();
 
@@ -1512,8 +1542,9 @@ mod tests {
 
     #[test]
     fn test_push_transform_translation() {
-        use crate::layer::OffsetLayer;
         use flui_types::Matrix4;
+
+        use crate::layer::OffsetLayer;
 
         let mut tree = LayerTree::new();
         let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
@@ -1529,8 +1560,9 @@ mod tests {
 
     #[test]
     fn test_push_opacity_with_offset() {
-        use crate::layer::OffsetLayer;
         use flui_types::Offset;
+
+        use crate::layer::OffsetLayer;
 
         let mut tree = LayerTree::new();
         let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
@@ -1549,8 +1581,9 @@ mod tests {
     #[test]
     fn test_transform_opacity_as_containers() {
         // Test that transform and opacity layers can act as containers
-        use crate::layer::{CanvasLayer, OffsetLayer};
         use flui_types::{Matrix4, Offset};
+
+        use crate::layer::{CanvasLayer, OffsetLayer};
 
         let mut tree = LayerTree::new();
 
@@ -1584,11 +1617,11 @@ mod tests {
     #[test]
     fn test_complex_layer_hierarchy() {
         // Test Flutter's pattern: root -> transform -> clip -> opacity -> content
-        use crate::layer::{CanvasLayer, OffsetLayer};
-        use flui_types::geometry::Rect;
-        use flui_types::painting::Clip;
-        use flui_types::{Matrix4, Offset};
         use std::f32::consts::PI;
+
+        use flui_types::{geometry::Rect, painting::Clip, Matrix4, Offset};
+
+        use crate::layer::{CanvasLayer, OffsetLayer};
 
         let mut tree = LayerTree::new();
 

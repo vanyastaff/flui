@@ -3,8 +3,10 @@
 //! This layer clips its children to a rectangular region.
 //! Corresponds to Flutter's `ClipRectLayer`.
 
-use flui_types::geometry::{Pixels, Rect};
-use flui_types::painting::Clip;
+use flui_types::{
+    geometry::{Pixels, Rect},
+    painting::Clip,
+};
 
 /// Layer that clips children to a rectangle.
 ///
@@ -22,13 +24,9 @@ use flui_types::painting::Clip;
 ///
 /// ```rust
 /// use flui_layer::ClipRectLayer;
-/// use flui_types::geometry::Rect;
-/// use flui_types::painting::Clip;
+/// use flui_types::{geometry::Rect, painting::Clip};
 ///
-/// let layer = ClipRectLayer::new(
-///     Rect::from_xywh(10.0, 10.0, 100.0, 100.0),
-///     Clip::HardEdge,
-/// );
+/// let layer = ClipRectLayer::new(Rect::from_xywh(10.0, 10.0, 100.0, 100.0), Clip::HardEdge);
 ///
 /// assert_eq!(layer.clip_rect().width(), 100.0);
 /// ```
@@ -123,8 +121,9 @@ unsafe impl Sync for ClipRectLayer {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::px;
+
+    use super::*;
 
     #[test]
     fn test_clip_rect_layer_new() {

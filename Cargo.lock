@@ -916,47 +916,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "flui-android-app"
-version = "0.1.0"
-dependencies = [
- "flui-foundation",
- "flui-hot-reload",
- "flui-layer",
- "flui-rendering",
- "flui-types",
- "flui-view",
-]
-
-[[package]]
-name = "flui-android-demo"
-version = "0.1.0"
-dependencies = [
- "android-activity",
- "flui-engine",
- "flui-foundation",
- "flui-hot-reload",
- "flui-layer",
- "flui-log",
- "flui-platform",
- "flui-types",
- "log",
- "ndk",
- "pollster",
- "raw-window-handle",
- "tracing",
-]
-
-[[package]]
-name = "flui-android-scene"
-version = "0.1.0"
-dependencies = [
- "flui-hot-reload",
- "flui-layer",
- "flui-painting",
- "flui-types",
-]
-
-[[package]]
 name = "flui-app"
 version = "0.1.0"
 dependencies = [

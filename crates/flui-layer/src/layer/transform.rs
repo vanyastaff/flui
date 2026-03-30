@@ -3,8 +3,10 @@
 //! This layer applies a full 4x4 transformation matrix to its children.
 //! Corresponds to Flutter's `TransformLayer`.
 
-use flui_types::geometry::{Pixels, Point, Rect};
-use flui_types::Matrix4;
+use flui_types::{
+    geometry::{Pixels, Point, Rect},
+    Matrix4,
+};
 
 /// Layer that applies a full matrix transformation to its children.
 ///
@@ -34,9 +36,10 @@ use flui_types::Matrix4;
 /// # Example
 ///
 /// ```rust
+/// use std::f32::consts::PI;
+///
 /// use flui_layer::TransformLayer;
 /// use flui_types::Matrix4;
-/// use std::f32::consts::PI;
 ///
 /// // Create a rotation transform (45 degrees)
 /// let layer = TransformLayer::rotation(PI / 4.0);
@@ -226,9 +229,11 @@ unsafe impl Sync for TransformLayer {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use flui_types::geometry::px;
     use std::f32::consts::{FRAC_PI_2, PI};
+
+    use flui_types::geometry::px;
+
+    use super::*;
 
     #[test]
     fn test_transform_layer_new() {

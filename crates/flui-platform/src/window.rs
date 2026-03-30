@@ -1,7 +1,8 @@
 //! Cross-platform window abstraction
 //!
-//! This module defines the core `Window` trait that all platform implementations must provide.
-//! Platform-specific extensions are available through separate extension traits.
+//! This module defines the core `Window` trait that all platform
+//! implementations must provide. Platform-specific extensions are available
+//! through separate extension traits.
 //!
 //! # Architecture
 //!
@@ -35,8 +36,10 @@
 //! }
 //! ```
 
-use flui_types::geometry::{Point, Rect, Size};
-use flui_types::Pixels;
+use flui_types::{
+    Pixels,
+    geometry::{Point, Rect, Size},
+};
 
 // ============================================================================
 // Core Window Trait (Cross-Platform)
@@ -44,8 +47,9 @@ use flui_types::Pixels;
 
 /// Cross-platform window abstraction.
 ///
-/// This trait defines the core functionality that all platform window implementations
-/// must provide. Platform-specific features are available through extension traits.
+/// This trait defines the core functionality that all platform window
+/// implementations must provide. Platform-specific features are available
+/// through extension traits.
 pub trait Window {
     /// Get the window's unique identifier.
     fn id(&self) -> WindowId;
@@ -56,7 +60,8 @@ pub trait Window {
     /// Set the window title.
     fn set_title(&mut self, title: &str);
 
-    /// Get the window's current position (top-left corner in screen coordinates).
+    /// Get the window's current position (top-left corner in screen
+    /// coordinates).
     fn position(&self) -> Point<Pixels>;
 
     /// Set the window's position.
@@ -79,7 +84,8 @@ pub trait Window {
         self.set_size(bounds.size());
     }
 
-    /// Get the window's current state (normal, minimized, maximized, fullscreen).
+    /// Get the window's current state (normal, minimized, maximized,
+    /// fullscreen).
     fn state(&self) -> WindowState;
 
     /// Set the window's state.
@@ -196,7 +202,8 @@ pub trait Window {
 
 /// Unique identifier for a window.
 ///
-/// This ID is unique within the application and persists for the window's lifetime.
+/// This ID is unique within the application and persists for the window's
+/// lifetime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WindowId(pub u64);
 
@@ -250,7 +257,8 @@ impl WindowState {
 
 /// Raw window handle for GPU integration.
 ///
-/// This is a simplified version. In production, use the `raw-window-handle` crate.
+/// This is a simplified version. In production, use the `raw-window-handle`
+/// crate.
 #[derive(Debug, Clone, Copy)]
 pub enum RawWindowHandle {
     /// macOS NSView handle.
@@ -600,7 +608,10 @@ mod tests {
 
         assert_eq!(builder.title, "Custom Window");
         assert_eq!(builder.size.width, Pixels(1024.0));
-        assert_eq!(builder.position, Some(Point::new(Pixels(100.0), Pixels(100.0))));
+        assert_eq!(
+            builder.position,
+            Some(Point::new(Pixels(100.0), Pixels(100.0)))
+        );
         assert!(!builder.resizable);
         assert_eq!(builder.state, WindowState::Maximized);
     }

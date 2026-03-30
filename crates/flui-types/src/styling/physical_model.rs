@@ -1,15 +1,18 @@
 //! Physical model types for Material Design elevation effects.
 //!
-//! These types support Material Design's concept of elevation, where UI elements
-//! are positioned at different heights with corresponding shadow effects.
+//! These types support Material Design's concept of elevation, where UI
+//! elements are positioned at different heights with corresponding shadow
+//! effects.
 
-use crate::geometry::{px, Pixels};
-use crate::Offset;
+use crate::{
+    Offset,
+    geometry::{Pixels, px},
+};
 
 /// Shape type for physical model layers.
 ///
-/// Determines the clipping shape and shadow outline for Material Design elevation.
-/// Similar to Flutter's `BoxShape`.
+/// Determines the clipping shape and shadow outline for Material Design
+/// elevation. Similar to Flutter's `BoxShape`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PhysicalShape {
@@ -32,7 +35,8 @@ pub enum MaterialType {
     #[default]
     Standard,
 
-    /// Canvas material (typically for backgrounds, may have different shadow behavior).
+    /// Canvas material (typically for backgrounds, may have different shadow
+    /// behavior).
     Canvas,
 
     /// Card material (commonly elevated surfaces in Material Design).

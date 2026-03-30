@@ -11,8 +11,9 @@
 //! # Example
 //!
 //! ```rust
-//! use flui_foundation::notifier::{ChangeNotifier, Listenable};
 //! use std::sync::Arc;
+//!
+//! use flui_foundation::notifier::{ChangeNotifier, Listenable};
 //!
 //! let notifier = ChangeNotifier::new();
 //! let id = notifier.add_listener(Arc::new(|| println!("Changed!")));
@@ -21,15 +22,21 @@
 //!
 //! # Note
 //!
-//! For event bubbling notifications (like `ScrollNotification`), see `flui-view`
-//! which provides the `Notification` trait that integrates with `BuildContext`.
+//! For event bubbling notifications (like `ScrollNotification`), see
+//! `flui-view` which provides the `Notification` trait that integrates with
+//! `BuildContext`.
+
+use std::{
+    collections::HashMap,
+    fmt,
+    ops::Deref,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 use parking_lot::Mutex;
-use std::collections::HashMap;
-use std::fmt;
-use std::ops::Deref;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 
 use crate::id::ListenerId;
 
@@ -49,8 +56,9 @@ pub type ListenerCallback = Arc<dyn Fn() + Send + Sync>;
 /// # Example
 ///
 /// ```rust
-/// use flui_foundation::notifier::{Listenable, ChangeNotifier};
 /// use std::sync::Arc;
+///
+/// use flui_foundation::notifier::{ChangeNotifier, Listenable};
 ///
 /// let notifier = ChangeNotifier::new();
 /// let id = notifier.add_listener(Arc::new(|| println!("Changed!")));
@@ -78,10 +86,13 @@ pub trait Listenable: Send + Sync {
 /// # Example
 ///
 /// ```rust
-/// use flui_foundation::notifier::{ValueListenable, ValueNotifier, Listenable};
 /// use std::sync::Arc;
 ///
-/// fn print_on_change<T: std::fmt::Debug + Clone + Send + Sync>(listenable: &impl ValueListenable<T>) {
+/// use flui_foundation::notifier::{Listenable, ValueListenable, ValueNotifier};
+///
+/// fn print_on_change<T: std::fmt::Debug + Clone + Send + Sync>(
+///     listenable: &impl ValueListenable<T>,
+/// ) {
 ///     println!("Current value: {:?}", listenable.value());
 /// }
 ///
@@ -96,7 +107,8 @@ pub trait ValueListenable<T>: Listenable {
     fn value(&self) -> &T;
 }
 
-/// A class that can be extended or mixed in that provides a change notification API.
+/// A class that can be extended or mixed in that provides a change notification
+/// API.
 ///
 /// Similar to Flutter's `ChangeNotifier`.
 #[derive(Clone)]
@@ -216,7 +228,8 @@ impl<T: Clone> ValueNotifier<T> {
 
     /// Returns a mutable reference to the current value.
     ///
-    /// Note: This does NOT notify listeners. Call `notify()` manually if needed.
+    /// Note: This does NOT notify listeners. Call `notify()` manually if
+    /// needed.
     #[inline]
     pub const fn value_mut(&mut self) -> &mut T {
         &mut self.value
@@ -475,8 +488,9 @@ impl Listenable for MergedListenable {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
 
     #[test]
     fn test_listener_id() {

@@ -1,13 +1,14 @@
 //! RenderFlex - lays out children in a row or column.
 
-use flui_types::geometry::px;
-use flui_types::{Offset, Pixels, Point, Rect, Size};
+use flui_types::{Offset, Pixels, Point, Rect, Size, geometry::px};
 
-use crate::arity::Variable;
-use crate::constraints::BoxConstraints;
-use crate::context::{BoxHitTestContext, BoxLayoutContext};
-use crate::parent_data::BoxParentData;
-use crate::traits::RenderBox;
+use crate::{
+    arity::Variable,
+    constraints::BoxConstraints,
+    context::{BoxHitTestContext, BoxLayoutContext},
+    parent_data::BoxParentData,
+    traits::RenderBox,
+};
 
 /// Direction of the flex layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -193,7 +194,7 @@ impl RenderBox for RenderFlex {
     type ParentData = BoxParentData;
 
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>) {
-        let constraints = ctx.constraints().clone();
+        let constraints = *ctx.constraints();
         let child_count = ctx.child_count();
         self.child_count = child_count;
 
@@ -227,7 +228,7 @@ impl RenderBox for RenderFlex {
         let mut max_cross = Pixels::ZERO;
 
         for i in 0..child_count {
-            let child_size = ctx.layout_child(i, child_constraints.clone());
+            let child_size = ctx.layout_child(i, child_constraints);
             child_sizes.push(child_size);
             total_main += self.main_size(child_size);
             max_cross = max_cross.max(self.cross_size(child_size));
@@ -276,15 +277,14 @@ impl RenderBox for RenderFlex {
         self.child_offsets.clear();
         self.child_offsets.reserve(child_count);
 
-        for i in 0..child_count {
-            let child_size = child_sizes[i];
-
+        for (i, &child_size) in child_sizes.iter().enumerate().take(child_count) {
             // Calculate cross axis offset based on alignment
             let cross_offset = match self.cross_axis_alignment {
                 CrossAxisAlignment::Start => Pixels::ZERO,
                 CrossAxisAlignment::End => cross_extent - self.cross_size(child_size),
                 CrossAxisAlignment::Center => (cross_extent - self.cross_size(child_size)) / 2.0,
-                CrossAxisAlignment::Stretch => Pixels::ZERO, // Child already stretched via constraints
+                CrossAxisAlignment::Stretch => Pixels::ZERO, /* Child already stretched via
+                                                              * constraints */
             };
 
             let offset = self.offset(main_offset, cross_offset);
@@ -314,10 +314,10 @@ impl RenderBox for RenderFlex {
 
         // Test children in reverse order (top-most first)
         for i in (0..self.child_count).rev() {
-            if let Some(&offset) = self.child_offsets.get(i) {
-                if ctx.hit_test_child_at_offset(i, offset) {
-                    return true;
-                }
+            if let Some(&offset) = self.child_offsets.get(i)
+                && ctx.hit_test_child_at_offset(i, offset)
+            {
+                return true;
             }
         }
 

@@ -1,15 +1,23 @@
 //! Executor System Tests
 //!
 //! Comprehensive tests for background and foreground executor implementations,
-//! covering thread safety, task execution order, and performance characteristics.
+//! covering thread safety, task execution order, and performance
+//! characteristics.
 
-use flui_platform::executor::{BackgroundExecutor, ForegroundExecutor};
-use flui_platform::PlatformExecutor;
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
+    },
+    thread,
+    time::{Duration, Instant},
+};
+
+use flui_platform::{
+    PlatformExecutor,
+    executor::{BackgroundExecutor, ForegroundExecutor},
+};
 use parking_lot::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::thread;
-use std::time::{Duration, Instant};
 
 fn init_tracing() {
     let _ = tracing_subscriber::fmt()
@@ -18,7 +26,8 @@ fn init_tracing() {
         .try_init();
 }
 
-/// Test that background executor runs tasks on worker threads, not the spawning thread
+/// Test that background executor runs tasks on worker threads, not the spawning
+/// thread
 #[test]
 fn test_background_executor_runs_on_worker_thread() {
     init_tracing();
@@ -49,7 +58,8 @@ fn test_background_executor_runs_on_worker_thread() {
     tracing::info!("PASS: Background task executed on worker thread (not UI thread)");
 }
 
-/// Test that foreground executor runs tasks on next event loop iteration (not immediately)
+/// Test that foreground executor runs tasks on next event loop iteration (not
+/// immediately)
 #[test]
 fn test_foreground_executor_deferred_execution() {
     init_tracing();
@@ -85,7 +95,8 @@ fn test_foreground_executor_deferred_execution() {
     tracing::info!("PASS: Foreground task executed on next event loop iteration");
 }
 
-/// Test that background task callbacks can safely update UI state via foreground executor
+/// Test that background task callbacks can safely update UI state via
+/// foreground executor
 #[test]
 fn test_background_callback_updates_ui_safely() {
     init_tracing();

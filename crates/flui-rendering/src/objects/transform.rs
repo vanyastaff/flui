@@ -2,10 +2,12 @@
 
 use flui_types::{Alignment, Matrix4, Offset, Pixels, Point, Rect, Size};
 
-use crate::arity::Single;
-use crate::context::{BoxHitTestContext, BoxLayoutContext};
-use crate::parent_data::BoxParentData;
-use crate::traits::RenderBox;
+use crate::{
+    arity::Single,
+    context::{BoxHitTestContext, BoxLayoutContext},
+    parent_data::BoxParentData,
+    traits::RenderBox,
+};
 
 /// A render object that applies a transformation matrix to its child.
 ///
@@ -170,7 +172,7 @@ impl RenderBox for RenderTransform {
     type ParentData = BoxParentData;
 
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) {
-        let constraints = ctx.constraints().clone();
+        let constraints = *ctx.constraints();
 
         if ctx.child_count() > 0 {
             self.has_child = true;
@@ -269,9 +271,11 @@ impl RenderBox for RenderTransform {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use flui_types::geometry::px;
     use std::f32::consts::PI;
+
+    use flui_types::geometry::px;
+
+    use super::*;
 
     #[test]
     fn test_transform_identity() {

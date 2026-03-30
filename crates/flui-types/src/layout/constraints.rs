@@ -3,8 +3,9 @@
 //! This module provides BoxConstraints, Flutter-style layout constraints
 //! that define the min/max width and height for a box.
 
-use crate::geometry::{Pixels, Size};
 use std::fmt;
+
+use crate::geometry::{Pixels, Size};
 
 /// Box constraints that define min/max width and height
 ///
@@ -14,8 +15,10 @@ use std::fmt;
 /// # Examples
 ///
 /// ```
-/// use flui_types::layout::BoxConstraints;
-/// use flui_types::geometry::{px, Size};
+/// use flui_types::{
+///     geometry::{Size, px},
+///     layout::BoxConstraints,
+/// };
 ///
 /// // Tight constraints (exact size)
 /// let tight = BoxConstraints::tight(Size::new(px(100.0), px(200.0)));

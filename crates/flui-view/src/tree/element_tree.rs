@@ -3,12 +3,14 @@
 //! Elements are stored in a Slab for O(1) access by ElementId.
 //! This follows Flutter's approach where Elements form the retained tree.
 
-use crate::view::{ElementBase, View};
+use std::sync::Arc;
+
 use flui_foundation::ElementId;
 use flui_rendering::pipeline::PipelineOwner;
 use parking_lot::RwLock;
 use slab::Slab;
-use std::sync::Arc;
+
+use crate::view::{ElementBase, View};
 
 /// A node in the Element tree.
 ///
@@ -149,13 +151,15 @@ impl ElementTree {
 
     /// Mount a View as the root of the tree with PipelineOwner.
     ///
-    /// This method passes the PipelineOwner to the root element before mounting,
-    /// which is necessary for RenderObjectElements to create their RenderObjects.
+    /// This method passes the PipelineOwner to the root element before
+    /// mounting, which is necessary for RenderObjectElements to create
+    /// their RenderObjects.
     ///
     /// # Flutter Equivalent
     ///
-    /// In Flutter, this corresponds to `RootWidget.attach(buildOwner, rootElement)`
-    /// combined with `_RawViewElement.mount()` which sets up the PipelineOwner.
+    /// In Flutter, this corresponds to `RootWidget.attach(buildOwner,
+    /// rootElement)` combined with `_RawViewElement.mount()` which sets up
+    /// the PipelineOwner.
     ///
     /// # Arguments
     ///
@@ -163,6 +167,7 @@ impl ElementTree {
     /// * `pipeline_owner` - Optional PipelineOwner for render tree management
     ///
     /// Returns the ElementId of the root element.
+    #[allow(clippy::needless_pass_by_value)] // Arc is cloned into element, taking Option by value is idiomatic
     pub fn mount_root_with_pipeline_owner(
         &mut self,
         view: &dyn View,

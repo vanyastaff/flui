@@ -2,9 +2,10 @@
 //!
 //! Wraps winit's MonitorHandle to implement PlatformDisplay.
 
-use crate::traits::{DisplayId, PlatformDisplay};
 use flui_types::geometry::{Bounds, DevicePixels, Point, Size};
 use winit::monitor::MonitorHandle;
+
+use crate::traits::{DisplayId, PlatformDisplay};
 
 /// Winit display wrapper
 ///

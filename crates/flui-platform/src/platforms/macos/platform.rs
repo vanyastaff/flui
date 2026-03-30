@@ -1,17 +1,21 @@
 //! macOS platform implementation using AppKit/Cocoa
 
-use crate::config::WindowConfiguration;
-use crate::executor::{BackgroundExecutor, ForegroundExecutor};
-use crate::shared::PlatformHandlers;
-use crate::traits::*;
-use anyhow::{Context, Result};
-use parking_lot::Mutex;
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
-use cocoa::appkit::{NSApp, NSApplication, NSApplicationActivationPolicyRegular};
-use cocoa::base::{id, nil};
+use anyhow::{Context, Result};
+use cocoa::{
+    appkit::{NSApp, NSApplication, NSApplicationActivationPolicyRegular},
+    base::{id, nil},
+};
 use objc::runtime::Object;
+use parking_lot::Mutex;
+
+use crate::{
+    config::WindowConfiguration,
+    executor::{BackgroundExecutor, ForegroundExecutor},
+    shared::PlatformHandlers,
+    traits::*,
+};
 
 mod display;
 mod window;
@@ -109,7 +113,8 @@ impl Platform for MacOSPlatform {
 
             // Set up event handling (custom sendEvent to intercept input)
             // Note: For now, we rely on NSWindowDelegate for window events
-            // Input events can be handled via NSResponder chain or custom NSApplication subclass
+            // Input events can be handled via NSResponder chain or custom NSApplication
+            // subclass
 
             // Run the NSApplication event loop
             tracing::info!("Starting NSApplication event loop");

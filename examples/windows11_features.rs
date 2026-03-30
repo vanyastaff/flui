@@ -27,10 +27,13 @@
 
 #![cfg(target_os = "windows")]
 
-use flui_platform::platforms::windows::{WindowCornerPreference, WindowsBackdrop, WindowsTheme};
-use flui_platform::{Platform, WindowOptions, WindowsPlatform};
-use flui_types::geometry::{px, Size};
 use std::sync::Arc;
+
+use flui_platform::{
+    Platform, WindowOptions, WindowsPlatform,
+    platforms::windows::{WindowCornerPreference, WindowsBackdrop, WindowsTheme},
+};
+use flui_types::geometry::{Size, px};
 
 fn main() -> anyhow::Result<()> {
     // Initialize logging
@@ -71,14 +74,8 @@ fn main() -> anyhow::Result<()> {
         match platform_clone.open_window(window_options) {
             Ok(window) => {
                 println!("Window created successfully!");
-                println!(
-                    "  Logical size: {:?}",
-                    window.logical_size()
-                );
-                println!(
-                    "  Physical size: {:?}",
-                    window.physical_size()
-                );
+                println!("  Logical size: {:?}", window.logical_size());
+                println!("  Physical size: {:?}", window.physical_size());
                 println!("  Scale factor: {:.1}x", window.scale_factor());
                 println!();
 
@@ -95,24 +92,33 @@ fn main() -> anyhow::Result<()> {
                 println!();
 
                 // Show available types for reference
-                println!("Available backdrop types: {:?}", [
-                    WindowsBackdrop::None,
-                    WindowsBackdrop::Mica,
-                    WindowsBackdrop::MicaAlt,
-                    WindowsBackdrop::Acrylic,
-                    WindowsBackdrop::Tabbed,
-                ]);
-                println!("Available corner preferences: {:?}", [
-                    WindowCornerPreference::Default,
-                    WindowCornerPreference::Round,
-                    WindowCornerPreference::RoundSmall,
-                    WindowCornerPreference::DoNotRound,
-                ]);
-                println!("Available themes: {:?}", [
-                    WindowsTheme::Light,
-                    WindowsTheme::Dark,
-                    WindowsTheme::System,
-                ]);
+                println!(
+                    "Available backdrop types: {:?}",
+                    [
+                        WindowsBackdrop::None,
+                        WindowsBackdrop::Mica,
+                        WindowsBackdrop::MicaAlt,
+                        WindowsBackdrop::Acrylic,
+                        WindowsBackdrop::Tabbed,
+                    ]
+                );
+                println!(
+                    "Available corner preferences: {:?}",
+                    [
+                        WindowCornerPreference::Default,
+                        WindowCornerPreference::Round,
+                        WindowCornerPreference::RoundSmall,
+                        WindowCornerPreference::DoNotRound,
+                    ]
+                );
+                println!(
+                    "Available themes: {:?}",
+                    [
+                        WindowsTheme::Light,
+                        WindowsTheme::Dark,
+                        WindowsTheme::System,
+                    ]
+                );
                 println!();
 
                 println!("All features applied!");

@@ -2,13 +2,12 @@
 //!
 //! This module provides types for batched semantics updates to the platform.
 
-use flui_types::geometry::Pixels;
-use flui_types::{Matrix4, Rect};
+use flui_foundation::SemanticsId;
+use flui_types::{geometry::Pixels, Matrix4, Rect};
 use smallvec::SmallVec;
 use smol_str::SmolStr;
 
 use crate::properties::TextDirection;
-use flui_foundation::SemanticsId;
 
 // ============================================================================
 // SemanticsNodeData
@@ -16,7 +15,8 @@ use flui_foundation::SemanticsId;
 
 /// Serialized data for a semantics node, suitable for sending to the platform.
 ///
-/// This is the format used when communicating with the platform's accessibility API.
+/// This is the format used when communicating with the platform's accessibility
+/// API.
 #[derive(Debug, Clone)]
 pub struct SemanticsNodeData {
     /// Node identifier.

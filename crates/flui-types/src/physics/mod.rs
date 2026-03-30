@@ -15,12 +15,14 @@ pub use tolerance::Tolerance;
 
 /// Base trait for physics simulations
 ///
-/// Similar to Flutter's `Simulation`. Simulations calculate position and velocity
-/// over time based on physical laws.
+/// Similar to Flutter's `Simulation`. Simulations calculate position and
+/// velocity over time based on physical laws.
 ///
 /// # Type Safety
-/// - All methods are marked `#[must_use]` to prevent accidentally ignoring results
-/// - Simulations are immutable - all operations return values without modifying state
+/// - All methods are marked `#[must_use]` to prevent accidentally ignoring
+///   results
+/// - Simulations are immutable - all operations return values without modifying
+///   state
 ///
 /// # Performance
 /// - Implementors should mark hot-path methods with `#[inline]`
@@ -29,7 +31,7 @@ pub use tolerance::Tolerance;
 /// # Examples
 ///
 /// ```
-/// use flui_types::physics::{Simulation, SpringSimulation, SpringDescription};
+/// use flui_types::physics::{Simulation, SpringDescription, SpringSimulation};
 ///
 /// let spring = SpringDescription::new(1.0, 100.0, 10.0); // mass, stiffness, damping
 /// let sim = SpringSimulation::new(spring, 0.0, 100.0, 0.0); // start, end, velocity

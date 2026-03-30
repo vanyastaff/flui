@@ -1,8 +1,10 @@
 //! Shader types for painting.
 
-use crate::geometry::{px, NumericUnit, Offset, Pixels, Size};
-use crate::painting::{BlurStyle, TileMode};
-use crate::styling::{Color, Color32};
+use crate::{
+    geometry::{NumericUnit, Offset, Pixels, Size, px},
+    painting::{BlurStyle, TileMode},
+    styling::{Color, Color32},
+};
 
 /// A shader (or gradient) to use when filling a shape.
 ///
@@ -12,8 +14,7 @@ use crate::styling::{Color, Color32};
 /// # Examples
 ///
 /// ```
-/// use flui_types::painting::Shader;
-/// use flui_types::styling::Color;
+/// use flui_types::{painting::Shader, styling::Color};
 ///
 /// let shader = Shader::linear_gradient(
 ///     flui_types::geometry::Offset::ZERO,
@@ -160,9 +161,7 @@ impl Shader {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::painting::Shader;
-    /// use flui_types::geometry::Offset;
-    /// use flui_types::styling::Color;
+    /// use flui_types::{geometry::Offset, painting::Shader, styling::Color};
     ///
     /// let shader = Shader::simple_linear(
     ///     Offset::ZERO,
@@ -186,15 +185,10 @@ impl Shader {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::painting::Shader;
-    /// use flui_types::geometry::Offset;
-    /// use flui_types::styling::Color;
+    /// use flui_types::{geometry::Offset, painting::Shader, styling::Color};
     ///
-    /// let shader = Shader::simple_radial(
-    ///     Offset::new(50.0, 50.0),
-    ///     25.0,
-    ///     vec![Color::RED, Color::BLUE],
-    /// );
+    /// let shader =
+    ///     Shader::simple_radial(Offset::new(50.0, 50.0), 25.0, vec![Color::RED, Color::BLUE]);
     /// ```
     #[inline]
     #[must_use]
@@ -204,7 +198,8 @@ impl Shader {
 
     /// Creates a simple sweep (conic) gradient with default settings.
     ///
-    /// This is a convenience method that creates a full 360° sweep gradient with:
+    /// This is a convenience method that creates a full 360° sweep gradient
+    /// with:
     /// - No color stops (colors evenly distributed)
     /// - Full rotation (0 to 2π radians)
     /// - TileMode::Clamp (no repeating)
@@ -212,9 +207,7 @@ impl Shader {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::painting::Shader;
-    /// use flui_types::geometry::Offset;
-    /// use flui_types::styling::Color;
+    /// use flui_types::{geometry::Offset, painting::Shader, styling::Color};
     ///
     /// let shader = Shader::simple_sweep(
     ///     Offset::new(50.0, 50.0),
@@ -340,7 +333,7 @@ impl ImageShader {
 /// # Examples
 ///
 /// ```
-/// use flui_types::painting::{MaskFilter, BlurStyle};
+/// use flui_types::painting::{BlurStyle, MaskFilter};
 ///
 /// let filter = MaskFilter::blur(BlurStyle::Normal, 5.0);
 /// assert_eq!(filter.sigma, 5.0);
@@ -420,8 +413,9 @@ impl MaskFilter {
 
 /// Shader specification for shader mask effects
 ///
-/// Defines the type of shader to apply as a mask using relative coordinates (0.0-1.0).
-/// This is a unified type used across flui_rendering, flui_painting, and flui_engine.
+/// Defines the type of shader to apply as a mask using relative coordinates
+/// (0.0-1.0). This is a unified type used across flui_rendering, flui_painting,
+/// and flui_engine.
 ///
 /// # Coordinate System
 ///
@@ -431,8 +425,7 @@ impl MaskFilter {
 /// # Examples
 ///
 /// ```
-/// use flui_types::painting::ShaderSpec;
-/// use flui_types::styling::Color32;
+/// use flui_types::{painting::ShaderSpec, styling::Color32};
 ///
 /// // Linear gradient from left to right
 /// let gradient = ShaderSpec::LinearGradient {
@@ -477,7 +470,8 @@ pub enum ShaderSpec {
 impl ShaderSpec {
     /// Convert ShaderSpec to Shader with absolute coordinates
     ///
-    /// Converts relative coordinates (0.0-1.0) to absolute offsets based on the size.
+    /// Converts relative coordinates (0.0-1.0) to absolute offsets based on the
+    /// size.
     ///
     /// # Arguments
     ///
@@ -486,9 +480,7 @@ impl ShaderSpec {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::painting::ShaderSpec;
-    /// use flui_types::styling::Color32;
-    /// use flui_types::Size;
+    /// use flui_types::{Size, painting::ShaderSpec, styling::Color32};
     ///
     /// let spec = ShaderSpec::LinearGradient {
     ///     start: (0.0, 0.0),
@@ -534,7 +526,8 @@ impl ShaderSpec {
                     Pixels(center.1 * size.height.into()),
                 );
 
-                // Convert relative radius to absolute (use average of width/height for circular radius)
+                // Convert relative radius to absolute (use average of width/height for circular
+                // radius)
                 let absolute_radius = *radius * (size.width.into() + size.height.into()) / 2.0;
 
                 // Convert Color32 to Color

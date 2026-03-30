@@ -6,9 +6,11 @@ pub enum StackFit {
     #[default]
     Loose,
 
-    /// The constraints passed to the stack from its parent are tightened to the biggest size
+    /// The constraints passed to the stack from its parent are tightened to the
+    /// biggest size
     ///
-    /// This forces the non-positioned children to be exactly as large as the stack's parent constraints.
+    /// This forces the non-positioned children to be exactly as large as the
+    /// stack's parent constraints.
     Expand,
 
     /// The non-positioned children are given unconstrained constraints

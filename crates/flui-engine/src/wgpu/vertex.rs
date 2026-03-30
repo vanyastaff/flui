@@ -11,7 +11,8 @@ use flui_types::{
 
 /// Generic vertex for rendering
 ///
-/// Used for general-purpose rendering with position, color, and texture coordinates.
+/// Used for general-purpose rendering with position, color, and texture
+/// coordinates.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, Pod, Zeroable)]
 pub struct Vertex {
@@ -133,7 +134,7 @@ pub struct RectInstance {
     pub color: [f32; 4],
 
     /// Padding for alignment
-    pub _padding: [f32; 3],
+    pub padding: [f32; 3],
 }
 
 impl RectInstance {
@@ -151,7 +152,7 @@ impl RectInstance {
             size: [width.0 as f32, height.0 as f32],
             border_radius,
             color: color.to_rgba_f32_array(),
-            _padding: [0.0; 3],
+            padding: [0.0; 3],
         }
     }
 
