@@ -1900,6 +1900,277 @@ impl Painter for WgpuPainter {
         }
     }
 
+    fn draw_image_repeat(
+        &mut self,
+        image: &flui_types::painting::Image,
+        dst: Rect<Pixels>,
+        repeat: flui_painting::display_list::ImageRepeat,
+    ) {
+        use flui_painting::display_list::ImageRepeat;
+
+        let img_w = image.width() as f32;
+        let img_h = image.height() as f32;
+        if img_w <= 0.0 || img_h <= 0.0 {
+            return;
+        }
+
+        match repeat {
+            ImageRepeat::NoRepeat => {
+                // Single draw, no tiling
+                self.draw_image(image, dst);
+            }
+            ImageRepeat::Repeat => {
+                // Tile in both directions
+                let mut y = dst.top().0;
+                while y < dst.bottom().0 {
+                    let mut x = dst.left().0;
+                    while x < dst.right().0 {
+                        let tile_w = img_w.min(dst.right().0 - x);
+                        let tile_h = img_h.min(dst.bottom().0 - y);
+                        let tile_dst = Rect::from_xywh(px(x), px(y), px(tile_w), px(tile_h));
+                        self.draw_image(image, tile_dst);
+                        x += img_w;
+                    }
+                    y += img_h;
+                }
+            }
+            ImageRepeat::RepeatX => {
+                // Tile only horizontally
+                let tile_h = img_h.min(dst.height().0);
+                let mut x = dst.left().0;
+                while x < dst.right().0 {
+                    let tile_w = img_w.min(dst.right().0 - x);
+                    let tile_dst = Rect::from_xywh(px(x), dst.top(), px(tile_w), px(tile_h));
+                    self.draw_image(image, tile_dst);
+                    x += img_w;
+                }
+            }
+            ImageRepeat::RepeatY => {
+                // Tile only vertically
+                let tile_w = img_w.min(dst.width().0);
+                let mut y = dst.top().0;
+                while y < dst.bottom().0 {
+                    let tile_h = img_h.min(dst.bottom().0 - y);
+                    let tile_dst = Rect::from_xywh(dst.left(), px(y), px(tile_w), px(tile_h));
+                    self.draw_image(image, tile_dst);
+                    y += img_h;
+                }
+            }
+        }
+    }
+
+    fn draw_image_nine_slice(
+        &mut self,
+        image: &flui_types::painting::Image,
+        center_slice: Rect<Pixels>,
+        dst: Rect<Pixels>,
+    ) {
+        let img_w = image.width() as f32;
+        let img_h = image.height() as f32;
+        if img_w <= 0.0 || img_h <= 0.0 {
+            return;
+        }
+
+        // Slice boundaries in image space
+        let sl = center_slice.left().0;
+        let st = center_slice.top().0;
+        let sr = center_slice.right().0;
+        let sb = center_slice.bottom().0;
+
+        // Destination boundaries
+        let dl = dst.left().0;
+        let dt = dst.top().0;
+        let dr = dst.right().0;
+        let db = dst.bottom().0;
+
+        // Inner destination boundaries (corners keep their pixel size)
+        let d_inner_left = dl + sl;
+        let d_inner_top = dt + st;
+        let d_inner_right = dr - (img_w - sr);
+        let d_inner_bottom = db - (img_h - sb);
+
+        // Clamp: if dst is too small, inner edges collapse
+        let d_inner_left = d_inner_left.min(dr);
+        let d_inner_top = d_inner_top.min(db);
+        let d_inner_right = d_inner_right.max(d_inner_left);
+        let d_inner_bottom = d_inner_bottom.max(d_inner_top);
+
+        // Helper: draw a sub-image region to a destination rect
+        // Since draw_image draws the full image into dst_rect, we use it per-slice.
+        // For a proper 9-slice we'd need draw_image_src_dst (src rect -> dst rect).
+        // As a pragmatic v1, we draw the full image scaled into each 9 region
+        // using the existing draw_image, which stretches the whole image.
+        //
+        // For correct 9-slice, we create sub-images from the pixel data.
+        let data = image.data();
+        let stride = (img_w as u32) * 4;
+
+        // Extract a sub-region of the image as a new Image
+        let extract = |sx: f32, sy: f32, sw: f32, sh: f32| -> Option<flui_types::painting::Image> {
+            let sx = sx.max(0.0) as u32;
+            let sy = sy.max(0.0) as u32;
+            let sw = sw.max(0.0) as u32;
+            let sh = sh.max(0.0) as u32;
+            if sw == 0 || sh == 0 {
+                return None;
+            }
+            let mut sub = Vec::with_capacity((sw * sh * 4) as usize);
+            for row in sy..(sy + sh) {
+                let start = (row * stride + sx * 4) as usize;
+                let end = start + (sw * 4) as usize;
+                if end <= data.len() {
+                    sub.extend_from_slice(&data[start..end]);
+                }
+            }
+            if sub.len() == (sw * sh * 4) as usize {
+                Some(flui_types::painting::Image::from_rgba8(sw, sh, sub))
+            } else {
+                None
+            }
+        };
+
+        // 9 slices: (src_x, src_y, src_w, src_h) -> dst rect
+        let slices: [(f32, f32, f32, f32, f32, f32, f32, f32); 9] = [
+            // Top-left corner
+            (0.0, 0.0, sl, st, dl, dt, d_inner_left - dl, d_inner_top - dt),
+            // Top center
+            (sl, 0.0, sr - sl, st, d_inner_left, dt, d_inner_right - d_inner_left, d_inner_top - dt),
+            // Top-right corner
+            (sr, 0.0, img_w - sr, st, d_inner_right, dt, dr - d_inner_right, d_inner_top - dt),
+            // Middle-left
+            (0.0, st, sl, sb - st, dl, d_inner_top, d_inner_left - dl, d_inner_bottom - d_inner_top),
+            // Center
+            (sl, st, sr - sl, sb - st, d_inner_left, d_inner_top, d_inner_right - d_inner_left, d_inner_bottom - d_inner_top),
+            // Middle-right
+            (sr, st, img_w - sr, sb - st, d_inner_right, d_inner_top, dr - d_inner_right, d_inner_bottom - d_inner_top),
+            // Bottom-left corner
+            (0.0, sb, sl, img_h - sb, dl, d_inner_bottom, d_inner_left - dl, db - d_inner_bottom),
+            // Bottom center
+            (sl, sb, sr - sl, img_h - sb, d_inner_left, d_inner_bottom, d_inner_right - d_inner_left, db - d_inner_bottom),
+            // Bottom-right corner
+            (sr, sb, img_w - sr, img_h - sb, d_inner_right, d_inner_bottom, dr - d_inner_right, db - d_inner_bottom),
+        ];
+
+        for (sx, sy, sw, sh, dx, dy, dw, dh) in slices {
+            if dw <= 0.0 || dh <= 0.0 || sw <= 0.0 || sh <= 0.0 {
+                continue;
+            }
+            if let Some(sub_image) = extract(sx, sy, sw, sh) {
+                let tile_dst = Rect::from_xywh(px(dx), px(dy), px(dw), px(dh));
+                self.draw_image(&sub_image, tile_dst);
+            }
+        }
+    }
+
+    fn draw_image_filtered(
+        &mut self,
+        image: &flui_types::painting::Image,
+        dst: Rect<Pixels>,
+        filter: flui_painting::display_list::ColorFilter,
+    ) {
+        use flui_painting::display_list::ColorFilter;
+
+        match filter {
+            ColorFilter::Mode { color, blend_mode: _ } => {
+                // Pragmatic v1: draw image then overlay a tinted rect
+                // First draw the image normally
+                self.draw_image(image, dst);
+
+                // Then overlay with the tint color using a semi-transparent rect
+                let tint_paint = Paint {
+                    color: color.with_alpha(color.a / 2),
+                    style: flui_painting::PaintStyle::Fill,
+                    ..Default::default()
+                };
+                self.rect(dst, &tint_paint);
+
+                tracing::debug!(
+                    "draw_image_filtered: Mode filter applied as color overlay (color={:?})",
+                    color
+                );
+            }
+            ColorFilter::Matrix(matrix) => {
+                // Apply color matrix to image pixel data on CPU
+                let data = image.data();
+                let w = image.width();
+                let h = image.height();
+                let mut new_data = Vec::with_capacity(data.len());
+
+                for pixel in data.chunks_exact(4) {
+                    let r = pixel[0] as f32 / 255.0;
+                    let g = pixel[1] as f32 / 255.0;
+                    let b = pixel[2] as f32 / 255.0;
+                    let a = pixel[3] as f32 / 255.0;
+
+                    let nr = (matrix[0] * r + matrix[1] * g + matrix[2] * b + matrix[3] * a + matrix[4]).clamp(0.0, 1.0);
+                    let ng = (matrix[5] * r + matrix[6] * g + matrix[7] * b + matrix[8] * a + matrix[9]).clamp(0.0, 1.0);
+                    let nb = (matrix[10] * r + matrix[11] * g + matrix[12] * b + matrix[13] * a + matrix[14]).clamp(0.0, 1.0);
+                    let na = (matrix[15] * r + matrix[16] * g + matrix[17] * b + matrix[18] * a + matrix[19]).clamp(0.0, 1.0);
+
+                    new_data.push((nr * 255.0) as u8);
+                    new_data.push((ng * 255.0) as u8);
+                    new_data.push((nb * 255.0) as u8);
+                    new_data.push((na * 255.0) as u8);
+                }
+
+                let filtered = flui_types::painting::Image::from_rgba8(w, h, new_data);
+                self.draw_image(&filtered, dst);
+
+                tracing::debug!("draw_image_filtered: Matrix filter applied via CPU");
+            }
+            ColorFilter::LinearToSrgbGamma => {
+                // Apply linear-to-sRGB gamma correction on CPU
+                let data = image.data();
+                let w = image.width();
+                let h = image.height();
+                let mut new_data = Vec::with_capacity(data.len());
+
+                for pixel in data.chunks_exact(4) {
+                    for &ch in &pixel[..3] {
+                        let linear = ch as f32 / 255.0;
+                        let srgb = if linear <= 0.0031308 {
+                            linear * 12.92
+                        } else {
+                            1.055 * linear.powf(1.0 / 2.4) - 0.055
+                        };
+                        new_data.push((srgb.clamp(0.0, 1.0) * 255.0) as u8);
+                    }
+                    new_data.push(pixel[3]); // Alpha unchanged
+                }
+
+                let filtered = flui_types::painting::Image::from_rgba8(w, h, new_data);
+                self.draw_image(&filtered, dst);
+
+                tracing::debug!("draw_image_filtered: LinearToSrgbGamma applied via CPU");
+            }
+            ColorFilter::SrgbToLinearGamma => {
+                // Apply sRGB-to-linear gamma correction on CPU
+                let data = image.data();
+                let w = image.width();
+                let h = image.height();
+                let mut new_data = Vec::with_capacity(data.len());
+
+                for pixel in data.chunks_exact(4) {
+                    for &ch in &pixel[..3] {
+                        let srgb = ch as f32 / 255.0;
+                        let linear = if srgb <= 0.04045 {
+                            srgb / 12.92
+                        } else {
+                            ((srgb + 0.055) / 1.055).powf(2.4)
+                        };
+                        new_data.push((linear.clamp(0.0, 1.0) * 255.0) as u8);
+                    }
+                    new_data.push(pixel[3]); // Alpha unchanged
+                }
+
+                let filtered = flui_types::painting::Image::from_rgba8(w, h, new_data);
+                self.draw_image(&filtered, dst);
+
+                tracing::debug!("draw_image_filtered: SrgbToLinearGamma applied via CPU");
+            }
+        }
+    }
+
     fn draw_shadow(
         &mut self,
         path: &flui_types::painting::path::Path,
