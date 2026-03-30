@@ -422,6 +422,26 @@ impl OffscreenRenderer {
         }
     }
 
+    /// Access the wgpu device
+    pub fn device(&self) -> &Arc<wgpu::Device> {
+        &self.device
+    }
+
+    /// Access the wgpu queue
+    pub fn queue(&self) -> &Arc<wgpu::Queue> {
+        &self.queue
+    }
+
+    /// Get the surface texture format
+    pub fn surface_format(&self) -> wgpu::TextureFormat {
+        self.surface_format
+    }
+
+    /// Access the texture pool
+    pub fn texture_pool(&self) -> &Arc<TexturePool> {
+        &self.texture_pool
+    }
+
     /// Get texture pool statistics
     pub fn texture_pool_stats(&self) -> super::texture_pool::PoolStats {
         self.texture_pool.stats()
