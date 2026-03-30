@@ -57,6 +57,15 @@ struct TessellatedBatch {
 /// painter.render(&view, &mut encoder)?;
 /// ```
 #[allow(missing_debug_implementations)]
+/// A pending offscreen texture waiting to be composited into the main render target.
+///
+/// Created by [`WgpuPainter::queue_offscreen_result`] and consumed during
+/// [`WgpuPainter::render`] after all other drawing is complete.
+struct PendingOffscreenTexture {
+    texture: super::texture_pool::PooledTexture,
+    bounds: Rect<Pixels>,
+}
+
 pub struct WgpuPainter {
     // ===== GPU State =====
     /// wgpu device (Arc for sharing with text renderer)
@@ -64,6 +73,9 @@ pub struct WgpuPainter {
 
     /// wgpu queue (Arc for sharing with text renderer)
     queue: Arc<wgpu::Queue>,
+
+    /// Surface texture format (needed for offscreen pipeline creation)
+    surface_format: wgpu::TextureFormat,
 
     /// Viewport size (width, height)
     size: (u32, u32),
@@ -203,6 +215,10 @@ pub struct WgpuPainter {
 
     /// Current accumulated opacity (1.0 = fully opaque)
     current_opacity: f32,
+
+    // ===== Offscreen Compositing =====
+    /// Pending offscreen textures to composite into the main render target
+    pending_offscreen: Vec<PendingOffscreenTexture>,
 }
 
 // GPU rendering routinely converts between numeric types for pixel coordinates,
@@ -688,6 +704,7 @@ impl WgpuPainter {
         Self {
             device,
             queue,
+            surface_format,
             size,
             buffer_pool,
             pipeline_cache,
@@ -729,7 +746,43 @@ impl WgpuPainter {
             current_scissor: None,
             opacity_stack: Vec::new(),
             current_opacity: 1.0,
+            pending_offscreen: Vec::new(),
         }
+    }
+
+    // ===== Accessors =====
+
+    /// Returns a reference to the wgpu device.
+    #[must_use]
+    pub fn device(&self) -> &Arc<wgpu::Device> {
+        &self.device
+    }
+
+    /// Returns a reference to the wgpu queue.
+    #[must_use]
+    pub fn queue(&self) -> &Arc<wgpu::Queue> {
+        &self.queue
+    }
+
+    /// Returns the surface texture format.
+    #[must_use]
+    pub fn surface_format(&self) -> wgpu::TextureFormat {
+        self.surface_format
+    }
+
+    // ===== Offscreen Compositing =====
+
+    /// Queue an offscreen-rendered texture for compositing into the main render target.
+    ///
+    /// The texture will be drawn as a full quad at the given `bounds` during the
+    /// next [`render`](Self::render) call, after text but before buffer cleanup.
+    pub fn queue_offscreen_result(
+        &mut self,
+        texture: super::texture_pool::PooledTexture,
+        bounds: Rect<Pixels>,
+    ) {
+        self.pending_offscreen
+            .push(PendingOffscreenTexture { texture, bounds });
     }
 
     /// Render all batched geometry to a texture view
@@ -836,6 +889,18 @@ impl WgpuPainter {
         // ===== Render Text =====
         self.text_renderer
             .render(&self.device, &self.queue, view, encoder, self.size)?;
+
+        // ===== Composite Offscreen Results =====
+        // Drain to take ownership and avoid borrow conflict with &mut self methods.
+        let pending: Vec<_> = self.pending_offscreen.drain(..).collect();
+        for p in &pending {
+            let instance = super::instancing::TextureInstance::new(
+                p.bounds,
+                flui_types::styling::Color::WHITE,
+            );
+            let _ = self.texture_batch.add(instance);
+            self.flush_texture_batch(encoder, view, p.texture.view());
+        }
 
         // ===== Clear buffers for next frame =====
         self.vertices.clear();
