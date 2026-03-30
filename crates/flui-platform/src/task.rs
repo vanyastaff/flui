@@ -76,6 +76,7 @@ enum TaskState<T> {
     /// Task completed synchronously — value available immediately
     Ready(Option<T>),
     /// Task spawned on tokio runtime — awaiting JoinHandle
+    #[cfg(not(target_arch = "wasm32"))]
     Spawned(tokio::task::JoinHandle<T>),
 }
 
@@ -89,6 +90,7 @@ impl<T> Task<T> {
     }
 
     /// Create a task from a tokio JoinHandle
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn from_handle(handle: tokio::task::JoinHandle<T>) -> Self {
         Task(TaskState::Spawned(handle))
     }
@@ -120,6 +122,7 @@ impl<T: Send + 'static> Future for Task<T> {
                 let val = val.take().expect("Task::Ready polled after completion");
                 Poll::Ready(val)
             }
+            #[cfg(not(target_arch = "wasm32"))]
             TaskState::Spawned(handle) => {
                 // SAFETY: JoinHandle is Unpin, so pinning is safe
                 let handle = unsafe { Pin::new_unchecked(handle) };
@@ -144,6 +147,7 @@ impl<T> std::fmt::Debug for Task<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.0 {
             TaskState::Ready(_) => f.debug_tuple("Task::Ready").finish(),
+            #[cfg(not(target_arch = "wasm32"))]
             TaskState::Spawned(_) => f.debug_tuple("Task::Spawned").finish(),
         }
     }

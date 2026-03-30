@@ -167,8 +167,8 @@ fn register_wheel_events(
         callbacks.dispatch_input(input);
     });
 
-    let mut options = web_sys::AddEventListenerOptions::new();
-    options.passive(false); // Non-passive to allow preventDefault
+    let options = web_sys::AddEventListenerOptions::new();
+    options.set_passive(false); // Non-passive to allow preventDefault
     let _ = canvas.add_event_listener_with_callback_and_add_event_listener_options(
         "wheel",
         closure.as_ref().unchecked_ref(),
@@ -216,7 +216,7 @@ fn make_pointer_state(pe: &web_sys::PointerEvent) -> ui_events::pointer::Pointer
     PointerState {
         time: 0, // Browser doesn't expose nanosecond timestamps easily
         position: PhysicalPosition::new(pe.offset_x() as f64, pe.offset_y() as f64),
-        buttons: PointerButtons::new(pe.buttons() as u32),
+        buttons: PointerButtons::default(),
         modifiers,
         count: 0,
         contact_geometry: PhysicalSize::new(
@@ -324,36 +324,34 @@ fn convert_keyboard_event(
     ke: &web_sys::KeyboardEvent,
     state: keyboard_types::KeyState,
 ) -> PlatformInput {
-    use keyboard_types::{Code, Key, Location, Modifiers, NamedKey};
-
-    let mut modifiers = Modifiers::empty();
+    let mut modifiers = keyboard_types::Modifiers::empty();
     if ke.shift_key() {
-        modifiers |= Modifiers::SHIFT;
+        modifiers |= keyboard_types::Modifiers::SHIFT;
     }
     if ke.ctrl_key() {
-        modifiers |= Modifiers::CONTROL;
+        modifiers |= keyboard_types::Modifiers::CONTROL;
     }
     if ke.alt_key() {
-        modifiers |= Modifiers::ALT;
+        modifiers |= keyboard_types::Modifiers::ALT;
     }
     if ke.meta_key() {
-        modifiers |= Modifiers::META;
+        modifiers |= keyboard_types::Modifiers::META;
     }
 
     let key = map_key_value(&ke.key());
 
     let location = match ke.location() {
-        0 => Location::Standard,
-        1 => Location::Left,
-        2 => Location::Right,
-        3 => Location::Numpad,
-        _ => Location::Standard,
+        0 => keyboard_types::Location::Standard,
+        1 => keyboard_types::Location::Left,
+        2 => keyboard_types::Location::Right,
+        3 => keyboard_types::Location::Numpad,
+        _ => keyboard_types::Location::Standard,
     };
 
     PlatformInput::Keyboard(ui_events::keyboard::KeyboardEvent {
         state,
         key,
-        code: Code::Unidentified,
+        code: keyboard_types::Code::Unidentified,
         location,
         modifiers,
         repeat: ke.repeat(),
@@ -403,7 +401,7 @@ fn map_key_value(key: &str) -> keyboard_types::Key {
         "End" => Key::Named(NamedKey::End),
         "PageUp" => Key::Named(NamedKey::PageUp),
         "PageDown" => Key::Named(NamedKey::PageDown),
-        " " => Key::Named(NamedKey::Space),
+        " " => Key::Character(" ".into()),
         "F1" => Key::Named(NamedKey::F1),
         "F2" => Key::Named(NamedKey::F2),
         "F3" => Key::Named(NamedKey::F3),
@@ -420,6 +418,6 @@ fn map_key_value(key: &str) -> keyboard_types::Key {
         "NumLock" => Key::Named(NamedKey::NumLock),
         "ScrollLock" => Key::Named(NamedKey::ScrollLock),
         s if s.len() == 1 => Key::Character(s.into()),
-        _ => Key::Unidentified,
+        _ => Key::Named(NamedKey::Unidentified),
     }
 }

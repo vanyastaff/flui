@@ -293,7 +293,11 @@ impl PlatformWindow for WebWindow {
     ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
         use raw_window_handle::{RawWindowHandle, WebCanvasWindowHandle, WindowHandle};
 
-        let handle = WebCanvasWindowHandle::new(std::num::NonZero::new(1).unwrap());
+        // WebCanvasWindowHandle expects a NonNull<c_void> pointer to the canvas object
+        let obj: &wasm_bindgen::JsValue = self.canvas.as_ref();
+        let ptr = std::ptr::NonNull::new(obj as *const wasm_bindgen::JsValue as *mut std::ffi::c_void)
+            .expect("canvas JsValue pointer is null");
+        let handle = WebCanvasWindowHandle::new(ptr);
         let raw = RawWindowHandle::WebCanvas(handle);
         // SAFETY: The canvas element is valid for the lifetime of this borrow
         Ok(unsafe { WindowHandle::borrow_raw(raw) })

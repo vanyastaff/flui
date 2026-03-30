@@ -152,6 +152,7 @@
 
 pub mod config;
 pub mod cursor;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod executor;
 pub mod platforms;
 pub mod shared;
@@ -167,6 +168,7 @@ pub use config::{FullscreenMonitor, WindowConfiguration};
 // Re-export cursor types
 pub use cursor::CursorStyle;
 // Re-export executor types
+#[cfg(not(target_arch = "wasm32"))]
 pub use executor::{BackgroundExecutor, ForegroundExecutor};
 // Mobile platforms
 #[cfg(target_os = "android")]

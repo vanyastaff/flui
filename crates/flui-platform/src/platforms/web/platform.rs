@@ -220,8 +220,10 @@ impl Platform for WebPlatform {
     }
 
     fn app_path(&self) -> Result<std::path::PathBuf> {
+        // web_sys::Window::location() returns Location, not Result
+        // Location::origin() returns Result<String, JsValue>
         if let Some(w) = web_sys::window() {
-            if let Ok(origin) = w.location().origin() {
+            if let Ok(origin) = w.location().href() {
                 return Ok(std::path::PathBuf::from(origin));
             }
         }
