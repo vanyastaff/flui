@@ -130,7 +130,7 @@ pub use tessellator::Tessellator;
 #[cfg(feature = "wgpu-backend")]
 pub use text_renderer::{TextRenderingSystem, TextRun};
 // Texture pool
-pub use texture_pool::{PooledTexture, TextureDesc, TexturePool};
+pub use texture_pool::{GpuTexture, PooledTexture, PoolStats, TextureDesc, TexturePool};
 // Vertex types
 pub use vertex::{ImageInstance, PathVertex, RectInstance, RectVertex, Vertex};
 

@@ -79,7 +79,7 @@ impl OffscreenRenderer {
         let bind_group_layout = Self::create_bind_group_layout(&device);
 
         Self {
-            texture_pool: Arc::new(TexturePool::new()),
+            texture_pool: Arc::new(TexturePool::new(Arc::clone(&device))),
             shader_cache: Arc::new(ShaderCache::new()),
             device,
             queue,
@@ -303,7 +303,7 @@ impl OffscreenRenderer {
 
         // Acquire offscreen texture for masked result
         let size = Size::new(child_bounds.width(), child_bounds.height());
-        let texture = self.texture_pool.acquire(size);
+        let texture = self.texture_pool.acquire_from_size(size, self.surface_format);
 
         // Ensure pipeline exists (Arc allows using after mutable borrow ends)
         let _ = self.get_or_create_pipeline(shader_type);
@@ -363,24 +363,8 @@ impl OffscreenRenderer {
             ],
         });
 
-        // Create texture descriptor for offscreen target
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let texture_desc = wgpu::TextureDescriptor {
-            label: Some("Shader Mask Offscreen Texture"),
-            size: wgpu::Extent3d {
-                width: size.width.0 as u32,
-                height: size.height.0 as u32,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: self.surface_format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        };
-        let output_texture = self.device.create_texture(&texture_desc);
-        let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        // Use the pooled texture as the offscreen render target
+        let output_view = texture.view();
 
         // Create command encoder
         let mut encoder = self
@@ -400,7 +384,7 @@ impl OffscreenRenderer {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Shader Mask Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &output_view,
+                    view: output_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
