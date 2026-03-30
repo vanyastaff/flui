@@ -1023,7 +1023,12 @@ impl TickerFuture {
         }
 
         // Block on the listener until notified (no thread spawning)
-        listener.wait();
+        // Note: On wasm32, blocking is not possible — call the callback
+        // immediately. The async path (or_cancel) should be used instead.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            listener.wait();
+        }
         callback();
     }
 }

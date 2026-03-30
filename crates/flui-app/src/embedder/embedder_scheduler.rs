@@ -93,7 +93,7 @@ impl EmbedderScheduler {
     /// - Execute transient callbacks (animations)
     /// - Start frame timing
     pub fn begin_frame(&mut self) -> u64 {
-        let frame_id = self.scheduler.handle_begin_frame(std::time::Instant::now());
+        let frame_id = self.scheduler.handle_begin_frame(web_time::Instant::now());
         self.current_frame = frame_id.as_u64();
         self.current_frame
     }

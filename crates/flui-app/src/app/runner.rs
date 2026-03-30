@@ -156,7 +156,7 @@ where
                 return;
             }
 
-            let now = std::time::Instant::now();
+            let now = web_time::Instant::now();
 
             // Scheduler callbacks (animations)
             let scheduler = Scheduler::instance();
@@ -429,7 +429,7 @@ where
                 return;
             }
 
-            let now = std::time::Instant::now();
+            let now = web_time::Instant::now();
             let scheduler = Scheduler::instance();
             let _frame_id = scheduler.handle_begin_frame(now);
             scheduler.handle_draw_frame();
@@ -573,7 +573,7 @@ where
                 return;
             }
 
-            let now = std::time::Instant::now();
+            let now = web_time::Instant::now();
             let scheduler = Scheduler::instance();
             let _frame_id = scheduler.handle_begin_frame(now);
             scheduler.handle_draw_frame();
