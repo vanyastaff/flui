@@ -22,6 +22,10 @@ pub enum ShaderType {
     GaussianBlurHorizontal,
     /// Gaussian blur vertical pass shader (compute)
     GaussianBlurVertical,
+    /// Dual Kawase blur downsample pass shader
+    DualKawaseDownsample,
+    /// Dual Kawase blur upsample pass shader
+    DualKawaseUpsample,
 }
 
 impl ShaderType {
@@ -37,6 +41,12 @@ impl ShaderType {
             ShaderType::GaussianBlurVertical => {
                 include_str!("shaders/effects/blur_vertical.wgsl")
             }
+            ShaderType::DualKawaseDownsample => {
+                include_str!("shaders/effects/blur_downsample.wgsl")
+            }
+            ShaderType::DualKawaseUpsample => {
+                include_str!("shaders/effects/blur_upsample.wgsl")
+            }
         }
     }
 
@@ -48,6 +58,8 @@ impl ShaderType {
             ShaderType::RadialGradientMask => "Radial Gradient Mask Shader",
             ShaderType::GaussianBlurHorizontal => "Gaussian Blur Horizontal Shader",
             ShaderType::GaussianBlurVertical => "Gaussian Blur Vertical Shader",
+            ShaderType::DualKawaseDownsample => "Dual Kawase Downsample",
+            ShaderType::DualKawaseUpsample => "Dual Kawase Upsample",
         }
     }
 
