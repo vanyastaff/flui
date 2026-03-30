@@ -44,8 +44,10 @@ rustflags = ["-C", "link-arg=-fuse-ld=lld"]
 # ═══════════════════════════════════════════════════════════════════════════════
 # WASM target
 # ═══════════════════════════════════════════════════════════════════════════════
-[target.wasm32-unknown-unknown]
-rustflags = ["-C", "target-feature=+atomics,+bulk-memory,+mutable-globals"]
+# Atomics/bulk-memory only needed for multi-threaded WASM (SharedArrayBuffer).
+# Uncomment when enabling Web Workers with shared memory.
+# [target.wasm32-unknown-unknown]
+# rustflags = ["-C", "target-feature=+atomics,+bulk-memory,+mutable-globals"]
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Profile-specific rustflags
