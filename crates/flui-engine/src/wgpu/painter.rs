@@ -66,6 +66,79 @@ struct PendingOffscreenTexture {
     bounds: Rect<Pixels>,
 }
 
+/// A segment of draw commands that share the same rendering phase ordering.
+///
+/// When an offscreen texture is queued, the current segment is finalized and
+/// a new one starts. This ensures that content drawn before the offscreen
+/// texture renders before it, and content drawn after renders after it,
+/// preserving correct Z-order.
+struct DrawSegment {
+    /// Rectangle instance batch
+    rect_batch: super::instancing::InstanceBatch<super::instancing::RectInstance>,
+    /// Circle instance batch
+    circle_batch: super::instancing::InstanceBatch<super::instancing::CircleInstance>,
+    /// Arc instance batch
+    arc_batch: super::instancing::InstanceBatch<super::instancing::ArcInstance>,
+    /// Shadow instance batch
+    shadow_batch: super::instancing::InstanceBatch<super::instancing::ShadowInstance>,
+    /// Linear gradient instance batch
+    linear_gradient_batch:
+        super::instancing::InstanceBatch<super::instancing::LinearGradientInstance>,
+    /// Radial gradient instance batch
+    radial_gradient_batch:
+        super::instancing::InstanceBatch<super::instancing::RadialGradientInstance>,
+    /// Accumulated gradient stops for this segment
+    current_gradient_stops: Vec<super::effects::GradientStop>,
+    /// Batched vertices for tessellation path
+    vertices: Vec<Vertex>,
+    /// Batched indices for tessellation path
+    indices: Vec<u32>,
+    /// Recorded tessellated batches for this segment
+    tess_batches: Vec<TessellatedBatch>,
+    /// Current pipeline key (for batching draws with same pipeline)
+    current_pipeline_key: Option<PipelineKey>,
+}
+
+impl DrawSegment {
+    /// Create an empty draw segment with pre-allocated batch capacities.
+    fn new() -> Self {
+        Self {
+            rect_batch: super::instancing::InstanceBatch::new(1024),
+            circle_batch: super::instancing::InstanceBatch::new(1024),
+            arc_batch: super::instancing::InstanceBatch::new(1024),
+            shadow_batch: super::instancing::InstanceBatch::new(1024),
+            linear_gradient_batch: super::instancing::InstanceBatch::new(512),
+            radial_gradient_batch: super::instancing::InstanceBatch::new(512),
+            current_gradient_stops: Vec::new(),
+            vertices: Vec::new(),
+            indices: Vec::new(),
+            tess_batches: Vec::new(),
+            current_pipeline_key: None,
+        }
+    }
+
+    /// Returns `true` if this segment has no drawing commands.
+    fn is_empty(&self) -> bool {
+        self.rect_batch.is_empty()
+            && self.circle_batch.is_empty()
+            && self.arc_batch.is_empty()
+            && self.shadow_batch.is_empty()
+            && self.linear_gradient_batch.is_empty()
+            && self.radial_gradient_batch.is_empty()
+            && self.vertices.is_empty()
+            && self.tess_batches.is_empty()
+    }
+}
+
+/// An item in the draw order list, either a segment of batched commands
+/// or an offscreen texture to composite.
+enum DrawItem {
+    /// A segment of instanced/tessellated/gradient draw commands.
+    Segment(DrawSegment),
+    /// An offscreen texture to composite at its bounds.
+    OffscreenTexture(PendingOffscreenTexture),
+}
+
 /// GPU painter for wgpu-based rendering.
 ///
 /// Manages instanced batching, tessellation, text rendering, and offscreen compositing.
@@ -91,21 +164,6 @@ pub struct WgpuPainter {
     /// Pipeline cache for specialized rendering pipelines
     pipeline_cache: PipelineCache,
 
-    /// Batched vertices for current frame (tessellation path for complex
-    /// shapes)
-    vertices: Vec<Vertex>,
-
-    /// Batched indices for current frame (tessellation path for complex shapes)
-    indices: Vec<u32>,
-
-    /// Current pipeline key (for batching draws with same pipeline)
-    current_pipeline_key: Option<PipelineKey>,
-
-    /// Recorded tessellated batches for the current frame.
-    /// Each batch stores a pipeline key and an index range so the render
-    /// pass can switch pipelines only when necessary.
-    tess_batches: Vec<TessellatedBatch>,
-
     // ===== Instanced Rendering =====
     /// Instanced rectangle pipeline (100x faster for UI)
     instanced_rect_pipeline: wgpu::RenderPipeline,
@@ -122,20 +180,11 @@ pub struct WgpuPainter {
     /// Shared unit quad index buffer
     unit_quad_index_buffer: wgpu::Buffer,
 
-    /// Rectangle instance batch
-    rect_batch: super::instancing::InstanceBatch<super::instancing::RectInstance>,
-
     /// Instanced circle pipeline (100x faster for UI)
     instanced_circle_pipeline: wgpu::RenderPipeline,
 
-    /// Circle instance batch
-    circle_batch: super::instancing::InstanceBatch<super::instancing::CircleInstance>,
-
     /// Instanced arc pipeline (100x faster for progress indicators)
     instanced_arc_pipeline: wgpu::RenderPipeline,
-
-    /// Arc instance batch
-    arc_batch: super::instancing::InstanceBatch<super::instancing::ArcInstance>,
 
     /// Instanced texture pipeline (100x faster for images/icons)
     instanced_texture_pipeline: wgpu::RenderPipeline,
@@ -150,22 +199,11 @@ pub struct WgpuPainter {
     /// Linear gradient pipeline (GPU-accelerated gradients)
     linear_gradient_pipeline: wgpu::RenderPipeline,
 
-    /// Linear gradient instance batch
-    linear_gradient_batch:
-        super::instancing::InstanceBatch<super::instancing::LinearGradientInstance>,
-
     /// Radial gradient pipeline (GPU-accelerated radial gradients)
     radial_gradient_pipeline: wgpu::RenderPipeline,
 
-    /// Radial gradient instance batch
-    radial_gradient_batch:
-        super::instancing::InstanceBatch<super::instancing::RadialGradientInstance>,
-
     /// Shadow pipeline (analytical shadows with single-pass rendering)
     shadow_pipeline: wgpu::RenderPipeline,
-
-    /// Shadow instance batch
-    shadow_batch: super::instancing::InstanceBatch<super::instancing::ShadowInstance>,
 
     /// Gradient stops storage buffer (shared for all gradients)
     gradient_stops_buffer: wgpu::Buffer,
@@ -175,9 +213,6 @@ pub struct WgpuPainter {
 
     /// Current gradient stops bind group (recreated when stops change)
     gradient_bind_group: Option<wgpu::BindGroup>,
-
-    /// Accumulated gradient stops for current frame (cleared each frame)
-    current_gradient_stops: Vec<super::effects::GradientStop>,
 
     /// Default texture sampler (linear filtering with repeat)
     default_sampler: wgpu::Sampler,
@@ -219,9 +254,12 @@ pub struct WgpuPainter {
     /// Current accumulated opacity (1.0 = fully opaque)
     current_opacity: f32,
 
-    // ===== Offscreen Compositing =====
-    /// Pending offscreen textures to composite into the main render target
-    pending_offscreen: Vec<PendingOffscreenTexture>,
+    // ===== Segmented Draw Order =====
+    /// Current draw segment accumulating batched commands
+    current_segment: DrawSegment,
+
+    /// Ordered list of completed draw items (segments and offscreen textures)
+    draw_order: Vec<DrawItem>,
 }
 
 // GPU rendering routinely converts between numeric types for pixel coordinates,
@@ -403,8 +441,7 @@ impl WgpuPainter {
             usage: wgpu::BufferUsages::INDEX,
         });
 
-        // Create rectangle instance batch
-        let rect_batch = super::instancing::InstanceBatch::new(1024); // 1024 rects per batch
+        // (Rectangle instance batch moved to DrawSegment)
 
         // ===== Circle Instanced Rendering Setup =====
 
@@ -463,8 +500,7 @@ impl WgpuPainter {
                 cache: None,
             });
 
-        // Create circle instance batch
-        let circle_batch = super::instancing::InstanceBatch::new(1024); // 1024 circles per batch
+        // (Circle instance batch moved to DrawSegment)
 
         // ===== Arc Instanced Rendering Setup =====
 
@@ -523,8 +559,7 @@ impl WgpuPainter {
                 cache: None,
             });
 
-        // Create arc instance batch
-        let arc_batch = super::instancing::InstanceBatch::new(1024); // 1024 arcs per batch
+        // (Arc instance batch moved to DrawSegment)
 
         // ===== Texture Instanced Rendering Setup =====
 
@@ -667,8 +702,7 @@ impl WgpuPainter {
             &gradient_bind_group_layout,
         );
 
-        // Create linear gradient batch
-        let linear_gradient_batch = super::instancing::InstanceBatch::new(512); // 512 gradients per batch
+        // (Linear gradient batch moved to DrawSegment)
 
         // Create radial gradient pipeline
         let radial_gradient_pipeline = super::effects_pipeline::create_radial_gradient_pipeline(
@@ -678,8 +712,7 @@ impl WgpuPainter {
             &gradient_bind_group_layout,
         );
 
-        // Create radial gradient batch
-        let radial_gradient_batch = super::instancing::InstanceBatch::new(512); // 512 gradients per batch
+        // (Radial gradient batch moved to DrawSegment)
 
         // Create shadow pipeline
         let shadow_pipeline = super::effects_pipeline::create_shadow_pipeline(
@@ -688,14 +721,10 @@ impl WgpuPainter {
             pipeline_cache.viewport_bind_group_layout(),
         );
 
-        // Create shadow batch
-        let shadow_batch = super::instancing::InstanceBatch::new(1024); // 1024 shadows per batch
+        // (Shadow batch moved to DrawSegment)
 
         // No bind group yet (created on first gradient use)
         let gradient_bind_group = None;
-
-        // Initialize gradient stops accumulator
-        let current_gradient_stops = Vec::new();
 
         // Create texture cache (uses Arc for safe sharing)
         let texture_cache = super::texture_cache::TextureCache::new(device.clone(), queue.clone());
@@ -711,33 +740,22 @@ impl WgpuPainter {
             size,
             buffer_pool,
             pipeline_cache,
-            vertices: Vec::new(),
-            indices: Vec::new(),
-            current_pipeline_key: None,
-            tess_batches: Vec::new(),
             instanced_rect_pipeline,
             viewport_buffer,
             viewport_bind_group,
             unit_quad_buffer,
             unit_quad_index_buffer,
-            rect_batch,
             instanced_circle_pipeline,
-            circle_batch,
             instanced_arc_pipeline,
-            arc_batch,
             instanced_texture_pipeline,
             texture_batch,
             texture_bind_group_layout,
             linear_gradient_pipeline,
-            linear_gradient_batch,
             radial_gradient_pipeline,
-            radial_gradient_batch,
             shadow_pipeline,
-            shadow_batch,
             gradient_stops_buffer,
             gradient_bind_group_layout,
             gradient_bind_group,
-            current_gradient_stops,
             default_sampler,
             texture_cache,
             external_texture_registry,
@@ -749,7 +767,8 @@ impl WgpuPainter {
             current_scissor: None,
             opacity_stack: Vec::new(),
             current_opacity: 1.0,
-            pending_offscreen: Vec::new(),
+            current_segment: DrawSegment::new(),
+            draw_order: Vec::new(),
         }
     }
 
@@ -777,20 +796,32 @@ impl WgpuPainter {
 
     /// Queue an offscreen-rendered texture for compositing into the main render target.
     ///
-    /// The texture will be drawn as a full quad at the given `bounds` during the
-    /// next [`render`](Self::render) call, after text but before buffer cleanup.
+    /// This finalizes the current draw segment and inserts the offscreen texture
+    /// into the draw order. Content drawn before this call will render before
+    /// the offscreen texture, and content drawn after will render after it,
+    /// preserving correct Z-ordering.
     pub fn queue_offscreen_result(
         &mut self,
         texture: super::texture_pool::PooledTexture,
         bounds: Rect<Pixels>,
     ) {
-        self.pending_offscreen
-            .push(PendingOffscreenTexture { texture, bounds });
+        // Finalize the current segment and start a new one
+        let segment = std::mem::replace(&mut self.current_segment, DrawSegment::new());
+        if !segment.is_empty() {
+            self.draw_order.push(DrawItem::Segment(segment));
+        }
+        self.draw_order
+            .push(DrawItem::OffscreenTexture(PendingOffscreenTexture {
+                texture,
+                bounds,
+            }));
     }
 
     /// Render all batched geometry to a texture view
     ///
     /// This should be called once per frame after all drawing operations.
+    /// Draw items are rendered in the order they were recorded, with offscreen
+    /// textures interleaved at the correct Z-position.
     ///
     /// # Arguments
     /// * `view` - Texture view to render to
@@ -803,118 +834,158 @@ impl WgpuPainter {
     ) -> Result<(), String> {
         // Log rendering stats
         let text_count = self.text_renderer.text_count();
-        let rect_count = self.rect_batch.len();
-        let circle_count = self.circle_batch.len();
+        let rect_count = self.current_segment.rect_batch.len();
+        let circle_count = self.current_segment.circle_batch.len();
         let buffer_stats = self.buffer_pool.stats();
 
         tracing::trace!(
-            vertices = self.vertices.len(),
-            indices = self.indices.len(),
+            vertices = self.current_segment.vertices.len(),
+            indices = self.current_segment.indices.len(),
             text_count,
             rects = rect_count,
             circles = circle_count,
+            segments = self.draw_order.len(),
             cache_hit_rate = format!("{:.0}%", buffer_stats.reuse_rate * 100.0),
             "Drawing commands"
         );
 
-        // ===== Render All Instanced Primitives FIRST =====
-        // (Background rects, circles, etc. render first, then tessellated shapes on
-        // top)
-        self.flush_all_instanced_batches(encoder, view);
+        // ===== Finalize current segment =====
+        let final_segment = std::mem::replace(&mut self.current_segment, DrawSegment::new());
+        if !final_segment.is_empty() {
+            self.draw_order.push(DrawItem::Segment(final_segment));
+        }
 
-        // ===== Render Gradients (Linear + Radial) =====
-        self.flush_gradient_batches(encoder, view);
-
-        // ===== Render Tessellated Shapes LAST (on top of instanced) =====
-        if !self.vertices.is_empty() && !self.tess_batches.is_empty() {
-            // Upload vertices to GPU
-            let vertex_buffer = self
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Shape Vertex Buffer"),
-                    contents: bytemuck::cast_slice(&self.vertices),
-                    usage: wgpu::BufferUsages::VERTEX,
-                });
-
-            // Upload indices to GPU
-            let index_buffer = self
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Shape Index Buffer"),
-                    contents: bytemuck::cast_slice(&self.indices),
-                    usage: wgpu::BufferUsages::INDEX,
-                });
-
-            // Render shapes in single pass, switching pipelines per batch
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Shape Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load, // Don't clear - background already cleared
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-
-            render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-            render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-
-            // Apply scissor rect if active
-            if let Some((x, y, width, height)) = self.current_scissor {
-                render_pass.set_scissor_rect(x, y, width, height);
-            }
-
-            // Iterate over recorded batches, switching pipeline only when the
-            // key changes.  This keeps a single render pass while still using
-            // the correct blend mode / MSAA variant for each group of draws.
-            let mut active_key: Option<PipelineKey> = None;
-            for batch in &self.tess_batches {
-                if active_key != Some(batch.pipeline_key) {
-                    let pipeline = self
-                        .pipeline_cache
-                        .get_or_create(&self.device, batch.pipeline_key);
-                    render_pass.set_pipeline(pipeline);
-                    active_key = Some(batch.pipeline_key);
+        // ===== Process draw items in order =====
+        let items: Vec<DrawItem> = self.draw_order.drain(..).collect();
+        for item in items {
+            match item {
+                DrawItem::Segment(mut seg) => {
+                    self.flush_segment(&mut seg, encoder, view);
                 }
-
-                let start = batch.index_start;
-                let end = start + batch.index_count;
-                render_pass.draw_indexed(start..end, 0, 0..1);
+                DrawItem::OffscreenTexture(p) => {
+                    let instance = super::instancing::TextureInstance::new(
+                        p.bounds,
+                        flui_types::styling::Color::WHITE,
+                    );
+                    let _ = self.texture_batch.add(instance);
+                    self.flush_texture_batch(encoder, view, p.texture.view());
+                    // p.texture dropped here, returns to pool
+                }
             }
         }
 
-        // ===== Render Text =====
+        // ===== Render Text (global - always on top) =====
         self.text_renderer
             .render(&self.device, &self.queue, view, encoder, self.size)?;
 
-        // ===== Composite Offscreen Results =====
-        // Drain to take ownership and avoid borrow conflict with &mut self methods.
-        let pending: Vec<_> = self.pending_offscreen.drain(..).collect();
-        for p in &pending {
-            let instance = super::instancing::TextureInstance::new(
-                p.bounds,
-                flui_types::styling::Color::WHITE,
-            );
-            let _ = self.texture_batch.add(instance);
-            self.flush_texture_batch(encoder, view, p.texture.view());
-        }
-
-        // ===== Clear buffers for next frame =====
-        self.vertices.clear();
-        self.indices.clear();
-        self.tess_batches.clear();
-        self.current_pipeline_key = None;
-
-        // Reset buffer pool for next frame (enables buffer reuse)
+        // ===== Reset buffer pool for next frame =====
         self.buffer_pool.reset();
 
         Ok(())
+    }
+
+    /// Flush a single draw segment by temporarily swapping it into current_segment
+    /// and calling the existing flush methods.
+    ///
+    /// This avoids refactoring all flush methods to accept segment parameters.
+    fn flush_segment(
+        &mut self,
+        seg: &mut DrawSegment,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+    ) {
+        // Swap segment data into current_segment temporarily
+        std::mem::swap(&mut self.current_segment, seg);
+
+        // Call existing flush methods (they read from self.current_segment.*)
+        self.flush_all_instanced_batches(encoder, view);
+        self.flush_gradient_batches(encoder, view);
+        self.flush_tessellated_geometry(encoder, view);
+
+        // Swap back (now empty after flush)
+        std::mem::swap(&mut self.current_segment, seg);
+    }
+
+    /// Flush tessellated geometry from the current segment.
+    ///
+    /// Uploads vertices/indices and renders all recorded tessellated batches
+    /// in a single render pass, switching pipelines as needed.
+    fn flush_tessellated_geometry(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+    ) {
+        if self.current_segment.vertices.is_empty() || self.current_segment.tess_batches.is_empty()
+        {
+            return;
+        }
+
+        // Upload vertices to GPU
+        let vertex_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Shape Vertex Buffer"),
+                contents: bytemuck::cast_slice(&self.current_segment.vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+
+        // Upload indices to GPU
+        let index_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Shape Index Buffer"),
+                contents: bytemuck::cast_slice(&self.current_segment.indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+
+        // Render shapes in single pass, switching pipelines per batch
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Shape Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
+        render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
+        render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+        render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+
+        // Apply scissor rect if active
+        if let Some((x, y, width, height)) = self.current_scissor {
+            render_pass.set_scissor_rect(x, y, width, height);
+        }
+
+        let mut active_key: Option<PipelineKey> = None;
+        for batch in &self.current_segment.tess_batches {
+            if active_key != Some(batch.pipeline_key) {
+                let pipeline = self
+                    .pipeline_cache
+                    .get_or_create(&self.device, batch.pipeline_key);
+                render_pass.set_pipeline(pipeline);
+                active_key = Some(batch.pipeline_key);
+            }
+
+            let start = batch.index_start;
+            let end = start + batch.index_count;
+            render_pass.draw_indexed(start..end, 0, 0..1);
+        }
+
+        // Drop render pass
+        drop(render_pass);
+
+        // Clear tessellated data
+        self.current_segment.vertices.clear();
+        self.current_segment.indices.clear();
+        self.current_segment.tess_batches.clear();
+        self.current_segment.current_pipeline_key = None;
     }
 
     /// Resize the viewport
@@ -995,19 +1066,21 @@ impl WgpuPainter {
             return;
         }
 
-        let base_index = self.vertices.len() as u32;
-        let index_start = self.indices.len() as u32;
+        let base_index = self.current_segment.vertices.len() as u32;
+        let index_start = self.current_segment.indices.len() as u32;
 
         // Add vertices (already transformed by tessellator if needed)
-        self.vertices.extend(vertices);
+        self.current_segment.vertices.extend(vertices);
 
         // Add indices with offset
-        self.indices.extend(indices.iter().map(|&i| i + base_index));
+        self.current_segment
+            .indices
+            .extend(indices.iter().map(|&i| i + base_index));
 
         let index_count = indices.len() as u32;
 
         // Try to extend the current batch if the pipeline key matches
-        if let Some(last) = self.tess_batches.last_mut() {
+        if let Some(last) = self.current_segment.tess_batches.last_mut() {
             if last.pipeline_key == key {
                 last.index_count += index_count;
                 return;
@@ -1015,8 +1088,8 @@ impl WgpuPainter {
         }
 
         // Pipeline key changed (or first batch) — start a new batch
-        self.current_pipeline_key = Some(key);
-        self.tess_batches.push(TessellatedBatch {
+        self.current_segment.current_pipeline_key = Some(key);
+        self.current_segment.tess_batches.push(TessellatedBatch {
             pipeline_key: key,
             index_start,
             index_count,
@@ -1051,10 +1124,10 @@ impl WgpuPainter {
         view: &wgpu::TextureView,
     ) {
         // Check if we have any batches to flush
-        let has_rects = !self.rect_batch.is_empty();
-        let has_circles = !self.circle_batch.is_empty();
-        let has_arcs = !self.arc_batch.is_empty();
-        let has_shadows = !self.shadow_batch.is_empty();
+        let has_rects = !self.current_segment.rect_batch.is_empty();
+        let has_circles = !self.current_segment.circle_batch.is_empty();
+        let has_arcs = !self.current_segment.arc_batch.is_empty();
+        let has_shadows = !self.current_segment.shadow_batch.is_empty();
 
         if !has_rects && !has_circles && !has_arcs && !has_shadows {
             return;
@@ -1063,20 +1136,20 @@ impl WgpuPainter {
         #[cfg(debug_assertions)]
         tracing::trace!(
             "WgpuPainter::flush_all_instanced_batches (single pass): rects={}, circles={}, arcs={}, shadows={}",
-            self.rect_batch.len(),
-            self.circle_batch.len(),
-            self.arc_batch.len(),
-            self.shadow_batch.len()
+            self.current_segment.rect_batch.len(),
+            self.current_segment.circle_batch.len(),
+            self.current_segment.arc_batch.len(),
+            self.current_segment.shadow_batch.len()
         );
 
         // Calculate total buffer size and offsets
         let rect_size =
-            self.rect_batch.len() * std::mem::size_of::<super::instancing::RectInstance>();
+            self.current_segment.rect_batch.len() * std::mem::size_of::<super::instancing::RectInstance>();
         let circle_size =
-            self.circle_batch.len() * std::mem::size_of::<super::instancing::CircleInstance>();
-        let arc_size = self.arc_batch.len() * std::mem::size_of::<super::instancing::ArcInstance>();
+            self.current_segment.circle_batch.len() * std::mem::size_of::<super::instancing::CircleInstance>();
+        let arc_size = self.current_segment.arc_batch.len() * std::mem::size_of::<super::instancing::ArcInstance>();
         let shadow_size =
-            self.shadow_batch.len() * std::mem::size_of::<super::instancing::ShadowInstance>();
+            self.current_segment.shadow_batch.len() * std::mem::size_of::<super::instancing::ShadowInstance>();
 
         // Build combined instance buffer
         // IMPORTANT: Shadows FIRST for correct z-ordering (background → foreground)
@@ -1086,23 +1159,23 @@ impl WgpuPainter {
         // Append shadows first (render behind shapes)
         let shadow_offset = 0;
         if has_shadows {
-            combined_buffer.extend_from_slice(self.shadow_batch.as_bytes());
+            combined_buffer.extend_from_slice(self.current_segment.shadow_batch.as_bytes());
         }
 
         // Then append shapes (render on top of shadows)
         let rect_offset = combined_buffer.len();
         if has_rects {
-            combined_buffer.extend_from_slice(self.rect_batch.as_bytes());
+            combined_buffer.extend_from_slice(self.current_segment.rect_batch.as_bytes());
         }
 
         let circle_offset = combined_buffer.len();
         if has_circles {
-            combined_buffer.extend_from_slice(self.circle_batch.as_bytes());
+            combined_buffer.extend_from_slice(self.current_segment.circle_batch.as_bytes());
         }
 
         let arc_offset = combined_buffer.len();
         if has_arcs {
-            combined_buffer.extend_from_slice(self.arc_batch.as_bytes());
+            combined_buffer.extend_from_slice(self.current_segment.arc_batch.as_bytes());
         }
 
         // Upload combined buffer (using buffer pool with zero-copy)
@@ -1152,7 +1225,7 @@ impl WgpuPainter {
             let shadow_end = shadow_start + shadow_size as u64;
             render_pass.set_vertex_buffer(1, instance_buffer.slice(shadow_start..shadow_end));
 
-            render_pass.draw_indexed(0..6, 0, 0..self.shadow_batch.len() as u32);
+            render_pass.draw_indexed(0..6, 0, 0..self.current_segment.shadow_batch.len() as u32);
         }
 
         // ===== Draw Rectangles (if any) =====
@@ -1163,7 +1236,7 @@ impl WgpuPainter {
             let rect_end = rect_start + rect_size as u64;
             render_pass.set_vertex_buffer(1, instance_buffer.slice(rect_start..rect_end));
 
-            render_pass.draw_indexed(0..6, 0, 0..self.rect_batch.len() as u32);
+            render_pass.draw_indexed(0..6, 0, 0..self.current_segment.rect_batch.len() as u32);
         }
 
         // ===== Draw Circles (if any) =====
@@ -1174,7 +1247,7 @@ impl WgpuPainter {
             let circle_end = circle_start + circle_size as u64;
             render_pass.set_vertex_buffer(1, instance_buffer.slice(circle_start..circle_end));
 
-            render_pass.draw_indexed(0..6, 0, 0..self.circle_batch.len() as u32);
+            render_pass.draw_indexed(0..6, 0, 0..self.current_segment.circle_batch.len() as u32);
         }
 
         // ===== Draw Arcs (if any) =====
@@ -1185,17 +1258,17 @@ impl WgpuPainter {
             let arc_end = arc_start + arc_size as u64;
             render_pass.set_vertex_buffer(1, instance_buffer.slice(arc_start..arc_end));
 
-            render_pass.draw_indexed(0..6, 0, 0..self.arc_batch.len() as u32);
+            render_pass.draw_indexed(0..6, 0, 0..self.current_segment.arc_batch.len() as u32);
         }
 
         // Drop render pass (explicit for clarity)
         drop(render_pass);
 
         // Clear batches for next frame
-        self.rect_batch.clear();
-        self.circle_batch.clear();
-        self.arc_batch.clear();
-        self.shadow_batch.clear();
+        self.current_segment.rect_batch.clear();
+        self.current_segment.circle_batch.clear();
+        self.current_segment.arc_batch.clear();
+        self.current_segment.shadow_batch.clear();
     }
 
     /// Flush gradient batches (linear and radial)
@@ -1208,8 +1281,8 @@ impl WgpuPainter {
         view: &wgpu::TextureView,
     ) {
         // Check if we have any gradients to render
-        let has_linear = !self.linear_gradient_batch.is_empty();
-        let has_radial = !self.radial_gradient_batch.is_empty();
+        let has_linear = !self.current_segment.linear_gradient_batch.is_empty();
+        let has_radial = !self.current_segment.radial_gradient_batch.is_empty();
 
         if !has_linear && !has_radial {
             return;
@@ -1218,17 +1291,17 @@ impl WgpuPainter {
         #[cfg(debug_assertions)]
         tracing::trace!(
             "WgpuPainter::flush_gradient_batches: linear={}, radial={}, stops={}",
-            self.linear_gradient_batch.len(),
-            self.radial_gradient_batch.len(),
-            self.current_gradient_stops.len()
+            self.current_segment.linear_gradient_batch.len(),
+            self.current_segment.radial_gradient_batch.len(),
+            self.current_segment.current_gradient_stops.len()
         );
 
         // ===== Upload Gradient Stops to GPU =====
-        if !self.current_gradient_stops.is_empty() {
+        if !self.current_segment.current_gradient_stops.is_empty() {
             self.queue.write_buffer(
                 &self.gradient_stops_buffer,
                 0,
-                bytemuck::cast_slice(&self.current_gradient_stops),
+                bytemuck::cast_slice(&self.current_segment.current_gradient_stops),
             );
 
             // Create/update bind group
@@ -1244,9 +1317,9 @@ impl WgpuPainter {
         }
 
         // Calculate buffer sizes
-        let linear_size = self.linear_gradient_batch.len()
+        let linear_size = self.current_segment.linear_gradient_batch.len()
             * std::mem::size_of::<super::instancing::LinearGradientInstance>();
-        let radial_size = self.radial_gradient_batch.len()
+        let radial_size = self.current_segment.radial_gradient_batch.len()
             * std::mem::size_of::<super::instancing::RadialGradientInstance>();
 
         // Build combined instance buffer
@@ -1254,12 +1327,12 @@ impl WgpuPainter {
 
         let linear_offset = 0;
         if has_linear {
-            combined_buffer.extend_from_slice(self.linear_gradient_batch.as_bytes());
+            combined_buffer.extend_from_slice(self.current_segment.linear_gradient_batch.as_bytes());
         }
 
         let radial_offset = combined_buffer.len();
         if has_radial {
-            combined_buffer.extend_from_slice(self.radial_gradient_batch.as_bytes());
+            combined_buffer.extend_from_slice(self.current_segment.radial_gradient_batch.as_bytes());
         }
 
         // Upload combined buffer (zero-copy via queue.write_buffer)
@@ -1305,7 +1378,7 @@ impl WgpuPainter {
             let linear_end = linear_start + linear_size as u64;
             render_pass.set_vertex_buffer(1, instance_buffer.slice(linear_start..linear_end));
 
-            render_pass.draw_indexed(0..6, 0, 0..self.linear_gradient_batch.len() as u32);
+            render_pass.draw_indexed(0..6, 0, 0..self.current_segment.linear_gradient_batch.len() as u32);
         }
 
         // ===== Draw Radial Gradients (if any) =====
@@ -1316,16 +1389,16 @@ impl WgpuPainter {
             let radial_end = radial_start + radial_size as u64;
             render_pass.set_vertex_buffer(1, instance_buffer.slice(radial_start..radial_end));
 
-            render_pass.draw_indexed(0..6, 0, 0..self.radial_gradient_batch.len() as u32);
+            render_pass.draw_indexed(0..6, 0, 0..self.current_segment.radial_gradient_batch.len() as u32);
         }
 
         // Drop render pass
         drop(render_pass);
 
         // Clear batches for next frame
-        self.linear_gradient_batch.clear();
-        self.radial_gradient_batch.clear();
-        self.current_gradient_stops.clear();
+        self.current_segment.linear_gradient_batch.clear();
+        self.current_segment.radial_gradient_batch.clear();
+        self.current_segment.current_gradient_stops.clear();
     }
 
     /// Flush texture instance batch with given texture
@@ -1446,7 +1519,7 @@ impl Painter for WgpuPainter {
 
             // Use GPU instancing for filled rects (100x faster!)
             let instance = super::instancing::RectInstance::rect(transformed_rect, color);
-            let _ = self.rect_batch.add(instance);
+            let _ = self.current_segment.rect_batch.add(instance);
             // Note: Auto-flush happens in render() - no need to flush here
         } else {
             // Stroked rect - use tessellator (less common, fallback path)
@@ -1484,7 +1557,7 @@ impl Painter for WgpuPainter {
                 rrect.bottom_right.x.0.max(rrect.bottom_right.y.0),
                 rrect.bottom_left.x.0.max(rrect.bottom_left.y.0),
             );
-            let _ = self.rect_batch.add(instance);
+            let _ = self.current_segment.rect_batch.add(instance);
         } else {
             // Stroked rounded rect - use tessellator (fallback)
             if let Ok((vertices, indices)) = self.tessellator.tessellate_rrect(rrect, paint) {
@@ -1517,7 +1590,7 @@ impl Painter for WgpuPainter {
             // Use GPU instancing for filled circles (100x faster!)
             let instance =
                 super::instancing::CircleInstance::new(transformed_center, radius, color);
-            let _ = self.circle_batch.add(instance);
+            let _ = self.current_segment.circle_batch.add(instance);
             // Note: Auto-flush happens in render() - no need to flush here
         } else {
             // Stroked circle - use tessellator (less common, fallback path)
@@ -1572,7 +1645,7 @@ impl Painter for WgpuPainter {
                 sweep_angle,
                 paint.color,
             );
-            let _ = self.arc_batch.add(instance);
+            let _ = self.current_segment.arc_batch.add(instance);
         } else {
             // For stroked arcs or arcs without center, use tessellation
             // TODO: Implement proper arc tessellation in Tessellator
@@ -1585,7 +1658,7 @@ impl Painter for WgpuPainter {
                     sweep_angle,
                     paint.color,
                 );
-                let _ = self.arc_batch.add(instance);
+                let _ = self.current_segment.arc_batch.add(instance);
             } else {
                 // Use tessellation for stroked arcs
                 match self.tessellator.tessellate_arc(
@@ -2321,7 +2394,7 @@ impl WgpuPainter {
 
         // Append gradient stops to global buffer (max 8 per gradient)
         let stop_count = stops.len().min(8);
-        self.current_gradient_stops
+        self.current_segment.current_gradient_stops
             .extend_from_slice(&stops[..stop_count]);
 
         let instance = LinearGradientInstance::new(
@@ -2337,7 +2410,7 @@ impl WgpuPainter {
             stop_count as u32,
         );
 
-        if self.linear_gradient_batch.add(instance) {
+        if self.current_segment.linear_gradient_batch.add(instance) {
             // Batch full, flush will happen in render()
         }
     }
@@ -2377,7 +2450,7 @@ impl WgpuPainter {
 
         // Append gradient stops to global buffer (max 8 per gradient)
         let stop_count = stops.len().min(8);
-        self.current_gradient_stops
+        self.current_segment.current_gradient_stops
             .extend_from_slice(&stops[..stop_count]);
 
         let instance = RadialGradientInstance::new(
@@ -2393,7 +2466,7 @@ impl WgpuPainter {
             stop_count as u32,
         );
 
-        if self.radial_gradient_batch.add(instance) {
+        if self.current_segment.radial_gradient_batch.add(instance) {
             // Batch full, flush will happen in render()
         }
     }
@@ -2433,7 +2506,7 @@ impl WgpuPainter {
 
         let instance = ShadowInstance::new(rect_pos, rect_size, corner_radius, params);
 
-        if self.shadow_batch.add(instance) {
+        if self.current_segment.shadow_batch.add(instance) {
             // Batch full, flush will happen in render()
         }
     }
