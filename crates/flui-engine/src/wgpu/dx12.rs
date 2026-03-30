@@ -79,29 +79,95 @@ pub struct Dx12Features {
 impl Dx12Features {
     /// Detect DirectX 12 features from a wgpu device.
     ///
+    /// Uses wgpu's feature flags to infer DX12 capabilities where possible.
+    /// Some DX12-specific features (Work Graphs, SER, DirectStorage, Auto HDR)
+    /// are not exposed through wgpu and require direct D3D12 API access via
+    /// the `windows` crate's `ID3D12Device` interfaces.
+    ///
     /// # Errors
     ///
     /// Returns error if device is not DirectX 12 backend.
-    pub fn detect(_device: &wgpu::Device) -> Result<Self> {
+    pub fn detect(device: &wgpu::Device) -> Result<Self> {
         #[cfg(not(target_os = "windows"))]
         {
+            let _ = device;
             return Err(anyhow!("DirectX 12 is only available on Windows"));
         }
 
-        // TODO: Query actual D3D12 device capabilities via FFI
-        // For now, return conservative defaults
-        Ok(Self {
-            feature_level: Dx12FeatureLevel::Level12_0,
-            supports_work_graphs: false,
-            supports_ser: false,
-            supports_vrs: false,
-            vrs_tier: VrsTier::NotSupported,
-            supports_mesh_shaders: false,
-            supports_sampler_feedback: false,
-            supports_direct_storage: false,
-            auto_hdr_enabled: false,
-            shader_model: ShaderModel::SM6_0,
-        })
+        #[cfg(target_os = "windows")]
+        {
+            let features = device.features();
+
+            // Infer feature level from available wgpu features.
+            // wgpu does not directly expose D3D12 feature levels, so we estimate
+            // based on which features are available.
+            let supports_mesh_shaders = features.contains(wgpu::Features::EXPERIMENTAL_MESH_SHADER);
+
+            // VRS detection: not directly exposed by wgpu as a feature flag.
+            // Would require ID3D12Device8::CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS6).
+            let supports_vrs = false;
+            let vrs_tier = VrsTier::NotSupported;
+
+            // Sampler feedback requires D3D12 feature level 12.2 / Shader Model 6.5+.
+            // Not exposed through wgpu.
+            let supports_sampler_feedback = false;
+
+            // Estimate feature level based on available features
+            let feature_level = if supports_mesh_shaders {
+                Dx12FeatureLevel::Level12_2
+            } else if features.contains(wgpu::Features::TEXTURE_COMPRESSION_BC) {
+                // BC compression is baseline DX11/12, but combined with other features
+                // suggests at least 12.1
+                Dx12FeatureLevel::Level12_1
+            } else {
+                Dx12FeatureLevel::Level12_0
+            };
+
+            // Shader model estimation based on feature level
+            let shader_model = match feature_level {
+                Dx12FeatureLevel::Level12_2 => ShaderModel::SM6_5,
+                Dx12FeatureLevel::Level12_1 => ShaderModel::SM6_2,
+                Dx12FeatureLevel::Level12_0 => ShaderModel::SM6_0,
+            };
+
+            // Work Graphs (SM 6.8) and SER are NVIDIA Ada / AMD RDNA3+ specific.
+            // These require ID3D12Device14 or vendor-specific extensions.
+            // Not queryable through wgpu.
+            let supports_work_graphs = false;
+            let supports_ser = false;
+
+            // DirectStorage requires the DirectStorage runtime DLL.
+            // Not queryable through wgpu - would need LoadLibrary("dstorage.dll").
+            let supports_direct_storage = false;
+
+            // Auto HDR is a Windows 11 system-level setting.
+            // Would require DXGI_OUTPUT_DESC1::HardwareCompositionSupport query.
+            let auto_hdr_enabled = false;
+
+            tracing::debug!(
+                ?feature_level,
+                ?shader_model,
+                supports_mesh_shaders,
+                supports_vrs,
+                supports_work_graphs,
+                supports_direct_storage,
+                auto_hdr_enabled,
+                "Detected DX12 capabilities (some features require native D3D12 API for accurate detection)"
+            );
+
+            Ok(Self {
+                feature_level,
+                supports_work_graphs,
+                supports_ser,
+                supports_vrs,
+                vrs_tier,
+                supports_mesh_shaders,
+                supports_sampler_feedback,
+                supports_direct_storage,
+                auto_hdr_enabled,
+                shader_model,
+            })
+        }
     }
 
     /// Check if GPU supports DX12 Ultimate (all advanced features).
@@ -346,11 +412,22 @@ impl AutoHdrConfig {
     }
 
     /// Check if Auto HDR is available on this system.
+    ///
+    /// Auto HDR detection requires querying Windows display capabilities via DXGI:
+    /// - `IDXGIOutput6::GetDesc1()` for `DXGI_OUTPUT_DESC1::ColorSpace`
+    /// - Windows 11 or Windows 10 with HDR enabled in display settings
+    ///
+    /// This is not available through wgpu's public API. Returns `false` as a
+    /// conservative default. Applications needing HDR should query the Windows
+    /// display settings API directly.
     pub fn is_available() -> bool {
         #[cfg(target_os = "windows")]
         {
-            // TODO: Query Windows version and display capabilities
-            // For now, assume available on Windows 11+
+            // Accurate detection requires DXGI FFI:
+            //   IDXGIOutput6::GetDesc1() -> DXGI_OUTPUT_DESC1.ColorSpace
+            // and checking for Windows 11+ (build 22000+).
+            // wgpu does not expose DXGI output capabilities.
+            tracing::debug!("Auto HDR availability not detectable via wgpu (requires DXGI output query)");
             false
         }
 
@@ -514,10 +591,21 @@ impl DirectStorageConfig {
     }
 
     /// Check if DirectStorage is available.
+    ///
+    /// DirectStorage detection requires checking for the DirectStorage runtime DLL
+    /// (`dstorage.dll`) and Windows 10 2004+ (build 19041+). This is not queryable
+    /// through wgpu. Returns `false` as a conservative default.
+    ///
+    /// Applications needing DirectStorage should use the `windows` crate to call
+    /// `DStorageGetFactory()` directly.
     pub fn is_available() -> bool {
         #[cfg(target_os = "windows")]
         {
-            // TODO: Query Windows version and DirectStorage runtime
+            // Accurate detection requires:
+            //   LoadLibrary("dstorage.dll") to check runtime presence
+            //   DStorageGetFactory() to verify GPU support
+            // wgpu does not expose DirectStorage capabilities.
+            tracing::debug!("DirectStorage availability not detectable via wgpu (requires dstorage.dll runtime check)");
             false
         }
 
