@@ -15,16 +15,19 @@ use crate::{
 
 use super::window::WebWindow;
 
-/// Register all DOM event listeners on the canvas
+/// Register all DOM event listeners on the canvas.
+///
+/// Closures are intentionally leaked via `forget()` — they must live for the
+/// lifetime of the page because DOM event listeners hold references to them.
 pub fn register_event_listeners(window: &WebWindow) {
     let canvas = window.canvas();
     let callbacks = Arc::clone(window.callbacks());
 
-    register_pointer_events(canvas, &callbacks, window);
-    register_keyboard_events(&callbacks, window);
-    register_focus_events(canvas, window);
-    register_wheel_events(canvas, &callbacks, window);
-    register_context_menu_block(canvas, window);
+    register_pointer_events(canvas, &callbacks);
+    register_keyboard_events(&callbacks);
+    register_focus_events(canvas, &callbacks);
+    register_wheel_events(canvas, &callbacks);
+    register_context_menu_block(canvas);
 }
 
 // ==================== Pointer Events ====================
@@ -32,7 +35,6 @@ pub fn register_event_listeners(window: &WebWindow) {
 fn register_pointer_events(
     canvas: &web_sys::HtmlCanvasElement,
     callbacks: &Arc<WindowCallbacks>,
-    window: &WebWindow,
 ) {
     // pointerdown
     {
@@ -44,7 +46,7 @@ fn register_pointer_events(
         });
         let _ = canvas
             .add_event_listener_with_callback("pointerdown", closure.as_ref().unchecked_ref());
-        window.keep_closure(closure);
+        closure.forget();
     }
 
     // pointermove
@@ -57,7 +59,7 @@ fn register_pointer_events(
         });
         let _ = canvas
             .add_event_listener_with_callback("pointermove", closure.as_ref().unchecked_ref());
-        window.keep_closure(closure);
+        closure.forget();
     }
 
     // pointerup
@@ -70,13 +72,13 @@ fn register_pointer_events(
         });
         let _ =
             canvas.add_event_listener_with_callback("pointerup", closure.as_ref().unchecked_ref());
-        window.keep_closure(closure);
+        closure.forget();
     }
 }
 
 // ==================== Keyboard Events ====================
 
-fn register_keyboard_events(callbacks: &Arc<WindowCallbacks>, window: &WebWindow) {
+fn register_keyboard_events(callbacks: &Arc<WindowCallbacks>) {
     let browser_window = web_sys::window().expect("no global window");
 
     // keydown
@@ -89,7 +91,7 @@ fn register_keyboard_events(callbacks: &Arc<WindowCallbacks>, window: &WebWindow
         });
         let _ = browser_window
             .add_event_listener_with_callback("keydown", closure.as_ref().unchecked_ref());
-        window.keep_closure(closure);
+        closure.forget();
     }
 
     // keyup
@@ -102,53 +104,53 @@ fn register_keyboard_events(callbacks: &Arc<WindowCallbacks>, window: &WebWindow
         });
         let _ = browser_window
             .add_event_listener_with_callback("keyup", closure.as_ref().unchecked_ref());
-        window.keep_closure(closure);
+        closure.forget();
     }
 }
 
 // ==================== Focus Events ====================
 
-fn register_focus_events(canvas: &web_sys::HtmlCanvasElement, window: &WebWindow) {
+fn register_focus_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<WindowCallbacks>) {
     // focus
     {
-        let callbacks = Arc::clone(window.callbacks());
+        let callbacks = Arc::clone(callbacks);
         let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |_: web_sys::Event| {
             callbacks.dispatch_active_status_change(true);
         });
         let _ = canvas.add_event_listener_with_callback("focus", closure.as_ref().unchecked_ref());
-        window.keep_closure(closure);
+        closure.forget();
     }
 
     // blur
     {
-        let callbacks = Arc::clone(window.callbacks());
+        let callbacks = Arc::clone(callbacks);
         let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |_: web_sys::Event| {
             callbacks.dispatch_active_status_change(false);
         });
         let _ = canvas.add_event_listener_with_callback("blur", closure.as_ref().unchecked_ref());
-        window.keep_closure(closure);
+        closure.forget();
     }
 
     // pointerenter → hover
     {
-        let callbacks = Arc::clone(window.callbacks());
+        let callbacks = Arc::clone(callbacks);
         let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |_: web_sys::Event| {
             callbacks.dispatch_hover_status_change(true);
         });
         let _ = canvas
             .add_event_listener_with_callback("pointerenter", closure.as_ref().unchecked_ref());
-        window.keep_closure(closure);
+        closure.forget();
     }
 
     // pointerleave → hover
     {
-        let callbacks = Arc::clone(window.callbacks());
+        let callbacks = Arc::clone(callbacks);
         let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |_: web_sys::Event| {
             callbacks.dispatch_hover_status_change(false);
         });
         let _ = canvas
             .add_event_listener_with_callback("pointerleave", closure.as_ref().unchecked_ref());
-        window.keep_closure(closure);
+        closure.forget();
     }
 }
 
@@ -157,7 +159,6 @@ fn register_focus_events(canvas: &web_sys::HtmlCanvasElement, window: &WebWindow
 fn register_wheel_events(
     canvas: &web_sys::HtmlCanvasElement,
     callbacks: &Arc<WindowCallbacks>,
-    window: &WebWindow,
 ) {
     let callbacks = Arc::clone(callbacks);
     let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
@@ -174,18 +175,18 @@ fn register_wheel_events(
         closure.as_ref().unchecked_ref(),
         &options,
     );
-    window.keep_closure(closure);
+    closure.forget();
 }
 
 // ==================== Context Menu Block ====================
 
-fn register_context_menu_block(canvas: &web_sys::HtmlCanvasElement, window: &WebWindow) {
+fn register_context_menu_block(canvas: &web_sys::HtmlCanvasElement) {
     let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
         e.prevent_default();
     });
     let _ =
         canvas.add_event_listener_with_callback("contextmenu", closure.as_ref().unchecked_ref());
-    window.keep_closure(closure);
+    closure.forget();
 }
 
 // ==================== Event Conversion ====================
@@ -351,7 +352,7 @@ fn convert_keyboard_event(
     PlatformInput::Keyboard(ui_events::keyboard::KeyboardEvent {
         state,
         key,
-        code: keyboard_types::Code::Unidentified,
+        code: ke.code().parse().unwrap_or(keyboard_types::Code::Unidentified),
         location,
         modifiers,
         repeat: ke.repeat(),
@@ -417,7 +418,9 @@ fn map_key_value(key: &str) -> keyboard_types::Key {
         "CapsLock" => Key::Named(NamedKey::CapsLock),
         "NumLock" => Key::Named(NamedKey::NumLock),
         "ScrollLock" => Key::Named(NamedKey::ScrollLock),
-        s if s.len() == 1 => Key::Character(s.into()),
+        // Any string that is a single character (including multi-byte Unicode like Cyrillic)
+        s if s.chars().count() == 1 => Key::Character(s.into()),
+        // Multi-char strings that aren't named keys (e.g. "Dead", "Unidentified")
         _ => Key::Named(NamedKey::Unidentified),
     }
 }

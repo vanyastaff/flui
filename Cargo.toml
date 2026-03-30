@@ -38,6 +38,9 @@ members = [
     #   cd examples/web_demo && wasm-pack build --target web --out-dir pkg
     "examples/web_demo",          # Web/WASM platform demo (cdylib)
 
+    # === Tools ===
+    "tools/web-server",           # Built-in web dev server (wasm-pack + HTTP serve)
+
     # === Temporarily disabled ===
     # "crates/flui-animation",
     # "crates/flui-reactivity",

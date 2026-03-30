@@ -8,9 +8,7 @@ use std::sync::Arc;
 
 use wasm_bindgen::prelude::*;
 
-use flui_platform::traits::{
-    DispatchEventResult, Platform, PlatformInput, PlatformWindow,
-};
+use flui_platform::traits::{DispatchEventResult, PlatformInput};
 
 #[wasm_bindgen(start)]
 pub fn start() {
@@ -58,13 +56,44 @@ pub fn start() {
         window.on_input(Box::new(|input: PlatformInput| {
             match &input {
                 PlatformInput::Pointer(pe) => {
-                    web_sys::console::log_1(
-                        &format!("Pointer: {:?}", std::mem::discriminant(pe)).into(),
-                    );
+                    use ui_events::pointer::PointerEvent;
+                    match pe {
+                        PointerEvent::Down(e) => {
+                            web_sys::console::log_1(
+                                &format!(
+                                    "Pointer Down: button={:?} pos=({:.0}, {:.0})",
+                                    e.button, e.state.position.x, e.state.position.y
+                                )
+                                .into(),
+                            );
+                        }
+                        PointerEvent::Up(e) => {
+                            web_sys::console::log_1(
+                                &format!(
+                                    "Pointer Up: button={:?} pos=({:.0}, {:.0})",
+                                    e.button, e.state.position.x, e.state.position.y
+                                )
+                                .into(),
+                            );
+                        }
+                        PointerEvent::Move(_) => {
+                            // Skip move events to avoid console spam
+                        }
+                        PointerEvent::Scroll(e) => {
+                            web_sys::console::log_1(
+                                &format!("Scroll: delta={:?}", e.delta).into(),
+                            );
+                        }
+                        _ => {}
+                    }
                 }
                 PlatformInput::Keyboard(ke) => {
                     web_sys::console::log_1(
-                        &format!("Key: {:?} {:?}", ke.state, ke.key).into(),
+                        &format!(
+                            "Key {:?}: {:?} (code={:?})",
+                            ke.state, ke.key, ke.code
+                        )
+                        .into(),
                     );
                 }
             }

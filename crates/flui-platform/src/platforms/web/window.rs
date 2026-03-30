@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size, device_px, px};
 use parking_lot::Mutex;
-use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
 use crate::{
@@ -23,8 +22,6 @@ pub struct WebWindow {
     canvas: web_sys::HtmlCanvasElement,
     state: Arc<Mutex<WebWindowState>>,
     callbacks: Arc<WindowCallbacks>,
-    /// Store JS closures to prevent garbage collection
-    _closures: Mutex<Vec<Closure<dyn FnMut(web_sys::Event)>>>,
 }
 
 struct WebWindowState {
@@ -106,7 +103,6 @@ impl WebWindow {
             canvas,
             state: Arc::new(Mutex::new(state)),
             callbacks: Arc::new(WindowCallbacks::new()),
-            _closures: Mutex::new(Vec::new()),
         })
     }
 
@@ -118,11 +114,6 @@ impl WebWindow {
     /// Get window callbacks for event dispatch
     pub fn callbacks(&self) -> &Arc<WindowCallbacks> {
         &self.callbacks
-    }
-
-    /// Store a JS closure to prevent it from being garbage collected
-    pub fn keep_closure(&self, closure: Closure<dyn FnMut(web_sys::Event)>) {
-        self._closures.lock().push(closure);
     }
 
     /// Update tracked size (called from resize observer / events)
