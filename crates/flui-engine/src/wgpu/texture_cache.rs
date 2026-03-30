@@ -50,6 +50,12 @@ pub enum TextureId {
     Data(u64),
     /// Named texture (user-provided ID)
     Named(String),
+    /// Pointer-based identity (Arc data pointer address).
+    ///
+    /// O(1) identity derived from `Arc::as_ptr()`. Images sharing the same
+    /// `Arc<Vec<u8>>` allocation produce the same key, avoiding expensive
+    /// full-data hashing on every frame.
+    Pointer(usize),
 }
 
 impl TextureId {
@@ -73,6 +79,15 @@ impl TextureId {
     /// Create from user-provided name
     pub fn from_name(name: impl Into<String>) -> Self {
         Self::Named(name.into())
+    }
+
+    /// Create from an `Arc` data pointer address (O(1) identity).
+    ///
+    /// Use with [`flui_types::painting::Image::data_ptr()`] so that images
+    /// sharing the same underlying allocation are deduplicated without
+    /// hashing the full pixel buffer.
+    pub fn from_ptr(ptr: usize) -> Self {
+        Self::Pointer(ptr)
     }
 }
 
@@ -229,6 +244,9 @@ impl TextureCache {
             }
             TextureId::Named(_) => {
                 return Err("Cannot load TextureId::Named without explicit data".to_string());
+            }
+            TextureId::Pointer(_) => {
+                return Err("Cannot load TextureId::Pointer without explicit data".to_string());
             }
         };
 

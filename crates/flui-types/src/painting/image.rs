@@ -130,6 +130,17 @@ impl Image {
         self.data.len()
     }
 
+    /// Returns a stable pointer-based identity for this image.
+    ///
+    /// Images that share the same underlying `Arc<Vec<u8>>` (i.e., cloned
+    /// handles) will return the same value. This is O(1) and suitable for
+    /// use as a cache key to avoid re-hashing large pixel buffers every frame.
+    #[inline]
+    #[must_use]
+    pub fn data_ptr(&self) -> usize {
+        Arc::as_ptr(&self.data) as usize
+    }
+
     /// Creates a clone of the image that shares the underlying data.
     ///
     /// This is a cheap operation because the data is reference-counted.

@@ -1875,8 +1875,8 @@ impl Painter for WgpuPainter {
             dst_rect
         );
 
-        // Create texture ID from image data hash
-        let texture_id = super::texture_cache::TextureId::from_data(image.data());
+        // Use Arc pointer identity for O(1) cache lookup instead of hashing all pixels
+        let texture_id = super::texture_cache::TextureId::from_ptr(image.data_ptr());
 
         // Load or get cached texture
         match self.texture_cache.load_from_rgba(
@@ -2342,8 +2342,8 @@ impl Painter for WgpuPainter {
             return;
         }
 
-        // Load texture into cache
-        let texture_id = super::texture_cache::TextureId::from_data(image.data());
+        // Use Arc pointer identity for O(1) cache lookup instead of hashing all pixels
+        let texture_id = super::texture_cache::TextureId::from_ptr(image.data_ptr());
 
         match self.texture_cache.load_from_rgba(
             texture_id,
