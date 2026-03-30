@@ -226,6 +226,9 @@ pub trait CommandRenderer {
     /// Fill entire viewport with color
     fn render_color(&mut self, color: Color, blend_mode: BlendMode, transform: &Matrix4);
 
+    /// Fill entire viewport with paint (supports shaders, blend modes, etc.)
+    fn render_paint(&mut self, paint: &Paint, transform: &Matrix4);
+
     /// Render backdrop filter effect (blur, color adjustments, etc.)
     fn render_backdrop_filter(
         &mut self,

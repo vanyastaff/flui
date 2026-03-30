@@ -810,6 +810,14 @@ impl CommandRenderer for Backend {
         });
     }
 
+    fn render_paint(&mut self, paint: &Paint, transform: &Matrix4) {
+        let paint = paint.clone();
+        self.with_transform(transform, |painter| {
+            let viewport_bounds = painter.viewport_bounds();
+            painter.rect(viewport_bounds, &paint);
+        });
+    }
+
     fn render_backdrop_filter(
         &mut self,
         child: Option<&flui_painting::DisplayList>,

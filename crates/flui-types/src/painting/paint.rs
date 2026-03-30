@@ -8,6 +8,66 @@ use crate::{
     styling::Color,
 };
 
+/// Dash pattern for stroked paths.
+///
+/// Defines an alternating pattern of dash and gap lengths that is applied
+/// when stroking a path. The pattern repeats cyclically along the path.
+///
+/// # Examples
+///
+/// ```rust
+/// use flui_types::painting::paint::DashPattern;
+///
+/// // Simple dashed line: 10px dash, 5px gap
+/// let dashes = DashPattern {
+///     intervals: vec![10.0, 5.0],
+///     phase: 0.0,
+/// };
+///
+/// // Dash-dot pattern: 10px dash, 3px gap, 2px dot, 3px gap
+/// let dash_dot = DashPattern {
+///     intervals: vec![10.0, 3.0, 2.0, 3.0],
+///     phase: 0.0,
+/// };
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct DashPattern {
+    /// Alternating dash/gap lengths.
+    ///
+    /// Must contain an even number of entries. If an odd number is provided,
+    /// the pattern is conceptually repeated to make it even (e.g., `[5, 3, 2]`
+    /// becomes `[5, 3, 2, 5, 3, 2]`).
+    pub intervals: Vec<f32>,
+
+    /// Starting offset into the pattern.
+    ///
+    /// A phase of 0.0 starts at the beginning of the first dash.
+    /// Positive values shift the pattern forward along the path.
+    pub phase: f32,
+}
+
+impl DashPattern {
+    /// Creates a new dash pattern with the given intervals and phase.
+    #[must_use]
+    #[inline]
+    pub fn new(intervals: Vec<f32>, phase: f32) -> Self {
+        Self { intervals, phase }
+    }
+
+    /// Returns the total length of one cycle of the dash pattern.
+    #[must_use]
+    pub fn cycle_length(&self) -> f32 {
+        self.intervals.iter().sum()
+    }
+
+    /// Returns true if the pattern has valid intervals (non-empty, all positive).
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        !self.intervals.is_empty() && self.intervals.iter().all(|&v| v > 0.0)
+    }
+}
+
 /// Paint style and properties for rendering shapes and paths.
 ///
 /// Contains all the information needed to render a shape, including color,
@@ -38,6 +98,12 @@ pub struct Paint {
 
     /// Optional shader (gradient, image pattern, etc.).
     pub shader: Option<Shader>,
+
+    /// Optional dash pattern for stroked paths.
+    ///
+    /// When set and `style` is `PaintStyle::Stroke`, the stroke will be
+    /// rendered as a dashed line following this pattern.
+    pub dash_pattern: Option<DashPattern>,
 }
 
 impl Paint {
@@ -54,6 +120,7 @@ impl Paint {
             blend_mode: BlendMode::SrcOver,
             anti_alias: true,
             shader: None,
+            dash_pattern: None,
         }
     }
 
@@ -74,6 +141,7 @@ impl Paint {
             blend_mode: BlendMode::SrcOver,
             anti_alias: true,
             shader: None,
+            dash_pattern: None,
         }
     }
 
@@ -152,6 +220,40 @@ impl Paint {
         self
     }
 
+    /// Sets the dash pattern for stroked paths.
+    ///
+    /// The dash pattern defines alternating dash/gap lengths.
+    /// This only has an effect when `style` is `PaintStyle::Stroke`.
+    ///
+    /// # Arguments
+    ///
+    /// * `intervals` - Alternating dash and gap lengths (must be non-empty)
+    /// * `phase` - Starting offset into the pattern
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use flui_types::painting::Paint;
+    /// use flui_types::styling::Color;
+    ///
+    /// // Dashed line: 10px dash, 5px gap
+    /// let paint = Paint::stroke(Color::BLACK, 2.0)
+    ///     .with_dash(vec![10.0, 5.0], 0.0);
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn with_dash(mut self, intervals: Vec<f32>, phase: f32) -> Self {
+        self.dash_pattern = Some(DashPattern::new(intervals, phase));
+        self
+    }
+
+    /// Returns true if a dash pattern is set.
+    #[must_use]
+    #[inline]
+    pub const fn has_dash(&self) -> bool {
+        self.dash_pattern.is_some()
+    }
+
     /// Returns true if this is a fill paint.
     #[must_use]
     #[inline]
@@ -225,6 +327,20 @@ impl Default for Paint {
     #[inline]
     fn default() -> Self {
         Self::fill(Color::BLACK)
+    }
+}
+
+impl PartialEq for Paint {
+    fn eq(&self, other: &Self) -> bool {
+        self.style == other.style
+            && self.color == other.color
+            && self.stroke_width == other.stroke_width
+            && self.stroke_cap == other.stroke_cap
+            && self.stroke_join == other.stroke_join
+            && self.blend_mode == other.blend_mode
+            && self.anti_alias == other.anti_alias
+            && self.dash_pattern == other.dash_pattern
+        // Note: shader comparison intentionally excluded (contains f32 arrays)
     }
 }
 
@@ -332,6 +448,14 @@ impl PaintBuilder {
     #[inline]
     pub fn shader(mut self, shader: Shader) -> Self {
         self.paint.shader = Some(shader);
+        self
+    }
+
+    /// Sets the dash pattern.
+    #[must_use]
+    #[inline]
+    pub fn dash(mut self, intervals: Vec<f32>, phase: f32) -> Self {
+        self.paint.dash_pattern = Some(DashPattern::new(intervals, phase));
         self
     }
 

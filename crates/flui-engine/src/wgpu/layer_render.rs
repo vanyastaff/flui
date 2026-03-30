@@ -648,6 +648,7 @@ mod tests {
             _transform: &Matrix4,
         ) {
         }
+        fn render_paint(&mut self, _paint: &Paint, _transform: &Matrix4) {}
         fn render_backdrop_filter(
             &mut self,
             _child: Option<&flui_painting::DisplayList>,

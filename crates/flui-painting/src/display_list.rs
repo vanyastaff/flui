@@ -1392,6 +1392,18 @@ pub enum DrawCommand {
         transform: Matrix4,
     },
 
+    /// Fill entire canvas with a Paint (color, shader, blend mode)
+    ///
+    /// This is the full-featured version of `DrawColor` that supports
+    /// shaders and all paint properties. Fills the entire viewport
+    /// with the given paint styling.
+    DrawPaint {
+        /// Paint to fill with (color, shader, blend mode, etc.)
+        paint: Paint,
+        /// Transform at recording time
+        transform: Matrix4,
+    },
+
     /// Draw multiple sprites from a texture atlas
     DrawAtlas {
         /// Source image (atlas texture)
@@ -1734,6 +1746,13 @@ impl DrawCommand {
                 blend_mode: *blend_mode,
                 transform: *transform,
             },
+            Self::DrawPaint {
+                paint,
+                transform,
+            } => Self::DrawPaint {
+                paint: paint.clone().with_opacity(opacity),
+                transform: *transform,
+            },
 
             // ─────────────────────────────────────────────────────────────────
             // Child commands: Recursively apply opacity to DisplayList
@@ -1989,8 +2008,8 @@ impl DrawCommand {
 
                 combined_bounds
             }
-            DrawCommand::DrawColor { .. } => {
-                // DrawColor fills entire canvas, no specific bounds
+            DrawCommand::DrawColor { .. } | DrawCommand::DrawPaint { .. } => {
+                // DrawColor/DrawPaint fill entire canvas, no specific bounds
                 None
             }
             DrawCommand::DrawGradient {
@@ -2176,6 +2195,7 @@ impl DrawCommand {
             | DrawCommand::DrawPoints { transform, .. }
             | DrawCommand::DrawVertices { transform, .. }
             | DrawCommand::DrawColor { transform, .. }
+            | DrawCommand::DrawPaint { transform, .. }
             | DrawCommand::DrawAtlas { transform, .. }
             | DrawCommand::SaveLayer { transform, .. }
             | DrawCommand::RestoreLayer { transform, .. } => *transform,
@@ -2199,6 +2219,7 @@ impl DrawCommand {
             | DrawCommand::DrawDRRect { paint, .. }
             | DrawCommand::DrawPoints { paint, .. }
             | DrawCommand::DrawVertices { paint, .. }
+            | DrawCommand::DrawPaint { paint, .. }
             | DrawCommand::SaveLayer { paint, .. } => Some(paint),
 
             DrawCommand::DrawImage { paint, .. }
@@ -2249,6 +2270,7 @@ impl DrawCommand {
             | DrawCommand::DrawPoints { transform, .. }
             | DrawCommand::DrawVertices { transform, .. }
             | DrawCommand::DrawColor { transform, .. }
+            | DrawCommand::DrawPaint { transform, .. }
             | DrawCommand::DrawAtlas { transform, .. }
             | DrawCommand::SaveLayer { transform, .. }
             | DrawCommand::RestoreLayer { transform, .. } => transform,

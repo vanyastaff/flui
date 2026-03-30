@@ -286,6 +286,10 @@ impl CommandRenderer for DebugBackend {
         self.log_command("render_color", &format!("color={color:?}"));
     }
 
+    fn render_paint(&mut self, paint: &Paint, _transform: &Matrix4) {
+        self.log_command("render_paint", &format!("paint.color={:?}", paint.color));
+    }
+
     fn render_backdrop_filter(
         &mut self,
         child: Option<&flui_painting::DisplayList>,

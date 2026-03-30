@@ -1344,11 +1344,8 @@ impl Canvas {
     /// canvas.draw_paint(&gradient_paint);
     /// ```
     pub fn draw_paint(&mut self, paint: &Paint) {
-        // DrawPaint is equivalent to DrawColor with the paint's color
-        // For full shader support, we'd need a dedicated DrawPaint command
-        self.display_list.push(DrawCommand::DrawColor {
-            color: paint.color,
-            blend_mode: paint.blend_mode,
+        self.display_list.push(DrawCommand::DrawPaint {
+            paint: paint.clone(),
             transform: self.transform,
         });
     }

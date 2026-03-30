@@ -679,6 +679,219 @@ impl Tessellator {
         let lyon_path = flui_path.to_lyon_path();
         self.tessellate_stroke(&lyon_path, paint)
     }
+
+    /// Tessellate a stroked lyon path with dash pattern.
+    ///
+    /// Splits the path into dash segments based on the pattern, then tessellates
+    /// each dash as a separate stroke sub-path.
+    ///
+    /// # Arguments
+    /// * `path` - Lyon path to tessellate
+    /// * `paint` - Paint style (must have stroke style and dash_pattern set)
+    /// * `dash_pattern` - The dash pattern (intervals and phase)
+    ///
+    /// # Returns
+    /// Tuple of (vertices, indices) ready for GPU upload
+    pub fn tessellate_dashed_stroke(
+        &mut self,
+        path: &Path,
+        paint: &Paint,
+        dash_pattern: &flui_types::painting::DashPattern,
+    ) -> Result<(Vec<Vertex>, Vec<u32>)> {
+        use lyon::path::PathEvent;
+        use lyon::path::iterator::PathIterator;
+        use lyon::tessellation::{LineCap, LineJoin};
+
+        if !dash_pattern.is_valid() {
+            // Fallback to solid stroke if pattern is invalid
+            return self.tessellate_stroke(path, paint);
+        }
+
+        let intervals = &dash_pattern.intervals;
+        // Normalize: if odd number of intervals, conceptually double the array
+        let effective_intervals: Vec<f32> = if intervals.len() % 2 != 0 {
+            intervals.iter().chain(intervals.iter()).copied().collect()
+        } else {
+            intervals.clone()
+        };
+
+        let cycle_length: f32 = effective_intervals.iter().sum();
+        if cycle_length <= 0.0 {
+            return self.tessellate_stroke(path, paint);
+        }
+
+        // Collect all line segments from the path by flattening curves
+        let mut segments: Vec<(lyon::geom::Point<f32>, lyon::geom::Point<f32>)> = Vec::new();
+        let mut current_pos = lyon::geom::point(0.0f32, 0.0);
+
+        // Flatten the path to line segments (tolerance controls curve approximation quality)
+        for event in path.iter().flattened(0.5) {
+            match event {
+                PathEvent::Begin { at } => {
+                    current_pos = at;
+                }
+                PathEvent::Line { from: _, to } => {
+                    segments.push((current_pos, to));
+                    current_pos = to;
+                }
+                PathEvent::End { .. } => {}
+                PathEvent::Quadratic { .. } | PathEvent::Cubic { .. } => {
+                    // flattened() should have converted these to lines
+                }
+            }
+        }
+
+        if segments.is_empty() {
+            return Ok((Vec::new(), Vec::new()));
+        }
+
+        // Walk the segments and generate dash sub-paths
+        let mut dash_paths: Vec<Path> = Vec::new();
+        let mut phase = dash_pattern.phase % cycle_length;
+        if phase < 0.0 {
+            phase += cycle_length;
+        }
+
+        // Find starting interval index and remaining distance in that interval
+        let mut interval_idx = 0usize;
+        let mut remaining_in_interval = effective_intervals[0];
+        let mut consumed = 0.0f32;
+        while consumed + remaining_in_interval <= phase && interval_idx < effective_intervals.len() {
+            consumed += remaining_in_interval;
+            interval_idx = (interval_idx + 1) % effective_intervals.len();
+            remaining_in_interval = effective_intervals[interval_idx];
+        }
+        remaining_in_interval -= phase - consumed;
+        let is_drawing = interval_idx % 2 == 0; // Even indices are dashes, odd are gaps
+
+        let mut drawing = is_drawing;
+        let mut remaining = remaining_in_interval;
+
+        let mut current_builder: Option<lyon::path::BuilderWithAttributes> = None;
+        if drawing {
+            current_builder = Some(Path::builder_with_attributes(0));
+        }
+        let mut started_subpath = false;
+
+        for (from, to) in &segments {
+            let dx = to.x - from.x;
+            let dy = to.y - from.y;
+            let seg_length = (dx * dx + dy * dy).sqrt();
+            if seg_length < f32::EPSILON {
+                continue;
+            }
+            let dir_x = dx / seg_length;
+            let dir_y = dy / seg_length;
+
+            let mut offset = 0.0f32;
+
+            while offset < seg_length {
+                let available = seg_length - offset;
+                let consume = remaining.min(available);
+
+                let start_x = from.x + dir_x * offset;
+                let start_y = from.y + dir_y * offset;
+                let end_x = from.x + dir_x * (offset + consume);
+                let end_y = from.y + dir_y * (offset + consume);
+
+                if drawing {
+                    if let Some(ref mut builder) = current_builder {
+                        if !started_subpath {
+                            builder.begin(lyon::geom::point(start_x, start_y), &[]);
+                            started_subpath = true;
+                        }
+                        builder.line_to(lyon::geom::point(end_x, end_y), &[]);
+                    }
+                }
+
+                remaining -= consume;
+                offset += consume;
+
+                if remaining <= f32::EPSILON {
+                    // Finished current interval, move to next
+                    if drawing && started_subpath {
+                        if let Some(mut builder) = current_builder.take() {
+                            builder.end(false);
+                            dash_paths.push(builder.build());
+                        }
+                        started_subpath = false;
+                    }
+                    interval_idx = (interval_idx + 1) % effective_intervals.len();
+                    drawing = interval_idx % 2 == 0;
+                    remaining = effective_intervals[interval_idx];
+                    if drawing {
+                        current_builder = Some(Path::builder_with_attributes(0));
+                    } else {
+                        current_builder = None;
+                    }
+                }
+            }
+        }
+
+        // Finish any in-progress dash
+        if drawing && started_subpath {
+            if let Some(mut builder) = current_builder.take() {
+                builder.end(false);
+                dash_paths.push(builder.build());
+            }
+        }
+
+        // Now tessellate all dash sub-paths and combine the geometry
+        let options = StrokeOptions::default()
+            .with_line_width(paint.stroke_width)
+            .with_line_cap(match paint.stroke_cap {
+                StrokeCap::Butt => LineCap::Butt,
+                StrokeCap::Round => LineCap::Round,
+                StrokeCap::Square => LineCap::Square,
+            })
+            .with_line_join(match paint.stroke_join {
+                StrokeJoin::Miter => LineJoin::Miter,
+                StrokeJoin::Round => LineJoin::Round,
+                StrokeJoin::Bevel => LineJoin::Bevel,
+            })
+            .with_miter_limit(4.0);
+
+        let mut all_vertices: Vec<Vertex> = Vec::new();
+        let mut all_indices: Vec<u32> = Vec::new();
+
+        for dash_path in &dash_paths {
+            self.geometry.vertices.clear();
+            self.geometry.indices.clear();
+
+            self.stroke_tessellator
+                .tessellate_path(
+                    dash_path,
+                    &options,
+                    &mut BuffersBuilder::new(
+                        &mut self.geometry,
+                        StrokeVertexConstructor { color: paint.color },
+                    ),
+                )
+                .map_err(|e| TessellationError::StrokeFailed(e.to_string()))?;
+
+            // Offset indices for combined buffer
+            #[allow(clippy::cast_possible_truncation)]
+            let base_vertex = all_vertices.len() as u32;
+            all_vertices.extend_from_slice(&self.geometry.vertices);
+            all_indices.extend(self.geometry.indices.iter().map(|i| i + base_vertex));
+        }
+
+        Ok((all_vertices, all_indices))
+    }
+
+    /// Tessellate a stroked FLUI path with dash pattern.
+    ///
+    /// Converts the FLUI path to a lyon path, then delegates to
+    /// `tessellate_dashed_stroke`.
+    pub fn tessellate_flui_path_dashed_stroke(
+        &mut self,
+        flui_path: &flui_types::painting::path::Path,
+        paint: &Paint,
+        dash_pattern: &flui_types::painting::DashPattern,
+    ) -> Result<(Vec<Vertex>, Vec<u32>)> {
+        let lyon_path = flui_path.to_lyon_path();
+        self.tessellate_dashed_stroke(&lyon_path, paint, dash_pattern)
+    }
 }
 
 /// Helper trait for creating lyon paths from FLUI types

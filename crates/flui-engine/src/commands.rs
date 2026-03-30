@@ -191,6 +191,9 @@ pub fn dispatch_command<R: CommandRenderer + ?Sized>(command: &DrawCommand, rend
         } => {
             renderer.render_color(*color, *blend_mode, transform);
         }
+        DrawCommand::DrawPaint { paint, transform } => {
+            renderer.render_paint(paint, transform);
+        }
         DrawCommand::DrawAtlas {
             image,
             sprites,
