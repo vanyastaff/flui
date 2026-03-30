@@ -524,27 +524,76 @@ impl Tessellator {
 
     // ===== Additional methods for WgpuPainter =====
 
-    /// Tessellate a rounded rectangle (RRect)
+    /// Tessellate a rounded rectangle (RRect) with per-corner radii
     ///
-    /// Alias for tessellate_rounded_rect that accepts RRect type.
+    /// Builds a lyon path with independent corner arcs, supporting
+    /// different radii for each corner of the rectangle.
+    #[allow(clippy::similar_names)]
     pub fn tessellate_rrect(
         &mut self,
         rrect: RRect,
         paint: &Paint,
     ) -> Result<(Vec<Vertex>, Vec<u32>)> {
-        // Use average of all corner radii for simplicity
-        // TODO: Support per-corner radii
-        let radius = (rrect.top_left.x
-            + rrect.top_left.y
-            + rrect.top_right.x
-            + rrect.top_right.y
-            + rrect.bottom_left.x
-            + rrect.bottom_left.y
-            + rrect.bottom_right.x
-            + rrect.bottom_right.y)
-            / 8.0;
+        let mut path_builder = Path::builder();
 
-        self.tessellate_rounded_rect(rrect.rect, radius.0, paint)
+        let rect = rrect.rect;
+        let left = rect.left();
+        let top = rect.top();
+        let right = rect.right();
+        let bottom = rect.bottom();
+
+        // Clamp corner radii to half the smallest dimension
+        let max_radius_x = rect.width() / 2.0;
+        let max_radius_y = rect.height() / 2.0;
+
+        let tl_x = rrect.top_left.x.min(max_radius_x);
+        let tl_y = rrect.top_left.y.min(max_radius_y);
+        let tr_x = rrect.top_right.x.min(max_radius_x);
+        let tr_y = rrect.top_right.y.min(max_radius_y);
+        let br_x = rrect.bottom_right.x.min(max_radius_x);
+        let br_y = rrect.bottom_right.y.min(max_radius_y);
+        let bl_x = rrect.bottom_left.x.min(max_radius_x);
+        let bl_y = rrect.bottom_left.y.min(max_radius_y);
+
+        // Start at top-left, after the corner arc
+        path_builder.begin(lyon::geom::point((left + tl_x).0, top.0));
+
+        // Top edge to top-right corner
+        path_builder.line_to(lyon::geom::point((right - tr_x).0, top.0));
+        // Top-right corner
+        path_builder.quadratic_bezier_to(
+            lyon::geom::point(right.0, top.0),
+            lyon::geom::point(right.0, (top + tr_y).0),
+        );
+
+        // Right edge to bottom-right corner
+        path_builder.line_to(lyon::geom::point(right.0, (bottom - br_y).0));
+        // Bottom-right corner
+        path_builder.quadratic_bezier_to(
+            lyon::geom::point(right.0, bottom.0),
+            lyon::geom::point((right - br_x).0, bottom.0),
+        );
+
+        // Bottom edge to bottom-left corner
+        path_builder.line_to(lyon::geom::point((left + bl_x).0, bottom.0));
+        // Bottom-left corner
+        path_builder.quadratic_bezier_to(
+            lyon::geom::point(left.0, bottom.0),
+            lyon::geom::point(left.0, (bottom - bl_y).0),
+        );
+
+        // Left edge to top-left corner
+        path_builder.line_to(lyon::geom::point(left.0, (top + tl_y).0));
+        // Top-left corner
+        path_builder.quadratic_bezier_to(
+            lyon::geom::point(left.0, top.0),
+            lyon::geom::point((left + tl_x).0, top.0),
+        );
+
+        path_builder.close();
+
+        let path = path_builder.build();
+        self.tessellate_fill(&path, paint)
     }
 
     /// Tessellate a stroked rectangle
@@ -795,17 +844,22 @@ impl IntoLyonPath for flui_types::painting::path::Path {
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod tests {
     use super::*;
+    use flui_types::geometry::{Radius, rrect::RRect};
+
+    fn px(v: f32) -> Pixels {
+        Pixels(v)
+    }
 
     #[test]
     fn test_tessellate_rect() {
         let mut tessellator = Tessellator::new();
-        let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
+        let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
         let paint = Paint::fill(Color::RED);
 
         let result = tessellator.tessellate_rect(rect, &paint);
         assert!(result.is_ok());
 
-        let (vertices, indices) = result.unwrap();
+        let (vertices, indices) = result.expect("rect tessellation should succeed");
         assert!(!vertices.is_empty());
         assert!(!indices.is_empty());
         assert_eq!(indices.len() % 3, 0); // Should be triangles
@@ -814,13 +868,13 @@ mod tests {
     #[test]
     fn test_tessellate_circle() {
         let mut tessellator = Tessellator::new();
-        let center = Point::new(50.0, 50.0);
+        let center = Point::new(px(50.0), px(50.0));
         let paint = Paint::fill(Color::BLUE);
 
         let result = tessellator.tessellate_circle(center, 25.0, &paint);
         assert!(result.is_ok());
 
-        let (vertices, indices) = result.unwrap();
+        let (vertices, indices) = result.expect("circle tessellation should succeed");
         assert!(!vertices.is_empty());
         assert!(!indices.is_empty());
     }
@@ -828,23 +882,64 @@ mod tests {
     #[test]
     fn test_tessellate_rounded_rect() {
         let mut tessellator = Tessellator::new();
-        let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
+        let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
         let paint = Paint::fill(Color::GREEN);
 
         let result = tessellator.tessellate_rounded_rect(rect, 10.0, &paint);
         assert!(result.is_ok());
 
-        let (vertices, indices) = result.unwrap();
+        let (vertices, indices) = result.expect("rounded rect tessellation should succeed");
         assert!(!vertices.is_empty());
         assert!(!indices.is_empty());
     }
 
     #[test]
+    fn test_rrect_per_corner_radii() {
+        let mut tessellator = Tessellator::new();
+        let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
+        let paint = Paint::fill(Color::RED);
+
+        // Create an RRect with different radii per corner
+        let rrect = RRect::from_rect_and_corners(
+            rect,
+            Radius::circular(px(5.0)),   // top-left: small
+            Radius::circular(px(15.0)),  // top-right: medium
+            Radius::circular(px(25.0)),  // bottom-right: large
+            Radius::circular(px(10.0)),  // bottom-left: moderate
+        );
+
+        let result = tessellator.tessellate_rrect(rrect, &paint);
+        assert!(result.is_ok());
+
+        let (vertices, indices) = result.expect("tessellation should succeed");
+        assert!(!vertices.is_empty());
+        assert!(!indices.is_empty());
+        assert_eq!(indices.len() % 3, 0, "indices should form triangles");
+
+        // Also test with elliptical (non-circular) radii
+        let rrect_elliptical = RRect::from_rect_and_corners(
+            rect,
+            Radius::elliptical(px(5.0), px(10.0)),
+            Radius::elliptical(px(15.0), px(8.0)),
+            Radius::elliptical(px(20.0), px(12.0)),
+            Radius::elliptical(px(3.0), px(18.0)),
+        );
+
+        let result_elliptical = tessellator.tessellate_rrect(rrect_elliptical, &paint);
+        assert!(result_elliptical.is_ok());
+
+        let (verts, inds) = result_elliptical.expect("elliptical tessellation should succeed");
+        assert!(!verts.is_empty());
+        assert!(!inds.is_empty());
+        assert_eq!(inds.len() % 3, 0, "indices should form triangles");
+    }
+
+    #[test]
     fn test_create_polyline_path() {
         let points = vec![
-            Point::new(0.0, 0.0),
-            Point::new(10.0, 10.0),
-            Point::new(20.0, 0.0),
+            Point::new(px(0.0), px(0.0)),
+            Point::new(px(10.0), px(10.0)),
+            Point::new(px(20.0), px(0.0)),
         ];
 
         let _path = Tessellator::create_polyline_path(&points, false);
