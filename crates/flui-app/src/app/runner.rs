@@ -60,7 +60,7 @@ where
 
     #[cfg(target_arch = "wasm32")]
     {
-        run_web(config);
+        run_web(root, config);
     }
 }
 
@@ -500,9 +500,113 @@ fn run_ios(_config: AppConfig) {
 // ============================================================================
 
 #[cfg(target_arch = "wasm32")]
-fn run_web(_config: AppConfig) {
-    tracing::info!("Web platform - not yet implemented");
-    // TODO: Implement wasm-bindgen integration
+fn run_web<V>(root: V, config: AppConfig)
+where
+    V: View + StatelessView + Clone + Send + Sync + 'static,
+{
+    use std::sync::Arc;
+
+    use flui_engine::wgpu::Renderer;
+    use flui_foundation::HasInstance;
+    use flui_platform::{
+        WindowOptions,
+        traits::{DispatchEventResult, LifecycleEvent, PlatformInput},
+    };
+    use flui_scheduler::Scheduler;
+    use parking_lot::Mutex;
+
+    use crate::embedder::PlatformWindowHandle;
+
+    tracing::info!("Starting web platform via flui-platform");
+
+    let platform = flui_platform::current_platform().expect("Failed to initialize web platform");
+    let platform_inner = Arc::clone(&platform);
+
+    platform.run(Box::new(move || {
+        // 1. Open window (creates canvas)
+        let options: WindowOptions = (&config).into();
+        let window = platform_inner
+            .open_window(options)
+            .expect("Failed to create canvas window");
+
+        // 2. Create GPU renderer via wasm-bindgen-futures (async on web)
+        let phys_size = window.physical_size();
+        let platform_quit = Arc::clone(&platform_inner);
+        let renderer_window = window.as_ref() as *const dyn flui_platform::PlatformWindow;
+
+        // SAFETY: On wasm32, everything is single-threaded, the pointer remains valid
+        // within the spawn_local closure. We must use spawn_local because wgpu surface
+        // creation is async on web (WebGPU adapter request).
+        wasm_bindgen_futures::spawn_local(async move {
+            let window_ref = unsafe { &*renderer_window };
+            let handle = PlatformWindowHandle(window_ref);
+            let renderer = Renderer::new(&handle).await;
+            let mut renderer = match renderer {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::error!("GPU init failed: {:?}", e);
+                    platform_quit.quit();
+                    return;
+                }
+            };
+            renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
+            tracing::info!("WebGPU renderer initialized");
+        });
+
+        // 3. Mount root widget
+        mount_root(&root, phys_size.width.0 as f32, phys_size.height.0 as f32);
+
+        // 4. Register input callback
+        window.on_input(Box::new(move |input: PlatformInput| {
+            AppBinding::instance().handle_input(input);
+            DispatchEventResult {
+                propagate: false,
+                default_prevented: true,
+            }
+        }));
+
+        // 5. Register frame callback
+        window.on_request_frame(Box::new(move || {
+            let binding = AppBinding::instance();
+
+            if !binding.needs_redraw() && !binding.has_pending_work() {
+                return;
+            }
+
+            let now = std::time::Instant::now();
+            let scheduler = Scheduler::instance();
+            let _frame_id = scheduler.handle_begin_frame(now);
+            scheduler.handle_draw_frame();
+
+            // Note: renderer is initialized async, frames without a renderer are no-ops
+        }));
+
+        // 6. Lifecycle callbacks
+        platform_inner.on_quit(Box::new(|| {
+            tracing::info!("Web platform quit");
+            AppBinding::instance().transition_lifecycle(LifecycleEvent::Terminating);
+        }));
+
+        let platform_for_close = Arc::clone(&platform_inner);
+        window.on_close(Box::new(move || {
+            tracing::info!("Canvas window closed");
+            platform_for_close.quit();
+        }));
+
+        window.on_active_status_change(Box::new(|active| {
+            let event = if active {
+                LifecycleEvent::Activated
+            } else {
+                LifecycleEvent::Deactivated
+            };
+            AppBinding::instance().transition_lifecycle(event);
+        }));
+
+        // 7. Store window
+        AppBinding::instance().set_window(window);
+
+        tracing::info!("Web platform initialized with callbacks");
+    }));
 }
 
 #[cfg(test)]
