@@ -920,23 +920,15 @@ impl WgpuPainter {
             return;
         }
 
-        // Upload vertices to GPU
-        let vertex_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Shape Vertex Buffer"),
-                contents: bytemuck::cast_slice(&self.current_segment.vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-
-        // Upload indices to GPU
-        let index_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Shape Index Buffer"),
-                contents: bytemuck::cast_slice(&self.current_segment.indices),
-                usage: wgpu::BufferUsages::INDEX,
-            });
+        // Upload vertices and indices to GPU (using buffer pool for zero-copy reuse)
+        let (vertex_buffer, index_buffer) = self.buffer_pool.get_vertex_and_index_buffers(
+            &self.device,
+            &self.queue,
+            "Shape Vertex Buffer",
+            bytemuck::cast_slice(&self.current_segment.vertices),
+            "Shape Index Buffer",
+            bytemuck::cast_slice(&self.current_segment.indices),
+        );
 
         // Render shapes in single pass, switching pipelines per batch
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -986,6 +978,11 @@ impl WgpuPainter {
         self.current_segment.indices.clear();
         self.current_segment.tess_batches.clear();
         self.current_segment.current_pipeline_key = None;
+    }
+
+    /// Returns the current viewport size as `(width, height)`.
+    pub fn size(&self) -> (u32, u32) {
+        self.size
     }
 
     /// Resize the viewport

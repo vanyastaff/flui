@@ -47,7 +47,6 @@
 
 mod atlas;
 mod backend;
-#[allow(dead_code)]
 mod buffer_pool;
 mod buffers;
 mod commands;
@@ -102,6 +101,7 @@ pub use atlas::{AtlasEntry, AtlasRect, TextureAtlas};
 // Backend
 pub use backend::Backend;
 // Buffer management
+pub use buffer_pool::{BufferPool, BufferPoolStats};
 pub use buffers::{BufferManager, DynamicBuffer};
 // Command rendering (re-exported from crate root)
 pub use commands::{CommandRenderer, dispatch_command, dispatch_commands};
