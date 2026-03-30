@@ -62,16 +62,28 @@ impl ShaderType {
     }
 }
 
-/// Compiled shader module (placeholder for wgpu::ShaderModule)
+/// Compiled shader with optional cached GPU module
 ///
-/// In full implementation, this would hold the actual wgpu::ShaderModule.
-/// For now, it's a placeholder to establish the API.
-#[derive(Debug, Clone)]
+/// Stores the WGSL source and optionally the compiled `wgpu::ShaderModule`.
+/// The module field is `None` when created via `get_or_compile` (source-only),
+/// and populated when created via `get_or_compile_module` (GPU-ready).
+#[derive(Clone)]
 pub struct CompiledShader {
     pub shader_type: ShaderType,
     pub source: String,
-    // TODO: Add actual wgpu::ShaderModule when integrating with renderer
-    // pub module: Arc<wgpu::ShaderModule>,
+    /// Cached GPU shader module. `None` for source-only inspection.
+    /// Wrapped in `Arc` because `wgpu::ShaderModule` does not implement `Clone`.
+    pub module: Option<Arc<wgpu::ShaderModule>>,
+}
+
+impl std::fmt::Debug for CompiledShader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompiledShader")
+            .field("shader_type", &self.shader_type)
+            .field("source", &format!("({} bytes)", self.source.len()))
+            .field("module", &self.module.as_ref().map(|_| "<ShaderModule>"))
+            .finish()
+    }
 }
 
 /// Shader cache for compiled shaders
@@ -113,14 +125,66 @@ impl ShaderCache {
             return Arc::clone(shader);
         }
 
-        // Compile the shader
+        // Compile the shader (source-only, no GPU module)
         let compiled = Arc::new(CompiledShader {
             shader_type,
             source: shader_type.source_code().to_string(),
-            // TODO: Create actual wgpu::ShaderModule here
+            module: None,
         });
 
         cache.insert(shader_type, Arc::clone(&compiled));
+        compiled
+    }
+
+    /// Get or compile a shader with its GPU module
+    ///
+    /// Returns cached shader with a compiled `wgpu::ShaderModule`. If the shader
+    /// source is already cached but lacks a module, compiles and caches the module.
+    /// Uses double-check locking to avoid redundant compilation under contention.
+    #[must_use]
+    pub fn get_or_compile_module(
+        &self,
+        shader_type: ShaderType,
+        device: &wgpu::Device,
+    ) -> Arc<CompiledShader> {
+        // Fast path: check if we already have a compiled module (read lock)
+        {
+            let cache = self.cache.read();
+            if let Some(shader) = cache.get(&shader_type) {
+                if shader.module.is_some() {
+                    tracing::trace!("Shader module cache hit: {:?}", shader_type);
+                    return Arc::clone(shader);
+                }
+            }
+        }
+
+        // Slow path: need to compile the module (write lock)
+        let mut cache = self.cache.write();
+
+        // Double-check: another thread may have compiled it while we waited
+        if let Some(shader) = cache.get(&shader_type) {
+            if shader.module.is_some() {
+                return Arc::clone(shader);
+            }
+        }
+
+        // Get or create the source
+        let source = shader_type.source_code().to_string();
+
+        // Compile the GPU shader module
+        let module = Arc::new(device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some(shader_type.label()),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(shader_type.source_code())),
+        }));
+
+        let compiled = Arc::new(CompiledShader {
+            shader_type,
+            source,
+            module: Some(module),
+        });
+
+        cache.insert(shader_type, Arc::clone(&compiled));
+        tracing::debug!("Compiled and cached shader module: {:?}", shader_type);
         compiled
     }
 
