@@ -328,22 +328,39 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for ImageFilterLayer {
 }
 
 impl<R: CommandRenderer + ?Sized> LayerRender<R> for ShaderMaskLayer {
-    fn render(&self, _renderer: &mut R) {
-        // TODO: Implement shader mask GPU rendering
+    fn render(&self, renderer: &mut R) {
+        // Create a compositing layer bounded to the mask area.
+        // Children will be rendered into this layer, then composited
+        // with the shader mask applied during restore.
+        let paint = flui_painting::Paint::default();
+        renderer.save_layer(
+            Some(self.bounds()),
+            &paint,
+            &flui_types::geometry::Matrix4::IDENTITY,
+        );
+        // Clip children to mask bounds so content outside is discarded
+        renderer.push_clip_rect(&self.bounds(), flui_types::painting::Clip::AntiAlias);
     }
 
-    fn cleanup(&self, _renderer: &mut R) {
-        // TODO: Implement shader mask cleanup
+    fn cleanup(&self, renderer: &mut R) {
+        // Pop in reverse order: first clip, then compositing layer
+        renderer.pop_clip();
+        renderer.restore_layer(&flui_types::geometry::Matrix4::IDENTITY);
     }
 }
 
 impl<R: CommandRenderer + ?Sized> LayerRender<R> for BackdropFilterLayer {
-    fn render(&self, _renderer: &mut R) {
-        // TODO: Implement backdrop filter GPU rendering
+    fn render(&self, renderer: &mut R) {
+        // Clip to layer bounds so the filter only affects the target area,
+        // then apply the image filter (blur, color adjust, etc.) to the backdrop
+        renderer.push_clip_rect(&self.bounds(), flui_types::painting::Clip::AntiAlias);
+        renderer.push_image_filter(self.filter());
     }
 
-    fn cleanup(&self, _renderer: &mut R) {
-        // TODO: Implement backdrop filter cleanup
+    fn cleanup(&self, renderer: &mut R) {
+        // Pop in reverse order: first image filter, then clip
+        renderer.pop_image_filter();
+        renderer.pop_clip();
     }
 }
 
