@@ -28,11 +28,11 @@ use crate::{
 /// - CI environments without display servers
 /// - Benchmarking without rendering overhead
 pub struct HeadlessPlatform {
+    capabilities: DesktopCapabilities,
     state: Arc<Mutex<HeadlessState>>,
 }
 
 struct HeadlessState {
-    capabilities: DesktopCapabilities,
     handlers: PlatformHandlers,
     background_executor: Arc<TestExecutor>,
     foreground_executor: Arc<TestExecutor>,
@@ -51,7 +51,6 @@ impl HeadlessPlatform {
     /// Create a new headless platform
     pub fn new() -> Self {
         let state = HeadlessState {
-            capabilities: DesktopCapabilities,
             handlers: PlatformHandlers::new(),
             background_executor: Arc::new(TestExecutor::new("background")),
             foreground_executor: Arc::new(TestExecutor::new("foreground")),
@@ -66,6 +65,7 @@ impl HeadlessPlatform {
         };
 
         Self {
+            capabilities: DesktopCapabilities,
             state: Arc::new(Mutex::new(state)),
         }
     }
@@ -157,7 +157,7 @@ impl Platform for HeadlessPlatform {
     }
 
     fn capabilities(&self) -> &dyn PlatformCapabilities {
-        unsafe { &*(&self.with_state(|state| state.capabilities) as *const _) }
+        &self.capabilities
     }
 
     fn name(&self) -> &'static str {
