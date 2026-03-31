@@ -6,7 +6,7 @@ use crate::{
     arity::Variable,
     constraints::BoxConstraints,
     context::{BoxHitTestContext, BoxLayoutContext},
-    parent_data::BoxParentData,
+    parent_data::{FlexFit, FlexParentData},
     traits::RenderBox,
 };
 
@@ -191,9 +191,9 @@ impl RenderFlex {
 impl flui_foundation::Diagnosticable for RenderFlex {}
 impl RenderBox for RenderFlex {
     type Arity = Variable;
-    type ParentData = BoxParentData;
+    type ParentData = FlexParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>) {
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, FlexParentData>) {
         let constraints = *ctx.constraints();
         let child_count = ctx.child_count();
         self.child_count = child_count;
@@ -206,11 +206,32 @@ impl RenderBox for RenderFlex {
             return;
         }
 
-        // Calculate child constraints based on direction
-        let child_constraints = match self.direction {
+        // ====================================================================
+        // Two-pass flex layout (Flutter's RenderFlex.performLayout algorithm)
+        // ====================================================================
+
+        // Collect flex factors from parent data
+        let mut flex_factors: Vec<Option<i32>> = Vec::with_capacity(child_count);
+        let mut flex_fits: Vec<FlexFit> = Vec::with_capacity(child_count);
+        let mut total_flex: i32 = 0;
+
+        for i in 0..child_count {
+            let (flex, fit) = ctx
+                .child_parent_data(i)
+                .map(|pd| (pd.flex, pd.fit))
+                .unwrap_or((None, FlexFit::Loose));
+            if let Some(f) = flex {
+                total_flex += f;
+            }
+            flex_factors.push(flex);
+            flex_fits.push(fit);
+        }
+
+        // Non-flex child constraints: unbounded on main axis
+        let non_flex_constraints = match self.direction {
             FlexDirection::Horizontal => BoxConstraints::new(
                 Pixels::ZERO,
-                Pixels::INFINITY, // Unbounded main axis
+                Pixels::INFINITY,
                 constraints.min_height,
                 constraints.max_height,
             ),
@@ -218,24 +239,90 @@ impl RenderBox for RenderFlex {
                 constraints.min_width,
                 constraints.max_width,
                 Pixels::ZERO,
-                Pixels::INFINITY, // Unbounded main axis
+                Pixels::INFINITY,
             ),
         };
 
-        // Layout all children and collect sizes
-        let mut child_sizes = Vec::with_capacity(child_count);
-        let mut total_main = Pixels::ZERO;
+        // Pass 1: Layout non-flex children, sum their main-axis sizes
+        let mut child_sizes: Vec<Option<Size>> = vec![None; child_count];
+        let mut inflexible_main = Pixels::ZERO;
         let mut max_cross = Pixels::ZERO;
 
         for i in 0..child_count {
-            let child_size = ctx.layout_child(i, child_constraints);
-            child_sizes.push(child_size);
-            total_main += self.main_size(child_size);
-            max_cross = max_cross.max(self.cross_size(child_size));
+            if flex_factors[i].is_none() || flex_factors[i] == Some(0) {
+                let child_size = ctx.layout_child(i, non_flex_constraints);
+                child_sizes[i] = Some(child_size);
+                inflexible_main += self.main_size(child_size);
+                max_cross = max_cross.max(self.cross_size(child_size));
+            }
         }
 
-        // Add spacing
+        // Add spacing to inflexible total
         let total_spacing = px(self.spacing * (child_count - 1).max(0) as f32);
+        inflexible_main += total_spacing;
+
+        // Calculate available main-axis extent
+        let max_main = match self.direction {
+            FlexDirection::Horizontal => constraints.max_width,
+            FlexDirection::Vertical => constraints.max_height,
+        };
+
+        // Remaining space for flex children
+        let remaining = if max_main.is_finite() {
+            (max_main - inflexible_main).max(Pixels::ZERO)
+        } else {
+            Pixels::ZERO
+        };
+
+        // Pass 2: Layout flex children, distributing remaining space
+        if total_flex > 0 {
+            for i in 0..child_count {
+                if let Some(flex) = flex_factors[i] {
+                    if flex > 0 {
+                        let allocated = remaining * (flex as f32 / total_flex as f32);
+
+                        let child_constraints = match (self.direction, flex_fits[i]) {
+                            (FlexDirection::Horizontal, FlexFit::Tight) => BoxConstraints::new(
+                                allocated,
+                                allocated,
+                                constraints.min_height,
+                                constraints.max_height,
+                            ),
+                            (FlexDirection::Horizontal, FlexFit::Loose) => BoxConstraints::new(
+                                Pixels::ZERO,
+                                allocated,
+                                constraints.min_height,
+                                constraints.max_height,
+                            ),
+                            (FlexDirection::Vertical, FlexFit::Tight) => BoxConstraints::new(
+                                constraints.min_width,
+                                constraints.max_width,
+                                allocated,
+                                allocated,
+                            ),
+                            (FlexDirection::Vertical, FlexFit::Loose) => BoxConstraints::new(
+                                constraints.min_width,
+                                constraints.max_width,
+                                Pixels::ZERO,
+                                allocated,
+                            ),
+                        };
+
+                        let child_size = ctx.layout_child(i, child_constraints);
+                        child_sizes[i] = Some(child_size);
+                        max_cross = max_cross.max(self.cross_size(child_size));
+                    }
+                }
+            }
+        }
+
+        // Calculate total main from all laid-out children
+        let mut total_main = Pixels::ZERO;
+        for child_size in &child_sizes {
+            if let Some(s) = child_size {
+                total_main += self.main_size(*s);
+            }
+        }
         total_main += total_spacing;
 
         // Calculate our size
@@ -277,14 +364,15 @@ impl RenderBox for RenderFlex {
         self.child_offsets.clear();
         self.child_offsets.reserve(child_count);
 
-        for (i, &child_size) in child_sizes.iter().enumerate().take(child_count) {
+        for i in 0..child_count {
+            let child_size = child_sizes[i].unwrap_or(Size::ZERO);
+
             // Calculate cross axis offset based on alignment
             let cross_offset = match self.cross_axis_alignment {
                 CrossAxisAlignment::Start => Pixels::ZERO,
                 CrossAxisAlignment::End => cross_extent - self.cross_size(child_size),
                 CrossAxisAlignment::Center => (cross_extent - self.cross_size(child_size)) / 2.0,
-                CrossAxisAlignment::Stretch => Pixels::ZERO, /* Child already stretched via
-                                                              * constraints */
+                CrossAxisAlignment::Stretch => Pixels::ZERO,
             };
 
             let offset = self.offset(main_offset, cross_offset);
@@ -307,7 +395,7 @@ impl RenderBox for RenderFlex {
 
     // paint() uses default no-op - Flex just positions children
 
-    fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Variable, BoxParentData>) -> bool {
+    fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Variable, FlexParentData>) -> bool {
         if !ctx.is_within_size(self.size.width, self.size.height) {
             return false;
         }
