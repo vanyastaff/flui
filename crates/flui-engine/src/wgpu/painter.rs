@@ -1027,7 +1027,11 @@ impl WgpuPainter {
         // Swap segment data into current_segment temporarily
         std::mem::swap(&mut self.current_segment, seg);
 
-        // Call existing flush methods (they read from self.current_segment.*)
+        // Flush order optimized to minimize GPU pipeline switches:
+        // 1. Instanced primitives (rect, circle, arc, shadow) - similar pipelines
+        // 2. Gradient primitives (linear, radial, sweep) - similar pipelines
+        // 3. Tessellated geometry - different pipeline type
+        // 4. Textures - handled separately via flush_texture_batch (requires texture bind group changes)
         self.flush_all_instanced_batches(encoder, view);
         self.flush_gradient_batches(encoder, view);
         self.flush_tessellated_geometry(encoder, view);
