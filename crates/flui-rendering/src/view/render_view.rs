@@ -1,10 +1,12 @@
 //! RenderView - the root of the render tree.
 
 use std::fmt::Debug;
+use std::sync::{Arc, Weak};
 
 use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
 use flui_layer::TransformLayer;
 use flui_types::{Matrix4, Offset, Pixels, Rect, Size};
+use parking_lot::RwLock;
 
 use super::ViewConfiguration;
 use crate::{
@@ -49,8 +51,13 @@ pub struct RenderView {
     /// Whether automatic system UI adjustment is enabled.
     automatic_system_ui_adjustment: bool,
 
-    /// The pipeline owner (raw pointer for direct access).
-    owner: Option<*const PipelineOwner>,
+    /// The pipeline owner (weak reference to avoid preventing cleanup).
+    ///
+    /// Uses `Weak<RwLock<PipelineOwner>>` because `PipelineOwner` is stored as
+    /// `Arc<RwLock<PipelineOwner>>` in the application layer. A weak reference
+    /// allows the render view to reference the owner without preventing cleanup
+    /// when the owner is dropped.
+    owner: Option<Weak<RwLock<PipelineOwner>>>,
 
     // ========================================================================
     // Render Object State
@@ -86,10 +93,6 @@ impl Debug for RenderView {
             .finish()
     }
 }
-
-// Safety: RenderView manages raw pointer to PipelineOwner carefully
-unsafe impl Send for RenderView {}
-unsafe impl Sync for RenderView {}
 
 impl Default for RenderView {
     fn default() -> Self {
@@ -240,6 +243,26 @@ impl RenderView {
     // Initialization
     // ========================================================================
 
+    /// Returns whether a pipeline owner is attached and still alive.
+    pub fn has_owner(&self) -> bool {
+        self.owner
+            .as_ref()
+            .is_some_and(|weak| weak.strong_count() > 0)
+    }
+
+    /// Attaches this render view to a pipeline owner.
+    ///
+    /// The render view holds a weak reference to the owner, so it does not
+    /// prevent cleanup when the owner is dropped.
+    pub fn attach(&mut self, owner: &Arc<RwLock<PipelineOwner>>) {
+        self.owner = Some(Arc::downgrade(owner));
+    }
+
+    /// Detaches this render view from its pipeline owner.
+    pub fn detach(&mut self) {
+        self.owner = None;
+    }
+
     /// Bootstrap the rendering pipeline by preparing the first frame.
     ///
     /// # Panics
@@ -250,7 +273,7 @@ impl RenderView {
     /// - No configuration is set
     pub fn prepare_initial_frame(&mut self) {
         assert!(
-            self.owner.is_some(),
+            self.has_owner(),
             "attach the RenderView to a PipelineOwner before calling prepare_initial_frame"
         );
         assert!(
@@ -761,7 +784,7 @@ mod tests {
     #[test]
     fn test_render_view_owner_is_none() {
         let view = RenderView::new();
-        assert!(view.owner.is_none());
+        assert!(!view.has_owner());
     }
 
     #[test]
