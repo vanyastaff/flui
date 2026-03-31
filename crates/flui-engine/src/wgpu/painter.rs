@@ -321,6 +321,18 @@ pub struct WgpuPainter {
     /// Current active scissor rect (None = no clipping)
     current_scissor: Option<(u32, u32, u32, u32)>,
 
+    // ===== SDF Clip Stack =====
+    /// Stack of SDF rounded rectangle clip regions.
+    /// Each element is `[x, y, width, height, radius_tl, radius_tr, radius_br, radius_bl]`.
+    /// Used to restore clip state on `restore()`.
+    rrect_clip_stack: Vec<[f32; 8]>,
+
+    /// Current SDF rounded rectangle clip.
+    /// All zeros means no clip is active.
+    /// When non-zero, each new instance gets this clip data so the fragment
+    /// shader can perform per-pixel SDF clipping without a stencil buffer.
+    current_rrect_clip: [f32; 8],
+
     // ===== Opacity/Layer Stack =====
     /// Stack of opacity values for save_layer/restore_layer
     /// Each element is the accumulated alpha (0.0-1.0)
@@ -854,6 +866,8 @@ impl WgpuPainter {
             current_transform,
             scissor_stack: Vec::new(),
             current_scissor: None,
+            rrect_clip_stack: Vec::new(),
+            current_rrect_clip: [0.0; 8],
             opacity_stack: Vec::new(),
             current_opacity: 1.0,
             layer_stack: Vec::new(),
@@ -1872,7 +1886,8 @@ impl Painter for WgpuPainter {
                 let bottom_right = self.apply_transform(Point::new(rect.right(), rect.bottom()));
                 let transformed_rect =
                     Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
-                let instance = super::instancing::RectInstance::rect(transformed_rect, color);
+                let instance = super::instancing::RectInstance::rect(transformed_rect, color)
+                    .with_clip_rrect(self.current_rrect_clip);
                 let _ = self.current_segment.rect_batch.add(instance);
                 DrawSegment::push_scissor_region(&mut self.current_segment.rect_scissors, self.current_scissor);
             } else {
@@ -1939,7 +1954,8 @@ impl Painter for WgpuPainter {
                 rrect.top_right.x.0.max(rrect.top_right.y.0),
                 rrect.bottom_right.x.0.max(rrect.bottom_right.y.0),
                 rrect.bottom_left.x.0.max(rrect.bottom_left.y.0),
-            );
+            )
+            .with_clip_rrect(self.current_rrect_clip);
             let _ = self.current_segment.rect_batch.add(instance);
             DrawSegment::push_scissor_region(&mut self.current_segment.rect_scissors, self.current_scissor);
         } else {
@@ -2849,6 +2865,9 @@ impl Painter for WgpuPainter {
         if let Some(scissor) = self.current_scissor {
             self.scissor_stack.push(scissor);
         }
+
+        // Save current SDF rrect clip
+        self.rrect_clip_stack.push(self.current_rrect_clip);
     }
 
     fn restore(&mut self) {
@@ -2862,6 +2881,13 @@ impl Painter for WgpuPainter {
                 self.current_scissor = None;
             } else {
                 self.current_scissor = self.scissor_stack.pop();
+            }
+
+            // Restore SDF rrect clip state
+            if let Some(clip) = self.rrect_clip_stack.pop() {
+                self.current_rrect_clip = clip;
+            } else {
+                self.current_rrect_clip = [0.0; 8];
             }
 
             #[cfg(debug_assertions)]
@@ -2979,19 +3005,49 @@ impl Painter for WgpuPainter {
     }
 
     fn clip_rrect(&mut self, rrect: RRect) {
-        // Rounded rectangle clipping requires stencil buffer
-        // This is a more complex feature that needs:
-        // 1. Stencil buffer configuration in render pass
-        // 2. Render clip mask to stencil
-        // 3. Enable stencil test for subsequent draws
-        // 4. Stack management for nested clips
-        //
-        // For now, fall back to bounding box clipping
+        // SDF-based rounded rectangle clipping: pass clip bounds and radii
+        // to each instance so the fragment shader can do per-pixel SDF clipping.
+        // This avoids stencil buffers and tessellation entirely.
+
+        // Apply current transform to get screen-space clip coordinates
+        let transform = self.current_transform;
+        let rect = rrect.rect;
+
+        let (x, y, w, h) = if transform == glam::Mat4::IDENTITY {
+            (
+                rect.left().0,
+                rect.top().0,
+                rect.width().0,
+                rect.height().0,
+            )
+        } else {
+            // Transform corners and compute AABB
+            let tl = transform
+                * glam::Vec4::new(rect.left().0, rect.top().0, 0.0, 1.0);
+            let br = transform
+                * glam::Vec4::new(rect.right().0, rect.bottom().0, 0.0, 1.0);
+            let min_x = tl.x.min(br.x);
+            let min_y = tl.y.min(br.y);
+            let max_x = tl.x.max(br.x);
+            let max_y = tl.y.max(br.y);
+            (min_x, min_y, max_x - min_x, max_y - min_y)
+        };
+
+        // Use the maximum of each corner's x/y radius (same approach as draw_rrect)
+        let r_tl = rrect.top_left.x.0.max(rrect.top_left.y.0);
+        let r_tr = rrect.top_right.x.0.max(rrect.top_right.y.0);
+        let r_br = rrect.bottom_right.x.0.max(rrect.bottom_right.y.0);
+        let r_bl = rrect.bottom_left.x.0.max(rrect.bottom_left.y.0);
+
+        self.current_rrect_clip = [x, y, w, h, r_tl, r_tr, r_br, r_bl];
+
+        // Also apply bounding-box scissor clip for early rejection by the rasterizer
         self.clip_rect(rrect.rect);
 
         #[cfg(debug_assertions)]
-        tracing::warn!(
-            "WgpuPainter::clip_rrect: using bounding box fallback (rounded corners not supported yet)"
+        tracing::trace!(
+            "WgpuPainter::clip_rrect: SDF clip set [{:.1}, {:.1}, {:.1}, {:.1}] radii=[{:.1}, {:.1}, {:.1}, {:.1}]",
+            x, y, w, h, r_tl, r_tr, r_br, r_bl
         );
     }
 

@@ -50,6 +50,11 @@ pub struct RectInstance {
     /// translate_y]) Full matrix would be 16 floats, but for UI we only
     /// need 2D affine
     pub transform: [f32; 4],
+
+    /// SDF clip rounded rectangle: [x, y, width, height, radius_tl, radius_tr, radius_br, radius_bl]
+    /// All zeros means no clip active. When non-zero, the fragment shader
+    /// uses an SDF test to discard pixels outside this rounded rectangle.
+    pub clip_rrect: [f32; 8],
 }
 
 impl RectInstance {
@@ -61,6 +66,7 @@ impl RectInstance {
             color: color.to_f32_array(),
             corner_radii: [0.0; 4],
             transform: [1.0, 1.0, 0.0, 0.0], // Identity transform
+            clip_rrect: [0.0; 8],
         }
     }
 
@@ -72,6 +78,7 @@ impl RectInstance {
             color: color.to_f32_array(),
             corner_radii: [radius; 4],
             transform: [1.0, 1.0, 0.0, 0.0],
+            clip_rrect: [0.0; 8],
         }
     }
 
@@ -90,7 +97,19 @@ impl RectInstance {
             color: color.to_f32_array(),
             corner_radii: [top_left, top_right, bottom_right, bottom_left],
             transform: [1.0, 1.0, 0.0, 0.0],
+            clip_rrect: [0.0; 8],
         }
+    }
+
+    /// Set the SDF clip rounded rectangle on this instance
+    ///
+    /// The clip is specified as `[x, y, width, height, radius_tl, radius_tr, radius_br, radius_bl]`.
+    /// All zeros means no clip. When non-zero, the fragment shader discards
+    /// pixels that fall outside the rounded rectangle using an SDF test.
+    #[must_use]
+    pub fn with_clip_rrect(mut self, clip: [f32; 8]) -> Self {
+        self.clip_rrect = clip;
+        self
     }
 
     /// Create an instance with transform
@@ -118,6 +137,10 @@ impl RectInstance {
             4 => Float32x4,
             // Transform (location 5)
             5 => Float32x4,
+            // Clip rrect part 1: [x, y, width, height] (location 6)
+            6 => Float32x4,
+            // Clip rrect part 2: [radius_tl, radius_tr, radius_br, radius_bl] (location 7)
+            7 => Float32x4,
         ];
 
         wgpu::VertexBufferLayout {
@@ -607,9 +630,10 @@ mod tests {
     #[test]
     fn test_rect_instance_size() {
         // Verify struct is tightly packed for GPU
+        // 16 original floats + 8 clip_rrect floats = 24 floats = 96 bytes
         assert_eq!(
             std::mem::size_of::<RectInstance>(),
-            16 * 4 // 16 floats = 64 bytes
+            24 * 4 // 24 floats = 96 bytes
         );
     }
 
