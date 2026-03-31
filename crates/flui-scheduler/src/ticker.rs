@@ -56,13 +56,19 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use web_time::Instant;
 
-use crate::{
-    duration::Seconds,
-    id::{TickerIdMarker, TypedId},
-};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// Unique ticker identifier
-pub type TickerId = TypedId<TickerIdMarker>;
+use crate::duration::Seconds;
+
+/// Unique ticker identifier from `flui_foundation`.
+pub use flui_foundation::TickerId;
+
+/// Generate the next unique ticker ID using a global atomic counter.
+fn next_ticker_id() -> TickerId {
+    static COUNTER: AtomicUsize = AtomicUsize::new(1);
+    let value = COUNTER.fetch_add(1, Ordering::Relaxed);
+    TickerId::zip(value)
+}
 
 /// Ticker callback - receives elapsed time in seconds
 pub type TickerCallback = Box<dyn FnMut(f64) + Send>;
@@ -179,7 +185,7 @@ impl Ticker {
     /// Create a new ticker
     pub fn new() -> Self {
         Self {
-            id: TickerId::new(),
+            id: next_ticker_id(),
             inner: Arc::new(Mutex::new(TickerInner {
                 state: TickerState::Idle,
                 start_time: None,
@@ -616,7 +622,7 @@ impl ScheduledTicker {
     /// Create a new scheduled ticker
     pub fn new(scheduler: Arc<crate::scheduler::Scheduler>) -> Self {
         Self {
-            id: TickerId::new(),
+            id: next_ticker_id(),
             scheduler,
             inner: Arc::new(Mutex::new(ScheduledTickerInner {
                 state: TickerState::Idle,

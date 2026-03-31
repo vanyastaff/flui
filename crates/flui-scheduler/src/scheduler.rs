@@ -79,15 +79,14 @@ use crate::{
         AppLifecycleState, FrameCallback, FrameId, FramePhase, FrameTiming, OneShotFrameCallback,
         PostFrameCallback, RecurringFrameCallback, SchedulerPhase,
     },
-    id::{CallbackIdMarker, IdGenerator, TypedId},
+    id::{IdGenerator, CallbackId},
     task::{Priority, TaskQueue},
     ticker::TickerProvider,
     traits::PriorityLevel,
     vsync::VsyncScheduler,
 };
 
-/// Unique identifier for callbacks (transient, persistent, post-frame)
-pub type CallbackId = TypedId<CallbackIdMarker>;
+// CallbackId is imported from crate::id (re-exported from flui_foundation::FrameCallbackId)
 
 /// Cancellable transient callback with ID
 struct CancellableTransientCallback {
@@ -138,7 +137,7 @@ struct FrameCompletionState {
 ///     // Now safe to do post-frame cleanup
 ///     println!(
 ///         "Frame {} completed in {}ms",
-///         timing.id.as_u64(),
+///         timing.id.get(),
 ///         timing.elapsed().value()
 ///     );
 /// }
@@ -359,7 +358,7 @@ struct CallbackState {
     /// Cancelled callback IDs (lock-free)
     cancelled: DashMap<CallbackId, ()>,
     /// Callback ID generator
-    id_gen: IdGenerator<CallbackIdMarker>,
+    id_gen: IdGenerator<flui_foundation::markers::FrameCallback>,
     /// Legacy frame callbacks
     frame: Mutex<Vec<FrameCallback>>,
     /// Persistent frame callbacks (every frame)
@@ -1240,7 +1239,7 @@ impl Scheduler {
     ///
     ///     println!(
     ///         "Frame {} completed in {}ms",
-    ///         timing.id.as_u64(),
+    ///         timing.id.get(),
     ///         timing.elapsed().value()
     ///     );
     /// }
@@ -1696,7 +1695,7 @@ mod tests {
         assert!(scheduler.is_frame_scheduled());
 
         let frame_id = scheduler.execute_frame();
-        assert!(frame_id.as_u64() > 0);
+        assert!(frame_id.get() > 0);
         assert!(!scheduler.is_frame_scheduled());
     }
 
@@ -2153,7 +2152,7 @@ mod tests {
         assert!(result3.is_ready());
 
         if let Poll::Ready(timing) = result3 {
-            assert!(timing.id.as_u64() > 0);
+            assert!(timing.id.get() > 0);
         }
     }
 

@@ -1514,106 +1514,90 @@ fn test_vsync_driven_scheduler_inactive_on_vsync() {
 // ============================================================================
 
 #[test]
-fn test_typed_id_creation() {
-    use flui_scheduler::id::{TypedCallbackId, TypedFrameId, TypedTaskId, TypedTickerId};
+fn test_foundation_id_creation() {
+    use flui_scheduler::id::{IdGenerator, markers};
 
-    let frame_id = TypedFrameId::new();
-    let task_id = TypedTaskId::new();
-    let ticker_id = TypedTickerId::new();
-    let callback_id = TypedCallbackId::new();
+    let frame_gen = IdGenerator::<markers::Frame>::new();
+    let task_gen = IdGenerator::<markers::Task>::new();
+    let ticker_gen = IdGenerator::<markers::Ticker>::new();
+    let callback_gen = IdGenerator::<markers::FrameCallback>::new();
 
-    // All IDs should be unique
-    assert_ne!(frame_id.as_u64(), task_id.as_u64());
-    assert_ne!(task_id.as_u64(), ticker_id.as_u64());
-    assert_ne!(ticker_id.as_u64(), callback_id.as_u64());
+    let frame_id = frame_gen.next();
+    let task_id = task_gen.next();
+    let ticker_id = ticker_gen.next();
+    let callback_id = callback_gen.next();
+
+    // All IDs should have valid values
+    assert!(frame_id.get() > 0);
+    assert!(task_id.get() > 0);
+    assert!(ticker_id.get() > 0);
+    assert!(callback_id.get() > 0);
 }
 
 #[test]
-fn test_typed_id_raw() {
-    use flui_scheduler::id::TypedFrameId;
+fn test_foundation_id_raw() {
+    use flui_scheduler::id::{IdGenerator, markers, FrameId};
 
-    let id = TypedFrameId::new();
-    let raw = id.raw();
-    let value = id.as_u64();
+    let id_gen = IdGenerator::<markers::Frame>::new();
+    let id: FrameId = id_gen.next();
+    let raw = id.into_raw();
+    let value = id.get();
 
-    assert_eq!(raw.get(), value);
+    assert_eq!(raw.unzip(), value);
 }
 
 #[test]
-fn test_typed_id_from_raw() {
-    use std::num::NonZeroU64;
+fn test_foundation_id_from_zip() {
+    use flui_scheduler::id::FrameId;
 
-    use flui_scheduler::id::TypedFrameId;
-
-    let raw = NonZeroU64::new(42).unwrap();
-    let id = TypedFrameId::from_raw(raw);
-
-    assert_eq!(id.as_u64(), 42);
+    let id = FrameId::zip(42);
+    assert_eq!(id.get(), 42);
 }
 
 #[test]
-fn test_typed_id_type_name() {
-    use flui_scheduler::id::{TypedCallbackId, TypedFrameId, TypedTaskId, TypedTickerId};
+fn test_foundation_id_display() {
+    use flui_scheduler::id::FrameId;
 
-    assert_eq!(TypedFrameId::type_name(), "Frame");
-    assert_eq!(TypedTaskId::type_name(), "Task");
-    assert_eq!(TypedTickerId::type_name(), "Ticker");
-    assert_eq!(TypedCallbackId::type_name(), "Callback");
-}
-
-#[test]
-fn test_typed_id_default() {
-    use flui_scheduler::id::TypedFrameId;
-
-    let id1: TypedFrameId = Default::default();
-    let id2: TypedFrameId = Default::default();
-
-    // Default creates new unique IDs
-    assert_ne!(id1, id2);
-}
-
-#[test]
-fn test_typed_id_display() {
-    use flui_scheduler::id::TypedFrameId;
-
-    let id = TypedFrameId::new();
+    let id = FrameId::zip(42);
     let display = format!("{}", id);
 
-    assert!(display.starts_with("Frame#"));
+    assert!(display.contains("Frame"));
+    assert!(display.contains("42"));
 }
 
 #[test]
-fn test_typed_id_debug() {
-    use flui_scheduler::id::TypedFrameId;
+fn test_foundation_id_debug() {
+    use flui_scheduler::id::FrameId;
 
-    let id = TypedFrameId::new();
+    let id = FrameId::zip(42);
     let debug = format!("{:?}", id);
 
-    assert!(debug.starts_with("FrameId("));
+    assert!(debug.contains("Frame"));
+    assert!(debug.contains("42"));
 }
 
 #[test]
-fn test_typed_id_ordering() {
-    use flui_scheduler::id::TypedFrameId;
+fn test_foundation_id_ordering() {
+    use flui_scheduler::id::FrameId;
 
-    let id1 = TypedFrameId::new();
-    let id2 = TypedFrameId::new();
-    let id3 = TypedFrameId::new();
+    let id1 = FrameId::zip(1);
+    let id2 = FrameId::zip(2);
+    let id3 = FrameId::zip(3);
 
-    // IDs should be ordered by creation time
+    // IDs should be ordered by value
     assert!(id1 < id2);
     assert!(id2 < id3);
     assert!(id1 < id3);
 }
 
 #[test]
-fn test_typed_id_hash() {
+fn test_foundation_id_hash() {
     use std::collections::HashSet;
 
-    use flui_scheduler::id::TypedFrameId;
+    use flui_scheduler::id::FrameId;
 
-    let id1 = TypedFrameId::new();
-    let id2 = TypedFrameId::new();
+    let id1 = FrameId::zip(1);
+    let id2 = FrameId::zip(2);
 
     let mut set = HashSet::new();
     set.insert(id1);
@@ -1626,17 +1610,17 @@ fn test_typed_id_hash() {
 
 #[test]
 fn test_id_generator() {
-    use flui_scheduler::id::{FrameIdMarker, IdGenerator};
+    use flui_scheduler::id::{IdGenerator, markers};
 
-    let generator = IdGenerator::<FrameIdMarker>::new();
+    let generator = IdGenerator::<markers::Frame>::new();
 
     let id1 = generator.next();
     let id2 = generator.next();
     let id3 = generator.next();
 
-    assert_eq!(id1.as_u64(), 1);
-    assert_eq!(id2.as_u64(), 2);
-    assert_eq!(id3.as_u64(), 3);
+    assert_eq!(id1.get(), 1);
+    assert_eq!(id2.get(), 2);
+    assert_eq!(id3.get(), 3);
 
     // Test current
     assert_eq!(generator.current(), 4);
@@ -1644,33 +1628,33 @@ fn test_id_generator() {
 
 #[test]
 fn test_id_generator_starting_from() {
-    use flui_scheduler::id::{IdGenerator, TaskIdMarker};
+    use flui_scheduler::id::{IdGenerator, markers};
 
-    let generator = IdGenerator::<TaskIdMarker>::starting_from(100);
+    let generator = IdGenerator::<markers::Task>::starting_from(100);
 
     let id1 = generator.next();
     let id2 = generator.next();
 
-    assert_eq!(id1.as_u64(), 100);
-    assert_eq!(id2.as_u64(), 101);
+    assert_eq!(id1.get(), 100);
+    assert_eq!(id2.get(), 101);
 }
 
 #[test]
 fn test_id_generator_starting_from_zero() {
-    use flui_scheduler::id::{IdGenerator, TaskIdMarker};
+    use flui_scheduler::id::{IdGenerator, markers};
 
     // Starting from 0 should be converted to 1
-    let generator = IdGenerator::<TaskIdMarker>::starting_from(0);
+    let generator = IdGenerator::<markers::Task>::starting_from(0);
 
     let id = generator.next();
-    assert_eq!(id.as_u64(), 1);
+    assert_eq!(id.get(), 1);
 }
 
 #[test]
 fn test_id_generator_reset() {
-    use flui_scheduler::id::{FrameIdMarker, IdGenerator};
+    use flui_scheduler::id::{IdGenerator, markers};
 
-    let generator = IdGenerator::<FrameIdMarker>::new();
+    let generator = IdGenerator::<markers::Frame>::new();
 
     generator.next();
     generator.next();
@@ -1682,14 +1666,14 @@ fn test_id_generator_reset() {
     assert_eq!(generator.current(), 1);
 
     let id = generator.next();
-    assert_eq!(id.as_u64(), 1);
+    assert_eq!(id.get(), 1);
 }
 
 #[test]
 fn test_id_generator_default() {
-    use flui_scheduler::id::{FrameIdMarker, IdGenerator};
+    use flui_scheduler::id::{IdGenerator, markers};
 
-    let generator: IdGenerator<FrameIdMarker> = Default::default();
+    let generator: IdGenerator<markers::Frame> = Default::default();
     assert_eq!(generator.current(), 1);
 }
 
@@ -2385,7 +2369,7 @@ fn test_task_creation() {
 
     assert_eq!(task.priority(), Priority::Animation);
     let id = task.id();
-    assert!(id.as_u64() > 0);
+    assert!(id.get() > 0);
 }
 
 #[test]
@@ -2448,7 +2432,7 @@ fn test_typed_task_id() {
     let id = task.id();
 
     // ID should be valid (non-zero)
-    assert!(id.as_u64() > 0);
+    assert!(id.get() > 0);
 }
 
 #[test]

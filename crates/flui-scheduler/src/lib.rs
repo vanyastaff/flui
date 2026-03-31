@@ -75,12 +75,15 @@
 //! ```
 //!
 //! ### Type-Safe IDs
-//! PhantomData markers prevent ID type confusion:
+//! Foundation markers prevent ID type confusion:
 //! ```rust
-//! use flui_scheduler::{frame::FrameId, task::TaskId};
+//! use flui_scheduler::id::IdGenerator;
+//! use flui_foundation::markers;
 //!
-//! let frame_id = FrameId::new();
-//! let task_id = TaskId::new();
+//! let frame_gen = IdGenerator::<markers::Frame>::new();
+//! let task_gen = IdGenerator::<markers::Task>::new();
+//! let frame_id = frame_gen.next();
+//! let task_id = task_gen.next();
 //! // These are different types - can't be mixed!
 //! ```
 //!
@@ -186,14 +189,11 @@ pub use frame::{
     LifecycleStateCallback, OneShotFrameCallback, PostFrameCallback, RecurringFrameCallback,
     SchedulerPhase,
 };
-// Re-exports - ID types
+// Re-exports - ID types (unified with flui-foundation)
 pub use id::{
-    CallbackIdMarker, FrameHandle, FrameIdMarker, Handle, IdGenerator, IdMarker, TaskHandle,
-    TaskIdMarker, TickerIdMarker, TypedId,
+    CallbackId, FrameHandle, Handle, Id, IdGenerator, Marker, TaskHandle, markers,
 };
-pub use scheduler::{
-    CallbackId, FrameCompletionFuture, FrameSkipPolicy, Scheduler, SchedulerBuilder,
-};
+pub use scheduler::{FrameCompletionFuture, FrameSkipPolicy, Scheduler, SchedulerBuilder};
 pub use task::{Priority, PriorityCount, Task, TaskId, TaskQueue, TypedTask};
 pub use ticker::{
     ScheduledTicker, ScheduledTickerCallback, Ticker, TickerCallback, TickerCanceled, TickerFuture,
@@ -236,7 +236,7 @@ pub mod prelude_advanced {
         SchedulerBuilder, TickerGroup, VsyncMode, VsyncStats,
     };
     pub use crate::{
-        id::{FrameHandle, Handle, IdGenerator, TypedId},
+        id::{FrameHandle, Handle, Id, IdGenerator},
         prelude::*,
         task::TypedTask,
         traits::{

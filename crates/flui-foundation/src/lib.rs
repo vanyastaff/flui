@@ -192,6 +192,7 @@ pub use id::{
     // Group/Region IDs
     FocusId,
     FrameCallbackId,
+    FrameId,
     // Gesture IDs
     GestureId,
     GroupId,
@@ -217,7 +218,9 @@ pub use id::{
     RestorationScopeId,
     RouteId,
     SemanticsId,
+    TaskId,
     TextureId,
+    TickerId,
     VendorId,
     ViewId,
     // Marker types module

@@ -1,281 +1,129 @@
-//! Type-safe identifiers using PhantomData markers
+//! Type-safe identifiers for the scheduler subsystem.
 //!
-//! This module provides generic ID types that use phantom type parameters
-//! to prevent mixing different kinds of identifiers at compile time.
+//! This module re-exports foundation ID types (`Id<T>`, markers) and provides
+//! scheduler-specific utilities: `IdGenerator` for atomic auto-increment ID
+//! generation, and `Handle` for generation-counted slot-map references.
 //!
-//! ## PhantomData Pattern
+//! ## Foundation Unification
 //!
-//! PhantomData allows us to "tag" types with additional type information
-//! without any runtime cost. This prevents bugs like passing a TaskId
-//! where a FrameId is expected.
+//! All scheduler ID types (`FrameId`, `TaskId`, `TickerId`, `CallbackId`) are
+//! now aliases for `flui_foundation::Id<T>` with the corresponding marker from
+//! `flui_foundation::markers`. This eliminates the previous parallel
+//! `TypedId<M>` system.
+//!
+//! ## Example
 //!
 //! ```rust
-//! use flui_scheduler::id::{FrameIdMarker, TaskIdMarker, TypedId};
+//! use flui_scheduler::id::{IdGenerator, Handle};
+//! use flui_foundation::markers;
 //!
-//! type FrameId = TypedId<FrameIdMarker>;
-//! type TaskId = TypedId<TaskIdMarker>;
+//! // Generate unique IDs using atomic counter
+//! let id_gen = IdGenerator::<markers::Frame>::new();
+//! let id1 = id_gen.next();
+//! let id2 = id_gen.next();
+//! assert_ne!(id1, id2);
 //!
-//! fn process_frame(id: FrameId) { /* ... */
-//! }
-//!
-//! let frame_id = FrameId::new();
-//! let task_id = TaskId::new();
-//!
-//! process_frame(frame_id); // OK
-//! // process_frame(task_id);  // Compile error!
+//! // Handles for ABA-safe slot-map references
+//! let handle = Handle::<markers::Frame>::new(42, 1);
+//! assert_eq!(handle.index(), 42);
 //! ```
 
 use std::{
     fmt,
-    hash::Hash,
     marker::PhantomData,
-    num::NonZeroU64,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 // =============================================================================
-// ID Marker Traits (Sealed)
+// Re-exports from flui-foundation
 // =============================================================================
 
-mod sealed {
-    pub trait IdMarkerSealed {}
+pub use flui_foundation::{
+    FrameCallbackId, FrameId, Id, Identifier, Index, Marker, RawId, TaskId, TickerId,
+    markers,
+};
 
-    impl IdMarkerSealed for super::FrameIdMarker {}
-    impl IdMarkerSealed for super::TaskIdMarker {}
-    impl IdMarkerSealed for super::TickerIdMarker {}
-    impl IdMarkerSealed for super::CallbackIdMarker {}
-}
-
-/// Marker trait for ID types - sealed to prevent external implementations
+/// Scheduler callback ID - alias for `FrameCallbackId` from foundation.
 ///
-/// # Sealed Trait
-///
-/// This trait is **sealed** and cannot be implemented outside of this crate.
-/// The available ID markers are:
-/// - [`FrameIdMarker`]
-/// - [`TaskIdMarker`]
-/// - [`TickerIdMarker`]
-/// - [`CallbackIdMarker`]
-pub trait IdMarker: sealed::IdMarkerSealed + Send + Sync + 'static {
-    /// Human-readable name for this ID type
-    const NAME: &'static str;
-}
-
-/// Marker for frame identifiers
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct FrameIdMarker;
-
-impl IdMarker for FrameIdMarker {
-    const NAME: &'static str = "Frame";
-}
-
-/// Marker for task identifiers
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct TaskIdMarker;
-
-impl IdMarker for TaskIdMarker {
-    const NAME: &'static str = "Task";
-}
-
-/// Marker for ticker identifiers
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct TickerIdMarker;
-
-impl IdMarker for TickerIdMarker {
-    const NAME: &'static str = "Ticker";
-}
-
-/// Marker for callback identifiers
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct CallbackIdMarker;
-
-impl IdMarker for CallbackIdMarker {
-    const NAME: &'static str = "Callback";
-}
+/// Identifies callbacks (transient, persistent, post-frame) in the scheduler.
+pub type CallbackId = FrameCallbackId;
 
 // =============================================================================
-// TypedId - Generic ID with Phantom Type
+// ID Generation with Atomic Counters
 // =============================================================================
 
-/// A type-safe identifier with compile-time type checking
+/// ID generator for a specific marker type.
 ///
-/// Uses `NonZeroU64` for niche optimization - `Option<TypedId<M>>` is the same
-/// size as `TypedId<M>` (8 bytes).
+/// Produces unique `Id<M>` values via an atomic counter. Useful when you need
+/// deterministic ID generation or want to reset counters (e.g., in tests).
+///
+/// Unlike `Id::new()`/`Id::zip()` which require an explicit index, the
+/// generator auto-increments from 1.
 ///
 /// ## Example
 ///
 /// ```rust
-/// use flui_scheduler::id::{FrameIdMarker, TaskIdMarker, TypedId};
+/// use flui_scheduler::id::IdGenerator;
+/// use flui_foundation::{FrameId, markers};
 ///
-/// // Create type aliases for clarity
-/// type FrameId = TypedId<FrameIdMarker>;
-/// type TaskId = TypedId<TaskIdMarker>;
+/// let id_gen = IdGenerator::<markers::Frame>::new();
+/// let id1: FrameId = id_gen.next();
+/// let id2: FrameId = id_gen.next();
+/// assert_ne!(id1, id2);
+/// assert_eq!(id1.get(), 1);
+/// assert_eq!(id2.get(), 2);
 ///
-/// let frame = FrameId::new();
-/// let task = TaskId::new();
-///
-/// // These are different types - can't be mixed!
-/// assert_ne!(
-///     std::any::TypeId::of::<FrameId>(),
-///     std::any::TypeId::of::<TaskId>()
-/// );
+/// id_gen.reset();
+/// let id3: FrameId = id_gen.next();
+/// assert_eq!(id3.get(), 1);
 /// ```
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct TypedId<M: IdMarker> {
-    value: NonZeroU64,
+pub struct IdGenerator<M: Marker> {
+    counter: AtomicUsize,
     _marker: PhantomData<M>,
 }
 
-impl<M: IdMarker> TypedId<M> {
-    /// Create a new unique ID
-    ///
-    /// IDs are generated using a global atomic counter, ensuring uniqueness
-    /// across all IDs of the same type within a process.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the internal counter overflows (after 2^64 - 1 IDs).
-    /// In practice, this is effectively impossible.
-    pub fn new() -> Self {
-        static COUNTER: AtomicU64 = AtomicU64::new(1);
-        let value = COUNTER.fetch_add(1, Ordering::Relaxed);
-
-        Self {
-            // SAFETY: Counter starts at 1 and only increments
-            value: NonZeroU64::new(value).expect("ID counter overflow"),
-            _marker: PhantomData,
-        }
-    }
-
-    /// Create from a raw value
-    ///
-    /// This is not marked `unsafe` because using a non-unique ID cannot cause
-    /// memory unsafety, only logical errors. However, callers should ensure:
-    ///
-    /// - The value is unique within its usage domain
-    /// - The ID was not already generated by another source
-    ///
-    /// # Use Cases
-    ///
-    /// - Deserializing IDs from storage
-    /// - Interoperating with external ID systems
-    pub const fn from_raw(value: NonZeroU64) -> Self {
-        Self {
-            value,
-            _marker: PhantomData,
-        }
-    }
-
-    /// Get the raw value
-    #[inline]
-    pub const fn raw(self) -> NonZeroU64 {
-        self.value
-    }
-
-    /// Get the raw value as u64
-    #[inline]
-    pub const fn as_u64(self) -> u64 {
-        self.value.get()
-    }
-
-    /// Get the marker type name
-    #[inline]
-    pub const fn type_name() -> &'static str {
-        M::NAME
-    }
-}
-
-impl<M: IdMarker> Default for TypedId<M> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<M: IdMarker> fmt::Debug for TypedId<M> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}Id({})", M::NAME, self.value)
-    }
-}
-
-impl<M: IdMarker> fmt::Display for TypedId<M> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}#{}", M::NAME, self.value)
-    }
-}
-
-// =============================================================================
-// Type Aliases for Common ID Types
-// =============================================================================
-
-/// Type-safe frame identifier
-pub type TypedFrameId = TypedId<FrameIdMarker>;
-
-/// Type-safe task identifier
-pub type TypedTaskId = TypedId<TaskIdMarker>;
-
-/// Type-safe ticker identifier
-pub type TypedTickerId = TypedId<TickerIdMarker>;
-
-/// Type-safe callback identifier
-pub type TypedCallbackId = TypedId<CallbackIdMarker>;
-
-// =============================================================================
-// ID Generation with Custom Counters
-// =============================================================================
-
-/// ID generator for a specific marker type
-///
-/// Useful when you need deterministic ID generation or want to reset counters.
-pub struct IdGenerator<M: IdMarker> {
-    counter: AtomicU64,
-    _marker: PhantomData<M>,
-}
-
-impl<M: IdMarker> IdGenerator<M> {
-    /// Create a new ID generator starting from 1
+impl<M: Marker> IdGenerator<M> {
+    /// Create a new ID generator starting from 1.
     pub const fn new() -> Self {
         Self {
-            counter: AtomicU64::new(1),
+            counter: AtomicUsize::new(1),
             _marker: PhantomData,
         }
     }
 
-    /// Create a generator starting from a specific value
+    /// Create a generator starting from a specific value.
     ///
     /// If `start` is 0, it will be set to 1 to ensure non-zero IDs.
-    pub fn starting_from(start: u64) -> Self {
+    pub fn starting_from(start: usize) -> Self {
         let start = if start == 0 { 1 } else { start };
         Self {
-            counter: AtomicU64::new(start),
+            counter: AtomicUsize::new(start),
             _marker: PhantomData,
         }
     }
 
-    /// Generate the next ID
+    /// Generate the next ID.
     ///
     /// # Panics
     ///
-    /// Panics if the counter overflows (after 2^64 - 1 IDs).
-    pub fn next(&self) -> TypedId<M> {
+    /// Panics if the counter overflows (after `usize::MAX - 1` IDs).
+    pub fn next(&self) -> Id<M> {
         let value = self.counter.fetch_add(1, Ordering::Relaxed);
-        TypedId {
-            value: NonZeroU64::new(value).expect("ID counter overflow"),
-            _marker: PhantomData,
-        }
+        Id::zip(value)
     }
 
-    /// Get the current counter value (next ID that will be generated)
-    pub fn current(&self) -> u64 {
+    /// Get the current counter value (next ID that will be generated).
+    pub fn current(&self) -> usize {
         self.counter.load(Ordering::Relaxed)
     }
 
-    /// Reset the counter to 1
+    /// Reset the counter to 1.
     pub fn reset(&self) {
         self.counter.store(1, Ordering::Relaxed);
     }
 }
 
-impl<M: IdMarker> Default for IdGenerator<M> {
+impl<M: Marker> Default for IdGenerator<M> {
     fn default() -> Self {
         Self::new()
     }
@@ -285,19 +133,47 @@ impl<M: IdMarker> Default for IdGenerator<M> {
 // Handle Pattern (ID + Generation for ABA problem prevention)
 // =============================================================================
 
-/// A handle that includes a generation number
+/// A handle that includes a generation number.
 ///
 /// Useful for detecting stale references in slot-map style data structures.
 /// The generation is incremented each time a slot is reused.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Handle<M: IdMarker> {
+pub struct Handle<M: Marker> {
     index: u32,
     generation: u32,
     _marker: PhantomData<M>,
 }
 
-impl<M: IdMarker> Handle<M> {
-    /// Create a new handle
+// Manual trait implementations to avoid requiring M: Copy/Clone/etc bounds
+// (foundation markers are empty enums that cannot implement Copy/Clone)
+
+impl<M: Marker> Copy for Handle<M> {}
+
+impl<M: Marker> Clone for Handle<M> {
+    #[inline]
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<M: Marker> PartialEq for Handle<M> {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.index == other.index && self.generation == other.generation
+    }
+}
+
+impl<M: Marker> Eq for Handle<M> {}
+
+impl<M: Marker> std::hash::Hash for Handle<M> {
+    #[inline]
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.index.hash(state);
+        self.generation.hash(state);
+    }
+}
+
+impl<M: Marker> Handle<M> {
+    /// Create a new handle.
     pub const fn new(index: u32, generation: u32) -> Self {
         Self {
             index,
@@ -306,19 +182,19 @@ impl<M: IdMarker> Handle<M> {
         }
     }
 
-    /// Get the index
+    /// Get the index.
     #[inline]
     pub const fn index(self) -> u32 {
         self.index
     }
 
-    /// Get the generation
+    /// Get the generation.
     #[inline]
     pub const fn generation(self) -> u32 {
         self.generation
     }
 
-    /// Create a handle with incremented generation (for slot reuse)
+    /// Create a handle with incremented generation (for slot reuse).
     #[inline]
     pub const fn next_generation(self) -> Self {
         Self {
@@ -328,13 +204,13 @@ impl<M: IdMarker> Handle<M> {
         }
     }
 
-    /// Pack into a single u64 for efficient storage
+    /// Pack into a single u64 for efficient storage.
     #[inline]
     pub const fn pack(self) -> u64 {
         ((self.generation as u64) << 32) | (self.index as u64)
     }
 
-    /// Unpack from a u64
+    /// Unpack from a u64.
     #[inline]
     pub const fn unpack(packed: u64) -> Self {
         Self {
@@ -345,29 +221,27 @@ impl<M: IdMarker> Handle<M> {
     }
 }
 
-impl<M: IdMarker> fmt::Debug for Handle<M> {
+impl<M: Marker> fmt::Debug for Handle<M> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}Handle({}, gen={})",
-            M::NAME,
-            self.index,
-            self.generation
-        )
+        let type_name = core::any::type_name::<M>();
+        let marker_name = type_name.rsplit("::").next().unwrap_or(type_name);
+        write!(f, "{}Handle({}, gen={})", marker_name, self.index, self.generation)
     }
 }
 
-impl<M: IdMarker> fmt::Display for Handle<M> {
+impl<M: Marker> fmt::Display for Handle<M> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}[{}:{}]", M::NAME, self.index, self.generation)
+        let type_name = core::any::type_name::<M>();
+        let marker_name = type_name.rsplit("::").next().unwrap_or(type_name);
+        write!(f, "{}[{}:{}]", marker_name, self.index, self.generation)
     }
 }
 
-/// Type-safe frame handle
-pub type FrameHandle = Handle<FrameIdMarker>;
+/// Type-safe frame handle.
+pub type FrameHandle = Handle<markers::Frame>;
 
-/// Type-safe task handle
-pub type TaskHandle = Handle<TaskIdMarker>;
+/// Type-safe task handle.
+pub type TaskHandle = Handle<markers::Task>;
 
 // =============================================================================
 // Tests
@@ -378,56 +252,59 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_typed_id_uniqueness() {
-        let id1 = TypedFrameId::new();
-        let id2 = TypedFrameId::new();
+    fn test_id_uniqueness_via_generator() {
+        let id_gen = IdGenerator::<markers::Frame>::new();
+        let id1 = id_gen.next();
+        let id2 = id_gen.next();
 
         assert_ne!(id1, id2);
-        assert!(id2.as_u64() > id1.as_u64());
+        assert!(id2.get() > id1.get());
     }
 
     #[test]
-    fn test_typed_id_type_safety() {
-        // This is a compile-time test - these types are different
-        let _frame_id: TypedFrameId = TypedId::new();
-        let _task_id: TypedTaskId = TypedId::new();
+    fn test_id_type_safety() {
+        // These are different types - can't be mixed!
+        let _frame_id: FrameId = Id::zip(1);
+        let _task_id: TaskId = Id::zip(2);
 
-        // Type names are different
-        assert_eq!(TypedFrameId::type_name(), "Frame");
-        assert_eq!(TypedTaskId::type_name(), "Task");
+        assert_ne!(
+            std::any::TypeId::of::<FrameId>(),
+            std::any::TypeId::of::<TaskId>()
+        );
     }
 
     #[test]
-    fn test_typed_id_display() {
-        let frame_id = TypedFrameId::new();
+    fn test_id_display() {
+        let frame_id = FrameId::zip(42);
         let display = format!("{}", frame_id);
-        assert!(display.starts_with("Frame#"));
+        assert!(display.contains("Frame"));
+        assert!(display.contains("42"));
     }
 
     #[test]
     fn test_option_niche_optimization() {
         use std::mem::size_of;
 
-        // NonZeroU64 enables niche optimization
-        assert_eq!(size_of::<TypedFrameId>(), 8);
-        assert_eq!(size_of::<Option<TypedFrameId>>(), 8);
+        // NonZeroUsize enables niche optimization
+        assert_eq!(size_of::<FrameId>(), size_of::<usize>());
+        assert_eq!(size_of::<Option<FrameId>>(), size_of::<usize>());
     }
 
     #[test]
     fn test_id_generator() {
-        let generator = IdGenerator::<FrameIdMarker>::new();
+        let generator = IdGenerator::<markers::Frame>::new();
 
         let id1 = generator.next();
         let id2 = generator.next();
         let id3 = generator.next();
 
-        assert_eq!(id1.as_u64(), 1);
-        assert_eq!(id2.as_u64(), 2);
-        assert_eq!(id3.as_u64(), 3);
+        assert_eq!(id1.get(), 1);
+        assert_eq!(id2.get(), 2);
+        assert_eq!(id3.get(), 3);
 
         generator.reset();
         let id4 = generator.next();
-        assert_eq!(id4.as_u64(), 1);
+        assert_eq!(id4.get(), 1);
     }
 
     #[test]

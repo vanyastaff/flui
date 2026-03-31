@@ -623,6 +623,21 @@ ids! {
     /// Identifies scheduled frame callbacks in the scheduler binding.
     pub type FrameCallbackId FrameCallback;
 
+    /// Frame ID - scheduler frame identifier.
+    ///
+    /// Identifies individual frames in the scheduler frame lifecycle.
+    pub type FrameId Frame;
+
+    /// Task ID - scheduler task identifier.
+    ///
+    /// Identifies tasks in the priority-based task queue.
+    pub type TaskId Task;
+
+    /// Ticker ID - scheduler ticker identifier.
+    ///
+    /// Identifies tickers for animation timing callbacks.
+    pub type TickerId Ticker;
+
     // =====================================================================
     // Gesture IDs
     // =====================================================================

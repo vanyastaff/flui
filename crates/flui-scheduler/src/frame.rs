@@ -7,31 +7,43 @@
 //!
 //! ## Type-Safe Frame IDs
 //!
-//! Frame IDs use the newtype pattern for type safety:
+//! Frame IDs use `flui_foundation::Id<Frame>` for type safety:
 //! ```rust
-//! use flui_scheduler::frame::FrameId;
+//! use flui_scheduler::id::IdGenerator;
+//! use flui_foundation::markers;
 //!
-//! let frame1 = FrameId::new();
-//! let frame2 = FrameId::new();
+//! let gen = IdGenerator::<markers::Frame>::new();
+//! let frame1 = gen.next();
+//! let frame2 = gen.next();
 //! assert_ne!(frame1, frame2);
 //! ```
 
-use std::{fmt, sync::Arc};
+use std::{
+    fmt,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use web_time::Instant;
 
-use crate::{
-    duration::{FrameDuration, Milliseconds, Percentage, Seconds},
-    id::{FrameIdMarker, TypedId},
-};
+use crate::duration::{FrameDuration, Milliseconds, Percentage, Seconds};
 
-/// Unique frame identifier using type-safe ID
+/// Unique frame identifier using type-safe ID from `flui_foundation`.
 ///
-/// Uses `NonZeroU64` internally for niche optimization -
-/// `Option<FrameId>` is the same size as `FrameId` (8 bytes).
-pub type FrameId = TypedId<FrameIdMarker>;
+/// Uses `NonZeroUsize` internally for niche optimization -
+/// `Option<FrameId>` is the same size as `FrameId`.
+pub use flui_foundation::FrameId;
+
+/// Generate the next unique frame ID using a global atomic counter.
+fn next_frame_id() -> FrameId {
+    static COUNTER: AtomicUsize = AtomicUsize::new(1);
+    let value = COUNTER.fetch_add(1, Ordering::Relaxed);
+    FrameId::zip(value)
+}
 
 /// Scheduler phase - which part of the frame lifecycle is executing
 ///
@@ -568,7 +580,7 @@ impl FrameTiming {
     /// Create a new frame timing
     pub fn new(target_fps: u32) -> Self {
         Self {
-            id: FrameId::new(),
+            id: next_frame_id(),
             start_time: Instant::now(),
             frame_duration: FrameDuration::from_fps(target_fps),
             phase: FramePhase::Idle,
@@ -578,7 +590,7 @@ impl FrameTiming {
     /// Create with a specific frame duration
     pub fn with_duration(frame_duration: FrameDuration) -> Self {
         Self {
-            id: FrameId::new(),
+            id: next_frame_id(),
             start_time: Instant::now(),
             frame_duration,
             phase: FramePhase::Idle,
@@ -767,10 +779,10 @@ mod tests {
 
     #[test]
     fn test_frame_id_unique() {
-        let id1 = FrameId::new();
-        let id2 = FrameId::new();
+        let id1 = next_frame_id();
+        let id2 = next_frame_id();
         assert_ne!(id1, id2);
-        assert!(id2.as_u64() > id1.as_u64());
+        assert!(id2.get() > id1.get());
     }
 
     #[test]
