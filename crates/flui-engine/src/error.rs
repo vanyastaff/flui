@@ -217,6 +217,7 @@ impl RenderError {
             RenderError::OutOfMemory
                 | RenderError::NoAdapter
                 | RenderError::DeviceCreation(_)
+                | RenderError::SurfaceCreation(_)
                 | RenderError::NotInitialized
         )
     }
@@ -260,6 +261,11 @@ mod tests {
         assert!(RenderError::OutOfMemory.is_fatal());
         assert!(RenderError::NoAdapter.is_fatal());
         assert!(RenderError::NotInitialized.is_fatal());
+        assert!(RenderError::surface_creation(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "test"
+        ))
+        .is_fatal());
         assert!(!RenderError::SurfaceLost.is_fatal());
         assert!(!RenderError::Timeout.is_fatal());
     }

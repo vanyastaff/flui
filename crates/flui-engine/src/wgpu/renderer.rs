@@ -504,6 +504,21 @@ impl Renderer {
         self.config.as_ref().map_or((0, 0), |c| (c.width, c.height))
     }
 
+    /// Reconfigure the surface after loss or outdated error.
+    ///
+    /// This is called automatically by `render_scene()` when a
+    /// `SurfaceError::Lost` or `SurfaceError::Outdated` is encountered,
+    /// but can also be called manually if needed.
+    pub fn reconfigure_surface(&mut self) -> Result<(), RenderError> {
+        if let (Some(config), Some(surface)) = (&self.config, &self.surface) {
+            surface.configure(&self.device, config);
+            tracing::info!("Surface reconfigured ({}x{})", config.width, config.height);
+            Ok(())
+        } else {
+            Err(RenderError::NotInitialized)
+        }
+    }
+
     /// Render a `flui_layer::Scene` to the surface.
     ///
     /// Traverses the scene's LayerTree depth-first, dispatching each layer's
@@ -517,12 +532,29 @@ impl Renderer {
 
         let surface = self.surface.as_ref().ok_or(RenderError::SurfaceLost)?;
 
-        let output = surface.get_current_texture().map_err(|e| match e {
-            wgpu::SurfaceError::Lost | wgpu::SurfaceError::Other => RenderError::SurfaceLost,
-            wgpu::SurfaceError::OutOfMemory => RenderError::OutOfMemory,
-            wgpu::SurfaceError::Outdated => RenderError::SurfaceOutdated,
-            wgpu::SurfaceError::Timeout => RenderError::Timeout,
-        })?;
+        let output = match surface.get_current_texture() {
+            Ok(output) => output,
+            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                // Auto-reconfigure and retry once
+                self.reconfigure_surface()?;
+                let surface = self.surface.as_ref().ok_or(RenderError::SurfaceLost)?;
+                surface.get_current_texture().map_err(|e| match e {
+                    wgpu::SurfaceError::Lost | wgpu::SurfaceError::Other => {
+                        RenderError::SurfaceLost
+                    }
+                    wgpu::SurfaceError::OutOfMemory => RenderError::OutOfMemory,
+                    wgpu::SurfaceError::Outdated => RenderError::SurfaceOutdated,
+                    wgpu::SurfaceError::Timeout => RenderError::Timeout,
+                })?
+            }
+            Err(e) => {
+                return Err(match e {
+                    wgpu::SurfaceError::OutOfMemory => RenderError::OutOfMemory,
+                    wgpu::SurfaceError::Timeout => RenderError::Timeout,
+                    _ => RenderError::SurfaceLost,
+                });
+            }
+        };
 
         let view = output
             .texture
