@@ -38,6 +38,7 @@ use anyhow::Result;
 use wgpu;
 
 use crate::error::RenderError;
+use crate::traits::Painter;
 use super::occlusion::OcclusionTracker;
 
 /// GPU backend capabilities
@@ -557,6 +558,12 @@ impl Renderer {
     pub fn render_scene(&mut self, scene: &flui_layer::Scene) -> Result<(), RenderError> {
         use super::backend::Backend;
 
+        // TODO: Fine-grained damage tracking from widget state changes.
+        // Currently, the application layer must call `mark_dirty()` or
+        // `mark_full_repaint()` explicitly (e.g., after any input event).
+        // When the widget layer (flui-view) is re-enabled, widgets should
+        // call `mark_dirty(bounds)` on state change for per-region tracking.
+
         // Check if we need to render at all
         if !self.damage_tracker.has_damage() && !self.damage_tracker.needs_full_repaint() {
             // Nothing changed — skip this frame entirely
@@ -646,6 +653,23 @@ impl Renderer {
             } else {
                 Backend::new(painter)
             };
+
+            // Apply damage rect as scissor optimization: when only part of the
+            // screen changed, limit GPU work to the damaged region.
+            // `damage_rect()` returns `None` for full repaint (no scissor needed),
+            // `Some(rect)` for partial damage.
+            if let Some(damage) = self.damage_tracker.damage_rect() {
+                if damage.width().0 > 0.0 && damage.height().0 > 0.0 {
+                    backend.painter_mut().clip_rect(damage);
+                    tracing::trace!(
+                        left = damage.left().0,
+                        top = damage.top().0,
+                        width = damage.width().0,
+                        height = damage.height().0,
+                        "Damage scissor applied"
+                    );
+                }
+            }
 
             // Depth-first traversal of layer tree
             if let Some(root_id) = scene.root() {
