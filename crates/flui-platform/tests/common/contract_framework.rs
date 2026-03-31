@@ -30,7 +30,6 @@
 //! ```
 
 use flui_platform::Platform;
-use std::sync::Arc;
 
 /// Result type for contract tests
 pub type ContractResult = Result<(), Box<dyn std::error::Error>>;
@@ -38,7 +37,7 @@ pub type ContractResult = Result<(), Box<dyn std::error::Error>>;
 /// A single contract test case
 pub struct ContractTest {
     name: String,
-    test_fn: Box<dyn Fn(&Arc<dyn Platform>) -> ContractResult>,
+    test_fn: Box<dyn Fn(&dyn Platform) -> ContractResult>,
     skip_on_headless: bool,
 }
 
@@ -46,7 +45,7 @@ impl ContractTest {
     /// Create a new contract test
     pub fn new<F>(name: impl Into<String>, test_fn: F) -> Self
     where
-        F: Fn(&Arc<dyn Platform>) -> ContractResult + 'static,
+        F: Fn(&dyn Platform) -> ContractResult + 'static,
     {
         Self {
             name: name.into(),
@@ -62,7 +61,7 @@ impl ContractTest {
     }
 
     /// Run the contract test on a given platform
-    pub fn run(&self, platform: &Arc<dyn Platform>) -> ContractResult {
+    pub fn run(&self, platform: &dyn Platform) -> ContractResult {
         let platform_name = platform.name();
 
         if self.skip_on_headless && platform_name == "Headless" {
@@ -104,7 +103,7 @@ impl PlatformContract {
     /// Add a contract test with a closure
     pub fn test<F>(&mut self, name: impl Into<String>, test_fn: F) -> &mut Self
     where
-        F: Fn(&Arc<dyn Platform>) -> ContractResult + 'static,
+        F: Fn(&dyn Platform) -> ContractResult + 'static,
     {
         self.tests.push(ContractTest::new(name, test_fn));
         self
@@ -113,7 +112,7 @@ impl PlatformContract {
     /// Add a contract test that skips headless platforms
     pub fn test_skip_headless<F>(&mut self, name: impl Into<String>, test_fn: F) -> &mut Self
     where
-        F: Fn(&Arc<dyn Platform>) -> ContractResult + 'static,
+        F: Fn(&dyn Platform) -> ContractResult + 'static,
     {
         self.tests
             .push(ContractTest::new(name, test_fn).skip_on_headless());
@@ -134,7 +133,7 @@ impl PlatformContract {
         let mut skipped = 0;
 
         for test in &self.tests {
-            match test.run(&platform) {
+            match test.run(&*platform) {
                 Ok(()) => {
                     if test.skip_on_headless && platform_name == "Headless" {
                         skipped += 1;
@@ -201,14 +200,14 @@ pub mod common_contracts {
     use super::*;
 
     /// Contract: Platform must have a non-empty name
-    pub fn has_valid_name(platform: &Arc<dyn Platform>) -> ContractResult {
+    pub fn has_valid_name(platform: &dyn Platform) -> ContractResult {
         let name = platform.name();
         contract_assert!(!name.is_empty(), "Platform name must not be empty");
         Ok(())
     }
 
     /// Contract: Platform must provide display enumeration
-    pub fn can_enumerate_displays(platform: &Arc<dyn Platform>) -> ContractResult {
+    pub fn can_enumerate_displays(platform: &dyn Platform) -> ContractResult {
         let displays = platform.displays();
         // Empty is OK for headless, but must return a valid collection
         contract_assert!(
@@ -219,7 +218,7 @@ pub mod common_contracts {
     }
 
     /// Contract: Display scale factors must be positive and reasonable
-    pub fn has_valid_display_scales(platform: &Arc<dyn Platform>) -> ContractResult {
+    pub fn has_valid_display_scales(platform: &dyn Platform) -> ContractResult {
         let displays = platform.displays();
         for (idx, display) in displays.iter().enumerate() {
             let scale = display.scale_factor();
@@ -232,7 +231,7 @@ pub mod common_contracts {
     }
 
     /// Contract: Clipboard API must not panic
-    pub fn has_safe_clipboard_api(platform: &Arc<dyn Platform>) -> ContractResult {
+    pub fn has_safe_clipboard_api(platform: &dyn Platform) -> ContractResult {
         let clipboard = platform.clipboard();
 
         // Write and read should not panic
@@ -243,7 +242,7 @@ pub mod common_contracts {
     }
 
     /// Contract: Executors must be available
-    pub fn has_executors(platform: &Arc<dyn Platform>) -> ContractResult {
+    pub fn has_executors(platform: &dyn Platform) -> ContractResult {
         let _bg = platform.background_executor();
         let _fg = platform.foreground_executor();
 

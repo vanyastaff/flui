@@ -27,10 +27,8 @@
 
 #![cfg(target_os = "windows")]
 
-use std::sync::Arc;
-
 use flui_platform::{
-    Platform, WindowOptions, WindowsPlatform,
+    WindowOptions, WindowsPlatform,
     platforms::windows::{WindowCornerPreference, WindowsBackdrop, WindowsTheme},
 };
 use flui_types::geometry::{Size, px};
@@ -54,10 +52,10 @@ fn main() -> anyhow::Result<()> {
     println!("  ESC - Exit");
     println!();
 
-    // Create platform (wrap in Arc for cloning into the run callback)
-    let platform: Arc<dyn Platform> = Arc::new(WindowsPlatform::new()?);
+    // Create platform (Box<dyn Platform> - run() takes ownership)
+    let platform: Box<dyn flui_platform::Platform> = Box::new(WindowsPlatform::new()?);
 
-    // Create window with initial options
+    // Create window before running the event loop (run() takes ownership)
     let window_options = WindowOptions {
         title: "Windows 11 Features Demo".to_string(),
         size: Size::new(px(1000.0), px(700.0)),
@@ -68,76 +66,66 @@ fn main() -> anyhow::Result<()> {
         max_size: None,
     };
 
-    let platform_clone = platform.clone();
+    let window = platform.open_window(window_options)?;
+
+    println!("Window created successfully!");
+    println!("  Logical size: {:?}", window.logical_size());
+    println!("  Physical size: {:?}", window.physical_size());
+    println!("  Scale factor: {:.1}x", window.scale_factor());
+    println!();
+
+    // Show available Windows 11 features
+    println!("Applying Windows 11 features...");
+
+    // Note: These features require WindowsWindowExt trait on a
+    // concrete WindowsWindow. The cross-platform PlatformWindow trait
+    // provides set_background_appearance() for basic backdrop support.
+    println!("  Setting Mica backdrop (via set_background_appearance)");
+    println!("  Enabling dark mode");
+    println!("  Setting rounded corners");
+    println!("  Setting custom title bar color");
+    println!();
+
+    // Show available types for reference
+    println!(
+        "Available backdrop types: {:?}",
+        [
+            WindowsBackdrop::None,
+            WindowsBackdrop::Mica,
+            WindowsBackdrop::MicaAlt,
+            WindowsBackdrop::Acrylic,
+            WindowsBackdrop::Tabbed,
+        ]
+    );
+    println!(
+        "Available corner preferences: {:?}",
+        [
+            WindowCornerPreference::Default,
+            WindowCornerPreference::Round,
+            WindowCornerPreference::RoundSmall,
+            WindowCornerPreference::DoNotRound,
+        ]
+    );
+    println!(
+        "Available themes: {:?}",
+        [
+            WindowsTheme::Light,
+            WindowsTheme::Dark,
+            WindowsTheme::System,
+        ]
+    );
+    println!();
+
+    println!("All features applied!");
+    println!();
+    println!("Note: Full feature application requires mutable WindowsWindow access.");
+    println!("This demo shows the API - full integration requires event loop.");
+    println!();
+    println!("Hover over the maximize button to see Snap Layouts!");
 
     platform.run(Box::new(move || {
-        match platform_clone.open_window(window_options) {
-            Ok(window) => {
-                println!("Window created successfully!");
-                println!("  Logical size: {:?}", window.logical_size());
-                println!("  Physical size: {:?}", window.physical_size());
-                println!("  Scale factor: {:.1}x", window.scale_factor());
-                println!();
-
-                // Show available Windows 11 features
-                println!("Applying Windows 11 features...");
-
-                // Note: These features require WindowsWindowExt trait on a
-                // concrete WindowsWindow. The cross-platform PlatformWindow trait
-                // provides set_background_appearance() for basic backdrop support.
-                println!("  Setting Mica backdrop (via set_background_appearance)");
-                println!("  Enabling dark mode");
-                println!("  Setting rounded corners");
-                println!("  Setting custom title bar color");
-                println!();
-
-                // Show available types for reference
-                println!(
-                    "Available backdrop types: {:?}",
-                    [
-                        WindowsBackdrop::None,
-                        WindowsBackdrop::Mica,
-                        WindowsBackdrop::MicaAlt,
-                        WindowsBackdrop::Acrylic,
-                        WindowsBackdrop::Tabbed,
-                    ]
-                );
-                println!(
-                    "Available corner preferences: {:?}",
-                    [
-                        WindowCornerPreference::Default,
-                        WindowCornerPreference::Round,
-                        WindowCornerPreference::RoundSmall,
-                        WindowCornerPreference::DoNotRound,
-                    ]
-                );
-                println!(
-                    "Available themes: {:?}",
-                    [
-                        WindowsTheme::Light,
-                        WindowsTheme::Dark,
-                        WindowsTheme::System,
-                    ]
-                );
-                println!();
-
-                println!("All features applied!");
-                println!();
-                println!("Note: Full feature application requires mutable WindowsWindow access.");
-                println!("This demo shows the API - full integration requires event loop.");
-                println!();
-                println!("Hover over the maximize button to see Snap Layouts!");
-
-                // Keep window open
-                println!("Window will stay open for 10 seconds...");
-                std::thread::sleep(std::time::Duration::from_secs(10));
-                println!("Closing window...");
-            }
-            Err(e) => {
-                eprintln!("Failed to create window: {}", e);
-            }
-        }
-        platform_clone.quit();
+        // Keep window alive via closure capture
+        let _window = window;
     }));
 
     println!("Demo finished!");

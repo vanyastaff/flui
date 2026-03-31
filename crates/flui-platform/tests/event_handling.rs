@@ -20,7 +20,7 @@ fn init_tracing() {
 }
 
 /// Get platform instance for testing
-fn get_test_platform() -> Arc<dyn Platform> {
+fn get_test_platform() -> Box<dyn Platform> {
     if std::env::var("FLUI_HEADLESS").is_ok() {
         flui_platform::headless_platform()
     } else {

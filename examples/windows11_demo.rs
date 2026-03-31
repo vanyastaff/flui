@@ -30,8 +30,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("automatically applied by flui-platform!");
     println!();
 
-    // Create platform
-    let platform = WindowsPlatform::new()?;
+    // Create platform (Box<dyn Platform> - run() takes ownership)
+    let platform: Box<dyn Platform> = Box::new(WindowsPlatform::new()?);
 
     // Create window - Windows 11 features applied automatically!
     let options = WindowOptions {

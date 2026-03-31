@@ -25,8 +25,6 @@
 //! RUST_LOG=debug cargo test -p flui-platform --test contract -- --nocapture
 //! ```
 
-use std::sync::Arc;
-
 use flui_platform::{Platform, WindowOptions, current_platform, headless_platform};
 use flui_types::geometry::{Size, device_px, px};
 
@@ -36,7 +34,7 @@ use flui_types::geometry::{Size, device_px, px};
 ///
 /// In normal mode: Uses current_platform() for native testing
 /// In headless mode: Uses headless_platform() for CI/testing
-fn get_test_platform() -> Arc<dyn Platform> {
+fn get_test_platform() -> Box<dyn Platform> {
     // Check if FLUI_HEADLESS environment variable is set
     if std::env::var("FLUI_HEADLESS").is_ok() {
         headless_platform()
