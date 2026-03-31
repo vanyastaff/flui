@@ -144,6 +144,8 @@ pub struct Renderer {
     supports_copy_src: bool,
     /// Tracks dirty regions for incremental rendering (skip frames with no damage)
     damage_tracker: flui_layer::damage::DamageTracker,
+    /// Tracks opaque regions to skip fully-occluded layers during traversal
+    occlusion: OcclusionTracker,
 }
 
 impl Renderer {
@@ -282,6 +284,7 @@ impl Renderer {
             offscreen,
             supports_copy_src,
             damage_tracker: flui_layer::damage::DamageTracker::new(),
+            occlusion: OcclusionTracker::new(),
         })
     }
 
@@ -328,6 +331,7 @@ impl Renderer {
             offscreen: None,
             supports_copy_src: false,
             damage_tracker: flui_layer::damage::DamageTracker::new(),
+            occlusion: OcclusionTracker::new(),
         })
     }
 
@@ -630,7 +634,10 @@ impl Renderer {
             supports_copy_src: self.supports_copy_src,
         };
 
-        // 3. Render scene content via LayerTree traversal
+        // 3. Reset occlusion tracker for this frame
+        self.occlusion.reset();
+
+        // 4. Render scene content via LayerTree traversal
         if scene.has_content()
             && let Some(painter) = self.painter.take()
         {
@@ -649,10 +656,16 @@ impl Renderer {
                     &ctx,
                     &output.texture,
                     &view,
+                    &mut self.occlusion,
                 );
             }
 
-            // 4. Final flush — submit remaining painter batches
+            tracing::trace!(
+                opaque_regions = self.occlusion.opaque_count(),
+                "Occlusion tracking complete for frame"
+            );
+
+            // 5. Final flush — submit remaining painter batches
             let mut painter = backend.into_painter();
             let mut final_encoder = self
                 .device
@@ -681,6 +694,9 @@ impl Renderer {
     /// Each layer's `render()` pushes state (transforms, clips, opacity),
     /// children are rendered, then `cleanup()` pops the state.
     ///
+    /// Layers that are fully occluded by previously-rendered opaque content
+    /// are skipped entirely (including their children), reducing overdraw.
+    ///
     /// `BackdropFilterLayer` is handled specially at the Renderer level when
     /// the surface supports `COPY_SRC`, enabling mid-frame flush + blur.
     fn render_layer_recursive(
@@ -690,6 +706,7 @@ impl Renderer {
         ctx: &RenderContext,
         surface_texture: &wgpu::Texture,
         surface_view: &wgpu::TextureView,
+        occlusion: &mut OcclusionTracker,
     ) {
         use super::layer_render::LayerRender;
 
@@ -697,8 +714,33 @@ impl Renderer {
             return;
         };
 
+        let layer = node.layer();
+
+        // Occlusion culling: skip layers fully hidden behind opaque content.
+        // Only check layers that report bounds — layers without bounds (Offset,
+        // Transform, Opacity, etc.) are containers that affect their children
+        // and cannot be culled independently.
+        if let Some(bounds) = layer.bounds() {
+            let x = bounds.left().0;
+            let y = bounds.top().0;
+            let w = bounds.width().0;
+            let h = bounds.height().0;
+
+            if w > 0.0 && h > 0.0 && occlusion.is_occluded(x, y, w, h) {
+                tracing::trace!(
+                    ?layer_id,
+                    x,
+                    y,
+                    w,
+                    h,
+                    "Skipping occluded layer"
+                );
+                return; // Skip this layer and all its children
+            }
+        }
+
         // Special handling for BackdropFilter — requires mid-frame flush + copy
-        if let flui_layer::Layer::BackdropFilter(bf_layer) = node.layer() {
+        if let flui_layer::Layer::BackdropFilter(bf_layer) = layer {
             if ctx.supports_copy_src {
                 Self::handle_backdrop_filter(
                     bf_layer,
@@ -708,6 +750,7 @@ impl Renderer {
                     ctx,
                     surface_texture,
                     surface_view,
+                    occlusion,
                 );
                 return;
             }
@@ -715,14 +758,38 @@ impl Renderer {
         }
 
         // Normal path: render → children → cleanup
-        node.layer().render(backend);
+        layer.render(backend);
 
         let children: Vec<_> = node.children().to_vec();
         for child_id in children {
-            Self::render_layer_recursive(tree, child_id, backend, ctx, surface_texture, surface_view);
+            Self::render_layer_recursive(
+                tree,
+                child_id,
+                backend,
+                ctx,
+                surface_texture,
+                surface_view,
+                occlusion,
+            );
         }
 
-        node.layer().cleanup(backend);
+        layer.cleanup(backend);
+
+        // Register opaque regions after rendering so that subsequent layers
+        // (siblings rendered later in traversal order) can be culled.
+        // Only leaf layers known to draw solid content are registered.
+        if layer.is_opaque() {
+            if let Some(bounds) = layer.bounds() {
+                let x = bounds.left().0;
+                let y = bounds.top().0;
+                let w = bounds.width().0;
+                let h = bounds.height().0;
+
+                if w > 0.0 && h > 0.0 {
+                    occlusion.add_opaque(x, y, w, h);
+                }
+            }
+        }
     }
 
     /// Handle a `BackdropFilterLayer` via mid-frame flush and Dual Kawase blur.
@@ -742,6 +809,7 @@ impl Renderer {
         ctx: &RenderContext,
         surface_texture: &wgpu::Texture,
         surface_view: &wgpu::TextureView,
+        occlusion: &mut OcclusionTracker,
     ) {
         use flui_types::painting::ImageFilter;
 
@@ -756,7 +824,7 @@ impl Renderer {
                 let children: Vec<_> = node.children().to_vec();
                 for child_id in children {
                     Self::render_layer_recursive(
-                        tree, child_id, backend, ctx, surface_texture, surface_view,
+                        tree, child_id, backend, ctx, surface_texture, surface_view, occlusion,
                     );
                 }
                 return;
@@ -824,7 +892,7 @@ impl Renderer {
         let children: Vec<_> = node.children().to_vec();
         for child_id in children {
             Self::render_layer_recursive(
-                tree, child_id, backend, ctx, surface_texture, surface_view,
+                tree, child_id, backend, ctx, surface_texture, surface_view, occlusion,
             );
         }
         // No cleanup needed — backdrop filter has no push/pop state in this path

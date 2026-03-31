@@ -431,6 +431,28 @@ impl Layer {
         matches!(self, Layer::Leader(_) | Layer::Follower(_))
     }
 
+    /// Returns true if this layer is known to be fully opaque.
+    ///
+    /// Conservative check used by `OcclusionTracker` to register opaque regions.
+    /// Only returns `true` for leaf layers that are guaranteed to draw solid
+    /// content with no transparency: `Canvas` and `Picture` layers (which always
+    /// fill their bounds), and `Texture` layers with opacity >= 1.0.
+    ///
+    /// Container/effect layers (clips, transforms, opacity, filters) return
+    /// `false` because their visual output depends on their children.
+    #[allow(clippy::match_same_arms)]
+    pub fn is_opaque(&self) -> bool {
+        match self {
+            // Canvas and Picture layers draw solid content into their bounds
+            Layer::Canvas(_) => true,
+            Layer::Picture(_) => true,
+            // Texture is opaque only if its opacity is >= 1.0
+            Layer::Texture(layer) => layer.is_opaque(),
+            // All other layers are conservatively treated as non-opaque
+            _ => false,
+        }
+    }
+
     // ========== Downcasting ==========
 
     /// Returns the canvas layer if this is one.
