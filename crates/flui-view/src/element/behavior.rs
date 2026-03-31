@@ -374,8 +374,8 @@ where
             let mut owner = pipeline_owner.write();
             let tree_depth = owner.render_tree().depth(render_id).unwrap_or(0);
 
-            owner.add_node_needing_layout(render_id.get(), tree_depth as usize);
-            owner.add_node_needing_paint(render_id.get(), tree_depth as usize);
+            owner.add_node_needing_layout(render_id, tree_depth as usize);
+            owner.add_node_needing_paint(render_id, tree_depth as usize);
 
             tracing::debug!(
                 "RenderBehavior::on_update marked render_id={:?} dirty",

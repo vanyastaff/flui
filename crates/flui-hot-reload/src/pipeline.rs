@@ -147,7 +147,7 @@ impl PluginPipeline {
             // Without this, subsequent calls after the first frame return an empty scene
             // because take_layer_tree() consumes the tree and nodes are no longer dirty.
             if let Some(root_id) = pipeline.root_id() {
-                pipeline.add_node_needing_paint(root_id.get(), 0);
+                pipeline.add_node_needing_paint(root_id, 0);
             } else {
                 log("draw_frame: WARNING — no root_id in pipeline");
             }

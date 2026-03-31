@@ -189,8 +189,8 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
             self.render_id = Some(render_id);
 
             // Add to dirty lists
-            owner.add_node_needing_layout(render_id.get(), 0);
-            owner.add_node_needing_paint(render_id.get(), 0);
+            owner.add_node_needing_layout(render_id, 0);
+            owner.add_node_needing_paint(render_id, 0);
             owner.request_visual_update();
 
             tracing::debug!(

@@ -25,19 +25,26 @@ static PIPELINE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 /// A node that needs processing in one of the pipeline phases.
 ///
-/// Stores both the node ID and its depth in the tree for efficient sorting.
+/// Stores both the node's `RenderId` (1-based) and its depth in the tree for
+/// efficient sorting. The `id` field is typed as `RenderId` to enforce the
+/// ID offset convention at the type level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DirtyNode {
-    /// The unique identifier of the render object.
-    pub id: usize,
+    /// The render object identifier (1-based `RenderId`).
+    pub id: RenderId,
     /// The depth of the node in the render tree (root = 0).
     pub depth: usize,
 }
 
 impl DirtyNode {
     /// Creates a new dirty node entry.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The `RenderId` of the render object (1-based).
+    /// * `depth` - The depth of the node in the tree.
     #[inline]
-    pub fn new(id: usize, depth: usize) -> Self {
+    pub fn new(id: RenderId, depth: usize) -> Self {
         Self { id, depth }
     }
 }
@@ -308,8 +315,8 @@ impl PipelineOwner {
         let depth = self.render_tree.depth(id).unwrap_or(0) as usize;
 
         // New nodes need layout and paint
-        self.add_node_needing_layout(id.get(), depth);
-        self.add_node_needing_paint(id.get(), depth);
+        self.add_node_needing_layout(id, depth);
+        self.add_node_needing_paint(id, depth);
 
         id
     }
@@ -348,11 +355,11 @@ impl PipelineOwner {
         let child_depth = parent_depth + 1;
 
         // Mark child as needing layout and paint
-        self.add_node_needing_layout(child_id.get(), child_depth as usize);
-        self.add_node_needing_paint(child_id.get(), child_depth as usize);
+        self.add_node_needing_layout(child_id, child_depth as usize);
+        self.add_node_needing_paint(child_id, child_depth as usize);
 
         // Mark parent as needing layout (child structure changed)
-        self.add_node_needing_layout(parent_id.get(), parent_depth as usize);
+        self.add_node_needing_layout(parent_id, parent_depth as usize);
 
         Some(child_id)
     }
@@ -372,8 +379,8 @@ impl PipelineOwner {
         let id = self.render_tree.insert(node);
         let depth = self.render_tree.depth(id).unwrap_or(0) as usize;
 
-        self.add_node_needing_layout(id.get(), depth);
-        self.add_node_needing_paint(id.get(), depth);
+        self.add_node_needing_layout(id, depth);
+        self.add_node_needing_paint(id, depth);
 
         id
     }
@@ -469,9 +476,9 @@ impl PipelineOwner {
     ///
     /// # Arguments
     ///
-    /// * `node_id` - The unique identifier of the render object
+    /// * `node_id` - The `RenderId` of the render object (1-based)
     /// * `depth` - The depth of the node in the render tree
-    pub fn add_node_needing_layout(&mut self, node_id: usize, depth: usize) {
+    pub fn add_node_needing_layout(&mut self, node_id: RenderId, depth: usize) {
         self.nodes_needing_layout
             .push(DirtyNode::new(node_id, depth));
     }
@@ -480,9 +487,9 @@ impl PipelineOwner {
     ///
     /// # Arguments
     ///
-    /// * `node_id` - The unique identifier of the render object
+    /// * `node_id` - The `RenderId` of the render object (1-based)
     /// * `depth` - The depth of the node in the render tree
-    pub fn add_node_needing_paint(&mut self, node_id: usize, depth: usize) {
+    pub fn add_node_needing_paint(&mut self, node_id: RenderId, depth: usize) {
         self.nodes_needing_paint
             .push(DirtyNode::new(node_id, depth));
     }
@@ -491,9 +498,9 @@ impl PipelineOwner {
     ///
     /// # Arguments
     ///
-    /// * `node_id` - The unique identifier of the render object
+    /// * `node_id` - The `RenderId` of the render object (1-based)
     /// * `depth` - The depth of the node in the render tree
-    pub fn add_node_needing_compositing_bits_update(&mut self, node_id: usize, depth: usize) {
+    pub fn add_node_needing_compositing_bits_update(&mut self, node_id: RenderId, depth: usize) {
         self.nodes_needing_compositing_bits_update
             .push(DirtyNode::new(node_id, depth));
     }
@@ -502,9 +509,9 @@ impl PipelineOwner {
     ///
     /// # Arguments
     ///
-    /// * `node_id` - The unique identifier of the render object
+    /// * `node_id` - The `RenderId` of the render object (1-based)
     /// * `depth` - The depth of the node in the render tree
-    pub fn add_node_needing_semantics(&mut self, node_id: usize, depth: usize) {
+    pub fn add_node_needing_semantics(&mut self, node_id: RenderId, depth: usize) {
         self.nodes_needing_semantics
             .push(DirtyNode::new(node_id, depth));
     }
@@ -582,12 +589,8 @@ impl PipelineOwner {
 
             // Process each dirty node
             for dirty_node in dirty_nodes {
-                // Look up the node in the RenderTree by its ID
-                // The DirtyNode.id is the slab index (0-based), but RenderId is 1-based
-                let render_id = RenderId::new(dirty_node.id);
-
                 // Layout this node with synchronous child layout support
-                self.layout_node_with_children(render_id);
+                self.layout_node_with_children(dirty_node.id);
             }
 
             self.debug_doing_layout = false;
@@ -763,8 +766,7 @@ impl PipelineOwner {
 
             // Clear needs_paint flags for all dirty nodes
             for dirty_node in &dirty_nodes {
-                let render_id = RenderId::new(dirty_node.id);
-                if let Some(render_node) = self.render_tree.get(render_id) {
+                if let Some(render_node) = self.render_tree.get(dirty_node.id) {
                     render_node.clear_needs_paint();
                 }
             }
@@ -1098,9 +1100,9 @@ mod tests {
     fn test_pipeline_owner_dirty_nodes() {
         let mut owner = PipelineOwner::new();
 
-        owner.add_node_needing_layout(1, 0);
-        owner.add_node_needing_layout(2, 1);
-        owner.add_node_needing_paint(3, 2);
+        owner.add_node_needing_layout(RenderId::new(1), 0);
+        owner.add_node_needing_layout(RenderId::new(2), 1);
+        owner.add_node_needing_paint(RenderId::new(3), 2);
 
         assert_eq!(owner.nodes_needing_layout().len(), 2);
         assert_eq!(owner.nodes_needing_paint().len(), 1);
@@ -1111,8 +1113,8 @@ mod tests {
     #[test]
     fn test_pipeline_owner_flush_layout() {
         let mut owner = PipelineOwner::new();
-        owner.add_node_needing_layout(1, 0);
-        owner.add_node_needing_layout(2, 1);
+        owner.add_node_needing_layout(RenderId::new(1), 0);
+        owner.add_node_needing_layout(RenderId::new(2), 1);
 
         owner.flush_layout();
 
@@ -1122,9 +1124,9 @@ mod tests {
     #[test]
     fn test_pipeline_owner_flush_all() {
         let mut owner = PipelineOwner::new();
-        owner.add_node_needing_layout(1, 0);
-        owner.add_node_needing_paint(2, 1);
-        owner.add_node_needing_compositing_bits_update(3, 2);
+        owner.add_node_needing_layout(RenderId::new(1), 0);
+        owner.add_node_needing_paint(RenderId::new(2), 1);
+        owner.add_node_needing_compositing_bits_update(RenderId::new(3), 2);
 
         owner.flush_all();
 
@@ -1135,9 +1137,9 @@ mod tests {
     fn test_flush_layout_sorts_by_depth_shallow_first() {
         let mut owner = PipelineOwner::new();
         // Add nodes in reverse depth order
-        owner.add_node_needing_layout(3, 2); // deepest
-        owner.add_node_needing_layout(1, 0); // shallowest
-        owner.add_node_needing_layout(2, 1); // middle
+        owner.add_node_needing_layout(RenderId::new(3), 2); // deepest
+        owner.add_node_needing_layout(RenderId::new(1), 0); // shallowest
+        owner.add_node_needing_layout(RenderId::new(2), 1); // middle
 
         // Before flush, they're in insertion order
         assert_eq!(owner.nodes_needing_layout()[0].depth, 2);
@@ -1154,9 +1156,9 @@ mod tests {
     fn test_flush_paint_sorts_by_depth_deep_first() {
         let mut owner = PipelineOwner::new();
         // Add nodes in shallow-first order
-        owner.add_node_needing_paint(1, 0); // shallowest
-        owner.add_node_needing_paint(2, 1); // middle
-        owner.add_node_needing_paint(3, 2); // deepest
+        owner.add_node_needing_paint(RenderId::new(1), 0); // shallowest
+        owner.add_node_needing_paint(RenderId::new(2), 1); // middle
+        owner.add_node_needing_paint(RenderId::new(3), 2); // deepest
 
         owner.flush_paint();
 
@@ -1192,9 +1194,9 @@ mod tests {
     #[test]
     fn test_pipeline_owner_clear_dirty_nodes() {
         let mut owner = PipelineOwner::new();
-        owner.add_node_needing_layout(1, 0);
-        owner.add_node_needing_paint(2, 1);
-        owner.add_node_needing_semantics(3, 2);
+        owner.add_node_needing_layout(RenderId::new(1), 0);
+        owner.add_node_needing_paint(RenderId::new(2), 1);
+        owner.add_node_needing_semantics(RenderId::new(3), 2);
 
         owner.clear_all_dirty_nodes();
 
