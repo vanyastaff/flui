@@ -180,20 +180,12 @@ impl Platform for IOSPlatform {
         unimplemented!("iOS main queue executor not implemented")
     }
 
-    fn text_system(&self) -> Arc<dyn PlatformTextSystem> {
-        unimplemented!("iOS Core Text system not implemented")
-    }
-
     fn run(&self, _on_finish_launching: Box<dyn FnOnce()>) {
         unimplemented!("iOS UIApplicationMain run loop not implemented")
     }
 
     fn quit(&self) {
         unimplemented!("iOS quit (not recommended by Apple) not implemented")
-    }
-
-    fn request_frame(&self) {
-        unimplemented!("iOS CADisplayLink frame request not implemented")
     }
 
     fn active_window(&self) -> Option<WindowId> {

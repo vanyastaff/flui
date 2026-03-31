@@ -8,7 +8,6 @@ mod display;
 mod events;
 mod executor;
 mod platform;
-mod text_system;
 mod window;
 
 pub use platform::WebPlatform;

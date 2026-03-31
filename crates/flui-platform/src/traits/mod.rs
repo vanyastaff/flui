@@ -46,9 +46,8 @@ pub use input::{
 pub use keyboard_types::NamedKey;
 pub use lifecycle::{DefaultLifecycle, LifecycleEvent, LifecycleState, PlatformLifecycle};
 pub use platform::{
-    Clipboard, ClipboardItem, Font, FontId, FontMetrics, FontRun, FontStyle, FontWeight, GlyphId,
-    LineLayout, PathPromptOptions, Platform, PlatformExecutor, PlatformTextSystem, ShapedGlyph,
-    ShapedRun, TextSystemError, WindowEvent, WindowId, WindowMode, WindowOptions,
+    Clipboard, ClipboardItem, PathPromptOptions, Platform, PlatformExecutor, WindowEvent, WindowId,
+    WindowMode, WindowOptions,
 };
 #[cfg(feature = "winit-backend")]
 pub use window::WinitWindow;

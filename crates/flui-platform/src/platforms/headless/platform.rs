@@ -14,9 +14,9 @@ use crate::{
     shared::{PlatformHandlers, WindowCallbacks},
     traits::{
         Clipboard, ClipboardItem, DesktopCapabilities, DispatchEventResult, Platform,
-        PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformInput, PlatformTextSystem,
-        PlatformWindow, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent,
-        WindowId, WindowOptions,
+        PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformInput, PlatformWindow,
+        WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId,
+        WindowOptions,
     },
 };
 
@@ -36,7 +36,6 @@ struct HeadlessState {
     handlers: PlatformHandlers,
     background_executor: Arc<TestExecutor>,
     foreground_executor: Arc<TestExecutor>,
-    text_system: Arc<MockTextSystem>,
     clipboard: Arc<MockClipboard>,
     active_window: Option<WindowId>,
     is_running: bool,
@@ -56,7 +55,6 @@ impl HeadlessPlatform {
             handlers: PlatformHandlers::new(),
             background_executor: Arc::new(TestExecutor::new("background")),
             foreground_executor: Arc::new(TestExecutor::new("foreground")),
-            text_system: Arc::new(MockTextSystem),
             clipboard: Arc::new(MockClipboard::new()),
             active_window: None,
             is_running: false,
@@ -96,10 +94,6 @@ impl Platform for HeadlessPlatform {
         self.with_state(|state| state.foreground_executor.clone())
     }
 
-    fn text_system(&self) -> Arc<dyn PlatformTextSystem> {
-        self.with_state(|state| state.text_system.clone())
-    }
-
     fn run(&self, on_ready: Box<dyn FnOnce()>) {
         tracing::info!("Starting headless platform (no event loop)");
 
@@ -120,10 +114,6 @@ impl Platform for HeadlessPlatform {
             state.is_running = false;
             state.handlers.invoke_quit();
         });
-    }
-
-    fn request_frame(&self) {
-        // No-op in headless mode
     }
 
     fn open_window(&self, options: WindowOptions) -> Result<Box<dyn PlatformWindow>> {
@@ -575,61 +565,6 @@ impl PlatformExecutor for TestExecutor {
 
     fn is_on_executor(&self) -> bool {
         true // Always on executor in test mode
-    }
-}
-
-/// Mock text system
-struct MockTextSystem;
-
-impl PlatformTextSystem for MockTextSystem {
-    fn add_fonts(&self, _fonts: Vec<std::borrow::Cow<'static, [u8]>>) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    fn all_font_names(&self) -> Vec<String> {
-        vec!["Mock Sans".to_string()]
-    }
-
-    fn font_id(&self, _descriptor: &crate::traits::Font) -> anyhow::Result<crate::traits::FontId> {
-        Ok(crate::traits::FontId(0))
-    }
-
-    fn font_metrics(&self, _font_id: crate::traits::FontId) -> crate::traits::FontMetrics {
-        crate::traits::FontMetrics {
-            units_per_em: 1000,
-            ascent: 800.0,
-            descent: 200.0,
-            line_gap: 0.0,
-            underline_position: -100.0,
-            underline_thickness: 50.0,
-            cap_height: 700.0,
-            x_height: 500.0,
-        }
-    }
-
-    fn glyph_for_char(
-        &self,
-        _font_id: crate::traits::FontId,
-        ch: char,
-    ) -> Option<crate::traits::GlyphId> {
-        Some(crate::traits::GlyphId(ch as u32))
-    }
-
-    fn layout_line(
-        &self,
-        text: &str,
-        font_size: f32,
-        _runs: &[crate::traits::FontRun],
-    ) -> crate::traits::LineLayout {
-        let char_count = text.chars().count() as f32;
-        crate::traits::LineLayout {
-            font_size,
-            width: char_count * font_size * 0.6,
-            ascent: font_size * 0.8,
-            descent: font_size * 0.2,
-            runs: Vec::new(),
-            len: text.len(),
-        }
     }
 }
 

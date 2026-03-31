@@ -18,7 +18,6 @@ use super::{
     clipboard::WebClipboard,
     display::WebDisplay,
     executor::WebExecutor,
-    text_system::WebTextSystem,
     window::WebWindow,
 };
 
@@ -31,7 +30,6 @@ struct WebState {
     handlers: PlatformHandlers,
     foreground_executor: Arc<WebExecutor>,
     background_executor: Arc<WebExecutor>,
-    text_system: Arc<WebTextSystem>,
     clipboard: Arc<WebClipboard>,
     is_running: bool,
 }
@@ -49,7 +47,6 @@ impl WebPlatform {
             handlers: PlatformHandlers::new(),
             foreground_executor: Arc::new(WebExecutor::new()),
             background_executor: Arc::new(WebExecutor::new()),
-            text_system: Arc::new(WebTextSystem::new()),
             clipboard: Arc::new(WebClipboard::new()),
             is_running: false,
         };
@@ -106,10 +103,6 @@ impl Platform for WebPlatform {
         self.with_state(|s| s.foreground_executor.clone())
     }
 
-    fn text_system(&self) -> Arc<dyn PlatformTextSystem> {
-        self.with_state(|s| s.text_system.clone())
-    }
-
     fn run(&self, on_ready: Box<dyn FnOnce()>) {
         tracing::info!("Starting web platform");
 
@@ -130,10 +123,6 @@ impl Platform for WebPlatform {
             s.is_running = false;
             s.handlers.invoke_quit();
         });
-    }
-
-    fn request_frame(&self) {
-        // RAF loop is always running — this is a no-op hint
     }
 
     fn open_window(&self, options: WindowOptions) -> Result<Box<dyn PlatformWindow>> {

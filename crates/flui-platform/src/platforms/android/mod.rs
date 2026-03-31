@@ -68,7 +68,6 @@ pub struct AndroidPlatform {
     running: Arc<AtomicBool>,
     window: Arc<Mutex<Option<Arc<AndroidWindow>>>>,
     background_executor: Arc<SimpleExecutor>,
-    text_system: Arc<MockTextSystem>,
     clipboard: Arc<MockClipboard>,
     capabilities: MobileCapabilities,
 }
@@ -83,7 +82,6 @@ impl AndroidPlatform {
             running: Arc::new(AtomicBool::new(true)),
             window: Arc::new(Mutex::new(None)),
             background_executor: Arc::new(SimpleExecutor),
-            text_system: Arc::new(MockTextSystem),
             clipboard: Arc::new(MockClipboard::new()),
             capabilities: MobileCapabilities::android(),
         }
@@ -172,10 +170,6 @@ impl Platform for AndroidPlatform {
 
     fn foreground_executor(&self) -> Arc<dyn PlatformExecutor> {
         self.background_executor.clone()
-    }
-
-    fn text_system(&self) -> Arc<dyn PlatformTextSystem> {
-        self.text_system.clone()
     }
 
     fn run(&self, on_ready: Box<dyn FnOnce()>) {
@@ -304,12 +298,6 @@ impl Platform for AndroidPlatform {
         self.running.store(false, Ordering::SeqCst);
     }
 
-    fn request_frame(&self) {
-        if let Some(ref w) = *self.window.lock() {
-            w.request_redraw();
-        }
-    }
-
     fn open_window(&self, _options: WindowOptions) -> Result<Box<dyn PlatformWindow>> {
         let window = Arc::new(AndroidWindow::new(self.app.clone()));
         *self.window.lock() = Some(Arc::clone(&window));
@@ -362,52 +350,6 @@ struct SimpleExecutor;
 impl PlatformExecutor for SimpleExecutor {
     fn spawn(&self, task: Box<dyn FnOnce() + Send>) {
         task();
-    }
-}
-
-/// Mock text system for Android MVP
-struct MockTextSystem;
-
-impl PlatformTextSystem for MockTextSystem {
-    fn add_fonts(&self, _fonts: Vec<std::borrow::Cow<'static, [u8]>>) -> Result<()> {
-        Ok(())
-    }
-
-    fn all_font_names(&self) -> Vec<String> {
-        vec!["Roboto".to_string()]
-    }
-
-    fn font_id(&self, _descriptor: &Font) -> Result<FontId> {
-        Ok(FontId(0))
-    }
-
-    fn font_metrics(&self, _font_id: FontId) -> FontMetrics {
-        FontMetrics {
-            units_per_em: 1000,
-            ascent: 800.0,
-            descent: 200.0,
-            line_gap: 0.0,
-            underline_position: -100.0,
-            underline_thickness: 50.0,
-            cap_height: 700.0,
-            x_height: 500.0,
-        }
-    }
-
-    fn glyph_for_char(&self, _font_id: FontId, ch: char) -> Option<GlyphId> {
-        Some(GlyphId(ch as u32))
-    }
-
-    fn layout_line(&self, text: &str, font_size: f32, _runs: &[FontRun]) -> LineLayout {
-        let char_count = text.chars().count() as f32;
-        LineLayout {
-            font_size,
-            width: char_count * font_size * 0.6,
-            ascent: font_size * 0.8,
-            descent: font_size * 0.2,
-            runs: Vec::new(),
-            len: text.len(),
-        }
     }
 }
 

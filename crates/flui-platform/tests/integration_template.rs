@@ -219,67 +219,7 @@ fn test_event_propagation() {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// SECTION 5: Text System Integration
-// ═══════════════════════════════════════════════════════════════
-
-/// Template: Test text system + rendering integration
-#[test]
-fn test_text_system_integration() {
-    init_tracing();
-
-    tracing::info!("Testing text system integration");
-
-    let platform = get_test_platform();
-    let text_system = platform.text_system();
-
-    // Font enumeration
-    let font_names = text_system.all_font_names();
-    assert!(!font_names.is_empty(), "Should have at least one font");
-    tracing::info!("Found {} fonts, first: {}", font_names.len(), font_names[0]);
-
-    // Font resolution
-    let font = flui_platform::Font {
-        family: font_names[0].clone(),
-        ..Default::default()
-    };
-    let id = text_system.font_id(&font).expect("Should resolve font");
-
-    // Text layout
-    let text = "Integration Test";
-    let layout = text_system.layout_line(
-        text,
-        16.0,
-        &[flui_platform::FontRun {
-            font_id: id,
-            len: text.len(),
-        }],
-    );
-
-    tracing::info!(
-        "Text layout: width={:.1}, ascent={:.1}",
-        layout.width,
-        layout.ascent
-    );
-
-    assert!(
-        layout.width > 0.0 && layout.width < 1000.0,
-        "Text width should be reasonable, got {}",
-        layout.width
-    );
-
-    // TODO: Add actual rendering integration when flui_painting is ready
-    // Example:
-    // ```rust
-    // let canvas = Canvas::from_window(&window)?;
-    // canvas.draw_text(text, Point::ORIGIN, &font_family, font_size, Color::BLACK);
-    // canvas.present();
-    // ```
-
-    tracing::info!("✓ Text system integration validated");
-}
-
-// ═══════════════════════════════════════════════════════════════
-// SECTION 6: Clipboard Integration
+// SECTION 5: Clipboard Integration
 // ═══════════════════════════════════════════════════════════════
 
 /// Template: Test clipboard + UI component integration

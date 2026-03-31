@@ -31,11 +31,10 @@
 //! The [`Platform`] trait is the central abstraction that all platform
 //! implementations must provide. It covers:
 //!
-//! - **Lifecycle**: Event loop, quit, frame requests
+//! - **Lifecycle**: Event loop, quit
 //! - **Windows**: Creation, management, events
 //! - **Displays**: Monitor enumeration and information
 //! - **Executors**: Background and foreground task execution
-//! - **Text System**: Font loading and text rendering
 //! - **Clipboard**: Read/write operations
 //! - **Callbacks**: Event handler registration
 //!
@@ -95,7 +94,6 @@
 //! - **Mock Windows**: `open_window()` returns mock windows (no OS windows
 //!   created)
 //! - **In-Memory Clipboard**: Full clipboard API with in-memory storage
-//! - **Mock Text System**: Text measurement and font APIs (estimates)
 //! - **Mock Displays**: Single virtual display at 1920x1080
 //! - **Background Executor**: Async task execution with tokio runtime
 //! - **Foreground Executor**: Channel-based task queue for main thread
@@ -197,12 +195,10 @@ pub use task::{Priority, Task, TaskLabel};
 // Re-export core traits
 pub use traits::{
     Clipboard, ClipboardItem, DefaultLifecycle, DesktopCapabilities, DispatchEventResult,
-    DisplayId, Font, FontId, FontMetrics, FontRun, FontStyle, FontWeight, GlyphId, LifecycleEvent,
-    LifecycleState, LineLayout, MobileCapabilities, PathPromptOptions, Platform,
+    DisplayId, LifecycleEvent, LifecycleState, MobileCapabilities, PathPromptOptions, Platform,
     PlatformCapabilities, PlatformDisplay, PlatformEmbedder, PlatformExecutor, PlatformLifecycle,
-    PlatformTextSystem, PlatformWindow, ShapedGlyph, ShapedRun, TextSystemError, WebCapabilities,
-    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId, WindowMode,
-    WindowOptions,
+    PlatformWindow, WebCapabilities, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
+    WindowEvent, WindowId, WindowMode, WindowOptions,
 };
 
 /// Get the current platform implementation

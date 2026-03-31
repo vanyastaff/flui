@@ -97,12 +97,6 @@ impl Platform for MacOSPlatform {
         Arc::clone(&self.foreground_executor) as Arc<dyn PlatformExecutor>
     }
 
-    fn text_system(&self) -> Arc<dyn PlatformTextSystem> {
-        // TODO: Implement Core Text system (Phase 2)
-        // For now, uses trait default methods (stub implementation)
-        Arc::new(DummyTextSystem)
-    }
-
     fn run(&self, on_finish_launching: Box<dyn FnOnce()>) {
         unsafe {
             // Call the launch callback
@@ -127,11 +121,6 @@ impl Platform for MacOSPlatform {
             tracing::info!("Requesting application quit");
             let _: () = msg_send![self.app, terminate: nil];
         }
-    }
-
-    fn request_frame(&self) {
-        // TODO: Post event to trigger frame rendering
-        tracing::trace!("Frame requested (not yet implemented)");
     }
 
     fn open_window(&self, options: WindowOptions) -> Result<Box<dyn PlatformWindow>> {
@@ -222,8 +211,3 @@ impl Drop for MacOSPlatform {
     }
 }
 
-// ==================== Dummy Implementations ====================
-
-struct DummyTextSystem;
-
-impl PlatformTextSystem for DummyTextSystem {}

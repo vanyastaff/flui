@@ -38,8 +38,7 @@ use crate::{
     shared::PlatformHandlers,
     traits::{
         Clipboard, DesktopCapabilities, Platform, PlatformCapabilities, PlatformDisplay,
-        PlatformExecutor, PlatformTextSystem, PlatformWindow, WindowEvent, WindowId, WindowOptions,
-        WinitWindow,
+        PlatformExecutor, PlatformWindow, WindowEvent, WindowId, WindowOptions, WinitWindow,
     },
 };
 
@@ -73,9 +72,6 @@ struct WinitPlatformState {
 
     /// Foreground executor
     foreground_executor: Arc<SimpleExecutor>,
-
-    /// Text system
-    text_system: Arc<SimpleTextSystem>,
 
     /// Clipboard
     clipboard: Arc<ArboardClipboard>,
@@ -118,7 +114,6 @@ impl WinitPlatformState {
             handlers: PlatformHandlers::new(),
             background_executor: Arc::new(SimpleExecutor::new("background")),
             foreground_executor: Arc::new(SimpleExecutor::new("foreground")),
-            text_system: Arc::new(SimpleTextSystem::new()),
             clipboard,
             window_requests: Arc::new(WindowRequestQueue::new()),
             window_id_map: HashMap::new(),
@@ -389,10 +384,6 @@ impl Platform for WinitPlatform {
         self.with_state(|state| state.foreground_executor.clone())
     }
 
-    fn text_system(&self) -> Arc<dyn PlatformTextSystem> {
-        self.with_state(|state| state.text_system.clone())
-    }
-
     fn run(&self, _on_ready: Box<dyn FnOnce()>) {
         // This method can't actually run the event loop because it takes &self
         // Users should call run_event_loop() instead
@@ -405,15 +396,6 @@ impl Platform for WinitPlatform {
         self.with_state(|state| {
             state.should_quit = true;
             state.handlers.invoke_quit();
-        });
-    }
-
-    fn request_frame(&self) {
-        // Request redraw on all windows
-        self.with_state(|state| {
-            for window in state.windows.values() {
-                window.request_redraw();
-            }
         });
     }
 
@@ -639,27 +621,3 @@ impl PlatformExecutor for SimpleExecutor {
     }
 }
 
-/// Simple text system implementation
-struct SimpleTextSystem;
-
-impl SimpleTextSystem {
-    fn new() -> Self {
-        Self
-    }
-}
-
-impl PlatformTextSystem for SimpleTextSystem {
-    fn default_font_family(&self) -> String {
-        #[cfg(target_os = "windows")]
-        return "Segoe UI".to_string();
-
-        #[cfg(target_os = "macos")]
-        return "SF Pro Text".to_string();
-
-        #[cfg(target_os = "linux")]
-        return "Ubuntu".to_string();
-
-        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-        return "sans-serif".to_string();
-    }
-}

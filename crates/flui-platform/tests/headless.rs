@@ -162,11 +162,6 @@ fn test_t069_all_tests_pass_in_headless_mode() {
     // Basic platform operations
     assert_eq!(platform.name(), "Headless");
 
-    // Text system
-    let text_system = platform.text_system();
-    let font_names = text_system.all_font_names();
-    assert!(!font_names.is_empty(), "Should have at least one font");
-
     // Executors
     let _bg_executor = platform.background_executor();
     let _fg_executor = platform.foreground_executor();
@@ -226,41 +221,6 @@ fn test_headless_multiple_windows() {
 
     // Both windows created successfully (PlatformWindow trait doesn't expose
     // id())
-}
-
-#[test]
-fn test_headless_text_system() {
-    // Additional test: Verify text system works in headless mode
-
-    let platform = headless_platform();
-    let text_system = platform.text_system();
-
-    // Verify font enumeration works
-    let font_names = text_system.all_font_names();
-    assert!(!font_names.is_empty(), "Should have at least one mock font");
-
-    // Verify font resolution works
-    let font = flui_platform::Font {
-        family: font_names[0].clone(),
-        ..Default::default()
-    };
-    let id = text_system
-        .font_id(&font)
-        .expect("Should resolve mock font");
-
-    // Verify layout works
-    let layout = text_system.layout_line(
-        "Hello, World!",
-        16.0,
-        &[flui_platform::FontRun {
-            font_id: id,
-            len: 13,
-        }],
-    );
-    assert!(
-        layout.width > 0.0,
-        "Text layout should return non-zero width"
-    );
 }
 
 #[test]

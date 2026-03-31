@@ -242,19 +242,6 @@ pub mod common_contracts {
         Ok(())
     }
 
-    /// Contract: Text system must be available
-    pub fn has_text_system(platform: &Arc<dyn Platform>) -> ContractResult {
-        let text_system = platform.text_system();
-        let default_font = text_system.default_font_family();
-
-        contract_assert!(
-            !default_font.is_empty(),
-            "Default font family must not be empty"
-        );
-
-        Ok(())
-    }
-
     /// Contract: Executors must be available
     pub fn has_executors(platform: &Arc<dyn Platform>) -> ContractResult {
         let _bg = platform.background_executor();

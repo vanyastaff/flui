@@ -138,20 +138,12 @@ impl Platform for LinuxPlatform {
         unimplemented!("Linux main thread executor not implemented")
     }
 
-    fn text_system(&self) -> Arc<dyn PlatformTextSystem> {
-        unimplemented!("Linux fontconfig/FreeType system not implemented")
-    }
-
     fn run(&self, _on_finish_launching: Box<dyn FnOnce()>) {
         unimplemented!("Linux event loop (Wayland/X11) not implemented")
     }
 
     fn quit(&self) {
         unimplemented!("Linux quit not implemented")
-    }
-
-    fn request_frame(&self) {
-        unimplemented!("Linux frame request not implemented")
     }
 
     fn active_window(&self) -> Option<WindowId> {

@@ -94,8 +94,6 @@ pub struct WindowsPlatform {
     /// Window configuration (shared across all windows)
     config: WindowConfiguration,
 
-    /// DirectWrite text system
-    text_system: Arc<dyn PlatformTextSystem>,
 }
 
 // SAFETY: HWND is just an integer handle and is safe to send/share between
@@ -179,19 +177,6 @@ impl WindowsPlatform {
         let background_executor = Arc::new(BackgroundExecutor::new());
         let foreground_executor = Arc::new(ForegroundExecutor::new());
 
-        // Create DirectWrite text system (fall back to dummy if DirectWrite fails)
-        let text_system: Arc<dyn PlatformTextSystem> =
-            match super::text_system::DirectWriteTextSystem::new() {
-                Ok(ts) => {
-                    tracing::info!("DirectWrite text system initialized");
-                    Arc::new(ts)
-                }
-                Err(e) => {
-                    tracing::warn!("DirectWrite init failed, using fallback: {:?}", e);
-                    Arc::new(DummyTextSystem)
-                }
-            };
-
         tracing::info!("Windows platform initialized with Tokio executors");
 
         Ok(Self {
@@ -201,7 +186,6 @@ impl WindowsPlatform {
             background_executor,
             foreground_executor,
             config,
-            text_system,
         })
     }
 
@@ -832,10 +816,6 @@ impl Platform for WindowsPlatform {
         Arc::clone(&self.foreground_executor) as Arc<dyn PlatformExecutor>
     }
 
-    fn text_system(&self) -> Arc<dyn PlatformTextSystem> {
-        self.text_system.clone()
-    }
-
     // ==================== Lifecycle ====================
 
     fn run(&self, on_ready: Box<dyn FnOnce()>) {
@@ -855,11 +835,6 @@ impl Platform for WindowsPlatform {
         unsafe {
             PostQuitMessage(0);
         }
-    }
-
-    fn request_frame(&self) {
-        // TODO: Implement frame requests
-        tracing::trace!("Frame requested");
     }
 
     // ==================== Window Management ====================
@@ -1287,53 +1262,6 @@ fn current_modifiers() -> keyboard_types::Modifiers {
             mods |= keyboard_types::Modifiers::META;
         }
         mods
-    }
-}
-
-// ==================== Dummy Implementations ====================
-
-struct DummyTextSystem;
-
-impl PlatformTextSystem for DummyTextSystem {
-    fn add_fonts(&self, _fonts: Vec<std::borrow::Cow<'static, [u8]>>) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    fn all_font_names(&self) -> Vec<String> {
-        vec!["Segoe UI".to_string()]
-    }
-
-    fn font_id(&self, _descriptor: &Font) -> anyhow::Result<FontId> {
-        Ok(FontId(0))
-    }
-
-    fn font_metrics(&self, _font_id: FontId) -> FontMetrics {
-        FontMetrics {
-            units_per_em: 2048,
-            ascent: 1854.0,
-            descent: 434.0,
-            line_gap: 0.0,
-            underline_position: -130.0,
-            underline_thickness: 90.0,
-            cap_height: 1434.0,
-            x_height: 1024.0,
-        }
-    }
-
-    fn glyph_for_char(&self, _font_id: FontId, _ch: char) -> Option<GlyphId> {
-        None
-    }
-
-    fn layout_line(&self, text: &str, font_size: f32, _runs: &[FontRun]) -> LineLayout {
-        let char_count = text.chars().count() as f32;
-        LineLayout {
-            font_size,
-            width: char_count * font_size * 0.6,
-            ascent: font_size * 0.8,
-            descent: font_size * 0.2,
-            runs: Vec::new(),
-            len: text.len(),
-        }
     }
 }
 
