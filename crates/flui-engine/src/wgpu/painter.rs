@@ -942,6 +942,19 @@ impl WgpuPainter {
         // ===== Reset buffer pool for next frame =====
         self.buffer_pool.reset();
 
+        // ===== Frame-boundary texture cache maintenance =====
+        self.texture_cache.reset_use_counters();
+        let shrunk = self.texture_cache.shrink();
+        let evicted = self.texture_cache.evict_over_budget();
+        if shrunk > 0 || evicted > 0 {
+            tracing::debug!(
+                shrunk,
+                evicted,
+                memory_bytes = self.texture_cache.memory_bytes(),
+                "Texture cache maintenance"
+            );
+        }
+
         Ok(())
     }
 

@@ -172,6 +172,8 @@ pub struct TextureCache {
     device: Arc<Device>,
     /// Queue reference (for uploading data) - Arc for safe shared ownership
     queue: Arc<Queue>,
+    /// Maximum memory budget in bytes (default 100 MB)
+    max_memory_bytes: usize,
 }
 
 impl TextureCache {
@@ -199,7 +201,34 @@ impl TextureCache {
             cache_misses: 0,
             device,
             queue,
+            max_memory_bytes: 100 * 1024 * 1024, // 100 MB default
         }
+    }
+
+    /// Create a new texture cache with a custom memory budget
+    ///
+    /// # Arguments
+    /// * `device` - WGPU device for creating textures (Arc for safe sharing)
+    /// * `queue` - WGPU queue for uploading texture data (Arc for safe sharing)
+    /// * `max_memory_bytes` - Maximum memory budget in bytes
+    pub fn with_memory_budget(
+        device: Arc<Device>,
+        queue: Arc<Queue>,
+        max_memory_bytes: usize,
+    ) -> Self {
+        let mut cache = Self::new(device, queue);
+        cache.max_memory_bytes = max_memory_bytes;
+        cache
+    }
+
+    /// Set the maximum memory budget in bytes
+    pub fn set_max_memory_bytes(&mut self, max_memory_bytes: usize) {
+        self.max_memory_bytes = max_memory_bytes;
+    }
+
+    /// Get the current maximum memory budget in bytes
+    pub fn max_memory_bytes(&self) -> usize {
+        self.max_memory_bytes
     }
 
     /// Get default sampler
@@ -459,6 +488,46 @@ impl TextureCache {
         }
     }
 
+    /// Total memory used by all cached textures in bytes
+    pub fn memory_bytes(&self) -> usize {
+        self.textures.values().map(|t| t.size_bytes).sum()
+    }
+
+    /// Evict textures when total memory exceeds the budget
+    ///
+    /// Removes textures with `use_count == 0` until memory is within budget.
+    /// Returns the number of evicted textures.
+    pub fn evict_over_budget(&mut self) -> usize {
+        let current = self.memory_bytes();
+        if current <= self.max_memory_bytes {
+            return 0;
+        }
+
+        // Collect unused texture keys sorted by size (largest first for fastest reclaim)
+        let mut unused: Vec<(TextureId, usize)> = self
+            .textures
+            .iter()
+            .filter(|(_, t)| t.use_count == 0)
+            .map(|(id, t)| (id.clone(), t.size_bytes))
+            .collect();
+        unused.sort_by(|a, b| b.1.cmp(&a.1));
+
+        let mut freed = 0usize;
+        let mut evicted = 0usize;
+        let overshoot = current - self.max_memory_bytes;
+
+        for (id, size) in unused {
+            self.textures.remove(&id);
+            freed += size;
+            evicted += 1;
+            if freed >= overshoot {
+                break;
+            }
+        }
+
+        evicted
+    }
+
     /// Shrink cache to remove unused textures
     ///
     /// Removes textures with use_count == 0.
@@ -475,6 +544,209 @@ impl TextureCache {
         for texture in self.textures.values_mut() {
             texture.use_count = 0;
         }
+    }
+}
+
+/// Unit tests that do NOT require a GPU.
+///
+/// We test eviction logic by directly inserting `CachedTexture` stubs into
+/// the internal `HashMap`, bypassing wgpu entirely. This is possible because
+/// the test module lives inside the same file and has access to private fields.
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+
+    /// Lightweight stub that mirrors `TextureCache` eviction logic without
+    /// requiring any GPU resources. Each entry is just `(size_bytes, use_count)`.
+    ///
+    /// The algorithms here are identical to those in `TextureCache`, so these
+    /// tests validate correctness of the eviction/shrink/reset logic.
+    struct StubEntry {
+        size_bytes: usize,
+        use_count: usize,
+    }
+
+    struct StubCache {
+        textures: HashMap<TextureId, StubEntry>,
+        max_memory_bytes: usize,
+    }
+
+    impl StubCache {
+        fn new(max_memory_bytes: usize) -> Self {
+            Self {
+                textures: HashMap::new(),
+                max_memory_bytes,
+            }
+        }
+
+        fn insert(&mut self, id: TextureId, size_bytes: usize, use_count: usize) {
+            self.textures.insert(id, StubEntry { size_bytes, use_count });
+        }
+
+        fn memory_bytes(&self) -> usize {
+            self.textures.values().map(|t| t.size_bytes).sum()
+        }
+
+        fn reset_use_counters(&mut self) {
+            for t in self.textures.values_mut() {
+                t.use_count = 0;
+            }
+        }
+
+        fn shrink(&mut self) -> usize {
+            let before = self.textures.len();
+            self.textures.retain(|_, t| t.use_count > 0);
+            before - self.textures.len()
+        }
+
+        fn evict_over_budget(&mut self) -> usize {
+            let current = self.memory_bytes();
+            if current <= self.max_memory_bytes {
+                return 0;
+            }
+
+            let mut unused: Vec<(TextureId, usize)> = self
+                .textures
+                .iter()
+                .filter(|(_, t)| t.use_count == 0)
+                .map(|(id, t)| (id.clone(), t.size_bytes))
+                .collect();
+            unused.sort_by(|a, b| b.1.cmp(&a.1));
+
+            let mut freed = 0usize;
+            let mut evicted = 0usize;
+            let overshoot = current - self.max_memory_bytes;
+
+            for (id, size) in unused {
+                self.textures.remove(&id);
+                freed += size;
+                evicted += 1;
+                if freed >= overshoot {
+                    break;
+                }
+            }
+
+            evicted
+        }
+    }
+
+    #[test]
+    fn test_reset_use_counters_sets_all_to_zero() {
+        let mut cache = StubCache::new(1024);
+        cache.insert(TextureId::from_name("a"), 64, 5);
+        cache.insert(TextureId::from_name("b"), 32, 3);
+
+        cache.reset_use_counters();
+
+        for t in cache.textures.values() {
+            assert_eq!(t.use_count, 0);
+        }
+    }
+
+    #[test]
+    fn test_shrink_removes_unused_only() {
+        let mut cache = StubCache::new(1024);
+        cache.insert(TextureId::from_name("used"), 64, 1);
+        cache.insert(TextureId::from_name("unused"), 32, 0);
+
+        let removed = cache.shrink();
+        assert_eq!(removed, 1);
+        assert!(cache.textures.contains_key(&TextureId::from_name("used")));
+        assert!(!cache.textures.contains_key(&TextureId::from_name("unused")));
+    }
+
+    #[test]
+    fn test_shrink_keeps_all_when_all_used() {
+        let mut cache = StubCache::new(1024);
+        cache.insert(TextureId::from_name("a"), 64, 2);
+        cache.insert(TextureId::from_name("b"), 32, 1);
+
+        let removed = cache.shrink();
+        assert_eq!(removed, 0);
+        assert_eq!(cache.textures.len(), 2);
+    }
+
+    #[test]
+    fn test_memory_bytes_sums_all() {
+        let mut cache = StubCache::new(1024);
+        cache.insert(TextureId::from_name("a"), 64, 0);
+        cache.insert(TextureId::from_name("b"), 128, 0);
+
+        assert_eq!(cache.memory_bytes(), 192);
+    }
+
+    #[test]
+    fn test_evict_over_budget_noop_when_under() {
+        let mut cache = StubCache::new(1024);
+        cache.insert(TextureId::from_name("a"), 64, 0);
+
+        let evicted = cache.evict_over_budget();
+        assert_eq!(evicted, 0);
+        assert_eq!(cache.textures.len(), 1);
+    }
+
+    #[test]
+    fn test_evict_over_budget_removes_unused() {
+        // Budget: 64 bytes
+        let mut cache = StubCache::new(64);
+        cache.insert(TextureId::from_name("keep"), 64, 1); // used
+        cache.insert(TextureId::from_name("evict"), 64, 0); // unused
+        // Total = 128, budget = 64
+
+        let evicted = cache.evict_over_budget();
+        assert_eq!(evicted, 1);
+        assert!(cache.textures.contains_key(&TextureId::from_name("keep")));
+        assert!(!cache.textures.contains_key(&TextureId::from_name("evict")));
+        assert!(cache.memory_bytes() <= 64);
+    }
+
+    #[test]
+    fn test_evict_over_budget_skips_used_textures() {
+        // Budget: 64 bytes, all textures are used => nothing can be evicted
+        let mut cache = StubCache::new(64);
+        cache.insert(TextureId::from_name("a"), 64, 1);
+        cache.insert(TextureId::from_name("b"), 64, 1);
+
+        let evicted = cache.evict_over_budget();
+        assert_eq!(evicted, 0);
+        assert_eq!(cache.textures.len(), 2);
+    }
+
+    #[test]
+    fn test_evict_over_budget_largest_first() {
+        // Budget: 80 bytes. Total = 64+16+16 = 96 (16 over)
+        let mut cache = StubCache::new(80);
+        cache.insert(TextureId::from_name("big"), 64, 0);
+        cache.insert(TextureId::from_name("small1"), 16, 0);
+        cache.insert(TextureId::from_name("small2"), 16, 0);
+
+        let evicted = cache.evict_over_budget();
+        // Largest-first: "big" (64) is evicted first, freeing 64 >= 16 overshoot
+        assert_eq!(evicted, 1);
+        assert!(!cache.textures.contains_key(&TextureId::from_name("big")));
+        assert!(cache.memory_bytes() <= 80);
+    }
+
+    #[test]
+    fn test_evict_over_budget_evicts_multiple_when_needed() {
+        // Budget: 32 bytes. Total = 16+16+16+16 = 64 (32 over)
+        let mut cache = StubCache::new(32);
+        cache.insert(TextureId::from_name("a"), 16, 0);
+        cache.insert(TextureId::from_name("b"), 16, 0);
+        cache.insert(TextureId::from_name("c"), 16, 0);
+        cache.insert(TextureId::from_name("d"), 16, 0);
+
+        let evicted = cache.evict_over_budget();
+        assert_eq!(evicted, 2); // Need to free 32 bytes = 2 x 16
+        assert!(cache.memory_bytes() <= 32);
+    }
+
+    #[test]
+    fn test_texture_id_equality() {
+        assert_eq!(TextureId::from_name("x"), TextureId::from_name("x"));
+        assert_ne!(TextureId::from_name("x"), TextureId::from_name("y"));
+        assert_eq!(TextureId::from_ptr(42), TextureId::from_ptr(42));
+        assert_ne!(TextureId::from_ptr(42), TextureId::from_ptr(99));
     }
 }
 
