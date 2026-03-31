@@ -10,7 +10,8 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
 use crate::{
-    shared::PlatformHandlers,
+    cursor::CursorStyle,
+    shared::{PlatformHandlers, WindowCallbacks},
     traits::*,
 };
 
@@ -32,6 +33,9 @@ struct WebState {
     background_executor: Arc<WebExecutor>,
     clipboard: Arc<WebClipboard>,
     is_running: bool,
+    /// Window callbacks for RAF loop frame dispatch.
+    /// Set when `open_window` creates the single browser window.
+    window_callbacks: Option<Arc<WindowCallbacks>>,
 }
 
 // SAFETY: WASM is single-threaded — no data races possible
@@ -49,6 +53,7 @@ impl WebPlatform {
             background_executor: Arc::new(WebExecutor::new()),
             clipboard: Arc::new(WebClipboard::new()),
             is_running: false,
+            window_callbacks: None,
         };
 
         Ok(Self {
@@ -74,12 +79,29 @@ impl WebPlatform {
         let window = web_sys::window().expect("no global window");
 
         *g.borrow_mut() = Some(Closure::new(move || {
-            let is_running = state.lock().is_running;
+            let (is_running, callbacks) = {
+                let s = state.lock();
+                (s.is_running, s.window_callbacks.clone())
+            };
             if !is_running {
                 return;
             }
 
-            // Request next frame before any work (ensures smooth loop)
+            // Dispatch frame request to window callbacks
+            if let Some(ref cbs) = callbacks {
+                cbs.dispatch_request_frame();
+            }
+
+            // Also fire RedrawRequested through platform handlers
+            {
+                let mut s = state.lock();
+                s.handlers
+                    .invoke_window_event(WindowEvent::RedrawRequested {
+                        window_id: WindowId(0),
+                    });
+            }
+
+            // Request next frame after work (ensures smooth loop)
             if let Some(w) = web_sys::window() {
                 let _ = w.request_animation_frame(
                     f.borrow().as_ref().unwrap().as_ref().unchecked_ref(),
@@ -137,6 +159,12 @@ impl Platform for WebPlatform {
 
         // Register DOM event listeners on the canvas
         super::events::register_event_listeners(&window);
+
+        // Store window callbacks in state so the RAF loop can dispatch frames
+        let callbacks = window.callbacks().clone();
+        self.with_state(|s| {
+            s.window_callbacks = Some(callbacks);
+        });
 
         // Notify window created
         self.with_state(|s| {
@@ -206,6 +234,38 @@ impl Platform for WebPlatform {
 
     fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>) {
         self.with_state(|s| s.handlers.window_event = Some(callback));
+    }
+
+    fn set_cursor_style(&self, style: CursorStyle) {
+        let css_cursor = match style {
+            CursorStyle::Arrow => "default",
+            CursorStyle::IBeam => "text",
+            CursorStyle::Crosshair => "crosshair",
+            CursorStyle::ClosedHand => "grabbing",
+            CursorStyle::OpenHand => "grab",
+            CursorStyle::PointingHand => "pointer",
+            CursorStyle::ResizeLeft => "w-resize",
+            CursorStyle::ResizeRight => "e-resize",
+            CursorStyle::ResizeLeftRight => "ew-resize",
+            CursorStyle::ResizeUp => "n-resize",
+            CursorStyle::ResizeDown => "s-resize",
+            CursorStyle::ResizeUpDown => "ns-resize",
+            CursorStyle::ResizeUpLeftDownRight => "nwse-resize",
+            CursorStyle::ResizeUpRightDownLeft => "nesw-resize",
+            CursorStyle::ResizeColumn => "col-resize",
+            CursorStyle::ResizeRow => "row-resize",
+            CursorStyle::OperationNotAllowed => "not-allowed",
+            CursorStyle::DragLink => "alias",
+            CursorStyle::DragCopy => "copy",
+            CursorStyle::ContextualMenu => "context-menu",
+            CursorStyle::None => "none",
+        };
+
+        if let Some(document) = web_sys::window().and_then(|w| w.document()) {
+            if let Some(body) = document.body() {
+                let _ = body.style().set_property("cursor", css_cursor);
+            }
+        }
     }
 
     fn app_path(&self) -> Result<std::path::PathBuf> {
