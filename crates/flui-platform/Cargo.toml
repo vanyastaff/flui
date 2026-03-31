@@ -19,6 +19,9 @@ dpi = "0.1"
 # Windowing (for platform implementations)
 winit = { workspace = true, optional = true }
 
+# Clipboard (for winit backend)
+arboard = { workspace = true, optional = true }
+
 # Error handling & logging
 anyhow = { workspace = true }
 thiserror = { workspace = true }
@@ -116,7 +119,7 @@ default = ["desktop"]
 desktop = ["winit"]
 
 # Legacy winit backend (deprecated, optional)
-winit-backend = ["winit"]
+winit-backend = ["winit", "arboard"]
 
 # Web platform
 web = []

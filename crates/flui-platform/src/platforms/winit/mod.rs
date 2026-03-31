@@ -2,6 +2,7 @@
 
 mod clipboard;
 mod display;
+mod events;
 mod platform;
 mod window_requests;
 
