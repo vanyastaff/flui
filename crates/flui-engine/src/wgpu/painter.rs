@@ -2833,24 +2833,52 @@ impl Painter for WgpuPainter {
     // ===== Clipping =====
 
     fn clip_rect(&mut self, rect: Rect<Pixels>) {
-        // Convert logical coordinates to physical pixels
         // Apply current transform to get screen-space coordinates
         let transform = self.current_transform;
 
-        // Transform rect corners
-        let top_left =
-            transform.transform_point3(glam::Vec3::new(rect.left().0, rect.top().0, 0.0));
-        let bottom_right =
-            transform.transform_point3(glam::Vec3::new(rect.right().0, rect.bottom().0, 0.0));
+        // Compute axis-aligned bounding box in screen space
+        let (x, y, width, height) = if transform == glam::Mat4::IDENTITY {
+            // Fast path: no transform, use rect directly
+            let x = rect.left().0.max(0.0) as u32;
+            let y = rect.top().0.max(0.0) as u32;
+            let right = rect.right().0.min(self.size.0 as f32) as u32;
+            let bottom = rect.bottom().0.min(self.size.1 as f32) as u32;
+            (x, y, right.saturating_sub(x), bottom.saturating_sub(y))
+        } else {
+            // Transform all 4 corners to screen space and compute AABB
+            // This is a conservative approximation for rotated/skewed clips
+            let corners = [
+                transform
+                    .transform_point3(glam::Vec3::new(rect.left().0, rect.top().0, 0.0)),
+                transform
+                    .transform_point3(glam::Vec3::new(rect.right().0, rect.top().0, 0.0)),
+                transform
+                    .transform_point3(glam::Vec3::new(rect.right().0, rect.bottom().0, 0.0)),
+                transform
+                    .transform_point3(glam::Vec3::new(rect.left().0, rect.bottom().0, 0.0)),
+            ];
+            let min_x = corners.iter().map(|c| c.x).fold(f32::INFINITY, f32::min);
+            let min_y = corners.iter().map(|c| c.y).fold(f32::INFINITY, f32::min);
+            let max_x = corners
+                .iter()
+                .map(|c| c.x)
+                .fold(f32::NEG_INFINITY, f32::max);
+            let max_y = corners
+                .iter()
+                .map(|c| c.y)
+                .fold(f32::NEG_INFINITY, f32::max);
 
-        // Calculate scissor rect in physical pixels
-        let x = top_left.x.max(0.0) as u32;
-        let y = top_left.y.max(0.0) as u32;
-        let right = bottom_right.x.min(self.size.0 as f32) as u32;
-        let bottom = bottom_right.y.min(self.size.1 as f32) as u32;
-
-        let width = right.saturating_sub(x);
-        let height = bottom.saturating_sub(y);
+            // Clamp to surface bounds
+            let x = min_x.max(0.0) as u32;
+            let y = min_y.max(0.0) as u32;
+            let w = (max_x.min(self.size.0 as f32) - min_x.max(0.0))
+                .ceil()
+                .max(0.0) as u32;
+            let h = (max_y.min(self.size.1 as f32) - min_y.max(0.0))
+                .ceil()
+                .max(0.0) as u32;
+            (x, y, w, h)
+        };
 
         // Intersect with current scissor if any
         let scissor = if let Some((cur_x, cur_y, cur_w, cur_h)) = self.current_scissor {
