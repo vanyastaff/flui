@@ -93,6 +93,7 @@
 // MODULES
 // ============================================================================
 
+pub mod damage;
 mod compositor;
 mod handle;
 mod link_registry;
