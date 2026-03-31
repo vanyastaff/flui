@@ -6,18 +6,17 @@
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            background: #1a1a2e;
+            background: #0d0d1a;
             display: flex;
             flex-direction: column;
             align-items: center;
-            justify-content: center;
-            min-height: 100vh;
+            padding: 24px;
             font-family: system-ui, -apple-system, sans-serif;
             color: #e0e0e0;
         }
         h1 {
-            margin-bottom: 16px;
-            font-size: 24px;
+            margin-bottom: 8px;
+            font-size: 28px;
             color: #00d2ff;
         }
         p {
@@ -28,6 +27,7 @@
         canvas {
             border: 2px solid #333;
             border-radius: 8px;
+            max-width: 100%;
         }
         .info {
             margin-top: 16px;
@@ -39,7 +39,7 @@
 <body>
     <h1>FLUI Painting Demo</h1>
     <p>GPU-accelerated painting primitives via flui-engine + flui-painting</p>
-    <canvas id="flui-canvas" width="800" height="600"></canvas>
+    <canvas id="flui-canvas" width="1200" height="3000"></canvas>
     <p class="info">Built with FLUI — Flutter-inspired UI framework for Rust</p>
 
     <script type="module">

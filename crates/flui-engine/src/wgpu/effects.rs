@@ -68,8 +68,10 @@ pub struct LinearGradientInstance {
     pub corner_radii: [f32; 4],
     /// Number of gradient stops (1-8)
     pub stop_count: u32,
+    /// Offset into the shared gradient stops buffer
+    pub stop_offset: u32,
     /// Padding for GPU alignment
-    pub padding: [u32; 3],
+    pub padding: [u32; 2],
 }
 
 impl LinearGradientInstance {
@@ -86,9 +88,16 @@ impl LinearGradientInstance {
             gradient_start: [start.x, start.y],
             gradient_end: [end.x, end.y],
             corner_radii,
-            stop_count: stop_count.min(8), // Max 8 stops
-            padding: [0; 3],
+            stop_count: stop_count.min(8),
+            stop_offset: 0,
+            padding: [0; 2],
         }
+    }
+
+    /// Set the offset into the shared gradient stops buffer
+    pub fn with_stop_offset(mut self, offset: u32) -> Self {
+        self.stop_offset = offset;
+        self
     }
 
     /// Create a vertical gradient (top to bottom)
@@ -145,8 +154,10 @@ pub struct RadialGradientInstance {
     pub corner_radii: [f32; 4],
     /// Number of gradient stops (1-8)
     pub stop_count: u32,
+    /// Offset into the shared gradient stops buffer
+    pub stop_offset: u32,
     /// Padding for GPU alignment
-    pub padding2: [u32; 3],
+    pub padding2: [u32; 2],
 }
 
 impl RadialGradientInstance {
@@ -165,8 +176,15 @@ impl RadialGradientInstance {
             padding1: 0.0,
             corner_radii,
             stop_count: stop_count.min(8),
-            padding2: [0; 3],
+            stop_offset: 0,
+            padding2: [0; 2],
         }
+    }
+
+    /// Set the offset into the shared gradient stops buffer
+    pub fn with_stop_offset(mut self, offset: u32) -> Self {
+        self.stop_offset = offset;
+        self
     }
 
     /// Create a radial gradient centered in the rectangle
@@ -200,8 +218,10 @@ pub struct SweepGradientInstance {
     pub corner_radii: [f32; 4],
     /// Number of gradient stops (1-8)
     pub stop_count: u32,
+    /// Offset into the shared gradient stops buffer
+    pub stop_offset: u32,
     /// Padding for GPU alignment
-    pub padding: [u32; 3],
+    pub padding: [u32; 2],
 }
 
 impl SweepGradientInstance {
@@ -220,8 +240,15 @@ impl SweepGradientInstance {
             angles: [start_angle, end_angle],
             corner_radii,
             stop_count: stop_count.min(8),
-            padding: [0; 3],
+            stop_offset: 0,
+            padding: [0; 2],
         }
+    }
+
+    /// Set the offset into the shared gradient stops buffer
+    pub fn with_stop_offset(mut self, offset: u32) -> Self {
+        self.stop_offset = offset;
+        self
     }
 
     /// Create a full-circle sweep gradient (0 to 2*PI) centered in the rectangle

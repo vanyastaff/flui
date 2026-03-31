@@ -645,7 +645,11 @@ impl Tessellator {
 
         let points = vec![p1, p2];
         let path = Self::create_polyline_path(&points, false);
-        let result = self.tessellate_stroke(&path, paint);
+        let result = if let Some(ref dash) = paint.dash_pattern {
+            self.tessellate_dashed_stroke(&path, paint, dash)
+        } else {
+            self.tessellate_stroke(&path, paint)
+        };
 
         #[cfg(debug_assertions)]
         match &result {

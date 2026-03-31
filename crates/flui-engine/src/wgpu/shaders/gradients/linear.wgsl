@@ -21,13 +21,16 @@ struct InstanceInput {
     @location(4) gradient_end: vec2<f32>,   // End point (local coords)
     @location(5) corner_radii: vec4<f32>,   // [tl, tr, br, bl] for clipping
     @location(6) stop_count: u32,           // Number of gradient stops (1-8)
+    @location(7) stop_offset: u32,          // Offset into gradient stops buffer
 }
 
 // Gradient stop definition
 struct GradientStop {
     color: vec4<f32>,  // RGBA color
     position: f32,     // Position along gradient [0.0, 1.0]
-    _padding: vec3<f32>,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 // Vertex output / Fragment input
@@ -40,6 +43,7 @@ struct VertexOutput {
     @location(4) rect_size: vec2<f32>,
     @location(5) corner_radii: vec4<f32>,
     @location(6) @interpolate(flat) stop_count: u32,
+    @location(7) @interpolate(flat) stop_offset: u32,
 }
 
 // Uniforms
@@ -78,38 +82,32 @@ fn sdfToAlpha(dist: f32) -> f32 {
 /// Interpolate color from gradient stops
 /// t: position along gradient [0.0, 1.0]
 /// stop_count: number of stops to consider
-fn interpolateGradient(t: f32, stop_count: u32) -> vec4<f32> {
+fn interpolateGradient(t: f32, stop_count: u32, stop_offset: u32) -> vec4<f32> {
     let t_clamped = clamp(t, 0.0, 1.0);
 
-    // Handle edge cases
     if (stop_count == 0u) {
-        return vec4<f32>(0.0, 0.0, 0.0, 1.0); // Fallback to black
+        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
     }
     if (stop_count == 1u) {
-        return gradient_stops[0].color;
+        return gradient_stops[stop_offset].color;
     }
 
-    // Find the two stops that bracket our position
-    var prev_stop = gradient_stops[0];
-    var next_stop = gradient_stops[1];
+    var prev_stop = gradient_stops[stop_offset];
+    var next_stop = gradient_stops[stop_offset + 1u];
 
-    // Before first stop
     if (t_clamped <= prev_stop.position) {
         return prev_stop.color;
     }
 
-    // Find bracketing stops
     for (var i = 1u; i < stop_count; i++) {
-        next_stop = gradient_stops[i];
+        next_stop = gradient_stops[stop_offset + i];
 
         if (t_clamped <= next_stop.position) {
-            // Interpolate between prev_stop and next_stop
             let range = next_stop.position - prev_stop.position;
             if (range > 0.0) {
                 let local_t = (t_clamped - prev_stop.position) / range;
                 return mix(prev_stop.color, next_stop.color, local_t);
             } else {
-                // Stops at same position, use next
                 return next_stop.color;
             }
         }
@@ -117,7 +115,6 @@ fn interpolateGradient(t: f32, stop_count: u32) -> vec4<f32> {
         prev_stop = next_stop;
     }
 
-    // After last stop
     return next_stop.color;
 }
 
@@ -148,6 +145,7 @@ fn vs_main(
     out.rect_size = instance.bounds.zw;
     out.corner_radii = instance.corner_radii;
     out.stop_count = instance.stop_count;
+    out.stop_offset = instance.stop_offset;
 
     return out;
 }
@@ -181,13 +179,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     // Interpolate color from gradient stops
-    var color = interpolateGradient(t, in.stop_count);
+    var color = interpolateGradient(t, in.stop_count, in.stop_offset);
 
-    // Apply rounded corner alpha
-    if (dist > -1.0) {
-        let alpha = sdfToAlpha(dist);
-        color = vec4<f32>(color.rgb, color.a * alpha);
-    }
+    // Apply rounded corner alpha (fwidth must be called from uniform control flow)
+    let alpha = sdfToAlpha(dist);
+    color = vec4<f32>(color.rgb, color.a * alpha);
 
     return color;
 }

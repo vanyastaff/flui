@@ -56,7 +56,7 @@ mod debug;
 #[cfg(target_os = "windows")]
 pub mod dx12;
 #[allow(dead_code)]
-mod effects;
+pub mod effects;
 mod effects_pipeline;
 mod external_texture_registry;
 #[allow(dead_code)]

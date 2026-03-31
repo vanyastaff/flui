@@ -32,10 +32,24 @@ use crate::traits::Painter;
 /// vertices/indices to the global buffers.  When the pipeline key changes
 /// a new batch is started so that the render pass can switch pipelines at
 /// the correct index boundary.
+/// Scissor rect type (x, y, width, height) in physical pixels.
+type ScissorRect = Option<(u32, u32, u32, u32)>;
+
+/// Tracks a sub-range of instances that share the same scissor state.
+/// Used to split instanced draw calls when clipping changes.
+#[derive(Debug, Clone)]
+struct ScissorRegion {
+    scissor: ScissorRect,
+    start: u32,
+    count: u32,
+}
+
 #[derive(Debug, Clone)]
 struct TessellatedBatch {
     /// Pipeline variant to use for this batch
     pipeline_key: PipelineKey,
+    /// Scissor rect active when this batch was recorded
+    scissor: ScissorRect,
     /// First index (inclusive) into the shared index buffer
     index_start: u32,
     /// Number of indices in this batch
@@ -100,6 +114,18 @@ struct DrawSegment {
     tess_batches: Vec<TessellatedBatch>,
     /// Current pipeline key (for batching draws with same pipeline)
     current_pipeline_key: Option<PipelineKey>,
+    /// Scissor regions for rect instanced batch
+    rect_scissors: Vec<ScissorRegion>,
+    /// Scissor regions for circle instanced batch
+    circle_scissors: Vec<ScissorRegion>,
+    /// Scissor regions for arc instanced batch
+    arc_scissors: Vec<ScissorRegion>,
+    /// Scissor regions for linear gradient batch
+    linear_grad_scissors: Vec<ScissorRegion>,
+    /// Scissor regions for radial gradient batch
+    radial_grad_scissors: Vec<ScissorRegion>,
+    /// Scissor regions for sweep gradient batch
+    sweep_grad_scissors: Vec<ScissorRegion>,
 }
 
 impl DrawSegment {
@@ -118,7 +144,29 @@ impl DrawSegment {
             indices: Vec::new(),
             tess_batches: Vec::new(),
             current_pipeline_key: None,
+            rect_scissors: Vec::new(),
+            circle_scissors: Vec::new(),
+            arc_scissors: Vec::new(),
+            linear_grad_scissors: Vec::new(),
+            radial_grad_scissors: Vec::new(),
+            sweep_grad_scissors: Vec::new(),
         }
+    }
+
+    /// Record an instance addition for a given scissor region tracker.
+    /// Extends the last region if scissor matches, or creates a new one.
+    fn push_scissor_region(regions: &mut Vec<ScissorRegion>, scissor: ScissorRect) {
+        if let Some(last) = regions.last_mut() {
+            if last.scissor == scissor {
+                last.count += 1;
+                return;
+            }
+        }
+        regions.push(ScissorRegion {
+            scissor,
+            start: regions.last().map_or(0, |r| r.start + r.count),
+            count: 1,
+        });
     }
 
     /// Returns `true` if this segment has no drawing commands.
@@ -700,32 +748,28 @@ impl WgpuPainter {
         let gradient_bind_group_layout =
             super::effects_pipeline::create_gradient_bind_group_layout(&device);
 
-        // Create linear gradient pipeline
+        // Create shared pipeline layout for all gradient pipelines
+        let gradient_pipeline_layout = super::effects_pipeline::create_gradient_pipeline_layout(
+            &device,
+            pipeline_cache.viewport_bind_group_layout(),
+            &gradient_bind_group_layout,
+        );
+
+        // Create gradient pipelines (all share the same PipelineLayout for bind group compatibility)
         let linear_gradient_pipeline = super::effects_pipeline::create_linear_gradient_pipeline(
             &device,
             surface_format,
-            pipeline_cache.viewport_bind_group_layout(),
-            &gradient_bind_group_layout,
+            &gradient_pipeline_layout,
         );
-
-        // (Linear gradient batch moved to DrawSegment)
-
-        // Create radial gradient pipeline
         let radial_gradient_pipeline = super::effects_pipeline::create_radial_gradient_pipeline(
             &device,
             surface_format,
-            pipeline_cache.viewport_bind_group_layout(),
-            &gradient_bind_group_layout,
+            &gradient_pipeline_layout,
         );
-
-        // (Radial gradient batch moved to DrawSegment)
-
-        // Create sweep gradient pipeline
         let sweep_gradient_pipeline = super::effects_pipeline::create_sweep_gradient_pipeline(
             &device,
             surface_format,
-            pipeline_cache.viewport_bind_group_layout(),
-            &gradient_bind_group_layout,
+            &gradient_pipeline_layout,
         );
 
         // (Sweep gradient batch moved to DrawSegment)
@@ -967,11 +1011,6 @@ impl WgpuPainter {
         render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
         render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
 
-        // Apply scissor rect if active
-        if let Some((x, y, width, height)) = self.current_scissor {
-            render_pass.set_scissor_rect(x, y, width, height);
-        }
-
         let mut active_key: Option<PipelineKey> = None;
         for batch in &self.current_segment.tess_batches {
             if active_key != Some(batch.pipeline_key) {
@@ -980,6 +1019,13 @@ impl WgpuPainter {
                     .get_or_create(&self.device, batch.pipeline_key);
                 render_pass.set_pipeline(pipeline);
                 active_key = Some(batch.pipeline_key);
+            }
+
+            // Set per-batch scissor rect
+            if let Some((x, y, w, h)) = batch.scissor {
+                render_pass.set_scissor_rect(x, y, w, h);
+            } else {
+                render_pass.set_scissor_rect(0, 0, self.size.0, self.size.1);
             }
 
             let start = batch.index_start;
@@ -1064,6 +1110,14 @@ impl WgpuPainter {
         Point::new(px(p.x), px(p.y))
     }
 
+    /// Check if the current transform is axis-aligned (no rotation/skew).
+    /// When false, rects must be tessellated rather than instanced.
+    fn is_axis_aligned_transform(&self) -> bool {
+        let m = self.current_transform;
+        // Off-diagonal elements of the 2D part must be ~zero
+        m.x_axis.y.abs() < 1e-6 && m.y_axis.x.abs() < 1e-6
+    }
+
     /// Add tessellated shape from vertices/indices with pipeline key tracking.
     ///
     /// When the requested `key` matches the current batch's pipeline key the
@@ -1093,9 +1147,9 @@ impl WgpuPainter {
 
         let index_count = indices.len() as u32;
 
-        // Try to extend the current batch if the pipeline key matches
+        // Try to extend the current batch if pipeline key AND scissor match
         if let Some(last) = self.current_segment.tess_batches.last_mut() {
-            if last.pipeline_key == key {
+            if last.pipeline_key == key && last.scissor == self.current_scissor {
                 last.index_count += index_count;
                 return;
             }
@@ -1105,6 +1159,7 @@ impl WgpuPainter {
         self.current_segment.current_pipeline_key = Some(key);
         self.current_segment.tess_batches.push(TessellatedBatch {
             pipeline_key: key,
+            scissor: self.current_scissor,
             index_start,
             index_count,
         });
@@ -1116,6 +1171,98 @@ impl WgpuPainter {
     /// `draw_vertices`, `draw_shadow`).
     fn add_tessellated(&mut self, vertices: Vec<Vertex>, indices: &[u32]) {
         self.add_tessellated_with_key(vertices, indices, PipelineKey::alpha_blend());
+    }
+
+    /// Convert a `Shader` into GPU `GradientStop`s (max 8).
+    fn shader_to_gradient_stops(
+        shader: &flui_types::painting::Shader,
+    ) -> Vec<super::effects::GradientStop> {
+        let (colors, stops) = match shader {
+            flui_types::painting::Shader::LinearGradient { colors, stops, .. }
+            | flui_types::painting::Shader::RadialGradient { colors, stops, .. }
+            | flui_types::painting::Shader::SweepGradient { colors, stops, .. } => {
+                (colors.as_slice(), stops.as_deref())
+            }
+            flui_types::painting::Shader::Solid { color } => {
+                return vec![
+                    super::effects::GradientStop::new(*color, 0.0),
+                    super::effects::GradientStop::new(*color, 1.0),
+                ];
+            }
+            _ => return vec![],
+        };
+
+        let count = colors.len().min(8);
+        (0..count)
+            .map(|i| {
+                let position = if let Some(s) = stops {
+                    s.get(i).copied().unwrap_or(i as f32 / (count - 1).max(1) as f32)
+                } else {
+                    i as f32 / (count - 1).max(1) as f32
+                };
+                super::effects::GradientStop::new(colors[i], position)
+            })
+            .collect()
+    }
+
+    /// Dispatch a filled rect/rrect/circle with a shader to the correct gradient pipeline.
+    /// Returns `true` if the shader was handled, `false` if it should fall through to solid color.
+    fn dispatch_shader_rect(
+        &mut self,
+        bounds: Rect<Pixels>,
+        paint: &Paint,
+        corner_radii: [f32; 4],
+    ) -> bool {
+        let shader = match &paint.shader {
+            Some(s) => s,
+            None => return false,
+        };
+
+        let stops = Self::shader_to_gradient_stops(shader);
+        if stops.is_empty() {
+            return false;
+        }
+
+        // Apply current transform to bounds
+        let top_left = self.apply_transform(Point::new(bounds.left(), bounds.top()));
+        let bottom_right = self.apply_transform(Point::new(bounds.right(), bounds.bottom()));
+        let transformed = Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
+
+        match shader {
+            flui_types::painting::Shader::LinearGradient { from, to, .. } => {
+                // Convert Offset<Pixels> to local coordinates relative to bounds
+                let start = glam::Vec2::new(from.dx.0 - bounds.left().0, from.dy.0 - bounds.top().0);
+                let end = glam::Vec2::new(to.dx.0 - bounds.left().0, to.dy.0 - bounds.top().0);
+                self.gradient_rect(transformed, start, end, &stops, corner_radii[0]);
+            }
+            flui_types::painting::Shader::RadialGradient { center, radius, .. } => {
+                let c = glam::Vec2::new(
+                    center.dx.0 - bounds.left().0,
+                    center.dy.0 - bounds.top().0,
+                );
+                self.radial_gradient_rect(transformed, c, *radius, &stops, corner_radii[0]);
+            }
+            flui_types::painting::Shader::SweepGradient {
+                center,
+                start_angle,
+                end_angle,
+                ..
+            } => {
+                let c = glam::Vec2::new(
+                    center.dx.0 - bounds.left().0,
+                    center.dy.0 - bounds.top().0,
+                );
+                self.sweep_gradient_rect(transformed, c, *start_angle, *end_angle, &stops, corner_radii[0]);
+            }
+            flui_types::painting::Shader::Solid { color } => {
+                // Just use the solid color directly — fall through
+                let _ = color;
+                return false;
+            }
+            _ => return false,
+        }
+
+        true
     }
 
     /// Flush all instanced batches using SINGLE render pass (Phase 9
@@ -1256,50 +1403,74 @@ impl WgpuPainter {
             wgpu::IndexFormat::Uint16,
         );
 
-        // Apply scissor rect if active
-        if let Some((x, y, width, height)) = self.current_scissor {
-            render_pass.set_scissor_rect(x, y, width, height);
+        // Helper: set scissor rect for a region (full viewport when None)
+        let full_w = self.size.0;
+        let full_h = self.size.1;
+
+        // Execute per-scissor-region draws for each shape type.
+        // This replaces the old single-draw-per-type approach with granular
+        // scissor clipping per sub-range of instances.
+
+        // --- Shadows (rendered first for correct z-ordering) ---
+        if has_shadows {
+            render_pass.set_pipeline(&self.shadow_pipeline);
+            let buf_start = shadow_offset;
+            let buf_end = buf_start + shadow_size as u64;
+            render_pass.set_vertex_buffer(1, instance_buffer.slice(buf_start..buf_end));
+            // Shadows don't have per-shape scissor regions yet; draw all at once
+            render_pass.set_scissor_rect(0, 0, full_w, full_h);
+            render_pass.draw_indexed(0..6, 0, 0..self.current_segment.shadow_batch.len() as u32);
         }
 
-        // Execute draw commands from the batcher
-        // Each command tracks its pipeline and instance buffer slice.
-        // We iterate the batcher's command list and dispatch draws with
-        // the correct pipeline. Different pipeline types require different
-        // wgpu pipelines, so we switch per-command.
-        for (i, cmd) in batcher.commands().iter().enumerate() {
-            // Select pipeline based on draw order:
-            // - Command 0 with shadows present -> shadow pipeline
-            // - Otherwise by PipelineId
-            let is_shadow_draw = i == 0 && has_shadows;
-            if is_shadow_draw {
-                render_pass.set_pipeline(&self.shadow_pipeline);
-            } else {
-                match cmd.pipeline_id {
-                    PipelineId::Rectangle => {
-                        render_pass.set_pipeline(&self.instanced_rect_pipeline);
-                    }
-                    PipelineId::Circle => {
-                        render_pass.set_pipeline(&self.instanced_circle_pipeline);
-                    }
-                    PipelineId::Arc => {
-                        render_pass.set_pipeline(&self.instanced_arc_pipeline);
-                    }
-                    PipelineId::Texture => {
-                        // Texture pipeline not yet wired; skip
-                        continue;
-                    }
-                }
-            }
-
-            let buf_start = cmd.instance_buffer_offset;
-            let buf_end = buf_start + cmd.instance_buffer_size;
+        // --- Rectangles (per-scissor-region) ---
+        if has_rects {
+            render_pass.set_pipeline(&self.instanced_rect_pipeline);
+            let buf_start = rect_offset;
+            let buf_end = buf_start + rect_size as u64;
             render_pass.set_vertex_buffer(1, instance_buffer.slice(buf_start..buf_end));
 
-            render_pass.draw_indexed(
-                0..cmd.args.index_count,
-                0,
-                0..cmd.args.instance_count,
-            );
+            for region in &self.current_segment.rect_scissors {
+                if let Some((x, y, w, h)) = region.scissor {
+                    render_pass.set_scissor_rect(x, y, w, h);
+                } else {
+                    render_pass.set_scissor_rect(0, 0, full_w, full_h);
+                }
+                render_pass.draw_indexed(0..6, 0, region.start..region.start + region.count);
+            }
+        }
+
+        // --- Circles (per-scissor-region) ---
+        if has_circles {
+            render_pass.set_pipeline(&self.instanced_circle_pipeline);
+            let buf_start = circle_offset;
+            let buf_end = buf_start + circle_size as u64;
+            render_pass.set_vertex_buffer(1, instance_buffer.slice(buf_start..buf_end));
+
+            for region in &self.current_segment.circle_scissors {
+                if let Some((x, y, w, h)) = region.scissor {
+                    render_pass.set_scissor_rect(x, y, w, h);
+                } else {
+                    render_pass.set_scissor_rect(0, 0, full_w, full_h);
+                }
+                render_pass.draw_indexed(0..6, 0, region.start..region.start + region.count);
+            }
+        }
+
+        // --- Arcs (per-scissor-region) ---
+        if has_arcs {
+            render_pass.set_pipeline(&self.instanced_arc_pipeline);
+            let buf_start = arc_offset;
+            let buf_end = buf_start + arc_size as u64;
+            render_pass.set_vertex_buffer(1, instance_buffer.slice(buf_start..buf_end));
+
+            for region in &self.current_segment.arc_scissors {
+                if let Some((x, y, w, h)) = region.scissor {
+                    render_pass.set_scissor_rect(x, y, w, h);
+                } else {
+                    render_pass.set_scissor_rect(0, 0, full_w, full_h);
+                }
+                render_pass.draw_indexed(0..6, 0, region.start..region.start + region.count);
+            }
         }
 
         // Drop render pass (explicit for clarity)
@@ -1310,6 +1481,9 @@ impl WgpuPainter {
         self.current_segment.circle_batch.clear();
         self.current_segment.arc_batch.clear();
         self.current_segment.shadow_batch.clear();
+        self.current_segment.rect_scissors.clear();
+        self.current_segment.circle_scissors.clear();
+        self.current_segment.arc_scissors.clear();
     }
 
     /// Flush gradient batches (linear and radial)
@@ -1420,37 +1594,75 @@ impl WgpuPainter {
             wgpu::IndexFormat::Uint16,
         );
 
-        // ===== Draw Linear Gradients (if any) =====
+        let full_w = self.size.0;
+        let full_h = self.size.1;
+
+        // ===== Draw Linear Gradients (per-scissor-region) =====
         if has_linear {
             render_pass.set_pipeline(&self.linear_gradient_pipeline);
+            // Re-set bind groups after pipeline switch (WebGPU invalidates bind groups
+            // when the new pipeline's PipelineLayout is a different object)
+            render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
+            if let Some(ref gradient_bind_group) = self.gradient_bind_group {
+                render_pass.set_bind_group(1, gradient_bind_group, &[]);
+            }
 
             let linear_start = linear_offset as u64;
             let linear_end = linear_start + linear_size as u64;
             render_pass.set_vertex_buffer(1, instance_buffer.slice(linear_start..linear_end));
 
-            render_pass.draw_indexed(0..6, 0, 0..self.current_segment.linear_gradient_batch.len() as u32);
+            for region in &self.current_segment.linear_grad_scissors {
+                if let Some((x, y, w, h)) = region.scissor {
+                    render_pass.set_scissor_rect(x, y, w, h);
+                } else {
+                    render_pass.set_scissor_rect(0, 0, full_w, full_h);
+                }
+                render_pass.draw_indexed(0..6, 0, region.start..region.start + region.count);
+            }
         }
 
-        // ===== Draw Radial Gradients (if any) =====
+        // ===== Draw Radial Gradients (per-scissor-region) =====
         if has_radial {
             render_pass.set_pipeline(&self.radial_gradient_pipeline);
+            render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
+            if let Some(ref gradient_bind_group) = self.gradient_bind_group {
+                render_pass.set_bind_group(1, gradient_bind_group, &[]);
+            }
 
             let radial_start = radial_offset as u64;
             let radial_end = radial_start + radial_size as u64;
             render_pass.set_vertex_buffer(1, instance_buffer.slice(radial_start..radial_end));
 
-            render_pass.draw_indexed(0..6, 0, 0..self.current_segment.radial_gradient_batch.len() as u32);
+            for region in &self.current_segment.radial_grad_scissors {
+                if let Some((x, y, w, h)) = region.scissor {
+                    render_pass.set_scissor_rect(x, y, w, h);
+                } else {
+                    render_pass.set_scissor_rect(0, 0, full_w, full_h);
+                }
+                render_pass.draw_indexed(0..6, 0, region.start..region.start + region.count);
+            }
         }
 
-        // ===== Draw Sweep Gradients (if any) =====
+        // ===== Draw Sweep Gradients (per-scissor-region) =====
         if has_sweep {
             render_pass.set_pipeline(&self.sweep_gradient_pipeline);
+            render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
+            if let Some(ref gradient_bind_group) = self.gradient_bind_group {
+                render_pass.set_bind_group(1, gradient_bind_group, &[]);
+            }
 
             let sweep_start = sweep_offset as u64;
             let sweep_end = sweep_start + sweep_size as u64;
             render_pass.set_vertex_buffer(1, instance_buffer.slice(sweep_start..sweep_end));
 
-            render_pass.draw_indexed(0..6, 0, 0..self.current_segment.sweep_gradient_batch.len() as u32);
+            for region in &self.current_segment.sweep_grad_scissors {
+                if let Some((x, y, w, h)) = region.scissor {
+                    render_pass.set_scissor_rect(x, y, w, h);
+                } else {
+                    render_pass.set_scissor_rect(0, 0, full_w, full_h);
+                }
+                render_pass.draw_indexed(0..6, 0, region.start..region.start + region.count);
+            }
         }
 
         // Drop render pass
@@ -1461,6 +1673,9 @@ impl WgpuPainter {
         self.current_segment.radial_gradient_batch.clear();
         self.current_segment.sweep_gradient_batch.clear();
         self.current_segment.current_gradient_stops.clear();
+        self.current_segment.linear_grad_scissors.clear();
+        self.current_segment.radial_grad_scissors.clear();
+        self.current_segment.sweep_grad_scissors.clear();
     }
 
     /// Flush texture instance batch with given texture
@@ -1565,11 +1780,10 @@ impl Painter for WgpuPainter {
         tracing::trace!("WgpuPainter::rect: rect={:?}, paint={:?}", rect, paint);
 
         if paint.style == PaintStyle::Fill {
-            // Apply current transform to rect bounds
-            let top_left = self.apply_transform(Point::new(rect.left(), rect.top()));
-            let bottom_right = self.apply_transform(Point::new(rect.right(), rect.bottom()));
-            let transformed_rect =
-                Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
+            // Check for shader (gradient) — dispatch to gradient pipeline
+            if paint.has_shader() && self.dispatch_shader_rect(rect, paint, [0.0; 4]) {
+                return;
+            }
 
             // Apply current opacity to color
             let color = if self.current_opacity < 1.0 {
@@ -1579,10 +1793,31 @@ impl Painter for WgpuPainter {
                 paint.color
             };
 
-            // Use GPU instancing for filled rects (100x faster!)
-            let instance = super::instancing::RectInstance::rect(transformed_rect, color);
-            let _ = self.current_segment.rect_batch.add(instance);
-            // Note: Auto-flush happens in render() - no need to flush here
+            if self.is_axis_aligned_transform() {
+                // Fast path: GPU instancing for axis-aligned rects
+                let top_left = self.apply_transform(Point::new(rect.left(), rect.top()));
+                let bottom_right = self.apply_transform(Point::new(rect.right(), rect.bottom()));
+                let transformed_rect =
+                    Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
+                let instance = super::instancing::RectInstance::rect(transformed_rect, color);
+                let _ = self.current_segment.rect_batch.add(instance);
+                DrawSegment::push_scissor_region(&mut self.current_segment.rect_scissors, self.current_scissor);
+            } else {
+                // Slow path: tessellate rotated/skewed rects as a transformed quad
+                let tl = self.apply_transform(Point::new(rect.left(), rect.top()));
+                let tr = self.apply_transform(Point::new(rect.right(), rect.top()));
+                let br = self.apply_transform(Point::new(rect.right(), rect.bottom()));
+                let bl = self.apply_transform(Point::new(rect.left(), rect.bottom()));
+                let rgba = color.to_rgba_f32_array();
+                let vertices = vec![
+                    Vertex { position: [tl.x.0, tl.y.0], color: rgba, tex_coord: [0.0, 0.0] },
+                    Vertex { position: [tr.x.0, tr.y.0], color: rgba, tex_coord: [1.0, 0.0] },
+                    Vertex { position: [br.x.0, br.y.0], color: rgba, tex_coord: [1.0, 1.0] },
+                    Vertex { position: [bl.x.0, bl.y.0], color: rgba, tex_coord: [0.0, 1.0] },
+                ];
+                let indices = vec![0, 1, 2, 0, 2, 3];
+                self.add_tessellated_with_key(vertices, &indices, pipeline::pipeline_key_from_paint(paint));
+            }
         } else {
             // Stroked rect - use tessellator (less common, fallback path)
             // Paint already contains stroke information (stroke_width, stroke_cap,
@@ -1595,6 +1830,19 @@ impl Painter for WgpuPainter {
 
     fn rrect(&mut self, rrect: RRect, paint: &Paint) {
         if paint.style == PaintStyle::Fill {
+            // Check for shader (gradient) — dispatch to gradient pipeline
+            if paint.has_shader() {
+                let corner_radii = [
+                    rrect.top_left.x.0.max(rrect.top_left.y.0),
+                    rrect.top_right.x.0.max(rrect.top_right.y.0),
+                    rrect.bottom_right.x.0.max(rrect.bottom_right.y.0),
+                    rrect.bottom_left.x.0.max(rrect.bottom_left.y.0),
+                ];
+                if self.dispatch_shader_rect(rrect.bounding_rect(), paint, corner_radii) {
+                    return;
+                }
+            }
+
             // Apply current transform to rect bounds
             let top_left = self.apply_transform(Point::new(rrect.rect.left(), rrect.rect.top()));
             let bottom_right =
@@ -1620,6 +1868,7 @@ impl Painter for WgpuPainter {
                 rrect.bottom_left.x.0.max(rrect.bottom_left.y.0),
             );
             let _ = self.current_segment.rect_batch.add(instance);
+            DrawSegment::push_scissor_region(&mut self.current_segment.rect_scissors, self.current_scissor);
         } else {
             // Stroked rounded rect - use tessellator (fallback)
             if let Ok((vertices, indices)) = self.tessellator.tessellate_rrect(rrect, paint) {
@@ -1638,6 +1887,20 @@ impl Painter for WgpuPainter {
         );
 
         if paint.style == PaintStyle::Fill {
+            // Check for shader (gradient) — dispatch to gradient pipeline
+            if paint.has_shader() {
+                let bounds = Rect::from_xywh(
+                    center.x - px(radius),
+                    center.y - px(radius),
+                    px(radius * 2.0),
+                    px(radius * 2.0),
+                );
+                // Use large corner radius to make it circular
+                if self.dispatch_shader_rect(bounds, paint, [radius; 4]) {
+                    return;
+                }
+            }
+
             // Apply current transform to center point
             let transformed_center = self.apply_transform(center);
 
@@ -1653,6 +1916,7 @@ impl Painter for WgpuPainter {
             let instance =
                 super::instancing::CircleInstance::new(transformed_center, radius, color);
             let _ = self.current_segment.circle_batch.add(instance);
+            DrawSegment::push_scissor_region(&mut self.current_segment.circle_scissors, self.current_scissor);
             // Note: Auto-flush happens in render() - no need to flush here
         } else {
             // Stroked circle - use tessellator (less common, fallback path)
@@ -1708,6 +1972,7 @@ impl Painter for WgpuPainter {
                 paint.color,
             );
             let _ = self.current_segment.arc_batch.add(instance);
+            DrawSegment::push_scissor_region(&mut self.current_segment.arc_scissors, self.current_scissor);
         } else {
             // For stroked arcs or arcs without center, use tessellation
             // TODO: Implement proper arc tessellation in Tessellator
@@ -1721,6 +1986,7 @@ impl Painter for WgpuPainter {
                     paint.color,
                 );
                 let _ = self.current_segment.arc_batch.add(instance);
+                DrawSegment::push_scissor_region(&mut self.current_segment.arc_scissors, self.current_scissor);
             } else {
                 // Use tessellation for stroked arcs
                 match self.tessellator.tessellate_arc(
@@ -2727,6 +2993,7 @@ impl WgpuPainter {
 
         // Append gradient stops to global buffer (max 8 per gradient)
         let stop_count = stops.len().min(8);
+        let stop_offset = self.current_segment.current_gradient_stops.len() as u32;
         self.current_segment.current_gradient_stops
             .extend_from_slice(&stops[..stop_count]);
 
@@ -2741,11 +3008,12 @@ impl WgpuPainter {
             gradient_end,
             [corner_radius; 4],
             stop_count as u32,
-        );
+        ).with_stop_offset(stop_offset);
 
         if self.current_segment.linear_gradient_batch.add(instance) {
             // Batch full, flush will happen in render()
         }
+        DrawSegment::push_scissor_region(&mut self.current_segment.linear_grad_scissors, self.current_scissor);
     }
 
     /// Draw a rectangle with a radial gradient
@@ -2783,6 +3051,7 @@ impl WgpuPainter {
 
         // Append gradient stops to global buffer (max 8 per gradient)
         let stop_count = stops.len().min(8);
+        let stop_offset = self.current_segment.current_gradient_stops.len() as u32;
         self.current_segment.current_gradient_stops
             .extend_from_slice(&stops[..stop_count]);
 
@@ -2797,11 +3066,12 @@ impl WgpuPainter {
             radius,
             [corner_radius; 4],
             stop_count as u32,
-        );
+        ).with_stop_offset(stop_offset);
 
         if self.current_segment.radial_gradient_batch.add(instance) {
             // Batch full, flush will happen in render()
         }
+        DrawSegment::push_scissor_region(&mut self.current_segment.radial_grad_scissors, self.current_scissor);
     }
 
     /// Draw a rectangle with a sweep (angular/conic) gradient
@@ -2826,6 +3096,7 @@ impl WgpuPainter {
 
         // Append gradient stops to global buffer (max 8 per gradient)
         let stop_count = stops.len().min(8);
+        let stop_offset = self.current_segment.current_gradient_stops.len() as u32;
         self.current_segment.current_gradient_stops
             .extend_from_slice(&stops[..stop_count]);
 
@@ -2841,11 +3112,12 @@ impl WgpuPainter {
             end_angle,
             [corner_radius; 4],
             stop_count as u32,
-        );
+        ).with_stop_offset(stop_offset);
 
         if self.current_segment.sweep_gradient_batch.add(instance) {
             // Batch full, flush will happen in render()
         }
+        DrawSegment::push_scissor_region(&mut self.current_segment.sweep_grad_scissors, self.current_scissor);
     }
 
     /// Draw a shadow for a rectangle

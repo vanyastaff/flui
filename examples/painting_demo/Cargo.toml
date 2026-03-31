@@ -18,8 +18,11 @@ web-sys = { version = "0.3.86", features = [
     "console",
 ] }
 console_error_panic_hook = "0.1"
+js-sys = "0.3"
+raw-window-handle = "0.6"
 wgpu = { workspace = true, features = ["webgpu", "wgsl"] }
 flui-painting = { path = "../../crates/flui-painting" }
 flui-engine = { path = "../../crates/flui-engine", features = ["wgpu-backend", "webgpu"] }
 flui-types = { path = "../../crates/flui-types" }
 flui-layer = { path = "../../crates/flui-layer" }
+glam = "0.30"

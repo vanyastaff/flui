@@ -40,26 +40,34 @@ pub fn create_gradient_stops_buffer(device: &wgpu::Device) -> wgpu::Buffer {
 }
 
 /// Create linear gradient rendering pipeline
+/// Create a shared pipeline layout for all gradient pipelines.
+/// Using the same PipelineLayout object ensures bind group compatibility
+/// when switching pipelines within a render pass (WebGPU requirement).
+pub fn create_gradient_pipeline_layout(
+    device: &wgpu::Device,
+    viewport_bind_group_layout: &wgpu::BindGroupLayout,
+    gradient_bind_group_layout: &wgpu::BindGroupLayout,
+) -> wgpu::PipelineLayout {
+    device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Shared Gradient Pipeline Layout"),
+        bind_group_layouts: &[viewport_bind_group_layout, gradient_bind_group_layout],
+        push_constant_ranges: &[],
+    })
+}
+
 pub fn create_linear_gradient_pipeline(
     device: &wgpu::Device,
     surface_format: wgpu::TextureFormat,
-    viewport_bind_group_layout: &wgpu::BindGroupLayout,
-    gradient_bind_group_layout: &wgpu::BindGroupLayout,
+    pipeline_layout: &wgpu::PipelineLayout,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Linear Gradient Shader"),
         source: wgpu::ShaderSource::Wgsl(include_str!("shaders/gradients/linear.wgsl").into()),
     });
 
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("Linear Gradient Pipeline Layout"),
-        bind_group_layouts: &[viewport_bind_group_layout, gradient_bind_group_layout],
-        push_constant_ranges: &[],
-    });
-
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Linear Gradient Pipeline"),
-        layout: Some(&pipeline_layout),
+        layout: Some(pipeline_layout),
         vertex: wgpu::VertexState {
             module: &shader,
             entry_point: Some("vs_main"),
@@ -109,23 +117,16 @@ pub fn create_linear_gradient_pipeline(
 pub fn create_radial_gradient_pipeline(
     device: &wgpu::Device,
     surface_format: wgpu::TextureFormat,
-    viewport_bind_group_layout: &wgpu::BindGroupLayout,
-    gradient_bind_group_layout: &wgpu::BindGroupLayout,
+    pipeline_layout: &wgpu::PipelineLayout,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Radial Gradient Shader"),
         source: wgpu::ShaderSource::Wgsl(include_str!("shaders/gradients/radial.wgsl").into()),
     });
 
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("Radial Gradient Pipeline Layout"),
-        bind_group_layouts: &[viewport_bind_group_layout, gradient_bind_group_layout],
-        push_constant_ranges: &[],
-    });
-
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Radial Gradient Pipeline"),
-        layout: Some(&pipeline_layout),
+        layout: Some(pipeline_layout),
         vertex: wgpu::VertexState {
             module: &shader,
             entry_point: Some("vs_main"),
@@ -175,23 +176,16 @@ pub fn create_radial_gradient_pipeline(
 pub fn create_sweep_gradient_pipeline(
     device: &wgpu::Device,
     surface_format: wgpu::TextureFormat,
-    viewport_bind_group_layout: &wgpu::BindGroupLayout,
-    gradient_bind_group_layout: &wgpu::BindGroupLayout,
+    pipeline_layout: &wgpu::PipelineLayout,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Sweep Gradient Shader"),
         source: wgpu::ShaderSource::Wgsl(include_str!("shaders/gradients/sweep.wgsl").into()),
     });
 
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("Sweep Gradient Pipeline Layout"),
-        bind_group_layouts: &[viewport_bind_group_layout, gradient_bind_group_layout],
-        push_constant_ranges: &[],
-    });
-
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Sweep Gradient Pipeline"),
-        layout: Some(&pipeline_layout),
+        layout: Some(pipeline_layout),
         vertex: wgpu::VertexState {
             module: &shader,
             entry_point: Some("vs_main"),

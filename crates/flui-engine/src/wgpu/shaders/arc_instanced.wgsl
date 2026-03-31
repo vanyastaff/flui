@@ -47,22 +47,24 @@ fn vs_main(
     let center = instance.center_radius.xy;
     let radius = instance.center_radius.z;
 
-    // Transform unit quad [-1,1] to arc bounding box
-    // Apply instance transform for elliptical arcs (scale_x, scale_y)
-    let local_pos = vertex.position * vec2<f32>(
+    // Convert unit quad [0,1] to [-1,1] range for arc SDF
+    let centered_pos = vertex.position * 2.0 - 1.0;
+
+    // Transform to arc bounding box
+    let local_pos = centered_pos * vec2<f32>(
         radius * instance.transform.x,
         radius * instance.transform.y
     );
 
-    let world_pos = center + local_pos + instance.transform.zw; // Add translation
+    let world_pos = center + local_pos + instance.transform.zw;
 
     // Convert to clip space [-1, 1]
     let clip_x = (world_pos.x / viewport.size.x) * 2.0 - 1.0;
-    let clip_y = 1.0 - (world_pos.y / viewport.size.y) * 2.0; // Flip Y for screen coords
+    let clip_y = 1.0 - (world_pos.y / viewport.size.y) * 2.0;
 
     out.position = vec4<f32>(clip_x, clip_y, 0.0, 1.0);
     out.color = instance.color;
-    out.local_pos = vertex.position; // [-1 to 1] range
+    out.local_pos = centered_pos; // [-1 to 1] range
     out.radius = radius;
     out.start_angle = instance.angles.x;
     out.sweep_angle = instance.angles.y;

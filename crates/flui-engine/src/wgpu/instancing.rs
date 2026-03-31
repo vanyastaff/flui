@@ -418,8 +418,10 @@ impl LinearGradientInstance {
             4 => Float32x2,
             // Corner radii (location 5)
             5 => Float32x4,
-            // Stop count (location 6) - using Uint32 for integer
+            // Stop count (location 6)
             6 => Uint32,
+            // Stop offset (location 7)
+            7 => Uint32,
         ];
 
         wgpu::VertexBufferLayout {
@@ -448,6 +450,8 @@ impl RadialGradientInstance {
             5 => Float32x4,
             // Stop count (location 6)
             6 => Uint32,
+            // Stop offset (location 7)
+            7 => Uint32,
         ];
 
         wgpu::VertexBufferLayout {
@@ -480,6 +484,8 @@ impl SweepGradientInstance {
             5 => Float32x4,
             // Stop count (location 6)
             6 => Uint32,
+            // Stop offset (location 7)
+            7 => Uint32,
         ];
 
         wgpu::VertexBufferLayout {
