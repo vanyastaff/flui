@@ -674,6 +674,45 @@ impl TextureCache {
         }
     }
 
+    // ===== Asset Integration =====
+
+    /// Load a texture from pre-decoded RGBA bytes provided by flui-assets.
+    ///
+    /// This is a convenience bridge between `flui_assets::AssetRegistry` and
+    /// the GPU texture cache. The caller is responsible for decoding the image
+    /// (e.g., via `image::load_from_memory`) before passing raw RGBA bytes.
+    ///
+    /// # Usage with flui-assets
+    ///
+    /// ```rust,ignore
+    /// use flui_assets::AssetRegistry;
+    /// use flui_engine::wgpu::texture_cache::{TextureCache, TextureId};
+    ///
+    /// // 1. Load and decode image via asset registry
+    /// let registry = AssetRegistry::global();
+    /// let image_data = registry.load_bytes("sprites/hero.png").await?;
+    /// let img = image::load_from_memory(&image_data)?.to_rgba8();
+    /// let (w, h) = img.dimensions();
+    ///
+    /// // 2. Upload decoded RGBA to GPU cache
+    /// let cached = texture_cache.load_from_asset(
+    ///     TextureId::from_path("sprites/hero.png"),
+    ///     &img,
+    ///     w,
+    ///     h,
+    /// )?;
+    /// ```
+    #[cfg(feature = "assets")]
+    pub fn load_from_asset(
+        &mut self,
+        id: TextureId,
+        rgba_data: &[u8],
+        width: u32,
+        height: u32,
+    ) -> Result<&CachedTexture, String> {
+        self.load_from_rgba(id, width, height, rgba_data)
+    }
+
     // ===== Atlas Access =====
 
     /// Get a [`wgpu::TextureView`] for the shared atlas texture.

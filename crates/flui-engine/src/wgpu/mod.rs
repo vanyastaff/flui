@@ -58,6 +58,7 @@ pub mod dx12;
 #[allow(dead_code)]
 pub mod effects;
 mod effects_pipeline;
+pub mod font_loader;
 mod external_texture_registry;
 #[allow(dead_code)]
 mod instancing;
@@ -136,6 +137,9 @@ pub use text_renderer::{TextRenderingSystem, TextRun};
 pub use texture_pool::{GpuTexture, PooledTexture, PoolStats, TextureDesc, TexturePool};
 // Vertex types
 pub use vertex::{ImageInstance, PathVertex, RectInstance, RectVertex, Vertex};
+
+// Font loading utilities
+pub use font_loader::FontLoader;
 
 // Painter (WgpuPainter is the concrete implementation, Painter trait from crate::traits)
 pub use crate::traits::Painter;

@@ -103,4 +103,4 @@ pub use traits::{CommandRenderer, Painter};
 pub use wgpu::DebugBackend;
 // wgpu backend exports
 #[cfg(feature = "wgpu-backend")]
-pub use wgpu::{Backend, LayerRender, WgpuPainter};
+pub use wgpu::{Backend, FontLoader, LayerRender, WgpuPainter};

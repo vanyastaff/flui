@@ -27,6 +27,7 @@ gles = ["wgpu-backend", "wgpu/gles", "wgpu/wgsl"]
 
 # === Optional Features ===
 images = ["dep:image"]
+assets = ["dep:flui-assets"]
 serialization = ["lyon/serialization"]
 devtools = ["dep:flui-devtools"]
 lyon-debugger = ["lyon/debugger"]
@@ -41,6 +42,7 @@ flui-painting = { path = "../flui-painting" }
 flui-foundation = { path = "../flui-foundation" }
 flui-layer = { path = "../flui-layer" }
 flui-devtools = { path = "../flui-devtools", optional = true }
+flui-assets = { path = "../flui-assets", optional = true }
 
 # === GPU Rendering (wgpu backend) ===
 wgpu = { workspace = true, default-features = false, optional = true }
