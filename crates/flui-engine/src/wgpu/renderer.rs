@@ -38,6 +38,7 @@ use anyhow::Result;
 use wgpu;
 
 use crate::error::RenderError;
+use super::occlusion::OcclusionTracker;
 
 /// GPU backend capabilities
 #[derive(Debug, Clone)]
@@ -141,6 +142,8 @@ pub struct Renderer {
     offscreen: Option<Arc<parking_lot::Mutex<super::offscreen::OffscreenRenderer>>>,
     /// Whether the surface supports COPY_SRC (for mid-frame texture copies)
     supports_copy_src: bool,
+    /// Tracks dirty regions for incremental rendering (skip frames with no damage)
+    damage_tracker: flui_layer::damage::DamageTracker,
 }
 
 impl Renderer {
@@ -278,6 +281,7 @@ impl Renderer {
             painter: Some(painter),
             offscreen,
             supports_copy_src,
+            damage_tracker: flui_layer::damage::DamageTracker::new(),
         })
     }
 
@@ -323,6 +327,7 @@ impl Renderer {
             painter: None,
             offscreen: None,
             supports_copy_src: false,
+            damage_tracker: flui_layer::damage::DamageTracker::new(),
         })
     }
 
@@ -468,6 +473,8 @@ impl Renderer {
                 painter.resize(width, height);
             }
 
+            self.damage_tracker.mark_full_repaint();
+
             tracing::debug!("Surface resized to {}x{}", width, height);
         }
     }
@@ -497,6 +504,21 @@ impl Renderer {
         self.config.as_ref()
     }
 
+    /// Mark a screen region as dirty (needs repaint).
+    pub fn mark_dirty(&mut self, rect: flui_types::geometry::Rect<flui_types::geometry::Pixels>) {
+        self.damage_tracker.mark_dirty(rect);
+    }
+
+    /// Mark the entire screen as needing repaint.
+    pub fn mark_full_repaint(&mut self) {
+        self.damage_tracker.mark_full_repaint();
+    }
+
+    /// Check if the renderer has pending damage.
+    pub fn has_damage(&self) -> bool {
+        self.damage_tracker.has_damage()
+    }
+
     /// Get current surface size as `(width, height)`.
     ///
     /// Returns `(0, 0)` if no surface is configured (e.g., offscreen renderer).
@@ -512,6 +534,7 @@ impl Renderer {
     pub fn reconfigure_surface(&mut self) -> Result<(), RenderError> {
         if let (Some(config), Some(surface)) = (&self.config, &self.surface) {
             surface.configure(&self.device, config);
+            self.damage_tracker.mark_full_repaint();
             tracing::info!("Surface reconfigured ({}x{})", config.width, config.height);
             Ok(())
         } else {
@@ -529,6 +552,13 @@ impl Renderer {
     /// texture can be copied, blurred, and composited before continuing.
     pub fn render_scene(&mut self, scene: &flui_layer::Scene) -> Result<(), RenderError> {
         use super::backend::Backend;
+
+        // Check if we need to render at all
+        if !self.damage_tracker.has_damage() && !self.damage_tracker.needs_full_repaint() {
+            // Nothing changed — skip this frame entirely
+            tracing::trace!("Skipping frame: no damage");
+            return Ok(());
+        }
 
         let surface = self.surface.as_ref().ok_or(RenderError::SurfaceLost)?;
 
@@ -639,6 +669,10 @@ impl Renderer {
         }
 
         output.present();
+
+        // Reset damage for next frame
+        self.damage_tracker.reset();
+
         Ok(())
     }
 
