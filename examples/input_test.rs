@@ -7,11 +7,6 @@
 //!
 //! Run with: cargo run --example input_test
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
-
 use flui_platform::{WindowOptions, current_platform};
 use flui_types::geometry::{Size, px};
 
@@ -24,7 +19,7 @@ fn main() {
         .with_line_number(true)
         .init();
 
-    tracing::info!("🎮 FLUI Input Event Test");
+    tracing::info!("FLUI Input Event Test");
     tracing::info!("Platform: {}", std::env::consts::OS);
     tracing::info!("");
     tracing::info!("Instructions:");
@@ -37,11 +32,11 @@ fn main() {
     tracing::info!("");
 
     let platform = current_platform().expect("Failed to initialize platform");
-    tracing::info!("✅ Platform initialized: {}", platform.name());
+    tracing::info!("Platform initialized: {}", platform.name());
 
     // Display info
     let displays = platform.displays();
-    tracing::info!("📺 Found {} display(s)", displays.len());
+    tracing::info!("Found {} display(s)", displays.len());
     for (i, disp) in displays.iter().enumerate() {
         tracing::info!(
             "  Display {}: {} ({}x{} @ {:.1}x)",
@@ -54,10 +49,10 @@ fn main() {
     }
 
     tracing::info!("");
-    tracing::info!("🪟 Creating test window...");
+    tracing::info!("Creating test window...");
 
     let window_options = WindowOptions {
-        title: "🎮 Input Event Test - Move mouse & press keys!".to_string(),
+        title: "Input Event Test - Move mouse & press keys!".to_string(),
         size: Size::new(px(800.0), px(600.0)),
         resizable: true,
         visible: true,
@@ -66,42 +61,22 @@ fn main() {
         max_size: None,
     };
 
-    let platform_clone = platform.clone();
-    let running = Arc::new(AtomicBool::new(true));
-    let running_clone = running.clone();
-
-    // Spawn a thread to quit after 30 seconds
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_secs(30));
-        tracing::info!("");
-        tracing::info!("⏱️  30 seconds elapsed");
-        tracing::info!("👋 Closing application...");
-        running_clone.store(false, Ordering::Relaxed);
-    });
+    // Create window before running the event loop
+    let window = platform
+        .open_window(window_options)
+        .expect("Failed to create window");
+    tracing::info!("Window created successfully!");
+    tracing::info!("   Logical size: {:?}", window.logical_size());
+    tracing::info!("   Physical size: {:?}", window.physical_size());
+    tracing::info!("   Scale factor: {:.1}x", window.scale_factor());
+    tracing::info!("");
+    tracing::info!("Waiting for input events...");
 
     platform.run(Box::new(move || {
-        match platform_clone.open_window(window_options) {
-            Ok(window) => {
-                tracing::info!("✅ Window created successfully!");
-                tracing::info!("   Logical size: {:?}", window.logical_size());
-                tracing::info!("   Physical size: {:?}", window.physical_size());
-                tracing::info!("   Scale factor: {:.1}x", window.scale_factor());
-                tracing::info!("");
-                tracing::info!("⌨️  Waiting for input events...");
-                tracing::info!("   (Events will be logged as they occur)");
-                tracing::info!("   Note: Event logging is currently TODO in platform layer");
-                tracing::info!("");
-
-                // The platform.run() will keep the event loop running
-                // Window will stay responsive and handle messages
-                // The background thread will call quit after 30 seconds
-            }
-            Err(e) => {
-                tracing::error!("❌ Failed to create window: {}", e);
-                platform_clone.quit();
-            }
-        }
+        tracing::info!("Platform ready, window is open");
+        // Keep window alive via closure capture
+        let _window = window;
     }));
 
-    tracing::info!("🏁 Application finished!");
+    tracing::info!("Application finished!");
 }

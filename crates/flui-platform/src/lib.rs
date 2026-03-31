@@ -160,7 +160,6 @@ pub mod window;
 
 // Re-export configuration types
 // ==================== Platform Detection ====================
-use std::sync::Arc;
 
 pub use config::{FullscreenMonitor, WindowConfiguration};
 // Re-export cursor types
@@ -306,26 +305,26 @@ pub use traits::{
 ///     // Use Windows-specific features
 /// }
 /// ```
-pub fn current_platform() -> anyhow::Result<Arc<dyn Platform>> {
+pub fn current_platform() -> anyhow::Result<Box<dyn Platform>> {
     // Check for headless mode via environment variable (CI/testing)
     if std::env::var("FLUI_HEADLESS").is_ok() {
         tracing::info!("FLUI_HEADLESS detected, using headless platform");
-        return Ok(Arc::new(HeadlessPlatform::new()));
+        return Ok(Box::new(HeadlessPlatform::new()));
     }
 
     #[cfg(windows)]
     {
-        Ok(Arc::new(WindowsPlatform::new()?))
+        Ok(Box::new(WindowsPlatform::new()?))
     }
 
     #[cfg(all(target_os = "macos", not(windows)))]
     {
-        Ok(Arc::new(MacOSPlatform::new()?))
+        Ok(Box::new(MacOSPlatform::new()?))
     }
 
     #[cfg(all(target_os = "linux", not(any(windows, target_os = "macos"))))]
     {
-        Ok(Arc::new(LinuxPlatform::new()?))
+        Ok(Box::new(LinuxPlatform::new()?))
     }
 
     #[cfg(all(
@@ -350,7 +349,7 @@ pub fn current_platform() -> anyhow::Result<Arc<dyn Platform>> {
         ))
     ))]
     {
-        Ok(Arc::new(IOSPlatform::new()?))
+        Ok(Box::new(IOSPlatform::new()?))
     }
 
     #[cfg(all(
@@ -364,7 +363,7 @@ pub fn current_platform() -> anyhow::Result<Arc<dyn Platform>> {
         ))
     ))]
     {
-        Ok(Arc::new(WebPlatform::new()?))
+        Ok(Box::new(WebPlatform::new()?))
     }
 
     #[cfg(not(any(
@@ -395,6 +394,6 @@ pub fn current_platform() -> anyhow::Result<Arc<dyn Platform>> {
 /// let platform = headless_platform();
 /// assert_eq!(platform.name(), "Headless");
 /// ```
-pub fn headless_platform() -> Arc<dyn Platform> {
-    Arc::new(HeadlessPlatform::new())
+pub fn headless_platform() -> Box<dyn Platform> {
+    Box::new(HeadlessPlatform::new())
 }

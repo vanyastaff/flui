@@ -56,18 +56,15 @@ impl Default for WindowOptions {
 /// needed to restore from each state. This design ensures type-safety:
 /// restoration data is only available when in the corresponding state.
 ///
-/// # Platform-specific notes
-///
-/// - **Windows**: `restore_style` stores WS_* window style bits
-/// - **macOS**: Would store NSWindow style mask
-/// - **Linux**: Would store window manager hints
+/// Platform-specific restoration data (e.g., window style bits) should be
+/// stored in the platform's own `WindowContext` or equivalent struct.
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// match window_mode {
 ///     WindowMode::Normal => println!("Window is in normal state"),
-///     WindowMode::Fullscreen { restore_style, restore_bounds } => {
+///     WindowMode::Fullscreen { restore_bounds } => {
 ///         println!("Window is fullscreen, can restore to {:?}", restore_bounds);
 ///     }
 ///     _ => {}
@@ -93,13 +90,6 @@ pub enum WindowMode {
 
     /// Window is in fullscreen mode
     Fullscreen {
-        /// Window style bits before fullscreen (platform-specific)
-        ///
-        /// - Windows: WS_OVERLAPPEDWINDOW, WS_POPUP, etc.
-        /// - macOS: NSWindowStyleMask bits
-        /// - Linux: X11/Wayland window type atoms
-        restore_style: u32,
-
         /// Bounds before fullscreen for restoration
         restore_bounds: Bounds<DevicePixels>,
     },
@@ -189,12 +179,15 @@ pub trait Platform: Send + Sync + 'static {
 
     /// Run the platform event loop
     ///
-    /// This function takes ownership of the current thread and runs the
-    /// platform's event loop. The `on_ready` callback is invoked once the
-    /// platform is initialized and ready to create windows.
+    /// This function takes ownership of the platform and the current thread,
+    /// running the platform's event loop. The `on_ready` callback is invoked
+    /// once the platform is initialized and ready to create windows.
+    ///
+    /// Takes `self: Box<Self>` because some backends (e.g. winit) require
+    /// ownership of the event loop to run it.
     ///
     /// This function only returns when the application quits.
-    fn run(&self, on_ready: Box<dyn FnOnce()>);
+    fn run(self: Box<Self>, on_ready: Box<dyn FnOnce()>);
 
     /// Request the application to quit
     ///
@@ -386,14 +379,6 @@ pub enum WindowEvent {
 
     /// Window focus changed
     FocusChanged { window_id: WindowId, focused: bool },
-
-    /// Window gained focus (deprecated, use FocusChanged)
-    #[deprecated(note = "Use FocusChanged instead")]
-    Focused(WindowId),
-
-    /// Window lost focus (deprecated, use FocusChanged)
-    #[deprecated(note = "Use FocusChanged instead")]
-    Unfocused(WindowId),
 
     /// Window was resized (size in device pixels)
     Resized {

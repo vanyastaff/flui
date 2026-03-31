@@ -97,7 +97,7 @@ impl Platform for MacOSPlatform {
         Arc::clone(&self.foreground_executor) as Arc<dyn PlatformExecutor>
     }
 
-    fn run(&self, on_finish_launching: Box<dyn FnOnce()>) {
+    fn run(self: Box<Self>, on_finish_launching: Box<dyn FnOnce()>) {
         unsafe {
             // Call the launch callback
             on_finish_launching();
@@ -171,12 +171,12 @@ impl Platform for MacOSPlatform {
 
     fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
         let mut handlers = self.handlers.lock();
-        handlers.on_quit = Some(callback);
+        handlers.quit = Some(callback);
     }
 
     fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>) {
         let mut handlers = self.handlers.lock();
-        handlers.on_window_event = Some(callback);
+        handlers.window_event = Some(callback);
     }
 
     fn app_path(&self) -> Result<std::path::PathBuf> {

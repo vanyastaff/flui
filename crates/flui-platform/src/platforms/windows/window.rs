@@ -174,6 +174,7 @@ impl WindowsWindow {
                 config,
                 is_hovered: std::cell::Cell::new(false),
                 modifiers: std::cell::Cell::new(keyboard_types::Modifiers::empty()),
+                restore_style: std::cell::Cell::new(0),
             });
             let context_ptr = Box::into_raw(context);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, context_ptr as isize);
@@ -311,20 +312,20 @@ impl WindowsWindow {
 
             match current_mode {
                 WindowMode::Fullscreen {
-                    restore_style,
                     restore_bounds,
                 } => {
                     // Exit fullscreen - restore previous style and bounds
-                    tracing::info!("🪟 Exiting fullscreen mode");
+                    tracing::info!("Exiting fullscreen mode");
 
                     // Validate transition
                     let candidate = WindowMode::Normal;
                     if !current_mode.can_transition_to(&candidate) {
-                        tracing::warn!("⚠️  Cannot exit fullscreen: invalid state transition");
+                        tracing::warn!("Cannot exit fullscreen: invalid state transition");
                         return;
                     }
 
-                    // Restore window style
+                    // Restore window style from WindowContext
+                    let restore_style = ctx.restore_style.get();
                     SetWindowLongPtrW(hwnd, GWL_STYLE, restore_style as isize);
 
                     // Restore window position and size
@@ -350,14 +351,15 @@ impl WindowsWindow {
                 }
                 _ => {
                     // Enter fullscreen - save current state and go borderless on monitor
-                    tracing::info!("🖥️  Entering fullscreen mode");
+                    tracing::info!("Entering fullscreen mode");
 
                     // Get current window rect
                     let mut rect = RECT::default();
                     GetWindowRect(hwnd, &mut rect).ok();
 
-                    // Save current style
+                    // Save current style to WindowContext
                     let current_style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+                    ctx.restore_style.set(current_style);
 
                     // Save current bounds
                     let restore_bounds = Bounds {
@@ -370,12 +372,11 @@ impl WindowsWindow {
 
                     // Validate transition
                     let candidate = WindowMode::Fullscreen {
-                        restore_style: current_style,
                         restore_bounds,
                     };
                     if !current_mode.can_transition_to(&candidate) {
                         tracing::warn!(
-                            "⚠️  Cannot enter fullscreen: invalid state transition from {:?}",
+                            "Cannot enter fullscreen: invalid state transition from {:?}",
                             current_mode
                         );
                         return;

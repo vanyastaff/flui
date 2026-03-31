@@ -384,10 +384,26 @@ impl Platform for WinitPlatform {
         self.with_state(|state| state.foreground_executor.clone())
     }
 
-    fn run(&self, _on_ready: Box<dyn FnOnce()>) {
-        // This method can't actually run the event loop because it takes &self
-        // Users should call run_event_loop() instead
-        panic!("Use WinitPlatform::run_event_loop() instead of Platform::run()");
+    fn run(self: Box<Self>, on_ready: Box<dyn FnOnce()>) {
+        tracing::info!("Starting winit event loop via Platform::run()");
+
+        let event_loop = match EventLoop::builder().build() {
+            Ok(el) => el,
+            Err(e) => {
+                tracing::error!("Failed to create winit event loop: {:?}", e);
+                return;
+            }
+        };
+
+        let platform = Arc::new(*self);
+        let mut app = WinitApp {
+            platform,
+            on_ready: Some(on_ready),
+        };
+
+        if let Err(e) = event_loop.run_app(&mut app) {
+            tracing::error!("Winit event loop error: {:?}", e);
+        }
     }
 
     fn quit(&self) {

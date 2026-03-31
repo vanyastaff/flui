@@ -51,6 +51,11 @@ pub(super) struct WindowContext {
     pub is_hovered: std::cell::Cell<bool>,
     /// Current keyboard modifiers (T035)
     pub modifiers: std::cell::Cell<keyboard_types::Modifiers>,
+    /// Window style bits before fullscreen (Windows-specific: WS_OVERLAPPEDWINDOW, etc.)
+    ///
+    /// Stored here instead of in `WindowMode` to keep the cross-platform enum
+    /// free of platform-specific fields.
+    pub restore_style: std::cell::Cell<u32>,
 }
 
 impl WindowContext {
@@ -818,7 +823,7 @@ impl Platform for WindowsPlatform {
 
     // ==================== Lifecycle ====================
 
-    fn run(&self, on_ready: Box<dyn FnOnce()>) {
+    fn run(self: Box<Self>, on_ready: Box<dyn FnOnce()>) {
         tracing::info!("Running Windows platform");
 
         // Call ready callback

@@ -138,7 +138,7 @@ impl Platform for LinuxPlatform {
         unimplemented!("Linux main thread executor not implemented")
     }
 
-    fn run(&self, _on_finish_launching: Box<dyn FnOnce()>) {
+    fn run(self: Box<Self>, _on_finish_launching: Box<dyn FnOnce()>) {
         unimplemented!("Linux event loop (Wayland/X11) not implemented")
     }
 

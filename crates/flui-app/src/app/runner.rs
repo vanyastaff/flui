@@ -106,118 +106,118 @@ where
     tracing::info!("Starting desktop platform via flui-platform");
 
     let platform = flui_platform::current_platform().expect("Failed to initialize platform");
-    let platform_inner = Arc::clone(&platform);
 
-    platform.run(Box::new(move || {
-        // 1. Open window
-        let options: WindowOptions = (&config).into();
-        let window = platform_inner
-            .open_window(options)
-            .expect("Failed to create window");
+    // 1. Open window before run() since run() takes ownership
+    let options: WindowOptions = (&config).into();
+    let window = platform
+        .open_window(options)
+        .expect("Failed to create window");
 
-        // 2. Create GPU renderer directly (no DesktopEmbedder)
-        let phys_size = window.physical_size();
-        let renderer = pollster::block_on(async {
-            let handle = PlatformWindowHandle(window.as_ref());
-            Renderer::new(&handle).await
-        });
-        let mut renderer = match renderer {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::error!("GPU init failed: {:?}", e);
-                platform_inner.quit();
-                return;
-            }
+    // 2. Create GPU renderer directly (no DesktopEmbedder)
+    let phys_size = window.physical_size();
+    let renderer = pollster::block_on(async {
+        let handle = PlatformWindowHandle(window.as_ref());
+        Renderer::new(&handle).await
+    });
+    let mut renderer = match renderer {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("GPU init failed: {:?}", e);
+            return;
+        }
+    };
+    renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
+
+    // 3. Mount root widget
+    mount_root(&root, phys_size.width.0 as f32, phys_size.height.0 as f32);
+
+    // 4. Wrap renderer for callback sharing
+    let renderer = Arc::new(Mutex::new(renderer));
+
+    // 5. Register input callback -> AppBinding::handle_input()
+    window.on_input(Box::new(move |input: PlatformInput| {
+        AppBinding::instance().handle_input(input);
+        DispatchEventResult {
+            propagate: false,
+            default_prevented: true,
+        }
+    }));
+
+    // 6. Register frame callback -> scheduler + AppBinding::render_frame()
+    let renderer_frame = Arc::clone(&renderer);
+    window.on_request_frame(Box::new(move || {
+        let binding = AppBinding::instance();
+
+        // On-demand rendering: skip frame if nothing changed
+        if !binding.needs_redraw() && !binding.has_pending_work() {
+            return;
+        }
+
+        let now = web_time::Instant::now();
+
+        // Scheduler callbacks (animations)
+        let scheduler = Scheduler::instance();
+        let _frame_id = scheduler.handle_begin_frame(now);
+        scheduler.handle_draw_frame();
+
+        // Render frame via AppBinding
+        let mut r = renderer_frame.lock();
+        binding.render_frame(&mut r);
+    }));
+
+    // 7. Register resize callback -> renderer.resize()
+    let renderer_resize = Arc::clone(&renderer);
+    window.on_resize(Box::new(move |size, scale_factor| {
+        let w = (size.width.0 * scale_factor) as u32;
+        let h = (size.height.0 * scale_factor) as u32;
+        renderer_resize.lock().resize(w, h);
+        AppBinding::instance().request_redraw();
+    }));
+
+    // 8. Lifecycle callbacks
+
+    // Platform quit -> transition to Terminating
+    platform.on_quit(Box::new(|| {
+        tracing::info!("Platform quit");
+        AppBinding::instance().transition_lifecycle(LifecycleEvent::Terminating);
+    }));
+
+    // Window close -> log and let the platform handle quit
+    // (Windows window proc already calls PostQuitMessage on WM_DESTROY)
+    window.on_close(Box::new(move || {
+        tracing::info!("Window closed");
+    }));
+
+    // Window should-close -> allow by default
+    window.on_should_close(Box::new(|| {
+        tracing::debug!("Window close requested, allowing");
+        true
+    }));
+
+    // Window active status -> lifecycle Activated/Deactivated
+    window.on_active_status_change(Box::new(|active| {
+        let event = if active {
+            LifecycleEvent::Activated
+        } else {
+            LifecycleEvent::Deactivated
         };
-        renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
+        AppBinding::instance().transition_lifecycle(event);
+    }));
 
-        // 3. Mount root widget
-        mount_root(&root, phys_size.width.0 as f32, phys_size.height.0 as f32);
+    // Mark lifecycle as started
+    AppBinding::instance().transition_lifecycle(LifecycleEvent::Started);
 
-        // 4. Wrap renderer for callback sharing
-        let renderer = Arc::new(Mutex::new(renderer));
+    // 9. Request initial redraw
+    window.request_redraw();
 
-        // 5. Register input callback → AppBinding::handle_input()
-        window.on_input(Box::new(move |input: PlatformInput| {
-            AppBinding::instance().handle_input(input);
-            DispatchEventResult {
-                propagate: false,
-                default_prevented: true,
-            }
-        }));
+    // 10. Store window in AppBinding for runtime access
+    AppBinding::instance().set_window(window);
 
-        // 6. Register frame callback → scheduler + AppBinding::render_frame()
-        let renderer_frame = Arc::clone(&renderer);
-        window.on_request_frame(Box::new(move || {
-            let binding = AppBinding::instance();
+    tracing::info!("Desktop platform initialized with callbacks");
 
-            // On-demand rendering: skip frame if nothing changed
-            if !binding.needs_redraw() && !binding.has_pending_work() {
-                return;
-            }
-
-            let now = web_time::Instant::now();
-
-            // Scheduler callbacks (animations)
-            let scheduler = Scheduler::instance();
-            let _frame_id = scheduler.handle_begin_frame(now);
-            scheduler.handle_draw_frame();
-
-            // Render frame via AppBinding
-            let mut r = renderer_frame.lock();
-            binding.render_frame(&mut r);
-        }));
-
-        // 7. Register resize callback → renderer.resize()
-        let renderer_resize = Arc::clone(&renderer);
-        window.on_resize(Box::new(move |size, scale_factor| {
-            let w = (size.width.0 * scale_factor) as u32;
-            let h = (size.height.0 * scale_factor) as u32;
-            renderer_resize.lock().resize(w, h);
-            AppBinding::instance().request_redraw();
-        }));
-
-        // 8. Lifecycle callbacks
-
-        // Platform quit → transition to Terminating
-        platform_inner.on_quit(Box::new(|| {
-            tracing::info!("Platform quit");
-            AppBinding::instance().transition_lifecycle(LifecycleEvent::Terminating);
-        }));
-
-        // Window close → request platform quit
-        let platform_for_close = Arc::clone(&platform_inner);
-        window.on_close(Box::new(move || {
-            tracing::info!("Window closed");
-            platform_for_close.quit();
-        }));
-
-        // Window should-close → allow by default
-        window.on_should_close(Box::new(|| {
-            tracing::debug!("Window close requested, allowing");
-            true
-        }));
-
-        // Window active status → lifecycle Activated/Deactivated
-        window.on_active_status_change(Box::new(|active| {
-            let event = if active {
-                LifecycleEvent::Activated
-            } else {
-                LifecycleEvent::Deactivated
-            };
-            AppBinding::instance().transition_lifecycle(event);
-        }));
-
-        // Mark lifecycle as started
-        AppBinding::instance().transition_lifecycle(LifecycleEvent::Started);
-
-        // 9. Request initial redraw
-        window.request_redraw();
-
-        // 10. Store window in AppBinding for runtime access
-        AppBinding::instance().set_window(window);
-
-        tracing::info!("Desktop platform initialized with callbacks");
+    // Run the event loop (takes ownership of the platform)
+    platform.run(Box::new(|| {
+        tracing::info!("Platform ready");
     }));
 }
 
@@ -360,128 +360,127 @@ where
 
     let hot_reload = Arc::new(Mutex::new(HotReloadDriver::new(&plugin_path)));
 
-    let platform = Arc::new(AndroidPlatform::new(app));
-    let platform_inner = Arc::clone(&platform);
+    let platform: Box<dyn Platform> = Box::new(AndroidPlatform::new(app));
 
-    platform.run(Box::new(move || {
-        // 1. Open window (wraps the existing ANativeWindow)
-        let options: WindowOptions = (&config).into();
-        let window = platform_inner
-            .open_window(options)
-            .expect("Failed to create Android window");
+    // 1. Open window (wraps the existing ANativeWindow) before run()
+    let options: WindowOptions = (&config).into();
+    let window = platform
+        .open_window(options)
+        .expect("Failed to create Android window");
 
-        // 2. Create GPU renderer (Vulkan backend on Android)
-        let phys_size = window.physical_size();
-        let renderer = pollster::block_on(async {
-            let handle = PlatformWindowHandle(window.as_ref());
-            Renderer::new(&handle).await
-        });
-        let mut renderer = match renderer {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::error!("GPU init failed: {:?}", e);
-                platform_inner.quit();
-                return;
-            }
-        };
-        renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
+    // 2. Create GPU renderer (Vulkan backend on Android)
+    let phys_size = window.physical_size();
+    let renderer = pollster::block_on(async {
+        let handle = PlatformWindowHandle(window.as_ref());
+        Renderer::new(&handle).await
+    });
+    let mut renderer = match renderer {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("GPU init failed: {:?}", e);
+            return;
+        }
+    };
+    renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
 
-        // 3. Mount root widget (used when no plugin is active)
-        mount_root(&root, phys_size.width.0 as f32, phys_size.height.0 as f32);
+    // 3. Mount root widget (used when no plugin is active)
+    mount_root(&root, phys_size.width.0 as f32, phys_size.height.0 as f32);
 
-        // 4. Wrap renderer for callback sharing
-        let renderer = Arc::new(Mutex::new(renderer));
+    // 4. Wrap renderer for callback sharing
+    let renderer = Arc::new(Mutex::new(renderer));
 
-        // 5. Register input callback → AppBinding::handle_input()
-        window.on_input(Box::new(move |input: PlatformInput| {
-            AppBinding::instance().handle_input(input);
-            DispatchEventResult {
-                propagate: false,
-                default_prevented: true,
-            }
-        }));
+    // 5. Register input callback -> AppBinding::handle_input()
+    window.on_input(Box::new(move |input: PlatformInput| {
+        AppBinding::instance().handle_input(input);
+        DispatchEventResult {
+            propagate: false,
+            default_prevented: true,
+        }
+    }));
 
-        // 6. Register frame callback — with hot-reload plugin override
-        let renderer_frame = Arc::clone(&renderer);
-        let hot_reload_frame = Arc::clone(&hot_reload);
-        window.on_request_frame(Box::new(move || {
-            let mut r = renderer_frame.lock();
-            let (w, h) = r.size();
-            let mut hr = hot_reload_frame.lock();
+    // 6. Register frame callback -- with hot-reload plugin override
+    let renderer_frame = Arc::clone(&renderer);
+    let hot_reload_frame = Arc::clone(&hot_reload);
+    window.on_request_frame(Box::new(move || {
+        let mut r = renderer_frame.lock();
+        let (w, h) = r.size();
+        let mut hr = hot_reload_frame.lock();
 
-            // Poll for plugin updates (mtime check, auto-reload)
-            hr.poll(w as f32, h as f32);
+        // Poll for plugin updates (mtime check, auto-reload)
+        hr.poll(w as f32, h as f32);
 
-            // If plugin is active, use its Scene instead of AppBinding's pipeline
-            if let Some(scene) = hr.build_scene(w as f32, h as f32) {
-                drop(hr);
-                if let Err(e) = r.render_scene(&scene) {
-                    tracing::error!("Plugin render failed: {:?}", e);
-                }
-                return;
-            }
+        // If plugin is active, use its Scene instead of AppBinding's pipeline
+        if let Some(scene) = hr.build_scene(w as f32, h as f32) {
             drop(hr);
-            drop(r);
-
-            // Normal path: use AppBinding's widget pipeline
-            let binding = AppBinding::instance();
-            if !binding.needs_redraw() && !binding.has_pending_work() {
-                return;
+            if let Err(e) = r.render_scene(&scene) {
+                tracing::error!("Plugin render failed: {:?}", e);
             }
+            return;
+        }
+        drop(hr);
+        drop(r);
 
-            let now = web_time::Instant::now();
-            let scheduler = Scheduler::instance();
-            let _frame_id = scheduler.handle_begin_frame(now);
-            scheduler.handle_draw_frame();
+        // Normal path: use AppBinding's widget pipeline
+        let binding = AppBinding::instance();
+        if !binding.needs_redraw() && !binding.has_pending_work() {
+            return;
+        }
 
-            let mut r = renderer_frame.lock();
-            binding.render_frame(&mut r);
-        }));
+        let now = web_time::Instant::now();
+        let scheduler = Scheduler::instance();
+        let _frame_id = scheduler.handle_begin_frame(now);
+        scheduler.handle_draw_frame();
 
-        // 7. Register resize callback → renderer.resize()
-        let renderer_resize = Arc::clone(&renderer);
-        window.on_resize(Box::new(move |size, scale_factor| {
-            let w = (size.width.0 * scale_factor) as u32;
-            let h = (size.height.0 * scale_factor) as u32;
-            renderer_resize.lock().resize(w, h);
-            AppBinding::instance().request_redraw();
-        }));
+        let mut r = renderer_frame.lock();
+        binding.render_frame(&mut r);
+    }));
 
-        // 8. Lifecycle callbacks
+    // 7. Register resize callback -> renderer.resize()
+    let renderer_resize = Arc::clone(&renderer);
+    window.on_resize(Box::new(move |size, scale_factor| {
+        let w = (size.width.0 * scale_factor) as u32;
+        let h = (size.height.0 * scale_factor) as u32;
+        renderer_resize.lock().resize(w, h);
+        AppBinding::instance().request_redraw();
+    }));
 
-        // Platform quit → transition to Terminating
-        platform_inner.on_quit(Box::new(|| {
-            tracing::info!("Platform quit");
-            AppBinding::instance().transition_lifecycle(LifecycleEvent::Terminating);
-        }));
+    // 8. Lifecycle callbacks
 
-        // Window close (fired by Android Destroy event)
-        let platform_for_close = Arc::clone(&platform_inner);
-        window.on_close(Box::new(move || {
-            tracing::info!("Window closed");
-            platform_for_close.quit();
-        }));
+    // Platform quit -> transition to Terminating
+    platform.on_quit(Box::new(|| {
+        tracing::info!("Platform quit");
+        AppBinding::instance().transition_lifecycle(LifecycleEvent::Terminating);
+    }));
 
-        // Window active status → lifecycle Activated/Deactivated
-        window.on_active_status_change(Box::new(|active| {
-            let event = if active {
-                LifecycleEvent::Activated
-            } else {
-                LifecycleEvent::Deactivated
-            };
-            AppBinding::instance().transition_lifecycle(event);
-        }));
+    // Window close (fired by Android Destroy event)
+    window.on_close(Box::new(move || {
+        tracing::info!("Window closed");
+    }));
 
-        // Mark lifecycle as started
-        AppBinding::instance().transition_lifecycle(LifecycleEvent::Started);
+    // Window active status -> lifecycle Activated/Deactivated
+    window.on_active_status_change(Box::new(|active| {
+        let event = if active {
+            LifecycleEvent::Activated
+        } else {
+            LifecycleEvent::Deactivated
+        };
+        AppBinding::instance().transition_lifecycle(event);
+    }));
 
-        // 9. Request initial redraw
-        window.request_redraw();
+    // Mark lifecycle as started
+    AppBinding::instance().transition_lifecycle(LifecycleEvent::Started);
 
-        // 10. Store window in AppBinding for runtime access
-        AppBinding::instance().set_window(window);
+    // 9. Request initial redraw
+    window.request_redraw();
 
-        tracing::info!("Android platform initialized with callbacks (hot-reload enabled)");
+    // 10. Store window in AppBinding for runtime access
+    AppBinding::instance().set_window(window);
+
+    tracing::info!("Android platform initialized with callbacks (hot-reload enabled)");
+
+    // Run the event loop (takes ownership of the platform)
+    platform.run(Box::new(|| {
+        tracing::info!("Android platform ready");
     }));
 }
 
@@ -504,8 +503,6 @@ fn run_web<V>(root: V, config: AppConfig)
 where
     V: View + StatelessView + Clone + Send + Sync + 'static,
 {
-    use std::sync::Arc;
-
     use flui_engine::wgpu::Renderer;
     use flui_foundation::HasInstance;
     use flui_platform::{
@@ -513,99 +510,98 @@ where
         traits::{DispatchEventResult, LifecycleEvent, PlatformInput},
     };
     use flui_scheduler::Scheduler;
-    use parking_lot::Mutex;
 
     use crate::embedder::PlatformWindowHandle;
 
     tracing::info!("Starting web platform via flui-platform");
 
     let platform = flui_platform::current_platform().expect("Failed to initialize web platform");
-    let platform_inner = Arc::clone(&platform);
 
-    platform.run(Box::new(move || {
-        // 1. Open window (creates canvas)
-        let options: WindowOptions = (&config).into();
-        let window = platform_inner
-            .open_window(options)
-            .expect("Failed to create canvas window");
+    // 1. Open window (creates canvas) before run() since run() takes ownership
+    let options: WindowOptions = (&config).into();
+    let window = platform
+        .open_window(options)
+        .expect("Failed to create canvas window");
 
-        // 2. Create GPU renderer via wasm-bindgen-futures (async on web)
-        let phys_size = window.physical_size();
-        let platform_quit = Arc::clone(&platform_inner);
-        let renderer_window = window.as_ref() as *const dyn flui_platform::PlatformWindow;
+    // 2. Create GPU renderer via wasm-bindgen-futures (async on web)
+    let phys_size = window.physical_size();
+    let renderer_window = window.as_ref() as *const dyn flui_platform::PlatformWindow;
 
-        // SAFETY: On wasm32, everything is single-threaded, the pointer remains valid
-        // within the spawn_local closure. We must use spawn_local because wgpu surface
-        // creation is async on web (WebGPU adapter request).
-        wasm_bindgen_futures::spawn_local(async move {
-            let window_ref = unsafe { &*renderer_window };
-            let handle = PlatformWindowHandle(window_ref);
-            let renderer = Renderer::new(&handle).await;
-            let mut renderer = match renderer {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::error!("GPU init failed: {:?}", e);
-                    platform_quit.quit();
-                    return;
-                }
-            };
-            renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
-            tracing::info!("WebGPU renderer initialized");
-        });
-
-        // 3. Mount root widget
-        mount_root(&root, phys_size.width.0 as f32, phys_size.height.0 as f32);
-
-        // 4. Register input callback
-        window.on_input(Box::new(move |input: PlatformInput| {
-            AppBinding::instance().handle_input(input);
-            DispatchEventResult {
-                propagate: false,
-                default_prevented: true,
-            }
-        }));
-
-        // 5. Register frame callback
-        window.on_request_frame(Box::new(move || {
-            let binding = AppBinding::instance();
-
-            if !binding.needs_redraw() && !binding.has_pending_work() {
+    // SAFETY: On wasm32, everything is single-threaded, the pointer remains valid
+    // within the spawn_local closure. We must use spawn_local because wgpu surface
+    // creation is async on web (WebGPU adapter request).
+    wasm_bindgen_futures::spawn_local(async move {
+        let window_ref = unsafe { &*renderer_window };
+        let handle = PlatformWindowHandle(window_ref);
+        let renderer = Renderer::new(&handle).await;
+        let mut renderer = match renderer {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!("GPU init failed: {:?}", e);
                 return;
             }
+        };
+        renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
+        tracing::info!("WebGPU renderer initialized");
+    });
 
-            let now = web_time::Instant::now();
-            let scheduler = Scheduler::instance();
-            let _frame_id = scheduler.handle_begin_frame(now);
-            scheduler.handle_draw_frame();
+    // 3. Mount root widget
+    let phys_size = window.physical_size();
+    mount_root(&root, phys_size.width.0 as f32, phys_size.height.0 as f32);
 
-            // Note: renderer is initialized async, frames without a renderer are no-ops
-        }));
+    // 4. Register input callback
+    window.on_input(Box::new(move |input: PlatformInput| {
+        AppBinding::instance().handle_input(input);
+        DispatchEventResult {
+            propagate: false,
+            default_prevented: true,
+        }
+    }));
 
-        // 6. Lifecycle callbacks
-        platform_inner.on_quit(Box::new(|| {
-            tracing::info!("Web platform quit");
-            AppBinding::instance().transition_lifecycle(LifecycleEvent::Terminating);
-        }));
+    // 5. Register frame callback
+    window.on_request_frame(Box::new(move || {
+        let binding = AppBinding::instance();
 
-        let platform_for_close = Arc::clone(&platform_inner);
-        window.on_close(Box::new(move || {
-            tracing::info!("Canvas window closed");
-            platform_for_close.quit();
-        }));
+        if !binding.needs_redraw() && !binding.has_pending_work() {
+            return;
+        }
 
-        window.on_active_status_change(Box::new(|active| {
-            let event = if active {
-                LifecycleEvent::Activated
-            } else {
-                LifecycleEvent::Deactivated
-            };
-            AppBinding::instance().transition_lifecycle(event);
-        }));
+        let now = web_time::Instant::now();
+        let scheduler = Scheduler::instance();
+        let _frame_id = scheduler.handle_begin_frame(now);
+        scheduler.handle_draw_frame();
 
-        // 7. Store window
-        AppBinding::instance().set_window(window);
+        // Note: renderer is initialized async, frames without a renderer are no-ops
+    }));
 
-        tracing::info!("Web platform initialized with callbacks");
+    // 6. Lifecycle callbacks
+    platform.on_quit(Box::new(|| {
+        tracing::info!("Web platform quit");
+        AppBinding::instance().transition_lifecycle(LifecycleEvent::Terminating);
+    }));
+
+    window.on_close(Box::new(move || {
+        tracing::info!("Canvas window closed");
+        // On web, no explicit quit mechanism needed
+    }));
+
+    window.on_active_status_change(Box::new(|active| {
+        let event = if active {
+            LifecycleEvent::Activated
+        } else {
+            LifecycleEvent::Deactivated
+        };
+        AppBinding::instance().transition_lifecycle(event);
+    }));
+
+    // 7. Store window
+    AppBinding::instance().set_window(window);
+
+    tracing::info!("Web platform initialized with callbacks");
+
+    // Run the event loop (takes ownership of the platform)
+    platform.run(Box::new(|| {
+        tracing::info!("Web platform ready");
     }));
 }
 

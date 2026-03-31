@@ -4,20 +4,20 @@ use flui_platform::{WindowOptions, current_platform};
 use flui_types::geometry::{Size, px};
 
 fn main() {
-    println!("🚀 FLUI Hello World!");
-    println!("Platform: {}", std::env::consts::OS);
-
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .init();
 
+    tracing::info!("FLUI Hello World!");
+    tracing::info!("Platform: {}", std::env::consts::OS);
+
     let platform = current_platform().expect("Failed to initialize platform");
-    println!("✅ Platform initialized: {:?}", platform.name());
+    tracing::info!("Platform initialized: {:?}", platform.name());
 
     let displays = platform.displays();
-    println!("📺 Found {} display(s):", displays.len());
+    tracing::info!("Found {} display(s):", displays.len());
     for (i, display) in displays.iter().enumerate() {
-        println!(
+        tracing::info!(
             "  Display {}: {} ({}x{} @ {:.1}x scale)",
             i + 1,
             display.name(),
@@ -27,10 +27,10 @@ fn main() {
         );
     }
 
-    println!("\n🪟 Creating window...");
+    tracing::info!("Creating window...");
 
     let window_options = WindowOptions {
-        title: "Hello FLUI! 👋".to_string(),
+        title: "Hello FLUI!".to_string(),
         size: Size::new(px(800.0), px(600.0)),
         resizable: true,
         visible: true,
@@ -39,23 +39,20 @@ fn main() {
         max_size: None,
     };
 
-    let platform_clone = platform.clone();
+    // Create window before running the event loop (run() takes ownership)
+    let window = platform
+        .open_window(window_options)
+        .expect("Failed to create window");
+    tracing::info!("Window created successfully!");
+    tracing::info!("   Logical size: {:?}", window.logical_size());
+    tracing::info!("   Physical size: {:?}", window.physical_size());
+    tracing::info!("   Scale factor: {:.1}x", window.scale_factor());
 
     platform.run(Box::new(move || {
-        match platform_clone.open_window(window_options) {
-            Ok(window) => {
-                println!("✅ Window created successfully!");
-                println!("   Logical size: {:?}", window.logical_size());
-                println!("   Physical size: {:?}", window.physical_size());
-                println!("   Scale factor: {:.1}x", window.scale_factor());
-                println!("\n⏱️  Window will stay open for 10 seconds...");
-                std::thread::sleep(std::time::Duration::from_secs(10));
-                println!("\n👋 Closing application...");
-            }
-            Err(e) => eprintln!("❌ Failed to create window: {}", e),
-        }
-        platform_clone.quit();
+        tracing::info!("Platform ready, window is open");
+        // Keep window alive via closure capture
+        let _window = window;
     }));
 
-    println!("🏁 Application finished!");
+    tracing::info!("Application finished!");
 }

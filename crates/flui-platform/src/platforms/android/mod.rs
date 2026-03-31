@@ -172,7 +172,7 @@ impl Platform for AndroidPlatform {
         self.background_executor.clone()
     }
 
-    fn run(&self, on_ready: Box<dyn FnOnce()>) {
+    fn run(self: Box<Self>, on_ready: Box<dyn FnOnce()>) {
         tracing::info!("Starting Android platform event loop");
 
         let mut on_ready = Some(on_ready);

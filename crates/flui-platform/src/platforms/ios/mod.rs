@@ -180,7 +180,7 @@ impl Platform for IOSPlatform {
         unimplemented!("iOS main queue executor not implemented")
     }
 
-    fn run(&self, _on_finish_launching: Box<dyn FnOnce()>) {
+    fn run(self: Box<Self>, _on_finish_launching: Box<dyn FnOnce()>) {
         unimplemented!("iOS UIApplicationMain run loop not implemented")
     }
 

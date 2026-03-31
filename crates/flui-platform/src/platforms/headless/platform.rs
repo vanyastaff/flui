@@ -94,7 +94,7 @@ impl Platform for HeadlessPlatform {
         self.with_state(|state| state.foreground_executor.clone())
     }
 
-    fn run(&self, on_ready: Box<dyn FnOnce()>) {
+    fn run(self: Box<Self>, on_ready: Box<dyn FnOnce()>) {
         tracing::info!("Starting headless platform (no event loop)");
 
         self.with_state(|state| {

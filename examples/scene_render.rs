@@ -125,97 +125,101 @@ fn main() {
     let platform = current_platform().expect("Failed to initialize platform");
     tracing::info!("Platform: {}", platform.name());
 
-    let platform_for_ready = platform.clone();
+    let title = if hot_reload.is_some() {
+        "FLUI Scene Render — Hot-Reload Active"
+    } else {
+        "FLUI Scene Render — GPU Compositor Proof"
+    };
+
+    let options = WindowOptions {
+        title: title.to_string(),
+        size: Size::new(px(800.0), px(600.0)),
+        resizable: true,
+        visible: true,
+        decorated: true,
+        min_size: None,
+        max_size: None,
+    };
+
+    // Create window before running the event loop (run() takes ownership)
+    let window: Arc<dyn PlatformWindow> = Arc::from(
+        platform
+            .open_window(options)
+            .expect("Failed to open window"),
+    );
+
+    tracing::info!(
+        "Window created: {:?} @ {:.1}x scale",
+        window.physical_size(),
+        window.scale_factor()
+    );
+
+    // Create Renderer from PlatformWindow
+    let handle = PlatformWindowHandle {
+        window: window.clone(),
+    };
+
+    let mut renderer =
+        pollster::block_on(Renderer::new(&handle)).expect("Failed to create GPU renderer");
+
+    let phys = window.physical_size();
+    renderer.resize(phys.width.0 as u32, phys.height.0 as u32);
+
+    tracing::info!(
+        "GPU: {} ({:?})",
+        renderer.capabilities().adapter_name,
+        renderer.capabilities().backend
+    );
+
+    let renderer = Arc::new(Mutex::new(renderer));
+
+    // Register frame callback — build scene and render each frame
+    let renderer_frame = Arc::clone(&renderer);
+    let window_for_frame = window.clone();
+    let hot_reload_frame = hot_reload.clone();
+    window.on_request_frame(Box::new(move || {
+        let size = window_for_frame.physical_size();
+        let w = size.width.0 as f32;
+        let h = size.height.0 as f32;
+
+        // If hot-reload is enabled, poll for plugin updates and use plugin scene
+        let scene = if let Some(ref hr) = hot_reload_frame {
+            let mut driver = hr.lock().unwrap();
+            driver.poll(w, h);
+            driver.build_scene_or(w, h, build_test_scene)
+        } else {
+            build_test_scene(w, h)
+        };
+
+        // Render scene through the full pipeline
+        let mut r = renderer_frame.lock().unwrap();
+        if let Err(e) = r.render_scene(&scene) {
+            tracing::error!("render_scene failed: {:?}", e);
+        }
+    }));
+
+    // Register resize callback
+    let renderer_resize = Arc::clone(&renderer);
+    window.on_resize(Box::new(move |size, scale_factor| {
+        let w = (size.width.0 * scale_factor) as u32;
+        let h = (size.height.0 * scale_factor) as u32;
+        renderer_resize.lock().unwrap().resize(w, h);
+    }));
+
+    // Request first frame
+    window.request_redraw();
+
+    if hot_reload.is_some() {
+        tracing::info!("Scene render with hot-reload — edit plugin and rebuild to see changes");
+    } else {
+        tracing::info!("Scene render pipeline active — set FLUI_SCENE_PLUGIN for hot-reload");
+    }
 
     platform.run(Box::new(move || {
-        let title = if hot_reload.is_some() {
-            "FLUI Scene Render — Hot-Reload Active"
-        } else {
-            "FLUI Scene Render — GPU Compositor Proof"
-        };
-
-        let options = WindowOptions {
-            title: title.to_string(),
-            size: Size::new(px(800.0), px(600.0)),
-            resizable: true,
-            visible: true,
-            decorated: true,
-            min_size: None,
-            max_size: None,
-        };
-
-        let window: Arc<dyn PlatformWindow> = Arc::from(
-            platform_for_ready
-                .open_window(options)
-                .expect("Failed to open window"),
-        );
-
-        tracing::info!(
-            "Window created: {:?} @ {:.1}x scale",
-            window.physical_size(),
-            window.scale_factor()
-        );
-
-        // Create Renderer from PlatformWindow
-        let handle = PlatformWindowHandle {
-            window: window.clone(),
-        };
-
-        let mut renderer =
-            pollster::block_on(Renderer::new(&handle)).expect("Failed to create GPU renderer");
-
-        let phys = window.physical_size();
-        renderer.resize(phys.width.0 as u32, phys.height.0 as u32);
-
-        tracing::info!(
-            "GPU: {} ({:?})",
-            renderer.capabilities().adapter_name,
-            renderer.capabilities().backend
-        );
-
-        let renderer = Arc::new(Mutex::new(renderer));
-
-        // Register frame callback — build scene and render each frame
-        let renderer_frame = Arc::clone(&renderer);
-        let window_for_frame = window.clone();
-        let hot_reload_frame = hot_reload.clone();
-        window.on_request_frame(Box::new(move || {
-            let size = window_for_frame.physical_size();
-            let w = size.width.0 as f32;
-            let h = size.height.0 as f32;
-
-            // If hot-reload is enabled, poll for plugin updates and use plugin scene
-            let scene = if let Some(ref hr) = hot_reload_frame {
-                let mut driver = hr.lock().unwrap();
-                driver.poll(w, h);
-                driver.build_scene_or(w, h, build_test_scene)
-            } else {
-                build_test_scene(w, h)
-            };
-
-            // Render scene through the full pipeline
-            let mut r = renderer_frame.lock().unwrap();
-            if let Err(e) = r.render_scene(&scene) {
-                tracing::error!("render_scene failed: {:?}", e);
-            }
-        }));
-
-        // Register resize callback
-        let renderer_resize = Arc::clone(&renderer);
-        window.on_resize(Box::new(move |size, scale_factor| {
-            let w = (size.width.0 * scale_factor) as u32;
-            let h = (size.height.0 * scale_factor) as u32;
-            renderer_resize.lock().unwrap().resize(w, h);
-        }));
-
-        // Request first frame
-        window.request_redraw();
-
-        if hot_reload.is_some() {
-            tracing::info!("Scene render with hot-reload — edit plugin and rebuild to see changes");
-        } else {
-            tracing::info!("Scene render pipeline active — set FLUI_SCENE_PLUGIN for hot-reload");
-        }
+        tracing::info!("Platform ready");
+        // Keep resources alive via closure capture
+        let _window = &window;
+        let _renderer = &renderer;
     }));
 
     tracing::info!("Application finished");

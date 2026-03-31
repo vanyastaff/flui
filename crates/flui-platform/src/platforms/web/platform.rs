@@ -103,7 +103,7 @@ impl Platform for WebPlatform {
         self.with_state(|s| s.foreground_executor.clone())
     }
 
-    fn run(&self, on_ready: Box<dyn FnOnce()>) {
+    fn run(self: Box<Self>, on_ready: Box<dyn FnOnce()>) {
         tracing::info!("Starting web platform");
 
         self.with_state(|s| s.is_running = true);
