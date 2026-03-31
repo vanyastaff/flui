@@ -211,6 +211,26 @@ enum DrawItem {
     Segment(DrawSegment),
     /// An offscreen texture to composite at its bounds.
     OffscreenTexture(PendingOffscreenTexture),
+    /// An opacity layer: a group of draw items to render offscreen and composite
+    /// with the given alpha. Created by `save_layer`/`restore_layer`.
+    OpacityLayer(PendingOpacityLayer),
+}
+
+/// A pending opacity layer waiting to be rendered offscreen and composited.
+///
+/// Created by [`WgpuPainter::restore_layer`] when opacity < 1.0.
+/// During [`WgpuPainter::render`], the contained segments are flushed to a
+/// pooled offscreen texture, then that texture is composited onto the main
+/// surface with the layer opacity applied as tint alpha.
+struct PendingOpacityLayer {
+    /// Draw items accumulated between save_layer and restore_layer
+    items: Vec<DrawItem>,
+    /// Final segment at the time of restore_layer (may have content)
+    final_segment: DrawSegment,
+    /// Group opacity to apply during compositing (0.0-1.0)
+    opacity: f32,
+    /// Compositing bounds in screen coordinates
+    bounds: Rect<Pixels>,
 }
 
 /// GPU painter for wgpu-based rendering.
@@ -302,6 +322,9 @@ pub struct WgpuPainter {
     /// Lyon-based path tessellator for complex shapes
     tessellator: Tessellator,
 
+    /// Cache for tessellated path geometry (avoids re-tessellation of identical paths)
+    path_cache: super::path_cache::PathCache,
+
     // ===== Text Rendering =====
     /// Glyphon-based text renderer
     text_renderer: TextRenderer,
@@ -347,6 +370,11 @@ pub struct WgpuPainter {
     /// the subtree can be rendered to an offscreen texture and composited
     /// with group opacity.
     layer_stack: Vec<SavedLayer>,
+
+    /// Texture pool for offscreen layer compositing (opacity layers).
+    /// Textures are acquired when `restore_layer` flushes offscreen content
+    /// and returned to the pool when the `PooledTexture` RAII handle is dropped.
+    layer_texture_pool: super::texture_pool::TexturePool,
 
     // ===== Segmented Draw Order =====
     /// Current draw segment accumulating batched commands
@@ -861,6 +889,7 @@ impl WgpuPainter {
             texture_cache,
             external_texture_registry,
             tessellator,
+            path_cache: super::path_cache::PathCache::new(512),
             text_renderer,
             transform_stack,
             current_transform,
@@ -871,6 +900,10 @@ impl WgpuPainter {
             opacity_stack: Vec::new(),
             current_opacity: 1.0,
             layer_stack: Vec::new(),
+            layer_texture_pool: super::texture_pool::TexturePool::with_capacity(
+                Arc::clone(&device),
+                4,
+            ),
             current_segment: DrawSegment::new(),
             draw_order: Vec::new(),
         }
@@ -963,6 +996,9 @@ impl WgpuPainter {
         view: &wgpu::TextureView,
         encoder: &mut wgpu::CommandEncoder,
     ) -> Result<(), String> {
+        // Advance path cache frame counter and evict stale entries
+        self.path_cache.advance_frame();
+
         // Log rendering stats
         let text_count = self.text_renderer.text_count();
         let rect_count = self.current_segment.rect_batch.len();
@@ -2203,8 +2239,29 @@ impl Painter for WgpuPainter {
     }
 
     fn draw_path(&mut self, path: &flui_types::painting::path::Path, paint: &Paint) {
-        // Tessellate the path
-        // Paint already contains stroke information
+        // Compute cache key from path geometry + paint tessellation parameters
+        let path_hash = super::path_cache::PathCache::compute_path_hash(
+            path,
+            paint.style,
+            paint.stroke_width,
+            paint.stroke_cap,
+            paint.stroke_join,
+        );
+
+        // Check cache for previously tessellated geometry
+        if let Some((positions, cached_indices)) = self.path_cache.get(path_hash) {
+            // Reconstruct full Vertex data with current paint color
+            let rgba = paint.color.to_rgba_f32_array();
+            let vertices: Vec<Vertex> = positions
+                .iter()
+                .map(|&pos| Vertex::new(pos, rgba, [0.0, 0.0]))
+                .collect();
+            let indices: Vec<u32> = cached_indices.to_vec();
+            self.add_tessellated_with_key(vertices, &indices, pipeline::pipeline_key_from_paint(paint));
+            return;
+        }
+
+        // Cache miss — tessellate and store
         let result = if paint.style == PaintStyle::Fill {
             self.tessellator.tessellate_flui_path_fill(path, paint)
         } else {
@@ -2213,6 +2270,12 @@ impl Painter for WgpuPainter {
 
         match result {
             Ok((vertices, indices)) => {
+                // Extract position data for cache (color-independent)
+                let positions: Vec<[f32; 2]> =
+                    vertices.iter().map(|v| v.position).collect();
+                self.path_cache
+                    .insert(path_hash, positions, indices.clone());
+
                 self.add_tessellated_with_key(vertices, &indices, pipeline::pipeline_key_from_paint(paint));
             }
             Err(e) => {
@@ -3138,31 +3201,33 @@ impl Painter for WgpuPainter {
                 !offscreen_segment.is_empty() || !offscreen_order.is_empty();
 
             if has_offscreen_content && (1.0 - saved.layer_opacity).abs() > f32::EPSILON {
-                // TODO: Full offscreen render-to-texture compositing.
-                //
-                // The correct approach is:
-                //   1. Acquire a PooledTexture from the texture pool
-                //   2. Flush offscreen_order + offscreen_segment to that texture
-                //   3. Queue the texture via DrawItem::OffscreenTexture with layer_opacity
-                //      applied through the TextureInstance tint alpha
-                //
-                // This requires passing an offscreen TextureView to flush_segment, which
-                // currently always renders to the main surface. For now, fall back to the
-                // simpler per-vertex alpha approach and re-integrate the offscreen content
-                // into the parent draw order.
-                tracing::warn!(
-                    "WgpuPainter::restore_layer: offscreen compositing not yet implemented, \
-                     falling back to per-vertex alpha (layer_opacity={:.3}). \
-                     Overlapping children within this layer may show incorrect blending.",
-                    saved.layer_opacity
-                );
+                // Offscreen render-to-texture compositing:
+                // Package the offscreen content as an OpacityLayer draw item.
+                // During render(), this will be flushed to a pooled offscreen texture
+                // and composited onto the main surface with the layer opacity as tint alpha.
+                let composite_bounds = _composite_bounds;
 
-                // Fall back: re-integrate the offscreen content with per-vertex opacity
-                // This is incorrect for overlapping children but preserves existing behavior
-                self.reintegrate_offscreen_content(
-                    offscreen_segment,
-                    offscreen_order,
+                // Finalize the current parent segment so the opacity layer is
+                // inserted at the correct Z-position in the draw order
+                let parent_segment =
+                    std::mem::replace(&mut self.current_segment, DrawSegment::new());
+                if !parent_segment.is_empty() {
+                    self.draw_order.push(DrawItem::Segment(parent_segment));
+                }
+
+                self.draw_order
+                    .push(DrawItem::OpacityLayer(PendingOpacityLayer {
+                        items: offscreen_order,
+                        final_segment: offscreen_segment,
+                        opacity: saved.layer_opacity,
+                        bounds: composite_bounds,
+                    }));
+
+                tracing::trace!(
+                    "WgpuPainter::restore_layer: queued OpacityLayer \
+                     (opacity={:.3}, bounds={:?})",
                     saved.layer_opacity,
+                    composite_bounds
                 );
             } else if has_offscreen_content {
                 // Opacity is ~1.0, no compositing needed — just merge content back

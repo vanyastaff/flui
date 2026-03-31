@@ -345,7 +345,7 @@ impl PartialEq for Paint {
 }
 
 /// Paint style: fill or stroke.
-#[derive(Clone, Debug, Default, Copy, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PaintStyle {
     /// Fill the interior.

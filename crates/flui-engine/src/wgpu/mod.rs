@@ -69,6 +69,7 @@ mod multi_draw;
 pub mod occlusion;
 mod offscreen;
 mod painter;
+pub mod path_cache;
 #[allow(dead_code)]
 mod pipeline;
 mod pipelines;
