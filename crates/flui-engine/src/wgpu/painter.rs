@@ -861,6 +861,10 @@ impl WgpuPainter {
         let external_texture_registry =
             super::external_texture_registry::ExternalTextureRegistry::new(device.clone());
 
+        // Create texture pool for opacity layer offscreen compositing
+        let layer_texture_pool =
+            super::texture_pool::TexturePool::with_capacity(Arc::clone(&device), 4);
+
         Self {
             device,
             queue,
@@ -900,10 +904,7 @@ impl WgpuPainter {
             opacity_stack: Vec::new(),
             current_opacity: 1.0,
             layer_stack: Vec::new(),
-            layer_texture_pool: super::texture_pool::TexturePool::with_capacity(
-                Arc::clone(&device),
-                4,
-            ),
+            layer_texture_pool,
             current_segment: DrawSegment::new(),
             draw_order: Vec::new(),
         }
@@ -1038,6 +1039,9 @@ impl WgpuPainter {
                     self.flush_texture_batch(encoder, view, p.texture.view());
                     // p.texture dropped here, returns to pool
                 }
+                DrawItem::OpacityLayer(layer) => {
+                    self.flush_opacity_layer(layer, encoder, view);
+                }
             }
         }
 
@@ -1088,6 +1092,111 @@ impl WgpuPainter {
 
         // Swap back (now empty after flush)
         std::mem::swap(&mut self.current_segment, seg);
+    }
+
+    /// Flush an opacity layer by rendering its content to an offscreen texture
+    /// and compositing the result onto the main surface with group opacity.
+    ///
+    /// This implements correct group opacity: all children within the layer
+    /// are first rendered to an offscreen texture at full opacity, then the
+    /// entire texture is composited with the layer's alpha. This avoids the
+    /// incorrect per-primitive alpha blending that occurs when overlapping
+    /// children each have independent alpha applied.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    fn flush_opacity_layer(
+        &mut self,
+        mut layer: PendingOpacityLayer,
+        encoder: &mut wgpu::CommandEncoder,
+        main_view: &wgpu::TextureView,
+    ) {
+        // Use the full viewport size for the offscreen texture.
+        // Segments contain viewport-space coordinates, so using the full viewport
+        // avoids coordinate translation. The transparent clear ensures only the
+        // actually-drawn region contributes to the composite.
+        let (vp_w, vp_h) = self.size;
+        if vp_w == 0 || vp_h == 0 {
+            return;
+        }
+
+        // Acquire a pooled offscreen texture
+        let offscreen = self
+            .layer_texture_pool
+            .acquire(vp_w, vp_h, self.surface_format);
+        let offscreen_view = offscreen.view();
+
+        // Clear the offscreen texture to fully transparent
+        {
+            let _clear_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Opacity Layer Clear Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: offscreen_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            // Pass dropped immediately — just clearing
+        }
+
+        // Flush all inner draw items to the offscreen texture
+        for item in layer.items.drain(..) {
+            match item {
+                DrawItem::Segment(mut seg) => {
+                    self.flush_segment(&mut seg, encoder, offscreen_view);
+                }
+                DrawItem::OffscreenTexture(p) => {
+                    let instance = super::instancing::TextureInstance::new(
+                        p.bounds,
+                        flui_types::styling::Color::WHITE,
+                    );
+                    let _ = self.texture_batch.add(instance);
+                    self.flush_texture_batch(encoder, offscreen_view, p.texture.view());
+                }
+                DrawItem::OpacityLayer(nested) => {
+                    // Recursively handle nested opacity layers
+                    self.flush_opacity_layer(nested, encoder, offscreen_view);
+                }
+            }
+        }
+
+        // Flush the final segment (content drawn after the last draw order item)
+        if !layer.final_segment.is_empty() {
+            self.flush_segment(&mut layer.final_segment, encoder, offscreen_view);
+        }
+
+        // Composite the offscreen texture onto the main surface with group opacity.
+        // The tint color is white with the layer opacity as alpha, so the texture
+        // shader multiplies every texel by that alpha value.
+        let alpha_u8 = (layer.opacity.clamp(0.0, 1.0) * 255.0) as u8;
+        let tint = flui_types::styling::Color::rgba(255, 255, 255, alpha_u8);
+
+        // Use layer bounds as the destination rect for compositing.
+        // The UV coordinates map the bounds region from the full-viewport texture.
+        let uv_left = layer.bounds.left().0 / vp_w as f32;
+        let uv_top = layer.bounds.top().0 / vp_h as f32;
+        let uv_right = layer.bounds.right().0 / vp_w as f32;
+        let uv_bottom = layer.bounds.bottom().0 / vp_h as f32;
+
+        let instance = super::instancing::TextureInstance::with_uv(
+            layer.bounds,
+            [uv_left, uv_top, uv_right, uv_bottom],
+            tint,
+        );
+        let _ = self.texture_batch.add(instance);
+        self.flush_texture_batch(encoder, main_view, offscreen_view);
+
+        tracing::trace!(
+            opacity = layer.opacity,
+            bounds = ?layer.bounds,
+            "Composited opacity layer"
+        );
+
+        // offscreen texture returned to pool when `offscreen` is dropped here
     }
 
     /// Flush tessellated geometry from the current segment.
@@ -3191,7 +3300,7 @@ impl Painter for WgpuPainter {
             self.current_opacity = saved.saved_opacity;
 
             // Determine compositing bounds — use provided bounds or fall back to viewport
-            let _composite_bounds = if let Some(b) = saved.bounds {
+            let composite_bounds = if let Some(b) = saved.bounds {
                 Rect::from_ltrb(px(b[0]), px(b[1]), px(b[0] + b[2]), px(b[1] + b[3]))
             } else {
                 self.viewport_bounds()
@@ -3205,7 +3314,6 @@ impl Painter for WgpuPainter {
                 // Package the offscreen content as an OpacityLayer draw item.
                 // During render(), this will be flushed to a pooled offscreen texture
                 // and composited onto the main surface with the layer opacity as tint alpha.
-                let composite_bounds = _composite_bounds;
 
                 // Finalize the current parent segment so the opacity layer is
                 // inserted at the correct Z-position in the draw order
