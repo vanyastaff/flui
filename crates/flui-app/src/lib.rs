@@ -46,7 +46,7 @@ pub mod theme;
 // Legacy alias
 pub use app::{
     AppBinding, AppConfig, DefaultLifecycle, LifecycleEvent, LifecycleState, RootRenderElement,
-    RootRenderView, WidgetsFlutterBinding, run_app, run_app_with_config,
+    RootRenderView, WidgetsFlutterBinding, run_app, run_app_with_config, run_direct,
 };
 // Android-specific entry points
 #[cfg(target_os = "android")]
@@ -86,6 +86,7 @@ pub mod prelude {
     pub use crate::DebugFlags;
     pub use crate::{
         AppConfig, LifecycleState, WidgetsFlutterBinding, run_app, run_app_with_config,
+        run_direct,
     };
     // Bindings
     pub use crate::{

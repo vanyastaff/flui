@@ -230,7 +230,7 @@ flui-painting = { path = "crates/flui-painting" }
 # flui-reactivity = { path = "crates/flui-reactivity" }
 
 # === Application Layer ===
-# flui-app = { path = "crates/flui-app" }
+flui-app = { path = "crates/flui-app" }
 
 # === Platform Layer (for examples) ===
 flui-platform = { path = "crates/flui-platform" }

@@ -8,11 +8,13 @@
 
 mod binding;
 mod config;
+pub mod direct;
 mod lifecycle;
 pub mod runner;
 
 pub use binding::AppBinding;
 pub use config::AppConfig;
+pub use direct::run_direct;
 pub use lifecycle::{DefaultLifecycle, LifecycleEvent, LifecycleState};
 #[cfg(target_os = "android")]
 pub use runner::{run_app_android, run_app_android_with_config};
