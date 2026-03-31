@@ -106,10 +106,19 @@ pub struct CachedTexture {
     pub use_count: usize,
     /// Size in bytes (for memory tracking)
     pub size_bytes: usize,
+    /// UV rectangle for atlas entries.
+    ///
+    /// `None` means this texture occupies its own standalone GPU texture
+    /// (UVs are implicitly `[0, 0, 1, 1]`).
+    ///
+    /// `Some([u_min, v_min, u_max, v_max])` means this entry lives inside
+    /// the shared [`super::atlas::TextureAtlas`] and should use these UVs
+    /// when constructing a [`super::instancing::TextureInstance`].
+    pub uv_rect: Option<[f32; 4]>,
 }
 
 impl CachedTexture {
-    /// Create new cached texture entry
+    /// Create new cached texture entry (standalone, not in atlas)
     fn new(texture: Texture, view: TextureView, width: u32, height: u32) -> Self {
         let size_bytes = (width * height * 4) as usize; // RGBA8 = 4 bytes per pixel
         Self {
@@ -119,7 +128,36 @@ impl CachedTexture {
             height,
             use_count: 0,
             size_bytes,
+            uv_rect: None,
         }
+    }
+
+    /// Create a cached texture entry backed by the shared atlas.
+    fn new_atlas(
+        atlas_texture: Texture,
+        atlas_view: TextureView,
+        width: u32,
+        height: u32,
+        uv_rect: [f32; 4],
+    ) -> Self {
+        // Size accounting: the pixels live inside the atlas, but we still
+        // track per-entry byte usage for memory budgeting.
+        let size_bytes = (width * height * 4) as usize;
+        Self {
+            texture: atlas_texture,
+            view: atlas_view,
+            width,
+            height,
+            use_count: 0,
+            size_bytes,
+            uv_rect: Some(uv_rect),
+        }
+    }
+
+    /// Returns `true` when this entry is stored inside the shared atlas.
+    #[must_use]
+    pub fn is_atlas_entry(&self) -> bool {
+        self.uv_rect.is_some()
     }
 
     /// Increment use counter
@@ -141,11 +179,20 @@ pub struct TextureCacheStats {
     pub hit_rate: f32,
     /// Total memory used by cached textures (bytes)
     pub memory_bytes: usize,
+    /// Number of images packed in the shared atlas
+    pub atlas_images: usize,
+    /// Atlas utilization ratio (0.0 to 1.0)
+    pub atlas_utilization: f32,
 }
 
 /// GPU Texture Cache
 ///
 /// Manages texture loading, caching, and reuse for optimal performance.
+///
+/// Small images (both dimensions <= [`super::atlas::ATLAS_MAX_DIMENSION`])
+/// are automatically packed into a shared [`super::atlas::TextureAtlas`],
+/// reducing draw calls for icon-heavy UIs. Larger images get standalone
+/// GPU textures as before.
 ///
 /// # Example
 ///
@@ -174,6 +221,11 @@ pub struct TextureCache {
     queue: Arc<Queue>,
     /// Maximum memory budget in bytes (default 100 MB)
     max_memory_bytes: usize,
+    /// Shared texture atlas for small images (icons, thumbnails).
+    ///
+    /// Images with both dimensions <= `ATLAS_MAX_DIMENSION` are packed here.
+    /// When the atlas is full, allocation falls back to standalone textures.
+    atlas: super::atlas::TextureAtlas,
 }
 
 impl TextureCache {
@@ -194,6 +246,19 @@ impl TextureCache {
             ..Default::default()
         });
 
+        let atlas = super::atlas::TextureAtlas::new(
+            &device,
+            super::atlas::ATLAS_DEFAULT_SIZE,
+            super::atlas::ATLAS_DEFAULT_SIZE,
+            TextureFormat::Rgba8UnormSrgb,
+        );
+
+        tracing::debug!(
+            size = super::atlas::ATLAS_DEFAULT_SIZE,
+            threshold = super::atlas::ATLAS_MAX_DIMENSION,
+            "Texture atlas initialized"
+        );
+
         Self {
             textures: HashMap::new(),
             default_sampler,
@@ -202,6 +267,7 @@ impl TextureCache {
             device,
             queue,
             max_memory_bytes: 100 * 1024 * 1024, // 100 MB default
+            atlas,
         }
     }
 
@@ -324,8 +390,68 @@ impl TextureCache {
                 // Cache miss - create texture
                 self.cache_misses += 1;
 
-                let device = &self.device;
                 let queue = &self.queue;
+
+                // Try atlas for small images (icons, thumbnails)
+                if super::atlas::fits_in_atlas(width, height) {
+                    if let Some((image_id, rect)) = self.atlas.allocate(width, height) {
+                        // Upload to atlas sub-region
+                        self.atlas.upload_image(queue, image_id, data);
+
+                        let (atlas_w, atlas_h) = self.atlas.dimensions();
+                        let (min_uv, max_uv) = rect.uv_coords(atlas_w, atlas_h);
+                        let uv_rect = [min_uv[0], min_uv[1], max_uv[0], max_uv[1]];
+
+                        // Re-use the atlas GPU texture and view for the cache entry
+                        // NOTE: wgpu::Texture is not Clone, so we create a fresh
+                        // view each time.  All atlas entries share the same
+                        // underlying GPU allocation — the view is lightweight.
+                        let atlas_view = self.atlas.create_view();
+
+                        // We need a Texture reference for CachedTexture, but the
+                        // atlas owns it. Create a tiny 1x1 placeholder texture as
+                        // the `texture` field — it won't be used for rendering
+                        // because atlas entries are identified by `uv_rect.is_some()`
+                        // and rendered through the atlas texture view.
+                        let placeholder = self.device.create_texture(&TextureDescriptor {
+                            label: Some("Atlas Entry Placeholder"),
+                            size: Extent3d {
+                                width: 1,
+                                height: 1,
+                                depth_or_array_layers: 1,
+                            },
+                            mip_level_count: 1,
+                            sample_count: 1,
+                            dimension: TextureDimension::D2,
+                            format: TextureFormat::Rgba8UnormSrgb,
+                            usage: TextureUsages::TEXTURE_BINDING,
+                            view_formats: &[],
+                        });
+
+                        let cached_texture =
+                            CachedTexture::new_atlas(placeholder, atlas_view, width, height, uv_rect);
+
+                        tracing::trace!(
+                            width,
+                            height,
+                            image_id,
+                            ?uv_rect,
+                            "Image packed into atlas"
+                        );
+
+                        return Ok(entry.insert(cached_texture));
+                    }
+                    // Atlas full — fall through to standalone texture
+                    tracing::debug!(
+                        width,
+                        height,
+                        atlas_utilization = %format!("{:.1}%", self.atlas.utilization() * 100.0),
+                        "Atlas full, falling back to standalone texture"
+                    );
+                }
+
+                // Standalone texture (large image or atlas full)
+                let device = &self.device;
 
                 let texture = device.create_texture(&TextureDescriptor {
                     label: Some("Cached Texture"),
@@ -485,6 +611,8 @@ impl TextureCache {
             cache_misses: self.cache_misses,
             hit_rate,
             memory_bytes,
+            atlas_images: self.atlas.image_count(),
+            atlas_utilization: self.atlas.utilization(),
         }
     }
 
@@ -544,6 +672,29 @@ impl TextureCache {
         for texture in self.textures.values_mut() {
             texture.use_count = 0;
         }
+    }
+
+    // ===== Atlas Access =====
+
+    /// Get a [`wgpu::TextureView`] for the shared atlas texture.
+    ///
+    /// Used by the painter to bind the atlas for instanced rendering of all
+    /// atlas-backed images in a single draw call.
+    #[must_use]
+    pub fn atlas_view(&self) -> wgpu::TextureView {
+        self.atlas.create_view()
+    }
+
+    /// Returns the number of images currently packed in the atlas.
+    #[must_use]
+    pub fn atlas_image_count(&self) -> usize {
+        self.atlas.image_count()
+    }
+
+    /// Returns the atlas utilization ratio (0.0 to 1.0).
+    #[must_use]
+    pub fn atlas_utilization(&self) -> f32 {
+        self.atlas.utilization()
     }
 }
 
@@ -789,6 +940,8 @@ mod tests {
             cache_misses: 0,
             hit_rate: 0.0,
             memory_bytes: 0,
+            atlas_images: 0,
+            atlas_utilization: 0.0,
         };
 
         assert_eq!(stats.cached_textures, 0);

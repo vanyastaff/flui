@@ -2213,19 +2213,28 @@ impl Painter for WgpuPainter {
         // Use Arc pointer identity for O(1) cache lookup instead of hashing all pixels
         let texture_id = super::texture_cache::TextureId::from_ptr(image.data_ptr());
 
-        // Load or get cached texture
+        // Load or get cached texture (small images are auto-packed into the atlas)
         match self.texture_cache.load_from_rgba(
             texture_id,
             image.width(),
             image.height(),
             image.data(),
         ) {
-            Ok(_cached_texture) => {
-                // Create a texture instance for GPU-instanced rendering
-                let instance = super::instancing::TextureInstance::new(
-                    dst_rect,
-                    flui_types::styling::Color::WHITE, // No tint
-                );
+            Ok(cached_texture) => {
+                // Use atlas UV coordinates when the image lives in the shared
+                // atlas, otherwise use full-texture UVs [0,0,1,1].
+                let instance = if let Some(uv_rect) = cached_texture.uv_rect {
+                    super::instancing::TextureInstance::with_uv(
+                        dst_rect,
+                        uv_rect,
+                        flui_types::styling::Color::WHITE,
+                    )
+                } else {
+                    super::instancing::TextureInstance::new(
+                        dst_rect,
+                        flui_types::styling::Color::WHITE,
+                    )
+                };
                 let _ = self.texture_batch.add(instance);
             }
             Err(e) => {
