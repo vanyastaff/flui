@@ -42,7 +42,7 @@ use flui_foundation::{BindingBase, HasInstance, impl_binding_singleton};
 use flui_interaction::binding::GestureBinding;
 use flui_painting::PaintingBinding;
 use flui_rendering::{
-    binding::{HitTestable, PipelineManifold, RendererBinding},
+    binding::{PipelineManifold, RendererBinding, ViewHitTestable},
     hit_testing::HitTestResult,
     input::MouseTracker,
     pipeline::PipelineOwner,
@@ -356,10 +356,10 @@ impl PipelineManifold for RenderingFlutterBinding {
 }
 
 // ============================================================================
-// HitTestable Implementation
+// ViewHitTestable Implementation
 // ============================================================================
 
-impl HitTestable for RenderingFlutterBinding {
+impl ViewHitTestable for RenderingFlutterBinding {
     fn hit_test_in_view(&self, result: &mut HitTestResult, position: Offset, view_id: u64) {
         let views = self.render_views.read();
         if let Some(view) = views.get(&view_id) {

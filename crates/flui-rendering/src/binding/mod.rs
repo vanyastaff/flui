@@ -77,15 +77,19 @@ pub trait HitTestDispatcher: Send + Sync {
 }
 
 // ============================================================================
-// HitTestable
+// ViewHitTestable
 // ============================================================================
 
-/// Interface for objects that can be hit tested.
+/// Interface for objects that can be hit tested within a specific view.
+///
+/// This is distinct from `flui_interaction::HitTestable`, which operates on
+/// individual render objects without a view context. `ViewHitTestable` adds
+/// the `view_id` parameter to route hit tests to the correct render tree.
 ///
 /// # Flutter Equivalence
 ///
-/// Corresponds to Flutter's `HitTestable` mixin.
-pub trait HitTestable: Send + Sync {
+/// Corresponds to Flutter's `HitTestable` mixin on `RendererBinding`.
+pub trait ViewHitTestable: Send + Sync {
     /// Hit test at the given position in the given view.
     ///
     /// # Arguments
@@ -137,7 +141,7 @@ pub trait HitTestable: Send + Sync {
 /// 5. **Paint** - [`flush_paint`](PipelineOwner::flush_paint)
 /// 6. **Compositing** - Send layers to GPU
 /// 7. **Semantics** - [`flush_semantics`](PipelineOwner::flush_semantics)
-pub trait RendererBinding: PipelineManifold + HitTestable {
+pub trait RendererBinding: PipelineManifold + ViewHitTestable {
     // ========================================================================
     // Pipeline Owner Tree
     // ========================================================================
@@ -439,13 +443,13 @@ mod tests {
     // Verify the traits are object-safe
     fn _assert_pipeline_manifold_object_safe(_: &dyn PipelineManifold) {}
     fn _assert_hit_test_dispatcher_object_safe(_: &dyn HitTestDispatcher) {}
-    fn _assert_hittestable_object_safe(_: &dyn HitTestable) {}
+    fn _assert_view_hittestable_object_safe(_: &dyn ViewHitTestable) {}
 
     #[test]
     fn test_traits_are_send_sync() {
         fn assert_send_sync<T: Send + Sync + ?Sized>() {}
         assert_send_sync::<dyn PipelineManifold>();
         assert_send_sync::<dyn HitTestDispatcher>();
-        assert_send_sync::<dyn HitTestable>();
+        assert_send_sync::<dyn ViewHitTestable>();
     }
 }
