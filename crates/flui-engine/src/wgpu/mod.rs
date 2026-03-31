@@ -66,6 +66,7 @@ mod instancing;
 #[cfg(target_os = "macos")]
 pub mod metal;
 mod multi_draw;
+pub mod occlusion;
 mod offscreen;
 mod painter;
 #[allow(dead_code)]
