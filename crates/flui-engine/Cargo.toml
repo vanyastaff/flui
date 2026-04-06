@@ -76,10 +76,16 @@ env_logger = "0.11.8"
 tokio = { workspace = true }
 criterion = { version = "0.5", features = ["html_reports"] }
 wgpu = { workspace = true }
+winit = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [[bench]]
 name = "engine_bench"
 harness = false
+
+[[example]]
+name = "render_demo"
+required-features = ["wgpu-backend"]
 
 [lints]
 workspace = true

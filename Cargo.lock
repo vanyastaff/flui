@@ -1009,8 +1009,10 @@ dependencies = [
  "thiserror 2.0.17",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "ttf-parser 0.25.1",
  "wgpu",
+ "winit",
 ]
 
 [[package]]
