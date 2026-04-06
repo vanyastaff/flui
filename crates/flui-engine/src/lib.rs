@@ -89,6 +89,9 @@ pub mod platform;
 /// Consolidated vertex and instance types for GPU rendering
 pub mod vertex;
 
+/// Debug encoder for non-GPU command tracing
+pub mod debug;
+
 // ============================================================================
 // LEGACY BACKEND (kept during migration — will be removed in Task 16)
 // ============================================================================
@@ -134,6 +137,9 @@ pub use frame::submission::{BatchedDraw, ScissorRect};
 // New public API — pipeline registry
 #[cfg(feature = "wgpu-backend")]
 pub use pipelines::registry::{PipelineId, PipelineRegistry};
+
+// New public API — debug encoder (no GPU required)
+pub use debug::DebugEncoder;
 
 // Re-export layer types from flui-layer
 pub use flui_layer::{
