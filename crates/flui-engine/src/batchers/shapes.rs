@@ -56,14 +56,7 @@ impl ShapeBatcher {
     }
 
     /// Add a circle (equal radii).
-    pub fn add_circle(
-        &mut self,
-        cx: f32,
-        cy: f32,
-        r: f32,
-        color: [f32; 4],
-        transform: [f32; 4],
-    ) {
+    pub fn add_circle(&mut self, cx: f32, cy: f32, r: f32, color: [f32; 4], transform: [f32; 4]) {
         let mut instance = CircleInstance::circle([cx, cy], r, color);
         instance.transform = transform;
         self.circles.push(instance);
@@ -108,15 +101,7 @@ impl ShapeBatcher {
     }
 
     /// Add a line segment.
-    pub fn add_line(
-        &mut self,
-        x1: f32,
-        y1: f32,
-        x2: f32,
-        y2: f32,
-        color: [f32; 4],
-        width: f32,
-    ) {
+    pub fn add_line(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, color: [f32; 4], width: f32) {
         self.lines
             .push(LineInstance::new([x1, y1], [x2, y2], color, width));
     }
@@ -143,6 +128,30 @@ impl ShapeBatcher {
     #[must_use]
     pub fn line_count(&self) -> usize {
         self.lines.len()
+    }
+
+    /// Read-only access to the accumulated rectangles.
+    #[must_use]
+    pub fn rects(&self) -> &[RectInstance] {
+        &self.rects
+    }
+
+    /// Read-only access to the accumulated circles / ovals.
+    #[must_use]
+    pub fn circles(&self) -> &[CircleInstance] {
+        &self.circles
+    }
+
+    /// Read-only access to the accumulated arcs.
+    #[must_use]
+    pub fn arcs(&self) -> &[ArcInstance] {
+        &self.arcs
+    }
+
+    /// Read-only access to the accumulated lines.
+    #[must_use]
+    pub fn lines(&self) -> &[LineInstance] {
+        &self.lines
     }
 
     /// Returns `true` if no shapes have been added.

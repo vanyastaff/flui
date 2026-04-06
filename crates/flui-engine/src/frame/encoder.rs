@@ -8,11 +8,15 @@
 
 use std::sync::Arc;
 
+use wgpu::util::DeviceExt;
+
 use crate::context::gpu_device::GpuDevice;
 use crate::context::render_surface::RenderSurface;
 use crate::error::RenderResult;
 use crate::frame::dispatch::{traverse_scene, Batchers};
 use crate::frame::state_stack::StateStack;
+use crate::pipelines::registry::PipelineId;
+use crate::vertex::FrameUniforms;
 use flui_layer::Scene;
 
 /// Per-frame command encoder. Created by
@@ -57,11 +61,28 @@ impl<'surface> FrameEncoder<'surface> {
     /// internal batchers.
     pub fn render_scene(&mut self, scene: &Scene) -> RenderResult<()> {
         let _span = tracing::debug_span!("render_scene").entered();
-        traverse_scene(scene, &mut self.batchers, &mut self.state, self.scale_factor);
+        traverse_scene(
+            scene,
+            &mut self.batchers,
+            &mut self.state,
+            self.scale_factor,
+        );
         Ok(())
     }
 
+    /// Mutable access to the batchers for direct draw command recording.
+    ///
+    /// Useful for demos and tests that bypass the scene/layer pipeline
+    /// and push primitives directly.
+    pub fn batchers_mut(&mut self) -> &mut Batchers {
+        &mut self.batchers
+    }
+
     /// Submit all recorded GPU work and present the frame.
+    ///
+    /// Uploads batcher data to GPU buffers, executes draw calls for each
+    /// pipeline (shapes, paths, shadows, text), submits the command buffer,
+    /// and presents the frame.
     ///
     /// On error the frame is dropped -- the caller should call
     /// [`RenderSurface::resize`](crate::context::render_surface::RenderSurface::resize)
@@ -69,6 +90,106 @@ impl<'surface> FrameEncoder<'surface> {
     pub fn finish(self) -> RenderResult<()> {
         let _span = tracing::debug_span!("finish_frame").entered();
 
+        // -- Update viewport uniform ----------------------------------------
+        let uniforms = FrameUniforms::new(
+            self.surface.width() as f32,
+            self.surface.height() as f32,
+            self.scale_factor,
+        );
+        self.gpu.queue().write_buffer(
+            self.surface.viewport_buffer(),
+            0,
+            bytemuck::bytes_of(&uniforms),
+        );
+
+        // -- Upload shape instances to GPU buffers --------------------------
+        let rect_buf = if self.batchers.shapes.rect_count() > 0 {
+            Some(self.gpu.device().create_buffer_init(
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("rect_instances"),
+                    contents: bytemuck::cast_slice(self.batchers.shapes.rects()),
+                    usage: wgpu::BufferUsages::VERTEX,
+                },
+            ))
+        } else {
+            None
+        };
+
+        let circle_buf = if self.batchers.shapes.circle_count() > 0 {
+            Some(self.gpu.device().create_buffer_init(
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("circle_instances"),
+                    contents: bytemuck::cast_slice(self.batchers.shapes.circles()),
+                    usage: wgpu::BufferUsages::VERTEX,
+                },
+            ))
+        } else {
+            None
+        };
+
+        let arc_buf = if self.batchers.shapes.arc_count() > 0 {
+            Some(self.gpu.device().create_buffer_init(
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("arc_instances"),
+                    contents: bytemuck::cast_slice(self.batchers.shapes.arcs()),
+                    usage: wgpu::BufferUsages::VERTEX,
+                },
+            ))
+        } else {
+            None
+        };
+
+        let shadow_buf = if self.batchers.effects.shadow_count() > 0 {
+            Some(self.gpu.device().create_buffer_init(
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("shadow_instances"),
+                    contents: bytemuck::cast_slice(self.batchers.effects.shadows()),
+                    usage: wgpu::BufferUsages::VERTEX,
+                },
+            ))
+        } else {
+            None
+        };
+
+        // -- Upload path geometry -------------------------------------------
+        let (path_verts_buf, path_idxs_buf) =
+            if self.batchers.paths.draw_range_count() > 0 {
+                let verts = self.gpu.device().create_buffer_init(
+                    &wgpu::util::BufferInitDescriptor {
+                        label: Some("path_vertices"),
+                        contents: bytemuck::cast_slice(self.batchers.paths.vertices()),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    },
+                );
+                let idxs = self.gpu.device().create_buffer_init(
+                    &wgpu::util::BufferInitDescriptor {
+                        label: Some("path_indices"),
+                        contents: bytemuck::cast_slice(self.batchers.paths.indices()),
+                        usage: wgpu::BufferUsages::INDEX,
+                    },
+                );
+                (Some(verts), Some(idxs))
+            } else {
+                (None, None)
+            };
+
+        // -- Prepare text ---------------------------------------------------
+        // Acquire the text system lock early; the guard must outlive the
+        // render pass because `TextSystem::render` borrows into it.
+        let has_text = self.batchers.text.run_count() > 0;
+        let mut text_sys_guard = self.gpu.text_system().lock();
+        if has_text {
+            text_sys_guard.prepare(
+                self.gpu.device(),
+                self.gpu.queue(),
+                self.batchers.text.runs(),
+                self.surface.width(),
+                self.surface.height(),
+                self.scale_factor,
+            );
+        }
+
+        // -- Create command encoder and render pass -------------------------
         let mut encoder =
             self.gpu
                 .device()
@@ -76,7 +197,6 @@ impl<'surface> FrameEncoder<'surface> {
                     label: Some("flui_frame_encoder"),
                 });
 
-        // Create render pass
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("flui_main_pass"),
@@ -108,24 +228,108 @@ impl<'surface> FrameEncoder<'surface> {
                 1.0,
             );
 
-            // TODO: Upload batcher data to GPU buffers and execute draw calls.
-            // For now we just clear the screen -- actual draw submission will
-            // be wired when pipelines are fully connected to shaders.
             let _span = tracing::debug_span!("submit_draws").entered();
 
-            // Shape instanced draws would go here:
-            //   for each rect batch: set pipeline, set buffers, draw_indexed
-            //   for each circle batch: similar
-            //   etc.
+            // Bind viewport uniform (shared by all pipelines)
+            render_pass.set_bind_group(0, self.surface.viewport_bind_group(), &[]);
+
+            // Set shared unit quad for instanced draws
+            render_pass.set_vertex_buffer(0, self.gpu.unit_quad_vbo().slice(..));
+            render_pass.set_index_buffer(
+                self.gpu.unit_quad_ibo().slice(..),
+                wgpu::IndexFormat::Uint16,
+            );
+
+            // === Rects ===
+            if let Some(ref buf) = rect_buf {
+                if let Some(pipeline) = self.gpu.pipelines().get(PipelineId::RectInstanced) {
+                    render_pass.set_pipeline(pipeline);
+                    render_pass.set_vertex_buffer(1, buf.slice(..));
+                    render_pass.draw_indexed(
+                        0..6,
+                        0,
+                        0..self.batchers.shapes.rect_count() as u32,
+                    );
+                }
+            }
+
+            // === Circles ===
+            if let Some(ref buf) = circle_buf {
+                if let Some(pipeline) = self.gpu.pipelines().get(PipelineId::CircleInstanced) {
+                    render_pass.set_pipeline(pipeline);
+                    render_pass.set_vertex_buffer(1, buf.slice(..));
+                    render_pass.draw_indexed(
+                        0..6,
+                        0,
+                        0..self.batchers.shapes.circle_count() as u32,
+                    );
+                }
+            }
+
+            // === Arcs ===
+            if let Some(ref buf) = arc_buf {
+                if let Some(pipeline) = self.gpu.pipelines().get(PipelineId::ArcInstanced) {
+                    render_pass.set_pipeline(pipeline);
+                    render_pass.set_vertex_buffer(1, buf.slice(..));
+                    render_pass.draw_indexed(
+                        0..6,
+                        0,
+                        0..self.batchers.shapes.arc_count() as u32,
+                    );
+                }
+            }
+
+            // === Paths (tessellated, non-instanced) ===
+            if let (Some(ref verts), Some(ref idxs)) = (&path_verts_buf, &path_idxs_buf) {
+                if let Some(pipeline) = self.gpu.pipelines().get(PipelineId::PathFill) {
+                    render_pass.set_pipeline(pipeline);
+                    render_pass.set_vertex_buffer(0, verts.slice(..));
+                    render_pass.set_index_buffer(idxs.slice(..), wgpu::IndexFormat::Uint32);
+                    for range in self.batchers.paths.draw_ranges() {
+                        render_pass.draw_indexed(
+                            range.start_index..(range.start_index + range.index_count),
+                            0,
+                            0..1,
+                        );
+                    }
+                    // Restore unit quad for subsequent instanced draws
+                    render_pass.set_vertex_buffer(0, self.gpu.unit_quad_vbo().slice(..));
+                    render_pass.set_index_buffer(
+                        self.gpu.unit_quad_ibo().slice(..),
+                        wgpu::IndexFormat::Uint16,
+                    );
+                }
+            }
+
+            // === Shadows ===
+            if let Some(ref buf) = shadow_buf {
+                if let Some(pipeline) = self.gpu.pipelines().get(PipelineId::Shadow) {
+                    render_pass.set_pipeline(pipeline);
+                    render_pass.set_vertex_buffer(1, buf.slice(..));
+                    render_pass.draw_indexed(
+                        0..6,
+                        0,
+                        0..self.batchers.effects.shadow_count() as u32,
+                    );
+                }
+            }
+
+            // === Text (last, via glyphon) ===
+            if has_text {
+                text_sys_guard.render(&mut render_pass);
+            }
         }
 
         // Submit
-        self.gpu
-            .queue()
-            .submit(std::iter::once(encoder.finish()));
+        self.gpu.queue().submit(std::iter::once(encoder.finish()));
 
         // Present
         self.surface_texture.present();
+
+        // Trim text atlas after frame
+        if has_text {
+            text_sys_guard.trim();
+        }
 
         Ok(())
     }

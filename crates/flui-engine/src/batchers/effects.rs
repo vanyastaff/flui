@@ -134,6 +134,11 @@ impl EffectBatcher {
         self.shadows.len()
     }
 
+    /// Read-only access to the accumulated shadow instances.
+    pub fn shadows(&self) -> &[ShadowInstance] {
+        &self.shadows
+    }
+
     /// Returns the number of queued blur passes.
     pub fn blur_count(&self) -> usize {
         self.blur_passes.len()
