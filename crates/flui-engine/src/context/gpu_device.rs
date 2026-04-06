@@ -7,6 +7,8 @@
 
 use std::sync::Arc;
 
+use wgpu::util::DeviceExt;
+
 use crate::context::capabilities::GpuCapabilities;
 use crate::error::{RenderError, RenderResult};
 use crate::pipelines::registry::PipelineRegistry;
@@ -27,6 +29,8 @@ pub struct GpuDevice {
     buffer_pool: parking_lot::Mutex<BufferPool>,
     texture_cache: parking_lot::Mutex<TextureCache>,
     default_format: wgpu::TextureFormat,
+    unit_quad_vbo: wgpu::Buffer,
+    unit_quad_ibo: wgpu::Buffer,
 }
 
 impl GpuDevice {
@@ -48,15 +52,13 @@ impl GpuDevice {
         }))
         .map_err(|_| RenderError::NoAdapter)?;
 
-        let (device, queue) = pollster::block_on(
-            adapter.request_device(&wgpu::DeviceDescriptor {
-                label: Some("flui_gpu_device"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
-                memory_hints: Default::default(),
-                trace: Default::default(),
-            }),
-        )
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("flui_gpu_device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::default(),
+            memory_hints: Default::default(),
+            trace: Default::default(),
+        }))
         .map_err(|e| RenderError::DeviceCreation(Box::new(e)))?;
 
         let device = Arc::new(device);
@@ -65,6 +67,7 @@ impl GpuDevice {
         let capabilities = GpuCapabilities::from_adapter_info(&adapter_info, &adapter);
         let default_format = wgpu::TextureFormat::Bgra8Unorm;
         let pipelines = PipelineRegistry::new(&device, default_format);
+        let (unit_quad_vbo, unit_quad_ibo) = Self::create_unit_quad_buffers(&device);
 
         Ok(Self {
             device,
@@ -75,6 +78,8 @@ impl GpuDevice {
             buffer_pool: parking_lot::Mutex::new(BufferPool::new()),
             texture_cache: parking_lot::Mutex::new(TextureCache::new()),
             default_format,
+            unit_quad_vbo,
+            unit_quad_ibo,
         })
     }
 
@@ -94,15 +99,13 @@ impl GpuDevice {
         }))
         .map_err(|_| RenderError::NoAdapter)?;
 
-        let (device, queue) = pollster::block_on(
-            adapter.request_device(&wgpu::DeviceDescriptor {
-                label: Some("flui_gpu_device"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
-                memory_hints: Default::default(),
-                trace: Default::default(),
-            }),
-        )
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("flui_gpu_device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::default(),
+            memory_hints: Default::default(),
+            trace: Default::default(),
+        }))
         .map_err(|e| RenderError::DeviceCreation(Box::new(e)))?;
 
         let device = Arc::new(device);
@@ -116,6 +119,7 @@ impl GpuDevice {
             .copied()
             .unwrap_or(wgpu::TextureFormat::Bgra8Unorm);
         let pipelines = PipelineRegistry::new(&device, default_format);
+        let (unit_quad_vbo, unit_quad_ibo) = Self::create_unit_quad_buffers(&device);
 
         Ok(Self {
             device,
@@ -126,6 +130,8 @@ impl GpuDevice {
             buffer_pool: parking_lot::Mutex::new(BufferPool::new()),
             texture_cache: parking_lot::Mutex::new(TextureCache::new()),
             default_format,
+            unit_quad_vbo,
+            unit_quad_ibo,
         })
     }
 
@@ -169,6 +175,44 @@ impl GpuDevice {
     #[must_use]
     pub fn default_format(&self) -> wgpu::TextureFormat {
         self.default_format
+    }
+
+    /// Shared unit quad vertex buffer (4 vertices as `[f32; 2]`).
+    #[must_use]
+    pub fn unit_quad_vbo(&self) -> &wgpu::Buffer {
+        &self.unit_quad_vbo
+    }
+
+    /// Shared unit quad index buffer (6 indices as `u16`).
+    #[must_use]
+    pub fn unit_quad_ibo(&self) -> &wgpu::Buffer {
+        &self.unit_quad_ibo
+    }
+
+    /// Create the shared unit quad vertex and index buffers.
+    ///
+    /// The quad covers `[0,0]..=[1,1]` and is used by all instanced draw calls
+    /// (rects, circles, arcs, images, shadows).
+    fn create_unit_quad_buffers(device: &wgpu::Device) -> (wgpu::Buffer, wgpu::Buffer) {
+        let vertices: &[f32] = &[
+            0.0, 0.0, // top-left
+            1.0, 0.0, // top-right
+            1.0, 1.0, // bottom-right
+            0.0, 1.0, // bottom-left
+        ];
+        let indices: &[u16] = &[0, 1, 2, 0, 2, 3];
+
+        let vbo = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("unit_quad_vbo"),
+            contents: bytemuck::cast_slice(vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let ibo = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("unit_quad_ibo"),
+            contents: bytemuck::cast_slice(indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        (vbo, ibo)
     }
 
     /// Select the best wgpu backend for the current platform.
