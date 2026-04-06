@@ -14,6 +14,7 @@ use flui_painting::display_list::{DisplayListCore, DrawCommand};
 use flui_types::geometry::{Matrix4, Pixels, RRect, Rect};
 use flui_types::painting::{Paint, Path, PathCommand, PointMode, Shader};
 use flui_types::styling::Color;
+use flui_types::typography::FontWeight;
 
 use crate::batchers::compositing::{CompositingBatcher, FilterType};
 use crate::batchers::effects::{
@@ -710,24 +711,62 @@ pub fn dispatch_command(
             size: _,
             style,
             paint,
-            transform,
+            transform: _,
         } => {
             let font_size = style.font_size.unwrap_or(14.0) as f32;
-            let font_weight = style.font_weight.map(|w| w.value()).unwrap_or(400);
-            let key = TextCacheKey::new(text, font_size, "", font_weight);
+            let font_weight = style.font_weight.as_ref().map(FontWeight::value).unwrap_or(400);
+            let font_family = style
+                .font_family
+                .as_deref()
+                .unwrap_or("sans-serif");
+            let key = TextCacheKey::new(text, font_size, font_family, font_weight);
             let color = paint_to_color(paint);
-            batchers
-                .text
-                .add_run(key, [offset.dx.get(), offset.dy.get()], color, None);
+            let position = [offset.dx.get(), offset.dy.get()];
+            let clip = state.clip.current_clip().map(|c| [c.x, c.y, c.width, c.height]);
+            batchers.text.add_run(
+                key,
+                text.clone(),
+                font_family.to_string(),
+                position,
+                color,
+                clip,
+            );
         }
 
         DrawCommand::DrawTextSpan {
             span,
             offset,
-            text_scale_factor,
-            transform,
+            text_scale_factor: _,
+            transform: _,
         } => {
-            tracing::warn!("DrawTextSpan: rich text not yet implemented");
+            // Extract plain text from the rich span and render as a single-style run.
+            let plain_text = span.to_plain_text();
+            if plain_text.is_empty() {
+                tracing::debug!("DrawTextSpan: empty span, skipping");
+            } else {
+                // Use the root span's style if available, otherwise defaults.
+                let (font_size, font_weight, font_family) = if let Some(style) = span.style() {
+                    (
+                        style.font_size.unwrap_or(14.0) as f32,
+                        style.font_weight.as_ref().map(FontWeight::value).unwrap_or(400),
+                        style.font_family.as_deref().unwrap_or("sans-serif").to_string(),
+                    )
+                } else {
+                    (14.0_f32, 400_u16, "sans-serif".to_string())
+                };
+                let key = TextCacheKey::new(&plain_text, font_size, &font_family, font_weight);
+                let color = [0.0, 0.0, 0.0, 1.0]; // default black; spans don't carry a Paint
+                let position = [offset.dx.get(), offset.dy.get()];
+                let clip = state.clip.current_clip().map(|c| [c.x, c.y, c.width, c.height]);
+                batchers.text.add_run(
+                    key,
+                    plain_text,
+                    font_family,
+                    position,
+                    color,
+                    clip,
+                );
+            }
         }
 
         // =================================================================

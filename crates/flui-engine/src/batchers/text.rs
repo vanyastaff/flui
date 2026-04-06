@@ -9,6 +9,10 @@ use crate::text::TextCacheKey;
 pub struct PreparedTextRun {
     /// Cache key identifying the shaped text run.
     pub cache_key: TextCacheKey,
+    /// Original text content (needed for shaping on cache miss).
+    pub text: String,
+    /// Font family name (e.g. "sans-serif", "Roboto").
+    pub font_family: String,
     /// Position in logical pixels (x, y).
     pub position: [f32; 2],
     /// RGBA color.
@@ -34,12 +38,16 @@ impl TextBatcher {
     pub fn add_run(
         &mut self,
         key: TextCacheKey,
+        text: String,
+        font_family: String,
         position: [f32; 2],
         color: [f32; 4],
         clip: Option<[f32; 4]>,
     ) {
         self.runs.push(PreparedTextRun {
             cache_key: key,
+            text,
+            font_family,
             position,
             color,
             clip,
@@ -93,8 +101,15 @@ mod tests {
     #[test]
     fn add_run_accumulates() {
         let mut batcher = TextBatcher::new();
-        batcher.add_run(make_key("hello"), [0.0, 0.0], [1.0; 4], None);
-        batcher.add_run(make_key("world"), [10.0, 20.0], [0.0, 0.0, 0.0, 1.0], Some([0.0, 0.0, 100.0, 100.0]));
+        batcher.add_run(make_key("hello"), "hello".into(), "Arial".into(), [0.0, 0.0], [1.0; 4], None);
+        batcher.add_run(
+            make_key("world"),
+            "world".into(),
+            "Arial".into(),
+            [10.0, 20.0],
+            [0.0, 0.0, 0.0, 1.0],
+            Some([0.0, 0.0, 100.0, 100.0]),
+        );
         assert_eq!(batcher.run_count(), 2);
         assert!(!batcher.is_empty());
     }
@@ -102,7 +117,7 @@ mod tests {
     #[test]
     fn clear_resets() {
         let mut batcher = TextBatcher::new();
-        batcher.add_run(make_key("hello"), [0.0, 0.0], [1.0; 4], None);
+        batcher.add_run(make_key("hello"), "hello".into(), "Arial".into(), [0.0, 0.0], [1.0; 4], None);
         assert!(!batcher.is_empty());
         batcher.clear();
         assert!(batcher.is_empty());

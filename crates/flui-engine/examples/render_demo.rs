@@ -16,6 +16,7 @@ use winit::window::{Window, WindowAttributes, WindowId};
 
 use flui_engine::context::gpu_device::GpuDevice;
 use flui_engine::context::render_surface::RenderSurface;
+use flui_engine::text::cache::TextCacheKey;
 
 /// Application state machine: starts without a window, creates GPU resources
 /// once the event loop is active.
@@ -221,6 +222,39 @@ fn render_frame(surface: &mut RenderSurface) -> Result<(), Box<dyn std::error::E
             0.0,
             std::f32::consts::PI * 1.5,
             [1.0, 0.4, 0.1, 1.0],   // orange
+        );
+    }
+
+    // -- Text runs via TextBatcher ------------------------------------------
+    {
+        let key = TextCacheKey::new("Hello FLUI Engine!", 32.0, "sans-serif", 400);
+        batchers.text.add_run(
+            key,
+            "Hello FLUI Engine!".into(),
+            "sans-serif".into(),
+            [50.0, 470.0],
+            [0.0, 0.0, 0.0, 1.0],
+            None,
+        );
+
+        let key2 = TextCacheKey::new("GPU-accelerated text rendering", 18.0, "sans-serif", 400);
+        batchers.text.add_run(
+            key2,
+            "GPU-accelerated text rendering".into(),
+            "sans-serif".into(),
+            [50.0, 510.0],
+            [0.3, 0.3, 0.3, 1.0],
+            None,
+        );
+
+        let key3 = TextCacheKey::new("Bold text sample", 24.0, "sans-serif", 700);
+        batchers.text.add_run(
+            key3,
+            "Bold text sample".into(),
+            "sans-serif".into(),
+            [50.0, 540.0],
+            [0.1, 0.3, 0.7, 1.0],
+            None,
         );
     }
 

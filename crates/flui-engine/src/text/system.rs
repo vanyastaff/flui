@@ -6,7 +6,7 @@
 
 use glyphon::{
     Attrs, Buffer, Cache, Color as GlyphonColor, Family, FontSystem, Metrics, Resolution, Shaping,
-    SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer as GlyphonRenderer, Viewport,
+    SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer as GlyphonRenderer, Viewport, Weight,
 };
 
 use crate::batchers::text::PreparedTextRun;
@@ -99,18 +99,20 @@ impl TextSystem {
         for run in runs {
             if self.shape_cache.get(&run.cache_key, self.current_frame).is_none() {
                 let font_size = f32::from_bits(run.cache_key.font_size_bits);
+                let line_height = font_size * 1.2;
                 let mut buffer =
-                    Buffer::new(&mut self.font_system, Metrics::new(font_size, font_size * 1.2));
+                    Buffer::new(&mut self.font_system, Metrics::new(font_size, line_height));
 
                 buffer.set_size(&mut self.font_system, Some(width as f32), Some(height as f32));
 
-                let attrs = Attrs::new().family(Family::SansSerif);
-                // We don't have the original text, only its hash in the cache key.
-                // For now, shape an empty string; real usage should store text in PreparedTextRun.
-                // However, the batcher stores PreparedTextRun which has cache_key but not text.
-                // We rely on the cache being pre-populated by an earlier stage.
-                // If miss, we create a placeholder buffer.
-                buffer.set_text(&mut self.font_system, "", &attrs, Shaping::Advanced);
+                let family = if run.font_family.is_empty() {
+                    Family::SansSerif
+                } else {
+                    Family::Name(&run.font_family)
+                };
+                let weight = Weight(run.cache_key.font_weight);
+                let attrs = Attrs::new().family(family).weight(weight);
+                buffer.set_text(&mut self.font_system, &run.text, &attrs, Shaping::Advanced);
                 buffer.shape_until_scroll(&mut self.font_system, false);
 
                 self.shape_cache
