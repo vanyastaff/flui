@@ -177,6 +177,12 @@ impl GpuDevice {
         self.default_format
     }
 
+    /// The shared bind group layout used by all pipelines for `FrameUniforms`.
+    #[must_use]
+    pub fn bind_group_layout(&self) -> &Arc<wgpu::BindGroupLayout> {
+        self.pipelines.bind_group_layout()
+    }
+
     /// Shared unit quad vertex buffer (4 vertices as `[f32; 2]`).
     #[must_use]
     pub fn unit_quad_vbo(&self) -> &wgpu::Buffer {

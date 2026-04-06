@@ -5,9 +5,12 @@
 
 use std::sync::Arc;
 
+use wgpu::util::DeviceExt;
+
 use crate::context::gpu_device::GpuDevice;
 use crate::error::{RenderError, RenderResult};
 use crate::frame::encoder::FrameEncoder;
+use crate::vertex::FrameUniforms;
 
 /// Per-window rendering surface. One per window.
 ///
@@ -20,6 +23,8 @@ pub struct RenderSurface {
     width: u32,
     height: u32,
     scale_factor: f32,
+    viewport_buffer: wgpu::Buffer,
+    viewport_bind_group: wgpu::BindGroup,
 }
 
 impl RenderSurface {
@@ -59,13 +64,20 @@ impl RenderSurface {
         };
         surface.configure(gpu.device(), &config);
 
+        let clamped_width = width.max(1);
+        let clamped_height = height.max(1);
+        let (viewport_buffer, viewport_bind_group) =
+            create_viewport_resources(&gpu, clamped_width, clamped_height, scale_factor);
+
         Ok(Self {
             gpu,
             surface,
             config,
-            width: width.max(1),
-            height: height.max(1),
+            width: clamped_width,
+            height: clamped_height,
             scale_factor,
+            viewport_buffer,
+            viewport_bind_group,
         })
     }
 
@@ -88,6 +100,15 @@ impl RenderSurface {
         self.config.width = self.width;
         self.config.height = self.height;
         self.surface.configure(self.gpu.device(), &self.config);
+
+        let uniforms = FrameUniforms::new(
+            self.width as f32,
+            self.height as f32,
+            self.scale_factor,
+        );
+        self.gpu
+            .queue()
+            .write_buffer(&self.viewport_buffer, 0, bytemuck::bytes_of(&uniforms));
     }
 
     /// Get the current surface texture for rendering.
@@ -96,15 +117,13 @@ impl RenderSurface {
     /// swap chain. The texture must be presented (dropped) after rendering
     /// to display the frame.
     pub fn get_current_texture(&self) -> RenderResult<wgpu::SurfaceTexture> {
-        self.surface
-            .get_current_texture()
-            .map_err(|e| match e {
-                wgpu::SurfaceError::Lost => RenderError::SurfaceLost,
-                wgpu::SurfaceError::Outdated => RenderError::SurfaceOutdated,
-                wgpu::SurfaceError::Timeout => RenderError::Timeout,
-                wgpu::SurfaceError::OutOfMemory => RenderError::OutOfMemory,
-                _ => RenderError::SurfaceLost,
-            })
+        self.surface.get_current_texture().map_err(|e| match e {
+            wgpu::SurfaceError::Lost => RenderError::SurfaceLost,
+            wgpu::SurfaceError::Outdated => RenderError::SurfaceOutdated,
+            wgpu::SurfaceError::Timeout => RenderError::Timeout,
+            wgpu::SurfaceError::OutOfMemory => RenderError::OutOfMemory,
+            _ => RenderError::SurfaceLost,
+        })
     }
 
     /// Begin recording a new frame.
@@ -148,6 +167,42 @@ impl RenderSurface {
     pub fn format(&self) -> wgpu::TextureFormat {
         self.config.format
     }
+
+    /// The viewport uniform bind group (group 0) for all pipelines.
+    #[must_use]
+    pub fn viewport_bind_group(&self) -> &wgpu::BindGroup {
+        &self.viewport_bind_group
+    }
+
+    /// The viewport uniform buffer containing [`FrameUniforms`].
+    #[must_use]
+    pub fn viewport_buffer(&self) -> &wgpu::Buffer {
+        &self.viewport_buffer
+    }
+}
+
+/// Create the viewport uniform buffer and its bind group.
+fn create_viewport_resources(
+    gpu: &GpuDevice,
+    width: u32,
+    height: u32,
+    scale_factor: f32,
+) -> (wgpu::Buffer, wgpu::BindGroup) {
+    let uniforms = FrameUniforms::new(width as f32, height as f32, scale_factor);
+    let buffer = gpu.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("viewport_uniform"),
+        contents: bytemuck::bytes_of(&uniforms),
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    });
+    let bind_group = gpu.device().create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("viewport_bind_group"),
+        layout: gpu.bind_group_layout(),
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: buffer.as_entire_binding(),
+        }],
+    });
+    (buffer, bind_group)
 }
 
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
