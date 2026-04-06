@@ -25,6 +25,7 @@ use crate::batchers::paths::PathBatcher;
 use crate::batchers::shapes::ShapeBatcher;
 use crate::batchers::text::TextBatcher;
 use crate::frame::state_stack::{ClipRect, StateStack};
+use crate::frame::submission::{BatcherSnapshot, DrawOp, ScissorRect};
 use crate::text::TextCacheKey;
 
 // ===========================================================================
@@ -72,6 +73,25 @@ impl Batchers {
         self.images.clear();
         self.effects.clear();
         self.compositing.clear();
+    }
+
+    /// Take a snapshot of all batcher counts at this point in time.
+    ///
+    /// Used together with a second snapshot after dispatching a leaf layer's
+    /// commands to compute the per-layer instance ranges.
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn snapshot(&self) -> BatcherSnapshot {
+        BatcherSnapshot {
+            rects: self.shapes.rect_count() as u32,
+            circles: self.shapes.circle_count() as u32,
+            arcs: self.shapes.arc_count() as u32,
+            shadows: self.effects.shadow_count() as u32,
+            path_draw_ranges: self.paths.draw_range_count() as u32,
+            linear_gradients: self.effects.linear_gradient_count() as u32,
+            radial_gradients: self.effects.radial_gradient_count() as u32,
+            text_runs: self.text.run_count() as u32,
+        }
     }
 
     /// Returns `true` if every batcher is empty.
@@ -999,15 +1019,29 @@ pub fn dispatch_command(
 // ===========================================================================
 
 /// Traverse a [`Scene`]'s layer tree and dispatch all draw commands.
+///
+/// Returns a `Vec<DrawOp>` that records draw operations in painter's order.
+/// Each leaf layer (Canvas, Picture) produces a `DrawGroup` that references
+/// ranges into the batcher data. Clip state changes produce `SetScissor`
+/// and `ClearScissor` ops.
 pub fn traverse_scene(
     scene: &Scene,
     batchers: &mut Batchers,
     state: &mut StateStack,
     scale_factor: f32,
-) {
+) -> Vec<DrawOp> {
+    let mut draw_ops = Vec::new();
     if let Some(root_id) = scene.root() {
-        traverse_layer(scene.layer_tree(), root_id, batchers, state, scale_factor);
+        traverse_layer(
+            scene.layer_tree(),
+            root_id,
+            batchers,
+            state,
+            scale_factor,
+            &mut draw_ops,
+        );
     }
+    draw_ops
 }
 
 /// Recursively traverse a single layer and its children.
@@ -1017,6 +1051,7 @@ fn traverse_layer(
     batchers: &mut Batchers,
     state: &mut StateStack,
     scale_factor: f32,
+    draw_ops: &mut Vec<DrawOp>,
 ) {
     let Some(node) = tree.get(layer_id) else {
         return;
@@ -1025,17 +1060,27 @@ fn traverse_layer(
 
     match layer {
         // =====================================================================
-        // Leaf layers -- dispatch display list commands
+        // Leaf layers -- dispatch display list commands and emit DrawGroup
         // =====================================================================
         Layer::Canvas(canvas) => {
+            let before = batchers.snapshot();
             for cmd in canvas.display_list().commands() {
                 dispatch_command(cmd, batchers, state, scale_factor);
+            }
+            let after = batchers.snapshot();
+            if before != after {
+                draw_ops.push(DrawOp::DrawGroup { before, after });
             }
         }
 
         Layer::Picture(picture) => {
+            let before = batchers.snapshot();
             for cmd in picture.picture().commands() {
                 dispatch_command(cmd, batchers, state, scale_factor);
+            }
+            let after = batchers.snapshot();
+            if before != after {
+                draw_ops.push(DrawOp::DrawGroup { before, after });
             }
         }
 
@@ -1052,40 +1097,58 @@ fn traverse_layer(
         }
 
         // =====================================================================
-        // Clip layers
+        // Clip layers -- emit scissor ops around children
         // =====================================================================
         Layer::ClipRect(clip) => {
             let r = clip.clip_rect();
-            state.clip.push_rect(ClipRect {
+            let clip_rect = ClipRect {
                 x: r.left().get(),
                 y: r.top().get(),
                 width: r.width().get(),
                 height: r.height().get(),
-            });
-            traverse_children(tree, layer_id, batchers, state, scale_factor);
+            };
+            state.clip.push_rect(clip_rect);
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            draw_ops.push(DrawOp::SetScissor(ScissorRect {
+                x: clip_rect.x as u32,
+                y: clip_rect.y as u32,
+                width: clip_rect.width as u32,
+                height: clip_rect.height as u32,
+            }));
+            traverse_children(tree, layer_id, batchers, state, scale_factor, draw_ops);
             state.clip.pop();
+            draw_ops.push(DrawOp::ClearScissor);
         }
 
         Layer::ClipRRect(clip) => {
             let r = &clip.clip_rrect().rect;
-            state.clip.push_rect(ClipRect {
+            let clip_rect = ClipRect {
                 x: r.left().get(),
                 y: r.top().get(),
                 width: r.width().get(),
                 height: r.height().get(),
-            });
-            traverse_children(tree, layer_id, batchers, state, scale_factor);
+            };
+            state.clip.push_rect(clip_rect);
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            draw_ops.push(DrawOp::SetScissor(ScissorRect {
+                x: clip_rect.x as u32,
+                y: clip_rect.y as u32,
+                width: clip_rect.width as u32,
+                height: clip_rect.height as u32,
+            }));
+            traverse_children(tree, layer_id, batchers, state, scale_factor, draw_ops);
             state.clip.pop();
+            draw_ops.push(DrawOp::ClearScissor);
         }
 
         Layer::ClipPath(_) => {
             tracing::debug!("ClipPath layer: stencil clipping pending");
-            traverse_children(tree, layer_id, batchers, state, scale_factor);
+            traverse_children(tree, layer_id, batchers, state, scale_factor, draw_ops);
         }
 
         Layer::ClipSuperellipse(_) => {
             tracing::debug!("ClipSuperellipse layer: falling back to no clip");
-            traverse_children(tree, layer_id, batchers, state, scale_factor);
+            traverse_children(tree, layer_id, batchers, state, scale_factor, draw_ops);
         }
 
         // =====================================================================
@@ -1097,14 +1160,14 @@ fn traverse_layer(
             state
                 .transform
                 .push(glam::Mat4::from_translation(glam::Vec3::new(dx, dy, 0.0)));
-            traverse_children(tree, layer_id, batchers, state, scale_factor);
+            traverse_children(tree, layer_id, batchers, state, scale_factor, draw_ops);
             state.transform.pop();
         }
 
         Layer::Transform(_transform_layer) => {
             // Full Matrix4 -> glam::Mat4 conversion to be added.
             state.transform.push(glam::Mat4::IDENTITY);
-            traverse_children(tree, layer_id, batchers, state, scale_factor);
+            traverse_children(tree, layer_id, batchers, state, scale_factor, draw_ops);
             state.transform.pop();
         }
 
@@ -1113,13 +1176,13 @@ fn traverse_layer(
         // =====================================================================
         Layer::Opacity(opacity_layer) => {
             state.opacity.push(opacity_layer.alpha());
-            traverse_children(tree, layer_id, batchers, state, scale_factor);
+            traverse_children(tree, layer_id, batchers, state, scale_factor, draw_ops);
             state.opacity.pop();
         }
 
         Layer::ColorFilter(_) => {
             batchers.compositing.add_color_filter([0.0; 4]);
-            traverse_children(tree, layer_id, batchers, state, scale_factor);
+            traverse_children(tree, layer_id, batchers, state, scale_factor, draw_ops);
         }
 
         Layer::ImageFilter(_) => {
@@ -1130,12 +1193,12 @@ fn traverse_layer(
                     sigma_y: 0.0,
                 },
             );
-            traverse_children(tree, layer_id, batchers, state, scale_factor);
+            traverse_children(tree, layer_id, batchers, state, scale_factor, draw_ops);
         }
 
         Layer::ShaderMask(_) => {
             batchers.compositing.add_shader_mask([0.0; 4], 0);
-            traverse_children(tree, layer_id, batchers, state, scale_factor);
+            traverse_children(tree, layer_id, batchers, state, scale_factor, draw_ops);
         }
 
         Layer::BackdropFilter(_) => {
@@ -1146,18 +1209,18 @@ fn traverse_layer(
                     sigma_y: 10.0,
                 },
             );
-            traverse_children(tree, layer_id, batchers, state, scale_factor);
+            traverse_children(tree, layer_id, batchers, state, scale_factor, draw_ops);
         }
 
         // =====================================================================
         // Linking layers
         // =====================================================================
         Layer::Leader(_) => {
-            traverse_children(tree, layer_id, batchers, state, scale_factor);
+            traverse_children(tree, layer_id, batchers, state, scale_factor, draw_ops);
         }
 
         Layer::Follower(_) => {
-            traverse_children(tree, layer_id, batchers, state, scale_factor);
+            traverse_children(tree, layer_id, batchers, state, scale_factor, draw_ops);
         }
 
         // =====================================================================
@@ -1176,12 +1239,13 @@ fn traverse_children(
     batchers: &mut Batchers,
     state: &mut StateStack,
     scale_factor: f32,
+    draw_ops: &mut Vec<DrawOp>,
 ) {
     if let Some(children) = tree.children(parent_id) {
         // Clone the slice to avoid holding a borrow on `tree` while recursing.
         let child_ids: Vec<_> = children.to_vec();
         for child_id in child_ids {
-            traverse_layer(tree, child_id, batchers, state, scale_factor);
+            traverse_layer(tree, child_id, batchers, state, scale_factor, draw_ops);
         }
     }
 }
@@ -1570,5 +1634,163 @@ mod tests {
 
         // Opacity should have been popped after traversal.
         assert!((state.opacity.current() - 1.0).abs() < f32::EPSILON);
+    }
+
+    // -- Draw order tests -----------------------------------------------------
+
+    #[test]
+    fn draw_ops_preserve_per_layer_order() {
+        // Create a scene with two canvas layers under a common parent:
+        //   root (Offset)
+        //     ├── Canvas1 (draws a red rect)
+        //     └── Canvas2 (draws a blue circle)
+        //
+        // The draw_ops should contain two DrawGroup entries in order,
+        // ensuring Canvas2's circle is drawn after Canvas1's rect.
+        use flui_painting::Canvas;
+
+        let mut tree = LayerTree::new();
+        let root = Layer::Offset(OffsetLayer::new(flui_types::Offset::ZERO));
+        let root_id = tree.insert(root);
+
+        // Canvas 1: red rect
+        let mut canvas1 = Canvas::new();
+        canvas1.draw_rect(
+            Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(50.0)),
+            &Paint::fill(Color::rgb(255, 0, 0)),
+        );
+        let c1_id = tree.insert(Layer::Canvas(CanvasLayer::from_canvas(canvas1)));
+        tree.add_child(root_id, c1_id);
+
+        // Canvas 2: blue circle
+        let mut canvas2 = Canvas::new();
+        canvas2.draw_circle(
+            Point::new(px(50.0), px(50.0)),
+            px(25.0),
+            &Paint::fill(Color::rgb(0, 0, 255)),
+        );
+        let c2_id = tree.insert(Layer::Canvas(CanvasLayer::from_canvas(canvas2)));
+        tree.add_child(root_id, c2_id);
+
+        let scene = Scene::new(
+            flui_types::Size::new(px(800.0), px(600.0)),
+            tree,
+            Some(root_id),
+            0,
+        );
+
+        let mut batchers = Batchers::new();
+        let mut state = StateStack::new();
+        let ops = traverse_scene(&scene, &mut batchers, &mut state, 1.0);
+
+        // Should have exactly 2 draw groups.
+        assert_eq!(ops.len(), 2, "expected 2 draw groups, got {}", ops.len());
+
+        // First group: rect added (rects 0->1), no circles.
+        match &ops[0] {
+            DrawOp::DrawGroup { before, after } => {
+                assert_eq!(before.rects, 0);
+                assert_eq!(after.rects, 1, "first group should add 1 rect");
+                assert_eq!(before.circles, 0);
+                assert_eq!(after.circles, 0, "first group should add 0 circles");
+            }
+            other => panic!("expected DrawGroup, got {:?}", other),
+        }
+
+        // Second group: circle added (circles 0->1), rects unchanged at 1.
+        match &ops[1] {
+            DrawOp::DrawGroup { before, after } => {
+                assert_eq!(before.rects, 1);
+                assert_eq!(after.rects, 1, "second group should not add rects");
+                assert_eq!(before.circles, 0);
+                assert_eq!(after.circles, 1, "second group should add 1 circle");
+            }
+            other => panic!("expected DrawGroup, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn draw_ops_emit_scissor_for_clip_layers() {
+        use flui_painting::Canvas;
+        use flui_types::painting::Clip;
+
+        let mut tree = LayerTree::new();
+        let clip_layer = Layer::ClipRect(ClipRectLayer::new(
+            Rect::from_xywh(px(10.0), px(20.0), px(200.0), px(100.0)),
+            Clip::HardEdge,
+        ));
+        let clip_id = tree.insert(clip_layer);
+
+        let mut canvas = Canvas::new();
+        canvas.draw_rect(
+            Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0)),
+            &Paint::fill(Color::rgb(255, 0, 0)),
+        );
+        let canvas_id = tree.insert(Layer::Canvas(CanvasLayer::from_canvas(canvas)));
+        tree.add_child(clip_id, canvas_id);
+
+        let scene = Scene::new(
+            flui_types::Size::new(px(800.0), px(600.0)),
+            tree,
+            Some(clip_id),
+            0,
+        );
+
+        let mut batchers = Batchers::new();
+        let mut state = StateStack::new();
+        let ops = traverse_scene(&scene, &mut batchers, &mut state, 1.0);
+
+        // Should be: SetScissor, DrawGroup, ClearScissor
+        assert_eq!(ops.len(), 3, "expected 3 ops, got {:?}", ops);
+        assert!(
+            matches!(ops[0], DrawOp::SetScissor(ref s) if s.x == 10 && s.y == 20 && s.width == 200 && s.height == 100),
+            "expected SetScissor, got {:?}",
+            ops[0]
+        );
+        assert!(
+            matches!(ops[1], DrawOp::DrawGroup { .. }),
+            "expected DrawGroup, got {:?}",
+            ops[1]
+        );
+        assert!(
+            matches!(ops[2], DrawOp::ClearScissor),
+            "expected ClearScissor, got {:?}",
+            ops[2]
+        );
+    }
+
+    #[test]
+    fn snapshot_reflects_batcher_counts() {
+        let mut b = Batchers::new();
+        let snap0 = b.snapshot();
+        assert_eq!(snap0, BatcherSnapshot::default());
+
+        b.shapes.add_rect(0.0, 0.0, 10.0, 10.0, [1.0; 4], [0.0; 4], [1.0, 0.0, 0.0, 1.0]);
+        b.shapes.add_circle(5.0, 5.0, 3.0, [1.0; 4], [1.0, 0.0, 0.0, 1.0]);
+
+        let snap1 = b.snapshot();
+        assert_eq!(snap1.rects, 1);
+        assert_eq!(snap1.circles, 1);
+        assert_eq!(snap1.arcs, 0);
+    }
+
+    #[test]
+    fn empty_canvas_layer_produces_no_draw_group() {
+        let mut tree = LayerTree::new();
+        let canvas_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+
+        let scene = Scene::new(
+            flui_types::Size::new(px(800.0), px(600.0)),
+            tree,
+            Some(canvas_id),
+            0,
+        );
+
+        let mut batchers = Batchers::new();
+        let mut state = StateStack::new();
+        let ops = traverse_scene(&scene, &mut batchers, &mut state, 1.0);
+
+        // Empty canvas adds nothing to batchers, so no DrawGroup emitted.
+        assert!(ops.is_empty(), "expected no ops for empty canvas, got {:?}", ops);
     }
 }

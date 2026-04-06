@@ -19,6 +19,55 @@ pub struct ScissorRect {
     pub height: u32,
 }
 
+/// A snapshot of batcher counts at a point in time.
+///
+/// Used to compute per-layer draw ranges: snapshot before dispatching a leaf
+/// layer's commands and after, then the difference gives the instance ranges
+/// that belong to that layer.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub struct BatcherSnapshot {
+    /// Number of rectangles accumulated so far.
+    pub rects: u32,
+    /// Number of circles accumulated so far.
+    pub circles: u32,
+    /// Number of arcs accumulated so far.
+    pub arcs: u32,
+    /// Number of shadows accumulated so far.
+    pub shadows: u32,
+    /// Number of path draw ranges accumulated so far.
+    pub path_draw_ranges: u32,
+    /// Number of linear gradients accumulated so far.
+    pub linear_gradients: u32,
+    /// Number of radial gradients accumulated so far.
+    pub radial_gradients: u32,
+    /// Number of text runs accumulated so far.
+    pub text_runs: u32,
+}
+
+/// An ordered draw operation recorded during scene traversal.
+///
+/// These operations preserve painter's order across layer boundaries.
+/// Each leaf layer produces a `DrawGroup` that references ranges into the
+/// batcher data. The encoder iterates these in order, drawing each type
+/// within a group before advancing to the next group.
+#[derive(Clone, Debug)]
+pub enum DrawOp {
+    /// A group of draw commands from a single leaf layer.
+    ///
+    /// Contains the batcher ranges (before/after snapshot) so the encoder
+    /// can draw only the instances that belong to this layer.
+    DrawGroup {
+        /// Batcher state before this layer's commands were dispatched.
+        before: BatcherSnapshot,
+        /// Batcher state after this layer's commands were dispatched.
+        after: BatcherSnapshot,
+    },
+    /// Set scissor rect for subsequent draws.
+    SetScissor(ScissorRect),
+    /// Clear scissor (restore full viewport).
+    ClearScissor,
+}
+
 /// A single GPU draw command, produced by batcher flush.
 ///
 /// These commands form an ordered list that is replayed inside a render pass.
@@ -88,7 +137,13 @@ mod tests {
             pipeline: PipelineId::PathFill,
             index_count: 300,
         };
-        assert!(matches!(draw, BatchedDraw::Indexed { index_count: 300, .. }));
+        assert!(matches!(
+            draw,
+            BatchedDraw::Indexed {
+                index_count: 300,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -99,9 +154,17 @@ mod tests {
 
     #[test]
     fn batched_draw_scissor() {
-        let scissor = ScissorRect { x: 10, y: 20, width: 100, height: 200 };
+        let scissor = ScissorRect {
+            x: 10,
+            y: 20,
+            width: 100,
+            height: 200,
+        };
         let draw = BatchedDraw::SetScissor(scissor);
-        assert!(matches!(draw, BatchedDraw::SetScissor(ScissorRect { x: 10, .. })));
+        assert!(matches!(
+            draw,
+            BatchedDraw::SetScissor(ScissorRect { x: 10, .. })
+        ));
     }
 
     #[test]
