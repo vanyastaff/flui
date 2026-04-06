@@ -120,7 +120,8 @@ impl CompositingBatcher {
 
     /// Add a shader mask operation.
     pub fn add_shader_mask(&mut self, bounds: [f32; 4], blend_mode: u32) {
-        self.ops.push(CompositingOp::ShaderMask { bounds, blend_mode });
+        self.ops
+            .push(CompositingOp::ShaderMask { bounds, blend_mode });
     }
 
     /// Add a backdrop filter operation.

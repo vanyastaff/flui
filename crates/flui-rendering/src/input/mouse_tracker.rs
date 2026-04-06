@@ -583,7 +583,12 @@ mod tests {
 
     #[test]
     fn test_pointer_hover_event() {
-        let event = PointerHoverEvent::new(Offset::new(px(10.0), px(20.0)), 0, 0, Offset::new(px(5.0), px(5.0)));
+        let event = PointerHoverEvent::new(
+            Offset::new(px(10.0), px(20.0)),
+            0,
+            0,
+            Offset::new(px(5.0), px(5.0)),
+        );
         assert_eq!(event.position.dx, 10.0);
         assert_eq!(event.delta.dx, 5.0);
     }

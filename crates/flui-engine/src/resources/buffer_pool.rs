@@ -114,10 +114,7 @@ impl BufferPool {
         stats: &mut PoolStats,
     ) -> usize {
         // Try to find an existing buffer that is not in use and large enough
-        if let Some(idx) = pool
-            .iter()
-            .position(|b| !b.in_use && b.size >= size)
-        {
+        if let Some(idx) = pool.iter().position(|b| !b.in_use && b.size >= size) {
             pool[idx].in_use = true;
             stats.reuses += 1;
             return idx;

@@ -101,11 +101,7 @@ impl RenderSurface {
         self.config.height = self.height;
         self.surface.configure(self.gpu.device(), &self.config);
 
-        let uniforms = FrameUniforms::new(
-            self.width as f32,
-            self.height as f32,
-            self.scale_factor,
-        );
+        let uniforms = FrameUniforms::new(self.width as f32, self.height as f32, self.scale_factor);
         self.gpu
             .queue()
             .write_buffer(&self.viewport_buffer, 0, bytemuck::bytes_of(&uniforms));
@@ -189,11 +185,13 @@ fn create_viewport_resources(
     scale_factor: f32,
 ) -> (wgpu::Buffer, wgpu::BindGroup) {
     let uniforms = FrameUniforms::new(width as f32, height as f32, scale_factor);
-    let buffer = gpu.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("viewport_uniform"),
-        contents: bytemuck::bytes_of(&uniforms),
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-    });
+    let buffer = gpu
+        .device()
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("viewport_uniform"),
+            contents: bytemuck::bytes_of(&uniforms),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
     let bind_group = gpu.device().create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("viewport_bind_group"),
         layout: gpu.bind_group_layout(),

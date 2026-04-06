@@ -86,7 +86,9 @@ impl ImageBatcher {
     /// of [`ImageQuadInstance`] for that texture.
     pub fn groups_in_order(&self) -> impl Iterator<Item = (u64, &[ImageQuadInstance])> {
         self.order.iter().filter_map(|&id| {
-            self.groups.get(&id).map(|instances| (id, instances.as_slice()))
+            self.groups
+                .get(&id)
+                .map(|instances| (id, instances.as_slice()))
         })
     }
 }

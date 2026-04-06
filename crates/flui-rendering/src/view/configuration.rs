@@ -199,7 +199,11 @@ mod tests {
 
     #[test]
     fn test_view_configuration_flexible() {
-        let config = ViewConfiguration::flexible(Size::new(px(0.0), px(0.0)), Size::new(px(800.0), px(600.0)), 1.0);
+        let config = ViewConfiguration::flexible(
+            Size::new(px(0.0), px(0.0)),
+            Size::new(px(800.0), px(600.0)),
+            1.0,
+        );
         let logical = config.logical_constraints();
         assert_eq!(logical.min_width, 0.0);
         assert_eq!(logical.max_width, 800.0);
