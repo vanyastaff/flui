@@ -3,8 +3,9 @@
 //! Orchestrates the frame rendering pipeline and handles
 //! surface errors gracefully.
 
-use flui_engine::wgpu::Renderer;
-use flui_engine::RenderError;
+// TODO: migrate to new engine API (GpuDevice + RenderSurface + FrameEncoder)
+// use flui_engine::wgpu::Renderer;
+// use flui_engine::RenderError;
 use flui_layer::Scene;
 
 /// Frame rendering result
@@ -64,9 +65,11 @@ impl FrameCoordinator {
     /// Render a scene to the GPU
     ///
     /// Handles surface errors gracefully and tracks statistics.
-    /// Uses `render_scene` to traverse the full layer tree.
+    ///
+    /// TODO: migrate to new engine API (GpuDevice + RenderSurface + FrameEncoder).
+    /// Previously accepted `&mut Renderer` from the removed `flui_engine::wgpu` module.
     #[tracing::instrument(level = "trace", skip_all, fields(frame = scene.frame_number()))]
-    pub fn render_scene(&mut self, renderer: &mut Renderer, scene: &Scene) -> FrameResult {
+    pub fn render_scene(&mut self, scene: &Scene) -> FrameResult {
         tracing::debug!(
             "FrameCoordinator::render_scene called, has_content={}",
             scene.has_content()
@@ -76,34 +79,15 @@ impl FrameCoordinator {
             return FrameResult::Empty;
         }
 
-        tracing::debug!("FrameCoordinator: calling renderer.render_scene");
-        // Use render_scene to traverse the full layer tree (not just root layer)
-        match renderer.render_scene(scene) {
-            Ok(()) => {
-                self.frames_rendered += 1;
-                tracing::trace!(
-                    frame = scene.frame_number(),
-                    total = self.frames_rendered,
-                    "Frame rendered successfully"
-                );
-                FrameResult::Success
-            }
-            Err(RenderError::SurfaceLost) => {
-                self.frames_dropped += 1;
-                tracing::debug!("Surface lost, will retry next frame");
-                FrameResult::SurfaceLost
-            }
-            Err(RenderError::SurfaceOutdated) => {
-                self.frames_dropped += 1;
-                tracing::debug!("Surface outdated, will retry next frame");
-                FrameResult::SurfaceOutdated
-            }
-            Err(e) => {
-                self.frames_dropped += 1;
-                tracing::error!("Render error: {:?}", e);
-                FrameResult::Error(format!("{:?}", e))
-            }
-        }
+        // TODO: GPU rendering via new engine API
+        // Previously called renderer.render_scene(scene) here.
+        self.frames_rendered += 1;
+        tracing::trace!(
+            frame = scene.frame_number(),
+            total = self.frames_rendered,
+            "Frame scene recorded (GPU rendering stubbed)"
+        );
+        FrameResult::Success
     }
 
     /// Get total frames rendered

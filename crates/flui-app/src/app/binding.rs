@@ -28,7 +28,8 @@
 
 use crate::bindings::RenderingFlutterBinding;
 use crate::embedder::{FrameCoordinator, PointerState};
-use flui_engine::wgpu::Renderer;
+// TODO: migrate to new engine API (GpuDevice + RenderSurface + FrameEncoder)
+// use flui_engine::wgpu::Renderer;
 use flui_foundation::HasInstance;
 use flui_interaction::binding::GestureBinding;
 use flui_interaction::events::{
@@ -350,21 +351,20 @@ impl AppBinding {
     /// Render a complete frame to GPU.
     ///
     /// Orchestrates: process_events → draw → render → mark_rendered
+    ///
+    /// TODO: migrate to new engine API (GpuDevice + RenderSurface + FrameEncoder)
+    /// Previously accepted `&mut Renderer` from the removed `flui_engine::wgpu` module.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn render_frame(&self, renderer: &mut Renderer) -> Option<Arc<Scene>> {
+    pub fn render_frame_to_scene(&self, width: u32, height: u32) -> Option<Arc<Scene>> {
         // 1. Process coalesced pointer moves
         self.process_pending_events();
 
         // 2. Draw frame (build + layout + paint → Scene)
-        let (width, height) = renderer.size();
         let constraints = BoxConstraints::tight(Size::new(px(width as f32), px(height as f32)));
         let scene = self.draw_frame(constraints);
 
-        // 3. Render scene to GPU
-        if let Some(ref scene) = scene {
-            let mut coordinator = self.frame_coordinator.write();
-            let _result = coordinator.render_scene(renderer, scene);
-        }
+        // 3. TODO: GPU rendering via new engine API
+        // Previously: coordinator.render_scene(renderer, scene)
 
         // 4. Mark rendered
         self.mark_rendered();

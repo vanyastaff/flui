@@ -4,7 +4,8 @@
 //! Uses `ui-events-winit` for W3C-compliant event translation.
 
 use crate::app::AppBinding;
-use flui_engine::wgpu::Renderer;
+// TODO: migrate to new engine API (GpuDevice + RenderSurface + FrameEncoder)
+// use flui_engine::wgpu::Renderer;
 use flui_foundation::HasInstance;
 use flui_interaction::events::{PointerEvent, ScrollEventData};
 use flui_scheduler::Scheduler;
@@ -44,8 +45,9 @@ pub struct DesktopEmbedder {
     /// Platform window
     window: Arc<Window>,
 
-    /// GPU renderer
-    renderer: Renderer,
+    /// GPU renderer placeholder
+    /// TODO: migrate to new engine API (GpuDevice + RenderSurface + FrameEncoder)
+    _renderer: (),
 
     /// Event reducer for translating winit events to ui-events
     event_reducer: WindowEventReducer,
@@ -76,20 +78,14 @@ impl DesktopEmbedder {
 
         let size = window.inner_size();
 
-        // 2. Initialize GPU renderer
-        let mut renderer = {
-            let _span = tracing::info_span!("init_gpu").entered();
-            Renderer::new(window.as_ref())
-                .await
-                .map_err(|e| EmbedderError::GpuInitialization(format!("{:?}", e)))?
-        };
-        renderer.resize(size.width, size.height);
+        // TODO: migrate to new engine API (GpuDevice + RenderSurface + FrameEncoder)
+        // Previously initialized Renderer from flui_engine::wgpu here.
 
         tracing::info!(width = size.width, height = size.height, "Window created");
 
         Ok(Self {
             window,
-            renderer,
+            _renderer: (),
             event_reducer: WindowEventReducer::default(),
         })
     }
@@ -106,8 +102,8 @@ impl DesktopEmbedder {
                 elwt.exit();
                 return;
             }
-            WindowEvent::Resized(size) => {
-                self.renderer.resize(size.width, size.height);
+            WindowEvent::Resized(_size) => {
+                // TODO: migrate to new engine API - previously called self.renderer.resize()
                 binding.request_redraw();
                 return;
             }
@@ -213,7 +209,8 @@ impl DesktopEmbedder {
 
         // 2. Render the frame via AppBinding
         let binding = AppBinding::instance();
-        let _scene = binding.render_frame(&mut self.renderer);
+        let (width, height) = self.size();
+        let _scene = binding.render_frame_to_scene(width, height);
     }
 
     /// Check if redraw is needed
