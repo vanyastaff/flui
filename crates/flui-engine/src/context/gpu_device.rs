@@ -207,6 +207,35 @@ impl GpuDevice {
         &self.unit_quad_ibo
     }
 
+    /// Create an offscreen render texture and its view.
+    ///
+    /// The texture is suitable for use as a `RENDER_ATTACHMENT` and `COPY_SRC`,
+    /// enabling headless rendering followed by pixel readback via
+    /// [`read_texture_to_rgba`](super::headless_render::read_texture_to_rgba).
+    #[must_use]
+    pub fn create_render_texture(
+        &self,
+        width: u32,
+        height: u32,
+    ) -> (wgpu::Texture, wgpu::TextureView) {
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("headless_render_target"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.default_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        (texture, view)
+    }
+
     /// Create the shared unit quad vertex and index buffers.
     ///
     /// The quad covers `[0,0]..=[1,1]` and is used by all instanced draw calls

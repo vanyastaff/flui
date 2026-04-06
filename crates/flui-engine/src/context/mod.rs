@@ -10,4 +10,7 @@ pub mod gpu_device;
 #[cfg(feature = "wgpu-backend")]
 pub mod render_surface;
 
+#[cfg(feature = "wgpu-backend")]
+pub mod headless_render;
+
 pub mod headless;
