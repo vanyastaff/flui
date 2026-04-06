@@ -8,11 +8,11 @@
 //! and state stacks, with no GPU code.
 
 use flui_foundation::LayerId;
-use flui_layer::{Layer, Scene};
 use flui_layer::tree::LayerTree;
-use flui_painting::display_list::{DrawCommand, DisplayListCore};
+use flui_layer::{Layer, Scene};
+use flui_painting::display_list::{DisplayListCore, DrawCommand};
 use flui_types::geometry::{Matrix4, Pixels, RRect, Rect};
-use flui_types::painting::Paint;
+use flui_types::painting::{Paint, Path, PathCommand, PointMode};
 use flui_types::styling::Color;
 
 use crate::batchers::compositing::{CompositingBatcher, FilterType};
@@ -143,6 +143,212 @@ fn rect_to_xywh(r: &Rect<Pixels>) -> [f32; 4] {
 }
 
 // ===========================================================================
+// Path conversion helpers
+// ===========================================================================
+
+/// Convert a `flui_types::painting::Path` to a `lyon::path::Path`.
+///
+/// Handles all [`PathCommand`] variants by mapping to the lyon path builder API.
+/// Returns `None` if the path is empty.
+#[allow(unused_assignments)] // has_open_subpath tracking is intentional across branches
+fn convert_path_to_lyon(path: &Path) -> Option<lyon::path::Path> {
+    let commands = path.commands();
+    if commands.is_empty() {
+        return None;
+    }
+
+    let mut builder = lyon::path::Path::builder();
+    let mut has_open_subpath = false;
+
+    for cmd in commands {
+        match *cmd {
+            PathCommand::MoveTo(p) => {
+                if has_open_subpath {
+                    builder.end(false);
+                }
+                builder.begin(lyon::math::point(p.x.get(), p.y.get()));
+                has_open_subpath = true;
+            }
+            PathCommand::LineTo(p) => {
+                if !has_open_subpath {
+                    builder.begin(lyon::math::point(0.0, 0.0));
+                    has_open_subpath = true;
+                }
+                builder.line_to(lyon::math::point(p.x.get(), p.y.get()));
+            }
+            PathCommand::QuadraticTo(cp, ep) => {
+                if !has_open_subpath {
+                    builder.begin(lyon::math::point(0.0, 0.0));
+                    has_open_subpath = true;
+                }
+                builder.quadratic_bezier_to(
+                    lyon::math::point(cp.x.get(), cp.y.get()),
+                    lyon::math::point(ep.x.get(), ep.y.get()),
+                );
+            }
+            PathCommand::CubicTo(c1, c2, ep) => {
+                if !has_open_subpath {
+                    builder.begin(lyon::math::point(0.0, 0.0));
+                    has_open_subpath = true;
+                }
+                builder.cubic_bezier_to(
+                    lyon::math::point(c1.x.get(), c1.y.get()),
+                    lyon::math::point(c2.x.get(), c2.y.get()),
+                    lyon::math::point(ep.x.get(), ep.y.get()),
+                );
+            }
+            PathCommand::Close => {
+                if has_open_subpath {
+                    builder.close();
+                    has_open_subpath = false;
+                }
+            }
+            PathCommand::AddRect(rect) => {
+                if has_open_subpath {
+                    builder.end(false);
+                    has_open_subpath = false;
+                }
+                let l = rect.left().get();
+                let t = rect.top().get();
+                let r = rect.right().get();
+                let b = rect.bottom().get();
+                builder.begin(lyon::math::point(l, t));
+                has_open_subpath = true;
+                builder.line_to(lyon::math::point(r, t));
+                builder.line_to(lyon::math::point(r, b));
+                builder.line_to(lyon::math::point(l, b));
+                builder.close();
+                has_open_subpath = false;
+            }
+            PathCommand::AddCircle(center, radius) => {
+                if has_open_subpath {
+                    builder.end(false);
+                    has_open_subpath = false;
+                }
+                // Approximate circle with 4 cubic bezier segments
+                let cx = center.x.get();
+                let cy = center.y.get();
+                // Control point offset for circular arc approximation
+                let k = radius * 0.552_284_749_8; // (4/3)(sqrt(2)-1)
+                builder.begin(lyon::math::point(cx + radius, cy));
+                has_open_subpath = true;
+                builder.cubic_bezier_to(
+                    lyon::math::point(cx + radius, cy + k),
+                    lyon::math::point(cx + k, cy + radius),
+                    lyon::math::point(cx, cy + radius),
+                );
+                builder.cubic_bezier_to(
+                    lyon::math::point(cx - k, cy + radius),
+                    lyon::math::point(cx - radius, cy + k),
+                    lyon::math::point(cx - radius, cy),
+                );
+                builder.cubic_bezier_to(
+                    lyon::math::point(cx - radius, cy - k),
+                    lyon::math::point(cx - k, cy - radius),
+                    lyon::math::point(cx, cy - radius),
+                );
+                builder.cubic_bezier_to(
+                    lyon::math::point(cx + k, cy - radius),
+                    lyon::math::point(cx + radius, cy - k),
+                    lyon::math::point(cx + radius, cy),
+                );
+                builder.close();
+                has_open_subpath = false;
+            }
+            PathCommand::AddOval(rect) => {
+                if has_open_subpath {
+                    builder.end(false);
+                    has_open_subpath = false;
+                }
+                let cx = (rect.left().get() + rect.right().get()) * 0.5;
+                let cy = (rect.top().get() + rect.bottom().get()) * 0.5;
+                let rx = rect.width().get() * 0.5;
+                let ry = rect.height().get() * 0.5;
+                let kx = rx * 0.552_284_749_8;
+                let ky = ry * 0.552_284_749_8;
+                builder.begin(lyon::math::point(cx + rx, cy));
+                has_open_subpath = true;
+                builder.cubic_bezier_to(
+                    lyon::math::point(cx + rx, cy + ky),
+                    lyon::math::point(cx + kx, cy + ry),
+                    lyon::math::point(cx, cy + ry),
+                );
+                builder.cubic_bezier_to(
+                    lyon::math::point(cx - kx, cy + ry),
+                    lyon::math::point(cx - rx, cy + ky),
+                    lyon::math::point(cx - rx, cy),
+                );
+                builder.cubic_bezier_to(
+                    lyon::math::point(cx - rx, cy - ky),
+                    lyon::math::point(cx - kx, cy - ry),
+                    lyon::math::point(cx, cy - ry),
+                );
+                builder.cubic_bezier_to(
+                    lyon::math::point(cx + kx, cy - ry),
+                    lyon::math::point(cx + rx, cy - ky),
+                    lyon::math::point(cx + rx, cy),
+                );
+                builder.close();
+                has_open_subpath = false;
+            }
+            PathCommand::AddArc(rect, start_angle, sweep_angle) => {
+                if has_open_subpath {
+                    builder.end(false);
+                    has_open_subpath = false;
+                }
+                // Approximate arc with line segments
+                let cx = (rect.left().get() + rect.right().get()) * 0.5;
+                let cy = (rect.top().get() + rect.bottom().get()) * 0.5;
+                let rx = rect.width().get() * 0.5;
+                let ry = rect.height().get() * 0.5;
+                let segments = 32u32;
+                for i in 0..=segments {
+                    let t = start_angle + sweep_angle * (i as f32 / segments as f32);
+                    let px = cx + rx * t.cos();
+                    let py = cy + ry * t.sin();
+                    if i == 0 {
+                        builder.begin(lyon::math::point(px, py));
+                        has_open_subpath = true;
+                    } else {
+                        builder.line_to(lyon::math::point(px, py));
+                    }
+                }
+                if has_open_subpath {
+                    builder.end(false);
+                    has_open_subpath = false;
+                }
+            }
+        }
+    }
+
+    if has_open_subpath {
+        builder.end(false);
+    }
+
+    Some(builder.build())
+}
+
+/// Convert an [`RRect`] to a `lyon::path::Path` for tessellation.
+fn rrect_to_lyon_path(rrect: &RRect) -> lyon::path::Path {
+    let flui_path = Path::from_rrect(*rrect);
+    // from_rrect always produces a non-empty path
+    convert_path_to_lyon(&flui_path).unwrap_or_else(|| {
+        // Fallback: simple rectangle
+        let mut builder = lyon::path::Path::builder();
+        let l = rrect.rect.left().get();
+        let t = rrect.rect.top().get();
+        let r = rrect.rect.right().get();
+        let b = rrect.rect.bottom().get();
+        builder.begin(lyon::math::point(l, t));
+        builder.line_to(lyon::math::point(r, t));
+        builder.line_to(lyon::math::point(r, b));
+        builder.line_to(lyon::math::point(l, b));
+        builder.close();
+        builder.build()
+    })
+}
+
+// ===========================================================================
 // Command dispatch
 // ===========================================================================
 
@@ -237,14 +443,9 @@ pub fn dispatch_command(
         } => {
             let color = paint_to_color(paint);
             let width = paint.stroke_width.max(1.0);
-            batchers.shapes.add_line(
-                p1.x.get(),
-                p1.y.get(),
-                p2.x.get(),
-                p2.y.get(),
-                color,
-                width,
-            );
+            batchers
+                .shapes
+                .add_line(p1.x.get(), p1.y.get(), p2.x.get(), p2.y.get(), color, width);
         }
 
         DrawCommand::DrawArc {
@@ -259,7 +460,9 @@ pub fn dispatch_command(
             let cx = rect.left().get() + rect.width().get() / 2.0;
             let cy = rect.top().get() + rect.height().get() / 2.0;
             let r = rect.width().get().min(rect.height().get()) / 2.0;
-            batchers.shapes.add_arc(cx, cy, r, *start_angle, *sweep_angle, color);
+            batchers
+                .shapes
+                .add_arc(cx, cy, r, *start_angle, *sweep_angle, color);
         }
 
         // =================================================================
@@ -270,7 +473,15 @@ pub fn dispatch_command(
             paint,
             transform,
         } => {
-            tracing::debug!("DrawPath: path tessellation pending");
+            let color = paint_to_color(paint);
+            if let Some(lyon_path) = convert_path_to_lyon(path) {
+                if paint.is_fill() {
+                    batchers.paths.add_fill(&lyon_path, color);
+                } else {
+                    let width = paint.stroke_width.max(1.0);
+                    batchers.paths.add_stroke(&lyon_path, color, width);
+                }
+            }
         }
 
         DrawCommand::DrawDRRect {
@@ -279,7 +490,25 @@ pub fn dispatch_command(
             paint,
             transform,
         } => {
-            tracing::debug!("DrawDRRect: tessellation pending");
+            let color = paint_to_color(paint);
+            // Tessellate outer rounded rect as a fill, then subtract inner.
+            // For correct subtraction we'd need boolean path ops (not in lyon core),
+            // so we tessellate both: outer as fill, inner as fill with background
+            // color (punch-through). For now, just tessellate the outer shape.
+            let outer_path = rrect_to_lyon_path(outer);
+            if paint.is_fill() {
+                batchers.paths.add_fill(&outer_path, color);
+                // Tessellate inner as an "erase" with zero-alpha to approximate subtraction.
+                let inner_path = rrect_to_lyon_path(inner);
+                batchers
+                    .paths
+                    .add_fill(&inner_path, [0.0, 0.0, 0.0, 0.0]);
+            } else {
+                let width = paint.stroke_width.max(1.0);
+                batchers.paths.add_stroke(&outer_path, color, width);
+                let inner_path = rrect_to_lyon_path(inner);
+                batchers.paths.add_stroke(&inner_path, color, width);
+            }
         }
 
         DrawCommand::DrawPoints {
@@ -288,7 +517,68 @@ pub fn dispatch_command(
             paint,
             transform,
         } => {
-            tracing::debug!("DrawPoints: tessellation pending");
+            let color = paint_to_color(paint);
+            let width = paint.stroke_width.max(1.0);
+            match mode {
+                PointMode::Points => {
+                    // Draw each point as a small filled circle
+                    let radius = width * 0.5;
+                    for pt in points {
+                        let cx = pt.x.get();
+                        let cy = pt.y.get();
+                        // Approximate point as a diamond (4 triangles)
+                        let verts: &[[f32; 2]] = &[
+                            [cx, cy - radius],
+                            [cx + radius, cy],
+                            [cx, cy + radius],
+                            [cx - radius, cy],
+                        ];
+                        let idxs: &[u32] = &[0, 1, 2, 0, 2, 3];
+                        batchers.paths.add_vertices(verts, None, idxs, color);
+                    }
+                }
+                PointMode::Lines => {
+                    // Draw lines between consecutive point pairs
+                    if points.len() >= 2 {
+                        let mut builder = lyon::path::Path::builder();
+                        let mut i = 0;
+                        while i + 1 < points.len() {
+                            builder.begin(lyon::math::point(
+                                points[i].x.get(),
+                                points[i].y.get(),
+                            ));
+                            builder.line_to(lyon::math::point(
+                                points[i + 1].x.get(),
+                                points[i + 1].y.get(),
+                            ));
+                            builder.end(false);
+                            i += 2;
+                        }
+                        let lyon_path = builder.build();
+                        batchers.paths.add_stroke(&lyon_path, color, width);
+                    }
+                }
+                PointMode::Polygon => {
+                    // Draw a closed polygon connecting all points
+                    if points.len() >= 2 {
+                        let mut builder = lyon::path::Path::builder();
+                        builder.begin(lyon::math::point(
+                            points[0].x.get(),
+                            points[0].y.get(),
+                        ));
+                        for pt in &points[1..] {
+                            builder.line_to(lyon::math::point(pt.x.get(), pt.y.get()));
+                        }
+                        builder.close();
+                        let lyon_path = builder.build();
+                        if paint.is_fill() {
+                            batchers.paths.add_fill(&lyon_path, color);
+                        } else {
+                            batchers.paths.add_stroke(&lyon_path, color, width);
+                        }
+                    }
+                }
+            }
         }
 
         DrawCommand::DrawVertices {
@@ -314,10 +604,7 @@ pub fn dispatch_command(
             transform,
         } => {
             let font_size = style.font_size.unwrap_or(14.0) as f32;
-            let font_weight = style
-                .font_weight
-                .map(|w| w.value())
-                .unwrap_or(400);
+            let font_weight = style.font_weight.map(|w| w.value()).unwrap_or(400);
             let key = TextCacheKey::new(text, font_size, "", font_weight);
             let color = paint_to_color(paint);
             batchers
@@ -467,9 +754,15 @@ pub fn dispatch_command(
         } => {
             let c = color_to_array(color);
             // Full-viewport rect with color.
-            batchers
-                .shapes
-                .add_rect(0.0, 0.0, f32::MAX, f32::MAX, c, [0.0; 4], [1.0, 0.0, 0.0, 1.0]);
+            batchers.shapes.add_rect(
+                0.0,
+                0.0,
+                f32::MAX,
+                f32::MAX,
+                c,
+                [0.0; 4],
+                [1.0, 0.0, 0.0, 1.0],
+            );
         }
 
         // =================================================================
@@ -759,8 +1052,15 @@ mod tests {
     #[test]
     fn batchers_clear_all() {
         let mut b = Batchers::new();
-        b.shapes
-            .add_rect(0.0, 0.0, 10.0, 10.0, [1.0; 4], [0.0; 4], [1.0, 0.0, 0.0, 1.0]);
+        b.shapes.add_rect(
+            0.0,
+            0.0,
+            10.0,
+            10.0,
+            [1.0; 4],
+            [0.0; 4],
+            [1.0, 0.0, 0.0, 1.0],
+        );
         assert!(!b.is_all_empty());
         b.clear_all();
         assert!(b.is_all_empty());
@@ -1067,7 +1367,10 @@ mod tests {
     #[test]
     fn traverse_offset_layer_pushes_and_pops_transform() {
         let mut tree = LayerTree::new();
-        let offset_layer = Layer::Offset(OffsetLayer::new(flui_types::Offset::new(px(10.0), px(20.0))));
+        let offset_layer = Layer::Offset(OffsetLayer::new(flui_types::Offset::new(
+            px(10.0),
+            px(20.0),
+        )));
         let offset_id = tree.insert(offset_layer);
 
         let canvas_layer = Layer::Canvas(CanvasLayer::new());
