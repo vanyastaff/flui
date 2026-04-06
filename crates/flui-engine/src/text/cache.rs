@@ -119,6 +119,27 @@ impl<T> ShapeCache<T> {
         );
     }
 
+    /// Look up a cached value without updating its last-used frame.
+    ///
+    /// Useful when you need multiple simultaneous immutable borrows of
+    /// different cached entries (e.g. building a slice of `TextArea`
+    /// references).
+    pub fn get_ref(&self, key: &TextCacheKey) -> Option<&T> {
+        self.entries.get(key).map(|entry| &entry.value)
+    }
+
+    /// Touch all provided keys, updating their last-used frame.
+    ///
+    /// Call this before or after a batch of `get_ref` lookups to keep
+    /// the entries alive in the LRU.
+    pub fn touch_keys<'a>(&mut self, keys: impl IntoIterator<Item = &'a TextCacheKey>, current_frame: u64) {
+        for key in keys {
+            if let Some(entry) = self.entries.get_mut(key) {
+                entry.last_used_frame = current_frame;
+            }
+        }
+    }
+
     /// Check if the cache contains a key.
     pub fn contains(&self, key: &TextCacheKey) -> bool {
         self.entries.contains_key(key)
@@ -131,8 +152,9 @@ impl<T> ShapeCache<T> {
 
     /// Remove entries where `current_frame - last_used_frame > eviction_ttl_frames`.
     pub fn evict_stale(&mut self, current_frame: u64) {
-        self.entries
-            .retain(|_, entry| current_frame.saturating_sub(entry.last_used_frame) <= self.eviction_ttl_frames);
+        self.entries.retain(|_, entry| {
+            current_frame.saturating_sub(entry.last_used_frame) <= self.eviction_ttl_frames
+        });
     }
 
     /// Remove all entries.

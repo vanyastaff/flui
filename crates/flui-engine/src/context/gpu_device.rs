@@ -14,6 +14,7 @@ use crate::error::{RenderError, RenderResult};
 use crate::pipelines::registry::PipelineRegistry;
 use crate::resources::buffer_pool::BufferPool;
 use crate::resources::texture_cache::TextureCache;
+use crate::text::system::TextSystem;
 
 /// Shared GPU state, one per application.
 ///
@@ -28,6 +29,7 @@ pub struct GpuDevice {
     pipelines: PipelineRegistry,
     buffer_pool: parking_lot::Mutex<BufferPool>,
     texture_cache: parking_lot::Mutex<TextureCache>,
+    text_system: parking_lot::Mutex<TextSystem>,
     default_format: wgpu::TextureFormat,
     unit_quad_vbo: wgpu::Buffer,
     unit_quad_ibo: wgpu::Buffer,
@@ -67,6 +69,7 @@ impl GpuDevice {
         let capabilities = GpuCapabilities::from_adapter_info(&adapter_info, &adapter);
         let default_format = wgpu::TextureFormat::Bgra8Unorm;
         let pipelines = PipelineRegistry::new(&device, default_format);
+        let text_system = TextSystem::new(&device, &queue, default_format);
         let (unit_quad_vbo, unit_quad_ibo) = Self::create_unit_quad_buffers(&device);
 
         Ok(Self {
@@ -77,6 +80,7 @@ impl GpuDevice {
             pipelines,
             buffer_pool: parking_lot::Mutex::new(BufferPool::new()),
             texture_cache: parking_lot::Mutex::new(TextureCache::new()),
+            text_system: parking_lot::Mutex::new(text_system),
             default_format,
             unit_quad_vbo,
             unit_quad_ibo,
@@ -119,6 +123,7 @@ impl GpuDevice {
             .copied()
             .unwrap_or(wgpu::TextureFormat::Bgra8Unorm);
         let pipelines = PipelineRegistry::new(&device, default_format);
+        let text_system = TextSystem::new(&device, &queue, default_format);
         let (unit_quad_vbo, unit_quad_ibo) = Self::create_unit_quad_buffers(&device);
 
         Ok(Self {
@@ -129,6 +134,7 @@ impl GpuDevice {
             pipelines,
             buffer_pool: parking_lot::Mutex::new(BufferPool::new()),
             texture_cache: parking_lot::Mutex::new(TextureCache::new()),
+            text_system: parking_lot::Mutex::new(text_system),
             default_format,
             unit_quad_vbo,
             unit_quad_ibo,
@@ -169,6 +175,12 @@ impl GpuDevice {
     #[must_use]
     pub fn texture_cache(&self) -> &parking_lot::Mutex<TextureCache> {
         &self.texture_cache
+    }
+
+    /// The text rendering system (locked on access).
+    #[must_use]
+    pub fn text_system(&self) -> &parking_lot::Mutex<TextSystem> {
+        &self.text_system
     }
 
     /// The default texture format for this device.
