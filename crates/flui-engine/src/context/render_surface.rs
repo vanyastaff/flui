@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use crate::context::gpu_device::GpuDevice;
 use crate::error::{RenderError, RenderResult};
+use crate::frame::encoder::FrameEncoder;
 
 /// Per-window rendering surface. One per window.
 ///
@@ -104,6 +105,18 @@ impl RenderSurface {
                 wgpu::SurfaceError::OutOfMemory => RenderError::OutOfMemory,
                 _ => RenderError::SurfaceLost,
             })
+    }
+
+    /// Begin recording a new frame.
+    ///
+    /// Returns a [`FrameEncoder`] that can be used to record draw commands
+    /// and then submitted via [`FrameEncoder::finish`].
+    ///
+    /// Returns `Err(SurfaceLost)` if the surface needs reconfiguration
+    /// (call [`resize`](Self::resize) and retry).
+    pub fn begin_frame(&self) -> RenderResult<FrameEncoder<'_>> {
+        let surface_texture = self.get_current_texture()?;
+        Ok(FrameEncoder::new(self, surface_texture))
     }
 
     /// The shared GPU device backing this surface.
