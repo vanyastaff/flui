@@ -1,79 +1,14 @@
-mod window_ext;
-
-pub use window_ext::*;
-
 //! Linux platform implementation (stub)
 //!
 //! This module provides a stub implementation of the Platform trait for Linux.
-//! It serves as a placeholder for future native Linux integration using:
+//! It serves as a placeholder for future native Linux integration using
+//! Wayland (preferred), X11 (fallback), Vulkan/wgpu, and fontconfig/FreeType.
 //!
-//! - **Wayland**: Modern compositor protocol (preferred)
-//! - **X11/Xlib**: Legacy X Window System support
-//! - **Vulkan/wgpu**: GPU rendering
-//! - **Tokio**: Already integrated for async executors
-//! - **fontconfig/FreeType**: Font loading and text rendering
-//!
-//! # Current Status
-//!
-//! ⚠️ **NOT IMPLEMENTED** - This is a stub that returns `unimplemented!()` for all operations.
-//!
-//! # Implementation Roadmap
-//!
-//! ## Wayland Backend (Primary)
-//!
-//! 1. **Window Management**:
-//!    - wayland-client for protocol handling
-//!    - xdg-shell for window decorations
-//!    - Multi-monitor support via wl_output
-//!    - Fullscreen via xdg-toplevel
-//!
-//! 2. **Event Loop**:
-//!    - wayland event queue integration
-//!    - Input via wl_seat, wl_keyboard, wl_pointer
-//!    - Event dispatch on main thread
-//!
-//! 3. **Rendering**:
-//!    - wgpu surface from wayland surface
-//!    - DMA-BUF for zero-copy buffers
-//!    - HiDPI support via wl_output scale
-//!
-//! ## X11 Backend (Fallback)
-//!
-//! 1. **Window Management**:
-//!    - Xlib or xcb for window creation
-//!    - EWMH for window manager hints
-//!    - Xrandr for multi-monitor
-//!    - _NET_WM_STATE_FULLSCREEN for fullscreen
-//!
-//! 2. **Event Loop**:
-//!    - XNextEvent for event polling
-//!    - XInput2 for modern input devices
-//!    - Event dispatch on main thread
-//!
-//! 3. **Rendering**:
-//!    - wgpu surface from X11 window
-//!    - DRI3/Present for efficient presentation
-//!
-//! ## Shared Services
-//!
-//! 4. **Platform Services**:
-//!    - fontconfig for font discovery
-//!    - FreeType for font rasterization
-//!    - Clipboard via wayland-data-device or X11 CLIPBOARD
-//!    - D-Bus for desktop integration
-//!
-//! # Usage
-//!
-//! Currently, attempting to use this platform will panic. For Linux development,
-//! use the winit-based backend or wait for native implementation.
-//!
-//! ```rust,ignore
-//! #[cfg(target_os = "linux")]
-//! use flui_platform::LinuxPlatform;
-//!
-//! // This will panic with "not implemented"
-//! let platform = LinuxPlatform::new();
-//! ```
+//! **NOT IMPLEMENTED** — all operations return `unimplemented!()`.
+
+mod window_ext;
+
+pub use window_ext::*;
 
 use crate::traits::*;
 use anyhow::Result;
