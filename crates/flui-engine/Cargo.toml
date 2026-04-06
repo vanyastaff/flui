@@ -74,6 +74,11 @@ image = { workspace = true, optional = true }
 pollster = { workspace = true }
 env_logger = "0.11.8"
 tokio = { workspace = true }
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "engine_bench"
+harness = false
 
 [lints]
 workspace = true

@@ -29,29 +29,21 @@
 //! GPU (wgpu)
 //! ```
 //!
-//! # Usage
+//! # Module Structure (new)
 //!
-//! ```rust,ignore
-//! use flui_engine::wgpu::SceneRenderer;
-//! use flui_layer::{Scene, SceneBuilder, CanvasLayer, Layer};
-//! use flui_types::Size;
+//! - [`context`] — GPU device, surface, and capability management
+//! - [`frame`] — Per-frame state, encoding, and submission
+//! - [`batchers`] — Draw call batching by primitive type
+//! - [`pipelines`] — Render pipeline creation and caching
+//! - [`text`] — Text rendering subsystem
+//! - [`resources`] — Buffer pools, texture caches, atlases
+//! - [`platform`] — Platform-specific GPU optimizations
+//! - [`vertex`] — Consolidated vertex and instance types
 //!
-//! // 1. Build a Scene (in framework layer)
-//! let scene = Scene::from_layer(
-//!     Size::new(800.0, 600.0),
-//!     Layer::Canvas(CanvasLayer::new()),
-//!     0,
-//! );
+//! # Legacy Module
 //!
-//! // 2. Render Scene (in engine layer)
-//! let mut renderer = SceneRenderer::new(surface, 800, 600);
-//! renderer.render_scene(&scene)?;
-//! ```
-//!
-//! # Feature Flags
-//!
-//! - `wgpu` (default) - wgpu GPU backend
-//! - Future: `skia`, `vello`, `software`
+//! The [`wgpu`] module contains the original `WgpuPainter` implementation.
+//! It will be removed once the migration to the new module structure is complete.
 
 // ============================================================================
 // ABSTRACT LAYER (backend-agnostic)
@@ -70,7 +62,35 @@ pub mod commands;
 pub mod utils;
 
 // ============================================================================
-// BACKENDS
+// NEW MODULE STRUCTURE (migration in progress)
+// ============================================================================
+
+/// GPU device, surface, and capability management
+pub mod context;
+
+/// Per-frame rendering state and command encoding
+pub mod frame;
+
+/// Draw call batching by primitive type
+pub mod batchers;
+
+/// Render pipeline creation and caching
+pub mod pipelines;
+
+/// Text rendering subsystem
+pub mod text;
+
+/// GPU resource management (buffers, textures, atlases)
+pub mod resources;
+
+/// Platform-specific GPU backend optimizations
+pub mod platform;
+
+/// Consolidated vertex and instance types for GPU rendering
+pub mod vertex;
+
+// ============================================================================
+// LEGACY BACKEND (kept during migration — will be removed in Task 16)
 // ============================================================================
 
 /// wgpu rendering backend (Vulkan/Metal/DX12/WebGPU)
