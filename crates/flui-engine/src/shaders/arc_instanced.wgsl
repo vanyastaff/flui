@@ -1,36 +1,43 @@
 // Instanced arc shader for FLUI
 //
 // Renders multiple arcs (partial circles) in a single draw call using GPU instancing.
-// Each instance contains: center, radius, angles (start, sweep), color, and transform.
 //
-// Performance: 100 arcs = 1 draw call (vs 100 without instancing)
+// Instance layout matches ArcInstance in vertex.rs:
+//   @location(2) center:      vec2<f32>  (center x, y)
+//   @location(3) radius:      f32
+//   @location(4) start_angle: f32
+//   @location(5) sweep_angle: f32
+//   @location(6) color:       vec4<f32>  (RGBA)
+//   (padding not exposed to shader)
 
-// Vertex input (shared unit quad: [-1,-1] to [1,1])
+const TWO_PI: f32 = 6.28318530718;
+
+// Vertex input (shared unit quad: [0,0] to [1,1])
 struct VertexInput {
-    @location(0) position: vec2<f32>,  // Quad corner [-1 to 1]
+    @location(0) position: vec2<f32>,
 }
 
-// Instance input (per-arc data)
+// Instance input — matches ArcInstance::desc()
 struct InstanceInput {
-    @location(2) center_radius: vec4<f32>,  // [x, y, radius, _padding]
-    @location(3) angles: vec4<f32>,         // [start_angle, sweep_angle, _padding, _padding]
-    @location(4) color: vec4<f32>,          // [r, g, b, a] in 0-1 range
-    @location(5) transform: vec4<f32>,      // [scale_x, scale_y, translate_x, translate_y]
+    @location(2) center: vec2<f32>,
+    @location(3) radius: f32,
+    @location(4) start_angle: f32,
+    @location(5) sweep_angle: f32,
+    @location(6) color: vec4<f32>,
 }
 
 // Vertex output / Fragment input
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) color: vec4<f32>,
-    @location(1) local_pos: vec2<f32>,      // Position relative to arc center [-1 to 1]
-    @location(2) radius: f32,               // Arc radius (for anti-aliasing)
-    @location(3) start_angle: f32,          // Start angle in radians
-    @location(4) sweep_angle: f32,          // Sweep angle in radians
+    @location(1) local_pos: vec2<f32>,
+    @location(2) start_angle: f32,
+    @location(3) sweep_angle: f32,
 }
 
-// Viewport uniform (for screen-space to clip-space conversion)
+// Viewport uniform
 struct Viewport {
-    size: vec2<f32>,      // Viewport size in pixels
+    size: vec2<f32>,
     _padding: vec2<f32>,
 }
 
@@ -44,121 +51,92 @@ fn vs_main(
 ) -> VertexOutput {
     var out: VertexOutput;
 
-    let center = instance.center_radius.xy;
-    let radius = instance.center_radius.z;
+    // Convert unit quad [0,1] to [-1,1] range
+    let normalized_pos = vertex.position * 2.0 - 1.0;
 
-    // Transform unit quad [-1,1] to arc bounding box
-    // Apply instance transform for elliptical arcs (scale_x, scale_y)
-    let local_pos = vertex.position * vec2<f32>(
-        radius * instance.transform.x,
-        radius * instance.transform.y
-    );
-
-    let world_pos = center + local_pos + instance.transform.zw; // Add translation
+    // Scale by radius to create bounding box around arc
+    let world_pos = instance.center + normalized_pos * instance.radius;
 
     // Convert to clip space [-1, 1]
     let clip_x = (world_pos.x / viewport.size.x) * 2.0 - 1.0;
-    let clip_y = 1.0 - (world_pos.y / viewport.size.y) * 2.0; // Flip Y for screen coords
+    let clip_y = 1.0 - (world_pos.y / viewport.size.y) * 2.0;
 
     out.position = vec4<f32>(clip_x, clip_y, 0.0, 1.0);
     out.color = instance.color;
-    out.local_pos = vertex.position; // [-1 to 1] range
-    out.radius = radius;
-    out.start_angle = instance.angles.x;
-    out.sweep_angle = instance.angles.y;
+    out.local_pos = normalized_pos;
+    out.start_angle = instance.start_angle;
+    out.sweep_angle = instance.sweep_angle;
 
     return out;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Calculate distance from arc center
+    // Distance from center in local space (unit circle)
     let dist = length(in.local_pos);
 
-    // Arc edge at distance = 1.0 (unit circle in local space)
-    // Smooth anti-aliasing using smoothstep
-    let edge_softness = 0.02; // 2% of radius for smooth edge
-    var alpha = 1.0 - smoothstep(1.0 - edge_softness, 1.0 + edge_softness, dist);
+    // Circle edge SDF with adaptive AA
+    let edge_width = fwidth(dist) * 0.5;
+    var alpha = 1.0 - smoothstep(1.0 - edge_width, 1.0 + edge_width, dist);
 
-    // Discard pixels outside circle radius
     if (alpha < 0.01) {
         discard;
     }
 
     // Calculate angle of current pixel
-    // atan2(y, x) returns angle from -π to π
-    // We need to convert local_pos to angle
     let pixel_angle = atan2(in.local_pos.y, in.local_pos.x);
 
-    // Normalize angles to [0, 2π] range
-    let start = in.start_angle;
-    let sweep = in.sweep_angle;
-
-    // Handle angle wrapping
-    // Convert pixel angle to [0, 2π] range
-    var normalized_pixel = pixel_angle;
-    if (normalized_pixel < 0.0) {
-        normalized_pixel = normalized_pixel + 6.28318530718; // + 2π
+    // Normalize pixel angle to [0, 2pi)
+    var norm_pixel = pixel_angle;
+    if (norm_pixel < 0.0) {
+        norm_pixel = norm_pixel + TWO_PI;
     }
 
-    // Convert start angle to [0, 2π] range
-    var normalized_start = start;
-    if (normalized_start < 0.0) {
-        normalized_start = normalized_start + 6.28318530718;
+    // Normalize start angle to [0, 2pi)
+    var norm_start = in.start_angle;
+    if (norm_start < 0.0) {
+        norm_start = norm_start + TWO_PI;
     }
 
-    // Calculate end angle
-    var end_angle = normalized_start + sweep;
+    let end_angle = norm_start + in.sweep_angle;
 
     // Check if pixel is within arc sweep
     var in_arc = false;
 
-    if (sweep > 0.0) {
-        // Clockwise sweep
-        if (end_angle > 6.28318530718) {
-            // Arc wraps around 2π
-            in_arc = (normalized_pixel >= normalized_start) || (normalized_pixel <= (end_angle - 6.28318530718));
+    if (in.sweep_angle > 0.0) {
+        if (end_angle > TWO_PI) {
+            in_arc = (norm_pixel >= norm_start) || (norm_pixel <= (end_angle - TWO_PI));
         } else {
-            in_arc = (normalized_pixel >= normalized_start) && (normalized_pixel <= end_angle);
+            in_arc = (norm_pixel >= norm_start) && (norm_pixel <= end_angle);
         }
     } else {
-        // Counter-clockwise sweep
-        end_angle = normalized_start + sweep;
-        if (end_angle < 0.0) {
-            // Arc wraps around 0
-            in_arc = (normalized_pixel <= normalized_start) || (normalized_pixel >= (end_angle + 6.28318530718));
+        let neg_end = norm_start + in.sweep_angle;
+        if (neg_end < 0.0) {
+            in_arc = (norm_pixel <= norm_start) || (norm_pixel >= (neg_end + TWO_PI));
         } else {
-            in_arc = (normalized_pixel <= normalized_start) && (normalized_pixel >= end_angle);
+            in_arc = (norm_pixel <= norm_start) && (norm_pixel >= neg_end);
         }
     }
 
-    // Discard pixels outside arc sweep with smooth edges
     if (!in_arc) {
         discard;
     }
 
-    // Apply smooth edge anti-aliasing to arc boundaries
-    let angle_softness = 0.05; // ~3 degrees
-    var edge_alpha = 1.0;
-
-    // Distance to start edge
-    var dist_to_start = abs(normalized_pixel - normalized_start);
+    // Smooth edges at arc boundaries
+    let angle_softness = 0.05;
+    var dist_to_start = abs(norm_pixel - norm_start);
     if (dist_to_start > 3.14159265359) {
-        dist_to_start = 6.28318530718 - dist_to_start; // Handle wrap-around
+        dist_to_start = TWO_PI - dist_to_start;
     }
-
-    // Distance to end edge
-    var dist_to_end = abs(normalized_pixel - end_angle);
+    var dist_to_end = abs(norm_pixel - end_angle);
     if (dist_to_end > 3.14159265359) {
-        dist_to_end = 6.28318530718 - dist_to_end; // Handle wrap-around
+        dist_to_end = TWO_PI - dist_to_end;
     }
-
-    // Smooth edges at arc start and end
     let min_edge_dist = min(dist_to_start, dist_to_end);
+    var edge_alpha = 1.0;
     if (min_edge_dist < angle_softness) {
         edge_alpha = min_edge_dist / angle_softness;
     }
 
-    // Multiply alpha with color alpha and edge alpha
     return vec4<f32>(in.color.rgb, in.color.a * alpha * edge_alpha);
 }

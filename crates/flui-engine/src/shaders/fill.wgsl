@@ -1,52 +1,48 @@
-// Fill shader for solid colors and gradients
+// Fill shader for tessellated vector paths
 //
-// This shader handles basic 2D rendering with vertex colors.
-// It supports both solid fills and per-vertex color interpolation.
+// Non-instanced: each vertex carries its own position and color.
+// Used for lyon-tessellated path geometry.
+//
+// Vertex layout matches PathVertex in vertex.rs:
+//   @location(0) position: vec2<f32>
+//   @location(1) color:    vec4<f32>
 
-// Uniform buffer containing view-projection matrix and viewport info
-struct Uniforms {
-    view_proj: mat4x4<f32>,
-    viewport_size: vec4<f32>,
-    time: f32,
-    _padding: vec3<f32>,
-}
-
-@group(0) @binding(0)
-var<uniform> uniforms: Uniforms;
-
-// Vertex shader input
+// Vertex input
 struct VertexInput {
     @location(0) position: vec2<f32>,
     @location(1) color: vec4<f32>,
-    @location(2) uv: vec2<f32>,
 }
 
-// Vertex shader output / Fragment shader input
+// Vertex output / Fragment input
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec4<f32>,
-    @location(1) uv: vec2<f32>,
 }
 
-// Vertex shader
+// Viewport uniform
+struct Viewport {
+    size: vec2<f32>,
+    _padding: vec2<f32>,
+}
+
+@group(0) @binding(0)
+var<uniform> viewport: Viewport;
+
 @vertex
 fn vs_main(input: VertexInput) -> VertexOutput {
     var output: VertexOutput;
 
-    // Transform position to clip space
-    output.clip_position = uniforms.view_proj * vec4<f32>(input.position, 0.0, 1.0);
+    // Convert screen-space position to clip space [-1, 1]
+    let clip_x = (input.position.x / viewport.size.x) * 2.0 - 1.0;
+    let clip_y = 1.0 - (input.position.y / viewport.size.y) * 2.0;
 
-    // Pass through color and UV
+    output.clip_position = vec4<f32>(clip_x, clip_y, 0.0, 1.0);
     output.color = input.color;
-    output.uv = input.uv;
 
     return output;
 }
 
-// Fragment shader
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    // Simply output the interpolated vertex color
-    // This gives us smooth gradients from vertex colors
     return input.color;
 }

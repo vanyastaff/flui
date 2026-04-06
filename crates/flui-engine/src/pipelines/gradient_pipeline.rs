@@ -1,10 +1,14 @@
 //! Render pipeline for linear and radial gradients.
 //!
-//! **Placeholder:** Both pipelines currently use the rect shader.
+//! Gradient shaders require storage buffers for dynamic color stops, which
+//! adds complexity. For v1, both pipelines use the rect instanced shader as a
+//! placeholder with RectInstance layout. Gradient rendering will be wired in a
+//! future pass when the storage buffer infrastructure is in place.
 
 /// Creates the linear gradient render pipeline.
 ///
-/// **Placeholder:** Uses the rect shader until the dedicated gradient shader is wired.
+/// **Placeholder:** Uses the rect shader until the gradient storage buffer
+/// infrastructure is wired.
 pub fn create_linear_gradient_pipeline(
     device: &wgpu::Device,
     format: wgpu::TextureFormat,
@@ -20,7 +24,8 @@ pub fn create_linear_gradient_pipeline(
 
 /// Creates the radial gradient render pipeline.
 ///
-/// **Placeholder:** Uses the rect shader until the dedicated gradient shader is wired.
+/// **Placeholder:** Uses the rect shader until the gradient storage buffer
+/// infrastructure is wired.
 pub fn create_radial_gradient_pipeline(
     device: &wgpu::Device,
     format: wgpu::TextureFormat,
