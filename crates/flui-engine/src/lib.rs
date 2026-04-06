@@ -106,12 +106,34 @@ pub use commands::{dispatch_command, dispatch_commands};
 pub use error::{RenderError, RenderResult};
 pub use traits::{CommandRenderer, Painter};
 
-// wgpu backend exports
+// wgpu backend exports (legacy — kept during migration)
 #[cfg(feature = "wgpu-backend")]
 pub use wgpu::{Backend, LayerRender, WgpuPainter};
 
 #[cfg(all(feature = "wgpu-backend", debug_assertions))]
 pub use wgpu::DebugBackend;
+
+// New public API — GPU context
+#[cfg(feature = "wgpu-backend")]
+pub use context::gpu_device::GpuDevice;
+#[cfg(feature = "wgpu-backend")]
+pub use context::render_surface::RenderSurface;
+#[cfg(feature = "wgpu-backend")]
+pub use context::capabilities::GpuCapabilities;
+
+// New public API — frame encoding and submission
+#[cfg(feature = "wgpu-backend")]
+pub use frame::encoder::FrameEncoder;
+#[cfg(feature = "wgpu-backend")]
+pub use frame::dispatch::Batchers;
+#[cfg(feature = "wgpu-backend")]
+pub use frame::state_stack::StateStack;
+#[cfg(feature = "wgpu-backend")]
+pub use frame::submission::{BatchedDraw, ScissorRect};
+
+// New public API — pipeline registry
+#[cfg(feature = "wgpu-backend")]
+pub use pipelines::registry::{PipelineId, PipelineRegistry};
 
 // Re-export layer types from flui-layer
 pub use flui_layer::{
