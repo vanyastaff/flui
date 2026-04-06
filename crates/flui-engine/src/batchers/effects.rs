@@ -139,6 +139,16 @@ impl EffectBatcher {
         &self.shadows
     }
 
+    /// Read-only access to the accumulated linear gradient instances.
+    pub fn linear_gradients(&self) -> &[LinearGradientInstance] {
+        &self.linear_gradients
+    }
+
+    /// Read-only access to the accumulated radial gradient instances.
+    pub fn radial_gradients(&self) -> &[RadialGradientInstance] {
+        &self.radial_gradients
+    }
+
     /// Returns the number of queued blur passes.
     pub fn blur_count(&self) -> usize {
         self.blur_passes.len()

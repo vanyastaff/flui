@@ -76,6 +76,7 @@ impl PipelineId {
 pub struct PipelineRegistry {
     pipelines: HashMap<PipelineId, Arc<wgpu::RenderPipeline>>,
     bind_group_layout: Arc<wgpu::BindGroupLayout>,
+    gradient_bind_group_layout: Arc<wgpu::BindGroupLayout>,
 }
 
 impl PipelineRegistry {
@@ -85,22 +86,25 @@ impl PipelineRegistry {
     /// compiles every pipeline variant. Called once during GPU device initialization.
     #[must_use]
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
-        let bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("frame_uniforms_layout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }],
-            });
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("frame_uniforms_layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
 
         let bind_group_layout = Arc::new(bind_group_layout);
+
+        let gradient_bind_group_layout = Arc::new(
+            super::gradient_pipeline::create_gradient_bind_group_layout(device),
+        );
 
         let mut pipelines = HashMap::new();
 
@@ -165,6 +169,7 @@ impl PipelineRegistry {
                 device,
                 format,
                 &bind_group_layout,
+                &gradient_bind_group_layout,
             )),
         );
         pipelines.insert(
@@ -173,6 +178,7 @@ impl PipelineRegistry {
                 device,
                 format,
                 &bind_group_layout,
+                &gradient_bind_group_layout,
             )),
         );
 
@@ -207,14 +213,17 @@ impl PipelineRegistry {
         // Compositing pipeline
         pipelines.insert(
             PipelineId::Compositing,
-            Arc::new(
-                super::blur_pipeline::create_compositing_pipeline(device, format, &bind_group_layout),
-            ),
+            Arc::new(super::blur_pipeline::create_compositing_pipeline(
+                device,
+                format,
+                &bind_group_layout,
+            )),
         );
 
         Self {
             pipelines,
             bind_group_layout,
+            gradient_bind_group_layout,
         }
     }
 
@@ -228,6 +237,14 @@ impl PipelineRegistry {
     #[must_use]
     pub fn bind_group_layout(&self) -> &Arc<wgpu::BindGroupLayout> {
         &self.bind_group_layout
+    }
+
+    /// Returns the bind group layout for gradient-specific data (group 1).
+    ///
+    /// Contains gradient uniform buffer (binding 0) and stops storage buffer (binding 1).
+    #[must_use]
+    pub fn gradient_bind_group_layout(&self) -> &Arc<wgpu::BindGroupLayout> {
+        &self.gradient_bind_group_layout
     }
 }
 

@@ -12,11 +12,13 @@ use flui_layer::tree::LayerTree;
 use flui_layer::{Layer, Scene};
 use flui_painting::display_list::{DisplayListCore, DrawCommand};
 use flui_types::geometry::{Matrix4, Pixels, RRect, Rect};
-use flui_types::painting::{Paint, Path, PathCommand, PointMode};
+use flui_types::painting::{Paint, Path, PathCommand, PointMode, Shader};
 use flui_types::styling::Color;
 
 use crate::batchers::compositing::{CompositingBatcher, FilterType};
-use crate::batchers::effects::{EffectBatcher, ShadowInstance};
+use crate::batchers::effects::{
+    EffectBatcher, GradientStop, LinearGradientInstance, RadialGradientInstance, ShadowInstance,
+};
 use crate::batchers::images::ImageBatcher;
 use crate::batchers::paths::PathBatcher;
 use crate::batchers::shapes::ShapeBatcher;
@@ -140,6 +142,113 @@ fn rect_to_xywh(r: &Rect<Pixels>) -> [f32; 4] {
         r.width().get(),
         r.height().get(),
     ]
+}
+
+// ===========================================================================
+// Gradient dispatch helper
+// ===========================================================================
+
+/// Convert a slice of [`Color`] values and optional stop positions into GPU
+/// [`GradientStop`] instances with evenly distributed positions when no
+/// explicit stops are provided.
+fn build_gradient_stops(colors: &[Color], stops: Option<&Vec<f32>>) -> Vec<GradientStop> {
+    let count = colors.len();
+    colors
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let position = stops
+                .and_then(|s| s.get(i).copied())
+                .unwrap_or_else(|| {
+                    if count <= 1 {
+                        0.0
+                    } else {
+                        i as f32 / (count - 1) as f32
+                    }
+                });
+            GradientStop {
+                color: color_to_array(c),
+                position,
+                _padding: [0.0; 3],
+            }
+        })
+        .collect()
+}
+
+/// Dispatch a [`Shader`] variant to the appropriate gradient batcher.
+///
+/// Handles `LinearGradient`, `RadialGradient`, and `SweepGradient` (mapped to
+/// radial as a fallback). `Image` shaders are ignored with a debug log.
+fn dispatch_gradient(
+    batchers: &mut Batchers,
+    shader: &Shader,
+    bounds: [f32; 4],
+    corner_radii: [f32; 4],
+    transform: [f32; 4],
+) {
+    match shader {
+        Shader::LinearGradient {
+            from,
+            to,
+            colors,
+            stops,
+            tile_mode: _,
+        } => {
+            let gradient_stops = build_gradient_stops(colors, stops.as_ref());
+            batchers.effects.add_linear_gradient(LinearGradientInstance {
+                bounds,
+                start: [from.dx.get(), from.dy.get()],
+                end: [to.dx.get(), to.dy.get()],
+                stops: gradient_stops,
+                corner_radii,
+                transform,
+            });
+        }
+        Shader::RadialGradient {
+            center,
+            radius,
+            colors,
+            stops,
+            tile_mode: _,
+            focal: _,
+            focal_radius: _,
+        } => {
+            let gradient_stops = build_gradient_stops(colors, stops.as_ref());
+            batchers
+                .effects
+                .add_radial_gradient(RadialGradientInstance {
+                    bounds,
+                    center: [center.dx.get(), center.dy.get()],
+                    radius: *radius,
+                    stops: gradient_stops,
+                    corner_radii,
+                    transform,
+                });
+        }
+        Shader::SweepGradient {
+            center,
+            colors,
+            stops,
+            ..
+        } => {
+            // Fallback: treat sweep gradient as radial using the bounding rect diagonal
+            let gradient_stops = build_gradient_stops(colors, stops.as_ref());
+            let half_diag = (bounds[2] * bounds[2] + bounds[3] * bounds[3]).sqrt() * 0.5;
+            batchers
+                .effects
+                .add_radial_gradient(RadialGradientInstance {
+                    bounds,
+                    center: [center.dx.get(), center.dy.get()],
+                    radius: half_diag,
+                    stops: gradient_stops,
+                    corner_radii,
+                    transform,
+                });
+        }
+        Shader::Image(_) | _ => {
+            tracing::debug!("DrawGradient: unsupported shader variant, skipping");
+        }
+    }
 }
 
 // ===========================================================================
@@ -736,7 +845,10 @@ pub fn dispatch_command(
             shader,
             transform,
         } => {
-            tracing::debug!("DrawGradient: gradient dispatch pending shader decomposition");
+            let bounds = rect_to_xywh(rect);
+            let corner_radii = [0.0; 4];
+            let xform = extract_transform_2d(transform);
+            dispatch_gradient(batchers, shader, bounds, corner_radii, xform);
         }
 
         DrawCommand::DrawGradientRRect {
@@ -744,7 +856,11 @@ pub fn dispatch_command(
             shader,
             transform,
         } => {
-            tracing::debug!("DrawGradientRRect: gradient dispatch pending");
+            let rect = rrect.bounding_rect();
+            let bounds = rect_to_xywh(&rect);
+            let corner_radii = rrect_corner_radii(rrect);
+            let xform = extract_transform_2d(transform);
+            dispatch_gradient(batchers, shader, bounds, corner_radii, xform);
         }
 
         DrawCommand::DrawColor {

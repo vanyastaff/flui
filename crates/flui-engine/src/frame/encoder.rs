@@ -19,6 +19,44 @@ use crate::pipelines::registry::PipelineId;
 use crate::vertex::FrameUniforms;
 use flui_layer::Scene;
 
+// ---------------------------------------------------------------------------
+// GPU-side gradient uniform structs
+// ---------------------------------------------------------------------------
+
+/// GPU uniform data for a linear gradient (matches `GradientUniforms` in
+/// `linear.wgsl`).
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct LinearGradientUniforms {
+    /// Bounding rectangle (x, y, w, h).
+    bounds: [f32; 4],
+    /// Start and end points packed as (start.x, start.y, end.x, end.y).
+    start_end: [f32; 4],
+    /// Per-corner radii [tl, tr, br, bl].
+    corner_radii: [f32; 4],
+    /// Number of color stops.
+    stop_count: u32,
+    /// Padding to align to 16 bytes.
+    _padding: [u32; 3],
+}
+
+/// GPU uniform data for a radial gradient (matches `GradientUniforms` in
+/// `radial.wgsl`).
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct RadialGradientUniforms {
+    /// Bounding rectangle (x, y, w, h).
+    bounds: [f32; 4],
+    /// Center and radius packed as (center.x, center.y, radius, 0.0).
+    center_radius: [f32; 4],
+    /// Per-corner radii [tl, tr, br, bl].
+    corner_radii: [f32; 4],
+    /// Number of color stops.
+    stop_count: u32,
+    /// Padding to align to 16 bytes.
+    _padding: [u32; 3],
+}
+
 /// Per-frame command encoder. Created by
 /// [`RenderSurface::begin_frame`](crate::context::render_surface::RenderSurface::begin_frame).
 ///
@@ -311,6 +349,138 @@ impl<'surface> FrameEncoder<'surface> {
                         0,
                         0..self.batchers.effects.shadow_count() as u32,
                     );
+                }
+            }
+
+            // === Linear Gradients ===
+            #[allow(clippy::cast_possible_truncation)] // stop counts are always small
+            if self.batchers.effects.linear_gradient_count() > 0 {
+                if let Some(pipeline) = self.gpu.pipelines().get(PipelineId::LinearGradient) {
+                    render_pass.set_pipeline(pipeline);
+                    // Ensure unit quad is bound (may have been replaced by path vertices)
+                    render_pass.set_vertex_buffer(0, self.gpu.unit_quad_vbo().slice(..));
+                    render_pass.set_index_buffer(
+                        self.gpu.unit_quad_ibo().slice(..),
+                        wgpu::IndexFormat::Uint16,
+                    );
+
+                    let gradient_bgl = self.gpu.pipelines().gradient_bind_group_layout();
+                    for grad in self.batchers.effects.linear_gradients() {
+                        let uniforms = LinearGradientUniforms {
+                            bounds: grad.bounds,
+                            start_end: [grad.start[0], grad.start[1], grad.end[0], grad.end[1]],
+                            corner_radii: grad.corner_radii,
+                            stop_count: grad.stops.len() as u32,
+                            _padding: [0; 3],
+                        };
+
+                        let uniform_buf =
+                            self.gpu
+                                .device()
+                                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                    label: Some("linear_gradient_uniforms"),
+                                    contents: bytemuck::bytes_of(&uniforms),
+                                    usage: wgpu::BufferUsages::UNIFORM,
+                                });
+
+                        let stops_buf =
+                            self.gpu
+                                .device()
+                                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                    label: Some("linear_gradient_stops"),
+                                    contents: bytemuck::cast_slice(&grad.stops),
+                                    usage: wgpu::BufferUsages::STORAGE,
+                                });
+
+                        let bind_group =
+                            self.gpu
+                                .device()
+                                .create_bind_group(&wgpu::BindGroupDescriptor {
+                                    label: Some("linear_gradient_bind_group"),
+                                    layout: gradient_bgl,
+                                    entries: &[
+                                        wgpu::BindGroupEntry {
+                                            binding: 0,
+                                            resource: uniform_buf.as_entire_binding(),
+                                        },
+                                        wgpu::BindGroupEntry {
+                                            binding: 1,
+                                            resource: stops_buf.as_entire_binding(),
+                                        },
+                                    ],
+                                });
+
+                        render_pass.set_bind_group(1, &bind_group, &[]);
+                        render_pass.draw_indexed(0..6, 0, 0..1);
+                    }
+
+                    // Clear group 1 so subsequent pipelines don't inherit it
+                    render_pass.set_bind_group(0, self.surface.viewport_bind_group(), &[]);
+                }
+            }
+
+            // === Radial Gradients ===
+            #[allow(clippy::cast_possible_truncation)] // stop counts are always small
+            if self.batchers.effects.radial_gradient_count() > 0 {
+                if let Some(pipeline) = self.gpu.pipelines().get(PipelineId::RadialGradient) {
+                    render_pass.set_pipeline(pipeline);
+                    render_pass.set_vertex_buffer(0, self.gpu.unit_quad_vbo().slice(..));
+                    render_pass.set_index_buffer(
+                        self.gpu.unit_quad_ibo().slice(..),
+                        wgpu::IndexFormat::Uint16,
+                    );
+
+                    let gradient_bgl = self.gpu.pipelines().gradient_bind_group_layout();
+                    for grad in self.batchers.effects.radial_gradients() {
+                        let uniforms = RadialGradientUniforms {
+                            bounds: grad.bounds,
+                            center_radius: [grad.center[0], grad.center[1], grad.radius, 0.0],
+                            corner_radii: grad.corner_radii,
+                            stop_count: grad.stops.len() as u32,
+                            _padding: [0; 3],
+                        };
+
+                        let uniform_buf =
+                            self.gpu
+                                .device()
+                                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                    label: Some("radial_gradient_uniforms"),
+                                    contents: bytemuck::bytes_of(&uniforms),
+                                    usage: wgpu::BufferUsages::UNIFORM,
+                                });
+
+                        let stops_buf =
+                            self.gpu
+                                .device()
+                                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                    label: Some("radial_gradient_stops"),
+                                    contents: bytemuck::cast_slice(&grad.stops),
+                                    usage: wgpu::BufferUsages::STORAGE,
+                                });
+
+                        let bind_group =
+                            self.gpu
+                                .device()
+                                .create_bind_group(&wgpu::BindGroupDescriptor {
+                                    label: Some("radial_gradient_bind_group"),
+                                    layout: gradient_bgl,
+                                    entries: &[
+                                        wgpu::BindGroupEntry {
+                                            binding: 0,
+                                            resource: uniform_buf.as_entire_binding(),
+                                        },
+                                        wgpu::BindGroupEntry {
+                                            binding: 1,
+                                            resource: stops_buf.as_entire_binding(),
+                                        },
+                                    ],
+                                });
+
+                        render_pass.set_bind_group(1, &bind_group, &[]);
+                        render_pass.draw_indexed(0..6, 0, 0..1);
+                    }
+
+                    render_pass.set_bind_group(0, self.surface.viewport_bind_group(), &[]);
                 }
             }
 
