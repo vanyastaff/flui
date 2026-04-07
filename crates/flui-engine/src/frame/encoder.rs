@@ -370,6 +370,20 @@ impl<'surface> FrameEncoder<'surface> {
             for op in ops {
                 match op {
                     DrawOp::DrawGroup { before, after } => {
+                        // === Shadows first (drawn UNDER content) ===
+                        let shadow_count = after.shadows - before.shadows;
+                        if shadow_count > 0 {
+                            if let Some(ref buf) = shadow_buf {
+                                if let Some(pipeline) = self.gpu.pipelines().get(PipelineId::Shadow)
+                                {
+                                    render_pass.set_pipeline(pipeline);
+                                    let offset = before.shadows as u64 * shadow_stride;
+                                    render_pass.set_vertex_buffer(1, buf.slice(offset..));
+                                    render_pass.draw_indexed(0..6, 0, 0..shadow_count);
+                                }
+                            }
+                        }
+
                         // === Rects (range: before.rects..after.rects) ===
                         let rect_count = after.rects - before.rects;
                         if rect_count > 0 {
@@ -447,20 +461,6 @@ impl<'surface> FrameEncoder<'surface> {
                                         self.gpu.unit_quad_ibo().slice(..),
                                         wgpu::IndexFormat::Uint16,
                                     );
-                                }
-                            }
-                        }
-
-                        // === Shadows (range: before.shadows..after.shadows) ===
-                        let shadow_count = after.shadows - before.shadows;
-                        if shadow_count > 0 {
-                            if let Some(ref buf) = shadow_buf {
-                                if let Some(pipeline) = self.gpu.pipelines().get(PipelineId::Shadow)
-                                {
-                                    render_pass.set_pipeline(pipeline);
-                                    let offset = before.shadows as u64 * shadow_stride;
-                                    render_pass.set_vertex_buffer(1, buf.slice(offset..));
-                                    render_pass.draw_indexed(0..6, 0, 0..shadow_count);
                                 }
                             }
                         }
