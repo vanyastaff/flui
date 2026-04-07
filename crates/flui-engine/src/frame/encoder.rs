@@ -58,6 +58,23 @@ struct RadialGradientUniforms {
     _padding: [u32; 3],
 }
 
+/// GPU uniform data for a sweep gradient (matches `GradientUniforms` in
+/// `sweep.wgsl`).
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct SweepGradientUniforms {
+    /// Bounding rectangle (x, y, w, h).
+    bounds: [f32; 4],
+    /// Center and angles packed as (center.x, center.y, start_angle, end_angle).
+    center_angles: [f32; 4],
+    /// Per-corner radii [tl, tr, br, bl].
+    corner_radii: [f32; 4],
+    /// Number of color stops.
+    stop_count: u32,
+    /// Padding to align to 16 bytes.
+    _padding: [u32; 3],
+}
+
 /// Per-frame command encoder. Created by
 /// [`RenderSurface::begin_frame`](crate::context::render_surface::RenderSurface::begin_frame).
 ///
@@ -154,7 +171,8 @@ impl<'surface> FrameEncoder<'surface> {
             let data = bytemuck::cast_slice(self.batchers.shapes.rects());
             let buf = {
                 let mut pool = self.gpu.buffer_pool().lock();
-                pool.get_vertex_buffer(self.gpu.device(), data.len() as u64).clone()
+                pool.get_vertex_buffer(self.gpu.device(), data.len() as u64)
+                    .clone()
             };
             self.gpu.queue().write_buffer(&buf, 0, data);
             Some(buf)
@@ -166,7 +184,8 @@ impl<'surface> FrameEncoder<'surface> {
             let data = bytemuck::cast_slice(self.batchers.shapes.circles());
             let buf = {
                 let mut pool = self.gpu.buffer_pool().lock();
-                pool.get_vertex_buffer(self.gpu.device(), data.len() as u64).clone()
+                pool.get_vertex_buffer(self.gpu.device(), data.len() as u64)
+                    .clone()
             };
             self.gpu.queue().write_buffer(&buf, 0, data);
             Some(buf)
@@ -178,7 +197,8 @@ impl<'surface> FrameEncoder<'surface> {
             let data = bytemuck::cast_slice(self.batchers.shapes.arcs());
             let buf = {
                 let mut pool = self.gpu.buffer_pool().lock();
-                pool.get_vertex_buffer(self.gpu.device(), data.len() as u64).clone()
+                pool.get_vertex_buffer(self.gpu.device(), data.len() as u64)
+                    .clone()
             };
             self.gpu.queue().write_buffer(&buf, 0, data);
             Some(buf)
@@ -190,7 +210,8 @@ impl<'surface> FrameEncoder<'surface> {
             let data = bytemuck::cast_slice(self.batchers.effects.shadows());
             let buf = {
                 let mut pool = self.gpu.buffer_pool().lock();
-                pool.get_vertex_buffer(self.gpu.device(), data.len() as u64).clone()
+                pool.get_vertex_buffer(self.gpu.device(), data.len() as u64)
+                    .clone()
             };
             self.gpu.queue().write_buffer(&buf, 0, data);
             Some(buf)
@@ -199,8 +220,7 @@ impl<'surface> FrameEncoder<'surface> {
         };
 
         // -- Upload image instances to GPU buffers (from pool) ---------------
-        let image_instance_stride =
-            std::mem::size_of::<crate::vertex::ImageQuadInstance>() as u64;
+        let image_instance_stride = std::mem::size_of::<crate::vertex::ImageQuadInstance>() as u64;
         let image_buf = if self.batchers.images.total_instance_count() > 0 {
             // Flatten all image groups into a single contiguous buffer.
             // We track the byte offset per group so we can issue per-texture draws.
@@ -223,22 +243,25 @@ impl<'surface> FrameEncoder<'surface> {
         };
 
         // -- Upload path geometry (from pool) -------------------------------
-        let (path_verts_buf, path_idxs_buf) =
-            if self.batchers.paths.draw_range_count() > 0 {
-                let vert_data = bytemuck::cast_slice(self.batchers.paths.vertices());
-                let idx_data = bytemuck::cast_slice(self.batchers.paths.indices());
-                let (verts, idxs) = {
-                    let mut pool = self.gpu.buffer_pool().lock();
-                    let v = pool.get_vertex_buffer(self.gpu.device(), vert_data.len() as u64).clone();
-                    let i = pool.get_index_buffer(self.gpu.device(), idx_data.len() as u64).clone();
-                    (v, i)
-                };
-                self.gpu.queue().write_buffer(&verts, 0, vert_data);
-                self.gpu.queue().write_buffer(&idxs, 0, idx_data);
-                (Some(verts), Some(idxs))
-            } else {
-                (None, None)
+        let (path_verts_buf, path_idxs_buf) = if self.batchers.paths.draw_range_count() > 0 {
+            let vert_data = bytemuck::cast_slice(self.batchers.paths.vertices());
+            let idx_data = bytemuck::cast_slice(self.batchers.paths.indices());
+            let (verts, idxs) = {
+                let mut pool = self.gpu.buffer_pool().lock();
+                let v = pool
+                    .get_vertex_buffer(self.gpu.device(), vert_data.len() as u64)
+                    .clone();
+                let i = pool
+                    .get_index_buffer(self.gpu.device(), idx_data.len() as u64)
+                    .clone();
+                (v, i)
             };
+            self.gpu.queue().write_buffer(&verts, 0, vert_data);
+            self.gpu.queue().write_buffer(&idxs, 0, idx_data);
+            (Some(verts), Some(idxs))
+        } else {
+            (None, None)
+        };
 
         // -- Prepare text ---------------------------------------------------
         // Acquire the text system lock early; the guard must outlive the
@@ -311,15 +334,14 @@ impl<'surface> FrameEncoder<'surface> {
             let rect_stride = std::mem::size_of::<crate::vertex::RectInstance>() as u64;
             let circle_stride = std::mem::size_of::<crate::vertex::CircleInstance>() as u64;
             let arc_stride = std::mem::size_of::<crate::vertex::ArcInstance>() as u64;
-            let shadow_stride = std::mem::size_of::<crate::batchers::effects::ShadowInstance>() as u64;
+            let shadow_stride =
+                std::mem::size_of::<crate::batchers::effects::ShadowInstance>() as u64;
 
             // If no draw_ops were recorded (e.g. direct batcher usage via
             // batchers_mut()), fall back to a single implicit group covering
             // everything.
             let fallback_ops;
-            let ops: &[DrawOp] = if self.draw_ops.is_empty()
-                && !self.batchers.is_all_empty()
-            {
+            let ops: &[DrawOp] = if self.draw_ops.is_empty() && !self.batchers.is_all_empty() {
                 use crate::frame::submission::BatcherSnapshot;
                 fallback_ops = vec![DrawOp::DrawGroup {
                     before: BatcherSnapshot::default(),
@@ -341,7 +363,9 @@ impl<'surface> FrameEncoder<'surface> {
                         let rect_count = after.rects - before.rects;
                         if rect_count > 0 {
                             if let Some(ref buf) = rect_buf {
-                                if let Some(pipeline) = self.gpu.pipelines().get(PipelineId::RectInstanced) {
+                                if let Some(pipeline) =
+                                    self.gpu.pipelines().get(PipelineId::RectInstanced)
+                                {
                                     render_pass.set_pipeline(pipeline);
                                     let offset = before.rects as u64 * rect_stride;
                                     render_pass.set_vertex_buffer(1, buf.slice(offset..));
@@ -354,7 +378,9 @@ impl<'surface> FrameEncoder<'surface> {
                         let circle_count = after.circles - before.circles;
                         if circle_count > 0 {
                             if let Some(ref buf) = circle_buf {
-                                if let Some(pipeline) = self.gpu.pipelines().get(PipelineId::CircleInstanced) {
+                                if let Some(pipeline) =
+                                    self.gpu.pipelines().get(PipelineId::CircleInstanced)
+                                {
                                     render_pass.set_pipeline(pipeline);
                                     let offset = before.circles as u64 * circle_stride;
                                     render_pass.set_vertex_buffer(1, buf.slice(offset..));
@@ -367,7 +393,9 @@ impl<'surface> FrameEncoder<'surface> {
                         let arc_count = after.arcs - before.arcs;
                         if arc_count > 0 {
                             if let Some(ref buf) = arc_buf {
-                                if let Some(pipeline) = self.gpu.pipelines().get(PipelineId::ArcInstanced) {
+                                if let Some(pipeline) =
+                                    self.gpu.pipelines().get(PipelineId::ArcInstanced)
+                                {
                                     render_pass.set_pipeline(pipeline);
                                     let offset = before.arcs as u64 * arc_stride;
                                     render_pass.set_vertex_buffer(1, buf.slice(offset..));
@@ -379,22 +407,31 @@ impl<'surface> FrameEncoder<'surface> {
                         // === Paths (range: before.path_draw_ranges..after.path_draw_ranges) ===
                         let path_range_count = after.path_draw_ranges - before.path_draw_ranges;
                         if path_range_count > 0 {
-                            if let (Some(ref verts), Some(ref idxs)) = (&path_verts_buf, &path_idxs_buf) {
-                                if let Some(pipeline) = self.gpu.pipelines().get(PipelineId::PathFill) {
+                            if let (Some(ref verts), Some(ref idxs)) =
+                                (&path_verts_buf, &path_idxs_buf)
+                            {
+                                if let Some(pipeline) =
+                                    self.gpu.pipelines().get(PipelineId::PathFill)
+                                {
                                     render_pass.set_pipeline(pipeline);
                                     render_pass.set_vertex_buffer(0, verts.slice(..));
-                                    render_pass.set_index_buffer(idxs.slice(..), wgpu::IndexFormat::Uint32);
+                                    render_pass.set_index_buffer(
+                                        idxs.slice(..),
+                                        wgpu::IndexFormat::Uint32,
+                                    );
                                     let ranges = self.batchers.paths.draw_ranges();
                                     for i in before.path_draw_ranges..after.path_draw_ranges {
                                         let range = &ranges[i as usize];
                                         render_pass.draw_indexed(
-                                            range.start_index..(range.start_index + range.index_count),
+                                            range.start_index
+                                                ..(range.start_index + range.index_count),
                                             0,
                                             0..1,
                                         );
                                     }
                                     // Restore unit quad for subsequent instanced draws
-                                    render_pass.set_vertex_buffer(0, self.gpu.unit_quad_vbo().slice(..));
+                                    render_pass
+                                        .set_vertex_buffer(0, self.gpu.unit_quad_vbo().slice(..));
                                     render_pass.set_index_buffer(
                                         self.gpu.unit_quad_ibo().slice(..),
                                         wgpu::IndexFormat::Uint16,
@@ -407,7 +444,8 @@ impl<'surface> FrameEncoder<'surface> {
                         let shadow_count = after.shadows - before.shadows;
                         if shadow_count > 0 {
                             if let Some(ref buf) = shadow_buf {
-                                if let Some(pipeline) = self.gpu.pipelines().get(PipelineId::Shadow) {
+                                if let Some(pipeline) = self.gpu.pipelines().get(PipelineId::Shadow)
+                                {
                                     render_pass.set_pipeline(pipeline);
                                     let offset = before.shadows as u64 * shadow_stride;
                                     render_pass.set_vertex_buffer(1, buf.slice(offset..));
@@ -421,15 +459,12 @@ impl<'surface> FrameEncoder<'surface> {
                         let img_after = after.images;
                         if img_after > img_before {
                             if let Some(ref buf) = image_buf {
-                                if let Some(pipeline) =
-                                    self.gpu.pipelines().get(PipelineId::Image)
+                                if let Some(pipeline) = self.gpu.pipelines().get(PipelineId::Image)
                                 {
                                     render_pass.set_pipeline(pipeline);
                                     // Restore unit quad for instanced draws
-                                    render_pass.set_vertex_buffer(
-                                        0,
-                                        self.gpu.unit_quad_vbo().slice(..),
-                                    );
+                                    render_pass
+                                        .set_vertex_buffer(0, self.gpu.unit_quad_vbo().slice(..));
                                     render_pass.set_index_buffer(
                                         self.gpu.unit_quad_ibo().slice(..),
                                         wgpu::IndexFormat::Uint16,
@@ -449,12 +484,12 @@ impl<'surface> FrameEncoder<'surface> {
 
                                         let mut cache = self.gpu.texture_cache().lock();
                                         if let Some(cached) = cache.get(texture_id) {
-                                            let bind_group = self.gpu.device().create_bind_group(
-                                                &wgpu::BindGroupDescriptor {
+                                            let bind_group =
+                                                self.gpu
+                                                    .device()
+                                                    .create_bind_group(&wgpu::BindGroupDescriptor {
                                                     label: Some("image_texture_bind"),
-                                                    layout: self
-                                                        .gpu
-                                                        .image_bind_group_layout(),
+                                                    layout: self.gpu.image_bind_group_layout(),
                                                     entries: &[
                                                         wgpu::BindGroupEntry {
                                                             binding: 0,
@@ -471,16 +506,13 @@ impl<'surface> FrameEncoder<'surface> {
                                                                 ),
                                                         },
                                                     ],
-                                                },
-                                            );
+                                                });
                                             render_pass.set_bind_group(1, &bind_group, &[]);
 
                                             let buf_offset =
                                                 instance_offset as u64 * image_instance_stride;
-                                            render_pass.set_vertex_buffer(
-                                                1,
-                                                buf.slice(buf_offset..),
-                                            );
+                                            render_pass
+                                                .set_vertex_buffer(1, buf.slice(buf_offset..));
                                             render_pass.draw_indexed(0..6, 0, 0..count);
                                         }
                                         drop(cache);
@@ -501,21 +533,30 @@ impl<'surface> FrameEncoder<'surface> {
                         // === Linear Gradients (range: before.linear_gradients..after.linear_gradients) ===
                         #[allow(clippy::cast_possible_truncation)]
                         if after.linear_gradients > before.linear_gradients {
-                            if let Some(pipeline) = self.gpu.pipelines().get(PipelineId::LinearGradient) {
+                            if let Some(pipeline) =
+                                self.gpu.pipelines().get(PipelineId::LinearGradient)
+                            {
                                 render_pass.set_pipeline(pipeline);
-                                render_pass.set_vertex_buffer(0, self.gpu.unit_quad_vbo().slice(..));
+                                render_pass
+                                    .set_vertex_buffer(0, self.gpu.unit_quad_vbo().slice(..));
                                 render_pass.set_index_buffer(
                                     self.gpu.unit_quad_ibo().slice(..),
                                     wgpu::IndexFormat::Uint16,
                                 );
 
-                                let gradient_bgl = self.gpu.pipelines().gradient_bind_group_layout();
+                                let gradient_bgl =
+                                    self.gpu.pipelines().gradient_bind_group_layout();
                                 let grads = self.batchers.effects.linear_gradients();
                                 for i in before.linear_gradients..after.linear_gradients {
                                     let grad = &grads[i as usize];
                                     let uniforms = LinearGradientUniforms {
                                         bounds: grad.bounds,
-                                        start_end: [grad.start[0], grad.start[1], grad.end[0], grad.end[1]],
+                                        start_end: [
+                                            grad.start[0],
+                                            grad.start[1],
+                                            grad.end[0],
+                                            grad.end[1],
+                                        ],
                                         corner_radii: grad.corner_radii,
                                         stop_count: grad.stops.len() as u32,
                                         _padding: [0; 3],
@@ -524,64 +565,79 @@ impl<'surface> FrameEncoder<'surface> {
                                     let uniform_data = bytemuck::bytes_of(&uniforms);
                                     let uniform_buf = {
                                         let mut pool = self.gpu.buffer_pool().lock();
-                                        pool.get_uniform_buffer(self.gpu.device(), uniform_data.len() as u64).clone()
+                                        pool.get_uniform_buffer(
+                                            self.gpu.device(),
+                                            uniform_data.len() as u64,
+                                        )
+                                        .clone()
                                     };
                                     self.gpu.queue().write_buffer(&uniform_buf, 0, uniform_data);
 
                                     let stops_data = bytemuck::cast_slice(&grad.stops);
-                                    let stops_buf =
-                                        self.gpu
-                                            .device()
-                                            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                                                label: Some("linear_gradient_stops"),
-                                                contents: stops_data,
-                                                usage: wgpu::BufferUsages::STORAGE,
-                                            });
+                                    let stops_buf = self.gpu.device().create_buffer_init(
+                                        &wgpu::util::BufferInitDescriptor {
+                                            label: Some("linear_gradient_stops"),
+                                            contents: stops_data,
+                                            usage: wgpu::BufferUsages::STORAGE,
+                                        },
+                                    );
 
-                                    let bind_group =
-                                        self.gpu
-                                            .device()
-                                            .create_bind_group(&wgpu::BindGroupDescriptor {
-                                                label: Some("linear_gradient_bind_group"),
-                                                layout: gradient_bgl,
-                                                entries: &[
-                                                    wgpu::BindGroupEntry {
-                                                        binding: 0,
-                                                        resource: uniform_buf.as_entire_binding(),
-                                                    },
-                                                    wgpu::BindGroupEntry {
-                                                        binding: 1,
-                                                        resource: stops_buf.as_entire_binding(),
-                                                    },
-                                                ],
-                                            });
+                                    let bind_group = self.gpu.device().create_bind_group(
+                                        &wgpu::BindGroupDescriptor {
+                                            label: Some("linear_gradient_bind_group"),
+                                            layout: gradient_bgl,
+                                            entries: &[
+                                                wgpu::BindGroupEntry {
+                                                    binding: 0,
+                                                    resource: uniform_buf.as_entire_binding(),
+                                                },
+                                                wgpu::BindGroupEntry {
+                                                    binding: 1,
+                                                    resource: stops_buf.as_entire_binding(),
+                                                },
+                                            ],
+                                        },
+                                    );
 
                                     render_pass.set_bind_group(1, &bind_group, &[]);
                                     render_pass.draw_indexed(0..6, 0, 0..1);
                                 }
 
-                                render_pass.set_bind_group(0, self.surface.viewport_bind_group(), &[]);
+                                render_pass.set_bind_group(
+                                    0,
+                                    self.surface.viewport_bind_group(),
+                                    &[],
+                                );
                             }
                         }
 
                         // === Radial Gradients (range: before.radial_gradients..after.radial_gradients) ===
                         #[allow(clippy::cast_possible_truncation)]
                         if after.radial_gradients > before.radial_gradients {
-                            if let Some(pipeline) = self.gpu.pipelines().get(PipelineId::RadialGradient) {
+                            if let Some(pipeline) =
+                                self.gpu.pipelines().get(PipelineId::RadialGradient)
+                            {
                                 render_pass.set_pipeline(pipeline);
-                                render_pass.set_vertex_buffer(0, self.gpu.unit_quad_vbo().slice(..));
+                                render_pass
+                                    .set_vertex_buffer(0, self.gpu.unit_quad_vbo().slice(..));
                                 render_pass.set_index_buffer(
                                     self.gpu.unit_quad_ibo().slice(..),
                                     wgpu::IndexFormat::Uint16,
                                 );
 
-                                let gradient_bgl = self.gpu.pipelines().gradient_bind_group_layout();
+                                let gradient_bgl =
+                                    self.gpu.pipelines().gradient_bind_group_layout();
                                 let grads = self.batchers.effects.radial_gradients();
                                 for i in before.radial_gradients..after.radial_gradients {
                                     let grad = &grads[i as usize];
                                     let uniforms = RadialGradientUniforms {
                                         bounds: grad.bounds,
-                                        center_radius: [grad.center[0], grad.center[1], grad.radius, 0.0],
+                                        center_radius: [
+                                            grad.center[0],
+                                            grad.center[1],
+                                            grad.radius,
+                                            0.0,
+                                        ],
                                         corner_radii: grad.corner_radii,
                                         stop_count: grad.stops.len() as u32,
                                         _padding: [0; 3],
@@ -590,43 +646,130 @@ impl<'surface> FrameEncoder<'surface> {
                                     let uniform_data = bytemuck::bytes_of(&uniforms);
                                     let uniform_buf = {
                                         let mut pool = self.gpu.buffer_pool().lock();
-                                        pool.get_uniform_buffer(self.gpu.device(), uniform_data.len() as u64).clone()
+                                        pool.get_uniform_buffer(
+                                            self.gpu.device(),
+                                            uniform_data.len() as u64,
+                                        )
+                                        .clone()
                                     };
                                     self.gpu.queue().write_buffer(&uniform_buf, 0, uniform_data);
 
                                     let stops_data = bytemuck::cast_slice(&grad.stops);
-                                    let stops_buf =
-                                        self.gpu
-                                            .device()
-                                            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                                                label: Some("radial_gradient_stops"),
-                                                contents: stops_data,
-                                                usage: wgpu::BufferUsages::STORAGE,
-                                            });
+                                    let stops_buf = self.gpu.device().create_buffer_init(
+                                        &wgpu::util::BufferInitDescriptor {
+                                            label: Some("radial_gradient_stops"),
+                                            contents: stops_data,
+                                            usage: wgpu::BufferUsages::STORAGE,
+                                        },
+                                    );
 
-                                    let bind_group =
-                                        self.gpu
-                                            .device()
-                                            .create_bind_group(&wgpu::BindGroupDescriptor {
-                                                label: Some("radial_gradient_bind_group"),
-                                                layout: gradient_bgl,
-                                                entries: &[
-                                                    wgpu::BindGroupEntry {
-                                                        binding: 0,
-                                                        resource: uniform_buf.as_entire_binding(),
-                                                    },
-                                                    wgpu::BindGroupEntry {
-                                                        binding: 1,
-                                                        resource: stops_buf.as_entire_binding(),
-                                                    },
-                                                ],
-                                            });
+                                    let bind_group = self.gpu.device().create_bind_group(
+                                        &wgpu::BindGroupDescriptor {
+                                            label: Some("radial_gradient_bind_group"),
+                                            layout: gradient_bgl,
+                                            entries: &[
+                                                wgpu::BindGroupEntry {
+                                                    binding: 0,
+                                                    resource: uniform_buf.as_entire_binding(),
+                                                },
+                                                wgpu::BindGroupEntry {
+                                                    binding: 1,
+                                                    resource: stops_buf.as_entire_binding(),
+                                                },
+                                            ],
+                                        },
+                                    );
 
                                     render_pass.set_bind_group(1, &bind_group, &[]);
                                     render_pass.draw_indexed(0..6, 0, 0..1);
                                 }
 
-                                render_pass.set_bind_group(0, self.surface.viewport_bind_group(), &[]);
+                                render_pass.set_bind_group(
+                                    0,
+                                    self.surface.viewport_bind_group(),
+                                    &[],
+                                );
+                            }
+                        }
+
+                        // === Sweep Gradients (range: before.sweep_gradients..after.sweep_gradients) ===
+                        #[allow(clippy::cast_possible_truncation)]
+                        if after.sweep_gradients > before.sweep_gradients {
+                            if let Some(pipeline) =
+                                self.gpu.pipelines().get(PipelineId::SweepGradient)
+                            {
+                                render_pass.set_pipeline(pipeline);
+                                render_pass
+                                    .set_vertex_buffer(0, self.gpu.unit_quad_vbo().slice(..));
+                                render_pass.set_index_buffer(
+                                    self.gpu.unit_quad_ibo().slice(..),
+                                    wgpu::IndexFormat::Uint16,
+                                );
+
+                                let gradient_bgl =
+                                    self.gpu.pipelines().gradient_bind_group_layout();
+                                let grads = self.batchers.effects.sweep_gradients();
+                                for i in before.sweep_gradients..after.sweep_gradients {
+                                    let grad = &grads[i as usize];
+                                    let uniforms = SweepGradientUniforms {
+                                        bounds: grad.bounds,
+                                        center_angles: [
+                                            grad.center[0],
+                                            grad.center[1],
+                                            grad.start_angle,
+                                            grad.end_angle,
+                                        ],
+                                        corner_radii: grad.corner_radii,
+                                        stop_count: grad.stops.len() as u32,
+                                        _padding: [0; 3],
+                                    };
+
+                                    let uniform_data = bytemuck::bytes_of(&uniforms);
+                                    let uniform_buf = {
+                                        let mut pool = self.gpu.buffer_pool().lock();
+                                        pool.get_uniform_buffer(
+                                            self.gpu.device(),
+                                            uniform_data.len() as u64,
+                                        )
+                                        .clone()
+                                    };
+                                    self.gpu.queue().write_buffer(&uniform_buf, 0, uniform_data);
+
+                                    let stops_data = bytemuck::cast_slice(&grad.stops);
+                                    let stops_buf = self.gpu.device().create_buffer_init(
+                                        &wgpu::util::BufferInitDescriptor {
+                                            label: Some("sweep_gradient_stops"),
+                                            contents: stops_data,
+                                            usage: wgpu::BufferUsages::STORAGE,
+                                        },
+                                    );
+
+                                    let bind_group = self.gpu.device().create_bind_group(
+                                        &wgpu::BindGroupDescriptor {
+                                            label: Some("sweep_gradient_bind_group"),
+                                            layout: gradient_bgl,
+                                            entries: &[
+                                                wgpu::BindGroupEntry {
+                                                    binding: 0,
+                                                    resource: uniform_buf.as_entire_binding(),
+                                                },
+                                                wgpu::BindGroupEntry {
+                                                    binding: 1,
+                                                    resource: stops_buf.as_entire_binding(),
+                                                },
+                                            ],
+                                        },
+                                    );
+
+                                    render_pass.set_bind_group(1, &bind_group, &[]);
+                                    render_pass.draw_indexed(0..6, 0, 0..1);
+                                }
+
+                                render_pass.set_bind_group(
+                                    0,
+                                    self.surface.viewport_bind_group(),
+                                    &[],
+                                );
                             }
                         }
 

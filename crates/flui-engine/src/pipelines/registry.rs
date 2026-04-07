@@ -22,6 +22,8 @@ pub enum PipelineId {
     LinearGradient,
     /// Radial gradient fill pipeline
     RadialGradient,
+    /// Sweep (conic/angular) gradient fill pipeline
+    SweepGradient,
     /// Box shadow pipeline
     Shadow,
     /// Gaussian blur downsample pass
@@ -45,6 +47,7 @@ impl PipelineId {
             Self::Image,
             Self::LinearGradient,
             Self::RadialGradient,
+            Self::SweepGradient,
             Self::Shadow,
             Self::BlurDownsample,
             Self::BlurUpsample,
@@ -64,6 +67,7 @@ impl PipelineId {
             Self::Image => "image",
             Self::LinearGradient => "linear_gradient",
             Self::RadialGradient => "radial_gradient",
+            Self::SweepGradient => "sweep_gradient",
             Self::Shadow => "shadow",
             Self::BlurDownsample => "blur_downsample",
             Self::BlurUpsample => "blur_upsample",
@@ -181,6 +185,15 @@ impl PipelineRegistry {
                 &gradient_bind_group_layout,
             )),
         );
+        pipelines.insert(
+            PipelineId::SweepGradient,
+            Arc::new(super::gradient_pipeline::create_sweep_gradient_pipeline(
+                device,
+                format,
+                &bind_group_layout,
+                &gradient_bind_group_layout,
+            )),
+        );
 
         // Shadow pipeline
         pipelines.insert(
@@ -254,7 +267,7 @@ mod tests {
 
     #[test]
     fn pipeline_id_all_returns_12() {
-        assert_eq!(PipelineId::all().len(), 12);
+        assert_eq!(PipelineId::all().len(), 13);
     }
 
     #[test]
@@ -292,6 +305,6 @@ mod tests {
         for id in PipelineId::all() {
             assert!(set.insert(*id), "duplicate pipeline id: {id:?}");
         }
-        assert_eq!(set.len(), 12);
+        assert_eq!(set.len(), 13);
     }
 }

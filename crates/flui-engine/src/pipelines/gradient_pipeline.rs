@@ -53,9 +53,7 @@ pub fn create_linear_gradient_pipeline(
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("linear_gradient_shader"),
-        source: wgpu::ShaderSource::Wgsl(
-            include_str!("../shaders/gradients/linear.wgsl").into(),
-        ),
+        source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/gradients/linear.wgsl").into()),
     });
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -87,6 +85,47 @@ pub fn create_linear_gradient_pipeline(
     })
 }
 
+/// Creates the sweep gradient render pipeline.
+pub fn create_sweep_gradient_pipeline(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    viewport_bind_group_layout: &wgpu::BindGroupLayout,
+    gradient_bind_group_layout: &wgpu::BindGroupLayout,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("sweep_gradient_shader"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/gradients/sweep.wgsl").into()),
+    });
+
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("sweep_gradient_pipeline_layout"),
+        bind_group_layouts: &[viewport_bind_group_layout, gradient_bind_group_layout],
+        push_constant_ranges: &[],
+    });
+
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("sweep_gradient_pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            buffers: &[unit_quad_vertex_layout()],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(alpha_blend_target(format))],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        primitive: default_primitive_state(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+        cache: None,
+    })
+}
+
 /// Creates the radial gradient render pipeline.
 pub fn create_radial_gradient_pipeline(
     device: &wgpu::Device,
@@ -96,9 +135,7 @@ pub fn create_radial_gradient_pipeline(
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("radial_gradient_shader"),
-        source: wgpu::ShaderSource::Wgsl(
-            include_str!("../shaders/gradients/radial.wgsl").into(),
-        ),
+        source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/gradients/radial.wgsl").into()),
     });
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {

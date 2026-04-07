@@ -18,8 +18,8 @@ use flui_types::typography::FontWeight;
 
 use crate::batchers::compositing::{CompositingBatcher, FilterType};
 use crate::batchers::effects::{
-    EffectBatcher, GradientStop, LinearGradientInstance, RadialGradientInstance,
-    SweepGradientInstance, ShadowInstance,
+    EffectBatcher, GradientStop, LinearGradientInstance, RadialGradientInstance, ShadowInstance,
+    SweepGradientInstance,
 };
 use crate::batchers::images::ImageBatcher;
 use crate::batchers::paths::PathBatcher;
@@ -181,15 +181,13 @@ fn build_gradient_stops(colors: &[Color], stops: Option<&Vec<f32>>) -> Vec<Gradi
         .iter()
         .enumerate()
         .map(|(i, c)| {
-            let position = stops
-                .and_then(|s| s.get(i).copied())
-                .unwrap_or_else(|| {
-                    if count <= 1 {
-                        0.0
-                    } else {
-                        i as f32 / (count - 1) as f32
-                    }
-                });
+            let position = stops.and_then(|s| s.get(i).copied()).unwrap_or_else(|| {
+                if count <= 1 {
+                    0.0
+                } else {
+                    i as f32 / (count - 1) as f32
+                }
+            });
             GradientStop {
                 color: color_to_array(c),
                 position,
@@ -219,14 +217,16 @@ fn dispatch_gradient(
             tile_mode: _,
         } => {
             let gradient_stops = build_gradient_stops(colors, stops.as_ref());
-            batchers.effects.add_linear_gradient(LinearGradientInstance {
-                bounds,
-                start: [from.dx.get(), from.dy.get()],
-                end: [to.dx.get(), to.dy.get()],
-                stops: gradient_stops,
-                corner_radii,
-                transform,
-            });
+            batchers
+                .effects
+                .add_linear_gradient(LinearGradientInstance {
+                    bounds,
+                    start: [from.dx.get(), from.dy.get()],
+                    end: [to.dx.get(), to.dy.get()],
+                    stops: gradient_stops,
+                    corner_radii,
+                    transform,
+                });
         }
         Shader::RadialGradient {
             center,
@@ -258,17 +258,15 @@ fn dispatch_gradient(
             ..
         } => {
             let gradient_stops = build_gradient_stops(colors, stops.as_ref());
-            batchers
-                .effects
-                .add_sweep_gradient(SweepGradientInstance {
-                    bounds,
-                    center: [center.dx.get(), center.dy.get()],
-                    start_angle: *start_angle,
-                    end_angle: *end_angle,
-                    stops: gradient_stops,
-                    corner_radii,
-                    transform,
-                });
+            batchers.effects.add_sweep_gradient(SweepGradientInstance {
+                bounds,
+                center: [center.dx.get(), center.dy.get()],
+                start_angle: *start_angle,
+                end_angle: *end_angle,
+                stops: gradient_stops,
+                corner_radii,
+                transform,
+            });
         }
         Shader::Image(_) | _ => {
             tracing::debug!("DrawGradient: unsupported shader variant, skipping");
@@ -634,9 +632,7 @@ pub fn dispatch_command(
                 batchers.paths.add_fill(&outer_path, color);
                 // Tessellate inner as an "erase" with zero-alpha to approximate subtraction.
                 let inner_path = rrect_to_lyon_path(inner);
-                batchers
-                    .paths
-                    .add_fill(&inner_path, [0.0, 0.0, 0.0, 0.0]);
+                batchers.paths.add_fill(&inner_path, [0.0, 0.0, 0.0, 0.0]);
             } else {
                 let width = paint.stroke_width.max(1.0);
                 batchers.paths.add_stroke(&outer_path, color, width);
@@ -677,10 +673,7 @@ pub fn dispatch_command(
                         let mut builder = lyon::path::Path::builder();
                         let mut i = 0;
                         while i + 1 < points.len() {
-                            builder.begin(lyon::math::point(
-                                points[i].x.get(),
-                                points[i].y.get(),
-                            ));
+                            builder.begin(lyon::math::point(points[i].x.get(), points[i].y.get()));
                             builder.line_to(lyon::math::point(
                                 points[i + 1].x.get(),
                                 points[i + 1].y.get(),
@@ -696,10 +689,7 @@ pub fn dispatch_command(
                     // Draw a closed polygon connecting all points
                     if points.len() >= 2 {
                         let mut builder = lyon::path::Path::builder();
-                        builder.begin(lyon::math::point(
-                            points[0].x.get(),
-                            points[0].y.get(),
-                        ));
+                        builder.begin(lyon::math::point(points[0].x.get(), points[0].y.get()));
                         for pt in &points[1..] {
                             builder.line_to(lyon::math::point(pt.x.get(), pt.y.get()));
                         }
@@ -738,15 +728,19 @@ pub fn dispatch_command(
             transform: _,
         } => {
             let font_size = style.font_size.unwrap_or(14.0) as f32;
-            let font_weight = style.font_weight.as_ref().map(FontWeight::value).unwrap_or(400);
-            let font_family = style
-                .font_family
-                .as_deref()
-                .unwrap_or("sans-serif");
+            let font_weight = style
+                .font_weight
+                .as_ref()
+                .map(FontWeight::value)
+                .unwrap_or(400);
+            let font_family = style.font_family.as_deref().unwrap_or("sans-serif");
             let key = TextCacheKey::new(text, font_size, font_family, font_weight);
             let color = paint_to_color(paint);
             let position = [offset.dx.get(), offset.dy.get()];
-            let clip = state.clip.current_clip().map(|c| [c.x, c.y, c.width, c.height]);
+            let clip = state
+                .clip
+                .current_clip()
+                .map(|c| [c.x, c.y, c.width, c.height]);
             batchers.text.add_run(
                 key,
                 text.clone(),
@@ -772,8 +766,16 @@ pub fn dispatch_command(
                 let (font_size, font_weight, font_family) = if let Some(style) = span.style() {
                     (
                         style.font_size.unwrap_or(14.0) as f32,
-                        style.font_weight.as_ref().map(FontWeight::value).unwrap_or(400),
-                        style.font_family.as_deref().unwrap_or("sans-serif").to_string(),
+                        style
+                            .font_weight
+                            .as_ref()
+                            .map(FontWeight::value)
+                            .unwrap_or(400),
+                        style
+                            .font_family
+                            .as_deref()
+                            .unwrap_or("sans-serif")
+                            .to_string(),
                     )
                 } else {
                     (14.0_f32, 400_u16, "sans-serif".to_string())
@@ -781,15 +783,13 @@ pub fn dispatch_command(
                 let key = TextCacheKey::new(&plain_text, font_size, &font_family, font_weight);
                 let color = [0.0, 0.0, 0.0, 1.0]; // default black; spans don't carry a Paint
                 let position = [offset.dx.get(), offset.dy.get()];
-                let clip = state.clip.current_clip().map(|c| [c.x, c.y, c.width, c.height]);
-                batchers.text.add_run(
-                    key,
-                    plain_text,
-                    font_family,
-                    position,
-                    color,
-                    clip,
-                );
+                let clip = state
+                    .clip
+                    .current_clip()
+                    .map(|c| [c.x, c.y, c.width, c.height]);
+                batchers
+                    .text
+                    .add_run(key, plain_text, font_family, position, color, clip);
             }
         }
 
@@ -1769,8 +1769,17 @@ mod tests {
         let snap0 = b.snapshot();
         assert_eq!(snap0, BatcherSnapshot::default());
 
-        b.shapes.add_rect(0.0, 0.0, 10.0, 10.0, [1.0; 4], [0.0; 4], [1.0, 0.0, 0.0, 1.0]);
-        b.shapes.add_circle(5.0, 5.0, 3.0, [1.0; 4], [1.0, 0.0, 0.0, 1.0]);
+        b.shapes.add_rect(
+            0.0,
+            0.0,
+            10.0,
+            10.0,
+            [1.0; 4],
+            [0.0; 4],
+            [1.0, 0.0, 0.0, 1.0],
+        );
+        b.shapes
+            .add_circle(5.0, 5.0, 3.0, [1.0; 4], [1.0, 0.0, 0.0, 1.0]);
 
         let snap1 = b.snapshot();
         assert_eq!(snap1.rects, 1);
@@ -1795,6 +1804,10 @@ mod tests {
         let ops = traverse_scene(&scene, &mut batchers, &mut state, 1.0);
 
         // Empty canvas adds nothing to batchers, so no DrawGroup emitted.
-        assert!(ops.is_empty(), "expected no ops for empty canvas, got {:?}", ops);
+        assert!(
+            ops.is_empty(),
+            "expected no ops for empty canvas, got {:?}",
+            ops
+        );
     }
 }
