@@ -452,6 +452,7 @@ fn render_frame(surface: &mut RenderSurface) -> Result<(), Box<dyn std::error::E
             point(bx + 80.0, by + 40.0),
             point(bx + 120.0, by - 10.0),
         );
+        builder.end(false); // open path (not closed)
         let curve = builder.build();
         batchers.paths.add_stroke(&curve, TEAL, 2.5);
     }
