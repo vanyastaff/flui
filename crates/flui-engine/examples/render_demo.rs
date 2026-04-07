@@ -103,7 +103,7 @@ impl ApplicationHandler for App {
 
         let window_attrs = WindowAttributes::default()
             .with_title("flui-engine Feature Showcase")
-            .with_inner_size(winit::dpi::LogicalSize::new(1200u32, 900u32));
+            .with_inner_size(winit::dpi::LogicalSize::new(1200u32, 1200u32));
 
         let window = match event_loop.create_window(window_attrs) {
             Ok(w) => Arc::new(w),
@@ -532,7 +532,7 @@ fn render_frame(surface: &mut RenderSurface) -> Result<(), Box<dyn std::error::E
     add_label(batchers, "Radial Gradients", LEFT_MARGIN, y);
     y += LABEL_HEIGHT + LABEL_TO_CONTENT_GAP;
 
-    let radial_size = 70.0;
+    let radial_size = 80.0;
     let radial_spacing = 120.0;
 
     // Center-out gradient (white -> dark blue)
