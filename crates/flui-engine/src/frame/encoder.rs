@@ -146,72 +146,71 @@ impl<'surface> FrameEncoder<'surface> {
             bytemuck::bytes_of(&uniforms),
         );
 
-        // -- Upload shape instances to GPU buffers --------------------------
+        // -- Reset buffer pool for this frame --------------------------------
+        self.gpu.buffer_pool().lock().reset();
+
+        // -- Upload shape instances to GPU buffers (from pool) -------------
         let rect_buf = if self.batchers.shapes.rect_count() > 0 {
-            Some(self.gpu.device().create_buffer_init(
-                &wgpu::util::BufferInitDescriptor {
-                    label: Some("rect_instances"),
-                    contents: bytemuck::cast_slice(self.batchers.shapes.rects()),
-                    usage: wgpu::BufferUsages::VERTEX,
-                },
-            ))
+            let data = bytemuck::cast_slice(self.batchers.shapes.rects());
+            let buf = {
+                let mut pool = self.gpu.buffer_pool().lock();
+                pool.get_vertex_buffer(self.gpu.device(), data.len() as u64).clone()
+            };
+            self.gpu.queue().write_buffer(&buf, 0, data);
+            Some(buf)
         } else {
             None
         };
 
         let circle_buf = if self.batchers.shapes.circle_count() > 0 {
-            Some(self.gpu.device().create_buffer_init(
-                &wgpu::util::BufferInitDescriptor {
-                    label: Some("circle_instances"),
-                    contents: bytemuck::cast_slice(self.batchers.shapes.circles()),
-                    usage: wgpu::BufferUsages::VERTEX,
-                },
-            ))
+            let data = bytemuck::cast_slice(self.batchers.shapes.circles());
+            let buf = {
+                let mut pool = self.gpu.buffer_pool().lock();
+                pool.get_vertex_buffer(self.gpu.device(), data.len() as u64).clone()
+            };
+            self.gpu.queue().write_buffer(&buf, 0, data);
+            Some(buf)
         } else {
             None
         };
 
         let arc_buf = if self.batchers.shapes.arc_count() > 0 {
-            Some(self.gpu.device().create_buffer_init(
-                &wgpu::util::BufferInitDescriptor {
-                    label: Some("arc_instances"),
-                    contents: bytemuck::cast_slice(self.batchers.shapes.arcs()),
-                    usage: wgpu::BufferUsages::VERTEX,
-                },
-            ))
+            let data = bytemuck::cast_slice(self.batchers.shapes.arcs());
+            let buf = {
+                let mut pool = self.gpu.buffer_pool().lock();
+                pool.get_vertex_buffer(self.gpu.device(), data.len() as u64).clone()
+            };
+            self.gpu.queue().write_buffer(&buf, 0, data);
+            Some(buf)
         } else {
             None
         };
 
         let shadow_buf = if self.batchers.effects.shadow_count() > 0 {
-            Some(self.gpu.device().create_buffer_init(
-                &wgpu::util::BufferInitDescriptor {
-                    label: Some("shadow_instances"),
-                    contents: bytemuck::cast_slice(self.batchers.effects.shadows()),
-                    usage: wgpu::BufferUsages::VERTEX,
-                },
-            ))
+            let data = bytemuck::cast_slice(self.batchers.effects.shadows());
+            let buf = {
+                let mut pool = self.gpu.buffer_pool().lock();
+                pool.get_vertex_buffer(self.gpu.device(), data.len() as u64).clone()
+            };
+            self.gpu.queue().write_buffer(&buf, 0, data);
+            Some(buf)
         } else {
             None
         };
 
-        // -- Upload path geometry -------------------------------------------
+        // -- Upload path geometry (from pool) -------------------------------
         let (path_verts_buf, path_idxs_buf) =
             if self.batchers.paths.draw_range_count() > 0 {
-                let verts = self.gpu.device().create_buffer_init(
-                    &wgpu::util::BufferInitDescriptor {
-                        label: Some("path_vertices"),
-                        contents: bytemuck::cast_slice(self.batchers.paths.vertices()),
-                        usage: wgpu::BufferUsages::VERTEX,
-                    },
-                );
-                let idxs = self.gpu.device().create_buffer_init(
-                    &wgpu::util::BufferInitDescriptor {
-                        label: Some("path_indices"),
-                        contents: bytemuck::cast_slice(self.batchers.paths.indices()),
-                        usage: wgpu::BufferUsages::INDEX,
-                    },
-                );
+                let vert_data = bytemuck::cast_slice(self.batchers.paths.vertices());
+                let idx_data = bytemuck::cast_slice(self.batchers.paths.indices());
+                let (verts, idxs) = {
+                    let mut pool = self.gpu.buffer_pool().lock();
+                    let v = pool.get_vertex_buffer(self.gpu.device(), vert_data.len() as u64).clone();
+                    let i = pool.get_index_buffer(self.gpu.device(), idx_data.len() as u64).clone();
+                    (v, i)
+                };
+                self.gpu.queue().write_buffer(&verts, 0, vert_data);
+                self.gpu.queue().write_buffer(&idxs, 0, idx_data);
                 (Some(verts), Some(idxs))
             } else {
                 (None, None)
@@ -416,21 +415,20 @@ impl<'surface> FrameEncoder<'surface> {
                                         _padding: [0; 3],
                                     };
 
-                                    let uniform_buf =
-                                        self.gpu
-                                            .device()
-                                            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                                                label: Some("linear_gradient_uniforms"),
-                                                contents: bytemuck::bytes_of(&uniforms),
-                                                usage: wgpu::BufferUsages::UNIFORM,
-                                            });
+                                    let uniform_data = bytemuck::bytes_of(&uniforms);
+                                    let uniform_buf = {
+                                        let mut pool = self.gpu.buffer_pool().lock();
+                                        pool.get_uniform_buffer(self.gpu.device(), uniform_data.len() as u64).clone()
+                                    };
+                                    self.gpu.queue().write_buffer(&uniform_buf, 0, uniform_data);
 
+                                    let stops_data = bytemuck::cast_slice(&grad.stops);
                                     let stops_buf =
                                         self.gpu
                                             .device()
                                             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                                                 label: Some("linear_gradient_stops"),
-                                                contents: bytemuck::cast_slice(&grad.stops),
+                                                contents: stops_data,
                                                 usage: wgpu::BufferUsages::STORAGE,
                                             });
 
@@ -483,21 +481,20 @@ impl<'surface> FrameEncoder<'surface> {
                                         _padding: [0; 3],
                                     };
 
-                                    let uniform_buf =
-                                        self.gpu
-                                            .device()
-                                            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                                                label: Some("radial_gradient_uniforms"),
-                                                contents: bytemuck::bytes_of(&uniforms),
-                                                usage: wgpu::BufferUsages::UNIFORM,
-                                            });
+                                    let uniform_data = bytemuck::bytes_of(&uniforms);
+                                    let uniform_buf = {
+                                        let mut pool = self.gpu.buffer_pool().lock();
+                                        pool.get_uniform_buffer(self.gpu.device(), uniform_data.len() as u64).clone()
+                                    };
+                                    self.gpu.queue().write_buffer(&uniform_buf, 0, uniform_data);
 
+                                    let stops_data = bytemuck::cast_slice(&grad.stops);
                                     let stops_buf =
                                         self.gpu
                                             .device()
                                             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                                                 label: Some("radial_gradient_stops"),
-                                                contents: bytemuck::cast_slice(&grad.stops),
+                                                contents: stops_data,
                                                 usage: wgpu::BufferUsages::STORAGE,
                                             });
 
