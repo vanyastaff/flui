@@ -316,41 +316,41 @@ fn render_frame(surface: &mut RenderSurface) -> Result<(), Box<dyn std::error::E
     y += LABEL_HEIGHT + LABEL_TO_CONTENT_GAP;
 
     let line_base_y = y;
-    // Horizontal lines - different widths
+    // Horizontal lines - different widths (drawn as stroked paths)
     let h_widths: [f32; 3] = [1.0, 2.0, 4.0];
     let h_colors: [[f32; 4]; 3] = [BLUE, RED, GREEN];
     for i in 0..3 {
         let ly = line_base_y + i as f32 * 15.0;
-        batchers.shapes.add_line(
-            LEFT_MARGIN, ly,
-            LEFT_MARGIN + 200.0, ly,
-            h_colors[i],
-            h_widths[i],
-        );
+        let mut builder = Path::builder();
+        builder.begin(point(LEFT_MARGIN, ly));
+        builder.line_to(point(LEFT_MARGIN + 200.0, ly));
+        builder.end(false);
+        let path = builder.build();
+        batchers.paths.add_stroke(&path, h_colors[i], h_widths[i]);
     }
 
     // Vertical lines
     let v_colors: [[f32; 4]; 3] = [PURPLE, ORANGE, TEAL];
     for i in 0..3 {
         let lx = LEFT_MARGIN + 250.0 + i as f32 * 30.0;
-        batchers.shapes.add_line(
-            lx, line_base_y,
-            lx, line_base_y + 40.0,
-            v_colors[i],
-            h_widths[i],
-        );
+        let mut builder = Path::builder();
+        builder.begin(point(lx, line_base_y));
+        builder.line_to(point(lx, line_base_y + 40.0));
+        builder.end(false);
+        let path = builder.build();
+        batchers.paths.add_stroke(&path, v_colors[i], h_widths[i]);
     }
 
     // Diagonal lines
     let d_colors: [[f32; 4]; 3] = [RED, GREEN, BLUE];
     for i in 0..3 {
         let lx = LEFT_MARGIN + 380.0 + i as f32 * 80.0;
-        batchers.shapes.add_line(
-            lx, line_base_y,
-            lx + 60.0, line_base_y + 40.0,
-            d_colors[i],
-            h_widths[i],
-        );
+        let mut builder = Path::builder();
+        builder.begin(point(lx, line_base_y));
+        builder.line_to(point(lx + 60.0, line_base_y + 40.0));
+        builder.end(false);
+        let path = builder.build();
+        batchers.paths.add_stroke(&path, d_colors[i], h_widths[i]);
     }
     y += 45.0 + SECTION_GAP;
 

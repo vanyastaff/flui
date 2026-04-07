@@ -563,10 +563,10 @@ impl<'surface> FrameEncoder<'surface> {
                                     let uniforms = LinearGradientUniforms {
                                         bounds: grad.bounds,
                                         start_end: [
-                                            grad.start[0],
-                                            grad.start[1],
-                                            grad.end[0],
-                                            grad.end[1],
+                                            grad.start[0] - grad.bounds[0],
+                                            grad.start[1] - grad.bounds[1],
+                                            grad.end[0] - grad.bounds[0],
+                                            grad.end[1] - grad.bounds[1],
                                         ],
                                         corner_radii: grad.corner_radii,
                                         stop_count: grad.stops.len() as u32,
@@ -644,8 +644,8 @@ impl<'surface> FrameEncoder<'surface> {
                                     let uniforms = RadialGradientUniforms {
                                         bounds: grad.bounds,
                                         center_radius: [
-                                            grad.center[0],
-                                            grad.center[1],
+                                            grad.center[0] - grad.bounds[0],
+                                            grad.center[1] - grad.bounds[1],
                                             grad.radius,
                                             0.0,
                                         ],
@@ -725,8 +725,8 @@ impl<'surface> FrameEncoder<'surface> {
                                     let uniforms = SweepGradientUniforms {
                                         bounds: grad.bounds,
                                         center_angles: [
-                                            grad.center[0],
-                                            grad.center[1],
+                                            grad.center[0] - grad.bounds[0],
+                                            grad.center[1] - grad.bounds[1],
                                             grad.start_angle,
                                             grad.end_angle,
                                         ],
