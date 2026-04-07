@@ -37,7 +37,12 @@ impl TextSystem {
     /// Initialises the font system with platform fonts and an embedded Roboto
     /// fallback, then sets up the glyph atlas and renderer for the given
     /// texture format.
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        depth_stencil: Option<wgpu::DepthStencilState>,
+    ) -> Self {
         let mut font_system = Self::initialize_font_system();
 
         // Load embedded fallback font
@@ -51,7 +56,7 @@ impl TextSystem {
             &mut text_atlas,
             device,
             wgpu::MultisampleState::default(),
-            None,
+            depth_stencil,
         );
 
         let viewport = Viewport::new(device, &cache);

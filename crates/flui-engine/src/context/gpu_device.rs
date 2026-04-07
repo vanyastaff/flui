@@ -73,7 +73,12 @@ impl GpuDevice {
         let capabilities = GpuCapabilities::from_adapter_info(&adapter_info, &adapter);
         let default_format = wgpu::TextureFormat::Bgra8Unorm;
         let pipelines = PipelineRegistry::new(&device, default_format);
-        let text_system = TextSystem::new(&device, &queue, default_format);
+        let text_system = TextSystem::new(
+            &device,
+            &queue,
+            default_format,
+            Some(Self::text_depth_stencil_state()),
+        );
         let (unit_quad_vbo, unit_quad_ibo) = Self::create_unit_quad_buffers(&device);
         let (image_sampler, image_bind_group_layout) = Self::create_image_resources(&device);
 
@@ -131,7 +136,12 @@ impl GpuDevice {
             .copied()
             .unwrap_or(wgpu::TextureFormat::Bgra8Unorm);
         let pipelines = PipelineRegistry::new(&device, default_format);
-        let text_system = TextSystem::new(&device, &queue, default_format);
+        let text_system = TextSystem::new(
+            &device,
+            &queue,
+            default_format,
+            Some(Self::text_depth_stencil_state()),
+        );
         let (unit_quad_vbo, unit_quad_ibo) = Self::create_unit_quad_buffers(&device);
         let (image_sampler, image_bind_group_layout) = Self::create_image_resources(&device);
 
@@ -350,6 +360,37 @@ impl GpuDevice {
         ));
 
         (image_sampler, image_bind_group_layout)
+    }
+
+    /// Depth/stencil state used by the text renderer pipeline.
+    ///
+    /// The text renderer must be aware of the depth/stencil attachment on
+    /// the render pass even though it neither reads nor writes depth/stencil
+    /// values. Without this, wgpu rejects the render pass due to pipeline
+    /// incompatibility.
+    fn text_depth_stencil_state() -> wgpu::DepthStencilState {
+        wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth24PlusStencil8,
+            depth_write_enabled: false,
+            depth_compare: wgpu::CompareFunction::Always,
+            stencil: wgpu::StencilState {
+                front: wgpu::StencilFaceState {
+                    compare: wgpu::CompareFunction::Always,
+                    fail_op: wgpu::StencilOperation::Keep,
+                    depth_fail_op: wgpu::StencilOperation::Keep,
+                    pass_op: wgpu::StencilOperation::Keep,
+                },
+                back: wgpu::StencilFaceState {
+                    compare: wgpu::CompareFunction::Always,
+                    fail_op: wgpu::StencilOperation::Keep,
+                    depth_fail_op: wgpu::StencilOperation::Keep,
+                    pass_op: wgpu::StencilOperation::Keep,
+                },
+                read_mask: 0xFF,
+                write_mask: 0x00,
+            },
+            bias: wgpu::DepthBiasState::default(),
+        }
     }
 
     /// Create the shared unit quad vertex and index buffers.
