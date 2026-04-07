@@ -132,7 +132,11 @@ impl<T> ShapeCache<T> {
     ///
     /// Call this before or after a batch of `get_ref` lookups to keep
     /// the entries alive in the LRU.
-    pub fn touch_keys<'a>(&mut self, keys: impl IntoIterator<Item = &'a TextCacheKey>, current_frame: u64) {
+    pub fn touch_keys<'a>(
+        &mut self,
+        keys: impl IntoIterator<Item = &'a TextCacheKey>,
+        current_frame: u64,
+    ) {
         for key in keys {
             if let Some(entry) = self.entries.get_mut(key) {
                 entry.last_used_frame = current_frame;

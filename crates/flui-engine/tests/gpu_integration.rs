@@ -72,9 +72,7 @@ fn headless_clear_to_white() {
     let gpu = GpuDevice::new_headless().expect("GPU init");
     let (texture, view) = gpu.create_render_texture(64, 64);
 
-    let mut enc = gpu
-        .device()
-        .create_command_encoder(&Default::default());
+    let mut enc = gpu.device().create_command_encoder(&Default::default());
     {
         let _pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
@@ -119,9 +117,7 @@ fn headless_clear_to_red() {
     let gpu = GpuDevice::new_headless().expect("GPU init");
     let (texture, view) = gpu.create_render_texture(32, 32);
 
-    let mut enc = gpu
-        .device()
-        .create_command_encoder(&Default::default());
+    let mut enc = gpu.device().create_command_encoder(&Default::default());
     {
         let _pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,

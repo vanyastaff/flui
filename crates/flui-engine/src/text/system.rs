@@ -37,11 +37,7 @@ impl TextSystem {
     /// Initialises the font system with platform fonts and an embedded Roboto
     /// fallback, then sets up the glyph atlas and renderer for the given
     /// texture format.
-    pub fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        format: wgpu::TextureFormat,
-    ) -> Self {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
         let mut font_system = Self::initialize_font_system();
 
         // Load embedded fallback font
@@ -87,23 +83,25 @@ impl TextSystem {
     ) {
         self.current_frame += 1;
 
-        self.viewport.update(
-            queue,
-            Resolution {
-                width,
-                height,
-            },
-        );
+        self.viewport.update(queue, Resolution { width, height });
 
         // Ensure all runs have cached buffers
         for run in runs {
-            if self.shape_cache.get(&run.cache_key, self.current_frame).is_none() {
+            if self
+                .shape_cache
+                .get(&run.cache_key, self.current_frame)
+                .is_none()
+            {
                 let font_size = f32::from_bits(run.cache_key.font_size_bits);
                 let line_height = font_size * 1.2;
                 let mut buffer =
                     Buffer::new(&mut self.font_system, Metrics::new(font_size, line_height));
 
-                buffer.set_size(&mut self.font_system, Some(width as f32), Some(height as f32));
+                buffer.set_size(
+                    &mut self.font_system,
+                    Some(width as f32),
+                    Some(height as f32),
+                );
 
                 let family = if run.font_family.is_empty() {
                     Family::SansSerif
@@ -121,10 +119,8 @@ impl TextSystem {
         }
 
         // Update LRU timestamps for all runs in one pass (mutable borrow).
-        self.shape_cache.touch_keys(
-            runs.iter().map(|r| &r.cache_key),
-            self.current_frame,
-        );
+        self.shape_cache
+            .touch_keys(runs.iter().map(|r| &r.cache_key), self.current_frame);
 
         // Build TextArea references using immutable borrows only.
         let mut text_areas: Vec<TextArea<'_>> = Vec::with_capacity(runs.len());

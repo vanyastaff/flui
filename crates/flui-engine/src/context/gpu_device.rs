@@ -325,8 +325,8 @@ impl GpuDevice {
             ..Default::default()
         });
 
-        let image_bind_group_layout =
-            Arc::new(device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        let image_bind_group_layout = Arc::new(device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
                 label: Some("image_bind_group_layout"),
                 entries: &[
                     wgpu::BindGroupLayoutEntry {
@@ -346,7 +346,8 @@ impl GpuDevice {
                         count: None,
                     },
                 ],
-            }));
+            },
+        ));
 
         (image_sampler, image_bind_group_layout)
     }

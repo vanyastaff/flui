@@ -1,7 +1,8 @@
 //! Visual rendering demo for flui-engine.
 //!
-//! Renders a grid of colored rounded rectangles and a row of circles
-//! using the flui-engine GPU pipeline directly (no scene/layer tree).
+//! Renders a grid of colored shapes, tessellated paths (triangle, star,
+//! diamond), gradient effects (sweep, linear), and text runs using the
+//! flui-engine GPU pipeline directly (no scene/layer tree).
 //!
 //! Run: `cargo run -p flui-engine --example render_demo`
 
@@ -14,9 +15,15 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowAttributes, WindowId};
 
+use flui_engine::batchers::effects::{
+    GradientStop, LinearGradientInstance, SweepGradientInstance,
+};
 use flui_engine::context::gpu_device::GpuDevice;
 use flui_engine::context::render_surface::RenderSurface;
 use flui_engine::text::cache::TextCacheKey;
+
+use lyon::math::point;
+use lyon::path::Path;
 
 /// Application state machine: starts without a window, creates GPU resources
 /// once the event loop is active.
@@ -117,9 +124,7 @@ impl ApplicationHandler for App {
             }
             WindowEvent::Resized(new_size) => {
                 let scale = state.window.scale_factor() as f32;
-                state
-                    .surface
-                    .resize(new_size.width, new_size.height, scale);
+                state.surface.resize(new_size.width, new_size.height, scale);
                 state.window.request_redraw();
             }
             WindowEvent::RedrawRequested => {
@@ -143,13 +148,14 @@ impl App {
     ///
     /// The returned `RenderState` borrows from `window` via raw handles;
     /// the caller must keep the `Window` alive for the lifetime of the state.
-    unsafe fn create_render_state(&self, window: &Arc<Window>) -> Result<RenderState, Box<dyn std::error::Error>> {
+    unsafe fn create_render_state(
+        &self,
+        window: &Arc<Window>,
+    ) -> Result<RenderState, Box<dyn std::error::Error>> {
         // Step 1: create a temporary wgpu surface for adapter selection.
         let temp_surface = self
             .instance
-            .create_surface_unsafe(
-                wgpu::SurfaceTargetUnsafe::from_window(window.as_ref())?,
-            )?;
+            .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::from_window(window.as_ref())?)?;
 
         // Step 2: create GpuDevice using the surface for adapter compatibility.
         let gpu = Arc::new(GpuDevice::new_with_surface(&self.instance, &temp_surface)?);
@@ -174,7 +180,7 @@ impl App {
     }
 }
 
-/// Draw one frame: a 10x8 grid of coloured rounded rectangles plus circles.
+/// Draw one frame showcasing shapes, paths, gradients, and text.
 fn render_frame(surface: &mut RenderSurface) -> Result<(), Box<dyn std::error::Error>> {
     let mut frame = surface.begin_frame()?;
     let batchers = frame.batchers_mut();
@@ -193,9 +199,9 @@ fn render_frame(surface: &mut RenderSurface) -> Result<(), Box<dyn std::error::E
                 y,
                 60.0,
                 40.0,
-                [r, g, 0.5, 1.0],       // colour: gradient across grid
-                [8.0, 8.0, 8.0, 8.0],   // per-corner radii
-                [1.0, 1.0, 0.0, 0.0],   // identity transform
+                [r, g, 0.5, 1.0],     // colour: gradient across grid
+                [8.0, 8.0, 8.0, 8.0], // per-corner radii
+                [1.0, 1.0, 0.0, 0.0], // identity transform
             );
         }
     }
@@ -207,8 +213,8 @@ fn render_frame(surface: &mut RenderSurface) -> Result<(), Box<dyn std::error::E
             cx,
             500.0,
             30.0,
-            [0.2, 0.6, 1.0, 1.0],   // blue-ish
-            [1.0, 1.0, 0.0, 0.0],   // identity transform
+            [0.2, 0.6, 1.0, 1.0], // blue-ish
+            [1.0, 1.0, 0.0, 0.0], // identity transform
         );
     }
 
@@ -217,13 +223,144 @@ fn render_frame(surface: &mut RenderSurface) -> Result<(), Box<dyn std::error::E
         let cx = 150.0 + i as f32 * 250.0;
         batchers.shapes.add_arc(
             cx,
-            560.0,
+            500.0,
             25.0,
             0.0,
             std::f32::consts::PI * 1.5,
-            [1.0, 0.4, 0.1, 1.0],   // orange
+            [1.0, 0.4, 0.1, 1.0], // orange
         );
     }
+
+    // -- Ovals ---------------------------------------------------------------
+    batchers.shapes.add_oval(
+        620.0,
+        480.0,
+        60.0,
+        30.0,
+        [0.6, 0.2, 0.8, 1.0], // purple
+        [1.0, 1.0, 0.0, 0.0], // identity transform
+    );
+
+    // -- Lines ---------------------------------------------------------------
+    for i in 0..4 {
+        let y = 470.0 + i as f32 * 12.0;
+        let hue = i as f32 / 4.0;
+        batchers.shapes.add_line(
+            620.0,
+            y,
+            780.0,
+            y,
+            [hue, 1.0 - hue, 0.5, 1.0],
+            2.0,
+        );
+    }
+
+    // -- Tessellated path: triangle via PathBatcher --------------------------
+    {
+        let mut builder = Path::builder();
+        builder.begin(point(50.0, 560.0));
+        builder.line_to(point(90.0, 590.0));
+        builder.line_to(point(10.0, 590.0));
+        builder.close();
+        let triangle = builder.build();
+        batchers.paths.add_fill(&triangle, [0.9, 0.2, 0.3, 1.0]); // red triangle
+    }
+
+    // -- Tessellated path: star outline via PathBatcher ----------------------
+    {
+        let cx = 170.0_f32;
+        let cy = 575.0_f32;
+        let outer_r = 25.0_f32;
+        let inner_r = 10.0_f32;
+        let points = 5;
+        let mut builder = Path::builder();
+        for i in 0..(points * 2) {
+            let angle =
+                -std::f32::consts::FRAC_PI_2 + std::f32::consts::PI * i as f32 / points as f32;
+            let r = if i % 2 == 0 { outer_r } else { inner_r };
+            let px = cx + r * angle.cos();
+            let py = cy + r * angle.sin();
+            if i == 0 {
+                builder.begin(point(px, py));
+            } else {
+                builder.line_to(point(px, py));
+            }
+        }
+        builder.close();
+        let star = builder.build();
+        batchers
+            .paths
+            .add_stroke(&star, [1.0, 0.8, 0.0, 1.0], 2.0); // gold star outline
+    }
+
+    // -- Tessellated path: diamond via add_vertices --------------------------
+    {
+        let verts: &[[f32; 2]] = &[
+            [270.0, 555.0], // top
+            [295.0, 575.0], // right
+            [270.0, 595.0], // bottom
+            [245.0, 575.0], // left
+        ];
+        let indices: &[u32] = &[0, 1, 2, 0, 2, 3];
+        batchers
+            .paths
+            .add_vertices(verts, None, indices, [0.2, 0.8, 0.4, 1.0]); // green diamond
+    }
+
+    // -- Sweep gradient effect -----------------------------------------------
+    batchers.effects.add_sweep_gradient(SweepGradientInstance {
+        bounds: [350.0, 545.0, 60.0, 60.0],
+        center: [380.0, 575.0],
+        start_angle: 0.0,
+        end_angle: std::f32::consts::TAU,
+        stops: vec![
+            GradientStop {
+                color: [1.0, 0.0, 0.0, 1.0],
+                position: 0.0,
+                _padding: [0.0; 3],
+            },
+            GradientStop {
+                color: [0.0, 1.0, 0.0, 1.0],
+                position: 0.33,
+                _padding: [0.0; 3],
+            },
+            GradientStop {
+                color: [0.0, 0.0, 1.0, 1.0],
+                position: 0.66,
+                _padding: [0.0; 3],
+            },
+            GradientStop {
+                color: [1.0, 0.0, 0.0, 1.0],
+                position: 1.0,
+                _padding: [0.0; 3],
+            },
+        ],
+        corner_radii: [0.0; 4],
+        transform: [1.0, 0.0, 0.0, 1.0],
+    });
+
+    // -- Linear gradient effect ----------------------------------------------
+    batchers
+        .effects
+        .add_linear_gradient(LinearGradientInstance {
+            bounds: [430.0, 545.0, 120.0, 40.0],
+            start: [430.0, 565.0],
+            end: [550.0, 565.0],
+            stops: vec![
+                GradientStop {
+                    color: [0.0, 0.5, 1.0, 1.0],
+                    position: 0.0,
+                    _padding: [0.0; 3],
+                },
+                GradientStop {
+                    color: [1.0, 0.5, 0.0, 1.0],
+                    position: 1.0,
+                    _padding: [0.0; 3],
+                },
+            ],
+            corner_radii: [10.0, 10.0, 10.0, 10.0],
+            transform: [1.0, 0.0, 0.0, 1.0],
+        });
 
     // -- Text runs via TextBatcher ------------------------------------------
     {

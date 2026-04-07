@@ -101,7 +101,14 @@ mod tests {
     #[test]
     fn add_run_accumulates() {
         let mut batcher = TextBatcher::new();
-        batcher.add_run(make_key("hello"), "hello".into(), "Arial".into(), [0.0, 0.0], [1.0; 4], None);
+        batcher.add_run(
+            make_key("hello"),
+            "hello".into(),
+            "Arial".into(),
+            [0.0, 0.0],
+            [1.0; 4],
+            None,
+        );
         batcher.add_run(
             make_key("world"),
             "world".into(),
@@ -117,7 +124,14 @@ mod tests {
     #[test]
     fn clear_resets() {
         let mut batcher = TextBatcher::new();
-        batcher.add_run(make_key("hello"), "hello".into(), "Arial".into(), [0.0, 0.0], [1.0; 4], None);
+        batcher.add_run(
+            make_key("hello"),
+            "hello".into(),
+            "Arial".into(),
+            [0.0, 0.0],
+            [1.0; 4],
+            None,
+        );
         assert!(!batcher.is_empty());
         batcher.clear();
         assert!(batcher.is_empty());
