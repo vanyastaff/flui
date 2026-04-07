@@ -957,6 +957,10 @@ pub fn dispatch_command(
             batchers
                 .compositing
                 .add_shader_mask(rect_to_xywh(bounds), 0);
+            tracing::debug!(
+                "ShaderMask command: v1 records mask metadata only \
+                 (no GPU mask effect applied)"
+            );
         }
 
         DrawCommand::BackdropFilter {
@@ -971,24 +975,38 @@ pub fn dispatch_command(
                 FilterType::Blur {
                     sigma_x: 10.0,
                     sigma_y: 10.0,
-                }, // placeholder
+                },
+            );
+            tracing::debug!(
+                "BackdropFilter command: v1 records filter metadata only \
+                 (no GPU blur effect applied)"
             );
         }
 
         DrawCommand::SaveLayer {
             bounds,
-            paint: _,
+            paint,
             transform,
         } => {
             let b = bounds
                 .as_ref()
                 .map(rect_to_xywh)
                 .unwrap_or([0.0, 0.0, f32::MAX, f32::MAX]);
-            batchers.compositing.push_target(b, 1.0, 0);
+            let opacity = paint.color.a as f32 / 255.0;
+            batchers.compositing.push_target(b, opacity, 0);
+            // v1: apply opacity multiplicatively via state stack rather than
+            // true offscreen compositing.
+            state.opacity.push(opacity);
+            tracing::debug!(
+                opacity,
+                "SaveLayer: v1 applies opacity multiplicatively (no offscreen target)"
+            );
         }
 
         DrawCommand::RestoreLayer { transform } => {
             batchers.compositing.pop_target();
+            state.opacity.pop();
+            tracing::debug!("RestoreLayer: v1 pops opacity (no offscreen compositing)");
         }
 
         // =================================================================
@@ -1200,18 +1218,34 @@ fn traverse_layer(
             traverse_children(tree, layer_id, batchers, state, scale_factor, draw_ops);
         }
 
-        Layer::ShaderMask(_) => {
-            batchers.compositing.add_shader_mask([0.0; 4], 0);
+        Layer::ShaderMask(mask_layer) => {
+            // v1: ShaderMask renders children normally without applying the mask.
+            // Full shader-based masking requires offscreen render targets (v2).
+            let bounds = mask_layer.bounds();
+            let b = rect_to_xywh(&bounds);
+            batchers.compositing.add_shader_mask(b, 0);
+            tracing::info!(
+                "ShaderMask layer: v1 renders children without mask effect \
+                 (full masking deferred to v2)"
+            );
             traverse_children(tree, layer_id, batchers, state, scale_factor, draw_ops);
         }
 
-        Layer::BackdropFilter(_) => {
+        Layer::BackdropFilter(filter_layer) => {
+            // v1: BackdropFilter renders children normally without applying blur.
+            // Full backdrop blur requires framebuffer readback + multi-pass blur (v2).
+            let bounds = filter_layer.bounds();
+            let b = rect_to_xywh(&bounds);
             batchers.compositing.add_backdrop_filter(
-                [0.0; 4],
+                b,
                 FilterType::Blur {
                     sigma_x: 10.0,
                     sigma_y: 10.0,
                 },
+            );
+            tracing::info!(
+                "BackdropFilter layer: v1 renders children without blur effect \
+                 (full backdrop blur deferred to v2)"
             );
             traverse_children(tree, layer_id, batchers, state, scale_factor, draw_ops);
         }
@@ -1515,12 +1549,79 @@ mod tests {
         };
         dispatch_command(&save, &mut batchers, &mut state, 1.0);
         assert_eq!(batchers.compositing.target_depth(), 1);
+        // v1: SaveLayer pushes opacity onto state stack
+        // BLACK has a=255, so opacity = 1.0. Combined = 1.0.
+        assert!((state.opacity.current() - 1.0).abs() < f32::EPSILON);
 
         let restore = DrawCommand::RestoreLayer {
             transform: Matrix4::identity(),
         };
         dispatch_command(&restore, &mut batchers, &mut state, 1.0);
         assert_eq!(batchers.compositing.target_depth(), 0);
+        // v1: RestoreLayer pops opacity
+        assert!((state.opacity.current() - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn dispatch_save_layer_with_opacity() {
+        let mut batchers = Batchers::new();
+        let mut state = StateStack::new();
+
+        // Use a paint with 50% alpha (128/255 ~ 0.502)
+        let save = DrawCommand::SaveLayer {
+            bounds: Some(Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0))),
+            paint: Paint::fill(Color::rgba(255, 255, 255, 128)),
+            transform: Matrix4::identity(),
+        };
+        dispatch_command(&save, &mut batchers, &mut state, 1.0);
+        assert_eq!(batchers.compositing.target_depth(), 1);
+        // Opacity should be approximately 128/255 ~ 0.502
+        let expected = 128.0 / 255.0;
+        assert!((state.opacity.current() - expected).abs() < 0.01);
+
+        let restore = DrawCommand::RestoreLayer {
+            transform: Matrix4::identity(),
+        };
+        dispatch_command(&restore, &mut batchers, &mut state, 1.0);
+        assert!((state.opacity.current() - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn dispatch_shader_mask_records_metadata() {
+        use flui_painting::display_list::DisplayList;
+
+        let mut batchers = Batchers::new();
+        let mut state = StateStack::new();
+        let cmd = DrawCommand::ShaderMask {
+            child: Box::new(DisplayList::new()),
+            shader: Shader::LinearGradient {
+                from: flui_types::geometry::Offset::new(px(0.0), px(0.0)),
+                to: flui_types::geometry::Offset::new(px(100.0), px(0.0)),
+                colors: vec![Color::BLACK, Color::WHITE],
+                stops: None,
+                tile_mode: flui_types::painting::TileMode::Clamp,
+            },
+            bounds: Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
+            blend_mode: flui_types::painting::BlendMode::SrcOver,
+            transform: Matrix4::identity(),
+        };
+        dispatch_command(&cmd, &mut batchers, &mut state, 1.0);
+        assert_eq!(batchers.compositing.op_count(), 1);
+    }
+
+    #[test]
+    fn dispatch_backdrop_filter_records_metadata() {
+        let mut batchers = Batchers::new();
+        let mut state = StateStack::new();
+        let cmd = DrawCommand::BackdropFilter {
+            child: None,
+            filter: flui_types::painting::ImageFilter::blur(5.0),
+            bounds: Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
+            blend_mode: flui_types::painting::BlendMode::SrcOver,
+            transform: Matrix4::identity(),
+        };
+        dispatch_command(&cmd, &mut batchers, &mut state, 1.0);
+        assert_eq!(batchers.compositing.op_count(), 1);
     }
 
     // -- Traversal tests ------------------------------------------------------

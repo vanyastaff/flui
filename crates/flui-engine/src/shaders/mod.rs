@@ -38,6 +38,8 @@ pub mod effects {
     pub const BLUR_UPSAMPLE: &str = include_str!("effects/blur_upsample.wgsl");
     /// Drop shadow shader.
     pub const SHADOW: &str = include_str!("effects/shadow.wgsl");
+    /// Compositing shader for offscreen render target blending.
+    pub const COMPOSITING: &str = include_str!("effects/compositing.wgsl");
 }
 
 /// Gradient shaders for linear and radial gradients.

@@ -889,6 +889,26 @@ impl<'surface> FrameEncoder<'surface> {
                             }
                         }
                     }
+
+                    DrawOp::PushRenderTarget { bounds, opacity } => {
+                        // v1: SaveLayer compositing uses multiplicative opacity
+                        // via the StateStack rather than true offscreen render
+                        // targets. Full render-target switching (end current
+                        // pass, create offscreen texture, begin new pass)
+                        // will be implemented in v2.
+                        tracing::debug!(
+                            ?bounds,
+                            opacity,
+                            "PushRenderTarget: v1 no-op (opacity applied via state stack)"
+                        );
+                    }
+
+                    DrawOp::PopRenderTarget => {
+                        // v1: Matching pop for the PushRenderTarget no-op.
+                        tracing::debug!(
+                            "PopRenderTarget: v1 no-op (no offscreen target to composite)"
+                        );
+                    }
                 }
             }
         }

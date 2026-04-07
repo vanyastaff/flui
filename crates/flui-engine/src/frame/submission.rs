@@ -70,6 +70,25 @@ pub enum DrawOp {
     SetScissor(ScissorRect),
     /// Clear scissor (restore full viewport).
     ClearScissor,
+    /// Begin rendering to an offscreen render target for SaveLayer compositing.
+    ///
+    /// Content between this and the matching `PopRenderTarget` is logically
+    /// rendered to an offscreen texture with the given bounds.
+    ///
+    /// **v1 behaviour:** The opacity is applied multiplicatively via the
+    /// opacity stack rather than true offscreen compositing. Full offscreen
+    /// render-target switching will be implemented in v2.
+    PushRenderTarget {
+        /// Bounding rectangle in pixels: x, y, width, height.
+        bounds: [f32; 4],
+        /// Layer opacity (0.0-1.0).
+        opacity: f32,
+    },
+    /// Pop an offscreen render target and composite it back.
+    ///
+    /// **v1 behaviour:** This is a no-op marker; the opacity was already
+    /// applied multiplicatively when `PushRenderTarget` was emitted.
+    PopRenderTarget,
     /// Push stencil clip: render clip geometry to stencil buffer (increment),
     /// then increase the stencil reference for subsequent draws.
     StencilPush {
@@ -204,5 +223,23 @@ mod tests {
         };
         assert!(matches!(push, BatchedDraw::PushRenderTarget { .. }));
         assert!(matches!(pop, BatchedDraw::PopRenderTarget { .. }));
+    }
+
+    #[test]
+    fn draw_op_push_render_target() {
+        let op = DrawOp::PushRenderTarget {
+            bounds: [10.0, 20.0, 100.0, 200.0],
+            opacity: 0.75,
+        };
+        assert!(matches!(
+            op,
+            DrawOp::PushRenderTarget { opacity, .. } if (opacity - 0.75).abs() < f32::EPSILON
+        ));
+    }
+
+    #[test]
+    fn draw_op_pop_render_target() {
+        let op = DrawOp::PopRenderTarget;
+        assert!(matches!(op, DrawOp::PopRenderTarget));
     }
 }
