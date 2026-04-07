@@ -30,7 +30,9 @@ struct GradientUniforms {
     start_end: vec4<f32>,    // start.x, start.y, end.x, end.y (local coords)
     corner_radii: vec4<f32>, // tl, tr, br, bl
     stop_count: u32,
-    _padding: vec3<u32>,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 @group(1) @binding(0)

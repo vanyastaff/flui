@@ -30,7 +30,9 @@ struct GradientUniforms {
     center_angles: vec4<f32>,       // center.x, center.y, start_angle, end_angle
     corner_radii: vec4<f32>,        // tl, tr, br, bl
     stop_count: u32,
-    _padding: vec3<u32>,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 @group(1) @binding(0)
