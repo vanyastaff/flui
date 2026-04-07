@@ -42,7 +42,7 @@ pub fn create_rect_pipeline(
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         }),
         primitive: default_primitive_state(),
-        depth_stencil: None,
+        depth_stencil: Some(default_depth_stencil_state()),
         multisample: wgpu::MultisampleState::default(),
         multiview: None,
         cache: None,
@@ -88,7 +88,7 @@ pub fn create_circle_pipeline(
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         }),
         primitive: default_primitive_state(),
-        depth_stencil: None,
+        depth_stencil: Some(default_depth_stencil_state()),
         multisample: wgpu::MultisampleState::default(),
         multiview: None,
         cache: None,
@@ -133,7 +133,7 @@ pub fn create_arc_pipeline(
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         }),
         primitive: default_primitive_state(),
-        depth_stencil: None,
+        depth_stencil: Some(default_depth_stencil_state()),
         multisample: wgpu::MultisampleState::default(),
         multiview: None,
         cache: None,
@@ -179,7 +179,7 @@ pub(crate) fn create_placeholder_pipeline(
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         }),
         primitive: default_primitive_state(),
-        depth_stencil: None,
+        depth_stencil: Some(default_depth_stencil_state()),
         multisample: wgpu::MultisampleState::default(),
         multiview: None,
         cache: None,
@@ -209,6 +209,33 @@ pub(crate) fn alpha_blend_target(format: wgpu::TextureFormat) -> wgpu::ColorTarg
         format,
         blend: Some(wgpu::BlendState::ALPHA_BLENDING),
         write_mask: wgpu::ColorWrites::ALL,
+    }
+}
+
+/// Stencil-aware depth/stencil state shared by all regular drawing pipelines.
+///
+/// Regular pipelines test against the stencil buffer (compare: `GreaterEqual`)
+/// but never write to it. The stencil reference is set dynamically via
+/// `render_pass.set_stencil_reference()`.  When no clip is active the
+/// reference is 0, which passes against the cleared stencil value of 0.
+pub(crate) fn default_depth_stencil_state() -> wgpu::DepthStencilState {
+    let face = wgpu::StencilFaceState {
+        compare: wgpu::CompareFunction::GreaterEqual,
+        fail_op: wgpu::StencilOperation::Keep,
+        depth_fail_op: wgpu::StencilOperation::Keep,
+        pass_op: wgpu::StencilOperation::Keep,
+    };
+    wgpu::DepthStencilState {
+        format: wgpu::TextureFormat::Depth24PlusStencil8,
+        depth_write_enabled: false,
+        depth_compare: wgpu::CompareFunction::Always,
+        stencil: wgpu::StencilState {
+            front: face,
+            back: face,
+            read_mask: 0xFF,
+            write_mask: 0xFF,
+        },
+        bias: wgpu::DepthBiasState::default(),
     }
 }
 

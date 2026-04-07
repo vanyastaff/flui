@@ -70,6 +70,30 @@ pub enum DrawOp {
     SetScissor(ScissorRect),
     /// Clear scissor (restore full viewport).
     ClearScissor,
+    /// Push stencil clip: render clip geometry to stencil buffer (increment),
+    /// then increase the stencil reference for subsequent draws.
+    StencilPush {
+        /// Start index into the path vertex buffer for the clip geometry.
+        clip_verts_start: u32,
+        /// Number of clip vertices.
+        clip_verts_count: u32,
+        /// Start index into the path index buffer for the clip geometry.
+        clip_idx_start: u32,
+        /// Number of clip indices.
+        clip_idx_count: u32,
+    },
+    /// Pop stencil clip: render clip geometry to stencil buffer (decrement),
+    /// then decrease the stencil reference for subsequent draws.
+    StencilPop {
+        /// Start index into the path vertex buffer for the clip geometry.
+        clip_verts_start: u32,
+        /// Number of clip vertices.
+        clip_verts_count: u32,
+        /// Start index into the path index buffer for the clip geometry.
+        clip_idx_start: u32,
+        /// Number of clip indices.
+        clip_idx_count: u32,
+    },
 }
 
 /// A single GPU draw command, produced by batcher flush.

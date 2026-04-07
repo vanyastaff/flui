@@ -17,6 +17,8 @@ pub mod registry;
 pub mod shadow_pipeline;
 #[cfg(feature = "wgpu-backend")]
 pub mod shape_pipeline;
+#[cfg(feature = "wgpu-backend")]
+pub mod stencil_pipeline;
 
 #[cfg(feature = "wgpu-backend")]
 pub use registry::{PipelineId, PipelineRegistry};

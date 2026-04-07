@@ -303,7 +303,14 @@ impl<'surface> FrameEncoder<'surface> {
                         store: wgpu::StoreOp::Store,
                     },
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: self.surface.stencil_view(),
+                    depth_ops: None,
+                    stencil_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
@@ -354,6 +361,10 @@ impl<'surface> FrameEncoder<'surface> {
 
             let surface_w = self.surface.width();
             let surface_h = self.surface.height();
+
+            // Stencil reference value, incremented/decremented by stencil
+            // push/pop operations for non-rectangular clipping.
+            let mut stencil_ref: u32 = 0;
 
             // Iterate draw operations in painter's order.
             for op in ops {
@@ -795,6 +806,88 @@ impl<'surface> FrameEncoder<'surface> {
 
                     DrawOp::ClearScissor => {
                         render_pass.set_scissor_rect(0, 0, surface_w, surface_h);
+                    }
+
+                    DrawOp::StencilPush {
+                        clip_verts_start: _,
+                        clip_verts_count: _,
+                        clip_idx_start,
+                        clip_idx_count,
+                    } => {
+                        if let (Some(ref verts), Some(ref idxs)) =
+                            (&path_verts_buf, &path_idxs_buf)
+                        {
+                            // Write clip shape to stencil buffer (increment)
+                            if let Some(pipeline) = self
+                                .gpu
+                                .pipelines()
+                                .get(PipelineId::StencilWriteIncrement)
+                            {
+                                render_pass.set_pipeline(pipeline);
+                                render_pass.set_vertex_buffer(0, verts.slice(..));
+                                render_pass.set_index_buffer(
+                                    idxs.slice(..),
+                                    wgpu::IndexFormat::Uint32,
+                                );
+                                stencil_ref += 1;
+                                render_pass.set_stencil_reference(stencil_ref);
+                                render_pass.draw_indexed(
+                                    *clip_idx_start
+                                        ..(*clip_idx_start + *clip_idx_count),
+                                    0,
+                                    0..1,
+                                );
+
+                                // Restore unit quad for subsequent instanced draws
+                                render_pass
+                                    .set_vertex_buffer(0, self.gpu.unit_quad_vbo().slice(..));
+                                render_pass.set_index_buffer(
+                                    self.gpu.unit_quad_ibo().slice(..),
+                                    wgpu::IndexFormat::Uint16,
+                                );
+                            }
+                        }
+                    }
+
+                    DrawOp::StencilPop {
+                        clip_verts_start: _,
+                        clip_verts_count: _,
+                        clip_idx_start,
+                        clip_idx_count,
+                    } => {
+                        if let (Some(ref verts), Some(ref idxs)) =
+                            (&path_verts_buf, &path_idxs_buf)
+                        {
+                            // Write clip shape to stencil buffer (decrement)
+                            if let Some(pipeline) = self
+                                .gpu
+                                .pipelines()
+                                .get(PipelineId::StencilWriteDecrement)
+                            {
+                                render_pass.set_pipeline(pipeline);
+                                render_pass.set_vertex_buffer(0, verts.slice(..));
+                                render_pass.set_index_buffer(
+                                    idxs.slice(..),
+                                    wgpu::IndexFormat::Uint32,
+                                );
+                                render_pass.draw_indexed(
+                                    *clip_idx_start
+                                        ..(*clip_idx_start + *clip_idx_count),
+                                    0,
+                                    0..1,
+                                );
+                                stencil_ref = stencil_ref.saturating_sub(1);
+                                render_pass.set_stencil_reference(stencil_ref);
+
+                                // Restore unit quad for subsequent instanced draws
+                                render_pass
+                                    .set_vertex_buffer(0, self.gpu.unit_quad_vbo().slice(..));
+                                render_pass.set_index_buffer(
+                                    self.gpu.unit_quad_ibo().slice(..),
+                                    wgpu::IndexFormat::Uint16,
+                                );
+                            }
+                        }
                     }
                 }
             }

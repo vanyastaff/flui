@@ -25,6 +25,8 @@ pub struct RenderSurface {
     scale_factor: f32,
     viewport_buffer: wgpu::Buffer,
     viewport_bind_group: wgpu::BindGroup,
+    stencil_texture: wgpu::Texture,
+    stencil_view: wgpu::TextureView,
 }
 
 impl RenderSurface {
@@ -68,6 +70,8 @@ impl RenderSurface {
         let clamped_height = height.max(1);
         let (viewport_buffer, viewport_bind_group) =
             create_viewport_resources(&gpu, clamped_width, clamped_height, scale_factor);
+        let (stencil_texture, stencil_view) =
+            create_stencil_resources(gpu.device(), clamped_width, clamped_height);
 
         Ok(Self {
             gpu,
@@ -78,6 +82,8 @@ impl RenderSurface {
             scale_factor,
             viewport_buffer,
             viewport_bind_group,
+            stencil_texture,
+            stencil_view,
         })
     }
 
@@ -105,6 +111,11 @@ impl RenderSurface {
         self.gpu
             .queue()
             .write_buffer(&self.viewport_buffer, 0, bytemuck::bytes_of(&uniforms));
+
+        let (stencil_texture, stencil_view) =
+            create_stencil_resources(self.gpu.device(), self.width, self.height);
+        self.stencil_texture = stencil_texture;
+        self.stencil_view = stencil_view;
     }
 
     /// Get the current surface texture for rendering.
@@ -175,6 +186,42 @@ impl RenderSurface {
     pub fn viewport_buffer(&self) -> &wgpu::Buffer {
         &self.viewport_buffer
     }
+
+    /// The stencil texture view for depth/stencil attachments.
+    #[must_use]
+    pub fn stencil_view(&self) -> &wgpu::TextureView {
+        &self.stencil_view
+    }
+
+    /// The stencil texture (exposed for inspection/testing).
+    #[must_use]
+    pub fn stencil_texture(&self) -> &wgpu::Texture {
+        &self.stencil_texture
+    }
+}
+
+/// Create the depth/stencil texture and its view.
+fn create_stencil_resources(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("stencil_texture"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Depth24PlusStencil8,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
 }
 
 /// Create the viewport uniform buffer and its bind group.

@@ -41,7 +41,7 @@ pub fn create_path_fill_pipeline(
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         }),
         primitive: super::shape_pipeline::default_primitive_state(),
-        depth_stencil: None,
+        depth_stencil: Some(super::shape_pipeline::default_depth_stencil_state()),
         multisample: wgpu::MultisampleState::default(),
         multiview: None,
         cache: None,

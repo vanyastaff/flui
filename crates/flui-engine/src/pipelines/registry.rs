@@ -32,6 +32,10 @@ pub enum PipelineId {
     BlurUpsample,
     /// Final compositing pipeline
     Compositing,
+    /// Stencil write pipeline for non-rectangular clipping (increment)
+    StencilWriteIncrement,
+    /// Stencil write pipeline for non-rectangular clipping (decrement)
+    StencilWriteDecrement,
 }
 
 impl PipelineId {
@@ -52,6 +56,8 @@ impl PipelineId {
             Self::BlurDownsample,
             Self::BlurUpsample,
             Self::Compositing,
+            Self::StencilWriteIncrement,
+            Self::StencilWriteDecrement,
         ]
     }
 
@@ -72,6 +78,8 @@ impl PipelineId {
             Self::BlurDownsample => "blur_downsample",
             Self::BlurUpsample => "blur_upsample",
             Self::Compositing => "compositing",
+            Self::StencilWriteIncrement => "stencil_write_increment",
+            Self::StencilWriteDecrement => "stencil_write_decrement",
         }
     }
 }
@@ -233,6 +241,24 @@ impl PipelineRegistry {
             )),
         );
 
+        // Stencil write pipelines (non-rectangular clipping)
+        pipelines.insert(
+            PipelineId::StencilWriteIncrement,
+            Arc::new(super::stencil_pipeline::create_stencil_increment_pipeline(
+                device,
+                format,
+                &bind_group_layout,
+            )),
+        );
+        pipelines.insert(
+            PipelineId::StencilWriteDecrement,
+            Arc::new(super::stencil_pipeline::create_stencil_decrement_pipeline(
+                device,
+                format,
+                &bind_group_layout,
+            )),
+        );
+
         Self {
             pipelines,
             bind_group_layout,
@@ -267,7 +293,7 @@ mod tests {
 
     #[test]
     fn pipeline_id_all_returns_12() {
-        assert_eq!(PipelineId::all().len(), 13);
+        assert_eq!(PipelineId::all().len(), 15);
     }
 
     #[test]
@@ -305,6 +331,6 @@ mod tests {
         for id in PipelineId::all() {
             assert!(set.insert(*id), "duplicate pipeline id: {id:?}");
         }
-        assert_eq!(set.len(), 13);
+        assert_eq!(set.len(), 15);
     }
 }

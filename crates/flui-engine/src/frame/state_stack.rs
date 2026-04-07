@@ -238,6 +238,8 @@ pub struct StateStack {
     pub clip: ClipStack,
     /// The opacity state.
     pub opacity: OpacityStack,
+    /// Current stencil nesting depth for non-rectangular clipping.
+    pub stencil_depth: u32,
 }
 
 impl StateStack {
@@ -248,6 +250,7 @@ impl StateStack {
             transform: TransformStack::new(),
             clip: ClipStack::new(),
             opacity: OpacityStack::new(),
+            stencil_depth: 0,
         }
     }
 
@@ -256,6 +259,7 @@ impl StateStack {
         self.transform.reset();
         self.clip.reset();
         self.opacity.reset();
+        self.stencil_depth = 0;
     }
 }
 
