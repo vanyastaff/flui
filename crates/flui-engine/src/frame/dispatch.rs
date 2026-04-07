@@ -18,7 +18,8 @@ use flui_types::typography::FontWeight;
 
 use crate::batchers::compositing::{CompositingBatcher, FilterType};
 use crate::batchers::effects::{
-    EffectBatcher, GradientStop, LinearGradientInstance, RadialGradientInstance, ShadowInstance,
+    EffectBatcher, GradientStop, LinearGradientInstance, RadialGradientInstance,
+    SweepGradientInstance, ShadowInstance,
 };
 use crate::batchers::images::ImageBatcher;
 use crate::batchers::paths::PathBatcher;
@@ -90,7 +91,9 @@ impl Batchers {
             path_draw_ranges: self.paths.draw_range_count() as u32,
             linear_gradients: self.effects.linear_gradient_count() as u32,
             radial_gradients: self.effects.radial_gradient_count() as u32,
+            sweep_gradients: self.effects.sweep_gradient_count() as u32,
             text_runs: self.text.run_count() as u32,
+            images: self.images.total_instance_count() as u32,
         }
     }
 
@@ -250,17 +253,18 @@ fn dispatch_gradient(
             center,
             colors,
             stops,
+            start_angle,
+            end_angle,
             ..
         } => {
-            // Fallback: treat sweep gradient as radial using the bounding rect diagonal
             let gradient_stops = build_gradient_stops(colors, stops.as_ref());
-            let half_diag = (bounds[2] * bounds[2] + bounds[3] * bounds[3]).sqrt() * 0.5;
             batchers
                 .effects
-                .add_radial_gradient(RadialGradientInstance {
+                .add_sweep_gradient(SweepGradientInstance {
                     bounds,
                     center: [center.dx.get(), center.dy.get()],
-                    radius: half_diag,
+                    start_angle: *start_angle,
+                    end_angle: *end_angle,
                     stops: gradient_stops,
                     corner_radii,
                     transform,

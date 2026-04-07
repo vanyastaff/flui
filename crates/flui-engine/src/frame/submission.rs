@@ -40,8 +40,12 @@ pub struct BatcherSnapshot {
     pub linear_gradients: u32,
     /// Number of radial gradients accumulated so far.
     pub radial_gradients: u32,
+    /// Number of sweep gradients accumulated so far.
+    pub sweep_gradients: u32,
     /// Number of text runs accumulated so far.
     pub text_runs: u32,
+    /// Number of image instances accumulated so far.
+    pub images: u32,
 }
 
 /// An ordered draw operation recorded during scene traversal.

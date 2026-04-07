@@ -52,6 +52,25 @@ pub struct RadialGradientInstance {
     pub transform: [f32; 4],
 }
 
+/// A sweep (conic/angular) gradient effect applied to a bounded region.
+#[derive(Clone, Debug)]
+pub struct SweepGradientInstance {
+    /// Bounding rectangle (x, y, w, h).
+    pub bounds: [f32; 4],
+    /// Center of the sweep gradient.
+    pub center: [f32; 2],
+    /// Starting angle in radians.
+    pub start_angle: f32,
+    /// Ending angle in radians.
+    pub end_angle: f32,
+    /// Color stops along the gradient.
+    pub stops: Vec<GradientStop>,
+    /// Per-corner radii for rounded-rect gradients.
+    pub corner_radii: [f32; 4],
+    /// 2×2 affine transform packed as `[a, b, c, d]`.
+    pub transform: [f32; 4],
+}
+
 /// A box-shadow effect instance.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
@@ -89,6 +108,7 @@ pub struct BlurPass {
 pub struct EffectBatcher {
     linear_gradients: Vec<LinearGradientInstance>,
     radial_gradients: Vec<RadialGradientInstance>,
+    sweep_gradients: Vec<SweepGradientInstance>,
     shadows: Vec<ShadowInstance>,
     blur_passes: Vec<BlurPass>,
 }
@@ -107,6 +127,11 @@ impl EffectBatcher {
     /// Enqueues a radial gradient instance.
     pub fn add_radial_gradient(&mut self, instance: RadialGradientInstance) {
         self.radial_gradients.push(instance);
+    }
+
+    /// Enqueues a sweep gradient instance.
+    pub fn add_sweep_gradient(&mut self, instance: SweepGradientInstance) {
+        self.sweep_gradients.push(instance);
     }
 
     /// Enqueues a shadow instance.
@@ -129,6 +154,11 @@ impl EffectBatcher {
         self.radial_gradients.len()
     }
 
+    /// Returns the number of queued sweep gradient instances.
+    pub fn sweep_gradient_count(&self) -> usize {
+        self.sweep_gradients.len()
+    }
+
     /// Returns the number of queued shadow instances.
     pub fn shadow_count(&self) -> usize {
         self.shadows.len()
@@ -149,6 +179,11 @@ impl EffectBatcher {
         &self.radial_gradients
     }
 
+    /// Read-only access to the accumulated sweep gradient instances.
+    pub fn sweep_gradients(&self) -> &[SweepGradientInstance] {
+        &self.sweep_gradients
+    }
+
     /// Returns the number of queued blur passes.
     pub fn blur_count(&self) -> usize {
         self.blur_passes.len()
@@ -158,6 +193,7 @@ impl EffectBatcher {
     pub fn is_empty(&self) -> bool {
         self.linear_gradients.is_empty()
             && self.radial_gradients.is_empty()
+            && self.sweep_gradients.is_empty()
             && self.shadows.is_empty()
             && self.blur_passes.is_empty()
     }
@@ -166,6 +202,7 @@ impl EffectBatcher {
     pub fn clear(&mut self) {
         self.linear_gradients.clear();
         self.radial_gradients.clear();
+        self.sweep_gradients.clear();
         self.shadows.clear();
         self.blur_passes.clear();
     }
@@ -186,6 +223,29 @@ mod tests {
             bounds: [0.0, 0.0, 100.0, 50.0],
             start: [0.0, 0.0],
             end: [100.0, 0.0],
+            stops: vec![
+                GradientStop {
+                    color: [1.0, 0.0, 0.0, 1.0],
+                    position: 0.0,
+                    _padding: [0.0; 3],
+                },
+                GradientStop {
+                    color: [0.0, 0.0, 1.0, 1.0],
+                    position: 1.0,
+                    _padding: [0.0; 3],
+                },
+            ],
+            corner_radii: [0.0; 4],
+            transform: [1.0, 0.0, 0.0, 1.0],
+        }
+    }
+
+    fn sample_sweep_gradient() -> SweepGradientInstance {
+        SweepGradientInstance {
+            bounds: [0.0, 0.0, 100.0, 100.0],
+            center: [50.0, 50.0],
+            start_angle: 0.0,
+            end_angle: std::f32::consts::TAU,
             stops: vec![
                 GradientStop {
                     color: [1.0, 0.0, 0.0, 1.0],
@@ -259,6 +319,21 @@ mod tests {
     }
 
     #[test]
+    fn add_sweep_gradient() {
+        let mut batcher = EffectBatcher::new();
+        batcher.add_sweep_gradient(sample_sweep_gradient());
+
+        assert!(!batcher.is_empty());
+        assert_eq!(batcher.sweep_gradient_count(), 1);
+        assert_eq!(batcher.sweep_gradients().len(), 1);
+        let sg = &batcher.sweep_gradients()[0];
+        assert_eq!(sg.center, [50.0, 50.0]);
+        assert_eq!(sg.start_angle, 0.0);
+        assert_eq!(sg.end_angle, std::f32::consts::TAU);
+        assert_eq!(sg.stops.len(), 2);
+    }
+
+    #[test]
     fn add_shadow() {
         let mut batcher = EffectBatcher::new();
         batcher.add_shadow(sample_shadow());
@@ -281,6 +356,7 @@ mod tests {
         let mut batcher = EffectBatcher::new();
         batcher.add_linear_gradient(sample_linear_gradient());
         batcher.add_radial_gradient(sample_radial_gradient());
+        batcher.add_sweep_gradient(sample_sweep_gradient());
         batcher.add_shadow(sample_shadow());
         batcher.add_blur(sample_blur());
 
@@ -291,6 +367,7 @@ mod tests {
         assert!(batcher.is_empty());
         assert_eq!(batcher.linear_gradient_count(), 0);
         assert_eq!(batcher.radial_gradient_count(), 0);
+        assert_eq!(batcher.sweep_gradient_count(), 0);
         assert_eq!(batcher.shadow_count(), 0);
         assert_eq!(batcher.blur_count(), 0);
     }

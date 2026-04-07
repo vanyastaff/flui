@@ -198,6 +198,30 @@ impl<'surface> FrameEncoder<'surface> {
             None
         };
 
+        // -- Upload image instances to GPU buffers (from pool) ---------------
+        let image_instance_stride =
+            std::mem::size_of::<crate::vertex::ImageQuadInstance>() as u64;
+        let image_buf = if self.batchers.images.total_instance_count() > 0 {
+            // Flatten all image groups into a single contiguous buffer.
+            // We track the byte offset per group so we can issue per-texture draws.
+            let total_count = self.batchers.images.total_instance_count();
+            let total_bytes = total_count as u64 * image_instance_stride;
+            let buf = {
+                let mut pool = self.gpu.buffer_pool().lock();
+                pool.get_vertex_buffer(self.gpu.device(), total_bytes)
+                    .clone()
+            };
+            let mut offset: u64 = 0;
+            for (_texture_id, instances) in self.batchers.images.groups_in_order() {
+                let data = bytemuck::cast_slice(instances);
+                self.gpu.queue().write_buffer(&buf, offset, data);
+                offset += instances.len() as u64 * image_instance_stride;
+            }
+            Some(buf)
+        } else {
+            None
+        };
+
         // -- Upload path geometry (from pool) -------------------------------
         let (path_verts_buf, path_idxs_buf) =
             if self.batchers.paths.draw_range_count() > 0 {
@@ -388,6 +412,88 @@ impl<'surface> FrameEncoder<'surface> {
                                     let offset = before.shadows as u64 * shadow_stride;
                                     render_pass.set_vertex_buffer(1, buf.slice(offset..));
                                     render_pass.draw_indexed(0..6, 0, 0..shadow_count);
+                                }
+                            }
+                        }
+
+                        // === Images (instanced per texture group) ===
+                        let img_before = before.images;
+                        let img_after = after.images;
+                        if img_after > img_before {
+                            if let Some(ref buf) = image_buf {
+                                if let Some(pipeline) =
+                                    self.gpu.pipelines().get(PipelineId::Image)
+                                {
+                                    render_pass.set_pipeline(pipeline);
+                                    // Restore unit quad for instanced draws
+                                    render_pass.set_vertex_buffer(
+                                        0,
+                                        self.gpu.unit_quad_vbo().slice(..),
+                                    );
+                                    render_pass.set_index_buffer(
+                                        self.gpu.unit_quad_ibo().slice(..),
+                                        wgpu::IndexFormat::Uint16,
+                                    );
+
+                                    let mut instance_offset: u32 = 0;
+                                    for (texture_id, instances) in
+                                        self.batchers.images.groups_in_order()
+                                    {
+                                        let count = instances.len() as u32;
+                                        // Skip groups outside [img_before..img_after]
+                                        let group_end = instance_offset + count;
+                                        if group_end <= img_before || instance_offset >= img_after {
+                                            instance_offset = group_end;
+                                            continue;
+                                        }
+
+                                        let mut cache = self.gpu.texture_cache().lock();
+                                        if let Some(cached) = cache.get(texture_id) {
+                                            let bind_group = self.gpu.device().create_bind_group(
+                                                &wgpu::BindGroupDescriptor {
+                                                    label: Some("image_texture_bind"),
+                                                    layout: self
+                                                        .gpu
+                                                        .image_bind_group_layout(),
+                                                    entries: &[
+                                                        wgpu::BindGroupEntry {
+                                                            binding: 0,
+                                                            resource:
+                                                                wgpu::BindingResource::Sampler(
+                                                                    self.gpu.image_sampler(),
+                                                                ),
+                                                        },
+                                                        wgpu::BindGroupEntry {
+                                                            binding: 1,
+                                                            resource:
+                                                                wgpu::BindingResource::TextureView(
+                                                                    &cached.view,
+                                                                ),
+                                                        },
+                                                    ],
+                                                },
+                                            );
+                                            render_pass.set_bind_group(1, &bind_group, &[]);
+
+                                            let buf_offset =
+                                                instance_offset as u64 * image_instance_stride;
+                                            render_pass.set_vertex_buffer(
+                                                1,
+                                                buf.slice(buf_offset..),
+                                            );
+                                            render_pass.draw_indexed(0..6, 0, 0..count);
+                                        }
+                                        drop(cache);
+
+                                        instance_offset = group_end;
+                                    }
+
+                                    // Restore viewport bind group after image bind group(1) usage
+                                    render_pass.set_bind_group(
+                                        0,
+                                        self.surface.viewport_bind_group(),
+                                        &[],
+                                    );
                                 }
                             }
                         }

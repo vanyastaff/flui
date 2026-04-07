@@ -5,6 +5,7 @@
 //! Thread-safety is provided by `Arc` internals and `parking_lot::Mutex`
 //! around mutable resources.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use wgpu::util::DeviceExt;
@@ -33,6 +34,9 @@ pub struct GpuDevice {
     default_format: wgpu::TextureFormat,
     unit_quad_vbo: wgpu::Buffer,
     unit_quad_ibo: wgpu::Buffer,
+    texture_id_counter: AtomicU64,
+    image_sampler: wgpu::Sampler,
+    image_bind_group_layout: Arc<wgpu::BindGroupLayout>,
 }
 
 impl GpuDevice {
@@ -71,6 +75,7 @@ impl GpuDevice {
         let pipelines = PipelineRegistry::new(&device, default_format);
         let text_system = TextSystem::new(&device, &queue, default_format);
         let (unit_quad_vbo, unit_quad_ibo) = Self::create_unit_quad_buffers(&device);
+        let (image_sampler, image_bind_group_layout) = Self::create_image_resources(&device);
 
         Ok(Self {
             device,
@@ -84,6 +89,9 @@ impl GpuDevice {
             default_format,
             unit_quad_vbo,
             unit_quad_ibo,
+            texture_id_counter: AtomicU64::new(0),
+            image_sampler,
+            image_bind_group_layout,
         })
     }
 
@@ -125,6 +133,7 @@ impl GpuDevice {
         let pipelines = PipelineRegistry::new(&device, default_format);
         let text_system = TextSystem::new(&device, &queue, default_format);
         let (unit_quad_vbo, unit_quad_ibo) = Self::create_unit_quad_buffers(&device);
+        let (image_sampler, image_bind_group_layout) = Self::create_image_resources(&device);
 
         Ok(Self {
             device,
@@ -138,6 +147,9 @@ impl GpuDevice {
             default_format,
             unit_quad_vbo,
             unit_quad_ibo,
+            texture_id_counter: AtomicU64::new(0),
+            image_sampler,
+            image_bind_group_layout,
         })
     }
 
@@ -189,6 +201,72 @@ impl GpuDevice {
         self.default_format
     }
 
+    /// The shared image sampler for all texture rendering.
+    #[must_use]
+    pub fn image_sampler(&self) -> &wgpu::Sampler {
+        &self.image_sampler
+    }
+
+    /// The shared bind group layout for image texture + sampler at group(1).
+    #[must_use]
+    pub fn image_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
+        &self.image_bind_group_layout
+    }
+
+    /// Load image from raw bytes (PNG, JPEG, etc.) and upload to GPU.
+    ///
+    /// Returns a unique texture ID that can be used with the image batcher.
+    /// The texture is cached in the [`TextureCache`] and can be reused across frames.
+    #[cfg(feature = "images")]
+    pub fn load_image(&self, data: &[u8]) -> RenderResult<u64> {
+        let img = image::load_from_memory(data)
+            .map_err(|e| RenderError::resource(format!("image decode: {e}")))?;
+        let rgba = img.to_rgba8();
+        let (width, height) = rgba.dimensions();
+
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("loaded_image"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * width),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let id = self.texture_id_counter.fetch_add(1, Ordering::Relaxed) + 1;
+        self.texture_cache
+            .lock()
+            .insert(id, texture, view, width, height);
+        Ok(id)
+    }
+
     /// The shared bind group layout used by all pipelines for `FrameUniforms`.
     #[must_use]
     pub fn bind_group_layout(&self) -> &Arc<wgpu::BindGroupLayout> {
@@ -234,6 +312,43 @@ impl GpuDevice {
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         (texture, view)
+    }
+
+    /// Create the shared image sampler and bind group layout.
+    fn create_image_resources(
+        device: &wgpu::Device,
+    ) -> (wgpu::Sampler, Arc<wgpu::BindGroupLayout>) {
+        let image_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("image_sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        let image_bind_group_layout =
+            Arc::new(device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("image_bind_group_layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                ],
+            }));
+
+        (image_sampler, image_bind_group_layout)
     }
 
     /// Create the shared unit quad vertex and index buffers.
