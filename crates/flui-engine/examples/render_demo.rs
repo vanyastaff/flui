@@ -25,6 +25,7 @@ use flui_engine::text::cache::TextCacheKey;
 use lyon::math::point;
 use lyon::path::Path;
 
+
 /// Application state machine: starts without a window, creates GPU resources
 /// once the event loop is active.
 struct App {
