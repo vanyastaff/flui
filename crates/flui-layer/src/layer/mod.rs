@@ -89,9 +89,6 @@ mod shader_mask;
 // Annotation search system
 pub mod annotation;
 
-// Composition callbacks
-pub mod composition_callback;
-
 // Re-exports
 pub use annotated_region::{
     AnnotatedRegionLayer, AnnotationValue, SemanticLabel, SystemUiOverlayStyle,

@@ -37,9 +37,50 @@
 //! ```
 
 use flui_foundation::LayerId;
+use std::fmt;
+
 use flui_types::{Pixels, Size};
 
 use crate::{layer::Layer, link_registry::LinkRegistry, tree::LayerTree};
+
+// ============================================================================
+// COMPOSITION CALLBACK
+// ============================================================================
+
+/// A one-shot callback invoked when a [`Scene`] finalises compositing.
+///
+/// Stored on the owning [`Scene`] via [`Scene::add_composition_callback`] and
+/// fired by [`Scene::fire_composition_callbacks`]. The callback is consumed on
+/// fire; re-registration is the caller's responsibility.
+///
+/// The closure is `FnOnce() + Send + 'static` so it can carry owned state
+/// across the build / fire boundary and survive a move to the render thread.
+pub struct CompositionCallback(Box<dyn FnOnce() + Send + 'static>);
+
+impl CompositionCallback {
+    /// Wraps a closure in a callback. Prefer [`Scene::add_composition_callback`]
+    /// for the canonical registration path.
+    #[inline]
+    pub fn new<F>(callback: F) -> Self
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        Self(Box::new(callback))
+    }
+
+    /// Consumes the callback and invokes it.
+    #[inline]
+    pub fn fire(self) {
+        (self.0)();
+    }
+}
+
+impl fmt::Debug for CompositionCallback {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CompositionCallback")
+            .finish_non_exhaustive()
+    }
+}
 
 // ============================================================================
 // SCENE
@@ -74,6 +115,9 @@ pub struct Scene {
     /// Leader-follower link registry for this scene
     link_registry: LinkRegistry,
 
+    /// One-shot callbacks fired when this scene finalises compositing.
+    composition_callbacks: Vec<CompositionCallback>,
+
     /// Frame number for debugging
     frame_number: u64,
 }
@@ -86,6 +130,7 @@ impl Scene {
             layer_tree: LayerTree::new(),
             root: None,
             link_registry: LinkRegistry::new(),
+            composition_callbacks: Vec::new(),
             frame_number: 0,
         }
     }
@@ -102,6 +147,7 @@ impl Scene {
             layer_tree,
             root,
             link_registry: LinkRegistry::new(),
+            composition_callbacks: Vec::new(),
             frame_number,
         }
     }
@@ -119,6 +165,7 @@ impl Scene {
             layer_tree,
             root,
             link_registry,
+            composition_callbacks: Vec::new(),
             frame_number,
         }
     }
@@ -134,7 +181,48 @@ impl Scene {
             layer_tree: tree,
             root: Some(root_id),
             link_registry: LinkRegistry::new(),
+            composition_callbacks: Vec::new(),
             frame_number,
+        }
+    }
+
+    // ========================================================================
+    // COMPOSITION CALLBACKS
+    // ========================================================================
+
+    /// Registers a one-shot callback to fire when this scene finalises
+    /// compositing.
+    ///
+    /// Callbacks are consumed on fire (see [`fire_composition_callbacks`]).
+    /// Re-registration is the caller's responsibility.
+    ///
+    /// [`fire_composition_callbacks`]: Self::fire_composition_callbacks
+    pub fn add_composition_callback<F>(&mut self, callback: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        self.composition_callbacks
+            .push(CompositionCallback::new(callback));
+    }
+
+    /// Returns the number of pending composition callbacks.
+    #[inline]
+    pub fn composition_callback_count(&self) -> usize {
+        self.composition_callbacks.len()
+    }
+
+    /// Fires every registered composition callback exactly once, in
+    /// registration order.
+    ///
+    /// The callback list is drained -- subsequent calls fire nothing until
+    /// new callbacks are added.
+    ///
+    /// Mythos Step 9 (U9) wraps each fire in `std::panic::catch_unwind` and
+    /// returns a `Vec<LayerError>` of poisoned callbacks; this U2 shape is the
+    /// simple drain-and-invoke form that U9 will replace.
+    pub fn fire_composition_callbacks(&mut self) {
+        for callback in self.composition_callbacks.drain(..) {
+            callback.fire();
         }
     }
 
@@ -364,5 +452,47 @@ mod tests {
         // Now create scene with the tree
         let scene = Scene::new(Size::new(px(800.0), px(600.0)), tree, root_id, 0);
         assert!(scene.has_content());
+    }
+
+    // ========================================================================
+    // COMPOSITION CALLBACK TESTS (U2)
+    // ========================================================================
+
+    #[test]
+    fn test_composition_callback_register_and_fire() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let mut scene = Scene::empty(Size::new(px(100.0), px(100.0)));
+        assert_eq!(scene.composition_callback_count(), 0);
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let c1 = Arc::clone(&counter);
+        scene.add_composition_callback(move || {
+            c1.fetch_add(1, Ordering::SeqCst);
+        });
+        let c2 = Arc::clone(&counter);
+        scene.add_composition_callback(move || {
+            c2.fetch_add(10, Ordering::SeqCst);
+        });
+
+        assert_eq!(scene.composition_callback_count(), 2);
+
+        scene.fire_composition_callbacks();
+        assert_eq!(counter.load(Ordering::SeqCst), 11);
+        assert_eq!(scene.composition_callback_count(), 0);
+
+        // Re-firing is a no-op (callbacks consumed).
+        scene.fire_composition_callbacks();
+        assert_eq!(counter.load(Ordering::SeqCst), 11);
+    }
+
+    #[test]
+    fn test_composition_callback_empty_fire_is_noop() {
+        let mut scene = Scene::empty(Size::ZERO);
+        scene.fire_composition_callbacks();
+        assert_eq!(scene.composition_callback_count(), 0);
     }
 }

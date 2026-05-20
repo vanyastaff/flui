@@ -115,11 +115,6 @@ pub use compositor::{CompositorStats, SceneBuilder, SceneCompositor};
 pub use flui_foundation::LayerId;
 // Re-export annotation search types
 pub use layer::annotation::{AnnotationEntry, AnnotationResult, AnnotationSearchOptions};
-// Re-export composition callback types
-pub use layer::composition_callback::{
-    CompositionCallbackHandle, CompositionCallbackId, CompositionCallbackRegistry,
-    HasCompositionCallbacks,
-};
 pub use layer::{
     // Annotation layers
     AnnotatedRegionLayer,
@@ -165,7 +160,7 @@ pub use layer::{
 // RE-EXPORTS - Link Registry
 // ============================================================================
 pub use link_registry::{LeaderInfo, LinkRegistry};
-pub use scene::Scene;
+pub use scene::{CompositionCallback, Scene};
 // ============================================================================
 // RE-EXPORTS - Tree
 // ============================================================================
@@ -200,7 +195,7 @@ pub mod prelude {
     // Clip layers
     pub use crate::{ClipPathLayer, ClipRRectLayer, ClipRectLayer, ClipSuperellipseLayer};
     // Composition callbacks
-    pub use crate::{CompositionCallbackRegistry, HasCompositionCallbacks};
+    pub use crate::CompositionCallback;
     // Linking layers
     pub use crate::{FollowerLayer, LayerLink, LeaderLayer};
     // Core types
