@@ -13,8 +13,11 @@ use flui_types::{
 
 use std::sync::Arc;
 
-use super::{commands::dispatch_command, painter::WgpuPainter};
-use crate::traits::{CommandRenderer, Painter};
+use super::painter::WgpuPainter;
+use crate::{
+    commands::dispatch_command,
+    traits::{CommandRenderer, Painter},
+};
 
 /// wgpu backend implementation of CommandRenderer.
 ///

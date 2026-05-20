@@ -14,7 +14,7 @@ use flui_layer::{
 };
 use flui_painting::DisplayListCore;
 
-use super::commands::{CommandRenderer, dispatch_commands};
+use crate::{commands::dispatch_commands, traits::CommandRenderer};
 
 // ============================================================================
 // SUPERELLIPSE PATH CACHE

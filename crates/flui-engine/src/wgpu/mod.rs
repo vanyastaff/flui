@@ -49,7 +49,6 @@ mod atlas;
 mod backend;
 mod buffer_pool;
 mod buffers;
-mod commands;
 #[cfg(debug_assertions)]
 mod debug;
 #[allow(dead_code)]
@@ -99,7 +98,10 @@ pub use backend::Backend;
 pub use buffer_pool::{BufferPool, BufferPoolStats};
 pub use buffers::{BufferManager, DynamicBuffer};
 // Command rendering (re-exported from crate root)
-pub use commands::{CommandRenderer, dispatch_command, dispatch_commands};
+pub use crate::{
+    commands::{dispatch_command, dispatch_commands},
+    traits::CommandRenderer,
+};
 #[cfg(debug_assertions)]
 pub use debug::DebugBackend;
 // External texture registry
