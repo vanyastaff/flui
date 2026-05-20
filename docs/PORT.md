@@ -179,7 +179,7 @@ Four other crates carry `crates/<crate>/docs/ARCHITECTURE.md` files (`flui-paint
 | `flui-painting` | `crates/flui-painting/docs/ARCHITECTURE.md` (pre-template) | Active |
 | `flui-semantics` | Not yet templated | Active |
 | `flui-scheduler` | Not yet templated | Active |
-| `flui-layer` | Not yet templated | Active |
+| [`flui-layer`](../crates/flui-layer/ARCHITECTURE.md) | Templated 2026-05-20 (Mythos chain) | Active |
 | `flui-interaction` | `crates/flui-interaction/docs/ARCHITECTURE.md` (pre-template; precedent for `## Thread safety` format) | Active |
 | `flui-engine` | Not yet templated | Active |
 | `flui-log` | Not yet templated | Active |
