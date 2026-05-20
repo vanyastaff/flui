@@ -118,8 +118,10 @@ pub trait RendererBinding: Send + Sync {
 
     /// Returns the root pipeline owner.
     ///
-    /// This is the root of the PipelineOwner tree. Child pipeline owners
-    /// are added via [`PipelineOwner::adopt_child`].
+    /// This is the root of the PipelineOwner tree. Multi-window scenarios
+    /// own multiple PipelineOwner instances side-by-side; the previous
+    /// `PipelineOwner::adopt_child` hierarchical API was removed in
+    /// Mythos Step 9.
     fn root_pipeline_owner(&self) -> &RwLock<PipelineOwner>;
 
     /// Creates the root pipeline owner.

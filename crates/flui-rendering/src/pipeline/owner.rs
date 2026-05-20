@@ -1,16 +1,13 @@
 //! PipelineOwner manages the rendering pipeline.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicU64, Ordering},
+use std::{
+    marker::PhantomData,
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 use flui_foundation::RenderId;
 use flui_layer::LayerTree;
 use flui_types::Offset;
-use parking_lot::RwLock;
-
-use std::marker::PhantomData;
 
 use crate::{context::CanvasContext, storage::RenderTree};
 
@@ -63,12 +60,13 @@ static PIPELINE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 /// 3. [`flush_paint`](Self::flush_paint) - Generate paint commands
 /// 4. [`flush_semantics`](Self::flush_semantics) - Update accessibility tree
 ///
-/// # Hierarchical Pipelines
+/// # Multi-window
 ///
-/// Pipeline owners can be organized in a tree using
-/// [`adopt_child`](Self::adopt_child) and [`drop_child`](Self::drop_child).
-/// During flush operations, parent pipelines flush their own nodes first, then
-/// recursively flush children.
+/// Each PipelineOwner manages one render tree. Multi-window applications
+/// own multiple PipelineOwner instances side-by-side; the previous
+/// hierarchical-pipelines API (`adopt_child` / `drop_child`) was removed
+/// in Mythos Step 9 -- it used `Arc<RwLock<PipelineOwner>>` for tree
+/// nodes, an anti-pattern this crate refuses.
 pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// Unique identifier for this pipeline owner.
     id: u64,
@@ -88,9 +86,6 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// [`DirtySets`](super::dirty::DirtySets). Replaces what used to be four
     /// parallel `Vec<DirtyNode>` fields scattered across the struct.
     dirty: DirtySets,
-
-    /// Child pipeline owners.
-    children: Vec<Arc<RwLock<PipelineOwner>>>,
 
     /// Whether we're currently doing layout.
     debug_doing_layout: bool,
@@ -130,7 +125,6 @@ impl<Phase: PipelinePhase> std::fmt::Debug for PipelineOwner<Phase> {
             .field("render_tree_len", &self.render_tree.len())
             .field("nodes_needing_layout", &self.dirty.needs_layout.len())
             .field("nodes_needing_paint", &self.dirty.needs_paint.len())
-            .field("children", &self.children.len())
             .field("debug_doing_layout", &self.debug_doing_layout)
             .field("debug_doing_paint", &self.debug_doing_paint)
             .field("debug_doing_semantics", &self.debug_doing_semantics)
@@ -164,7 +158,6 @@ impl PipelineOwner<Idle> {
             root_id: None,
             notifier: VisualUpdateNotifier::new(),
             dirty: DirtySets::new(),
-            children: Vec::new(),
             debug_doing_layout: false,
             debug_doing_paint: false,
             debug_doing_semantics: false,
@@ -204,7 +197,6 @@ impl PipelineOwner<Idle> {
             root_id: None,
             notifier,
             dirty: DirtySets::new(),
-            children: Vec::new(),
             debug_doing_layout: false,
             debug_doing_paint: false,
             debug_doing_semantics: false,
@@ -457,39 +449,13 @@ impl PipelineOwner<Idle> {
         id
     }
 
-    // ========================================================================
-    // Hierarchy Management
-    // ========================================================================
-
-    /// Adopts a child pipeline owner.
-    ///
-    /// The child will be flushed after this owner during each phase.
-    pub fn adopt_child(&mut self, child: Arc<RwLock<PipelineOwner>>) {
-        self.children.push(child);
-    }
-
-    /// Drops a child pipeline owner.
-    ///
-    /// Returns true if the child was found and removed.
-    pub fn drop_child(&mut self, child_id: u64) -> bool {
-        if let Some(pos) = self.children.iter().position(|c| c.read().id == child_id) {
-            self.children.remove(pos);
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Returns the number of child pipeline owners.
-    #[inline]
-    pub fn child_count(&self) -> usize {
-        self.children.len()
-    }
-
-    /// Returns an iterator over child pipeline owners.
-    pub fn children(&self) -> impl Iterator<Item = &Arc<RwLock<PipelineOwner>>> {
-        self.children.iter()
-    }
+    // Hierarchical-pipelines API (`adopt_child` / `drop_child` /
+    // `child_count` / `children`) was removed in Mythos Step 9 along
+    // with the `children: Vec<Arc<RwLock<PipelineOwner>>>` field. Flutter
+    // models multi-window via nested PipelineOwners; FLUI's `flui-app`
+    // owns multiple PipelineOwner instances side-by-side instead.
+    // See docs/designs/2026-05-20-mythos-flui-rendering-redesign.md
+    // Section 12 (Rejected Designs -- "Hierarchical pipeline owners").
 
     // ========================================================================
     // Dirty Node Access (Flutter API)
@@ -643,11 +609,7 @@ impl PipelineOwner<Idle> {
             self.debug_doing_layout = false;
         }
 
-        // Always flush children, even if parent has no dirty nodes
-        // Flutter does this to ensure hierarchical pipeline owners work correctly
-        for child in &self.children {
-            child.write().flush_layout();
-        }
+        // Hierarchical-pipelines child flush removed in Mythos Step 9.
     }
 
     /// Lays out a single node with depth-first child layout.
@@ -778,10 +740,7 @@ impl PipelineOwner<Idle> {
         }
         self.dirty.needs_compositing.clear();
 
-        // Flush children
-        for child in &self.children {
-            child.write().flush_compositing_bits();
-        }
+        // Hierarchical-pipelines child flush removed in Mythos Step 9.
     }
 
     // ========================================================================
@@ -844,11 +803,7 @@ impl PipelineOwner<Idle> {
             self.debug_doing_paint = false;
         }
 
-        // Always flush children, even if parent has no dirty nodes
-        // Flutter does this to ensure hierarchical pipeline owners work correctly
-        for child in &self.children {
-            child.write().flush_paint();
-        }
+        // Hierarchical-pipelines child flush removed in Mythos Step 9.
     }
 
     /// Recursively paints a node and its children with accumulated offset.
@@ -1211,7 +1166,6 @@ where
         root_id: from.root_id,
         notifier: from.notifier,
         dirty: from.dirty,
-        children: from.children,
         debug_doing_layout: from.debug_doing_layout,
         debug_doing_paint: from.debug_doing_paint,
         debug_doing_semantics: from.debug_doing_semantics,
@@ -1229,6 +1183,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
 
     #[test]
@@ -1318,18 +1274,9 @@ mod tests {
         assert!(owner.nodes_needing_paint().is_empty());
     }
 
-    #[test]
-    fn test_pipeline_owner_hierarchy() {
-        let mut parent = PipelineOwner::new();
-        let child = Arc::new(RwLock::new(PipelineOwner::new()));
-        let child_id = child.read().id();
-
-        parent.adopt_child(child.clone());
-        assert_eq!(parent.child_count(), 1);
-
-        assert!(parent.drop_child(child_id));
-        assert_eq!(parent.child_count(), 0);
-    }
+    // test_pipeline_owner_hierarchy removed in Mythos Step 9 along with the
+    // adopt_child/drop_child/child_count/children API. Multi-PipelineOwner
+    // scenarios (multi-window) are now owned by flui-app side-by-side.
 
     #[test]
     fn test_pipeline_owner_semantics_enabled() {
