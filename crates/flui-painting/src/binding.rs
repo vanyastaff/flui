@@ -359,18 +359,21 @@ impl PaintingBinding {
     }
 
     /// Handles memory pressure by clearing the image cache.
+    #[tracing::instrument(skip(self))]
     pub fn handle_memory_pressure(&self) {
         tracing::info!("Memory pressure: clearing image cache");
         self.image_cache.clear();
     }
 
     /// Evicts a specific asset from the cache.
+    #[tracing::instrument(skip(self))]
     pub fn evict(&self, asset: &str) {
         self.image_cache.evict(asset);
         self.image_cache.clear_live_images();
     }
 
     /// Handles a system message (e.g., font change notification).
+    #[tracing::instrument(skip(self))]
     pub fn handle_system_message(&self, message_type: &str) {
         if message_type == "fontsChange" {
             tracing::debug!("System fonts changed");
