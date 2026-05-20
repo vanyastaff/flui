@@ -16,6 +16,7 @@ use crate::{context::CanvasContext, storage::RenderTree};
 
 use super::{
     dirty::{DirtyNode, DirtySets},
+    notifier::VisualUpdateNotifier,
     phase::{Compositing, Idle, Layout, PaintPhase, PipelinePhase, Semantics},
 };
 
@@ -69,17 +70,10 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// The root render object ID of this pipeline.
     root_id: Option<RenderId>,
 
-    /// Callback when visual update is needed.
-    #[allow(clippy::type_complexity)]
-    on_need_visual_update: Option<Box<dyn Fn() + Send + Sync>>,
-
-    /// Callback when semantics owner is created.
-    #[allow(clippy::type_complexity)]
-    on_semantics_owner_created: Option<Box<dyn Fn() + Send + Sync>>,
-
-    /// Callback when semantics owner is disposed.
-    #[allow(clippy::type_complexity)]
-    on_semantics_owner_disposed: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Consolidated visual-update + semantics-owner-lifecycle callback
+    /// notifier. Replaces three previously-separate `Box<dyn Fn() + Send +
+    /// Sync>` fields. See [`VisualUpdateNotifier`](super::notifier::VisualUpdateNotifier).
+    notifier: VisualUpdateNotifier,
 
     /// Co-located dirty sets for the four pipeline phases. See
     /// [`DirtySets`](super::dirty::DirtySets). Replaces what used to be four
@@ -140,9 +134,7 @@ impl PipelineOwner<Idle> {
             id: PIPELINE_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
             render_tree: RenderTree::new(),
             root_id: None,
-            on_need_visual_update: None,
-            on_semantics_owner_created: None,
-            on_semantics_owner_disposed: None,
+            notifier: VisualUpdateNotifier::new(),
             dirty: DirtySets::new(),
             children: Vec::new(),
             debug_doing_layout: false,
@@ -165,13 +157,21 @@ impl PipelineOwner<Idle> {
         G: Fn() + Send + Sync + 'static,
         H: Fn() + Send + Sync + 'static,
     {
+        let mut notifier = VisualUpdateNotifier::new();
+        if let Some(f) = on_need_visual_update {
+            notifier.set_need_visual_update(f);
+        }
+        if let Some(f) = on_semantics_owner_created {
+            notifier.set_semantics_owner_created(f);
+        }
+        if let Some(f) = on_semantics_owner_disposed {
+            notifier.set_semantics_owner_disposed(f);
+        }
         Self {
             id: PIPELINE_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
             render_tree: RenderTree::new(),
             root_id: None,
-            on_need_visual_update: on_need_visual_update.map(|f| Box::new(f) as _),
-            on_semantics_owner_created: on_semantics_owner_created.map(|f| Box::new(f) as _),
-            on_semantics_owner_disposed: on_semantics_owner_disposed.map(|f| Box::new(f) as _),
+            notifier,
             dirty: DirtySets::new(),
             children: Vec::new(),
             debug_doing_layout: false,
@@ -194,7 +194,7 @@ impl PipelineOwner<Idle> {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.on_need_visual_update = Some(Box::new(callback));
+        self.notifier.set_need_visual_update(callback);
     }
 
     /// Sets the callback for when semantics owner is created.
@@ -202,7 +202,7 @@ impl PipelineOwner<Idle> {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.on_semantics_owner_created = Some(Box::new(callback));
+        self.notifier.set_semantics_owner_created(callback);
     }
 
     /// Sets the callback for when semantics owner is disposed.
@@ -210,16 +210,14 @@ impl PipelineOwner<Idle> {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.on_semantics_owner_disposed = Some(Box::new(callback));
+        self.notifier.set_semantics_owner_disposed(callback);
     }
 
     /// Requests a visual update.
     ///
     /// Called by render objects when they need to be re-rendered.
     pub fn request_visual_update(&self) {
-        if let Some(callback) = &self.on_need_visual_update {
-            callback();
-        }
+        self.notifier.fire_need_visual_update();
     }
 
     /// Returns the root render object ID.
@@ -499,16 +497,10 @@ impl PipelineOwner<Idle> {
     /// Sets whether semantics are enabled.
     pub fn set_semantics_enabled(&self, enabled: bool) {
         let was_enabled = self.semantics_enabled.swap(enabled, Ordering::Relaxed);
-        if enabled
-            && !was_enabled
-            && let Some(callback) = &self.on_semantics_owner_created
-        {
-            callback();
-        } else if !enabled
-            && was_enabled
-            && let Some(callback) = &self.on_semantics_owner_disposed
-        {
-            callback();
+        if enabled && !was_enabled {
+            self.notifier.fire_semantics_owner_created();
+        } else if !enabled && was_enabled {
+            self.notifier.fire_semantics_owner_disposed();
         }
     }
 
@@ -1132,9 +1124,7 @@ where
         id: from.id,
         render_tree: from.render_tree,
         root_id: from.root_id,
-        on_need_visual_update: from.on_need_visual_update,
-        on_semantics_owner_created: from.on_semantics_owner_created,
-        on_semantics_owner_disposed: from.on_semantics_owner_disposed,
+        notifier: from.notifier,
         dirty: from.dirty,
         children: from.children,
         debug_doing_layout: from.debug_doing_layout,

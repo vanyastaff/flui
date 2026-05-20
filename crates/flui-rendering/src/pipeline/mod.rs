@@ -7,6 +7,7 @@
 //! 4. Semantics - build accessibility tree
 
 mod dirty;
+mod notifier;
 mod owner;
 pub mod phase;
 
@@ -19,6 +20,7 @@ pub use flui_types::painting::{BlendMode, ClipOp, FilterQuality, ImageFilter, Po
 // Re-export canvas types from flui_types
 pub use dirty::{DirtyNode, DirtySets};
 pub use flui_types::painting::{BlurStyle, StrokeCap, StrokeJoin, TileMode};
+pub use notifier::VisualUpdateNotifier;
 pub use owner::PipelineOwner;
 pub use phase::{Compositing, Idle, Layout, PaintPhase, PipelinePhase, Semantics};
 
