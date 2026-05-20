@@ -115,10 +115,6 @@ impl ClipRectLayer {
     }
 }
 
-// Thread safety
-unsafe impl Send for ClipRectLayer {}
-unsafe impl Sync for ClipRectLayer {}
-
 #[cfg(test)]
 mod tests {
     use flui_types::geometry::px;

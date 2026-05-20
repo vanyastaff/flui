@@ -92,10 +92,6 @@ impl CanvasLayer {
     }
 }
 
-// Thread safety
-unsafe impl Send for CanvasLayer {}
-unsafe impl Sync for CanvasLayer {}
-
 #[cfg(test)]
 mod tests {
     use super::*;

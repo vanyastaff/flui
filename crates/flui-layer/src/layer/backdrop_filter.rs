@@ -90,10 +90,6 @@ impl BackdropFilterLayer {
     }
 }
 
-// Thread safety: BackdropFilterLayer contains only owned, Send types
-unsafe impl Send for BackdropFilterLayer {}
-unsafe impl Sync for BackdropFilterLayer {}
-
 #[cfg(test)]
 mod tests {
     use flui_types::geometry::px;

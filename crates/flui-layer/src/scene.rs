@@ -301,8 +301,9 @@ impl Default for Scene {
     }
 }
 
-// Scene can be sent to render thread
-unsafe impl Send for Scene {}
+// `Scene: Send` is auto-derived from its fields (`LayerTree`, `LinkRegistry`,
+// `Vec<CompositionCallback>` whose payload is `FnOnce() + Send + 'static`).
+// No `unsafe impl` is needed -- Mythos Step 3 deletion.
 
 // ============================================================================
 // SCENE BUILDER INTEGRATION

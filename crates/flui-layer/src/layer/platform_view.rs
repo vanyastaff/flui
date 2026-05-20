@@ -171,10 +171,6 @@ impl PlatformViewLayer {
     }
 }
 
-// Thread safety
-unsafe impl Send for PlatformViewLayer {}
-unsafe impl Sync for PlatformViewLayer {}
-
 #[cfg(test)]
 mod tests {
     use flui_types::geometry::px;

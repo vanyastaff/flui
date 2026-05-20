@@ -155,10 +155,6 @@ impl LeaderLayer {
     }
 }
 
-// Thread safety
-unsafe impl Send for LeaderLayer {}
-unsafe impl Sync for LeaderLayer {}
-
 #[cfg(test)]
 mod tests {
     use flui_types::geometry::px;

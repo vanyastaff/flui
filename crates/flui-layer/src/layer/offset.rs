@@ -129,10 +129,6 @@ impl OffsetLayer {
     }
 }
 
-// Thread safety (Copy type, always safe)
-unsafe impl Send for OffsetLayer {}
-unsafe impl Sync for OffsetLayer {}
-
 #[cfg(test)]
 mod tests {
     use flui_types::geometry::px;

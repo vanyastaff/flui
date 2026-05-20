@@ -186,10 +186,6 @@ impl ImageFilterLayer {
     }
 }
 
-// Thread safety
-unsafe impl Send for ImageFilterLayer {}
-unsafe impl Sync for ImageFilterLayer {}
-
 #[cfg(test)]
 mod tests {
     use flui_types::geometry::px;

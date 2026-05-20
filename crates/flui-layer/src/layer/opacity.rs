@@ -166,10 +166,6 @@ impl Default for OpacityLayer {
     }
 }
 
-// Thread safety (Copy type)
-unsafe impl Send for OpacityLayer {}
-unsafe impl Sync for OpacityLayer {}
-
 #[cfg(test)]
 mod tests {
     use flui_types::geometry::px;

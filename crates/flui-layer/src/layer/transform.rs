@@ -223,10 +223,6 @@ impl Default for TransformLayer {
     }
 }
 
-// Thread safety
-unsafe impl Send for TransformLayer {}
-unsafe impl Sync for TransformLayer {}
-
 #[cfg(test)]
 mod tests {
     use std::f32::consts::{FRAC_PI_2, PI};

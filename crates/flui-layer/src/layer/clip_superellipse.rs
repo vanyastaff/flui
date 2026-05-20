@@ -201,10 +201,6 @@ impl ClipSuperellipseLayer {
     }
 }
 
-// Thread safety
-unsafe impl Send for ClipSuperellipseLayer {}
-unsafe impl Sync for ClipSuperellipseLayer {}
-
 impl Default for ClipSuperellipseLayer {
     fn default() -> Self {
         Self::new(RSuperellipse::ZERO, Clip::AntiAlias)

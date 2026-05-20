@@ -207,10 +207,6 @@ impl Default for TextureLayer {
     }
 }
 
-// Thread safety
-unsafe impl Send for TextureLayer {}
-unsafe impl Sync for TextureLayer {}
-
 #[cfg(test)]
 mod tests {
     use flui_types::geometry::px;

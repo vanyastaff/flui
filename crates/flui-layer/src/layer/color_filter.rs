@@ -174,10 +174,6 @@ impl Default for ColorFilterLayer {
     }
 }
 
-// Thread safety
-unsafe impl Send for ColorFilterLayer {}
-unsafe impl Sync for ColorFilterLayer {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
