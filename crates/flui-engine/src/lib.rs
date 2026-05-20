@@ -73,9 +73,6 @@ pub mod traits;
 /// RenderCommand dispatch functions
 pub mod commands;
 
-/// Utility modules (vector text, etc.)
-pub mod utils;
-
 // ============================================================================
 // BACKENDS
 // ============================================================================
