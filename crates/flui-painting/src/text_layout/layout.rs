@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 
 use cosmic_text::{Buffer, Cursor, FontSystem, Metrics, Shaping};
 use flui_types::{
-    geometry::{Offset, Pixels, Rect, Size, px},
+    geometry::{Offset, Pixels, Rect},
     typography::{
         LineMetrics, TextAffinity, TextBox, TextDirection, TextPosition, TextRange, TextStyle,
     },
@@ -401,11 +401,3 @@ impl std::fmt::Debug for TextLayout {
             .finish_non_exhaustive()
     }
 }
-
-// Suppress unused-import warnings when only the layout module
-// references `px` via re-exports.
-#[allow(dead_code)]
-const _PX_REEXPORT_MARKER: fn() = || {
-    let _ = px(0.0);
-    let _ = Size::new(px(0.0), px(0.0));
-};

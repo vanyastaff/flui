@@ -100,3 +100,32 @@ fn test_canvas_restore_without_save() {
     );
     assert_eq!(canvas.len(), 1);
 }
+
+/// Mythos chain U10 wired a `debug_assert!` in `Canvas::finish` to
+/// catch unrestored `save()` calls during test runs. Release builds
+/// preserve Flutter parity (silent finalisation via `tracing::warn!`).
+///
+/// This test fires only when `debug_assertions` is on (cargo test
+/// default). Release-build `cargo test --release` would skip the
+/// panic-expectation, matching the documented per-mode behavior.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "unrestored save() calls")]
+fn test_canvas_finish_panics_in_debug_on_unrestored_save() {
+    let mut canvas = Canvas::new();
+    canvas.save();
+    canvas.translate(50.0, 50.0);
+    // No matching restore() -- save_stack has 1 entry at finish() time.
+    let _ = canvas.finish();
+}
+
+/// A balanced save/restore pair must not trip the imbalance assert.
+#[test]
+fn test_canvas_finish_clean_after_balanced_save_restore() {
+    let mut canvas = Canvas::new();
+    canvas.save();
+    canvas.translate(50.0, 50.0);
+    canvas.restore();
+    let display_list = canvas.finish();
+    assert_eq!(display_list.len(), 0);
+}

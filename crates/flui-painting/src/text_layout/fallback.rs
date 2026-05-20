@@ -6,7 +6,7 @@
 //! compile without cosmic-text.
 
 use flui_types::{
-    geometry::{Offset, Pixels, Rect, Size, px},
+    geometry::{Offset, Pixels, Rect},
     typography::{
         LineMetrics, TextAffinity, TextBox, TextDirection, TextPosition, TextRange, TextStyle,
     },
@@ -231,8 +231,3 @@ pub fn measure_inline_span(
     let scaled_font_size = font_size * scale_factor;
     measure_text(&plain_text, span.style(), scaled_font_size, max_width, None)
 }
-
-#[allow(dead_code)]
-const _SIZE_PX_USE: fn() = || {
-    let _: Size<Pixels> = Size::new(px(0.0), px(0.0));
-};
