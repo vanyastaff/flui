@@ -10,8 +10,6 @@ categories = ["gui", "graphics", "rendering"]
 
 [features]
 default = []
-# Enable parallel layer operations
-parallel = ["rayon"]
 
 [dependencies]
 # Foundation - canonical ID types
@@ -37,9 +35,6 @@ tracing = "0.1"
 
 # Structured errors for LayerError
 thiserror = { workspace = true }
-
-# Optional parallel processing
-rayon = { version = "1.10", optional = true }
 
 [dev-dependencies]
 # For tests

@@ -1268,8 +1268,8 @@ dependencies = [
  "flui-tree",
  "flui-types",
  "parking_lot",
- "rayon",
  "slab",
+ "thiserror 2.0.17",
  "tracing",
 ]
 

@@ -225,6 +225,7 @@ impl Scene {
     /// the `flui-rendering` chain (commit `dc0fa1ad`).
     ///
     /// [`LayerError::CallbackPoisoned`]: crate::LayerError::CallbackPoisoned
+    #[tracing::instrument(skip_all, name = "fire_composition_callbacks", fields(n = self.composition_callbacks.len()))]
     pub fn fire_composition_callbacks(&mut self) -> Vec<crate::LayerError> {
         use std::panic::{AssertUnwindSafe, catch_unwind};
 

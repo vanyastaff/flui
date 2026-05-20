@@ -541,6 +541,7 @@ impl<'a> SceneBuilder<'a> {
     ///
     /// assert!(root.is_some());
     /// ```
+    #[tracing::instrument(skip_all, name = "scene_build", fields(depth = self.depth()))]
     pub fn build(self) -> Option<LayerId> {
         self.root
     }
@@ -554,4 +555,3 @@ impl<'a> SceneBuilder<'a> {
         root
     }
 }
-
