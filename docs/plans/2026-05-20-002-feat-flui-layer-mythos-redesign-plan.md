@@ -1,8 +1,9 @@
 ---
 title: "feat: flui-layer Mythos redesign"
 type: feat
-status: ready
+status: completed
 date: 2026-05-20
+completed: 2026-05-20
 origin: docs/brainstorms/flui-layer-mythos-redesign-requirements.md
 verdict: docs/designs/2026-05-20-mythos-flui-layer-redesign.md
 ---
@@ -610,6 +611,38 @@ This chain is purely internal refactor — no user-facing API ships from `flui-l
 - Verified net unsafe delta `−39` via `git log --oneline | head -14` + `git diff --stat` reported deletions.
 
 **Rollback strategy:** the chain lands as 14 commits on a feature branch off `main`. If a regression surfaces post-merge, individual commits can be reverted in reverse order; U14 is trivially revertable, U12/U13 (doc + script) are independent, and U1-U11 are the substantive refactor — each is a single concern that can be rolled back without affecting later units (with the dependency caveats sketched in High-Level Technical Design).
+
+---
+
+## Chain Summary (Status: completed 2026-05-20)
+
+14 commits landed on `feat/flui-layer-mythos-redesign` branch:
+
+| Commit | Step | Subject |
+|---|---|---|
+| `fa7cbe6a` | -- | docs(designs): add Mythos flui-layer redesign verdict + brainstorm + plan |
+| `702e8751` | U1 | refactor(flui-layer): delete `LayerHandle<T>` + 17 type aliases |
+| `f2df8821` | U2 | refactor(flui-layer): fold `composition_callback` into `Scene` |
+| `7a3cc0c6` | U3 | refactor(flui-layer): delete 35 `unsafe impl Send/Sync` blocks |
+| `366f6c10` | U4 | refactor(flui-layer): macro-collapse `Layer` is_*/as_* dispatch |
+| `77f02d39` | U5 | refactor(flui-layer): delete duplicate `push_*` / `get_layer` APIs |
+| `fe80f030` | U6 | refactor(flui-layer): extract `LayerBounds` trait to `bounds.rs` |
+| `62f3e17d` | U7 | refactor(flui-layer): extract `LayerTree` tests to `tests/` |
+| `0d1369ee` | U8 | refactor(flui-layer): delete `Scene::dispose` + add `Scene::builder` |
+| `6e60e211` | U9 | refactor(flui-layer): error model + `catch_unwind` + `pop` Result |
+| `f97e5cbb` | U10 | refactor(flui-layer): split `compositor.rs` into directory |
+| `6abaa7df` | U11 | refactor(flui-layer): drop `parallel` feature; add tracing spans |
+| `624086cb` | U12 | docs(arch): `flui-layer` `ARCHITECTURE.md` + `PORT.md` index flip |
+| `389e4897` | U13 | chore(port-check): extend triggers to cover `flui-layer` |
+| `2790494e` | U14 | chore(plan): final verification + flip plan to completed |
+
+**Final tally:**
+
+- Net unsafe delta: **-37** (35 layer-file / scene.rs blocks in U3 + 2 `LayerHandle<T>` blocks in U1).
+- Net LOC delta in touched .rs files: **~-3,000 LOC** in production code; an additional +625 LOC of integration-test scaffolding lives in `tests/layer_tree.rs` (+330) and `tests/scene_builder.rs` (+295) from the extractions.
+- God modules split: 3 (`tree/layer_tree.rs` 1660 → 542 production + 330 tests, `layer/mod.rs` 1075 → 584 + 103 `bounds.rs` + 86 `dispatch.rs`, `compositor.rs` 967 → `mod.rs` 14 + `builder.rs` 557 + `retained.rs` 94 + `tests/scene_builder.rs` 295).
+- Verification gates: `cargo check --workspace` clean across all 14 commits; `cargo test -p flui-layer --lib` 229 passing post-U10; `cargo test -p flui-layer --tests` 45 passing (20 layer_tree + 17 scene_builder + 8 damage_tracking); `bash scripts/port-check.sh -v` 6 triggers ok.
+- Pre-existing issues NOT addressed by the chain (tracked in `crates/flui-layer/ARCHITECTURE.md` Friction log): 21 doctest failures from pre-`Pixels`-wrap `Offset::new(f32, f32)` shape; flaky `flui-app::test_semantics_enabled` due to shared singleton state across `cargo test --workspace --lib` runs; 1 flui-layer-specific clippy `let-else` hint on `damage.rs:74` (untouched file).
 
 ---
 
