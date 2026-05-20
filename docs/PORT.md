@@ -76,7 +76,7 @@ The *funnel* signatures (`tree.rs::insert_box`, view → render `From` impls) ac
 
 **Back-references:** verdict §12 rejected design #2 (`Arc<RwLock<Renderer>>` shared); strategy clause "single owner of wgpu resources."
 
-**Regex:** `Arc<\s*(parking_lot::)?(Mutex|RwLock)<\s*(super::)?\w*(Renderer|Pool)\b|Arc<\s*(parking_lot::)?(Mutex|RwLock)<\s*wgpu::` constrained to `crates/flui-engine/src/wgpu/`, with file-glob exclusions for the three Friction-log-tracked sites listed above.
+**Regex:** `^\s+(pub\s+)?\w+\s*:\s*(Option<\s*)?Arc<\s*(parking_lot::)?(Mutex|RwLock)<\s*((super::)?(\w+::)*\w*(Renderer|Pool)\w*|wgpu::\w+)` constrained to `crates/flui-engine/src/wgpu/`, with file-glob exclusions for the three Friction-log-tracked sites listed above. Anchored to struct-field syntax (leading whitespace + optional `pub` + ident + `:`); inner alternation `((super::)?(\w+::)*\w*(Renderer|Pool)\w*|wgpu::\w+)` is grouped so `wgpu::*` matches only at the outer-type position. Catches both `Arc<...>` and `Option<Arc<...>>` field shapes. Tightened after Copilot review on PR #79.
 
 ### Reactive lint promotion
 

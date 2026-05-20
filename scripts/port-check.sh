@@ -231,9 +231,22 @@ check "6" \
 # entry "Arc<parking_lot::Mutex<OffscreenRenderer>>" and "Arc<Mutex<
 # TexturePoolInner>>" for the deferral rationale.
 # -----------------------------------------------------------------------------
+#
+# Regex shape (anchored + grouped per Copilot review on PR #79):
+#   ^\s+(pub\s+)?\w+\s*:\s*(Option<\s*)?Arc<\s*(parking_lot::)?(Mutex|RwLock)<\s*((super::)?(\w+::)*\w*(Renderer|Pool)\w*|wgpu::\w+)
+# Anchors to struct-field syntax: leading whitespace + optional `pub` + ident
+# + `:`. Inner alternation `((super::)?(\w+::)*\w*(Renderer|Pool)\w*|wgpu::\w+)`
+# is grouped so `wgpu::*` matches only at the outer-type position, not as a
+# bleed-through into the `Renderer|Pool` arm. Path segments (`super::`,
+# `\w+::`) allow `super::offscreen::OffscreenRenderer` and similar. Trailing
+# `\w*` on the Renderer/Pool arm catches names like `TexturePoolInner` where
+# `Pool` is not at the end of the identifier. `(Option<\s*)?` catches both
+# `Arc<...>` direct fields and `Option<Arc<...>>` fields (the shape used by
+# `Renderer::offscreen`).
+# -----------------------------------------------------------------------------
 check "7" \
-  "Arc<(Mutex|RwLock)<*Renderer|*Pool|wgpu::*>> field in flui-engine wgpu module" \
-  'Arc<\s*(parking_lot::)?(Mutex|RwLock)<\s*(super::)?\w*(Renderer|Pool)\b|Arc<\s*(parking_lot::)?(Mutex|RwLock)<\s*wgpu::' \
+  "Arc<(Mutex|RwLock)<*Renderer|*Pool|wgpu::*>> struct field in flui-engine wgpu module" \
+  '^\s+(pub\s+)?\w+\s*:\s*(Option<\s*)?Arc<\s*(parking_lot::)?(Mutex|RwLock)<\s*((super::)?(\w+::)*\w*(Renderer|Pool)\w*|wgpu::\w+)' \
   --type rust \
   --glob '!**/test*.rs' \
   --glob '!**/tests/**' \

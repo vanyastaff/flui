@@ -9,7 +9,7 @@
 //! its place where multiple consumers reference the same shader.
 //!
 //! Removed in Mythos U10 (commit chain on `feat/flui-engine-mythos-redesign`):
-//! 11 unused const aliases (`FILL`, `SOLID`, `LINEAR_GRADIENT`, `RADIAL_GRADIENT`,
+//! 12 unused const aliases (`FILL`, `SOLID`, `LINEAR_GRADIENT`, `RADIAL_GRADIENT`,
 //! `BLUR_HORIZONTAL`, `BLUR_VERTICAL`, `BLUR_DOWNSAMPLE`, `BLUR_UPSAMPLE`,
 //! `SHADOW`, `LINEAR`, `RADIAL`, `SDF`) that pointed at WGSL files already
 //! `include_str!`-loaded by `shader_compiler.rs` / `effects_pipeline.rs`. The
