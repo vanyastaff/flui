@@ -991,11 +991,12 @@ impl WgpuPainter {
     /// * `view` - Texture view to render to
     /// * `encoder` - Command encoder
     #[tracing::instrument(level = "trace", skip_all)]
+    #[must_use = "errors must be propagated or handled"]
     pub fn render(
         &mut self,
         view: &wgpu::TextureView,
         encoder: &mut wgpu::CommandEncoder,
-    ) -> Result<(), String> {
+    ) -> crate::error::RenderResult<()> {
         // Advance path cache frame counter and evict stale entries
         self.path_cache.advance_frame();
 

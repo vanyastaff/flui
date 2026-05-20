@@ -147,20 +147,27 @@ check "4" \
 #   - flui-engine/src/wgpu/layer_render.rs (per-layer wgpu walk; extended in
 #     Mythos Step 13 of the flui-layer chain)
 #
+# *** SCOPE EXCLUSIONS BELOW ARE TRACKED-OUTSTANDING-REFACTOR WHITELISTS ***
+#
 # `flui-engine/src/wgpu/backend.rs` is NOT in the scope yet because it has
 # known per-frame `Arc::clone` sites at lines 121-122 (offscreen-painter
 # cache initialisation) and lines 408-409 (`render_shader_mask` accessor
 # pattern). Both are documented as Friction log entries in
-# crates/flui-engine/ARCHITECTURE.md and tracked as Outstanding refactors
-# (the `Arc<Mutex<OffscreenRenderer>>` -> direct ownership refactor will
-# eliminate them). When the refactor lands, `backend.rs` should be added
-# to this trigger's scope to catch regressions.
+# `crates/flui-engine/ARCHITECTURE.md` and tracked as Outstanding refactor #1
+# (`Arc<Mutex<OffscreenRenderer>>` -> direct ownership + `Backend<'a>`). When
+# the refactor lands, `backend.rs` MUST be added to this trigger's scope in
+# the same PR so regressions are caught against the post-refactor shape.
 #
-# `renderer.rs` is NOT in the scope because `Renderer::new` and `new_offscreen`
-# perform setup-phase `Arc::clone(&device)` / `Arc::clone(&queue)` calls that
-# amortise across the renderer's lifetime; the canonical per-frame clones at
-# lines 636-637 (RenderContext construction) are documented as Friction log
-# entries and tracked separately.
+# `flui-engine/src/wgpu/renderer.rs` is NOT in the scope because:
+# - `Renderer::new` and `new_offscreen` perform setup-phase `Arc::clone(&device)`
+#   / `Arc::clone(&queue)` calls that amortise across the renderer's lifetime
+#   (acceptable per the strategy clause).
+# - The canonical per-frame clones at lines 656-657 (RenderContext
+#   construction) are documented as Friction log entries and tracked as
+#   Outstanding refactor #3 (Per-frame Arc::clone -> borrowed references;
+#   depends on Outstanding refactor #1). When that refactor lands, `renderer.rs`
+#   should be added to this trigger's scope with a function-level exclusion
+#   for `Renderer::new` / `new_offscreen` (setup-phase) only.
 # -----------------------------------------------------------------------------
 check "5" \
   "Arc::clone in per-frame paint/composite loop" \
@@ -200,6 +207,29 @@ check "6" \
 #
 # Scope excludes test files (`!**/test*.rs`, `!**/tests/**`) so test fixtures
 # are not flagged.
+#
+# *** FILE-GLOB EXCLUSIONS BELOW ARE TRACKED-OUTSTANDING-REFACTOR WHITELISTS ***
+#
+# Three files contain the EXACT patterns this trigger is designed to catch:
+#   - `texture_pool.rs:71,224`  -- `Arc<Mutex<TexturePoolInner>>` (R10; tracked
+#                                  as Outstanding refactor #2 in
+#                                  `crates/flui-engine/ARCHITECTURE.md`).
+#   - `renderer.rs:147`         -- `Arc<parking_lot::Mutex<OffscreenRenderer>>`
+#                                  (R9; tracked as Outstanding refactor #1).
+#   - `backend.rs:26,45,57`     -- same `Arc<Mutex<OffscreenRenderer>>` shape,
+#                                  symmetric with renderer.rs (R9).
+#
+# The Mythos chain (PR feat/flui-engine-mythos-redesign) DEFERRED these three
+# refactors to follow-up work per ARCHITECTURE.md `## Outstanding refactors`.
+# To avoid port-check fire-on-known-violation, the three files are whitelisted
+# below. **When the corresponding Outstanding refactor lands (i.e., the
+# Arc<Mutex<>> shape is removed from a file), the matching `--glob !**/<file>`
+# exclusion below MUST be removed in the same PR** so this trigger then catches
+# regressions against the post-refactor shape.
+#
+# Cross-reference: see `crates/flui-engine/ARCHITECTURE.md` ## Friction log
+# entry "Arc<parking_lot::Mutex<OffscreenRenderer>>" and "Arc<Mutex<
+# TexturePoolInner>>" for the deferral rationale.
 # -----------------------------------------------------------------------------
 check "7" \
   "Arc<(Mutex|RwLock)<*Renderer|*Pool|wgpu::*>> field in flui-engine wgpu module" \

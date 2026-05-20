@@ -1,11 +1,16 @@
 ---
 title: "feat: flui-engine Mythos redesign"
 type: feat
-status: completed
+status: partially-completed
 date: 2026-05-20
 completed: 2026-05-20
 origin: docs/brainstorms/flui-engine-mythos-redesign-requirements.md
 verdict: docs/designs/2026-05-20-mythos-flui-engine-redesign.md
+deferred:
+  - U6 (covers R9): "Arc<parking_lot::Mutex<OffscreenRenderer>> -> direct ownership + Backend<'a> lifetime. Concrete blocker: substantial borrow-checker refactor (200-400 LOC of churn) for marginal-runtime-benefit (lock uncontested in production). Tracked in crates/flui-engine/ARCHITECTURE.md ## Outstanding refactors."
+  - U7 (covers R11): "Per-frame Arc::clone(&device)/Arc::clone(&queue) -> borrowed references. Depends on U6. Tracked in crates/flui-engine/ARCHITECTURE.md ## Outstanding refactors."
+  - U8 (covers R10): "Arc<Mutex<TexturePoolInner>> -> explicit pool.release(texture). Concrete blocker: touches every PooledTexture consumer (4-6 sites in OffscreenRenderer). Tracked in crates/flui-engine/ARCHITECTURE.md ## Outstanding refactors."
+  - R7 (partial): "Original plan promised deletion of wgpu/external_texture_registry.rs (315 LOC) + wgpu/texture_cache.rs (1,000 LOC) + wgpu/path_cache.rs (336 LOC) + wgpu/multi_draw.rs (304 LOC) + wgpu/commands.rs (6 LOC). Only commands.rs landed. Phase 1 audit was external-callers-only; in-crate consumers via painter.rs fields surfaced at U4 execution. The four modules deferred to a painter.rs internal-audit pass (Outstanding refactor #6)."
 ---
 
 # feat: flui-engine Mythos redesign
@@ -32,12 +37,12 @@ Sourced from `docs/brainstorms/flui-engine-mythos-redesign-requirements.md`:
 - **R4** — Delete `crates/flui-engine/src/utils/` (utils/text.rs 802 LOC + utils/mod.rs 7 LOC; `VectorTextRenderer`).
 - **R5** — Delete `wgpu/scene.rs` (1,820 LOC) + `wgpu/compositor.rs` (365 LOC).
 - **R6** — Delete `wgpu/vulkan.rs` (826 LOC) + `wgpu/dx12.rs` (769 LOC) + `wgpu/metal.rs` (587 LOC).
-- **R7** — Delete `wgpu/external_texture_registry.rs` (315 LOC) + `wgpu/texture_cache.rs` (1,000 LOC) + `wgpu/path_cache.rs` (336 LOC) + `wgpu/multi_draw.rs` (304 LOC) + `wgpu/commands.rs` (6 LOC re-export shim).
+- **R7** — Original scope: delete five modules totalling ~1,961 LOC. **Partially completed:** only `wgpu/commands.rs` (6 LOC re-export shim) deleted at U4. The other four modules (`wgpu/external_texture_registry.rs` 315 LOC, `wgpu/texture_cache.rs` 1,000 LOC, `wgpu/path_cache.rs` 336 LOC, `wgpu/multi_draw.rs` 304 LOC) had **in-crate consumers in `painter.rs` field storage** (`WgpuPainter::{texture_cache, external_texture_registry, path_cache}` fields + `MultiDrawBatcher` import) that the Phase 1 audit (external-callers-only grep) missed. Deletion deferred to a `painter.rs` internal-audit pass; tracked as Outstanding refactor #6 in `crates/flui-engine/ARCHITECTURE.md`.
 - **R8** — Delete `pub trait Painter` from `traits.rs` (~380 LOC). `WgpuPainter` methods become inherent. `RenderError::PainterError(String)` deleted.
-- **R9** — Replace `Arc<parking_lot::Mutex<OffscreenRenderer>>` with direct ownership in `Renderer` + lifetime-borrowed `Backend<'a>`.
-- **R10** — Replace `Arc<Mutex<TexturePoolInner>>` with direct ownership + explicit `TexturePool::release`.
-- **R11** — Eliminate per-frame `Arc::clone(&device)` / `Arc::clone(&queue)` in `Renderer::render_scene`. `RenderContext` borrows references.
-- **R12** — Migrate `Renderer::new` / `new_offscreen` from `anyhow::Result` to `RenderResult`. Ripple into `flui-app`.
+- **R9** — Replace `Arc<parking_lot::Mutex<OffscreenRenderer>>` with direct ownership in `Renderer` + lifetime-borrowed `Backend<'a>`. **Deferred** per `deferred:` block above; tracked as Outstanding refactor.
+- **R11** — Eliminate per-frame `Arc::clone(&device)` / `Arc::clone(&queue)` in `Renderer::render_scene`. `RenderContext` borrows references. **Deferred** (depends on R9).
+- **R10** — Replace `Arc<Mutex<TexturePoolInner>>` with direct ownership + explicit `TexturePool::release`. **Deferred** per `deferred:` block above; tracked as Outstanding refactor.
+- **R12** — Migrate `Renderer::new` / `new_offscreen` from `anyhow::Result` to `RenderResult`. **No ripple into `flui-app` required** — `RenderError: Error + Send + Sync` auto-converts to `anyhow::Error` via the blanket `From<E>` impl on the caller side; verified by `cargo build -p flui-app` clean post-migration. Original plan claim of "Ripple into `flui-app`" was incorrect; the migration is engine-internal.
 - **R13** — Audit `#[allow(dead_code)]` markers (global + per-module); remove or justify.
 - **R14** — Investigate `wgpu/text.rs` vs `wgpu/text_renderer.rs` duplication; merge or rename for clarity.
 - **R15** — Extend `scripts/port-check.sh`: add `crates/flui-engine/src` to Triggers 1, 2, 3 path scopes; extend Trigger 3 verb set with `submit|present|render_scene|render_layer_recursive|handle_backdrop_filter`; extend Trigger 5 scope; add new Trigger 7 for `Arc<(parking_lot::)?(Mutex|RwLock)<*Renderer|*Pool|wgpu::*>` in `crates/flui-engine/src/wgpu/`.
@@ -59,7 +64,7 @@ Sourced from `docs/brainstorms/flui-engine-mythos-redesign-requirements.md`:
 - **In scope:** `crates/flui-engine/` source + tests; the public-API ripples into `crates/flui-app/`; `scripts/port-check.sh`; `docs/PORT.md` `## Index` table entry for `flui-engine`; new file `crates/flui-engine/ARCHITECTURE.md`.
 
 - **Out of scope (deferred to follow-up):**
-  - `painter/` directory split (`wgpu/painter.rs` 3,772 LOC into `painter/{batch, segment, layer, gradient, text, render}.rs`). Mechanical LOC redistribution; if chain bandwidth permits, lands in U10; if not, Outstanding refactor.
+  - `painter/` directory split (`wgpu/painter.rs` 3,772 LOC into `painter/{batch, segment, layer, gradient, text, render}.rs`). Mechanical LOC redistribution; **deferred to Outstanding refactor** (post-chain housekeeping PR). U10 is exclusively dead-code-allow audit; it does not absorb the split.
   - `offscreen/` directory split (`wgpu/offscreen.rs` 1,525 LOC into `offscreen/{mask, blur, morph}.rs`). Same defer-or-include decision.
   - `proptest` / `loom` / miri test coverage for `flui-engine`. Recorded as Outstanding refactor; requires dev-dep decisions.
   - Implementing missing `BackdropFilter`, `ImageFilter::ColorAdjust`, `ImageFilter::Compose` GPU paths (current code has fallback paths logged at warn). Separate feature plan, not Mythos.
@@ -153,7 +158,7 @@ None. Local research is sufficient; the chain is internal refactor work and buil
 - **Keep the single `unsafe { instance.create_surface_unsafe(...) }` block.** wgpu's API requires it. Net unsafe delta is zero.
 - **`Renderer: Send` (not `Sync`).** Cross-thread frame production via value-move. No `Arc<Renderer>` ceremony.
 - **Land breaking ripples in-band over deferred.** R12's `anyhow::Result` → `RenderResult` migration in `flui-app` lands in the same chain.
-- **`painter/` and `offscreen/` directory splits are chain-bandwidth-dependent.** If U10 has room, the splits land; else Outstanding refactors with concrete blocker "no semantic change."
+- **`painter/` and `offscreen/` directory splits deferred to Outstanding refactors.** Mechanical LOC redistribution; concrete blocker "no semantic change; review-clarity favours focused housekeeping PR after the chain merges."
 
 ---
 
@@ -358,7 +363,7 @@ flowchart TD
 - Modify: `crates/flui-engine/src/wgpu/mod.rs`:
   - Remove `pub use crate::traits::Painter;` (line ~147).
 - Modify: `crates/flui-engine/src/wgpu/painter.rs`:
-  - Remove `impl Painter for WgpuPainter { ... }` block (~30 methods, lines TBD). The methods stay as inherent impls on `WgpuPainter` (they already exist as inherent impls; the trait impl was a thin re-export of them).
+  - Convert `impl Painter for WgpuPainter { ... }` to `impl WgpuPainter { ... }`. **Important correction to original plan framing:** the trait impl block contains the only method bodies (~1,519 LOC for 46 methods); methods do NOT pre-exist as inherent impls. Mechanical conversion: change `impl Painter for WgpuPainter {` -> `impl WgpuPainter {`, then prefix every `fn name(...)` inside the block with `pub fn name(...)` (46 prefixings). Add `#[allow(missing_docs)]` on the impl block (trait method docs are lost with the deletion; redocumentation tracked as Outstanding refactor "Doc-sweep on WgpuPainter inherent methods").
   - Remove `use crate::traits::Painter;` import (line ~27).
 - Modify: `crates/flui-engine/src/wgpu/backend.rs`:
   - Remove `use crate::traits::Painter;` (line ~17) — replace with `use crate::traits::CommandRenderer;`.

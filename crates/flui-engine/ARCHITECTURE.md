@@ -94,17 +94,30 @@ The `GpuCapabilities` struct in `wgpu/renderer.rs` is the canonical capability s
 
 **Accepted trade-off:** Future HDR / EDR / WCG / MetalFX features will re-implement only what's needed against wgpu's actual capability surface, not 2,182 LOC of stubs. HDR support via `Rgba16Float` surface format is **not lost** -- `GpuCapabilities::supports_hdr` continues to detect it; the deleted `EdrConfig` was a configuration struct with no consumer.
 
-### 5. Deletion of `pub trait Painter`, dead-code suppression audit, and `RenderResult` consistency
+### 5. `RenderResult<T>` consistency over `anyhow::Result<T>` on `Renderer` + `FontLoader`
 
 **Rule:** Strategy clause "Consistent error model in the engine's public API."
 
-**Choice:** Delete `RenderError::PainterError(String)` variant and `RenderError::painter()` constructor (in Mythos U5 alongside the `Painter` trait deletion). Migrate `Renderer::new` / `Renderer::new_offscreen` / `FontLoader::load_file` / `FontLoader::load_directory` from `anyhow::Result<T>` to `RenderResult<T>` (Mythos U9, commit `8e6acb65`). Map wgpu errors to specific `RenderError` variants (`surface_creation`, `device_creation`, `NoAdapter`). Remove global `#![allow(dead_code)]` at `lib.rs:4`; only `#![allow(missing_debug_implementations)]` stays (wgpu's resource handles intentionally don't impl `Debug`).
+**Choice:** Migrate `Renderer::new` / `Renderer::new_offscreen` / `FontLoader::load_file` / `FontLoader::load_directory` from `anyhow::Result<T>` to `RenderResult<T>` (Mythos U6 in commit log; verdict's U9, commit `8e6acb65`). Map wgpu errors to specific `RenderError` variants: `wgpu::SurfaceTargetUnsafe::from_window` and `wgpu::Instance::create_surface_unsafe` failures -> `RenderError::surface_creation`; `wgpu::Instance::request_adapter` failure -> `RenderError::AdapterRequest(#[source] Box<dyn Error + Send + Sync>)` (preserves the wgpu diagnostic payload via `Error::source()`); `wgpu::Adapter::request_device` failure -> `RenderError::device_creation`. filesystem errors in font_loader -> `RenderError::ResourceIo { context, #[source] source: std::io::Error }` (preserves `io::ErrorKind` for caller-side matching).
 
 **Alternatives:**
 - Keep `anyhow::Result` on `Renderer::new` "because it's simpler" -- rejected. Inconsistent with `RenderResult<T>` on every other engine API.
-- Keep global `#![allow(dead_code)]` "during active development" -- rejected. The global allow hides the per-item dead-code findings that the chain surfaced. Per-module allows on `effects`, `instancing`, `pipeline`, `shader_compiler` are kept (with documentation comments) where forward-looking helpers exist with named consumers; the global allow goes away.
+- Use the existing `RenderError::ResourceCreation(String)` variant via `format!("font load {path}: {e}")` for font_loader -- rejected during the chain's cleanup pass. The format-into-String shape severs `Error::source()` and loses `io::ErrorKind` discrimination. Added `RenderError::ResourceIo { context, #[source] source: io::Error }` instead.
+- Keep `RenderError::NoAdapter` as a sentinel-only variant (discarding the wgpu diagnostic via `.map_err(|_| NoAdapter)`) -- rejected during the chain's cleanup pass. wgpu 25.x's `RequestAdapterError::NotFound` carries `active_backends` / `requested_backends` / `supported_backends` / `no_fallback_backends` / `no_adapter_backends` / `incompatible_surface_backends` operator-diagnostic fields; the original `.map_err(|_| NoAdapter)` flatten dropped them. Added `RenderError::AdapterRequest(#[source] Box<dyn Error + Send + Sync>)` to preserve the diagnostic.
 
-**Accepted trade-off:** Verdict §12 rejected design #8. The migration ripples into `flui-app` / `flui-painting-demo` -- both compile unchanged because `RenderError: Error + Send + Sync` is auto-convertible to `anyhow::Error` via the blanket impl. Zero caller-side changes needed.
+**Accepted trade-off:** Verdict §12 rejected design #8. **No `flui-app` ripple was required** -- `RenderError: Error + Send + Sync` auto-converts to `anyhow::Error` via the blanket `From<E: Error + Send + Sync + 'static>` impl. The original plan's claim of "ripple into flui-app" was incorrect; verified by `cargo build -p flui-app` clean post-migration with zero caller-side changes. The migration is engine-internal.
+
+### 5b. Deletion of global `#![allow(dead_code)]` + per-module audit
+
+**Rule:** Mythos audit principle "every `#[allow(dead_code)]` is either a documented forward-looking consumer or an unaudited zombie."
+
+**Choice:** Remove global `#![allow(dead_code)]` at `lib.rs:4`; only `#![allow(missing_debug_implementations)]` stays (wgpu's resource handles intentionally don't impl `Debug`). Per-module `#[allow(dead_code)]` retained with documentation on `effects`, `instancing`, `pipeline`, `shader_compiler` modules (forward-looking helpers with named eventual consumers in `painter.rs`'s public API; per-item audit tracked in Outstanding refactor "Per-item audit of dead helpers in `effects` / `instancing` / `pipeline` / `shader_compiler` modules"). Per-field allows added on `Renderer::{instance, adapter}` (wgpu keep-alive), `TextureAtlas::format` (queried via wgpu Texture, not field), `BufferManager::device` (Arc<Device> for buffer creation).
+
+**Alternatives:**
+- Keep global `#![allow(dead_code)]` "during active development" -- rejected. The global allow hides the per-item dead-code findings that the chain surfaced.
+- Delete every per-module allow + every dead item the lint flags -- rejected as scope creep. The chain prioritised module-level cleanup over per-item churn; per-item audit deferred to Outstanding refactor with explicit per-item inventory.
+
+**Accepted trade-off:** 17 dead-code warnings surfaced + addressed via deletion or per-item documentation in Mythos U7 (Step 7 in commit log; verdict's U10+U11, commit `5d51f35e`). Test count: 53 -> 48 (5 tests deleted alongside `text_renderer.rs`).
 
 ### 6. The single existing `unsafe` block at `Renderer::new` stays + gets a documented SAFETY comment
 
@@ -143,7 +156,7 @@ Per-frame `Arc::clone` removal (verdict's U7) and `Arc<Mutex<OffscreenRenderer>>
 | `Renderer::instance` ([`src/wgpu/renderer.rs`](src/wgpu/renderer.rs)) | `wgpu::Instance` | Owned, keep-alive | Single mutator. `#[allow(dead_code)]` documents the keep-alive shape (Adapter depends on Instance being alive). |
 | `Renderer::adapter` | `wgpu::Adapter` | Owned, keep-alive | Same shape. |
 | `Renderer::device` / `Renderer::queue` | `Arc<wgpu::Device>` / `Arc<wgpu::Queue>` | Shared, wgpu convention | wgpu's own API uses `Arc` for these handles (cheap ref-count, not lock-protected). Shared by `WgpuPainter` and `OffscreenRenderer` via setup-phase `Arc::clone` (acceptable; not per-frame). |
-| `Renderer::surface` | `Option<wgpu::Surface<'static>>` | Owned, single-mutator | wgpu's `Surface` is `Send` but not `Sync`; cannot be shared across threads. |
+| `Renderer::surface` | `Option<wgpu::Surface<'static>>` | Owned, single-mutator | wgpu 25.x's `Surface<'_>: Send + Sync` (verified via `assert_impl_all!` in `wgpu/src/api/surface.rs`). Single-mutator enforced by code convention (only `Renderer::render_scene` calls `surface.get_current_texture`), not by trait bound. |
 | `Renderer::painter` | `Option<WgpuPainter>` | Owned, single-mutator | The take/return dance during `render_scene` is the per-frame ownership transfer. |
 | `Renderer::offscreen` | `Option<Arc<parking_lot::Mutex<OffscreenRenderer>>>` | **Mythos friction** | The lock is uncontended in production (single-mutator). Removal requires a `Backend<'a>` lifetime refactor; see [Outstanding refactors](#outstanding-refactors). |
 | `Backend::offscreen` | `Option<Arc<parking_lot::Mutex<OffscreenRenderer>>>` | **Mythos friction** | Same; symmetric with the above. |
@@ -159,15 +172,16 @@ Per-frame `Arc::clone` removal (verdict's U7) and `Arc<Mutex<OffscreenRenderer>>
 
 | Site | Block | Safety invariant |
 |---|---|---|
-| [`src/wgpu/renderer.rs:189-202`](src/wgpu/renderer.rs) | `unsafe { let surface_target = wgpu::SurfaceTargetUnsafe::from_window(window).map_err(...)?; instance.create_surface_unsafe(surface_target).map_err(...)? }` | The caller (typically `flui-app`) guarantees the window handle remains valid for the lifetime of the returned `Renderer` (and thus the `wgpu::Surface<'static>` it holds). `flui-app::App` owns the winit window for the application's lifetime. |
+| [`src/wgpu/renderer.rs:189-208`](src/wgpu/renderer.rs) | `unsafe { let surface_target = wgpu::SurfaceTargetUnsafe::from_window(window).map_err(...)?; instance.create_surface_unsafe(surface_target).map_err(...)? }` | In this call site the `SurfaceTargetUnsafe::RawHandle` is consumed immediately by `create_surface_unsafe`, so the two unsafe-fn contracts collapse to a single invariant: `window` must outlive the returned `Surface`. `flui-app::App` holds the winit window for the entire application lifetime, so the `Renderer` (and its `Surface<'static>`) cannot outlive the window. |
+| [`src/wgpu/buffer_pool.rs:277-298`](src/wgpu/buffer_pool.rs) | 5 unsafe deref blocks (raw pointer disjoint-borrow primitive: `unsafe { &mut *allocations }`, `unsafe { &mut *reuses }`, `unsafe { &*vertex_ptr }`) | Pre-existing unsafe primitive for disjoint borrows over the allocation tracker. Predates this chain. The safety invariants are documented locally in the file. Not modified by the Mythos chain (net unsafe delta for this chain: 0); listed here for inventory completeness. |
 
-No `unsafe impl Send/Sync` anywhere in the crate. No other unsafe blocks in production code. Net unsafe delta for the chain: **0**.
+No `unsafe impl Send/Sync` anywhere in the crate. Two unsafe surfaces total: one in `renderer.rs` (wgpu surface creation), one in `buffer_pool.rs` (5-block disjoint-borrow primitive, pre-existing). Net unsafe delta for the chain: **0** (chain added zero; consolidated one existing block in `renderer.rs` with a documented SAFETY comment).
 
-**Auto-derived Send/Sync** on:
-- `Renderer` -- `Send`, not `Sync` (wgpu `Surface` is `!Sync`).
-- `WgpuPainter` -- `Send`, not `Sync`.
-- `OffscreenRenderer` -- `Send`, not `Sync` (HashMap of `Arc<RenderPipeline>` is `Send`).
-- `TexturePool` -- `Send + Sync` (through `Arc<Mutex<>>`; will become `Send`-only after the Mythos friction is resolved per [Outstanding refactors](#outstanding-refactors)).
+**Auto-derived Send/Sync** on (verified against wgpu 25.x trait bounds):
+- `Renderer` -- `Send + Sync` today (every field is `Send + Sync`: wgpu `Instance`/`Adapter`/`Device`/`Queue`/`Surface<'static>` are all `Send + Sync` in wgpu 25.x; `Arc<parking_lot::Mutex<OffscreenRenderer>>` provides `Sync` via the Mutex). Single-mutator enforced by code convention, not by trait bound. After U6 (Outstanding refactor) replaces `Arc<Mutex<OffscreenRenderer>>` with owned `Option<OffscreenRenderer>`, `Renderer: Send + Sync` will still hold iff `OffscreenRenderer: Sync`; if not, `Renderer` becomes `Send`-only.
+- `WgpuPainter` -- `Send`, not `Sync` (holds `Arc<wgpu::Device>` + `Arc<wgpu::Queue>` which are `Send + Sync`, but internal batch state uses `Vec<T>` mutated through `&mut self`; no interior mutability sync surface).
+- `OffscreenRenderer` -- `Send`, not `Sync` (HashMap of `Arc<RenderPipeline>` is `Send`; the struct has no interior-mutability sync primitives).
+- `TexturePool` -- `Send + Sync` today (through inner `Arc<Mutex<TexturePoolInner>>`); will become `Send`-only after U8 (Outstanding refactor) replaces the inner lock with direct ownership.
 
 ---
 
@@ -177,7 +191,7 @@ Known sites that do not yet match the methodology but are not violations of the 
 
 ### `Arc<parking_lot::Mutex<OffscreenRenderer>>` shared between `Renderer` and `Backend`
 
-**Sites:** [`src/wgpu/renderer.rs:141`](src/wgpu/renderer.rs) (`Renderer::offscreen` field), [`src/wgpu/renderer.rs:649`](src/wgpu/renderer.rs) (Arc::clone at `Backend::with_offscreen` construction), [`src/wgpu/renderer.rs:877-878, 904-905`](src/wgpu/renderer.rs) (`offscreen_arc.lock()` calls in `handle_backdrop_filter`), [`src/wgpu/backend.rs:26`](src/wgpu/backend.rs) (field), [`src/wgpu/backend.rs:45, 57`](src/wgpu/backend.rs) (signatures), [`src/wgpu/backend.rs:399, 407, 464`](src/wgpu/backend.rs) (`offscreen_arc.lock()` calls in `render_shader_mask`).
+**Sites:** [`src/wgpu/renderer.rs:147`](src/wgpu/renderer.rs) (`Renderer::offscreen` field), [`src/wgpu/renderer.rs:670`](src/wgpu/renderer.rs) (`Arc::clone(offscreen)` at `Backend::with_offscreen` construction), [`src/wgpu/renderer.rs:898, 925`](src/wgpu/renderer.rs) (`offscreen_arc.lock()` calls in `handle_backdrop_filter`), [`src/wgpu/backend.rs:26`](src/wgpu/backend.rs) (field), [`src/wgpu/backend.rs:45, 57`](src/wgpu/backend.rs) (signatures), [`src/wgpu/backend.rs:399`](src/wgpu/backend.rs) (`self.offscreen.clone()` Arc-clone bind), [`src/wgpu/backend.rs:407, 464`](src/wgpu/backend.rs) (`offscreen_arc.lock()` calls in `render_shader_mask`).
 
 **Violation:** none of the seven refusal triggers; the Mythos verdict §9 lists this as the canonical "Arc<Mutex<>> over single-mutator data" smell, but the lock is uncontended in production (single-mutator). The shape is a known maintenance burden, not a soundness or contention issue today.
 
@@ -366,32 +380,32 @@ Concrete cleanups visible from `flui-engine` outward, sized for an `/aif-impleme
 
 **Dependencies:** observed-real-world-panic before implementing.
 
-### Doctest fix: `Offset::new(<f32>, <f32>)` -> `Offset::new(px(<f32>), px(<f32>))`
+### Doc-sweep on `WgpuPainter` inherent methods
 
-**Files:** ~10-20 doc examples across `src/wgpu/*.rs`.
+**Files:** [`src/wgpu/painter.rs`](src/wgpu/painter.rs) (the `impl WgpuPainter` block at the post-U5 boundary).
 
-**Goal:** every doctest currently uses `Offset::new(100.0, 50.0)` which fails to compile because `Offset<Pixels>::new` requires `Pixels`-wrapped arguments. The breakage predates the Mythos chain; tracked in Friction log.
+**Goal:** the U5 commit (`1b376beb`) deleted the `pub trait Painter` and converted its 46 methods to inherent `pub fn` on `WgpuPainter`. The trait's per-method doc comments were lost with the trait deletion. A blanket `#[allow(missing_docs)]` was applied on the impl block as a transient suppression. The doc-sweep restores per-method docs (copied/adapted from the deleted trait's doc comments preserved in git history at commit `db817c0d^:crates/flui-engine/src/traits.rs`).
 
-**Concrete blocker:** none. Mechanical sweep; 1-2 hours.
+**Shape:** 46 doc comments to write (or port from the pre-deletion git revision). After the sweep, remove the `#[allow(missing_docs)]` from the impl block at `painter.rs:2025` area.
 
-**Dependencies:** none.
+**Concrete blocker:** mechanical doc-writing; ~2-3 hours. Could land in the same PR as the `painter/` directory split (Outstanding refactor #4) since both touch the impl block.
 
-### `flui-app`, `flui-view`, `flui-platform`, `flui-painting`, `flui-interaction` Mythos chains next
+**Dependencies:** ideally lands with the `painter/` split for review-clarity, but standalone is also fine.
 
-**Files:** TBD per future brainstorms.
+### Pre-existing follow-ups (filed for awareness, not deferred-with-blocker)
 
-**Goal:** continue the chain through the remaining active crates. `flui-app` owns the frame loop and would receive a similar audit. `flui-view` is the element tree (where the methodology's `flui-rendering` exemplar already templated). `flui-platform` is the platform abstraction layer. `flui-painting` has its own pre-template `crates/flui-painting/docs/ARCHITECTURE.md` that needs grafting. `flui-interaction` has the same.
+The following pre-existing concerns are tracked outside this Outstanding refactors list because they have no concrete blocker -- they are scheduled fixes, not technical deferrals:
 
-**Shape:** one brainstorm + verdict + plan + chain per crate, following the precedent of `flui-rendering` (PR #77), `flui-layer` (PR #78), and this `flui-engine` chain.
+- **Doctest `Pixels`-wrap fix:** every doctest in `src/wgpu/*.rs` currently uses `Offset::new(100.0, 50.0)` which fails to compile because `Offset<Pixels>::new` requires `Pixels`-wrapped arguments. Pre-existed the Mythos chain. Mechanical sweep; 1-2 hours. Should be its own PR; not on the deferred-refactor list because there is no blocker. Tracked separately in the Friction log.
 
-**Dependencies:** standalone planning effort. Not blocking any work in this crate.
+- **Cross-crate Mythos chain continuation** (`flui-app`, `flui-view`, `flui-platform`, `flui-painting`, `flui-interaction`): these are next-crate planning artifacts. Listed in [`docs/PORT.md`](../../docs/PORT.md) `## Index` as "Not yet templated" entries; brainstorms + verdicts + plans live in `docs/brainstorms/`, `docs/designs/`, `docs/plans/` when they are authored. **Out of scope for `flui-engine/ARCHITECTURE.md`'s Outstanding refactors** (which scope to work visible from this crate outward). Pointers stay in `docs/PORT.md`.
 
 ---
 
 ## Notes
 
 - **Net unsafe delta for this chain: 0.** The single existing `unsafe { instance.create_surface_unsafe(...) }` block in `Renderer::new` is required by wgpu's API contract and stays; the chain consolidated the two unsafe calls into one block with a documented SAFETY comment. Zero new unsafe blocks were added.
-- **Net LOC reduction for this chain: ~-5,984 LOC of production code** across deletions (utils/ 809 LOC + wgpu/scene.rs 1,820 + wgpu/compositor.rs 365 + wgpu/vulkan.rs 826 + wgpu/dx12.rs 769 + wgpu/metal.rs 587 + wgpu/commands.rs 6 + Painter trait ~420 + text_renderer.rs 297 + 11 shader const aliases ~65 + smaller cleanups). Three god modules (`painter.rs`, `offscreen.rs`, plus the historic mid-size files) remain un-split; tracked in Outstanding refactors.
+- **Net LOC reduction for this chain: ~-5,888 LOC of production code** (per `git show --stat` totals across the 10 substantive commits): U1 -812 (utils/ delete), U2 -2,190 (scene.rs + compositor.rs delete), U3 -2,188 (platform stubs delete), U4 net -1 (commands.rs shim + import fixes), U5 net -429 (Painter trait + RenderError::PainterError + painting_demo imports), U6 net +23 (anyhow -> RenderResult), U7 net -291 (text_renderer.rs delete + shader const aliases + dead-code allow audit). Original target was ≥6,000 LOC; **target missed by ~112 LOC** because R7's promised 1,955 LOC of additional module deletions deferred (the four `wgpu/{texture_cache, external_texture_registry, path_cache, multi_draw}.rs` modules turned out to have in-crate consumers via `painter.rs` fields; deletion deferred to Outstanding refactor #6). Three god modules (`painter.rs`, `offscreen.rs`, plus the historic mid-size files) remain un-split; tracked in Outstanding refactors.
 - **`port-check.sh` extended in Mythos U13 of this chain** -- see [`docs/PORT.md`](../../docs/PORT.md) `## Refusal triggers` for the seven trigger inventory after the extension.
 - **`Arc<Mutex<>>` shapes for `OffscreenRenderer` and `TexturePoolInner` survived the chain.** Documented in Friction log + Outstanding refactors with concrete blockers. The chain prioritised dead-code deletion (largest LOC wins) over lock-shape refactoring (substantial lifetime gymnastics for marginal runtime benefit).
 - **Two test counts** at chain end: `cargo test -p flui-engine --lib` shows 48 passed (down from 53 pre-chain, with 5 tests deleted alongside `text_renderer.rs`); `cargo test -p flui-engine --doc` count TBD per doctest fix Outstanding refactor.

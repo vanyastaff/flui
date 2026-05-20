@@ -917,7 +917,7 @@ Ordered. Each step lands as a reviewable commit. Each step compiles, `cargo test
 - Delete `pub trait Painter` from `crates/flui-engine/src/traits.rs` (~380 LOC).
 - Remove `pub use traits::Painter` from `lib.rs` and `wgpu/mod.rs`.
 - Rename `traits.rs` → `command_renderer.rs` for clarity.
-- Update `wgpu/painter.rs`: remove `impl Painter for WgpuPainter` block (~30 method impls); methods stay as inherent impls on `WgpuPainter` (they already exist that way; the trait impl wrapped them).
+- Update `wgpu/painter.rs`: convert `impl Painter for WgpuPainter` block to `impl WgpuPainter`. The trait impl block holds the only method bodies (~1,519 LOC for 46 methods); methods do NOT pre-exist as inherent impls. Conversion is mechanical: drop `for WgpuPainter` from the impl signature, then prefix every `fn name(...)` inside with `pub fn name(...)` (visibility inherited from the trait until now).
 - Update `wgpu/backend.rs`: remove `use crate::traits::{CommandRenderer, Painter}` → `use crate::traits::CommandRenderer`.
 - Delete `RenderError::PainterError(String)` variant + `RenderError::painter()` constructor.
 

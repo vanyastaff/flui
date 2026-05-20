@@ -215,7 +215,7 @@ impl Renderer {
                 force_fallback_adapter: false,
             })
             .await
-            .map_err(|_| RenderError::NoAdapter)?;
+            .map_err(RenderError::adapter_request)?;
 
         // Detect capabilities
         let capabilities = GpuCapabilities::detect(&adapter);
@@ -323,7 +323,7 @@ impl Renderer {
                 force_fallback_adapter: false,
             })
             .await
-            .map_err(|_| RenderError::NoAdapter)?;
+            .map_err(RenderError::adapter_request)?;
 
         let capabilities = GpuCapabilities::detect(&adapter);
 
