@@ -70,6 +70,29 @@ This section records places where the Rust shape diverges from the Dart shape an
 
 **Accepted trade-off:** net unsafe deletion, one fewer place where the carry-cost of a soundness comment exists.
 
+### Third-party trait calls wrapped in `catch_unwind`; phases return `RenderResult<()>`
+
+**Rule:** design verdict Section 7 ("Partial failure recovery: A render object that panics inside `perform_layout` or `paint` poisons that node only. The pipeline catches via `std::panic::catch_unwind`, marks the node as `RenderError::Poisoned`, drops the in-flight frame, and lets the caller decide.") and Section 10 (the `Poisoned { render_object, phase }` error variant). Mythos Step 12.
+
+**Choice:** every third-party trait call site has its call wrapped in `std::panic::catch_unwind(AssertUnwindSafe(|| ...))`. A panicking render object surfaces as `RenderError::Poisoned { render_object, phase }` rather than aborting the process. Specifically:
+
+- `RenderEntry::layout` ([`src/storage/entry.rs`](src/storage/entry.rs)) wraps `render_object.perform_layout_raw(...)` and returns `RenderResult<ProtocolGeometry<P>>`. On the panic path, state is left untouched (`NEEDS_LAYOUT` stays set) so the next frame can retry.
+- `PipelineOwner::<PaintPhase>::paint_node_recursive` ([`src/pipeline/owner.rs`](src/pipeline/owner.rs)) wraps `render_object.paint(context, offset)`, returns `RenderResult<()>`, and propagates Poisoned through the recursion via a captured error slot in the children-painting closure.
+
+The phase entry points (`run_layout` / `run_compositing` / `run_paint` / `run_semantics`) now return `RenderResult<()>`. `run_frame` returns `(PipelineOwner<Idle>, RenderResult<Option<LayerTree>>)` -- the owner **always** comes back at Idle so frame-loop callers can mutex-replace through it on both success and error paths.
+
+`RenderObject<P>::debug_name(&self) -> &'static str` is the static identifier embedded in `RenderError::Poisoned`. Its default body monomorphizes per concrete impl via `core::any::type_name::<Self>()`; calling through `&dyn RenderObject<P>` yields the concrete type name because the vtable carries the monomorphized stub.
+
+**Alternatives:**
+
+- **Process-wide `panic::set_hook`** -- rejected, leaks pipeline concerns into global process state and can't differentiate phase-of-origin.
+- **Cache `debug_name` on `RenderEntry<P>` at insertion** -- considered. Would avoid one vtable dispatch per error case. Not adopted because the dispatch happens only on the failure path (cold by definition), and the cache adds a `&'static str` field that pollutes every `RenderEntry<P>` in the common case.
+- **Return `(PipelineOwner<Idle>, RenderError)` tuple on error** (shape (a) in the Mythos spec) -- rejected, awkward to compose; pattern-matching on `(_, Result<_>)` is cleaner than splitting the success and error tuples.
+
+**Accepted trade-off:** `AssertUnwindSafe` is documented inline at each wrapper. The render object's internal state may be torn after a panic; the pipeline treats the node as poisoned and lets the caller drop or replace it. Process-level safety is preserved; the render tree itself is not corrupted.
+
+**Note:** `hit_test_raw` is part of the `RenderObject<P>` trait, but the current pipeline owner does not invoke it directly -- hit testing is dispatched at the `RenderView` layer outside the frame pipeline. The catch_unwind helper around hit_test will land when hit testing is wired through the pipeline.
+
 ### Multi-source design references in this crate
 
 Strategy clause "Behavior loyal, structure Rust-native" treats Flutter as the **semantic** reference. The structural shape of individual components in this crate has been informed by multiple Rust-side audited references as recorded in prior plans:
@@ -184,32 +207,6 @@ Criterion is already in `flui-rendering` dev-dependencies. The bench harness nee
 **Shape:** each class is a new file under `crates/flui-rendering/tests/` plus a dev-dependency. Adding all three at once would expand the Mythos chain into infrastructure work; they are properly scoped as a follow-up commit.
 
 **Dependencies:** none beyond crate dev-deps.
-
-### `catch_unwind` plumbing for `RenderError::Poisoned` (deferred from Mythos Step 12)
-
-**Files:** [`src/pipeline/owner.rs`](src/pipeline/owner.rs), [`src/traits/render_object.rs`](src/traits/render_object.rs).
-
-**Goal:** the `RenderError::Poisoned { render_object, phase }` variant landed in Mythos Step 12, but the actual `std::panic::catch_unwind` plumbing around `perform_layout_raw` / `paint` / `hit_test_raw` trait calls is not yet in place. A third-party render object panicking inside one of these methods still aborts the process today.
-
-**Shape:** wrap every trait call site in `pipeline/owner.rs` with `catch_unwind`:
-
-```rust
-match std::panic::catch_unwind(AssertUnwindSafe(|| {
-    render_object.perform_layout_raw(constraints)
-})) {
-    Ok(geometry) => /* normal path */,
-    Err(_) => return Err(RenderError::poisoned(render_object.debug_name(), "layout")),
-}
-```
-
-Requires:
-- `RenderObject<P>::debug_name(&self) -> &'static str` accessor (already in Mythos Step 11 design; add as a trait method with `type_name::<Self>()` default).
-- `flush_layout` / `flush_paint` / `flush_semantics` signatures change from `()` to `RenderResult<()>` so the error can propagate.
-- `RendererBinding::draw_frame` updates to handle the new return type (drop the frame, log, retry next tick).
-
-**Why deferred:** flips the return type of the entire flush_* surface, rippling into flui-app's draw loop. Land alongside Mythos Step 7 finalization (per-phase method redistribution) which already touches the same call shapes.
-
-**Dependencies:** debug_name method on RenderObject; or use TypeId-based name lookup as a fallback.
 
 ### Audit pre-existing clippy issues in `src/objects/flex.rs`
 

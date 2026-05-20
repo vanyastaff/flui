@@ -298,6 +298,30 @@ pub trait RenderObject<P: Protocol>:
     }
 
     // ========================================================================
+    // Diagnostics
+    // ========================================================================
+
+    /// Stable static identifier for this render object.
+    ///
+    /// Used by the pipeline owner in error messages (specifically
+    /// [`crate::error::RenderError::Poisoned`]) to identify the offending
+    /// render object without holding a `String` or allocating per call.
+    ///
+    /// The default body monomorphizes per concrete `Self` and returns
+    /// [`core::any::type_name::<Self>()`]. Vtables for `dyn
+    /// RenderObject<P>` carry a pointer to that monomorphized default,
+    /// so calling `obj.debug_name()` through a dyn pointer yields the
+    /// concrete type name. Concrete impls may override to provide a
+    /// shorter / more human-readable name.
+    ///
+    /// Mythos Step 12 (2026-05-20): introduced alongside the
+    /// `std::panic::catch_unwind` plumbing that turns trait-call panics
+    /// into `RenderError::Poisoned` rather than process aborts.
+    fn debug_name(&self) -> &'static str {
+        core::any::type_name::<Self>()
+    }
+
+    // ========================================================================
     // Pipeline Integration
     // ========================================================================
     //

@@ -140,6 +140,11 @@ impl PluginPipeline {
         // nothing is dirty and the previous frame is still on-screen),
         // the plugin must return a Scene every time it's called: the
         // host expects a new opaque pointer.
+        //
+        // Mythos Step 12 (2026-05-20): `run_frame` returns
+        // `(PipelineOwner<Idle>, RenderResult<Option<LayerTree>>)`. On
+        // error we log and emit an empty Scene so the host's opaque
+        // pointer stays valid.
         let layer_tree = {
             let mut guard = self.pipeline_owner.write();
             if let Some(root_id) = guard.root_id() {
@@ -148,9 +153,15 @@ impl PluginPipeline {
                 log("draw_frame: WARNING — no root_id in pipeline");
             }
             let owner = std::mem::take(&mut *guard);
-            let (owner, layer_tree) = owner.run_frame();
+            let (owner, result) = owner.run_frame();
             *guard = owner;
-            layer_tree
+            match result {
+                Ok(layer_tree) => layer_tree,
+                Err(e) => {
+                    log(&format!("draw_frame: pipeline failed: {e:?}"));
+                    None
+                }
+            }
         };
 
         // Phase 3: Extract Scene from LayerTree

@@ -226,7 +226,12 @@ pub trait RendererBinding: Send + Sync {
     /// `send_frames_to_engine` branch only handles compositing for the
     /// engine handoff.
     ///
-    /// Mythos Step 7 finalization (2026-05-20).
+    /// Mythos Step 7 finalization (2026-05-20). Mythos Step 12
+    /// (2026-05-20): `run_frame` returns `(PipelineOwner<Idle>,
+    /// RenderResult<Option<LayerTree>>)`. On error (e.g. a render
+    /// object panicked and was caught by `catch_unwind`), the frame is
+    /// dropped, the error is logged via tracing, and the owner is put
+    /// back ready for the next frame.
     fn draw_frame(&self) {
         let root_owner = self.root_pipeline_owner();
 
@@ -234,9 +239,15 @@ pub trait RendererBinding: Send + Sync {
         let layer_tree = {
             let mut guard = root_owner.write();
             let owner = std::mem::take(&mut *guard);
-            let (owner, layer_tree) = owner.run_frame();
+            let (owner, result) = owner.run_frame();
             *guard = owner;
-            layer_tree
+            match result {
+                Ok(layer_tree) => layer_tree,
+                Err(e) => {
+                    tracing::error!(error = ?e, "draw_frame: pipeline failed, dropping frame");
+                    None
+                }
+            }
         };
 
         // Phase 6: Composite frames (only if sending frames)

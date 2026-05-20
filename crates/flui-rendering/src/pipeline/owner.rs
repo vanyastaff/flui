@@ -250,24 +250,60 @@ impl PipelineOwner<Idle> {
     // ========================================================================
 
     /// Runs a full frame: layout -> compositing-bits -> paint -> semantics.
-    /// Consumes `self`, returns the owner back at [`Idle`] plus the layer
-    /// tree produced by the paint phase (if any).
+    /// Consumes `self`, returns the owner back at [`Idle`] plus a
+    /// [`RenderResult`] indicating whether the frame produced a layer
+    /// tree or failed mid-phase.
     ///
     /// The phase transitions are the load-bearing mechanism here -- each
     /// `run_*` method lives only on its matching phase's impl block, so
     /// the type system enforces the ordering. There is no runtime branch
     /// that could call `run_paint` before `run_layout`.
-    pub fn run_frame(self) -> (PipelineOwner<Idle>, Option<LayerTree>) {
+    ///
+    /// # Mythos Step 12 -- error handling
+    ///
+    /// If any phase returns [`crate::error::RenderError`] (most notably
+    /// [`crate::error::RenderError::Poisoned`] from a panicking render
+    /// object), the in-flight frame is dropped, the owner is returned at
+    /// [`Idle`] (no in-flight layer tree), and the second element of the
+    /// tuple is `Err(...)`. The owner is **always** usable for a
+    /// subsequent frame on the success and error paths alike.
+    pub fn run_frame(
+        self,
+    ) -> (
+        PipelineOwner<Idle>,
+        crate::error::RenderResult<Option<LayerTree>>,
+    ) {
+        // Layout
         let mut owner = self.into_layout();
-        owner.run_layout();
+        if let Err(e) = owner.run_layout() {
+            return (owner.into_idle(), Err(e));
+        }
+
+        // Compositing
         let mut owner = owner.into_compositing();
-        owner.run_compositing();
+        if let Err(e) = owner.run_compositing() {
+            return (owner.into_idle(), Err(e));
+        }
+
+        // Paint
         let mut owner = owner.into_paint();
-        owner.run_paint();
+        if let Err(e) = owner.run_paint() {
+            return (owner.into_idle(), Err(e));
+        }
+
+        // Semantics
         let mut owner = owner.into_semantics();
-        owner.run_semantics();
+        if let Err(e) = owner.run_semantics() {
+            // Semantics phase has no `into_idle` because the transition
+            // to <Idle> goes via `finish`. Use `finish` to recover the
+            // owner for the error path -- the layer tree from the paint
+            // phase is discarded on error to keep the invariant "Err =>
+            // no layer tree".
+            return (owner.finish(), Err(e));
+        }
+
         let layer_tree = owner.take_layer_tree();
-        (owner.finish(), layer_tree)
+        (owner.finish(), Ok(layer_tree))
     }
 }
 
@@ -710,7 +746,7 @@ impl PipelineOwner<Layout> {
     /// `perform_layout` can call `layout_child()` which triggers
     /// synchronous child layout through the RenderTree. The child is laid
     /// out immediately and returns its size.
-    pub fn run_layout(&mut self) {
+    pub fn run_layout(&mut self) -> crate::error::RenderResult<()> {
         tracing::debug!("run_layout: {} nodes", self.dirty.needs_layout.len());
 
         // Process own dirty nodes if any
@@ -738,11 +774,19 @@ impl PipelineOwner<Layout> {
             for dirty_node in dirty_nodes {
                 // Layout this node with synchronous child layout support.
                 // Depth starts at 0; recursion limit enforced inside.
-                self.layout_node_with_children(dirty_node.id, 0);
+                //
+                // Mythos Step 12: layout_node_with_children returns
+                // RenderResult<()>. On error we restore
+                // debug_doing_layout and bail.
+                if let Err(e) = self.layout_node_with_children(dirty_node.id, 0) {
+                    self.debug_doing_layout = false;
+                    return Err(e);
+                }
             }
 
             self.debug_doing_layout = false;
         }
+        Ok(())
     }
 
     /// Lays out a single node with depth-first child layout.
@@ -755,18 +799,24 @@ impl PipelineOwner<Layout> {
     ///
     /// This ensures that when parent's `perform_layout` calls `layout_child()`,
     /// the child's size is already cached and available.
-    fn layout_node_with_children(&mut self, render_id: RenderId, depth: usize) {
+    fn layout_node_with_children(
+        &mut self,
+        render_id: RenderId,
+        depth: usize,
+    ) -> crate::error::RenderResult<()> {
         // Mythos Step 12: bound recursion depth to detect infinite
         // parent-child cycles. Going past LAYOUT_DEPTH_LIMIT surfaces
-        // RenderError::LayoutDepthExceeded via tracing and aborts the
-        // offending subtree without panicking.
+        // RenderError::LayoutDepthExceeded; the caller (run_layout)
+        // propagates the error.
         if depth > LAYOUT_DEPTH_LIMIT {
             tracing::error!(
-                error = ?crate::error::RenderError::layout_depth_exceeded(LAYOUT_DEPTH_LIMIT),
                 ?render_id,
-                "layout_node_with_children: depth limit exceeded; aborting subtree"
+                "layout_node_with_children: depth limit exceeded ({})",
+                LAYOUT_DEPTH_LIMIT
             );
-            return;
+            return Err(crate::error::RenderError::layout_depth_exceeded(
+                LAYOUT_DEPTH_LIMIT,
+            ));
         }
 
         // Check if node exists and needs layout
@@ -774,12 +824,12 @@ impl PipelineOwner<Layout> {
             if let Some(render_node) = self.render_tree.get(render_id) {
                 render_node.needs_layout()
             } else {
-                return;
+                return Ok(());
             }
         };
 
         if !needs_layout {
-            return;
+            return Ok(());
         }
 
         tracing::trace!(
@@ -813,13 +863,16 @@ impl PipelineOwner<Layout> {
 
                 // Recursively layout the child (depth-first), incrementing
                 // the recursion-depth counter so LAYOUT_DEPTH_LIMIT can
-                // catch infinite cycles.
-                self.layout_node_with_children(*child_id, depth + 1);
+                // catch infinite cycles. Errors propagate up the
+                // recursion via `?`.
+                self.layout_node_with_children(*child_id, depth + 1)?;
             }
 
             // STEP 3: Sync child size to parent's ChildState BEFORE parent layout
             self.sync_child_size_to_parent(*child_id);
         }
+
+        Ok(())
     }
 
     /// Propagates constraints from parent to child.
@@ -862,7 +915,7 @@ impl PipelineOwner<Compositing> {
     ///
     /// Nodes are sorted by depth (shallow first). This matches Flutter's
     /// `flushCompositingBits` behavior.
-    pub fn run_compositing(&mut self) {
+    pub fn run_compositing(&mut self) -> crate::error::RenderResult<()> {
         tracing::debug!(
             "run_compositing: {} nodes",
             self.dirty.needs_compositing.len()
@@ -892,6 +945,7 @@ impl PipelineOwner<Compositing> {
             );
         }
         self.dirty.needs_compositing.clear();
+        Ok(())
     }
 }
 
@@ -918,7 +972,7 @@ impl PipelineOwner<PaintPhase> {
     ///
     /// Nodes are sorted by depth (deep first) so children are painted before
     /// their parents. This matches Flutter's `flushPaint` behavior.
-    pub fn run_paint(&mut self) {
+    pub fn run_paint(&mut self) -> crate::error::RenderResult<()> {
         tracing::debug!("run_paint: {} nodes", self.dirty.needs_paint.len());
 
         // Process own dirty nodes if any
@@ -941,6 +995,11 @@ impl PipelineOwner<PaintPhase> {
 
             // Paint render tree recursively starting from root.
             // Each parent paints itself, then paints children with accumulated offset.
+            //
+            // Mythos Step 12: paint_node_recursive returns RenderResult<()>;
+            // a panicking render object surfaces as Err(Poisoned). We must
+            // restore debug_doing_paint before `?`-propagating so the
+            // owner's debug invariants stay consistent on the error path.
             if let Some(root_id) = self.root_id
                 && let Some(root_node) = self.render_tree.get(root_id)
             {
@@ -951,18 +1010,27 @@ impl PipelineOwner<PaintPhase> {
                 let mut context = CanvasContext::new(paint_bounds);
 
                 // Paint recursively from root with offset accumulation
-                self.paint_node_recursive(&mut context, root_id, Offset::ZERO);
+                let paint_result = self.paint_node_recursive(&mut context, root_id, Offset::ZERO);
 
-                // Store the resulting layer tree
-                self.last_layer_tree = Some(context.into_layer_tree());
-                tracing::debug!(
-                    "run_paint: layer tree has {} layers",
-                    self.last_layer_tree.as_ref().map(|t| t.len()).unwrap_or(0)
-                );
+                match paint_result {
+                    Ok(()) => {
+                        // Store the resulting layer tree
+                        self.last_layer_tree = Some(context.into_layer_tree());
+                        tracing::debug!(
+                            "run_paint: layer tree has {} layers",
+                            self.last_layer_tree.as_ref().map(|t| t.len()).unwrap_or(0)
+                        );
+                    }
+                    Err(e) => {
+                        self.debug_doing_paint = false;
+                        return Err(e);
+                    }
+                }
             }
 
             self.debug_doing_paint = false;
         }
+        Ok(())
     }
 
     /// Recursively paints a node and its children with accumulated offset.
@@ -981,7 +1049,12 @@ impl PipelineOwner<PaintPhase> {
     /// The tree structure (parent-child relationships) is stored in RenderTree,
     /// while child offsets are stored in each render object's internal state
     /// (set during layout via position_child).
-    fn paint_node_recursive(&self, context: &mut CanvasContext, node_id: RenderId, offset: Offset) {
+    fn paint_node_recursive(
+        &self,
+        context: &mut CanvasContext,
+        node_id: RenderId,
+        offset: Offset,
+    ) -> crate::error::RenderResult<()> {
         // Get the render node and collect info for painting
         let (is_repaint_boundary, children_with_offsets, paint_alpha, paint_transform): (
             bool,
@@ -1011,8 +1084,22 @@ impl PipelineOwner<PaintPhase> {
                     alpha
                 );
 
-                // Paint this node at the accumulated offset
-                render_object.paint(context, offset);
+                // Paint this node at the accumulated offset.
+                //
+                // Mythos Step 12: the paint call is third-party code. Wrap
+                // in catch_unwind so a panicking render object surfaces as
+                // RenderError::Poisoned rather than aborting the process.
+                // AssertUnwindSafe is justified because (a) the canvas
+                // context's drawing primitives are themselves panic-safe
+                // (they record commands into Vec, no mid-state torn
+                // invariants) and (b) the render object's internal state
+                // is opaque to us -- on panic we treat the node as torn
+                // and let the caller decide whether to drop it.
+                let debug_name = render_object.debug_name();
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    render_object.paint(context, offset);
+                }))
+                .map_err(|_| crate::error::RenderError::poisoned(debug_name, "paint"))?;
 
                 // For each child in the tree, get its offset from the render object
                 // The render object stores offsets via position_child during layout
@@ -1035,13 +1122,20 @@ impl PipelineOwner<PaintPhase> {
 
                 (is_boundary, children, alpha, transform)
             } else {
-                return;
+                return Ok(());
             }
         };
 
-        // Helper closure to paint all children
-        let paint_children = |ctx: &mut CanvasContext, base_offset: Offset| {
+        // Mythos Step 12: paint_children captures a mutable error slot.
+        // The push_opacity / push_transform callbacks are FnOnce; if a
+        // recursive paint surfaces a Poisoned error, we stash it and the
+        // outer function returns it once the closure has unwound.
+        let mut child_error: Option<crate::error::RenderError> = None;
+        let mut paint_children = |ctx: &mut CanvasContext, base_offset: Offset| {
             for (child_id, child_offset) in &children_with_offsets {
+                if child_error.is_some() {
+                    return;
+                }
                 // Check if child is a repaint boundary
                 let child_is_repaint_boundary = {
                     if let Some(child_node) = self.render_tree.get(*child_id) {
@@ -1051,17 +1145,24 @@ impl PipelineOwner<PaintPhase> {
                     }
                 };
 
-                if child_is_repaint_boundary {
+                let result = if child_is_repaint_boundary {
                     // For repaint boundaries, create a new OffsetLayer
                     let child_accumulated_offset = base_offset + *child_offset;
-
+                    let mut inner_result: crate::error::RenderResult<()> = Ok(());
                     ctx.paint_child_with_offset(child_accumulated_offset, |child_ctx| {
-                        self.paint_node_recursive(child_ctx, *child_id, Offset::ZERO);
+                        inner_result =
+                            self.paint_node_recursive(child_ctx, *child_id, Offset::ZERO);
                     });
+                    inner_result
                 } else {
                     // Normal case: accumulate offset and paint directly
                     let child_accumulated_offset = base_offset + *child_offset;
-                    self.paint_node_recursive(ctx, *child_id, child_accumulated_offset);
+                    self.paint_node_recursive(ctx, *child_id, child_accumulated_offset)
+                };
+
+                if let Err(e) = result {
+                    child_error = Some(e);
+                    return;
                 }
             }
         };
@@ -1110,6 +1211,11 @@ impl PipelineOwner<PaintPhase> {
             paint_children(context, offset);
         }
 
+        // Propagate any child error captured during recursive paint.
+        if let Some(err) = child_error {
+            return Err(err);
+        }
+
         // Track that this was a repaint boundary for future reference.
         //
         // U2 exemplar refactor: the previous shape took a write lock on the
@@ -1125,6 +1231,8 @@ impl PipelineOwner<PaintPhase> {
         {
             entry.state().set_was_repaint_boundary(true);
         }
+
+        Ok(())
     }
 }
 
@@ -1148,9 +1256,9 @@ impl PipelineOwner<Semantics> {
     /// The geometries of children depend on ancestors' transforms and clips,
     /// so parents must be processed first. This matches Flutter's
     /// `flushSemantics`.
-    pub fn run_semantics(&mut self) {
+    pub fn run_semantics(&mut self) -> crate::error::RenderResult<()> {
         if !self.semantics_enabled() {
-            return;
+            return Ok(());
         }
 
         tracing::debug!("run_semantics: {} nodes", self.dirty.needs_semantics.len());
@@ -1173,6 +1281,7 @@ impl PipelineOwner<Semantics> {
         }
 
         self.debug_doing_semantics = false;
+        Ok(())
     }
 }
 
@@ -1249,7 +1358,7 @@ mod tests {
         owner.add_node_needing_layout(RenderId::new(2), 1);
 
         let mut owner = owner.into_layout();
-        owner.run_layout();
+        owner.run_layout().expect("layout phase should succeed");
 
         assert!(owner.nodes_needing_layout().is_empty());
     }
@@ -1261,7 +1370,8 @@ mod tests {
         owner.add_node_needing_paint(RenderId::new(2), 1);
         owner.add_node_needing_compositing_bits_update(RenderId::new(3), 2);
 
-        let (owner, _layer_tree) = owner.run_frame();
+        let (owner, result) = owner.run_frame();
+        let _layer_tree = result.expect("frame should succeed");
 
         assert!(!owner.has_dirty_nodes());
     }
@@ -1280,7 +1390,7 @@ mod tests {
         assert_eq!(owner.nodes_needing_layout()[2].depth, 1);
 
         let mut owner = owner.into_layout();
-        owner.run_layout();
+        owner.run_layout().expect("layout phase should succeed");
 
         // After flush, list is cleared
         assert!(owner.nodes_needing_layout().is_empty());
@@ -1296,7 +1406,7 @@ mod tests {
 
         let owner = owner.into_layout().into_compositing();
         let mut owner = owner.into_paint();
-        owner.run_paint();
+        owner.run_paint().expect("paint phase should succeed");
 
         // After flush, list is cleared
         assert!(owner.nodes_needing_paint().is_empty());
@@ -1351,5 +1461,245 @@ mod tests {
 
         owner.request_visual_update();
         assert_eq!(counter.load(Ordering::Relaxed), 2);
+    }
+
+    // ========================================================================
+    // Mythos Step 12: catch_unwind plumbing
+    // ========================================================================
+    //
+    // Verifies that a render object panicking inside a third-party trait
+    // call (paint, perform_layout_raw) surfaces as
+    // RenderError::Poisoned rather than aborting the process, and that
+    // the owner remains usable for a subsequent frame.
+
+    /// Direct (non-RenderBox) RenderObject<BoxProtocol> impl whose
+    /// `paint` method panics on demand. Used by the catch_unwind tests
+    /// below.
+    ///
+    /// We bypass the RenderBox blanket impl (whose paint is a no-op)
+    /// because we want to exercise the actual third-party paint call
+    /// site the pipeline owner wraps in `catch_unwind`.
+    #[derive(Debug)]
+    struct PanickingPaintBox {
+        size: flui_types::Size,
+    }
+
+    impl PanickingPaintBox {
+        fn new() -> Self {
+            Self {
+                size: flui_types::Size::ZERO,
+            }
+        }
+    }
+
+    impl flui_foundation::Diagnosticable for PanickingPaintBox {}
+    impl crate::traits::PaintEffectsCapability for PanickingPaintBox {}
+    impl crate::traits::SemanticsCapability for PanickingPaintBox {}
+    impl crate::traits::HotReloadCapability for PanickingPaintBox {}
+
+    impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for PanickingPaintBox {
+        fn perform_layout_raw(
+            &mut self,
+            _constraints: crate::protocol::ProtocolConstraints<crate::protocol::BoxProtocol>,
+        ) -> crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol> {
+            self.size
+        }
+
+        fn paint(&self, _context: &mut crate::context::CanvasContext, _offset: flui_types::Offset) {
+            panic!("PanickingPaintBox::paint -- intentional test panic");
+        }
+
+        fn hit_test_raw(
+            &self,
+            _result: &mut crate::protocol::ProtocolHitResult<crate::protocol::BoxProtocol>,
+            _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
+        ) -> bool {
+            false
+        }
+
+        fn geometry(&self) -> &crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol> {
+            &self.size
+        }
+
+        fn set_geometry(
+            &mut self,
+            geometry: crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>,
+        ) {
+            self.size = geometry;
+        }
+
+        fn paint_bounds(&self) -> flui_types::Rect {
+            flui_types::Rect::from_origin_size(flui_types::Point::ZERO, self.size)
+        }
+    }
+
+    /// Direct (non-RenderBox) RenderObject<BoxProtocol> impl whose
+    /// `perform_layout_raw` panics. Used to test catch_unwind on the
+    /// layout phase through `RenderEntry::layout`.
+    #[derive(Debug)]
+    struct PanickingLayoutBox {
+        size: flui_types::Size,
+    }
+
+    impl PanickingLayoutBox {
+        fn new() -> Self {
+            Self {
+                size: flui_types::Size::ZERO,
+            }
+        }
+    }
+
+    impl flui_foundation::Diagnosticable for PanickingLayoutBox {}
+    impl crate::traits::PaintEffectsCapability for PanickingLayoutBox {}
+    impl crate::traits::SemanticsCapability for PanickingLayoutBox {}
+    impl crate::traits::HotReloadCapability for PanickingLayoutBox {}
+
+    impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for PanickingLayoutBox {
+        fn perform_layout_raw(
+            &mut self,
+            _constraints: crate::protocol::ProtocolConstraints<crate::protocol::BoxProtocol>,
+        ) -> crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol> {
+            panic!("PanickingLayoutBox::perform_layout_raw -- intentional test panic");
+        }
+
+        fn paint(&self, _context: &mut crate::context::CanvasContext, _offset: flui_types::Offset) {
+        }
+
+        fn hit_test_raw(
+            &self,
+            _result: &mut crate::protocol::ProtocolHitResult<crate::protocol::BoxProtocol>,
+            _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
+        ) -> bool {
+            false
+        }
+
+        fn geometry(&self) -> &crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol> {
+            &self.size
+        }
+
+        fn set_geometry(
+            &mut self,
+            geometry: crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>,
+        ) {
+            self.size = geometry;
+        }
+
+        fn paint_bounds(&self) -> flui_types::Rect {
+            flui_types::Rect::from_origin_size(flui_types::Point::ZERO, self.size)
+        }
+    }
+
+    /// A panicking `paint` call must surface as
+    /// `RenderError::Poisoned { phase: "paint", .. }` and not abort.
+    /// The owner must remain usable for a subsequent frame.
+    #[test]
+    fn test_run_frame_catches_paint_panic() {
+        use crate::error::RenderError;
+
+        // Silence the default panic hook for the duration of this test
+        // so cargo test output isn't polluted by the intentional panic.
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+
+        let mut owner = PipelineOwner::new();
+        let root_id = owner.insert(Box::new(PanickingPaintBox::new())
+            as Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>);
+        owner.set_root_id(Some(root_id));
+
+        let (owner, result) = owner.run_frame();
+
+        std::panic::set_hook(prev);
+
+        // The frame produces an error of the Poisoned variant.
+        let err = result.expect_err("paint should panic, surface as Err");
+        match err {
+            RenderError::Poisoned { phase, .. } => {
+                assert_eq!(phase, "paint", "phase should be 'paint'");
+            }
+            other => panic!("expected RenderError::Poisoned, got {other:?}"),
+        }
+
+        // Owner is reusable for a subsequent frame -- it's back at <Idle>
+        // and another `run_frame` call must not panic. We re-mark the
+        // panicking node dirty to force the paint path to run again,
+        // since the first frame already cleared its paint dirty flag.
+        // The second frame must hit the panic site once more and
+        // surface the same Err(Poisoned).
+        let mut owner = owner;
+        owner.add_node_needing_paint(root_id, 0);
+
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let (owner, second_result) = owner.run_frame();
+        std::panic::set_hook(prev);
+
+        let _second_err =
+            second_result.expect_err("re-marked paint should hit the panicking node again");
+
+        // The owner is still at Idle after the second frame and can be
+        // dropped cleanly -- the catch_unwind plumbing has not left any
+        // resources poisoned.
+        drop(owner);
+    }
+
+    /// A panicking `perform_layout_raw` surfaces as
+    /// `RenderError::Poisoned { phase: "layout", .. }` through
+    /// `RenderEntry::layout`. This verifies the catch_unwind wrapper on
+    /// the layout call site (Mythos Step 12).
+    ///
+    /// Note: `RenderEntry::layout` is not yet wired into the pipeline
+    /// owner's `run_layout` (the propagation stubs are empty per the
+    /// Mythos Outstanding Refactors list), so this test exercises the
+    /// entry directly rather than through `run_frame`.
+    #[test]
+    fn test_render_entry_layout_catches_panic() {
+        use crate::error::RenderError;
+        use crate::storage::RenderEntry;
+        use flui_types::Size;
+
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+
+        let mut entry =
+            RenderEntry::<crate::protocol::BoxProtocol>::new(Box::new(PanickingLayoutBox::new())
+                as Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>);
+
+        let result = entry.layout(crate::constraints::BoxConstraints::tight(Size::ZERO));
+
+        std::panic::set_hook(prev);
+
+        let err = result.expect_err("perform_layout_raw should panic, surface as Err");
+        match err {
+            RenderError::Poisoned { phase, .. } => {
+                assert_eq!(phase, "layout", "phase should be 'layout'");
+            }
+            other => panic!("expected RenderError::Poisoned, got {other:?}"),
+        }
+
+        // After a poisoned layout, the entry's NEEDS_LAYOUT flag is
+        // still set (geometry was never updated).
+        assert!(
+            entry.needs_layout(),
+            "needs_layout should remain true on the panic path"
+        );
+    }
+
+    /// `RenderObject::debug_name` returns the concrete type name via
+    /// vtable dispatch through `core::any::type_name::<Self>()` in the
+    /// monomorphized default body. This is the static identifier used
+    /// in `RenderError::Poisoned`.
+    #[test]
+    fn test_debug_name_via_dyn_dispatch() {
+        let panicking: Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>> =
+            Box::new(PanickingPaintBox::new());
+
+        let name = panicking.debug_name();
+        // Type names include the module path. We only assert that it
+        // contains the concrete type's identifier to keep the test
+        // independent of compiler-version formatting.
+        assert!(
+            name.contains("PanickingPaintBox"),
+            "debug_name() should resolve to the concrete type via vtable; got `{name}`"
+        );
     }
 }

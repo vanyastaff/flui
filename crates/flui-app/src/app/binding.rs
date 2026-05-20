@@ -374,12 +374,25 @@ impl AppBinding {
         // (2026-05-20): the four `flush_*` calls are gone; `run_frame`
         // is the single entry point and the layer tree comes back as
         // its second return value.
+        //
+        // Mythos Step 12 (2026-05-20): `run_frame` now returns
+        // `(PipelineOwner<Idle>, RenderResult<Option<LayerTree>>)`. The
+        // owner always comes back at Idle, so we always restore it. If
+        // the frame errored (e.g. a render object panicked and was
+        // caught by `catch_unwind`), we log via tracing and drop the
+        // frame -- the owner is still usable for the next call.
         let layer_tree = {
             let mut guard = self.shared_pipeline_owner.write();
             let owner = std::mem::take(&mut *guard);
-            let (owner, layer_tree) = owner.run_frame();
+            let (owner, result) = owner.run_frame();
             *guard = owner;
-            layer_tree
+            match result {
+                Ok(layer_tree) => layer_tree,
+                Err(e) => {
+                    tracing::error!(error = ?e, "draw_frame: pipeline failed, dropping frame");
+                    None
+                }
+            }
         };
 
         // Phase 4: Create Scene from LayerTree

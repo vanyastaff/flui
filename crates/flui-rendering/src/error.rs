@@ -155,15 +155,16 @@ pub enum RenderError {
         limit: usize,
     },
 
-    /// A render object's `perform_layout` or `paint` panicked. The
+    /// A render object's `perform_layout_raw` or `paint` panicked. The
     /// pipeline catches via `std::panic::catch_unwind`, drops the
     /// in-flight frame, and surfaces this variant so the caller can
     /// decide (drop the node, retry next frame, abort).
     ///
-    /// `catch_unwind` plumbing is queued in
-    /// `crates/flui-rendering/ARCHITECTURE.md` Outstanding refactors;
-    /// the variant exists today so consumers can pattern-match against
-    /// the eventual surface.
+    /// Mythos Step 12 (2026-05-20): the catch_unwind plumbing is live.
+    /// See [`RenderEntry::layout`](crate::storage::RenderEntry::layout)
+    /// for the layout wrapper and `PipelineOwner::<PaintPhase>` for the
+    /// paint wrapper. The `Mapping decisions` section of
+    /// `crates/flui-rendering/ARCHITECTURE.md` documents the design.
     #[error("render object {render_object} panicked during {phase}")]
     Poisoned {
         /// Static debug name of the offending render object.

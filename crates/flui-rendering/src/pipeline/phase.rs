@@ -44,28 +44,34 @@
 //! }
 //! ```
 //!
-//! The legitimate transition sequence type-checks and runs:
+//! The legitimate transition sequence type-checks and runs. Each `run_*`
+//! returns [`crate::error::RenderResult<()>`] (Mythos Step 12); `?` or
+//! `expect` propagates panics-turned-errors from third-party render
+//! objects:
 //!
 //! ```
 //! use flui_rendering::pipeline::PipelineOwner;
 //! let owner = PipelineOwner::new();        // <Idle>
 //! let mut owner = owner.into_layout();     // <Layout>
-//! owner.run_layout();
+//! owner.run_layout().unwrap();
 //! let mut owner = owner.into_compositing();// <Compositing>
-//! owner.run_compositing();
+//! owner.run_compositing().unwrap();
 //! let mut owner = owner.into_paint();      // <PaintPhase>
-//! owner.run_paint();
+//! owner.run_paint().unwrap();
 //! let mut owner = owner.into_semantics();  // <Semantics>
-//! owner.run_semantics();
+//! owner.run_semantics().unwrap();
 //! let _owner = owner.finish();             // back to <Idle>
 //! ```
 //!
-//! And the convenience orchestrator:
+//! And the convenience orchestrator. `run_frame` always returns the
+//! owner at [`Idle`] alongside a [`crate::error::RenderResult`] for
+//! the layer tree:
 //!
 //! ```
 //! use flui_rendering::pipeline::PipelineOwner;
 //! let owner = PipelineOwner::new();
-//! let (_owner, _layer_tree) = owner.run_frame();
+//! let (_owner, result) = owner.run_frame();
+//! let _layer_tree = result.unwrap();
 //! ```
 //!
 //! ## States

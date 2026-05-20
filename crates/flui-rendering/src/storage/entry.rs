@@ -240,21 +240,49 @@ impl<P: Protocol> RenderEntry<P> {
     /// object, stores the resulting geometry in state, and clears the
     /// `NEEDS_LAYOUT` flag.
     ///
-    /// Returns the computed geometry.
-    pub fn layout(&mut self, constraints: ProtocolConstraints<P>) -> ProtocolGeometry<P>
+    /// The `perform_layout_raw` call is wrapped in
+    /// [`std::panic::catch_unwind`]; a panic surfaces as
+    /// [`crate::error::RenderError::Poisoned`] (Mythos Step 12). On the
+    /// panic path the state's geometry is **not** updated -- the previous
+    /// geometry (or `None` if this is the first layout) remains valid.
+    /// The `NEEDS_LAYOUT` flag is also left set so the pipeline can retry
+    /// next frame after the offending node has been removed or fixed.
+    ///
+    /// Returns the computed geometry on success.
+    pub fn layout(
+        &mut self,
+        constraints: ProtocolConstraints<P>,
+    ) -> crate::error::RenderResult<ProtocolGeometry<P>>
     where
         ProtocolGeometry<P>: Clone,
         ProtocolConstraints<P>: Clone,
     {
-        // Perform layout
-        let geometry = self.render_object.perform_layout_raw(constraints.clone());
+        // Capture the debug name BEFORE the &mut reborrow -- a shared
+        // borrow against `&*self.render_object` cannot coexist with the
+        // &mut needed inside the unwind closure, so we read the name
+        // upfront and let it outlive the closure.
+        let debug_name = self.render_object.debug_name();
 
-        // Update state
+        // SAFETY of AssertUnwindSafe: the render object's internal state
+        // is opaque to us. If it panics, we treat the state as torn and
+        // surface RenderError::Poisoned -- callers are required to drop
+        // or replace the node before reusing it. The pipeline-side state
+        // (geometry / constraints / flags) on `self.state` is not touched
+        // before the panic site, so the render tree stays consistent.
+        let render_object = &mut *self.render_object;
+        let constraints_for_call = constraints.clone();
+        let geometry = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            render_object.perform_layout_raw(constraints_for_call)
+        }))
+        .map_err(|_| crate::error::RenderError::poisoned(debug_name, "layout"))?;
+
+        // Update state -- only on the success path. On panic, state remains
+        // untouched and NEEDS_LAYOUT stays set so a retry is possible.
         self.state.set_geometry(geometry.clone());
         self.state.set_constraints(constraints);
         self.state.clear_needs_layout();
 
-        geometry
+        Ok(geometry)
     }
 }
 

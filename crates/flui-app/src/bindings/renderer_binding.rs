@@ -401,13 +401,24 @@ impl RendererBinding for RenderingFlutterBinding {
         // `run_frame()` orchestration; semantics now runs inside
         // run_frame regardless of `send_frames_to_engine`, so the only
         // gated work below is the per-view composite handoff.
+        //
+        // Mythos Step 12 (2026-05-20): `run_frame` returns
+        // `(PipelineOwner<Idle>, RenderResult<Option<LayerTree>>)`. The
+        // owner is always restored; on error the frame is dropped and
+        // logged via tracing.
         let root_owner = self.root_pipeline_owner();
         let layer_tree = {
             let mut guard = root_owner.write();
             let owner = std::mem::take(&mut *guard);
-            let (owner, layer_tree) = owner.run_frame();
+            let (owner, result) = owner.run_frame();
             *guard = owner;
-            layer_tree
+            match result {
+                Ok(layer_tree) => layer_tree,
+                Err(e) => {
+                    tracing::error!(error = ?e, "draw_frame: pipeline failed, dropping frame");
+                    None
+                }
+            }
         };
 
         // Phase 6: Composite frames (only if sending frames)
