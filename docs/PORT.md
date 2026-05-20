@@ -176,7 +176,7 @@ Four other crates carry `crates/<crate>/docs/ARCHITECTURE.md` files (`flui-paint
 | `flui-types` | Not yet templated | Active |
 | `flui-tree` | Not yet templated | Active |
 | `flui-platform` | Not yet templated | Active |
-| `flui-painting` | `crates/flui-painting/docs/ARCHITECTURE.md` (pre-template) | Active |
+| [`flui-painting`](../crates/flui-painting/ARCHITECTURE.md) | Templated 2026-05-20 (Mythos chain) | Active |
 | `flui-semantics` | Not yet templated | Active |
 | `flui-scheduler` | Not yet templated | Active |
 | [`flui-layer`](../crates/flui-layer/ARCHITECTURE.md) | Templated 2026-05-20 (Mythos chain) | Active |
