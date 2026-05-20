@@ -68,6 +68,16 @@ The *funnel* signatures (`tree.rs::insert_box`, view → render `From` impls) ac
 
 **Regex:** `:\s*Vec<\s*Box<\s*dyn\s+View|:\s*Box<\s*dyn\s+View` constrained to `crates/flui-view/src/element/child_storage.rs` and storage struct definitions in `crates/flui-view/src/element/**`.
 
+### 7. `Arc<Mutex<*Renderer | *Pool | wgpu::*>>` field in `flui-engine` wgpu module 🔮
+
+**Forward-looking** — added in Mythos Step 9 of the `flui-engine` chain. Catches regressions of the `Arc<parking_lot::Mutex<OffscreenRenderer>>` and `Arc<Mutex<TexturePoolInner>>` shapes documented as Outstanding refactors in [`crates/flui-engine/ARCHITECTURE.md`](../crates/flui-engine/ARCHITECTURE.md). Today's known sites are excluded via file-glob (`!**/texture_pool.rs`, `!**/renderer.rs`, `!**/backend.rs`) so the trigger reports clean post-chain; when the corresponding Outstanding refactor lands, the file-glob exclusions go away.
+
+**Why:** the wgpu single-mutator runtime invariant means `Arc<Mutex<T>>` on engine subsystems hides a single-thread access pattern behind shared-mutability ceremony. The lock is uncontended in production but the shape mismatches the type-level invariant; a future regression would re-introduce the same maintenance burden.
+
+**Back-references:** verdict §12 rejected design #2 (`Arc<RwLock<Renderer>>` shared); strategy clause "single owner of wgpu resources."
+
+**Regex:** `Arc<\s*(parking_lot::)?(Mutex|RwLock)<\s*(super::)?\w*(Renderer|Pool)\b|Arc<\s*(parking_lot::)?(Mutex|RwLock)<\s*wgpu::` constrained to `crates/flui-engine/src/wgpu/`, with file-glob exclusions for the three Friction-log-tracked sites listed above.
+
 ### Reactive lint promotion
 
 Triggers grow reactively. A new trigger is added to this list when an anti-pattern is caught in review; it does not pre-exist its first observation.
@@ -216,7 +226,7 @@ just port-check               # silent on pass; lists each violation on fail
 just port-check-verbose       # prints "ok" lines for each passing trigger
 ```
 
-The underlying script lives at [`scripts/port-check.sh`](../scripts/port-check.sh). It runs six `rg` (ripgrep) invocations — one per refusal trigger — and filters out doc-comment matches. The regexes are derived directly from the trigger entries in this document; when a trigger changes here, the script changes too.
+The underlying script lives at [`scripts/port-check.sh`](../scripts/port-check.sh). It runs seven `rg` (ripgrep) invocations — one per refusal trigger — and filters out doc-comment matches. The regexes are derived directly from the trigger entries in this document; when a trigger changes here, the script changes too.
 
 **Cross-platform note.** The script is bash. On Windows, run via Git Bash or WSL — both ship with `bash` and modern `rg` on PATH. A PowerShell sibling is not provided in this iteration because the regex set is identical and dual-maintenance is not warranted at solo-maintainer scale.
 
