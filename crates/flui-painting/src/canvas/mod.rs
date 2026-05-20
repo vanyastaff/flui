@@ -144,6 +144,12 @@ impl Canvas {
         save_depth = self.save_stack.len(),
     ))]
     pub fn finish(self) -> DisplayList {
+        debug_assert!(
+            self.save_stack.is_empty(),
+            "Canvas finished with {} unrestored save() calls",
+            self.save_stack.len()
+        );
+
         if !self.save_stack.is_empty() {
             tracing::warn!(
                 unrestored_saves = self.save_stack.len(),
@@ -248,4 +254,3 @@ impl AsRef<DisplayList> for Canvas {
         &self.display_list
     }
 }
-
