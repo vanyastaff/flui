@@ -12,42 +12,14 @@ use parking_lot::RwLock;
 
 use crate::{context::CanvasContext, storage::RenderTree};
 
+use super::dirty::{DirtyNode, DirtySets};
+
 // ============================================================================
 // Pipeline ID Counter
 // ============================================================================
 
 /// Global counter for unique pipeline owner IDs.
 static PIPELINE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
-
-// ============================================================================
-// DirtyNode
-// ============================================================================
-
-/// A node that needs processing in one of the pipeline phases.
-///
-/// Stores both the node's `RenderId` (1-based) and its depth in the tree for
-/// efficient sorting. The `id` field is typed as `RenderId` to enforce the
-/// ID offset convention at the type level.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DirtyNode {
-    /// The render object identifier (1-based `RenderId`).
-    pub id: RenderId,
-    /// The depth of the node in the render tree (root = 0).
-    pub depth: usize,
-}
-
-impl DirtyNode {
-    /// Creates a new dirty node entry.
-    ///
-    /// # Arguments
-    ///
-    /// * `id` - The `RenderId` of the render object (1-based).
-    /// * `depth` - The depth of the node in the tree.
-    #[inline]
-    pub fn new(id: RenderId, depth: usize) -> Self {
-        Self { id, depth }
-    }
-}
 
 // ============================================================================
 // PipelineOwner
@@ -104,18 +76,10 @@ pub struct PipelineOwner {
     #[allow(clippy::type_complexity)]
     on_semantics_owner_disposed: Option<Box<dyn Fn() + Send + Sync>>,
 
-    /// Nodes needing layout (sorted shallow-first during flush).
-    nodes_needing_layout: Vec<DirtyNode>,
-
-    /// Nodes needing compositing bits update (sorted shallow-first during
-    /// flush).
-    nodes_needing_compositing_bits_update: Vec<DirtyNode>,
-
-    /// Nodes needing paint (sorted deep-first during flush).
-    nodes_needing_paint: Vec<DirtyNode>,
-
-    /// Nodes needing semantics update (sorted shallow-first during flush).
-    nodes_needing_semantics: Vec<DirtyNode>,
+    /// Co-located dirty sets for the four pipeline phases. See
+    /// [`DirtySets`](super::dirty::DirtySets). Replaces what used to be four
+    /// parallel `Vec<DirtyNode>` fields scattered across the struct.
+    dirty: DirtySets,
 
     /// Child pipeline owners.
     children: Vec<Arc<RwLock<PipelineOwner>>>,
@@ -142,8 +106,8 @@ impl std::fmt::Debug for PipelineOwner {
             .field("id", &self.id)
             .field("root_id", &self.root_id)
             .field("render_tree_len", &self.render_tree.len())
-            .field("nodes_needing_layout", &self.nodes_needing_layout.len())
-            .field("nodes_needing_paint", &self.nodes_needing_paint.len())
+            .field("nodes_needing_layout", &self.dirty.needs_layout.len())
+            .field("nodes_needing_paint", &self.dirty.needs_paint.len())
             .field("children", &self.children.len())
             .field("debug_doing_layout", &self.debug_doing_layout)
             .field("debug_doing_paint", &self.debug_doing_paint)
@@ -169,10 +133,7 @@ impl PipelineOwner {
             on_need_visual_update: None,
             on_semantics_owner_created: None,
             on_semantics_owner_disposed: None,
-            nodes_needing_layout: Vec::new(),
-            nodes_needing_compositing_bits_update: Vec::new(),
-            nodes_needing_paint: Vec::new(),
-            nodes_needing_semantics: Vec::new(),
+            dirty: DirtySets::new(),
             children: Vec::new(),
             debug_doing_layout: false,
             debug_doing_paint: false,
@@ -200,10 +161,7 @@ impl PipelineOwner {
             on_need_visual_update: on_need_visual_update.map(|f| Box::new(f) as _),
             on_semantics_owner_created: on_semantics_owner_created.map(|f| Box::new(f) as _),
             on_semantics_owner_disposed: on_semantics_owner_disposed.map(|f| Box::new(f) as _),
-            nodes_needing_layout: Vec::new(),
-            nodes_needing_compositing_bits_update: Vec::new(),
-            nodes_needing_paint: Vec::new(),
-            nodes_needing_semantics: Vec::new(),
+            dirty: DirtySets::new(),
             children: Vec::new(),
             debug_doing_layout: false,
             debug_doing_paint: false,
@@ -448,7 +406,7 @@ impl PipelineOwner {
     /// [`flush_layout`](Self::flush_layout) pass.
     #[inline]
     pub fn nodes_needing_layout(&self) -> &[DirtyNode] {
-        &self.nodes_needing_layout
+        &self.dirty.needs_layout
     }
 
     /// Returns the nodes needing paint.
@@ -457,19 +415,19 @@ impl PipelineOwner {
     /// [`flush_paint`](Self::flush_paint) pass.
     #[inline]
     pub fn nodes_needing_paint(&self) -> &[DirtyNode] {
-        &self.nodes_needing_paint
+        &self.dirty.needs_paint
     }
 
     /// Returns the nodes needing compositing bits update.
     #[inline]
     pub fn nodes_needing_compositing_bits_update(&self) -> &[DirtyNode] {
-        &self.nodes_needing_compositing_bits_update
+        &self.dirty.needs_compositing
     }
 
     /// Returns the nodes needing semantics update.
     #[inline]
     pub fn nodes_needing_semantics(&self) -> &[DirtyNode] {
-        &self.nodes_needing_semantics
+        &self.dirty.needs_semantics
     }
 
     /// Adds a node to the layout dirty list.
@@ -479,8 +437,7 @@ impl PipelineOwner {
     /// * `node_id` - The `RenderId` of the render object (1-based)
     /// * `depth` - The depth of the node in the render tree
     pub fn add_node_needing_layout(&mut self, node_id: RenderId, depth: usize) {
-        self.nodes_needing_layout
-            .push(DirtyNode::new(node_id, depth));
+        self.dirty.needs_layout.push(DirtyNode::new(node_id, depth));
     }
 
     /// Adds a node to the paint dirty list.
@@ -490,8 +447,7 @@ impl PipelineOwner {
     /// * `node_id` - The `RenderId` of the render object (1-based)
     /// * `depth` - The depth of the node in the render tree
     pub fn add_node_needing_paint(&mut self, node_id: RenderId, depth: usize) {
-        self.nodes_needing_paint
-            .push(DirtyNode::new(node_id, depth));
+        self.dirty.needs_paint.push(DirtyNode::new(node_id, depth));
     }
 
     /// Adds a node to the compositing bits dirty list.
@@ -501,7 +457,8 @@ impl PipelineOwner {
     /// * `node_id` - The `RenderId` of the render object (1-based)
     /// * `depth` - The depth of the node in the render tree
     pub fn add_node_needing_compositing_bits_update(&mut self, node_id: RenderId, depth: usize) {
-        self.nodes_needing_compositing_bits_update
+        self.dirty
+            .needs_compositing
             .push(DirtyNode::new(node_id, depth));
     }
 
@@ -512,7 +469,8 @@ impl PipelineOwner {
     /// * `node_id` - The `RenderId` of the render object (1-based)
     /// * `depth` - The depth of the node in the render tree
     pub fn add_node_needing_semantics(&mut self, node_id: RenderId, depth: usize) {
-        self.nodes_needing_semantics
+        self.dirty
+            .needs_semantics
             .push(DirtyNode::new(node_id, depth));
     }
 
@@ -564,16 +522,16 @@ impl PipelineOwner {
     ///
     /// After processing own nodes, recursively flushes child pipeline owners.
     pub fn flush_layout(&mut self) {
-        tracing::debug!("flush_layout: {} nodes", self.nodes_needing_layout.len());
+        tracing::debug!("flush_layout: {} nodes", self.dirty.needs_layout.len());
 
         // Process own dirty nodes if any
         // Flutter pattern: while loop to handle nodes added during layout
-        while !self.nodes_needing_layout.is_empty() {
+        while !self.dirty.needs_layout.is_empty() {
             self.debug_doing_layout = true;
 
             // Take the dirty nodes and replace with empty vec
             // This allows new nodes to be added during layout
-            let mut dirty_nodes = std::mem::take(&mut self.nodes_needing_layout);
+            let mut dirty_nodes = std::mem::take(&mut self.dirty.needs_layout);
 
             // Sort by depth (shallow first) - parents before children
             // Flutter: dirtyNodes.sort((a, b) => a.depth - b.depth)
@@ -703,12 +661,13 @@ impl PipelineOwner {
     pub fn flush_compositing_bits(&mut self) {
         tracing::debug!(
             "flush_compositing_bits: {} nodes",
-            self.nodes_needing_compositing_bits_update.len()
+            self.dirty.needs_compositing.len()
         );
 
         // Sort by depth (shallow first)
         // Flutter: _nodesNeedingCompositingBitsUpdate.sort((a, b) => a.depth - b.depth)
-        self.nodes_needing_compositing_bits_update
+        self.dirty
+            .needs_compositing
             .sort_unstable_by_key(|node| node.depth);
 
         // Process dirty nodes
@@ -721,14 +680,14 @@ impl PipelineOwner {
         //
         // Currently we just clear the list - compositing works but
         // may not be optimally batched.
-        for node in &self.nodes_needing_compositing_bits_update {
+        for node in &self.dirty.needs_compositing {
             tracing::trace!(
                 "compositing bits update: node id={} depth={} (batching not implemented)",
                 node.id,
                 node.depth
             );
         }
-        self.nodes_needing_compositing_bits_update.clear();
+        self.dirty.needs_compositing.clear();
 
         // Flush children
         for child in &self.children {
@@ -751,14 +710,14 @@ impl PipelineOwner {
     ///
     /// After processing own nodes, recursively flushes child pipeline owners.
     pub fn flush_paint(&mut self) {
-        tracing::debug!("flush_paint: {} nodes", self.nodes_needing_paint.len());
+        tracing::debug!("flush_paint: {} nodes", self.dirty.needs_paint.len());
 
         // Process own dirty nodes if any
-        if !self.nodes_needing_paint.is_empty() {
+        if !self.dirty.needs_paint.is_empty() {
             self.debug_doing_paint = true;
 
             // Take dirty nodes and replace with empty vec
-            let dirty_nodes = std::mem::take(&mut self.nodes_needing_paint);
+            let dirty_nodes = std::mem::take(&mut self.dirty.needs_paint);
 
             // Sort by depth (deep first) - children before parents
             // Flutter: dirtyNodes.sort((a, b) => b.depth - a.depth)
@@ -988,16 +947,16 @@ impl PipelineOwner {
 
         tracing::debug!(
             "flush_semantics: {} nodes",
-            self.nodes_needing_semantics.len()
+            self.dirty.needs_semantics.len()
         );
 
         self.debug_doing_semantics = true;
 
         // Filter out nodes that still need layout (they're not ready for semantics)
         // Flutter: .where((object) => !object._needsLayout && object.owner == this)
-        let nodes_to_process: Vec<DirtyNode> = self.nodes_needing_semantics.to_vec();
+        let nodes_to_process: Vec<DirtyNode> = self.dirty.needs_semantics.to_vec();
 
-        self.nodes_needing_semantics.clear();
+        self.dirty.needs_semantics.clear();
 
         // Semantics system is not yet implemented
         if !nodes_to_process.is_empty() {
@@ -1055,29 +1014,29 @@ impl PipelineOwner {
 
     /// Returns the total number of dirty nodes across all lists.
     pub fn dirty_node_count(&self) -> usize {
-        self.nodes_needing_layout.len()
-            + self.nodes_needing_compositing_bits_update.len()
-            + self.nodes_needing_paint.len()
-            + self.nodes_needing_semantics.len()
+        self.dirty.needs_layout.len()
+            + self.dirty.needs_compositing.len()
+            + self.dirty.needs_paint.len()
+            + self.dirty.needs_semantics.len()
     }
 
     /// Returns whether there are any dirty nodes.
     #[inline]
     pub fn has_dirty_nodes(&self) -> bool {
-        !self.nodes_needing_layout.is_empty()
-            || !self.nodes_needing_compositing_bits_update.is_empty()
-            || !self.nodes_needing_paint.is_empty()
-            || !self.nodes_needing_semantics.is_empty()
+        !self.dirty.needs_layout.is_empty()
+            || !self.dirty.needs_compositing.is_empty()
+            || !self.dirty.needs_paint.is_empty()
+            || !self.dirty.needs_semantics.is_empty()
     }
 
     /// Clears all dirty node lists without processing them.
     ///
     /// Use with caution - this discards pending work.
     pub fn clear_all_dirty_nodes(&mut self) {
-        self.nodes_needing_layout.clear();
-        self.nodes_needing_compositing_bits_update.clear();
-        self.nodes_needing_paint.clear();
-        self.nodes_needing_semantics.clear();
+        self.dirty.needs_layout.clear();
+        self.dirty.needs_compositing.clear();
+        self.dirty.needs_paint.clear();
+        self.dirty.needs_semantics.clear();
     }
 }
 

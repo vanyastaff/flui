@@ -6,6 +6,7 @@
 //! 3. Paint - generate display lists
 //! 4. Semantics - build accessibility tree
 
+mod dirty;
 mod owner;
 
 // Re-export Clip from flui_types
@@ -15,8 +16,9 @@ pub use flui_types::painting::Clip;
 // Re-export additional types from flui_types::painting for convenience
 pub use flui_types::painting::{BlendMode, ClipOp, FilterQuality, ImageFilter, PointMode, Shader};
 // Re-export canvas types from flui_types
+pub use dirty::{DirtyNode, DirtySets};
 pub use flui_types::painting::{BlurStyle, StrokeCap, StrokeJoin, TileMode};
-pub use owner::{DirtyNode, PipelineOwner};
+pub use owner::PipelineOwner;
 
 // Re-export contexts from context module (canonical location)
 pub use crate::context::{Canvas, CanvasContext, ClipContext, Paint, PaintStyle, Picture};
