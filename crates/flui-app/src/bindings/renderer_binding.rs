@@ -42,7 +42,7 @@ use flui_foundation::{BindingBase, HasInstance, impl_binding_singleton};
 use flui_interaction::binding::GestureBinding;
 use flui_painting::PaintingBinding;
 use flui_rendering::{
-    binding::{PipelineManifold, RendererBinding, ViewHitTestable},
+    binding::RendererBinding,
     hit_testing::HitTestResult,
     input::MouseTracker,
     pipeline::PipelineOwner,
@@ -331,10 +331,12 @@ impl BindingBase for RenderingFlutterBinding {
 impl_binding_singleton!(RenderingFlutterBinding);
 
 // ============================================================================
-// PipelineManifold Implementation
+// RendererBinding Implementation
 // ============================================================================
 
-impl PipelineManifold for RenderingFlutterBinding {
+impl RendererBinding for RenderingFlutterBinding {
+    // ---- formerly PipelineManifold ----
+
     fn request_visual_update(&self) {
         Scheduler::instance().schedule_frame(Box::new(|_timing| {
             // Visual update frame callback
@@ -353,13 +355,9 @@ impl PipelineManifold for RenderingFlutterBinding {
         let mut listeners = self.semantics_listeners.write();
         listeners.retain(|l| !Arc::ptr_eq(l, listener));
     }
-}
 
-// ============================================================================
-// ViewHitTestable Implementation
-// ============================================================================
+    // ---- formerly ViewHitTestable ----
 
-impl ViewHitTestable for RenderingFlutterBinding {
     fn hit_test_in_view(&self, result: &mut HitTestResult, position: Offset, view_id: u64) {
         let views = self.render_views.read();
         if let Some(view) = views.get(&view_id) {
@@ -367,13 +365,9 @@ impl ViewHitTestable for RenderingFlutterBinding {
             view_guard.hit_test(result, position);
         }
     }
-}
 
-// ============================================================================
-// RendererBinding Implementation
-// ============================================================================
+    // ---- RendererBinding proper ----
 
-impl RendererBinding for RenderingFlutterBinding {
     fn root_pipeline_owner(&self) -> &RwLock<PipelineOwner> {
         &self.root_pipeline_owner
     }

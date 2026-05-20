@@ -116,9 +116,8 @@ pub mod prelude {
     pub use crate::{
         arity::{Arity, Leaf, Optional, Single, Variable},
         binding::{
-            HitTestDispatcher, PipelineManifold, RendererBinding, ViewHitTestable,
-            debug_dump_layer_tree, debug_dump_pipeline_owner_tree, debug_dump_render_tree,
-            debug_dump_semantics_tree,
+            RendererBinding, debug_dump_layer_tree, debug_dump_pipeline_owner_tree,
+            debug_dump_render_tree, debug_dump_semantics_tree,
         },
         delegates::{
             AspectRatioDelegate, CenterLayoutDelegate, CustomClipper, CustomPainter, FlowDelegate,

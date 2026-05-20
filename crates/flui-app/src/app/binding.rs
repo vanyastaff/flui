@@ -462,7 +462,7 @@ impl AppBinding {
                 self.gestures
                     .handle_pointer_event(&pointer_event, |position| {
                         // Perform rendering-layer hit test through the RenderView
-                        use flui_rendering::binding::ViewHitTestable;
+                        use flui_rendering::binding::RendererBinding;
                         let renderer = self.renderer.read();
                         let mut render_result = flui_rendering::hit_testing::HitTestResult::new();
                         let offset = flui_types::Offset::new(position.dx, position.dy);

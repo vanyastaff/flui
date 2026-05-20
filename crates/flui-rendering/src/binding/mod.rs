@@ -1,109 +1,36 @@
-//! Renderer binding traits - interfaces for the rendering system.
+//! Renderer binding trait -- the integration point between the rendering
+//! system and the application layer.
 //!
-//! This module provides traits for integrating the rendering system
-//! with the application layer. The concrete implementations live in `flui_app`.
+//! Concrete implementations live in `flui_app`.
 //!
 //! # Flutter Equivalence
 //!
-//! This corresponds to Flutter's `rendering/binding.dart`:
-//! - [`PipelineManifold`] - Interface for pipeline owner tree management
-//! - [`RendererBinding`] - Main mixin for rendering integration
-//! - [`HitTestDispatcher`] - Interface for hit test event dispatching
+//! Corresponds to Flutter's `rendering/binding.dart` `RendererBinding`
+//! mixin. Flutter's `PipelineManifold` and `HitTestable`-on-`RendererBinding`
+//! mixins are folded into this single trait. The `HitTestDispatcher` mixin
+//! (Flutter's `GestureBinding`-side dispatch) is omitted entirely -- it had
+//! zero production implementations in FLUI.
 //!
 //! # Architecture
 //!
 //! ```text
-//! flui_app::RenderingFlutterBinding
-//!     implements RendererBinding
-//!         uses PipelineManifold
-//!         uses HitTestDispatcher
+//! flui_app::RenderingFlutterBinding implements RendererBinding
 //! ```
+//!
+//! Mythos Step 4 (2026-05-20): the three-trait stack (`PipelineManifold`,
+//! `HitTestDispatcher`, `ViewHitTestable`) was collapsed. See
+//! `docs/designs/2026-05-20-mythos-flui-rendering-redesign.md` Section 12.
 
 use std::{collections::HashMap, sync::Arc};
 
 use parking_lot::RwLock;
 
 use crate::{
-    hit_testing::{HitTestResult, PointerEvent},
+    hit_testing::HitTestResult,
     input::MouseTracker,
     pipeline::PipelineOwner,
     view::{RenderView, ViewConfiguration},
 };
-
-// ============================================================================
-// PipelineManifold
-// ============================================================================
-
-/// Interface for managing the pipeline owner tree and semantics.
-///
-/// This trait is implemented by the binding to provide services to pipeline
-/// owners in the tree. It acts as a bridge between PipelineOwner and the
-/// binding's scheduling/semantics systems.
-///
-/// # Flutter Equivalence
-///
-/// Corresponds to Flutter's `PipelineManifold` class.
-pub trait PipelineManifold: Send + Sync {
-    /// Request that the visual display be updated.
-    ///
-    /// This is called by pipeline owners when they have work to do.
-    /// The binding should schedule a frame in response.
-    fn request_visual_update(&self);
-
-    /// Whether semantics are currently enabled.
-    ///
-    /// When true, the framework will maintain the semantics tree.
-    fn semantics_enabled(&self) -> bool;
-
-    /// Add a listener for semantics enabled changes.
-    fn add_semantics_enabled_listener(&self, listener: Arc<dyn Fn(bool) + Send + Sync>);
-
-    /// Remove a previously added semantics enabled listener.
-    fn remove_semantics_enabled_listener(&self, listener: &Arc<dyn Fn(bool) + Send + Sync>);
-}
-
-// ============================================================================
-// HitTestDispatcher
-// ============================================================================
-
-/// Interface for dispatching hit test results to targets.
-///
-/// # Flutter Equivalence
-///
-/// This is part of Flutter's `GestureBinding` functionality.
-pub trait HitTestDispatcher: Send + Sync {
-    /// Dispatch a pointer event to all targets in the hit test result.
-    fn dispatch_event(&self, event: &PointerEvent, result: &HitTestResult);
-}
-
-// ============================================================================
-// ViewHitTestable
-// ============================================================================
-
-/// Interface for objects that can be hit tested within a specific view.
-///
-/// This is distinct from `flui_interaction::HitTestable`, which operates on
-/// individual render objects without a view context. `ViewHitTestable` adds
-/// the `view_id` parameter to route hit tests to the correct render tree.
-///
-/// # Flutter Equivalence
-///
-/// Corresponds to Flutter's `HitTestable` mixin on `RendererBinding`.
-pub trait ViewHitTestable: Send + Sync {
-    /// Hit test at the given position in the given view.
-    ///
-    /// # Arguments
-    ///
-    /// * `result` - The hit test result to populate
-    /// * `position` - The position in logical pixels
-    /// * `view_id` - The ID of the view to hit test in
-    fn hit_test_in_view(
-        &self,
-        result: &mut HitTestResult,
-        position: flui_types::Offset,
-        view_id: u64,
-    );
-}
 
 // ============================================================================
 // RendererBinding
@@ -113,12 +40,17 @@ pub trait ViewHitTestable: Send + Sync {
 ///
 /// This trait provides the rendering system integration that bindings must
 /// implement. It manages multiple independent render trees, each rooted in
-/// a [`RenderView`].
+/// a [`RenderView`]. It also exposes the integration surface for visual-
+/// update requests, semantics enablement, and view-routed hit testing --
+/// historically split across `PipelineManifold` and `ViewHitTestable` mixins
+/// in Flutter, but unified here because every concrete binding implements
+/// all three together and the abstraction earned nothing.
 ///
 /// # Flutter Equivalence
 ///
 /// Corresponds to Flutter's `RendererBinding` mixin from
-/// `rendering/binding.dart`.
+/// `rendering/binding.dart`, plus the merged surface of `PipelineManifold`
+/// and the `HitTestable` mixin.
 ///
 /// # Responsibilities
 ///
@@ -127,6 +59,9 @@ pub trait ViewHitTestable: Send + Sync {
 /// - Creating [`ViewConfiguration`]s for views
 /// - Coordinating frame production via [`draw_frame`](Self::draw_frame)
 /// - Managing [`MouseTracker`] for hover events
+/// - Responding to visual-update requests from pipeline owners
+/// - Tracking semantics-enabled state and its listeners
+/// - Routing hit tests to the correct view's render tree
 ///
 /// # Frame Production
 ///
@@ -141,9 +76,44 @@ pub trait ViewHitTestable: Send + Sync {
 /// 5. **Paint** - [`flush_paint`](PipelineOwner::flush_paint)
 /// 6. **Compositing** - Send layers to GPU
 /// 7. **Semantics** - [`flush_semantics`](PipelineOwner::flush_semantics)
-pub trait RendererBinding: PipelineManifold + ViewHitTestable {
+pub trait RendererBinding: Send + Sync {
     // ========================================================================
-    // Pipeline Owner Tree
+    // Pipeline / Manifold (formerly PipelineManifold)
+    // ========================================================================
+
+    /// Request that the visual display be updated.
+    ///
+    /// Called by pipeline owners when they have work to do. The binding
+    /// should schedule a frame in response.
+    fn request_visual_update(&self);
+
+    /// Whether semantics are currently enabled.
+    fn semantics_enabled(&self) -> bool;
+
+    /// Add a listener for semantics-enabled changes.
+    fn add_semantics_enabled_listener(&self, listener: Arc<dyn Fn(bool) + Send + Sync>);
+
+    /// Remove a previously added semantics-enabled listener.
+    fn remove_semantics_enabled_listener(&self, listener: &Arc<dyn Fn(bool) + Send + Sync>);
+
+    // ========================================================================
+    // View-routed hit testing (formerly ViewHitTestable)
+    // ========================================================================
+
+    /// Hit test at the given position in the given view.
+    ///
+    /// Distinct from `flui_interaction::HitTestable`, which operates on
+    /// individual render objects without a view context. This adds the
+    /// `view_id` parameter to route hit tests to the correct render tree.
+    fn hit_test_in_view(
+        &self,
+        result: &mut HitTestResult,
+        position: flui_types::Offset,
+        view_id: u64,
+    );
+
+    // ========================================================================
+    // Pipeline owner tree
     // ========================================================================
 
     /// Returns the root pipeline owner.
@@ -440,16 +410,12 @@ pub fn debug_dump_pipeline_owner_tree<B: RendererBinding + ?Sized>(binding: &B) 
 mod tests {
     use super::*;
 
-    // Verify the traits are object-safe
-    fn _assert_pipeline_manifold_object_safe(_: &dyn PipelineManifold) {}
-    fn _assert_hit_test_dispatcher_object_safe(_: &dyn HitTestDispatcher) {}
-    fn _assert_view_hittestable_object_safe(_: &dyn ViewHitTestable) {}
+    // Verify the trait is object-safe.
+    fn _assert_renderer_binding_object_safe(_: &dyn RendererBinding) {}
 
     #[test]
-    fn test_traits_are_send_sync() {
+    fn test_renderer_binding_send_sync() {
         fn assert_send_sync<T: Send + Sync + ?Sized>() {}
-        assert_send_sync::<dyn PipelineManifold>();
-        assert_send_sync::<dyn HitTestDispatcher>();
-        assert_send_sync::<dyn ViewHitTestable>();
+        assert_send_sync::<dyn RendererBinding>();
     }
 }
