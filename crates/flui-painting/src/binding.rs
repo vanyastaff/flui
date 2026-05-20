@@ -1,16 +1,19 @@
 //! PaintingBinding - Binding for the painting library.
 //!
-//! Provides image caching, shader warm-up, and system font notifications.
+//! Provides image caching and system font notifications.
 //!
 //! # Flutter Equivalence
 //!
 //! Corresponds to Flutter's `PaintingBinding` mixin from
-//! `painting/binding.dart`.
+//! `painting/binding.dart`. Flutter's shader-warm-up subsystem was
+//! deleted in Mythos chain step 2 (decorative; `execute()` was a stub
+//! and no production caller relied on it). Real offscreen-canvas-backed
+//! warm-up is tracked in `crates/flui-painting/ARCHITECTURE.md`
+//! `## Outstanding refactors`.
 //!
 //! # Features
 //!
 //! - [`ImageCache`] - Caches decoded images for reuse
-//! - [`ShaderWarmUp`] - Pre-compiles shaders to avoid jank
 //! - System font change notifications
 //! - Memory pressure handling
 
@@ -23,10 +26,7 @@ use std::{
 };
 
 use flui_foundation::{BindingBase, HasInstance, impl_binding_singleton};
-use flui_types::{
-    Size,
-    geometry::{Pixels, px},
-};
+use flui_types::{Size, geometry::Pixels};
 use parking_lot::RwLock;
 
 // ============================================================================
@@ -239,59 +239,6 @@ impl ImageCache {
 }
 
 // ============================================================================
-// ShaderWarmUp
-// ============================================================================
-
-/// Trait for shader warm-up implementations.
-///
-/// Shader compilation can cause jank during animations. By pre-compiling
-/// shaders during startup, we can avoid this.
-///
-/// # Flutter Equivalence
-///
-/// Corresponds to Flutter's `ShaderWarmUp` class from
-/// `painting/shader_warm_up.dart`.
-///
-/// # Status
-///
-/// The Mythos chain (U1) deleted the dead canvas-recording trait that
-/// this trait's per-shape draw method consumed (zero production impls
-/// existed). The remaining trait surface (`size()` + `execute()`) is
-/// decorative; `execute()` is a stub. The entire `ShaderWarmUp`
-/// subsystem is slated for deletion in U2 of the same chain. Real
-/// offscreen-canvas-backed warm-up is tracked in
-/// `crates/flui-painting/ARCHITECTURE.md` `## Outstanding refactors`.
-pub trait ShaderWarmUp: Send + Sync {
-    /// The size of the canvas to use for warm-up.
-    ///
-    /// Defaults to 100x100 logical pixels.
-    fn size(&self) -> Size<Pixels> {
-        Size::new(px(100.0), px(100.0))
-    }
-
-    /// Executes the shader warm-up.
-    ///
-    /// This is called during binding initialization. Currently a stub --
-    /// a real implementation requires an offscreen canvas API that does
-    /// not yet exist in the workspace.
-    fn execute(&self) {
-        tracing::debug!("Executing shader warm-up with size {:?}", self.size());
-    }
-}
-
-/// Default shader warm-up.
-///
-/// Today this is an empty struct because the per-shape draw method that
-/// drew rect/rrect/circle shapes was deleted in U1 (it consumed a dead
-/// canvas-recording trait with zero production impls). The struct is
-/// retained as the singleton `ShaderWarmUp` impl until U2 deletes the
-/// trait entirely.
-#[derive(Debug, Default)]
-pub struct DefaultShaderWarmUp;
-
-impl ShaderWarmUp for DefaultShaderWarmUp {}
-
-// ============================================================================
 // SystemFontsNotifier
 // ============================================================================
 
@@ -343,20 +290,28 @@ impl SystemFontsNotifier {
 
 /// Binding for the painting library.
 ///
-/// Provides image caching, shader warm-up, and system font notifications.
+/// Provides image caching and system font notifications.
 ///
 /// # Flutter Equivalence
 ///
 /// Corresponds to Flutter's `PaintingBinding` mixin.
+///
+/// # Trimmed surface (Mythos chain U2/U3)
+///
+/// Flutter's shader-warm-up subsystem was deleted -- the trait had one
+/// stub impl whose `execute()` body documented "in a real implementation,
+/// we'd create an offscreen canvas here"; no production caller relied
+/// on warm-up to bootstrap shader compilation. The optional warm-up
+/// field on this binding, the `with_*` constructor variant, and the
+/// `set_*` setter all went with it. Real offscreen-canvas-backed
+/// warm-up is tracked in `crates/flui-painting/ARCHITECTURE.md`
+/// `## Outstanding refactors`.
 pub struct PaintingBinding {
     /// The image cache singleton.
     image_cache: ImageCache,
 
     /// System fonts notifier.
     system_fonts: SystemFontsNotifier,
-
-    /// Optional shader warm-up.
-    shader_warm_up: Option<Box<dyn ShaderWarmUp>>,
 }
 
 impl std::fmt::Debug for PaintingBinding {
@@ -367,7 +322,6 @@ impl std::fmt::Debug for PaintingBinding {
                 "image_cache_size_bytes",
                 &self.image_cache.current_size_bytes(),
             )
-            .field("has_shader_warm_up", &self.shader_warm_up.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -384,18 +338,6 @@ impl PaintingBinding {
         let mut binding = Self {
             image_cache: ImageCache::new(),
             system_fonts: SystemFontsNotifier::new(),
-            shader_warm_up: None,
-        };
-        binding.init_instances();
-        binding
-    }
-
-    /// Creates a painting binding with a custom shader warm-up.
-    pub fn with_shader_warm_up(warm_up: Box<dyn ShaderWarmUp>) -> Self {
-        let mut binding = Self {
-            image_cache: ImageCache::new(),
-            system_fonts: SystemFontsNotifier::new(),
-            shader_warm_up: Some(warm_up),
         };
         binding.init_instances();
         binding
@@ -414,13 +356,6 @@ impl PaintingBinding {
     /// Returns the system fonts notifier.
     pub fn system_fonts(&self) -> &SystemFontsNotifier {
         &self.system_fonts
-    }
-
-    /// Sets the shader warm-up.
-    ///
-    /// Must be called before [`init_instances`](BindingBase::init_instances).
-    pub fn set_shader_warm_up(&mut self, warm_up: Box<dyn ShaderWarmUp>) {
-        self.shader_warm_up = Some(warm_up);
     }
 
     /// Handles memory pressure by clearing the image cache.
@@ -446,12 +381,6 @@ impl PaintingBinding {
 
 impl BindingBase for PaintingBinding {
     fn init_instances(&mut self) {
-        // Execute shader warm-up if configured
-        if let Some(warm_up) = &self.shader_warm_up {
-            warm_up.execute();
-            tracing::debug!("Shader warm-up completed");
-        }
-
         tracing::info!("PaintingBinding initialized");
     }
 }
@@ -477,6 +406,8 @@ pub fn image_cache() -> &'static ImageCache {
 
 #[cfg(test)]
 mod tests {
+    use flui_types::geometry::px;
+
     use super::*;
 
     #[test]
