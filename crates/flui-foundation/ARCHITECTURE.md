@@ -1,5 +1,7 @@
 # Flutter Foundation Types - Complete Reference
 
+> **Template note (grafted 2026-05-19):** This document was retro-fitted to the per-crate `ARCHITECTURE.md` template defined in [`docs/PORT.md`](../../docs/PORT.md). The existing Flutter walk (sections 1-17) plays the role of `## Flutter source mapping`; the Architecture Decision Summary at the bottom plays the role of `## Mapping decisions`. The `## Thread safety`, `## Friction log`, and `## Outstanding refactors` sections were appended without rewriting the existing body.
+
 This document maps ALL types from Flutter's `foundation` library to their usage patterns across the Flutter codebase, providing guidance for FLUI implementation.
 
 ## Table of Contents
@@ -659,3 +661,39 @@ return SynchronousFuture<RestorationBucket?>(_rootBucket);
 | Tree storage | Class references | `Slab` with typed IDs |
 | Platform channels | `WriteBuffer/ReadBuffer` | `bytes` crate |
 | Binding system | Mixin composition | Trait composition |
+
+---
+
+## Thread safety
+
+`flui-foundation` is a Layer 0 crate (no FLUI dependencies); concurrency primitives are minimal and live at well-defined seams.
+
+| Site | Primitive | Where | Why |
+|------|-----------|-------|-----|
+| `BindingBase::INITIALIZED` flag | `&'static AtomicBool` | `binding.rs:135, 180-182` | One-shot initialisation guard for a binding singleton. Set-once, then read-only. Off any hot path. |
+| `GlobalKey` ID counter | `AtomicU64` (static) | `key.rs:140, 462` | Monotonic key allocator. `fetch_add` only, no contention pattern. Off any hot path. |
+| `Notifier::listeners` | `Arc<parking_lot::Mutex<HashMap<ListenerId, ListenerCallback>>>` | `notifier.rs:116, 140` | Listener registry held during register/unregister/notify. Notifier callbacks are invoked outside the lock (clone-then-iterate pattern established in [`docs/plans/2026-03-31-core-crates-hardening.md`](../../docs/plans/2026-03-31-core-crates-hardening.md) Task 3 for `SyncObserverList`). Not on the render hot path; consumed by the build phase and by `flui-reactivity` (currently disabled). |
+| `Notifier::next_id` | `Arc<AtomicUsize>` | `notifier.rs:117, 141` | Listener-ID allocator. `fetch_add` only. |
+
+No `RwLock` in `flui-foundation`. No primitive listed here sits inside `perform_layout` / `paint` / `View::build`.
+
+---
+
+## Friction log
+
+No active friction at the time of the graft (2026-05-19). The crate's surface is mature and the established patterns (`Id<T: Marker>` typed IDs, `thiserror` for errors, `parking_lot::Mutex` + clone-then-iterate for `Notifier`) match the strategy clauses without compromise.
+
+Latent question worth tracking — not a violation:
+
+- `Notifier`'s `Mutex<HashMap<ListenerId, ListenerCallback>>` works correctly today, but a re-entrant listener that calls `add_listener` from inside a notify callback would have to take the same lock while the notify path is iterating a clone. The clone-then-iterate pattern prevents deadlock but allows a registration in round N to surface only in round N+1. Documented behaviour; not broken.
+
+---
+
+## Outstanding refactors
+
+Items below are concrete cleanups visible from `flui-foundation` outward. Each is sized for an `/aif-implement` dispatch without out-of-band clarification.
+
+- **`Notifier` re-entrancy semantics** — document the round-N-vs-round-N+1 behaviour described in `## Friction log` in the `Notifier` rustdoc so callers can reason about it. Trivial doc change; no code touch.
+- **Architecture Decision Summary follow-through** — the summary table at the top of this document declares "State notification → Signals (`flui-reactivity`)" but `flui-reactivity` is currently disabled in the workspace. When `flui-reactivity` is re-enabled, audit whether `Notifier`'s public API should be deprecated in favour of the signals surface, or whether both stay as a permanent split (`flui-foundation` for the trait, `flui-reactivity` for the reactive layer). Decision recorded here when made.
+
+---

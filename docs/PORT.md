@@ -169,7 +169,7 @@ Four other crates carry `crates/<crate>/docs/ARCHITECTURE.md` files (`flui-paint
 
 | Crate | `ARCHITECTURE.md` state | Status |
 | --- | --- | --- |
-| [`flui-foundation`](../crates/flui-foundation/ARCHITECTURE.md) | Templated (graft in progress) | Active |
+| [`flui-foundation`](../crates/flui-foundation/ARCHITECTURE.md) | Templated (grafted 2026-05-19) | Active |
 | [`flui-rendering`](../crates/flui-rendering/ARCHITECTURE.md) | ⏳ U3 will populate (exemplar instance) | Active |
 | `flui-types` | Not yet templated | Active |
 | `flui-tree` | Not yet templated | Active |
