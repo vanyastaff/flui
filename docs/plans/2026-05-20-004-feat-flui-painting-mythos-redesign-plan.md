@@ -777,14 +777,14 @@ This chain is purely internal refactor -- no user-facing API ships from `flui-pa
   - text_painter.rs 990 → text_painter/ 873 (-117)
   - binding.rs trimmed (~250 LOC removed via WarmUpCanvas + ShaderWarmUp + DefaultShaderWarmUp + 3 PaintingBinding methods deletion)
   - `DisplayList::commands_mut` deleted in U11 (3 LOC; was dead post-U10 demotion)
-- **New integration test files in `tests/`:** 4 added in U8 (`canvas_unit.rs`, `display_list_unit.rs`, `text_layout_unit.rs`, `text_painter_unit.rs`). Total integration tests grew to 230 across 13 files; lib tests at 23. Test count preserved or grew across every commit.
+- **New integration test files in `tests/`:** 4 added in U8 (`canvas_unit.rs`, `display_list_unit.rs`, `text_layout_unit.rs`, `text_painter_unit.rs`); 1 added during code-review fixup pass 2 (`text_layout_fallback.rs`, cfg-gated `not(feature = "text")`). Total integration tests at 142 across 12 files; lib tests at 23 (default features). Earlier drafts of this plan reported "230 across 13 files" — that number reflected the pre-fixup state where a redundant `tests/mod.rs` double-counted every test binary; deleting that file removed 69 duplicate runs without losing any actual assertions.
 - **God modules split:** 4 (canvas → 8 files, display_list → 6 files, text_layout → 5 files, text_painter → 4 files).
 - **Dead surface deleted:** `WarmUpCanvas` trait (4 abstract methods), `ShaderWarmUp` trait (1 stub impl), `DefaultShaderWarmUp` struct, `PaintingBinding::shader_warm_up` field + `with_shader_warm_up` constructor + `set_shader_warm_up` setter, `DisplayList::commands_mut` public method.
 - **Companion docs:** `docs/MIGRATION.md` stubbed (obsolete migration notes); `docs/{ARCHITECTURE,PERFORMANCE,README}.md` kept and linked from new templated `crates/flui-painting/ARCHITECTURE.md` at crate root.
 - **Verification gates passed:**
   - `cargo check --workspace` clean across all 14 commits (pre-existing flui-engine warning unchanged).
   - `cargo test -p flui-painting --lib` 23 passing.
-  - `cargo test -p flui-painting --tests` 230 passing across 13 integration files.
+  - `cargo test -p flui-painting --tests` 142 passing across 12 integration files (corrected post-fixup; see note in the bullet above).
   - `cargo build --no-default-features -p flui-painting` clean (fallback impl compiles standalone).
   - `bash scripts/port-check.sh -v` 6 triggers ok.
   - `cargo clippy -p flui-painting --lib --no-deps -- -D warnings` clean.
@@ -797,6 +797,30 @@ This chain is purely internal refactor -- no user-facing API ships from `flui-pa
   - Allocation hot path documented (audit F1-F5 in `docs/research/2026-05-20-flui-painting-alloc-audit.md`); optimisations filed as Outstanding refactors with named blockers.
   - Shader warm-up real implementation deferred (requires wgpu surface API).
   - Property tests, mutation testing, doctest sweep filed as Outstanding.
+
+### Code-review fixup pass (post-PR open)
+
+Two follow-up commits landed after PR #80 was opened, addressing the
+two findings the best-judgment fixer had to defer:
+
+1. `3a66bcf8 fix(flui-painting): cap ShaderMask/BackdropFilter
+   recursion at depth 64` — finding #19. Adds
+   `MAX_EFFECT_DEPTH = 64` cap on
+   `DrawCommand::with_opacity` / `apply_transform` recursion into
+   `ShaderMask` / `BackdropFilter` child `DisplayList`s. Public API
+   unchanged; saturation logs a `tracing::warn!` and clones the
+   subtree unchanged. Regression test
+   (`nested_shader_mask_opacity_depth_saturates_without_overflow`)
+   exercises a 256-deep chain.
+
+2. `21937c38 refactor(flui-painting): split canvas/sugar.rs into 6
+   concern modules` — finding #14. Splits the 674-LOC
+   `canvas/sugar.rs` into `canvas/sugar/{mod, batch, conditional,
+   grid, debug, shapes, chain}.rs` (one `impl Canvas` block per
+   concern, ~50–360 LOC each). Method surface unchanged.
+
+Both verified against the same gate set as U1–U14
+(`cargo build/test/clippy`, `port-check.sh 6/6`, workspace check).
 
 ---
 
