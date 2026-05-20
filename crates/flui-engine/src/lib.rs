@@ -95,7 +95,7 @@ pub use flui_layer::{
 };
 // Re-export Paint from flui_painting
 pub use flui_painting::Paint;
-pub use traits::{CommandRenderer, Painter};
+pub use traits::CommandRenderer;
 #[cfg(all(feature = "wgpu-backend", debug_assertions))]
 pub use wgpu::DebugBackend;
 // wgpu backend exports

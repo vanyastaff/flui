@@ -134,5 +134,4 @@ pub use vertex::{ImageInstance, PathVertex, RectInstance, RectVertex, Vertex};
 // Font loading utilities
 pub use font_loader::FontLoader;
 
-// Painter (WgpuPainter is the concrete implementation, Painter trait from crate::traits)
-pub use crate::traits::Painter;
+// Painter (WgpuPainter is the concrete implementation; Painter trait deleted in Mythos U5)

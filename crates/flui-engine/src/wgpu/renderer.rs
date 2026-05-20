@@ -39,7 +39,6 @@ use wgpu;
 
 use super::occlusion::OcclusionTracker;
 use crate::error::RenderError;
-use crate::traits::Painter;
 
 /// GPU backend capabilities
 #[derive(Debug, Clone)]

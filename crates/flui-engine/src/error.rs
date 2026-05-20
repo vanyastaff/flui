@@ -112,12 +112,6 @@ pub enum RenderError {
     // ========================================================================
     // Rendering errors
     // ========================================================================
-    /// Error during painting operations
-    ///
-    /// An error occurred while executing paint commands.
-    #[error("Painter error: {0}")]
-    PainterError(String),
-
     /// Shader compilation or linking failed
     ///
     /// The shader source couldn't be compiled or linked.
@@ -168,12 +162,6 @@ impl RenderError {
         E: Error + Send + Sync + 'static,
     {
         RenderError::DeviceCreation(Box::new(error))
-    }
-
-    /// Create a painter error from a string
-    #[must_use]
-    pub fn painter<S: Into<String>>(msg: S) -> Self {
-        RenderError::PainterError(msg.into())
     }
 
     /// Create a shader error from a string
@@ -240,10 +228,6 @@ mod tests {
         assert_eq!(
             RenderError::NoAdapter.to_string(),
             "No suitable GPU adapter found"
-        );
-        assert_eq!(
-            RenderError::painter("test error").to_string(),
-            "Painter error: test error"
         );
     }
 

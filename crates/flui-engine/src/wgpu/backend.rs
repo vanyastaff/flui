@@ -14,10 +14,7 @@ use flui_types::{
 use std::sync::Arc;
 
 use super::painter::WgpuPainter;
-use crate::{
-    commands::dispatch_command,
-    traits::{CommandRenderer, Painter},
-};
+use crate::{commands::dispatch_command, traits::CommandRenderer};
 
 /// wgpu backend implementation of CommandRenderer.
 ///
@@ -274,7 +271,7 @@ impl CommandRenderer for Backend {
             let color = style.color.unwrap_or(Color::BLACK);
             let paint = Paint::fill(color);
             let position = Point::new(offset.dx, offset.dy);
-            painter.text_styled(text, position, font_size, &paint);
+            painter.text(text, position, font_size, &paint);
         });
     }
 
@@ -300,7 +297,7 @@ impl CommandRenderer for Backend {
         let position = Point::new(offset.dx, offset.dy);
 
         self.with_transform(transform, |painter| {
-            painter.text_styled(&text, position, font_size, &paint);
+            painter.text(&text, position, font_size, &paint);
         });
     }
 
