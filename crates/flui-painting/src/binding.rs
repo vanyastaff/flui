@@ -25,7 +25,7 @@ use std::{
 use flui_foundation::{BindingBase, HasInstance, impl_binding_singleton};
 use flui_types::{
     Size,
-    geometry::{Half, Pixels, Radius, px},
+    geometry::{Pixels, px},
 };
 use parking_lot::RwLock;
 
@@ -251,6 +251,16 @@ impl ImageCache {
 ///
 /// Corresponds to Flutter's `ShaderWarmUp` class from
 /// `painting/shader_warm_up.dart`.
+///
+/// # Status
+///
+/// The Mythos chain (U1) deleted the dead canvas-recording trait that
+/// this trait's per-shape draw method consumed (zero production impls
+/// existed). The remaining trait surface (`size()` + `execute()`) is
+/// decorative; `execute()` is a stub. The entire `ShaderWarmUp`
+/// subsystem is slated for deletion in U2 of the same chain. Real
+/// offscreen-canvas-backed warm-up is tracked in
+/// `crates/flui-painting/ARCHITECTURE.md` `## Outstanding refactors`.
 pub trait ShaderWarmUp: Send + Sync {
     /// The size of the canvas to use for warm-up.
     ///
@@ -259,64 +269,27 @@ pub trait ShaderWarmUp: Send + Sync {
         Size::new(px(100.0), px(100.0))
     }
 
-    /// Paints the warm-up scene onto the canvas.
-    ///
-    /// Implementations should draw shapes that trigger shader compilation
-    /// for commonly used effects.
-    fn warm_up_on_canvas(&self, canvas: &mut dyn WarmUpCanvas);
-
     /// Executes the shader warm-up.
     ///
-    /// This is called during binding initialization.
+    /// This is called during binding initialization. Currently a stub --
+    /// a real implementation requires an offscreen canvas API that does
+    /// not yet exist in the workspace.
     fn execute(&self) {
-        // Create a temporary canvas and paint the warm-up scene
         tracing::debug!("Executing shader warm-up with size {:?}", self.size());
-        // In a real implementation, we'd create an offscreen canvas here
     }
 }
 
-/// Canvas interface for shader warm-up.
+/// Default shader warm-up.
 ///
-/// A minimal canvas interface used during warm-up.
-pub trait WarmUpCanvas {
-    /// Draws a rectangle.
-    fn draw_rect(&mut self, rect: flui_types::Rect<flui_types::geometry::Pixels>);
-
-    /// Draws a rounded rectangle.
-    fn draw_rrect(&mut self, rrect: flui_types::RRect);
-
-    /// Draws a circle.
-    fn draw_circle(&mut self, center: flui_types::Offset<Pixels>, radius: f32);
-
-    /// Draws a path.
-    fn draw_path(&mut self, path: &[flui_types::Offset<Pixels>]);
-}
-
-/// Default shader warm-up that draws common shapes.
+/// Today this is an empty struct because the per-shape draw method that
+/// drew rect/rrect/circle shapes was deleted in U1 (it consumed a dead
+/// canvas-recording trait with zero production impls). The struct is
+/// retained as the singleton `ShaderWarmUp` impl until U2 deletes the
+/// trait entirely.
 #[derive(Debug, Default)]
 pub struct DefaultShaderWarmUp;
 
-impl ShaderWarmUp for DefaultShaderWarmUp {
-    fn warm_up_on_canvas(&self, canvas: &mut dyn WarmUpCanvas) {
-        let size = self.size();
-
-        // Draw various shapes to trigger shader compilation
-        canvas.draw_rect(flui_types::Rect::from_ltwh(
-            px(0.0),
-            px(0.0),
-            size.width,
-            size.height,
-        ));
-        canvas.draw_rrect(flui_types::RRect::from_rect_and_radius(
-            flui_types::Rect::from_ltwh(px(10.0), px(10.0), px(80.0), px(80.0)),
-            Radius::circular(px(10.0)),
-        ));
-        canvas.draw_circle(
-            flui_types::Offset::new(size.width.half(), size.height.half()),
-            30.0,
-        );
-    }
-}
+impl ShaderWarmUp for DefaultShaderWarmUp {}
 
 // ============================================================================
 // SystemFontsNotifier

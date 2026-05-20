@@ -186,7 +186,7 @@ pub mod tessellation;
 // Binding
 pub use binding::{
     CachedImage, DefaultShaderWarmUp, ImageCache, ImageHandle, PaintingBinding, ShaderWarmUp,
-    SystemFontsNotifier, WarmUpCanvas, image_cache,
+    SystemFontsNotifier, image_cache,
 };
 // Primary API types
 pub use canvas::Canvas;
