@@ -95,11 +95,14 @@
 
 mod compositor;
 pub mod damage;
+mod error;
 mod link_registry;
 mod scene;
 
 pub mod layer;
 pub mod tree;
+
+pub use error::{LayerError, LayerResult};
 
 // ============================================================================
 // RE-EXPORTS - Layer Types

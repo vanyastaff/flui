@@ -35,6 +35,9 @@ parking_lot = "0.12"
 # Tracing for diagnostics
 tracing = "0.1"
 
+# Structured errors for LayerError
+thiserror = { workspace = true }
+
 # Optional parallel processing
 rayon = { version = "1.10", optional = true }
 

@@ -512,29 +512,21 @@ impl<'a> SceneBuilder<'a> {
     /// After popping, subsequent operations will add children to the
     /// previous parent layer.
     ///
-    /// # Panics
+    /// Returns `Err(LayerError::BuilderStackUnderflow)` if the stack is
+    /// empty -- programmer error in the paint phase. For the panic-free
+    /// probe form, use [`try_pop`].
     ///
-    /// Panics if the stack is empty.
+    /// [`try_pop`]: Self::try_pop
     ///
-    /// # Example
+    /// # Mythos
     ///
-    /// ```rust
-    /// use flui_layer::{LayerTree, SceneBuilder};
-    /// use flui_types::Offset;
-    ///
-    /// let mut tree = LayerTree::new();
-    /// let mut builder = SceneBuilder::new(&mut tree);
-    ///
-    /// builder.push_offset(Offset::new(10.0, 20.0));
-    /// builder.push_opacity(0.5);
-    /// builder.pop(); // Back to offset layer
-    /// builder.pop(); // Stack is now empty
-    /// ```
-    pub fn pop(&mut self) {
-        let _ = self
-            .stack
+    /// Replaces a previous `expect("SceneBuilder::pop called on empty stack")`
+    /// panic with a structured error in Step 9.
+    pub fn pop(&mut self) -> crate::LayerResult<()> {
+        self.stack
             .pop()
-            .expect("SceneBuilder::pop called on empty stack");
+            .map(|_| ())
+            .ok_or(crate::LayerError::BuilderStackUnderflow)
     }
 
     /// Pops the current layer, returning its ID.
@@ -723,11 +715,11 @@ mod tests {
         let opacity_id = builder.push_opacity(0.5);
         assert_eq!(builder.depth(), 2);
 
-        builder.pop();
+        builder.pop().unwrap();
         assert_eq!(builder.depth(), 1);
         assert_eq!(builder.current(), Some(offset_id));
 
-        builder.pop();
+        builder.pop().unwrap();
         assert_eq!(builder.depth(), 0);
 
         // Root should still be offset
@@ -822,9 +814,9 @@ mod tests {
         let _ = builder.push_opacity(0.8);
         let _ = builder.push_transform(Matrix4::scaling(2.0, 2.0, 1.0));
         let _ = builder.add_canvas(CanvasLayer::new());
-        builder.pop();
-        builder.pop();
-        builder.pop();
+        builder.pop().unwrap();
+        builder.pop().unwrap();
+        builder.pop().unwrap();
 
         let root = builder.build().unwrap();
         assert!(tree.get_layer(root).unwrap().is_offset());
@@ -839,7 +831,7 @@ mod tests {
             Rect::from_ltwh(px(0.0), px(0.0), px(200.0), px(200.0)),
             Clip::HardEdge,
         );
-        builder.pop();
+        builder.pop().unwrap();
 
         let layer = tree.get_layer(clip_id).unwrap();
         assert!(layer.is_clip_rect());
@@ -852,7 +844,7 @@ mod tests {
 
         let _ = builder.push_offset(Offset::ZERO);
         let _ = builder.add_canvas(CanvasLayer::new());
-        builder.pop();
+        builder.pop().unwrap();
 
         let root = builder.build();
         assert!(root.is_some());
@@ -867,7 +859,7 @@ mod tests {
         let mut builder = SceneBuilder::new(&mut tree);
 
         let _ = builder.push_offset(Offset::ZERO);
-        builder.pop();
+        builder.pop().unwrap();
 
         let root1 = builder.build_and_reset();
         assert!(root1.is_some());
@@ -876,7 +868,7 @@ mod tests {
 
         // Can build another scene
         let _ = builder.push_opacity(1.0);
-        builder.pop();
+        builder.pop().unwrap();
 
         let root2 = builder.build_and_reset();
         assert!(root2.is_some());

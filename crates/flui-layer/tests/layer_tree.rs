@@ -5,12 +5,9 @@
 //! preserved verbatim; the `use super::*; use crate::layer::CanvasLayer;`
 //! pair becomes `use flui_layer::*;` for integration access.
 
-use flui_foundation::{ElementId, LayerId};
+use flui_foundation::ElementId;
 use flui_layer::{CanvasLayer, Layer, LayerNode, LayerTree};
-use flui_types::{
-    Offset,
-    geometry::{Pixels, Rect, Size, px},
-};
+use flui_types::{Offset, geometry::px};
 
 #[test]
 fn test_layer_tree_new() {
@@ -327,4 +324,3 @@ fn test_layer_composition_integration() {
     assert!(tree.contains(picture1_id));
     assert!(tree.contains(picture2_id));
 }
-

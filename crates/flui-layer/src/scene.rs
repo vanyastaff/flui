@@ -217,13 +217,30 @@ impl Scene {
     /// The callback list is drained -- subsequent calls fire nothing until
     /// new callbacks are added.
     ///
-    /// Mythos Step 9 (U9) wraps each fire in `std::panic::catch_unwind` and
-    /// returns a `Vec<LayerError>` of poisoned callbacks; this U2 shape is the
-    /// simple drain-and-invoke form that U9 will replace.
-    pub fn fire_composition_callbacks(&mut self) {
+    /// Each callback is wrapped in [`std::panic::catch_unwind`] to isolate
+    /// programmer error in a single callback from the rest. A poisoned
+    /// callback yields one [`LayerError::CallbackPoisoned`] entry in the
+    /// returned vec; subsequent callbacks still fire. This mirrors the
+    /// rendering crate's `Poisoned` shape introduced in Mythos Step 12 of
+    /// the `flui-rendering` chain (commit `dc0fa1ad`).
+    ///
+    /// [`LayerError::CallbackPoisoned`]: crate::LayerError::CallbackPoisoned
+    pub fn fire_composition_callbacks(&mut self) -> Vec<crate::LayerError> {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let mut errors = Vec::new();
         for callback in self.composition_callbacks.drain(..) {
-            callback.fire();
+            // `AssertUnwindSafe` here documents that callbacks are
+            // self-contained `FnOnce() + Send` -- a panic in one callback
+            // does not tear scene-level invariants (the callback list is
+            // already drained by `drain(..)` before fire).
+            if let Err(_payload) = catch_unwind(AssertUnwindSafe(|| callback.fire())) {
+                errors.push(crate::LayerError::CallbackPoisoned {
+                    panic_type: "composition_callback",
+                });
+            }
         }
+        errors
     }
 
     /// Returns the viewport size.
@@ -506,6 +523,60 @@ mod tests {
         // Re-firing is a no-op (callbacks consumed).
         scene.fire_composition_callbacks();
         assert_eq!(counter.load(Ordering::SeqCst), 11);
+    }
+
+    #[test]
+    fn test_composition_callback_poison_isolation() {
+        // Mythos Step 9: a panicking callback must be caught and reported as
+        // `LayerError::CallbackPoisoned` without preventing subsequent
+        // callbacks from firing. This mirrors the rendering crate's
+        // `Poisoned` shape (commit dc0fa1ad).
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let mut scene = Scene::empty(Size::ZERO);
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        let c1 = Arc::clone(&counter);
+        scene.add_composition_callback(move || {
+            c1.fetch_add(1, Ordering::SeqCst);
+        });
+        scene.add_composition_callback(|| {
+            panic!("intentional poison in callback 2");
+        });
+        let c3 = Arc::clone(&counter);
+        scene.add_composition_callback(move || {
+            c3.fetch_add(100, Ordering::SeqCst);
+        });
+
+        let errors = scene.fire_composition_callbacks();
+        // Two non-panicking callbacks each ran exactly once.
+        assert_eq!(counter.load(Ordering::SeqCst), 101);
+        // Exactly one poisoned callback was reported.
+        assert_eq!(errors.len(), 1);
+        assert!(matches!(
+            errors[0],
+            crate::LayerError::CallbackPoisoned { .. }
+        ));
+        // Callback list is drained even on poison.
+        assert_eq!(scene.composition_callback_count(), 0);
+    }
+
+    #[test]
+    fn test_scene_builder_pop_underflow() {
+        // Mythos Step 9: SceneBuilder::pop returns Result instead of
+        // panicking on empty stack. `try_pop` stays as the panic-free
+        // probe form.
+        let mut tree = LayerTree::new();
+        let mut builder = crate::SceneBuilder::new(&mut tree);
+
+        let err = builder.pop().unwrap_err();
+        assert!(matches!(err, crate::LayerError::BuilderStackUnderflow));
+
+        // try_pop is the panic-free probe; returns Option.
+        assert!(builder.try_pop().is_none());
     }
 
     #[test]
