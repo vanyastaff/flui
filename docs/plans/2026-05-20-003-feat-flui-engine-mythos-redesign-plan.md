@@ -1,8 +1,9 @@
 ---
 title: "feat: flui-engine Mythos redesign"
 type: feat
-status: in-progress
+status: completed
 date: 2026-05-20
+completed: 2026-05-20
 origin: docs/brainstorms/flui-engine-mythos-redesign-requirements.md
 verdict: docs/designs/2026-05-20-mythos-flui-engine-redesign.md
 ---
