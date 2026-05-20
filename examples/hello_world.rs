@@ -16,14 +16,14 @@ fn main() {
 
     let displays = platform.displays();
     tracing::info!("Found {} display(s):", displays.len());
-    for (i, display) in displays.iter().enumerate() {
+    for (i, disp) in displays.iter().enumerate() {
         tracing::info!(
             "  Display {}: {} ({}x{} @ {:.1}x scale)",
             i + 1,
-            display.name(),
-            display.bounds().size.width,
-            display.bounds().size.height,
-            display.scale_factor()
+            disp.name(),
+            disp.bounds().size.width,
+            disp.bounds().size.height,
+            disp.scale_factor()
         );
     }
 

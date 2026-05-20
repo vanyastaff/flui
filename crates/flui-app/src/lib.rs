@@ -37,7 +37,6 @@
 // Modules
 pub mod app;
 pub mod bindings;
-pub mod debug;
 pub mod embedder;
 pub mod overlay;
 pub mod theme;
@@ -56,8 +55,6 @@ pub use bindings::{
     GestureBinding, PaintingBinding, PipelineOwner, RenderingFlutterBinding, Scheduler,
     SemanticsBinding, WidgetsBinding,
 };
-// Debug exports
-pub use debug::DebugFlags;
 // Convenience re-exports from flui_log
 pub use flui_log::{Level, Logger, debug, error, info, trace, warn};
 // Convenience re-exports from flui-view
@@ -82,11 +79,8 @@ pub mod prelude {
     // Logging
     pub use flui_log::{debug, error, info, trace, warn};
 
-    // Debug
-    pub use crate::DebugFlags;
     pub use crate::{
-        AppConfig, LifecycleState, WidgetsFlutterBinding, run_app, run_app_with_config,
-        run_direct,
+        AppConfig, LifecycleState, WidgetsFlutterBinding, run_app, run_app_with_config, run_direct,
     };
     // Bindings
     pub use crate::{

@@ -54,7 +54,7 @@ fn init_tracing() {
 }
 
 /// Create a test platform instance
-fn get_test_platform() -> std::sync::Arc<dyn flui_platform::Platform> {
+fn get_test_platform() -> Box<dyn flui_platform::Platform> {
     current_platform().expect("Failed to create platform")
 }
 
@@ -336,7 +336,7 @@ fn test_full_integration() {
 #[allow(dead_code)]
 fn with_platform<F>(test_fn: F)
 where
-    F: FnOnce(std::sync::Arc<dyn flui_platform::Platform>),
+    F: FnOnce(Box<dyn flui_platform::Platform>),
 {
     init_tracing();
     let platform = get_test_platform();

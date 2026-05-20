@@ -33,14 +33,14 @@ fn main() -> anyhow::Result<()> {
     // Display information
     let displays = platform.displays();
     tracing::info!("Displays:");
-    for (i, display) in displays.iter().enumerate() {
+    for (i, disp) in displays.iter().enumerate() {
         tracing::info!(
             "  {}. {} - {}x{} @ {:.1}x",
             i + 1,
-            display.name(),
-            display.bounds().size.width,
-            display.bounds().size.height,
-            display.scale_factor()
+            disp.name(),
+            disp.bounds().size.width,
+            disp.bounds().size.height,
+            disp.scale_factor()
         );
     }
 
