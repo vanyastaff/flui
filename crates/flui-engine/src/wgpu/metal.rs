@@ -194,7 +194,9 @@ impl MetalFxUpscaler {
             // underlying MTLDevice, we assume support on macOS. Applications
             // should handle the error from upscale() gracefully if the GPU
             // does not actually support MetalFX.
-            tracing::debug!("MetalFX support assumed on macOS (native MTLDevice query unavailable via wgpu)");
+            tracing::debug!(
+                "MetalFX support assumed on macOS (native MTLDevice query unavailable via wgpu)"
+            );
             true
         }
 
@@ -386,7 +388,9 @@ impl EdrConfig {
             //   let headroom: CGFloat = msg_send![screen, maximumExtendedDynamicRangeColorComponentValue];
             // Return 1.0 (SDR) as a safe default. Applications integrating with
             // AppKit directly can override this with the actual display value.
-            tracing::debug!("Returning default EDR headroom 1.0 (NSScreen query unavailable via wgpu)");
+            tracing::debug!(
+                "Returning default EDR headroom 1.0 (NSScreen query unavailable via wgpu)"
+            );
             1.0
         }
 
@@ -480,7 +484,9 @@ impl RayTracingConfig {
             // wgpu does not expose ray tracing extensions for Metal backend.
             // Return false since Metal ray tracing (M3+, macOS 15+) is not yet
             // widely deployed and cannot be verified without native API access.
-            tracing::debug!("Metal ray tracing not detectable via wgpu (requires MTLDevice.supportsRaytracing)");
+            tracing::debug!(
+                "Metal ray tracing not detectable via wgpu (requires MTLDevice.supportsRaytracing)"
+            );
             false
         }
 

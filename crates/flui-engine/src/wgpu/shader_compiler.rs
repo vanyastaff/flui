@@ -275,12 +275,7 @@ pub struct LinearGradientUniforms {
 }
 
 impl LinearGradientUniforms {
-    pub fn new(
-        start: (f32, f32),
-        end: (f32, f32),
-        start_color: Color,
-        end_color: Color,
-    ) -> Self {
+    pub fn new(start: (f32, f32), end: (f32, f32), start_color: Color, end_color: Color) -> Self {
         Self {
             start: [start.0, start.1],
             end: [end.0, end.1],
@@ -312,12 +307,7 @@ pub struct RadialGradientUniforms {
 }
 
 impl RadialGradientUniforms {
-    pub fn new(
-        center: (f32, f32),
-        radius: f32,
-        center_color: Color,
-        edge_color: Color,
-    ) -> Self {
+    pub fn new(center: (f32, f32), radius: f32, center_color: Color, edge_color: Color) -> Self {
         Self {
             center: [center.0, center.1],
             radius,
@@ -392,7 +382,9 @@ pub fn create_uniforms_from_shader(
             let uniforms = SolidMaskUniforms::from_color(*color);
             bytemuck::bytes_of(&uniforms).to_vec()
         }
-        Shader::LinearGradient { from, to, colors, .. } => {
+        Shader::LinearGradient {
+            from, to, colors, ..
+        } => {
             let w = bounds.width().0;
             let h = bounds.height().0;
             let bx = bounds.left().0;
@@ -410,7 +402,12 @@ pub fn create_uniforms_from_shader(
             let uniforms = LinearGradientUniforms::new(start, end, start_color, end_color);
             bytemuck::bytes_of(&uniforms).to_vec()
         }
-        Shader::RadialGradient { center, radius, colors, .. } => {
+        Shader::RadialGradient {
+            center,
+            radius,
+            colors,
+            ..
+        } => {
             let w = bounds.width().0;
             let h = bounds.height().0;
             let bx = bounds.left().0;
@@ -424,7 +421,13 @@ pub fn create_uniforms_from_shader(
             let uniforms = RadialGradientUniforms::new((cx, cy), nr, center_color, edge_color);
             bytemuck::bytes_of(&uniforms).to_vec()
         }
-        Shader::SweepGradient { center, start_angle, end_angle, colors, .. } => {
+        Shader::SweepGradient {
+            center,
+            start_angle,
+            end_angle,
+            colors,
+            ..
+        } => {
             let w = bounds.width().0;
             let h = bounds.height().0;
             let bx = bounds.left().0;

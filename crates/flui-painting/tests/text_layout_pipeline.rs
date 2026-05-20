@@ -5,14 +5,12 @@
 //! measurement -> layout -> paint pipeline.
 
 use flui_painting::{
-    Canvas, DisplayListCore, TextPainter,
-    detect_text_direction, measure_inline_span, measure_text,
+    Canvas, DisplayListCore, TextPainter, detect_text_direction, measure_inline_span, measure_text,
 };
 use flui_types::{
     geometry::{Offset, px},
     typography::{
-        FontWeight, InlineSpan, TextAlign, TextDirection, TextPosition, TextSpan,
-        TextStyle,
+        FontWeight, InlineSpan, TextAlign, TextDirection, TextPosition, TextSpan, TextStyle,
     },
 };
 

@@ -311,9 +311,7 @@ impl WindowsWindow {
             let current_mode = ctx.mode.get();
 
             match current_mode {
-                WindowMode::Fullscreen {
-                    restore_bounds,
-                } => {
+                WindowMode::Fullscreen { restore_bounds } => {
                     // Exit fullscreen - restore previous style and bounds
                     tracing::info!("Exiting fullscreen mode");
 
@@ -371,9 +369,7 @@ impl WindowsWindow {
                     };
 
                     // Validate transition
-                    let candidate = WindowMode::Fullscreen {
-                        restore_bounds,
-                    };
+                    let candidate = WindowMode::Fullscreen { restore_bounds };
                     if !current_mode.can_transition_to(&candidate) {
                         tracing::warn!(
                             "Cannot enter fullscreen: invalid state transition from {:?}",

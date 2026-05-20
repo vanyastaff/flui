@@ -190,9 +190,7 @@ pub use frame::{
     SchedulerPhase,
 };
 // Re-exports - ID types (unified with flui-foundation)
-pub use id::{
-    CallbackId, FrameHandle, Handle, Id, IdGenerator, Marker, TaskHandle, markers,
-};
+pub use id::{CallbackId, FrameHandle, Handle, Id, IdGenerator, Marker, TaskHandle, markers};
 pub use scheduler::{FrameCompletionFuture, FrameSkipPolicy, Scheduler, SchedulerBuilder};
 pub use task::{Priority, PriorityCount, Task, TaskId, TaskQueue, TypedTask};
 pub use ticker::{

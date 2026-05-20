@@ -37,9 +37,9 @@ use std::sync::Arc;
 use anyhow::Result;
 use wgpu;
 
+use super::occlusion::OcclusionTracker;
 use crate::error::RenderError;
 use crate::traits::Painter;
-use super::occlusion::OcclusionTracker;
 
 /// GPU backend capabilities
 #[derive(Debug, Clone)]
@@ -229,9 +229,7 @@ impl Renderer {
         let surface_format = Self::select_surface_format(&surface_caps, &capabilities);
 
         // Check if the surface supports COPY_SRC (needed for backdrop blur)
-        let supports_copy_src = surface_caps
-            .usages
-            .contains(wgpu::TextureUsages::COPY_SRC);
+        let supports_copy_src = surface_caps.usages.contains(wgpu::TextureUsages::COPY_SRC);
         if !supports_copy_src {
             tracing::warn!(
                 "Surface does not support COPY_SRC; backdrop blur will use fallback path"
@@ -604,11 +602,11 @@ impl Renderer {
         // 1. Clear pass — submit immediately so the surface is ready for
         //    mid-frame copy operations (backdrop blur needs pixels on the surface).
         {
-            let mut clear_encoder = self
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("FLUI Clear Encoder"),
-                });
+            let mut clear_encoder =
+                self.device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("FLUI Clear Encoder"),
+                    });
             {
                 let _pass = clear_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("FLUI Clear Pass"),
@@ -691,11 +689,11 @@ impl Renderer {
 
             // 5. Final flush — submit remaining painter batches
             let mut painter = backend.into_painter();
-            let mut final_encoder = self
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("FLUI Final Render Encoder"),
-                });
+            let mut final_encoder =
+                self.device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("FLUI Final Render Encoder"),
+                    });
             if let Err(e) = painter.render(&view, &mut final_encoder) {
                 tracing::error!("Painter render failed: {}", e);
             }
@@ -751,14 +749,7 @@ impl Renderer {
             let h = bounds.height().0;
 
             if w > 0.0 && h > 0.0 && occlusion.is_occluded(x, y, w, h) {
-                tracing::trace!(
-                    ?layer_id,
-                    x,
-                    y,
-                    w,
-                    h,
-                    "Skipping occluded layer"
-                );
+                tracing::trace!(?layer_id, x, y, w, h, "Skipping occluded layer");
                 return; // Skip this layer and all its children
             }
         }
@@ -844,11 +835,19 @@ impl Renderer {
         let sigma = match bf_layer.filter() {
             ImageFilter::Blur { sigma_x, sigma_y } => (*sigma_x + *sigma_y) / 2.0,
             _ => {
-                tracing::warn!("Backdrop filter type not supported for GPU blur, rendering children only");
+                tracing::warn!(
+                    "Backdrop filter type not supported for GPU blur, rendering children only"
+                );
                 let children: Vec<_> = node.children().to_vec();
                 for child_id in children {
                     Self::render_layer_recursive(
-                        tree, child_id, backend, ctx, surface_texture, surface_view, occlusion,
+                        tree,
+                        child_id,
+                        backend,
+                        ctx,
+                        surface_texture,
+                        surface_view,
+                        occlusion,
                     );
                 }
                 return;
@@ -861,7 +860,10 @@ impl Renderer {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Backdrop Flush Encoder"),
                 });
-        if let Err(e) = backend.painter_mut().render(surface_view, &mut flush_encoder) {
+        if let Err(e) = backend
+            .painter_mut()
+            .render(surface_view, &mut flush_encoder)
+        {
             tracing::error!("Backdrop flush failed: {}", e);
         }
 
@@ -905,7 +907,9 @@ impl Renderer {
             };
 
             // 4. Queue blurred result for compositing
-            backend.painter_mut().queue_offscreen_result(blurred, bounds);
+            backend
+                .painter_mut()
+                .queue_offscreen_result(blurred, bounds);
         } else {
             // No offscreen renderer available — just submit the flush
             ctx.queue.submit(std::iter::once(flush_encoder.finish()));
@@ -916,7 +920,13 @@ impl Renderer {
         let children: Vec<_> = node.children().to_vec();
         for child_id in children {
             Self::render_layer_recursive(
-                tree, child_id, backend, ctx, surface_texture, surface_view, occlusion,
+                tree,
+                child_id,
+                backend,
+                ctx,
+                surface_texture,
+                surface_view,
+                occlusion,
             );
         }
         // No cleanup needed — backdrop filter has no push/pop state in this path

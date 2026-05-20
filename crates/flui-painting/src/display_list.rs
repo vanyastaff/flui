@@ -1746,10 +1746,7 @@ impl DrawCommand {
                 blend_mode: *blend_mode,
                 transform: *transform,
             },
-            Self::DrawPaint {
-                paint,
-                transform,
-            } => Self::DrawPaint {
+            Self::DrawPaint { paint, transform } => Self::DrawPaint {
                 paint: paint.clone().with_opacity(opacity),
                 transform: *transform,
             },

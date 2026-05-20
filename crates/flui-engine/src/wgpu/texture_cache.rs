@@ -428,8 +428,13 @@ impl TextureCache {
                             view_formats: &[],
                         });
 
-                        let cached_texture =
-                            CachedTexture::new_atlas(placeholder, atlas_view, width, height, uv_rect);
+                        let cached_texture = CachedTexture::new_atlas(
+                            placeholder,
+                            atlas_view,
+                            width,
+                            height,
+                            uv_rect,
+                        );
 
                         tracing::trace!(
                             width,
@@ -770,7 +775,13 @@ mod unit_tests {
         }
 
         fn insert(&mut self, id: TextureId, size_bytes: usize, use_count: usize) {
-            self.textures.insert(id, StubEntry { size_bytes, use_count });
+            self.textures.insert(
+                id,
+                StubEntry {
+                    size_bytes,
+                    use_count,
+                },
+            );
         }
 
         fn memory_bytes(&self) -> usize {

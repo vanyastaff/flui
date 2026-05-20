@@ -207,19 +207,13 @@ fn hash_command(cmd: &PathCommand, hasher: &mut DefaultHasher) {
 }
 
 /// Hash a `Point<Pixels>` by its f32 bit patterns.
-fn hash_point(
-    p: &flui_types::Point<flui_types::geometry::Pixels>,
-    hasher: &mut DefaultHasher,
-) {
+fn hash_point(p: &flui_types::Point<flui_types::geometry::Pixels>, hasher: &mut DefaultHasher) {
     p.x.0.to_bits().hash(hasher);
     p.y.0.to_bits().hash(hasher);
 }
 
 /// Hash a `Rect<Pixels>` by its four edge f32 bit patterns.
-fn hash_rect(
-    r: &flui_types::Rect<flui_types::geometry::Pixels>,
-    hasher: &mut DefaultHasher,
-) {
+fn hash_rect(r: &flui_types::Rect<flui_types::geometry::Pixels>, hasher: &mut DefaultHasher) {
     r.left().0.to_bits().hash(hasher);
     r.top().0.to_bits().hash(hasher);
     r.right().0.to_bits().hash(hasher);

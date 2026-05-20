@@ -58,8 +58,8 @@ pub mod dx12;
 #[allow(dead_code)]
 pub mod effects;
 mod effects_pipeline;
-pub mod font_loader;
 mod external_texture_registry;
+pub mod font_loader;
 #[allow(dead_code)]
 mod instancing;
 // NOTE: integration_tests.rs removed - needs rewrite for new
@@ -117,7 +117,9 @@ pub use external_texture_registry::{ExternalTextureEntry, ExternalTextureRegistr
 // Layer rendering
 pub use layer_render::LayerRender;
 // Multi-draw indirect batching
-pub use multi_draw::{DrawCommand, DrawIndexedIndirectArgs, MultiDrawBatcher, MultiDrawStats, PipelineId};
+pub use multi_draw::{
+    DrawCommand, DrawIndexedIndirectArgs, MultiDrawBatcher, MultiDrawStats, PipelineId,
+};
 // Offscreen rendering
 pub use offscreen::{MaskedRenderResult, OffscreenRenderer, PipelineManager};
 pub use painter::WgpuPainter;
@@ -134,7 +136,7 @@ pub use tessellator::Tessellator;
 #[cfg(feature = "wgpu-backend")]
 pub use text_renderer::{TextRenderingSystem, TextRun};
 // Texture pool
-pub use texture_pool::{GpuTexture, PooledTexture, PoolStats, TextureDesc, TexturePool};
+pub use texture_pool::{GpuTexture, PoolStats, PooledTexture, TextureDesc, TexturePool};
 // Vertex types
 pub use vertex::{ImageInstance, PathVertex, RectInstance, RectVertex, Vertex};
 

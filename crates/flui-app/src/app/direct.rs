@@ -68,9 +68,8 @@ pub fn run_direct(
     render_fn: impl FnMut(&mut SceneBuilder<'_>, f32, f32) + Send + 'static,
 ) -> anyhow::Result<()> {
     // Initialize logging
-    let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| {
-        "info,flui_app=debug,flui_engine=debug,wgpu=warn".to_string()
-    });
+    let filter = std::env::var("RUST_LOG")
+        .unwrap_or_else(|_| "info,flui_app=debug,flui_engine=debug,wgpu=warn".to_string());
 
     flui_log::Logger::new()
         .with_filter(&filter)
@@ -143,12 +142,7 @@ pub fn run_direct(
 
         let root = tree.root();
         let frame = frame_counter_frame.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let scene = Scene::new(
-            Size::new(px(w as f32), px(h as f32)),
-            tree,
-            root,
-            frame,
-        );
+        let scene = Scene::new(Size::new(px(w as f32), px(h as f32)), tree, root, frame);
 
         if let Err(e) = r.render_scene(&scene) {
             if e.is_recoverable() {
@@ -171,11 +165,9 @@ pub fn run_direct(
     }));
 
     // 6. Register input callback (triggers redraw on any input)
-    window.on_input(Box::new(move |_input: PlatformInput| {
-        DispatchEventResult {
-            propagate: false,
-            default_prevented: false,
-        }
+    window.on_input(Box::new(move |_input: PlatformInput| DispatchEventResult {
+        propagate: false,
+        default_prevented: false,
     }));
 
     // 7. Lifecycle callbacks

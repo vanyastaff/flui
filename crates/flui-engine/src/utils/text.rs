@@ -419,8 +419,14 @@ mod tests {
             .render(&params)
             .expect("rendering single character should succeed");
 
-        assert!(!vertices.is_empty(), "single visible glyph should produce vertices");
-        assert!(!indices.is_empty(), "single visible glyph should produce indices");
+        assert!(
+            !vertices.is_empty(),
+            "single visible glyph should produce vertices"
+        );
+        assert!(
+            !indices.is_empty(),
+            "single visible glyph should produce indices"
+        );
     }
 
     // ===== Render: Empty and Whitespace =====
@@ -435,7 +441,10 @@ mod tests {
             .render(&params)
             .expect("rendering empty string should succeed");
 
-        assert!(vertices.is_empty(), "empty string should produce no vertices");
+        assert!(
+            vertices.is_empty(),
+            "empty string should produce no vertices"
+        );
         assert!(indices.is_empty(), "empty string should produce no indices");
     }
 
@@ -518,20 +527,18 @@ mod tests {
         let mut renderer = VectorTextRenderer::new(load_test_font());
         let identity = Mat4::IDENTITY;
         let color = Color::rgba(255, 0, 0, 255);
-        let params = TextRenderParams::new(
-            "R",
-            Point::new(px(0.0), px(0.0)),
-            24.0,
-            color,
-            &identity,
-        );
+        let params =
+            TextRenderParams::new("R", Point::new(px(0.0), px(0.0)), 24.0, color, &identity);
 
         let (vertices, _) = renderer
             .render(&params)
             .expect("colored render should succeed");
 
         for v in &vertices {
-            assert_eq!(v.color, color, "every vertex should carry the specified color");
+            assert_eq!(
+                v.color, color,
+                "every vertex should carry the specified color"
+            );
         }
     }
 
@@ -679,10 +686,7 @@ mod tests {
         let params = default_params("A", 24.0, &identity);
 
         let result = renderer.render(&params);
-        assert!(
-            result.is_err(),
-            "invalid font data should return an error"
-        );
+        assert!(result.is_err(), "invalid font data should return an error");
         assert!(
             matches!(result, Err(VectorTextError::InvalidFont)),
             "error should be InvalidFont variant"

@@ -98,7 +98,6 @@ pub struct WindowsPlatform {
 
     /// Window configuration (shared across all windows)
     config: WindowConfiguration,
-
 }
 
 // SAFETY: HWND is just an integer handle and is safe to send/share between

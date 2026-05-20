@@ -337,13 +337,14 @@ fn generate_superellipse_path(
     // Helper: compute superellipse point for a corner quadrant.
     // `cx`, `cy` is the corner center, `rx`, `ry` are the radii,
     // `t` sweeps through the quarter, `sx`/`sy` select the quadrant direction.
-    let se_point = |cx: f32, cy: f32, rx: f32, ry: f32, t: f32, sx: f32, sy: f32| -> Point<Pixels> {
-        let cos_t = t.cos();
-        let sin_t = t.sin();
-        let x = cx + sx * rx * cos_t.abs().powf(two_over_n);
-        let y = cy + sy * ry * sin_t.abs().powf(two_over_n);
-        Point::new(px(x), px(y))
-    };
+    let se_point =
+        |cx: f32, cy: f32, rx: f32, ry: f32, t: f32, sx: f32, sy: f32| -> Point<Pixels> {
+            let cos_t = t.cos();
+            let sin_t = t.sin();
+            let x = cx + sx * rx * cos_t.abs().powf(two_over_n);
+            let y = cy + sy * ry * sin_t.abs().powf(two_over_n);
+            Point::new(px(x), px(y))
+        };
 
     // Start at top edge, after top-left corner
     // Top-left corner: center at (left + tl.x, top + tl.y)
@@ -357,8 +358,7 @@ fn generate_superellipse_path(
         if rx > 0.0 && ry > 0.0 {
             for i in 0..=segments_per_corner {
                 // Sweep from PI/2 to 0 (parametric), mapping to top-left quadrant
-                let t = std::f32::consts::FRAC_PI_2
-                    * (1.0 - i as f32 / segments_per_corner as f32);
+                let t = std::f32::consts::FRAC_PI_2 * (1.0 - i as f32 / segments_per_corner as f32);
                 let p = se_point(cx, cy, rx, ry, t, -1.0, -1.0);
                 if i == 0 {
                     path.move_to(p);
@@ -381,8 +381,7 @@ fn generate_superellipse_path(
         let ry = tr.y.0;
         if rx > 0.0 && ry > 0.0 {
             for i in 0..=segments_per_corner {
-                let t = std::f32::consts::FRAC_PI_2
-                    * (i as f32 / segments_per_corner as f32);
+                let t = std::f32::consts::FRAC_PI_2 * (i as f32 / segments_per_corner as f32);
                 let p = se_point(cx, cy, rx, ry, t, 1.0, -1.0);
                 path.line_to(p);
             }
@@ -401,8 +400,7 @@ fn generate_superellipse_path(
         let ry = br.y.0;
         if rx > 0.0 && ry > 0.0 {
             for i in 0..=segments_per_corner {
-                let t = std::f32::consts::FRAC_PI_2
-                    * (1.0 - i as f32 / segments_per_corner as f32);
+                let t = std::f32::consts::FRAC_PI_2 * (1.0 - i as f32 / segments_per_corner as f32);
                 let p = se_point(cx, cy, rx, ry, t, 1.0, 1.0);
                 path.line_to(p);
             }
@@ -421,8 +419,7 @@ fn generate_superellipse_path(
         let ry = bl.y.0;
         if rx > 0.0 && ry > 0.0 {
             for i in 0..=segments_per_corner {
-                let t = std::f32::consts::FRAC_PI_2
-                    * (i as f32 / segments_per_corner as f32);
+                let t = std::f32::consts::FRAC_PI_2 * (i as f32 / segments_per_corner as f32);
                 let p = se_point(cx, cy, rx, ry, t, -1.0, 1.0);
                 path.line_to(p);
             }
@@ -845,13 +842,7 @@ mod tests {
             _transform: &Matrix4,
         ) {
         }
-        fn render_color(
-            &mut self,
-            _color: Color,
-            _blend_mode: BlendMode,
-            _transform: &Matrix4,
-        ) {
-        }
+        fn render_color(&mut self, _color: Color, _blend_mode: BlendMode, _transform: &Matrix4) {}
         fn render_paint(&mut self, _paint: &Paint, _transform: &Matrix4) {}
         fn render_backdrop_filter(
             &mut self,
@@ -876,9 +867,30 @@ mod tests {
         }
 
         // ===== Clipping (no-ops) =====
-        fn clip_rect(&mut self, _rect: Rect<Pixels>, _clip_op: flui_types::painting::ClipOp, _clip_behavior: flui_types::painting::Clip, _transform: &Matrix4) {}
-        fn clip_rrect(&mut self, _rrect: RRect, _clip_op: flui_types::painting::ClipOp, _clip_behavior: flui_types::painting::Clip, _transform: &Matrix4) {}
-        fn clip_path(&mut self, _path: &Path, _clip_op: flui_types::painting::ClipOp, _clip_behavior: flui_types::painting::Clip, _transform: &Matrix4) {}
+        fn clip_rect(
+            &mut self,
+            _rect: Rect<Pixels>,
+            _clip_op: flui_types::painting::ClipOp,
+            _clip_behavior: flui_types::painting::Clip,
+            _transform: &Matrix4,
+        ) {
+        }
+        fn clip_rrect(
+            &mut self,
+            _rrect: RRect,
+            _clip_op: flui_types::painting::ClipOp,
+            _clip_behavior: flui_types::painting::Clip,
+            _transform: &Matrix4,
+        ) {
+        }
+        fn clip_path(
+            &mut self,
+            _path: &Path,
+            _clip_op: flui_types::painting::ClipOp,
+            _clip_behavior: flui_types::painting::Clip,
+            _transform: &Matrix4,
+        ) {
+        }
 
         // ===== Viewport =====
         fn viewport_bounds(&self) -> Rect<Pixels> {
@@ -899,11 +911,7 @@ mod tests {
         }
 
         // ===== Layer Tree Operations (recorded) =====
-        fn push_clip_rect(
-            &mut self,
-            _rect: &Rect<Pixels>,
-            _clip_behavior: Clip,
-        ) {
+        fn push_clip_rect(&mut self, _rect: &Rect<Pixels>, _clip_behavior: Clip) {
             self.calls.push("push_clip_rect".to_string());
         }
         fn push_clip_rrect(&mut self, _rrect: &RRect, _clip_behavior: Clip) {
@@ -1039,7 +1047,12 @@ mod tests {
         layer.cleanup(&mut renderer);
         assert_eq!(
             renderer.calls,
-            vec!["push_offset", "push_opacity", "pop_opacity", "pop_transform"]
+            vec![
+                "push_offset",
+                "push_opacity",
+                "pop_opacity",
+                "pop_transform"
+            ]
         );
     }
 
@@ -1103,7 +1116,9 @@ mod tests {
 
     #[test]
     fn test_shader_mask_layer_saves_and_clips() {
-        use flui_types::{painting::BlendMode as TBlendMode, painting::Shader as TShader, styling::Color};
+        use flui_types::{
+            painting::BlendMode as TBlendMode, painting::Shader as TShader, styling::Color,
+        };
 
         let mut renderer = MockRenderer::new();
         let shader = TShader::solid(Color::WHITE);
@@ -1132,11 +1147,8 @@ mod tests {
         let mut renderer = MockRenderer::new();
         let filter = ImageFilter::blur(5.0);
         let bounds = Rect::from_xywh(px(0.0), px(0.0), px(200.0), px(150.0));
-        let layer = BackdropFilterLayer::new(
-            filter,
-            flui_types::painting::BlendMode::SrcOver,
-            bounds,
-        );
+        let layer =
+            BackdropFilterLayer::new(filter, flui_types::painting::BlendMode::SrcOver, bounds);
 
         layer.render(&mut renderer);
         assert_eq!(renderer.calls, Vec::<String>::new());

@@ -52,9 +52,9 @@ impl OcclusionTracker {
         let qx2 = x + w;
         let qy2 = y + h;
 
-        self.opaque_rects.iter().any(|&[ox, oy, ow, oh]| {
-            ox <= x && oy <= y && (ox + ow) >= qx2 && (oy + oh) >= qy2
-        })
+        self.opaque_rects
+            .iter()
+            .any(|&[ox, oy, ow, oh]| ox <= x && oy <= y && (ox + ow) >= qx2 && (oy + oh) >= qy2)
     }
 
     /// Clears all tracked opaque rects for the next frame.

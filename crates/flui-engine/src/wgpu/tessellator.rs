@@ -760,7 +760,8 @@ impl Tessellator {
         let mut interval_idx = 0usize;
         let mut remaining_in_interval = effective_intervals[0];
         let mut consumed = 0.0f32;
-        while consumed + remaining_in_interval <= phase && interval_idx < effective_intervals.len() {
+        while consumed + remaining_in_interval <= phase && interval_idx < effective_intervals.len()
+        {
             consumed += remaining_in_interval;
             interval_idx = (interval_idx + 1) % effective_intervals.len();
             remaining_in_interval = effective_intervals[interval_idx];
@@ -1128,10 +1129,10 @@ mod tests {
         // Create an RRect with different radii per corner
         let rrect = RRect::from_rect_and_corners(
             rect,
-            Radius::circular(px(5.0)),   // top-left: small
-            Radius::circular(px(15.0)),  // top-right: medium
-            Radius::circular(px(25.0)),  // bottom-right: large
-            Radius::circular(px(10.0)),  // bottom-left: moderate
+            Radius::circular(px(5.0)),  // top-left: small
+            Radius::circular(px(15.0)), // top-right: medium
+            Radius::circular(px(25.0)), // bottom-right: large
+            Radius::circular(px(10.0)), // bottom-left: moderate
         );
 
         let result = tessellator.tessellate_rrect(rrect, &paint);
@@ -1188,13 +1189,7 @@ mod tests {
         let paint = Paint::fill(Color::RED);
 
         // Full circle: sweep_angle = 2*PI
-        let result = tessellator.tessellate_arc(
-            rect,
-            0.0,
-            std::f32::consts::TAU,
-            false,
-            &paint,
-        );
+        let result = tessellator.tessellate_arc(rect, 0.0, std::f32::consts::TAU, false, &paint);
         assert!(result.is_ok(), "full circle arc should tessellate");
 
         let (vertices, indices) = result.expect("full circle arc tessellation should succeed");
@@ -1242,7 +1237,10 @@ mod tests {
         assert!(result.is_ok(), "quarter circle arc should tessellate");
 
         let (vertices, indices) = result.expect("quarter circle tessellation should succeed");
-        assert!(!vertices.is_empty(), "quarter circle should produce vertices");
+        assert!(
+            !vertices.is_empty(),
+            "quarter circle should produce vertices"
+        );
         assert!(!indices.is_empty(), "quarter circle should produce indices");
         assert_eq!(indices.len() % 3, 0, "indices should form triangles");
     }
@@ -1264,7 +1262,10 @@ mod tests {
         assert!(result.is_ok(), "negative sweep arc should tessellate");
 
         let (vertices, indices) = result.expect("negative sweep tessellation should succeed");
-        assert!(!vertices.is_empty(), "negative sweep should produce vertices");
+        assert!(
+            !vertices.is_empty(),
+            "negative sweep should produce vertices"
+        );
         assert!(!indices.is_empty(), "negative sweep should produce indices");
         assert_eq!(indices.len() % 3, 0, "indices should form triangles");
     }
@@ -1276,13 +1277,7 @@ mod tests {
         let paint = Paint::fill(Color::GREEN);
 
         // Very small sweep (near zero) — should not panic
-        let result = tessellator.tessellate_arc(
-            rect,
-            0.0,
-            1e-8,
-            false,
-            &paint,
-        );
+        let result = tessellator.tessellate_arc(rect, 0.0, 1e-8, false, &paint);
         // Near-zero sweep produces a degenerate path; tessellation may produce
         // empty geometry but must not error or panic.
         assert!(result.is_ok(), "near-zero sweep arc should not error");
@@ -1295,13 +1290,8 @@ mod tests {
         let paint = Paint::stroke(Color::RED, 2.0);
 
         // Stroke-mode arc (quarter circle)
-        let result = tessellator.tessellate_arc(
-            rect,
-            0.0,
-            std::f32::consts::FRAC_PI_2,
-            false,
-            &paint,
-        );
+        let result =
+            tessellator.tessellate_arc(rect, 0.0, std::f32::consts::FRAC_PI_2, false, &paint);
         assert!(result.is_ok(), "stroke-mode arc should tessellate");
 
         let (vertices, indices) = result.expect("stroke arc tessellation should succeed");
@@ -1316,17 +1306,14 @@ mod tests {
         let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(50.0));
         let paint = Paint::fill(Color::BLUE);
 
-        let result = tessellator.tessellate_arc(
-            rect,
-            0.0,
-            std::f32::consts::PI,
-            true,
-            &paint,
-        );
+        let result = tessellator.tessellate_arc(rect, 0.0, std::f32::consts::PI, true, &paint);
         assert!(result.is_ok(), "elliptical arc should tessellate");
 
         let (vertices, indices) = result.expect("elliptical arc tessellation should succeed");
-        assert!(!vertices.is_empty(), "elliptical arc should produce vertices");
+        assert!(
+            !vertices.is_empty(),
+            "elliptical arc should produce vertices"
+        );
         assert!(!indices.is_empty(), "elliptical arc should produce indices");
         assert_eq!(indices.len() % 3, 0, "indices should form triangles");
     }

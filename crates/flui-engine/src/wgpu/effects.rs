@@ -252,11 +252,7 @@ impl SweepGradientInstance {
     }
 
     /// Create a full-circle sweep gradient (0 to 2*PI) centered in the rectangle
-    pub fn full_circle(
-        bounds: [f32; 4],
-        corner_radii: [f32; 4],
-        stop_count: u32,
-    ) -> Self {
+    pub fn full_circle(bounds: [f32; 4], corner_radii: [f32; 4], stop_count: u32) -> Self {
         let width = bounds[2];
         let height = bounds[3];
         let center = Vec2::new(width * 0.5, height * 0.5);

@@ -21,7 +21,10 @@ use tower_http::services::ServeDir;
 
 /// FLUI Web Dev Server — build WASM and serve locally.
 #[derive(Parser, Debug)]
-#[command(name = "flui-web-server", about = "Built-in dev server for FLUI web apps")]
+#[command(
+    name = "flui-web-server",
+    about = "Built-in dev server for FLUI web apps"
+)]
 struct Args {
     /// Port to serve on.
     #[arg(short, long, default_value_t = 8080)]

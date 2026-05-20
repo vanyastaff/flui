@@ -495,27 +495,35 @@ mod tests {
         }
 
         // All should be cached
-        assert!(registry
-            .get::<FontAsset>(&AssetKey::new("test0.ttf"))
-            .await
-            .is_some());
-        assert!(registry
-            .get::<FontAsset>(&AssetKey::new("test1.ttf"))
-            .await
-            .is_some());
+        assert!(
+            registry
+                .get::<FontAsset>(&AssetKey::new("test0.ttf"))
+                .await
+                .is_some()
+        );
+        assert!(
+            registry
+                .get::<FontAsset>(&AssetKey::new("test1.ttf"))
+                .await
+                .is_some()
+        );
 
         // Clear all FontAssets
         registry.clear::<FontAsset>().await;
 
         // Should all be gone
-        assert!(registry
-            .get::<FontAsset>(&AssetKey::new("test0.ttf"))
-            .await
-            .is_none());
-        assert!(registry
-            .get::<FontAsset>(&AssetKey::new("test1.ttf"))
-            .await
-            .is_none());
+        assert!(
+            registry
+                .get::<FontAsset>(&AssetKey::new("test0.ttf"))
+                .await
+                .is_none()
+        );
+        assert!(
+            registry
+                .get::<FontAsset>(&AssetKey::new("test1.ttf"))
+                .await
+                .is_none()
+        );
     }
 
     #[test]

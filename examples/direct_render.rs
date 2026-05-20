@@ -15,12 +15,7 @@ fn main() -> anyhow::Result<()> {
             .with_size(800, 600),
         |builder, w, h| {
             use flui_painting::Canvas;
-            use flui_types::{
-                geometry::px,
-                painting::Paint,
-                styling::Color,
-                Rect,
-            };
+            use flui_types::{Rect, geometry::px, painting::Paint, styling::Color};
 
             // Record drawing commands into a Picture
             let mut canvas = Canvas::new();

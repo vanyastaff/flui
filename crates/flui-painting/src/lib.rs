@@ -197,7 +197,8 @@ pub use display_list::{
 };
 pub use error::{PaintingError, Result};
 pub use text_layout::{
-    LineInfo, TextLayout, TextLayoutResult, detect_text_direction, measure_inline_span, measure_text,
+    LineInfo, TextLayout, TextLayoutResult, detect_text_direction, measure_inline_span,
+    measure_text,
 };
 pub use text_painter::{DEFAULT_FONT_SIZE, TextBaseline, TextPainter};
 

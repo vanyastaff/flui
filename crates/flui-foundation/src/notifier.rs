@@ -789,10 +789,7 @@ mod tests {
     fn test_merged_listenable_forwards_notifications() {
         let a = ValueNotifier::new(1);
         let b = ValueNotifier::new(2);
-        let merged = MergedListenable::new(vec![
-            Box::new(a.clone()),
-            Box::new(b.clone()),
-        ]);
+        let merged = MergedListenable::new(vec![Box::new(a.clone()), Box::new(b.clone())]);
         let count = Arc::new(AtomicUsize::new(0));
         let count2 = count.clone();
         merged.add_listener(Arc::new(move || {

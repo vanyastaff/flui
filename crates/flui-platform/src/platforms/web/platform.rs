@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use parking_lot::Mutex;
-use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
+use wasm_bindgen::prelude::*;
 
 use crate::{
     cursor::CursorStyle,
@@ -16,10 +16,7 @@ use crate::{
 };
 
 use super::{
-    clipboard::WebClipboard,
-    display::WebDisplay,
-    executor::WebExecutor,
-    window::WebWindow,
+    clipboard::WebClipboard, display::WebDisplay, executor::WebExecutor, window::WebWindow,
 };
 
 /// Web/WASM platform implementation
@@ -103,16 +100,14 @@ impl WebPlatform {
 
             // Request next frame after work (ensures smooth loop)
             if let Some(w) = web_sys::window() {
-                let _ = w.request_animation_frame(
-                    f.borrow().as_ref().unwrap().as_ref().unchecked_ref(),
-                );
+                let _ = w
+                    .request_animation_frame(f.borrow().as_ref().unwrap().as_ref().unchecked_ref());
             }
         }));
 
         // Kick off the first frame
-        let _ = window.request_animation_frame(
-            g.borrow().as_ref().unwrap().as_ref().unchecked_ref(),
-        );
+        let _ =
+            window.request_animation_frame(g.borrow().as_ref().unwrap().as_ref().unchecked_ref());
     }
 }
 

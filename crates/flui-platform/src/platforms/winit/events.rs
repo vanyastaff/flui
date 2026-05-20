@@ -7,12 +7,12 @@ use std::{sync::LazyLock, time::Instant};
 use dpi::{PhysicalPosition, PhysicalSize};
 use keyboard_types::Modifiers as KeyboardModifiers;
 use ui_events::{
+    ScrollDelta,
     keyboard::{Code, KeyState, KeyboardEvent, Location},
     pointer::{
         PointerButton, PointerButtonEvent, PointerEvent, PointerId, PointerInfo, PointerState,
         PointerType, PointerUpdate,
     },
-    ScrollDelta,
 };
 use winit::event::{ElementState, MouseButton, MouseScrollDelta};
 
@@ -217,9 +217,7 @@ fn convert_winit_key(key: &winit::keyboard::Key) -> keyboard_types::Key {
         }
         winit::keyboard::Key::Character(c) => K::Character(c.to_string()),
         winit::keyboard::Key::Dead(_) => K::Named(keyboard_types::NamedKey::Unidentified),
-        winit::keyboard::Key::Unidentified(_) => {
-            K::Named(keyboard_types::NamedKey::Unidentified)
-        }
+        winit::keyboard::Key::Unidentified(_) => K::Named(keyboard_types::NamedKey::Unidentified),
     }
 }
 

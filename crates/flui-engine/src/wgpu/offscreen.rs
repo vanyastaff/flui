@@ -321,7 +321,9 @@ impl OffscreenRenderer {
 
         // Acquire offscreen texture for masked result
         let size = Size::new(child_bounds.width(), child_bounds.height());
-        let texture = self.texture_pool.acquire_from_size(size, self.surface_format);
+        let texture = self
+            .texture_pool
+            .acquire_from_size(size, self.surface_format);
 
         // Ensure pipeline exists (Arc allows using after mutable borrow ends)
         let _ = self.get_or_create_pipeline(shader_type);

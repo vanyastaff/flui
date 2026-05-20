@@ -391,12 +391,20 @@ impl PipelineCacheConfig {
         // Validate version
         let version = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
         if version != 1 {
-            tracing::debug!(?path, version, "Pipeline cache file has unsupported version");
+            tracing::debug!(
+                ?path,
+                version,
+                "Pipeline cache file has unsupported version"
+            );
             return None;
         }
 
         let cache_data = data[8..].to_vec();
-        tracing::debug!(?path, size = cache_data.len(), "Loaded pipeline cache from disk");
+        tracing::debug!(
+            ?path,
+            size = cache_data.len(),
+            "Loaded pipeline cache from disk"
+        );
         Some(cache_data)
     }
 
@@ -431,7 +439,11 @@ impl PipelineCacheConfig {
         if let Some(parent) = path.parent() {
             if !parent.exists() {
                 std::fs::create_dir_all(parent).map_err(|e| {
-                    anyhow!("Failed to create pipeline cache directory {:?}: {}", parent, e)
+                    anyhow!(
+                        "Failed to create pipeline cache directory {:?}: {}",
+                        parent,
+                        e
+                    )
                 })?;
                 tracing::debug!(?parent, "Created pipeline cache directory");
             }
@@ -449,16 +461,18 @@ impl PipelineCacheConfig {
         // Write to a temporary file first, then rename for atomic operation
         let tmp_path = path.with_extension("tmp");
         let mut file = std::fs::File::create(&tmp_path).map_err(|e| {
-            anyhow!("Failed to create temporary cache file {:?}: {}", tmp_path, e)
+            anyhow!(
+                "Failed to create temporary cache file {:?}: {}",
+                tmp_path,
+                e
+            )
         })?;
 
-        file.write_all(&file_data).map_err(|e| {
-            anyhow!("Failed to write pipeline cache data: {}", e)
-        })?;
+        file.write_all(&file_data)
+            .map_err(|e| anyhow!("Failed to write pipeline cache data: {}", e))?;
 
-        file.flush().map_err(|e| {
-            anyhow!("Failed to flush pipeline cache data: {}", e)
-        })?;
+        file.flush()
+            .map_err(|e| anyhow!("Failed to flush pipeline cache data: {}", e))?;
         drop(file);
 
         // Set user-only permissions on Unix
@@ -471,7 +485,12 @@ impl PipelineCacheConfig {
 
         // Atomic rename
         std::fs::rename(&tmp_path, path).map_err(|e| {
-            anyhow!("Failed to rename pipeline cache file {:?} -> {:?}: {}", tmp_path, path, e)
+            anyhow!(
+                "Failed to rename pipeline cache file {:?} -> {:?}: {}",
+                tmp_path,
+                path,
+                e
+            )
         })?;
 
         tracing::debug!(?path, size = data.len(), "Saved pipeline cache to disk");

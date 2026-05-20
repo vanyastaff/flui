@@ -391,14 +391,10 @@ impl ApplicationHandler for WinitApp {
                 });
             }
             WinitWindowEvent::CursorMoved { position, .. } => {
-                let modifiers =
-                    self.platform
-                        .with_state(|state| {
-                            state
-                                .cursor_positions
-                                .insert(platform_id, position);
-                            state.current_modifiers
-                        });
+                let modifiers = self.platform.with_state(|state| {
+                    state.cursor_positions.insert(platform_id, position);
+                    state.current_modifiers
+                });
 
                 if let Some(ref win) = window {
                     let scale = win.scale_factor();
@@ -592,9 +588,7 @@ impl Platform for WinitPlatform {
                 .map(|win| {
                     // Return an Arc<WinitWindow> wrapped in WinitWindowHandle
                     // so the caller gets a Box<dyn PlatformWindow>
-                    Box::new(WinitWindowHandle {
-                        inner: win.clone(),
-                    }) as Box<dyn PlatformWindow>
+                    Box::new(WinitWindowHandle { inner: win.clone() }) as Box<dyn PlatformWindow>
                 })
         })
     }
@@ -746,12 +740,12 @@ impl WinitApp {
             .with_visible(options.visible);
 
         if let Some(min) = options.min_size {
-            attributes =
-                attributes.with_min_inner_size(winit::dpi::LogicalSize::new(min.width.0, min.height.0));
+            attributes = attributes
+                .with_min_inner_size(winit::dpi::LogicalSize::new(min.width.0, min.height.0));
         }
         if let Some(max) = options.max_size {
-            attributes =
-                attributes.with_max_inner_size(winit::dpi::LogicalSize::new(max.width.0, max.height.0));
+            attributes = attributes
+                .with_max_inner_size(winit::dpi::LogicalSize::new(max.width.0, max.height.0));
         }
 
         let raw_window = Arc::new(event_loop.create_window(attributes)?);
@@ -868,7 +862,9 @@ impl PlatformWindow for WinitWindowHandle {
 
     fn on_resize(
         &self,
-        callback: Box<dyn FnMut(flui_types::geometry::Size<flui_types::geometry::Pixels>, f32) + Send>,
+        callback: Box<
+            dyn FnMut(flui_types::geometry::Size<flui_types::geometry::Pixels>, f32) + Send,
+        >,
     ) {
         self.inner.on_resize(callback);
     }
@@ -906,4 +902,3 @@ impl PlatformWindow for WinitWindowHandle {
         self
     }
 }
-

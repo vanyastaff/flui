@@ -1536,7 +1536,7 @@ fn test_foundation_id_creation() {
 
 #[test]
 fn test_foundation_id_raw() {
-    use flui_scheduler::id::{IdGenerator, markers, FrameId};
+    use flui_scheduler::id::{FrameId, IdGenerator, markers};
 
     let id_gen = IdGenerator::<markers::Frame>::new();
     let id: FrameId = id_gen.next();

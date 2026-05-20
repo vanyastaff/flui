@@ -16,12 +16,9 @@ pub fn start() {
     // Log to browser console
     web_sys::console::log_1(&"FLUI Web Demo starting...".into());
 
-    let platform = flui_platform::current_platform()
-        .expect("Failed to initialize web platform");
+    let platform = flui_platform::current_platform().expect("Failed to initialize web platform");
 
-    web_sys::console::log_1(
-        &format!("Platform: {}", platform.name()).into(),
-    );
+    web_sys::console::log_1(&format!("Platform: {}", platform.name()).into());
 
     // Create canvas window before running the event loop
     let options = flui_platform::WindowOptions {
@@ -75,20 +72,14 @@ pub fn start() {
                         // Skip move events to avoid console spam
                     }
                     PointerEvent::Scroll(e) => {
-                        web_sys::console::log_1(
-                            &format!("Scroll: delta={:?}", e.delta).into(),
-                        );
+                        web_sys::console::log_1(&format!("Scroll: delta={:?}", e.delta).into());
                     }
                     _ => {}
                 }
             }
             PlatformInput::Keyboard(ke) => {
                 web_sys::console::log_1(
-                    &format!(
-                        "Key {:?}: {:?} (code={:?})",
-                        ke.state, ke.key, ke.code
-                    )
-                    .into(),
+                    &format!("Key {:?}: {:?} (code={:?})", ke.state, ke.key, ke.code).into(),
                 );
             }
         }
@@ -106,7 +97,11 @@ pub fn start() {
     // Register resize callback
     window.on_resize(Box::new(|size, scale| {
         web_sys::console::log_1(
-            &format!("Resize: {}x{} (scale: {scale})", size.width.0, size.height.0).into(),
+            &format!(
+                "Resize: {}x{} (scale: {scale})",
+                size.width.0, size.height.0
+            )
+            .into(),
         );
     }));
 

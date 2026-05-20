@@ -289,14 +289,10 @@ impl CommandRenderer for Backend {
 
         let style = span.style();
         #[allow(clippy::cast_possible_truncation)]
-        let base_font_size = style
-            .and_then(|s| s.font_size)
-            .unwrap_or(14.0) as f32;
+        let base_font_size = style.and_then(|s| s.font_size).unwrap_or(14.0) as f32;
         #[allow(clippy::cast_possible_truncation)]
         let font_size = base_font_size * (text_scale_factor as f32);
-        let color = style
-            .and_then(|s| s.color)
-            .unwrap_or(Color::BLACK);
+        let color = style.and_then(|s| s.color).unwrap_or(Color::BLACK);
         let paint = Paint::fill(color);
         let position = Point::new(offset.dx, offset.dy);
 
@@ -420,13 +416,10 @@ impl CommandRenderer for Backend {
             // Step 2: Get or create cached offscreen painter (avoids per-call allocation)
             // Ensure the cache is populated (creates or resizes as needed), then take
             // it out temporarily so we can wrap it in a Backend for command dispatch.
-            let _ = self.get_or_create_offscreen_painter(
-                &device,
-                &queue,
-                format,
-                (width, height),
-            );
-            let mut temp_painter = self.offscreen_painter.take()
+            let _ = self.get_or_create_offscreen_painter(&device, &queue, format, (width, height));
+            let mut temp_painter = self
+                .offscreen_painter
+                .take()
                 .expect("offscreen_painter was just populated by get_or_create");
             {
                 let mut temp_backend = Backend::new(temp_painter);
@@ -437,10 +430,9 @@ impl CommandRenderer for Backend {
             }
 
             // Step 4: Flush child content to offscreen texture
-            let mut encoder =
-                device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("ShaderMask Child Render"),
-                });
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("ShaderMask Child Render"),
+            });
             // Clear the child texture first
             {
                 let _clear_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -470,12 +462,8 @@ impl CommandRenderer for Backend {
             // Step 5: Apply shader mask via GPU pipeline
             let masked_texture = {
                 let mut offscreen = offscreen_arc.lock();
-                let result = offscreen.render_masked(
-                    bounds,
-                    shader,
-                    blend_mode,
-                    child_tex.texture(),
-                );
+                let result =
+                    offscreen.render_masked(bounds, shader, blend_mode, child_tex.texture());
                 result.into_texture()
             };
 
@@ -641,9 +629,7 @@ impl CommandRenderer for Backend {
                 _ => {
                     // Image and other non-gradient shader types are not applicable
                     // for gradient rendering; skip silently.
-                    tracing::debug!(
-                        "render_gradient: unsupported shader variant, skipping"
-                    );
+                    tracing::debug!("render_gradient: unsupported shader variant, skipping");
                 }
             }
         });
@@ -794,9 +780,7 @@ impl CommandRenderer for Backend {
                     );
                 }
                 _ => {
-                    tracing::debug!(
-                        "render_gradient_rrect: unsupported shader variant, skipping"
-                    );
+                    tracing::debug!("render_gradient_rrect: unsupported shader variant, skipping");
                 }
             }
         });

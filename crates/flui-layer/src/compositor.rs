@@ -41,8 +41,7 @@ use flui_foundation::LayerId;
 use flui_types::{
     geometry::{Pixels, RRect, Rect},
     painting::{
-        effects::ColorMatrix, BlendMode, Clip, FilterQuality, ImageFilter, Path, Shader,
-        TextureId,
+        effects::ColorMatrix, BlendMode, Clip, FilterQuality, ImageFilter, Path, Shader, TextureId,
     },
     Matrix4,
 };

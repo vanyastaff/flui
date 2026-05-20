@@ -5,13 +5,10 @@
 
 use std::sync::Arc;
 
-use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
+use wasm_bindgen::prelude::*;
 
-use crate::{
-    shared::WindowCallbacks,
-    traits::PlatformInput,
-};
+use crate::{shared::WindowCallbacks, traits::PlatformInput};
 
 use super::window::WebWindow;
 
@@ -32,10 +29,7 @@ pub fn register_event_listeners(window: &WebWindow) {
 
 // ==================== Pointer Events ====================
 
-fn register_pointer_events(
-    canvas: &web_sys::HtmlCanvasElement,
-    callbacks: &Arc<WindowCallbacks>,
-) {
+fn register_pointer_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<WindowCallbacks>) {
     // pointerdown
     {
         let callbacks = Arc::clone(callbacks);
@@ -156,10 +150,7 @@ fn register_focus_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<Wi
 
 // ==================== Wheel Events ====================
 
-fn register_wheel_events(
-    canvas: &web_sys::HtmlCanvasElement,
-    callbacks: &Arc<WindowCallbacks>,
-) {
+fn register_wheel_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<WindowCallbacks>) {
     let callbacks = Arc::clone(callbacks);
     let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
         e.prevent_default();
@@ -220,10 +211,7 @@ fn make_pointer_state(pe: &web_sys::PointerEvent) -> ui_events::pointer::Pointer
         buttons: PointerButtons::default(),
         modifiers,
         count: 0,
-        contact_geometry: PhysicalSize::new(
-            pe.width().max(1) as f64,
-            pe.height().max(1) as f64,
-        ),
+        contact_geometry: PhysicalSize::new(pe.width().max(1) as f64, pe.height().max(1) as f64),
         orientation: PointerOrientation::default(),
         pressure: pe.pressure(),
         tangential_pressure: pe.tangential_pressure(),
@@ -279,15 +267,14 @@ fn convert_pointer_move(pe: &web_sys::PointerEvent) -> PlatformInput {
 
 fn convert_wheel_event(we: &web_sys::WheelEvent) -> PlatformInput {
     use dpi::PhysicalPosition;
-    use ui_events::pointer::{PointerEvent, PointerInfo, PointerScrollEvent, PointerState, PointerType};
     use ui_events::ScrollDelta;
+    use ui_events::pointer::{
+        PointerEvent, PointerInfo, PointerScrollEvent, PointerState, PointerType,
+    };
 
     let delta = match we.delta_mode() {
         // DOM_DELTA_PIXEL = 0
-        0 => ScrollDelta::PixelDelta(PhysicalPosition::new(
-            we.delta_x(),
-            we.delta_y(),
-        )),
+        0 => ScrollDelta::PixelDelta(PhysicalPosition::new(we.delta_x(), we.delta_y())),
         // DOM_DELTA_LINE = 1
         1 => ScrollDelta::LineDelta(we.delta_x() as f32, we.delta_y() as f32),
         // DOM_DELTA_PAGE = 2
@@ -352,7 +339,10 @@ fn convert_keyboard_event(
     PlatformInput::Keyboard(ui_events::keyboard::KeyboardEvent {
         state,
         key,
-        code: ke.code().parse().unwrap_or(keyboard_types::Code::Unidentified),
+        code: ke
+            .code()
+            .parse()
+            .unwrap_or(keyboard_types::Code::Unidentified),
         location,
         modifiers,
         repeat: ke.repeat(),

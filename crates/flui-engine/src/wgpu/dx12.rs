@@ -427,7 +427,9 @@ impl AutoHdrConfig {
             //   IDXGIOutput6::GetDesc1() -> DXGI_OUTPUT_DESC1.ColorSpace
             // and checking for Windows 11+ (build 22000+).
             // wgpu does not expose DXGI output capabilities.
-            tracing::debug!("Auto HDR availability not detectable via wgpu (requires DXGI output query)");
+            tracing::debug!(
+                "Auto HDR availability not detectable via wgpu (requires DXGI output query)"
+            );
             false
         }
 
@@ -605,7 +607,9 @@ impl DirectStorageConfig {
             //   LoadLibrary("dstorage.dll") to check runtime presence
             //   DStorageGetFactory() to verify GPU support
             // wgpu does not expose DirectStorage capabilities.
-            tracing::debug!("DirectStorage availability not detectable via wgpu (requires dstorage.dll runtime check)");
+            tracing::debug!(
+                "DirectStorage availability not detectable via wgpu (requires dstorage.dll runtime check)"
+            );
             false
         }
 

@@ -38,9 +38,8 @@ pub async fn main() {
         let ptr = NonNull::new_unchecked(Box::into_raw(Box::new(obj)) as *mut std::ffi::c_void);
         let handle = raw_window_handle::WebCanvasWindowHandle::new(ptr);
         let raw_window = raw_window_handle::RawWindowHandle::WebCanvas(handle);
-        let raw_display = raw_window_handle::RawDisplayHandle::Web(
-            raw_window_handle::WebDisplayHandle::new(),
-        );
+        let raw_display =
+            raw_window_handle::RawDisplayHandle::Web(raw_window_handle::WebDisplayHandle::new());
         let target = wgpu::SurfaceTargetUnsafe::RawHandle {
             raw_display_handle: raw_display,
             raw_window_handle: raw_window,
@@ -154,23 +153,13 @@ fn draw_all_demos(painter: &mut flui_engine::WgpuPainter) {
     y_offset += 110.0 + section_gap;
 
     // === Section 3: Circles & Ovals ===
-    painter.text(
-        "3. Circles & Ovals",
-        pt(30.0, y_offset),
-        22.0,
-        &label_paint,
-    );
+    painter.text("3. Circles & Ovals", pt(30.0, y_offset), 22.0, &label_paint);
     y_offset += 35.0;
     draw_circles_and_ovals(painter, y_offset);
     y_offset += 130.0 + section_gap;
 
     // === Section 4: Lines & Strokes ===
-    painter.text(
-        "4. Lines & Strokes",
-        pt(30.0, y_offset),
-        22.0,
-        &label_paint,
-    );
+    painter.text("4. Lines & Strokes", pt(30.0, y_offset), 22.0, &label_paint);
     y_offset += 35.0;
     draw_lines_and_strokes(painter, y_offset);
     y_offset += 100.0 + section_gap;
@@ -238,12 +227,7 @@ fn draw_all_demos(painter: &mut flui_engine::WgpuPainter) {
     y_offset += 130.0 + section_gap;
 
     // === Section 12: Text ===
-    painter.text(
-        "12. Text Rendering",
-        pt(30.0, y_offset),
-        22.0,
-        &label_paint,
-    );
+    painter.text("12. Text Rendering", pt(30.0, y_offset), 22.0, &label_paint);
     y_offset += 35.0;
     draw_text(painter, y_offset);
     y_offset += 130.0 + section_gap;
@@ -484,12 +468,7 @@ fn draw_arcs(painter: &mut flui_engine::WgpuPainter, y: f32) {
     let arc_data: &[(f32, f32, Color, &str)] = &[
         (0.0, FRAC_PI_2, Color::rgba(255, 80, 80, 220), "90 deg"),
         (0.0, PI, Color::rgba(80, 255, 80, 220), "180 deg"),
-        (
-            PI * 0.25,
-            PI,
-            Color::rgba(80, 80, 255, 220),
-            "45-225 deg",
-        ),
+        (PI * 0.25, PI, Color::rgba(80, 80, 255, 220), "45-225 deg"),
         (0.0, TAU * 0.75, Color::rgba(255, 200, 50, 220), "270 deg"),
     ];
 
@@ -519,9 +498,18 @@ fn draw_gradients(painter: &mut flui_engine::WgpuPainter, y: f32) {
     let linear = Shader::simple_linear(
         ofs(30.0, y),
         ofs(330.0, y),
-        vec![Color::RED, Color::YELLOW, Color::GREEN, Color::CYAN, Color::BLUE],
+        vec![
+            Color::RED,
+            Color::YELLOW,
+            Color::GREEN,
+            Color::CYAN,
+            Color::BLUE,
+        ],
     );
-    painter.rect(rect(30.0, y, 300.0, 100.0), &Paint::fill(Color::WHITE).with_shader(linear));
+    painter.rect(
+        rect(30.0, y, 300.0, 100.0),
+        &Paint::fill(Color::WHITE).with_shader(linear),
+    );
     painter.text("Linear (rainbow)", pt(100.0, y + 110.0), 12.0, &label_paint);
 
     // Linear gradient (diagonal)
@@ -530,31 +518,62 @@ fn draw_gradients(painter: &mut flui_engine::WgpuPainter, y: f32) {
         ofs(640.0, y + 100.0),
         vec![Color::rgba(255, 0, 128, 255), Color::rgba(0, 128, 255, 255)],
     );
-    painter.rect(rect(370.0, y, 270.0, 100.0), &Paint::fill(Color::WHITE).with_shader(diag));
-    painter.text("Linear (diagonal)", pt(430.0, y + 110.0), 12.0, &label_paint);
+    painter.rect(
+        rect(370.0, y, 270.0, 100.0),
+        &Paint::fill(Color::WHITE).with_shader(diag),
+    );
+    painter.text(
+        "Linear (diagonal)",
+        pt(430.0, y + 110.0),
+        12.0,
+        &label_paint,
+    );
 
     // Radial gradient
     let radial = Shader::simple_radial(
         ofs(750.0, y + 50.0),
         50.0,
-        vec![Color::WHITE, Color::rgba(255, 100, 50, 255), Color::rgba(50, 0, 100, 255)],
+        vec![
+            Color::WHITE,
+            Color::rgba(255, 100, 50, 255),
+            Color::rgba(50, 0, 100, 255),
+        ],
     );
-    painter.circle(pt(750.0, y + 50.0), 50.0, &Paint::fill(Color::WHITE).with_shader(radial));
+    painter.circle(
+        pt(750.0, y + 50.0),
+        50.0,
+        &Paint::fill(Color::WHITE).with_shader(radial),
+    );
     painter.text("Radial", pt(725.0, y + 110.0), 12.0, &label_paint);
 
     // Sweep gradient
     let sweep = Shader::simple_sweep(
         ofs(920.0, y + 50.0),
-        vec![Color::RED, Color::YELLOW, Color::GREEN, Color::CYAN, Color::BLUE, Color::MAGENTA, Color::RED],
+        vec![
+            Color::RED,
+            Color::YELLOW,
+            Color::GREEN,
+            Color::CYAN,
+            Color::BLUE,
+            Color::MAGENTA,
+            Color::RED,
+        ],
     );
-    painter.circle(pt(920.0, y + 50.0), 50.0, &Paint::fill(Color::WHITE).with_shader(sweep));
+    painter.circle(
+        pt(920.0, y + 50.0),
+        50.0,
+        &Paint::fill(Color::WHITE).with_shader(sweep),
+    );
     painter.text("Sweep", pt(900.0, y + 110.0), 12.0, &label_paint);
 
     // Gradient on rounded rect
     let rrect_grad = Shader::simple_linear(
         ofs(1000.0, y),
         ofs(1170.0, y + 100.0),
-        vec![Color::rgba(255, 50, 200, 255), Color::rgba(50, 200, 255, 255)],
+        vec![
+            Color::rgba(255, 50, 200, 255),
+            Color::rgba(50, 200, 255, 255),
+        ],
     );
     let rrect = RRect::from_rect_circular(rect(1000.0, y, 170.0, 100.0), px(20.0));
     painter.rrect(rrect, &Paint::fill(Color::WHITE).with_shader(rrect_grad));
@@ -592,10 +611,7 @@ fn draw_transforms(painter: &mut flui_engine::WgpuPainter, y: f32) {
         painter.save();
         painter.translate(ofs(center_x, center_y));
         painter.rotate(i as f32 * std::f32::consts::PI / 6.0);
-        painter.rect(
-            rect(-50.0, -15.0, 100.0, 30.0),
-            &Paint::fill(*color),
-        );
+        painter.rect(rect(-50.0, -15.0, 100.0, 30.0), &Paint::fill(*color));
         painter.restore();
     }
     painter.text("Rotate", pt(275.0, y + 145.0), 12.0, &label_paint);
@@ -736,11 +752,7 @@ fn draw_drrect(painter: &mut flui_engine::WgpuPainter, y: f32) {
     // Thick border frame
     let outer1 = RRect::from_rect_circular(rect(30.0, y, 200.0, 100.0), px(20.0));
     let inner1 = RRect::from_rect_circular(rect(45.0, y + 15.0, 170.0, 70.0), px(10.0));
-    painter.draw_drrect(
-        outer1,
-        inner1,
-        &Paint::fill(Color::rgba(255, 100, 50, 255)),
-    );
+    painter.draw_drrect(outer1, inner1, &Paint::fill(Color::rgba(255, 100, 50, 255)));
     painter.text("Thick frame", pt(80.0, y + 110.0), 12.0, &label_paint);
 
     // Gradient frame
@@ -759,12 +771,7 @@ fn draw_drrect(painter: &mut flui_engine::WgpuPainter, y: f32) {
         inner2,
         &Paint::fill(Color::WHITE).with_shader(frame_grad),
     );
-    painter.text(
-        "Gradient frame",
-        pt(320.0, y + 110.0),
-        12.0,
-        &label_paint,
-    );
+    painter.text("Gradient frame", pt(320.0, y + 110.0), 12.0, &label_paint);
 
     // Thin outline frame
     let outer3 = RRect::from_rect_circular(rect(530.0, y, 200.0, 100.0), px(15.0));
@@ -779,11 +786,7 @@ fn draw_drrect(painter: &mut flui_engine::WgpuPainter, y: f32) {
     // Asymmetric radii frame
     let outer4 = RRect::from_rect_circular(rect(780.0, y, 200.0, 100.0), px(40.0));
     let inner4 = RRect::from_rect_circular(rect(800.0, y + 20.0, 160.0, 60.0), px(5.0));
-    painter.draw_drrect(
-        outer4,
-        inner4,
-        &Paint::fill(Color::rgba(255, 200, 50, 255)),
-    );
+    painter.draw_drrect(outer4, inner4, &Paint::fill(Color::rgba(255, 200, 50, 255)));
     painter.text("Asymmetric", pt(835.0, y + 110.0), 12.0, &label_paint);
 }
 
@@ -818,12 +821,7 @@ fn draw_opacity(painter: &mut flui_engine::WgpuPainter, y: f32) {
         let color = Color::rgba(255, 50, 50, *alpha);
         painter.rect(rect(x, y, 120.0, 80.0), &Paint::fill(color));
     }
-    painter.text(
-        "Decreasing alpha",
-        pt(60.0, y + 90.0),
-        12.0,
-        &label_paint,
-    );
+    painter.text("Decreasing alpha", pt(60.0, y + 90.0), 12.0, &label_paint);
 
     // RGB overlap (additive-like with transparency)
     let overlap_x = 400.0;
@@ -858,12 +856,7 @@ fn draw_opacity(painter: &mut flui_engine::WgpuPainter, y: f32) {
             &Paint::fill(Color::rgba(100, 200, 255, alpha)),
         );
     }
-    painter.text(
-        "Alpha gradient",
-        pt(750.0, y + 90.0),
-        12.0,
-        &label_paint,
-    );
+    painter.text("Alpha gradient", pt(750.0, y + 90.0), 12.0, &label_paint);
 }
 
 // ============================================================
@@ -873,8 +866,7 @@ fn draw_opacity(painter: &mut flui_engine::WgpuPainter, y: f32) {
 fn make_star(center: Point<Pixels>, outer_r: f32, inner_r: f32, points: usize) -> Path {
     let mut pts = Vec::with_capacity(points * 2);
     for i in 0..(points * 2) {
-        let angle = (i as f32) * std::f32::consts::PI / points as f32
-            - std::f32::consts::FRAC_PI_2;
+        let angle = (i as f32) * std::f32::consts::PI / points as f32 - std::f32::consts::FRAC_PI_2;
         let r = if i % 2 == 0 { outer_r } else { inner_r };
         pts.push(pt(
             center.x.0 + angle.cos() * r,
@@ -887,8 +879,7 @@ fn make_star(center: Point<Pixels>, outer_r: f32, inner_r: f32, points: usize) -
 fn make_regular_polygon(center: Point<Pixels>, radius: f32, sides: usize) -> Path {
     let mut pts = Vec::with_capacity(sides);
     for i in 0..sides {
-        let angle = (i as f32) * std::f32::consts::TAU / sides as f32
-            - std::f32::consts::FRAC_PI_2;
+        let angle = (i as f32) * std::f32::consts::TAU / sides as f32 - std::f32::consts::FRAC_PI_2;
         pts.push(pt(
             center.x.0 + angle.cos() * radius,
             center.y.0 + angle.sin() * radius,

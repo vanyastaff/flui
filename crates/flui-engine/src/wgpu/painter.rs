@@ -1428,7 +1428,9 @@ impl WgpuPainter {
         (0..count)
             .map(|i| {
                 let position = if let Some(s) = stops {
-                    s.get(i).copied().unwrap_or(i as f32 / (count - 1).max(1) as f32)
+                    s.get(i)
+                        .copied()
+                        .unwrap_or(i as f32 / (count - 1).max(1) as f32)
                 } else {
                     i as f32 / (count - 1).max(1) as f32
                 };
@@ -1463,15 +1465,14 @@ impl WgpuPainter {
         match shader {
             flui_types::painting::Shader::LinearGradient { from, to, .. } => {
                 // Convert Offset<Pixels> to local coordinates relative to bounds
-                let start = glam::Vec2::new(from.dx.0 - bounds.left().0, from.dy.0 - bounds.top().0);
+                let start =
+                    glam::Vec2::new(from.dx.0 - bounds.left().0, from.dy.0 - bounds.top().0);
                 let end = glam::Vec2::new(to.dx.0 - bounds.left().0, to.dy.0 - bounds.top().0);
                 self.gradient_rect(transformed, start, end, &stops, corner_radii[0]);
             }
             flui_types::painting::Shader::RadialGradient { center, radius, .. } => {
-                let c = glam::Vec2::new(
-                    center.dx.0 - bounds.left().0,
-                    center.dy.0 - bounds.top().0,
-                );
+                let c =
+                    glam::Vec2::new(center.dx.0 - bounds.left().0, center.dy.0 - bounds.top().0);
                 self.radial_gradient_rect(transformed, c, *radius, &stops, corner_radii[0]);
             }
             flui_types::painting::Shader::SweepGradient {
@@ -1480,11 +1481,16 @@ impl WgpuPainter {
                 end_angle,
                 ..
             } => {
-                let c = glam::Vec2::new(
-                    center.dx.0 - bounds.left().0,
-                    center.dy.0 - bounds.top().0,
+                let c =
+                    glam::Vec2::new(center.dx.0 - bounds.left().0, center.dy.0 - bounds.top().0);
+                self.sweep_gradient_rect(
+                    transformed,
+                    c,
+                    *start_angle,
+                    *end_angle,
+                    &stops,
+                    corner_radii[0],
                 );
-                self.sweep_gradient_rect(transformed, c, *start_angle, *end_angle, &stops, corner_radii[0]);
             }
             flui_types::painting::Shader::Solid { color } => {
                 // Just use the solid color directly — fall through
@@ -1529,13 +1535,14 @@ impl WgpuPainter {
         }
 
         // Calculate instance data sizes
-        let rect_size =
-            self.current_segment.rect_batch.len() * std::mem::size_of::<super::instancing::RectInstance>();
-        let circle_size =
-            self.current_segment.circle_batch.len() * std::mem::size_of::<super::instancing::CircleInstance>();
-        let arc_size = self.current_segment.arc_batch.len() * std::mem::size_of::<super::instancing::ArcInstance>();
-        let shadow_size =
-            self.current_segment.shadow_batch.len() * std::mem::size_of::<super::instancing::ShadowInstance>();
+        let rect_size = self.current_segment.rect_batch.len()
+            * std::mem::size_of::<super::instancing::RectInstance>();
+        let circle_size = self.current_segment.circle_batch.len()
+            * std::mem::size_of::<super::instancing::CircleInstance>();
+        let arc_size = self.current_segment.arc_batch.len()
+            * std::mem::size_of::<super::instancing::ArcInstance>();
+        let shadow_size = self.current_segment.shadow_batch.len()
+            * std::mem::size_of::<super::instancing::ShadowInstance>();
 
         // Build combined instance buffer
         // IMPORTANT: Shadows FIRST for correct z-ordering (background → foreground)
@@ -1778,12 +1785,14 @@ impl WgpuPainter {
 
         let linear_offset = 0;
         if has_linear {
-            combined_buffer.extend_from_slice(self.current_segment.linear_gradient_batch.as_bytes());
+            combined_buffer
+                .extend_from_slice(self.current_segment.linear_gradient_batch.as_bytes());
         }
 
         let radial_offset = combined_buffer.len();
         if has_radial {
-            combined_buffer.extend_from_slice(self.current_segment.radial_gradient_batch.as_bytes());
+            combined_buffer
+                .extend_from_slice(self.current_segment.radial_gradient_batch.as_bytes());
         }
 
         let sweep_offset = combined_buffer.len();
@@ -2034,7 +2043,10 @@ impl Painter for WgpuPainter {
                 let instance = super::instancing::RectInstance::rect(transformed_rect, color)
                     .with_clip_rrect(self.current_rrect_clip);
                 let _ = self.current_segment.rect_batch.add(instance);
-                DrawSegment::push_scissor_region(&mut self.current_segment.rect_scissors, self.current_scissor);
+                DrawSegment::push_scissor_region(
+                    &mut self.current_segment.rect_scissors,
+                    self.current_scissor,
+                );
             } else {
                 // Slow path: tessellate rotated/skewed rects as a transformed quad
                 let tl = self.apply_transform(Point::new(rect.left(), rect.top()));
@@ -2043,20 +2055,44 @@ impl Painter for WgpuPainter {
                 let bl = self.apply_transform(Point::new(rect.left(), rect.bottom()));
                 let rgba = color.to_rgba_f32_array();
                 let vertices = vec![
-                    Vertex { position: [tl.x.0, tl.y.0], color: rgba, tex_coord: [0.0, 0.0] },
-                    Vertex { position: [tr.x.0, tr.y.0], color: rgba, tex_coord: [1.0, 0.0] },
-                    Vertex { position: [br.x.0, br.y.0], color: rgba, tex_coord: [1.0, 1.0] },
-                    Vertex { position: [bl.x.0, bl.y.0], color: rgba, tex_coord: [0.0, 1.0] },
+                    Vertex {
+                        position: [tl.x.0, tl.y.0],
+                        color: rgba,
+                        tex_coord: [0.0, 0.0],
+                    },
+                    Vertex {
+                        position: [tr.x.0, tr.y.0],
+                        color: rgba,
+                        tex_coord: [1.0, 0.0],
+                    },
+                    Vertex {
+                        position: [br.x.0, br.y.0],
+                        color: rgba,
+                        tex_coord: [1.0, 1.0],
+                    },
+                    Vertex {
+                        position: [bl.x.0, bl.y.0],
+                        color: rgba,
+                        tex_coord: [0.0, 1.0],
+                    },
                 ];
                 let indices = vec![0, 1, 2, 0, 2, 3];
-                self.add_tessellated_with_key(vertices, &indices, pipeline::pipeline_key_from_paint(paint));
+                self.add_tessellated_with_key(
+                    vertices,
+                    &indices,
+                    pipeline::pipeline_key_from_paint(paint),
+                );
             }
         } else {
             // Stroked rect - use tessellator (less common, fallback path)
             // Paint already contains stroke information (stroke_width, stroke_cap,
             // stroke_join)
             if let Ok((vertices, indices)) = self.tessellator.tessellate_rect_stroke(rect, paint) {
-                self.add_tessellated_with_key(vertices, &indices, pipeline::pipeline_key_from_paint(paint));
+                self.add_tessellated_with_key(
+                    vertices,
+                    &indices,
+                    pipeline::pipeline_key_from_paint(paint),
+                );
             }
         }
     }
@@ -2102,11 +2138,18 @@ impl Painter for WgpuPainter {
             )
             .with_clip_rrect(self.current_rrect_clip);
             let _ = self.current_segment.rect_batch.add(instance);
-            DrawSegment::push_scissor_region(&mut self.current_segment.rect_scissors, self.current_scissor);
+            DrawSegment::push_scissor_region(
+                &mut self.current_segment.rect_scissors,
+                self.current_scissor,
+            );
         } else {
             // Stroked rounded rect - use tessellator (fallback)
             if let Ok((vertices, indices)) = self.tessellator.tessellate_rrect(rrect, paint) {
-                self.add_tessellated_with_key(vertices, &indices, pipeline::pipeline_key_from_paint(paint));
+                self.add_tessellated_with_key(
+                    vertices,
+                    &indices,
+                    pipeline::pipeline_key_from_paint(paint),
+                );
             }
         }
     }
@@ -2150,14 +2193,21 @@ impl Painter for WgpuPainter {
             let instance =
                 super::instancing::CircleInstance::new(transformed_center, radius, color);
             let _ = self.current_segment.circle_batch.add(instance);
-            DrawSegment::push_scissor_region(&mut self.current_segment.circle_scissors, self.current_scissor);
+            DrawSegment::push_scissor_region(
+                &mut self.current_segment.circle_scissors,
+                self.current_scissor,
+            );
             // Note: Auto-flush happens in render() - no need to flush here
         } else {
             // Stroked circle - use tessellator (less common, fallback path)
             if let Ok((vertices, indices)) =
                 self.tessellator.tessellate_circle(center, radius, paint)
             {
-                self.add_tessellated_with_key(vertices, &indices, pipeline::pipeline_key_from_paint(paint));
+                self.add_tessellated_with_key(
+                    vertices,
+                    &indices,
+                    pipeline::pipeline_key_from_paint(paint),
+                );
             }
         }
     }
@@ -2171,7 +2221,11 @@ impl Painter for WgpuPainter {
         let radii = Point::new(rect.width() / 2.0, rect.height() / 2.0);
 
         if let Ok((vertices, indices)) = self.tessellator.tessellate_ellipse(center, radii, paint) {
-            self.add_tessellated_with_key(vertices, &indices, pipeline::pipeline_key_from_paint(paint));
+            self.add_tessellated_with_key(
+                vertices,
+                &indices,
+                pipeline::pipeline_key_from_paint(paint),
+            );
         }
     }
 
@@ -2206,7 +2260,10 @@ impl Painter for WgpuPainter {
                 paint.color,
             );
             let _ = self.current_segment.arc_batch.add(instance);
-            DrawSegment::push_scissor_region(&mut self.current_segment.arc_scissors, self.current_scissor);
+            DrawSegment::push_scissor_region(
+                &mut self.current_segment.arc_scissors,
+                self.current_scissor,
+            );
         } else {
             // For stroked arcs or arcs without center, use tessellation
             // TODO: Implement proper arc tessellation in Tessellator
@@ -2220,7 +2277,10 @@ impl Painter for WgpuPainter {
                     paint.color,
                 );
                 let _ = self.current_segment.arc_batch.add(instance);
-                DrawSegment::push_scissor_region(&mut self.current_segment.arc_scissors, self.current_scissor);
+                DrawSegment::push_scissor_region(
+                    &mut self.current_segment.arc_scissors,
+                    self.current_scissor,
+                );
             } else {
                 // Use tessellation for stroked arcs
                 match self.tessellator.tessellate_arc(
@@ -2231,7 +2291,11 @@ impl Painter for WgpuPainter {
                     paint,
                 ) {
                     Ok((vertices, indices)) => {
-                        self.add_tessellated_with_key(vertices, &indices, pipeline::pipeline_key_from_paint(paint));
+                        self.add_tessellated_with_key(
+                            vertices,
+                            &indices,
+                            pipeline::pipeline_key_from_paint(paint),
+                        );
                     }
                     Err(e) => {
                         #[cfg(debug_assertions)]
@@ -2254,7 +2318,11 @@ impl Painter for WgpuPainter {
         // Tessellate the DRRect (ring with inner cutout)
         match self.tessellator.tessellate_drrect(&outer, &inner, paint) {
             Ok((vertices, indices)) => {
-                self.add_tessellated_with_key(vertices, &indices, pipeline::pipeline_key_from_paint(paint));
+                self.add_tessellated_with_key(
+                    vertices,
+                    &indices,
+                    pipeline::pipeline_key_from_paint(paint),
+                );
             }
             Err(e) => {
                 #[cfg(debug_assertions)]
@@ -2282,7 +2350,11 @@ impl Painter for WgpuPainter {
                     vertices.len(),
                     indices.len()
                 );
-                self.add_tessellated_with_key(vertices, &indices, pipeline::pipeline_key_from_paint(paint));
+                self.add_tessellated_with_key(
+                    vertices,
+                    &indices,
+                    pipeline::pipeline_key_from_paint(paint),
+                );
             }
             Err(e) => {
                 #[cfg(debug_assertions)]
@@ -2366,7 +2438,11 @@ impl Painter for WgpuPainter {
                 .map(|&pos| Vertex::new(pos, rgba, [0.0, 0.0]))
                 .collect();
             let indices: Vec<u32> = cached_indices.to_vec();
-            self.add_tessellated_with_key(vertices, &indices, pipeline::pipeline_key_from_paint(paint));
+            self.add_tessellated_with_key(
+                vertices,
+                &indices,
+                pipeline::pipeline_key_from_paint(paint),
+            );
             return;
         }
 
@@ -2380,12 +2456,15 @@ impl Painter for WgpuPainter {
         match result {
             Ok((vertices, indices)) => {
                 // Extract position data for cache (color-independent)
-                let positions: Vec<[f32; 2]> =
-                    vertices.iter().map(|v| v.position).collect();
+                let positions: Vec<[f32; 2]> = vertices.iter().map(|v| v.position).collect();
                 self.path_cache
                     .insert(path_hash, positions, indices.clone());
 
-                self.add_tessellated_with_key(vertices, &indices, pipeline::pipeline_key_from_paint(paint));
+                self.add_tessellated_with_key(
+                    vertices,
+                    &indices,
+                    pipeline::pipeline_key_from_paint(paint),
+                );
             }
             Err(e) => {
                 tracing::warn!("Failed to tessellate path: {}", e);
@@ -2568,23 +2647,104 @@ impl Painter for WgpuPainter {
         // 9 slices: (src_x, src_y, src_w, src_h) -> dst rect
         let slices: [(f32, f32, f32, f32, f32, f32, f32, f32); 9] = [
             // Top-left corner
-            (0.0, 0.0, sl, st, dl, dt, d_inner_left - dl, d_inner_top - dt),
+            (
+                0.0,
+                0.0,
+                sl,
+                st,
+                dl,
+                dt,
+                d_inner_left - dl,
+                d_inner_top - dt,
+            ),
             // Top center
-            (sl, 0.0, sr - sl, st, d_inner_left, dt, d_inner_right - d_inner_left, d_inner_top - dt),
+            (
+                sl,
+                0.0,
+                sr - sl,
+                st,
+                d_inner_left,
+                dt,
+                d_inner_right - d_inner_left,
+                d_inner_top - dt,
+            ),
             // Top-right corner
-            (sr, 0.0, img_w - sr, st, d_inner_right, dt, dr - d_inner_right, d_inner_top - dt),
+            (
+                sr,
+                0.0,
+                img_w - sr,
+                st,
+                d_inner_right,
+                dt,
+                dr - d_inner_right,
+                d_inner_top - dt,
+            ),
             // Middle-left
-            (0.0, st, sl, sb - st, dl, d_inner_top, d_inner_left - dl, d_inner_bottom - d_inner_top),
+            (
+                0.0,
+                st,
+                sl,
+                sb - st,
+                dl,
+                d_inner_top,
+                d_inner_left - dl,
+                d_inner_bottom - d_inner_top,
+            ),
             // Center
-            (sl, st, sr - sl, sb - st, d_inner_left, d_inner_top, d_inner_right - d_inner_left, d_inner_bottom - d_inner_top),
+            (
+                sl,
+                st,
+                sr - sl,
+                sb - st,
+                d_inner_left,
+                d_inner_top,
+                d_inner_right - d_inner_left,
+                d_inner_bottom - d_inner_top,
+            ),
             // Middle-right
-            (sr, st, img_w - sr, sb - st, d_inner_right, d_inner_top, dr - d_inner_right, d_inner_bottom - d_inner_top),
+            (
+                sr,
+                st,
+                img_w - sr,
+                sb - st,
+                d_inner_right,
+                d_inner_top,
+                dr - d_inner_right,
+                d_inner_bottom - d_inner_top,
+            ),
             // Bottom-left corner
-            (0.0, sb, sl, img_h - sb, dl, d_inner_bottom, d_inner_left - dl, db - d_inner_bottom),
+            (
+                0.0,
+                sb,
+                sl,
+                img_h - sb,
+                dl,
+                d_inner_bottom,
+                d_inner_left - dl,
+                db - d_inner_bottom,
+            ),
             // Bottom center
-            (sl, sb, sr - sl, img_h - sb, d_inner_left, d_inner_bottom, d_inner_right - d_inner_left, db - d_inner_bottom),
+            (
+                sl,
+                sb,
+                sr - sl,
+                img_h - sb,
+                d_inner_left,
+                d_inner_bottom,
+                d_inner_right - d_inner_left,
+                db - d_inner_bottom,
+            ),
             // Bottom-right corner
-            (sr, sb, img_w - sr, img_h - sb, d_inner_right, d_inner_bottom, dr - d_inner_right, db - d_inner_bottom),
+            (
+                sr,
+                sb,
+                img_w - sr,
+                img_h - sb,
+                d_inner_right,
+                d_inner_bottom,
+                dr - d_inner_right,
+                db - d_inner_bottom,
+            ),
         ];
 
         for (sx, sy, sw, sh, dx, dy, dw, dh) in slices {
@@ -2607,7 +2767,10 @@ impl Painter for WgpuPainter {
         use flui_painting::display_list::ColorFilter;
 
         match filter {
-            ColorFilter::Mode { color, blend_mode: _ } => {
+            ColorFilter::Mode {
+                color,
+                blend_mode: _,
+            } => {
                 // Pragmatic v1: draw image then overlay a tinted rect
                 // First draw the image normally
                 self.draw_image(image, dst);
@@ -2638,10 +2801,24 @@ impl Painter for WgpuPainter {
                     let b = pixel[2] as f32 / 255.0;
                     let a = pixel[3] as f32 / 255.0;
 
-                    let nr = (matrix[0] * r + matrix[1] * g + matrix[2] * b + matrix[3] * a + matrix[4]).clamp(0.0, 1.0);
-                    let ng = (matrix[5] * r + matrix[6] * g + matrix[7] * b + matrix[8] * a + matrix[9]).clamp(0.0, 1.0);
-                    let nb = (matrix[10] * r + matrix[11] * g + matrix[12] * b + matrix[13] * a + matrix[14]).clamp(0.0, 1.0);
-                    let na = (matrix[15] * r + matrix[16] * g + matrix[17] * b + matrix[18] * a + matrix[19]).clamp(0.0, 1.0);
+                    let nr =
+                        (matrix[0] * r + matrix[1] * g + matrix[2] * b + matrix[3] * a + matrix[4])
+                            .clamp(0.0, 1.0);
+                    let ng =
+                        (matrix[5] * r + matrix[6] * g + matrix[7] * b + matrix[8] * a + matrix[9])
+                            .clamp(0.0, 1.0);
+                    let nb = (matrix[10] * r
+                        + matrix[11] * g
+                        + matrix[12] * b
+                        + matrix[13] * a
+                        + matrix[14])
+                        .clamp(0.0, 1.0);
+                    let na = (matrix[15] * r
+                        + matrix[16] * g
+                        + matrix[17] * b
+                        + matrix[18] * a
+                        + matrix[19])
+                        .clamp(0.0, 1.0);
 
                     new_data.push((nr * 255.0) as u8);
                     new_data.push((ng * 255.0) as u8);
@@ -2837,7 +3014,11 @@ impl Painter for WgpuPainter {
 
         // Add to tessellated geometry (bypassing tessellator since we already have
         // triangles)
-        self.add_tessellated_with_key(our_vertices, &our_indices, pipeline::pipeline_key_from_paint(paint));
+        self.add_tessellated_with_key(
+            our_vertices,
+            &our_indices,
+            pipeline::pipeline_key_from_paint(paint),
+        );
     }
 
     fn draw_atlas(
@@ -3115,14 +3296,10 @@ impl Painter for WgpuPainter {
             // Transform all 4 corners to screen space and compute AABB
             // This is a conservative approximation for rotated/skewed clips
             let corners = [
-                transform
-                    .transform_point3(glam::Vec3::new(rect.left().0, rect.top().0, 0.0)),
-                transform
-                    .transform_point3(glam::Vec3::new(rect.right().0, rect.top().0, 0.0)),
-                transform
-                    .transform_point3(glam::Vec3::new(rect.right().0, rect.bottom().0, 0.0)),
-                transform
-                    .transform_point3(glam::Vec3::new(rect.left().0, rect.bottom().0, 0.0)),
+                transform.transform_point3(glam::Vec3::new(rect.left().0, rect.top().0, 0.0)),
+                transform.transform_point3(glam::Vec3::new(rect.right().0, rect.top().0, 0.0)),
+                transform.transform_point3(glam::Vec3::new(rect.right().0, rect.bottom().0, 0.0)),
+                transform.transform_point3(glam::Vec3::new(rect.left().0, rect.bottom().0, 0.0)),
             ];
             let min_x = corners.iter().map(|c| c.x).fold(f32::INFINITY, f32::min);
             let min_y = corners.iter().map(|c| c.y).fold(f32::INFINITY, f32::min);
@@ -3186,18 +3363,11 @@ impl Painter for WgpuPainter {
         let rect = rrect.rect;
 
         let (x, y, w, h) = if transform == glam::Mat4::IDENTITY {
-            (
-                rect.left().0,
-                rect.top().0,
-                rect.width().0,
-                rect.height().0,
-            )
+            (rect.left().0, rect.top().0, rect.width().0, rect.height().0)
         } else {
             // Transform corners and compute AABB
-            let tl = transform
-                * glam::Vec4::new(rect.left().0, rect.top().0, 0.0, 1.0);
-            let br = transform
-                * glam::Vec4::new(rect.right().0, rect.bottom().0, 0.0, 1.0);
+            let tl = transform * glam::Vec4::new(rect.left().0, rect.top().0, 0.0, 1.0);
+            let br = transform * glam::Vec4::new(rect.right().0, rect.bottom().0, 0.0, 1.0);
             let min_x = tl.x.min(br.x);
             let min_y = tl.y.min(br.y);
             let max_x = tl.x.max(br.x);
@@ -3219,7 +3389,14 @@ impl Painter for WgpuPainter {
         #[cfg(debug_assertions)]
         tracing::trace!(
             "WgpuPainter::clip_rrect: SDF clip set [{:.1}, {:.1}, {:.1}, {:.1}] radii=[{:.1}, {:.1}, {:.1}, {:.1}]",
-            x, y, w, h, r_tl, r_tr, r_br, r_bl
+            x,
+            y,
+            w,
+            h,
+            r_tl,
+            r_tr,
+            r_br,
+            r_bl
         );
     }
 
@@ -3292,8 +3469,7 @@ impl Painter for WgpuPainter {
             // Capture the offscreen content drawn since save_layer
             let offscreen_segment =
                 std::mem::replace(&mut self.current_segment, saved.saved_segment);
-            let offscreen_order =
-                std::mem::replace(&mut self.draw_order, saved.saved_draw_order);
+            let offscreen_order = std::mem::replace(&mut self.draw_order, saved.saved_draw_order);
 
             // Restore parent opacity state
             self.opacity_stack = saved.saved_opacity_stack;
@@ -3401,7 +3577,8 @@ impl WgpuPainter {
         // Append gradient stops to global buffer (max 8 per gradient)
         let stop_count = stops.len().min(8);
         let stop_offset = self.current_segment.current_gradient_stops.len() as u32;
-        self.current_segment.current_gradient_stops
+        self.current_segment
+            .current_gradient_stops
             .extend_from_slice(&stops[..stop_count]);
 
         let instance = LinearGradientInstance::new(
@@ -3415,12 +3592,16 @@ impl WgpuPainter {
             gradient_end,
             [corner_radius; 4],
             stop_count as u32,
-        ).with_stop_offset(stop_offset);
+        )
+        .with_stop_offset(stop_offset);
 
         if self.current_segment.linear_gradient_batch.add(instance) {
             // Batch full, flush will happen in render()
         }
-        DrawSegment::push_scissor_region(&mut self.current_segment.linear_grad_scissors, self.current_scissor);
+        DrawSegment::push_scissor_region(
+            &mut self.current_segment.linear_grad_scissors,
+            self.current_scissor,
+        );
     }
 
     /// Draw a rectangle with a radial gradient
@@ -3459,7 +3640,8 @@ impl WgpuPainter {
         // Append gradient stops to global buffer (max 8 per gradient)
         let stop_count = stops.len().min(8);
         let stop_offset = self.current_segment.current_gradient_stops.len() as u32;
-        self.current_segment.current_gradient_stops
+        self.current_segment
+            .current_gradient_stops
             .extend_from_slice(&stops[..stop_count]);
 
         let instance = RadialGradientInstance::new(
@@ -3473,12 +3655,16 @@ impl WgpuPainter {
             radius,
             [corner_radius; 4],
             stop_count as u32,
-        ).with_stop_offset(stop_offset);
+        )
+        .with_stop_offset(stop_offset);
 
         if self.current_segment.radial_gradient_batch.add(instance) {
             // Batch full, flush will happen in render()
         }
-        DrawSegment::push_scissor_region(&mut self.current_segment.radial_grad_scissors, self.current_scissor);
+        DrawSegment::push_scissor_region(
+            &mut self.current_segment.radial_grad_scissors,
+            self.current_scissor,
+        );
     }
 
     /// Draw a rectangle with a sweep (angular/conic) gradient
@@ -3504,7 +3690,8 @@ impl WgpuPainter {
         // Append gradient stops to global buffer (max 8 per gradient)
         let stop_count = stops.len().min(8);
         let stop_offset = self.current_segment.current_gradient_stops.len() as u32;
-        self.current_segment.current_gradient_stops
+        self.current_segment
+            .current_gradient_stops
             .extend_from_slice(&stops[..stop_count]);
 
         let instance = SweepGradientInstance::new(
@@ -3519,12 +3706,16 @@ impl WgpuPainter {
             end_angle,
             [corner_radius; 4],
             stop_count as u32,
-        ).with_stop_offset(stop_offset);
+        )
+        .with_stop_offset(stop_offset);
 
         if self.current_segment.sweep_gradient_batch.add(instance) {
             // Batch full, flush will happen in render()
         }
-        DrawSegment::push_scissor_region(&mut self.current_segment.sweep_grad_scissors, self.current_scissor);
+        DrawSegment::push_scissor_region(
+            &mut self.current_segment.sweep_grad_scissors,
+            self.current_scissor,
+        );
     }
 
     /// Draw a shadow for a rectangle

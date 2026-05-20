@@ -210,4 +210,3 @@ impl Drop for MacOSPlatform {
         // NSApplication is a singleton, no need to release
     }
 }
-

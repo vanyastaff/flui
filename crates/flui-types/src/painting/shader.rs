@@ -300,7 +300,9 @@ impl Shader {
         }
 
         match self {
-            Shader::LinearGradient { from, to, colors, .. } => {
+            Shader::LinearGradient {
+                from, to, colors, ..
+            } => {
                 let mut data = Vec::with_capacity(48);
                 let w: f32 = bounds.width().0;
                 let h: f32 = bounds.height().0;
@@ -319,14 +321,23 @@ impl Shader {
                 data.extend_from_slice(&ey.to_le_bytes());
 
                 let c0 = colors.first().map_or([0.0, 0.0, 0.0, 1.0], color_to_f32x4);
-                for v in &c0 { data.extend_from_slice(&v.to_le_bytes()); }
+                for v in &c0 {
+                    data.extend_from_slice(&v.to_le_bytes());
+                }
 
                 let c1 = colors.get(1).map_or(c0, |c| color_to_f32x4(c));
-                for v in &c1 { data.extend_from_slice(&v.to_le_bytes()); }
+                for v in &c1 {
+                    data.extend_from_slice(&v.to_le_bytes());
+                }
 
                 data
             }
-            Shader::RadialGradient { center, radius, colors, .. } => {
+            Shader::RadialGradient {
+                center,
+                radius,
+                colors,
+                ..
+            } => {
                 let mut data = Vec::with_capacity(48);
                 let w: f32 = bounds.width().0;
                 let h: f32 = bounds.height().0;
@@ -345,23 +356,31 @@ impl Shader {
                 data.extend_from_slice(&0.0f32.to_le_bytes()); // padding
 
                 let c0 = colors.first().map_or([0.0, 0.0, 0.0, 1.0], color_to_f32x4);
-                for v in &c0 { data.extend_from_slice(&v.to_le_bytes()); }
+                for v in &c0 {
+                    data.extend_from_slice(&v.to_le_bytes());
+                }
 
                 let c1 = colors.get(1).map_or(c0, |c| color_to_f32x4(c));
-                for v in &c1 { data.extend_from_slice(&v.to_le_bytes()); }
+                for v in &c1 {
+                    data.extend_from_slice(&v.to_le_bytes());
+                }
 
                 data
             }
             Shader::Solid { color } => {
                 let mut data = Vec::with_capacity(16);
                 let c = color_to_f32x4(color);
-                for v in &c { data.extend_from_slice(&v.to_le_bytes()); }
+                for v in &c {
+                    data.extend_from_slice(&v.to_le_bytes());
+                }
                 data
             }
             // SweepGradient and Image fall back to white solid
             _ => {
                 let mut data = Vec::with_capacity(16);
-                for v in &[1.0f32, 1.0, 1.0, 1.0] { data.extend_from_slice(&v.to_le_bytes()); }
+                for v in &[1.0f32, 1.0, 1.0, 1.0] {
+                    data.extend_from_slice(&v.to_le_bytes());
+                }
                 data
             }
         }
@@ -526,7 +545,6 @@ impl MaskFilter {
         )
     }
 }
-
 
 #[cfg(test)]
 mod tests {

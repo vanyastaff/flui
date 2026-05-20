@@ -166,11 +166,7 @@ impl TexturePoolInner {
 
     /// Try to find and remove a matching texture from the available pool
     fn take_matching(&mut self, desc: &TextureDesc) -> Option<GpuTexture> {
-        if let Some(idx) = self
-            .available
-            .iter()
-            .position(|t| t.desc == *desc)
-        {
+        if let Some(idx) = self.available.iter().position(|t| t.desc == *desc) {
             tracing::trace!("Texture pool hit: {:?}", desc);
             Some(self.available.swap_remove(idx))
         } else {
@@ -250,12 +246,7 @@ impl TexturePool {
     /// The returned [`PooledTexture`] automatically returns the GPU texture
     /// to the pool when dropped.
     #[must_use]
-    pub fn acquire(
-        &self,
-        width: u32,
-        height: u32,
-        format: wgpu::TextureFormat,
-    ) -> PooledTexture {
+    pub fn acquire(&self, width: u32, height: u32, format: wgpu::TextureFormat) -> PooledTexture {
         let desc = TextureDesc {
             width: width.max(1),
             height: height.max(1),

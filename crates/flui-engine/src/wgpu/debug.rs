@@ -325,15 +325,33 @@ impl CommandRenderer for DebugBackend {
         );
     }
 
-    fn clip_rect(&mut self, rect: Rect<Pixels>, _clip_op: flui_types::painting::ClipOp, _clip_behavior: flui_types::painting::Clip, _transform: &Matrix4) {
+    fn clip_rect(
+        &mut self,
+        rect: Rect<Pixels>,
+        _clip_op: flui_types::painting::ClipOp,
+        _clip_behavior: flui_types::painting::Clip,
+        _transform: &Matrix4,
+    ) {
         self.log_command("clip_rect", &format!("rect={rect:?}"));
     }
 
-    fn clip_rrect(&mut self, rrect: RRect, _clip_op: flui_types::painting::ClipOp, _clip_behavior: flui_types::painting::Clip, _transform: &Matrix4) {
+    fn clip_rrect(
+        &mut self,
+        rrect: RRect,
+        _clip_op: flui_types::painting::ClipOp,
+        _clip_behavior: flui_types::painting::Clip,
+        _transform: &Matrix4,
+    ) {
         self.log_command("clip_rrect", &format!("rrect={rrect:?}"));
     }
 
-    fn clip_path(&mut self, path: &Path, _clip_op: flui_types::painting::ClipOp, _clip_behavior: flui_types::painting::Clip, _transform: &Matrix4) {
+    fn clip_path(
+        &mut self,
+        path: &Path,
+        _clip_op: flui_types::painting::ClipOp,
+        _clip_behavior: flui_types::painting::Clip,
+        _transform: &Matrix4,
+    ) {
         self.log_command("clip_path", &format!("commands={}", path.commands().len()));
     }
 

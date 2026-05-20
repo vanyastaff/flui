@@ -39,8 +39,7 @@ use std::{
 // =============================================================================
 
 pub use flui_foundation::{
-    FrameCallbackId, FrameId, Id, Identifier, Index, Marker, RawId, TaskId, TickerId,
-    markers,
+    FrameCallbackId, FrameId, Id, Identifier, Index, Marker, RawId, TaskId, TickerId, markers,
 };
 
 /// Scheduler callback ID - alias for `FrameCallbackId` from foundation.
@@ -225,7 +224,11 @@ impl<M: Marker> fmt::Debug for Handle<M> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let type_name = core::any::type_name::<M>();
         let marker_name = type_name.rsplit("::").next().unwrap_or(type_name);
-        write!(f, "{}Handle({}, gen={})", marker_name, self.index, self.generation)
+        write!(
+            f,
+            "{}Handle({}, gen={})",
+            marker_name, self.index, self.generation
+        )
     }
 }
 

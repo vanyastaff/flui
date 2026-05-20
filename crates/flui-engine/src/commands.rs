@@ -242,13 +242,28 @@ pub fn dispatch_command<R: CommandRenderer + ?Sized>(command: &DrawCommand, rend
         }
 
         // === Clipping Commands ===
-        DrawCommand::ClipRect { rect, clip_op, clip_behavior, transform } => {
+        DrawCommand::ClipRect {
+            rect,
+            clip_op,
+            clip_behavior,
+            transform,
+        } => {
             renderer.clip_rect(*rect, *clip_op, *clip_behavior, transform);
         }
-        DrawCommand::ClipRRect { rrect, clip_op, clip_behavior, transform } => {
+        DrawCommand::ClipRRect {
+            rrect,
+            clip_op,
+            clip_behavior,
+            transform,
+        } => {
             renderer.clip_rrect(*rrect, *clip_op, *clip_behavior, transform);
         }
-        DrawCommand::ClipPath { path, clip_op, clip_behavior, transform } => {
+        DrawCommand::ClipPath {
+            path,
+            clip_op,
+            clip_behavior,
+            transform,
+        } => {
             renderer.clip_path(path, *clip_op, *clip_behavior, transform);
         }
         DrawCommand::BackdropFilter {

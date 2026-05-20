@@ -79,7 +79,7 @@ use crate::{
         AppLifecycleState, FrameCallback, FrameId, FramePhase, FrameTiming, OneShotFrameCallback,
         PostFrameCallback, RecurringFrameCallback, SchedulerPhase,
     },
-    id::{IdGenerator, CallbackId},
+    id::{CallbackId, IdGenerator},
     task::{Priority, TaskQueue},
     ticker::TickerProvider,
     traits::PriorityLevel,
