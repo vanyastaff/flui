@@ -10,9 +10,14 @@ use flui_layer::LayerTree;
 use flui_types::Offset;
 use parking_lot::RwLock;
 
+use std::marker::PhantomData;
+
 use crate::{context::CanvasContext, storage::RenderTree};
 
-use super::dirty::{DirtyNode, DirtySets};
+use super::{
+    dirty::{DirtyNode, DirtySets},
+    phase::{Compositing, Idle, Layout, PaintPhase, PipelinePhase, Semantics},
+};
 
 // ============================================================================
 // Pipeline ID Counter
@@ -54,7 +59,7 @@ static PIPELINE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 /// [`adopt_child`](Self::adopt_child) and [`drop_child`](Self::drop_child).
 /// During flush operations, parent pipelines flush their own nodes first, then
 /// recursively flush children.
-pub struct PipelineOwner {
+pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// Unique identifier for this pipeline owner.
     id: u64,
 
@@ -98,11 +103,16 @@ pub struct PipelineOwner {
 
     /// The layer tree produced by the last paint phase.
     last_layer_tree: Option<LayerTree>,
+
+    /// Phantom marker for the typestate phase. Always zero-sized.
+    /// See `crates/flui-rendering/src/pipeline/phase.rs`.
+    _phase: PhantomData<Phase>,
 }
 
-impl std::fmt::Debug for PipelineOwner {
+impl<Phase: PipelinePhase> std::fmt::Debug for PipelineOwner<Phase> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PipelineOwner")
+            .field("phase", &Phase::NAME)
             .field("id", &self.id)
             .field("root_id", &self.root_id)
             .field("render_tree_len", &self.render_tree.len())
@@ -117,14 +127,14 @@ impl std::fmt::Debug for PipelineOwner {
     }
 }
 
-impl Default for PipelineOwner {
+impl Default for PipelineOwner<Idle> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl PipelineOwner {
-    /// Creates a new pipeline owner.
+impl PipelineOwner<Idle> {
+    /// Creates a new pipeline owner in the [`Idle`] phase.
     pub fn new() -> Self {
         Self {
             id: PIPELINE_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
@@ -140,10 +150,11 @@ impl PipelineOwner {
             debug_doing_semantics: false,
             semantics_enabled: AtomicBool::new(false),
             last_layer_tree: None,
+            _phase: PhantomData,
         }
     }
 
-    /// Creates a new pipeline owner with callbacks.
+    /// Creates a new pipeline owner with callbacks in the [`Idle`] phase.
     pub fn with_callbacks<F, G, H>(
         on_need_visual_update: Option<F>,
         on_semantics_owner_created: Option<G>,
@@ -168,6 +179,7 @@ impl PipelineOwner {
             debug_doing_semantics: false,
             semantics_enabled: AtomicBool::new(false),
             last_layer_tree: None,
+            _phase: PhantomData,
         }
     }
 
@@ -1037,6 +1049,100 @@ impl PipelineOwner {
         self.dirty.needs_compositing.clear();
         self.dirty.needs_paint.clear();
         self.dirty.needs_semantics.clear();
+    }
+}
+
+// ============================================================================
+// Phase transitions (Mythos Step 1 -- non-consuming rebind)
+// ============================================================================
+//
+// Step 1 adds the phantom-typed Phase parameter and the transition
+// methods that rebind the parameter. They are not yet consuming: the
+// `into_*` methods take `self` by value but Step 7 will tighten this so
+// that, e.g., `run_paint` cannot be reached without first transitioning
+// through `into_paint` from a layout-and-composited pipeline. Today they
+// are convertor methods that always succeed.
+//
+// The transitions update the runtime `debug_doing_*` flags as a runtime
+// safety net during the migration; once Step 7 lands, those flags can be
+// removed because the type system carries the same information.
+
+impl PipelineOwner<Idle> {
+    /// Transitions an idle pipeline into the [`Layout`] phase.
+    ///
+    /// Step 1 rebind only -- no behavior change. Step 7 will gate this on
+    /// the pipeline being free of in-flight phase work.
+    pub fn into_layout(self) -> PipelineOwner<Layout> {
+        rebind_phase(self)
+    }
+}
+
+impl PipelineOwner<Layout> {
+    /// Transitions a layout-phase pipeline into the [`Compositing`] phase.
+    pub fn into_compositing(self) -> PipelineOwner<Compositing> {
+        rebind_phase(self)
+    }
+
+    /// Returns to [`Idle`] from the layout phase (e.g. on error abort).
+    pub fn into_idle(self) -> PipelineOwner<Idle> {
+        rebind_phase(self)
+    }
+}
+
+impl PipelineOwner<Compositing> {
+    /// Transitions a compositing-phase pipeline into the [`PaintPhase`] phase.
+    pub fn into_paint(self) -> PipelineOwner<PaintPhase> {
+        rebind_phase(self)
+    }
+
+    /// Returns to [`Idle`] from the compositing phase.
+    pub fn into_idle(self) -> PipelineOwner<Idle> {
+        rebind_phase(self)
+    }
+}
+
+impl PipelineOwner<PaintPhase> {
+    /// Transitions a paint-phase pipeline into the [`Semantics`] phase.
+    pub fn into_semantics(self) -> PipelineOwner<Semantics> {
+        rebind_phase(self)
+    }
+
+    /// Returns to [`Idle`] from the paint phase.
+    pub fn into_idle(self) -> PipelineOwner<Idle> {
+        rebind_phase(self)
+    }
+}
+
+impl PipelineOwner<Semantics> {
+    /// Completes the frame and returns to [`Idle`].
+    pub fn finish(self) -> PipelineOwner<Idle> {
+        rebind_phase(self)
+    }
+}
+
+/// Internal helper: shifts the `Phase` phantom parameter without touching any
+/// runtime field. Behaviour-preserving by construction.
+#[inline]
+fn rebind_phase<From, To>(from: PipelineOwner<From>) -> PipelineOwner<To>
+where
+    From: PipelinePhase,
+    To: PipelinePhase,
+{
+    PipelineOwner {
+        id: from.id,
+        render_tree: from.render_tree,
+        root_id: from.root_id,
+        on_need_visual_update: from.on_need_visual_update,
+        on_semantics_owner_created: from.on_semantics_owner_created,
+        on_semantics_owner_disposed: from.on_semantics_owner_disposed,
+        dirty: from.dirty,
+        children: from.children,
+        debug_doing_layout: from.debug_doing_layout,
+        debug_doing_paint: from.debug_doing_paint,
+        debug_doing_semantics: from.debug_doing_semantics,
+        semantics_enabled: from.semantics_enabled,
+        last_layer_tree: from.last_layer_tree,
+        _phase: PhantomData,
     }
 }
 

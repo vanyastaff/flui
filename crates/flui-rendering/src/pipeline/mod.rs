@@ -8,6 +8,7 @@
 
 mod dirty;
 mod owner;
+pub mod phase;
 
 // Re-export Clip from flui_types
 // Re-export layer types from flui-layer
@@ -19,6 +20,7 @@ pub use flui_types::painting::{BlendMode, ClipOp, FilterQuality, ImageFilter, Po
 pub use dirty::{DirtyNode, DirtySets};
 pub use flui_types::painting::{BlurStyle, StrokeCap, StrokeJoin, TileMode};
 pub use owner::PipelineOwner;
+pub use phase::{Compositing, Idle, Layout, PaintPhase, PipelinePhase, Semantics};
 
 // Re-export contexts from context module (canonical location)
 pub use crate::context::{Canvas, CanvasContext, ClipContext, Paint, PaintStyle, Picture};
