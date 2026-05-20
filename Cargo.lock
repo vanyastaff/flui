@@ -1365,6 +1365,7 @@ dependencies = [
  "ambassador",
  "bitflags 2.10.0",
  "criterion",
+ "crossbeam-channel",
  "downcast-rs 2.0.2",
  "flui-foundation",
  "flui-interaction",

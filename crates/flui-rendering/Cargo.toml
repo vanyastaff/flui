@@ -26,6 +26,7 @@ smallvec = { workspace = true }
 downcast-rs = "2.0"
 slab = "0.4"  # For RenderTree storage
 ambassador = { workspace = true }  # Trait delegation via procedural macros
+crossbeam-channel = "0.5"  # PipelineOwnerHandle bounded mark-dirty channel
 
 [dev-dependencies]
 criterion.workspace = true

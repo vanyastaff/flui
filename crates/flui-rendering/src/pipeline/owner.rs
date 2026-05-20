@@ -16,9 +16,18 @@ use crate::{context::CanvasContext, storage::RenderTree};
 
 use super::{
     dirty::{DirtyNode, DirtySets},
+    handle::{DirtyKind, DirtyRequest, PipelineOwnerHandle},
     notifier::VisualUpdateNotifier,
     phase::{Compositing, Idle, Layout, PaintPhase, PipelinePhase, Semantics},
 };
+
+/// Default bounded capacity of the dirty-request channel between
+/// [`PipelineOwnerHandle`] producers and the [`PipelineOwner`] receiver.
+/// 256 is a heuristic: more than peak burst from a typical async asset
+/// loader completion storm, low enough that producers feel backpressure
+/// rather than silently growing the queue. Tunable at owner construction
+/// via [`PipelineOwner::new_with_capacity`].
+const DEFAULT_DIRTY_CHANNEL_CAPACITY: usize = 256;
 
 // ============================================================================
 // Pipeline ID Counter
@@ -98,6 +107,15 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// The layer tree produced by the last paint phase.
     last_layer_tree: Option<LayerTree>,
 
+    /// Prototype handle held by the owner so `handle()` can clone it for
+    /// each caller without re-allocating the channel. See
+    /// [`PipelineOwnerHandle`](super::handle::PipelineOwnerHandle).
+    handle: PipelineOwnerHandle,
+
+    /// Receiver end of the bounded dirty-request channel. Drained into
+    /// `dirty` by `drain_pending_dirty` at phase boundaries.
+    dirty_rx: crossbeam_channel::Receiver<DirtyRequest>,
+
     /// Phantom marker for the typestate phase. Always zero-sized.
     /// See `crates/flui-rendering/src/pipeline/phase.rs`.
     _phase: PhantomData<Phase>,
@@ -128,8 +146,18 @@ impl Default for PipelineOwner<Idle> {
 }
 
 impl PipelineOwner<Idle> {
-    /// Creates a new pipeline owner in the [`Idle`] phase.
+    /// Creates a new pipeline owner in the [`Idle`] phase with the
+    /// default dirty-channel capacity ([`DEFAULT_DIRTY_CHANNEL_CAPACITY`],
+    /// 256).
     pub fn new() -> Self {
+        Self::new_with_capacity(DEFAULT_DIRTY_CHANNEL_CAPACITY)
+    }
+
+    /// Creates a new pipeline owner in the [`Idle`] phase with a custom
+    /// dirty-channel capacity. Use this when the default 256 doesn't match
+    /// the producer profile.
+    pub fn new_with_capacity(dirty_channel_capacity: usize) -> Self {
+        let (handle, dirty_rx) = PipelineOwnerHandle::new_pair(dirty_channel_capacity);
         Self {
             id: PIPELINE_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
             render_tree: RenderTree::new(),
@@ -142,6 +170,8 @@ impl PipelineOwner<Idle> {
             debug_doing_semantics: false,
             semantics_enabled: AtomicBool::new(false),
             last_layer_tree: None,
+            handle,
+            dirty_rx,
             _phase: PhantomData,
         }
     }
@@ -167,6 +197,7 @@ impl PipelineOwner<Idle> {
         if let Some(f) = on_semantics_owner_disposed {
             notifier.set_semantics_owner_disposed(f);
         }
+        let (handle, dirty_rx) = PipelineOwnerHandle::new_pair(DEFAULT_DIRTY_CHANNEL_CAPACITY);
         Self {
             id: PIPELINE_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
             render_tree: RenderTree::new(),
@@ -179,6 +210,8 @@ impl PipelineOwner<Idle> {
             debug_doing_semantics: false,
             semantics_enabled: AtomicBool::new(false),
             last_layer_tree: None,
+            handle,
+            dirty_rx,
             _phase: PhantomData,
         }
     }
@@ -218,6 +251,58 @@ impl PipelineOwner<Idle> {
     /// Called by render objects when they need to be re-rendered.
     pub fn request_visual_update(&self) {
         self.notifier.fire_need_visual_update();
+    }
+
+    // ========================================================================
+    // Cross-thread mark-dirty handle (Mythos Step 8)
+    // ========================================================================
+
+    /// Returns a clone of the cross-thread mark-dirty handle.
+    ///
+    /// Each clone is its own `Sender` over the same bounded channel; sends
+    /// from different threads do not block each other. Backpressure
+    /// surfaces as [`super::handle::SendError::ChannelFull`].
+    #[inline]
+    pub fn handle(&self) -> PipelineOwnerHandle {
+        self.handle.clone()
+    }
+
+    /// Drains the pending dirty-request channel into the local
+    /// [`DirtySets`].
+    ///
+    /// Call at phase boundaries (today: at the start of `flush_layout`
+    /// / `flush_paint` etc.; Mythos Step 7 will move this into the
+    /// consuming phase transitions). Non-blocking; processes every
+    /// request available at the time of call and returns the count
+    /// drained.
+    pub fn drain_pending_dirty(&mut self) -> usize {
+        let mut drained = 0;
+        while let Ok(req) = self.dirty_rx.try_recv() {
+            match req.kind {
+                DirtyKind::Layout => {
+                    self.dirty
+                        .needs_layout
+                        .push(DirtyNode::new(req.id, req.depth));
+                }
+                DirtyKind::Compositing => {
+                    self.dirty
+                        .needs_compositing
+                        .push(DirtyNode::new(req.id, req.depth));
+                }
+                DirtyKind::Paint => {
+                    self.dirty
+                        .needs_paint
+                        .push(DirtyNode::new(req.id, req.depth));
+                }
+                DirtyKind::Semantics => {
+                    self.dirty
+                        .needs_semantics
+                        .push(DirtyNode::new(req.id, req.depth));
+                }
+            }
+            drained += 1;
+        }
+        drained
     }
 
     /// Returns the root render object ID.
@@ -1132,6 +1217,8 @@ where
         debug_doing_semantics: from.debug_doing_semantics,
         semantics_enabled: from.semantics_enabled,
         last_layer_tree: from.last_layer_tree,
+        handle: from.handle,
+        dirty_rx: from.dirty_rx,
         _phase: PhantomData,
     }
 }
