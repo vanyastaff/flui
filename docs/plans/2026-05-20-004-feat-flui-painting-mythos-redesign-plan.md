@@ -1,8 +1,9 @@
 ---
 title: "feat: flui-painting Mythos redesign"
 type: feat
-status: in_progress
+status: completed
 date: 2026-05-20
+completed: 2026-05-20
 origin: docs/brainstorms/flui-painting-mythos-redesign-requirements.md
 verdict: docs/designs/2026-05-20-mythos-flui-painting-redesign.md
 ---
@@ -744,38 +745,58 @@ This chain is purely internal refactor -- no user-facing API ships from `flui-pa
 
 ---
 
-## Chain Summary (Status: in_progress — flipped to completed at U14)
+## Chain Summary (Status: completed 2026-05-20)
 
-14 commits expected to land on `feat/flui-painting-mythos-redesign` branch:
+15 commits landed on `feat/flui-painting-mythos-redesign` branch:
 
-| Step | Subject (anticipated) |
-|---|---|
-| U0 | docs(designs): add Mythos flui-painting redesign verdict + brainstorm + plan |
-| U1 | refactor(flui-painting): delete `WarmUpCanvas` trait (dead, 0 impls) |
-| U2 | refactor(flui-painting): collapse `ShaderWarmUp` subsystem (decorative) |
-| U3 | refactor(flui-painting): trim `PaintingBinding` surface + stub `docs/MIGRATION.md` |
-| U4 | refactor(flui-painting): split `canvas.rs` (3305 LOC) into `canvas/` directory |
-| U5 | refactor(flui-painting): split `display_list.rs` (2434 LOC) into `display_list/` directory |
-| U6 | refactor(flui-painting): split `text_layout.rs` (1243 LOC) + flatten `mod inner` cfg |
-| U7 | refactor(flui-painting): split `text_painter.rs` (990 LOC) into `text_painter/` directory |
-| U8 | refactor(flui-painting): extract inline tests to `tests/` integration |
-| U9 | docs(flui-painting): allocation hot-path audit |
-| U10 | refactor(flui-painting): error model strengthening + `commands_mut` demotion |
-| U11 | refactor(flui-painting): dependency + feature audit |
-| U12 | docs(arch): `flui-painting` `ARCHITECTURE.md` + `PORT.md` Index flip |
-| U13 | chore(port-check): re-confirm triggers cover `flui-painting/src/` post-split |
-| U14 | chore(plan): final verification + flip plan to completed |
+| Commit | Step | Subject |
+|---|---|---|
+| `25f48fcc` | -- | docs(designs): add Mythos flui-painting redesign verdict + brainstorm + plan |
+| `33342ce0` | U1 | refactor(flui-painting): delete dead `WarmUpCanvas` trait |
+| `c0b34ec3` | U2 | refactor(flui-painting): collapse `ShaderWarmUp` subsystem |
+| `397d0ca9` | U3 | refactor(flui-painting): trim PaintingBinding surface + stub `docs/MIGRATION.md` |
+| `e0e62b73` | U4 | refactor(flui-painting): split `canvas.rs` god module (3305 LOC) |
+| `cef956c9` | U5 | refactor(flui-painting): split `display_list.rs` god module (2434 LOC) |
+| `47d4a700` | U6 | refactor(flui-painting): split `text_layout.rs` + flatten cfg (1243 LOC) |
+| `ea004b58` | U7 | refactor(flui-painting): split `text_painter.rs` god module (990 LOC) |
+| `17c26773` | U8 | refactor(flui-painting): extract inline tests to `tests/` |
+| `77aa580e` | U9 | docs(flui-painting): allocation hot-path audit |
+| `32f61267` | U10 | refactor(flui-painting): error model strengthen |
+| `ddd89e9a` | U11 | refactor(flui-painting): dependency + feature audit |
+| `0ae8dbf7` | U12 | docs(arch): `flui-painting` `ARCHITECTURE.md` + `PORT.md` flip |
+| `8feb4082` | U13 | chore(port-check): extend triggers to cover `flui-painting` |
+| pending  | U14 | chore(plan): final verification + flip plan to completed |
 
-**Expected final tally:**
+**Final tally:**
 
-- Net unsafe delta: **0** (`#[forbid(unsafe_code)]` stays; zero blocks introduced).
-- Net LOC delta in `src/` production code: ~−250 LOC from dead-surface deletions (U1+U2+U3) + ~+200 LOC of submodule scaffolding boilerplate (mod headers, module-level docs across new files) ≈ −50 LOC net in `src/`. ~7,972 LOC redistributed across new submodule directories.
-- New integration test files in `tests/`: 12 (extracted in U8). Test count preserved or grows.
-- God modules split: 4 (`canvas.rs` 3305 → 6-7 submodule files, `display_list.rs` 2434 → 5-6 submodule files, `text_layout.rs` 1243 → 5 submodule files, `text_painter.rs` 990 → 3-4 submodule files).
-- Dead surface deleted: `WarmUpCanvas` trait (4 abstract methods), `ShaderWarmUp` trait (1 stub impl), `DefaultShaderWarmUp` struct, `PaintingBinding::shader_warm_up` field + `with_shader_warm_up` constructor + `set_shader_warm_up` setter.
-- Companion docs: `docs/MIGRATION.md` stubbed (obsolete migration notes); `docs/{ARCHITECTURE,PERFORMANCE,README}.md` kept and linked from new templated `ARCHITECTURE.md`.
-- Verification gates: `cargo check --workspace` clean across all 14 commits; `cargo test -p flui-painting --lib` green; `cargo test -p flui-painting --tests` green (existing + extracted integration tests); `bash scripts/port-check.sh -v` 6 triggers ok; `cargo build --no-default-features -p flui-painting` clean.
-- Pre-existing issues NOT addressed by the chain (tracked in `crates/flui-painting/ARCHITECTURE.md` Friction log): potential ~20 doctest failures from pre-`Pixels`-wrap `Offset::new(f32, f32)` shape (pending verification in U11; if present, filed as Outstanding doctest sweep); allocation hot path documented but not optimised (deferred to Outstanding); shader warm-up real implementation deferred (requires wgpu surface API).
+- **Net unsafe delta: 0.** The crate is and stays `#[forbid(unsafe_code)]` at `crates/flui-painting/src/lib.rs:151`. Distinct from `flui-layer` chain's -39.
+- **Net LOC delta in `src/` production code:** approximately **-2,000 LOC** across the 4 god-module splits + dead-code deletions:
+  - canvas.rs 3305 → canvas/ 2187 (-1118)
+  - display_list.rs 2434 → display_list/ 2016 (-418)
+  - text_layout.rs 1243 → text_layout/ 1161 (-82)
+  - text_painter.rs 990 → text_painter/ 873 (-117)
+  - binding.rs trimmed (~250 LOC removed via WarmUpCanvas + ShaderWarmUp + DefaultShaderWarmUp + 3 PaintingBinding methods deletion)
+  - `DisplayList::commands_mut` deleted in U11 (3 LOC; was dead post-U10 demotion)
+- **New integration test files in `tests/`:** 4 added in U8 (`canvas_unit.rs`, `display_list_unit.rs`, `text_layout_unit.rs`, `text_painter_unit.rs`). Total integration tests grew to 230 across 13 files; lib tests at 23. Test count preserved or grew across every commit.
+- **God modules split:** 4 (canvas → 8 files, display_list → 6 files, text_layout → 5 files, text_painter → 4 files).
+- **Dead surface deleted:** `WarmUpCanvas` trait (4 abstract methods), `ShaderWarmUp` trait (1 stub impl), `DefaultShaderWarmUp` struct, `PaintingBinding::shader_warm_up` field + `with_shader_warm_up` constructor + `set_shader_warm_up` setter, `DisplayList::commands_mut` public method.
+- **Companion docs:** `docs/MIGRATION.md` stubbed (obsolete migration notes); `docs/{ARCHITECTURE,PERFORMANCE,README}.md` kept and linked from new templated `crates/flui-painting/ARCHITECTURE.md` at crate root.
+- **Verification gates passed:**
+  - `cargo check --workspace` clean across all 14 commits (pre-existing flui-engine warning unchanged).
+  - `cargo test -p flui-painting --lib` 23 passing.
+  - `cargo test -p flui-painting --tests` 230 passing across 13 integration files.
+  - `cargo build --no-default-features -p flui-painting` clean (fallback impl compiles standalone).
+  - `bash scripts/port-check.sh -v` 6 triggers ok.
+  - `cargo clippy -p flui-painting --lib --no-deps -- -D warnings` clean.
+  - `cargo clippy -p flui-painting --tests --no-deps -- -D warnings` chain-introduced warnings fixed (1 `float_cmp` in `text_layout_unit.rs`); pre-existing test-file warnings in `rich_text_example.rs`, `tessellation_integration.rs`, `tessellation.rs` not in chain scope.
+- **Pre-existing issues NOT addressed** (tracked in `crates/flui-painting/ARCHITECTURE.md` Friction log + Outstanding refactors):
+  - cargo clippy warnings in untouched test files (`rich_text_example.rs`, `tessellation_integration.rs`, `tessellation.rs`).
+  - `cargo test --workspace` stack overflow in `flui-view::build_owner_tests` (pre-existing; not in chain scope).
+  - `cargo clippy --workspace -- -D warnings` blocked by 3 pre-existing flui-types clippy errors in `shader.rs` (manual midpoint + redundant closure).
+  - cosmic-text 0.12 (in flui-painting) vs cosmic-text 0.14 (in glyphon → flui-engine) duplicate version situation.
+  - Allocation hot path documented (audit F1-F5 in `docs/research/2026-05-20-flui-painting-alloc-audit.md`); optimisations filed as Outstanding refactors with named blockers.
+  - Shader warm-up real implementation deferred (requires wgpu surface API).
+  - Property tests, mutation testing, doctest sweep filed as Outstanding.
 
 ---
 

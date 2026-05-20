@@ -180,7 +180,7 @@ fn test_line_info_methods() {
     };
 
     assert_eq!(info.direction(), TextDirection::Rtl);
-    assert_eq!(info.bottom(), 20.0);
+    assert!((info.bottom() - 20.0).abs() < f32::EPSILON);
     assert_eq!(info.len(), 10);
     assert!(!info.is_empty());
 }
