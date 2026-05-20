@@ -28,7 +28,9 @@
       "mcp__filesystem__read_media_file",
       "Bash(Select-String -Pattern \"flui-hot-reload|flui-app\")",
       "Bash(cargo build:*)",
-      "Bash(rustc --version)"
+      "Bash(rustc --version)",
+      "Bash(bash \"C:/Users/vanya/.claude/plugins/cache/compound-engineering-plugin/compound-engineering/3.8.2/skills/ce-setup/scripts/check-health\" --version 3.8.2)",
+      "Bash(ls ../../../.flutter/flutter-master/packages/flutter/lib/src/ 2>/dev/null)"
     ]
   }
 }
