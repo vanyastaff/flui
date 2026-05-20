@@ -144,6 +144,20 @@ doc-strict:
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
 # =============================================================================
+# Port methodology
+# =============================================================================
+
+[group("port")]
+[doc("Run refusal-trigger grep regressions (six triggers from docs/PORT.md)")]
+port-check:
+    bash scripts/port-check.sh
+
+[group("port")]
+[doc("Run refusal-trigger checks with verbose pass/fail per trigger")]
+port-check-verbose:
+    bash scripts/port-check.sh -v
+
+# =============================================================================
 # Benchmarks
 # =============================================================================
 

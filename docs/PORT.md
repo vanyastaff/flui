@@ -20,7 +20,7 @@ Triggers are seeded from observed friction in the workspace. Forward-looking tri
 
 **Back-references:** [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) v2.2.0 Anti-Patterns ("`Arc<Mutex<>>` for tree structures"); [`STRATEGY.md`](../STRATEGY.md) "sync hot path".
 
-**Regex (used by `just port:check`):** `RwLock<\s*Box<\s*dyn\s+RenderObject` (storage-shaped violations).
+**Regex (used by `just port-check`):** `RwLock<\s*Box<\s*dyn\s+RenderObject` (storage-shaped violations).
 
 ### 2. `Box<dyn RenderObject<_>>` stored in render-tree storage hot path
 
@@ -72,7 +72,7 @@ Triggers grow reactively. A new trigger is added to this list when an anti-patte
 
 A trigger is promoted from a doc entry to a clippy lint **only after the same pattern has been caught at least twice in review**. The first-promotion mechanism is a `[workspace.lints.clippy]` deny entry in the root [`Cargo.toml`](../Cargo.toml). `dylint` (custom plugin in a dedicated `crates/flui-lints/`) and `cargo-deny[bans]` (dependency-level rules) stay deferred — they are heavier than the first promotion warrants.
 
-If a future trigger's shape cannot be expressed in any clippy lint that exists (e.g., field type + use-site predicate), the trigger remains in this document plus the `just port:check` grep and promotion is deferred until the toolchain catches up. This is acceptable — the grep is the durable enforcement layer.
+If a future trigger's shape cannot be expressed in any clippy lint that exists (e.g., field type + use-site predicate), the trigger remains in this document plus the `just port-check` grep and promotion is deferred until the toolchain catches up. This is acceptable — the grep is the durable enforcement layer.
 
 ---
 
@@ -207,13 +207,22 @@ External references this methodology builds on:
 
 ## Verification
 
-The `just port:check` recipe runs the refusal-trigger regexes from this document against the workspace and exits non-zero on any match outside the whitelist. Run it before opening a PR that touches `flui-rendering`, `flui-view`, or `flui-painting`:
+The `just port-check` recipe runs the refusal-trigger regexes from this document against the workspace and exits non-zero on any match outside the whitelist. Run it before opening a PR that touches `flui-rendering`, `flui-view`, or `flui-painting`:
 
 ```text
-just port:check
+just port-check               # silent on pass; lists each violation on fail
+just port-check-verbose       # prints "ok" lines for each passing trigger
 ```
 
+The underlying script lives at [`scripts/port-check.sh`](../scripts/port-check.sh). It runs six `rg` (ripgrep) invocations — one per refusal trigger — and filters out doc-comment matches. The regexes are derived directly from the trigger entries in this document; when a trigger changes here, the script changes too.
+
+**Cross-platform note.** The script is bash. On Windows, run via Git Bash or WSL — both ship with `bash` and modern `rg` on PATH. A PowerShell sibling is not provided in this iteration because the regex set is identical and dual-maintenance is not warranted at solo-maintainer scale.
+
 The recipe is not part of `just ci` by default — refusal triggers are a write-time guard, and CI carries the lint baseline plus the test suite. When a trigger is promoted to a clippy lint per the [Reactive lint promotion](#reactive-lint-promotion) rule, that lint runs under `cargo clippy --workspace -- -D warnings` (already in `just ci`); the doc entry stays as the human-readable surface for the rule.
+
+### Self-test (negative-test confirmation)
+
+`port-check` itself can be exercised by introducing a deliberate violation in a scratch file (e.g., `crates/flui-rendering/src/__port_check_scratch.rs` with a `RwLock<Box<dyn RenderObject<P>>>` field) and confirming the recipe exits non-zero, names the file and line, and references the correct trigger ID. Delete the scratch file when done. This confirms the recipe still distinguishes real violations from whitelist entries; do it after any change to the trigger regexes or the whitelist file globs.
 
 ---
 
