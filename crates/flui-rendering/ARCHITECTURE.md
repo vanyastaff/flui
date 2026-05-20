@@ -154,6 +154,18 @@ Concrete cleanups visible from `flui-rendering` outward, sized for an `/aif-impl
 
 **Dependencies:** none.
 
+### Per-phase method redistribution (Mythos Step 7 finalization)
+
+**Files:** [`src/pipeline/owner.rs`](src/pipeline/owner.rs), [`crates/flui-app/src/bindings/renderer_binding.rs`](../../crates/flui-app/src/bindings/renderer_binding.rs).
+
+**Goal:** today the typestate scaffold from Mythos Step 1 + the `run_frame` consuming convenience from Mythos Step 7 coexist with the legacy `flush_*` methods on `PipelineOwner<Idle>`. Full migration moves `flush_layout` to `impl PipelineOwner<Layout>` (renamed `run_layout`), `flush_paint` to `<PaintPhase>`, etc., so the compiler refuses to run paint on an owner that hasn't been transitioned to `<PaintPhase>` first.
+
+**Shape:** the legacy `RendererBinding::draw_frame` in `flui-app` calls `owner.write().flush_*()` four times. Migration replaces those four calls with one `let owner = std::mem::replace(...); let (owner, layer_tree) = owner.run_frame(); *guard = owner;` pattern. The `flush_*` methods are then removed (or marked `#[deprecated]`).
+
+**Why deferred:** the migration is mechanical but touches the binding singleton's locking pattern + the singleton's draw-loop call shape. Bundling that with the typestate-skeleton commits would have expanded the diff into `flui-app` significantly. Land as a follow-up commit when the binding is being touched for other reasons (e.g. when the Step 11 extension-trait split finally lands and ripples through the impls anyway).
+
+**Dependencies:** none beyond the Mythos Step 1 + Step 7 baseline.
+
 ### Extension-trait split of `RenderObject<P>` (deferred from Mythos Step 11)
 
 **Files:** [`src/traits/render_object.rs`](src/traits/render_object.rs).

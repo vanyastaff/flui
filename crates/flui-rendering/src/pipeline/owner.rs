@@ -1152,6 +1152,42 @@ impl PipelineOwner<Semantics> {
     }
 }
 
+// ============================================================================
+// Phase-typed full-frame convenience (Mythos Step 7)
+// ============================================================================
+//
+// `run_frame` is the typestate-enforced entry point: consume the idle
+// owner, run all four phases via the existing `flush_*` methods, and
+// return the owner back at [`Idle`] plus the produced layer tree.
+//
+// The phase transitions (`into_layout` / `into_compositing` / etc.) are
+// non-consuming-of-state rebinds today; the typestate is enforced at
+// the type level via PhantomData, but the actual frame work still
+// happens through the legacy `flush_*` methods on `<Idle>` (kept to
+// avoid breaking `flui-app::RenderingFlutterBinding::draw_frame`). Full
+// per-phase method redistribution (`run_layout` on `<Layout>` only,
+// `run_paint` on `<PaintPhase>` only, etc.) is queued in
+// `crates/flui-rendering/ARCHITECTURE.md` Outstanding refactors as a
+// follow-up that needs flui-app draw-loop refactoring in lockstep.
+
+impl PipelineOwner<Idle> {
+    /// Runs a full frame: layout -> compositing-bits -> paint -> semantics.
+    /// Consumes `self`, returns the owner back at [`Idle`] plus the
+    /// produced layer tree (if any).
+    ///
+    /// Mythos Step 7 (2026-05-20) -- the typestate-enforced full-frame
+    /// convenience. Existing callers using `flush_*` directly still
+    /// work; new callers should prefer `run_frame`.
+    pub fn run_frame(mut self) -> (PipelineOwner<Idle>, Option<LayerTree>) {
+        self.flush_layout();
+        self.flush_compositing_bits();
+        self.flush_paint();
+        self.flush_semantics();
+        let layer_tree = self.last_layer_tree.take();
+        (self, layer_tree)
+    }
+}
+
 /// Internal helper: shifts the `Phase` phantom parameter without touching any
 /// runtime field. Behaviour-preserving by construction.
 #[inline]
