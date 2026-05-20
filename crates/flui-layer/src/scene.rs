@@ -286,12 +286,16 @@ impl Scene {
         self.layer_tree.len()
     }
 
-    /// Disposes the scene, releasing any resources.
+    /// Returns a [`SceneBuilder`] that mutates this scene's layer tree.
     ///
-    /// After calling dispose, the scene should not be used.
-    pub fn dispose(self) {
-        // Scene is consumed, resources released via Drop
-        drop(self);
+    /// Convenience wrapper over `SceneBuilder::new(&mut scene.layer_tree)`.
+    /// The builder borrows the scene's tree exclusively; root and metadata
+    /// remain on the scene and are not touched by the builder.
+    ///
+    /// [`SceneBuilder`]: crate::compositor::SceneBuilder
+    #[inline]
+    pub fn builder(&mut self) -> crate::compositor::SceneBuilder<'_> {
+        crate::compositor::SceneBuilder::new(&mut self.layer_tree)
     }
 }
 
@@ -429,14 +433,28 @@ mod tests {
     }
 
     #[test]
-    fn test_scene_dispose() {
+    fn test_scene_drop_consumes() {
+        // Mythos Step 8: `Scene::dispose(self)` (which just called
+        // `drop(self)`) was deleted; `drop(scene)` is the idiomatic
+        // replacement.
         let scene = Scene::from_layer(
             Size::new(px(800.0), px(600.0)),
             Layer::Canvas(CanvasLayer::new()),
             0,
         );
-        scene.dispose();
-        // Scene is consumed, no further use possible
+        drop(scene);
+        // Scene is consumed by drop; no further use possible.
+    }
+
+    #[test]
+    fn test_scene_builder_method() {
+        let mut scene = Scene::empty(Size::new(px(100.0), px(100.0)));
+        {
+            let mut builder = scene.builder();
+            let _ = builder.add_canvas(CanvasLayer::new());
+        }
+        // Builder dropped; scene retains the tree but does not auto-set root.
+        assert_eq!(scene.layer_count(), 1);
     }
 
     #[test]
