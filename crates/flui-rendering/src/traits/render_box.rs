@@ -323,26 +323,11 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     // ========================================================================
     // Effect Layers
     // ========================================================================
-
-    /// Returns the alpha value for this render object's children.
-    ///
-    /// If this returns Some(alpha), paint_node_recursive will wrap children
-    /// in an OpacityLayer with the given alpha (0-255).
-    ///
-    /// Override this in RenderOpacity to provide the current alpha value.
-    fn paint_alpha(&self) -> Option<u8> {
-        None
-    }
-
-    /// Returns the transform matrix for this render object's children.
-    ///
-    /// If this returns Some(matrix), paint_node_recursive will wrap children
-    /// in a TransformLayer with the given matrix.
-    ///
-    /// Override this in RenderTransform to provide the current transform.
-    fn paint_transform(&self) -> Option<flui_types::Matrix4> {
-        None
-    }
+    //
+    // paint_alpha / paint_transform are NOT defined on RenderBox itself.
+    // They live on PaintEffectsCapability (a supertrait of
+    // RenderObject<BoxProtocol>); concrete render objects implement that
+    // capability trait directly. See Mythos Step 11.
 }
 
 /// Text baseline types for baseline alignment.
@@ -386,7 +371,11 @@ pub enum TextBaseline {
 /// requires it.
 impl<T> RenderObject<BoxProtocol> for T
 where
-    T: RenderBox + flui_foundation::Diagnosticable,
+    T: RenderBox
+        + flui_foundation::Diagnosticable
+        + crate::traits::PaintEffectsCapability
+        + crate::traits::SemanticsCapability
+        + crate::traits::HotReloadCapability,
 {
     fn perform_layout_raw(
         &mut self,

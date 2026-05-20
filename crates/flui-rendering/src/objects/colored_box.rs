@@ -7,7 +7,7 @@ use flui_types::{Color, Point, Rect, Size, geometry::px};
 use crate::{
     context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext},
     parent_data::BoxParentData,
-    traits::RenderBox,
+    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
 };
 
 /// A render object that paints a colored rectangle.
@@ -100,6 +100,11 @@ impl RenderBox for RenderColoredBox {
         Rect::from_origin_size(Point::ZERO, self.size)
     }
 }
+
+// Mythos Step 11: explicit (default) capability opt-outs.
+impl PaintEffectsCapability for RenderColoredBox {}
+impl SemanticsCapability for RenderColoredBox {}
+impl HotReloadCapability for RenderColoredBox {}
 
 #[cfg(test)]
 mod tests {

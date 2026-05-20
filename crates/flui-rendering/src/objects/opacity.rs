@@ -6,7 +6,7 @@ use flui_types::{Offset, Point, Rect, Size};
 use crate::{
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
-    traits::RenderBox,
+    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
 };
 
 /// A render object that applies transparency to its child.
@@ -175,7 +175,13 @@ impl RenderBox for RenderOpacity {
     fn box_paint_bounds(&self) -> Rect {
         Rect::from_origin_size(Point::ZERO, self.size)
     }
+}
 
+// Mythos Step 11: PaintEffectsCapability override -- the whole point of
+// RenderOpacity. The pipeline reads paint_alpha through a
+// `&dyn RenderObject<BoxProtocol>`; PaintEffectsCapability is a
+// supertrait of RenderObject<P>, so the call resolves here.
+impl PaintEffectsCapability for RenderOpacity {
     fn paint_alpha(&self) -> Option<u8> {
         // If fully opaque and not always needing compositing, no layer needed
         if self.alpha == 255 && !self.always_needs_compositing {
@@ -185,6 +191,9 @@ impl RenderBox for RenderOpacity {
         }
     }
 }
+
+impl SemanticsCapability for RenderOpacity {}
+impl HotReloadCapability for RenderOpacity {}
 
 #[cfg(test)]
 mod tests {

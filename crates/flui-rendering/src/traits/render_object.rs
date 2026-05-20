@@ -44,6 +44,69 @@ use crate::{
     semantics::SemanticsConfiguration,
 };
 
+// ============================================================================
+// Capability Traits (Mythos Step 11 extension-trait split)
+// ============================================================================
+
+/// Optional paint-effect hooks (alpha + transform layers).
+///
+/// Only render objects that actually emit OpacityLayer / TransformLayer
+/// implement non-default behaviour here -- RenderOpacity overrides
+/// `paint_alpha`, RenderTransform overrides `paint_transform`. Other
+/// concrete types get the default `None` for both and the paint phase
+/// skips the layer-wrapping path.
+///
+/// This trait is a supertrait of `RenderObject<P>`; the pipeline reads
+/// these methods through a `&dyn RenderObject<P>` and the call resolves
+/// to whichever impl the concrete type provided.
+pub trait PaintEffectsCapability {
+    /// Returns the alpha value to apply to children.
+    ///
+    /// If `Some(alpha)`, the painting pipeline wraps children in an
+    /// OpacityLayer. Used by `RenderOpacity` to implement opacity
+    /// animations. Default: `None` (no opacity effect).
+    fn paint_alpha(&self) -> Option<u8> {
+        None
+    }
+
+    /// Returns the transform matrix to apply to children.
+    ///
+    /// If `Some(matrix)`, the painting pipeline wraps children in a
+    /// TransformLayer. Used by `RenderTransform` to implement transform
+    /// animations. Default: `None` (no transform effect).
+    fn paint_transform(&self) -> Option<flui_types::Matrix4> {
+        None
+    }
+}
+
+/// Optional semantics-tree contribution.
+///
+/// Render objects that describe themselves to the accessibility tree
+/// override `describe_semantics_configuration`. Default no-op.
+///
+/// This trait is a supertrait of `RenderObject<P>`.
+pub trait SemanticsCapability {
+    /// Describes semantic properties for accessibility.
+    ///
+    /// Called when building the semantics tree. Override to provide
+    /// labels, actions, or other semantic information. Default: no-op.
+    fn describe_semantics_configuration(&self, _config: &mut SemanticsConfiguration) {}
+}
+
+/// Optional hot-reload reassembly hook.
+///
+/// Default no-op. Used by render objects that need to invalidate
+/// cached state after a hot-reload.
+///
+/// This trait is a supertrait of `RenderObject<P>`.
+pub trait HotReloadCapability {
+    /// Marks this render object for reprocessing after hot reload.
+    ///
+    /// Called by the framework after code changes. The storage layer
+    /// will mark this node dirty and reprocess it. Default: no-op.
+    fn reassemble(&mut self) {}
+}
+
 /// Base trait for all render objects in the render tree.
 ///
 /// This trait defines the minimal interface required by the storage layer
@@ -56,6 +119,20 @@ use crate::{
 ///
 /// - `P`: The layout protocol (BoxProtocol or SliverProtocol)
 ///
+/// # Capability Traits
+///
+/// `RenderObject<P>` carries three capability supertraits whose methods
+/// are reachable through any `&dyn RenderObject<P>`:
+///
+/// - [`PaintEffectsCapability`] -- `paint_alpha`, `paint_transform`
+/// - [`SemanticsCapability`] -- `describe_semantics_configuration`
+/// - [`HotReloadCapability`] -- `reassemble`
+///
+/// All three default to no-op / `None`. Concrete render objects opt in
+/// by writing `impl <Capability> for MyRenderObject { ... }`; the empty
+/// `impl <Capability> for MyRenderObject {}` is the explicit opt-out
+/// (uses all defaults).
+///
 /// # Storage Integration
 ///
 /// Render objects are wrapped in `RenderEntry<P>` which adds:
@@ -64,7 +141,16 @@ use crate::{
 /// - Thread-safe access via `RwLock`
 ///
 /// The storage layer calls these trait methods to drive the rendering pipeline.
-pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync + 'static {
+pub trait RenderObject<P: Protocol>:
+    Diagnosticable
+    + DowncastSync
+    + Send
+    + Sync
+    + 'static
+    + PaintEffectsCapability
+    + SemanticsCapability
+    + HotReloadCapability
+{
     // ========================================================================
     // Core Operations
     // ========================================================================
@@ -160,27 +246,12 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
     // ========================================================================
     // Effect Layers
     // ========================================================================
-
-    /// Returns the alpha value to apply to children.
-    ///
-    /// If Some(alpha), the painting pipeline wraps children in an OpacityLayer.
-    /// Used by `RenderOpacity` to implement opacity animations.
-    ///
-    /// Default: `None` (no opacity effect)
-    fn paint_alpha(&self) -> Option<u8> {
-        None
-    }
-
-    /// Returns the transform matrix to apply to children.
-    ///
-    /// If Some(matrix), the painting pipeline wraps children in a
-    /// TransformLayer. Used by `RenderTransform` to implement transform
-    /// animations.
-    ///
-    /// Default: `None` (no transform effect)
-    fn paint_transform(&self) -> Option<flui_types::Matrix4> {
-        None
-    }
+    //
+    // paint_alpha and paint_transform live on PaintEffectsCapability
+    // (Mythos Step 11 extension-trait split). They are still reachable
+    // through `&dyn RenderObject<P>` because PaintEffectsCapability is a
+    // supertrait, but a render object that doesn't apply any effect
+    // layers no longer has to carry the default impls on the core trait.
 
     // ========================================================================
     // Paint Bounds
@@ -193,28 +264,12 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
     fn paint_bounds(&self) -> Rect;
 
     // ========================================================================
-    // Semantics (Accessibility)
+    // Semantics / Hot Reload
     // ========================================================================
-
-    /// Describes semantic properties for accessibility.
-    ///
-    /// Called when building the semantics tree. Override to provide
-    /// labels, actions, or other semantic information.
-    ///
-    /// Default: No semantic properties
-    fn describe_semantics_configuration(&self, _config: &mut SemanticsConfiguration) {}
-
-    // ========================================================================
-    // Hot Reload
-    // ========================================================================
-
-    /// Marks this render object for reprocessing after hot reload.
-    ///
-    /// Called by the framework after code changes. The storage layer
-    /// will mark this node dirty and reprocess it.
-    ///
-    /// Default: Does nothing (storage layer handles dirty marking)
-    fn reassemble(&mut self) {}
+    //
+    // describe_semantics_configuration lives on SemanticsCapability.
+    // reassemble lives on HotReloadCapability. Both are supertraits of
+    // RenderObject<P>; reachable through the dyn pointer.
 
     // ========================================================================
     // Children Access (для pipeline/owner.rs)

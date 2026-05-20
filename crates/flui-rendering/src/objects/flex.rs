@@ -7,7 +7,7 @@ use crate::{
     constraints::BoxConstraints,
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::{FlexFit, FlexParentData},
-    traits::RenderBox,
+    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
 };
 
 /// Direction of the flex layout.
@@ -416,6 +416,11 @@ impl RenderBox for RenderFlex {
         Rect::from_origin_size(Point::ZERO, self.size)
     }
 }
+
+// Mythos Step 11: explicit (default) capability opt-outs.
+impl PaintEffectsCapability for RenderFlex {}
+impl SemanticsCapability for RenderFlex {}
+impl HotReloadCapability for RenderFlex {}
 
 #[cfg(test)]
 mod tests {

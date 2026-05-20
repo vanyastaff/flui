@@ -6,7 +6,7 @@ use flui_types::{Pixels, Point, Rect, Size};
 use crate::{
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
-    traits::RenderBox,
+    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
 };
 
 /// A render object that forces a specific size.
@@ -120,6 +120,11 @@ impl RenderBox for RenderSizedBox {
         Rect::from_origin_size(Point::ZERO, self.size)
     }
 }
+
+// Mythos Step 11: explicit (default) capability opt-outs.
+impl PaintEffectsCapability for RenderSizedBox {}
+impl SemanticsCapability for RenderSizedBox {}
+impl HotReloadCapability for RenderSizedBox {}
 
 #[cfg(test)]
 mod tests {

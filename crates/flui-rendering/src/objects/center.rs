@@ -6,7 +6,7 @@ use flui_types::{Offset, Point, Rect, Size};
 use crate::{
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
-    traits::RenderBox,
+    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
 };
 
 /// A render object that centers its child within the available space.
@@ -160,6 +160,11 @@ impl RenderBox for RenderCenter {
         Rect::from_origin_size(Point::ZERO, self.size)
     }
 }
+
+// Mythos Step 11: explicit (default) capability opt-outs.
+impl PaintEffectsCapability for RenderCenter {}
+impl SemanticsCapability for RenderCenter {}
+impl HotReloadCapability for RenderCenter {}
 
 #[cfg(test)]
 mod tests {

@@ -337,7 +337,11 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static 
 /// explanation.
 impl<T> RenderObject<SliverProtocol> for T
 where
-    T: RenderSliver + flui_foundation::Diagnosticable,
+    T: RenderSliver
+        + flui_foundation::Diagnosticable
+        + crate::traits::PaintEffectsCapability
+        + crate::traits::SemanticsCapability
+        + crate::traits::HotReloadCapability,
 {
     fn perform_layout_raw(
         &mut self,

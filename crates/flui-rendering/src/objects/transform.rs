@@ -6,7 +6,7 @@ use flui_types::{Alignment, Matrix4, Offset, Pixels, Point, Rect, Size};
 use crate::{
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
-    traits::RenderBox,
+    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
 };
 
 /// A render object that applies a transformation matrix to its child.
@@ -262,12 +262,19 @@ impl RenderBox for RenderTransform {
 
         Rect::from_ltrb(min_x, min_y, max_x, max_y)
     }
+}
 
+// Mythos Step 11: PaintEffectsCapability override -- the whole point of
+// RenderTransform.
+impl PaintEffectsCapability for RenderTransform {
     fn paint_transform(&self) -> Option<Matrix4> {
         // Return the effective transform so paint_node_recursive can apply it
         Some(self.effective_transform())
     }
 }
+
+impl SemanticsCapability for RenderTransform {}
+impl HotReloadCapability for RenderTransform {}
 
 #[cfg(test)]
 mod tests {
