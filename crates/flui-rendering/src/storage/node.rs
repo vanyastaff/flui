@@ -336,22 +336,20 @@ impl RenderNode {
         self.as_sliver().and_then(|entry| entry.state().geometry())
     }
 
-    /// Returns a read lock on the Box render object.
+    /// Returns an immutable reference to the Box render object.
     ///
     /// Panics if this is not a Box node.
-    pub fn box_render_object(
-        &self,
-    ) -> parking_lot::RwLockReadGuard<'_, Box<dyn RenderObject<BoxProtocol>>> {
+    pub fn box_render_object(&self) -> &dyn RenderObject<BoxProtocol> {
         self.as_box_unchecked().render_object()
     }
 
-    /// Returns a write lock on the Box render object.
+    /// Returns a mutable reference to the Box render object.
     ///
-    /// Panics if this is not a Box node.
-    pub fn box_render_object_mut(
-        &self,
-    ) -> parking_lot::RwLockWriteGuard<'_, Box<dyn RenderObject<BoxProtocol>>> {
-        self.as_box_unchecked().render_object_mut()
+    /// Panics if this is not a Box node. Requires `&mut self`; pipeline
+    /// phases obtain this through `&mut RenderTree`. See the U2 exemplar
+    /// refactor docstring on `RenderEntry`.
+    pub fn box_render_object_mut(&mut self) -> &mut dyn RenderObject<BoxProtocol> {
+        self.as_box_unchecked_mut().render_object_mut()
     }
 
     /// Clears the needs_paint flag.

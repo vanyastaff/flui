@@ -73,16 +73,20 @@ check "1" \
   crates/flui-view/src
 
 # -----------------------------------------------------------------------------
-# Trigger 2 -- Box<dyn RenderObject<...>> stored as a struct field.
-# Multi-line match for `struct X { ... Box<dyn RenderObject ...> ... }`.
-# Function-parameter uses inside `fn(...)` and `impl From<...>` blocks are
-# legitimate transient borrows and are not matched (they live outside `struct
-# ... {}` blocks).
+# Trigger 2 -- Box<dyn RenderObject<...>> wrapped in an interior-mutability
+# primitive in render storage.
+#
+# Owned `Box<dyn RenderObject<_>>` as a plain field is the chosen post-U2
+# baseline (preserves the open-set trait, delegates mutation discipline to
+# the borrow checker via &mut RenderTree). The hazard is *wrapping* the
+# trait object in RwLock/Mutex/RefCell/Cell/UnsafeCell on the storage type,
+# which would smuggle the lock-or-interior-mutability problem back in under
+# a different primitive. Trigger 1 catches RwLock specifically; this trigger
+# generalises to the others.
 # -----------------------------------------------------------------------------
 check "2" \
-  "Box<dyn RenderObject<...>> stored as a struct field in render storage" \
-  '(?s)struct\s+\w+[^{}]*\{[^}]*Box<\s*dyn\s+RenderObject' \
-  --multiline \
+  "Box<dyn RenderObject<...>> wrapped in interior-mutability primitive in render storage" \
+  '(RwLock|Mutex|RefCell|Cell|UnsafeCell)<\s*Box<\s*dyn\s+RenderObject' \
   --type rust \
   crates/flui-rendering/src/storage \
   crates/flui-view/src/element

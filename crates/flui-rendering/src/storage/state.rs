@@ -1025,6 +1025,31 @@ impl<P: Protocol> RenderState<P> {
             self.flags.remove(RenderFlags::IS_REPAINT_BOUNDARY);
         }
     }
+
+    /// Returns the previous-frame `IS_REPAINT_BOUNDARY` value.
+    ///
+    /// Written by the paint phase after a node is painted. Read by
+    /// compositing-bits propagation to detect repaint-boundary transitions.
+    ///
+    /// Hoisted off the `RenderObject<P>` trait surface (Flutter stores
+    /// this as `_wasRepaintBoundary` on the render object; in FLUI it
+    /// lives on `RenderState` so the paint phase flips a single atomic
+    /// bit rather than acquiring a write lock on the trait object). See
+    /// `docs/PORT.md` Refusal trigger 1 and the U2 exemplar refactor.
+    ///
+    /// Flutter equivalent: `_wasRepaintBoundary` (field read).
+    #[inline]
+    pub fn was_repaint_boundary(&self) -> bool {
+        self.flags.was_repaint_boundary()
+    }
+
+    /// Sets the previous-frame `IS_REPAINT_BOUNDARY` value.
+    ///
+    /// Flutter equivalent: `_wasRepaintBoundary = value`.
+    #[inline]
+    pub fn set_was_repaint_boundary(&self, was_boundary: bool) {
+        self.flags.set_was_repaint_boundary(was_boundary);
+    }
 }
 
 // ============================================================================

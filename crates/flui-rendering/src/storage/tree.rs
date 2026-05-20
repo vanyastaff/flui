@@ -495,12 +495,26 @@ impl RenderTree {
     }
 }
 
-// Safety: RenderTree is Send + Sync because:
-// - Slab<RenderNode> is Send + Sync when RenderNode is
-// - RenderNode contains Box<dyn RenderObject> which is Send + Sync
-// - Option<RenderId> and Option<Arc<RwLock<PipelineOwner>>> are Send + Sync
-unsafe impl Send for RenderTree {}
-unsafe impl Sync for RenderTree {}
+// Send + Sync auto-derive.
+//
+// U2 exemplar refactor removed the `RwLock<Box<dyn RenderObject<P>>>` field
+// on `RenderEntry<P>` and replaced it with plain `Box<dyn RenderObject<P>>`.
+// All transitive components are Send + Sync:
+//   - Slab<RenderNode> auto-derives Send + Sync from RenderNode.
+//   - RenderNode is an enum of RenderEntry<P>; each entry holds a plain
+//     Box<dyn RenderObject<P>>, RenderState<P> (lock-free atomics + OnceCell),
+//     and NodeLinks (POD).
+//   - Box<dyn RenderObject<P>> is Send + Sync because the trait requires
+//     `Send + Sync + 'static` (traits/render_object.rs).
+//   - Option<RenderId> and Option<Arc<RwLock<PipelineOwner>>> are Send + Sync.
+// No `unsafe impl` is required; the previous `unsafe impl Send/Sync for
+// RenderTree` block was load-bearing only because of the `RwLock` interior
+// mutability around `Box<dyn>`. With that gone, Rust's auto-derivation does
+// the right thing and produces the same `Send + Sync` reachability without
+// the unsafe carve-out.
+//
+// See `docs/PORT.md` Refusal trigger 1 and
+// `crates/flui-rendering/ARCHITECTURE.md` for the rationale.
 
 // ============================================================================
 // flui-tree Trait Implementations

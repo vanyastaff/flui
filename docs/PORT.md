@@ -22,15 +22,17 @@ Triggers are seeded from observed friction in the workspace. Forward-looking tri
 
 **Regex (used by `just port-check`):** `RwLock<\s*Box<\s*dyn\s+RenderObject` (storage-shaped violations).
 
-### 2. `Box<dyn RenderObject<_>>` stored in render-tree storage hot path
+### 2. `Box<dyn RenderObject<_>>` wrapped in any interior-mutability primitive in render storage
 
-**Why:** trait-object dispatch via `Box<dyn>` is permitted only at justified type-erasure boundaries (heterogeneous user-defined surfaces, platform abstractions). Storing it inside the per-frame storage type bypasses the compile-time arity dispatch the workspace is built around (see `Leaf`/`Single`/`Optional`/`Variable` in [`docs/architecture.md`](architecture.md)).
+**Why:** owned `Box<dyn RenderObject<_>>` stored as a plain field is acceptable — it is the chosen post-U2 baseline that preserves the open-set trait (blanket `impl<T: RenderBox + Diagnosticable> RenderObject<P> for T`) while delegating mutation discipline to the borrow checker through `&mut RenderTree`. The actual hazard is **wrapping** the trait object in any interior-mutability primitive (`RwLock`, `Mutex`, `RefCell`, `Cell`, `UnsafeCell`) on the storage type, because that would re-introduce the lock-or-interior-mutability problem the U2 refactor removed (the canonical violation was `RwLock<Box<dyn RenderObject<P>>>`).
 
-The *funnel* signatures (`tree.rs::insert_box`, view→render `From` impls) may keep `Box<dyn RenderObject<_>>` as a transient parameter type — only the stored shape is the violation.
+Trigger 1 catches the specific `RwLock` variant. Trigger 2 catches any other interior-mutability wrap that would smuggle the same problem back in under a different primitive.
+
+The *funnel* signatures (`tree.rs::insert_box`, view → render `From` impls) accept `Box<dyn RenderObject<_>>` as a transient parameter type and are not the target — the violation is the stored-and-wrapped shape.
 
 **Back-references:** [`.ai-factory/ARCHITECTURE.md`](../.ai-factory/ARCHITECTURE.md) example "`RenderBad { children: Vec<Box<dyn RenderObject>> }` — forbidden"; [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) Principle IV.
 
-**Regex:** `:\s*Box<\s*dyn\s+RenderObject\b` constrained to `crates/flui-rendering/src/storage/**` and `crates/flui-view/src/element/**` storage definitions.
+**Regex:** `(RwLock|Mutex|RefCell|Cell|UnsafeCell)<\s*Box<\s*dyn\s+RenderObject` constrained to render-storage modules.
 
 ### 3. `async fn` on `View::build`, `RenderObject::layout`, `RenderObject::paint`
 
@@ -170,7 +172,7 @@ Four other crates carry `crates/<crate>/docs/ARCHITECTURE.md` files (`flui-paint
 | Crate | `ARCHITECTURE.md` state | Status |
 | --- | --- | --- |
 | [`flui-foundation`](../crates/flui-foundation/ARCHITECTURE.md) | Templated (grafted 2026-05-19) | Active |
-| [`flui-rendering`](../crates/flui-rendering/ARCHITECTURE.md) | ⏳ U3 will populate (exemplar instance) | Active |
+| [`flui-rendering`](../crates/flui-rendering/ARCHITECTURE.md) | Templated 2026-05-20 (exemplar instance, U2 refactor recorded) | Active |
 | `flui-types` | Not yet templated | Active |
 | `flui-tree` | Not yet templated | Active |
 | `flui-platform` | Not yet templated | Active |

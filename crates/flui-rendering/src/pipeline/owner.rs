@@ -948,10 +948,20 @@ impl PipelineOwner {
             paint_children(context, offset);
         }
 
-        // Track that this was a repaint boundary for future reference
-        if is_repaint_boundary && let Some(render_node) = self.render_tree.get(node_id) {
-            let mut render_object = render_node.box_render_object_mut();
-            render_object.set_was_repaint_boundary(true);
+        // Track that this was a repaint boundary for future reference.
+        //
+        // U2 exemplar refactor: the previous shape took a write lock on the
+        // trait object (`render_node.box_render_object_mut()`) to flip a single
+        // bool via `set_was_repaint_boundary`. The bit lives on `RenderState`
+        // as `WAS_REPAINT_BOUNDARY` (see `storage/flags.rs`); the paint phase
+        // now flips an atomic without touching the trait object. The trait
+        // method has been removed. See `docs/PORT.md` Refusal trigger 1 and
+        // `crates/flui-rendering/ARCHITECTURE.md`.
+        if is_repaint_boundary
+            && let Some(render_node) = self.render_tree.get(node_id)
+            && let Some(entry) = render_node.as_box()
+        {
+            entry.state().set_was_repaint_boundary(true);
         }
     }
 

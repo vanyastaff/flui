@@ -243,10 +243,15 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
             // Update configuration if size changed
             if let (Some(pipeline_owner), Some(render_id)) = (&self.pipeline_owner, self.render_id)
             {
-                let owner = pipeline_owner.write();
-                if let Some(node) = owner.render_tree().get(render_id) {
+                // U2 exemplar refactor: mutable access to the render object goes
+                // through `&mut RenderTree` (`render_tree_mut().get_mut`) rather
+                // than acquiring a per-node `RwLock` write guard. The pipeline
+                // owner is still locked via its outer `Arc<RwLock<PipelineOwner>>`
+                // (shared-infrastructure lock, allowed per `docs/PORT.md`).
+                let mut owner = pipeline_owner.write();
+                if let Some(node) = owner.render_tree_mut().get_mut(render_id) {
                     // RenderView uses BoxProtocol
-                    let mut render_object = node.box_render_object_mut();
+                    let render_object = node.box_render_object_mut();
                     if let Some(render_view) = render_object
                         .as_any_mut()
                         .downcast_mut::<RenderViewObject>()

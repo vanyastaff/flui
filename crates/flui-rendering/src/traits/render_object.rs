@@ -242,16 +242,19 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
         Offset::ZERO
     }
 
-    /// Sets whether this was a repaint boundary in the last paint.
-    ///
-    /// Used by the framework to track boundary status for optimization.
-    ///
-    /// Default: Does nothing
-    fn set_was_repaint_boundary(&mut self, _value: bool) {}
-
     // ========================================================================
     // Pipeline Integration
     // ========================================================================
+    //
+    // Historical note (U2 exemplar refactor, see docs/PORT.md): the trait
+    // formerly carried a `set_was_repaint_boundary(&mut self, bool)` method.
+    // It was a leaky abstraction -- framework bookkeeping that only existed
+    // on the trait because Flutter's Dart classes are flat. The bit now lives
+    // on `RenderState<P>::flags` as `WAS_REPAINT_BOUNDARY` (see
+    // `crates/flui-rendering/src/storage/flags.rs`) and is flipped by the
+    // paint phase via an atomic store, without acquiring a lock on the
+    // trait object. Removing the method also removes the only paint-phase
+    // `&mut` access to the trait surface.
 
     /// Inserts this render object into the pipeline owner and returns its ID.
     ///

@@ -74,8 +74,11 @@ pub struct RenderView {
     needs_semantics_update: bool,
     #[allow(dead_code)]
     is_repaint_boundary: bool,
-    #[allow(dead_code)]
-    was_repaint_boundary: bool,
+    // U2 exemplar refactor: was_repaint_boundary previously lived here as a
+    // mirror of the (removed) RenderObject::set_was_repaint_boundary trait
+    // method. The bit now lives on `RenderState<P>::flags` as
+    // `WAS_REPAINT_BOUNDARY` (see `crates/flui-rendering/src/storage/flags.rs`
+    // and `crates/flui-rendering/ARCHITECTURE.md`).
     #[allow(dead_code)]
     needs_compositing: bool,
     #[allow(dead_code)]
@@ -120,7 +123,6 @@ impl RenderView {
             needs_compositing_bits_update: false,
             needs_semantics_update: false,
             is_repaint_boundary: true,
-            was_repaint_boundary: true,
             needs_compositing: true,
             cached_constraints: None,
             parent_data: None,
