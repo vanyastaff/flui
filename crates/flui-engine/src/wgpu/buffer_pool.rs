@@ -37,8 +37,10 @@
 //! pool.reset();  // Call at end of frame
 //! ```
 
-use wgpu::util::{BufferInitDescriptor, DeviceExt};
-use wgpu::{Buffer, BufferUsages, Device};
+use wgpu::{
+    Buffer, BufferUsages, Device,
+    util::{BufferInitDescriptor, DeviceExt},
+};
 
 /// Buffer pool entry
 struct PooledBuffer {
@@ -51,9 +53,9 @@ struct PooledBuffer {
 
 /// GPU buffer pool for efficient buffer reuse
 ///
-/// Maintains separate pools for different buffer types (vertex, index, uniform).
-/// Buffers are matched by size - if requested size matches pooled buffer size,
-/// the buffer is reused. Otherwise, a new buffer is created.
+/// Maintains separate pools for different buffer types (vertex, index,
+/// uniform). Buffers are matched by size - if requested size matches pooled
+/// buffer size, the buffer is reused. Otherwise, a new buffer is created.
 #[derive(Default)]
 pub struct BufferPool {
     vertex_buffers: Vec<PooledBuffer>,
@@ -73,8 +75,8 @@ impl BufferPool {
 
     /// Get or create a vertex buffer
     ///
-    /// If a vertex buffer of the same size is available in the pool, it will be reused.
-    /// Otherwise, a new buffer will be created.
+    /// If a vertex buffer of the same size is available in the pool, it will be
+    /// reused. Otherwise, a new buffer will be created.
     ///
     /// # Arguments
     /// * `device` - WGPU device
@@ -230,6 +232,72 @@ impl BufferPool {
 
         // Safe: We just pushed, so pool[index] exists
         &pool[index].buffer
+    }
+
+    /// Get or create a vertex buffer AND an index buffer simultaneously
+    ///
+    /// This method solves the borrow checker issue where calling
+    /// `get_vertex_buffer` and `get_index_buffer` separately would
+    /// require two `&mut self` borrows. By combining them into one call,
+    /// both buffer references can be held simultaneously.
+    ///
+    /// # Safety Note
+    ///
+    /// Uses raw pointers internally to split borrows on disjoint fields
+    /// (`vertex_buffers` vs `index_buffers`). This is sound because:
+    /// - The two Vec fields are disjoint memory regions
+    /// - The statistics counters are simple increment-only values
+    /// - No reallocation of `vertex_buffers` occurs during the index buffer call
+    #[allow(unsafe_code)]
+    pub fn get_vertex_and_index_buffers(
+        &mut self,
+        device: &Device,
+        queue: &wgpu::Queue,
+        vertex_label: &str,
+        vertex_contents: &[u8],
+        index_label: &str,
+        index_contents: &[u8],
+    ) -> (&Buffer, &Buffer) {
+        // We must call get_buffer_internal twice with disjoint borrows.
+        // Since vertex_buffers and index_buffers are separate fields,
+        // we split the borrow manually.
+        let allocations = &mut self.allocations as *mut usize;
+        let reuses = &mut self.reuses as *mut usize;
+
+        let vertex_buf = Self::get_buffer_internal(
+            device,
+            queue,
+            vertex_label,
+            vertex_contents,
+            BufferUsages::VERTEX | BufferUsages::COPY_DST,
+            &mut self.vertex_buffers,
+            // SAFETY: allocations/reuses are only used for statistics counting.
+            // The two calls never alias the same Vec, and the counters are
+            // simple increments with no observable side effects between calls.
+            unsafe { &mut *allocations },
+            unsafe { &mut *reuses },
+        );
+
+        // Convert to raw pointer to release the mutable borrow on vertex_buffers
+        let vertex_ptr = vertex_buf as *const Buffer;
+
+        let index_buf = Self::get_buffer_internal(
+            device,
+            queue,
+            index_label,
+            index_contents,
+            BufferUsages::INDEX | BufferUsages::COPY_DST,
+            &mut self.index_buffers,
+            unsafe { &mut *allocations },
+            unsafe { &mut *reuses },
+        );
+
+        // SAFETY: vertex_ptr points into self.vertex_buffers which is not
+        // modified by the index buffer call (separate Vec). The buffer
+        // reference is valid for the lifetime of &mut self.
+        let vertex_ref = unsafe { &*vertex_ptr };
+
+        (vertex_ref, index_buf)
     }
 
     /// Reset pool for next frame

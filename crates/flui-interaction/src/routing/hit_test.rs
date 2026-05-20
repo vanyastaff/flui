@@ -1,12 +1,14 @@
 //! Hit testing infrastructure (Flutter-like)
 //!
-//! This module provides base hit testing types following Flutter's architecture:
+//! This module provides base hit testing types following Flutter's
+//! architecture:
 //!
-//! - **`HitTestResult`** - Base result with transform stack (gestures/hit_test.dart)
+//! - **`HitTestResult`** - Base result with transform stack
+//!   (gestures/hit_test.dart)
 //! - **`HitTestEntry`** - Single hit entry with transform
 //!
-//! Protocol-specific types (`BoxHitTestResult`, `SliverHitTestResult`) are defined
-//! in `flui_rendering` crate, following Flutter's organization where:
+//! Protocol-specific types (`BoxHitTestResult`, `SliverHitTestResult`) are
+//! defined in `flui_rendering` crate, following Flutter's organization where:
 //! - `BoxHitTestResult` is in `rendering/box.dart`
 //! - `SliverHitTestResult` is in `rendering/sliver.dart`
 //!
@@ -15,13 +17,12 @@
 //! - HitTestResult: gestures/hit_test.dart
 //! - HitTestEntry: gestures/hit_test.dart
 
-use crate::events::{CursorIcon, PointerEvent, ScrollEventData};
-use flui_types::geometry::Pixels;
-
-use flui_types::geometry::{Matrix4, Offset};
 use std::sync::Arc;
 
 pub use flui_foundation::RenderId;
+use flui_types::geometry::{Matrix4, Offset, Pixels};
+
+use crate::events::{CursorIcon, PointerEvent, ScrollEventData};
 
 // ============================================================================
 // EVENT PROPAGATION
@@ -360,7 +361,8 @@ impl HitTestResult {
 
     /// Resolves the active mouse cursor.
     ///
-    /// Returns the first non-default cursor in the path, or `CursorIcon::Default`.
+    /// Returns the first non-default cursor in the path, or
+    /// `CursorIcon::Default`.
     pub fn resolve_cursor(&self) -> CursorIcon {
         for entry in &self.path {
             if entry.cursor != CursorIcon::Default {

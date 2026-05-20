@@ -1,15 +1,16 @@
 //! Viewport abstractions for render objects that are bigger on the inside.
 //!
-//! This module provides the interface for viewports - render objects that display
-//! a portion of their content, which can be controlled by a scroll offset.
+//! This module provides the interface for viewports - render objects that
+//! display a portion of their content, which can be controlled by a scroll
+//! offset.
 //!
 //! # Flutter Equivalence
 //!
 //! This corresponds to parts of Flutter's `rendering/viewport.dart`.
 
-use crate::protocol::BoxProtocol;
-use crate::traits::RenderObject;
 use flui_types::{Axis, Rect};
+
+use crate::{protocol::BoxProtocol, traits::RenderObject};
 
 /// The unit of measurement for a viewport's cache extent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -113,7 +114,8 @@ impl RevealedOffset {
 ///
 /// [`ViewportOffset`]: super::ViewportOffset
 pub trait RenderAbstractViewport: RenderObject<BoxProtocol> {
-    /// Returns the offset that would be needed to reveal the target render object.
+    /// Returns the offset that would be needed to reveal the target render
+    /// object.
     ///
     /// # Arguments
     ///
@@ -122,8 +124,8 @@ pub trait RenderAbstractViewport: RenderObject<BoxProtocol> {
     ///   - 0.0: as close to the leading edge as possible
     ///   - 1.0: as close to the trailing edge as possible
     ///   - 0.5: as close to the center as possible
-    /// * `rect` - Optional area of the target to reveal. If `None`, reveals
-    ///   the entire target's paint bounds.
+    /// * `rect` - Optional area of the target to reveal. If `None`, reveals the
+    ///   entire target's paint bounds.
     /// * `axis` - Optional axis for 2D viewports. Ignored by 1D viewports.
     fn get_offset_to_reveal(
         &self,
@@ -141,9 +143,9 @@ pub trait RenderAbstractViewport: RenderObject<BoxProtocol> {
 
 #[cfg(test)]
 mod tests {
+    use flui_types::{Rect, geometry::px};
+
     use super::*;
-    use flui_types::geometry::px;
-    use flui_types::Rect;
 
     #[test]
     fn test_cache_extent_style_default() {
@@ -168,8 +170,14 @@ mod tests {
 
     #[test]
     fn test_revealed_offset_clamp_already_visible() {
-        let leading = RevealedOffset::new(50.0, Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0)));
-        let trailing = RevealedOffset::new(150.0, Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0)));
+        let leading = RevealedOffset::new(
+            50.0,
+            Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0)),
+        );
+        let trailing = RevealedOffset::new(
+            150.0,
+            Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0)),
+        );
 
         // Current offset is between leading and trailing - already visible
         let result = RevealedOffset::clamp_offset(leading, trailing, 100.0);
@@ -178,8 +186,14 @@ mod tests {
 
     #[test]
     fn test_revealed_offset_clamp_needs_scroll_down() {
-        let leading = RevealedOffset::new(50.0, Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0)));
-        let trailing = RevealedOffset::new(150.0, Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0)));
+        let leading = RevealedOffset::new(
+            50.0,
+            Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0)),
+        );
+        let trailing = RevealedOffset::new(
+            150.0,
+            Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0)),
+        );
 
         // Current offset is above the visible range - need to scroll down
         let result = RevealedOffset::clamp_offset(leading, trailing, 200.0);
@@ -189,8 +203,14 @@ mod tests {
 
     #[test]
     fn test_revealed_offset_clamp_needs_scroll_up() {
-        let leading = RevealedOffset::new(50.0, Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0)));
-        let trailing = RevealedOffset::new(150.0, Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0)));
+        let leading = RevealedOffset::new(
+            50.0,
+            Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0)),
+        );
+        let trailing = RevealedOffset::new(
+            150.0,
+            Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0)),
+        );
 
         // Current offset is below the visible range - need to scroll up
         let result = RevealedOffset::clamp_offset(leading, trailing, 30.0);
@@ -201,8 +221,14 @@ mod tests {
     #[test]
     fn test_revealed_offset_clamp_inverted() {
         // When leading > trailing (inverted order)
-        let leading = RevealedOffset::new(150.0, Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0)));
-        let trailing = RevealedOffset::new(50.0, Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0)));
+        let leading = RevealedOffset::new(
+            150.0,
+            Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0)),
+        );
+        let trailing = RevealedOffset::new(
+            50.0,
+            Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0)),
+        );
 
         // Current offset is between - already visible
         let result = RevealedOffset::clamp_offset(leading, trailing, 100.0);

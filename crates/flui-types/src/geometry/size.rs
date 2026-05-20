@@ -1,13 +1,15 @@
 //! Size type for 2D dimensions.
 //!
 //! API design inspired by kurbo, glam, and Flutter.
-use super::{px, Pixels};
+use std::{
+    fmt::{self, Display},
+    ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
+};
 
-use std::fmt::{self, Display};
-use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign};
-
-use super::traits::{Along, Axis, Half, IsZero, NumericUnit, Unit};
-use super::{Point, Vec2};
+use super::{
+    Pixels, Point, Vec2, px,
+    traits::{Along, Axis, Half, IsZero, NumericUnit, Unit},
+};
 
 /// A 2D size with width and height.
 ///
@@ -21,7 +23,7 @@ use super::{Point, Vec2};
 /// # Examples
 ///
 /// ```
-/// use flui_types::geometry::{Size, px, Pixels};
+/// use flui_types::geometry::{Pixels, Size, px};
 ///
 /// let ui_size = Size::<Pixels>::new(px(800.0), px(600.0));
 /// assert_eq!(ui_size.area(), 480_000.0);
@@ -87,7 +89,7 @@ impl<T: Unit> Size<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Size, px, Pixels};
+    /// use flui_types::geometry::{Pixels, Size, px};
     ///
     /// let s = Size::<Pixels>::square(px(10.0));
     /// assert_eq!(s.width, px(10.0));
@@ -109,7 +111,7 @@ impl<T: NumericUnit> Size<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Size, px, Pixels};
+    /// use flui_types::geometry::{Pixels, Size, px};
     ///
     /// let s1 = Size::<Pixels>::new(px(100.0), px(50.0));
     /// let s2 = Size::<Pixels>::new(px(80.0), px(60.0));
@@ -130,7 +132,7 @@ impl<T: NumericUnit> Size<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Size, px, Pixels};
+    /// use flui_types::geometry::{Pixels, Size, px};
     ///
     /// let s1 = Size::<Pixels>::new(px(100.0), px(50.0));
     /// let s2 = Size::<Pixels>::new(px(80.0), px(60.0));
@@ -156,7 +158,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Size, px, Pixels};
+    /// use flui_types::geometry::{Pixels, Size, px};
     ///
     /// let s1 = Size::<Pixels>::new(px(0.0), px(10.0));
     /// assert!(s1.is_empty());
@@ -178,7 +180,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Size, px, Pixels};
+    /// use flui_types::geometry::{Pixels, Size, px};
     ///
     /// let s = Size::<Pixels>::new(px(10.0), px(20.0));
     /// assert_eq!(s.area(), 200.0);
@@ -198,7 +200,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Size, px, Pixels};
+    /// use flui_types::geometry::{Pixels, Size, px};
     ///
     /// let s = Size::<Pixels>::new(px(16.0), px(9.0));
     /// assert!((s.aspect_ratio() - 1.777).abs() < 0.01);
@@ -208,11 +210,7 @@ where
     pub fn aspect_ratio(self) -> f32 {
         let w: f32 = self.width.into();
         let h: f32 = self.height.into();
-        if h == 0.0 {
-            0.0
-        } else {
-            w / h
-        }
+        if h == 0.0 { 0.0 } else { w / h }
     }
 
     /// Returns the center point (half width, half height).
@@ -220,7 +218,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Size, Point, px, Pixels};
+    /// use flui_types::geometry::{Pixels, Point, Size, px};
     ///
     /// let s = Size::<Pixels>::new(px(100.0), px(200.0));
     /// let c = s.center();
@@ -247,7 +245,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Size, Point, px, Pixels};
+    /// use flui_types::geometry::{Pixels, Point, Size, px};
     ///
     /// let s = Size::<Pixels>::new(px(10.0), px(20.0));
     /// assert!(s.contains(Point::<Pixels>::new(px(5.0), px(10.0))));
@@ -323,7 +321,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Size, px, Pixels};
+    /// use flui_types::geometry::{Pixels, Size, px};
     ///
     /// let s = Size::<Pixels>::new(px(100.0), px(200.0));
     /// assert_eq!(s.to_array(), [100.0, 200.0]);
@@ -339,7 +337,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Size, Vec2, px, Pixels};
+    /// use flui_types::geometry::{Pixels, Size, Vec2, px};
     ///
     /// let s = Size::<Pixels>::new(px(100.0), px(200.0));
     /// let v = s.to_vec2();
@@ -625,7 +623,7 @@ impl Size<Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Size, ScaleFactor, Pixels, DevicePixels, px, device_px};
+    /// use flui_types::geometry::{DevicePixels, Pixels, ScaleFactor, Size, device_px, px};
     ///
     /// let logical = Size::new(px(100.0), px(200.0));
     /// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
@@ -653,7 +651,7 @@ impl Size<super::units::DevicePixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Size, ScaleFactor, Pixels, DevicePixels, device_px, px};
+    /// use flui_types::geometry::{DevicePixels, Pixels, ScaleFactor, Size, device_px, px};
     ///
     /// let device = Size::new(device_px(200.0), device_px(400.0));
     /// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
@@ -1007,7 +1005,7 @@ impl Size<super::units::Pixels> {
     /// use flui_types::geometry::{Size, px};
     ///
     /// let size = Size::new(px(100.0), px(200.0));
-    /// let scaled = size.scale(2.0);  // 2x Retina display
+    /// let scaled = size.scale(2.0); // 2x Retina display
     /// ```
     #[inline]
     #[must_use]
@@ -1220,7 +1218,7 @@ mod tests {
 #[cfg(test)]
 mod typed_tests {
     use super::*;
-    use crate::geometry::{px, Pixels};
+    use crate::geometry::{Pixels, px};
 
     #[test]
     fn test_size_new() {

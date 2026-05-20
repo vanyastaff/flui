@@ -1,24 +1,41 @@
-//! RenderEntry - Protocol-specific render node storage.
+//! `RenderEntry` -- protocol-specific render-node storage.
 //!
-//! This module provides `RenderEntry<P>`, which stores a render object along with
-//! its protocol-specific state and tree links. This is the internal storage unit
-//! that gets wrapped by `RenderNode` enum for heterogeneous tree storage.
+//! This module provides `RenderEntry<P>`, which stores a render object along
+//! with its protocol-specific state and tree links. This is the internal
+//! storage unit that gets wrapped by the `RenderNode` enum for heterogeneous
+//! tree storage.
+//!
+//! # U2 exemplar refactor (2026-05-20)
+//!
+//! The render object is owned by plain value (`Box<dyn RenderObject<P>>`),
+//! not wrapped in a lock. Mutable access goes through `&mut self`, which the
+//! pipeline obtains via `&mut RenderTree` at phase boundaries (Build / Layout
+//! / Paint). The previous shape `RwLock<Box<dyn RenderObject<P>>>` is the
+//! canonical refusal-trigger violation documented in `docs/PORT.md` (Trigger 1
+//! and Trigger 2). Single-writer-per-frame discipline is enforced by Rust's
+//! borrow checker on `&mut RenderTree`, matching Flutter's single-threaded
+//! pipeline invariant (`_debugDoingThisLayout` / `_debugDoingThisPaint`
+//! debug asserts in `.flutter/flutter-master/packages/flutter/lib/src/rendering/object.dart`).
+//!
+//! Pipeline bookkeeping bits that previously required a write lock on the
+//! trait object (specifically `set_was_repaint_boundary`) now live on
+//! `RenderState<P>::flags` (`crates/flui-rendering/src/storage/flags.rs`) and
+//! are flipped through atomic stores without touching the trait surface.
 
 use std::fmt::Debug;
 
 use flui_foundation::RenderId;
-use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
+use super::{links::NodeLinks, state::RenderState};
 use crate::protocol::{Protocol, ProtocolConstraints, ProtocolGeometry, RenderObject};
-
-use super::links::NodeLinks;
-use super::state::RenderState;
 
 /// Protocol-specific render entry.
 ///
 /// This is the internal storage unit for a render object in the tree.
 /// Each entry contains:
-/// - The render object itself (behind RwLock for interior mutability)
+/// - The render object itself (owned by value -- mutation discipline is
+///   enforced by `&mut self` access from the pipeline holding `&mut
+///   RenderTree`)
 /// - Protocol-specific state (geometry, constraints, flags)
 /// - Tree structure links (parent, children, depth)
 ///
@@ -26,12 +43,16 @@ use super::state::RenderState;
 ///
 /// - `P`: The protocol (BoxProtocol or SliverProtocol)
 ///
-/// # Interior Mutability
+/// # Mutation discipline
 ///
-/// The render object is wrapped in `RwLock` to enable:
-/// - Parent calling `child.layout()` during its own layout
-/// - Thread-safe access from multiple threads
-/// - Lock-free state access via `RenderState`
+/// The render object is owned plainly; there is no interior mutability on
+/// the storage type. Pipeline phases obtain mutable access by holding `&mut
+/// RenderTree` (via `PipelineOwner::render_tree_mut`) for the duration of
+/// the phase. Re-entrant access from a parent to a child during layout uses
+/// the disjoint-borrow primitive `RenderTree::get_two_mut`. State bits that
+/// only need to be flipped (e.g. `WAS_REPAINT_BOUNDARY` written by the paint
+/// phase) live on `RenderState<P>::flags` and are mutated through atomic
+/// stores -- no lock acquisition required.
 ///
 /// # Example
 ///
@@ -43,8 +64,8 @@ use super::state::RenderState;
 /// assert!(entry.state().needs_layout());
 /// ```
 pub struct RenderEntry<P: Protocol> {
-    /// The render object (RwLock for interior mutability during layout).
-    render_object: RwLock<Box<dyn RenderObject<P>>>,
+    /// The render object. Owned by value; mutation via `&mut self`.
+    render_object: Box<dyn RenderObject<P>>,
 
     /// Protocol-specific state (geometry, constraints, flags).
     state: RenderState<P>,
@@ -80,7 +101,7 @@ impl<P: Protocol> RenderEntry<P> {
     /// - Depth 0
     pub fn new(render_object: Box<dyn RenderObject<P>>) -> Self {
         Self {
-            render_object: RwLock::new(render_object),
+            render_object,
             state: RenderState::new(),
             links: NodeLinks::new(),
         }
@@ -93,7 +114,7 @@ impl<P: Protocol> RenderEntry<P> {
         depth: u16,
     ) -> Self {
         Self {
-            render_object: RwLock::new(render_object),
+            render_object,
             state: RenderState::new(),
             links: NodeLinks::with_parent(parent, depth),
         }
@@ -105,40 +126,24 @@ impl<P: Protocol> RenderEntry<P> {
 // ============================================================================
 
 impl<P: Protocol> RenderEntry<P> {
-    /// Returns a read lock on the render object.
+    /// Returns an immutable reference to the render object.
     ///
-    /// # Blocking
-    ///
-    /// This will block if another thread holds a write lock.
+    /// Always succeeds. No locking; the borrow checker enforces that no
+    /// concurrent `&mut` access exists.
     #[inline]
-    pub fn render_object(&self) -> RwLockReadGuard<'_, Box<dyn RenderObject<P>>> {
-        self.render_object.read()
+    pub fn render_object(&self) -> &dyn RenderObject<P> {
+        &*self.render_object
     }
 
-    /// Returns a write lock on the render object.
+    /// Returns a mutable reference to the render object.
     ///
-    /// # Blocking
-    ///
-    /// This will block if another thread holds any lock.
+    /// Requires `&mut self`. Pipeline phases obtain this via `&mut RenderTree`
+    /// (`PipelineOwner::render_tree_mut`) for the duration of the phase. For
+    /// parent-to-child re-entrant mutation during layout, use
+    /// `RenderTree::get_two_mut`.
     #[inline]
-    pub fn render_object_mut(&self) -> RwLockWriteGuard<'_, Box<dyn RenderObject<P>>> {
-        self.render_object.write()
-    }
-
-    /// Try to acquire a read lock on the render object.
-    ///
-    /// Returns `None` if a write lock is held.
-    #[inline]
-    pub fn try_render_object(&self) -> Option<RwLockReadGuard<'_, Box<dyn RenderObject<P>>>> {
-        self.render_object.try_read()
-    }
-
-    /// Try to acquire a write lock on the render object.
-    ///
-    /// Returns `None` if any lock is held.
-    #[inline]
-    pub fn try_render_object_mut(&self) -> Option<RwLockWriteGuard<'_, Box<dyn RenderObject<P>>>> {
-        self.render_object.try_write()
+    pub fn render_object_mut(&mut self) -> &mut dyn RenderObject<P> {
+        &mut *self.render_object
     }
 }
 
@@ -173,7 +178,7 @@ impl<P: Protocol> RenderEntry<P> {
         self.state.needs_paint()
     }
 
-    // NOTE: mark_needs_layout() and mark_needs_paint() removed from RenderEntry
+    // NOTE: mark_needs_layout() and mark_needs_paint() removed from RenderEntry.
     // These methods require element_id and tree access for dirty propagation.
     // They should be called through RenderTree or PipelineOwner instead.
 }
@@ -229,27 +234,55 @@ impl<P: Protocol> RenderEntry<P> {
 impl<P: Protocol> RenderEntry<P> {
     /// Performs layout on this entry.
     ///
-    /// This acquires a write lock on the render object, calls `perform_layout`,
-    /// stores the resulting geometry in state, and clears the needs_layout flag.
+    /// Requires `&mut self`: the caller (typically `PipelineOwner` holding
+    /// `&mut RenderTree`) has exclusive access to this entry for the duration
+    /// of the layout call. Calls `perform_layout_raw` on the owned render
+    /// object, stores the resulting geometry in state, and clears the
+    /// `NEEDS_LAYOUT` flag.
     ///
-    /// Returns the computed geometry.
-    pub fn layout(&self, constraints: ProtocolConstraints<P>) -> ProtocolGeometry<P>
+    /// The `perform_layout_raw` call is wrapped in
+    /// [`std::panic::catch_unwind`]; a panic surfaces as
+    /// [`crate::error::RenderError::Poisoned`] (Mythos Step 12). On the
+    /// panic path the state's geometry is **not** updated -- the previous
+    /// geometry (or `None` if this is the first layout) remains valid.
+    /// The `NEEDS_LAYOUT` flag is also left set so the pipeline can retry
+    /// next frame after the offending node has been removed or fixed.
+    ///
+    /// Returns the computed geometry on success.
+    pub fn layout(
+        &mut self,
+        constraints: ProtocolConstraints<P>,
+    ) -> crate::error::RenderResult<ProtocolGeometry<P>>
     where
         ProtocolGeometry<P>: Clone,
         ProtocolConstraints<P>: Clone,
     {
-        // Perform layout
-        let geometry = {
-            let mut obj = self.render_object.write();
-            obj.perform_layout_raw(constraints.clone())
-        };
+        // Capture the debug name BEFORE the &mut reborrow -- a shared
+        // borrow against `&*self.render_object` cannot coexist with the
+        // &mut needed inside the unwind closure, so we read the name
+        // upfront and let it outlive the closure.
+        let debug_name = self.render_object.debug_name();
 
-        // Update state
+        // SAFETY of AssertUnwindSafe: the render object's internal state
+        // is opaque to us. If it panics, we treat the state as torn and
+        // surface RenderError::Poisoned -- callers are required to drop
+        // or replace the node before reusing it. The pipeline-side state
+        // (geometry / constraints / flags) on `self.state` is not touched
+        // before the panic site, so the render tree stays consistent.
+        let render_object = &mut *self.render_object;
+        let constraints_for_call = constraints.clone();
+        let geometry = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            render_object.perform_layout_raw(constraints_for_call)
+        }))
+        .map_err(|_| crate::error::RenderError::poisoned(debug_name, "layout"))?;
+
+        // Update state -- only on the success path. On panic, state remains
+        // untouched and NEEDS_LAYOUT stays set so a retry is possible.
         self.state.set_geometry(geometry.clone());
         self.state.set_constraints(constraints);
         self.state.clear_needs_layout();
 
-        geometry
+        Ok(geometry)
     }
 }
 

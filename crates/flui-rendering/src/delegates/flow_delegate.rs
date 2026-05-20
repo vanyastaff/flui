@@ -3,8 +3,7 @@
 //! [`FlowDelegate`] allows users to implement custom flow layout behavior
 //! with custom constraints and painting transforms.
 
-use std::any::Any;
-use std::fmt::Debug;
+use std::{any::Any, fmt::Debug};
 
 use flui_types::{Matrix4, Size};
 
@@ -190,8 +189,9 @@ impl<'a> FlowPaintingContext<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::px;
+
+    use super::*;
 
     #[derive(Debug)]
     struct LinearFlowDelegate {

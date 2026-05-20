@@ -1,7 +1,8 @@
 //! macOS Multi-Window Management
 //!
-//! This module provides centralized management for multiple windows in a macOS application.
-//! It handles window lifecycle, coordination, and inter-window communication.
+//! This module provides centralized management for multiple windows in a macOS
+//! application. It handles window lifecycle, coordination, and inter-window
+//! communication.
 //!
 //! # Features
 //!
@@ -28,10 +29,15 @@
 //! let windows = manager.all_windows();
 //! ```
 
-use flui_types::geometry::{Point, Size};
-use flui_types::Pixels;
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
+
+use flui_types::{
+    Pixels,
+    geometry::{Point, Size},
+};
 
 // ============================================================================
 // Window Manager
@@ -429,10 +435,10 @@ impl WindowLevel {
     #[cfg(target_os = "macos")]
     pub fn to_ns_window_level(self) -> isize {
         match self {
-            WindowLevel::Normal => 0,        // NSNormalWindowLevel
-            WindowLevel::Floating => 3,      // NSFloatingWindowLevel
-            WindowLevel::Modal => 8,         // NSModalPanelWindowLevel
-            WindowLevel::Popover => 101,     // NSPopUpMenuWindowLevel
+            WindowLevel::Normal => 0,         // NSNormalWindowLevel
+            WindowLevel::Floating => 3,       // NSFloatingWindowLevel
+            WindowLevel::Modal => 8,          // NSModalPanelWindowLevel
+            WindowLevel::Popover => 101,      // NSPopUpMenuWindowLevel
             WindowLevel::ScreenSaver => 1000, // NSScreenSaverWindowLevel
         }
     }

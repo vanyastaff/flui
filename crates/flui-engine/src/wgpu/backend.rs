@@ -1,30 +1,61 @@
 //! Wgpu-based CommandRenderer implementation
 //!
-//! Production rendering backend executing drawing commands via GPU acceleration.
+//! Production rendering backend executing drawing commands via GPU
+//! acceleration.
 
-use super::commands::dispatch_command;
-use super::painter::WgpuPainter;
-use crate::traits::{CommandRenderer, Painter};
 use flui_painting::{BlendMode, DisplayListCore, Paint, PointMode};
 use flui_types::{
-    geometry::{px, Matrix4, Offset, Pixels, Point, RRect, Rect, Transform},
+    geometry::{Matrix4, Offset, Pixels, Point, RRect, Rect, Transform, px},
     painting::{Image, Path},
     styling::Color,
     typography::TextStyle,
 };
 
+use std::sync::Arc;
+
+use super::{commands::dispatch_command, painter::WgpuPainter};
+use crate::traits::{CommandRenderer, Painter};
+
 /// wgpu backend implementation of CommandRenderer.
 ///
-/// Note: Debug is not derived because `WgpuPainter` contains wgpu types that don't implement Debug.
+/// Note: Debug is not derived because `WgpuPainter` contains wgpu types that
+/// don't implement Debug.
 #[allow(missing_debug_implementations)]
 pub struct Backend {
     painter: WgpuPainter,
+    offscreen: Option<Arc<parking_lot::Mutex<super::offscreen::OffscreenRenderer>>>,
+    /// Cached offscreen painter reused across shader mask invocations.
+    /// Lazily created on first use, resized when dimensions change.
+    offscreen_painter: Option<WgpuPainter>,
 }
 
 impl Backend {
     /// Create a new Backend with the given painter.
     pub fn new(painter: WgpuPainter) -> Self {
-        Self { painter }
+        Self {
+            painter,
+            offscreen: None,
+            offscreen_painter: None,
+        }
+    }
+
+    /// Create a new Backend with the given painter and offscreen renderer.
+    pub fn with_offscreen(
+        painter: WgpuPainter,
+        offscreen: Arc<parking_lot::Mutex<super::offscreen::OffscreenRenderer>>,
+    ) -> Self {
+        Self {
+            painter,
+            offscreen: Some(offscreen),
+            offscreen_painter: None,
+        }
+    }
+
+    /// Access the offscreen renderer (for shader mask, backdrop filter).
+    pub fn offscreen(
+        &self,
+    ) -> Option<&Arc<parking_lot::Mutex<super::offscreen::OffscreenRenderer>>> {
+        self.offscreen.as_ref()
     }
 
     /// Get a reference to the underlying painter.
@@ -37,7 +68,9 @@ impl Backend {
         &mut self.painter
     }
 
-    /// Consume the renderer and return the underlying painter
+    /// Consume the renderer and return the underlying painter.
+    ///
+    /// The offscreen `Arc` is dropped here; ref-counting keeps it alive in Renderer.
     pub fn into_painter(self) -> WgpuPainter {
         self.painter
     }
@@ -57,6 +90,40 @@ impl Backend {
     /// Used to restore state after rendering layer children.
     pub fn restore(&mut self) {
         self.painter.restore();
+    }
+
+    /// Get or create a cached offscreen painter for shader mask rendering.
+    ///
+    /// On first call, creates a new `WgpuPainter` with shared device/queue.
+    /// On subsequent calls, returns the cached painter, resizing if needed.
+    fn get_or_create_offscreen_painter(
+        &mut self,
+        device: &Arc<wgpu::Device>,
+        queue: &Arc<wgpu::Queue>,
+        format: wgpu::TextureFormat,
+        size: (u32, u32),
+    ) -> &mut WgpuPainter {
+        if let Some(ref painter) = self.offscreen_painter {
+            if painter.size() != size {
+                // Size changed — drop and recreate
+                self.offscreen_painter = None;
+            }
+        }
+
+        self.offscreen_painter.get_or_insert_with(|| {
+            tracing::debug!(
+                "Creating cached offscreen painter: size={}x{}, format={:?}",
+                size.0,
+                size.1,
+                format
+            );
+            super::painter::WgpuPainter::with_shared_device(
+                Arc::clone(device),
+                Arc::clone(queue),
+                format,
+                size,
+            )
+        })
     }
 
     fn with_transform<F>(&mut self, transform: &Matrix4, draw_fn: F)
@@ -199,6 +266,7 @@ impl CommandRenderer for Backend {
         transform: &Matrix4,
     ) {
         self.with_transform(transform, |painter| {
+            #[allow(clippy::cast_possible_truncation)]
             let font_size = style.font_size.unwrap_or(14.0) as f32;
             let color = style.color.unwrap_or(Color::BLACK);
             let paint = Paint::fill(color);
@@ -209,19 +277,27 @@ impl CommandRenderer for Backend {
 
     fn render_text_span(
         &mut self,
-        _span: &flui_types::typography::InlineSpan,
+        span: &flui_types::typography::InlineSpan,
         offset: Offset<Pixels>,
-        _text_scale_factor: f64,
+        text_scale_factor: f64,
         transform: &Matrix4,
     ) {
-        // TODO: Implement rich text span rendering
-        // For now, just log that we received a text span
-        self.with_transform(transform, |_painter| {
-            tracing::debug!(
-                offset_x = offset.dx.0,
-                offset_y = offset.dy.0,
-                "render_text_span: rich text span rendering not yet implemented"
-            );
+        let text = span.to_plain_text();
+        if text.is_empty() {
+            return;
+        }
+
+        let style = span.style();
+        #[allow(clippy::cast_possible_truncation)]
+        let base_font_size = style.and_then(|s| s.font_size).unwrap_or(14.0) as f32;
+        #[allow(clippy::cast_possible_truncation)]
+        let font_size = base_font_size * (text_scale_factor as f32);
+        let color = style.and_then(|s| s.color).unwrap_or(Color::BLACK);
+        let paint = Paint::fill(color);
+        let position = Point::new(offset.dx, offset.dy);
+
+        self.with_transform(transform, |painter| {
+            painter.text_styled(&text, position, font_size, &paint);
         });
     }
 
@@ -314,27 +390,97 @@ impl CommandRenderer for Backend {
     fn render_shader_mask(
         &mut self,
         child: &flui_painting::DisplayList,
-        _shader: &flui_painting::Shader,
-        _bounds: Rect<Pixels>,
-        _blend_mode: BlendMode,
+        shader: &flui_painting::Shader,
+        bounds: Rect<Pixels>,
+        blend_mode: BlendMode,
         _transform: &Matrix4,
     ) {
-        // TODO: Implement full shader mask rendering
-        //
-        // Current architecture limitation: WgpuRenderer wraps WgpuPainter which doesn't
-        // have access to OffscreenRenderer (lives in GpuRenderer).
-        //
-        // For full implementation, we need to either:
-        // 1. Pass OffscreenRenderer to WgpuRenderer constructor, OR
-        // 2. Move shader mask handling to GpuRenderer level (render Layer directly), OR
-        // 3. Refactor to give WgpuPainter access to GPU resources
-        //
-        // For now, just render child content without masking as fallback
-        tracing::warn!(
-            "ShaderMask rendering via DisplayList not yet fully wired - rendering child without mask"
-        );
+        // Try GPU shader mask pipeline
+        if let Some(offscreen_arc) = self.offscreen.clone() {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let width = bounds.width().0.max(1.0) as u32;
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let height = bounds.height().0.max(1.0) as u32;
 
-        // Render child content without masking (fallback behavior)
+            // Step 1: Get GPU resources from offscreen renderer
+            let (device, queue, format, child_tex) = {
+                let offscreen = offscreen_arc.lock();
+                let device = Arc::clone(offscreen.device());
+                let queue = Arc::clone(offscreen.queue());
+                let format = offscreen.surface_format();
+                let child_tex = offscreen.texture_pool().acquire(width, height, format);
+                (device, queue, format, child_tex)
+            };
+            // Lock released here
+
+            // Step 2: Get or create cached offscreen painter (avoids per-call allocation)
+            // Ensure the cache is populated (creates or resizes as needed), then take
+            // it out temporarily so we can wrap it in a Backend for command dispatch.
+            let _ = self.get_or_create_offscreen_painter(&device, &queue, format, (width, height));
+            let mut temp_painter = self
+                .offscreen_painter
+                .take()
+                .expect("offscreen_painter was just populated by get_or_create");
+            {
+                let mut temp_backend = Backend::new(temp_painter);
+                for command in child.commands() {
+                    dispatch_command(command, &mut temp_backend);
+                }
+                temp_painter = temp_backend.into_painter();
+            }
+
+            // Step 4: Flush child content to offscreen texture
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("ShaderMask Child Render"),
+            });
+            // Clear the child texture first
+            {
+                let _clear_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("ShaderMask Child Clear"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: child_tex.view(),
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+            }
+            // Render child batches to offscreen texture
+            if let Err(e) = temp_painter.render(child_tex.view(), &mut encoder) {
+                tracing::error!("Failed to render shader mask child content: {}", e);
+            }
+            queue.submit(std::iter::once(encoder.finish()));
+
+            // Put the cached painter back for reuse
+            self.offscreen_painter = Some(temp_painter);
+
+            // Step 5: Apply shader mask via GPU pipeline
+            let masked_texture = {
+                let mut offscreen = offscreen_arc.lock();
+                let result =
+                    offscreen.render_masked(bounds, shader, blend_mode, child_tex.texture());
+                result.into_texture()
+            };
+
+            // Step 6: Queue masked result for compositing on main target
+            self.painter.queue_offscreen_result(masked_texture, bounds);
+
+            tracing::debug!(
+                "ShaderMask GPU pipeline complete: bounds={:?}, child_size={}x{}",
+                bounds,
+                width,
+                height
+            );
+            return;
+        }
+
+        // Fallback: render child content without masking
+        tracing::warn!("ShaderMask: no OffscreenRenderer, rendering child without mask");
         for command in child.commands() {
             dispatch_command(command, self);
         }
@@ -436,15 +582,54 @@ impl CommandRenderer for Backend {
                         0.0, // No corner radius for rect
                     );
                 }
-                flui_painting::Shader::SweepGradient { colors, .. } => {
-                    // Fallback to center color for sweep gradients (not yet implemented)
-                    if let Some(color) = colors.first() {
-                        let paint = Paint::fill(*color);
-                        painter.rect(rect, &paint);
+                flui_painting::Shader::SweepGradient {
+                    center,
+                    start_angle,
+                    end_angle,
+                    colors,
+                    stops,
+                    ..
+                } => {
+                    if colors.is_empty() {
+                        return;
                     }
+
+                    // Convert colors and stops to GradientStop array
+                    let gradient_stops: Vec<GradientStop> = if let Some(stop_positions) = stops {
+                        colors
+                            .iter()
+                            .zip(stop_positions.iter())
+                            .map(|(color, pos)| GradientStop::new(*color, *pos))
+                            .collect()
+                    } else {
+                        let count = colors.len();
+                        colors
+                            .iter()
+                            .enumerate()
+                            .map(|(i, color)| {
+                                let pos = if count > 1 {
+                                    i as f32 / (count - 1) as f32
+                                } else {
+                                    0.0
+                                };
+                                GradientStop::new(*color, pos)
+                            })
+                            .collect()
+                    };
+
+                    painter.sweep_gradient_rect(
+                        rect,
+                        glam::Vec2::new(center.dx.0, center.dy.0),
+                        *start_angle,
+                        *end_angle,
+                        &gradient_stops,
+                        0.0, // No corner radius for rect
+                    );
                 }
                 _ => {
-                    // Unknown shader type - fallback to transparent
+                    // Image and other non-gradient shader types are not applicable
+                    // for gradient rendering; skip silently.
+                    tracing::debug!("render_gradient: unsupported shader variant, skipping");
                 }
             }
         });
@@ -551,15 +736,51 @@ impl CommandRenderer for Backend {
                         corner_radius,
                     );
                 }
-                flui_painting::Shader::SweepGradient { colors, .. } => {
-                    // Fallback to center color for sweep gradients (not yet implemented)
-                    if let Some(color) = colors.first() {
-                        let paint = Paint::fill(*color);
-                        painter.rrect(rrect, &paint);
+                flui_painting::Shader::SweepGradient {
+                    center,
+                    start_angle,
+                    end_angle,
+                    colors,
+                    stops,
+                    ..
+                } => {
+                    if colors.is_empty() {
+                        return;
                     }
+
+                    let gradient_stops: Vec<GradientStop> = if let Some(stop_positions) = stops {
+                        colors
+                            .iter()
+                            .zip(stop_positions.iter())
+                            .map(|(color, pos)| GradientStop::new(*color, *pos))
+                            .collect()
+                    } else {
+                        let count = colors.len();
+                        colors
+                            .iter()
+                            .enumerate()
+                            .map(|(i, color)| {
+                                let pos = if count > 1 {
+                                    i as f32 / (count - 1) as f32
+                                } else {
+                                    0.0
+                                };
+                                GradientStop::new(*color, pos)
+                            })
+                            .collect()
+                    };
+
+                    painter.sweep_gradient_rect(
+                        rrect.rect,
+                        glam::Vec2::new(center.dx.0, center.dy.0),
+                        *start_angle,
+                        *end_angle,
+                        &gradient_stops,
+                        corner_radius,
+                    );
                 }
                 _ => {
-                    // Unknown shader type - fallback to transparent
+                    tracing::debug!("render_gradient_rrect: unsupported shader variant, skipping");
                 }
             }
         });
@@ -569,6 +790,14 @@ impl CommandRenderer for Backend {
         self.with_transform(transform, |painter| {
             let viewport_bounds = painter.viewport_bounds();
             let paint = Paint::fill(color);
+            painter.rect(viewport_bounds, &paint);
+        });
+    }
+
+    fn render_paint(&mut self, paint: &Paint, transform: &Matrix4) {
+        let paint = paint.clone();
+        self.with_transform(transform, |painter| {
+            let viewport_bounds = painter.viewport_bounds();
             painter.rect(viewport_bounds, &paint);
         });
     }
@@ -618,19 +847,40 @@ impl CommandRenderer for Backend {
         });
     }
 
-    fn clip_rect(&mut self, rect: Rect<Pixels>, transform: &Matrix4) {
+    fn clip_rect(
+        &mut self,
+        rect: Rect<Pixels>,
+        _clip_op: flui_types::painting::ClipOp,
+        _clip_behavior: flui_types::painting::Clip,
+        transform: &Matrix4,
+    ) {
+        // ClipOp and Clip are stored in DrawCommand and available here for future
+        // GPU-accelerated clip modes (e.g. stencil-based Difference, MSAA anti-aliased edges).
+        // Current implementation uses simple scissor clipping (Intersect + HardEdge).
         self.with_transform(transform, |painter| {
             painter.clip_rect(rect);
         });
     }
 
-    fn clip_rrect(&mut self, rrect: RRect, transform: &Matrix4) {
+    fn clip_rrect(
+        &mut self,
+        rrect: RRect,
+        _clip_op: flui_types::painting::ClipOp,
+        _clip_behavior: flui_types::painting::Clip,
+        transform: &Matrix4,
+    ) {
         self.with_transform(transform, |painter| {
             painter.clip_rrect(rrect);
         });
     }
 
-    fn clip_path(&mut self, path: &Path, transform: &Matrix4) {
+    fn clip_path(
+        &mut self,
+        path: &Path,
+        _clip_op: flui_types::painting::ClipOp,
+        _clip_behavior: flui_types::painting::Clip,
+        transform: &Matrix4,
+    ) {
         self.with_transform(transform, |painter| {
             painter.clip_path(path);
         });
@@ -699,7 +949,8 @@ impl CommandRenderer for Backend {
     }
 
     fn push_opacity(&mut self, alpha: f32) {
-        // Create a layer with opacity
+        // Create a layer with opacity (clamped to [0, 255])
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let alpha_u8 = (alpha.clamp(0.0, 1.0) * 255.0) as u8;
         let paint = Paint::fill(Color::WHITE).with_alpha(alpha_u8);
         self.painter.save_layer(None, &paint);
@@ -709,29 +960,163 @@ impl CommandRenderer for Backend {
         self.painter.restore_layer();
     }
 
-    fn push_color_filter(&mut self, _filter: &flui_types::painting::ColorMatrix) {
-        // TODO: Implement color filter via GPU shader
-        // For now, save state to maintain push/pop balance
-        self.painter.save();
-        tracing::trace!("push_color_filter: GPU color matrix filter not yet implemented");
-    }
+    fn push_color_filter(&mut self, filter: &flui_types::painting::ColorMatrix) {
+        // Check if the matrix is identity (no transformation needed)
+        let identity = flui_types::painting::ColorMatrix::identity();
+        if filter.values == identity.values {
+            // Identity matrix: use a plain save so pop_color_filter stays balanced
+            self.painter.save_layer(None, &Paint::fill(Color::WHITE));
+            tracing::trace!("push_color_filter: identity matrix, no-op layer");
+            return;
+        }
 
-    fn pop_color_filter(&mut self) {
-        self.painter.restore();
-    }
+        // Pragmatic approximation: extract opacity and tint from the color matrix.
+        //
+        // A full GPU color matrix filter requires render-to-texture + post-processing
+        // which needs offscreen rendering infrastructure not yet available.
+        //
+        // Instead, we approximate the color matrix effect:
+        // 1. Alpha scaling from the matrix's alpha row (a3 = alpha scale factor)
+        // 2. Color tint by applying the matrix to white [1,1,1,1] to derive
+        //    the dominant output color, then using it as a Multiply blend layer.
 
-    fn push_image_filter(&mut self, filter: &flui_painting::display_list::ImageFilter) {
-        // TODO: Implement image filter via GPU compute shader
-        // For now, save state to maintain push/pop balance
-        self.painter.save();
-        tracing::trace!(
-            "push_image_filter: GPU image filter not yet implemented - filter={:?}",
-            filter
+        // Extract alpha from matrix row 4 (indices 15-19): A' = a0*R + a1*G + a2*B + a3*A + a4
+        // For typical filters, a3 is the alpha scale and a4 is the alpha offset.
+        let alpha_scale = filter.values[18].clamp(0.0, 1.0); // a3
+        let alpha_offset = filter.values[19].clamp(0.0, 1.0); // a4
+        let effective_alpha = (alpha_scale + alpha_offset).clamp(0.0, 1.0);
+
+        // Apply the matrix to white to derive the tint color
+        let tinted = filter.apply([1.0, 1.0, 1.0, 1.0]);
+
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let tint_color = Color::rgba(
+            (tinted[0] * 255.0) as u8,
+            (tinted[1] * 255.0) as u8,
+            (tinted[2] * 255.0) as u8,
+            (effective_alpha * 255.0) as u8,
+        );
+
+        let paint = Paint::fill(tint_color);
+        self.painter.save_layer(None, &paint);
+
+        tracing::debug!(
+            "push_color_filter: approximation tint=({},{},{}) alpha={:.2}",
+            tint_color.r,
+            tint_color.g,
+            tint_color.b,
+            effective_alpha
         );
     }
 
+    fn pop_color_filter(&mut self) {
+        self.painter.restore_layer();
+    }
+
+    fn push_image_filter(&mut self, filter: &flui_painting::display_list::ImageFilter) {
+        use flui_painting::display_list::ImageFilter;
+
+        // Pragmatic approximation: full GPU image filters (blur, dilate, erode)
+        // require render-to-texture + compute shader post-processing which needs
+        // offscreen infrastructure not yet available. Instead, we use save_layer
+        // to isolate the filtered content for future GPU pass integration.
+        match filter {
+            ImageFilter::Blur { sigma_x, sigma_y } => {
+                // Capture content in a layer; actual Gaussian blur requires
+                // a two-pass separable compute shader on the layer texture.
+                let paint = Paint::fill(Color::WHITE);
+                self.painter.save_layer(None, &paint);
+                tracing::debug!(
+                    "push_image_filter(Blur): save_layer for blur sigma_x={:.2}, sigma_y={:.2} \
+                     (GPU blur not yet implemented)",
+                    sigma_x,
+                    sigma_y,
+                );
+            }
+            ImageFilter::Dilate { radius } => {
+                let paint = Paint::fill(Color::WHITE);
+                self.painter.save_layer(None, &paint);
+                tracing::debug!(
+                    "push_image_filter(Dilate): save_layer for dilate radius={:.2} \
+                     (GPU morphology not yet implemented)",
+                    radius,
+                );
+            }
+            ImageFilter::Erode { radius } => {
+                let paint = Paint::fill(Color::WHITE);
+                self.painter.save_layer(None, &paint);
+                tracing::debug!(
+                    "push_image_filter(Erode): save_layer for erode radius={:.2} \
+                     (GPU morphology not yet implemented)",
+                    radius,
+                );
+            }
+            ImageFilter::Matrix(matrix) => {
+                // Color matrix can be approximated the same way as push_color_filter.
+                // Extract tint and alpha from the matrix applied to white.
+                let alpha_scale = matrix.values[18].clamp(0.0, 1.0);
+                let alpha_offset = matrix.values[19].clamp(0.0, 1.0);
+                let effective_alpha = (alpha_scale + alpha_offset).clamp(0.0, 1.0);
+                let tinted = matrix.apply([1.0, 1.0, 1.0, 1.0]);
+
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let tint_color = Color::rgba(
+                    (tinted[0] * 255.0) as u8,
+                    (tinted[1] * 255.0) as u8,
+                    (tinted[2] * 255.0) as u8,
+                    (effective_alpha * 255.0) as u8,
+                );
+                let paint = Paint::fill(tint_color);
+                self.painter.save_layer(None, &paint);
+                tracing::debug!(
+                    "push_image_filter(Matrix): approximation tint=({},{},{}) alpha={:.2}",
+                    tint_color.r,
+                    tint_color.g,
+                    tint_color.b,
+                    effective_alpha,
+                );
+            }
+            ImageFilter::ColorAdjust(adjustment) => {
+                // Color adjustments are approximated via an opacity layer.
+                let paint = Paint::fill(Color::WHITE);
+                self.painter.save_layer(None, &paint);
+                tracing::debug!(
+                    "push_image_filter(ColorAdjust): save_layer for {:?} \
+                     (GPU color adjust not yet implemented)",
+                    adjustment,
+                );
+            }
+            ImageFilter::Compose(filters) => {
+                // For composed filters, we save a single layer. In the future,
+                // each sub-filter would chain as successive compute passes.
+                let paint = Paint::fill(Color::WHITE);
+                self.painter.save_layer(None, &paint);
+                tracing::debug!(
+                    "push_image_filter(Compose): save_layer for {} chained filters \
+                     (GPU compose not yet implemented)",
+                    filters.len(),
+                );
+            }
+            #[cfg(debug_assertions)]
+            ImageFilter::OverflowIndicator {
+                overflow_h,
+                overflow_v,
+                ..
+            } => {
+                // Debug-only overflow visualization; save layer for balance.
+                let paint = Paint::fill(Color::WHITE);
+                self.painter.save_layer(None, &paint);
+                tracing::debug!(
+                    "push_image_filter(OverflowIndicator): h={:.1}, v={:.1}",
+                    overflow_h,
+                    overflow_v,
+                );
+            }
+        }
+    }
+
     fn pop_image_filter(&mut self) {
-        self.painter.restore();
+        self.painter.restore_layer();
     }
 
     fn add_performance_overlay(
@@ -771,7 +1156,7 @@ impl CommandRenderer for Backend {
             Color::rgba(255, 130, 130, 255) // Light red
         };
         self.painter.text(
-            &format!("{:.0}", fps),
+            &format!("{fps:.0}"),
             Point::new(x_val, y),
             11.0,
             &Paint::fill(fps_color),
@@ -797,7 +1182,7 @@ impl CommandRenderer for Backend {
 
         let white = Color::rgba(220, 220, 220, 255);
         self.painter.text(
-            &format!("{:.1}", frame_time_ms),
+            &format!("{frame_time_ms:.1}"),
             Point::new(x_val, y),
             10.0,
             &Paint::fill(white),

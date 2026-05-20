@@ -7,13 +7,13 @@
 //! - **Extension traits**: Add methods to foreign types
 //! - **Marker traits**: Compile-time constraints
 
-use crate::events::{PointerEvent, PointerEventExt as EventsPointerEventExt};
-use flui_types::geometry::PixelDelta;
-use flui_types::geometry::Pixels;
+use flui_types::geometry::{Offset, PixelDelta, Pixels};
 
-use crate::ids::PointerId;
-use crate::routing::HitTestEntry;
-use flui_types::geometry::Offset;
+use crate::{
+    events::{PointerEvent, PointerEventExt as EventsPointerEventExt},
+    ids::PointerId,
+    routing::HitTestEntry,
+};
 
 // ============================================================================
 // HitTestTarget trait
@@ -21,8 +21,8 @@ use flui_types::geometry::Offset;
 
 /// Trait for types that can be hit test targets.
 ///
-/// Any render object that can receive pointer events should implement this trait.
-/// This follows Flutter's `HitTestTarget` interface exactly.
+/// Any render object that can receive pointer events should implement this
+/// trait. This follows Flutter's `HitTestTarget` interface exactly.
 ///
 /// # Flutter Equivalence
 /// ```dart
@@ -84,7 +84,8 @@ pub type BoxedCallback<D> = Box<dyn Fn(D) + Send + Sync>;
 // PointerEventExtTrait extension trait (additional methods)
 // ============================================================================
 
-/// Extension trait for `PointerEvent` with convenience methods for gesture recognition.
+/// Extension trait for `PointerEvent` with convenience methods for gesture
+/// recognition.
 ///
 /// Adds commonly needed methods without modifying the original type.
 pub trait PointerEventExtTrait {
@@ -235,7 +236,7 @@ impl<T: HitTestTarget + ?Sized> HitTestTarget for Box<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::{make_down_event, PointerType};
+    use crate::events::{PointerType, make_down_event};
 
     #[test]
     fn test_pointer_event_ext() {

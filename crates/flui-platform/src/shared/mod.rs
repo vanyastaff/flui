@@ -1,6 +1,7 @@
 //! Shared platform infrastructure
 //!
-//! Components shared between platform implementations to reduce code duplication.
+//! Components shared between platform implementations to reduce code
+//! duplication.
 
 mod handlers;
 

@@ -13,9 +13,12 @@
 //! # Example
 //!
 //! ```rust
+//! use std::sync::{
+//!     atomic::{AtomicBool, Ordering},
+//!     Arc,
+//! };
+//!
 //! use flui_layer::layer::composition_callback::CompositionCallbackRegistry;
-//! use std::sync::Arc;
-//! use std::sync::atomic::{AtomicBool, Ordering};
 //!
 //! let registry = CompositionCallbackRegistry::new();
 //! let was_called = Arc::new(AtomicBool::new(false));
@@ -33,9 +36,12 @@
 //! drop(handle);
 //! ```
 
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
+
 use parking_lot::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 
 /// A unique identifier for a composition callback.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -224,8 +230,9 @@ pub trait HasCompositionCallbacks {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::atomic::AtomicUsize;
+
+    use super::*;
 
     #[test]
     fn test_callback_id_uniqueness() {

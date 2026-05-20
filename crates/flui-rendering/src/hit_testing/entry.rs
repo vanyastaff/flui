@@ -2,8 +2,7 @@
 
 use std::sync::{Arc, Weak};
 
-use flui_types::geometry::px;
-use flui_types::Offset;
+use flui_types::{Offset, geometry::px};
 
 use super::{HitTestTarget, MatrixTransformPart};
 
@@ -226,8 +225,9 @@ impl Default for SliverHitTestEntry {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::px;
+
+    use super::*;
 
     #[test]
     fn test_box_hit_test_entry() {

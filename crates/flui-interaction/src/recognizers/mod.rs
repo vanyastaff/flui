@@ -35,7 +35,8 @@
 //! # Base Traits
 //!
 //! - [`OneSequenceGestureRecognizer`] - For gestures tracking a single pointer
-//! - [`PrimaryPointerGestureRecognizer`] - Adds state machine and deadline support
+//! - [`PrimaryPointerGestureRecognizer`] - Adds state machine and deadline
+//!   support
 //!
 //! # Example
 //!
@@ -64,18 +65,17 @@ pub mod scale;
 pub mod tap;
 
 // Re-export base traits
-pub use one_sequence::{OneSequenceGestureRecognizer, OneSequenceState};
-pub use primary_pointer::{
-    GestureRecognizerState as PrimaryPointerState, PrimaryPointerGestureRecognizer,
-    PrimaryPointerState as PrimaryPointerStateHelper,
-};
-
 // Re-export concrete recognizers
 pub use double_tap::DoubleTapGestureRecognizer;
 pub use drag::DragGestureRecognizer;
 pub use force_press::ForcePressGestureRecognizer;
 pub use long_press::LongPressGestureRecognizer;
 pub use multi_tap::MultiTapGestureRecognizer;
-pub use recognizer::{constants, GestureRecognizer, GestureRecognizerState, GestureState};
+pub use one_sequence::{OneSequenceGestureRecognizer, OneSequenceState};
+pub use primary_pointer::{
+    GestureRecognizerState as PrimaryPointerState, PrimaryPointerGestureRecognizer,
+    PrimaryPointerState as PrimaryPointerStateHelper,
+};
+pub use recognizer::{GestureRecognizer, GestureRecognizerState, GestureState, constants};
 pub use scale::ScaleGestureRecognizer;
 pub use tap::TapGestureRecognizer;

@@ -9,11 +9,13 @@ use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use smol_str::SmolStr;
 
-use crate::action::{SemanticsAction, SemanticsActionHandler};
-use crate::flags::{SemanticsFlag, SemanticsFlags};
-use crate::properties::{
-    AttributedString, CustomSemanticsAction, SemanticsHintOverrides, SemanticsProperties,
-    SemanticsSortKey, SemanticsTag, TextDirection,
+use crate::{
+    action::{SemanticsAction, SemanticsActionHandler},
+    flags::{SemanticsFlag, SemanticsFlags},
+    properties::{
+        AttributedString, CustomSemanticsAction, SemanticsHintOverrides, SemanticsProperties,
+        SemanticsSortKey, SemanticsTag, TextDirection,
+    },
 };
 
 // ============================================================================

@@ -16,13 +16,15 @@
 //! Vec2 · Vec2 = f32   (dot product)
 //! Vec2 × Vec2 = f32   (2D cross product)
 //! ```
-use super::{px, Pixels};
+use std::{
+    fmt::{self, Display},
+    ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign},
+};
 
-use std::fmt::{self, Display};
-use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
-
-use super::traits::{Along, Axis, NumericUnit, Unit};
-use super::Point;
+use super::{
+    Pixels, Point, px,
+    traits::{Along, Axis, NumericUnit, Unit},
+};
 
 /// A 2D vector representing direction and magnitude.
 ///
@@ -297,7 +299,6 @@ where
     T: Into<f32> + From<f32>,
 {
     /// Returns the length (magnitude) of the vector.
-    ///
     #[inline]
     #[must_use]
     pub fn length(self) -> f32 {
@@ -307,7 +308,6 @@ where
     }
 
     /// Returns the squared length of the vector.
-    ///
     #[inline]
     #[must_use]
     pub fn length_squared(self) -> f32 {
@@ -317,7 +317,6 @@ where
     }
 
     /// Returns a normalized (unit length) vector.
-    ///
     #[inline]
     #[must_use]
     pub fn try_normalize(self) -> Option<Vec2<Pixels>> {
@@ -375,7 +374,8 @@ where
 
     /// 2D cross product (also called "perp dot product").
     ///
-    /// Returns the z-component of the 3D cross product if vectors were in XY plane.
+    /// Returns the z-component of the 3D cross product if vectors were in XY
+    /// plane.
     #[inline]
     #[must_use]
     pub fn cross(self, other: Self) -> f32 {
@@ -392,7 +392,6 @@ where
     T: Into<f32> + From<f32>,
 {
     /// Returns a perpendicular vector (rotated 90° counter-clockwise).
-    ///
     #[inline]
     #[must_use]
     pub fn perp(self) -> Self {
@@ -415,7 +414,6 @@ where
     }
 
     /// Projects this vector onto another vector.
-    ///
     #[inline]
     #[must_use]
     pub fn project(self, onto: Self) -> Self {
@@ -432,7 +430,6 @@ where
     }
 
     /// Reflects this vector about a normal.
-    ///
     #[inline]
     #[must_use]
     pub fn reflect(self, normal: Self) -> Self {
@@ -455,7 +452,6 @@ where
     T: Into<f32>,
 {
     /// Returns the angle from the positive X axis in radians.
-    ///
     #[inline]
     #[must_use]
     pub fn angle(self) -> f32 {
@@ -489,7 +485,6 @@ where
     T: Into<f32> + From<f32>,
 {
     /// Returns the angle between this vector and another in radians.
-    ///
     #[inline]
     #[must_use]
     pub fn angle_between(self, other: Self) -> f32 {
@@ -704,7 +699,8 @@ where
         Self::new(T::from(x.trunc()), T::from(y.trunc()))
     }
 
-    /// Expands each component away from zero (ceil for positive, floor for negative).
+    /// Expands each component away from zero (ceil for positive, floor for
+    /// negative).
     #[inline]
     #[must_use]
     pub fn expand(self) -> Self {
@@ -1098,8 +1094,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::f32::consts::PI;
+
+    use super::*;
 
     #[test]
     fn test_construction() {
@@ -1330,7 +1327,7 @@ mod tests {
 #[cfg(test)]
 mod typed_tests {
     use super::*;
-    use crate::geometry::{px, Pixels};
+    use crate::geometry::{Pixels, px};
 
     #[test]
     fn test_vec2_new() {

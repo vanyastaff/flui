@@ -1,17 +1,21 @@
 //! macOS platform implementation using AppKit/Cocoa
 
-use crate::config::WindowConfiguration;
-use crate::executor::{BackgroundExecutor, ForegroundExecutor};
-use crate::shared::PlatformHandlers;
-use crate::traits::*;
-use anyhow::{Context, Result};
-use parking_lot::Mutex;
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
-use cocoa::appkit::{NSApp, NSApplication, NSApplicationActivationPolicyRegular};
-use cocoa::base::{id, nil};
+use anyhow::{Context, Result};
+use cocoa::{
+    appkit::{NSApp, NSApplication, NSApplicationActivationPolicyRegular},
+    base::{id, nil},
+};
 use objc::runtime::Object;
+use parking_lot::Mutex;
+
+use crate::{
+    config::WindowConfiguration,
+    executor::{BackgroundExecutor, ForegroundExecutor},
+    shared::PlatformHandlers,
+    traits::*,
+};
 
 mod display;
 mod window;
@@ -93,13 +97,7 @@ impl Platform for MacOSPlatform {
         Arc::clone(&self.foreground_executor) as Arc<dyn PlatformExecutor>
     }
 
-    fn text_system(&self) -> Arc<dyn PlatformTextSystem> {
-        // TODO: Implement Core Text system (Phase 2)
-        // For now, uses trait default methods (stub implementation)
-        Arc::new(DummyTextSystem)
-    }
-
-    fn run(&self, on_finish_launching: Box<dyn FnOnce()>) {
+    fn run(self: Box<Self>, on_finish_launching: Box<dyn FnOnce()>) {
         unsafe {
             // Call the launch callback
             on_finish_launching();
@@ -109,7 +107,8 @@ impl Platform for MacOSPlatform {
 
             // Set up event handling (custom sendEvent to intercept input)
             // Note: For now, we rely on NSWindowDelegate for window events
-            // Input events can be handled via NSResponder chain or custom NSApplication subclass
+            // Input events can be handled via NSResponder chain or custom NSApplication
+            // subclass
 
             // Run the NSApplication event loop
             tracing::info!("Starting NSApplication event loop");
@@ -122,11 +121,6 @@ impl Platform for MacOSPlatform {
             tracing::info!("Requesting application quit");
             let _: () = msg_send![self.app, terminate: nil];
         }
-    }
-
-    fn request_frame(&self) {
-        // TODO: Post event to trigger frame rendering
-        tracing::trace!("Frame requested (not yet implemented)");
     }
 
     fn open_window(&self, options: WindowOptions) -> Result<Box<dyn PlatformWindow>> {
@@ -177,12 +171,12 @@ impl Platform for MacOSPlatform {
 
     fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
         let mut handlers = self.handlers.lock();
-        handlers.on_quit = Some(callback);
+        handlers.quit = Some(callback);
     }
 
     fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>) {
         let mut handlers = self.handlers.lock();
-        handlers.on_window_event = Some(callback);
+        handlers.window_event = Some(callback);
     }
 
     fn app_path(&self) -> Result<std::path::PathBuf> {
@@ -216,9 +210,3 @@ impl Drop for MacOSPlatform {
         // NSApplication is a singleton, no need to release
     }
 }
-
-// ==================== Dummy Implementations ====================
-
-struct DummyTextSystem;
-
-impl PlatformTextSystem for DummyTextSystem {}

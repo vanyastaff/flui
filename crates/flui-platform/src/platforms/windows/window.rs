@@ -1,23 +1,29 @@
 //! Windows window implementation
 
-use parking_lot::Mutex;
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Context, Result};
-use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
-use raw_window_handle::{Win32WindowHandle, WindowsDisplayHandle};
-use windows::core::HSTRING;
-use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Gdi::*;
-use windows::Win32::System::LibraryLoader::*;
-use windows::Win32::UI::HiDpi::*;
-use windows::Win32::UI::WindowsAndMessaging::*;
+use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size, device_px, px};
+use parking_lot::Mutex;
+use raw_window_handle::{
+    HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle, Win32WindowHandle,
+    WindowsDisplayHandle,
+};
+use windows::{
+    Win32::{
+        Foundation::*,
+        Graphics::Gdi::*,
+        System::LibraryLoader::*,
+        UI::{HiDpi::*, WindowsAndMessaging::*},
+    },
+    core::HSTRING,
+};
 
-use super::util::{logical_to_device, USER_DEFAULT_SCREEN_DPI, WINDOW_CLASS_NAME};
-use crate::shared::{PlatformHandlers, WindowCallbacks};
-use crate::traits::*;
-use flui_types::geometry::{device_px, px, Bounds, DevicePixels, Pixels, Point, Size};
+use super::util::{USER_DEFAULT_SCREEN_DPI, WINDOW_CLASS_NAME, logical_to_device};
+use crate::{
+    shared::{PlatformHandlers, WindowCallbacks},
+    traits::*,
+};
 
 /// Windows window wrapper
 pub struct WindowsWindow {
@@ -34,8 +40,8 @@ pub struct WindowsWindow {
     windows_map: Arc<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
 }
 
-// SAFETY: HWND is just an integer handle and is safe to send/share between threads.
-// Windows API handles are thread-safe by design.
+// SAFETY: HWND is just an integer handle and is safe to send/share between
+// threads. Windows API handles are thread-safe by design.
 unsafe impl Send for WindowsWindow {}
 unsafe impl Sync for WindowsWindow {}
 
@@ -127,7 +133,8 @@ impl WindowsWindow {
                 scale_factor
             );
 
-            // Create window state with default bounds (actual bounds will be set after creation)
+            // Create window state with default bounds (actual bounds will be set after
+            // creation)
             let callbacks = Arc::new(WindowCallbacks::new());
 
             let state = Arc::new(Mutex::new(WindowState {
@@ -149,8 +156,9 @@ impl WindowsWindow {
             });
 
             // Create and store WindowContext for event dispatch
-            use super::platform::WindowContext;
             use flui_types::geometry::{DevicePixels, Size};
+
+            use super::platform::WindowContext;
 
             let window_id = WindowId(hwnd.0 as u64);
             let device_width = logical_to_device(width as f32, scale_factor);
@@ -166,6 +174,7 @@ impl WindowsWindow {
                 config,
                 is_hovered: std::cell::Cell::new(false),
                 modifiers: std::cell::Cell::new(keyboard_types::Modifiers::empty()),
+                restore_style: std::cell::Cell::new(0),
             });
             let context_ptr = Box::into_raw(context);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, context_ptr as isize);
@@ -190,10 +199,12 @@ impl WindowsWindow {
     /// - DWM frame extension for proper backdrop rendering
     fn apply_windows_features(hwnd: HWND) {
         unsafe {
-            use windows::Win32::Graphics::Dwm::{
-                DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMWINDOWATTRIBUTE,
+            use windows::Win32::{
+                Graphics::Dwm::{
+                    DWMWINDOWATTRIBUTE, DwmExtendFrameIntoClientArea, DwmSetWindowAttribute,
+                },
+                UI::Controls::MARGINS,
             };
-            use windows::Win32::UI::Controls::MARGINS;
 
             tracing::debug!("Applying Windows 11 features to HWND {:?}", hwnd);
 
@@ -256,22 +267,28 @@ impl WindowsWindow {
         self.state.lock().scale_factor
     }
 
-    /// Toggle fullscreen mode for a window by HWND (static method for use from window_proc)
+    /// Toggle fullscreen mode for a window by HWND (static method for use from
+    /// window_proc)
     ///
     /// This method implements borderless fullscreen by:
-    /// 1. **Entering fullscreen**: Saves current window style and bounds, removes window borders
-    ///    (WS_POPUP), and resizes to cover the entire monitor
+    /// 1. **Entering fullscreen**: Saves current window style and bounds,
+    ///    removes window borders (WS_POPUP), and resizes to cover the entire
+    ///    monitor
     /// 2. **Exiting fullscreen**: Restores saved window style and bounds
     ///
     /// # Implementation Details
-    /// - Uses borderless fullscreen (WS_POPUP) rather than exclusive fullscreen for better compatibility
-    /// - Automatically detects the monitor containing the window and fills it completely
+    /// - Uses borderless fullscreen (WS_POPUP) rather than exclusive fullscreen
+    ///   for better compatibility
+    /// - Automatically detects the monitor containing the window and fills it
+    ///   completely
     /// - Preserves window state (position, size, style) for proper restoration
-    /// - Dispatches `WindowEvent::Fullscreen` and `WindowEvent::ExitFullscreen` events
+    /// - Dispatches `WindowEvent::Fullscreen` and `WindowEvent::ExitFullscreen`
+    ///   events
     ///
     /// # Thread Safety
-    /// This method is unsafe because it accesses raw window context via GWLP_USERDATA.
-    /// It should only be called from the window's message loop thread or with proper synchronization.
+    /// This method is unsafe because it accesses raw window context via
+    /// GWLP_USERDATA. It should only be called from the window's message
+    /// loop thread or with proper synchronization.
     ///
     /// # Example
     /// ```ignore
@@ -279,8 +296,7 @@ impl WindowsWindow {
     /// WindowsWindow::toggle_fullscreen_for_hwnd(hwnd);
     /// ```
     pub fn toggle_fullscreen_for_hwnd(hwnd: HWND) {
-        use windows::Win32::Graphics::Gdi::*;
-        use windows::Win32::UI::WindowsAndMessaging::*;
+        use windows::Win32::{Graphics::Gdi::*, UI::WindowsAndMessaging::*};
 
         unsafe {
             // Get WindowContext from GWLP_USERDATA
@@ -295,21 +311,19 @@ impl WindowsWindow {
             let current_mode = ctx.mode.get();
 
             match current_mode {
-                WindowMode::Fullscreen {
-                    restore_style,
-                    restore_bounds,
-                } => {
+                WindowMode::Fullscreen { restore_bounds } => {
                     // Exit fullscreen - restore previous style and bounds
-                    tracing::info!("🪟 Exiting fullscreen mode");
+                    tracing::info!("Exiting fullscreen mode");
 
                     // Validate transition
                     let candidate = WindowMode::Normal;
                     if !current_mode.can_transition_to(&candidate) {
-                        tracing::warn!("⚠️  Cannot exit fullscreen: invalid state transition");
+                        tracing::warn!("Cannot exit fullscreen: invalid state transition");
                         return;
                     }
 
-                    // Restore window style
+                    // Restore window style from WindowContext
+                    let restore_style = ctx.restore_style.get();
                     SetWindowLongPtrW(hwnd, GWL_STYLE, restore_style as isize);
 
                     // Restore window position and size
@@ -335,14 +349,15 @@ impl WindowsWindow {
                 }
                 _ => {
                     // Enter fullscreen - save current state and go borderless on monitor
-                    tracing::info!("🖥️  Entering fullscreen mode");
+                    tracing::info!("Entering fullscreen mode");
 
                     // Get current window rect
                     let mut rect = RECT::default();
                     GetWindowRect(hwnd, &mut rect).ok();
 
-                    // Save current style
+                    // Save current style to WindowContext
                     let current_style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+                    ctx.restore_style.set(current_style);
 
                     // Save current bounds
                     let restore_bounds = Bounds {
@@ -354,13 +369,10 @@ impl WindowsWindow {
                     };
 
                     // Validate transition
-                    let candidate = WindowMode::Fullscreen {
-                        restore_style: current_style,
-                        restore_bounds,
-                    };
+                    let candidate = WindowMode::Fullscreen { restore_bounds };
                     if !current_mode.can_transition_to(&candidate) {
                         tracing::warn!(
-                            "⚠️  Cannot enter fullscreen: invalid state transition from {:?}",
+                            "Cannot enter fullscreen: invalid state transition from {:?}",
                             current_mode
                         );
                         return;
@@ -736,7 +748,7 @@ impl PlatformWindow for WindowsWindow {
                 return WindowAppearance::default();
             }
             // Check DWM dark mode attribute
-            use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWINDOWATTRIBUTE};
+            use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmGetWindowAttribute};
             let mut dark_mode: i32 = 0;
             let result = DwmGetWindowAttribute(
                 self.hwnd,
@@ -838,7 +850,7 @@ impl PlatformWindow for WindowsWindow {
 
     fn set_background_appearance(&self, appearance: WindowBackgroundAppearance) {
         unsafe {
-            use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWINDOWATTRIBUTE};
+            use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmSetWindowAttribute};
 
             let backdrop_value: i32 = match appearance {
                 WindowBackgroundAppearance::Opaque => 1,       // DWMSBT_NONE
@@ -1235,28 +1247,32 @@ impl WindowsWindow {
 
     /// Set DWM window attribute
     unsafe fn set_dwm_attribute<T>(&self, attribute: i32, value: &T) -> windows::core::Result<()> {
-        use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWINDOWATTRIBUTE};
+        unsafe {
+            use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmSetWindowAttribute};
 
-        DwmSetWindowAttribute(
-            self.hwnd,
-            DWMWINDOWATTRIBUTE(attribute),
-            value as *const T as *const std::ffi::c_void,
-            std::mem::size_of::<T>() as u32,
-        )
+            DwmSetWindowAttribute(
+                self.hwnd,
+                DWMWINDOWATTRIBUTE(attribute),
+                value as *const T as *const std::ffi::c_void,
+                std::mem::size_of::<T>() as u32,
+            )
+        }
     }
 
     /// Get DWM window attribute
     unsafe fn get_dwm_attribute<T: Default>(&self, attribute: i32) -> windows::core::Result<T> {
-        use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWINDOWATTRIBUTE};
+        unsafe {
+            use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmGetWindowAttribute};
 
-        let mut value = T::default();
-        DwmGetWindowAttribute(
-            self.hwnd,
-            DWMWINDOWATTRIBUTE(attribute),
-            &mut value as *mut T as *mut std::ffi::c_void,
-            std::mem::size_of::<T>() as u32,
-        )?;
-        Ok(value)
+            let mut value = T::default();
+            DwmGetWindowAttribute(
+                self.hwnd,
+                DWMWINDOWATTRIBUTE(attribute),
+                &mut value as *mut T as *mut std::ffi::c_void,
+                std::mem::size_of::<T>() as u32,
+            )?;
+            Ok(value)
+        }
     }
 }
 
@@ -1265,8 +1281,8 @@ impl WindowsWindow {
 // ============================================================================
 
 use super::window_ext::{
-    dwm_attributes, TaskbarProgressState, WindowCornerPreference, WindowsBackdrop, WindowsTheme,
-    WindowsWindowExt as WindowsWindowExtTrait,
+    TaskbarProgressState, WindowCornerPreference, WindowsBackdrop, WindowsTheme,
+    WindowsWindowExt as WindowsWindowExtTrait, dwm_attributes,
 };
 
 impl WindowsWindowExtTrait for WindowsWindow {
@@ -1378,7 +1394,7 @@ impl WindowsWindowExtTrait for WindowsWindow {
 
     fn enable_blur_behind(&mut self, enable: bool) {
         use windows::Win32::Graphics::Dwm::{
-            DwmEnableBlurBehindWindow, DWM_BB_ENABLE, DWM_BLURBEHIND,
+            DWM_BB_ENABLE, DWM_BLURBEHIND, DwmEnableBlurBehindWindow,
         };
 
         unsafe {

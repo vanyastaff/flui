@@ -21,10 +21,13 @@
 //! }
 //! ```
 
-use super::child_storage::*;
-
 // Re-export arity types from flui-tree for consistency with RenderObject system
 pub use flui_tree::{Arity, Leaf, Optional, Single, Variable};
+
+use super::child_storage::{
+    ElementChildStorage, NoChildStorage, OptionalChildStorage, SingleChildStorage,
+    VariableChildStorage,
+};
 
 /// Element-specific arity trait linking arity types to child storage.
 ///
@@ -53,7 +56,8 @@ impl ElementArity for Leaf {
 
 /// Single arity - exactly one child required.
 ///
-/// Used for elements that wrap a single child (e.g., StatelessElement, ProxyElement).
+/// Used for elements that wrap a single child (e.g., StatelessElement,
+/// ProxyElement).
 impl ElementArity for Single {
     type Storage = SingleChildStorage;
 }

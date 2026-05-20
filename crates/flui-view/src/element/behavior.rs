@@ -4,21 +4,22 @@
 //! view type (Stateless, Proxy, Stateful, Render). Behaviors encapsulate the
 //! view-specific logic while the unified Element handles all common operations.
 
-use super::arity::ElementArity;
-use super::generic::ElementCore;
-use crate::context::ElementBuildContext;
-use crate::view::{
-    AnimatedView, InheritedView, ProxyView, StatefulView, StatelessView, View, ViewState,
-};
-use flui_foundation::{ListenerId, RenderId};
-use flui_rendering::pipeline::PipelineOwner;
-use flui_rendering::protocol::Protocol;
-use flui_rendering::traits::RenderObject as RenderObjectTrait;
 use std::marker::PhantomData;
 
-use crate::element::RenderSlot;
-use crate::view::RenderView;
-use flui_foundation::ElementId;
+use flui_foundation::{ElementId, ListenerId, RenderId};
+use flui_rendering::{
+    pipeline::PipelineOwner, protocol::Protocol, traits::RenderObject as RenderObjectTrait,
+};
+
+use super::{arity::ElementArity, generic::ElementCore};
+use crate::{
+    context::ElementBuildContext,
+    element::RenderSlot,
+    view::{
+        AnimatedView, InheritedView, ProxyView, RenderView, StatefulView, StatelessView, View,
+        ViewState,
+    },
+};
 
 // ============================================================================
 // ElementBehavior Trait
@@ -48,6 +49,38 @@ where
     /// Called after view update to perform behavior-specific reactions.
     #[allow(unused_variables)]
     fn on_update(&mut self, core: &ElementCore<V, A>) {}
+
+    /// Called after the element is re-activated (re-inserted into the tree).
+    ///
+    /// Default is a no-op. Behaviors that own user-visible state (e.g.
+    /// `StatefulBehavior`) override this to forward to `ViewState::activate`.
+    #[allow(unused_variables)]
+    fn on_activate(&mut self, core: &mut ElementCore<V, A>) {}
+
+    /// Called before the element is deactivated (temporarily removed from the tree).
+    ///
+    /// Default is a no-op. Behaviors that own user-visible state (e.g.
+    /// `StatefulBehavior`) override this to forward to `ViewState::deactivate`.
+    #[allow(unused_variables)]
+    fn on_deactivate(&mut self, core: &mut ElementCore<V, A>) {}
+
+    /// Called after the view configuration is replaced, with access to the
+    /// previous view value.
+    ///
+    /// `on_update` already fires for generic post-update reactions; this hook
+    /// exists for behaviors that need the prior view (e.g. `StatefulBehavior`
+    /// forwarding to `ViewState::did_update_view`).
+    #[allow(unused_variables)]
+    fn on_view_updated(&mut self, core: &ElementCore<V, A>, old_view: &V) {}
+
+    /// The kind name used when formatting the parent `Element` with `Debug`.
+    ///
+    /// Defaults to `"Element"`. Behaviors override this so that type aliases
+    /// like `StatelessElement` and `StatefulElement` render with a familiar
+    /// name in logs and snapshot tests.
+    fn debug_kind(&self) -> &'static str {
+        "Element"
+    }
 }
 
 // ============================================================================
@@ -78,6 +111,10 @@ where
     V: StatelessView,
     A: ElementArity,
 {
+    fn debug_kind(&self) -> &'static str {
+        "StatelessElement"
+    }
+
     fn perform_build(&mut self, core: &mut ElementCore<V, A>) {
         if !core.should_build() {
             tracing::trace!("StatelessBehavior::perform_build skipped");
@@ -123,6 +160,10 @@ where
     V: ProxyView,
     A: ElementArity,
 {
+    fn debug_kind(&self) -> &'static str {
+        "ProxyElement"
+    }
+
     fn perform_build(&mut self, core: &mut ElementCore<V, A>) {
         if !core.should_build() {
             tracing::trace!("ProxyBehavior::perform_build skipped");
@@ -179,6 +220,10 @@ where
     V: StatefulView,
     A: ElementArity,
 {
+    fn debug_kind(&self) -> &'static str {
+        "StatefulElement"
+    }
+
     fn perform_build(&mut self, core: &mut ElementCore<V, A>) {
         let ctx = ElementBuildContext::new_minimal(core.depth());
 
@@ -204,6 +249,18 @@ where
 
     fn on_unmount(&mut self, _core: &mut ElementCore<V, A>) {
         self.state.dispose();
+    }
+
+    fn on_activate(&mut self, _core: &mut ElementCore<V, A>) {
+        self.state.activate();
+    }
+
+    fn on_deactivate(&mut self, _core: &mut ElementCore<V, A>) {
+        self.state.deactivate();
+    }
+
+    fn on_view_updated(&mut self, _core: &ElementCore<V, A>, old_view: &V) {
+        self.state.did_update_view(old_view);
     }
 }
 
@@ -281,6 +338,10 @@ where
     flui_rendering::storage::RenderNode:
         From<Box<dyn flui_rendering::traits::RenderObject<V::Protocol>>>,
 {
+    fn debug_kind(&self) -> &'static str {
+        "RenderObjectElement"
+    }
+
     fn perform_build(&mut self, core: &mut ElementCore<V, A>) {
         if !core.should_build() {
             tracing::trace!(
@@ -316,7 +377,7 @@ where
 
     fn on_mount(&mut self, core: &mut ElementCore<V, A>) {
         // Create RenderObject and insert into RenderTree
-        if let Some(ref pipeline_owner) = core.pipeline_owner() {
+        if let Some(pipeline_owner) = core.pipeline_owner() {
             tracing::info!("RenderBehavior::on_mount creating RenderObject");
 
             let render_object = core.view().create_render_object();
@@ -351,15 +412,15 @@ where
 
     fn on_unmount(&mut self, core: &mut ElementCore<V, A>) {
         // Remove from RenderTree
-        if let Some(render_id) = self.render_id {
-            if let Some(ref pipeline_owner) = core.pipeline_owner() {
-                let mut owner = pipeline_owner.write();
-                owner.render_tree_mut().remove(render_id);
-                tracing::debug!(
-                    "RenderBehavior::on_unmount removed render_id={:?}",
-                    render_id
-                );
-            }
+        if let Some(render_id) = self.render_id
+            && let Some(pipeline_owner) = core.pipeline_owner()
+        {
+            let mut owner = pipeline_owner.write();
+            owner.render_tree_mut().remove(render_id);
+            tracing::debug!(
+                "RenderBehavior::on_unmount removed render_id={:?}",
+                render_id
+            );
         }
 
         self.render_id = None;
@@ -367,19 +428,19 @@ where
 
     fn on_update(&mut self, core: &ElementCore<V, A>) {
         // Mark RenderObject for layout/paint
-        if let Some(render_id) = self.render_id {
-            if let Some(ref pipeline_owner) = core.pipeline_owner() {
-                let mut owner = pipeline_owner.write();
-                let tree_depth = owner.render_tree().depth(render_id).unwrap_or(0);
+        if let Some(render_id) = self.render_id
+            && let Some(pipeline_owner) = core.pipeline_owner()
+        {
+            let mut owner = pipeline_owner.write();
+            let tree_depth = owner.render_tree().depth(render_id).unwrap_or(0);
 
-                owner.add_node_needing_layout(render_id.get(), tree_depth as usize);
-                owner.add_node_needing_paint(render_id.get(), tree_depth as usize);
+            owner.add_node_needing_layout(render_id, tree_depth as usize);
+            owner.add_node_needing_paint(render_id, tree_depth as usize);
 
-                tracing::debug!(
-                    "RenderBehavior::on_update marked render_id={:?} dirty",
-                    render_id
-                );
-            }
+            tracing::debug!(
+                "RenderBehavior::on_update marked render_id={:?} dirty",
+                render_id
+            );
         }
     }
 }
@@ -450,6 +511,10 @@ where
     V: InheritedView,
     A: ElementArity,
 {
+    fn debug_kind(&self) -> &'static str {
+        "InheritedElement"
+    }
+
     fn perform_build(&mut self, core: &mut ElementCore<V, A>) {
         if !core.should_build() {
             tracing::trace!("InheritedBehavior::perform_build skipped");
@@ -473,8 +538,8 @@ where
         // For now, we update the cached data
         self.data = core.view().data().clone();
 
-        // TODO: Mark all dependents as needing rebuild if update_should_notify returns true
-        // This is handled by BuildOwner in a full implementation
+        // TODO: Mark all dependents as needing rebuild if update_should_notify returns
+        // true This is handled by BuildOwner in a full implementation
         tracing::debug!("InheritedBehavior::on_update data cached");
     }
 
@@ -574,6 +639,10 @@ where
     V: AnimatedView,
     A: ElementArity,
 {
+    fn debug_kind(&self) -> &'static str {
+        "AnimatedElement"
+    }
+
     fn perform_build(&mut self, core: &mut ElementCore<V, A>) {
         // Delegate to StatefulBehavior
         self.stateful.perform_build(core);
@@ -622,5 +691,17 @@ where
         self.stateful.on_update(core);
 
         tracing::debug!("AnimationBehavior::on_update resubscribed to listenable");
+    }
+
+    fn on_activate(&mut self, core: &mut ElementCore<V, A>) {
+        self.stateful.on_activate(core);
+    }
+
+    fn on_deactivate(&mut self, core: &mut ElementCore<V, A>) {
+        self.stateful.on_deactivate(core);
+    }
+
+    fn on_view_updated(&mut self, core: &ElementCore<V, A>, old_view: &V) {
+        self.stateful.on_view_updated(core, old_view);
     }
 }

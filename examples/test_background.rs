@@ -5,15 +5,14 @@
 
 #![cfg(target_os = "windows")]
 
-use flui_platform::traits::{Platform, PlatformWindow};
 use flui_platform::{WindowOptions, WindowsPlatform};
-use flui_types::geometry::{px, Size};
+use flui_types::geometry::{Size, px};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🧪 Testing Background Handling");
+    println!("Testing Background Handling");
     println!();
 
-    let platform = WindowsPlatform::new()?;
+    let platform: Box<dyn flui_platform::Platform> = Box::new(WindowsPlatform::new()?);
 
     let options = WindowOptions {
         title: "Background Test - Should be BLACK not white".to_string(),
@@ -25,18 +24,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         max_size: None,
     };
 
+    // Create window before running the event loop (run() takes ownership)
     let window = platform.open_window(options)?;
 
-    println!("✅ Window created");
+    println!("Window created");
     println!();
     println!("If background is:");
     println!("  - WHITE = WM_ERASEBKGND not working (Windows default)");
     println!("  - BLACK = WM_ERASEBKGND working! (no background drawn)");
     println!();
-    println!("Close window to exit");
 
-    platform.run(Box::new(|| {
-        println!("Platform ready!");
+    platform.run(Box::new(move || {
+        // Keep window alive via closure capture
+        let _window = window;
     }));
 
     Ok(())

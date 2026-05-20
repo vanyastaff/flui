@@ -5,12 +5,17 @@
 //!
 //! # Design Principles
 //!
-//! 1. **Backend-agnostic**: Core error variants don't depend on specific backend types
-//! 2. **Extensible**: `#[non_exhaustive]` allows adding variants without breaking changes
-//! 3. **Composable**: Backend-specific errors wrap underlying errors via `source()`
-//! 4. **Informative**: Each variant provides clear context about what went wrong
+//! 1. **Backend-agnostic**: Core error variants don't depend on specific
+//!    backend types
+//! 2. **Extensible**: `#[non_exhaustive]` allows adding variants without
+//!    breaking changes
+//! 3. **Composable**: Backend-specific errors wrap underlying errors via
+//!    `source()`
+//! 4. **Informative**: Each variant provides clear context about what went
+//!    wrong
 
 use std::error::Error;
+
 use thiserror::Error;
 
 /// Rendering errors that can occur in any backend
@@ -45,7 +50,8 @@ pub enum RenderError {
     /// Surface was lost and needs reconfiguration
     ///
     /// This typically happens when the window is minimized or the GPU driver
-    /// is reset. The surface will be reconfigured automatically on the next frame.
+    /// is reset. The surface will be reconfigured automatically on the next
+    /// frame.
     #[error("Surface was lost")]
     SurfaceLost,
 
@@ -84,15 +90,15 @@ pub enum RenderError {
     // ========================================================================
     /// Failed to create surface from window
     ///
-    /// The rendering backend couldn't create a surface from the provided window.
-    /// Contains backend-specific error as source.
+    /// The rendering backend couldn't create a surface from the provided
+    /// window. Contains backend-specific error as source.
     #[error("Failed to create surface: {0}")]
     SurfaceCreation(#[source] Box<dyn Error + Send + Sync>),
 
     /// No suitable GPU adapter found
     ///
-    /// No GPU was found that meets the requirements (e.g., supports required features,
-    /// is compatible with the surface).
+    /// No GPU was found that meets the requirements (e.g., supports required
+    /// features, is compatible with the surface).
     #[error("No suitable GPU adapter found")]
     NoAdapter,
 
@@ -120,7 +126,8 @@ pub enum RenderError {
 
     /// Pipeline creation failed
     ///
-    /// Failed to create a rendering pipeline (combination of shaders, state, etc.)
+    /// Failed to create a rendering pipeline (combination of shaders, state,
+    /// etc.)
     #[error("Pipeline error: {0}")]
     PipelineError(String),
 
@@ -210,6 +217,7 @@ impl RenderError {
             RenderError::OutOfMemory
                 | RenderError::NoAdapter
                 | RenderError::DeviceCreation(_)
+                | RenderError::SurfaceCreation(_)
                 | RenderError::NotInitialized
         )
     }
@@ -253,6 +261,10 @@ mod tests {
         assert!(RenderError::OutOfMemory.is_fatal());
         assert!(RenderError::NoAdapter.is_fatal());
         assert!(RenderError::NotInitialized.is_fatal());
+        assert!(
+            RenderError::surface_creation(std::io::Error::new(std::io::ErrorKind::Other, "test"))
+                .is_fatal()
+        );
         assert!(!RenderError::SurfaceLost.is_fatal());
         assert!(!RenderError::Timeout.is_fatal());
     }

@@ -3,16 +3,21 @@
 //! This module contains the core application infrastructure:
 //! - `AppBinding` - Combines all framework bindings
 //! - `AppConfig` - Application configuration
-//! - `AppLifecycle` - Lifecycle state management
+//! - `LifecycleState` - Lifecycle state management (re-exported from
+//!   flui-platform)
 
 mod binding;
 mod config;
+pub mod direct;
 mod lifecycle;
 pub mod runner;
 
 pub use binding::AppBinding;
 pub use config::AppConfig;
-pub use lifecycle::AppLifecycle;
+pub use direct::run_direct;
+pub use lifecycle::{DefaultLifecycle, LifecycleEvent, LifecycleState};
+#[cfg(target_os = "android")]
+pub use runner::{run_app_android, run_app_android_with_config};
 pub use runner::{run_app_impl as run_app, run_app_with_config_impl as run_app_with_config};
 
 /// Alias for AppBinding matching Flutter naming convention.

@@ -1,8 +1,12 @@
 //! Viewport offset for scroll position tracking.
 
-use std::fmt::Debug;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::{
+    fmt::Debug,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use parking_lot::RwLock;
 
@@ -57,7 +61,8 @@ impl ScrollDirection {
 ///
 /// Corresponds to Flutter's `ViewportOffset` abstract class.
 pub trait ViewportOffset: Debug + Send + Sync {
-    /// The number of pixels to offset the children in the opposite of the axis direction.
+    /// The number of pixels to offset the children in the opposite of the axis
+    /// direction.
     ///
     /// For example, if the axis direction is down, then the pixel value
     /// represents the number of logical pixels to move the children _up_ the
@@ -86,8 +91,8 @@ pub trait ViewportOffset: Debug + Send + Sync {
 
     /// Apply a layout-time correction to the scroll offset.
     ///
-    /// This method should change the `pixels` value by `correction`, but without
-    /// calling the notification callbacks.
+    /// This method should change the `pixels` value by `correction`, but
+    /// without calling the notification callbacks.
     fn correct_by(&mut self, correction: f32);
 
     /// Jumps `pixels` from its current value to the given value,
@@ -110,8 +115,8 @@ pub trait ViewportOffset: Debug + Send + Sync {
     /// The direction in which the user is trying to change `pixels`.
     fn user_scroll_direction(&self) -> ScrollDirection;
 
-    /// Whether a viewport is allowed to change `pixels` implicitly to respond to
-    /// a call to show a render object on screen.
+    /// Whether a viewport is allowed to change `pixels` implicitly to respond
+    /// to a call to show a render object on screen.
     fn allow_implicit_scrolling(&self) -> bool;
 
     /// Adds a listener that will be called when `pixels` changes.

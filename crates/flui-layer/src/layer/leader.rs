@@ -3,8 +3,9 @@
 //! This layer establishes a coordinate space that FollowerLayer instances
 //! can link to. Used for tooltips, dropdowns, and connected overlays.
 
-use flui_types::geometry::{Offset, Pixels, Rect, Size};
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use flui_types::geometry::{Offset, Pixels, Rect, Size};
 
 /// Unique identifier for leader-follower linkage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -63,7 +64,7 @@ impl Default for LayerLink {
 /// # Example
 ///
 /// ```rust
-/// use flui_layer::{LeaderLayer, FollowerLayer, LayerLink};
+/// use flui_layer::{FollowerLayer, LayerLink, LeaderLayer};
 /// use flui_types::geometry::{Offset, Size};
 ///
 /// // Create a link between leader and follower
@@ -73,8 +74,8 @@ impl Default for LayerLink {
 /// let leader = LeaderLayer::new(link, Size::new(px(100.0), px(30.0)));
 ///
 /// // Follower positions relative to the leader
-/// let follower = FollowerLayer::new(link)
-///     .with_target_offset(Offset::new(px(0.0), px(35.0))); // Below the leader
+/// let follower = FollowerLayer::new(link).with_target_offset(Offset::new(px(0.0), px(35.0)));
+/// // Below the leader
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LeaderLayer {
@@ -160,8 +161,9 @@ unsafe impl Sync for LeaderLayer {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::px;
+
+    use super::*;
 
     #[test]
     fn test_layer_link_unique() {

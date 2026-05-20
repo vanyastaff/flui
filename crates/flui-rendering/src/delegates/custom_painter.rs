@@ -4,17 +4,16 @@
 //! without creating a new render object. It provides methods for painting,
 //! hit testing, and accessibility.
 
-use std::any::Any;
-use std::fmt::Debug;
-
-use flui_types::{Offset, Size};
+use std::{any::Any, fmt::Debug};
 
 use flui_painting::Canvas;
+use flui_types::{Offset, Size};
 
 /// Builder for semantics information.
 ///
-/// **INCOMPLETE**: This is a placeholder type. Semantics support is not yet implemented.
-/// Using this builder will panic until the semantics system is complete.
+/// **INCOMPLETE**: This is a placeholder type. Semantics support is not yet
+/// implemented. Using this builder will panic until the semantics system is
+/// complete.
 #[derive(Debug, Clone)]
 pub struct SemanticsBuilder {
     _private: (),
@@ -82,7 +81,8 @@ pub trait CustomPainter: Send + Sync + Debug {
     /// Whether this painter should repaint when replaced with a new delegate.
     ///
     /// Called when a new instance of the delegate is provided, to check if
-    /// the new instance represents different information that requires repainting.
+    /// the new instance represents different information that requires
+    /// repainting.
     ///
     /// # Arguments
     ///

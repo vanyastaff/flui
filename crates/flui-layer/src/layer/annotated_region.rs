@@ -4,10 +4,9 @@
 //! Used for system UI integration (status bar color, etc.) and
 //! accessibility regions.
 
+use std::{any::Any, fmt, sync::Arc};
+
 use flui_types::geometry::{Pixels, Rect};
-use std::any::Any;
-use std::fmt;
-use std::sync::Arc;
 
 /// Type-erased annotation value.
 pub type AnnotationValue = Arc<dyn Any + Send + Sync>;
@@ -41,9 +40,10 @@ pub type AnnotationValue = Arc<dyn Any + Send + Sync>;
 /// # Example
 ///
 /// ```rust
+/// use std::sync::Arc;
+///
 /// use flui_layer::{AnnotatedRegionLayer, AnnotationValue};
 /// use flui_types::geometry::Rect;
-/// use std::sync::Arc;
 ///
 /// // Define a status bar style annotation
 /// #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,10 +54,7 @@ pub type AnnotationValue = Arc<dyn Any + Send + Sync>;
 ///
 /// // Create an annotation for status bar style
 /// let style = Arc::new(SystemUiOverlayStyle::Dark);
-/// let layer = AnnotatedRegionLayer::new(
-///     Rect::from_xywh(0.0, 0.0, 400.0, 24.0),
-///     style,
-/// );
+/// let layer = AnnotatedRegionLayer::new(Rect::from_xywh(0.0, 0.0, 400.0, 24.0), style);
 /// ```
 pub struct AnnotatedRegionLayer {
     /// The annotated region bounds
@@ -216,8 +213,9 @@ impl From<String> for SemanticLabel {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::px;
+
+    use super::*;
 
     #[test]
     fn test_annotated_region_new() {

@@ -5,7 +5,8 @@
 //!
 //! # Features
 //!
-//! - **Constraint Helpers**: Easy access to min/max sizes, tight/loose constraints
+//! - **Constraint Helpers**: Easy access to min/max sizes, tight/loose
+//!   constraints
 //! - **Child Layout**: Simplified child layout and positioning
 //! - **Intrinsic Sizing**: Helper methods for intrinsic dimension queries
 //! - **Debugging**: Layout debugging and visualization helpers
@@ -29,13 +30,14 @@
 //! }
 //! ```
 
-use flui_types::geometry::Offset;
-use flui_types::{Pixels, Size};
+use flui_tree::Arity;
+use flui_types::{Pixels, Size, geometry::Offset};
 
-use crate::arity::Arity;
-use crate::constraints::{BoxConstraints, Constraints};
-use crate::parent_data::ParentData;
-use crate::protocol::{BoxLayout, LayoutCapability, LayoutContextApi, Protocol};
+use crate::{
+    constraints::{BoxConstraints, Constraints},
+    parent_data::ParentData,
+    protocol::{BoxLayout, LayoutCapability, LayoutContextApi, Protocol},
+};
 
 // ============================================================================
 // LAYOUT CONTEXT
@@ -286,7 +288,7 @@ where
     /// Layouts a single child with parent's constraints and returns size.
     pub fn layout_single_child(&mut self) -> Size {
         if self.child_count() > 0 {
-            let constraints = self.inner.constraints().clone();
+            let constraints = *self.inner.constraints();
             self.inner.layout_child(0, constraints)
         } else {
             Size::ZERO

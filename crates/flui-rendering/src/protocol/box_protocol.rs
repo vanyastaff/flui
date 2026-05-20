@@ -5,16 +5,73 @@
 //! - [`BoxLayout`]: Layout capability (BoxConstraints → Size)
 //! - [`BoxHitTest`]: Hit test capability (Offset → BoxHitTestResult)
 
-use flui_types::geometry::{Matrix4, Offset, Point, Rect};
-use flui_types::Size;
-
-use crate::arity::Arity;
-use crate::constraints::{BoxConstraints, Constraints};
-use crate::parent_data::{BoxParentData, ParentData};
-use crate::protocol::capabilities::{
-    HitTestCapability, HitTestContextApi, LayoutCapability, LayoutContextApi,
+use flui_foundation::RenderId;
+use flui_tree::Arity;
+use flui_types::{
+    Size,
+    geometry::{Matrix4, Offset, Point, Rect},
 };
-use crate::protocol::protocol::{sealed, BidirectionalProtocol, Protocol, ProtocolCompatible};
+
+use crate::{
+    constraints::{BoxConstraints, Constraints},
+    parent_data::{BoxParentData, ParentData},
+    protocol::{
+        capabilities::{HitTestCapability, HitTestContextApi, LayoutCapability, LayoutContextApi},
+        protocol::{BidirectionalProtocol, Protocol, ProtocolCompatible, sealed},
+    },
+};
+
+// ============================================================================
+// CHILD STATE
+// ============================================================================
+//
+// Per-child layout-time bookkeeping owned by `BoxLayoutCtx`. Previously
+// lived in `crates/flui-rendering/src/children_access.rs` alongside a
+// 500-LOC closure-based iterator (`ChildrenAccess`) and the
+// `ChildHandle` wrapper in `child_handle.rs` -- both fought the borrow
+// checker for users that never appeared, so Mythos Step 5b deleted them
+// outright. `ChildState<P>` itself stays because it IS the data shape
+// `BoxLayoutContextApi::layout_child` / `position_child` /
+// `child_geometry` / `child_parent_data` need.
+
+/// Per-child layout-time state held by [`BoxLayoutCtx`].
+///
+/// Created by the pipeline before invoking a parent's `perform_layout`,
+/// mutated through `BoxLayoutContextApi::layout_child` /
+/// `position_child`, and read during the subsequent paint phase.
+#[derive(Debug)]
+pub struct ChildState<P: ParentData + Default> {
+    /// Render ID of this child.
+    pub id: RenderId,
+    /// Computed size after layout.
+    pub size: Size,
+    /// Position offset set by parent.
+    pub offset: Offset,
+    /// Parent data for this child.
+    pub parent_data: P,
+}
+
+impl<P: ParentData + Default> ChildState<P> {
+    /// Creates a new child state with default values.
+    pub fn new(id: RenderId) -> Self {
+        Self {
+            id,
+            size: Size::ZERO,
+            offset: Offset::ZERO,
+            parent_data: P::default(),
+        }
+    }
+
+    /// Creates a new child state with specific parent data.
+    pub fn with_parent_data(id: RenderId, parent_data: P) -> Self {
+        Self {
+            id,
+            size: Size::ZERO,
+            offset: Offset::ZERO,
+            parent_data,
+        }
+    }
+}
 
 // ============================================================================
 // BOX PROTOCOL
@@ -22,8 +79,8 @@ use crate::protocol::protocol::{sealed, BidirectionalProtocol, Protocol, Protoco
 
 /// Box protocol using 2D constraints and sizes.
 ///
-/// This is the most common protocol for 2D layout with width/height constraints.
-/// Used by most widgets: containers, buttons, text, images, etc.
+/// This is the most common protocol for 2D layout with width/height
+/// constraints. Used by most widgets: containers, buttons, text, images, etc.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BoxProtocol;
 
@@ -75,11 +132,11 @@ impl BoxConstraintsCacheKey {
     ///
     /// Returns `None` if any value is NaN.
     pub fn from_constraints(c: &BoxConstraints) -> Option<Self> {
-        // NaN check - NaN != NaN
-        if c.min_width != c.min_width
-            || c.max_width != c.max_width
-            || c.min_height != c.min_height
-            || c.max_height != c.max_height
+        // NaN check using is_nan()
+        if c.min_width.is_nan()
+            || c.max_width.is_nan()
+            || c.min_height.is_nan()
+            || c.max_height.is_nan()
         {
             return None;
         }
@@ -122,7 +179,6 @@ impl LayoutCapability for BoxLayout {
 /// Box layout context implementation.
 ///
 /// This context provides access to constraints and children during layout.
-
 /// Callback type for synchronous child layout.
 ///
 /// Called when parent's `layout_child()` is invoked. The callback receives
@@ -137,7 +193,7 @@ pub struct BoxLayoutCtx<'ctx, A: Arity, P: ParentData + Default> {
     constraints: BoxConstraints,
     geometry: Option<Size>,
     /// Reference to children states for position_child to update offsets.
-    children: Option<&'ctx mut Vec<crate::children_access::ChildState<P>>>,
+    children: Option<&'ctx mut Vec<ChildState<P>>>,
     /// Child render IDs for tree lookup during layout_child.
     child_ids: Option<&'ctx [flui_foundation::RenderId]>,
     /// Callback to perform synchronous child layout through RenderTree.
@@ -146,7 +202,8 @@ pub struct BoxLayoutCtx<'ctx, A: Arity, P: ParentData + Default> {
 }
 
 impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
-    /// Creates a new box layout context with given constraints (no children access).
+    /// Creates a new box layout context with given constraints (no children
+    /// access).
     pub fn new(constraints: BoxConstraints) -> Self {
         Self {
             constraints,
@@ -161,7 +218,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
     /// Creates a new box layout context with children access.
     pub fn with_children(
         constraints: BoxConstraints,
-        children: &'ctx mut Vec<crate::children_access::ChildState<P>>,
+        children: &'ctx mut Vec<ChildState<P>>,
     ) -> Self {
         Self {
             constraints,
@@ -173,13 +230,15 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
         }
     }
 
-    /// Creates a new box layout context with full access for synchronous child layout.
+    /// Creates a new box layout context with full access for synchronous child
+    /// layout.
     ///
     /// This constructor enables proper Flutter-style layout where parent's
-    /// `layout_child()` triggers synchronous child layout through the RenderTree.
+    /// `layout_child()` triggers synchronous child layout through the
+    /// RenderTree.
     pub fn with_layout_callback(
         constraints: BoxConstraints,
-        children: &'ctx mut Vec<crate::children_access::ChildState<P>>,
+        children: &'ctx mut Vec<ChildState<P>>,
         child_ids: &'ctx [flui_foundation::RenderId],
         layout_child_callback: LayoutChildCallback<'ctx>,
     ) -> Self {
@@ -222,37 +281,36 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
         // Try to use the layout callback for synchronous child layout
         if let (Some(child_ids), Some(callback)) =
             (self.child_ids, self.layout_child_callback.as_ref())
+            && let Some(&child_id) = child_ids.get(index)
         {
-            if let Some(&child_id) = child_ids.get(index) {
-                // Perform synchronous layout through RenderTree
-                let size = callback(child_id, constraints);
+            // Perform synchronous layout through RenderTree
+            let size = callback(child_id, constraints);
 
-                // Update cached size in children state
-                if let Some(children) = &mut self.children {
-                    if let Some(child) = children.get_mut(index) {
-                        child.size = size;
-                    }
-                }
-
-                return size;
+            // Update cached size in children state
+            if let Some(children) = &mut self.children
+                && let Some(child) = children.get_mut(index)
+            {
+                child.size = size;
             }
+
+            return size;
         }
 
         // Fallback: return cached size if available
-        if let Some(children) = &self.children {
-            if let Some(child) = children.get(index) {
-                return child.size;
-            }
+        if let Some(children) = &self.children
+            && let Some(child) = children.get(index)
+        {
+            return child.size;
         }
         Size::ZERO
     }
 
     fn position_child(&mut self, index: usize, offset: Offset) {
         // Store the offset in the child's state
-        if let Some(children) = &mut self.children {
-            if let Some(child) = children.get_mut(index) {
-                child.offset = offset;
-            }
+        if let Some(children) = &mut self.children
+            && let Some(child) = children.get_mut(index)
+        {
+            child.offset = offset;
         }
     }
 
@@ -431,9 +489,10 @@ impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, BoxHitTest, A, P>
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::arity::Leaf;
+    use flui_tree::Leaf;
     use flui_types::geometry::px;
+
+    use super::*;
 
     #[test]
     fn test_box_protocol_name() {

@@ -1,8 +1,9 @@
 //! Descendant iterators.
 
-use crate::traits::TreeNav;
 use flui_foundation::Identifier;
 use smallvec::SmallVec;
+
+use crate::traits::TreeNav;
 
 /// Stack type for descendants iterator.
 ///
@@ -177,10 +178,10 @@ impl<I: Identifier, T: TreeNav<I>> std::iter::FusedIterator for DescendantsWithD
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::iter::Ancestors;
-    use crate::traits::TreeRead;
     use flui_foundation::ElementId;
+
+    use super::*;
+    use crate::{iter::Ancestors, traits::TreeRead};
 
     struct TestNode {
         parent: Option<ElementId>,

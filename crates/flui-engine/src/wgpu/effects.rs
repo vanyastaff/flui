@@ -27,7 +27,7 @@ pub struct GradientStop {
     /// Position along gradient (0.0 = start, 1.0 = end)
     pub position: f32,
     /// Padding for GPU alignment
-    pub _padding: [f32; 3],
+    pub padding: [f32; 3],
 }
 
 impl GradientStop {
@@ -36,7 +36,7 @@ impl GradientStop {
         Self {
             color: color.to_rgba_f32().into(),
             position: position.clamp(0.0, 1.0),
-            _padding: [0.0; 3],
+            padding: [0.0; 3],
         }
     }
 
@@ -68,8 +68,10 @@ pub struct LinearGradientInstance {
     pub corner_radii: [f32; 4],
     /// Number of gradient stops (1-8)
     pub stop_count: u32,
+    /// Offset into the shared gradient stops buffer
+    pub stop_offset: u32,
     /// Padding for GPU alignment
-    pub _padding: [u32; 3],
+    pub padding: [u32; 2],
 }
 
 impl LinearGradientInstance {
@@ -86,9 +88,16 @@ impl LinearGradientInstance {
             gradient_start: [start.x, start.y],
             gradient_end: [end.x, end.y],
             corner_radii,
-            stop_count: stop_count.min(8), // Max 8 stops
-            _padding: [0; 3],
+            stop_count: stop_count.min(8),
+            stop_offset: 0,
+            padding: [0; 2],
         }
+    }
+
+    /// Set the offset into the shared gradient stops buffer
+    pub fn with_stop_offset(mut self, offset: u32) -> Self {
+        self.stop_offset = offset;
+        self
     }
 
     /// Create a vertical gradient (top to bottom)
@@ -140,13 +149,15 @@ pub struct RadialGradientInstance {
     /// Gradient radius
     pub radius: f32,
     /// Padding
-    pub _padding1: f32,
+    pub padding1: f32,
     /// Corner radii [top-left, top-right, bottom-right, bottom-left]
     pub corner_radii: [f32; 4],
     /// Number of gradient stops (1-8)
     pub stop_count: u32,
+    /// Offset into the shared gradient stops buffer
+    pub stop_offset: u32,
     /// Padding for GPU alignment
-    pub _padding2: [u32; 3],
+    pub padding2: [u32; 2],
 }
 
 impl RadialGradientInstance {
@@ -162,11 +173,18 @@ impl RadialGradientInstance {
             bounds,
             center: [center.x, center.y],
             radius,
-            _padding1: 0.0,
+            padding1: 0.0,
             corner_radii,
             stop_count: stop_count.min(8),
-            _padding2: [0; 3],
+            stop_offset: 0,
+            padding2: [0; 2],
         }
+    }
+
+    /// Set the offset into the shared gradient stops buffer
+    pub fn with_stop_offset(mut self, offset: u32) -> Self {
+        self.stop_offset = offset;
+        self
     }
 
     /// Create a radial gradient centered in the rectangle
@@ -180,6 +198,72 @@ impl RadialGradientInstance {
         let height = bounds[3];
         let center = Vec2::new(width * 0.5, height * 0.5);
         Self::new(bounds, center, radius, corner_radii, stop_count)
+    }
+}
+
+/// Sweep (angular/conic) gradient instance data for GPU instancing
+///
+/// Layout matches the sweep.wgsl InstanceInput struct.
+/// Each instance represents one sweep-gradient-filled rectangle.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+pub struct SweepGradientInstance {
+    /// Rectangle bounds [x, y, width, height]
+    pub bounds: [f32; 4],
+    /// Gradient center point (local coordinates)
+    pub center: [f32; 2],
+    /// Start and end angles in radians [start_angle, end_angle]
+    pub angles: [f32; 2],
+    /// Corner radii [top-left, top-right, bottom-right, bottom-left]
+    pub corner_radii: [f32; 4],
+    /// Number of gradient stops (1-8)
+    pub stop_count: u32,
+    /// Offset into the shared gradient stops buffer
+    pub stop_offset: u32,
+    /// Padding for GPU alignment
+    pub padding: [u32; 2],
+}
+
+impl SweepGradientInstance {
+    /// Create a new sweep gradient instance
+    pub fn new(
+        bounds: [f32; 4],
+        center: Vec2,
+        start_angle: f32,
+        end_angle: f32,
+        corner_radii: [f32; 4],
+        stop_count: u32,
+    ) -> Self {
+        Self {
+            bounds,
+            center: [center.x, center.y],
+            angles: [start_angle, end_angle],
+            corner_radii,
+            stop_count: stop_count.min(8),
+            stop_offset: 0,
+            padding: [0; 2],
+        }
+    }
+
+    /// Set the offset into the shared gradient stops buffer
+    pub fn with_stop_offset(mut self, offset: u32) -> Self {
+        self.stop_offset = offset;
+        self
+    }
+
+    /// Create a full-circle sweep gradient (0 to 2*PI) centered in the rectangle
+    pub fn full_circle(bounds: [f32; 4], corner_radii: [f32; 4], stop_count: u32) -> Self {
+        let width = bounds[2];
+        let height = bounds[3];
+        let center = Vec2::new(width * 0.5, height * 0.5);
+        Self::new(
+            bounds,
+            center,
+            0.0,
+            std::f32::consts::TAU,
+            corner_radii,
+            stop_count,
+        )
     }
 }
 
@@ -267,13 +351,13 @@ pub struct ShadowInstance {
     /// Corner radius (uniform for now)
     pub corner_radius: f32,
     /// Padding
-    pub _padding1: [f32; 3],
+    pub padding1: [f32; 3],
     /// Shadow offset
     pub shadow_offset: [f32; 2],
     /// Blur sigma
     pub blur_sigma: f32,
     /// Padding
-    pub _padding2: f32,
+    pub padding2: f32,
     /// Shadow color
     pub shadow_color: [f32; 4],
 }
@@ -302,10 +386,10 @@ impl ShadowInstance {
             rect_pos,
             rect_size,
             corner_radius,
-            _padding1: [0.0; 3],
+            padding1: [0.0; 3],
             shadow_offset: [params.offset.x, params.offset.y],
             blur_sigma: params.blur_sigma,
-            _padding2: 0.0,
+            padding2: 0.0,
             shadow_color: params.color.to_rgba_f32().into(),
         }
     }
@@ -324,7 +408,7 @@ pub struct BlurParams {
     /// Sample offset multiplier
     pub offset: f32,
     /// Padding for GPU alignment
-    pub _padding: f32,
+    pub padding: f32,
 }
 
 impl BlurParams {
@@ -333,7 +417,7 @@ impl BlurParams {
         Self {
             texture_size,
             offset,
-            _padding: 0.0,
+            padding: 0.0,
         }
     }
 }

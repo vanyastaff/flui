@@ -2,9 +2,11 @@
 
 #[cfg(feature = "tessellation")]
 mod tessellation_tests {
-    use flui_painting::tessellation::{tessellate_fill, tessellate_stroke, TessellationOptions};
-    use flui_types::geometry::{px, Point, Rect};
-    use flui_types::painting::Path;
+    use flui_painting::tessellation::{TessellationOptions, tessellate_fill, tessellate_stroke};
+    use flui_types::{
+        geometry::{Point, Rect, px},
+        painting::Path,
+    };
 
     #[test]
     fn test_tessellate_fill_circle() {

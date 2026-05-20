@@ -19,7 +19,8 @@ use flui_foundation::ElementId;
 ///
 /// # Type Parameter
 ///
-/// * `T` - Additional slot data (often `Option<ElementId>` for sibling reference)
+/// * `T` - Additional slot data (often `Option<ElementId>` for sibling
+///   reference)
 ///
 /// # Flutter Equivalent
 ///
@@ -35,8 +36,8 @@ use flui_foundation::ElementId;
 /// # Example
 ///
 /// ```rust
-/// use flui_view::IndexedSlot;
 /// use flui_foundation::ElementId;
+/// use flui_view::IndexedSlot;
 ///
 /// // First child has no previous sibling
 /// let first_slot: IndexedSlot<Option<ElementId>> = IndexedSlot::new(0, None);
@@ -147,8 +148,8 @@ impl ElementSlot {
 /// # Example
 ///
 /// ```rust
-/// use flui_view::IndexedSlotBuilder;
 /// use flui_foundation::ElementId;
+/// use flui_view::IndexedSlotBuilder;
 ///
 /// let mut builder = IndexedSlotBuilder::new();
 ///

@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>FLUI Painting Demo</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #0d0d1a;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 24px;
+            font-family: system-ui, -apple-system, sans-serif;
+            color: #e0e0e0;
+        }
+        h1 {
+            margin-bottom: 8px;
+            font-size: 28px;
+            color: #00d2ff;
+        }
+        p {
+            margin-bottom: 16px;
+            font-size: 14px;
+            opacity: 0.7;
+        }
+        canvas {
+            border: 2px solid #333;
+            border-radius: 8px;
+            max-width: 100%;
+        }
+        .info {
+            margin-top: 16px;
+            font-size: 12px;
+            opacity: 0.5;
+        }
+    </style>
+</head>
+<body>
+    <h1>FLUI Painting Demo</h1>
+    <p>GPU-accelerated painting primitives via flui-engine + flui-painting</p>
+    <canvas id="flui-canvas" width="1200" height="3000"></canvas>
+    <p class="info">Built with FLUI — Flutter-inspired UI framework for Rust</p>
+
+    <script type="module">
+        import init from './pkg/flui_painting_demo.js';
+
+        async function run() {
+            try {
+                await init();
+                console.log('FLUI Painting Demo initialized');
+            } catch (e) {
+                console.error('Failed to initialize FLUI Painting Demo:', e);
+                document.body.innerHTML += `<p style="color: red; margin-top: 20px;">Error: ${e}</p>`;
+            }
+        }
+
+        run();
+    </script>
+</body>
+</html>

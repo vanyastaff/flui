@@ -1,7 +1,6 @@
 //! Integration tests for Color ApproxEq implementation
 
-use flui_types::geometry::ApproxEq;
-use flui_types::Color;
+use flui_types::{Color, geometry::ApproxEq};
 
 #[test]
 fn test_approx_eq_identical() {

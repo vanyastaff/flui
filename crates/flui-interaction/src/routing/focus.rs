@@ -1,14 +1,16 @@
 //! Keyboard focus management
 //!
-//! FocusManager is a global singleton that tracks which UI element has keyboard focus.
-//! Only one element can have focus at a time.
+//! FocusManager is a global singleton that tracks which UI element has keyboard
+//! focus. Only one element can have focus at a time.
 //!
 //! # Type System Features
 //!
-//! - **Newtype pattern**: `FocusNodeId` uses `NonZeroU64` for niche optimization
+//! - **Newtype pattern**: `FocusNodeId` uses `NonZeroU64` for niche
+//!   optimization
 //! - **Singleton pattern**: Global focus manager via `OnceLock`
 //! - **parking_lot**: High-performance read-write locks
-//! - **FocusScope integration**: Tab/Shift+Tab navigation via `FocusScopeManager`
+//! - **FocusScope integration**: Tab/Shift+Tab navigation via
+//!   `FocusScopeManager`
 //!
 //! # Example
 //!
@@ -32,11 +34,11 @@
 //! FocusManager::global().unfocus();
 //! ```
 
-use crate::events::KeyEvent;
-use crate::ids::FocusNodeId;
+use std::{collections::HashMap, sync::Arc};
+
 use parking_lot::RwLock;
-use std::collections::HashMap;
-use std::sync::Arc;
+
+use crate::{events::KeyEvent, ids::FocusNodeId};
 
 // Re-export FocusNodeId for convenience
 
@@ -226,8 +228,8 @@ impl FocusManager {
 
     /// Add a listener for focus changes.
     ///
-    /// Returns a callback that can be stored and used to check the current focus.
-    /// The listener is called whenever focus changes.
+    /// Returns a callback that can be stored and used to check the current
+    /// focus. The listener is called whenever focus changes.
     ///
     /// # Example
     ///
@@ -258,11 +260,13 @@ impl FocusManager {
     /// Transfer focus to the next focusable element.
     ///
     /// This is called when user presses Tab.
-    /// Implementation requires traversing the UI tree to find the next focusable element.
+    /// Implementation requires traversing the UI tree to find the next
+    /// focusable element.
     ///
     /// # Note
     ///
-    /// This requires focus scope and traversal policy support, which is not yet implemented.
+    /// This requires focus scope and traversal policy support, which is not yet
+    /// implemented.
     pub fn focus_next(&self) {
         tracing::warn!("focus_next() not yet implemented - needs focus scope support");
     }
@@ -273,7 +277,8 @@ impl FocusManager {
     ///
     /// # Note
     ///
-    /// This requires focus scope and traversal policy support, which is not yet implemented.
+    /// This requires focus scope and traversal policy support, which is not yet
+    /// implemented.
     pub fn focus_previous(&self) {
         tracing::warn!("focus_previous() not yet implemented - needs focus scope support");
     }
@@ -367,14 +372,12 @@ impl FocusManager {
 
         // Then, try focused node's handler
         let focused = *self.focused.read();
-        if let Some(node_id) = focused {
-            let handlers = self.key_handlers.read();
-            if let Some(handler) = handlers.get(&node_id) {
-                if handler(event) {
-                    tracing::trace!(node = node_id.get(), "Key event handled by focused node");
-                    return true;
-                }
-            }
+        if let Some(node_id) = focused
+            && let Some(handler) = self.key_handlers.read().get(&node_id).cloned()
+            && handler(event)
+        {
+            tracing::trace!(node = node_id.get(), "Key event handled by focused node");
+            return true;
         }
 
         tracing::trace!("Key event not handled");
@@ -563,9 +566,9 @@ mod tests {
 
     #[test]
     fn test_dispatch_key_event_to_focused() {
-        use crate::events::keyboard::Code;
-        use crate::testing::input::KeyEventBuilder;
         use std::sync::atomic::{AtomicBool, Ordering};
+
+        use crate::{events::keyboard::Code, testing::input::KeyEventBuilder};
 
         let manager = FocusManager::new();
         let node = FocusNodeId::new(1);
@@ -595,9 +598,9 @@ mod tests {
 
     #[test]
     fn test_dispatch_key_event_no_focus() {
-        use crate::events::keyboard::Code;
-        use crate::testing::input::KeyEventBuilder;
         use std::sync::atomic::{AtomicBool, Ordering};
+
+        use crate::{events::keyboard::Code, testing::input::KeyEventBuilder};
 
         let manager = FocusManager::new();
         let node = FocusNodeId::new(1);
@@ -624,9 +627,9 @@ mod tests {
 
     #[test]
     fn test_global_key_handler() {
-        use crate::events::keyboard::Code;
-        use crate::testing::input::KeyEventBuilder;
         use std::sync::atomic::{AtomicBool, Ordering};
+
+        use crate::{events::keyboard::Code, testing::input::KeyEventBuilder};
 
         let manager = FocusManager::new();
 
@@ -648,9 +651,9 @@ mod tests {
 
     #[test]
     fn test_global_handler_priority() {
-        use crate::events::keyboard::Code;
-        use crate::testing::input::KeyEventBuilder;
         use std::sync::atomic::{AtomicBool, Ordering};
+
+        use crate::{events::keyboard::Code, testing::input::KeyEventBuilder};
 
         let manager = FocusManager::new();
         let node = FocusNodeId::new(1);
@@ -688,9 +691,9 @@ mod tests {
 
     #[test]
     fn test_global_handler_passthrough() {
-        use crate::events::keyboard::Code;
-        use crate::testing::input::KeyEventBuilder;
         use std::sync::atomic::{AtomicBool, Ordering};
+
+        use crate::{events::keyboard::Code, testing::input::KeyEventBuilder};
 
         let manager = FocusManager::new();
         let node = FocusNodeId::new(1);
@@ -727,9 +730,9 @@ mod tests {
 
     #[test]
     fn test_clear_global_key_handlers() {
-        use crate::events::keyboard::Code;
-        use crate::testing::input::KeyEventBuilder;
         use std::sync::atomic::{AtomicBool, Ordering};
+
+        use crate::{events::keyboard::Code, testing::input::KeyEventBuilder};
 
         let manager = FocusManager::new();
 

@@ -1,11 +1,11 @@
 //! Windows display implementation
 
-use crate::traits::{DisplayId, PlatformDisplay};
-use flui_types::geometry::{Bounds, DevicePixels, Point, Size};
 use std::sync::Arc;
-use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Gdi::*;
-use windows::Win32::UI::HiDpi::*;
+
+use flui_types::geometry::{Bounds, DevicePixels, Point, Size};
+use windows::Win32::{Foundation::*, Graphics::Gdi::*, UI::HiDpi::*};
+
+use crate::traits::{DisplayId, PlatformDisplay};
 
 /// Windows display implementation
 pub struct WindowsDisplay {
@@ -118,22 +118,24 @@ pub fn enumerate_displays() -> Vec<Arc<dyn PlatformDisplay>> {
             _rect: *mut RECT,
             lparam: LPARAM,
         ) -> BOOL {
-            let displays = &mut *(lparam.0 as *mut Vec<Arc<dyn PlatformDisplay>>);
+            unsafe {
+                let displays = &mut *(lparam.0 as *mut Vec<Arc<dyn PlatformDisplay>>);
 
-            let mut monitor_info: MONITORINFOEXW = std::mem::zeroed();
-            monitor_info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+                let mut monitor_info: MONITORINFOEXW = std::mem::zeroed();
+                monitor_info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
 
-            if GetMonitorInfoW(hmonitor, &mut monitor_info.monitorInfo as *mut _ as *mut _)
-                .as_bool()
-            {
-                // MONITORINFOF_PRIMARY = 1
-                let is_primary = (monitor_info.monitorInfo.dwFlags & 1) != 0;
+                if GetMonitorInfoW(hmonitor, &mut monitor_info.monitorInfo as *mut _ as *mut _)
+                    .as_bool()
+                {
+                    // MONITORINFOF_PRIMARY = 1
+                    let is_primary = (monitor_info.monitorInfo.dwFlags & 1) != 0;
 
-                let display = Arc::new(WindowsDisplay::new(hmonitor, is_primary));
-                displays.push(display);
+                    let display = Arc::new(WindowsDisplay::new(hmonitor, is_primary));
+                    displays.push(display);
+                }
+
+                TRUE
             }
-
-            TRUE
         }
 
         let _ = EnumDisplayMonitors(

@@ -59,6 +59,34 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/flui-semantics/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/flui-view/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/crates/flui_rendering/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-app/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-app/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-assets/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-assets/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-devtools/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-devtools/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-engine/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-hot-reload/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-interaction/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-layer/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-log/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-log/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-painting/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-painting/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-painting/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-platform/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-platform/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-rendering/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-rendering/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-rendering/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-types/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-types/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-types/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-types/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/desktop_scene/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/painting_demo/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/web_demo/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/tools/web-server/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/demos/counter/target" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>

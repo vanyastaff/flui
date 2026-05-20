@@ -6,11 +6,15 @@
 //! - Managing GlobalKey registry
 //! - Coordinating InheritedElement lookups
 
-use crate::tree::ElementTree;
+use std::{
+    any::TypeId,
+    cmp::Reverse,
+    collections::{BinaryHeap, HashMap},
+};
+
 use flui_foundation::ElementId;
-use std::any::TypeId;
-use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap};
+
+use crate::tree::ElementTree;
 
 /// Entry in the dirty elements heap.
 ///
@@ -191,8 +195,8 @@ impl BuildOwner {
 
     /// Add an element to the inactive list.
     ///
-    /// Called when an element is deactivated (e.g., its parent rebuilds without it).
-    /// The element will be unmounted in `finalize_tree()`.
+    /// Called when an element is deactivated (e.g., its parent rebuilds without
+    /// it). The element will be unmounted in `finalize_tree()`.
     pub fn add_to_inactive(&mut self, id: ElementId, depth: usize) {
         self.inactive_elements.push(InactiveElement { id, depth });
     }
@@ -363,10 +367,10 @@ impl Drop for BuildScopeGuard<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tree::ElementTree;
-    use crate::{Lifecycle, View};
+    use crate::{Lifecycle, View, tree::ElementTree};
 
-    /// A leaf element that doesn't create children (prevents infinite recursion)
+    /// A leaf element that doesn't create children (prevents infinite
+    /// recursion)
     struct LeafElement {
         depth: usize,
         lifecycle: Lifecycle,

@@ -1,13 +1,15 @@
 //! Unit conversion example for flui_types
 //!
-//! This example demonstrates the layout-to-render pipeline with unit conversions:
+//! This example demonstrates the layout-to-render pipeline with unit
+//! conversions:
 //! - Pixels: Logical units used in layout (density-independent)
 //! - DevicePixels: Physical pixels on the screen (GPU coordinates)
 //! - ScaledPixels: Intermediate representation for scaling operations
 //!
-//! This showcases how FLUI handles different display densities (1x, 2x retina, 1.5x, etc.)
+//! This showcases how FLUI handles different display densities (1x, 2x retina,
+//! 1.5x, etc.)
 
-use flui_types::geometry::{device_px, px, Point, Rect, Size};
+use flui_types::geometry::{DevicePixels, Point, Rect, Size, device_px, px};
 
 fn main() {
     println!("=== FLUI Unit Conversions: Layout to Render Pipeline ===\n");
@@ -76,11 +78,15 @@ fn responsive_button_example() {
 
     // Render on different displays
     for (scale, name) in [(1.0, "1x"), (1.5, "1.5x"), (2.0, "2x"), (3.0, "3x")] {
-        let device_rect = Rect::from_xywh(
-            button_rect.left().to_device_pixels(scale),
-            button_rect.top().to_device_pixels(scale),
-            button_rect.width().to_device_pixels(scale),
-            button_rect.height().to_device_pixels(scale),
+        let device_rect = Rect::<DevicePixels>::from_origin_size(
+            Point::new(
+                button_rect.left().to_device_pixels(scale),
+                button_rect.top().to_device_pixels(scale),
+            ),
+            Size::new(
+                button_rect.width().to_device_pixels(scale),
+                button_rect.height().to_device_pixels(scale),
+            ),
         );
 
         println!(
@@ -102,11 +108,15 @@ fn gpu_pipeline_example() {
 
     // Step 2: Convert to device pixels for GPU
     let scale = 2.0; // Retina display
-    let gpu_viewport = Rect::from_xywh(
-        viewport.left().to_device_pixels(scale),
-        viewport.top().to_device_pixels(scale),
-        viewport.width().to_device_pixels(scale),
-        viewport.height().to_device_pixels(scale),
+    let gpu_viewport = Rect::<DevicePixels>::from_origin_size(
+        Point::new(
+            viewport.left().to_device_pixels(scale),
+            viewport.top().to_device_pixels(scale),
+        ),
+        Size::new(
+            viewport.width().to_device_pixels(scale),
+            viewport.height().to_device_pixels(scale),
+        ),
     );
     println!("   2. GPU: Framebuffer = {:?}", gpu_viewport);
     println!(
@@ -117,11 +127,15 @@ fn gpu_pipeline_example() {
 
     // Step 3: Scissor rect for clipping (must be in device pixels)
     let clip_rect_logical = Rect::from_xywh(px(100.0), px(100.0), px(200.0), px(150.0));
-    let scissor_rect = Rect::from_xywh(
-        clip_rect_logical.left().to_device_pixels(scale),
-        clip_rect_logical.top().to_device_pixels(scale),
-        clip_rect_logical.width().to_device_pixels(scale),
-        clip_rect_logical.height().to_device_pixels(scale),
+    let scissor_rect = Rect::<DevicePixels>::from_origin_size(
+        Point::new(
+            clip_rect_logical.left().to_device_pixels(scale),
+            clip_rect_logical.top().to_device_pixels(scale),
+        ),
+        Size::new(
+            clip_rect_logical.width().to_device_pixels(scale),
+            clip_rect_logical.height().to_device_pixels(scale),
+        ),
     );
     println!("   3. Scissor: Clip region = {:?}", scissor_rect);
 

@@ -3,8 +3,9 @@
 //! Comprehensive tests for display/monitor enumeration with DPI-aware bounds,
 //! refresh rates, and multi-monitor support.
 
-use flui_platform::current_platform;
 use std::collections::HashSet;
+
+use flui_platform::current_platform;
 
 fn init_tracing() {
     let _ = tracing_subscriber::fmt()
@@ -13,7 +14,8 @@ fn init_tracing() {
         .try_init();
 }
 
-/// Test that platform.displays() returns all connected displays with valid properties
+/// Test that platform.displays() returns all connected displays with valid
+/// properties
 #[test]
 fn test_displays_enumeration() {
     init_tracing();
@@ -227,7 +229,8 @@ fn test_high_dpi_scale_factor() {
     }
 }
 
-/// Test that display.usable_bounds() correctly excludes taskbar and menu bar areas
+/// Test that display.usable_bounds() correctly excludes taskbar and menu bar
+/// areas
 #[test]
 fn test_usable_bounds_exclude_system_ui() {
     init_tracing();
@@ -405,7 +408,8 @@ fn test_macos_nsscreen_enumeration() {
     tracing::info!("⊘ SKIP: macOS-specific test (not on macOS)");
 }
 
-/// Test that display bounds don't overlap incorrectly in multi-monitor configurations
+/// Test that display bounds don't overlap incorrectly in multi-monitor
+/// configurations
 #[test]
 fn test_multi_monitor_bounds_arrangement() {
     init_tracing();
@@ -553,7 +557,8 @@ fn test_scale_factor_changed_event() {
     tracing::info!("  - Verify WindowEvent::ScaleFactorChanged fires");
 }
 
-/// Benchmark display enumeration latency to ensure it's under 10ms even with multiple monitors
+/// Benchmark display enumeration latency to ensure it's under 10ms even with
+/// multiple monitors
 #[test]
 fn test_display_enumeration_performance() {
     init_tracing();

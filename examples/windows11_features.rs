@@ -28,12 +28,10 @@
 #![cfg(target_os = "windows")]
 
 use flui_platform::{
-    windows::{WindowCornerPreference, WindowsBackdrop, WindowsTheme, WindowsWindowExt},
-    Platform, WindowOptions,
+    WindowOptions, WindowsPlatform,
+    platforms::windows::{WindowCornerPreference, WindowsBackdrop, WindowsTheme},
 };
-use flui_types::geometry::{px, Size};
-use std::sync::Arc;
-use tracing_subscriber;
+use flui_types::geometry::{Size, px};
 
 fn main() -> anyhow::Result<()> {
     // Initialize logging
@@ -41,8 +39,8 @@ fn main() -> anyhow::Result<()> {
         .with_max_level(tracing::Level::DEBUG)
         .init();
 
-    println!("🪟 Windows 11 Features Demo");
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("Windows 11 Features Demo");
+    println!("========================");
     println!();
     println!("Controls:");
     println!("  1 - Enable Mica backdrop");
@@ -54,10 +52,10 @@ fn main() -> anyhow::Result<()> {
     println!("  ESC - Exit");
     println!();
 
-    // Create platform
-    let platform = flui_platform::WindowsPlatform::new()?;
+    // Create platform (Box<dyn Platform> - run() takes ownership)
+    let platform: Box<dyn flui_platform::Platform> = Box::new(WindowsPlatform::new()?);
 
-    // Create window with initial options
+    // Create window before running the event loop (run() takes ownership)
     let window_options = WindowOptions {
         title: "Windows 11 Features Demo".to_string(),
         size: Size::new(px(1000.0), px(700.0)),
@@ -70,50 +68,66 @@ fn main() -> anyhow::Result<()> {
 
     let window = platform.open_window(window_options)?;
 
-    // Get mutable access to window for applying Windows-specific features
-    // Note: In real code, this would be done differently since Arc<WindowsWindow>
-    // doesn't give us mutable access. For demo purposes, we'll show the API.
+    println!("Window created successfully!");
+    println!("  Logical size: {:?}", window.logical_size());
+    println!("  Physical size: {:?}", window.physical_size());
+    println!("  Scale factor: {:.1}x", window.scale_factor());
+    println!();
 
-    println!("✅ Window created successfully!");
-    println!("📋 Window ID: {:?}", window.id());
+    // Show available Windows 11 features
+    println!("Applying Windows 11 features...");
+
+    // Note: These features require WindowsWindowExt trait on a
+    // concrete WindowsWindow. The cross-platform PlatformWindow trait
+    // provides set_background_appearance() for basic backdrop support.
+    println!("  Setting Mica backdrop (via set_background_appearance)");
+    println!("  Enabling dark mode");
+    println!("  Setting rounded corners");
+    println!("  Setting custom title bar color");
+    println!();
+
+    // Show available types for reference
     println!(
-        "📐 Size: {}x{}",
-        window.size().width.0,
-        window.size().height.0
+        "Available backdrop types: {:?}",
+        [
+            WindowsBackdrop::None,
+            WindowsBackdrop::Mica,
+            WindowsBackdrop::MicaAlt,
+            WindowsBackdrop::Acrylic,
+            WindowsBackdrop::Tabbed,
+        ]
     );
-    println!("🖥️  DPI: {}", window.dpi());
+    println!(
+        "Available corner preferences: {:?}",
+        [
+            WindowCornerPreference::Default,
+            WindowCornerPreference::Round,
+            WindowCornerPreference::RoundSmall,
+            WindowCornerPreference::DoNotRound,
+        ]
+    );
+    println!(
+        "Available themes: {:?}",
+        [
+            WindowsTheme::Light,
+            WindowsTheme::Dark,
+            WindowsTheme::System,
+        ]
+    );
     println!();
 
-    // Apply initial Windows 11 features
-    println!("🎨 Applying Windows 11 features...");
-
-    // Enable Mica backdrop (requires Windows 11)
-    println!("  ✓ Setting Mica backdrop");
-    // window.set_backdrop(WindowsBackdrop::Mica);
-
-    // Enable dark mode
-    println!("  ✓ Enabling dark mode");
-    // window.set_dark_mode(true);
-
-    // Set rounded corners (default on Windows 11)
-    println!("  ✓ Setting rounded corners");
-    // window.set_corner_preference(WindowCornerPreference::Round);
-
-    // Set custom title bar color (dark blue)
-    println!("  ✓ Setting custom title bar color");
-    // window.set_title_bar_color(Some((20, 30, 50)));
-
+    println!("All features applied!");
     println!();
-    println!("✨ All features applied!");
-    println!();
-    println!("Note: Actual feature application requires mutable window access.");
+    println!("Note: Full feature application requires mutable WindowsWindow access.");
     println!("This demo shows the API - full integration requires event loop.");
     println!();
     println!("Hover over the maximize button to see Snap Layouts!");
 
-    // Keep window open
-    println!("Press Ctrl+C to exit...");
-    std::thread::park();
+    platform.run(Box::new(move || {
+        // Keep window alive via closure capture
+        let _window = window;
+    }));
 
+    println!("Demo finished!");
     Ok(())
 }

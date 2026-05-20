@@ -19,6 +19,7 @@ desktop = []
 android = []
 ios = []
 web = []
+winit-backend = ["winit", "ui-events-winit"]
 
 # === Debug Features ===
 debug-overlay = []
@@ -37,16 +38,29 @@ flui-layer = { path = "../flui-layer" }
 flui-semantics = { path = "../flui-semantics" }
 flui-engine = { path = "../flui-engine" }
 flui-log = { path = "../flui-log" }
+flui-platform = { path = "../flui-platform" }
+flui-hot-reload = { path = "../flui-hot-reload" }
 
-# Windowing (desktop)
-winit = { workspace = true }
-ui-events-winit = { workspace = true }
+# Windowing (legacy winit backend, optional)
+winit = { workspace = true, optional = true }
+ui-events-winit = { workspace = true, optional = true }
 
 # Utilities
 tracing.workspace = true
 parking_lot.workspace = true
 thiserror.workspace = true
-dpi = "0.1.2"
+anyhow.workspace = true
+raw-window-handle.workspace = true
 pollster = "0.4"
+web-time = "1.1"
+
+# Web/WASM platform
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+
+# Android platform (android_main entry point needs AndroidApp type)
+[target.'cfg(target_os = "android")'.dependencies]
+android-activity = { version = "0.6", features = ["native-activity"] }
 
 [dev-dependencies]

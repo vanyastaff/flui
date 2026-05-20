@@ -8,9 +8,10 @@
 //! # Example
 //!
 //! ```rust
+//! use std::path::Path;
+//!
 //! #[cfg(feature = "hot-reload")]
 //! use flui_devtools::hot_reload::HotReloader;
-//! use std::path::Path;
 //!
 //! #[cfg(feature = "hot-reload")]
 //! {
@@ -33,13 +34,16 @@
 //! }
 //! ```
 
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
+
 use notify::{
     Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Result as NotifyResult, Watcher,
 };
 use parking_lot::RwLock;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Duration;
 
 /// Hot reloader for watching file changes
 ///
@@ -82,15 +86,17 @@ impl HotReloader {
     ///
     /// # Arguments
     ///
-    /// - `debounce`: How long to wait after a change before triggering the callback
+    /// - `debounce`: How long to wait after a change before triggering the
+    ///   callback
     ///
     /// # Example
     ///
     /// ```rust
     /// # #[cfg(feature = "hot-reload")]
     /// # {
-    /// use flui_devtools::hot_reload::HotReloader;
     /// use std::time::Duration;
+    ///
+    /// use flui_devtools::hot_reload::HotReloader;
     ///
     /// let reloader = HotReloader::with_debounce(Duration::from_millis(1000));
     /// # }
@@ -379,9 +385,12 @@ impl std::fmt::Debug for WatchHandle {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+
     use super::*;
-    use std::fs;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn test_hot_reloader_creation() {

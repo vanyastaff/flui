@@ -39,6 +39,117 @@ impl AndroidBuilder {
     }
 }
 
+/// Scene plugin build/deploy methods for hot-reload workflow.
+///
+/// These methods are separate from the `PlatformBuilder` trait because they
+/// operate on a scene plugin crate (cdylib), not the host application.
+impl AndroidBuilder {
+    /// Build a scene plugin crate as a cdylib `.so` for the given Android target.
+    ///
+    /// Returns the path to the compiled `.so` file in the target directory.
+    ///
+    /// # Arguments
+    ///
+    /// * `target` - Android target triple (e.g., "arm64-v8a")
+    /// * `scene_crate` - Package name of the scene crate (e.g., "flui-android-scene")
+    /// * `release` - Whether to build in release mode
+    pub async fn build_scene_plugin(
+        &self,
+        target: &str,
+        scene_crate: &str,
+        release: bool,
+    ) -> BuildResult<PathBuf> {
+        tracing::info!("Building scene plugin '{}' for {}", scene_crate, target);
+
+        let mut args = vec![
+            "ndk".to_string(),
+            "-t".to_string(),
+            target.to_string(),
+            "build".to_string(),
+            "-p".to_string(),
+            scene_crate.to_string(),
+        ];
+
+        if release {
+            args.push("--release".to_string());
+        }
+
+        let args_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        process::run_command("cargo", &args_refs).await?;
+
+        // Map cargo-ndk target name to Rust target triple
+        let rust_target = match target {
+            "arm64-v8a" => "aarch64-linux-android",
+            "armeabi-v7a" => "armv7-linux-androideabi",
+            "x86_64" => "x86_64-linux-android",
+            "x86" => "i686-linux-android",
+            other => other,
+        };
+
+        let profile_dir = if release { "release" } else { "debug" };
+
+        // Find the .so file — scene crates produce lib{name}.so
+        let target_dir = self
+            .workspace_root
+            .join("target")
+            .join(rust_target)
+            .join(profile_dir);
+
+        // Look for any .so file matching the scene crate's lib name
+        let so_path = std::fs::read_dir(&target_dir)
+            .map_err(|_| BuildError::path_not_found(target_dir.clone(), "target output dir"))?
+            .filter_map(std::result::Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.extension().is_some_and(|ext| ext == "so")
+                    && path.file_name().is_some_and(|name| {
+                        let name = name.to_string_lossy();
+                        name.starts_with("lib") && name.contains("scene")
+                    })
+            })
+            .ok_or_else(|| {
+                BuildError::path_not_found(target_dir, "scene plugin .so not found in target dir")
+            })?;
+
+        tracing::info!("Scene plugin built: {:?}", so_path);
+        Ok(so_path)
+    }
+
+    /// Push a compiled scene plugin `.so` to a connected Android device.
+    ///
+    /// Uses `adb push` to `/data/local/tmp/` then `adb shell run-as` to copy
+    /// into the app's internal data directory (required by SELinux).
+    ///
+    /// # Arguments
+    ///
+    /// * `so_path` - Local path to the `.so` file
+    /// * `package` - Android package name (e.g., "com.vanya.flui.counter")
+    /// * `lib_name` - Library filename on device (e.g., "libflui_scene.so")
+    pub async fn push_scene_plugin(
+        &self,
+        so_path: &Path,
+        package: &str,
+        lib_name: &str,
+    ) -> BuildResult<()> {
+        let so_str = so_path
+            .to_str()
+            .ok_or_else(|| BuildError::Other(format!("Invalid path: {:?}", so_path)))?;
+
+        let tmp_path = format!("/data/local/tmp/{lib_name}");
+        let app_path = format!("/data/data/{package}/files/{lib_name}");
+
+        // Push to /data/local/tmp/
+        process::run_command("adb", &["push", so_str, &tmp_path]).await?;
+
+        // Copy into app's data directory (SELinux requires app_data_file context)
+        let cp_cmd = format!("cp {tmp_path} {app_path}");
+        process::run_command("adb", &["shell", "run-as", package, "sh", "-c", &cp_cmd]).await?;
+
+        tracing::info!("Scene plugin pushed to device: {}", app_path);
+        Ok(())
+    }
+}
+
 impl private::Sealed for AndroidBuilder {}
 
 impl PlatformBuilder for AndroidBuilder {

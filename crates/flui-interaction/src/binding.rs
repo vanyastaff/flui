@@ -55,7 +55,8 @@
 //!
 //! 1. **Pointer Down**: Hit test → cache result → dispatch → close arena
 //! 2. **Pointer Move**: Use cached hit test → dispatch (coalesced)
-//! 3. **Pointer Up/Cancel**: Use cached hit test → dispatch → sweep arena → clear cache
+//! 3. **Pointer Up/Cancel**: Use cached hit test → dispatch → sweep arena →
+//!    clear cache
 //!
 //! # Example
 //!
@@ -75,22 +76,25 @@
 //! }
 //! ```
 
-use crate::arena::GestureArena;
-use crate::ids::PointerId;
-use crate::routing::{HitTestResult, PointerRouter};
-use crate::settings::GestureSettings;
 use dashmap::DashMap;
-use flui_foundation::{impl_binding_singleton, BindingBase};
-use flui_types::geometry::Offset;
-use flui_types::geometry::Pixels;
+use flui_foundation::{BindingBase, impl_binding_singleton};
+use flui_types::geometry::{Offset, Pixels};
 use ui_events::pointer::{PointerEvent, PointerType};
+
+use crate::{
+    arena::GestureArena,
+    ids::PointerId,
+    routing::{HitTestResult, PointerRouter},
+    settings::GestureSettings,
+};
 
 /// Central coordinator for gesture event handling (singleton).
 ///
 /// GestureBinding manages the complete lifecycle of pointer events:
 /// - Performs hit testing on pointer down
 /// - Caches hit test results for subsequent events
-/// - Coalesces high-frequency pointer move events (100+ events/sec → 1 per frame)
+/// - Coalesces high-frequency pointer move events (100+ events/sec → 1 per
+///   frame)
 /// - Routes events through the PointerRouter
 /// - Manages arena lifecycle (close on down, sweep on up)
 ///
@@ -220,7 +224,8 @@ impl GestureBinding {
     /// # Arguments
     ///
     /// * `event` - The pointer event to handle
-    /// * `hit_test_fn` - Function to perform hit testing (called on pointer down)
+    /// * `hit_test_fn` - Function to perform hit testing (called on pointer
+    ///   down)
     ///
     /// # Example
     ///
@@ -483,8 +488,9 @@ impl std::fmt::Debug for GestureBinding {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_foundation::HasInstance;
+
+    use super::*;
 
     #[test]
     fn test_binding_singleton() {

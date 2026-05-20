@@ -14,31 +14,40 @@
 //! The architecture uses winit 0.30's `ApplicationHandler` trait to manage
 //! the event loop without consuming ownership.
 
-use super::clipboard::ArboardClipboard;
-use super::display::WinitDisplay;
-use super::window_requests::{WindowRequest, WindowRequestQueue};
-use crate::shared::PlatformHandlers;
-use crate::traits::{
-    Clipboard, DesktopCapabilities, Platform, PlatformCapabilities, PlatformDisplay,
-    PlatformExecutor, PlatformTextSystem, PlatformWindow, WindowEvent, WindowId, WindowOptions,
-    WinitWindow,
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use anyhow::Result;
+use keyboard_types::Modifiers as KeyboardModifiers;
 use parking_lot::Mutex;
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use winit::{
+    application::ApplicationHandler,
+    event::WindowEvent as WinitWindowEvent,
+    event_loop::{ActiveEventLoop, EventLoop},
+    window::{WindowAttributes, WindowId as WinitWindowId},
+};
 
-use winit::application::ApplicationHandler;
-use winit::event::WindowEvent as WinitWindowEvent;
-use winit::event_loop::{ActiveEventLoop, EventLoop};
-use winit::window::{WindowAttributes, WindowId as WinitWindowId};
+use super::{
+    clipboard::ArboardClipboard,
+    display::WinitDisplay,
+    events as winit_events,
+    window_requests::{WindowRequest, WindowRequestQueue},
+};
+use crate::{
+    shared::PlatformHandlers,
+    traits::{
+        Clipboard, DesktopCapabilities, Platform, PlatformCapabilities, PlatformDisplay,
+        PlatformExecutor, PlatformWindow, WindowEvent, WindowId, WindowOptions, WinitWindow,
+    },
+};
 
 /// Winit-based platform implementation
 ///
-/// This is the primary cross-platform implementation using winit for window management.
-/// It supports Windows, macOS, and Linux desktop environments.
+/// This is the primary cross-platform implementation using winit for window
+/// management. It supports Windows, macOS, and Linux desktop environments.
 ///
 /// # Usage
 ///
@@ -66,9 +75,6 @@ struct WinitPlatformState {
     /// Foreground executor
     foreground_executor: Arc<SimpleExecutor>,
 
-    /// Text system
-    text_system: Arc<SimpleTextSystem>,
-
     /// Clipboard
     clipboard: Arc<ArboardClipboard>,
 
@@ -78,8 +84,8 @@ struct WinitPlatformState {
     /// Map of winit window IDs to platform window IDs
     window_id_map: HashMap<WinitWindowId, WindowId>,
 
-    /// Map of platform window IDs to Arc<Window> for window creation
-    windows: HashMap<WindowId, Arc<winit::window::Window>>,
+    /// Map of platform window IDs to WinitWindow wrappers
+    windows: HashMap<WindowId, Arc<WinitWindow>>,
 
     /// Cached displays
     displays: Vec<Arc<WinitDisplay>>,
@@ -95,6 +101,12 @@ struct WinitPlatformState {
 
     /// Whether quit was requested
     should_quit: bool,
+
+    /// Current cursor position per window (physical)
+    cursor_positions: HashMap<WindowId, winit::dpi::PhysicalPosition<f64>>,
+
+    /// Current keyboard modifiers
+    current_modifiers: KeyboardModifiers,
 }
 
 impl WinitPlatformState {
@@ -110,7 +122,6 @@ impl WinitPlatformState {
             handlers: PlatformHandlers::new(),
             background_executor: Arc::new(SimpleExecutor::new("background")),
             foreground_executor: Arc::new(SimpleExecutor::new("foreground")),
-            text_system: Arc::new(SimpleTextSystem::new()),
             clipboard,
             window_requests: Arc::new(WindowRequestQueue::new()),
             window_id_map: HashMap::new(),
@@ -120,6 +131,8 @@ impl WinitPlatformState {
             next_window_id: 1,
             is_running: false,
             should_quit: false,
+            cursor_positions: HashMap::new(),
+            current_modifiers: KeyboardModifiers::empty(),
         }
     }
 
@@ -133,7 +146,7 @@ impl WinitPlatformState {
         &mut self,
         winit_id: WinitWindowId,
         platform_id: WindowId,
-        window: Arc<winit::window::Window>,
+        window: Arc<WinitWindow>,
     ) {
         self.window_id_map.insert(winit_id, platform_id);
         self.windows.insert(platform_id, window);
@@ -193,8 +206,8 @@ impl WinitPlatform {
 
     /// Create and run the event loop
     ///
-    /// This is the main entry point for the platform. It creates the event loop,
-    /// initializes the platform, and runs until quit is requested.
+    /// This is the main entry point for the platform. It creates the event
+    /// loop, initializes the platform, and runs until quit is requested.
     pub fn run_event_loop(self: Arc<Self>, on_ready: Box<dyn FnOnce()>) -> Result<()> {
         tracing::info!("Creating winit event loop");
 
@@ -213,7 +226,8 @@ impl WinitPlatform {
 
 /// Application handler for winit event loop
 ///
-/// Implements `ApplicationHandler` to receive events from winit without consuming the event loop.
+/// Implements `ApplicationHandler` to receive events from winit without
+/// consuming the event loop.
 struct WinitApp {
     platform: Arc<WinitPlatform>,
     on_ready: Option<Box<dyn FnOnce()>>,
@@ -243,13 +257,15 @@ impl ApplicationHandler for WinitApp {
 
     fn window_event(
         &mut self,
-        event_loop: &ActiveEventLoop,
+        _event_loop: &ActiveEventLoop,
         window_id: WinitWindowId,
         event: WinitWindowEvent,
     ) {
-        let platform_id = self
-            .platform
-            .with_state(|state| state.get_platform_window_id(window_id));
+        let (platform_id, window) = self.platform.with_state(|state| {
+            let pid = state.get_platform_window_id(window_id);
+            let win = pid.and_then(|id| state.windows.get(&id).cloned());
+            (pid, win)
+        });
 
         let Some(platform_id) = platform_id else {
             tracing::warn!("Received event for unknown window");
@@ -260,20 +276,40 @@ impl ApplicationHandler for WinitApp {
             WinitWindowEvent::CloseRequested => {
                 tracing::info!(?platform_id, "Window close requested");
 
-                // Notify handler
+                // Ask the window if it should close
+                if window
+                    .as_ref()
+                    .is_some_and(|win| !win.callbacks().dispatch_should_close())
+                {
+                    return; // Vetoed
+                }
+
+                // Notify per-window close callback
+                if let Some(ref win) = window {
+                    win.callbacks().dispatch_close();
+                }
+
+                // Notify platform handler
                 self.platform.with_state(|state| {
                     state
                         .handlers
                         .invoke_window_event(WindowEvent::CloseRequested {
                             window_id: platform_id,
                         });
-                    state.should_quit = true;
-                });
 
-                event_loop.exit();
+                    // Remove window from tracking
+                    state.window_id_map.retain(|_, v| *v != platform_id);
+                    state.windows.remove(&platform_id);
+                    state.cursor_positions.remove(&platform_id);
+
+                    // Quit if no windows remain
+                    if state.windows.is_empty() {
+                        state.should_quit = true;
+                    }
+                });
             }
             WinitWindowEvent::Resized(physical_size) => {
-                use flui_types::geometry::{device_px, Size};
+                use flui_types::geometry::{Size, device_px, px};
 
                 let size = Size::new(
                     device_px(physical_size.width as i32),
@@ -282,7 +318,17 @@ impl ApplicationHandler for WinitApp {
 
                 tracing::debug!(?platform_id, ?size, "Window resized");
 
-                // Notify handler
+                // Dispatch per-window resize callback
+                if let Some(ref win) = window {
+                    let scale = win.scale_factor() as f32;
+                    let logical = Size::new(
+                        px(physical_size.width as f32 / scale),
+                        px(physical_size.height as f32 / scale),
+                    );
+                    win.callbacks().dispatch_resize(logical, scale);
+                }
+
+                // Notify platform handler
                 self.platform.with_state(|state| {
                     state.handlers.invoke_window_event(WindowEvent::Resized {
                         window_id: platform_id,
@@ -293,7 +339,12 @@ impl ApplicationHandler for WinitApp {
             WinitWindowEvent::RedrawRequested => {
                 tracing::trace!(?platform_id, "Redraw requested");
 
-                // Notify handler
+                // Dispatch per-window frame request callback
+                if let Some(ref win) = window {
+                    win.callbacks().dispatch_request_frame();
+                }
+
+                // Notify platform handler
                 self.platform.with_state(|state| {
                     state
                         .handlers
@@ -305,7 +356,13 @@ impl ApplicationHandler for WinitApp {
             WinitWindowEvent::Focused(focused) => {
                 tracing::debug!(?platform_id, ?focused, "Window focus changed");
 
-                // Update active window
+                // Update WinitWindow focus state
+                if let Some(ref win) = window {
+                    win.set_focused(focused);
+                    win.callbacks().dispatch_active_status_change(focused);
+                }
+
+                // Update active window in platform state
                 self.platform.with_state(|state| {
                     if focused {
                         state.active_window = Some(platform_id);
@@ -332,6 +389,88 @@ impl ApplicationHandler for WinitApp {
                             scale_factor,
                         });
                 });
+            }
+            WinitWindowEvent::CursorMoved { position, .. } => {
+                let modifiers = self.platform.with_state(|state| {
+                    state.cursor_positions.insert(platform_id, position);
+                    state.current_modifiers
+                });
+
+                if let Some(ref win) = window {
+                    let scale = win.scale_factor();
+                    let input = winit_events::cursor_moved_event(position, scale, modifiers);
+                    win.callbacks().dispatch_input(input);
+                }
+            }
+            WinitWindowEvent::MouseInput { state, button, .. } => {
+                let (modifiers, cursor_pos) = self.platform.with_state(|s| {
+                    (
+                        s.current_modifiers,
+                        s.cursor_positions
+                            .get(&platform_id)
+                            .copied()
+                            .unwrap_or(winit::dpi::PhysicalPosition::new(0.0, 0.0)),
+                    )
+                });
+
+                if let Some(ref win) = window {
+                    let scale = win.scale_factor();
+                    let input = winit_events::mouse_button_event(
+                        button, state, cursor_pos, scale, modifiers,
+                    );
+                    win.callbacks().dispatch_input(input);
+                }
+            }
+            WinitWindowEvent::MouseWheel { delta, .. } => {
+                let (modifiers, cursor_pos) = self.platform.with_state(|s| {
+                    (
+                        s.current_modifiers,
+                        s.cursor_positions
+                            .get(&platform_id)
+                            .copied()
+                            .unwrap_or(winit::dpi::PhysicalPosition::new(0.0, 0.0)),
+                    )
+                });
+
+                if let Some(ref win) = window {
+                    let scale = win.scale_factor();
+                    let input =
+                        winit_events::mouse_wheel_event(delta, cursor_pos, scale, modifiers);
+                    win.callbacks().dispatch_input(input);
+                }
+            }
+            WinitWindowEvent::KeyboardInput { event, .. } => {
+                let modifiers = self.platform.with_state(|s| s.current_modifiers);
+
+                if let Some(ref win) = window {
+                    let input = winit_events::keyboard_event(&event, modifiers);
+                    win.callbacks().dispatch_input(input);
+                }
+            }
+            WinitWindowEvent::ModifiersChanged(new_modifiers) => {
+                self.platform.with_state(|state| {
+                    state.current_modifiers = winit_events::convert_modifiers(new_modifiers);
+                });
+            }
+            WinitWindowEvent::CursorEntered { .. } => {
+                if let Some(ref win) = window {
+                    win.callbacks().dispatch_hover_status_change(true);
+                }
+            }
+            WinitWindowEvent::CursorLeft { .. } => {
+                if let Some(ref win) = window {
+                    win.callbacks().dispatch_hover_status_change(false);
+                }
+            }
+            WinitWindowEvent::Moved(_) => {
+                if let Some(ref win) = window {
+                    win.callbacks().dispatch_moved();
+                }
+            }
+            WinitWindowEvent::ThemeChanged(_) => {
+                if let Some(ref win) = window {
+                    win.callbacks().dispatch_appearance_changed();
+                }
             }
             _ => {}
         }
@@ -380,14 +519,26 @@ impl Platform for WinitPlatform {
         self.with_state(|state| state.foreground_executor.clone())
     }
 
-    fn text_system(&self) -> Arc<dyn PlatformTextSystem> {
-        self.with_state(|state| state.text_system.clone())
-    }
+    fn run(self: Box<Self>, on_ready: Box<dyn FnOnce()>) {
+        tracing::info!("Starting winit event loop via Platform::run()");
 
-    fn run(&self, _on_ready: Box<dyn FnOnce()>) {
-        // This method can't actually run the event loop because it takes &self
-        // Users should call run_event_loop() instead
-        panic!("Use WinitPlatform::run_event_loop() instead of Platform::run()");
+        let event_loop = match EventLoop::builder().build() {
+            Ok(el) => el,
+            Err(e) => {
+                tracing::error!("Failed to create winit event loop: {:?}", e);
+                return;
+            }
+        };
+
+        let platform = Arc::new(*self);
+        let mut app = WinitApp {
+            platform,
+            on_ready: Some(on_ready),
+        };
+
+        if let Err(e) = event_loop.run_app(&mut app) {
+            tracing::error!("Winit event loop error: {:?}", e);
+        }
     }
 
     fn quit(&self) {
@@ -396,15 +547,6 @@ impl Platform for WinitPlatform {
         self.with_state(|state| {
             state.should_quit = true;
             state.handlers.invoke_quit();
-        });
-    }
-
-    fn request_frame(&self) {
-        // Request redraw on all windows
-        self.with_state(|state| {
-            for window in state.windows.values() {
-                window.request_redraw();
-            }
         });
     }
 
@@ -429,21 +571,24 @@ impl Platform for WinitPlatform {
 
         tracing::debug!("Waiting for window creation response");
 
-        // Wait for the response (this will block until the event loop processes the request)
+        // Wait for the response (this will block until the event loop processes the
+        // request)
         let window_id = response_rx
             .recv()
             .map_err(|_| anyhow::anyhow!("Failed to receive window creation response"))??;
 
         tracing::info!(?window_id, "Window created successfully");
 
-        // Get the window from state and create WinitWindow wrapper
+        // Get the window from state
         self.with_state(|state| {
             state
                 .windows
                 .get(&window_id)
                 .ok_or_else(|| anyhow::anyhow!("Window not found in state"))
-                .map(|arc_window| {
-                    Box::new(WinitWindow::new(arc_window.clone())) as Box<dyn PlatformWindow>
+                .map(|win| {
+                    // Return an Arc<WinitWindow> wrapped in WinitWindowHandle
+                    // so the caller gets a Box<dyn PlatformWindow>
+                    Box::new(WinitWindowHandle { inner: win.clone() }) as Box<dyn PlatformWindow>
                 })
         })
     }
@@ -584,19 +729,32 @@ impl WinitApp {
         event_loop: &ActiveEventLoop,
         options: WindowOptions,
     ) -> Result<WindowId> {
-        let attributes = WindowAttributes::default()
+        let mut attributes = WindowAttributes::default()
             .with_title(options.title)
             .with_inner_size(winit::dpi::LogicalSize::new(
                 options.size.width.0,
                 options.size.height.0,
-            ));
+            ))
+            .with_resizable(options.resizable)
+            .with_decorations(options.decorated)
+            .with_visible(options.visible);
 
-        let window = Arc::new(event_loop.create_window(attributes)?);
-        let winit_id = window.id();
+        if let Some(min) = options.min_size {
+            attributes = attributes
+                .with_min_inner_size(winit::dpi::LogicalSize::new(min.width.0, min.height.0));
+        }
+        if let Some(max) = options.max_size {
+            attributes = attributes
+                .with_max_inner_size(winit::dpi::LogicalSize::new(max.width.0, max.height.0));
+        }
+
+        let raw_window = Arc::new(event_loop.create_window(attributes)?);
+        let winit_id = raw_window.id();
+        let winit_window = Arc::new(WinitWindow::new(raw_window));
 
         let platform_id = self.platform.with_state(|state| {
             let id = state.allocate_window_id();
-            state.register_window(winit_id, id, window.clone());
+            state.register_window(winit_id, id, winit_window.clone());
             id
         });
 
@@ -629,27 +787,118 @@ impl PlatformExecutor for SimpleExecutor {
     }
 }
 
-/// Simple text system implementation
-struct SimpleTextSystem;
+// ==================== Window Handle (delegates to Arc<WinitWindow>) ====================
 
-impl SimpleTextSystem {
-    fn new() -> Self {
-        Self
-    }
+/// A handle that delegates `PlatformWindow` through `Arc<WinitWindow>`.
+///
+/// This exists because `open_window()` returns `Box<dyn PlatformWindow>`
+/// while the platform internally stores `Arc<WinitWindow>`. The handle
+/// delegates all trait methods to the shared `WinitWindow`.
+struct WinitWindowHandle {
+    inner: Arc<WinitWindow>,
 }
 
-impl PlatformTextSystem for SimpleTextSystem {
-    fn default_font_family(&self) -> String {
-        #[cfg(target_os = "windows")]
-        return "Segoe UI".to_string();
+impl PlatformWindow for WinitWindowHandle {
+    fn physical_size(&self) -> flui_types::geometry::Size<flui_types::geometry::DevicePixels> {
+        self.inner.physical_size()
+    }
 
-        #[cfg(target_os = "macos")]
-        return "SF Pro Text".to_string();
+    fn logical_size(&self) -> flui_types::geometry::Size<flui_types::geometry::Pixels> {
+        self.inner.logical_size()
+    }
 
-        #[cfg(target_os = "linux")]
-        return "Ubuntu".to_string();
+    fn scale_factor(&self) -> f64 {
+        self.inner.scale_factor()
+    }
 
-        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-        return "sans-serif".to_string();
+    fn request_redraw(&self) {
+        self.inner.request_redraw();
+    }
+
+    fn is_focused(&self) -> bool {
+        self.inner.is_focused()
+    }
+
+    fn is_visible(&self) -> bool {
+        self.inner.is_visible()
+    }
+
+    fn set_title(&self, title: &str) {
+        self.inner.set_title(title);
+    }
+
+    fn minimize(&self) {
+        self.inner.minimize();
+    }
+
+    fn maximize(&self) {
+        self.inner.maximize();
+    }
+
+    fn restore(&self) {
+        self.inner.restore();
+    }
+
+    fn toggle_fullscreen(&self) {
+        self.inner.toggle_fullscreen();
+    }
+
+    fn close(&self) {
+        self.inner.close();
+    }
+
+    fn on_input(
+        &self,
+        callback: Box<
+            dyn FnMut(crate::traits::PlatformInput) -> crate::traits::DispatchEventResult + Send,
+        >,
+    ) {
+        self.inner.on_input(callback);
+    }
+
+    fn on_request_frame(&self, callback: Box<dyn FnMut() + Send>) {
+        self.inner.on_request_frame(callback);
+    }
+
+    fn on_resize(
+        &self,
+        callback: Box<
+            dyn FnMut(flui_types::geometry::Size<flui_types::geometry::Pixels>, f32) + Send,
+        >,
+    ) {
+        self.inner.on_resize(callback);
+    }
+
+    fn on_moved(&self, callback: Box<dyn FnMut() + Send>) {
+        self.inner.on_moved(callback);
+    }
+
+    fn on_close(&self, callback: Box<dyn FnOnce() + Send>) {
+        self.inner.on_close(callback);
+    }
+
+    fn on_should_close(&self, callback: Box<dyn FnMut() -> bool + Send>) {
+        self.inner.on_should_close(callback);
+    }
+
+    fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        self.inner.on_active_status_change(callback);
+    }
+
+    fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        self.inner.on_hover_status_change(callback);
+    }
+
+    fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
+        self.inner.on_appearance_changed(callback);
+    }
+
+    #[cfg(feature = "winit-backend")]
+    fn as_winit(&self) -> Option<&Arc<winit::window::Window>> {
+        self.inner.as_winit()
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }

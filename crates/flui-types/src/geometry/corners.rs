@@ -156,11 +156,7 @@ impl<T> Corners<T> {
         } else {
             self.bottom_right
         };
-        if h_max > v_max {
-            h_max
-        } else {
-            v_max
-        }
+        if h_max > v_max { h_max } else { v_max }
     }
 
     /// Returns the minimum value among all corners.
@@ -179,11 +175,7 @@ impl<T> Corners<T> {
         } else {
             self.bottom_right
         };
-        if h_min < v_min {
-            h_min
-        } else {
-            v_min
-        }
+        if h_min < v_min { h_min } else { v_min }
     }
 }
 
@@ -216,8 +208,9 @@ impl<T: Clone> super::traits::Along for Corners<T> {
     fn along(&self, axis: super::traits::Axis) -> Self::Unit {
         match axis {
             super::traits::Axis::Horizontal => {
-                // Top and bottom horizontal pairs (top-left/top-right, bottom-left/bottom-right)
-                // Return average or first pair - here we return top corners
+                // Top and bottom horizontal pairs (top-left/top-right,
+                // bottom-left/bottom-right) Return average or first pair - here
+                // we return top corners
                 (self.top_left.clone(), self.top_right.clone())
             }
             super::traits::Axis::Vertical => {

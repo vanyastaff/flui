@@ -1,10 +1,9 @@
 //! Axis and direction types for layout systems
 //!
-//! This module contains types for representing axes, directions, and orientation,
-//! similar to Flutter's axis system.
+//! This module contains types for representing axes, directions, and
+//! orientation, similar to Flutter's axis system.
 
-use crate::geometry::Pixels;
-use crate::Size;
+use crate::{Size, geometry::Pixels};
 
 /// The two cardinal directions in two dimensions.
 ///
@@ -110,15 +109,22 @@ impl Axis {
 
     /// Create a size with the given main and cross values.
     ///
-    /// The main value is along this axis, cross value is along the opposite axis.
+    /// The main value is along this axis, cross value is along the opposite
+    /// axis.
     ///
     /// # Examples
     ///
     /// ```
     /// use flui_types::{Axis, Size};
     ///
-    /// assert_eq!(Axis::Horizontal.make_size_with_cross(100.0, 50.0), Size::new(100.0, 50.0));
-    /// assert_eq!(Axis::Vertical.make_size_with_cross(100.0, 50.0), Size::new(50.0, 100.0));
+    /// assert_eq!(
+    ///     Axis::Horizontal.make_size_with_cross(100.0, 50.0),
+    ///     Size::new(100.0, 50.0)
+    /// );
+    /// assert_eq!(
+    ///     Axis::Vertical.make_size_with_cross(100.0, 50.0),
+    ///     Size::new(50.0, 100.0)
+    /// );
     /// ```
     #[inline]
     #[must_use]
@@ -131,7 +137,8 @@ impl Axis {
 
     /// Flip a size based on this axis.
     ///
-    /// Horizontal axis returns the size unchanged, vertical axis swaps width and height.
+    /// Horizontal axis returns the size unchanged, vertical axis swaps width
+    /// and height.
     ///
     /// # Examples
     ///
@@ -233,8 +240,14 @@ impl AxisDirection {
     /// ```
     /// use flui_types::layout::AxisDirection;
     ///
-    /// assert_eq!(AxisDirection::LeftToRight.opposite(), AxisDirection::RightToLeft);
-    /// assert_eq!(AxisDirection::TopToBottom.opposite(), AxisDirection::BottomToTop);
+    /// assert_eq!(
+    ///     AxisDirection::LeftToRight.opposite(),
+    ///     AxisDirection::RightToLeft
+    /// );
+    /// assert_eq!(
+    ///     AxisDirection::TopToBottom.opposite(),
+    ///     AxisDirection::BottomToTop
+    /// );
     /// ```
     #[inline]
     pub const fn opposite(self) -> Self {
@@ -279,7 +292,8 @@ impl AxisDirection {
         !self.is_positive()
     }
 
-    /// Check if this direction is reversed relative to the natural reading direction.
+    /// Check if this direction is reversed relative to the natural reading
+    /// direction.
     ///
     /// # Examples
     ///
@@ -310,11 +324,7 @@ impl AxisDirection {
     #[inline]
     #[must_use]
     pub const fn sign(self) -> f32 {
-        if self.is_positive() {
-            1.0
-        } else {
-            -1.0
-        }
+        if self.is_positive() { 1.0 } else { -1.0 }
     }
 
     /// Create from an axis and whether it's reversed.
@@ -324,8 +334,14 @@ impl AxisDirection {
     /// ```
     /// use flui_types::{Axis, layout::AxisDirection};
     ///
-    /// assert_eq!(AxisDirection::from_axis(Axis::Horizontal, false), AxisDirection::LeftToRight);
-    /// assert_eq!(AxisDirection::from_axis(Axis::Horizontal, true), AxisDirection::RightToLeft);
+    /// assert_eq!(
+    ///     AxisDirection::from_axis(Axis::Horizontal, false),
+    ///     AxisDirection::LeftToRight
+    /// );
+    /// assert_eq!(
+    ///     AxisDirection::from_axis(Axis::Horizontal, true),
+    ///     AxisDirection::RightToLeft
+    /// );
     /// ```
     #[inline]
     pub const fn from_axis(axis: Axis, reversed: bool) -> Self {
@@ -346,8 +362,14 @@ impl AxisDirection {
     /// ```
     /// use flui_types::layout::AxisDirection;
     ///
-    /// assert_eq!(AxisDirection::TopToBottom.flip(), AxisDirection::LeftToRight);
-    /// assert_eq!(AxisDirection::BottomToTop.flip(), AxisDirection::RightToLeft);
+    /// assert_eq!(
+    ///     AxisDirection::TopToBottom.flip(),
+    ///     AxisDirection::LeftToRight
+    /// );
+    /// assert_eq!(
+    ///     AxisDirection::BottomToTop.flip(),
+    ///     AxisDirection::RightToLeft
+    /// );
     /// ```
     #[inline]
     pub const fn flip(self) -> Self {
@@ -380,10 +402,16 @@ impl Orientation {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::{layout::Orientation, Size};
+    /// use flui_types::{Size, layout::Orientation};
     ///
-    /// assert_eq!(Orientation::from_size(Size::new(100.0, 200.0)), Orientation::Portrait);
-    /// assert_eq!(Orientation::from_size(Size::new(200.0, 100.0)), Orientation::Landscape);
+    /// assert_eq!(
+    ///     Orientation::from_size(Size::new(100.0, 200.0)),
+    ///     Orientation::Portrait
+    /// );
+    /// assert_eq!(
+    ///     Orientation::from_size(Size::new(200.0, 100.0)),
+    ///     Orientation::Landscape
+    /// );
     /// ```
     #[inline]
     #[must_use]
@@ -463,8 +491,14 @@ impl VerticalDirection {
     /// ```
     /// use flui_types::layout::{AxisDirection, VerticalDirection};
     ///
-    /// assert_eq!(VerticalDirection::Down.to_axis_direction(), AxisDirection::TopToBottom);
-    /// assert_eq!(VerticalDirection::Up.to_axis_direction(), AxisDirection::BottomToTop);
+    /// assert_eq!(
+    ///     VerticalDirection::Down.to_axis_direction(),
+    ///     AxisDirection::TopToBottom
+    /// );
+    /// assert_eq!(
+    ///     VerticalDirection::Up.to_axis_direction(),
+    ///     AxisDirection::BottomToTop
+    /// );
     /// ```
     #[inline]
     pub const fn to_axis_direction(self) -> AxisDirection {

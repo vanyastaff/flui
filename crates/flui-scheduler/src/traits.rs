@@ -15,10 +15,12 @@
 //! Extension traits add methods to types without modifying them.
 //! Similar to Kotlin extension functions or C# extension methods.
 
-use crate::budget::FrameBudget;
-use crate::duration::{FrameDuration, Milliseconds, Percentage, Seconds};
-use crate::frame::FrameTiming;
-use crate::task::Priority;
+use crate::{
+    budget::FrameBudget,
+    duration::{FrameDuration, Milliseconds, Percentage, Seconds},
+    frame::FrameTiming,
+    task::Priority,
+};
 
 // =============================================================================
 // Sealed Trait Pattern for Priority
@@ -107,7 +109,8 @@ pub trait PriorityExt {
     /// Check if this priority should be skipped under the given budget policy
     fn should_skip(&self, policy: crate::budget::BudgetPolicy) -> bool;
 
-    /// Get the minimum frame budget utilization at which this priority may be skipped
+    /// Get the minimum frame budget utilization at which this priority may be
+    /// skipped
     fn skip_threshold(&self) -> Percentage;
 
     /// Check if this priority is higher than another

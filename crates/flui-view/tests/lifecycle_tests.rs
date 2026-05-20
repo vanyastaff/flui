@@ -1,13 +1,17 @@
 //! Integration tests for Element lifecycle.
 //!
-//! Tests the lifecycle states and transitions: Initial → Active ⇄ Inactive → Defunct
+//! Tests the lifecycle states and transitions: Initial → Active ⇄ Inactive →
+//! Defunct
+
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+};
 
 use flui_view::{
     BuildContext, ElementBase, ElementTree, Lifecycle, StatefulBehavior, StatefulElement,
     StatefulView, StatelessBehavior, StatelessElement, StatelessView, View, ViewState,
 };
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
 
 // ============================================================================
 // Test Views with lifecycle tracking
@@ -193,7 +197,7 @@ fn test_stateful_element_dispose_called_on_unmount() {
         deactivated: Arc::new(AtomicUsize::new(0)),
     };
 
-    let mut element = StatefulElement::new(&view);
+    let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
     element.mount(None, 0);
 
     assert!(!disposed.load(Ordering::SeqCst));
@@ -212,7 +216,7 @@ fn test_stateful_element_deactivate_callback() {
         deactivated: deactivated.clone(),
     };
 
-    let mut element = StatefulElement::new(&view);
+    let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
     element.mount(None, 0);
 
     assert_eq!(deactivated.load(Ordering::SeqCst), 0);
@@ -231,7 +235,7 @@ fn test_stateful_element_activate_callback() {
         deactivated: Arc::new(AtomicUsize::new(0)),
     };
 
-    let mut element = StatefulElement::new(&view);
+    let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
     element.mount(None, 0);
     element.deactivate();
 
@@ -252,7 +256,7 @@ fn test_stateful_element_multiple_deactivate_activate_cycles() {
         deactivated: deactivated.clone(),
     };
 
-    let mut element = StatefulElement::new(&view);
+    let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
     element.mount(None, 0);
 
     // First cycle

@@ -5,11 +5,11 @@
 //! - T062: Event handler demo example (created separately)
 //! - T063: Event dispatch latency benchmarking (<5ms target)
 
-use flui_platform::{current_platform, WindowOptions};
-use flui_types::geometry::{px, Size};
 use std::time::Instant;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
+
+use flui_platform::{WindowOptions, current_platform};
+use flui_types::geometry::{Size, px};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Initialize tracing for tests
 fn init_tracing() {

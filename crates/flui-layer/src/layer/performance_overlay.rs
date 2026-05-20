@@ -3,9 +3,12 @@
 //! This module provides the PerformanceOverlayLayer for displaying
 //! performance metrics like frame timings, raster cache, and memory usage.
 
+use std::{
+    collections::VecDeque,
+    time::{Duration, Instant},
+};
+
 use flui_types::geometry::{Pixels, Rect};
-use std::collections::VecDeque;
-use std::time::{Duration, Instant};
 
 /// Performance statistics for frame timing
 ///
@@ -64,6 +67,7 @@ impl PerformanceStats {
         }
 
         let total: Duration = self.frame_times.iter().sum();
+        #[allow(clippy::cast_precision_loss)] // frame count will never exceed f32 mantissa range
         let avg_frame_time = total.as_secs_f32() / self.frame_times.len() as f32;
 
         if avg_frame_time > 0.0 {
@@ -80,7 +84,9 @@ impl PerformanceStats {
         }
 
         let total: Duration = self.frame_times.iter().sum();
-        total.as_secs_f32() * 1000.0 / self.frame_times.len() as f32
+        #[allow(clippy::cast_precision_loss)] // frame count will never exceed f32 mantissa range
+        let len = self.frame_times.len() as f32;
+        total.as_secs_f32() * 1000.0 / len
     }
 
     /// Get minimum frame time in milliseconds
@@ -88,8 +94,7 @@ impl PerformanceStats {
         self.frame_times
             .iter()
             .min()
-            .map(|d| d.as_secs_f32() * 1000.0)
-            .unwrap_or(0.0)
+            .map_or(0.0, |d| d.as_secs_f32() * 1000.0)
     }
 
     /// Get maximum frame time in milliseconds
@@ -97,8 +102,7 @@ impl PerformanceStats {
         self.frame_times
             .iter()
             .max()
-            .map(|d| d.as_secs_f32() * 1000.0)
-            .unwrap_or(0.0)
+            .map_or(0.0, |d| d.as_secs_f32() * 1000.0)
     }
 
     /// Get total frames rendered
@@ -423,8 +427,9 @@ impl Default for PerformanceOverlayLayer {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::px;
+
+    use super::*;
 
     #[test]
     fn test_performance_overlay_option_flags() {

@@ -8,15 +8,16 @@
 //! - **Scheduling strategy**: Customizable task execution policy
 //! - **Timings callbacks**: Frame performance reporting
 
-use crate::frame::FrameTiming;
-use crate::scheduler::Scheduler;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
+
 use flui_foundation::{BindingBase, HasInstance};
-
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
+
+use crate::{frame::FrameTiming, scheduler::Scheduler};
 
 // ============================================================================
 // Callback Type Aliases
@@ -151,8 +152,10 @@ pub enum PerformanceMode {
 /// # Example
 ///
 /// ```rust
-/// use flui_scheduler::config::{PerformanceModeRequestHandle, PerformanceMode};
-/// use flui_scheduler::Scheduler;
+/// use flui_scheduler::{
+///     Scheduler,
+///     config::{PerformanceMode, PerformanceModeRequestHandle},
+/// };
 ///
 /// let scheduler = Scheduler::new();
 ///

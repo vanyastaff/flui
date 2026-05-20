@@ -1,12 +1,11 @@
 //! Specialized parent data types - Table and Text layouts.
 
-use flui_types::Offset;
 use std::hash::{Hash, Hasher};
 
-use super::base::ParentData;
-
-use super::container_mixin::ContainerParentDataMixin;
 use flui_foundation::RenderId;
+use flui_types::Offset;
+
+use super::{base::ParentData, container_mixin::ContainerParentDataMixin};
 
 // ============================================================================
 // TABLE CELL PARENT DATA
@@ -121,7 +120,8 @@ impl Hash for TableCellParentData {
 
 /// Parent data for inline text spans in rich text.
 ///
-/// Combines container functionality (for inline spans) with text range information.
+/// Combines container functionality (for inline spans) with text range
+/// information.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextParentData {
     /// Offset from paragraph origin.

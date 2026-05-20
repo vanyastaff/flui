@@ -9,18 +9,22 @@
 //!
 //! Flutter reference: https://api.flutter.dev/flutter/gestures/MultiTapGestureRecognizer-class.html
 
-use super::recognizer::{GestureRecognizer, GestureRecognizerState};
-use flui_types::geometry::Pixels;
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
-use crate::arena::GestureArenaMember;
-use crate::events::{PointerEvent, PointerType};
-use crate::ids::PointerId;
-use crate::settings::GestureSettings;
-use flui_types::Offset;
+use flui_types::{Offset, geometry::Pixels};
 use parking_lot::Mutex;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+
+use super::recognizer::{GestureRecognizer, GestureRecognizerState};
+use crate::{
+    arena::GestureArenaMember,
+    events::{PointerEvent, PointerType},
+    ids::PointerId,
+    settings::GestureSettings,
+};
 
 /// Callback for multi-tap events
 pub type MultiTapCallback = Arc<dyn Fn(MultiTapDetails) + Send + Sync>;
@@ -143,7 +147,8 @@ impl MultiTapGestureRecognizer {
     ///
     /// # Arguments
     /// * `arena` - Gesture arena for conflict resolution
-    /// * `required_pointer_count` - Number of simultaneous pointers required (2, 3, 4, etc.)
+    /// * `required_pointer_count` - Number of simultaneous pointers required
+    ///   (2, 3, 4, etc.)
     ///
     /// # Panics
     ///
@@ -399,16 +404,16 @@ impl MultiTapGestureRecognizer {
     pub fn check_timeout(&self) -> bool {
         let mut state = self.gesture_state.lock();
 
-        if state.phase == MultiTapPhase::Collecting {
-            if let Some(first_time) = state.first_down_time {
-                let elapsed = Instant::now().duration_since(first_time);
-                if elapsed > self.max_time_window {
-                    // Timeout - cancel
-                    state.phase = MultiTapPhase::Cancelled;
-                    drop(state);
-                    self.handle_cancel();
-                    return true;
-                }
+        if state.phase == MultiTapPhase::Collecting
+            && let Some(first_time) = state.first_down_time
+        {
+            let elapsed = Instant::now().duration_since(first_time);
+            if elapsed > self.max_time_window {
+                // Timeout - cancel
+                state.phase = MultiTapPhase::Cancelled;
+                drop(state);
+                self.handle_cancel();
+                return true;
             }
         }
 

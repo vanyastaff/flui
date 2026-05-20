@@ -3,37 +3,39 @@
 //! This platform implementation runs without any actual windowing system,
 //! making it ideal for unit tests and CI environments.
 
-use crate::cursor::CursorStyle;
-use crate::shared::{PlatformHandlers, WindowCallbacks};
-use crate::traits::{
-    Clipboard, ClipboardItem, DesktopCapabilities, DispatchEventResult, Platform,
-    PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformInput, PlatformTextSystem,
-    PlatformWindow, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent,
-    WindowId, WindowOptions,
-};
+use std::{path::PathBuf, sync::Arc};
+
 use anyhow::Result;
 use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
 use parking_lot::Mutex;
-use std::path::PathBuf;
-use std::sync::Arc;
+
+use crate::{
+    cursor::CursorStyle,
+    shared::{PlatformHandlers, WindowCallbacks},
+    traits::{
+        Clipboard, ClipboardItem, DesktopCapabilities, DispatchEventResult, Platform,
+        PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformInput, PlatformWindow,
+        WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId,
+        WindowOptions,
+    },
+};
 
 /// Headless platform for testing
 ///
-/// This platform implementation doesn't create any real windows or graphics contexts.
-/// It's designed for:
+/// This platform implementation doesn't create any real windows or graphics
+/// contexts. It's designed for:
 /// - Unit tests that need a Platform implementation
 /// - CI environments without display servers
 /// - Benchmarking without rendering overhead
 pub struct HeadlessPlatform {
+    capabilities: DesktopCapabilities,
     state: Arc<Mutex<HeadlessState>>,
 }
 
 struct HeadlessState {
-    capabilities: DesktopCapabilities,
     handlers: PlatformHandlers,
     background_executor: Arc<TestExecutor>,
     foreground_executor: Arc<TestExecutor>,
-    text_system: Arc<MockTextSystem>,
     clipboard: Arc<MockClipboard>,
     active_window: Option<WindowId>,
     is_running: bool,
@@ -49,11 +51,9 @@ impl HeadlessPlatform {
     /// Create a new headless platform
     pub fn new() -> Self {
         let state = HeadlessState {
-            capabilities: DesktopCapabilities,
             handlers: PlatformHandlers::new(),
             background_executor: Arc::new(TestExecutor::new("background")),
             foreground_executor: Arc::new(TestExecutor::new("foreground")),
-            text_system: Arc::new(MockTextSystem),
             clipboard: Arc::new(MockClipboard::new()),
             active_window: None,
             is_running: false,
@@ -65,6 +65,7 @@ impl HeadlessPlatform {
         };
 
         Self {
+            capabilities: DesktopCapabilities,
             state: Arc::new(Mutex::new(state)),
         }
     }
@@ -93,11 +94,7 @@ impl Platform for HeadlessPlatform {
         self.with_state(|state| state.foreground_executor.clone())
     }
 
-    fn text_system(&self) -> Arc<dyn PlatformTextSystem> {
-        self.with_state(|state| state.text_system.clone())
-    }
-
-    fn run(&self, on_ready: Box<dyn FnOnce()>) {
+    fn run(self: Box<Self>, on_ready: Box<dyn FnOnce()>) {
         tracing::info!("Starting headless platform (no event loop)");
 
         self.with_state(|state| {
@@ -117,10 +114,6 @@ impl Platform for HeadlessPlatform {
             state.is_running = false;
             state.handlers.invoke_quit();
         });
-    }
-
-    fn request_frame(&self) {
-        // No-op in headless mode
     }
 
     fn open_window(&self, options: WindowOptions) -> Result<Box<dyn PlatformWindow>> {
@@ -164,7 +157,7 @@ impl Platform for HeadlessPlatform {
     }
 
     fn capabilities(&self) -> &dyn PlatformCapabilities {
-        unsafe { &*(&self.with_state(|state| state.capabilities) as *const _) }
+        &self.capabilities
     }
 
     fn name(&self) -> &'static str {
@@ -575,61 +568,6 @@ impl PlatformExecutor for TestExecutor {
     }
 }
 
-/// Mock text system
-struct MockTextSystem;
-
-impl PlatformTextSystem for MockTextSystem {
-    fn add_fonts(&self, _fonts: Vec<std::borrow::Cow<'static, [u8]>>) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    fn all_font_names(&self) -> Vec<String> {
-        vec!["Mock Sans".to_string()]
-    }
-
-    fn font_id(&self, _descriptor: &crate::traits::Font) -> anyhow::Result<crate::traits::FontId> {
-        Ok(crate::traits::FontId(0))
-    }
-
-    fn font_metrics(&self, _font_id: crate::traits::FontId) -> crate::traits::FontMetrics {
-        crate::traits::FontMetrics {
-            units_per_em: 1000,
-            ascent: 800.0,
-            descent: 200.0,
-            line_gap: 0.0,
-            underline_position: -100.0,
-            underline_thickness: 50.0,
-            cap_height: 700.0,
-            x_height: 500.0,
-        }
-    }
-
-    fn glyph_for_char(
-        &self,
-        _font_id: crate::traits::FontId,
-        ch: char,
-    ) -> Option<crate::traits::GlyphId> {
-        Some(crate::traits::GlyphId(ch as u32))
-    }
-
-    fn layout_line(
-        &self,
-        text: &str,
-        font_size: f32,
-        _runs: &[crate::traits::FontRun],
-    ) -> crate::traits::LineLayout {
-        let char_count = text.chars().count() as f32;
-        crate::traits::LineLayout {
-            font_size,
-            width: char_count * font_size * 0.6,
-            ascent: font_size * 0.8,
-            descent: font_size * 0.2,
-            runs: Vec::new(),
-            len: text.len(),
-        }
-    }
-}
-
 /// Mock clipboard with in-memory storage
 struct MockClipboard {
     content: Mutex<Option<String>>,
@@ -700,8 +638,9 @@ mod tests {
 
     #[test]
     fn test_on_input_callback() {
-        use crate::traits::{DispatchEventResult, PlatformInput};
         use std::sync::atomic::{AtomicBool, Ordering};
+
+        use crate::traits::{DispatchEventResult, PlatformInput};
 
         let window = MockWindow::new(WindowId(0), WindowOptions::default());
 
@@ -714,11 +653,14 @@ mod tests {
         }));
 
         // Inject a keyboard event
-        let event = PlatformInput::Keyboard(crate::traits::KeyboardEvent {
+        let event = PlatformInput::Keyboard(ui_events::keyboard::KeyboardEvent {
+            state: ui_events::keyboard::KeyState::Down,
             key: crate::traits::Key::Named(keyboard_types::NamedKey::Enter),
+            code: ui_events::keyboard::Code::Unidentified,
+            location: ui_events::keyboard::Location::Standard,
             modifiers: keyboard_types::Modifiers::empty(),
-            is_down: true,
-            is_repeat: false,
+            repeat: false,
+            is_composing: false,
         });
 
         window.inject_event(event);

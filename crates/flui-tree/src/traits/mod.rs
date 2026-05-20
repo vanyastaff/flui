@@ -44,6 +44,6 @@ mod write;
 pub use nav::{TreeNav, TreeNavExt};
 pub use node::{Node, NodeExt, NodeTypeInfo};
 pub use read::{
-    collect_matching_nodes, count_matching_nodes, NodePredicate, NodeVisitor, TreeRead, TreeReadExt,
+    NodePredicate, NodeVisitor, TreeRead, TreeReadExt, collect_matching_nodes, count_matching_nodes,
 };
 pub use write::{TreeWrite, TreeWriteNav};

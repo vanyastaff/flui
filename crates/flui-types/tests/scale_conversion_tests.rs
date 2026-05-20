@@ -1,7 +1,7 @@
 //! Integration tests for type-safe scale conversions in geometry types
 
 use flui_types::geometry::{
-    device_px, px, DevicePixels, Offset, Pixels, Point, Rect, ScaleFactor, Size,
+    DevicePixels, Offset, Pixels, Point, Rect, ScaleFactor, Size, device_px, px,
 };
 
 #[test]
@@ -104,7 +104,8 @@ fn test_roundtrip_conversions() {
     let device = original_point.scale_with(scale);
     let roundtrip = device.unscale(scale);
 
-    // With integer device pixels and rounding, we should get exact match for whole numbers
+    // With integer device pixels and rounding, we should get exact match for whole
+    // numbers
     assert_eq!(roundtrip.x, px(100.0));
     assert_eq!(roundtrip.y, px(200.0));
 

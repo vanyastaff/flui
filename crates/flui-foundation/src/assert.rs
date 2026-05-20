@@ -6,8 +6,7 @@
 //! # Example
 //!
 //! ```rust
-//! use flui_foundation::assert::{FluiError};
-//! use flui_foundation::debug_assert_valid;
+//! use flui_foundation::{assert::FluiError, debug_assert_valid};
 //!
 //! fn layout_child(width: f64) {
 //!     debug_assert_valid!(width >= 0.0, "Width must be non-negative, got {}", width);

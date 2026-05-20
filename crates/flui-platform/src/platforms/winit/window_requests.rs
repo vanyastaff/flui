@@ -4,11 +4,15 @@
 //! Since winit 0.30 requires ActiveEventLoop to create windows,
 //! we use channels to communicate between Platform methods and the event loop.
 
-use crate::traits::{WindowId, WindowOptions};
+use std::sync::{
+    Arc,
+    mpsc::{Receiver, Sender, channel},
+};
+
 use anyhow::Result;
 use parking_lot::Mutex;
-use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::Arc;
+
+use crate::traits::{WindowId, WindowOptions};
 
 /// Request to create a new window
 #[derive(Debug)]
@@ -71,8 +75,9 @@ impl Default for WindowRequestQueue {
 
 #[cfg(test)]
 mod tests {
+    use flui_types::geometry::{Size, px};
+
     use super::*;
-    use flui_types::geometry::{px, Size};
 
     #[test]
     fn test_window_request_queue() {

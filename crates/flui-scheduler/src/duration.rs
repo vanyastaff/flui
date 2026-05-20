@@ -18,7 +18,7 @@
 //! different values that have the same underlying representation.
 //!
 //! ```rust
-//! use flui_scheduler::duration::{Milliseconds, Seconds, FrameDuration};
+//! use flui_scheduler::duration::{FrameDuration, Milliseconds, Seconds};
 //!
 //! // Type-safe - can't accidentally mix units
 //! let ms = Milliseconds::new(16.67);
@@ -32,8 +32,10 @@
 //! assert!(budget.as_ms().value() - 16.67 < 0.01);
 //! ```
 
-use std::fmt;
-use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign};
+use std::{
+    fmt,
+    ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
+};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -422,8 +424,9 @@ impl Microseconds {
     /// # Panics
     ///
     /// Panics if the value is negative, as `std::time::Duration` cannot
-    /// represent negative durations. Prefer [`try_to_std_duration`](Self::try_to_std_duration)
-    /// for fallible conversion.
+    /// represent negative durations. Prefer
+    /// [`try_to_std_duration`](Self::try_to_std_duration) for fallible
+    /// conversion.
     #[inline]
     pub fn to_std_duration(self) -> std::time::Duration {
         self.try_to_std_duration().unwrap_or_else(|| {

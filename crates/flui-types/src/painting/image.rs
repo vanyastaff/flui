@@ -1,9 +1,12 @@
 //! Image handling types for painting.
 
-use crate::geometry::{px, Pixels, Size};
-use crate::painting::BlendMode;
-use crate::styling::Color;
 use std::sync::Arc;
+
+use crate::{
+    geometry::{Pixels, Size, px},
+    painting::BlendMode,
+    styling::Color,
+};
 
 /// A handle to an image resource.
 ///
@@ -78,7 +81,8 @@ impl Image {
     ///
     /// # Safety
     ///
-    /// The caller must ensure that the data length matches `width * height * 4`.
+    /// The caller must ensure that the data length matches `width * height *
+    /// 4`.
     #[must_use]
     #[inline]
     pub fn from_rgba8_unchecked(width: u32, height: u32, data: Vec<u8>) -> Self {
@@ -126,6 +130,17 @@ impl Image {
         self.data.len()
     }
 
+    /// Returns a stable pointer-based identity for this image.
+    ///
+    /// Images that share the same underlying `Arc<Vec<u8>>` (i.e., cloned
+    /// handles) will return the same value. This is O(1) and suitable for
+    /// use as a cache key to avoid re-hashing large pixel buffers every frame.
+    #[inline]
+    #[must_use]
+    pub fn data_ptr(&self) -> usize {
+        Arc::as_ptr(&self.data) as usize
+    }
+
     /// Creates a clone of the image that shares the underlying data.
     ///
     /// This is a cheap operation because the data is reference-counted.
@@ -142,8 +157,7 @@ impl Image {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::painting::Image;
-    /// use flui_types::Color;
+    /// use flui_types::{Color, painting::Image};
     ///
     /// // Red 100x100 image
     /// let image = Image::solid_color(100, 100, Color::RED);
@@ -191,11 +205,10 @@ impl Image {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::painting::Image;
-    /// use flui_types::Color;
+    /// use flui_types::{Color, painting::Image};
     ///
     /// let image = Image::solid_color(1920, 1080, Color::BLACK);
-    /// assert!((image.aspect_ratio() - 16.0/9.0).abs() < 0.01);
+    /// assert!((image.aspect_ratio() - 16.0 / 9.0).abs() < 0.01);
     /// ```
     #[inline]
     #[must_use]
@@ -209,7 +222,8 @@ impl Image {
 }
 
 impl PartialEq for Image {
-    /// Images are equal if they have the same dimensions and point to the same data.
+    /// Images are equal if they have the same dimensions and point to the same
+    /// data.
     ///
     /// Note: This uses Arc pointer equality, not pixel-by-pixel comparison.
     #[inline]
@@ -241,7 +255,8 @@ pub enum ImageRepeat {
     /// Repeat the image in both the x and y directions until the box is filled.
     Repeat,
 
-    /// Repeat the image in the x direction until the box is filled horizontally.
+    /// Repeat the image in the x direction until the box is filled
+    /// horizontally.
     RepeatX,
 
     /// Repeat the image in the y direction until the box is filled vertically.
@@ -259,8 +274,7 @@ pub enum ImageRepeat {
 /// # Examples
 ///
 /// ```
-/// use flui_types::painting::ImageConfiguration;
-/// use flui_types::geometry::Size;
+/// use flui_types::{geometry::Size, painting::ImageConfiguration};
 ///
 /// let config = ImageConfiguration::new()
 ///     .with_size(Size::new(100.0, 100.0))
@@ -350,8 +364,10 @@ impl Default for ImageConfiguration {
 /// # Examples
 ///
 /// ```
-/// use flui_types::painting::{ColorFilter, BlendMode};
-/// use flui_types::styling::Color;
+/// use flui_types::{
+///     painting::{BlendMode, ColorFilter},
+///     styling::Color,
+/// };
 ///
 /// let filter = ColorFilter::mode(Color::RED, BlendMode::Multiply);
 /// ```

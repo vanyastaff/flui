@@ -46,11 +46,15 @@
 //! assert_eq!(intersection.size.width, 5.0);
 //! ```
 
-use super::traits::{NumericUnit, Unit};
-use super::Pixels;
-use super::{Corner, Edges, Point, Rect, Size};
-use std::fmt::{self, Display};
-use std::ops::{Add, Div, Mul, Sub};
+use std::{
+    fmt::{self, Display},
+    ops::{Add, Div, Mul, Sub},
+};
+
+use super::{
+    Corner, Edges, Pixels, Point, Rect, Size,
+    traits::{NumericUnit, Unit},
+};
 
 /// Axis-aligned bounding rectangle defined by origin and size.
 ///
@@ -85,7 +89,8 @@ impl<T: Unit> Bounds<T> {
         Self { origin, size }
     }
 
-    /// Maps the bounds to a different unit type by applying a function to each component.
+    /// Maps the bounds to a different unit type by applying a function to each
+    /// component.
     #[inline]
     #[must_use]
     pub fn map<U: Unit>(&self, f: impl Fn(T) -> U + Copy) -> Bounds<U>
@@ -98,7 +103,8 @@ impl<T: Unit> Bounds<T> {
         }
     }
 
-    /// Transforms the origin by applying a function while keeping the size unchanged.
+    /// Transforms the origin by applying a function while keeping the size
+    /// unchanged.
     #[inline]
     #[must_use]
     pub fn map_origin(self, f: impl Fn(T) -> T) -> Self
@@ -111,7 +117,8 @@ impl<T: Unit> Bounds<T> {
         }
     }
 
-    /// Transforms the size by applying a function while keeping the origin unchanged.
+    /// Transforms the size by applying a function while keeping the origin
+    /// unchanged.
     #[inline]
     #[must_use]
     pub fn map_size(self, f: impl Fn(T) -> T) -> Self
@@ -135,7 +142,8 @@ where
 {
     /// Creates bounds from two corner points.
     ///
-    /// Computes the size from the difference between bottom-right and top-left corners.
+    /// Computes the size from the difference between bottom-right and top-left
+    /// corners.
     #[inline]
     #[must_use]
     pub fn from_corners(top_left: Point<T>, bottom_right: Point<T>) -> Self {
@@ -147,7 +155,8 @@ where
 
     /// Creates bounds from a specific corner point and size.
     ///
-    /// The corner parameter determines which corner the origin point represents.
+    /// The corner parameter determines which corner the origin point
+    /// represents.
     #[inline]
     #[must_use]
     pub fn from_corner_and_size(corner: Corner, origin: Point<T>, size: Size<T>) -> Self {
@@ -318,8 +327,8 @@ where
 {
     /// Computes the intersection of these bounds with another bounds.
     ///
-    /// Returns a bounds representing the overlapping area. If there is no overlap,
-    /// the returned bounds may have negative or zero size.
+    /// Returns a bounds representing the overlapping area. If there is no
+    /// overlap, the returned bounds may have negative or zero size.
     #[inline]
     #[must_use]
     pub fn intersect(&self, other: &Self) -> Self {
@@ -395,8 +404,8 @@ where
 
     /// Converts a global point to local coordinates relative to these bounds.
     ///
-    /// Returns `Some(point)` with coordinates relative to the origin if the point is within
-    /// the bounds, or `None` if the point is outside.
+    /// Returns `Some(point)` with coordinates relative to the origin if the
+    /// point is within the bounds, or `None` if the point is outside.
     #[inline]
     #[must_use]
     pub fn localize(&self, point: &Point<T>) -> Option<Point<T>> {
@@ -418,7 +427,8 @@ where
 {
     /// Expands the bounds uniformly in all directions by the specified amount.
     ///
-    /// The origin moves outward by `amount`, and the size increases by `2 * amount`.
+    /// The origin moves outward by `amount`, and the size increases by `2 *
+    /// amount`.
     #[inline]
     #[must_use]
     pub fn dilate(&self, amount: T) -> Self {

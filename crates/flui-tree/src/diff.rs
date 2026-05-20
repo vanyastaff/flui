@@ -18,8 +18,7 @@
 //! # Usage
 //!
 //! ```
-//! use flui_tree::{TreeDiff, DiffOp, ChildDiff, ChildOp};
-//! use flui_tree::ElementId;
+//! use flui_tree::{ChildDiff, ChildOp, DiffOp, ElementId, TreeDiff};
 //!
 //! // Use ChildDiff for comparing children lists of a parent node
 //! let old_children = vec![ElementId::new(1), ElementId::new(2), ElementId::new(3)];
@@ -32,19 +31,24 @@
 //!         ChildOp::Keep { id, index } => { /* unchanged */ }
 //!         ChildOp::Insert { id, index } => { /* mount new */ }
 //!         ChildOp::Remove { id } => { /* unmount */ }
-//!         ChildOp::Reorder { id, old_index, new_index } => { /* reposition */ }
+//!         ChildOp::Reorder {
+//!             id,
+//!             old_index,
+//!             new_index,
+//!         } => { /* reposition */ }
 //!     }
 //! }
 //!
 //! assert!(!diff.is_empty());
 //! ```
 
-use std::collections::{HashMap, HashSet};
-use std::fmt;
-
-use smallvec::SmallVec;
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+};
 
 use flui_foundation::Identifier;
+use smallvec::SmallVec;
 
 use crate::traits::TreeNav;
 
@@ -195,7 +199,8 @@ impl<I: Identifier> fmt::Display for DiffOp<I> {
 
 /// Result of comparing two tree states.
 ///
-/// Contains a sequence of operations that transform the old tree into the new tree.
+/// Contains a sequence of operations that transform the old tree into the new
+/// tree.
 ///
 /// # Operation Order
 ///
@@ -507,18 +512,17 @@ impl<'a, I: Identifier, T: TreeNav<I>> TreeDiffer<'a, I, T> {
 
         // Nodes only in new tree -> Insert
         for &id in &self.new_ids {
-            if !self.old_ids.contains(&id) {
-                if let Some(new_info) = self.new_positions.get(&id) {
-                    if let Some(parent) = new_info.parent {
-                        self.ops.push(DiffOp::Insert {
-                            id,
-                            parent,
-                            index: new_info.index,
-                        });
-                        self.stats.inserts += 1;
-                    }
-                    // Root nodes without parent are handled specially
-                }
+            if !self.old_ids.contains(&id)
+                && let Some(new_info) = self.new_positions.get(&id)
+                && let Some(parent) = new_info.parent
+            {
+                // Root nodes without parent are handled specially
+                self.ops.push(DiffOp::Insert {
+                    id,
+                    parent,
+                    index: new_info.index,
+                });
+                self.stats.inserts += 1;
             }
         }
 
@@ -776,9 +780,10 @@ impl<I: Identifier> ChildOp<I> {
 
 #[cfg(test)]
 mod tests {
+    use flui_foundation::ElementId;
+
     use super::*;
     use crate::iter::{Ancestors, DescendantsWithDepth};
-    use flui_foundation::ElementId;
 
     // Simple test tree implementation
     struct TestTree {
@@ -1024,10 +1029,11 @@ mod tests {
         let diff = ChildDiff::compute(ElementId::new(100), old, new);
 
         assert_eq!(diff.changes(), 1);
-        assert!(diff
-            .ops()
-            .iter()
-            .any(|op| matches!(op, ChildOp::Insert { id, .. } if *id == ElementId::new(3))));
+        assert!(
+            diff.ops()
+                .iter()
+                .any(|op| matches!(op, ChildOp::Insert { id, .. } if *id == ElementId::new(3)))
+        );
     }
 
     #[test]
@@ -1037,10 +1043,11 @@ mod tests {
 
         let diff = ChildDiff::compute(ElementId::new(100), old, new);
 
-        assert!(diff
-            .ops()
-            .iter()
-            .any(|op| matches!(op, ChildOp::Remove { id } if *id == ElementId::new(3))));
+        assert!(
+            diff.ops()
+                .iter()
+                .any(|op| matches!(op, ChildOp::Remove { id } if *id == ElementId::new(3)))
+        );
     }
 
     #[test]
@@ -1116,10 +1123,11 @@ mod tests {
 
         // Verify all old IDs are removed
         for id_val in 1..=3 {
-            assert!(diff
-                .ops()
-                .iter()
-                .any(|op| matches!(op, ChildOp::Remove { id } if *id == ElementId::new(id_val))));
+            assert!(
+                diff.ops().iter().any(
+                    |op| matches!(op, ChildOp::Remove { id } if *id == ElementId::new(id_val))
+                )
+            );
         }
 
         // Verify all new IDs are inserted
@@ -1157,7 +1165,8 @@ mod tests {
             .filter(|op| matches!(op, ChildOp::Reorder { .. }))
             .collect();
 
-        // All items except the middle one (index 2 stays at index 2) should be reordered
+        // All items except the middle one (index 2 stays at index 2) should be
+        // reordered
         assert!(!reorders.is_empty());
 
         // No inserts or removes since all IDs are the same

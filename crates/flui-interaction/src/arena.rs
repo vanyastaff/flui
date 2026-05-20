@@ -21,8 +21,9 @@
 //!
 //! # GestureArenaEntry Handle Pattern
 //!
-//! When adding a member to the arena, you receive a [`GestureArenaEntry`] handle.
-//! This handle is the preferred way for recognizers to resolve themselves:
+//! When adding a member to the arena, you receive a [`GestureArenaEntry`]
+//! handle. This handle is the preferred way for recognizers to resolve
+//! themselves:
 //!
 //! ```rust,ignore
 //! let entry = arena.add(pointer, my_recognizer.clone());
@@ -41,12 +42,16 @@
 //!
 //! Flutter reference: https://api.flutter.dev/flutter/gestures/GestureArenaManager-class.html
 
-use crate::ids::PointerId;
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use smallvec::SmallVec;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+
+use crate::ids::PointerId;
 
 /// Default timeout for gesture disambiguation (100ms).
 ///
@@ -92,8 +97,8 @@ impl GestureDisposition {
 /// # Custom Recognizers
 ///
 /// To create a custom gesture recognizer, implement [`CustomGestureRecognizer`]
-/// instead of this trait directly. The blanket implementation will automatically
-/// provide `GestureArenaMember` for your type.
+/// instead of this trait directly. The blanket implementation will
+/// automatically provide `GestureArenaMember` for your type.
 ///
 /// ```rust,ignore
 /// use flui_interaction::sealed::CustomGestureRecognizer;
@@ -168,9 +173,9 @@ impl<T: crate::sealed::CustomGestureRecognizer> GestureArenaMember for T {
 ///
 /// # Thread Safety
 ///
-/// `GestureArenaEntry` is `Send + Sync` and can be safely shared across threads.
-/// Multiple calls to `resolve` are safe (subsequent calls are no-ops if the
-/// arena is already resolved).
+/// `GestureArenaEntry` is `Send + Sync` and can be safely shared across
+/// threads. Multiple calls to `resolve` are safe (subsequent calls are no-ops
+/// if the arena is already resolved).
 #[derive(Clone)]
 pub struct GestureArenaEntry {
     arena: GestureArena,
@@ -238,7 +243,8 @@ struct ArenaEntryData {
     /// Inline capacity: 4 (avoids heap for most cases).
     members: SmallVec<[Arc<dyn GestureArenaMember>; 4]>,
     /// Whether the arena is still open for new members.
-    /// When open, accepts are stored as eager_winner instead of resolving immediately.
+    /// When open, accepts are stored as eager_winner instead of resolving
+    /// immediately.
     is_open: bool,
     /// Whether this entry is held open (waiting for more information).
     is_held: bool,
@@ -249,7 +255,8 @@ struct ArenaEntryData {
     eager_winner: Option<Arc<dyn GestureArenaMember>>,
     /// Whether sweep is pending (requested while held).
     has_pending_sweep: bool,
-    /// Winners of the arena (if resolved). Multiple winners possible with teams.
+    /// Winners of the arena (if resolved). Multiple winners possible with
+    /// teams.
     winners: SmallVec<[Arc<dyn GestureArenaMember>; 2]>,
     /// When this arena entry was created (for timeout calculation).
     created_at: Instant,
@@ -331,10 +338,10 @@ impl ArenaEntryData {
         self.members.retain(|m| !Arc::ptr_eq(m, member));
 
         // Remove from eager winner if it was this member
-        if let Some(ref eager) = self.eager_winner {
-            if Arc::ptr_eq(eager, member) {
-                self.eager_winner = None;
-            }
+        if let Some(ref eager) = self.eager_winner
+            && Arc::ptr_eq(eager, member)
+        {
+            self.eager_winner = None;
         }
 
         // Notify the member
@@ -460,7 +467,8 @@ impl ArenaEntryData {
 ///
 /// # Thread Safety
 ///
-/// GestureArena is thread-safe and uses DashMap for lock-free concurrent access.
+/// GestureArena is thread-safe and uses DashMap for lock-free concurrent
+/// access.
 ///
 /// # Example
 ///
@@ -652,7 +660,8 @@ impl GestureArena {
 
     /// Resolve the arena with a specific winner.
     ///
-    /// Winner receives `accept_gesture()`, all others receive `reject_gesture()`.
+    /// Winner receives `accept_gesture()`, all others receive
+    /// `reject_gesture()`.
     ///
     /// # Note
     ///
@@ -666,7 +675,8 @@ impl GestureArena {
     /// Resolve the arena with multiple winners.
     ///
     /// All specified winners receive `accept_gesture()`.
-    /// This is useful when multiple gestures should be recognized simultaneously.
+    /// This is useful when multiple gestures should be recognized
+    /// simultaneously.
     ///
     /// # Example
     ///
@@ -725,8 +735,8 @@ impl GestureArena {
 
     /// Get the primary winner for a pointer (if resolved).
     ///
-    /// Returns the first winner. Use [`winners`](Self::winners) to get all winners
-    /// when team resolution is used.
+    /// Returns the first winner. Use [`winners`](Self::winners) to get all
+    /// winners when team resolution is used.
     pub fn winner(&self, pointer: PointerId) -> Option<Arc<dyn GestureArenaMember>> {
         self.entries
             .get(&pointer)
@@ -735,7 +745,8 @@ impl GestureArena {
 
     /// Get all winners for a pointer (if resolved).
     ///
-    /// Returns all winners including team members. Empty if not resolved or no winners.
+    /// Returns all winners including team members. Empty if not resolved or no
+    /// winners.
     pub fn winners(&self, pointer: PointerId) -> Vec<Arc<dyn GestureArenaMember>> {
         self.entries
             .get(&pointer)
@@ -1321,7 +1332,8 @@ mod tests {
         // Resolve all timed out arenas with zero timeout
         let count = arena.resolve_timed_out_arenas(Duration::ZERO);
 
-        // Only pointer1 should be force resolved (pointer2 already resolved, pointer3 held)
+        // Only pointer1 should be force resolved (pointer2 already resolved, pointer3
+        // held)
         assert_eq!(count, 1);
         assert!(arena.is_resolved(pointer1));
         assert!(arena.is_resolved(pointer2)); // Was already resolved

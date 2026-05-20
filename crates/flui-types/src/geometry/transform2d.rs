@@ -13,7 +13,7 @@
 //! # Examples
 //!
 //! ```
-//! use flui_types::geometry::{Transform2D, Pixels, px, Point};
+//! use flui_types::geometry::{Pixels, Point, Transform2D, px};
 //!
 //! // Create a translation transform
 //! let translate = Transform2D::<Pixels>::translation(px(100.0), px(50.0));
@@ -43,13 +43,15 @@
 //! - `shx`, `shy`: Shear factors
 //! - `tx`, `ty`: Translation offsets
 
-use super::{traits::Unit, Offset, Pixels, Point, Rect};
 use std::marker::PhantomData;
+
+use super::{Offset, Pixels, Point, Rect, traits::Unit};
 
 /// A 2D affine transformation matrix, generic over Unit type.
 ///
 /// An affine 2D transformation represented as a 2x3 matrix.
-/// This can represent translation, rotation, scale, shear, and combinations thereof.
+/// This can represent translation, rotation, scale, shear, and combinations
+/// thereof.
 ///
 /// # Type Safety
 ///
@@ -86,7 +88,7 @@ impl<T: Unit> Transform2D<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Transform2D, Pixels, Point, px};
+    /// use flui_types::geometry::{Pixels, Point, Transform2D, px};
     ///
     /// let identity = Transform2D::<Pixels>::identity();
     /// let point = Point::new(px(10.0), px(20.0));
@@ -111,7 +113,7 @@ impl<T: Unit> Transform2D<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Transform2D, Pixels, Point, px};
+    /// use flui_types::geometry::{Pixels, Point, Transform2D, px};
     ///
     /// let translate = Transform2D::translation(50.0, 100.0);
     /// let point = Point::new(px(10.0), px(20.0));
@@ -137,7 +139,7 @@ impl<T: Unit> Transform2D<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Transform2D, Pixels, Point, px};
+    /// use flui_types::geometry::{Pixels, Point, Transform2D, px};
     ///
     /// let scale = Transform2D::<Pixels>::scale(2.0);
     /// let point = Point::new(px(10.0), px(20.0));
@@ -163,7 +165,7 @@ impl<T: Unit> Transform2D<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Transform2D, Pixels, Point, px};
+    /// use flui_types::geometry::{Pixels, Point, Transform2D, px};
     ///
     /// let scale = Transform2D::<Pixels>::scale_xy(2.0, 3.0);
     /// let point = Point::new(px(10.0), px(20.0));
@@ -189,8 +191,9 @@ impl<T: Unit> Transform2D<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Transform2D, Pixels, Point, px};
     /// use std::f32::consts::PI;
+    ///
+    /// use flui_types::geometry::{Pixels, Point, Transform2D, px};
     ///
     /// let rotate_90 = Transform2D::<Pixels>::rotation(PI / 2.0);
     /// let point = Point::new(px(1.0), px(0.0));
@@ -229,7 +232,8 @@ impl<T: Unit> Transform2D<T> {
             && self.m32.abs() < 1e-6
     }
 
-    /// Checks if this transform preserves axis alignment (only translation and scale).
+    /// Checks if this transform preserves axis alignment (only translation and
+    /// scale).
     #[inline]
     pub fn is_axis_aligned(&self) -> bool {
         self.m12.abs() < 1e-6 && self.m21.abs() < 1e-6
@@ -246,7 +250,7 @@ impl Transform2D<Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Transform2D, Pixels, Point, px};
+    /// use flui_types::geometry::{Pixels, Point, Transform2D, px};
     ///
     /// let translate = Transform2D::translation(10.0, 20.0);
     /// let point = Point::new(px(5.0), px(15.0));
@@ -268,7 +272,7 @@ impl Transform2D<Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Transform2D, Pixels, Offset, px};
+    /// use flui_types::geometry::{Offset, Pixels, Transform2D, px};
     ///
     /// let scale = Transform2D::<Pixels>::scale(2.0);
     /// let offset = Offset::new(px(10.0), px(20.0));
@@ -300,7 +304,7 @@ impl Transform2D<Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Transform2D, Pixels, Point, px};
+    /// use flui_types::geometry::{Pixels, Point, Transform2D, px};
     ///
     /// let translate = Transform2D::translation(10.0, 0.0);
     /// let scale = Transform2D::<Pixels>::scale(2.0);
@@ -309,7 +313,7 @@ impl Transform2D<Pixels> {
     /// // First translate, then scale
     /// let point = Point::new(px(5.0), px(0.0));
     /// let result = combined.transform_point(point);
-    /// assert_eq!(result.x, px(30.0));  // (5 + 10) * 2 = 30
+    /// assert_eq!(result.x, px(30.0)); // (5 + 10) * 2 = 30
     /// ```
     #[inline]
     pub fn then(&self, other: &Transform2D<Pixels>) -> Transform2D<Pixels> {
@@ -356,7 +360,7 @@ impl<T: Unit> Default for Transform2D<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::{px, Pixels};
+    use crate::geometry::{Pixels, px};
 
     #[test]
     fn test_identity() {

@@ -4,8 +4,7 @@
 //! render objects. It is used by `RenderClipRect`, `RenderClipRRect`,
 //! and `RenderClipPath`.
 
-use std::any::Any;
-use std::fmt::Debug;
+use std::{any::Any, fmt::Debug};
 
 use flui_types::{Point, Rect, Size};
 
@@ -111,8 +110,9 @@ impl CustomClipper<Rect> for RectClipper {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::px;
+
+    use super::*;
 
     #[derive(Debug)]
     struct InsetClipper {

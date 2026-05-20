@@ -4,12 +4,11 @@
 //! - [`LayoutCapability`]: Layout input/output types
 //! - [`HitTestCapability`]: Hit test input/output types
 
-use std::fmt::Debug;
-use std::hash::Hash;
+use std::{fmt::Debug, hash::Hash};
 
+use flui_tree::Arity;
 use flui_types::geometry::Offset;
 
-use crate::arity::Arity;
 use crate::parent_data::ParentData;
 
 // ============================================================================

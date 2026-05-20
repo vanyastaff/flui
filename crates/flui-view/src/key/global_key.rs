@@ -3,12 +3,16 @@
 //! This module is part of the widgets layer, matching Flutter's architecture
 //! where `GlobalKey` is defined in `widgets/framework.dart`.
 
-use std::any::Any;
-use std::fmt;
-use std::hash::{Hash, Hasher};
-use std::marker::PhantomData;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::{
+    any::Any,
+    fmt,
+    hash::{Hash, Hasher},
+    marker::PhantomData,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use flui_foundation::{ElementId, ViewKey};
 

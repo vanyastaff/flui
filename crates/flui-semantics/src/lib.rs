@@ -1,11 +1,12 @@
 //! # FLUI Semantics - Accessibility Tree
 //!
-//! This crate provides the Semantics tree - the fifth tree in FLUI's 5-tree architecture:
-//! View → Element → Render → Layer → **Semantics**
+//! This crate provides the Semantics tree - the fifth tree in FLUI's 5-tree
+//! architecture: View → Element → Render → Layer → **Semantics**
 //!
 //! ## Purpose
 //!
-//! The semantics tree provides accessibility information for assistive technologies:
+//! The semantics tree provides accessibility information for assistive
+//! technologies:
 //! - Screen readers (VoiceOver, TalkBack, NVDA, JAWS)
 //! - Switch control
 //! - Voice control
@@ -27,7 +28,8 @@
 //!
 //! ## Key Types
 //!
-//! - [`SemanticsNode`] - Node with accessibility properties (label, role, actions)
+//! - [`SemanticsNode`] - Node with accessibility properties (label, role,
+//!   actions)
 //! - [`SemanticsConfiguration`] - Builder for semantic properties
 //! - [`SemanticsOwner`] - Manages tree lifecycle and platform updates
 //! - [`SemanticsAction`] - Actions that assistive tech can perform
@@ -36,7 +38,8 @@
 //! ## Optimizations
 //!
 //! This crate uses several optimizations for performance:
-//! - [`SmolStr`](smol_str::SmolStr) for labels/hints (O(1) clone, inline storage)
+//! - [`SmolStr`](smol_str::SmolStr) for labels/hints (O(1) clone, inline
+//!   storage)
 //! - [`SmallVec`](smallvec::SmallVec) for children/actions (stack allocation)
 //! - [`FxHashMap`](rustc_hash::FxHashMap) for fast lookups
 //!
@@ -82,80 +85,58 @@ pub mod update;
 // ============================================================================
 
 pub use action::{ActionArgs, SemanticsAction, SemanticsActionHandler};
-
 // ============================================================================
 // RE-EXPORTS - Binding Types
 // ============================================================================
-
 pub use binding::{
     AccessibilityFeatures, SemanticsActionEvent, SemanticsBinding, SemanticsHandle,
     SemanticsService,
 };
-
 // ============================================================================
 // RE-EXPORTS - Configuration
 // ============================================================================
-
 pub use configuration::SemanticsConfiguration;
-
 // ============================================================================
 // RE-EXPORTS - Event Types
 // ============================================================================
-
 pub use event::{SemanticsEvent, SemanticsEventData, SemanticsEventType};
-
 // ============================================================================
 // RE-EXPORTS - Flag Types
 // ============================================================================
-
 pub use flags::{SemanticsFlag, SemanticsFlags};
-
+// ============================================================================
+// RE-EXPORTS - Foundation Types
+// ============================================================================
+pub use flui_foundation::SemanticsId;
 // ============================================================================
 // RE-EXPORTS - Node Types
 // ============================================================================
-
 pub use node::SemanticsNode;
-
 // ============================================================================
 // RE-EXPORTS - Owner Types
 // ============================================================================
-
 pub use owner::{SemanticsNodeUpdate, SemanticsOwner, SemanticsUpdateCallback};
-
 // ============================================================================
 // RE-EXPORTS - Property Types
 // ============================================================================
-
 pub use properties::{
     AttributedString, CustomSemanticsAction, SemanticsHintOverrides, SemanticsProperties,
     SemanticsSortKey, SemanticsTag, StringAttribute, StringAttributeType, TextDirection,
 };
-
 // ============================================================================
 // RE-EXPORTS - Role Types
 // ============================================================================
-
 pub use role::{
     AccessibilityFocusBlockType, Assertiveness, DebugSemanticsDumpOrder, SemanticsRole,
 };
-
 // ============================================================================
 // RE-EXPORTS - Tree Types
 // ============================================================================
-
 pub use tree::SemanticsTree;
-
 // ============================================================================
 // RE-EXPORTS - Update Types
 // ============================================================================
-
 pub use update::{SemanticsNodeData, SemanticsTreeUpdate, SemanticsTreeUpdateBuilder};
-
-// ============================================================================
-// RE-EXPORTS - Foundation Types
-// ============================================================================
-
-pub use flui_foundation::SemanticsId;
 
 // ============================================================================
 // PRELUDE
@@ -168,6 +149,13 @@ pub use flui_foundation::SemanticsId;
 /// ```
 pub mod prelude {
     // Core types
+    // Re-export tree traits for convenience
+    pub use flui_tree::{TreeNav, TreeRead};
+    // Re-export optimized types
+    pub use rustc_hash::{FxHashMap, FxHashSet};
+    pub use smallvec::SmallVec;
+    pub use smol_str::SmolStr;
+
     pub use crate::{
         AccessibilityFeatures, AccessibilityFocusBlockType, ActionArgs, Assertiveness,
         AttributedString, DebugSemanticsDumpOrder, SemanticsAction, SemanticsActionEvent,
@@ -177,14 +165,6 @@ pub mod prelude {
         SemanticsRole, SemanticsService, SemanticsTag, SemanticsTree, SemanticsTreeUpdate,
         SemanticsTreeUpdateBuilder, TextDirection,
     };
-
-    // Re-export tree traits for convenience
-    pub use flui_tree::{TreeNav, TreeRead};
-
-    // Re-export optimized types
-    pub use rustc_hash::{FxHashMap, FxHashSet};
-    pub use smallvec::SmallVec;
-    pub use smol_str::SmolStr;
 }
 
 // ============================================================================

@@ -122,8 +122,9 @@ impl fmt::Display for GrowthDirection {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::collections::HashSet;
+
+    use super::*;
 
     #[test]
     fn test_forward() {

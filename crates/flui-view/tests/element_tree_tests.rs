@@ -1,6 +1,7 @@
 //! Integration tests for ElementTree.
 //!
-//! Tests Slab-based element storage, tree operations, and parent-child relationships.
+//! Tests Slab-based element storage, tree operations, and parent-child
+//! relationships.
 
 use flui_foundation::ElementId;
 use flui_view::{

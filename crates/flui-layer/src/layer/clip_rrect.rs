@@ -3,8 +3,10 @@
 //! This layer clips its children to a rounded rectangle region.
 //! Corresponds to Flutter's `ClipRRectLayer`.
 
-use flui_types::geometry::{Pixels, RRect, Rect};
-use flui_types::painting::Clip;
+use flui_types::{
+    geometry::{Pixels, RRect, Rect},
+    painting::Clip,
+};
 
 /// Layer that clips children to a rounded rectangle.
 ///
@@ -25,14 +27,13 @@ use flui_types::painting::Clip;
 ///
 /// ```rust
 /// use flui_layer::ClipRRectLayer;
-/// use flui_types::geometry::{RRect, Rect};
-/// use flui_types::painting::Clip;
+/// use flui_types::{
+///     geometry::{RRect, Rect},
+///     painting::Clip,
+/// };
 ///
 /// // Create rounded rectangle with 10px corner radius
-/// let rrect = RRect::from_rect_circular(
-///     Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
-///     10.0,
-/// );
+/// let rrect = RRect::from_rect_circular(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), 10.0);
 /// let layer = ClipRRectLayer::new(rrect, Clip::AntiAlias);
 ///
 /// assert_eq!(layer.clip_rrect().width(), 100.0);
@@ -154,8 +155,9 @@ unsafe impl Sync for ClipRRectLayer {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::px;
+
+    use super::*;
 
     #[test]
     fn test_clip_rrect_layer_new() {

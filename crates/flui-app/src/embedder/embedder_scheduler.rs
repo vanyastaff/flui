@@ -3,15 +3,18 @@
 //! Connects the embedder to flui-scheduler for frame lifecycle
 //! and task scheduling.
 
+use std::sync::{
+    Arc, Weak,
+    atomic::{AtomicBool, Ordering},
+};
+
 use flui_rendering::pipeline::PipelineOwner;
 use flui_scheduler::{Priority, Scheduler};
 use parking_lot::RwLock;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Weak,
-};
 
 /// Scheduler statistics snapshot
+// TODO: Will be used when EmbedderScheduler is integrated into the app binding
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct SchedulerStats {
     /// Target frames per second
@@ -33,6 +36,8 @@ pub struct SchedulerStats {
 ///
 /// This is embedder-specific glue code, not to be confused with
 /// `flui_scheduler::SchedulerBinding` trait.
+// TODO: Will be used when runner.rs switches from direct Scheduler calls to EmbedderScheduler
+#[allow(dead_code)]
 pub struct EmbedderScheduler {
     scheduler: Arc<Scheduler>,
     current_frame: u64,
@@ -46,6 +51,7 @@ impl std::fmt::Debug for EmbedderScheduler {
     }
 }
 
+#[allow(dead_code)]
 impl EmbedderScheduler {
     /// Create a new embedder scheduler
     pub fn new(scheduler: Arc<Scheduler>) -> Self {
@@ -62,7 +68,8 @@ impl EmbedderScheduler {
     ///
     /// # Why Weak Reference?
     ///
-    /// Uses `Weak<RwLock<PipelineOwner>>` to prevent circular reference memory leaks.
+    /// Uses `Weak<RwLock<PipelineOwner>>` to prevent circular reference memory
+    /// leaks.
     pub fn wire_up_pipeline(
         &self,
         pipeline_weak: Weak<RwLock<PipelineOwner>>,
@@ -86,8 +93,8 @@ impl EmbedderScheduler {
     /// - Execute transient callbacks (animations)
     /// - Start frame timing
     pub fn begin_frame(&mut self) -> u64 {
-        let frame_id = self.scheduler.begin_frame();
-        self.current_frame = frame_id.as_u64();
+        let frame_id = self.scheduler.handle_begin_frame(web_time::Instant::now());
+        self.current_frame = frame_id.get() as u64;
         self.current_frame
     }
 
@@ -97,7 +104,7 @@ impl EmbedderScheduler {
     /// - Execute post-frame callbacks
     /// - Update frame statistics
     pub fn end_frame(&self) {
-        self.scheduler.end_frame();
+        self.scheduler.end_of_frame();
     }
 
     /// Schedule a user input task (highest priority)

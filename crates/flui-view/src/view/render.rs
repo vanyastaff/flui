@@ -1,7 +1,8 @@
 //! RenderView - Views that create RenderObjects.
 //!
 //! RenderViews are leaf nodes in the View tree that produce RenderObjects.
-//! They bridge the View/Element system with the Render tree for layout and painting.
+//! They bridge the View/Element system with the Render tree for layout and
+//! painting.
 
 use crate::view::View;
 
@@ -109,23 +110,26 @@ macro_rules! impl_render_view {
     };
 }
 
-// NOTE: RenderElement implementation has been moved to unified Element architecture.
-// See crates/flui-view/src/element/unified.rs and element/behavior.rs
-// The type alias is exported from element/mod.rs:
+// NOTE: RenderElement implementation has been moved to unified Element
+// architecture. See crates/flui-view/src/element/unified.rs and
+// element/behavior.rs The type alias is exported from element/mod.rs:
 //   pub type RenderElement<V> = Element<V, Variable, RenderBehavior<V>>;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::element::{Lifecycle, RenderBehavior};
-    use crate::view::{ElementBase, View};
-    use crate::RenderElement;
+    use std::sync::Arc;
+
     use flui_foundation::RenderId;
-    use flui_rendering::objects::RenderSizedBox;
-    use flui_rendering::pipeline::PipelineOwner;
+    use flui_rendering::{objects::RenderSizedBox, pipeline::PipelineOwner};
     use flui_types::geometry::px;
     use parking_lot::RwLock;
-    use std::sync::Arc;
+
+    use super::*;
+    use crate::{
+        RenderElement,
+        element::{Lifecycle, RenderBehavior},
+        view::{ElementBase, View},
+    };
 
     /// A simple test RenderView using RenderSizedBox
     #[derive(Clone)]
@@ -143,8 +147,9 @@ mod tests {
         }
 
         fn update_render_object(&self, _render_object: &mut Self::RenderObject) {
-            // RenderSizedBox doesn't have setters for width/height after creation
-            // In a real implementation, we'd update the constraints
+            // RenderSizedBox doesn't have setters for width/height after
+            // creation In a real implementation, we'd update the
+            // constraints
         }
     }
 

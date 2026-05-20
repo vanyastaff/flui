@@ -1,7 +1,8 @@
 //! Liquid Glass Material System for macOS Tahoe 26+
 //!
-//! Liquid Glass is Apple's new translucent design language introduced in macOS Tahoe 26.
-//! It provides rich, dynamic materials with depth, blur, and vibrancy effects.
+//! Liquid Glass is Apple's new translucent design language introduced in macOS
+//! Tahoe 26. It provides rich, dynamic materials with depth, blur, and vibrancy
+//! effects.
 //!
 //! # Reference
 //! - macOS Tahoe 26 (Released September 15, 2025)
@@ -11,7 +12,9 @@
 #[cfg(target_os = "macos")]
 use objc2::rc::Retained;
 #[cfg(target_os = "macos")]
-use objc2_app_kit::{NSView, NSVisualEffectView, NSVisualEffectMaterial, NSVisualEffectBlendingMode};
+use objc2_app_kit::{
+    NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectView,
+};
 #[cfg(target_os = "macos")]
 use objc2_foundation::MainThreadMarker;
 
@@ -119,7 +122,7 @@ impl LiquidGlassMaterial {
                 // Parse version (e.g., "26.0.0" for Tahoe)
                 if let Some(major) = version_str.split('.').next() {
                     if let Ok(major_version) = major.trim().parse::<u32>() {
-                        return major_version >= 26;  // Tahoe is macOS 26
+                        return major_version >= 26; // Tahoe is macOS 26
                     }
                 }
             }
@@ -187,7 +190,8 @@ impl LiquidGlassConfig {
 
     /// Get the effective blur radius (custom or default)
     pub fn effective_blur_radius(&self) -> f32 {
-        self.blur_radius.unwrap_or_else(|| self.material.default_blur_radius())
+        self.blur_radius
+            .unwrap_or_else(|| self.material.default_blur_radius())
     }
 
     /// Get the effective tint color (custom or default)
@@ -224,8 +228,8 @@ impl BlendingMode {
 
 /// Apply Liquid Glass material to an NSView
 ///
-/// This creates an NSVisualEffectView with Liquid Glass configuration and adds it
-/// as a subview.
+/// This creates an NSVisualEffectView with Liquid Glass configuration and adds
+/// it as a subview.
 ///
 /// # Safety
 /// Must be called on the main thread.

@@ -29,14 +29,14 @@
 //! println!("Velocity: {} px/s", velocity.magnitude());
 //! ```
 
-use flui_types::geometry::Offset;
-use flui_types::geometry::Pixels;
+use std::{
+    collections::VecDeque,
+    time::{Duration, Instant},
+};
 
+use flui_types::geometry::{Offset, Pixels};
 // Re-export Velocity and VelocityEstimate from flui_types
 pub use flui_types::gestures::{Velocity, VelocityEstimate};
-
-use std::collections::VecDeque;
-use std::time::{Duration, Instant};
 
 // ============================================================================
 // Constants
@@ -483,7 +483,8 @@ impl VelocityTracker {
         VelocityEstimate::new(last.position, velocity.pixels_per_second, dur, confidence)
     }
 
-    /// Check if the current velocity estimate is reliable enough for fling detection.
+    /// Check if the current velocity estimate is reliable enough for fling
+    /// detection.
     pub fn is_reliable(&self) -> bool {
         let estimate = self.estimate();
         estimate.confidence > 0.5 && self.samples.len() >= 3

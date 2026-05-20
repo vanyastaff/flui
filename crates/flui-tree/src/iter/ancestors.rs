@@ -1,7 +1,8 @@
 //! Ancestor iterators.
 
-use crate::traits::TreeNav;
 use flui_foundation::Identifier;
+
+use crate::traits::TreeNav;
 
 /// Iterator over ancestors of a node.
 ///
@@ -200,10 +201,10 @@ impl<I: Identifier, T: TreeNav<I>> std::iter::FusedIterator for AncestorsWithDep
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::iter::DescendantsWithDepth;
-    use crate::traits::TreeRead;
     use flui_foundation::ElementId;
+
+    use super::*;
+    use crate::{iter::DescendantsWithDepth, traits::TreeRead};
 
     struct TestNode {
         parent: Option<ElementId>,

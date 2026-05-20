@@ -28,20 +28,20 @@
 //!
 //! ## Platform Trait
 //!
-//! The [`Platform`] trait is the central abstraction that all platform implementations
-//! must provide. It covers:
+//! The [`Platform`] trait is the central abstraction that all platform
+//! implementations must provide. It covers:
 //!
-//! - **Lifecycle**: Event loop, quit, frame requests
+//! - **Lifecycle**: Event loop, quit
 //! - **Windows**: Creation, management, events
 //! - **Displays**: Monitor enumeration and information
 //! - **Executors**: Background and foreground task execution
-//! - **Text System**: Font loading and text rendering
 //! - **Clipboard**: Read/write operations
 //! - **Callbacks**: Event handler registration
 //!
 //! ## Platform Selection
 //!
-//! Use [`current_platform()`] to get the appropriate platform for the current environment:
+//! Use [`current_platform()`] to get the appropriate platform for the current
+//! environment:
 //!
 //! ```rust,ignore
 //! use flui_platform::current_platform;
@@ -54,13 +54,13 @@
 //!
 //! ## Testing with Headless Mode
 //!
-//! The [`HeadlessPlatform`] provides a mock implementation perfect for CI/testing without
-//! requiring a display server, GPU, or OS windowing system.
+//! The [`HeadlessPlatform`] provides a mock implementation perfect for
+//! CI/testing without requiring a display server, GPU, or OS windowing system.
 //!
 //! ### Direct Usage
 //!
 //! ```rust
-//! use flui_platform::{headless_platform, Platform};
+//! use flui_platform::{Platform, headless_platform};
 //!
 //! let platform = headless_platform();
 //! assert_eq!(platform.name(), "Headless");
@@ -91,20 +91,21 @@
 //!
 //! ### What Headless Mode Provides
 //!
-//! - **Mock Windows**: `open_window()` returns mock windows (no OS windows created)
+//! - **Mock Windows**: `open_window()` returns mock windows (no OS windows
+//!   created)
 //! - **In-Memory Clipboard**: Full clipboard API with in-memory storage
-//! - **Mock Text System**: Text measurement and font APIs (estimates)
 //! - **Mock Displays**: Single virtual display at 1920x1080
 //! - **Background Executor**: Async task execution with tokio runtime
 //! - **Foreground Executor**: Channel-based task queue for main thread
 //! - **Fast Tests**: <100ms overhead, suitable for rapid test iteration
-//! - **Parallel Safe**: Thread-safe, no race conditions in parallel test execution
+//! - **Parallel Safe**: Thread-safe, no race conditions in parallel test
+//!   execution
 //!
 //! ### Example Test
 //!
 //! ```rust
-//! use flui_platform::{headless_platform, WindowOptions};
-//! use flui_types::geometry::{px, Size};
+//! use flui_platform::{WindowOptions, headless_platform};
+//! use flui_types::geometry::{Size, px};
 //!
 //! fn test_window_creation() {
 //!     let platform = headless_platform();
@@ -116,7 +117,9 @@
 //!         ..Default::default()
 //!     };
 //!
-//!     let window = platform.open_window(options).expect("Failed to create window");
+//!     let window = platform
+//!         .open_window(options)
+//!         .expect("Failed to create window");
 //!     // Window is a mock, no actual OS resources allocated
 //! }
 //! ```
@@ -147,6 +150,7 @@
 
 pub mod config;
 pub mod cursor;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod executor;
 pub mod platforms;
 pub mod shared;
@@ -155,67 +159,52 @@ pub mod traits;
 pub mod window;
 
 // Re-export configuration types
+// ==================== Platform Detection ====================
+
 pub use config::{FullscreenMonitor, WindowConfiguration};
-
-// Re-export executor types
-pub use executor::{BackgroundExecutor, ForegroundExecutor};
-
-// Re-export task types
-pub use task::{Priority, Task, TaskLabel};
-
-// Re-export core traits
-pub use traits::{
-    Clipboard, ClipboardItem, DefaultLifecycle, DesktopCapabilities, DispatchEventResult,
-    DisplayId, Font, FontId, FontMetrics, FontRun, FontStyle, FontWeight, GlyphId, LifecycleEvent,
-    LifecycleState, LineLayout, MobileCapabilities, PathPromptOptions, Platform,
-    PlatformCapabilities, PlatformDisplay, PlatformEmbedder, PlatformExecutor, PlatformLifecycle,
-    PlatformTextSystem, PlatformWindow, ShapedGlyph, ShapedRun, TextSystemError, WebCapabilities,
-    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId, WindowMode,
-    WindowOptions,
-};
-
 // Re-export cursor types
 pub use cursor::CursorStyle;
-
-// Re-export platform implementations
-pub use platforms::HeadlessPlatform;
-
-// Desktop platforms
-#[cfg(windows)]
-pub use platforms::WindowsPlatform;
-
-#[cfg(target_os = "macos")]
-pub use platforms::MacOSPlatform;
-
-#[cfg(target_os = "linux")]
-pub use platforms::LinuxPlatform;
-
+// Re-export executor types
+#[cfg(not(target_arch = "wasm32"))]
+pub use executor::{BackgroundExecutor, ForegroundExecutor};
 // Mobile platforms
 #[cfg(target_os = "android")]
 pub use platforms::AndroidPlatform;
-
+// Re-export platform implementations
+pub use platforms::HeadlessPlatform;
 #[cfg(target_os = "ios")]
 pub use platforms::IOSPlatform;
-
+#[cfg(target_os = "linux")]
+pub use platforms::LinuxPlatform;
+#[cfg(target_os = "macos")]
+pub use platforms::MacOSPlatform;
 // Web platform
 #[cfg(target_arch = "wasm32")]
 pub use platforms::WebPlatform;
-
+// Desktop platforms
+#[cfg(windows)]
+pub use platforms::WindowsPlatform;
 // Legacy backend
 #[cfg(feature = "winit-backend")]
 pub use platforms::WinitPlatform;
-
 // Re-export shared infrastructure
 pub use shared::{PlatformHandlers, WindowCallbacks};
-
-// ==================== Platform Detection ====================
-
-use std::sync::Arc;
+// Re-export task types
+pub use task::{Priority, Task, TaskLabel};
+// Re-export core traits
+pub use traits::{
+    Clipboard, ClipboardItem, DefaultLifecycle, DesktopCapabilities, DispatchEventResult,
+    DisplayId, LifecycleEvent, LifecycleState, MobileCapabilities, PathPromptOptions, Platform,
+    PlatformCapabilities, PlatformDisplay, PlatformEmbedder, PlatformExecutor, PlatformLifecycle,
+    PlatformWindow, WebCapabilities, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
+    WindowEvent, WindowId, WindowMode, WindowOptions,
+};
 
 /// Get the current platform implementation
 ///
-/// Automatically selects the correct platform based on the target OS at compile time.
-/// This is the recommended way to obtain a platform instance in cross-platform code.
+/// Automatically selects the correct platform based on the target OS at compile
+/// time. This is the recommended way to obtain a platform instance in
+/// cross-platform code.
 ///
 /// # Detection Logic
 ///
@@ -241,17 +230,23 @@ use std::sync::Arc;
 ///
 /// # Environment Variables
 ///
-/// - **FLUI_HEADLESS=1**: Forces headless mode for CI/testing (overrides OS detection)
+/// - **FLUI_HEADLESS=1**: Forces headless mode for CI/testing (overrides OS
+///   detection)
 ///
 /// # Platform Selection
 ///
-/// - **Headless** (if `FLUI_HEADLESS=1`): Returns `HeadlessPlatform` - testing mode
+/// - **Headless** (if `FLUI_HEADLESS=1`): Returns `HeadlessPlatform` - testing
+///   mode
 /// - **Windows**: Returns `WindowsPlatform` - fully implemented with Win32 API
-/// - **macOS**: Returns `MacOSPlatform` - stub (unimplemented, roadmap available)
-/// - **Linux**: Returns `LinuxPlatform` - stub (unimplemented, roadmap available)
-/// - **Android**: Returns `AndroidPlatform` - stub (unimplemented, roadmap available)
+/// - **macOS**: Returns `MacOSPlatform` - stub (unimplemented, roadmap
+///   available)
+/// - **Linux**: Returns `LinuxPlatform` - stub (unimplemented, roadmap
+///   available)
+/// - **Android**: Returns `AndroidPlatform` - stub (unimplemented, roadmap
+///   available)
 /// - **iOS**: Returns `IOSPlatform` - stub (unimplemented, roadmap available)
-/// - **Web/WASM**: Returns `WebPlatform` - stub (unimplemented, roadmap available)
+/// - **Web/WASM**: Returns `WebPlatform` - stub (unimplemented, roadmap
+///   available)
 ///
 /// # Platform Status
 ///
@@ -310,26 +305,26 @@ use std::sync::Arc;
 ///     // Use Windows-specific features
 /// }
 /// ```
-pub fn current_platform() -> anyhow::Result<Arc<dyn Platform>> {
+pub fn current_platform() -> anyhow::Result<Box<dyn Platform>> {
     // Check for headless mode via environment variable (CI/testing)
     if std::env::var("FLUI_HEADLESS").is_ok() {
         tracing::info!("FLUI_HEADLESS detected, using headless platform");
-        return Ok(Arc::new(HeadlessPlatform::new()));
+        return Ok(Box::new(HeadlessPlatform::new()));
     }
 
     #[cfg(windows)]
     {
-        Ok(Arc::new(WindowsPlatform::new()?))
+        Ok(Box::new(WindowsPlatform::new()?))
     }
 
     #[cfg(all(target_os = "macos", not(windows)))]
     {
-        Ok(Arc::new(MacOSPlatform::new()?))
+        Ok(Box::new(MacOSPlatform::new()?))
     }
 
     #[cfg(all(target_os = "linux", not(any(windows, target_os = "macos"))))]
     {
-        Ok(Arc::new(LinuxPlatform::new()?))
+        Ok(Box::new(LinuxPlatform::new()?))
     }
 
     #[cfg(all(
@@ -337,7 +332,11 @@ pub fn current_platform() -> anyhow::Result<Arc<dyn Platform>> {
         not(any(windows, target_os = "macos", target_os = "linux"))
     ))]
     {
-        Ok(Arc::new(AndroidPlatform::new()?))
+        // On Android, use AndroidPlatform::new(app) directly from android_main().
+        // current_platform() cannot be used because AndroidApp is required.
+        anyhow::bail!(
+            "On Android, use AndroidPlatform::new(app) from android_main() instead of current_platform()"
+        )
     }
 
     #[cfg(all(
@@ -350,7 +349,7 @@ pub fn current_platform() -> anyhow::Result<Arc<dyn Platform>> {
         ))
     ))]
     {
-        Ok(Arc::new(IOSPlatform::new()?))
+        Ok(Box::new(IOSPlatform::new()?))
     }
 
     #[cfg(all(
@@ -364,7 +363,7 @@ pub fn current_platform() -> anyhow::Result<Arc<dyn Platform>> {
         ))
     ))]
     {
-        Ok(Arc::new(WebPlatform::new()?))
+        Ok(Box::new(WebPlatform::new()?))
     }
 
     #[cfg(not(any(
@@ -395,6 +394,6 @@ pub fn current_platform() -> anyhow::Result<Arc<dyn Platform>> {
 /// let platform = headless_platform();
 /// assert_eq!(platform.name(), "Headless");
 /// ```
-pub fn headless_platform() -> Arc<dyn Platform> {
-    Arc::new(HeadlessPlatform::new())
+pub fn headless_platform() -> Box<dyn Platform> {
+    Box::new(HeadlessPlatform::new())
 }

@@ -1,7 +1,7 @@
 //! Metal 4 backend-specific features for macOS/iOS
 //!
-//! This module provides access to Metal 4 features that are not exposed through wgpu's
-//! cross-platform API, including:
+//! This module provides access to Metal 4 features that are not exposed through
+//! wgpu's cross-platform API, including:
 //! - MetalFX spatial/temporal upscaling
 //! - Extended Dynamic Range (EDR) support
 //! - Ray tracing acceleration structures
@@ -32,9 +32,10 @@
 //!     .with_reference_white(200.0);  // 200 nits SDR white
 //! ```
 
-use anyhow::{anyhow, Result};
-use flui_types::geometry::Size;
 use std::sync::Arc;
+
+use anyhow::{Result, anyhow};
+use flui_types::geometry::Size;
 
 // ============================================================================
 // MetalFX Upscaling
@@ -43,8 +44,8 @@ use std::sync::Arc;
 /// MetalFX upscaling mode.
 ///
 /// MetalFX is Apple's AI-powered upscaling technology, similar to NVIDIA DLSS
-/// or AMD FSR. It renders at a lower resolution and upscales to native resolution
-/// with minimal quality loss.
+/// or AMD FSR. It renders at a lower resolution and upscales to native
+/// resolution with minimal quality loss.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UpscaleMode {
     /// Spatial upscaling (no temporal history).
@@ -79,15 +80,17 @@ impl UpscaleMode {
 
 /// MetalFX upscaler for AI-powered resolution upscaling.
 ///
-/// This struct wraps Metal's MTLFXSpatialScaler or MTLFXTemporalScaler to provide
-/// high-quality upscaling from a lower render resolution to native display resolution.
+/// This struct wraps Metal's MTLFXSpatialScaler or MTLFXTemporalScaler to
+/// provide high-quality upscaling from a lower render resolution to native
+/// display resolution.
 ///
 /// # Performance Impact
 ///
 /// Spatial upscaling adds ~0.5-1ms per frame at 1440p.
 /// Temporal upscaling adds ~1-2ms per frame at 1440p.
 ///
-/// However, rendering at lower resolution can save 2-5ms, resulting in net performance gain.
+/// However, rendering at lower resolution can save 2-5ms, resulting in net
+/// performance gain.
 #[derive(Debug)]
 pub struct MetalFxUpscaler {
     mode: UpscaleMode,
@@ -137,8 +140,17 @@ impl MetalFxUpscaler {
             return Err(anyhow!("Input size must be smaller than output size"));
         }
 
-        // TODO: Check device features for MetalFX support
-        // This requires accessing the underlying MTLDevice and checking supportsFamily(MTLGPUFamilyMetal3)
+        // MetalFX support detection requires accessing the underlying MTLDevice via
+        // unsafe FFI (objc::msg_send![device, supportsFamily:MTLGPUFamilyMetal3]).
+        // wgpu does not expose the native Metal device handle in its public API,
+        // so we cannot query MetalFX support directly. The upscaler is created
+        // optimistically; actual MetalFX availability is checked at upscale time.
+        tracing::debug!(
+            mode = ?mode,
+            input = ?input_size,
+            output = ?output_size,
+            "Creating MetalFX upscaler (MetalFX support cannot be verified through wgpu)"
+        );
 
         Ok(Self {
             mode,
@@ -170,11 +182,21 @@ impl MetalFxUpscaler {
     }
 
     /// Check if MetalFX is supported on this device.
+    ///
+    /// Note: MetalFX requires Metal 3+ (Apple Silicon M1+ or AMD RDNA2+).
+    /// wgpu does not expose the native MTLDevice, so we cannot query
+    /// `supportsFamily(MTLGPUFamilyMetal3)` directly. On macOS, this returns
+    /// `true` as a best-effort assumption since most modern Macs support Metal 3.
     pub fn is_supported(&self) -> bool {
         #[cfg(target_os = "macos")]
         {
-            // TODO: Query MTLDevice capabilities
-            // For now, assume supported on all Metal devices
+            // MetalFX requires Metal 3 (M1+ or RDNA2+). Without access to the
+            // underlying MTLDevice, we assume support on macOS. Applications
+            // should handle the error from upscale() gracefully if the GPU
+            // does not actually support MetalFX.
+            tracing::debug!(
+                "MetalFX support assumed on macOS (native MTLDevice query unavailable via wgpu)"
+            );
             true
         }
 
@@ -190,7 +212,8 @@ impl MetalFxUpscaler {
     ///
     /// - `input_texture` - Rendered frame at input_size resolution
     /// - `output_texture` - Target texture at output_size resolution
-    /// - `motion_vectors` - Optional motion vector texture (required for temporal mode)
+    /// - `motion_vectors` - Optional motion vector texture (required for
+    ///   temporal mode)
     /// - `depth` - Optional depth texture (improves quality for temporal mode)
     ///
     /// # Errors
@@ -203,17 +226,23 @@ impl MetalFxUpscaler {
         _motion_vectors: Option<&wgpu::Texture>,
         _depth: Option<&wgpu::Texture>,
     ) -> Result<()> {
-        // TODO: Implement actual MetalFX upscaling
+        // MetalFX upscaling requires direct access to the Metal API:
+        // 1. Extract MTLDevice from wgpu::Device via unsafe hal::api::Metal
+        // 2. Create MTLFXSpatialScalerDescriptor or MTLFXTemporalScalerDescriptor
+        // 3. Configure input/output textures, color space, and motion vectors
+        // 4. Encode the scaling pass into a MTLCommandBuffer
+        // 5. Submit to the GPU queue
         //
-        // This requires:
-        // 1. Get Metal device from wgpu::Device (unsafe FFI)
-        // 2. Create MTLFXSpatialScaler or MTLFXTemporalScaler
-        // 3. Encode upscaling pass in command buffer
-        // 4. Submit to GPU queue
-        //
-        // For now, return error as placeholder
+        // This cannot be implemented through wgpu's public API alone. It requires
+        // either wgpu::hal unsafe access or a dedicated metal-rs / objc2 FFI layer.
+        // See: https://developer.apple.com/documentation/metalfx
+        tracing::debug!(
+            mode = ?self.mode,
+            ratio = self.upscale_ratio(),
+            "MetalFX upscaling requested but not available (requires Metal FFI bindings)"
+        );
         Err(anyhow!(
-            "MetalFX upscaling not yet implemented - requires Metal FFI bindings"
+            "MetalFX upscaling requires Metal FFI bindings (metal-rs/objc2) which are not yet integrated"
         ))
     }
 }
@@ -224,8 +253,8 @@ impl MetalFxUpscaler {
 
 /// Extended Dynamic Range configuration for HDR content on macOS.
 ///
-/// EDR allows content to exceed the standard 0-1 SDR range on compatible displays,
-/// enabling HDR highlights up to 1600 nits on Pro Display XDR.
+/// EDR allows content to exceed the standard 0-1 SDR range on compatible
+/// displays, enabling HDR highlights up to 1600 nits on Pro Display XDR.
 ///
 /// # Display Support
 ///
@@ -318,11 +347,20 @@ impl EdrConfig {
     }
 
     /// Check if EDR is available on the current display.
+    ///
+    /// Note: Accurate detection requires querying `NSScreen.maximumExtendedDynamicRangeColorComponentValue`
+    /// via AppKit/objc FFI. wgpu does not expose display EDR capabilities.
+    /// On macOS, this returns `true` since most Apple displays from 2019+ support some
+    /// level of EDR (even if only modest headroom on non-XDR panels).
     pub fn is_available() -> bool {
         #[cfg(target_os = "macos")]
         {
-            // TODO: Query NSScreen.maximumExtendedDynamicRangeColorComponentValue
-            // For now, assume available on all macOS displays
+            // EDR availability requires NSScreen query via AppKit FFI:
+            //   let headroom: CGFloat = msg_send![screen, maximumExtendedDynamicRangeColorComponentValue];
+            // Without AppKit FFI, we assume EDR is available on macOS since all modern
+            // Apple displays support at least basic EDR. Applications should check
+            // get_display_headroom() for actual capability before enabling HDR content.
+            tracing::debug!("EDR assumed available on macOS (NSScreen query unavailable via wgpu)");
             true
         }
 
@@ -334,12 +372,25 @@ impl EdrConfig {
 
     /// Get current display's EDR headroom.
     ///
-    /// Returns 1.0 if EDR is not supported.
+    /// Returns 1.0 (SDR) as a conservative default. Accurate headroom detection
+    /// requires querying `NSScreen.maximumExtendedDynamicRangeColorComponentValue`
+    /// via AppKit/objc FFI, which is not available through wgpu.
+    ///
+    /// Typical values on Apple hardware:
+    /// - MacBook Air: ~1.0 (no EDR)
+    /// - MacBook Pro 14"/16" (2021+): ~4.0-8.0
+    /// - Pro Display XDR: ~8.0
+    /// - Studio Display: ~2.0
     pub fn get_display_headroom() -> f32 {
         #[cfg(target_os = "macos")]
         {
-            // TODO: Query NSScreen.maximumExtendedDynamicRangeColorComponentValue
-            // For now, return conservative value
+            // Querying actual headroom requires AppKit FFI:
+            //   let headroom: CGFloat = msg_send![screen, maximumExtendedDynamicRangeColorComponentValue];
+            // Return 1.0 (SDR) as a safe default. Applications integrating with
+            // AppKit directly can override this with the actual display value.
+            tracing::debug!(
+                "Returning default EDR headroom 1.0 (NSScreen query unavailable via wgpu)"
+            );
             1.0
         }
 
@@ -378,8 +429,8 @@ pub struct RayTracingConfig {
 
     /// Maximum ray recursion depth.
     ///
-    /// Higher values enable more realistic inter-reflections but cost more performance.
-    /// Typical values: 1-4
+    /// Higher values enable more realistic inter-reflections but cost more
+    /// performance. Typical values: 1-4
     pub max_recursion_depth: u32,
 }
 
@@ -419,11 +470,23 @@ impl RayTracingConfig {
     }
 
     /// Check if ray tracing is supported on this device.
+    ///
+    /// Metal ray tracing requires Metal 4 (macOS 15+) and M3+ or RDNA3+ GPU.
+    /// Detection requires querying `MTLDevice.supportsRaytracing` via Metal FFI,
+    /// which is not available through wgpu's public API. Returns `false` as a
+    /// conservative default since Metal ray tracing is only available on very
+    /// recent hardware and OS combinations.
     pub fn is_supported() -> bool {
         #[cfg(target_os = "macos")]
         {
-            // TODO: Query MTLDevice.supportsRaytracing
-            // Ray tracing requires Metal 4 (macOS 15+) and M3+/RDNA3+ GPU
+            // Accurate detection requires Metal FFI:
+            //   let supported: BOOL = msg_send![device, supportsRaytracing];
+            // wgpu does not expose ray tracing extensions for Metal backend.
+            // Return false since Metal ray tracing (M3+, macOS 15+) is not yet
+            // widely deployed and cannot be verified without native API access.
+            tracing::debug!(
+                "Metal ray tracing not detectable via wgpu (requires MTLDevice.supportsRaytracing)"
+            );
             false
         }
 

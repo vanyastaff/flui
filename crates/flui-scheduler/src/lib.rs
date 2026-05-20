@@ -56,7 +56,7 @@
 //! ### Typestate Pattern
 //! Compile-time state machine for tickers:
 //! ```rust
-//! use flui_scheduler::typestate::{TypestateTicker, Idle, Active};
+//! use flui_scheduler::typestate::{Active, Idle, TypestateTicker};
 //!
 //! let ticker: TypestateTicker<Idle> = TypestateTicker::new();
 //! let ticker: TypestateTicker<Active> = ticker.start(|elapsed| {});
@@ -67,7 +67,7 @@
 //! ### Newtype Pattern
 //! Type-safe duration wrappers prevent unit mixing:
 //! ```rust
-//! use flui_scheduler::duration::{Milliseconds, FrameDuration};
+//! use flui_scheduler::duration::{FrameDuration, Milliseconds};
 //!
 //! let elapsed = Milliseconds::new(10.0); // 10ms elapsed
 //! let budget = FrameDuration::from_fps(60); // ~16.67ms budget
@@ -75,21 +75,22 @@
 //! ```
 //!
 //! ### Type-Safe IDs
-//! PhantomData markers prevent ID type confusion:
+//! Foundation markers prevent ID type confusion:
 //! ```rust
-//! use flui_scheduler::frame::FrameId;
-//! use flui_scheduler::task::TaskId;
+//! use flui_scheduler::id::IdGenerator;
+//! use flui_foundation::markers;
 //!
-//! let frame_id = FrameId::new();
-//! let task_id = TaskId::new();
+//! let frame_gen = IdGenerator::<markers::Frame>::new();
+//! let task_gen = IdGenerator::<markers::Task>::new();
+//! let frame_id = frame_gen.next();
+//! let task_id = task_gen.next();
 //! // These are different types - can't be mixed!
 //! ```
 //!
 //! ### Typed Tasks
 //! Compile-time priority checking:
 //! ```rust
-//! use flui_scheduler::task::TypedTask;
-//! use flui_scheduler::traits::UserInputPriority;
+//! use flui_scheduler::{task::TypedTask, traits::UserInputPriority};
 //!
 //! let task = TypedTask::<UserInputPriority>::new(|| {
 //!     println!("High priority!");
@@ -99,7 +100,7 @@
 //! ## Example Usage
 //!
 //! ```rust
-//! use flui_scheduler::{Scheduler, Priority, FrameBudget};
+//! use flui_scheduler::{FrameBudget, Priority, Scheduler};
 //!
 //! let scheduler = Scheduler::new();
 //!
@@ -120,8 +121,7 @@
 //! ## Feature Flags
 //!
 //! - **`serde`** - Enable serialization support for duration types, priorities,
-//!   and statistics. Adds `Serialize` and `Deserialize` derives
-//!   to data types.
+//!   and statistics. Adds `Serialize` and `Deserialize` derives to data types.
 //!
 //! ```toml
 //! [dependencies]
@@ -134,14 +134,16 @@
 //! - Native platforms (Windows, macOS, Linux) via `std::time`
 //! - WebAssembly via `performance.now()`
 //!
-//! All types are [`Send`] + [`Sync`] and safe for use in multi-threaded contexts.
+//! All types are [`Send`] + [`Sync`] and safe for use in multi-threaded
+//! contexts.
 //!
 //! ## Preludes
 //!
 //! Two prelude modules are provided for convenient imports:
 //!
 //! - [`prelude`] - Core types for basic scheduling
-//! - [`prelude_advanced`] - Includes typestate tickers, typed IDs, and typed tasks
+//! - [`prelude_advanced`] - Includes typestate tickers, typed IDs, and typed
+//!   tasks
 //!
 //! ```rust
 //! use flui_scheduler::prelude::*;
@@ -175,86 +177,69 @@ pub use budget::{
     AllPhaseStats, BudgetPolicy, FrameBudget, FrameBudgetBuilder, PhaseStats, SharedBudget,
 };
 pub use config::{
-    default_scheduling_strategy, set_time_dilation, time_dilation, PerformanceMode,
-    PerformanceModeRequestHandle, SchedulingStrategy, TimingsCallback, SERVICE_EXT_TIME_DILATION,
+    PerformanceMode, PerformanceModeRequestHandle, SERVICE_EXT_TIME_DILATION, SchedulingStrategy,
+    TimingsCallback, default_scheduling_strategy, set_time_dilation, time_dilation,
 };
+// Re-exports - Duration types
+pub use duration::{FrameDuration, Microseconds, Milliseconds, Percentage, Seconds};
+// Re-export from flui-foundation for binding pattern
+pub use flui_foundation::{BindingBase, HasInstance};
 pub use frame::{
     AppLifecycleState, FrameCallback, FrameId, FramePhase, FrameTiming, FrameTimingBuilder,
     LifecycleStateCallback, OneShotFrameCallback, PostFrameCallback, RecurringFrameCallback,
     SchedulerPhase,
 };
-pub use scheduler::{
-    CallbackId, FrameCompletionFuture, FrameSkipPolicy, Scheduler, SchedulerBuilder,
-};
-
-// Re-export from flui-foundation for binding pattern
-pub use flui_foundation::{BindingBase, HasInstance};
+// Re-exports - ID types (unified with flui-foundation)
+pub use id::{CallbackId, FrameHandle, Handle, Id, IdGenerator, Marker, TaskHandle, markers};
+pub use scheduler::{FrameCompletionFuture, FrameSkipPolicy, Scheduler, SchedulerBuilder};
 pub use task::{Priority, PriorityCount, Task, TaskId, TaskQueue, TypedTask};
 pub use ticker::{
     ScheduledTicker, ScheduledTickerCallback, Ticker, TickerCallback, TickerCanceled, TickerFuture,
     TickerFutureOrCancel, TickerGroup, TickerId, TickerProvider, TickerState,
 };
-pub use vsync::{VsyncCallback, VsyncDrivenScheduler, VsyncMode, VsyncScheduler, VsyncStats};
-
-// Re-exports - Duration types
-pub use duration::{FrameDuration, Microseconds, Milliseconds, Percentage, Seconds};
-
-// Re-exports - ID types
-pub use id::{
-    CallbackIdMarker, FrameHandle, FrameIdMarker, Handle, IdGenerator, IdMarker, TaskHandle,
-    TaskIdMarker, TickerIdMarker, TypedId,
-};
-
 // Re-exports - Trait types
 pub use traits::{
     AnimationPriority, BuildPriority, FrameBudgetExt, FrameTimingExt, IdlePriority, PriorityExt,
     PriorityLevel, ToMilliseconds, ToSeconds, UserInputPriority,
 };
-
 // Re-exports - Typestate types
 pub use typestate::{
     Active, Idle, Muted, Stopped, TickerState as TypestateTickerState, TypestateTicker,
 };
+pub use vsync::{VsyncCallback, VsyncDrivenScheduler, VsyncMode, VsyncScheduler, VsyncStats};
 
 /// Prelude for common scheduler types
 pub mod prelude {
     // Core types
+    // Duration types
+    // Extension traits for convenient method access
     pub use crate::{
         BudgetPolicy, FrameBudget, FrameId, FramePhase, FrameTiming, OneShotFrameCallback,
         Priority, ScheduledTicker, Scheduler, SchedulerPhase, Task, TaskId, TaskQueue, Ticker,
         TickerProvider, TickerState,
-    };
-
-    // Duration types
-    pub use crate::duration::{FrameDuration, Milliseconds, Percentage, Seconds};
-
-    // Extension traits for convenient method access
-    pub use crate::traits::{
-        FrameBudgetExt, FrameTimingExt, PriorityExt, ToMilliseconds, ToSeconds,
+        duration::{FrameDuration, Milliseconds, Percentage, Seconds},
+        traits::{FrameBudgetExt, FrameTimingExt, PriorityExt, ToMilliseconds, ToSeconds},
     };
 }
 
 /// Advanced prelude with typestate and type-safe IDs
 pub mod prelude_advanced {
-    pub use crate::prelude::*;
-
-    // Typestate ticker
-    pub use crate::typestate::{Active, Idle, Muted, Stopped, TickerState, TypestateTicker};
-
-    // Typed tasks
-    pub use crate::task::TypedTask;
-
     // Type-safe IDs
-    pub use crate::id::{FrameHandle, Handle, IdGenerator, TypedId};
-
+    // Typed tasks
     // Type-level priorities
-    pub use crate::traits::{
-        AnimationPriority, BuildPriority, IdlePriority, PriorityLevel, UserInputPriority,
-    };
-
+    // Typestate ticker
     // Additional types
     pub use crate::{
         AllPhaseStats, FrameBudgetBuilder, FrameTimingBuilder, PhaseStats, PriorityCount,
         SchedulerBuilder, TickerGroup, VsyncMode, VsyncStats,
+    };
+    pub use crate::{
+        id::{FrameHandle, Handle, Id, IdGenerator},
+        prelude::*,
+        task::TypedTask,
+        traits::{
+            AnimationPriority, BuildPriority, IdlePriority, PriorityLevel, UserInputPriority,
+        },
+        typestate::{Active, Idle, Muted, Stopped, TickerState, TypestateTicker},
     };
 }

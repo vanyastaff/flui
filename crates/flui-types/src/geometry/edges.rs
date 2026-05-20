@@ -58,7 +58,8 @@ impl<T> Edges<T> {
         }
     }
 
-    /// Creates symmetric edge values (vertical for top/bottom, horizontal for left/right).
+    /// Creates symmetric edge values (vertical for top/bottom, horizontal for
+    /// left/right).
     #[inline]
     pub fn symmetric(vertical: T, horizontal: T) -> Self
     where
@@ -216,7 +217,8 @@ impl Edges<super::units::Pixels> {
         }
     }
 
-    /// Get the total insets as a size (width: left + right, height: top + bottom).
+    /// Get the total insets as a size (width: left + right, height: top +
+    /// bottom).
     ///
     /// # Examples
     ///

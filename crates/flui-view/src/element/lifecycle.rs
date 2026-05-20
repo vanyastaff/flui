@@ -1,6 +1,7 @@
 //! Element lifecycle states.
 //!
-//! Defines the lifecycle phases an Element goes through from creation to disposal.
+//! Defines the lifecycle phases an Element goes through from creation to
+//! disposal.
 
 /// Lifecycle state of an Element.
 ///

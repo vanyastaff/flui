@@ -19,17 +19,16 @@ dpi = "0.1"
 # Windowing (for platform implementations)
 winit = { workspace = true, optional = true }
 
+# Clipboard (for winit backend)
+arboard = { workspace = true, optional = true }
+
 # Error handling & logging
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
-# Synchronization & Async
+# Synchronization
 parking_lot = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
-num_cpus = "1.16"
-flume = "0.11"              # Better MPSC channels for UI thread communication
-waker-fn = "1.2"            # Simplified async waker creation
 
 # Window handle abstraction
 raw-window-handle = "0.6"
@@ -54,8 +53,6 @@ windows = { version = "0.59", features = [
     "Win32_System_DataExchange",
     "Win32_System_Memory",
     "Win32_System_Ole",
-    "Win32_Graphics_DirectWrite",
-    "Win32_Globalization",
 ] }
 
 # macOS platform
@@ -68,6 +65,53 @@ objc = "0.2"
 foreign-types = "0.5"
 block = "0.1"
 
+# Android platform
+[target.'cfg(target_os = "android")'.dependencies]
+android-activity = { version = "0.6", features = ["native-activity"] }
+ndk = { version = "0.9", features = ["rwh_06"] }
+libc = "0.2"
+log = "0.4"
+
+# Native-only async dependencies (not available on wasm32)
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
+num_cpus = "1.16"
+flume = "0.11"              # Better MPSC channels for UI thread communication
+waker-fn = "1.2"            # Simplified async waker creation
+
+# Web/WASM platform
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    # Core DOM
+    "Window", "Document", "Element", "HtmlCanvasElement", "HtmlElement",
+    # Events
+    "Event", "EventTarget", "AddEventListenerOptions",
+    "PointerEvent", "KeyboardEvent", "WheelEvent", "MouseEvent",
+    "FocusEvent", "UiEvent",
+    # Rendering
+    "CanvasRenderingContext2d", "DomRect",
+    # Display
+    "Screen", "MediaQueryList", "MediaQueryListEvent",
+    # Observers
+    "ResizeObserver", "ResizeObserverEntry", "ResizeObserverSize",
+    # Animation
+    "Performance",
+    # Clipboard
+    "Clipboard", "Navigator",
+    # Visibility
+    "VisibilityState",
+    # Location
+    "Location",
+    # Styling
+    "CssStyleDeclaration",
+    # Console
+    "console",
+] }
+console_error_panic_hook = "0.1"
+
 [features]
 default = ["desktop"]
 
@@ -75,7 +119,10 @@ default = ["desktop"]
 desktop = ["winit"]
 
 # Legacy winit backend (deprecated, optional)
-winit-backend = ["winit"]
+winit-backend = ["winit", "arboard"]
+
+# Web platform
+web = []
 
 # Linux display server protocols
 wayland = []

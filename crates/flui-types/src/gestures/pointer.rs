@@ -2,8 +2,9 @@
 //!
 //! This module provides types for tracking pointer/touch device information.
 
-use crate::geometry::{Offset, Pixels};
 use std::time::Duration;
+
+use crate::geometry::{Offset, Pixels};
 
 /// A pair of local and global offsets
 ///
@@ -13,11 +14,10 @@ use std::time::Duration;
 /// # Examples
 ///
 /// ```
-/// use flui_types::gestures::OffsetPair;
-/// use flui_types::Offset;
+/// use flui_types::{Offset, gestures::OffsetPair};
 ///
 /// let pair = OffsetPair::new(
-///     Offset::new(10.0, 20.0),  // local
+///     Offset::new(10.0, 20.0),   // local
 ///     Offset::new(100.0, 200.0), // global
 /// );
 ///
@@ -46,13 +46,9 @@ impl OffsetPair {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::gestures::OffsetPair;
-    /// use flui_types::Offset;
+    /// use flui_types::{Offset, gestures::OffsetPair};
     ///
-    /// let pair = OffsetPair::new(
-    ///     Offset::new(10.0, 20.0),
-    ///     Offset::new(100.0, 200.0),
-    /// );
+    /// let pair = OffsetPair::new(Offset::new(10.0, 20.0), Offset::new(100.0, 200.0));
     /// ```
     #[inline]
     #[must_use]
@@ -65,8 +61,7 @@ impl OffsetPair {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::gestures::OffsetPair;
-    /// use flui_types::Offset;
+    /// use flui_types::{Offset, gestures::OffsetPair};
     ///
     /// let pair = OffsetPair::from_offset(Offset::new(50.0, 75.0));
     /// assert_eq!(pair.local, pair.global);
@@ -87,13 +82,9 @@ impl OffsetPair {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::gestures::OffsetPair;
-    /// use flui_types::Offset;
+    /// use flui_types::{Offset, gestures::OffsetPair};
     ///
-    /// let pair = OffsetPair::new(
-    ///     Offset::new(10.0, 20.0),
-    ///     Offset::new(100.0, 200.0),
-    /// );
+    /// let pair = OffsetPair::new(Offset::new(10.0, 20.0), Offset::new(100.0, 200.0));
     /// let delta = pair.delta();
     /// assert_eq!(delta, Offset::new(90.0, 180.0));
     /// ```
@@ -108,8 +99,7 @@ impl OffsetPair {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::gestures::OffsetPair;
-    /// use flui_types::Offset;
+    /// use flui_types::{Offset, gestures::OffsetPair};
     ///
     /// let valid = OffsetPair::new(Offset::new(10.0, 20.0), Offset::new(100.0, 200.0));
     /// assert!(valid.is_finite());
@@ -169,9 +159,12 @@ pub enum PointerDeviceKind {
 /// # Examples
 ///
 /// ```
-/// use flui_types::gestures::{PointerData, PointerDeviceKind};
-/// use flui_types::Offset;
 /// use std::time::Duration;
+///
+/// use flui_types::{
+///     Offset,
+///     gestures::{PointerData, PointerDeviceKind},
+/// };
 ///
 /// let data = PointerData::new(
 ///     Duration::from_millis(100),
@@ -263,9 +256,12 @@ impl PointerData {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::gestures::{PointerData, PointerDeviceKind};
-    /// use flui_types::Offset;
     /// use std::time::Duration;
+    ///
+    /// use flui_types::{
+    ///     Offset,
+    ///     gestures::{PointerData, PointerDeviceKind},
+    /// };
     ///
     /// let data = PointerData::new(
     ///     Duration::from_millis(100),
@@ -373,16 +369,20 @@ impl PointerData {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::gestures::{PointerData, PointerDeviceKind};
-    /// use flui_types::Offset;
     /// use std::time::Duration;
+    ///
+    /// use flui_types::{
+    ///     Offset,
+    ///     gestures::{PointerData, PointerDeviceKind},
+    /// };
     ///
     /// let down = PointerData::new(
     ///     Duration::from_millis(100),
     ///     Offset::ZERO,
     ///     0,
     ///     PointerDeviceKind::Touch,
-    /// ).with_pressure(0.5, 0.0, 1.0);
+    /// )
+    /// .with_pressure(0.5, 0.0, 1.0);
     /// assert!(down.is_down());
     /// ```
     #[inline]
@@ -396,16 +396,20 @@ impl PointerData {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::gestures::{PointerData, PointerDeviceKind};
-    /// use flui_types::Offset;
     /// use std::time::Duration;
+    ///
+    /// use flui_types::{
+    ///     Offset,
+    ///     gestures::{PointerData, PointerDeviceKind},
+    /// };
     ///
     /// let hover = PointerData::new(
     ///     Duration::from_millis(100),
     ///     Offset::ZERO,
     ///     0,
     ///     PointerDeviceKind::Stylus,
-    /// ).with_distance(5.0, 10.0);
+    /// )
+    /// .with_distance(5.0, 10.0);
     /// assert!(hover.is_hovering());
     /// ```
     #[inline]
@@ -419,16 +423,20 @@ impl PointerData {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::gestures::{PointerData, PointerDeviceKind};
-    /// use flui_types::Offset;
     /// use std::time::Duration;
+    ///
+    /// use flui_types::{
+    ///     Offset,
+    ///     gestures::{PointerData, PointerDeviceKind},
+    /// };
     ///
     /// let data = PointerData::new(
     ///     Duration::from_millis(100),
     ///     Offset::ZERO,
     ///     0,
     ///     PointerDeviceKind::Touch,
-    /// ).with_pressure(50.0, 0.0, 100.0);
+    /// )
+    /// .with_pressure(50.0, 0.0, 100.0);
     /// assert_eq!(data.normalized_pressure(), 0.5);
     /// ```
     #[inline]
@@ -447,16 +455,20 @@ impl PointerData {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::gestures::{PointerData, PointerDeviceKind};
-    /// use flui_types::Offset;
     /// use std::time::Duration;
+    ///
+    /// use flui_types::{
+    ///     Offset,
+    ///     gestures::{PointerData, PointerDeviceKind},
+    /// };
     ///
     /// let data = PointerData::new(
     ///     Duration::from_millis(100),
     ///     Offset::ZERO,
     ///     0,
     ///     PointerDeviceKind::Stylus,
-    /// ).with_distance(5.0, 10.0);
+    /// )
+    /// .with_distance(5.0, 10.0);
     /// assert_eq!(data.normalized_distance(), 0.5);
     /// ```
     #[inline]
@@ -476,16 +488,20 @@ impl PointerData {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::gestures::{PointerData, PointerDeviceKind};
-    /// use flui_types::Offset;
     /// use std::time::Duration;
+    ///
+    /// use flui_types::{
+    ///     Offset,
+    ///     gestures::{PointerData, PointerDeviceKind},
+    /// };
     ///
     /// let data = PointerData::new(
     ///     Duration::from_millis(100),
     ///     Offset::ZERO,
     ///     0,
     ///     PointerDeviceKind::Touch,
-    /// ).with_radius(10.0, 5.0, 0.0, 20.0);
+    /// )
+    /// .with_radius(10.0, 5.0, 0.0, 20.0);
     /// let area = data.touch_area();
     /// assert!((area - 157.08).abs() < 0.1); // π * 10 * 5
     /// ```
@@ -500,9 +516,12 @@ impl PointerData {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::gestures::{PointerData, PointerDeviceKind};
-    /// use flui_types::Offset;
     /// use std::time::Duration;
+    ///
+    /// use flui_types::{
+    ///     Offset,
+    ///     gestures::{PointerData, PointerDeviceKind},
+    /// };
     ///
     /// let valid = PointerData::new(
     ///     Duration::from_millis(100),
@@ -539,16 +558,20 @@ impl PointerData {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::gestures::{PointerData, PointerDeviceKind};
-    /// use flui_types::Offset;
     /// use std::time::Duration;
+    ///
+    /// use flui_types::{
+    ///     Offset,
+    ///     gestures::{PointerData, PointerDeviceKind},
+    /// };
     ///
     /// let data = PointerData::new(
     ///     Duration::from_millis(100),
     ///     Offset::ZERO,
     ///     0,
     ///     PointerDeviceKind::Touch,
-    /// ).with_delta(Offset::new(3.0, 4.0));
+    /// )
+    /// .with_delta(Offset::new(3.0, 4.0));
     /// assert_eq!(data.speed(), 5.0);
     /// ```
     #[inline]

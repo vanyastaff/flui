@@ -1,0 +1,18 @@
+[package]
+name = "flui-desktop-scene"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Hot-reloadable scene plugin for desktop (Windows/macOS/Linux)"
+
+[lib]
+crate-type = ["cdylib"]
+name = "flui_scene"
+
+[dependencies]
+flui-hot-reload = { path = "../../crates/flui-hot-reload" }
+flui-layer = { path = "../../crates/flui-layer" }
+flui-types = { path = "../../crates/flui-types" }
+
+[lints]
+workspace = true

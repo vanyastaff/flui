@@ -1,16 +1,19 @@
 //! Core platform abstraction trait
 //!
-//! Defines the central Platform trait that all platform implementations must provide.
-//! This trait serves as the main interface between the FLUI framework and platform-specific code.
+//! Defines the central Platform trait that all platform implementations must
+//! provide. This trait serves as the main interface between the FLUI framework
+//! and platform-specific code.
 
-use super::window::WindowAppearance;
-use super::{PlatformCapabilities, PlatformDisplay, PlatformWindow};
-use crate::cursor::CursorStyle;
-use crate::task::Task;
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+
 use anyhow::Result;
 use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+
+use super::{PlatformCapabilities, PlatformDisplay, PlatformWindow, window::WindowAppearance};
+use crate::{cursor::CursorStyle, task::Task};
 
 /// Window creation options
 #[derive(Debug, Clone)]
@@ -50,21 +53,18 @@ impl Default for WindowOptions {
 /// Window display mode with restoration data
 ///
 /// Combines window state (normal/minimized/maximized/fullscreen) with the data
-/// needed to restore from each state. This design ensures type-safety: restoration
-/// data is only available when in the corresponding state.
+/// needed to restore from each state. This design ensures type-safety:
+/// restoration data is only available when in the corresponding state.
 ///
-/// # Platform-specific notes
-///
-/// - **Windows**: `restore_style` stores WS_* window style bits
-/// - **macOS**: Would store NSWindow style mask
-/// - **Linux**: Would store window manager hints
+/// Platform-specific restoration data (e.g., window style bits) should be
+/// stored in the platform's own `WindowContext` or equivalent struct.
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// match window_mode {
 ///     WindowMode::Normal => println!("Window is in normal state"),
-///     WindowMode::Fullscreen { restore_style, restore_bounds } => {
+///     WindowMode::Fullscreen { restore_bounds } => {
 ///         println!("Window is fullscreen, can restore to {:?}", restore_bounds);
 ///     }
 ///     _ => {}
@@ -90,13 +90,6 @@ pub enum WindowMode {
 
     /// Window is in fullscreen mode
     Fullscreen {
-        /// Window style bits before fullscreen (platform-specific)
-        ///
-        /// - Windows: WS_OVERLAPPEDWINDOW, WS_POPUP, etc.
-        /// - macOS: NSWindowStyleMask bits
-        /// - Linux: X11/Wayland window type atoms
-        restore_style: u32,
-
         /// Bounds before fullscreen for restoration
         restore_bounds: Bounds<DevicePixels>,
     },
@@ -129,8 +122,9 @@ impl WindowMode {
 
     /// Validate if transition to new mode is allowed
     ///
-    /// All transitions are currently allowed except transitioning to the same state.
-    /// This method exists as a hook for adding transition restrictions in the future.
+    /// All transitions are currently allowed except transitioning to the same
+    /// state. This method exists as a hook for adding transition
+    /// restrictions in the future.
     pub fn can_transition_to(&self, new_mode: &WindowMode) -> bool {
         // All transitions allowed except same state
         !std::mem::discriminant(self).eq(&std::mem::discriminant(new_mode))
@@ -144,16 +138,18 @@ pub struct WindowId(pub u64);
 /// Core platform abstraction trait
 ///
 /// This trait provides the complete interface for platform-specific operations.
-/// All platform implementations (Winit, native Windows/macOS/Linux, headless testing)
-/// must implement this trait.
+/// All platform implementations (Winit, native Windows/macOS/Linux, headless
+/// testing) must implement this trait.
 ///
 /// # Architecture
 ///
 /// The Platform trait follows several key design principles from GPUI:
 ///
 /// - **Unified API**: Single trait for all platform operations
-/// - **Callback registry**: Framework can register handlers without tight coupling
-/// - **Interior mutability**: Implementations use Mutex/RwLock for thread-safe &self methods
+/// - **Callback registry**: Framework can register handlers without tight
+///   coupling
+/// - **Interior mutability**: Implementations use Mutex/RwLock for thread-safe
+///   &self methods
 /// - **Type erasure**: Returns `Box<dyn Trait>` for flexibility
 ///
 /// # Example
@@ -179,29 +175,25 @@ pub trait Platform: Send + Sync + 'static {
     /// Foreground tasks run on the main thread and must not block.
     fn foreground_executor(&self) -> Arc<dyn PlatformExecutor>;
 
-    /// Get the platform's text rendering system
-    fn text_system(&self) -> Arc<dyn PlatformTextSystem>;
-
     // ==================== Lifecycle ====================
 
     /// Run the platform event loop
     ///
-    /// This function takes ownership of the current thread and runs the platform's
-    /// event loop. The `on_ready` callback is invoked once the platform is initialized
-    /// and ready to create windows.
+    /// This function takes ownership of the platform and the current thread,
+    /// running the platform's event loop. The `on_ready` callback is invoked
+    /// once the platform is initialized and ready to create windows.
+    ///
+    /// Takes `self: Box<Self>` because some backends (e.g. winit) require
+    /// ownership of the event loop to run it.
     ///
     /// This function only returns when the application quits.
-    fn run(&self, on_ready: Box<dyn FnOnce()>);
+    fn run(self: Box<Self>, on_ready: Box<dyn FnOnce()>);
 
     /// Request the application to quit
     ///
-    /// This may not quit immediately - the platform will clean up and then exit.
+    /// This may not quit immediately - the platform will clean up and then
+    /// exit.
     fn quit(&self);
-
-    /// Request a new frame to be rendered
-    ///
-    /// This is used for continuous rendering modes (e.g., animations, games).
-    fn request_frame(&self);
 
     // ==================== Window Management ====================
 
@@ -388,14 +380,6 @@ pub enum WindowEvent {
     /// Window focus changed
     FocusChanged { window_id: WindowId, focused: bool },
 
-    /// Window gained focus (deprecated, use FocusChanged)
-    #[deprecated(note = "Use FocusChanged instead")]
-    Focused(WindowId),
-
-    /// Window lost focus (deprecated, use FocusChanged)
-    #[deprecated(note = "Use FocusChanged instead")]
-    Unfocused(WindowId),
-
     /// Window was resized (size in device pixels)
     Resized {
         window_id: WindowId,
@@ -460,235 +444,6 @@ pub trait PlatformExecutor: Send + Sync {
         false // Default implementation
     }
 }
-
-// ==================== Font Types (US5) ====================
-
-/// Unique identifier for a loaded font face
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct FontId(pub usize);
-
-/// Unique identifier for a glyph within a font
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct GlyphId(pub u32);
-
-/// Font descriptor for resolving a specific font face
-#[derive(Debug, Clone, Default)]
-pub struct Font {
-    /// Font family name (e.g., "Segoe UI", "Arial")
-    pub family: String,
-    /// Font weight (Normal, Bold, etc.)
-    pub weight: FontWeight,
-    /// Font style (Normal, Italic, Oblique)
-    pub style: FontStyle,
-}
-
-/// Font weight variants
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum FontWeight {
-    /// Thin (100)
-    Thin,
-    /// Light (300)
-    Light,
-    /// Normal/Regular (400)
-    #[default]
-    Normal,
-    /// Medium (500)
-    Medium,
-    /// SemiBold (600)
-    SemiBold,
-    /// Bold (700)
-    Bold,
-    /// ExtraBold (800)
-    ExtraBold,
-    /// Black (900)
-    Black,
-}
-
-impl FontWeight {
-    /// Convert to DirectWrite/CSS numeric weight
-    pub fn to_numeric(self) -> u16 {
-        match self {
-            FontWeight::Thin => 100,
-            FontWeight::Light => 300,
-            FontWeight::Normal => 400,
-            FontWeight::Medium => 500,
-            FontWeight::SemiBold => 600,
-            FontWeight::Bold => 700,
-            FontWeight::ExtraBold => 800,
-            FontWeight::Black => 900,
-        }
-    }
-}
-
-/// Font style variants
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum FontStyle {
-    /// Upright (normal)
-    #[default]
-    Normal,
-    /// Italic
-    Italic,
-    /// Oblique (slanted)
-    Oblique,
-}
-
-/// A run of text with a specific font
-#[derive(Debug, Clone, Copy)]
-pub struct FontRun {
-    /// Font to use for this run
-    pub font_id: FontId,
-    /// Number of UTF-8 bytes in this run
-    pub len: usize,
-}
-
-/// Font metrics in design units
-#[derive(Debug, Clone, Copy)]
-pub struct FontMetrics {
-    /// Design units per em square
-    pub units_per_em: u16,
-    /// Ascent in design units (positive, above baseline)
-    pub ascent: f32,
-    /// Descent in design units (positive value, below baseline)
-    pub descent: f32,
-    /// Line gap in design units
-    pub line_gap: f32,
-    /// Underline position in design units (negative = below baseline)
-    pub underline_position: f32,
-    /// Underline thickness in design units
-    pub underline_thickness: f32,
-    /// Cap height in design units
-    pub cap_height: f32,
-    /// x-height in design units
-    pub x_height: f32,
-}
-
-/// Result of laying out a single line of text
-#[derive(Debug, Clone)]
-pub struct LineLayout {
-    /// Font size used for layout
-    pub font_size: f32,
-    /// Total width of the line in logical pixels
-    pub width: f32,
-    /// Ascent of the line in logical pixels
-    pub ascent: f32,
-    /// Descent of the line in logical pixels (positive value)
-    pub descent: f32,
-    /// Shaped glyph runs
-    pub runs: Vec<ShapedRun>,
-    /// Total number of UTF-8 bytes in the laid-out text
-    pub len: usize,
-}
-
-/// A run of shaped glyphs with a single font
-#[derive(Debug, Clone)]
-pub struct ShapedRun {
-    /// Font used for this run
-    pub font_id: FontId,
-    /// Shaped glyphs in this run
-    pub glyphs: Vec<ShapedGlyph>,
-}
-
-/// A single shaped glyph with position
-#[derive(Debug, Clone, Copy)]
-pub struct ShapedGlyph {
-    /// Glyph identifier in the font
-    pub id: GlyphId,
-    /// Horizontal position from line start (logical pixels)
-    pub position_x: f32,
-    /// Vertical position from baseline (logical pixels)
-    pub position_y: f32,
-    /// Index of the source character in the original text (byte offset)
-    pub index: usize,
-}
-
-// ==================== PlatformTextSystem Trait (US5) ====================
-
-/// Platform-native text measurement and glyph shaping abstraction
-///
-/// Platform implementations use native APIs:
-/// - Windows: DirectWrite (`IDWriteFactory5`, `IDWriteTextLayout`)
-/// - macOS: Core Text (`CTFont`, `CTLine`, `CTRun`)
-/// - Linux: fontconfig + freetype
-///
-/// # Architecture
-///
-/// ```text
-/// flui-platform (this trait) → System font discovery + text measurement
-///         ↓
-/// flui-text (future) → Font registry, text layout, glyph shaping
-///         ↓
-/// flui_painting → GPU rendering with wgpu
-/// ```
-pub trait PlatformTextSystem: Send + Sync {
-    /// Load font data from raw bytes (TrueType/OpenType)
-    ///
-    /// Registers custom font data with the platform's font system.
-    /// After loading, fonts can be resolved via `font_id()`.
-    fn add_fonts(&self, fonts: Vec<std::borrow::Cow<'static, [u8]>>) -> anyhow::Result<()>;
-
-    /// List all available font family names
-    ///
-    /// Returns names from both system fonts and custom-loaded fonts.
-    fn all_font_names(&self) -> Vec<String>;
-
-    /// Resolve a font descriptor to a FontId
-    ///
-    /// Matches the requested family/weight/style to the closest available font.
-    fn font_id(&self, descriptor: &Font) -> anyhow::Result<FontId>;
-
-    /// Get metrics for a loaded font
-    ///
-    /// Returns design-unit metrics (ascent, descent, line gap, etc.).
-    fn font_metrics(&self, font_id: FontId) -> FontMetrics;
-
-    /// Map a character to its glyph ID in a font
-    ///
-    /// Returns `None` if the font does not contain a glyph for this character.
-    fn glyph_for_char(&self, font_id: FontId, ch: char) -> Option<GlyphId>;
-
-    /// Layout a single line of text with font runs
-    ///
-    /// Shapes text into positioned glyphs, handling kerning and ligatures.
-    /// Each `FontRun` specifies a font and byte length for a segment of text.
-    fn layout_line(&self, text: &str, font_size: f32, runs: &[FontRun]) -> LineLayout;
-}
-
-/// Text system errors
-#[derive(Debug, Clone, PartialEq)]
-pub enum TextSystemError {
-    /// Feature not yet implemented (MVP stub)
-    NotImplemented,
-
-    /// Font family not found on system
-    FontNotFound(String),
-
-    /// Failed to load font data
-    LoadFailed(String),
-
-    /// Platform API error (DirectWrite, Core Text, etc.)
-    PlatformError(String),
-}
-
-impl std::fmt::Display for TextSystemError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TextSystemError::NotImplemented => {
-                write!(f, "Text system feature not implemented (MVP stub)")
-            }
-            TextSystemError::FontNotFound(family) => {
-                write!(f, "Font family '{}' not found on system", family)
-            }
-            TextSystemError::LoadFailed(msg) => {
-                write!(f, "Failed to load font: {}", msg)
-            }
-            TextSystemError::PlatformError(msg) => {
-                write!(f, "Platform text system error: {}", msg)
-            }
-        }
-    }
-}
-
-impl std::error::Error for TextSystemError {}
 
 /// Clipboard operations
 pub trait Clipboard: Send + Sync {

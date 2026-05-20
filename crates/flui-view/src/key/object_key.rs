@@ -4,9 +4,7 @@
 //! where `ObjectKey` is defined in `widgets/framework.dart`.
 #![allow(unsafe_code)]
 
-use std::any::Any;
-use std::fmt;
-use std::sync::Arc;
+use std::{any::Any, fmt, sync::Arc};
 
 use flui_foundation::ViewKey;
 
@@ -18,9 +16,10 @@ use flui_foundation::ViewKey;
 /// # Example
 ///
 /// ```rust
-/// use flui_view::ObjectKey;
-/// use flui_foundation::ViewKey;
 /// use std::sync::Arc;
+///
+/// use flui_foundation::ViewKey;
+/// use flui_view::ObjectKey;
 ///
 /// let obj1 = Arc::new(42);
 /// let obj2 = Arc::new(42); // Same value, different object
@@ -29,7 +28,7 @@ use flui_foundation::ViewKey;
 /// let key2 = ObjectKey::new(Arc::clone(&obj1)); // Same object
 /// let key3 = ObjectKey::new(obj2); // Different object
 ///
-/// assert!(key1.key_eq(&key2));  // Same object
+/// assert!(key1.key_eq(&key2)); // Same object
 /// assert!(!key1.key_eq(&key3)); // Different objects
 /// ```
 #[derive(Clone)]
@@ -39,12 +38,12 @@ pub struct ObjectKey {
 }
 
 // SAFETY: ObjectKey is Send + Sync because:
-// 1. The raw pointer `ptr` is never dereferenced - it's only used for identity comparison
-//    via `std::ptr::eq()` which compares addresses, not values
-// 2. The `_holder` field is `Arc<dyn Any + Send + Sync>` which keeps the object alive
-//    and is itself Send + Sync
-// 3. The pointer value is derived from Arc::as_ptr() and remains valid as long as
-//    the Arc exists, which is guaranteed by the struct's lifetime
+// 1. The raw pointer `ptr` is never dereferenced - it's only used for identity
+//    comparison via `std::ptr::eq()` which compares addresses, not values
+// 2. The `_holder` field is `Arc<dyn Any + Send + Sync>` which keeps the object
+//    alive and is itself Send + Sync
+// 3. The pointer value is derived from Arc::as_ptr() and remains valid as long
+//    as the Arc exists, which is guaranteed by the struct's lifetime
 unsafe impl Send for ObjectKey {}
 unsafe impl Sync for ObjectKey {}
 

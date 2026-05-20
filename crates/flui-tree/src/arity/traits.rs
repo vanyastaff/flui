@@ -4,8 +4,10 @@
 
 use std::fmt::Debug;
 
-use super::accessors::ChildrenAccess;
-use super::runtime::{PerformanceHint, RuntimeArity};
+use super::{
+    accessors::ChildrenAccess,
+    runtime::{PerformanceHint, RuntimeArity},
+};
 
 // ============================================================================
 // ARITY TRAIT
@@ -27,7 +29,7 @@ use super::runtime::{PerformanceHint, RuntimeArity};
 /// The `Accessor` associated type uses GAT to provide flexible iteration:
 ///
 /// ```
-/// use flui_tree::arity::{Arity, Variable, ChildrenAccess};
+/// use flui_tree::arity::{Arity, ChildrenAccess, Variable};
 ///
 /// // The Arity trait defines an Accessor type via GAT:
 /// let children: &[u32] = &[1, 2, 3];
@@ -40,7 +42,7 @@ use super::runtime::{PerformanceHint, RuntimeArity};
 /// All operations are compatible with Higher-Rank Trait Bounds:
 ///
 /// ```
-/// use flui_tree::arity::{Arity, Variable, ChildrenAccess};
+/// use flui_tree::arity::{Arity, ChildrenAccess, Variable};
 ///
 /// let children: &[u32] = &[10, 20, 30];
 /// let accessor = Variable::from_slice(children);
@@ -74,7 +76,8 @@ pub trait Arity: sealed::Sealed + Send + Sync + Debug + Copy + Default + 'static
 
     /// Iterator type for this arity using GAT.
     ///
-    /// Allows different arity types to return optimized iterator implementations.
+    /// Allows different arity types to return optimized iterator
+    /// implementations.
     type Iterator<'a, T: 'a>: Iterator<Item = &'a T>
     where
         T: 'a,

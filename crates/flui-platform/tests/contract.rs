@@ -1,7 +1,7 @@
 //! Contract tests for Platform trait implementations
 //!
-//! These tests ensure that all platform implementations (Windows, macOS, Linux, etc.)
-//! provide consistent behavior for the Platform trait methods.
+//! These tests ensure that all platform implementations (Windows, macOS, Linux,
+//! etc.) provide consistent behavior for the Platform trait methods.
 //!
 //! # Test Philosophy
 //!
@@ -25,9 +25,8 @@
 //! RUST_LOG=debug cargo test -p flui-platform --test contract -- --nocapture
 //! ```
 
-use flui_platform::{current_platform, headless_platform, Platform, WindowOptions};
-use flui_types::geometry::{device_px, px, Size};
-use std::sync::Arc;
+use flui_platform::{Platform, WindowOptions, current_platform, headless_platform};
+use flui_types::geometry::{Size, device_px, px};
 
 // ==================== Helper: Get Test Platform ====================
 
@@ -35,7 +34,7 @@ use std::sync::Arc;
 ///
 /// In normal mode: Uses current_platform() for native testing
 /// In headless mode: Uses headless_platform() for CI/testing
-fn get_test_platform() -> Arc<dyn Platform> {
+fn get_test_platform() -> Box<dyn Platform> {
     // Check if FLUI_HEADLESS environment variable is set
     if std::env::var("FLUI_HEADLESS").is_ok() {
         headless_platform()
@@ -231,9 +230,9 @@ fn contract_foreground_executor() {
         *flag_clone.lock().unwrap() = true;
     }));
 
-    // THEN: Task should be queued (foreground executor requires manual draining)
-    // Note: Actual execution depends on platform event loop calling drain_tasks()
-    // This test just verifies spawning doesn't panic
+    // THEN: Task should be queued (foreground executor requires manual
+    // draining) Note: Actual execution depends on platform event loop
+    // calling drain_tasks() This test just verifies spawning doesn't panic
     // The flag won't be set without drain_tasks() being called by the platform
 }
 
@@ -447,7 +446,8 @@ fn test_window_lifecycle_contract() {
     }
 }
 
-/// Test that all platform implementations provide consistent display information
+/// Test that all platform implementations provide consistent display
+/// information
 #[test]
 fn test_display_enumeration_contract() {
     let _ = tracing_subscriber::fmt().with_test_writer().try_init();

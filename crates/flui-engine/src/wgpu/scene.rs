@@ -1,7 +1,8 @@
 //! Scene Graph - Immutable rendering primitives
 //!
 //! This module provides an immutable scene graph architecture inspired by GPUI.
-//! Scenes are built once via `SceneBuilder` and can be cached, diffed, and replayed.
+//! Scenes are built once via `SceneBuilder` and can be cached, diffed, and
+//! replayed.
 //!
 //! # Architecture
 //!
@@ -183,11 +184,12 @@ impl Scene {
             }
 
             // Try to batch with previous batch of same type
-            if let Some(last_batch) = batches.last_mut() {
-                if last_batch.primitive_type == prim_type && last_batch.texture_id.is_none() {
-                    last_batch.primitives.push(primitive.clone());
-                    continue;
-                }
+            if let Some(last_batch) = batches.last_mut()
+                && last_batch.primitive_type == prim_type
+                && last_batch.texture_id.is_none()
+            {
+                last_batch.primitives.push(primitive.clone());
+                continue;
             }
 
             // Create new batch
@@ -252,7 +254,8 @@ impl SceneBuilder {
 
     /// Start building a new layer
     ///
-    /// Returns a LayerBuilder that must call `.finish()` to return to SceneBuilder.
+    /// Returns a LayerBuilder that must call `.finish()` to return to
+    /// SceneBuilder.
     #[must_use]
     pub fn push_layer(self) -> LayerBuilder {
         LayerBuilder::new(self)
@@ -690,17 +693,19 @@ impl Primitive {
     #[must_use]
     pub fn bounds(&self) -> Rect<DevicePixels> {
         match self {
-            Primitive::Rect { rect, .. } => *rect,
+            Primitive::Rect { rect, .. } | Primitive::Image { rect, .. } => *rect,
             Primitive::Text {
                 position, style, ..
             } => {
                 // Approximate bounds (will be refined with actual text layout)
                 let font_size = style.font_size.unwrap_or(14.0);
+                #[allow(clippy::cast_possible_truncation)]
+                let font_size_i32 = font_size as i32;
                 Rect::from_min_max(
                     *position,
                     Point::new(
                         DevicePixels(position.x.0 + 100), // Placeholder width
-                        DevicePixels(position.y.0 + font_size as i32),
+                        DevicePixels(position.y.0 + font_size_i32),
                     ),
                 )
             }
@@ -727,7 +732,6 @@ impl Primitive {
 
                 Rect::from_min_max(Point::new(min_x, min_y), Point::new(max_x, max_y))
             }
-            Primitive::Image { rect, .. } => *rect,
             Primitive::Underline {
                 start,
                 end,
@@ -736,10 +740,13 @@ impl Primitive {
             } => {
                 let min_x = DevicePixels(start.x.0.min(end.x.0));
                 let max_x = DevicePixels(start.x.0.max(end.x.0));
+                #[allow(clippy::cast_possible_truncation)]
                 let min_y = DevicePixels((start.y.0 as f32 - thickness / 2.0) as i32);
+                #[allow(clippy::cast_possible_truncation)]
                 let max_y = DevicePixels((end.y.0 as f32 + thickness / 2.0) as i32);
                 Rect::from_min_max(Point::new(min_x, min_y), Point::new(max_x, max_y))
             }
+            #[allow(clippy::cast_possible_truncation)]
             Primitive::Shadow {
                 primitive,
                 offset,
@@ -757,7 +764,7 @@ impl Primitive {
                         DevicePixels(base_bounds.max_y().0 + offset.y.0),
                     ),
                 );
-                let blur = *blur_radius as f32;
+                let blur = *blur_radius;
                 Rect::from_min_max(
                     Point::new(
                         DevicePixels((offset_bounds.min_x().0 as f32 - blur) as i32),
@@ -792,10 +799,10 @@ impl PathCommand {
     #[must_use]
     pub fn point(&self) -> Point<DevicePixels> {
         match self {
-            PathCommand::MoveTo(p) => *p,
-            PathCommand::LineTo(p) => *p,
-            PathCommand::QuadraticTo(_, p) => *p,
-            PathCommand::CubicTo(_, _, p) => *p,
+            PathCommand::MoveTo(p)
+            | PathCommand::LineTo(p)
+            | PathCommand::QuadraticTo(_, p)
+            | PathCommand::CubicTo(_, _, p) => *p,
             PathCommand::Close => Point::new(DevicePixels(0), DevicePixels(0)),
         }
     }
@@ -952,7 +959,7 @@ impl BlendMode {
     /// Note: Some advanced blend modes require custom shaders.
     #[must_use]
     #[cfg(feature = "wgpu-backend")]
-    pub fn to_wgpu_blend(&self) -> wgpu::BlendState {
+    pub fn to_wgpu_blend(self) -> wgpu::BlendState {
         use wgpu::{BlendComponent, BlendFactor, BlendOperation, BlendState};
 
         match self {
@@ -1011,7 +1018,7 @@ impl BlendMode {
 
     /// Check if this blend mode requires custom shader implementation
     #[must_use]
-    pub fn requires_shader(&self) -> bool {
+    pub fn requires_shader(self) -> bool {
         matches!(
             self,
             BlendMode::Overlay
@@ -1025,7 +1032,8 @@ impl BlendMode {
     }
 }
 
-// NOTE: Tests temporarily disabled - need update for Pixels/DevicePixels migration
+// NOTE: Tests temporarily disabled - need update for Pixels/DevicePixels
+// migration
 #[cfg(all(test, feature = "disabled-tests"))]
 mod tests {
     use super::*;
@@ -1590,7 +1598,8 @@ mod tests {
             .build();
 
         let batches = scene.batch_primitives();
-        // Each layer creates separate batches (layers might have different transforms/opacity)
+        // Each layer creates separate batches (layers might have different
+        // transforms/opacity)
         assert_eq!(batches.len(), 2);
         assert_eq!(batches[0].primitives.len(), 1);
         assert_eq!(batches[1].primitives.len(), 1);

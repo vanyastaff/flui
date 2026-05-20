@@ -55,8 +55,9 @@
 //! batcher.execute(&mut render_pass);
 //! ```
 
-use bytemuck::{Pod, Zeroable};
 use std::mem;
+
+use bytemuck::{Pod, Zeroable};
 
 /// Indirect draw command for GPU
 ///
@@ -205,8 +206,8 @@ impl MultiDrawBatcher {
 
     /// Clear all batched commands
     pub fn clear(&mut self) {
-        self.commands.clear();
         self.total_draws += self.commands.len();
+        self.commands.clear();
         self.total_instances = 0;
     }
 

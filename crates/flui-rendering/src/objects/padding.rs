@@ -1,13 +1,14 @@
 //! RenderPadding - adds padding around a single child.
 
-use flui_types::geometry::px;
-use flui_types::{EdgeInsets, Offset, Pixels, Point, Rect, Size};
+use flui_tree::Single;
+use flui_types::{EdgeInsets, Offset, Pixels, Point, Rect, Size, geometry::px};
 
-use crate::arity::Single;
-use crate::constraints::BoxConstraints;
-use crate::context::{BoxHitTestContext, BoxLayoutContext};
-use crate::parent_data::BoxParentData;
-use crate::traits::RenderBox;
+use crate::{
+    constraints::BoxConstraints,
+    context::{BoxHitTestContext, BoxLayoutContext},
+    parent_data::BoxParentData,
+    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+};
 
 /// A render object that adds padding around its child.
 ///
@@ -81,7 +82,7 @@ impl RenderBox for RenderPadding {
     type ParentData = BoxParentData;
 
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) {
-        let constraints = ctx.constraints().clone();
+        let constraints = *ctx.constraints();
 
         if ctx.child_count() > 0 {
             self.has_child = true;
@@ -141,6 +142,11 @@ impl RenderBox for RenderPadding {
         Rect::from_origin_size(Point::ZERO, self.size)
     }
 }
+
+// Mythos Step 11: explicit (default) capability opt-outs.
+impl PaintEffectsCapability for RenderPadding {}
+impl SemanticsCapability for RenderPadding {}
+impl HotReloadCapability for RenderPadding {}
 
 #[cfg(test)]
 mod tests {

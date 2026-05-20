@@ -1,27 +1,11 @@
 {
   "mcpServers": {
-    "filesystem": {
-      "command": "cmd",
-      "args": [
-        "/c",
-        "npx",
-        "-y",
-        "@modelcontextprotocol/server-filesystem",
-        "C:\\Users\\vanya\\RustroverProjects\\flui"
-      ]
+    "cratesio": {
+      "type": "http",
+      "url": "https://cratesio-mcp.fly.dev/"
     },
-    "sequential-thinking": {
-      "command": "cmd",
-      "args": [
-        "/c",
-        "npx",
-        "-y",
-        "@modelcontextprotocol/server-sequential-thinking"
-      ]
-    },
-    "memory": {
-      "command": "cmd",
-      "args": ["/c", "npx", "-y", "@modelcontextprotocol/server-memory"]
+    "rust-docs": {
+      "command": "rust-docs-mcp"
     }
   }
 }

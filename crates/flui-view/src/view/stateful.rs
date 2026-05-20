@@ -162,17 +162,19 @@ macro_rules! impl_stateful_view {
     };
 }
 
-// NOTE: StatefulElement implementation has been moved to unified Element architecture.
-// See crates/flui-view/src/element/unified.rs and element/behavior.rs
-// The type alias is exported from element/mod.rs:
+// NOTE: StatefulElement implementation has been moved to unified Element
+// architecture. See crates/flui-view/src/element/unified.rs and
+// element/behavior.rs The type alias is exported from element/mod.rs:
 //   pub type StatefulElement<V> = Element<V, Single, StatefulBehavior<V>>;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::element::{Lifecycle, StatefulBehavior};
-    use crate::view::{ElementBase, View};
-    use crate::StatefulElement;
+    use crate::{
+        StatefulElement,
+        element::{Lifecycle, StatefulBehavior},
+        view::{ElementBase, View},
+    };
 
     #[derive(Clone)]
     struct TestCounter {

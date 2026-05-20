@@ -9,8 +9,8 @@
 
 use std::any::TypeId;
 
-use downcast_rs::{impl_downcast, Downcast};
-use dyn_clone::{clone_trait_object, DynClone};
+use downcast_rs::{Downcast, impl_downcast};
+use dyn_clone::{DynClone, clone_trait_object};
 
 /// Base trait for all Views.
 ///
@@ -22,7 +22,8 @@ use dyn_clone::{clone_trait_object, DynClone};
 /// # Type Parameter
 ///
 /// Each View type has an associated `Element` type that manages its lifecycle.
-/// This association is determined at compile time, avoiding runtime type checks.
+/// This association is determined at compile time, avoiding runtime type
+/// checks.
 ///
 /// # Example
 ///
@@ -65,8 +66,9 @@ pub trait View: Downcast + DynClone + Send + Sync + 'static {
 
     /// Check if this View can update an existing Element.
     ///
-    /// Returns `true` if the Element created by `old` can be updated with `self`.
-    /// By default, Views of the same concrete type can update each other.
+    /// Returns `true` if the Element created by `old` can be updated with
+    /// `self`. By default, Views of the same concrete type can update each
+    /// other.
     ///
     /// Override this to add additional constraints (e.g., key matching).
     ///
@@ -305,17 +307,20 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
         None
     }
 
-    /// Called by parent to attach this element's RenderObject to the render tree.
+    /// Called by parent to attach this element's RenderObject to the render
+    /// tree.
     ///
     /// For RenderObjectElements, this returns the RenderObject that should be
     /// inserted into the parent's render object.
     ///
-    /// For ComponentElements (Stateless, Stateful), this delegates to the child.
+    /// For ComponentElements (Stateless, Stateful), this delegates to the
+    /// child.
     ///
     /// # Flutter Equivalent
     ///
     /// This corresponds to the pattern where `attachRenderObject` calls
-    /// `ancestorRenderObjectElement.insertRenderObjectChild(renderObject, slot)`.
+    /// `ancestorRenderObjectElement.insertRenderObjectChild(renderObject,
+    /// slot)`.
     fn attach_to_render_tree(&mut self) -> Option<&mut dyn std::any::Any> {
         // Default: no RenderObject to attach
         // ComponentElements override to delegate to child
@@ -345,20 +350,24 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     /// Set the PipelineOwner for this element.
     ///
     /// Called by parent elements to propagate the PipelineOwner down the tree.
-    /// RenderObjectElements use this to insert their RenderObjects into the RenderTree.
+    /// RenderObjectElements use this to insert their RenderObjects into the
+    /// RenderTree.
     ///
-    /// Default implementation does nothing - only RenderObjectElements need this.
+    /// Default implementation does nothing - only RenderObjectElements need
+    /// this.
     ///
     /// # Arguments
-    /// * `owner` - Arc<dyn Any> that should be downcast to the concrete PipelineOwner type
+    /// * `owner` - Arc<dyn Any> that should be downcast to the concrete
+    ///   PipelineOwner type
     fn set_pipeline_owner_any(&mut self, _owner: std::sync::Arc<dyn std::any::Any + Send + Sync>) {
         // Default: no-op
     }
 
     /// Set the parent's RenderId for tree structure.
     ///
-    /// Called by parent elements to establish parent-child relationships in RenderTree.
-    /// Child RenderObjects will be attached as children of this RenderId.
+    /// Called by parent elements to establish parent-child relationships in
+    /// RenderTree. Child RenderObjects will be attached as children of this
+    /// RenderId.
     fn set_parent_render_id(&mut self, _parent_id: Option<flui_foundation::RenderId>) {
         // Default: no-op
     }

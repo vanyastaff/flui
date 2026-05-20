@@ -45,12 +45,16 @@
 //!
 //! Flutter reference: https://api.flutter.dev/flutter/gestures/GestureArenaTeam-class.html
 
-use crate::arena::{GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition};
-use crate::ids::PointerId;
+use std::sync::Arc;
+
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use smallvec::SmallVec;
-use std::sync::Arc;
+
+use crate::{
+    arena::{GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition},
+    ids::PointerId,
+};
 
 // ============================================================================
 // CombiningEntry - Team's entry handle for individual members
@@ -130,7 +134,8 @@ impl CombiningMember {
     }
 
     /// Resolve a member with the given disposition.
-    /// Returns an optional entry to resolve (to avoid holding lock during arena call).
+    /// Returns an optional entry to resolve (to avoid holding lock during arena
+    /// call).
     fn resolve(
         &mut self,
         member: &Arc<dyn GestureArenaMember>,
@@ -199,10 +204,8 @@ impl CombiningMember {
         }
 
         // If winner is the captain (not in members), notify captain separately
-        if winner_is_captain {
-            if let Some(ref captain) = captain {
-                captain.accept_gesture(self.pointer);
-            }
+        if winner_is_captain && let Some(ref captain) = captain {
+            captain.accept_gesture(self.pointer);
         }
 
         // Remove from team's combiners
@@ -316,15 +319,16 @@ impl GestureArenaTeam {
 
     /// Set the team's captain.
     ///
-    /// The captain wins on behalf of the entire team when any member claims victory.
+    /// The captain wins on behalf of the entire team when any member claims
+    /// victory.
     pub fn set_captain(&self, captain: Option<Arc<dyn GestureArenaMember>>) {
         *self.captain.lock() = captain;
     }
 
     /// Add a member to the team for a specific pointer.
     ///
-    /// Returns a [`TeamEntry`] handle that the member can use to resolve itself.
-    /// The resolution goes through the team's combining logic.
+    /// Returns a [`TeamEntry`] handle that the member can use to resolve
+    /// itself. The resolution goes through the team's combining logic.
     ///
     /// # Example
     ///
@@ -406,8 +410,9 @@ impl std::fmt::Debug for GestureArenaTeam {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    use super::*;
 
     // Mock member for testing
     #[allow(dead_code)]

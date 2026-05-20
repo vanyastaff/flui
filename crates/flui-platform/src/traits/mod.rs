@@ -18,11 +18,6 @@ pub use capabilities::{
 pub use display::{DisplayId, PlatformDisplay};
 pub use embedder::PlatformEmbedder;
 pub use input::{
-    // Conversion helpers
-    delta_offset_from_coords,
-    device_to_logical,
-    logical_to_device,
-    offset_from_coords,
     // Platform utilities
     BasicVelocityTracker,
     // Event dispatch result
@@ -41,17 +36,19 @@ pub use input::{
     ScrollDelta,
     SystemTimestamp,
     TimestampProvider,
+    // Conversion helpers
+    delta_offset_from_coords,
+    device_to_logical,
+    logical_to_device,
+    offset_from_coords,
 };
-
 // Re-export keyboard-types for convenience
 pub use keyboard_types::NamedKey;
 pub use lifecycle::{DefaultLifecycle, LifecycleEvent, LifecycleState, PlatformLifecycle};
 pub use platform::{
-    Clipboard, ClipboardItem, Font, FontId, FontMetrics, FontRun, FontStyle, FontWeight, GlyphId,
-    LineLayout, PathPromptOptions, Platform, PlatformExecutor, PlatformTextSystem, ShapedGlyph,
-    ShapedRun, TextSystemError, WindowEvent, WindowId, WindowMode, WindowOptions,
+    Clipboard, ClipboardItem, PathPromptOptions, Platform, PlatformExecutor, WindowEvent, WindowId,
+    WindowMode, WindowOptions,
 };
-pub use window::{PlatformWindow, WindowAppearance, WindowBackgroundAppearance, WindowBounds};
-
 #[cfg(feature = "winit-backend")]
 pub use window::WinitWindow;
+pub use window::{PlatformWindow, WindowAppearance, WindowBackgroundAppearance, WindowBounds};

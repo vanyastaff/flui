@@ -11,14 +11,15 @@
 //!
 //! # Design Notes
 //!
-//! - All IDs use `NonZeroUsize` for niche optimization (`Option<Id>` = `Id` size)
+//! - All IDs use `NonZeroUsize` for niche optimization (`Option<Id>` = `Id`
+//!   size)
 //! - Marker traits provide type safety between different ID domains
 //! - IDs are indices into `Slab` collections (valid until item removed)
 //!
 //! # Examples
 //!
 //! ```rust
-//! use flui_foundation::{ViewId, ElementId, RenderId};
+//! use flui_foundation::{ElementId, RenderId, ViewId};
 //!
 //! // All IDs have same size as Option<Id> (niche optimization)
 //! assert_eq!(
@@ -36,7 +37,6 @@
 //! ```
 #![allow(unsafe_code)]
 
-use crate::WasmNotSendSync;
 use core::{
     cmp::Ordering,
     fmt::{self, Debug, Display},
@@ -44,6 +44,8 @@ use core::{
     marker::PhantomData,
     num::NonZeroUsize,
 };
+
+use crate::WasmNotSendSync;
 
 // =========================================================================
 // Compile-time size assertions
@@ -106,7 +108,7 @@ impl RawId {
     #[inline]
     pub const unsafe fn zip_unchecked(index: Index) -> Self {
         // SAFETY: Caller guarantees index is non-zero
-        Self(NonZeroUsize::new_unchecked(index))
+        unsafe { Self(NonZeroUsize::new_unchecked(index)) }
     }
 
     /// Creates a RawId, returning `None` if index is 0.
@@ -155,8 +157,8 @@ impl From<RawId> for Index {
 /// resources cannot be confused. The marker is a zero-sized type that exists
 /// only at compile time.
 ///
-/// Uses `WasmNotSendSync` for WASM compatibility - on native requires `Send + Sync`,
-/// on WASM (single-threaded) has no thread-safety requirements.
+/// Uses `WasmNotSendSync` for WASM compatibility - on native requires `Send +
+/// Sync`, on WASM (single-threaded) has no thread-safety requirements.
 ///
 /// # Example
 ///
@@ -176,8 +178,8 @@ pub trait Marker: 'static + WasmNotSendSync + Debug {}
 
 /// A type-safe identifier for a specific resource type.
 ///
-/// `Id<T>` wraps a `RawId` with a marker type `T` that ensures IDs for different
-/// resource types cannot be mixed up at compile time.
+/// `Id<T>` wraps a `RawId` with a marker type `T` that ensures IDs for
+/// different resource types cannot be mixed up at compile time.
 ///
 /// # Type Safety
 ///
@@ -191,7 +193,7 @@ pub trait Marker: 'static + WasmNotSendSync + Debug {}
 /// # Examples
 ///
 /// ```rust
-/// use flui_foundation::{ViewId, ElementId};
+/// use flui_foundation::{ElementId, ViewId};
 ///
 /// let view = ViewId::zip(1);
 /// let element = ElementId::zip(1);
@@ -245,7 +247,7 @@ impl<T: Marker> Id<T> {
     #[inline]
     pub const unsafe fn zip_unchecked(index: Index) -> Self {
         // SAFETY: Caller guarantees index is non-zero
-        Self(RawId::zip_unchecked(index), PhantomData)
+        unsafe { Self(RawId::zip_unchecked(index), PhantomData) }
     }
 
     /// Creates an ID, returning `None` if index is 0.
@@ -288,7 +290,7 @@ impl<T: Marker> Id<T> {
     #[inline]
     pub const unsafe fn new_unchecked(index: Index) -> Self {
         // SAFETY: Caller guarantees index is non-zero
-        Self::zip_unchecked(index)
+        unsafe { Self::zip_unchecked(index) }
     }
 }
 
@@ -414,7 +416,7 @@ impl<T: Marker> From<Index> for Id<T> {
 /// # Example
 ///
 /// ```rust
-/// use flui_foundation::{Identifier, ElementId, ViewId};
+/// use flui_foundation::{ElementId, Identifier, ViewId};
 ///
 /// fn process_id<I: Identifier>(id: I) -> usize {
 ///     id.into()
@@ -434,8 +436,7 @@ pub trait Identifier:
     + Debug
     + Display
     + Into<Index>
-    + Send
-    + Sync
+    + WasmNotSendSync
     + 'static
 {
     /// Returns the underlying index value.
@@ -622,6 +623,21 @@ ids! {
     /// Identifies scheduled frame callbacks in the scheduler binding.
     pub type FrameCallbackId FrameCallback;
 
+    /// Frame ID - scheduler frame identifier.
+    ///
+    /// Identifies individual frames in the scheduler frame lifecycle.
+    pub type FrameId Frame;
+
+    /// Task ID - scheduler task identifier.
+    ///
+    /// Identifies tasks in the priority-based task queue.
+    pub type TaskId Task;
+
+    /// Ticker ID - scheduler ticker identifier.
+    ///
+    /// Identifies tickers for animation timing callbacks.
+    pub type TickerId Ticker;
+
     // =====================================================================
     // Gesture IDs
     // =====================================================================
@@ -671,8 +687,9 @@ ids! {
 
 #[cfg(feature = "serde")]
 mod serde_impl {
-    use super::*;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::*;
 
     impl Serialize for RawId {
         fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {

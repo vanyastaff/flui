@@ -19,11 +19,12 @@
 //! let gpu_circle: Circle<Pixels> = ui_circle.to_f32();
 //! ```
 
-use super::{px, Pixels};
 use std::fmt;
 
-use super::traits::{NumericUnit, Unit};
-use super::{Offset, Point, Radians, Rect, Size, Vec2};
+use super::{
+    Offset, Pixels, Point, Radians, Rect, Size, Vec2, px,
+    traits::{NumericUnit, Unit},
+};
 
 /// A circle defined by a center point and radius.
 ///
@@ -188,7 +189,8 @@ where
         self.radius.into() == 0.0
     }
 
-    /// Returns `true` if the circle is valid (non-negative radius, finite center).
+    /// Returns `true` if the circle is valid (non-negative radius, finite
+    /// center).
     #[inline]
     #[must_use]
     pub fn is_valid(&self) -> bool {
@@ -204,7 +206,8 @@ where
         self.center.distance_squared(point) <= r * r
     }
 
-    /// Returns `true` if the point is strictly inside the circle (not on boundary).
+    /// Returns `true` if the point is strictly inside the circle (not on
+    /// boundary).
     #[inline]
     #[must_use]
     pub fn contains_strict(&self, point: Point<T>) -> bool {
@@ -402,7 +405,8 @@ where
 impl Circle<Pixels> {
     /// Computes the intersection points between this circle and a line.
     ///
-    /// Returns `None` if they don't intersect, or `Some((p1, p2))` with the two intersection points.
+    /// Returns `None` if they don't intersect, or `Some((p1, p2))` with the two
+    /// intersection points.
     #[inline]
     #[must_use]
     pub fn intersect_line(

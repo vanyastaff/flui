@@ -1,15 +1,15 @@
 //! Thread Safety Tests
 //!
-//! Tests verifying that Canvas and `DisplayList` can be safely sent across threads
-//! for parallel painting and execution.
+//! Tests verifying that Canvas and `DisplayList` can be safely sent across
+//! threads for parallel painting and execution.
+
+use std::{sync::Arc, thread};
 
 use flui_painting::prelude::*;
 use flui_types::{
-    geometry::{px, Rect},
+    geometry::{Rect, px},
     styling::Color,
 };
-use std::sync::Arc;
-use std::thread;
 
 #[test]
 fn test_canvas_is_send() {
@@ -232,15 +232,13 @@ fn test_no_data_races() {
 #[test]
 fn test_canvas_not_sync() {
     // This is a compile-time test - uncomment to verify Canvas is !Sync
-    /*
-    let canvas = Canvas::new();
-    let canvas_ref = &canvas;
-
+    // let canvas = Canvas::new();
+    // let canvas_ref = &canvas;
+    //
     // This should NOT compile because Canvas is !Sync
-    let handle = thread::spawn(move || {
-        canvas_ref.finish();  // ERROR: Canvas is not Sync
-    });
-    */
+    // let handle = thread::spawn(move || {
+    // canvas_ref.finish();  // ERROR: Canvas is not Sync
+    // });
 
     // If this test compiles, Canvas is correctly !Sync
     // No assertion needed - compilation is the test

@@ -1,7 +1,7 @@
 //! # FLUI Layer - Compositor Layer Tree
 //!
-//! This crate provides the Layer tree - the fourth tree in FLUI's 5-tree architecture:
-//! View → Element → Render → **Layer** → Semantics
+//! This crate provides the Layer tree - the fourth tree in FLUI's 5-tree
+//! architecture: View → Element → Render → **Layer** → Semantics
 //!
 //! ## Architecture
 //!
@@ -41,7 +41,8 @@
 //! - **OpacityLayer**: Alpha blending
 //! - **ColorFilterLayer**: Color matrix transformation
 //! - **ImageFilterLayer**: Blur, dilate, erode effects
-//! - **ShaderMaskLayer**: GPU shader masking effects (gradient fades, vignettes)
+//! - **ShaderMaskLayer**: GPU shader masking effects (gradient fades,
+//!   vignettes)
 //! - **BackdropFilterLayer**: Backdrop filtering effects (frosted glass, blur)
 //!
 //! ### Linking Layers
@@ -53,8 +54,8 @@
 //!
 //! ## Tree Integration
 //!
-//! LayerTree implements `TreeRead<LayerId>` and `TreeNav<LayerId>` from `flui-tree`,
-//! enabling generic tree algorithms and visitors.
+//! LayerTree implements `TreeRead<LayerId>` and `TreeNav<LayerId>` from
+//! `flui-tree`, enabling generic tree algorithms and visitors.
 //!
 //! ```rust,ignore
 //! use flui_layer::{LayerTree, Layer, CanvasLayer};
@@ -93,6 +94,7 @@
 // ============================================================================
 
 mod compositor;
+pub mod damage;
 mod handle;
 mod link_registry;
 mod scene;
@@ -104,6 +106,31 @@ pub mod tree;
 // RE-EXPORTS - Layer Types
 // ============================================================================
 
+// ============================================================================
+// RE-EXPORTS - Compositor
+// ============================================================================
+pub use compositor::{CompositorStats, SceneBuilder, SceneCompositor};
+// ============================================================================
+// RE-EXPORTS - Foundation Types
+// ============================================================================
+pub use flui_foundation::LayerId;
+// ============================================================================
+// RE-EXPORTS - Handle
+// ============================================================================
+pub use handle::{
+    AnnotatedRegionLayerHandle, AnyLayerHandle, BackdropFilterLayerHandle, CanvasLayerHandle,
+    ClipPathLayerHandle, ClipRRectLayerHandle, ClipRectLayerHandle, ColorFilterLayerHandle,
+    FollowerLayerHandle, ImageFilterLayerHandle, LayerHandle, LeaderLayerHandle, OffsetLayerHandle,
+    OpacityLayerHandle, PlatformViewLayerHandle, ShaderMaskLayerHandle, TextureLayerHandle,
+    TransformLayerHandle,
+};
+// Re-export annotation search types
+pub use layer::annotation::{AnnotationEntry, AnnotationResult, AnnotationSearchOptions};
+// Re-export composition callback types
+pub use layer::composition_callback::{
+    CompositionCallbackHandle, CompositionCallbackId, CompositionCallbackRegistry,
+    HasCompositionCallbacks,
+};
 pub use layer::{
     // Annotation layers
     AnnotatedRegionLayer,
@@ -145,52 +172,15 @@ pub use layer::{
     TextureLayer,
     TransformLayer,
 };
-
-// Re-export annotation search types
-pub use layer::annotation::{AnnotationEntry, AnnotationResult, AnnotationSearchOptions};
-
-// Re-export composition callback types
-pub use layer::composition_callback::{
-    CompositionCallbackHandle, CompositionCallbackId, CompositionCallbackRegistry,
-    HasCompositionCallbacks,
-};
-
-// ============================================================================
-// RE-EXPORTS - Tree
-// ============================================================================
-
-pub use tree::{LayerNode, LayerTree};
-
-// ============================================================================
-// RE-EXPORTS - Compositor
-// ============================================================================
-
-pub use compositor::{CompositorStats, SceneBuilder, SceneCompositor};
-pub use scene::Scene;
-
 // ============================================================================
 // RE-EXPORTS - Link Registry
 // ============================================================================
-
 pub use link_registry::{LeaderInfo, LinkRegistry};
-
+pub use scene::Scene;
 // ============================================================================
-// RE-EXPORTS - Handle
+// RE-EXPORTS - Tree
 // ============================================================================
-
-pub use handle::{
-    AnnotatedRegionLayerHandle, AnyLayerHandle, BackdropFilterLayerHandle, CanvasLayerHandle,
-    ClipPathLayerHandle, ClipRRectLayerHandle, ClipRectLayerHandle, ColorFilterLayerHandle,
-    FollowerLayerHandle, ImageFilterLayerHandle, LayerHandle, LeaderLayerHandle, OffsetLayerHandle,
-    OpacityLayerHandle, PlatformViewLayerHandle, ShaderMaskLayerHandle, TextureLayerHandle,
-    TransformLayerHandle,
-};
-
-// ============================================================================
-// RE-EXPORTS - Foundation Types
-// ============================================================================
-
-pub use flui_foundation::LayerId;
+pub use tree::{LayerNode, LayerTree};
 
 // ============================================================================
 // PRELUDE
@@ -203,48 +193,37 @@ pub use flui_foundation::LayerId;
 /// ```
 pub mod prelude {
     // Leaf layers
-    pub use crate::{
-        CanvasLayer, PerformanceOverlayLayer, PerformanceOverlayOption, PerformanceStats,
-        PlatformViewLayer, TextureLayer,
-    };
+    // Re-export tree traits for convenience
+    pub use flui_tree::{TreeNav, TreeRead};
 
-    // Clip layers
-    pub use crate::{ClipPathLayer, ClipRRectLayer, ClipRectLayer, ClipSuperellipseLayer};
-
-    // Transform layers
-    pub use crate::{OffsetLayer, TransformLayer};
-
+    // Annotation layers
+    pub use crate::{AnnotatedRegionLayer, SemanticLabel, SystemUiOverlayStyle};
+    // Annotation search
+    pub use crate::{AnnotationEntry, AnnotationResult, AnnotationSearchOptions};
+    // Handle
+    pub use crate::{AnyLayerHandle, LayerHandle};
     // Effect layers
     pub use crate::{
         BackdropFilterLayer, ColorFilterLayer, ImageFilterLayer, OpacityLayer, ShaderMaskLayer,
     };
-
-    // Linking layers
-    pub use crate::{FollowerLayer, LayerLink, LeaderLayer};
-
-    // Annotation layers
-    pub use crate::{AnnotatedRegionLayer, SemanticLabel, SystemUiOverlayStyle};
-
-    // Annotation search
-    pub use crate::{AnnotationEntry, AnnotationResult, AnnotationSearchOptions};
-
+    pub use crate::{
+        CanvasLayer, PerformanceOverlayLayer, PerformanceOverlayOption, PerformanceStats,
+        PlatformViewLayer, TextureLayer,
+    };
+    // Clip layers
+    pub use crate::{ClipPathLayer, ClipRRectLayer, ClipRectLayer, ClipSuperellipseLayer};
     // Composition callbacks
     pub use crate::{CompositionCallbackRegistry, HasCompositionCallbacks};
-
-    // Platform types
-    pub use crate::{PlatformViewHitTestBehavior, PlatformViewId};
-
+    // Linking layers
+    pub use crate::{FollowerLayer, LayerLink, LeaderLayer};
     // Core types
     pub use crate::{Layer, LayerBounds, LayerId, LayerNode, LayerTree};
-
     // Compositor
     pub use crate::{LinkRegistry, Scene, SceneBuilder, SceneCompositor};
-
-    // Handle
-    pub use crate::{AnyLayerHandle, LayerHandle};
-
-    // Re-export tree traits for convenience
-    pub use flui_tree::{TreeNav, TreeRead};
+    // Transform layers
+    pub use crate::{OffsetLayer, TransformLayer};
+    // Platform types
+    pub use crate::{PlatformViewHitTestBehavior, PlatformViewId};
 }
 
 // ============================================================================
@@ -260,9 +239,12 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[cfg(test)]
 mod tests {
+    use flui_types::{
+        geometry::{px, Rect},
+        painting::Clip,
+    };
+
     use super::*;
-    use flui_types::geometry::{px, Rect};
-    use flui_types::painting::Clip;
 
     #[test]
     fn test_version() {

@@ -1,18 +1,21 @@
 //! Gesture Timer Service - Automatic timer callbacks for gesture recognizers.
 //!
 //! This module provides a timer service that automatically fires callbacks
-//! when gesture deadlines expire (e.g., long press timeout, double tap timeout).
+//! when gesture deadlines expire (e.g., long press timeout, double tap
+//! timeout).
 //!
 //! # Architecture
 //!
-//! Unlike Flutter which uses Dart's single-threaded `Timer` class, FLUI provides
-//! a flexible [`GestureTimer`] abstraction that works with any async executor.
+//! Unlike Flutter which uses Dart's single-threaded `Timer` class, FLUI
+//! provides a flexible [`GestureTimer`] abstraction that works with any async
+//! executor.
 //!
 //! ## Two Approaches
 //!
 //! ### 1. Frame-based checking (Simple)
 //!
-//! For simple applications, call [`GestureTimerService::check_timers`] every frame:
+//! For simple applications, call [`GestureTimerService::check_timers`] every
+//! frame:
 //!
 //! ```rust,ignore
 //! // In your event loop
@@ -58,11 +61,16 @@
 //! timer.cancel();
 //! ```
 
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+    time::{Duration, Instant},
+};
+
 use parking_lot::Mutex;
 use smallvec::SmallVec;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 /// Counter for generating unique timer IDs.
 static TIMER_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -256,7 +264,8 @@ impl GestureTimerService {
 
     /// Check and fire any timers that have expired.
     ///
-    /// Call this method periodically (e.g., every frame) if not using async execution.
+    /// Call this method periodically (e.g., every frame) if not using async
+    /// execution.
     ///
     /// Returns the number of timers that fired.
     pub fn check_timers(&self) -> usize {
@@ -417,7 +426,8 @@ static GLOBAL_TIMER_SERVICE: once_cell::sync::Lazy<GestureTimerService> =
 
 /// Get the global timer service.
 ///
-/// This is a convenience for applications that don't need multiple timer services.
+/// This is a convenience for applications that don't need multiple timer
+/// services.
 pub fn global_timer_service() -> &'static GestureTimerService {
     &GLOBAL_TIMER_SERVICE
 }
@@ -428,8 +438,9 @@ pub fn global_timer_service() -> &'static GestureTimerService {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::atomic::AtomicUsize;
+
+    use super::*;
 
     #[test]
     fn test_timer_service_creation() {

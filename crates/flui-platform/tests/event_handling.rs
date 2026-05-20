@@ -6,11 +6,11 @@
 //! - Window events (T048)
 //! - Multi-touch events (T050)
 
-use flui_platform::{current_platform, Platform, WindowOptions};
-use flui_types::geometry::{px, Size};
 use std::sync::{Arc, Mutex};
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
+
+use flui_platform::{Platform, WindowOptions, current_platform};
+use flui_types::geometry::{Size, px};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Initialize tracing for tests
 fn init_tracing() {
@@ -20,7 +20,7 @@ fn init_tracing() {
 }
 
 /// Get platform instance for testing
-fn get_test_platform() -> Arc<dyn Platform> {
+fn get_test_platform() -> Box<dyn Platform> {
     if std::env::var("FLUI_HEADLESS").is_ok() {
         flui_platform::headless_platform()
     } else {
@@ -75,7 +75,8 @@ fn test_mouse_click_pointer_event() {
 }
 
 // ============================================================================
-// T047: Keyboard press with modifier fires KeyboardEvent with Modifiers::CONTROL
+// T047: Keyboard press with modifier fires KeyboardEvent with
+// Modifiers::CONTROL
 // ============================================================================
 
 #[test]

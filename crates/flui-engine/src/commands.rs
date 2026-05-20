@@ -16,13 +16,15 @@
 //!                           Backend (wgpu, skia, etc.)
 //! ```
 
-use crate::traits::CommandRenderer;
 use flui_painting::DrawCommand;
+
+use crate::traits::CommandRenderer;
 
 /// Dispatch a single DrawCommand to the appropriate CommandRenderer method
 ///
 /// This is the core visitor dispatch function. It performs type-safe
-/// double-dispatch: the command type determines which renderer method is called.
+/// double-dispatch: the command type determines which renderer method is
+/// called.
 ///
 /// # Arguments
 ///
@@ -189,6 +191,9 @@ pub fn dispatch_command<R: CommandRenderer + ?Sized>(command: &DrawCommand, rend
         } => {
             renderer.render_color(*color, *blend_mode, transform);
         }
+        DrawCommand::DrawPaint { paint, transform } => {
+            renderer.render_paint(paint, transform);
+        }
         DrawCommand::DrawAtlas {
             image,
             sprites,
@@ -237,14 +242,29 @@ pub fn dispatch_command<R: CommandRenderer + ?Sized>(command: &DrawCommand, rend
         }
 
         // === Clipping Commands ===
-        DrawCommand::ClipRect { rect, transform } => {
-            renderer.clip_rect(*rect, transform);
+        DrawCommand::ClipRect {
+            rect,
+            clip_op,
+            clip_behavior,
+            transform,
+        } => {
+            renderer.clip_rect(*rect, *clip_op, *clip_behavior, transform);
         }
-        DrawCommand::ClipRRect { rrect, transform } => {
-            renderer.clip_rrect(*rrect, transform);
+        DrawCommand::ClipRRect {
+            rrect,
+            clip_op,
+            clip_behavior,
+            transform,
+        } => {
+            renderer.clip_rrect(*rrect, *clip_op, *clip_behavior, transform);
         }
-        DrawCommand::ClipPath { path, transform } => {
-            renderer.clip_path(path, transform);
+        DrawCommand::ClipPath {
+            path,
+            clip_op,
+            clip_behavior,
+            transform,
+        } => {
+            renderer.clip_path(path, *clip_op, *clip_behavior, transform);
         }
         DrawCommand::BackdropFilter {
             child,
@@ -254,7 +274,7 @@ pub fn dispatch_command<R: CommandRenderer + ?Sized>(command: &DrawCommand, rend
             transform,
         } => {
             renderer.render_backdrop_filter(
-                child.as_ref().map(|c| c.as_ref()),
+                child.as_ref().map(std::convert::AsRef::as_ref),
                 filter,
                 *bounds,
                 *blend_mode,

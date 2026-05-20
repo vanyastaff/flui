@@ -1,6 +1,6 @@
 //! Clipping types for painting.
 
-use crate::geometry::{px, Offset, Pixels, Rect, Size};
+use crate::geometry::{Offset, Pixels, Rect, Size, px};
 
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -33,8 +33,8 @@ pub enum Clip {
     /// Clip with anti-aliasing and save a layer.
     ///
     /// This is the most expensive option and is only necessary when you have
-    /// content that needs to be clipped with anti-aliasing AND has transparency.
-    /// In most cases, `AntiAlias` is sufficient.
+    /// content that needs to be clipped with anti-aliasing AND has
+    /// transparency. In most cases, `AntiAlias` is sufficient.
     AntiAliasWithSaveLayer,
 }
 
@@ -80,8 +80,8 @@ pub enum ClipBehavior {
 
     /// Clip with anti-aliasing and save a layer immediately following the clip.
     ///
-    /// This is rarely needed, but can be used when a clip is applied to a widget
-    /// with transparent children.
+    /// This is rarely needed, but can be used when a clip is applied to a
+    /// widget with transparent children.
     AntiAliasWithSaveLayer,
 }
 
@@ -124,14 +124,16 @@ impl From<ClipBehavior> for Clip {
 ///
 /// Similar to Flutter's `NotchedShape`.
 ///
-/// Typically used with `BottomAppBar` to create a notch for a `FloatingActionButton`.
+/// Typically used with `BottomAppBar` to create a notch for a
+/// `FloatingActionButton`.
 pub trait NotchedShape: std::fmt::Debug {
     /// Creates a path for the outer edge of the shape.
     ///
     /// The `host` is the bounding rectangle of the shape.
     /// The `guest` is the bounding rectangle of the notch.
     ///
-    /// Returns a path that describes the outer edge of the shape with the notch.
+    /// Returns a path that describes the outer edge of the shape with the
+    /// notch.
     fn get_outer_path(
         &self,
         host: Rect<Pixels>,

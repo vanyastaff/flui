@@ -1,12 +1,13 @@
 //! Decoration types for styling
 
-use crate::geometry::traits::{NumericUnit, Unit};
-use crate::layout::Alignment;
-use crate::painting::Image;
-use crate::styling::{Border, BorderRadius, BorderRadiusExt, BoxShadow, Color, Gradient};
-
 // Re-export painting types that are commonly used with decorations
 pub use crate::painting::{BlendMode, BoxFit, ColorFilter, ImageRepeat};
+use crate::{
+    geometry::traits::{NumericUnit, Unit},
+    layout::Alignment,
+    painting::Image,
+    styling::{Border, BorderRadius, BorderRadiusExt, BoxShadow, Color, Gradient},
+};
 
 /// An image to paint as part of a decoration.
 ///
@@ -110,8 +111,10 @@ pub trait Decoration: std::fmt::Debug {
 /// # Examples
 ///
 /// ```
-/// use flui_types::styling::{BoxDecoration, Color, Border, BorderSide, BorderStyle};
-/// use flui_types::geometry::{Pixels, px};
+/// use flui_types::{
+///     geometry::{Pixels, px},
+///     styling::{Border, BorderSide, BorderStyle, BoxDecoration, Color},
+/// };
 ///
 /// // Simple colored box
 /// let decoration = BoxDecoration::<Pixels>::with_color(Color::RED);
@@ -119,9 +122,11 @@ pub trait Decoration: std::fmt::Debug {
 /// // Box with border and shadow
 /// let decoration = BoxDecoration::<Pixels>::new()
 ///     .set_color(Some(Color::WHITE))
-///     .set_border(Some(Border::all(
-///         BorderSide::new(Color::BLACK, px(2.0), BorderStyle::Solid)
-///     )));
+///     .set_border(Some(Border::all(BorderSide::new(
+///         Color::BLACK,
+///         px(2.0),
+///         BorderStyle::Solid,
+///     ))));
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

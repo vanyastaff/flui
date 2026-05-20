@@ -1,6 +1,7 @@
 //! Display Enumeration Example
 //!
-//! Demonstrates how to enumerate displays (monitors) and query their properties.
+//! Demonstrates how to enumerate displays (monitors) and query their
+//! properties.
 //!
 //! Run with: `cargo run -p flui-platform --example displays`
 

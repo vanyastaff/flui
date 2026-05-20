@@ -8,19 +8,21 @@
 // All items in this module are prepared for Phase 2 integration.
 #![allow(dead_code)]
 
-use std::sync::LazyLock;
-use std::time::Instant;
-use windows::Win32::Foundation::*;
-use windows::Win32::UI::Input::KeyboardAndMouse::*;
+use std::{sync::LazyLock, time::Instant};
 
-use super::util::*;
-use crate::traits::{device_to_logical, Key, KeyboardEvent, PlatformInput, ScrollDelta};
 use dpi::{PhysicalPosition, PhysicalSize};
 use keyboard_types::Modifiers as KeyboardModifiers;
-use ui_events::pointer::{
-    PointerButton, PointerButtonEvent, PointerEvent, PointerId, PointerInfo, PointerState,
-    PointerType, PointerUpdate,
+use ui_events::{
+    keyboard::{Code, KeyState, KeyboardEvent, Location},
+    pointer::{
+        PointerButton, PointerButtonEvent, PointerEvent, PointerId, PointerInfo, PointerState,
+        PointerType, PointerUpdate,
+    },
 };
+use windows::Win32::{Foundation::*, UI::Input::KeyboardAndMouse::*};
+
+use super::util::*;
+use crate::traits::{Key, PlatformInput, ScrollDelta, device_to_logical};
 
 /// Process-start epoch for monotonic event timestamps.
 static PROCESS_START: LazyLock<Instant> = LazyLock::new(Instant::now);
@@ -134,22 +136,24 @@ fn vk_to_key(vk: VIRTUAL_KEY, _scan_code: u16) -> Key {
 
 /// Get current modifiers state
 unsafe fn get_modifiers() -> KeyboardModifiers {
-    let mut mods = KeyboardModifiers::empty();
+    unsafe {
+        let mut mods = KeyboardModifiers::empty();
 
-    if is_key_pressed(VK_SHIFT.0 as i32) {
-        mods |= KeyboardModifiers::SHIFT;
-    }
-    if is_key_pressed(VK_CONTROL.0 as i32) {
-        mods |= KeyboardModifiers::CONTROL;
-    }
-    if is_key_pressed(VK_MENU.0 as i32) {
-        mods |= KeyboardModifiers::ALT;
-    }
-    if is_key_pressed(VK_LWIN.0 as i32) || is_key_pressed(VK_RWIN.0 as i32) {
-        mods |= KeyboardModifiers::META;
-    }
+        if is_key_pressed(VK_SHIFT.0 as i32) {
+            mods |= KeyboardModifiers::SHIFT;
+        }
+        if is_key_pressed(VK_CONTROL.0 as i32) {
+            mods |= KeyboardModifiers::CONTROL;
+        }
+        if is_key_pressed(VK_MENU.0 as i32) {
+            mods |= KeyboardModifiers::ALT;
+        }
+        if is_key_pressed(VK_LWIN.0 as i32) || is_key_pressed(VK_RWIN.0 as i32) {
+            mods |= KeyboardModifiers::META;
+        }
 
-    mods
+        mods
+    }
 }
 
 // ============================================================================
@@ -248,7 +252,7 @@ pub fn mouse_wheel_event(wparam: WPARAM, lparam: LPARAM, scale_factor: f32) -> P
 // Keyboard events (simple wrappers)
 // ============================================================================
 
-/// Convert WM_KEYDOWN to KeyboardEvent
+/// Convert WM_KEYDOWN to W3C KeyboardEvent
 pub fn key_down_event(wparam: WPARAM, lparam: LPARAM) -> PlatformInput {
     let vk = VIRTUAL_KEY(wparam.0 as u16);
     let scan_code = ((lparam.0 >> 16) & 0xFF) as u16;
@@ -258,14 +262,17 @@ pub fn key_down_event(wparam: WPARAM, lparam: LPARAM) -> PlatformInput {
     let key = vk_to_key(vk, scan_code);
 
     PlatformInput::Keyboard(KeyboardEvent {
+        state: KeyState::Down,
         key,
+        code: Code::Unidentified,
+        location: Location::Standard,
         modifiers,
-        is_down: true,
-        is_repeat,
+        repeat: is_repeat,
+        is_composing: false,
     })
 }
 
-/// Convert WM_KEYUP to KeyboardEvent
+/// Convert WM_KEYUP to W3C KeyboardEvent
 pub fn key_up_event(wparam: WPARAM, lparam: LPARAM) -> PlatformInput {
     let vk = VIRTUAL_KEY(wparam.0 as u16);
     let scan_code = ((lparam.0 >> 16) & 0xFF) as u16;
@@ -274,10 +281,13 @@ pub fn key_up_event(wparam: WPARAM, lparam: LPARAM) -> PlatformInput {
     let key = vk_to_key(vk, scan_code);
 
     PlatformInput::Keyboard(KeyboardEvent {
+        state: KeyState::Up,
         key,
+        code: Code::Unidentified,
+        location: Location::Standard,
         modifiers,
-        is_down: false,
-        is_repeat: false,
+        repeat: false,
+        is_composing: false,
     })
 }
 

@@ -3,12 +3,13 @@
 //! Tests the IntoView, IntoElement, BoxedView, BoxedElement traits
 //! and downcast-rs / dyn-clone integration.
 
+use std::any::TypeId;
+
 use flui_view::{
-    element::{StatefulBehavior, StatelessBehavior},
     BoxedElement, BoxedView, BuildContext, ElementBase, IntoElement, IntoView, Lifecycle,
     StatefulElement, StatefulView, StatelessElement, StatelessView, View, ViewExt, ViewState,
+    element::{StatefulBehavior, StatelessBehavior},
 };
-use std::any::TypeId;
 
 // ============================================================================
 // Test Views

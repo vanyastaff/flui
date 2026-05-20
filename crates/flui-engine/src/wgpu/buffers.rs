@@ -1,9 +1,10 @@
 //! GPU buffer management
 //!
-//! This module provides efficient buffer allocation and management for GPU rendering.
-//! Supports dynamic vertex/instance buffers with automatic resizing.
+//! This module provides efficient buffer allocation and management for GPU
+//! rendering. Supports dynamic vertex/instance buffers with automatic resizing.
 
 use std::sync::Arc;
+
 use wgpu::{Buffer, BufferUsages, Device};
 
 /// Dynamic buffer that automatically grows as needed

@@ -1,17 +1,22 @@
 //! Event routing infrastructure
 //!
 //! EventRouter is the central hub for routing input events to UI elements.
-//! It uses hit testing for pointer events and focus management for keyboard events.
+//! It uses hit testing for pointer events and focus management for keyboard
+//! events.
 
-use super::focus::FocusManager;
+use std::{collections::HashMap, sync::Arc};
+
 use flui_types::geometry::Pixels;
-
-use super::hit_test::{HitTestResult, HitTestable};
-use crate::events::{Event, KeyEvent, PointerEvent, PointerEventExt, ScrollEventData};
-use crate::ids::PointerId;
 use parking_lot::RwLock;
-use std::collections::HashMap;
-use std::sync::Arc;
+
+use super::{
+    focus::FocusManager,
+    hit_test::{HitTestResult, HitTestable},
+};
+use crate::{
+    events::{Event, KeyEvent, PointerEvent, PointerEventExt, ScrollEventData},
+    ids::PointerId,
+};
 
 /// Central event router
 ///
@@ -122,10 +127,10 @@ impl EventRouter {
 
                 if is_dragging {
                     // Send to original down target (drag continuity)
-                    if let Some(state) = self.pointer_state.read().get(&pointer_id) {
-                        if let Some(target) = &state.down_target {
-                            target.dispatch(event);
-                        }
+                    if let Some(state) = self.pointer_state.read().get(&pointer_id)
+                        && let Some(target) = &state.down_target
+                    {
+                        target.dispatch(event);
                     }
                 } else {
                     // Normal hover - hit test at current position
@@ -142,19 +147,19 @@ impl EventRouter {
 
             PointerEvent::Up(_) => {
                 // Send to original down target
-                if let Some(state) = self.pointer_state.write().remove(&pointer_id) {
-                    if let Some(target) = state.down_target {
-                        target.dispatch(event);
-                    }
+                if let Some(state) = self.pointer_state.write().remove(&pointer_id)
+                    && let Some(target) = state.down_target
+                {
+                    target.dispatch(event);
                 }
             }
 
             PointerEvent::Cancel(_) => {
                 // Cancel drag
-                if let Some(state) = self.pointer_state.write().remove(&pointer_id) {
-                    if let Some(target) = state.down_target {
-                        target.dispatch(event);
-                    }
+                if let Some(state) = self.pointer_state.write().remove(&pointer_id)
+                    && let Some(target) = state.down_target
+                {
+                    target.dispatch(event);
                 }
             }
 
@@ -238,11 +243,11 @@ impl Default for EventRouter {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use super::super::hit_test::HitTestEntry;
-    use super::*;
-    use crate::events::{make_down_event, PointerType};
     use flui_foundation::RenderId;
     use flui_types::geometry::{Offset, Rect};
+
+    use super::{super::hit_test::HitTestEntry, *};
+    use crate::events::{PointerType, make_down_event};
 
     /// Mock layer for testing
     pub(crate) struct MockLayer {

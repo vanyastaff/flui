@@ -1,15 +1,18 @@
 //! Layer compositor for scene rendering
 //!
-//! This module handles compositing of layers with transforms, opacity, and blend modes.
-//! Manages the transform stack and applies layer effects during rendering.
+//! This module handles compositing of layers with transforms, opacity, and
+//! blend modes. Manages the transform stack and applies layer effects during
+//! rendering.
+
+use glam::Mat4;
 
 use super::scene::{BlendMode, LayerBatch};
-use glam::Mat4;
 
 /// Transform stack for hierarchical rendering
 ///
 /// Maintains a stack of transformation matrices for nested layers.
-/// Each layer can apply its own transform, which is composed with parent transforms.
+/// Each layer can apply its own transform, which is composed with parent
+/// transforms.
 #[derive(Debug, Clone)]
 pub struct TransformStack {
     /// Stack of transformation matrices

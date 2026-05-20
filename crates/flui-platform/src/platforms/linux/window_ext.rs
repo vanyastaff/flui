@@ -1,7 +1,8 @@
 //! Linux-specific window extensions
 //!
-//! This module provides Linux-specific features that extend the core `Window` trait.
-//! These features use Wayland and X11 protocols depending on the active display server.
+//! This module provides Linux-specific features that extend the core `Window`
+//! trait. These features use Wayland and X11 protocols depending on the active
+//! display server.
 //!
 //! # Usage
 //!

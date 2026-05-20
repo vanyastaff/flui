@@ -11,8 +11,7 @@
 //! RSuperellipse improves this by using circular arcs at corners,
 //! creating softer transitions that match Apple's design language.
 
-use super::{px, Pixels};
-use super::{Radius, Rect};
+use super::{Pixels, Radius, Rect, px};
 
 #[repr(C)]
 #[derive(Debug, Clone, PartialEq)]

@@ -1,7 +1,3 @@
-mod window_ext;
-
-pub use window_ext::*;
-
 //! Linux platform implementation (stub)
 //!
 //! This module provides a stub implementation of the Platform trait for Linux.
@@ -15,7 +11,8 @@ pub use window_ext::*;
 //!
 //! # Current Status
 //!
-//! ⚠️ **NOT IMPLEMENTED** - This is a stub that returns `unimplemented!()` for all operations.
+//! ⚠️ **NOT IMPLEMENTED** - This is a stub that returns `unimplemented!()` for
+//! all operations.
 //!
 //! # Implementation Roadmap
 //!
@@ -64,8 +61,8 @@ pub use window_ext::*;
 //!
 //! # Usage
 //!
-//! Currently, attempting to use this platform will panic. For Linux development,
-//! use the winit-based backend or wait for native implementation.
+//! Currently, attempting to use this platform will panic. For Linux
+//! development, use the winit-based backend or wait for native implementation.
 //!
 //! ```rust,ignore
 //! #[cfg(target_os = "linux")]
@@ -75,9 +72,14 @@ pub use window_ext::*;
 //! let platform = LinuxPlatform::new();
 //! ```
 
-use crate::traits::*;
-use anyhow::Result;
+mod window_ext;
+
 use std::sync::Arc;
+
+use anyhow::Result;
+pub use window_ext::*;
+
+use crate::traits::*;
 
 /// Linux platform implementation (stub)
 ///
@@ -103,7 +105,9 @@ impl LinuxPlatform {
     ///
     /// Always panics with "Linux platform not yet implemented"
     pub fn new() -> Result<Self> {
-        unimplemented!("Linux platform not yet implemented - use winit backend or wait for native Wayland/X11 implementation")
+        unimplemented!(
+            "Linux platform not yet implemented - use winit backend or wait for native Wayland/X11 implementation"
+        )
     }
 
     /// Check if running on Wayland
@@ -134,20 +138,12 @@ impl Platform for LinuxPlatform {
         unimplemented!("Linux main thread executor not implemented")
     }
 
-    fn text_system(&self) -> Arc<dyn PlatformTextSystem> {
-        unimplemented!("Linux fontconfig/FreeType system not implemented")
-    }
-
-    fn run(&self, _on_finish_launching: Box<dyn FnOnce()>) {
+    fn run(self: Box<Self>, _on_finish_launching: Box<dyn FnOnce()>) {
         unimplemented!("Linux event loop (Wayland/X11) not implemented")
     }
 
     fn quit(&self) {
         unimplemented!("Linux quit not implemented")
-    }
-
-    fn request_frame(&self) {
-        unimplemented!("Linux frame request not implemented")
     }
 
     fn active_window(&self) -> Option<WindowId> {

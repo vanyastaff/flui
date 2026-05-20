@@ -3,9 +3,10 @@
 //! This module provides types for blur effects and color filters,
 //! similar to CSS filter and backdrop-filter properties.
 
+use std::sync::Arc;
+
 use super::canvas::{StrokeCap, StrokeJoin};
 use crate::geometry::Pixels;
-use std::sync::Arc;
 
 /// Blur quality/algorithm level.
 ///
@@ -195,7 +196,8 @@ impl ColorMatrix {
     ///
     /// # Arguments
     ///
-    /// * `amount` - Saturation multiplier (0.0 to 2.0, 1.0 = no change, 0.0 = grayscale)
+    /// * `amount` - Saturation multiplier (0.0 to 2.0, 1.0 = no change, 0.0 =
+    ///   grayscale)
     #[inline]
     pub fn saturation(amount: f32) -> Self {
         let r = 0.2126 * (1.0 - amount);

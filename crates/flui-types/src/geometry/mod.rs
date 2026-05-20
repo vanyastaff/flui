@@ -1,7 +1,8 @@
 //! Type-safe geometry types for 2D graphics.
 //!
-//! This module provides fundamental geometry types with compile-time unit safety,
-//! preventing accidental mixing of coordinate systems (e.g., Pixels vs DevicePixels).
+//! This module provides fundamental geometry types with compile-time unit
+//! safety, preventing accidental mixing of coordinate systems (e.g., Pixels vs
+//! DevicePixels).
 //!
 //! # Core Types
 //!
@@ -19,7 +20,8 @@
 //!
 //! # Unit Types
 //!
-//! The geometry system uses type-safe units to prevent coordinate system mixing:
+//! The geometry system uses type-safe units to prevent coordinate system
+//! mixing:
 //!
 //! | Unit | Description | Use Case |
 //! |------|-------------|----------|
@@ -154,135 +156,107 @@ pub mod vector;
 /// ```
 pub mod prelude {
     // Core generic types
-    pub use super::offset::Offset;
-    pub use super::point::Point;
-    pub use super::size::Size;
-    pub use super::vector::Vec2;
-
     // Shape types
-    pub use super::bounds::Bounds;
-    pub use super::circle::Circle;
-    pub use super::line::Line;
-    pub use super::rect::Rect;
-    pub use super::rrect::{RRect, Radius};
-
+    // Error types
     // Unit types
-    pub use super::length::Rems;
-    pub use super::units::{
-        delta_px, device_px, px, scaled_px, DevicePixels, PixelDelta, Pixels, ScaledPixels,
-    };
-
+    // Constructor functions
     // Traits
     pub use super::traits::{Along, Axis, GeometryOps, Half, IsZero, NumericUnit, Sign, Unit};
-
-    // Error types
-    pub use super::error::GeometryError;
-
-    // Constructor functions
-    pub use super::point::point;
-    pub use super::rect::rect;
-    pub use super::size::size;
-    pub use super::vector::vec2;
+    pub use super::{
+        bounds::Bounds,
+        circle::Circle,
+        error::GeometryError,
+        length::Rems,
+        line::Line,
+        offset::Offset,
+        point::{Point, point},
+        rect::{Rect, rect},
+        rrect::{RRect, Radius},
+        size::{Size, size},
+        units::{
+            DevicePixels, PixelDelta, Pixels, ScaledPixels, delta_px, device_px, px, scaled_px,
+        },
+        vector::{Vec2, vec2},
+    };
 }
 
 // =============================================================================
 // CORE GENERIC TYPES - Type-safe geometry with unit parameters
 // =============================================================================
 
-/// Generic 2D point with unit-safe coordinates.
-///
-/// See [`point`](mod@point) module for full documentation.
-pub use point::Point;
-
-/// Generic 2D vector (displacement) with unit-safe coordinates.
-///
-/// See [`vector`] module for full documentation.
-pub use vector::Vec2;
-
-/// Generic 2D size (dimensions) with unit-safe coordinates.
-///
-/// See [`size`](mod@size) module for full documentation.
-pub use size::Size;
-
+// =============================================================================
+// SHAPE TYPES
+// =============================================================================
+pub use bezier::{CubicBez, QuadBez};
+pub use bounds::Bounds;
+pub use circle::Circle;
+// =============================================================================
+// STRUCTURAL TYPES
+// =============================================================================
+pub use corner::Corner;
+pub use corners::{Corners, corners};
+pub use edges::{Edges, edges};
+// =============================================================================
+// ERROR TYPES
+// =============================================================================
+pub use error::GeometryError;
+// =============================================================================
+// LENGTH TYPES
+// =============================================================================
+pub use length::{AbsoluteLength, DefiniteLength, Length, Percentage, Rems, auto, relative, rems};
+pub use line::Line;
+// =============================================================================
+// TRANSFORMATION TYPES
+// =============================================================================
+pub use matrix4::Matrix4;
 /// Generic 2D offset (Flutter-compatible displacement).
 ///
 /// See [`offset`] module for full documentation.
 pub use offset::Offset;
-
-// =============================================================================
-// SHAPE TYPES
-// =============================================================================
-
-pub use bezier::{CubicBez, QuadBez};
-pub use bounds::Bounds;
-pub use circle::Circle;
-pub use line::Line;
-pub use rect::{rect, Rect};
-pub use rrect::{RRect, Radius};
-pub use rsuperellipse::RSuperellipse;
-
-// =============================================================================
-// STRUCTURAL TYPES
-// =============================================================================
-
-pub use corner::Corner;
-pub use corners::{corners, Corners};
-pub use edges::{edges, Edges};
-pub use relative_rect::RelativeRect;
-
-// =============================================================================
-// TRANSFORMATION TYPES
-// =============================================================================
-
-pub use matrix4::Matrix4;
-pub use rotation::QuarterTurns;
-pub use transform::Transform;
-
-// =============================================================================
-// UNIT TYPES
-// =============================================================================
-
-pub use units::{
-    delta_px, device_px, px, radians, scaled_px, DevicePixels, ParseLengthError, PixelDelta,
-    Pixels, Radians, ScaleFactor, ScaledPixels,
-};
-
-// =============================================================================
-// LENGTH TYPES
-// =============================================================================
-
-pub use length::{auto, relative, rems, AbsoluteLength, DefiniteLength, Length, Percentage, Rems};
-
-// =============================================================================
-// TRAITS
-// =============================================================================
-
-pub use traits::{
-    Along, ApproxEq, Axis, Double, GeometryOps, Half, IsZero, NumericUnit, Sign, Unit,
-};
-
-// =============================================================================
-// ERROR TYPES
-// =============================================================================
-
-pub use error::GeometryError;
-
+/// Generic 2D point with unit-safe coordinates.
+///
+/// See [`point`](mod@point) module for full documentation.
+pub use point::Point;
 // =============================================================================
 // CONSTRUCTOR FUNCTIONS
 // =============================================================================
-
 pub use point::point;
+pub use rect::{Rect, rect};
+pub use relative_rect::RelativeRect;
+pub use rotation::QuarterTurns;
+pub use rrect::{RRect, Radius};
+pub use rsuperellipse::RSuperellipse;
+/// Generic 2D size (dimensions) with unit-safe coordinates.
+///
+/// See [`size`](mod@size) module for full documentation.
+pub use size::Size;
 pub use size::size;
-pub use vector::vec2;
-
 // =============================================================================
 // TEXT PATH HELPERS
 // =============================================================================
-
 pub use text_path::{
-    arc_position, bezier_point, bezier_tangent_rotation, grid_position, parametric_position,
-    spiral_position, vertical_scale, wave_offset, wave_rotation, CharTransform,
+    CharTransform, arc_position, bezier_point, bezier_tangent_rotation, grid_position,
+    parametric_position, spiral_position, vertical_scale, wave_offset, wave_rotation,
 };
+// =============================================================================
+// TRAITS
+// =============================================================================
+pub use traits::{
+    Along, ApproxEq, Axis, Double, GeometryOps, Half, IsZero, NumericUnit, Sign, Unit,
+};
+pub use transform::Transform;
+// =============================================================================
+// UNIT TYPES
+// =============================================================================
+pub use units::{
+    DevicePixels, ParseLengthError, PixelDelta, Pixels, Radians, ScaleFactor, ScaledPixels,
+    delta_px, device_px, px, radians, scaled_px,
+};
+/// Generic 2D vector (displacement) with unit-safe coordinates.
+///
+/// See [`vector`] module for full documentation.
+pub use vector::Vec2;
+pub use vector::vec2;
 
 // =============================================================================
 // TYPE ALIASES - Common instantiations for convenience

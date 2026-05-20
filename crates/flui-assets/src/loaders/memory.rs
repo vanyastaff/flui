@@ -244,15 +244,19 @@ mod tests {
         let loader: MemoryLoader<AssetKey, Vec<u8>> = MemoryLoader::new();
         let key = AssetKey::new("test");
 
-        assert!(!AssetLoader::<DummyAsset>::exists(&loader, &key)
-            .await
-            .unwrap());
+        assert!(
+            !AssetLoader::<DummyAsset>::exists(&loader, &key)
+                .await
+                .unwrap()
+        );
 
         loader.insert(key, vec![1, 2, 3]);
 
-        assert!(AssetLoader::<DummyAsset>::exists(&loader, &key)
-            .await
-            .unwrap());
+        assert!(
+            AssetLoader::<DummyAsset>::exists(&loader, &key)
+                .await
+                .unwrap()
+        );
     }
 
     // Dummy asset for testing

@@ -1,7 +1,7 @@
 //! Cross-platform GPU renderer with automatic backend selection
 //!
-//! This module provides a unified renderer that automatically selects the appropriate
-//! GPU backend based on the target platform:
+//! This module provides a unified renderer that automatically selects the
+//! appropriate GPU backend based on the target platform:
 //!
 //! - **macOS/iOS**: Metal 4
 //! - **Windows**: DirectX 12 (Agility SDK)
@@ -32,9 +32,14 @@
 //! renderer.render(display_list)?;
 //! ```
 
-use crate::error::RenderError;
+use std::sync::Arc;
+
 use anyhow::Result;
 use wgpu;
+
+use super::occlusion::OcclusionTracker;
+use crate::error::RenderError;
+use crate::traits::Painter;
 
 /// GPU backend capabilities
 #[derive(Debug, Clone)]
@@ -56,6 +61,9 @@ pub struct GpuCapabilities {
 
     /// Supports compute shaders
     pub supports_compute: bool,
+
+    /// Supports push constants (not available on all mobile GPUs)
+    pub supports_push_constants: bool,
 
     /// Supports BC texture compression (DX)
     pub supports_bc_compression: bool,
@@ -81,6 +89,7 @@ impl GpuCapabilities {
             max_texture_size: limits.max_texture_dimension_2d,
             supports_hdr: Self::check_hdr_support(info.backend),
             supports_compute: true, // Compute shaders are supported by default in wgpu
+            supports_push_constants: features.contains(wgpu::Features::PUSH_CONSTANTS),
             supports_bc_compression: features.contains(wgpu::Features::TEXTURE_COMPRESSION_BC),
             supports_astc_compression: features.contains(wgpu::Features::TEXTURE_COMPRESSION_ASTC),
             supports_etc2_compression: features.contains(wgpu::Features::TEXTURE_COMPRESSION_ETC2),
@@ -95,35 +104,49 @@ impl GpuCapabilities {
             0x106B => "Apple".to_string(),
             0x1414 => "Microsoft (WARP)".to_string(),
             0x5143 => "Qualcomm".to_string(),
-            _ => format!("Unknown (0x{:04X})", vendor_id),
+            _ => format!("Unknown (0x{vendor_id:04X})"),
         }
     }
 
     fn check_hdr_support(backend: wgpu::Backend) -> bool {
         match backend {
-            wgpu::Backend::Metal => {
-                // macOS EDR (Extended Dynamic Range) support
-                // Available on XDR displays
-                true
-            }
-            wgpu::Backend::Dx12 => {
-                // Windows Auto HDR (Windows 11 24H2+)
-                true
-            }
+            // macOS EDR (Extended Dynamic Range) on XDR displays,
+            // Windows Auto HDR (Windows 11 24H2+)
+            wgpu::Backend::Metal | wgpu::Backend::Dx12 => true,
             _ => false,
         }
     }
+}
+
+/// GPU context available during layer tree rendering.
+///
+/// Provides access to device, queue, and surface format for mid-frame
+/// operations like backdrop blur (flush -> copy -> blur -> composite).
+struct RenderContext {
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
+    surface_format: wgpu::TextureFormat,
+    /// Whether the surface supports COPY_SRC (for backdrop filter)
+    supports_copy_src: bool,
 }
 
 /// Cross-platform GPU renderer
 pub struct Renderer {
     instance: wgpu::Instance,
     adapter: wgpu::Adapter,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
     surface: Option<wgpu::Surface<'static>>,
     config: Option<wgpu::SurfaceConfiguration>,
     capabilities: GpuCapabilities,
+    painter: Option<super::painter::WgpuPainter>,
+    offscreen: Option<Arc<parking_lot::Mutex<super::offscreen::OffscreenRenderer>>>,
+    /// Whether the surface supports COPY_SRC (for mid-frame texture copies)
+    supports_copy_src: bool,
+    /// Tracks dirty regions for incremental rendering (skip frames with no damage)
+    damage_tracker: flui_layer::damage::DamageTracker,
+    /// Tracks opaque regions to skip fully-occluded layers during traversal
+    occlusion: OcclusionTracker,
 }
 
 impl Renderer {
@@ -161,7 +184,8 @@ impl Renderer {
             ..Default::default()
         });
 
-        // Create surface — requires unsafe: wgpu surface creation from raw window handle
+        // Create surface — requires unsafe: wgpu surface creation from raw window
+        // handle
         #[allow(unsafe_code)]
         let surface = unsafe {
             instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::from_window(window)?)
@@ -193,16 +217,33 @@ impl Renderer {
                 required_features: Self::required_features(&capabilities),
                 required_limits: Self::required_limits(&capabilities),
                 memory_hints: wgpu::MemoryHints::default(),
-                trace: Default::default(),
+                trace: wgpu::Trace::default(),
             })
             .await?;
+
+        let device = Arc::new(device);
+        let queue = Arc::new(queue);
 
         // Configure surface
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = Self::select_surface_format(&surface_caps, &capabilities);
 
+        // Check if the surface supports COPY_SRC (needed for backdrop blur)
+        let supports_copy_src = surface_caps.usages.contains(wgpu::TextureUsages::COPY_SRC);
+        if !supports_copy_src {
+            tracing::warn!(
+                "Surface does not support COPY_SRC; backdrop blur will use fallback path"
+            );
+        }
+
+        let surface_usage = if supports_copy_src {
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC
+        } else {
+            wgpu::TextureUsages::RENDER_ATTACHMENT
+        };
+
         let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: surface_usage,
             format: surface_format,
             width: 800, // Will be updated on resize
             height: 600,
@@ -214,6 +255,22 @@ impl Renderer {
 
         surface.configure(&device, &config);
 
+        // Create painter for GPU rendering
+        let painter = super::painter::WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            surface_format,
+            (config.width, config.height),
+        );
+
+        // Create offscreen renderer for shader mask / backdrop filter effects
+        let offscreen = super::offscreen::OffscreenRenderer::new(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            surface_format,
+        );
+        let offscreen = Some(Arc::new(parking_lot::Mutex::new(offscreen)));
+
         Ok(Self {
             instance,
             adapter,
@@ -222,6 +279,11 @@ impl Renderer {
             surface: Some(surface),
             config: Some(config),
             capabilities,
+            painter: Some(painter),
+            offscreen,
+            supports_copy_src,
+            damage_tracker: flui_layer::damage::DamageTracker::new(),
+            occlusion: OcclusionTracker::new(),
         })
     }
 
@@ -251,19 +313,24 @@ impl Renderer {
                 label: Some("FLUI Offscreen Device"),
                 required_features: Self::required_features(&capabilities),
                 required_limits: Self::required_limits(&capabilities),
-                memory_hints: Default::default(),
-                trace: Default::default(),
+                memory_hints: wgpu::MemoryHints::default(),
+                trace: wgpu::Trace::default(),
             })
             .await?;
 
         Ok(Self {
             instance,
             adapter,
-            device,
-            queue,
+            device: Arc::new(device),
+            queue: Arc::new(queue),
             surface: None,
             config: None,
             capabilities,
+            painter: None,
+            offscreen: None,
+            supports_copy_src: false,
+            damage_tracker: flui_layer::damage::DamageTracker::new(),
+            occlusion: OcclusionTracker::new(),
         })
     }
 
@@ -319,33 +386,33 @@ impl Renderer {
         }
     }
 
-    /// Required GPU features based on capabilities
+    /// Required GPU features based on capabilities and adapter support
     fn required_features(capabilities: &GpuCapabilities) -> wgpu::Features {
         let mut features = wgpu::Features::empty();
 
         // Always enable texture adapter-specific formats
         features |= wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
 
-        // Enable push constants if available (useful for uniforms)
-        features |= wgpu::Features::PUSH_CONSTANTS;
-
-        // Enable compute shaders if supported
-        if capabilities.supports_compute {
-            // Already included in Features::COMPUTE_SHADER check
+        // Push constants: only request if adapter supports them.
+        // Some mobile GPUs (especially older Android devices) don't support this.
+        if capabilities.supports_push_constants {
+            features |= wgpu::Features::PUSH_CONSTANTS;
         }
 
         features
     }
 
-    /// Required GPU limits based on capabilities
+    /// Required GPU limits based on capabilities and adapter support
     fn required_limits(capabilities: &GpuCapabilities) -> wgpu::Limits {
-        let mut limits = wgpu::Limits::default();
+        let mut limits = wgpu::Limits {
+            max_texture_dimension_2d: capabilities.max_texture_size.min(16384),
+            ..wgpu::Limits::default()
+        };
 
-        // Ensure we can handle reasonably large textures
-        limits.max_texture_dimension_2d = capabilities.max_texture_size.min(16384);
-
-        // Push constant size (if supported)
-        limits.max_push_constant_size = 128;
+        // Push constant size — only set if adapter supports push constants
+        if capabilities.supports_push_constants {
+            limits.max_push_constant_size = 128;
+        }
 
         limits
     }
@@ -397,14 +464,21 @@ impl Renderer {
 
     /// Resize the surface
     pub fn resize(&mut self, width: u32, height: u32) {
-        if let (Some(config), Some(surface)) = (&mut self.config, &self.surface) {
-            if width > 0 && height > 0 {
-                config.width = width;
-                config.height = height;
-                surface.configure(&self.device, config);
+        if let (Some(config), Some(surface)) = (&mut self.config, &self.surface)
+            && width > 0
+            && height > 0
+        {
+            config.width = width;
+            config.height = height;
+            surface.configure(&self.device, config);
 
-                tracing::debug!("Surface resized to {}x{}", width, height);
+            if let Some(painter) = &mut self.painter {
+                painter.resize(width, height);
             }
+
+            self.damage_tracker.mark_full_repaint();
+
+            tracing::debug!("Surface resized to {}x{}", width, height);
         }
     }
 
@@ -433,71 +507,429 @@ impl Renderer {
         self.config.as_ref()
     }
 
+    /// Mark a screen region as dirty (needs repaint).
+    pub fn mark_dirty(&mut self, rect: flui_types::geometry::Rect<flui_types::geometry::Pixels>) {
+        self.damage_tracker.mark_dirty(rect);
+    }
+
+    /// Mark the entire screen as needing repaint.
+    pub fn mark_full_repaint(&mut self) {
+        self.damage_tracker.mark_full_repaint();
+    }
+
+    /// Check if the renderer has pending damage.
+    pub fn has_damage(&self) -> bool {
+        self.damage_tracker.has_damage()
+    }
+
     /// Get current surface size as `(width, height)`.
     ///
     /// Returns `(0, 0)` if no surface is configured (e.g., offscreen renderer).
     pub fn size(&self) -> (u32, u32) {
-        self.config
-            .as_ref()
-            .map(|c| (c.width, c.height))
-            .unwrap_or((0, 0))
+        self.config.as_ref().map_or((0, 0), |c| (c.width, c.height))
+    }
+
+    /// Reconfigure the surface after loss or outdated error.
+    ///
+    /// This is called automatically by `render_scene()` when a
+    /// `SurfaceError::Lost` or `SurfaceError::Outdated` is encountered,
+    /// but can also be called manually if needed.
+    pub fn reconfigure_surface(&mut self) -> Result<(), RenderError> {
+        if let (Some(config), Some(surface)) = (&self.config, &self.surface) {
+            surface.configure(&self.device, config);
+            self.damage_tracker.mark_full_repaint();
+            tracing::info!("Surface reconfigured ({}x{})", config.width, config.height);
+            Ok(())
+        } else {
+            Err(RenderError::NotInitialized)
+        }
     }
 
     /// Render a `flui_layer::Scene` to the surface.
     ///
-    /// This is a placeholder that will be fully implemented when the layer
-    /// compositing pipeline is connected. Currently it acquires the surface
-    /// texture, clears it, and presents.
-    pub fn render_scene(&mut self, _scene: &flui_layer::Scene) -> Result<(), RenderError> {
-        let surface = self.surface.as_ref().ok_or(RenderError::SurfaceLost)?;
-        let config = self.config.as_ref().ok_or(RenderError::SurfaceLost)?;
+    /// Traverses the scene's LayerTree depth-first, dispatching each layer's
+    /// DisplayList commands through the GPU backend (WgpuPainter).
+    ///
+    /// For scenes containing `BackdropFilterLayer`, the render flow supports
+    /// mid-frame flush: painter batches are submitted early so the surface
+    /// texture can be copied, blurred, and composited before continuing.
+    pub fn render_scene(&mut self, scene: &flui_layer::Scene) -> Result<(), RenderError> {
+        use super::backend::Backend;
 
-        let output = surface.get_current_texture().map_err(|e| match e {
-            wgpu::SurfaceError::Lost => RenderError::SurfaceLost,
-            wgpu::SurfaceError::OutOfMemory => RenderError::OutOfMemory,
-            wgpu::SurfaceError::Outdated => RenderError::SurfaceOutdated,
-            wgpu::SurfaceError::Timeout => RenderError::Timeout,
-            _ => RenderError::SurfaceLost,
-        })?;
+        // TODO: Fine-grained damage tracking from widget state changes.
+        // Currently, the application layer must call `mark_dirty()` or
+        // `mark_full_repaint()` explicitly (e.g., after any input event).
+        // When the widget layer (flui-view) is re-enabled, widgets should
+        // call `mark_dirty(bounds)` on state change for per-region tracking.
+
+        // Check if we need to render at all
+        if !self.damage_tracker.has_damage() && !self.damage_tracker.needs_full_repaint() {
+            // Nothing changed — skip this frame entirely
+            tracing::trace!("Skipping frame: no damage");
+            return Ok(());
+        }
+
+        let surface = self.surface.as_ref().ok_or(RenderError::SurfaceLost)?;
+
+        let output = match surface.get_current_texture() {
+            Ok(output) => output,
+            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                // Auto-reconfigure and retry once
+                self.reconfigure_surface()?;
+                let surface = self.surface.as_ref().ok_or(RenderError::SurfaceLost)?;
+                surface.get_current_texture().map_err(|e| match e {
+                    wgpu::SurfaceError::Lost | wgpu::SurfaceError::Other => {
+                        RenderError::SurfaceLost
+                    }
+                    wgpu::SurfaceError::OutOfMemory => RenderError::OutOfMemory,
+                    wgpu::SurfaceError::Outdated => RenderError::SurfaceOutdated,
+                    wgpu::SurfaceError::Timeout => RenderError::Timeout,
+                })?
+            }
+            Err(e) => {
+                return Err(match e {
+                    wgpu::SurfaceError::OutOfMemory => RenderError::OutOfMemory,
+                    wgpu::SurfaceError::Timeout => RenderError::Timeout,
+                    _ => RenderError::SurfaceLost,
+                });
+            }
+        };
 
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("FLUI Scene Render Encoder"),
-            });
-
-        // Clear pass (placeholder -- full compositing TBD)
+        // 1. Clear pass — submit immediately so the surface is ready for
+        //    mid-frame copy operations (backdrop blur needs pixels on the surface).
         {
-            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("FLUI Clear Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 1.0,
-                            g: 1.0,
-                            b: 1.0,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
+            let mut clear_encoder =
+                self.device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("FLUI Clear Encoder"),
+                    });
+            {
+                let _pass = clear_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("FLUI Clear Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+            }
+            self.queue.submit(std::iter::once(clear_encoder.finish()));
         }
 
-        self.queue.submit(std::iter::once(encoder.finish()));
+        // 2. Build render context for backdrop filter support
+        let surface_format = self
+            .config
+            .as_ref()
+            .map_or(wgpu::TextureFormat::Bgra8UnormSrgb, |c| c.format);
+
+        let ctx = RenderContext {
+            device: Arc::clone(&self.device),
+            queue: Arc::clone(&self.queue),
+            surface_format,
+            supports_copy_src: self.supports_copy_src,
+        };
+
+        // 3. Reset occlusion tracker for this frame
+        self.occlusion.reset();
+
+        // 4. Render scene content via LayerTree traversal
+        if scene.has_content()
+            && let Some(painter) = self.painter.take()
+        {
+            let mut backend = if let Some(ref offscreen) = self.offscreen {
+                Backend::with_offscreen(painter, Arc::clone(offscreen))
+            } else {
+                Backend::new(painter)
+            };
+
+            // Apply damage rect as scissor optimization: when only part of the
+            // screen changed, limit GPU work to the damaged region.
+            // `damage_rect()` returns `None` for full repaint (no scissor needed),
+            // `Some(rect)` for partial damage.
+            if let Some(damage) = self.damage_tracker.damage_rect() {
+                if damage.width().0 > 0.0 && damage.height().0 > 0.0 {
+                    backend.painter_mut().clip_rect(damage);
+                    tracing::trace!(
+                        left = damage.left().0,
+                        top = damage.top().0,
+                        width = damage.width().0,
+                        height = damage.height().0,
+                        "Damage scissor applied"
+                    );
+                }
+            }
+
+            // Depth-first traversal of layer tree
+            if let Some(root_id) = scene.root() {
+                Self::render_layer_recursive(
+                    scene.layer_tree(),
+                    root_id,
+                    &mut backend,
+                    &ctx,
+                    &output.texture,
+                    &view,
+                    &mut self.occlusion,
+                );
+            }
+
+            tracing::trace!(
+                opaque_regions = self.occlusion.opaque_count(),
+                "Occlusion tracking complete for frame"
+            );
+
+            // 5. Final flush — submit remaining painter batches
+            let mut painter = backend.into_painter();
+            let mut final_encoder =
+                self.device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("FLUI Final Render Encoder"),
+                    });
+            if let Err(e) = painter.render(&view, &mut final_encoder) {
+                tracing::error!("Painter render failed: {}", e);
+            }
+            self.queue.submit(std::iter::once(final_encoder.finish()));
+
+            // Return painter to Renderer for reuse
+            self.painter = Some(painter);
+        }
+
         output.present();
 
-        let _ = config; // suppress unused warning
+        // Reset damage for next frame
+        self.damage_tracker.reset();
+
         Ok(())
+    }
+
+    /// Recursively render a layer and its children (depth-first).
+    ///
+    /// Each layer's `render()` pushes state (transforms, clips, opacity),
+    /// children are rendered, then `cleanup()` pops the state.
+    ///
+    /// Layers that are fully occluded by previously-rendered opaque content
+    /// are skipped entirely (including their children), reducing overdraw.
+    ///
+    /// `BackdropFilterLayer` is handled specially at the Renderer level when
+    /// the surface supports `COPY_SRC`, enabling mid-frame flush + blur.
+    fn render_layer_recursive(
+        tree: &flui_layer::LayerTree,
+        layer_id: flui_foundation::LayerId,
+        backend: &mut super::backend::Backend,
+        ctx: &RenderContext,
+        surface_texture: &wgpu::Texture,
+        surface_view: &wgpu::TextureView,
+        occlusion: &mut OcclusionTracker,
+    ) {
+        use super::layer_render::LayerRender;
+
+        let Some(node) = tree.get(layer_id) else {
+            return;
+        };
+
+        let layer = node.layer();
+
+        // Occlusion culling: skip layers fully hidden behind opaque content.
+        // Only check layers that report bounds — layers without bounds (Offset,
+        // Transform, Opacity, etc.) are containers that affect their children
+        // and cannot be culled independently.
+        if let Some(bounds) = layer.bounds() {
+            let x = bounds.left().0;
+            let y = bounds.top().0;
+            let w = bounds.width().0;
+            let h = bounds.height().0;
+
+            if w > 0.0 && h > 0.0 && occlusion.is_occluded(x, y, w, h) {
+                tracing::trace!(?layer_id, x, y, w, h, "Skipping occluded layer");
+                return; // Skip this layer and all its children
+            }
+        }
+
+        // Special handling for BackdropFilter — requires mid-frame flush + copy
+        if let flui_layer::Layer::BackdropFilter(bf_layer) = layer {
+            if ctx.supports_copy_src {
+                Self::handle_backdrop_filter(
+                    bf_layer,
+                    node,
+                    tree,
+                    backend,
+                    ctx,
+                    surface_texture,
+                    surface_view,
+                    occlusion,
+                );
+                return;
+            }
+            // Fall through to normal LayerRender path (clip + filter fallback)
+        }
+
+        // Normal path: render → children → cleanup
+        layer.render(backend);
+
+        let children: Vec<_> = node.children().to_vec();
+        for child_id in children {
+            Self::render_layer_recursive(
+                tree,
+                child_id,
+                backend,
+                ctx,
+                surface_texture,
+                surface_view,
+                occlusion,
+            );
+        }
+
+        layer.cleanup(backend);
+
+        // Register opaque regions after rendering so that subsequent layers
+        // (siblings rendered later in traversal order) can be culled.
+        // Only leaf layers known to draw solid content are registered.
+        if layer.is_opaque() {
+            if let Some(bounds) = layer.bounds() {
+                let x = bounds.left().0;
+                let y = bounds.top().0;
+                let w = bounds.width().0;
+                let h = bounds.height().0;
+
+                if w > 0.0 && h > 0.0 {
+                    occlusion.add_opaque(x, y, w, h);
+                }
+            }
+        }
+    }
+
+    /// Handle a `BackdropFilterLayer` via mid-frame flush and Dual Kawase blur.
+    ///
+    /// Flow:
+    /// 1. Flush current painter batches to the surface
+    /// 2. Copy the backdrop region from the surface to an offscreen texture
+    /// 3. Apply Dual Kawase blur via `OffscreenRenderer::render_blur`
+    /// 4. Queue blurred result for compositing back to the surface
+    /// 5. Render children on top
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    fn handle_backdrop_filter(
+        bf_layer: &flui_layer::BackdropFilterLayer,
+        node: &flui_layer::tree::LayerNode,
+        tree: &flui_layer::LayerTree,
+        backend: &mut super::backend::Backend,
+        ctx: &RenderContext,
+        surface_texture: &wgpu::Texture,
+        surface_view: &wgpu::TextureView,
+        occlusion: &mut OcclusionTracker,
+    ) {
+        use flui_types::painting::ImageFilter;
+
+        let bounds = bf_layer.bounds();
+
+        // Extract sigma from blur filter; other filter types fall back to
+        // normal child rendering (no GPU blur support yet).
+        let sigma = match bf_layer.filter() {
+            ImageFilter::Blur { sigma_x, sigma_y } => (*sigma_x + *sigma_y) / 2.0,
+            _ => {
+                tracing::warn!(
+                    "Backdrop filter type not supported for GPU blur, rendering children only"
+                );
+                let children: Vec<_> = node.children().to_vec();
+                for child_id in children {
+                    Self::render_layer_recursive(
+                        tree,
+                        child_id,
+                        backend,
+                        ctx,
+                        surface_texture,
+                        surface_view,
+                        occlusion,
+                    );
+                }
+                return;
+            }
+        };
+
+        // 1. Flush current painter batches to the surface so pixels are available
+        let mut flush_encoder =
+            ctx.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Backdrop Flush Encoder"),
+                });
+        if let Err(e) = backend
+            .painter_mut()
+            .render(surface_view, &mut flush_encoder)
+        {
+            tracing::error!("Backdrop flush failed: {}", e);
+        }
+
+        // 2. Copy region from surface to offscreen texture for blur input
+        let x = bounds.left().0.max(0.0) as u32;
+        let y = bounds.top().0.max(0.0) as u32;
+        let w = bounds.width().0.max(1.0) as u32;
+        let h = bounds.height().0.max(1.0) as u32;
+
+        if let Some(offscreen_arc) = backend.offscreen().cloned() {
+            let blur_input = {
+                let offscreen = offscreen_arc.lock();
+                offscreen.texture_pool().acquire(w, h, ctx.surface_format)
+            };
+
+            flush_encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: surface_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x, y, z: 0 },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: blur_input.texture(),
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+            );
+            ctx.queue.submit(std::iter::once(flush_encoder.finish()));
+
+            // 3. Apply Dual Kawase blur
+            let blurred = {
+                let mut offscreen = offscreen_arc.lock();
+                offscreen.render_blur(&blur_input, sigma)
+            };
+
+            // 4. Queue blurred result for compositing
+            backend
+                .painter_mut()
+                .queue_offscreen_result(blurred, bounds);
+        } else {
+            // No offscreen renderer available — just submit the flush
+            ctx.queue.submit(std::iter::once(flush_encoder.finish()));
+            tracing::warn!("Backdrop blur skipped: no offscreen renderer available");
+        }
+
+        // 5. Render children on top of the blurred backdrop
+        let children: Vec<_> = node.children().to_vec();
+        for child_id in children {
+            Self::render_layer_recursive(
+                tree,
+                child_id,
+                backend,
+                ctx,
+                surface_texture,
+                surface_view,
+                occlusion,
+            );
+        }
+        // No cleanup needed — backdrop filter has no push/pop state in this path
     }
 }
 

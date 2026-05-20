@@ -1,7 +1,8 @@
 //! Trait definitions for render objects.
 //!
 //! This module defines the core render object traits:
-//! - `RenderObject` - Base trait for all render objects (dynamic, stored in RenderTree)
+//! - `RenderObject` - Base trait for all render objects (dynamic, stored in
+//!   RenderTree)
 //! - `RenderBox` - 2D box layout with Arity-based child management
 //! - `RenderSliver` - Scrollable content layout
 

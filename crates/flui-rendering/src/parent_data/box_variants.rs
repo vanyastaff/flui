@@ -1,14 +1,12 @@
 //! Box protocol parent data variants - Specialized types for container layouts.
 
-use flui_types::{Matrix4, Offset};
 use std::hash::{Hash, Hasher};
-
-use super::base::ParentData;
-
-use super::container_mixin::ContainerParentDataMixin;
 
 // Re-export RenderId for convenience
 use flui_foundation::RenderId;
+use flui_types::{Matrix4, Offset};
+
+use super::{base::ParentData, container_mixin::ContainerParentDataMixin};
 
 // ============================================================================
 // CONTAINER BOX PARENT DATA (Base for containers)
@@ -508,8 +506,9 @@ impl Hash for MultiChildLayoutParentData {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::px;
+
+    use super::*;
 
     #[test]
     fn test_container_box_parent_data() {

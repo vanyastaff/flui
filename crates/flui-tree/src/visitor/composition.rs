@@ -3,11 +3,12 @@
 //! This module provides utilities for composing multiple visitors
 //! into a single traversal pass, improving efficiency.
 
-use super::{sealed, TreeVisitor, VisitorResult};
-use crate::TreeNav;
+use std::{fmt, marker::PhantomData};
+
 use flui_foundation::Identifier;
-use std::fmt;
-use std::marker::PhantomData;
+
+use super::{TreeVisitor, VisitorResult, sealed};
+use crate::TreeNav;
 
 // ============================================================================
 // COMPOSED VISITOR
@@ -447,10 +448,13 @@ impl<I: Identifier, T: TreeNav<I>, V: TreeVisitor<I, T> + Sized> VisitorExt<I, T
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::visitor::{CollectVisitor, CountVisitor, MaxDepthVisitor};
-    use crate::{TreeNav, TreeRead};
     use flui_foundation::ElementId;
+
+    use super::*;
+    use crate::{
+        TreeNav, TreeRead,
+        visitor::{CollectVisitor, CountVisitor, MaxDepthVisitor},
+    };
 
     // Test tree implementation
     struct TestNode {

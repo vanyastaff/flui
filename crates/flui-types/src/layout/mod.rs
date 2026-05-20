@@ -18,10 +18,10 @@ pub use alignment::{
 };
 pub use axis::{Axis, AxisDirection, Orientation, VerticalDirection};
 pub use baseline::TextBaseline;
+pub use r#box::{BoxFit, BoxShape, FittedSizes};
 pub use constraints::BoxConstraints;
 pub use flex::FlexFit;
 pub use fractional_offset::FractionalOffset;
-pub use r#box::{BoxFit, BoxShape, FittedSizes};
 pub use stack::StackFit;
 pub use table::{TableCellVerticalAlignment, TableColumnWidth};
 pub use viewport::CacheExtentStyle;

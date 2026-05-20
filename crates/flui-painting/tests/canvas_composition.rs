@@ -5,7 +5,7 @@
 
 use flui_painting::prelude::*;
 use flui_types::{
-    geometry::{px, Rect},
+    geometry::{Rect, px},
     styling::Color,
 };
 

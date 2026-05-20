@@ -1,7 +1,8 @@
 //! Mouse tracking for hover, enter, and exit events
 //!
-//! The MouseTracker manages the relationship between mouse devices and UI regions,
-//! triggering mouse events as the cursor moves through the widget tree.
+//! The MouseTracker manages the relationship between mouse devices and UI
+//! regions, triggering mouse events as the cursor moves through the widget
+//! tree.
 //!
 //! # Architecture
 //!
@@ -42,20 +43,22 @@
 //! }
 //! ```
 
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
+
+use flui_types::geometry::{Offset, Pixels};
 use parking_lot::Mutex;
 use smallvec::SmallVec;
 
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-
-use crate::events::{CursorIcon, InputEvent, PointerEvent, PointerEventExt};
-use flui_types::geometry::{Offset, Pixels};
-
-use crate::ids::RegionId;
-
 /// Device ID type (re-exported from events).
 pub use crate::events::DeviceId;
-use crate::routing::HitTestResult;
+use crate::{
+    events::{CursorIcon, InputEvent, PointerEvent, PointerEventExt},
+    ids::RegionId,
+    routing::HitTestResult,
+};
 
 /// Callback for mouse enter events
 pub type MouseEnterCallback = Arc<dyn Fn(DeviceId, Offset<Pixels>) + Send + Sync>;
@@ -399,8 +402,8 @@ impl MouseTracker {
 
     /// Sets the callback for cursor changes.
     ///
-    /// The callback is invoked whenever the active cursor changes for any device.
-    /// Use this to update the platform cursor.
+    /// The callback is invoked whenever the active cursor changes for any
+    /// device. Use this to update the platform cursor.
     ///
     /// # Example
     ///
@@ -430,10 +433,10 @@ impl MouseTracker {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::events::PointerType;
-    use crate::routing::HitTestResult;
     use flui_foundation::RenderId;
+
+    use super::*;
+    use crate::{events::PointerType, routing::HitTestResult};
 
     #[test]
     fn test_mouse_tracker_creation() {

@@ -161,8 +161,9 @@
 //! }
 //! ```
 
-use super::{Matrix4, Offset, Pixels};
 use std::f32::consts::PI;
+
+use super::{Matrix4, Offset, Pixels};
 
 /// High-level 2D transformation API
 ///
@@ -171,7 +172,8 @@ use std::f32::consts::PI;
 ///
 /// # Transform Order
 ///
-/// When composing transforms with `.then()`, they are applied in the order specified:
+/// When composing transforms with `.then()`, they are applied in the order
+/// specified:
 ///
 /// ```rust,ignore
 /// // Translate THEN rotate THEN scale
@@ -296,7 +298,7 @@ impl Transform {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_types::geometry::{Transform, Radians};
+    /// use flui_types::geometry::{Radians, Transform};
     ///
     /// let t = Transform::rotate_radians(Radians::from_degrees(45.0));
     /// ```
@@ -348,13 +350,9 @@ impl Transform {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_types::geometry::{Transform, Radians};
+    /// use flui_types::geometry::{Radians, Transform};
     ///
-    /// let t = Transform::rotate_around_radians(
-    ///     Radians::from_degrees(45.0),
-    ///     100.0,
-    ///     100.0
-    /// );
+    /// let t = Transform::rotate_around_radians(Radians::from_degrees(45.0), 100.0, 100.0);
     /// ```
     #[inline]
     pub fn rotate_around_radians(
@@ -441,7 +439,8 @@ impl Transform {
 
     /// Internal method for matrix conversion
     ///
-    /// Use `Into<Matrix4>` trait instead: `let matrix: Matrix4 = transform.into();`
+    /// Use `Into<Matrix4>` trait instead: `let matrix: Matrix4 =
+    /// transform.into();`
     fn to_matrix_internal(&self) -> Matrix4 {
         match self {
             Transform::Identity => Matrix4::identity(),
@@ -614,10 +613,12 @@ impl Transform {
         }
     }
 
-    /// Decompose a 2D affine transform into translate, rotate, and scale components
+    /// Decompose a 2D affine transform into translate, rotate, and scale
+    /// components
     ///
-    /// This is useful for applying transforms via painter APIs that only support
-    /// primitive operations (translate, rotate, scale) rather than arbitrary matrices.
+    /// This is useful for applying transforms via painter APIs that only
+    /// support primitive operations (translate, rotate, scale) rather than
+    /// arbitrary matrices.
     ///
     /// # Returns
     ///

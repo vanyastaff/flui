@@ -38,8 +38,8 @@
 //! }
 //! ```
 
-use flui_platform::{current_platform, WindowOptions};
-use flui_types::geometry::{px, Size};
+use flui_platform::{WindowOptions, current_platform};
+use flui_types::geometry::{Size, px};
 
 // ═══════════════════════════════════════════════════════════════
 // SECTION 1: Setup and Initialization
@@ -54,7 +54,7 @@ fn init_tracing() {
 }
 
 /// Create a test platform instance
-fn get_test_platform() -> std::sync::Arc<dyn flui_platform::Platform> {
+fn get_test_platform() -> Box<dyn flui_platform::Platform> {
     current_platform().expect("Failed to create platform")
 }
 
@@ -139,7 +139,7 @@ fn test_wgpu_surface_creation() {
     // let surface = unsafe {
     //     instance.create_surface_from_raw_window_handle(
     //         window.raw_window_handle(),
-    //         window.raw_display_handle()
+    //         window.raw_display_handle(),
     //     )
     // };
     // assert!(surface.is_ok());
@@ -167,7 +167,10 @@ fn test_canvas_integration() {
     //
     // // Test basic canvas operations
     // canvas.clear(Color::WHITE);
-    // canvas.draw_rect(Rect::new(px(10.0), px(10.0), px(100.0), px(100.0)), Color::RED);
+    // canvas.draw_rect(
+    //     Rect::new(px(10.0), px(10.0), px(100.0), px(100.0)),
+    //     Color::RED,
+    // );
     // canvas.present();
     // ```
 
@@ -205,74 +208,18 @@ fn test_event_propagation() {
     //
     // // Verify redraw event was captured
     // let events = events_received.lock().unwrap();
-    // assert!(events.iter().any(|e| matches!(e, WindowEvent::RedrawRequested)));
+    // assert!(
+    //     events
+    //         .iter()
+    //         .any(|e| matches!(e, WindowEvent::RedrawRequested))
+    // );
     // ```
 
     tracing::warn!("TODO: Implement event propagation test");
 }
 
 // ═══════════════════════════════════════════════════════════════
-// SECTION 5: Text System Integration
-// ═══════════════════════════════════════════════════════════════
-
-/// Template: Test text system + rendering integration
-#[test]
-fn test_text_system_integration() {
-    init_tracing();
-
-    tracing::info!("Testing text system integration");
-
-    let platform = get_test_platform();
-    let text_system = platform.text_system();
-
-    // Font enumeration
-    let font_names = text_system.all_font_names();
-    assert!(!font_names.is_empty(), "Should have at least one font");
-    tracing::info!("Found {} fonts, first: {}", font_names.len(), font_names[0]);
-
-    // Font resolution
-    let font = flui_platform::Font {
-        family: font_names[0].clone(),
-        ..Default::default()
-    };
-    let id = text_system.font_id(&font).expect("Should resolve font");
-
-    // Text layout
-    let text = "Integration Test";
-    let layout = text_system.layout_line(
-        text,
-        16.0,
-        &[flui_platform::FontRun {
-            font_id: id,
-            len: text.len(),
-        }],
-    );
-
-    tracing::info!(
-        "Text layout: width={:.1}, ascent={:.1}",
-        layout.width,
-        layout.ascent
-    );
-
-    assert!(
-        layout.width > 0.0 && layout.width < 1000.0,
-        "Text width should be reasonable, got {}",
-        layout.width
-    );
-
-    // TODO: Add actual rendering integration when flui_painting is ready
-    // Example:
-    // ```rust
-    // let canvas = Canvas::from_window(&window)?;
-    // canvas.draw_text(text, Point::ORIGIN, &font_family, font_size, Color::BLACK);
-    // canvas.present();
-    // ```
-
-    tracing::info!("✓ Text system integration validated");
-}
-
-// ═══════════════════════════════════════════════════════════════
-// SECTION 6: Clipboard Integration
+// SECTION 5: Clipboard Integration
 // ═══════════════════════════════════════════════════════════════
 
 /// Template: Test clipboard + UI component integration
@@ -321,8 +268,8 @@ fn test_executor_integration() {
     let bg_executor = platform.background_executor();
 
     use std::sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     };
 
     let task_executed = Arc::new(AtomicBool::new(false));
@@ -389,7 +336,7 @@ fn test_full_integration() {
 #[allow(dead_code)]
 fn with_platform<F>(test_fn: F)
 where
-    F: FnOnce(std::sync::Arc<dyn flui_platform::Platform>),
+    F: FnOnce(Box<dyn flui_platform::Platform>),
 {
     init_tracing();
     let platform = get_test_platform();
@@ -414,66 +361,66 @@ where
 // SECTION 10: Documentation and Notes
 // ═══════════════════════════════════════════════════════════════
 
-/*
-# Integration Testing Best Practices
-
-1. **Isolation**: Each test should be independent and not rely on global state
-2. **Cleanup**: Use RAII patterns to ensure resources are cleaned up
-3. **Timing**: Be careful with timing-dependent assertions in async code
-4. **Platform Differences**: Use platform detection to skip unsupported features
-5. **Logging**: Add tracing for debugging integration issues
-
-# Adding New Integration Tests
-
-To add a new integration test:
-
-1. Add the dependent crate to [dev-dependencies] in Cargo.toml:
-   ```toml
-   [dev-dependencies]
-   flui_painting = { path = "../flui_painting" }
-   ```
-
-2. Import the necessary types:
-   ```rust
-   use flui_painting::{Canvas, Color};
-   ```
-
-3. Write the test using the templates above as a guide
-
-4. Run the test:
-   ```bash
-   cargo test -p flui-platform --test integration_template test_name
-   ```
-
-# Common Integration Patterns
-
-## Pattern 1: Window + Graphics Surface
-```rust
-let window = create_test_window()?;
-let surface = create_wgpu_surface(&window)?;
+// # Integration Testing Best Practices
+//
+// 1. **Isolation**: Each test should be independent and not rely on global
+//    state
+// 2. **Cleanup**: Use RAII patterns to ensure resources are cleaned up
+// 3. **Timing**: Be careful with timing-dependent assertions in async code
+// 4. **Platform Differences**: Use platform detection to skip unsupported
+//    features
+// 5. **Logging**: Add tracing for debugging integration issues
+//
+// # Adding New Integration Tests
+//
+// To add a new integration test:
+//
+// 1. Add the dependent crate to [dev-dependencies] in Cargo.toml:
+// ```toml
+// [dev-dependencies]
+// flui_painting = { path = "../flui_painting" }
+// ```
+//
+// 2. Import the necessary types:
+// ```rust
+// use flui_painting::{Canvas, Color};
+// ```
+//
+// 3. Write the test using the templates above as a guide
+//
+// 4. Run the test:
+// ```bash
+// cargo test -p flui-platform --test integration_template test_name
+// ```
+//
+// # Common Integration Patterns
+//
+// ## Pattern 1: Window + Graphics Surface
+// ```rust
+// let window = create_test_window()?;
+// let surface = create_wgpu_surface(&window)?;
 // Render to surface
-```
-
-## Pattern 2: Platform Events → UI Updates
-```rust
-platform.on_window_event(Box::new(|event| {
-    match event {
-        WindowEvent::Resized(size) => {
-            // Update UI layout
-        }
-        _ => {}
-    }
-}));
-```
-
-## Pattern 3: Background Task → Main Thread Update
-```rust
-bg_executor.spawn(Box::new(move || {
-    let result = expensive_computation();
-    fg_executor.spawn(Box::new(move || {
-        update_ui(result);
-    }));
-}));
-```
-
-*/
+// ```
+//
+// ## Pattern 2: Platform Events → UI Updates
+// ```rust
+// platform.on_window_event(Box::new(|event| {
+// match event {
+// WindowEvent::Resized(size) => {
+// Update UI layout
+// }
+// _ => {}
+// }
+// }));
+// ```
+//
+// ## Pattern 3: Background Task → Main Thread Update
+// ```rust
+// bg_executor.spawn(Box::new(move || {
+//     let result = expensive_computation();
+//     fg_executor.spawn(Box::new(move || {
+//         update_ui(result);
+//     }));
+// }));
+// ```
+//

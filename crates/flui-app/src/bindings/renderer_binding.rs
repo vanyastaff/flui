@@ -30,23 +30,28 @@
 //! includes this binding plus widgets support. Use `RenderingFlutterBinding`
 //! directly only when working with the rendering layer without widgets.
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU32, Ordering},
+    },
+};
 
-use parking_lot::RwLock;
-
-use flui_foundation::{impl_binding_singleton, BindingBase, HasInstance};
+use flui_foundation::{BindingBase, HasInstance, impl_binding_singleton};
 use flui_interaction::binding::GestureBinding;
 use flui_painting::PaintingBinding;
-use flui_rendering::binding::{HitTestable, PipelineManifold, RendererBinding};
-use flui_rendering::hit_testing::HitTestResult;
-use flui_rendering::input::MouseTracker;
-use flui_rendering::pipeline::PipelineOwner;
-use flui_rendering::view::{RenderView, ViewConfiguration};
+use flui_rendering::{
+    binding::RendererBinding,
+    hit_testing::HitTestResult,
+    input::MouseTracker,
+    pipeline::PipelineOwner,
+    view::{RenderView, ViewConfiguration},
+};
 use flui_scheduler::Scheduler;
 use flui_semantics::{Assertiveness, SemanticsAction, SemanticsBinding};
 use flui_types::Offset;
+use parking_lot::RwLock;
 
 // ============================================================================
 // RenderingFlutterBinding
@@ -71,8 +76,9 @@ use flui_types::Offset;
 /// This binding is thread-safe and can be accessed from multiple threads.
 /// Internal state is protected by `RwLock`s.
 pub struct RenderingFlutterBinding {
-    /// Root of the PipelineOwner tree.
-    root_pipeline_owner: RwLock<PipelineOwner>,
+    /// Root of the PipelineOwner tree (shared with AppBinding when used
+    /// together).
+    root_pipeline_owner: Arc<RwLock<PipelineOwner>>,
 
     /// Render views managed by this binding (viewId → RenderView).
     render_views: RwLock<HashMap<u64, Arc<RwLock<RenderView>>>>,
@@ -84,6 +90,7 @@ pub struct RenderingFlutterBinding {
     semantics_enabled: AtomicBool,
 
     /// Listeners for semantics enabled changes.
+    #[allow(clippy::type_complexity)]
     semantics_listeners: RwLock<Vec<Arc<dyn Fn(bool) + Send + Sync>>>,
 
     /// Counter for deferred first frame.
@@ -120,15 +127,26 @@ impl Default for RenderingFlutterBinding {
 }
 
 impl RenderingFlutterBinding {
-    /// Creates a new rendering binding.
+    /// Creates a new rendering binding with its own PipelineOwner.
+    ///
+    /// Used by the singleton pattern. For sharing a PipelineOwner with
+    /// AppBinding, use [`new_with_pipeline`](Self::new_with_pipeline) instead.
     pub fn new() -> Self {
+        Self::new_with_pipeline(Arc::new(RwLock::new(PipelineOwner::new())))
+    }
+
+    /// Creates a new rendering binding with a shared PipelineOwner.
+    ///
+    /// This allows AppBinding to pass in the same `Arc<RwLock<PipelineOwner>>`
+    /// that elements use, ensuring a single PipelineOwner instance at runtime.
+    pub fn new_with_pipeline(pipeline_owner: Arc<RwLock<PipelineOwner>>) -> Self {
         // Create a dummy hit test callback for now
         // In practice, this gets replaced when the binding is fully initialized
         let hit_test_callback: flui_rendering::input::MouseTrackerHitTest =
             Arc::new(|_position, _view_id| HitTestResult::new());
 
         let mut binding = Self {
-            root_pipeline_owner: RwLock::new(PipelineOwner::new()),
+            root_pipeline_owner: pipeline_owner,
             render_views: RwLock::new(HashMap::new()),
             mouse_tracker: RwLock::new(MouseTracker::new(hit_test_callback)),
             semantics_enabled: AtomicBool::new(false),
@@ -160,7 +178,8 @@ impl RenderingFlutterBinding {
     // ========================================================================
 
     /// Tell the framework to not send the first frames to the engine until
-    /// there is a corresponding call to [`allow_first_frame`](Self::allow_first_frame).
+    /// there is a corresponding call to
+    /// [`allow_first_frame`](Self::allow_first_frame).
     ///
     /// Call this to perform asynchronous initialization work before the first
     /// frame is rendered (which takes down the splash screen). The framework
@@ -312,10 +331,12 @@ impl BindingBase for RenderingFlutterBinding {
 impl_binding_singleton!(RenderingFlutterBinding);
 
 // ============================================================================
-// PipelineManifold Implementation
+// RendererBinding Implementation
 // ============================================================================
 
-impl PipelineManifold for RenderingFlutterBinding {
+impl RendererBinding for RenderingFlutterBinding {
+    // ---- formerly PipelineManifold ----
+
     fn request_visual_update(&self) {
         Scheduler::instance().schedule_frame(Box::new(|_timing| {
             // Visual update frame callback
@@ -334,13 +355,9 @@ impl PipelineManifold for RenderingFlutterBinding {
         let mut listeners = self.semantics_listeners.write();
         listeners.retain(|l| !Arc::ptr_eq(l, listener));
     }
-}
 
-// ============================================================================
-// HitTestable Implementation
-// ============================================================================
+    // ---- formerly ViewHitTestable ----
 
-impl HitTestable for RenderingFlutterBinding {
     fn hit_test_in_view(&self, result: &mut HitTestResult, position: Offset, view_id: u64) {
         let views = self.render_views.read();
         if let Some(view) = views.get(&view_id) {
@@ -348,13 +365,9 @@ impl HitTestable for RenderingFlutterBinding {
             view_guard.hit_test(result, position);
         }
     }
-}
 
-// ============================================================================
-// RendererBinding Implementation
-// ============================================================================
+    // ---- RendererBinding proper ----
 
-impl RendererBinding for RenderingFlutterBinding {
     fn root_pipeline_owner(&self) -> &RwLock<PipelineOwner> {
         &self.root_pipeline_owner
     }
@@ -382,19 +395,33 @@ impl RendererBinding for RenderingFlutterBinding {
     }
 
     fn draw_frame(&self) {
-        // Call default implementation
+        // Mythos Step 7 finalization (2026-05-20): use mem::take +
+        // run_frame to consume the owner through the typestate
+        // transitions. The four `flush_*` calls collapse to one
+        // `run_frame()` orchestration; semantics now runs inside
+        // run_frame regardless of `send_frames_to_engine`, so the only
+        // gated work below is the per-view composite handoff.
+        //
+        // Mythos Step 12 (2026-05-20): `run_frame` returns
+        // `(PipelineOwner<Idle>, RenderResult<Option<LayerTree>>)`. The
+        // owner is always restored; on error the frame is dropped and
+        // logged via tracing.
         let root_owner = self.root_pipeline_owner();
+        let layer_tree = {
+            let mut guard = root_owner.write();
+            let owner = std::mem::take(&mut *guard);
+            let (owner, result) = owner.run_frame();
+            *guard = owner;
+            match result {
+                Ok(layer_tree) => layer_tree,
+                Err(e) => {
+                    tracing::error!(error = ?e, "draw_frame: pipeline failed, dropping frame");
+                    None
+                }
+            }
+        };
 
-        // Phase 3: Layout
-        root_owner.write().flush_layout();
-
-        // Phase 4: Compositing bits
-        root_owner.write().flush_compositing_bits();
-
-        // Phase 5: Paint
-        root_owner.write().flush_paint();
-
-        // Phase 6 & 7: Composite and Semantics (only if sending frames)
+        // Phase 6: Composite frames (only if sending frames)
         if self.send_frames_to_engine() {
             // Composite each render view
             for (_, view) in self.render_views.read().iter() {
@@ -403,12 +430,14 @@ impl RendererBinding for RenderingFlutterBinding {
                 // In a real implementation, send to GPU here
             }
 
-            // Phase 7: Semantics
-            root_owner.write().flush_semantics();
-
             // Mark first frame sent
             self.first_frame_sent.store(true, Ordering::Relaxed);
         }
+
+        // The produced layer tree is the responsibility of the
+        // concrete compositor wiring; today this binding does not own
+        // one, so we drop the value here intentionally.
+        let _ = layer_tree;
     }
 
     fn perform_semantics_action(

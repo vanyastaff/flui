@@ -3,7 +3,7 @@
 //! This module tests per-corner values for rounded rectangles, border radii,
 //! and corner-specific styling.
 
-use flui_types::geometry::{px, Corners, Radius};
+use flui_types::geometry::{Corners, Radius, px};
 
 // ============================================================================
 // Construction Tests

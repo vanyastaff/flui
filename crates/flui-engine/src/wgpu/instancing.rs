@@ -27,12 +27,13 @@
 //! ```
 
 use bytemuck::{Pod, Zeroable};
-use flui_types::{geometry::Pixels, styling::Color, Point, Rect};
+use flui_types::{Point, Rect, geometry::Pixels, styling::Color};
 
 /// Instance data for a rectangle
 ///
-/// This is uploaded to GPU as an instance buffer. Each rectangle gets one instance.
-/// The GPU shader reads this data per-instance and transforms a shared quad.
+/// This is uploaded to GPU as an instance buffer. Each rectangle gets one
+/// instance. The GPU shader reads this data per-instance and transforms a
+/// shared quad.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct RectInstance {
@@ -45,9 +46,15 @@ pub struct RectInstance {
     /// Corner radii [top_left, top_right, bottom_right, bottom_left]
     pub corner_radii: [f32; 4],
 
-    /// Transform matrix (simplified 2D: [scale_x, scale_y, translate_x, translate_y])
-    /// Full matrix would be 16 floats, but for UI we only need 2D affine
+    /// Transform matrix (simplified 2D: [scale_x, scale_y, translate_x,
+    /// translate_y]) Full matrix would be 16 floats, but for UI we only
+    /// need 2D affine
     pub transform: [f32; 4],
+
+    /// SDF clip rounded rectangle: [x, y, width, height, radius_tl, radius_tr, radius_br, radius_bl]
+    /// All zeros means no clip active. When non-zero, the fragment shader
+    /// uses an SDF test to discard pixels outside this rounded rectangle.
+    pub clip_rrect: [f32; 8],
 }
 
 impl RectInstance {
@@ -59,6 +66,7 @@ impl RectInstance {
             color: color.to_f32_array(),
             corner_radii: [0.0; 4],
             transform: [1.0, 1.0, 0.0, 0.0], // Identity transform
+            clip_rrect: [0.0; 8],
         }
     }
 
@@ -70,6 +78,7 @@ impl RectInstance {
             color: color.to_f32_array(),
             corner_radii: [radius; 4],
             transform: [1.0, 1.0, 0.0, 0.0],
+            clip_rrect: [0.0; 8],
         }
     }
 
@@ -88,7 +97,19 @@ impl RectInstance {
             color: color.to_f32_array(),
             corner_radii: [top_left, top_right, bottom_right, bottom_left],
             transform: [1.0, 1.0, 0.0, 0.0],
+            clip_rrect: [0.0; 8],
         }
+    }
+
+    /// Set the SDF clip rounded rectangle on this instance
+    ///
+    /// The clip is specified as `[x, y, width, height, radius_tl, radius_tr, radius_br, radius_bl]`.
+    /// All zeros means no clip. When non-zero, the fragment shader discards
+    /// pixels that fall outside the rounded rectangle using an SDF test.
+    #[must_use]
+    pub fn with_clip_rrect(mut self, clip: [f32; 8]) -> Self {
+        self.clip_rrect = clip;
+        self
     }
 
     /// Create an instance with transform
@@ -116,6 +137,10 @@ impl RectInstance {
             4 => Float32x4,
             // Transform (location 5)
             5 => Float32x4,
+            // Clip rrect part 1: [x, y, width, height] (location 6)
+            6 => Float32x4,
+            // Clip rrect part 2: [radius_tl, radius_tr, radius_br, radius_bl] (location 7)
+            7 => Float32x4,
         ];
 
         wgpu::VertexBufferLayout {
@@ -196,14 +221,16 @@ pub struct ArcInstance {
     pub center_radius: [f32; 4],
 
     /// Angles in radians [start_angle, sweep_angle, _padding, _padding]
-    /// start_angle: where the arc begins (0 = right, π/2 = bottom, π = left, 3π/2 = top)
-    /// sweep_angle: how much to sweep (positive = clockwise, negative = counter-clockwise)
+    /// start_angle: where the arc begins (0 = right, π/2 = bottom, π = left,
+    /// 3π/2 = top) sweep_angle: how much to sweep (positive = clockwise,
+    /// negative = counter-clockwise)
     pub angles: [f32; 4],
 
     /// Color [r, g, b, a] in 0-1 range
     pub color: [f32; 4],
 
-    /// Transform (for elliptical arcs: scale_x, scale_y, translate_x, translate_y)
+    /// Transform (for elliptical arcs: scale_x, scale_y, translate_x,
+    /// translate_y)
     pub transform: [f32; 4],
 }
 
@@ -397,7 +424,8 @@ impl TextureInstance {
 
 /// Linear gradient instance data for GPU instancing
 ///
-/// See `crate::painter::effects::LinearGradientInstance` for full documentation.
+/// See `crate::painter::effects::LinearGradientInstance` for full
+/// documentation.
 pub use super::effects::LinearGradientInstance;
 
 impl LinearGradientInstance {
@@ -413,8 +441,10 @@ impl LinearGradientInstance {
             4 => Float32x2,
             // Corner radii (location 5)
             5 => Float32x4,
-            // Stop count (location 6) - using Uint32 for integer
+            // Stop count (location 6)
             6 => Uint32,
+            // Stop offset (location 7)
+            7 => Uint32,
         ];
 
         wgpu::VertexBufferLayout {
@@ -443,10 +473,46 @@ impl RadialGradientInstance {
             5 => Float32x4,
             // Stop count (location 6)
             6 => Uint32,
+            // Stop offset (location 7)
+            7 => Uint32,
         ];
 
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<RadialGradientInstance>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: ATTRIBUTES,
+        }
+    }
+}
+
+// =============================================================================
+// Sweep Gradient Instances
+// =============================================================================
+
+/// Sweep gradient instance data for GPU instancing
+pub use super::effects::SweepGradientInstance;
+
+impl SweepGradientInstance {
+    /// Get wgpu vertex buffer layout for instance data
+    #[must_use]
+    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
+        const ATTRIBUTES: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
+            // Bounds (location 2)
+            2 => Float32x4,
+            // Center (location 3)
+            3 => Float32x2,
+            // Angles [start, end] (location 4)
+            4 => Float32x2,
+            // Corner radii (location 5)
+            5 => Float32x4,
+            // Stop count (location 6)
+            6 => Uint32,
+            // Stop offset (location 7)
+            7 => Uint32,
+        ];
+
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<SweepGradientInstance>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: ATTRIBUTES,
         }
@@ -555,7 +621,8 @@ impl<T> Default for InstanceBatch<T> {
     }
 }
 
-// NOTE: Tests temporarily disabled - need update for Pixels/DevicePixels migration
+// NOTE: Tests temporarily disabled - need update for Pixels/DevicePixels
+// migration
 #[cfg(all(test, feature = "disabled-tests"))]
 mod tests {
     use super::*;
@@ -563,9 +630,10 @@ mod tests {
     #[test]
     fn test_rect_instance_size() {
         // Verify struct is tightly packed for GPU
+        // 16 original floats + 8 clip_rrect floats = 24 floats = 96 bytes
         assert_eq!(
             std::mem::size_of::<RectInstance>(),
-            16 * 4 // 16 floats = 64 bytes
+            24 * 4 // 24 floats = 96 bytes
         );
     }
 

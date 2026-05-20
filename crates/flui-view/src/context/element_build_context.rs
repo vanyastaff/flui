@@ -3,14 +3,16 @@
 //! This provides the BuildContext interface during the build phase,
 //! giving Views access to tree information and dependency injection.
 
-use super::build_context::BuildContext;
-use crate::element::Notification;
-use crate::owner::BuildOwner;
-use crate::tree::ElementTree;
+use std::{
+    any::{Any, TypeId},
+    sync::Arc,
+};
+
 use flui_foundation::{ElementId, RenderId};
 use parking_lot::RwLock;
-use std::any::{Any, TypeId};
-use std::sync::Arc;
+
+use super::build_context::BuildContext;
+use crate::{element::Notification, owner::BuildOwner, tree::ElementTree};
 
 /// Concrete BuildContext implementation for Elements.
 ///
@@ -93,6 +95,7 @@ impl ElementBuildContext {
     /// Create a context for a specific element from the tree.
     ///
     /// Returns None if the element doesn't exist in the tree.
+    #[allow(clippy::needless_pass_by_value)] // Arc is cloned into Self, taking by value is idiomatic
     pub fn for_element(
         element_id: ElementId,
         tree: Arc<RwLock<ElementTree>>,
@@ -131,7 +134,8 @@ impl ElementBuildContext {
     /// Create a minimal context for use when full tree/owner aren't available.
     ///
     /// This is useful for StatelessElement::perform_build where we just need
-    /// a context to pass to view.build() but don't have full tree infrastructure.
+    /// a context to pass to view.build() but don't have full tree
+    /// infrastructure.
     pub fn new_minimal(depth: usize) -> Self {
         // Create dummy tree and owner for minimal context
         let tree = Arc::new(RwLock::new(ElementTree::new()));
@@ -262,15 +266,9 @@ impl BuildContext for ElementBuildContext {
         let tree = self.tree.read();
 
         let mut current_id = self.element_id;
-        loop {
-            let node = match tree.get(current_id) {
-                Some(n) => n,
-                None => break,
-            };
-
-            let parent_id = match node.parent() {
-                Some(p) => p,
-                None => break,
+        while let Some(node) = tree.get(current_id) {
+            let Some(parent_id) = node.parent() else {
+                break;
             };
 
             if !visitor(parent_id) {
@@ -306,20 +304,14 @@ impl BuildContext for ElementBuildContext {
 
         // Bubble up from current element
         let mut current_id = self.element_id;
-        loop {
-            let node = match tree.get(current_id) {
-                Some(n) => n,
-                None => break,
-            };
-
+        while let Some(node) = tree.get(current_id) {
             // Check if this element handles the notification
             // This requires NotifiableElement trait check
             // For now, just walk up
             let _ = notification;
 
-            let parent_id = match node.parent() {
-                Some(p) => p,
-                None => break,
+            let Some(parent_id) = node.parent() else {
+                break;
             };
 
             current_id = parent_id;
@@ -354,12 +346,14 @@ impl ElementBuildContextBuilder {
     }
 
     /// Set the element tree.
+    #[must_use]
     pub fn tree(mut self, tree: Arc<RwLock<ElementTree>>) -> Self {
         self.tree = Some(tree);
         self
     }
 
     /// Set the build owner.
+    #[must_use]
     pub fn owner(mut self, owner: Arc<RwLock<BuildOwner>>) -> Self {
         self.owner = Some(owner);
         self

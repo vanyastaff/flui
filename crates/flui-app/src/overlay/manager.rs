@@ -149,7 +149,8 @@ impl OverlayManager {
 
     /// Insert an ID into the sorted order list.
     fn insert_sorted(&mut self, id: OverlayId, priority: OverlayPriority) {
-        // Find insertion point - overlays with same priority are ordered by insertion time
+        // Find insertion point - overlays with same priority are ordered by insertion
+        // time
         let pos = self.order.partition_point(|&oid| {
             self.entries
                 .get(&oid)

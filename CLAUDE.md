@@ -279,10 +279,10 @@ git commit -m "feat: Add new widget
 - **wgpu issues:** Stay on 25.x (see https://github.com/gfx-rs/wgpu/issues/7915)
 
 ## Active Technologies
-- Rust 1.91 (workspace `rust-version`) + clap 4.5, cliclack 0.3.6, console 0.15, flui-build, flui-log, toml 0.9, which 8.0, serde, thiserror, tracing, dirs 5.0 (001-cli-completion)
+- Rust 1.94 (workspace `rust-version`) + clap 4.5, cliclack 0.3.6, console 0.15, flui-build, flui-log, toml 0.9, which 8.0, serde, thiserror, tracing, dirs 5.0 (001-cli-completion)
 - File-based (`flui.toml` project config, `~/.flui/config.toml` global config) (001-cli-completion)
-- Rust 1.91 (workspace `rust-version`) + windows 0.59 (Win32 API), ui-events (W3C events), keyboard-types 0.8, raw-window-handle 0.6, tokio 1.43, parking_lot 0.12, flume 0.11, thiserror, anyhow, tracing (002-platform-mvp)
+- Rust 1.94 (workspace `rust-version`) + windows 0.59 (Win32 API), ui-events (W3C events), keyboard-types 0.8, raw-window-handle 0.6, tokio 1.43, parking_lot 0.12, flume 0.11, thiserror, anyhow, tracing (002-platform-mvp)
 - N/A (platform abstraction, no persistence) (002-platform-mvp)
 
 ## Recent Changes
-- 001-cli-completion: Added Rust 1.91 (workspace `rust-version`) + clap 4.5, cliclack 0.3.6, console 0.15, flui-build, flui-log, toml 0.9, which 8.0, serde, thiserror, tracing, dirs 5.0
+- 001-cli-completion: Added Rust 1.94 (workspace `rust-version`) + clap 4.5, cliclack 0.3.6, console 0.15, flui-build, flui-log, toml 0.9, which 8.0, serde, thiserror, tracing, dirs 5.0

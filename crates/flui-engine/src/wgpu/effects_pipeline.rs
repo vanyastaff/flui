@@ -40,26 +40,34 @@ pub fn create_gradient_stops_buffer(device: &wgpu::Device) -> wgpu::Buffer {
 }
 
 /// Create linear gradient rendering pipeline
+/// Create a shared pipeline layout for all gradient pipelines.
+/// Using the same PipelineLayout object ensures bind group compatibility
+/// when switching pipelines within a render pass (WebGPU requirement).
+pub fn create_gradient_pipeline_layout(
+    device: &wgpu::Device,
+    viewport_bind_group_layout: &wgpu::BindGroupLayout,
+    gradient_bind_group_layout: &wgpu::BindGroupLayout,
+) -> wgpu::PipelineLayout {
+    device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Shared Gradient Pipeline Layout"),
+        bind_group_layouts: &[viewport_bind_group_layout, gradient_bind_group_layout],
+        push_constant_ranges: &[],
+    })
+}
+
 pub fn create_linear_gradient_pipeline(
     device: &wgpu::Device,
     surface_format: wgpu::TextureFormat,
-    viewport_bind_group_layout: &wgpu::BindGroupLayout,
-    gradient_bind_group_layout: &wgpu::BindGroupLayout,
+    pipeline_layout: &wgpu::PipelineLayout,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Linear Gradient Shader"),
         source: wgpu::ShaderSource::Wgsl(include_str!("shaders/gradients/linear.wgsl").into()),
     });
 
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("Linear Gradient Pipeline Layout"),
-        bind_group_layouts: &[viewport_bind_group_layout, gradient_bind_group_layout],
-        push_constant_ranges: &[],
-    });
-
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Linear Gradient Pipeline"),
-        layout: Some(&pipeline_layout),
+        layout: Some(pipeline_layout),
         vertex: wgpu::VertexState {
             module: &shader,
             entry_point: Some("vs_main"),
@@ -73,7 +81,7 @@ pub fn create_linear_gradient_pipeline(
                 // Instance buffer
                 super::instancing::LinearGradientInstance::desc(),
             ],
-            compilation_options: Default::default(),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
@@ -83,7 +91,7 @@ pub fn create_linear_gradient_pipeline(
                 blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
-            compilation_options: Default::default(),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
         }),
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleList,
@@ -109,23 +117,16 @@ pub fn create_linear_gradient_pipeline(
 pub fn create_radial_gradient_pipeline(
     device: &wgpu::Device,
     surface_format: wgpu::TextureFormat,
-    viewport_bind_group_layout: &wgpu::BindGroupLayout,
-    gradient_bind_group_layout: &wgpu::BindGroupLayout,
+    pipeline_layout: &wgpu::PipelineLayout,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Radial Gradient Shader"),
         source: wgpu::ShaderSource::Wgsl(include_str!("shaders/gradients/radial.wgsl").into()),
     });
 
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("Radial Gradient Pipeline Layout"),
-        bind_group_layouts: &[viewport_bind_group_layout, gradient_bind_group_layout],
-        push_constant_ranges: &[],
-    });
-
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Radial Gradient Pipeline"),
-        layout: Some(&pipeline_layout),
+        layout: Some(pipeline_layout),
         vertex: wgpu::VertexState {
             module: &shader,
             entry_point: Some("vs_main"),
@@ -139,7 +140,7 @@ pub fn create_radial_gradient_pipeline(
                 // Instance buffer
                 super::instancing::RadialGradientInstance::desc(),
             ],
-            compilation_options: Default::default(),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
@@ -149,7 +150,66 @@ pub fn create_radial_gradient_pipeline(
                 blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
-            compilation_options: Default::default(),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            unclipped_depth: false,
+            conservative: false,
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState {
+            count: 1,
+            mask: !0,
+            alpha_to_coverage_enabled: false,
+        },
+        multiview: None,
+        cache: None,
+    })
+}
+
+/// Create sweep (angular/conic) gradient rendering pipeline
+pub fn create_sweep_gradient_pipeline(
+    device: &wgpu::Device,
+    surface_format: wgpu::TextureFormat,
+    pipeline_layout: &wgpu::PipelineLayout,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Sweep Gradient Shader"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("shaders/gradients/sweep.wgsl").into()),
+    });
+
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Sweep Gradient Pipeline"),
+        layout: Some(pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            buffers: &[
+                // Vertex buffer (shared unit quad)
+                wgpu::VertexBufferLayout {
+                    array_stride: 8, // 2 floats (vec2)
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x2],
+                },
+                // Instance buffer
+                super::instancing::SweepGradientInstance::desc(),
+            ],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: surface_format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
         }),
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleList,
@@ -204,7 +264,7 @@ pub fn create_shadow_pipeline(
                 // Instance buffer
                 super::instancing::ShadowInstance::desc(),
             ],
-            compilation_options: Default::default(),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
@@ -214,7 +274,7 @@ pub fn create_shadow_pipeline(
                 blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
-            compilation_options: Default::default(),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
         }),
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleList,

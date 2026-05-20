@@ -1,11 +1,13 @@
 //! RenderTransform - applies a transformation matrix to a single child.
 
+use flui_tree::Single;
 use flui_types::{Alignment, Matrix4, Offset, Pixels, Point, Rect, Size};
 
-use crate::arity::Single;
-use crate::context::{BoxHitTestContext, BoxLayoutContext};
-use crate::parent_data::BoxParentData;
-use crate::traits::RenderBox;
+use crate::{
+    context::{BoxHitTestContext, BoxLayoutContext},
+    parent_data::BoxParentData,
+    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+};
 
 /// A render object that applies a transformation matrix to its child.
 ///
@@ -170,7 +172,7 @@ impl RenderBox for RenderTransform {
     type ParentData = BoxParentData;
 
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) {
-        let constraints = ctx.constraints().clone();
+        let constraints = *ctx.constraints();
 
         if ctx.child_count() > 0 {
             self.has_child = true;
@@ -260,18 +262,27 @@ impl RenderBox for RenderTransform {
 
         Rect::from_ltrb(min_x, min_y, max_x, max_y)
     }
+}
 
+// Mythos Step 11: PaintEffectsCapability override -- the whole point of
+// RenderTransform.
+impl PaintEffectsCapability for RenderTransform {
     fn paint_transform(&self) -> Option<Matrix4> {
         // Return the effective transform so paint_node_recursive can apply it
         Some(self.effective_transform())
     }
 }
 
+impl SemanticsCapability for RenderTransform {}
+impl HotReloadCapability for RenderTransform {}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use flui_types::geometry::px;
     use std::f32::consts::PI;
+
+    use flui_types::geometry::px;
+
+    use super::*;
 
     #[test]
     fn test_transform_identity() {

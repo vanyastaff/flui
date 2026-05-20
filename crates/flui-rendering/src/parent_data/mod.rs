@@ -85,28 +85,23 @@ mod table_text;
 
 // Base
 pub use base::ParentData;
-
 // Core types
 pub use box_parent_data::BoxParentData;
-pub use sliver_parent_data::SliverParentData;
-
-// Mixins
-pub use container_mixin::ContainerParentDataMixin;
-pub use keep_alive_mixin::KeepAliveParentDataMixin;
-
 // Box variants
 pub use box_variants::{
     ContainerBoxParentData, FlexFit, FlexParentData, FlowParentData, ListBodyParentData,
     ListWheelParentData, MultiChildLayoutParentData, StackParentData, WrapParentData,
 };
-
+// Mixins
+pub use container_mixin::ContainerParentDataMixin;
+pub use keep_alive_mixin::KeepAliveParentDataMixin;
+pub use sliver_parent_data::SliverParentData;
 // Sliver variants
 pub use sliver_variants::{
     SliverGridParentData, SliverLogicalContainerParentData, SliverLogicalParentData,
     SliverMultiBoxAdaptorParentData, SliverPhysicalContainerParentData, SliverPhysicalParentData,
     TreeSliverNodeParentData,
 };
-
 // Table and text
 pub use table_text::{TableCellParentData, TableCellVerticalAlignment, TextParentData, TextRange};
 
@@ -135,26 +130,21 @@ pub const CONTAINER_TYPES: usize = 14;
 pub mod prelude {
     // Base
     pub use super::ParentData;
-
     // Core types
     pub use super::{BoxParentData, SliverParentData};
-
-    // Mixins
-    pub use super::{ContainerParentDataMixin, KeepAliveParentDataMixin};
-
     // Box variants
     pub use super::{
         ContainerBoxParentData, FlexFit, FlexParentData, FlowParentData, ListBodyParentData,
         ListWheelParentData, MultiChildLayoutParentData, StackParentData, WrapParentData,
     };
-
+    // Mixins
+    pub use super::{ContainerParentDataMixin, KeepAliveParentDataMixin};
     // Sliver variants
     pub use super::{
         SliverGridParentData, SliverLogicalContainerParentData, SliverLogicalParentData,
         SliverMultiBoxAdaptorParentData, SliverPhysicalContainerParentData,
         SliverPhysicalParentData, TreeSliverNodeParentData,
     };
-
     // Table and text
     pub use super::{TableCellParentData, TableCellVerticalAlignment, TextParentData, TextRange};
 }

@@ -2,10 +2,9 @@
 //!
 //! Run with: cargo run --example profiler_demo
 
-use flui_devtools::prelude::*;
+use std::{thread, time::Duration};
+
 use flui_devtools::profiler::{FramePhase, Profiler};
-use std::thread;
-use std::time::Duration;
 
 fn simulate_build_phase() {
     thread::sleep(Duration::from_millis(5));

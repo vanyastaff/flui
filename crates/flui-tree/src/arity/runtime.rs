@@ -1,7 +1,8 @@
 //! Runtime arity information and performance hints.
 //!
 //! This module provides runtime representations of compile-time arity types,
-//! useful for error messages, debugging, dynamic validation, and performance optimization.
+//! useful for error messages, debugging, dynamic validation, and performance
+//! optimization.
 
 // ============================================================================
 // RUNTIME ARITY
@@ -10,7 +11,8 @@
 /// Enhanced runtime arity information with advanced features.
 ///
 /// Represents the runtime equivalent of compile-time arity types.
-/// Used for error messages, debugging, dynamic validation, and performance hints.
+/// Used for error messages, debugging, dynamic validation, and performance
+/// hints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RuntimeArity {
     /// Exactly N children.
@@ -83,7 +85,7 @@ impl RuntimeArity {
             Self::AtLeast(_) if count < 32 => PerformanceHint::SmallDynamic,
             Self::Variable if count < 16 => PerformanceHint::SmallDynamic,
             Self::AtLeast(_) | Self::Variable => PerformanceHint::LargeDynamic,
-            Self::Range(_, _) => PerformanceHint::Bounded,
+            Self::Range(..) => PerformanceHint::Bounded,
             Self::Never => PerformanceHint::Impossible,
         };
         (valid, hint)

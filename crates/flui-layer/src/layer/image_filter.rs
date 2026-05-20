@@ -1,11 +1,9 @@
 //! ImageFilterLayer - Image filter effects layer
 //!
-//! This layer applies image filters (blur, dilate, erode, etc.) to its children.
-//! Corresponds to Flutter's `ImageFilterLayer`.
+//! This layer applies image filters (blur, dilate, erode, etc.) to its
+//! children. Corresponds to Flutter's `ImageFilterLayer`.
 
-use flui_types::geometry::Pixels;
-use flui_types::painting::effects::ImageFilter;
-use flui_types::Offset;
+use flui_types::{geometry::Pixels, painting::effects::ImageFilter, Offset};
 
 /// Layer that applies an image filter to its children.
 ///
@@ -194,8 +192,9 @@ unsafe impl Sync for ImageFilterLayer {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::px;
+
+    use super::*;
 
     #[test]
     fn test_image_filter_layer_new() {

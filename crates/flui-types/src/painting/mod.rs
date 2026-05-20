@@ -1,7 +1,8 @@
 //! Painting types for Flui.
 //!
 //! This module contains low-level painting primitives used for rendering,
-//! including blend modes, image handling, clipping, canvas primitives, and shaders.
+//! including blend modes, image handling, clipping, canvas primitives, and
+//! shaders.
 
 #![allow(unused)] // Painting API for future implementation
 
@@ -27,6 +28,6 @@ pub use effects::{
     BlurMode, BlurQuality, ColorAdjustment, ColorMatrix, ImageFilter, PathPaintMode, StrokeOptions,
 };
 pub use image::{BoxFit, ColorFilter, FittedSizes, Image, ImageConfiguration, ImageRepeat};
-pub use paint::{Paint, PaintBuilder, PaintStyle};
+pub use paint::{DashPattern, Paint, PaintBuilder, PaintStyle};
 pub use path::{Path, PathCommand};
-pub use shader::{ImageShader, MaskFilter, Shader, ShaderSpec};
+pub use shader::{ImageShader, MaskFilter, Shader};

@@ -4,6 +4,7 @@
 //! into a single GPU texture, reducing draw calls and improving performance.
 
 use std::collections::HashMap;
+
 use wgpu::{
     Device, Extent3d, Queue, Texture, TextureDescriptor, TextureDimension, TextureFormat,
     TextureUsages,
@@ -63,6 +64,22 @@ pub struct AtlasEntry {
 
     /// Image ID
     pub image_id: u32,
+}
+
+/// Maximum dimension (width or height) for images eligible for atlas packing.
+///
+/// Images with both width and height at or below this threshold are routed to
+/// the atlas instead of getting a standalone GPU texture. Typical icons and
+/// thumbnails are well below 256x256.
+pub const ATLAS_MAX_DIMENSION: u32 = 256;
+
+/// Default atlas texture size (2048x2048).
+pub const ATLAS_DEFAULT_SIZE: u32 = 2048;
+
+/// Returns `true` when the given image dimensions fit inside the atlas.
+#[must_use]
+pub fn fits_in_atlas(width: u32, height: u32) -> bool {
+    width <= ATLAS_MAX_DIMENSION && height <= ATLAS_MAX_DIMENSION && width > 0 && height > 0
 }
 
 /// Simple texture atlas using shelf packing
@@ -234,6 +251,17 @@ impl TextureAtlas {
         &self.texture
     }
 
+    /// Create a [`wgpu::TextureView`] for the atlas texture.
+    ///
+    /// The view covers the entire atlas and is suitable for binding to a
+    /// render pipeline so that all atlas-backed images can be drawn in a
+    /// single instanced draw call.
+    #[must_use]
+    pub fn create_view(&self) -> wgpu::TextureView {
+        self.texture
+            .create_view(&wgpu::TextureViewDescriptor::default())
+    }
+
     /// Get atlas dimensions
     #[must_use]
     pub const fn dimensions(&self) -> (u32, u32) {
@@ -257,6 +285,45 @@ impl TextureAtlas {
 
         let total_pixels = self.width * self.height;
         used_pixels as f32 / total_pixels as f32
+    }
+}
+
+/// Unit tests that do NOT require a GPU.
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+
+    #[test]
+    fn test_fits_in_atlas_small_image() {
+        assert!(fits_in_atlas(64, 64));
+        assert!(fits_in_atlas(256, 256));
+        assert!(fits_in_atlas(1, 1));
+        assert!(fits_in_atlas(128, 64));
+    }
+
+    #[test]
+    fn test_fits_in_atlas_too_large() {
+        assert!(!fits_in_atlas(257, 64));
+        assert!(!fits_in_atlas(64, 257));
+        assert!(!fits_in_atlas(512, 512));
+        assert!(!fits_in_atlas(1024, 1024));
+    }
+
+    #[test]
+    fn test_fits_in_atlas_zero_dimension() {
+        assert!(!fits_in_atlas(0, 64));
+        assert!(!fits_in_atlas(64, 0));
+        assert!(!fits_in_atlas(0, 0));
+    }
+
+    #[test]
+    fn test_atlas_max_dimension_constant() {
+        assert_eq!(ATLAS_MAX_DIMENSION, 256);
+    }
+
+    #[test]
+    fn test_atlas_default_size_constant() {
+        assert_eq!(ATLAS_DEFAULT_SIZE, 2048);
     }
 }
 

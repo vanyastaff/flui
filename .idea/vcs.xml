@@ -2,6 +2,6 @@
 <project version="4">
   <component name="VcsDirectoryMappings">
     <mapping directory="" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/demos/counter" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/crates/flui-cli" vcs="Git" />
   </component>
 </project>

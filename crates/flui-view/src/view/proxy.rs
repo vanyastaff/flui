@@ -61,19 +61,23 @@ macro_rules! impl_proxy_view {
     };
 }
 
-// NOTE: ProxyElement implementation has been moved to unified Element architecture.
-// See crates/flui-view/src/element/unified.rs and element/behavior.rs
-// The type alias is exported from element/mod.rs:
+// NOTE: ProxyElement implementation has been moved to unified Element
+// architecture. See crates/flui-view/src/element/unified.rs and
+// element/behavior.rs The type alias is exported from element/mod.rs:
 //   pub type ProxyElement<V> = Element<V, Single, ProxyBehavior>;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::element::{Lifecycle, ProxyBehavior};
-    use crate::view::{ElementBase, View};
-    use crate::ProxyElement;
-    use flui_foundation::ElementId;
     use std::any::TypeId;
+
+    use flui_foundation::ElementId;
+
+    use super::*;
+    use crate::{
+        ProxyElement,
+        element::{Lifecycle, ProxyBehavior},
+        view::{ElementBase, View},
+    };
 
     // A dummy child view
     #[derive(Clone)]

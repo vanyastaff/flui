@@ -19,8 +19,10 @@
 //! ## Type-Safe Task Creation
 //!
 //! ```rust
-//! use flui_scheduler::task::{TypedTask, Priority};
-//! use flui_scheduler::traits::UserInputPriority;
+//! use flui_scheduler::{
+//!     task::{Priority, TypedTask},
+//!     traits::UserInputPriority,
+//! };
 //!
 //! // Type-safe task creation with compile-time priority
 //! let task = TypedTask::<UserInputPriority>::new(|| {
@@ -30,16 +32,22 @@
 //! assert_eq!(task.priority(), Priority::UserInput);
 //! ```
 
-use crate::id::{TaskIdMarker, TypedId};
-use crate::traits::PriorityLevel;
-use parking_lot::Mutex;
-use std::cmp::Ordering;
-use std::collections::BinaryHeap;
-use std::marker::PhantomData;
-use std::sync::Arc;
+use std::{cmp::Ordering, collections::BinaryHeap, marker::PhantomData, sync::Arc};
 
+use parking_lot::Mutex;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
+
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
+use crate::traits::PriorityLevel;
+
+/// Generate the next unique task ID using a global atomic counter.
+fn next_task_id() -> TaskId {
+    static COUNTER: AtomicUsize = AtomicUsize::new(1);
+    let value = COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
+    TaskId::zip(value)
+}
 
 /// Task priority levels (higher value = higher priority)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -141,8 +149,8 @@ impl std::fmt::Display for Priority {
     }
 }
 
-/// Unique task identifier using type-safe ID
-pub type TaskId = TypedId<TaskIdMarker>;
+/// Unique task identifier from `flui_foundation`.
+pub use flui_foundation::TaskId;
 
 /// A scheduled task with priority
 pub struct Task {
@@ -158,7 +166,7 @@ impl Task {
         F: FnOnce() + Send + 'static,
     {
         Self {
-            id: TaskId::new(),
+            id: next_task_id(),
             priority,
             callback: Box::new(callback),
         }
@@ -199,8 +207,10 @@ impl std::fmt::Debug for Task {
 /// ## Example
 ///
 /// ```rust
-/// use flui_scheduler::task::TypedTask;
-/// use flui_scheduler::traits::{UserInputPriority, IdlePriority};
+/// use flui_scheduler::{
+///     task::TypedTask,
+///     traits::{IdlePriority, UserInputPriority},
+/// };
 ///
 /// fn process_input_task(task: TypedTask<UserInputPriority>) {
 ///     task.execute();
@@ -227,7 +237,7 @@ impl<P: PriorityLevel> TypedTask<P> {
         F: FnOnce() + Send + 'static,
     {
         Self {
-            id: TaskId::new(),
+            id: next_task_id(),
             callback: Box::new(callback),
             _priority: PhantomData,
         }
@@ -296,7 +306,7 @@ impl Ord for PriorityTask {
     fn cmp(&self, other: &Self) -> Ordering {
         // Higher priority first, then by task ID (FIFO within priority)
         match self.0.priority.cmp(&other.0.priority) {
-            Ordering::Equal => other.0.id.as_u64().cmp(&self.0.id.as_u64()), // Earlier ID first
+            Ordering::Equal => other.0.id.get().cmp(&self.0.id.get()), // Earlier ID first
             ord => ord,
         }
     }
@@ -310,8 +320,7 @@ impl Ord for PriorityTask {
 /// ## Type-Safe Task Addition
 ///
 /// ```rust
-/// use flui_scheduler::task::TaskQueue;
-/// use flui_scheduler::traits::AnimationPriority;
+/// use flui_scheduler::{task::TaskQueue, traits::AnimationPriority};
 ///
 /// let queue = TaskQueue::new();
 ///

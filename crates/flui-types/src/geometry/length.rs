@@ -22,11 +22,11 @@
 //! # Examples
 //!
 //! ```rust
-//! use flui_types::geometry::{px, rems, relative, auto, Pixels};
+//! use flui_types::geometry::{Pixels, auto, px, relative, rems};
 //!
 //! // Absolute lengths
-//! let width = px(100.0);          // 100 pixels
-//! let font_size = rems(1.5);      // 1.5 root em units
+//! let width = px(100.0); // 100 pixels
+//! let font_size = rems(1.5); // 1.5 root em units
 //!
 //! // Relative length (50% of parent)
 //! let half = relative(0.5);
@@ -35,17 +35,19 @@
 //! let flexible = auto();
 //!
 //! // Convert to pixels with context
-//! let rem_size = px(16.0);  // 1rem = 16px
+//! let rem_size = px(16.0); // 1rem = 16px
 //! let parent_width = px(200.0);
 //!
-//! let absolute_px = font_size.to_pixels(rem_size);        // 24px
+//! let absolute_px = font_size.to_pixels(rem_size); // 24px
 //! let relative_px = half.to_pixels(parent_width, rem_size); // 100px
 //! ```
 
-use super::traits::IsZero;
-use super::{px, ParseLengthError, Pixels};
-use std::fmt::{self, Debug, Display};
-use std::str::FromStr;
+use std::{
+    fmt::{self, Debug, Display},
+    str::FromStr,
+};
+
+use super::{ParseLengthError, Pixels, px, traits::IsZero};
 
 // ============================================================================
 // REMS - Root em units for scalable typography
@@ -396,7 +398,8 @@ impl Neg for Rems {
 // REMS - ADDITIONAL TRAIT IMPLEMENTATIONS
 // ============================================================================
 
-// Note: Half, Double, IsZero, Sign, ApproxEq, GeometryOps are implemented in traits.rs
+// Note: Half, Double, IsZero, Sign, ApproxEq, GeometryOps are implemented in
+// traits.rs
 
 impl std::iter::Sum for Rems {
     #[inline]

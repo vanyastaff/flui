@@ -1,422 +1,93 @@
-# FLUI - Modern Rust UI Framework
+# FLUI
 
-A production-ready, Flutter-inspired declarative UI framework for Rust, featuring the proven three-tree architecture (View → Element → Render) with modern Rust idioms and GPU-accelerated rendering.
+> A modular, Flutter-inspired declarative UI framework for Rust with GPU-accelerated rendering.
 
-## 🚀 Status: Active Development
+FLUI brings the proven three-tree architecture (View → Element → Render) to Rust, adapted to native ownership, type-safe arity, and a strict layered crate DAG. It is currently in the platform-integration phase: foundation layers are stable, and higher rendering / view crates are being landed incrementally.
 
-- ✅ **Modular architecture** with 20+ specialized crates
-- ✅ **Thread-safe reactive system** with signals and hooks
-- ✅ **GPU-accelerated rendering** with wgpu backend
-- ✅ **Modern pipeline architecture** with abstract traits
-- ✅ **Cross-platform support** (Desktop, Mobile, Web)
-- ✅ **Production features** (metrics, error recovery, frame scheduling)
+## Status
 
-## ✨ Latest: v0.1.0 - Modular Architecture & New Pipeline System
+- ✅ Foundation: `flui-types`, `flui-foundation`, `flui-tree`, `flui-platform` (MVP)
+- ✅ Core: `flui-painting`, `flui-engine`, `flui-rendering`, `flui-scheduler`, `flui-layer`, `flui-semantics`, `flui-interaction`, `flui-log`, `flui-hot-reload`
+- ✅ Framework: `flui-view`, `flui-app` (migration)
+- ⏸️ Disabled until integration completes: `flui-animation`, `flui-reactivity`, `flui-devtools`, `flui-cli`, `flui-build`, `flui-assets`
 
-### New Modular Architecture
-FLUI has been restructured into focused, composable crates:
+See [`docs/crates.md`](docs/crates.md) for the full layered map and per-crate status.
 
-- **flui-foundation** - Core types and change notification
-- **flui-tree** - Tree abstractions and visitor patterns
-- **flui-view** - View traits, elements, and BuildContext
-- **flui-reactivity** - Signals, hooks, and reactive state management
-- **flui-scheduler** - Frame scheduling and task prioritization
+## Quick Start
 
-### Thread-Safe Reactivity
-```rust
-use flui_reactivity::{Signal, use_signal, use_effect};
-use flui_view::View;
-
-#[derive(Debug)]
-struct Counter;
-
-impl View for Counter {
-    fn build(self, ctx: &BuildContext) -> impl IntoElement {
-        // Signal is thread-safe and Copy
-        let count = use_signal(ctx, 0);
-
-        // Effects with automatic cleanup
-        use_effect(ctx, move |ctx| {
-            println!("Count changed: {}", count.get(ctx));
-            None // No cleanup needed
-        });
-
-        column![
-            text(format!("Count: {}", count.get(ctx))),
-            button("Increment").on_press(move || {
-                count.update(|n| *n + 1);  // Thread-safe!
-            })
-        ]
-    }
-}
-```
-
-## 🎯 Key Features
-
-### Three-Tree Architecture
-```
-View Tree (immutable) → Element Tree (mutable) → Render Tree (layout/paint)
-```
-
-- **Views**: Lightweight, immutable configuration
-- **Elements**: Persistent state and lifecycle management
-- **Renders**: Layout calculations and GPU-accelerated painting
-
-### Modern Reactive System
-
-```rust
-use flui_reactivity::prelude::*;
-
-// Signal - reactive state (Copy-based, thread-safe)
-let count = Signal::new(0);
-count.set(42);  // Triggers reactive updates
-
-// Computed - derived state with automatic tracking
-let doubled = count.derive(|&n| n * 2);
-
-// Effects - side effects with cleanup
-let cleanup = count.watch(|value| {
-    println!("Count: {}", value);
-});
-```
-
-### GPU-Accelerated Rendering
-
-FLUI uses **wgpu** for high-performance, cross-platform graphics:
-
-- **Hardware acceleration**: Native GPU performance on all platforms
-- **Modern graphics APIs**: Vulkan, Metal, DX12, WebGPU
-- **Efficient tessellation**: lyon for converting vectors to triangles
-- **SDF text rendering**: glyphon for high-quality text at any scale
-
-### Production Features
-
-- **Frame scheduling**: Budget management with priority queues
-- **Error recovery**: Configurable policies (skip frame, show error, use last good)
-- **Performance metrics**: FPS tracking, frame times, cache statistics
-- **Lock-free operations**: Atomic dirty tracking, triple buffering
-- **Parallel processing**: Multi-threaded builds with rayon
-
-## 🏗️ Project Structure
-
-```
-flui/
-├── crates/
-│   # Foundation Layer
-│   ├── flui_types/              # Basic geometry and math types
-│   ├── flui-foundation/         # Core types, change notification, diagnostics
-│   ├── flui-tree/              # Tree abstractions and visitor patterns
-│   
-│   # Framework Layer  
-│   ├── flui-view/              # View traits, elements, and BuildContext
-│   ├── flui-reactivity/        # Signals, hooks, reactive state
-│   ├── flui-scheduler/         # Frame scheduling and task prioritization
-│   ├── flui_core/              # Core framework implementation
-│   
-│   # Rendering Layer
-│   ├── flui_painting/          # 2D graphics primitives
-│   ├── flui_engine/            # wgpu rendering engine
-│   ├── flui_rendering/         # RenderObject implementations
-│   
-│   # Widget Layer
-│   ├── flui_widgets/           # Widget library (Text, Container, etc.)
-│   ├── flui_animation/         # Animation system
-│   ├── flui_interaction/       # Event handling and gestures
-│   
-│   # Application Layer
-│   ├── flui_app/               # Application framework
-│   ├── flui_assets/            # Asset management (images, fonts)
-│   
-│   # Development Tools
-│   ├── flui_devtools/          # Development and debugging tools
-│   ├── flui_cli/               # CLI for project management
-│   ├── flui_build/             # Cross-platform build system
-│   └── flui_log/               # Cross-platform logging
-│   
-├── examples/                   # Application examples
-├── demos/                      # Demo applications
-├── docs/                       # Documentation
-└── platforms/                  # Platform-specific code
-```
-
-## 🚀 Getting Started
-
-### Installation
-
-Add to your `Cargo.toml`:
-
-```toml
-[dependencies]
-# Core framework
-flui_core = "0.1"
-flui_widgets = "0.1"
-
-# Reactive state management
-flui-reactivity = { version = "0.1", features = ["hooks"] }
-
-# Optional: Asset management
-flui_assets = { version = "0.1", features = ["images"] }
-```
-
-### Hello World
-
-```rust
-use flui_core::prelude::*;
-use flui_widgets::Text;
-use flui-view::View;
-
-#[derive(Debug)]
-struct HelloWorld;
-
-impl View for HelloWorld {
-    fn build(self, ctx: &BuildContext) -> impl IntoElement {
-        Text::new("Hello, FLUI!")
-    }
-}
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut pipeline = PipelineOwner::new();
-    let root = HelloWorld.into_element();
-    pipeline.set_root(root);
-
-    // Render loop
-    loop {
-        let layer = pipeline.build_frame(constraints)?;
-        present(layer)?;
-    }
-}
-```
-
-### Counter with Reactive State
-
-```rust
-use flui_core::prelude::*;
-use flui-reactivity::{use_signal, use_effect};
-use flui_widgets::{Column, Text, Button};
-
-#[derive(Debug)]
-struct Counter;
-
-impl View for Counter {
-    fn build(self, ctx: &BuildContext) -> impl IntoElement {
-        let count = use_signal(ctx, 0);
-
-        // Side effect for logging
-        use_effect(ctx, move |ctx| {
-            println!("Count updated: {}", count.get(ctx));
-            None // No cleanup
-        });
-
-        Column::new()
-            .children(vec![
-                Box::new(Text::new(format!("Count: {}", count.get(ctx)))),
-                Box::new(Button::new("Increment")
-                    .on_pressed(move || count.update(|n| *n + 1))),
-                Box::new(Button::new("Decrement")
-                    .on_pressed(move || count.update(|n| *n - 1))),
-            ])
-    }
-}
-```
-
-## 📖 Examples
-
-### Run Examples
+Prerequisites: Rust 1.94 (edition 2024). The repository is a Cargo workspace, not yet published to crates.io.
 
 ```bash
-# Core examples
-cargo run --example hello_world_view      # Basic hello world
-cargo run --example counter_reactive      # Reactive counter
-cargo run --example todo_app              # Todo application
-
-# Pipeline examples
-cargo run --example custom_pipeline       # Custom pipeline implementation
-cargo run --example parallel_builds       # Multi-threaded builds
-
-# Rendering examples
-cargo run --example custom_render         # Custom RenderObject
-cargo run --example animation_demo        # Animation system
-```
-
-## 🧪 Testing
-
-```bash
-# Build workspace (dependency order matters)
+git clone https://github.com/vanyastaff/flui
+cd flui
 cargo build --workspace
-
-# Run all tests
-cargo test --workspace
-
-# Test specific layers
-cargo test -p flui-foundation
-cargo test -p flui-reactivity  
-cargo test -p flui_core
-
-# Check documentation
-cargo doc --workspace --no-deps
-
-# Run clippy
-cargo clippy --workspace -- -D warnings
-
-# Format code
-cargo fmt --all
+cargo run --example hello_world
 ```
 
-## 📚 Documentation
+A [`justfile`](justfile) is provided for common tasks — install [`just`](https://just.systems) and run `just` for the recipe list (`just check`, `just test`, `just clippy`, `just ci`, ...). Raw `cargo` commands always work too.
 
-### Essential Reading
+For a step-by-step setup including platform notes (Windows / macOS / Android NDK / WASM), see [`docs/getting-started.md`](docs/getting-started.md).
 
-- **[CLAUDE.md](CLAUDE.md)** - Development guidelines and build commands
-- **[docs/arch/README.md](docs/arch/README.md)** - Architecture overview
+## Key Features
 
-### Foundation Layer
+- **Three-tree pipeline.** Immutable `View` → mutable `Element` → layout/paint `Render`. Build / Layout / Paint phases run on demand only.
+- **Type-safe arity.** Render children parameterized by `Leaf`, `Single`, `Optional`, `Variable` — child-count mismatches become compile-time errors.
+- **GPU-first rendering.** `wgpu` 25.x backend with `lyon` tessellation and `cosmic-text` / `glyphon` for high-quality text.
+- **Cross-platform.** Native Win32 and AppKit backends, headless mode for CI, Android NDK target, WASM/WebGPU, plus a `winit` fallback.
+- **Hot-reload scenes.** `dlopen`-based plugin host (`flui-hot-reload`) for desktop iteration without process restarts.
+- **Strict architecture.** Layered crate DAG with no upward edges. `unsafe` is confined to `flui-platform`, `flui-painting`, `flui-engine`. Constitution-mandated and reviewed at the workspace level.
 
-- **[flui-foundation](crates/flui-foundation/README.md)** - Core types and change notification
-- **[flui-tree](crates/flui-tree/README.md)** - Tree abstractions and visitor patterns
-- **[flui_types](crates/flui_types/README.md)** - Basic geometry and math
-
-### Framework Layer
-
-- **[flui-view](crates/flui-view/README.md)** - View traits, elements, and BuildContext
-- **[flui-reactivity](crates/flui-reactivity/README.md)** - Reactive state management
-- **[flui_core](crates/flui_core/README.md)** - Core framework implementation
-
-### Rendering & Widgets
-
-- **[flui_engine](crates/flui_engine/README.md)** - wgpu rendering engine
-- **[flui_widgets](crates/flui_widgets/README.md)** - Widget library
-- **[flui_rendering](crates/flui_rendering/README.md)** - RenderObject implementations
-
-### Development Tools
-
-- **[flui_cli](crates/flui_cli/README.md)** - CLI tool for project management
-- **[flui_devtools](crates/flui_devtools/README.md)** - Development and debugging
-- **[flui_assets](crates/flui_assets/README.md)** - Asset management system
-
-## 🔧 Feature Flags
-
-```toml
-# Reactive system with hooks
-flui-reactivity = { version = "0.1", features = ["hooks", "async"] }
-
-# Asset management
-flui_assets = { version = "0.1", features = ["images", "network", "hot-reload"] }
-
-# Serialization support
-flui-foundation = { version = "0.1", features = ["serde"] }
-
-# Development tools
-flui = { version = "0.1", features = ["devtools"] }
-```
-
-## 📊 Performance
-
-### Memory Efficiency
-- **ElementId**: 8 bytes with niche optimization
-- **Signal<T>**: Copy-based, just an ID reference
-- **Lock-free operations**: Atomic dirty tracking, triple buffering
-
-### Concurrency  
-- **parking_lot**: 2-3× faster than std sync primitives
-- **DashMap**: Lock-free concurrent HashMap for signal storage
-- **Rayon**: Optional parallel processing for builds
-
-### GPU Acceleration
-- **wgpu**: Cross-platform GPU API (Vulkan/Metal/DX12/WebGPU)
-- **lyon**: Efficient tessellation to triangles
-- **glyphon**: SDF-based text rendering
-
-## 🛠️ Architecture Highlights
-
-### Modular Design
-
-Each crate has a specific responsibility:
-
-- **Foundation**: Minimal dependencies, core abstractions
-- **Tree**: Visitor patterns, tree traversal algorithms  
-- **View**: View traits, elements, and BuildContext
-- **Reactivity**: Signals, hooks, state management
-- **Core**: Concrete implementations of abstractions
-
-### Thread-Safe Reactivity
+## Hello World
 
 ```rust
-use flui_reactivity::{Signal, use_signal, batch};
+//! examples/hello_world.rs (excerpt)
+use flui_platform::{WindowOptions, current_platform};
+use flui_types::geometry::{Size, px};
 
-// Signals are Copy and thread-safe
-let signal = Signal::new(42);
-let signal_copy = signal; // No .clone() needed
+fn main() {
+    tracing_subscriber::fmt().with_max_level(tracing::Level::INFO).init();
 
-// Batch updates for performance
-batch(|| {
-    signal.set(1);
-    signal.set(2); 
-    signal.set(3);
-}); // Only triggers one update
+    let platform = current_platform().expect("failed to initialize platform");
+    tracing::info!("Platform: {:?}", platform.name());
+
+    let window = platform
+        .open_window(WindowOptions {
+            title: "Hello FLUI!".to_string(),
+            size: Size::new(px(800.0), px(600.0)),
+            resizable: true,
+            visible: true,
+            decorated: true,
+            min_size: None,
+            max_size: None,
+        })
+        .expect("failed to create window");
+
+    platform.run(Box::new(move || {
+        tracing::info!("ready");
+        let _window = window; // keep window alive in event loop
+    }));
+}
 ```
 
-## 🔥 What's New in v0.1.0
+Run with `cargo run --example hello_world`. More examples live under `examples/` and per-target crates (`examples/desktop_scene/`, `examples/web_demo/`, `examples/painting_demo/`).
 
-### Major Architectural Changes
-- ✨ **Modular crate structure** - 20+ focused crates
-- ✨ **Abstract pipeline traits** - Extensible phase system
-- ✨ **Copy-based signals** - Thread-safe reactive primitives
-- ✨ **Foundation layer** - Minimal-dependency core types
+## Documentation
 
-### New Crates
-- ✨ **flui-foundation** - Core types and diagnostics
-- ✨ **flui-tree** - Tree abstractions and visitors
-- ✨ **flui-view** - View traits, elements, and BuildContext
-- ✨ **flui-reactivity** - Comprehensive reactive system
-- ✨ **flui-scheduler** - Frame scheduling and prioritization
+| Guide | Description |
+|-------|-------------|
+| [Getting Started](docs/getting-started.md) | Prerequisites, build, run examples, platform-specific setup |
+| [Architecture](docs/architecture.md) | Three-tree pipeline + layered crate DAG overview |
+| [Crates Map](docs/crates.md) | Per-layer crate inventory with status and purpose |
+| [Testing](docs/testing.md) | Build / test / clippy / fmt commands, coverage targets, benchmarks |
+| [Contributing](docs/contributing.md) | Constitution, commits, speckit workflow, AI Factory skills |
 
-### Enhanced Developer Experience
-- ✅ **Better separation of concerns** - Each crate has clear purpose
-- ✅ **Flexible architecture** - Implement custom phases and coordinators
-- ✅ **Comprehensive documentation** - Each crate fully documented
-- ✅ **Testing utilities** - Built-in test harness for reactive components
+For deep architectural rules (dependency DAG, pipeline contracts, anti-patterns) see [`.ai-factory/ARCHITECTURE.md`](.ai-factory/ARCHITECTURE.md).
+For Claude Code-specific guidance (build commands, troubleshooting) see [`CLAUDE.md`](CLAUDE.md).
 
-## 🤝 Contributing
+## License
 
-We welcome contributions! Please see [CLAUDE.md](CLAUDE.md) for:
-- Build commands and development workflow
-- Code architecture and design patterns
-- Documentation standards
-- Testing requirements
+Licensed under the [MIT License](LICENSE). The workspace `Cargo.toml` declares dual `MIT OR Apache-2.0`; an Apache-2.0 license file will be added once dual-licensing is finalized.
 
-Areas for improvement:
-- Widget library expansion
-- Platform-specific optimizations
-- Performance benchmarks
-- More examples and tutorials
+## Acknowledgments
 
-## 📝 Changelog
-
-### v0.1.0 (Current)
-- ✨ Complete architectural restructure into modular crates
-- ✨ Abstract pipeline traits for extensibility
-- ✨ Copy-based Signal<T> with thread safety
-- ✨ Foundation layer with minimal dependencies
-- ✨ Comprehensive reactive system with hooks
-- ✨ Frame scheduling and task prioritization
-- 📚 Complete documentation for all crates
-- ✅ Modular testing with focused test suites
-
-## 📄 License
-
-MIT OR Apache-2.0
-
-## 🙏 Acknowledgments
-
-- **Flutter team** - For the proven three-tree architecture
-- **Leptos/SolidJS** - For inspiration on Copy-based signals and fine-grained reactivity
-- **React team** - For the hooks pattern and component lifecycle concepts
-- **Rust community** - For excellent tooling and ecosystem
-- **wgpu team** - For cross-platform GPU graphics
-- **parking_lot** - For high-performance synchronization
-
----
-
-**Built with ❤️ in Rust**
-
-*"Modular architecture meets reactive performance"*
+Patterns adapted from the [Flutter](https://flutter.dev) framework (vendored as `.flutter/` for reference) and the [GPUI](https://www.gpui.rs/) Rust UI library (vendored as `.gpui/` for reference). Both are studied, never copied — patterns are translated to FLUI idioms.

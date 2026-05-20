@@ -6,13 +6,13 @@
 
 use std::fmt::Debug;
 
-use crate::parent_data::ParentData;
+use flui_tree::Arity;
 
 use super::capabilities::{
     HitTestCapability, LayoutCapability, ProtocolConstraints, ProtocolGeometry, ProtocolHitTestCtx,
     ProtocolLayoutCtx,
 };
-use crate::arity::Arity;
+use crate::parent_data::ParentData;
 
 // ============================================================================
 // SEALED TRAIT

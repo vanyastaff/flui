@@ -7,7 +7,7 @@
 //! # Examples
 //!
 //! ```
-//! use flui_types::typography::{TextScaler, LinearTextScaler, NoScaling};
+//! use flui_types::typography::{LinearTextScaler, NoScaling, TextScaler};
 //!
 //! // Linear scaling (default)
 //! let scaler = LinearTextScaler::new(1.5);
@@ -23,8 +23,8 @@ use std::fmt::Debug;
 /// Trait for scaling text sizes.
 ///
 /// This trait enables accessibility features like system-wide text scaling.
-/// Implementations can provide linear scaling, non-linear scaling for large text,
-/// or no scaling at all.
+/// Implementations can provide linear scaling, non-linear scaling for large
+/// text, or no scaling at all.
 ///
 /// # Thread Safety
 ///
@@ -33,7 +33,7 @@ use std::fmt::Debug;
 /// # Examples
 ///
 /// ```
-/// use flui_types::typography::{TextScaler, LinearTextScaler};
+/// use flui_types::typography::{LinearTextScaler, TextScaler};
 ///
 /// fn layout_text(font_size: f64, scaler: &dyn TextScaler) -> f64 {
 ///     scaler.scale(font_size)

@@ -1,7 +1,6 @@
 //! Application configuration.
 
-use flui_types::geometry::px;
-use flui_types::Size;
+use flui_types::{Size, geometry::px};
 
 /// Application configuration.
 ///
@@ -139,6 +138,20 @@ impl AppConfig {
     pub fn with_debug_paint(mut self, enabled: bool) -> Self {
         self.debug_paint = enabled;
         self
+    }
+}
+
+impl From<&AppConfig> for flui_platform::WindowOptions {
+    fn from(config: &AppConfig) -> Self {
+        flui_platform::WindowOptions {
+            title: config.title.clone(),
+            size: config.size,
+            resizable: config.resizable,
+            visible: true,
+            decorated: config.decorations,
+            min_size: config.min_size,
+            max_size: config.max_size,
+        }
     }
 }
 

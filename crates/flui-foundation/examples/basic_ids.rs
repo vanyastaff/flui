@@ -3,8 +3,9 @@
 //! This example demonstrates how to use the various ID types in FLUI Foundation
 //! for identifying elements in the UI tree.
 
-use flui_foundation::{ElementId, Key, LayerId, RenderId, SemanticsId, ViewId};
 use std::collections::HashMap;
+
+use flui_foundation::{ElementId, Key, LayerId, RenderId, SemanticsId, ViewId};
 
 fn main() {
     println!("=== FLUI Foundation: Basic ID Example ===\n");

@@ -1,11 +1,13 @@
 //! RenderSizedBox - forces specific size constraints.
 
+use flui_tree::Leaf;
 use flui_types::{Pixels, Point, Rect, Size};
 
-use crate::arity::Leaf;
-use crate::context::{BoxHitTestContext, BoxLayoutContext};
-use crate::parent_data::BoxParentData;
-use crate::traits::RenderBox;
+use crate::{
+    context::{BoxHitTestContext, BoxLayoutContext},
+    parent_data::BoxParentData,
+    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+};
 
 /// A render object that forces a specific size.
 ///
@@ -119,10 +121,16 @@ impl RenderBox for RenderSizedBox {
     }
 }
 
+// Mythos Step 11: explicit (default) capability opt-outs.
+impl PaintEffectsCapability for RenderSizedBox {}
+impl SemanticsCapability for RenderSizedBox {}
+impl HotReloadCapability for RenderSizedBox {}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::px;
+
+    use super::*;
 
     #[test]
     fn test_sized_box_fixed_creation() {

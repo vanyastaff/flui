@@ -1,8 +1,10 @@
 //! Breadth-first (level-order) iterator.
 
-use crate::traits::TreeNav;
-use flui_foundation::Identifier;
 use std::collections::VecDeque;
+
+use flui_foundation::Identifier;
+
+use crate::traits::TreeNav;
 
 /// Breadth-first (level-order) iterator.
 ///
@@ -178,10 +180,13 @@ impl<I: Identifier, T: TreeNav<I>> std::iter::FusedIterator
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::iter::{Ancestors, DescendantsWithDepth};
-    use crate::traits::TreeRead;
     use flui_foundation::ElementId;
+
+    use super::*;
+    use crate::{
+        iter::{Ancestors, DescendantsWithDepth},
+        traits::TreeRead,
+    };
 
     struct TestNode {
         parent: Option<ElementId>,

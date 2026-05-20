@@ -11,17 +11,21 @@
 //!
 //! Flutter reference: https://api.flutter.dev/flutter/gestures/LongPressGestureRecognizer-class.html
 
-use super::recognizer::{GestureRecognizer, GestureRecognizerState};
-use flui_types::geometry::Pixels;
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
-use crate::arena::GestureArenaMember;
-use crate::events::{PointerEvent, PointerType};
-use crate::ids::PointerId;
-use crate::settings::GestureSettings;
-use flui_types::Offset;
+use flui_types::{Offset, geometry::Pixels};
 use parking_lot::Mutex;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+
+use super::recognizer::{GestureRecognizer, GestureRecognizerState};
+use crate::{
+    arena::GestureArenaMember,
+    events::{PointerEvent, PointerType},
+    ids::PointerId,
+    settings::GestureSettings,
+};
 
 /// Callback for long press down events (initial contact)
 pub type LongPressDownCallback = Arc<dyn Fn(LongPressDownDetails) + Send + Sync>;
@@ -225,7 +229,8 @@ impl LongPressGestureRecognizer {
         self
     }
 
-    /// Set the long press move callback (called during long press if pointer moves)
+    /// Set the long press move callback (called during long press if pointer
+    /// moves)
     pub fn with_on_long_press_move_update(
         self: Arc<Self>,
         callback: impl Fn(LongPressDetails) + Send + Sync + 'static,
@@ -234,7 +239,8 @@ impl LongPressGestureRecognizer {
         self
     }
 
-    /// Set the long press up callback (called when pointer released after long press)
+    /// Set the long press up callback (called when pointer released after long
+    /// press)
     pub fn with_on_long_press_up(
         self: Arc<Self>,
         callback: impl Fn(LongPressDetails) + Send + Sync + 'static,
@@ -245,8 +251,9 @@ impl LongPressGestureRecognizer {
 
     /// Set the long press end callback (called after up, with details)
     ///
-    /// Similar to `on_long_press_up` but called after the up event is processed.
-    /// This follows Flutter's pattern of having both onLongPressUp and onLongPressEnd.
+    /// Similar to `on_long_press_up` but called after the up event is
+    /// processed. This follows Flutter's pattern of having both
+    /// onLongPressUp and onLongPressEnd.
     pub fn with_on_long_press_end(
         self: Arc<Self>,
         callback: impl Fn(LongPressDetails) + Send + Sync + 'static,
@@ -412,35 +419,33 @@ impl LongPressGestureRecognizer {
     pub fn check_timer(&self) -> bool {
         let mut state = self.gesture_state.lock();
 
-        if state.phase == LongPressPhase::Possible {
-            if let Some(down_time) = state.down_time {
-                let elapsed = Instant::now().duration_since(down_time);
-                if elapsed >= self.long_press_duration() {
-                    // Timer elapsed! Start long press
-                    state.phase = LongPressPhase::Started;
+        if state.phase == LongPressPhase::Possible
+            && let Some(down_time) = state.down_time
+        {
+            let elapsed = Instant::now().duration_since(down_time);
+            if elapsed >= self.long_press_duration() {
+                // Timer elapsed! Start long press
+                state.phase = LongPressPhase::Started;
 
-                    if let (Some(position), Some(kind)) =
-                        (state.current_position, state.device_kind)
-                    {
-                        drop(state); // Release lock before calling callback
+                if let (Some(position), Some(kind)) = (state.current_position, state.device_kind) {
+                    drop(state); // Release lock before calling callback
 
-                        // Call on_long_press (simple callback)
-                        if let Some(callback) = self.callbacks.lock().on_long_press.clone() {
-                            callback();
-                        }
-
-                        // Call on_long_press_start callback
-                        if let Some(callback) = self.callbacks.lock().on_long_press_start.clone() {
-                            let details = LongPressStartDetails {
-                                global_position: position,
-                                local_position: position,
-                                kind,
-                            };
-                            callback(details);
-                        }
-
-                        return true;
+                    // Call on_long_press (simple callback)
+                    if let Some(callback) = self.callbacks.lock().on_long_press.clone() {
+                        callback();
                     }
+
+                    // Call on_long_press_start callback
+                    if let Some(callback) = self.callbacks.lock().on_long_press_start.clone() {
+                        let details = LongPressStartDetails {
+                            global_position: position,
+                            local_position: position,
+                            kind,
+                        };
+                        callback(details);
+                    }
+
+                    return true;
                 }
             }
         }

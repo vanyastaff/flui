@@ -10,17 +10,21 @@
 //!
 //! Flutter reference: https://api.flutter.dev/flutter/gestures/DoubleTapGestureRecognizer-class.html
 
-use super::recognizer::{GestureRecognizer, GestureRecognizerState};
-use flui_types::geometry::Pixels;
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
-use crate::arena::GestureArenaMember;
-use crate::events::{PointerEvent, PointerEventExt, PointerType};
-use crate::ids::PointerId;
-use crate::settings::GestureSettings;
-use flui_types::Offset;
+use flui_types::{Offset, geometry::Pixels};
 use parking_lot::Mutex;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+
+use super::recognizer::{GestureRecognizer, GestureRecognizerState};
+use crate::{
+    arena::GestureArenaMember,
+    events::{PointerEvent, PointerEventExt, PointerType},
+    ids::PointerId,
+    settings::GestureSettings,
+};
 
 /// Callback for double tap events
 pub type DoubleTapCallback = Arc<dyn Fn(DoubleTapDetails) + Send + Sync>;
@@ -323,16 +327,16 @@ impl DoubleTapGestureRecognizer {
     pub fn check_timeout(&self) -> bool {
         let mut state = self.gesture_state.lock();
 
-        if state.phase == DoubleTapPhase::WaitingForSecond {
-            if let Some(first_time) = state.first_tap_time {
-                let elapsed = Instant::now().duration_since(first_time);
-                if elapsed > self.double_tap_timeout() {
-                    // Timeout - reset to ready
-                    state.phase = DoubleTapPhase::Ready;
-                    state.first_tap_position = None;
-                    state.first_tap_time = None;
-                    return true;
-                }
+        if state.phase == DoubleTapPhase::WaitingForSecond
+            && let Some(first_time) = state.first_tap_time
+        {
+            let elapsed = Instant::now().duration_since(first_time);
+            if elapsed > self.double_tap_timeout() {
+                // Timeout - reset to ready
+                state.phase = DoubleTapPhase::Ready;
+                state.first_tap_position = None;
+                state.first_tap_time = None;
+                return true;
             }
         }
 
@@ -429,10 +433,10 @@ impl std::fmt::Debug for DoubleTapGestureRecognizer {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::arena::GestureArena;
-    use crate::events::make_up_event;
     use flui_types::geometry::px;
+
+    use super::*;
+    use crate::{arena::GestureArena, events::make_up_event};
 
     #[test]
     fn test_double_tap_recognizer_creation() {

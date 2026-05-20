@@ -1,239 +1,294 @@
 //! Texture pooling for offscreen rendering
 //!
 //! Manages GPU texture allocation and reuse to minimize allocation overhead
-//! during shader mask rendering.
+//! during shader mask rendering. Textures are created via `wgpu::Device` and
+//! returned to the pool on drop for reuse.
 
-use flui_types::{geometry::Pixels, Size};
-use parking_lot::Mutex;
-use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Texture descriptor for identifying pooled textures
+use flui_types::{Size, geometry::Pixels};
+use parking_lot::Mutex;
+
+/// Texture descriptor key for matching pooled textures
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TextureDesc {
     /// Width in pixels
     pub width: u32,
     /// Height in pixels
     pub height: u32,
-    /// Texture format (simplified for now)
-    pub format: TextureFormat,
+    /// wgpu texture format
+    pub format: wgpu::TextureFormat,
 }
 
 impl TextureDesc {
-    /// Create texture descriptor from size
-    pub fn from_size(size: Size<Pixels>) -> Self {
+    /// Create texture descriptor from size and format
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    pub fn from_size(size: Size<Pixels>, format: wgpu::TextureFormat) -> Self {
         Self {
-            width: size.width.0.ceil() as u32,
-            height: size.height.0.ceil() as u32,
-            format: TextureFormat::Rgba8,
+            width: size.width.0.ceil().max(1.0) as u32,
+            height: size.height.0.ceil().max(1.0) as u32,
+            format,
         }
     }
 
-    /// Get total size in bytes
+    /// Get total size in bytes (approximate)
     pub fn size_bytes(&self) -> usize {
-        let bytes_per_pixel = self.format.bytes_per_pixel();
-        (self.width * self.height) as usize * bytes_per_pixel
+        let bpp = self.format.block_copy_size(None).unwrap_or(4) as usize;
+        (self.width as usize) * (self.height as usize) * bpp
     }
 }
 
-/// Simplified texture format enum
+/// GPU texture with its view, managed by the pool
 ///
-/// In full implementation, this would map to wgpu::TextureFormat
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum TextureFormat {
-    /// RGBA 8-bit per channel (32-bit total)
-    Rgba8,
-    /// RGBA 16-bit float per channel (64-bit total)
-    Rgba16Float,
+/// Holds ownership of a `wgpu::Texture` and a default `wgpu::TextureView`.
+/// These are moved in and out of the pool — never cloned.
+pub struct GpuTexture {
+    /// The actual GPU texture
+    pub texture: wgpu::Texture,
+    /// Default texture view (created at allocation time)
+    pub view: wgpu::TextureView,
+    /// Descriptor used to create this texture (for matching)
+    pub desc: TextureDesc,
 }
 
-impl TextureFormat {
-    /// Get bytes per pixel for this format
-    pub fn bytes_per_pixel(&self) -> usize {
-        match self {
-            TextureFormat::Rgba8 => 4,       // 4 bytes (8 bits × 4 channels)
-            TextureFormat::Rgba16Float => 8, // 8 bytes (16 bits × 4 channels)
-        }
+// wgpu::Texture does not implement Debug
+impl std::fmt::Debug for GpuTexture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GpuTexture")
+            .field("desc", &self.desc)
+            .finish_non_exhaustive()
     }
 }
 
-/// Pooled texture handle
+/// Handle to a pooled texture. Returns the texture to the pool on drop.
 ///
-/// When dropped, returns the texture to the pool for reuse.
-///
-/// # Implementation Note
-///
-/// In full wgpu integration, this would hold:
-/// - wgpu::Texture
-/// - wgpu::TextureView
-/// - Descriptor information
-#[derive(Debug)]
+/// Access the underlying GPU texture and view via [`texture()`](Self::texture)
+/// and [`view()`](Self::view).
 pub struct PooledTexture {
-    desc: TextureDesc,
+    /// Inner GPU texture — `Option` so we can `take()` in Drop
+    gpu_texture: Option<GpuTexture>,
+    /// Reference back to the pool for return-on-drop
     pool: Arc<Mutex<TexturePoolInner>>,
-    // TODO: Add actual wgpu::Texture when integrating with renderer
-    // texture: wgpu::Texture,
-    // view: wgpu::TextureView,
+}
+
+// Manual Debug because GpuTexture uses manual Debug
+impl std::fmt::Debug for PooledTexture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PooledTexture")
+            .field("desc", &self.desc())
+            .field("has_texture", &self.gpu_texture.is_some())
+            .finish()
+    }
 }
 
 impl PooledTexture {
     /// Get texture descriptor
     pub fn desc(&self) -> &TextureDesc {
-        &self.desc
+        &self
+            .gpu_texture
+            .as_ref()
+            .expect("PooledTexture: gpu_texture taken before access")
+            .desc
     }
 
-    /// Get width
+    /// Get width in pixels
     pub fn width(&self) -> u32 {
-        self.desc.width
+        self.desc().width
     }
 
-    /// Get height
+    /// Get height in pixels
     pub fn height(&self) -> u32 {
-        self.desc.height
+        self.desc().height
     }
 
-    // TODO: Add wgpu texture accessors when integrated
-    // pub fn texture(&self) -> &wgpu::Texture { &self.texture }
-    // pub fn view(&self) -> &wgpu::TextureView { &self.view }
+    /// Get the underlying wgpu texture
+    pub fn texture(&self) -> &wgpu::Texture {
+        &self
+            .gpu_texture
+            .as_ref()
+            .expect("PooledTexture: gpu_texture taken before access")
+            .texture
+    }
+
+    /// Get the default texture view
+    pub fn view(&self) -> &wgpu::TextureView {
+        &self
+            .gpu_texture
+            .as_ref()
+            .expect("PooledTexture: gpu_texture taken before access")
+            .view
+    }
 }
 
 impl Drop for PooledTexture {
     fn drop(&mut self) {
-        // Return texture to pool (parking_lot::Mutex never panics on lock)
-        let mut pool = self.pool.lock();
-        pool.return_texture(self.desc);
-        tracing::trace!("Returned texture to pool: {:?}", self.desc);
+        if let Some(gpu_tex) = self.gpu_texture.take() {
+            let mut pool = self.pool.lock();
+            tracing::trace!("Returning texture to pool: {:?}", gpu_tex.desc);
+            pool.return_texture(gpu_tex);
+        }
     }
 }
 
-/// Internal texture pool implementation
-#[derive(Debug)]
+/// Internal texture pool state
 struct TexturePoolInner {
-    /// Available textures by descriptor
-    available: HashMap<TextureDesc, Vec<TextureDesc>>,
-    /// Total allocated textures count
+    /// Available (idle) textures keyed by descriptor
+    available: Vec<GpuTexture>,
+    /// Total number of textures ever allocated (including those currently out)
     total_allocated: usize,
-    /// Maximum pool size (number of textures)
+    /// Maximum number of idle textures to keep in the pool
     max_pool_size: usize,
-    /// Total memory used (bytes)
+    /// Total memory used by all allocated textures (bytes)
     total_memory_bytes: usize,
+}
+
+// Manual Debug because GpuTexture uses manual Debug
+impl std::fmt::Debug for TexturePoolInner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TexturePoolInner")
+            .field("available_count", &self.available.len())
+            .field("total_allocated", &self.total_allocated)
+            .field("max_pool_size", &self.max_pool_size)
+            .field("total_memory_bytes", &self.total_memory_bytes)
+            .finish()
+    }
 }
 
 impl TexturePoolInner {
     fn new(max_pool_size: usize) -> Self {
         Self {
-            available: HashMap::new(),
+            available: Vec::new(),
             total_allocated: 0,
             max_pool_size,
             total_memory_bytes: 0,
         }
     }
 
-    fn acquire_texture(&mut self, desc: TextureDesc) -> Option<TextureDesc> {
-        if let Some(textures) = self.available.get_mut(&desc) {
-            if let Some(texture_desc) = textures.pop() {
-                tracing::trace!("Texture pool hit: {:?}", desc);
-                return Some(texture_desc);
-            }
-        }
-        None
-    }
-
-    fn create_texture(&mut self, desc: TextureDesc) -> TextureDesc {
-        self.total_allocated += 1;
-        self.total_memory_bytes += desc.size_bytes();
-        tracing::trace!(
-            "Created new texture: {:?} (total: {}, memory: {} MB)",
-            desc,
-            self.total_allocated,
-            self.total_memory_bytes / (1024 * 1024)
-        );
-        desc
-    }
-
-    fn return_texture(&mut self, desc: TextureDesc) {
-        let entry = self.available.entry(desc).or_default();
-
-        // Check if pool is full
-        if entry.len() < self.max_pool_size {
-            entry.push(desc);
-            tracing::trace!("Texture returned to pool: {:?}", desc);
+    /// Try to find and remove a matching texture from the available pool
+    fn take_matching(&mut self, desc: &TextureDesc) -> Option<GpuTexture> {
+        if let Some(idx) = self.available.iter().position(|t| t.desc == *desc) {
+            tracing::trace!("Texture pool hit: {:?}", desc);
+            Some(self.available.swap_remove(idx))
         } else {
-            // Pool full, discard texture
-            self.total_allocated -= 1;
-            self.total_memory_bytes -= desc.size_bytes();
-            tracing::trace!("Texture pool full, discarding: {:?}", desc);
+            None
         }
     }
 
+    /// Return a texture to the pool for future reuse
+    fn return_texture(&mut self, gpu_tex: GpuTexture) {
+        if self.available.len() < self.max_pool_size {
+            tracing::trace!("Texture returned to pool: {:?}", gpu_tex.desc);
+            self.available.push(gpu_tex);
+        } else {
+            // Pool full — discard the texture (GPU resource dropped)
+            self.total_allocated = self.total_allocated.saturating_sub(1);
+            self.total_memory_bytes = self
+                .total_memory_bytes
+                .saturating_sub(gpu_tex.desc.size_bytes());
+            tracing::trace!("Texture pool full, discarding: {:?}", gpu_tex.desc);
+            // gpu_tex is dropped here, releasing the GPU resource
+        }
+    }
+
+    /// Clear all idle textures from the pool
     fn clear(&mut self) {
-        let total_textures: usize = self.available.values().map(|v| v.len()).sum();
+        let count = self.available.len();
+        let freed_bytes: usize = self.available.iter().map(|t| t.desc.size_bytes()).sum();
         self.available.clear();
-        self.total_allocated -= total_textures;
-        self.total_memory_bytes = 0;
-        tracing::info!(
-            "Texture pool cleared ({} textures released)",
-            total_textures
-        );
+        self.total_allocated = self.total_allocated.saturating_sub(count);
+        self.total_memory_bytes = self.total_memory_bytes.saturating_sub(freed_bytes);
+        tracing::info!("Texture pool cleared ({count} textures released)");
     }
 }
 
 /// Thread-safe texture pool for offscreen rendering
 ///
 /// Manages allocation and reuse of GPU textures to minimize overhead.
+/// Textures are created via `wgpu::Device::create_texture()` with
+/// `RENDER_ATTACHMENT | TEXTURE_BINDING | COPY_SRC` usage flags.
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_engine::layer::TexturePool;
-/// use flui_types::Size;
+/// use flui_engine::wgpu::TexturePool;
 ///
-/// let pool = TexturePool::new();
-/// let texture = pool.acquire(Size::new(1920.0, 1080.0));
+/// let pool = TexturePool::new(device.clone());
+/// let texture = pool.acquire(800, 600, wgpu::TextureFormat::Rgba8UnormSrgb);
 ///
-/// // Use texture for rendering...
+/// // Use texture.texture() and texture.view() for rendering...
 ///
 /// // Texture automatically returned to pool when dropped
 /// ```
-#[derive(Debug)]
+#[allow(missing_debug_implementations)]
 pub struct TexturePool {
     inner: Arc<Mutex<TexturePoolInner>>,
+    device: Arc<wgpu::Device>,
 }
 
 impl TexturePool {
     /// Create new texture pool with default settings
     ///
-    /// Default max pool size: 10 textures per descriptor
-    pub fn new() -> Self {
-        Self::with_capacity(10)
+    /// Default max pool size: 16 idle textures
+    pub fn new(device: Arc<wgpu::Device>) -> Self {
+        Self::with_capacity(device, 16)
     }
 
-    /// Create texture pool with specific max pool size
-    pub fn with_capacity(max_pool_size: usize) -> Self {
+    /// Create texture pool with specific max pool size for idle textures
+    pub fn with_capacity(device: Arc<wgpu::Device>, max_pool_size: usize) -> Self {
         Self {
             inner: Arc::new(Mutex::new(TexturePoolInner::new(max_pool_size))),
+            device,
         }
     }
 
-    /// Acquire a texture from the pool or create a new one
+    /// Acquire a texture from the pool (or create a new one)
     ///
-    /// Returns a pooled texture that will be automatically returned
+    /// The returned [`PooledTexture`] automatically returns the GPU texture
     /// to the pool when dropped.
     #[must_use]
-    pub fn acquire(&self, size: Size<Pixels>) -> PooledTexture {
-        let desc = TextureDesc::from_size(size);
+    pub fn acquire(&self, width: u32, height: u32, format: wgpu::TextureFormat) -> PooledTexture {
+        let desc = TextureDesc {
+            width: width.max(1),
+            height: height.max(1),
+            format,
+        };
+
         let mut pool = self.inner.lock();
 
-        // Try to get from pool first
-        if pool.acquire_texture(desc).is_none() {
-            // Not in pool, create new texture
-            pool.create_texture(desc);
-        }
+        // Try to reuse an existing texture
+        let gpu_texture = if let Some(existing) = pool.take_matching(&desc) {
+            existing
+        } else {
+            // Create a new GPU texture
+            let gpu_tex = self.create_gpu_texture(&desc);
+            pool.total_allocated += 1;
+            pool.total_memory_bytes += desc.size_bytes();
+            tracing::trace!(
+                "Created new texture: {:?} (total: {}, memory: {} KB)",
+                desc,
+                pool.total_allocated,
+                pool.total_memory_bytes / 1024
+            );
+            gpu_tex
+        };
 
         PooledTexture {
-            desc,
+            gpu_texture: Some(gpu_texture),
             pool: Arc::clone(&self.inner),
         }
+    }
+
+    /// Acquire a texture sized from a `Size<Pixels>` value
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    pub fn acquire_from_size(
+        &self,
+        size: Size<Pixels>,
+        format: wgpu::TextureFormat,
+    ) -> PooledTexture {
+        let w = size.width.0.ceil().max(1.0) as u32;
+        let h = size.height.0.ceil().max(1.0) as u32;
+        self.acquire(w, h, format)
     }
 
     /// Get pool statistics
@@ -243,31 +298,55 @@ impl TexturePool {
         PoolStats {
             total_allocated: pool.total_allocated,
             total_memory_bytes: pool.total_memory_bytes,
-            available_count: pool.available.values().map(|v| v.len()).sum(),
+            available_count: pool.available.len(),
         }
     }
 
-    /// Clear all textures from the pool
+    /// Clear all idle textures from the pool
     pub fn clear(&self) {
         let mut pool = self.inner.lock();
         pool.clear();
     }
-}
 
-impl Default for TexturePool {
-    fn default() -> Self {
-        Self::new()
+    /// Create a GPU texture matching the given descriptor
+    fn create_gpu_texture(&self, desc: &TextureDesc) -> GpuTexture {
+        let wgpu_desc = wgpu::TextureDescriptor {
+            label: Some("TexturePool Offscreen"),
+            size: wgpu::Extent3d {
+                width: desc.width,
+                height: desc.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: desc.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        };
+
+        let texture = self.device.create_texture(&wgpu_desc);
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        GpuTexture {
+            texture,
+            view,
+            desc: *desc,
+        }
     }
 }
 
 /// Texture pool statistics
 #[derive(Debug, Clone, Copy)]
 pub struct PoolStats {
-    /// Total number of textures allocated
+    /// Total number of textures allocated (in-use + idle)
     pub total_allocated: usize,
-    /// Total memory used by textures (bytes)
+    /// Total memory used by textures (bytes, approximate)
     pub total_memory_bytes: usize,
-    /// Number of textures available in pool
+    /// Number of textures currently idle in the pool
     pub available_count: usize,
 }
 
@@ -275,14 +354,26 @@ pub struct PoolStats {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_texture_desc_from_size() {
-        let size = Size::new(1920.0, 1080.0);
-        let desc = TextureDesc::from_size(size);
+    /// Helper: create a wgpu device for testing (headless)
+    fn create_test_device() -> Arc<wgpu::Device> {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .expect("Failed to find a suitable GPU adapter for testing");
 
-        assert_eq!(desc.width, 1920);
-        assert_eq!(desc.height, 1080);
-        assert_eq!(desc.format, TextureFormat::Rgba8);
+        let (device, _queue) = pollster::block_on(adapter.request_device(
+            &wgpu::DeviceDescriptor {
+                label: Some("Test Device"),
+                ..Default::default()
+            },
+            None,
+        ))
+        .expect("Failed to create GPU device for testing");
+
+        Arc::new(device)
     }
 
     #[test]
@@ -290,25 +381,27 @@ mod tests {
         let desc = TextureDesc {
             width: 100,
             height: 100,
-            format: TextureFormat::Rgba8,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
         };
-
         // 100 * 100 * 4 bytes per pixel = 40,000 bytes
         assert_eq!(desc.size_bytes(), 40_000);
     }
 
     #[test]
-    fn test_texture_format_bytes_per_pixel() {
-        assert_eq!(TextureFormat::Rgba8.bytes_per_pixel(), 4);
-        assert_eq!(TextureFormat::Rgba16Float.bytes_per_pixel(), 8);
+    fn test_texture_desc_from_size() {
+        let size = Size::new(1920.0, 1080.0);
+        let desc = TextureDesc::from_size(size, wgpu::TextureFormat::Rgba8UnormSrgb);
+        assert_eq!(desc.width, 1920);
+        assert_eq!(desc.height, 1080);
+        assert_eq!(desc.format, wgpu::TextureFormat::Rgba8UnormSrgb);
     }
 
     #[test]
     fn test_texture_pool_acquire_creates_new() {
-        let pool = TexturePool::new();
-        let size = Size::new(100.0, 100.0);
+        let device = create_test_device();
+        let pool = TexturePool::new(device);
 
-        let texture = pool.acquire(size);
+        let texture = pool.acquire(100, 100, wgpu::TextureFormat::Rgba8UnormSrgb);
         assert_eq!(texture.width(), 100);
         assert_eq!(texture.height(), 100);
 
@@ -318,21 +411,22 @@ mod tests {
 
     #[test]
     fn test_texture_pool_reuse() {
-        let pool = TexturePool::new();
-        let size = Size::new(100.0, 100.0);
+        let device = create_test_device();
+        let pool = TexturePool::new(device);
+        let fmt = wgpu::TextureFormat::Rgba8UnormSrgb;
 
-        // Acquire and drop first texture
+        // Acquire and drop
         {
-            let _texture1 = pool.acquire(size);
+            let _tex = pool.acquire(100, 100, fmt);
             assert_eq!(pool.stats().total_allocated, 1);
         }
 
-        // Should be returned to pool now
+        // Should be returned to pool
         assert_eq!(pool.stats().available_count, 1);
 
-        // Acquire again - should reuse
+        // Acquire again — should reuse
         {
-            let _texture2 = pool.acquire(size);
+            let _tex = pool.acquire(100, 100, fmt);
             assert_eq!(pool.stats().total_allocated, 1); // Still 1, reused
             assert_eq!(pool.stats().available_count, 0); // Taken from pool
         }
@@ -340,28 +434,25 @@ mod tests {
 
     #[test]
     fn test_texture_pool_different_sizes() {
-        let pool = TexturePool::new();
+        let device = create_test_device();
+        let pool = TexturePool::new(device);
+        let fmt = wgpu::TextureFormat::Rgba8UnormSrgb;
 
-        let size1 = Size::new(100.0, 100.0);
-        let size2 = Size::new(200.0, 200.0);
+        let _tex1 = pool.acquire(100, 100, fmt);
+        let _tex2 = pool.acquire(200, 200, fmt);
 
-        let _texture1 = pool.acquire(size1);
-        let _texture2 = pool.acquire(size2);
-
-        // Should have 2 different textures
-        let stats = pool.stats();
-        assert_eq!(stats.total_allocated, 2);
+        assert_eq!(pool.stats().total_allocated, 2);
     }
 
     #[test]
     fn test_texture_pool_clear() {
-        let pool = TexturePool::new();
-        let size = Size::new(100.0, 100.0);
+        let device = create_test_device();
+        let pool = TexturePool::new(device);
+        let fmt = wgpu::TextureFormat::Rgba8UnormSrgb;
 
         {
-            let _texture = pool.acquire(size);
+            let _tex = pool.acquire(100, 100, fmt);
         }
-
         assert_eq!(pool.stats().available_count, 1);
 
         pool.clear();
@@ -371,15 +462,62 @@ mod tests {
 
     #[test]
     fn test_pooled_texture_drop_returns_to_pool() {
-        let pool = TexturePool::new();
-        let size = Size::new(100.0, 100.0);
+        let device = create_test_device();
+        let pool = TexturePool::new(device);
+        let fmt = wgpu::TextureFormat::Rgba8UnormSrgb;
 
         {
-            let _texture = pool.acquire(size);
+            let _tex = pool.acquire(100, 100, fmt);
             assert_eq!(pool.stats().available_count, 0);
         }
+        // After drop
+        assert_eq!(pool.stats().available_count, 1);
+    }
 
-        // After drop, should be back in pool
+    #[test]
+    fn test_pooled_texture_has_real_gpu_texture() {
+        let device = create_test_device();
+        let pool = TexturePool::new(device);
+
+        let tex = pool.acquire(256, 256, wgpu::TextureFormat::Rgba8UnormSrgb);
+        // Access the real wgpu::Texture and TextureView
+        let _ = tex.texture();
+        let _ = tex.view();
+        assert_eq!(tex.width(), 256);
+        assert_eq!(tex.height(), 256);
+    }
+
+    #[test]
+    fn test_pool_max_size_eviction() {
+        let device = create_test_device();
+        let pool = TexturePool::with_capacity(device, 2);
+        let fmt = wgpu::TextureFormat::Rgba8UnormSrgb;
+
+        // Create and drop 3 textures — pool max is 2
+        {
+            let _t1 = pool.acquire(10, 10, fmt);
+            let _t2 = pool.acquire(10, 10, fmt);
+            let _t3 = pool.acquire(10, 10, fmt);
+        }
+        // Only 2 should be in the pool (third evicted)
+        assert_eq!(pool.stats().available_count, 2);
+    }
+
+    #[test]
+    fn test_different_formats_not_reused() {
+        let device = create_test_device();
+        let pool = TexturePool::new(device);
+
+        // Drop an Rgba8UnormSrgb texture
+        {
+            let _tex = pool.acquire(64, 64, wgpu::TextureFormat::Rgba8UnormSrgb);
+        }
+        assert_eq!(pool.stats().available_count, 1);
+
+        // Acquire Rgba16Float — should NOT reuse, should create new
+        let _tex = pool.acquire(64, 64, wgpu::TextureFormat::Rgba16Float);
+        assert_eq!(pool.stats().total_allocated, 2);
+        // The Rgba8 one is still idle in pool
         assert_eq!(pool.stats().available_count, 1);
     }
 }

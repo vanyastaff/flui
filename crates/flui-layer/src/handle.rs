@@ -24,9 +24,13 @@
 //! 3. When handle is dropped or set to None, ref count decreases
 //! 4. When ref count reaches 0, GPU resources can be released
 
-use std::fmt;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::{
+    fmt,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
 
 use flui_foundation::LayerId;
 
@@ -45,7 +49,7 @@ use crate::layer::Layer;
 /// # Usage
 ///
 /// ```rust
-/// use flui_layer::{LayerHandle, Layer, OpacityLayer};
+/// use flui_layer::{Layer, LayerHandle, OpacityLayer};
 ///
 /// // Create a handle (initially empty)
 /// let mut handle: LayerHandle<OpacityLayer> = LayerHandle::new();
@@ -325,8 +329,9 @@ pub type AnyLayerHandle = LayerHandle<Layer>;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::px;
+
+    use super::*;
 
     #[test]
     fn test_layer_handle_new() {

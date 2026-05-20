@@ -2,7 +2,6 @@
 //!
 //! Useful for development, debugging, and testing rendering without GPU.
 
-use super::commands::CommandRenderer;
 use flui_painting::{BlendMode, DisplayListCore, Paint, PointMode};
 use flui_types::{
     geometry::{Matrix4, Offset, Pixels, Point, RRect, Rect},
@@ -10,6 +9,8 @@ use flui_types::{
     styling::Color,
     typography::TextStyle,
 };
+
+use super::commands::CommandRenderer;
 
 /// Debug backend that logs all commands to tracing.
 #[derive(Debug)]
@@ -40,14 +41,11 @@ impl DebugBackend {
 
 impl CommandRenderer for DebugBackend {
     fn render_rect(&mut self, rect: Rect<Pixels>, paint: &Paint, _transform: &Matrix4) {
-        self.log_command(
-            "render_rect",
-            &format!("rect={:?}, paint={:?}", rect, paint),
-        );
+        self.log_command("render_rect", &format!("rect={rect:?}, paint={paint:?}"));
     }
 
     fn render_rrect(&mut self, rrect: RRect, _paint: &Paint, _transform: &Matrix4) {
-        self.log_command("render_rrect", &format!("rrect={:?}", rrect));
+        self.log_command("render_rrect", &format!("rrect={rrect:?}"));
     }
 
     fn render_circle(
@@ -59,12 +57,12 @@ impl CommandRenderer for DebugBackend {
     ) {
         self.log_command(
             "render_circle",
-            &format!("center={:?}, radius={}", center, radius),
+            &format!("center={center:?}, radius={radius}"),
         );
     }
 
     fn render_oval(&mut self, rect: Rect<Pixels>, _paint: &Paint, _transform: &Matrix4) {
-        self.log_command("render_oval", &format!("rect={:?}", rect));
+        self.log_command("render_oval", &format!("rect={rect:?}"));
     }
 
     fn render_line(
@@ -74,7 +72,7 @@ impl CommandRenderer for DebugBackend {
         _paint: &Paint,
         _transform: &Matrix4,
     ) {
-        self.log_command("render_line", &format!("p1={:?}, p2={:?}", p1, p2));
+        self.log_command("render_line", &format!("p1={p1:?}, p2={p2:?}"));
     }
 
     fn render_path(&mut self, path: &Path, _paint: &Paint, _transform: &Matrix4) {
@@ -95,7 +93,7 @@ impl CommandRenderer for DebugBackend {
     ) {
         self.log_command(
             "render_arc",
-            &format!("start={}, sweep={}", start_angle, sweep_angle),
+            &format!("start={start_angle}, sweep={sweep_angle}"),
         );
     }
 
@@ -130,10 +128,7 @@ impl CommandRenderer for DebugBackend {
         _paint: &Paint,
         _transform: &Matrix4,
     ) {
-        self.log_command(
-            "render_text",
-            &format!("text='{}', offset={:?}", text, offset),
-        );
+        self.log_command("render_text", &format!("text='{text}', offset={offset:?}"));
     }
 
     fn render_text_span(
@@ -145,7 +140,7 @@ impl CommandRenderer for DebugBackend {
     ) {
         self.log_command(
             "render_text_span",
-            &format!("offset={:?}, scale={}", offset, text_scale_factor),
+            &format!("offset={offset:?}, scale={text_scale_factor}"),
         );
     }
 
@@ -156,7 +151,7 @@ impl CommandRenderer for DebugBackend {
         _paint: Option<&Paint>,
         _transform: &Matrix4,
     ) {
-        self.log_command("render_image", &format!("dst={:?}", dst));
+        self.log_command("render_image", &format!("dst={dst:?}"));
     }
 
     fn render_atlas(
@@ -182,7 +177,7 @@ impl CommandRenderer for DebugBackend {
     ) {
         self.log_command(
             "render_image_repeat",
-            &format!("dst={:?}, repeat={:?}", dst, repeat),
+            &format!("dst={dst:?}, repeat={repeat:?}"),
         );
     }
 
@@ -196,7 +191,7 @@ impl CommandRenderer for DebugBackend {
     ) {
         self.log_command(
             "render_image_nine_slice",
-            &format!("center_slice={:?}, dst={:?}", center_slice, dst),
+            &format!("center_slice={center_slice:?}, dst={dst:?}"),
         );
     }
 
@@ -210,7 +205,7 @@ impl CommandRenderer for DebugBackend {
     ) {
         self.log_command(
             "render_image_filtered",
-            &format!("dst={:?}, filter={:?}", dst, filter),
+            &format!("dst={dst:?}, filter={filter:?}"),
         );
     }
 
@@ -239,7 +234,7 @@ impl CommandRenderer for DebugBackend {
     fn render_shadow(&mut self, _path: &Path, color: Color, elevation: f32, _transform: &Matrix4) {
         self.log_command(
             "render_shadow",
-            &format!("color={:?}, elevation={}", color, elevation),
+            &format!("color={color:?}, elevation={elevation}"),
         );
     }
 
@@ -271,7 +266,7 @@ impl CommandRenderer for DebugBackend {
     ) {
         self.log_command(
             "render_gradient",
-            &format!("rect={:?}, shader={:?}", rect, shader),
+            &format!("rect={rect:?}, shader={shader:?}"),
         );
     }
 
@@ -283,12 +278,16 @@ impl CommandRenderer for DebugBackend {
     ) {
         self.log_command(
             "render_gradient_rrect",
-            &format!("rrect={:?}, shader={:?}", rrect, shader),
+            &format!("rrect={rrect:?}, shader={shader:?}"),
         );
     }
 
     fn render_color(&mut self, color: Color, _blend_mode: BlendMode, _transform: &Matrix4) {
-        self.log_command("render_color", &format!("color={:?}", color));
+        self.log_command("render_color", &format!("color={color:?}"));
+    }
+
+    fn render_paint(&mut self, paint: &Paint, _transform: &Matrix4) {
+        self.log_command("render_paint", &format!("paint.color={:?}", paint.color));
     }
 
     fn render_backdrop_filter(
@@ -306,7 +305,7 @@ impl CommandRenderer for DebugBackend {
                 filter,
                 bounds,
                 blend_mode,
-                child.map(|c| c.commands().count()).unwrap_or(0)
+                child.map_or(0, |c| c.commands().count())
             ),
         );
     }
@@ -326,15 +325,33 @@ impl CommandRenderer for DebugBackend {
         );
     }
 
-    fn clip_rect(&mut self, rect: Rect<Pixels>, _transform: &Matrix4) {
-        self.log_command("clip_rect", &format!("rect={:?}", rect));
+    fn clip_rect(
+        &mut self,
+        rect: Rect<Pixels>,
+        _clip_op: flui_types::painting::ClipOp,
+        _clip_behavior: flui_types::painting::Clip,
+        _transform: &Matrix4,
+    ) {
+        self.log_command("clip_rect", &format!("rect={rect:?}"));
     }
 
-    fn clip_rrect(&mut self, rrect: RRect, _transform: &Matrix4) {
-        self.log_command("clip_rrect", &format!("rrect={:?}", rrect));
+    fn clip_rrect(
+        &mut self,
+        rrect: RRect,
+        _clip_op: flui_types::painting::ClipOp,
+        _clip_behavior: flui_types::painting::Clip,
+        _transform: &Matrix4,
+    ) {
+        self.log_command("clip_rrect", &format!("rrect={rrect:?}"));
     }
 
-    fn clip_path(&mut self, path: &Path, _transform: &Matrix4) {
+    fn clip_path(
+        &mut self,
+        path: &Path,
+        _clip_op: flui_types::painting::ClipOp,
+        _clip_behavior: flui_types::painting::Clip,
+        _transform: &Matrix4,
+    ) {
         self.log_command("clip_path", &format!("commands={}", path.commands().len()));
     }
 
@@ -343,10 +360,7 @@ impl CommandRenderer for DebugBackend {
     }
 
     fn save_layer(&mut self, bounds: Option<Rect<Pixels>>, paint: &Paint, _transform: &Matrix4) {
-        self.log_command(
-            "save_layer",
-            &format!("bounds={:?}, paint={:?}", bounds, paint),
-        );
+        self.log_command("save_layer", &format!("bounds={bounds:?}, paint={paint:?}"));
     }
 
     fn restore_layer(&mut self, _transform: &Matrix4) {
@@ -358,14 +372,14 @@ impl CommandRenderer for DebugBackend {
     fn push_clip_rect(&mut self, rect: &Rect<Pixels>, clip_behavior: flui_types::painting::Clip) {
         self.log_command(
             "push_clip_rect",
-            &format!("rect={:?}, behavior={:?}", rect, clip_behavior),
+            &format!("rect={rect:?}, behavior={clip_behavior:?}"),
         );
     }
 
     fn push_clip_rrect(&mut self, rrect: &RRect, clip_behavior: flui_types::painting::Clip) {
         self.log_command(
             "push_clip_rrect",
-            &format!("rrect={:?}, behavior={:?}", rrect, clip_behavior),
+            &format!("rrect={rrect:?}, behavior={clip_behavior:?}"),
         );
     }
 
@@ -385,11 +399,11 @@ impl CommandRenderer for DebugBackend {
     }
 
     fn push_offset(&mut self, offset: Offset<Pixels>) {
-        self.log_command("push_offset", &format!("offset={:?}", offset));
+        self.log_command("push_offset", &format!("offset={offset:?}"));
     }
 
     fn push_transform(&mut self, transform: &Matrix4) {
-        self.log_command("push_transform", &format!("transform={:?}", transform));
+        self.log_command("push_transform", &format!("transform={transform:?}"));
     }
 
     fn pop_transform(&mut self) {
@@ -397,7 +411,7 @@ impl CommandRenderer for DebugBackend {
     }
 
     fn push_opacity(&mut self, alpha: f32) {
-        self.log_command("push_opacity", &format!("alpha={}", alpha));
+        self.log_command("push_opacity", &format!("alpha={alpha}"));
     }
 
     fn pop_opacity(&mut self) {
@@ -405,7 +419,7 @@ impl CommandRenderer for DebugBackend {
     }
 
     fn push_color_filter(&mut self, filter: &flui_types::painting::ColorMatrix) {
-        self.log_command("push_color_filter", &format!("filter={:?}", filter));
+        self.log_command("push_color_filter", &format!("filter={filter:?}"));
     }
 
     fn pop_color_filter(&mut self) {
@@ -413,7 +427,7 @@ impl CommandRenderer for DebugBackend {
     }
 
     fn push_image_filter(&mut self, filter: &flui_painting::display_list::ImageFilter) {
-        self.log_command("push_image_filter", &format!("filter={:?}", filter));
+        self.log_command("push_image_filter", &format!("filter={filter:?}"));
     }
 
     fn pop_image_filter(&mut self) {
@@ -431,8 +445,7 @@ impl CommandRenderer for DebugBackend {
         self.log_command(
             "add_performance_overlay",
             &format!(
-                "options_mask={}, bounds={:?}, fps={:.1}, frame_time={:.2}ms, total_frames={}",
-                options_mask, bounds, fps, frame_time_ms, total_frames
+                "options_mask={options_mask}, bounds={bounds:?}, fps={fps:.1}, frame_time={frame_time_ms:.2}ms, total_frames={total_frames}"
             ),
         );
     }

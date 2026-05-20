@@ -3,8 +3,9 @@
 //! This layer positions its content relative to a LeaderLayer.
 //! Used for tooltips, dropdowns, and connected overlays.
 
-use super::leader::LayerLink;
 use flui_types::geometry::{Offset, Pixels, Size};
+
+use super::leader::LayerLink;
 
 /// Layer that positions content relative to a LeaderLayer.
 ///
@@ -27,7 +28,7 @@ use flui_types::geometry::{Offset, Pixels, Size};
 /// # Example
 ///
 /// ```rust
-/// use flui_layer::{LeaderLayer, FollowerLayer, LayerLink};
+/// use flui_layer::{FollowerLayer, LayerLink, LeaderLayer};
 /// use flui_types::geometry::Offset;
 ///
 /// let link = LayerLink::new();
@@ -236,8 +237,9 @@ unsafe impl Sync for FollowerLayer {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::px;
+
+    use super::*;
 
     #[test]
     fn test_follower_layer_new() {
@@ -275,7 +277,8 @@ mod tests {
             Size::new(px(80.0), px(40.0)),     // Follower size
         );
 
-        // Default anchors are (0,0), so follower goes to leader's top-left + target offset
+        // Default anchors are (0,0), so follower goes to leader's top-left + target
+        // offset
         assert_eq!(offset, Offset::new(px(100.0), px(110.0)));
     }
 

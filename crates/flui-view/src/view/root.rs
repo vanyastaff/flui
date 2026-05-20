@@ -8,18 +8,24 @@
 //! This corresponds to Flutter's `_RawViewInternal` and `_RawViewElement`
 //! which bootstrap the render tree for a FlutterView.
 
-use flui_foundation::{ElementId, RenderId};
-use flui_rendering::pipeline::PipelineOwner;
-use flui_rendering::storage::RenderNode;
-use flui_rendering::view::{RenderView as RenderViewObject, RenderViewAdapter, ViewConfiguration};
-use flui_types::geometry::px;
-use flui_types::Size;
-use parking_lot::RwLock;
-use std::any::{Any, TypeId};
-use std::sync::Arc;
+use std::{
+    any::{Any, TypeId},
+    sync::Arc,
+};
 
-use crate::element::{Lifecycle, RenderObjectElement, RenderSlot, RenderTreeRootElement};
-use crate::view::{ElementBase, View};
+use flui_foundation::{ElementId, RenderId};
+use flui_rendering::{
+    pipeline::PipelineOwner,
+    storage::RenderNode,
+    view::{RenderView as RenderViewObject, RenderViewAdapter, ViewConfiguration},
+};
+use flui_types::{Size, geometry::px};
+use parking_lot::RwLock;
+
+use crate::{
+    element::{Lifecycle, RenderObjectElement, RenderSlot, RenderTreeRootElement},
+    view::{ElementBase, View},
+};
 
 // ============================================================================
 // RootRenderView - The root widget
@@ -82,7 +88,8 @@ impl<V: View + Clone + Send + Sync + 'static> View for RootRenderView<V> {
 ///
 /// # Flutter Equivalent
 ///
-/// This corresponds to Flutter's `_RawViewElement` which extends `RenderTreeRootElement`.
+/// This corresponds to Flutter's `_RawViewElement` which extends
+/// `RenderTreeRootElement`.
 pub struct RootRenderElement<V: View + Clone> {
     /// The View configuration
     view: RootRenderView<V>,
@@ -173,7 +180,7 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
         render_view.set_configuration(config);
 
         // Insert into PipelineOwner's RenderTree via RenderViewAdapter
-        if let Some(ref pipeline_owner) = self.pipeline_owner {
+        if let Some(pipeline_owner) = &self.pipeline_owner {
             let mut owner = pipeline_owner.write();
             let adapter = RenderViewAdapter::new(render_view);
             let node = RenderNode::new_box(Box::new(adapter));
@@ -182,8 +189,8 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
             self.render_id = Some(render_id);
 
             // Add to dirty lists
-            owner.add_node_needing_layout(render_id.get(), 0);
-            owner.add_node_needing_paint(render_id.get(), 0);
+            owner.add_node_needing_layout(render_id, 0);
+            owner.add_node_needing_paint(render_id, 0);
             owner.request_visual_update();
 
             tracing::debug!(
@@ -200,8 +207,7 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
 
     fn unmount(&mut self) {
         // Detach from PipelineOwner's RenderTree
-        if let (Some(ref pipeline_owner), Some(render_id)) = (&self.pipeline_owner, self.render_id)
-        {
+        if let (Some(pipeline_owner), Some(render_id)) = (&self.pipeline_owner, self.render_id) {
             let mut owner = pipeline_owner.write();
             owner.set_root_id(None);
             owner.render_tree_mut().remove(render_id);
@@ -209,7 +215,7 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
         self.render_id = None;
 
         // Unmount child
-        if let Some(ref mut child) = self.child_element {
+        if let Some(child) = &mut self.child_element {
             child.unmount();
         }
         self.child_element = None;
@@ -219,14 +225,14 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
 
     fn activate(&mut self) {
         self.lifecycle = Lifecycle::Active;
-        if let Some(ref mut child) = self.child_element {
+        if let Some(child) = &mut self.child_element {
             child.activate();
         }
     }
 
     fn deactivate(&mut self) {
         self.lifecycle = Lifecycle::Inactive;
-        if let Some(ref mut child) = self.child_element {
+        if let Some(child) = &mut self.child_element {
             child.deactivate();
         }
     }
@@ -235,13 +241,17 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
         if let Some(v) = new_view.as_any().downcast_ref::<RootRenderView<V>>() {
             self.view = v.clone();
             // Update configuration if size changed
-            if let (Some(ref pipeline_owner), Some(render_id)) =
-                (&self.pipeline_owner, self.render_id)
+            if let (Some(pipeline_owner), Some(render_id)) = (&self.pipeline_owner, self.render_id)
             {
-                let owner = pipeline_owner.write();
-                if let Some(node) = owner.render_tree().get(render_id) {
+                // U2 exemplar refactor: mutable access to the render object goes
+                // through `&mut RenderTree` (`render_tree_mut().get_mut`) rather
+                // than acquiring a per-node `RwLock` write guard. The pipeline
+                // owner is still locked via its outer `Arc<RwLock<PipelineOwner>>`
+                // (shared-infrastructure lock, allowed per `docs/PORT.md`).
+                let mut owner = pipeline_owner.write();
+                if let Some(node) = owner.render_tree_mut().get_mut(render_id) {
                     // RenderView uses BoxProtocol
-                    let mut render_object = node.box_render_object_mut();
+                    let render_object = node.box_render_object_mut();
                     if let Some(render_view) = render_object
                         .as_any_mut()
                         .downcast_mut::<RenderViewObject>()
@@ -268,7 +278,7 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
 
             // Pass PipelineOwner and parent RenderId to child via trait methods
             // Child needs these to insert its RenderObject into the RenderTree
-            if let Some(ref pipeline_owner) = self.pipeline_owner {
+            if let Some(pipeline_owner) = &self.pipeline_owner {
                 // Use ElementBase trait methods for pipeline propagation
                 // This works for any element type that implements the trait
                 let owner_any: Arc<dyn std::any::Any + Send + Sync> =
@@ -289,40 +299,37 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
 
             // Attach child's RenderObject to RenderTree as child of RenderView
             // Get child's RenderId and establish parent-child relationship
-            if let (Some(ref pipeline_owner), Some(parent_id)) =
-                (&self.pipeline_owner, self.render_id)
-            {
-                if let Some(child_render_id) = child_element
+            if let (Some(pipeline_owner), Some(parent_id)) = (&self.pipeline_owner, self.render_id)
+                && let Some(child_render_id) = child_element
                     .render_object_any()
                     .and_then(|any| any.downcast_ref::<RenderId>().copied())
-                {
-                    let mut owner = pipeline_owner.write();
-                    let render_tree = owner.render_tree_mut();
+            {
+                let mut owner = pipeline_owner.write();
+                let render_tree = owner.render_tree_mut();
 
-                    // Set parent on child node
-                    if let Some(child_node) = render_tree.get_mut(child_render_id) {
-                        child_node.set_parent(Some(parent_id));
-                    }
-
-                    // Add child to parent's children list
-                    if let Some(parent_node) = render_tree.get_mut(parent_id) {
-                        parent_node.add_child(child_render_id);
-                        // Parent-child relationships are fully managed by NodeLinks
-                        // No need to notify render objects directly
-                    }
-
-                    tracing::debug!(
-                        "RootRenderElement::perform_build attached child render_id={:?} to parent render_id={:?}",
-                        child_render_id,
-                        parent_id
-                    );
+                // Set parent on child node
+                if let Some(child_node) = render_tree.get_mut(child_render_id) {
+                    child_node.set_parent(Some(parent_id));
                 }
+
+                // Add child to parent's children list
+                if let Some(parent_node) = render_tree.get_mut(parent_id) {
+                    parent_node.add_child(child_render_id);
+                    // Parent-child relationships are fully managed by NodeLinks
+                    // No need to notify render objects directly
+                }
+
+                tracing::debug!(
+                    "RootRenderElement::perform_build attached child render_id={:?} to parent render_id={:?}",
+                    child_render_id,
+                    parent_id
+                );
             }
 
             self.child_element = Some(child_element);
         } else {
             // Rebuild - update child element
-            if let Some(ref mut child) = self.child_element {
+            if let Some(child) = &mut self.child_element {
                 let child_view: &dyn View = &self.view.child;
                 child.update(child_view);
                 child.perform_build();
@@ -384,8 +391,7 @@ impl<V: View + Clone + Send + Sync + 'static> RenderObjectElement for RootRender
             );
 
             // Set parent-child relationship in RenderTree
-            if let (Some(ref pipeline_owner), Some(parent_id)) =
-                (&self.pipeline_owner, self.render_id)
+            if let (Some(pipeline_owner), Some(parent_id)) = (&self.pipeline_owner, self.render_id)
             {
                 let mut owner = pipeline_owner.write();
                 let render_tree = owner.render_tree_mut();
@@ -427,8 +433,7 @@ impl<V: View + Clone + Send + Sync + 'static> RenderObjectElement for RootRender
             );
 
             // Clear parent-child relationship in RenderTree
-            if let (Some(ref pipeline_owner), Some(parent_id)) =
-                (&self.pipeline_owner, self.render_id)
+            if let (Some(pipeline_owner), Some(parent_id)) = (&self.pipeline_owner, self.render_id)
             {
                 let mut owner = pipeline_owner.write();
                 let render_tree = owner.render_tree_mut();
@@ -492,8 +497,9 @@ impl<V: View + Clone + Send + Sync + 'static> RenderTreeRootElement for RootRend
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_rendering::pipeline::PipelineOwner;
+
+    use super::*;
 
     #[derive(Clone)]
     struct TestView;

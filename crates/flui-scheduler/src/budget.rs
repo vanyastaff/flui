@@ -6,8 +6,10 @@
 //! ## Type-Safe Budget Management
 //!
 //! ```rust
-//! use flui_scheduler::budget::{FrameBudget, BudgetPolicy};
-//! use flui_scheduler::duration::{Milliseconds, FrameDuration};
+//! use flui_scheduler::{
+//!     budget::{BudgetPolicy, FrameBudget},
+//!     duration::{FrameDuration, Milliseconds},
+//! };
 //!
 //! let mut budget = FrameBudget::new(60);
 //!
@@ -20,15 +22,17 @@
 //! }
 //! ```
 
-use crate::duration::{FrameDuration, Milliseconds, Percentage};
-use crate::frame::FramePhase;
-use parking_lot::Mutex;
-use std::collections::VecDeque;
-use std::sync::Arc;
-use web_time::Instant;
+use std::{collections::VecDeque, sync::Arc};
 
+use parking_lot::Mutex;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
+use web_time::Instant;
+
+use crate::{
+    duration::{FrameDuration, Milliseconds, Percentage},
+    frame::FramePhase,
+};
 
 /// Budget policy - what to do when over budget
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -153,8 +157,7 @@ impl PhaseTiming {
 /// # Examples
 ///
 /// ```
-/// use flui_scheduler::budget::FrameBudget;
-/// use flui_scheduler::duration::Milliseconds;
+/// use flui_scheduler::{budget::FrameBudget, duration::Milliseconds};
 ///
 /// let mut budget = FrameBudget::new(60);
 /// budget.reset();
@@ -187,7 +190,8 @@ pub struct FrameBudget {
     /// Average frame time (rolling window)
     avg_frame_time: Milliseconds,
 
-    /// Running sum of frame times in the rolling window (avoids re-summing each frame)
+    /// Running sum of frame times in the rolling window (avoids re-summing each
+    /// frame)
     running_sum: f64,
 
     /// Frame time history (last 60 frames)
@@ -339,10 +343,10 @@ impl FrameBudget {
         // Update running sum: add new, subtract evicted
         self.running_sum += total.value();
         self.frame_times.push_back(total);
-        if self.frame_times.len() > 60 {
-            if let Some(evicted) = self.frame_times.pop_front() {
-                self.running_sum -= evicted.value();
-            }
+        if self.frame_times.len() > 60
+            && let Some(evicted) = self.frame_times.pop_front()
+        {
+            self.running_sum -= evicted.value();
         }
 
         self.avg_frame_time = Milliseconds::new(self.running_sum / self.frame_times.len() as f64);
@@ -457,7 +461,8 @@ impl FrameBudget {
 
     /// Finish current frame and record total time
     ///
-    /// This is a convenience that calls [`record_frame_duration`](Self::record_frame_duration)
+    /// This is a convenience that calls
+    /// [`record_frame_duration`](Self::record_frame_duration)
     /// with the elapsed time since [`reset`](Self::reset) was called.
     pub fn finish_frame(&mut self) {
         if let Some(start) = self.frame_start {
@@ -544,8 +549,10 @@ impl AllPhaseStats {
 /// # Examples
 ///
 /// ```
-/// use flui_scheduler::budget::{FrameBudgetBuilder, BudgetPolicy};
-/// use flui_scheduler::duration::FrameDuration;
+/// use flui_scheduler::{
+///     budget::{BudgetPolicy, FrameBudgetBuilder},
+///     duration::FrameDuration,
+/// };
 ///
 /// let budget = FrameBudgetBuilder::new()
 ///     .target_fps(120)

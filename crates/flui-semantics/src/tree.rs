@@ -1,14 +1,15 @@
 //! SemanticsTree - Slab-based storage for semantics nodes
 //!
-//! This module provides the SemanticsTree struct for managing the accessibility tree.
-//! It implements `TreeRead<SemanticsId>` and `TreeNav<SemanticsId>` from flui-tree,
-//! enabling generic tree algorithms and visitors.
-
-use slab::Slab;
+//! This module provides the SemanticsTree struct for managing the accessibility
+//! tree. It implements `TreeRead<SemanticsId>` and `TreeNav<SemanticsId>` from
+//! flui-tree, enabling generic tree algorithms and visitors.
 
 use flui_foundation::{ElementId, SemanticsId};
-use flui_tree::iter::{Ancestors, DescendantsWithDepth};
-use flui_tree::{TreeNav, TreeRead};
+use flui_tree::{
+    iter::{Ancestors, DescendantsWithDepth},
+    TreeNav, TreeRead,
+};
+use slab::Slab;
 
 use crate::node::SemanticsNode;
 
@@ -18,8 +19,8 @@ use crate::node::SemanticsNode;
 
 /// SemanticsTree - Slab-based storage for accessibility nodes.
 ///
-/// This is the fifth of FLUI's five trees, corresponding to Flutter's Semantics tree
-/// used for accessibility services (screen readers, voice control, etc.).
+/// This is the fifth of FLUI's five trees, corresponding to Flutter's Semantics
+/// tree used for accessibility services (screen readers, voice control, etc.).
 ///
 /// # Architecture
 ///
@@ -37,7 +38,7 @@ use crate::node::SemanticsNode;
 /// # Example
 ///
 /// ```rust
-/// use flui_semantics::{SemanticsTree, SemanticsNode};
+/// use flui_semantics::{SemanticsNode, SemanticsTree};
 /// use flui_tree::TreeRead;
 ///
 /// let mut tree = SemanticsTree::new();
@@ -123,7 +124,7 @@ impl SemanticsTree {
     /// # Example
     ///
     /// ```rust
-    /// use flui_semantics::{SemanticsTree, SemanticsNode};
+    /// use flui_semantics::{SemanticsNode, SemanticsTree};
     ///
     /// let mut tree = SemanticsTree::new();
     /// let node = SemanticsNode::new();
@@ -164,7 +165,8 @@ impl SemanticsTree {
     ///
     /// Returns the removed node, or None if it didn't exist.
     ///
-    /// **Note:** This does NOT remove children. Caller must handle tree cleanup.
+    /// **Note:** This does NOT remove children. Caller must handle tree
+    /// cleanup.
     pub fn remove(&mut self, id: SemanticsId) -> Option<SemanticsNode> {
         // Update root if removing root
         if self.root == Some(id) {
@@ -258,7 +260,8 @@ impl SemanticsTree {
             .map(|(index, node)| (SemanticsId::new(index + 1), node))
     }
 
-    /// Returns a mutable iterator over all (SemanticsId, &mut SemanticsNode) pairs.
+    /// Returns a mutable iterator over all (SemanticsId, &mut SemanticsNode)
+    /// pairs.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (SemanticsId, &mut SemanticsNode)> + '_ {
         self.nodes
             .iter_mut()

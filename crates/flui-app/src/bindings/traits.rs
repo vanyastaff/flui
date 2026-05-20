@@ -180,6 +180,8 @@ pub trait RendererBindingBehavior: Binding {
 ///   void drawFrame(); // Calls buildScope() then super.drawFrame()
 /// }
 /// ```
+// TODO: Will be implemented when flui-view binding integration is complete
+#[allow(dead_code)]
 pub trait WidgetsBindingBehavior: RendererBindingBehavior {
     /// Type of the build owner used.
     type BuildOwner;
@@ -223,6 +225,8 @@ pub trait WidgetsBindingBehavior: RendererBindingBehavior {
 ///   void hitTest(HitTestResult result, Offset position);
 /// }
 /// ```
+// TODO: Will be implemented when flui-interaction binding integration is complete
+#[allow(dead_code)]
 pub trait GestureBindingBehavior: Binding {
     /// Type of hit test results.
     type HitTestResult;
@@ -253,6 +257,8 @@ pub trait GestureBindingBehavior: Binding {
 ///   void addPersistentFrameCallback(callback);
 /// }
 /// ```
+// TODO: Will be implemented when flui-scheduler binding integration is complete
+#[allow(dead_code)]
 pub trait SchedulerBindingBehavior: Binding {
     /// Schedule a new frame.
     fn schedule_frame(&mut self);

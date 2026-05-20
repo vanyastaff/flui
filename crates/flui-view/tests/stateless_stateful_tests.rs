@@ -1,14 +1,20 @@
-//! Integration tests for StatelessView/StatelessElement and StatefulView/StatefulElement.
+//! Integration tests for StatelessView/StatelessElement and
+//! StatefulView/StatefulElement.
 //!
 //! Tests view creation, element management, state handling, and update cycles.
+
+use std::{
+    any::TypeId,
+    sync::{
+        Arc,
+        atomic::{AtomicI32, AtomicUsize, Ordering},
+    },
+};
 
 use flui_view::{
     BuildContext, ElementBase, Lifecycle, StatefulBehavior, StatefulElement, StatefulView,
     StatelessBehavior, StatelessElement, StatelessView, View, ViewState,
 };
-use std::any::TypeId;
-use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
-use std::sync::Arc;
 
 // ============================================================================
 // StatelessView Tests
@@ -128,11 +134,12 @@ fn test_nested_stateless_views() {
 // StatefulView Tests
 // ============================================================================
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct CounterView {
     initial_count: i32,
 }
 
+#[derive(Debug)]
 struct CounterState {
     count: Arc<AtomicI32>,
     update_count: Arc<AtomicUsize>,

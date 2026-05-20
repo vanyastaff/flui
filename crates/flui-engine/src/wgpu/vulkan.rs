@@ -1,7 +1,7 @@
 //! Vulkan 1.4 backend-specific features for Linux and Android
 //!
-//! This module provides access to Vulkan 1.4 features that are not exposed through wgpu's
-//! cross-platform API, including:
+//! This module provides access to Vulkan 1.4 features that are not exposed
+//! through wgpu's cross-platform API, including:
 //! - Pipeline binary caching for faster startup
 //! - NVIDIA explicit sync for Wayland compositors
 //! - Mesa 25.x optimizations
@@ -31,9 +31,9 @@
 //! }
 //! ```
 
-use anyhow::{anyhow, Result};
 use std::path::PathBuf;
-use std::sync::Arc;
+
+use anyhow::{Result, anyhow};
 
 // ============================================================================
 // Vulkan Feature Detection
@@ -76,30 +76,77 @@ pub struct VulkanFeatures {
 impl VulkanFeatures {
     /// Detect Vulkan features from a wgpu device.
     ///
+    /// Uses wgpu's feature flags and adapter info to infer Vulkan capabilities
+    /// where possible. Some Vulkan-specific features (explicit sync, dynamic
+    /// rendering, extended dynamic state) are not directly exposed through wgpu
+    /// and would require `ash` (Vulkan FFI) for accurate detection.
+    ///
     /// # Errors
     ///
     /// Returns error if device is not Vulkan backend.
     pub fn detect(device: &wgpu::Device) -> Result<Self> {
         #[cfg(not(any(target_os = "linux", target_os = "android")))]
         {
+            let _ = device;
             return Err(anyhow!(
                 "Vulkan backend detection only available on Linux/Android"
             ));
         }
 
-        // TODO: Query actual Vulkan device capabilities via ash (Vulkan FFI)
-        // For now, return conservative defaults
-        Ok(Self {
-            api_version: VulkanVersion::Vulkan1_3,
-            driver_version: "Unknown".to_string(),
-            vendor: GpuVendor::Unknown,
-            supports_explicit_sync: false,
-            supports_pipeline_cache: true,
-            supports_dynamic_rendering: false,
-            supports_extended_dynamic_state: false,
-            supports_mesh_shaders: false,
-            mesa_version: None,
-        })
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        {
+            let features = device.features();
+
+            // Mesh shader support is queryable through wgpu experimental features
+            let supports_mesh_shaders = features.contains(wgpu::Features::EXPERIMENTAL_MESH_SHADER);
+
+            // Dynamic rendering (VK_KHR_dynamic_rendering) is core in Vulkan 1.3+.
+            // wgpu uses dynamic rendering internally when available, but doesn't
+            // expose it as a feature flag. Assume supported since wgpu requires Vulkan 1.3+.
+            let supports_dynamic_rendering = true;
+
+            // Pipeline caching is universally supported in Vulkan
+            let supports_pipeline_cache = true;
+
+            // Extended dynamic state (VK_EXT_extended_dynamic_state3) is not
+            // queryable through wgpu. Return false conservatively.
+            let supports_extended_dynamic_state = false;
+
+            // Explicit sync (linux-drm-syncobj) requires Linux 6.8+ and
+            // Wayland 1.34+. Not detectable through wgpu.
+            let supports_explicit_sync = false;
+
+            // Vendor detection from wgpu is not available without adapter info.
+            // The detect() method takes a Device, not an Adapter, so we can't
+            // call adapter.get_info(). Default to Unknown.
+            let vendor = GpuVendor::Unknown;
+
+            // API version: wgpu requires Vulkan 1.3 minimum. If mesh shaders
+            // are available, it likely indicates a newer driver stack.
+            let api_version = VulkanVersion::Vulkan1_3;
+
+            tracing::debug!(
+                ?api_version,
+                ?vendor,
+                supports_mesh_shaders,
+                supports_dynamic_rendering,
+                supports_pipeline_cache,
+                supports_explicit_sync,
+                "Detected Vulkan capabilities (some features require ash FFI for accurate detection)"
+            );
+
+            Ok(Self {
+                api_version,
+                driver_version: "Unknown (wgpu does not expose driver version)".to_string(),
+                vendor,
+                supports_explicit_sync,
+                supports_pipeline_cache,
+                supports_dynamic_rendering,
+                supports_extended_dynamic_state,
+                supports_mesh_shaders,
+                mesa_version: None, // Requires VkPhysicalDeviceDriverProperties via ash
+            })
+        }
     }
 
     /// Check if all Vulkan 1.4 features are supported.
@@ -211,7 +258,8 @@ impl MesaVersion {
 ///
 /// # Security Considerations
 ///
-/// Pipeline caches are driver-specific and include GPU-specific code. They should:
+/// Pipeline caches are driver-specific and include GPU-specific code. They
+/// should:
 /// - Be stored in user-specific cache directories (XDG_CACHE_HOME)
 /// - Be invalidated when driver version changes
 /// - Be readable only by the current user
@@ -284,35 +332,168 @@ impl PipelineCacheConfig {
 
     /// Load pipeline cache from disk.
     ///
-    /// Returns cached data if valid, None if cache is invalid or doesn't exist.
+    /// Returns cached data if valid, `None` if cache is invalid, too large,
+    /// or doesn't exist. The cache file uses a simple format:
+    /// - First 4 bytes: magic number (0x464C5549 = "FLUI")
+    /// - Next 4 bytes: cache format version (1)
+    /// - Remaining bytes: raw pipeline cache data
+    ///
+    /// Driver version invalidation is not yet implemented since wgpu does not
+    /// expose the Vulkan driver version. Cache files will be used regardless
+    /// of driver changes until ash FFI integration is added.
     pub fn load(&self) -> Option<Vec<u8>> {
+        use std::io::Read;
+
         if !self.enabled {
             return None;
         }
 
-        // TODO: Implement actual cache loading
-        // This requires:
-        // 1. Read cache file
-        // 2. Verify driver version if invalidate_on_driver_change is true
-        // 3. Validate cache integrity
-        None
+        let path = &self.cache_path;
+        if !path.exists() {
+            tracing::debug!(?path, "Pipeline cache file does not exist");
+            return None;
+        }
+
+        let metadata = std::fs::metadata(path).ok()?;
+        let file_size = metadata.len();
+
+        // Reject files exceeding max cache size
+        if file_size > self.max_size_bytes {
+            tracing::debug!(
+                ?path,
+                file_size,
+                max = self.max_size_bytes,
+                "Pipeline cache file exceeds max size, ignoring"
+            );
+            return None;
+        }
+
+        // Minimum valid size: 8 bytes header + at least 1 byte of data
+        if file_size < 9 {
+            tracing::debug!(?path, file_size, "Pipeline cache file too small, ignoring");
+            return None;
+        }
+
+        let mut file = std::fs::File::open(path).ok()?;
+        let mut data = Vec::with_capacity(file_size as usize);
+        if file.read_to_end(&mut data).ok()? != file_size as usize {
+            tracing::debug!(?path, "Pipeline cache file read incomplete");
+            return None;
+        }
+
+        // Validate magic number
+        let magic = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+        if magic != 0x464C5549 {
+            tracing::debug!(?path, magic, "Pipeline cache file has invalid magic number");
+            return None;
+        }
+
+        // Validate version
+        let version = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+        if version != 1 {
+            tracing::debug!(
+                ?path,
+                version,
+                "Pipeline cache file has unsupported version"
+            );
+            return None;
+        }
+
+        let cache_data = data[8..].to_vec();
+        tracing::debug!(
+            ?path,
+            size = cache_data.len(),
+            "Loaded pipeline cache from disk"
+        );
+        Some(cache_data)
     }
 
     /// Save pipeline cache to disk.
     ///
+    /// Creates the parent directory if it doesn't exist. Writes atomically by
+    /// first writing to a temporary file, then renaming. On Unix, sets file
+    /// permissions to user-only read/write (0o600).
+    ///
     /// # Errors
     ///
-    /// Returns error if unable to write cache file.
-    pub fn save(&self, _data: &[u8]) -> Result<()> {
+    /// Returns error if unable to create directories or write the cache file.
+    pub fn save(&self, data: &[u8]) -> Result<()> {
+        use std::io::Write;
+
         if !self.enabled {
             return Ok(());
         }
 
-        // TODO: Implement actual cache saving
-        // This requires:
-        // 1. Create cache directory if it doesn't exist
-        // 2. Write cache data atomically
-        // 3. Set appropriate permissions (user-only read/write)
+        if data.len() as u64 > self.max_size_bytes {
+            tracing::debug!(
+                size = data.len(),
+                max = self.max_size_bytes,
+                "Pipeline cache data exceeds max size, not saving"
+            );
+            return Ok(());
+        }
+
+        let path = &self.cache_path;
+
+        // Create parent directory if it doesn't exist
+        if let Some(parent) = path.parent() {
+            if !parent.exists() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    anyhow!(
+                        "Failed to create pipeline cache directory {:?}: {}",
+                        parent,
+                        e
+                    )
+                })?;
+                tracing::debug!(?parent, "Created pipeline cache directory");
+            }
+        }
+
+        // Build cache file with header
+        let mut file_data = Vec::with_capacity(8 + data.len());
+        // Magic number: "FLUI" = 0x464C5549
+        file_data.extend_from_slice(&0x464C5549_u32.to_le_bytes());
+        // Format version: 1
+        file_data.extend_from_slice(&1_u32.to_le_bytes());
+        // Pipeline cache data
+        file_data.extend_from_slice(data);
+
+        // Write to a temporary file first, then rename for atomic operation
+        let tmp_path = path.with_extension("tmp");
+        let mut file = std::fs::File::create(&tmp_path).map_err(|e| {
+            anyhow!(
+                "Failed to create temporary cache file {:?}: {}",
+                tmp_path,
+                e
+            )
+        })?;
+
+        file.write_all(&file_data)
+            .map_err(|e| anyhow!("Failed to write pipeline cache data: {}", e))?;
+
+        file.flush()
+            .map_err(|e| anyhow!("Failed to flush pipeline cache data: {}", e))?;
+        drop(file);
+
+        // Set user-only permissions on Unix
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o600);
+            let _ = std::fs::set_permissions(&tmp_path, perms);
+        }
+
+        // Atomic rename
+        std::fs::rename(&tmp_path, path).map_err(|e| {
+            anyhow!(
+                "Failed to rename pipeline cache file {:?} -> {:?}: {}",
+                tmp_path,
+                path,
+                e
+            )
+        })?;
+
+        tracing::debug!(?path, size = data.len(), "Saved pipeline cache to disk");
         Ok(())
     }
 }
@@ -363,13 +544,27 @@ impl ExplicitSyncConfig {
     }
 
     /// Check if explicit sync is available on this system.
+    ///
+    /// Explicit sync requires:
+    /// - Linux kernel 6.8+ (for `linux-drm-syncobj` protocol)
+    /// - Wayland 1.34+ with `wp_linux_drm_syncobj_manager_v1`
+    /// - Driver support: NVIDIA 565+, Mesa 24.1+
+    ///
+    /// These checks require system-level queries (uname, Wayland protocol
+    /// negotiation, driver version inspection) that are not available through
+    /// wgpu. Returns `false` as a conservative default.
     pub fn is_available() -> bool {
         #[cfg(target_os = "linux")]
         {
-            // TODO: Check for:
-            // - Linux kernel 6.8+
-            // - Wayland 1.34+ with wp_linux_drm_syncobj_v1
-            // - Driver support (NVIDIA 565+, Mesa 24.1+)
+            // Accurate detection would require:
+            // 1. uname().release to check kernel >= 6.8
+            // 2. Wayland registry query for wp_linux_drm_syncobj_manager_v1
+            // 3. VkPhysicalDeviceDriverProperties for driver version
+            // None of these are accessible through wgpu's API.
+            tracing::debug!(
+                "Explicit sync availability not detectable via wgpu \
+                 (requires kernel version, Wayland protocol, and driver queries)"
+            );
             false
         }
 
@@ -494,10 +689,23 @@ impl MesaOptimizations {
     }
 
     /// Check if running on Mesa drivers.
+    ///
+    /// Mesa detection requires querying `VkPhysicalDeviceDriverProperties.driverID`
+    /// via Vulkan's `vkGetPhysicalDeviceProperties2`, which is not exposed through
+    /// wgpu's public API. Returns `false` as a conservative default.
+    ///
+    /// Mesa driver IDs include: `VK_DRIVER_ID_MESA_RADV`, `VK_DRIVER_ID_MESA_TURNIP`,
+    /// `VK_DRIVER_ID_MESA_NVK`, `VK_DRIVER_ID_MESA_VENUS`, etc.
     pub fn is_mesa_available() -> bool {
         #[cfg(target_os = "linux")]
         {
-            // TODO: Check for Mesa drivers via VkPhysicalDeviceProperties
+            // Accurate detection requires ash (Vulkan FFI):
+            //   vkGetPhysicalDeviceProperties2 -> VkPhysicalDeviceDriverProperties.driverID
+            // Mesa-specific driver IDs: MESA_RADV, MESA_TURNIP, MESA_NVK, etc.
+            tracing::debug!(
+                "Mesa driver detection not available via wgpu \
+                 (requires VkPhysicalDeviceDriverProperties query)"
+            );
             false
         }
 

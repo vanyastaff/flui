@@ -102,7 +102,8 @@ impl ColorFilterLayer {
     ///
     /// # Arguments
     ///
-    /// * `amount` - Saturation multiplier (0.0 = grayscale, 1.0 = no change, 2.0 = double saturation)
+    /// * `amount` - Saturation multiplier (0.0 = grayscale, 1.0 = no change,
+    ///   2.0 = double saturation)
     #[inline]
     pub fn saturation(amount: f32) -> Self {
         Self::new(ColorMatrix::saturation(amount))

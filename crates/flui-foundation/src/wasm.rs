@@ -1,10 +1,11 @@
 //! WASM compatibility traits.
 //!
-//! This module provides traits that adapt behavior between native and WASM targets,
-//! similar to wgpu's approach.
+//! This module provides traits that adapt behavior between native and WASM
+//! targets, similar to wgpu's approach.
 //!
 //! On native platforms, `WasmNotSendSync` requires `Send + Sync`.
-//! On WASM (single-threaded), it's an empty trait allowing non-thread-safe types.
+//! On WASM (single-threaded), it's an empty trait allowing non-thread-safe
+//! types.
 //!
 //! # Usage
 //!
@@ -17,7 +18,8 @@
 //! }
 //! ```
 
-/// Trait for types that are `Send + Sync` on native but not necessarily on WASM.
+/// Trait for types that are `Send + Sync` on native but not necessarily on
+/// WASM.
 ///
 /// On native platforms (non-WASM), this trait requires `Send + Sync`.
 /// On WASM, where there's typically only one thread, this trait is empty,
@@ -40,7 +42,8 @@ pub trait WasmNotSendSync: Send + Sync {}
 #[cfg(not(target_arch = "wasm32"))]
 impl<T: Send + Sync> WasmNotSendSync for T {}
 
-/// Trait for types that are `Send + Sync` on native but not necessarily on WASM.
+/// Trait for types that are `Send + Sync` on native but not necessarily on
+/// WASM.
 ///
 /// On WASM, this is an empty trait since WASM is single-threaded.
 #[cfg(target_arch = "wasm32")]

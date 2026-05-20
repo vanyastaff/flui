@@ -43,6 +43,7 @@
 mod box_protocol;
 mod capabilities;
 mod into_render_object;
+#[allow(clippy::module_inception)] // protocol.rs inside protocol/ contains core Protocol trait
 mod protocol;
 mod sliver_protocol;
 
@@ -50,33 +51,29 @@ mod sliver_protocol;
 // PROTOCOL TRAIT EXPORTS
 // ============================================================================
 
-pub use protocol::{
-    // Marker traits
-    BaselineProtocol,
-    BidirectionalProtocol,
-    IntrinsicProtocol,
-    // Protocol trait
-    Protocol,
-    ProtocolCompatible,
-    ProtocolRenderObject,
+// ============================================================================
+// BOX PROTOCOL EXPORTS
+// ============================================================================
+pub use box_protocol::{
+    // Cache key
+    BoxConstraintsCacheKey,
+    // Hit test
+    BoxHitTest,
+    BoxHitTestCtx,
+    BoxHitTestEntry,
+    BoxHitTestResult,
+    // Layout
+    BoxLayout,
+    BoxLayoutCtx,
+    // Protocol
+    BoxProtocol,
+    // Per-child layout state (moved here from the deleted
+    // children_access.rs in Mythos Step 5b)
+    ChildState,
 };
-
-// ============================================================================
-// RENDER OBJECT TRAIT EXPORTS (re-exported from traits module)
-// ============================================================================
-
-pub use crate::traits::RenderObject;
-
-// ============================================================================
-// INTO RENDER OBJECT EXPORTS
-// ============================================================================
-
-pub use into_render_object::IntoRenderObject;
-
 // ============================================================================
 // CAPABILITY EXPORTS
 // ============================================================================
-
 pub use capabilities::{
     // Capability traits
     HitTestCapability,
@@ -91,30 +88,23 @@ pub use capabilities::{
     ProtocolLayoutCtx,
     ProtocolPosition,
 };
-
 // ============================================================================
-// BOX PROTOCOL EXPORTS
+// INTO RENDER OBJECT EXPORTS
 // ============================================================================
-
-pub use box_protocol::{
-    // Cache key
-    BoxConstraintsCacheKey,
-    // Hit test
-    BoxHitTest,
-    BoxHitTestCtx,
-    BoxHitTestEntry,
-    BoxHitTestResult,
-    // Layout
-    BoxLayout,
-    BoxLayoutCtx,
-    // Protocol
-    BoxProtocol,
+pub use into_render_object::IntoRenderObject;
+pub use protocol::{
+    // Marker traits
+    BaselineProtocol,
+    BidirectionalProtocol,
+    IntrinsicProtocol,
+    // Protocol trait
+    Protocol,
+    ProtocolCompatible,
+    ProtocolRenderObject,
 };
-
 // ============================================================================
 // SLIVER PROTOCOL EXPORTS
 // ============================================================================
-
 pub use sliver_protocol::{
     // Hit test
     MainAxisPosition,
@@ -130,6 +120,11 @@ pub use sliver_protocol::{
     // Protocol
     SliverProtocol,
 };
+
+// ============================================================================
+// RENDER OBJECT TRAIT EXPORTS (re-exported from traits module)
+// ============================================================================
+pub use crate::traits::RenderObject;
 
 // ============================================================================
 // PRELUDE MODULE

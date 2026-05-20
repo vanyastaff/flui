@@ -92,9 +92,8 @@
 
 use std::fmt;
 
-use smallvec::SmallVec;
-
 use flui_foundation::Identifier;
+use smallvec::SmallVec;
 
 use super::path::{IndexPath, TreePath};
 use crate::traits::TreeNav;
@@ -240,7 +239,8 @@ where
 
     /// Creates a new cursor at the given position.
     ///
-    /// The cursor starts without history. Use `with_history` for backtracking support.
+    /// The cursor starts without history. Use `with_history` for backtracking
+    /// support.
     #[must_use]
     pub fn new(tree: &'a T, position: I) -> Self {
         let depth = Self::compute_depth(tree, position);
@@ -504,7 +504,8 @@ where
     /// Moves to a specific node by ID.
     ///
     /// Returns `true` if the node exists in the tree.
-    /// Note: This doesn't validate that the node is reachable from current position.
+    /// Note: This doesn't validate that the node is reachable from current
+    /// position.
     #[must_use]
     pub fn go_to(&mut self, target: I) -> bool {
         if !self.tree.contains(target) {
@@ -554,12 +555,12 @@ where
     /// Does nothing if history is disabled or empty.
     #[must_use]
     pub fn go_back(&mut self) -> bool {
-        if let Some(ref mut history) = self.history {
-            if let Some(prev) = history.pop() {
-                self.current = prev;
-                self.depth = Self::compute_depth(self.tree, prev);
-                return true;
-            }
+        if let Some(ref mut history) = self.history
+            && let Some(prev) = history.pop()
+        {
+            self.current = prev;
+            self.depth = Self::compute_depth(self.tree, prev);
+            return true;
         }
         false
     }
@@ -753,8 +754,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_foundation::ElementId;
+
+    use super::*;
 
     // Simple mock tree for testing
     struct MockTree {

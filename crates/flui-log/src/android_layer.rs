@@ -1,18 +1,20 @@
 //! Android-specific logging layer using `android_log-sys`
 //!
-//! This module provides a [`tracing`] layer that outputs to Android's logcat system.
-//! It converts tracing events to native Android log calls with appropriate priority levels.
+//! This module provides a [`tracing`] layer that outputs to Android's logcat
+//! system. It converts tracing events to native Android log calls with
+//! appropriate priority levels.
 //!
 //! # Platform
 //!
-//! This module is only compiled and available on Android (`target_os = "android"`).
-//! On other platforms, the logging system uses platform-appropriate backends.
+//! This module is only compiled and available on Android (`target_os =
+//! "android"`). On other platforms, the logging system uses
+//! platform-appropriate backends.
 //!
 //! # Architecture
 //!
-//! The implementation uses FFI bindings from [`android_log-sys`] to call Android's
-//! native `__android_log_write` function. Tracing levels are mapped to Android's
-//! [`LogPriority`](android_log_sys::LogPriority) values:
+//! The implementation uses FFI bindings from [`android_log-sys`] to call
+//! Android's native `__android_log_write` function. Tracing levels are mapped
+//! to Android's [`LogPriority`](android_log_sys::LogPriority) values:
 //!
 //! | Tracing Level | Android Priority | Logcat Tag |
 //! |---------------|------------------|------------|
@@ -24,8 +26,8 @@
 //!
 //! # Usage
 //!
-//! This layer is automatically configured by [`Logger`](crate::Logger) when running
-//! on Android. You typically don't need to use it directly:
+//! This layer is automatically configured by [`Logger`](crate::Logger) when
+//! running on Android. You typically don't need to use it directly:
 //!
 //! ```rust,no_run
 //! use flui_log::Logger;
@@ -42,13 +44,11 @@
 //!
 //! ```rust,no_run
 //! use flui_log::android_layer::AndroidLayer;
-//! use tracing_subscriber::{layer::SubscriberExt, Registry};
+//! use tracing_subscriber::{Registry, layer::SubscriberExt};
 //!
-//! let subscriber = Registry::default()
-//!     .with(AndroidLayer::default());
+//! let subscriber = Registry::default().with(AndroidLayer::default());
 //!
-//! tracing::subscriber::set_global_default(subscriber)
-//!     .expect("Failed to set tracing subscriber");
+//! tracing::subscriber::set_global_default(subscriber).expect("Failed to set tracing subscriber");
 //! ```
 //!
 //! # Viewing Logs
@@ -86,12 +86,13 @@
 //! - [adb logcat documentation](https://developer.android.com/studio/command-line/logcat)
 
 use core::fmt::{Debug, Write};
+
 use tracing::{
+    Event, Id, Level, Subscriber,
     field::Field,
     span::{Attributes, Record},
-    Event, Id, Level, Subscriber,
 };
-use tracing_subscriber::{field::Visit, layer::Context, registry::LookupSpan, Layer};
+use tracing_subscriber::{Layer, field::Visit, layer::Context, registry::LookupSpan};
 
 /// Tracing layer that outputs to Android logcat
 ///
@@ -111,18 +112,16 @@ use tracing_subscriber::{field::Visit, layer::Context, registry::LookupSpan, Lay
 ///
 /// ```rust,no_run
 /// use flui_log::android_layer::AndroidLayer;
-/// use tracing_subscriber::{layer::SubscriberExt, Registry};
+/// use tracing_subscriber::{Registry, layer::SubscriberExt};
 ///
 /// // Create the layer
 /// let android_layer = AndroidLayer::default();
 ///
 /// // Combine with a registry
-/// let subscriber = Registry::default()
-///     .with(android_layer);
+/// let subscriber = Registry::default().with(android_layer);
 ///
 /// // Set as global subscriber
-/// tracing::subscriber::set_global_default(subscriber)
-///     .expect("Failed to set tracing subscriber");
+/// tracing::subscriber::set_global_default(subscriber).expect("Failed to set tracing subscriber");
 ///
 /// // Use tracing macros
 /// tracing::info!("Application started");
@@ -137,8 +136,8 @@ use tracing_subscriber::{field::Visit, layer::Context, registry::LookupSpan, Lay
 pub struct AndroidLayer {
     /// Application name used as fallback logcat tag
     ///
-    /// Used when the event's target (module path) is empty or contains null bytes.
-    /// Default: "flui"
+    /// Used when the event's target (module path) is empty or contains null
+    /// bytes. Default: "flui"
     app_name: String,
 }
 
@@ -205,7 +204,8 @@ impl StringRecorder {
         if self.output.is_empty() {
             self.output.push_str(msg);
         } else {
-            // Prepend message before existing fields, avoiding a second full-size allocation
+            // Prepend message before existing fields, avoiding a second full-size
+            // allocation
             let sep = " | ";
             self.output.insert_str(0, sep);
             self.output.insert_str(0, msg);
@@ -250,7 +250,8 @@ impl Visit for StringRecorder {
 impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for AndroidLayer {
     fn on_new_span(&self, _attrs: &Attributes<'_>, _id: &Id, _ctx: Context<'_, S>) {
         // Intentionally left empty: span tracking is not implemented on Android
-        // to minimize overhead. Android's logcat doesn't have native span support.
+        // to minimize overhead. Android's logcat doesn't have native span
+        // support.
     }
 
     fn on_record(&self, _span: &Id, _values: &Record<'_>, _ctx: Context<'_, S>) {
@@ -309,8 +310,8 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for AndroidLayer {
         //    - The CString is owned and valid for the duration of the call
         //    - The pointer is properly aligned and non-null
         //
-        // The function is safe to call from any thread and doesn't modify the input pointers.
-        // See: https://docs.rs/android_log-sys/latest/android_log_sys/fn.__android_log_write.html
+        // The function is safe to call from any thread and doesn't modify the input
+        // pointers. See: https://docs.rs/android_log-sys/latest/android_log_sys/fn.__android_log_write.html
         unsafe {
             android_log_sys::__android_log_write(
                 priority as i32,

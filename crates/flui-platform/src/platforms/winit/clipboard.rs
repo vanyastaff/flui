@@ -2,8 +2,9 @@
 //!
 //! Provides cross-platform clipboard access using the arboard library.
 
-use crate::traits::Clipboard;
 use parking_lot::Mutex;
+
+use crate::traits::Clipboard;
 
 /// Arboard-based clipboard implementation
 ///

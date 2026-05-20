@@ -1,13 +1,16 @@
 //! 2D offset (position/translation) type
 //!
-//! This module provides an immutable 2D offset type, similar to Flutter's Offset.
-use super::{px, PixelDelta, Pixels};
+//! This module provides an immutable 2D offset type, similar to Flutter's
+//! Offset.
+use std::{
+    fmt::{self, Display},
+    ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign},
+};
 
-use std::fmt::{self, Display};
-use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
-
-use super::traits::{NumericUnit, Unit};
-use super::{Point, Size, Vec2};
+use super::{
+    PixelDelta, Pixels, Point, Size, Vec2, px,
+    traits::{NumericUnit, Unit},
+};
 
 /// An immutable 2D offset in Cartesian coordinates.
 ///
@@ -237,7 +240,8 @@ impl Offset<Pixels> {
         )
     }
 
-    /// Create an offset representing the displacement from one point to another.
+    /// Create an offset representing the displacement from one point to
+    /// another.
     ///
     /// Returns `to - from` as an offset.
     ///
@@ -429,7 +433,6 @@ impl Offset<Pixels> {
     }
 
     /// Normalize this offset to a unit vector.
-    ///
     #[inline]
     #[must_use]
     pub fn normalize(self) -> Offset<Pixels> {
@@ -510,8 +513,8 @@ impl Offset<Pixels> {
 
     /// Clamp the magnitude (length) of this offset to a maximum value.
     ///
-    /// If the magnitude exceeds `max`, returns a scaled version with magnitude `max`.
-    /// Direction is preserved.
+    /// If the magnitude exceeds `max`, returns a scaled version with magnitude
+    /// `max`. Direction is preserved.
     ///
     /// # Examples
     ///
@@ -539,8 +542,8 @@ impl Offset<Pixels> {
 
     /// Move towards another offset by a specific distance.
     ///
-    /// If the distance to target is less than `max_distance`, returns the target.
-    /// Otherwise, moves `max_distance` units towards the target.
+    /// If the distance to target is less than `max_distance`, returns the
+    /// target. Otherwise, moves `max_distance` units towards the target.
     ///
     /// Useful for smooth following behavior and lerping with fixed step size.
     ///
@@ -923,11 +926,7 @@ where
         // Return sign of both components (0 if mixed)
         let dx_sign = self.dx.abs_sign();
         let dy_sign = self.dy.abs_sign();
-        if dx_sign == dy_sign {
-            dx_sign
-        } else {
-            0
-        }
+        if dx_sign == dy_sign { dx_sign } else { 0 }
     }
 }
 
@@ -941,7 +940,7 @@ impl Offset<Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Offset, ScaleFactor, Pixels, DevicePixels, px, device_px};
+    /// use flui_types::geometry::{DevicePixels, Offset, Pixels, ScaleFactor, device_px, px};
     ///
     /// let logical = Offset::new(px(10.0), px(20.0));
     /// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
@@ -969,7 +968,7 @@ impl Offset<super::units::DevicePixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Offset, ScaleFactor, Pixels, DevicePixels, device_px, px};
+    /// use flui_types::geometry::{DevicePixels, Offset, Pixels, ScaleFactor, device_px, px};
     ///
     /// let device = Offset::new(device_px(20), device_px(40));
     /// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
@@ -1156,7 +1155,7 @@ mod tests {
 #[cfg(test)]
 mod typed_tests {
     use super::*;
-    use crate::geometry::{px, Pixels};
+    use crate::geometry::{Pixels, px};
 
     #[test]
     fn test_offset_new() {

@@ -1,8 +1,9 @@
 //! NodeLinks - Tree structure data shared across all protocols.
 //!
-//! This module provides `NodeLinks`, which stores the parent/child relationships
-//! and depth information for render nodes. This is separated from protocol-specific
-//! data to allow shared implementation across Box and Sliver protocols.
+//! This module provides `NodeLinks`, which stores the parent/child
+//! relationships and depth information for render nodes. This is separated from
+//! protocol-specific data to allow shared implementation across Box and Sliver
+//! protocols.
 
 use flui_foundation::RenderId;
 

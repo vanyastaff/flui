@@ -14,15 +14,18 @@
 //! Point + Vec2  = Point (translate position)
 //! Point - Vec2  = Point (translate in opposite direction)
 //! ```
-use super::{px, Pixels};
+use std::{
+    fmt,
+    iter::Sum,
+    ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign},
+};
 
-use std::fmt;
-use std::iter::Sum;
-use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
-
-use super::error::GeometryError;
-use super::traits::{NumericUnit, Unit};
-use super::Vec2;
+use super::{
+    Pixels, Vec2,
+    error::GeometryError,
+    px,
+    traits::{NumericUnit, Unit},
+};
 
 /// Absolute position in 2D space.
 ///
@@ -121,7 +124,8 @@ impl<T: NumericUnit> Point<T>
 where
     T: Into<f32> + From<f32>,
 {
-    /// Creates a point with validation, returning an error for invalid coordinates.
+    /// Creates a point with validation, returning an error for invalid
+    /// coordinates.
     #[inline]
     pub fn try_new(x: T, y: T) -> Result<Self, GeometryError> {
         let point = Self { x, y };
@@ -141,11 +145,7 @@ where
             if v.is_nan() {
                 0.0
             } else if v.is_infinite() {
-                if v > 0.0 {
-                    f32::MAX
-                } else {
-                    f32::MIN
-                }
+                if v > 0.0 { f32::MAX } else { f32::MIN }
             } else {
                 v
             }
@@ -259,7 +259,6 @@ impl Point<Pixels> {
     }
 
     /// Converts to a vector with same coordinates.
-    ///
     #[inline]
     #[must_use]
     pub const fn to_vec2(self) -> Vec2<Pixels> {
@@ -342,7 +341,6 @@ where
     /// - `t = 0.0` returns `self`
     /// - `t = 0.5` returns midpoint
     /// - `t = 1.0` returns `other`
-    ///
     #[inline]
     #[must_use]
     pub fn lerp(self, other: Self, t: f32) -> Self {
@@ -805,7 +803,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Point, Pixels, px};
+    /// use flui_types::geometry::{Pixels, Point, px};
     ///
     /// let p = Point::<Pixels>::new(px(100.0), px(200.0));
     /// let p_f32 = p.to_f32();
@@ -1166,7 +1164,7 @@ impl Point<Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Point, ScaleFactor, Pixels, DevicePixels, px, device_px};
+    /// use flui_types::geometry::{DevicePixels, Pixels, Point, ScaleFactor, device_px, px};
     ///
     /// let logical = Point::new(px(100.0), px(200.0));
     /// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
@@ -1194,7 +1192,7 @@ impl Point<super::units::DevicePixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Point, ScaleFactor, Pixels, DevicePixels, device_px, px};
+    /// use flui_types::geometry::{DevicePixels, Pixels, Point, ScaleFactor, device_px, px};
     ///
     /// let device = Point::new(device_px(200.0), device_px(400.0));
     /// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
@@ -1411,7 +1409,7 @@ mod tests {
 #[cfg(test)]
 mod typed_tests {
     use super::*;
-    use crate::geometry::{px, Pixels};
+    use crate::geometry::{Pixels, px};
 
     #[test]
     fn test_point_new() {
@@ -1497,7 +1495,7 @@ mod typed_tests {
 #[cfg(test)]
 mod arithmetic_tests {
     use super::*;
-    use crate::geometry::{px, vec2, Pixels};
+    use crate::geometry::{Pixels, px, vec2};
 
     #[test]
     fn test_point_add_vec2() {

@@ -11,8 +11,9 @@
 //! # Example
 //!
 //! ```rust
-//! use flui_foundation::notifier::{ChangeNotifier, Listenable};
 //! use std::sync::Arc;
+//!
+//! use flui_foundation::notifier::{ChangeNotifier, Listenable};
 //!
 //! let notifier = ChangeNotifier::new();
 //! let id = notifier.add_listener(Arc::new(|| println!("Changed!")));
@@ -21,15 +22,21 @@
 //!
 //! # Note
 //!
-//! For event bubbling notifications (like `ScrollNotification`), see `flui-view`
-//! which provides the `Notification` trait that integrates with `BuildContext`.
+//! For event bubbling notifications (like `ScrollNotification`), see
+//! `flui-view` which provides the `Notification` trait that integrates with
+//! `BuildContext`.
+
+use std::{
+    collections::HashMap,
+    fmt,
+    ops::Deref,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 use parking_lot::Mutex;
-use std::collections::HashMap;
-use std::fmt;
-use std::ops::Deref;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 
 use crate::id::ListenerId;
 
@@ -49,8 +56,9 @@ pub type ListenerCallback = Arc<dyn Fn() + Send + Sync>;
 /// # Example
 ///
 /// ```rust
-/// use flui_foundation::notifier::{Listenable, ChangeNotifier};
 /// use std::sync::Arc;
+///
+/// use flui_foundation::notifier::{ChangeNotifier, Listenable};
 ///
 /// let notifier = ChangeNotifier::new();
 /// let id = notifier.add_listener(Arc::new(|| println!("Changed!")));
@@ -78,10 +86,13 @@ pub trait Listenable: Send + Sync {
 /// # Example
 ///
 /// ```rust
-/// use flui_foundation::notifier::{ValueListenable, ValueNotifier, Listenable};
 /// use std::sync::Arc;
 ///
-/// fn print_on_change<T: std::fmt::Debug + Clone + Send + Sync>(listenable: &impl ValueListenable<T>) {
+/// use flui_foundation::notifier::{Listenable, ValueListenable, ValueNotifier};
+///
+/// fn print_on_change<T: std::fmt::Debug + Clone + Send + Sync>(
+///     listenable: &impl ValueListenable<T>,
+/// ) {
 ///     println!("Current value: {:?}", listenable.value());
 /// }
 ///
@@ -96,7 +107,8 @@ pub trait ValueListenable<T>: Listenable {
     fn value(&self) -> &T;
 }
 
-/// A class that can be extended or mixed in that provides a change notification API.
+/// A class that can be extended or mixed in that provides a change notification
+/// API.
 ///
 /// Similar to Flutter's `ChangeNotifier`.
 #[derive(Clone)]
@@ -216,7 +228,8 @@ impl<T: Clone> ValueNotifier<T> {
 
     /// Returns a mutable reference to the current value.
     ///
-    /// Note: This does NOT notify listeners. Call `notify()` manually if needed.
+    /// Note: This does NOT notify listeners. Call `notify()` manually if
+    /// needed.
     #[inline]
     pub const fn value_mut(&mut self) -> &mut T {
         &mut self.value
@@ -385,10 +398,15 @@ impl<T: Clone + Send + Sync> ValueListenable<T> for ValueNotifier<T> {
 /// A listenable that merges multiple listenables.
 ///
 /// Similar to Flutter's `Listenable.merge()`.
+///
+/// When any source listenable notifies, all listeners registered on this
+/// merged listenable are notified.
 pub struct MergedListenable {
-    #[allow(dead_code)]
     listenables: Vec<Box<dyn Listenable + Send>>,
     notifier: ChangeNotifier,
+    /// Listener IDs for the subscriptions on each source, used for cleanup.
+    #[allow(dead_code)]
+    source_listener_ids: Vec<ListenerId>,
 }
 
 impl fmt::Debug for MergedListenable {
@@ -402,11 +420,26 @@ impl fmt::Debug for MergedListenable {
 
 impl MergedListenable {
     /// Create a new merged listenable from multiple listenables.
+    ///
+    /// Subscribes to each source so that when any source notifies,
+    /// this merged listenable forwards the notification to its own listeners.
     #[must_use]
     pub fn new(listenables: Vec<Box<dyn Listenable + Send>>) -> Self {
+        let notifier = ChangeNotifier::new();
+        let mut source_listener_ids = Vec::with_capacity(listenables.len());
+
+        for source in &listenables {
+            let forwarding_notifier = notifier.clone();
+            let id = source.add_listener(Arc::new(move || {
+                forwarding_notifier.notify_listeners();
+            }));
+            source_listener_ids.push(id);
+        }
+
         Self {
             listenables,
-            notifier: ChangeNotifier::new(),
+            notifier,
+            source_listener_ids,
         }
     }
 
@@ -414,7 +447,11 @@ impl MergedListenable {
     #[must_use]
     #[inline]
     pub fn empty() -> Self {
-        Self::new(Vec::new())
+        Self {
+            listenables: Vec::new(),
+            notifier: ChangeNotifier::new(),
+            source_listener_ids: Vec::new(),
+        }
     }
 
     /// Notify all listeners.
@@ -452,6 +489,14 @@ impl MergedListenable {
     }
 }
 
+impl Drop for MergedListenable {
+    fn drop(&mut self) {
+        for (source, id) in self.listenables.iter().zip(self.source_listener_ids.iter()) {
+            source.remove_listener(*id);
+        }
+    }
+}
+
 impl Default for MergedListenable {
     #[inline]
     fn default() -> Self {
@@ -475,8 +520,9 @@ impl Listenable for MergedListenable {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
 
     #[test]
     fn test_listener_id() {
@@ -737,6 +783,27 @@ mod tests {
         let merged = MergedListenable::default();
         let debug = format!("{:?}", merged);
         assert!(debug.contains("MergedListenable"));
+    }
+
+    #[test]
+    fn test_merged_listenable_forwards_notifications() {
+        let a = ValueNotifier::new(1);
+        let b = ValueNotifier::new(2);
+        let merged = MergedListenable::new(vec![Box::new(a.clone()), Box::new(b.clone())]);
+        let count = Arc::new(AtomicUsize::new(0));
+        let count2 = count.clone();
+        merged.add_listener(Arc::new(move || {
+            count2.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        // Mutate through the original (shares ChangeNotifier with the boxed clone)
+        let mut a = a;
+        a.set_value(10);
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+
+        let mut b = b;
+        b.set_value(20);
+        assert_eq!(count.load(Ordering::SeqCst), 2);
     }
 
     #[cfg(feature = "serde")]

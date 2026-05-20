@@ -1,6 +1,7 @@
 //! Testing utilities for gesture and event handling
 //!
-//! This module provides utilities for testing gesture recognizers and event handling:
+//! This module provides utilities for testing gesture recognizers and event
+//! handling:
 //!
 //! - [`GestureRecorder`] - Record pointer event sequences
 //! - [`GesturePlayer`] - Replay recorded gestures
@@ -25,10 +26,9 @@
 pub mod input;
 mod recording;
 
+// Re-export input builders
+pub use input::ModifiersBuilder;
 pub use recording::{
     GestureBuilder, GesturePlayer, GestureRecorder, GestureRecording, RecordedEvent,
     RecordedEventType,
 };
-
-// Re-export input builders
-pub use input::ModifiersBuilder;

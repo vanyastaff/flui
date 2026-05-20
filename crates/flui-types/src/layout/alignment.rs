@@ -10,7 +10,8 @@ use std::ops::{Add, Neg};
 pub enum MainAxisSize {
     /// Minimize the amount of space occupied by the children.
     ///
-    /// The widget will be as small as possible while still containing all children.
+    /// The widget will be as small as possible while still containing all
+    /// children.
     Min,
 
     #[default]
@@ -89,7 +90,8 @@ impl MainAxisAlignment {
         )
     }
 
-    /// Calculate spacing for children given total available space and number of children.
+    /// Calculate spacing for children given total available space and number of
+    /// children.
     ///
     /// Returns (leading_space, spacing_between).
     ///

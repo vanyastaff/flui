@@ -11,12 +11,15 @@
 //! - `Task::detach()` — fire-and-forget (drops handle, task keeps running)
 //! - `impl Future for Task<T>` — await the result
 //!
-//! Priority is stored as metadata. Tokio's fair scheduler handles all priorities
-//! adequately for MVP. Priority-aware thread pools are deferred to post-MVP.
+//! Priority is stored as metadata. Tokio's fair scheduler handles all
+//! priorities adequately for MVP. Priority-aware thread pools are deferred to
+//! post-MVP.
 
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::{
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
 /// Task priority level
 ///
@@ -73,19 +76,21 @@ enum TaskState<T> {
     /// Task completed synchronously — value available immediately
     Ready(Option<T>),
     /// Task spawned on tokio runtime — awaiting JoinHandle
+    #[cfg(not(target_arch = "wasm32"))]
     Spawned(tokio::task::JoinHandle<T>),
 }
 
 impl<T> Task<T> {
     /// Create an already-completed task
     ///
-    /// Useful for returning pre-computed values from APIs that return `Task<T>`,
-    /// or for testing without an async runtime.
+    /// Useful for returning pre-computed values from APIs that return
+    /// `Task<T>`, or for testing without an async runtime.
     pub fn ready(val: T) -> Self {
         Task(TaskState::Ready(Some(val)))
     }
 
     /// Create a task from a tokio JoinHandle
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn from_handle(handle: tokio::task::JoinHandle<T>) -> Self {
         Task(TaskState::Spawned(handle))
     }
@@ -117,6 +122,7 @@ impl<T: Send + 'static> Future for Task<T> {
                 let val = val.take().expect("Task::Ready polled after completion");
                 Poll::Ready(val)
             }
+            #[cfg(not(target_arch = "wasm32"))]
             TaskState::Spawned(handle) => {
                 // SAFETY: JoinHandle is Unpin, so pinning is safe
                 let handle = unsafe { Pin::new_unchecked(handle) };
@@ -141,6 +147,7 @@ impl<T> std::fmt::Debug for Task<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.0 {
             TaskState::Ready(_) => f.debug_tuple("Task::Ready").finish(),
+            #[cfg(not(target_arch = "wasm32"))]
             TaskState::Spawned(_) => f.debug_tuple("Task::Spawned").finish(),
         }
     }

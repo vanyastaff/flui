@@ -5,8 +5,10 @@
 //!
 //! # Features
 //!
-//! - `ObserverList<T>` - Observer management with O(1) add/remove via `HashMap` index
-//! - `HashedObserverList<T>` - Hash-based for unique observers with O(1) operations
+//! - `ObserverList<T>` - Observer management with O(1) add/remove via `HashMap`
+//!   index
+//! - `HashedObserverList<T>` - Hash-based for unique observers with O(1)
+//!   operations
 //!
 //! # Examples
 //!
@@ -27,9 +29,12 @@
 //! observers.remove(id1);
 //! ```
 
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::atomic::{AtomicUsize, Ordering},
+};
+
 use parking_lot::RwLock;
-use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::id::ObserverId;
 
@@ -194,8 +199,9 @@ impl<T: Clone> Clone for ObserverList<T> {
 /// # Examples
 ///
 /// ```rust
-/// use flui_foundation::SyncObserverList;
 /// use std::sync::Arc;
+///
+/// use flui_foundation::SyncObserverList;
 ///
 /// let observers: Arc<SyncObserverList<i32>> = Arc::new(SyncObserverList::new());
 ///
@@ -247,13 +253,19 @@ impl<T> SyncObserverList<T> {
 
     /// Executes a function for each observer.
     ///
-    /// This holds a read lock for the duration of iteration.
+    /// Clones observer entries while holding the read lock, then releases the
+    /// lock before invoking callbacks. This prevents deadlocks when a callback
+    /// tries to add or remove observers on the same list.
     pub fn for_each<F>(&self, mut f: F)
     where
         F: FnMut(&T),
+        T: Clone,
     {
-        let guard = self.inner.read();
-        for observer in guard.iter() {
+        let snapshot: Vec<T> = {
+            let guard = self.inner.read();
+            guard.iter().cloned().collect()
+        };
+        for observer in &snapshot {
             f(observer);
         }
     }
@@ -273,8 +285,9 @@ impl<T> SyncObserverList<T> {
 /// # Examples
 ///
 /// ```rust
-/// use flui_foundation::HashedObserverList;
 /// use std::sync::Arc;
+///
+/// use flui_foundation::HashedObserverList;
 ///
 /// let observers: HashedObserverList<String> = HashedObserverList::new();
 ///
@@ -472,6 +485,26 @@ mod tests {
 
         assert_eq!(list.remove(id2), Some(2));
         assert!(list.is_empty());
+    }
+
+    #[test]
+    fn test_sync_observer_list_no_deadlock_on_add_during_iterate() {
+        let list = SyncObserverList::new();
+        let _id1 = list.add(42);
+
+        // Before the fix, for_each held a read lock during iteration.
+        // If a callback tried to add/remove, it would deadlock.
+        // Now it snapshots and releases the lock first.
+        let mut seen = Vec::new();
+        list.for_each(|&val| {
+            seen.push(val);
+            // This would have deadlocked before the fix because add()
+            // requires a write lock while for_each held a read lock.
+            let _new_id = list.add(val + 1);
+        });
+        assert_eq!(seen, vec![42]);
+        // The observer added during iteration should now be present
+        assert_eq!(list.len(), 2);
     }
 
     #[test]

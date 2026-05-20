@@ -8,10 +8,9 @@
 //!
 //! Run with: cargo run --example event_handling -p flui-platform
 
-use flui_platform::{current_platform, WindowOptions};
-use flui_types::geometry::{px, Size};
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
+use flui_platform::{WindowOptions, current_platform};
+use flui_types::geometry::{Size, px};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() -> anyhow::Result<()> {
     // Initialize tracing with pretty output
@@ -131,8 +130,8 @@ fn main() -> anyhow::Result<()> {
     //             tracing::info!("🚪 Close requested for window {:?}", window_id);
     //         }
     //         WindowEvent::Resized { window_id, size } => {
-    //             tracing::info!("📐 Window {:?} resized to {:?}", window_id, size);
-    //         }
+    //             tracing::info!("📐 Window {:?} resized to {:?}", window_id,
+    // size);         }
     //         WindowEvent::FocusChanged { window_id, focused } => {
     //             tracing::info!("👁️  Window {:?} focus: {}", window_id, focused);
     //         }

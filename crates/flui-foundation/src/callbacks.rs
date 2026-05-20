@@ -5,14 +5,15 @@
 //!
 //! # Thread Safety
 //!
-//! All callback types are `Send + Sync` to support multi-threaded UI frameworks.
-//! This is a key difference from Flutter's Dart-based callbacks.
+//! All callback types are `Send + Sync` to support multi-threaded UI
+//! frameworks. This is a key difference from Flutter's Dart-based callbacks.
 //!
 //! # Examples
 //!
 //! ```rust
-//! use flui_foundation::{VoidCallback, ValueChanged, ValueGetter};
 //! use std::sync::Arc;
+//!
+//! use flui_foundation::{ValueChanged, ValueGetter, VoidCallback};
 //!
 //! // Simple callback with no arguments
 //! let on_pressed: VoidCallback = Arc::new(|| {
@@ -38,8 +39,9 @@ use std::sync::Arc;
 /// # Examples
 ///
 /// ```rust
-/// use flui_foundation::VoidCallback;
 /// use std::sync::Arc;
+///
+/// use flui_foundation::VoidCallback;
 ///
 /// let callback: VoidCallback = Arc::new(|| {
 ///     println!("Callback invoked!");
@@ -56,8 +58,9 @@ pub type VoidCallback = Arc<dyn Fn() + Send + Sync>;
 /// # Examples
 ///
 /// ```rust
-/// use flui_foundation::ValueChanged;
 /// use std::sync::Arc;
+///
+/// use flui_foundation::ValueChanged;
 ///
 /// let on_changed: ValueChanged<String> = Arc::new(|value| {
 ///     println!("New value: {}", value);
@@ -73,8 +76,9 @@ pub type ValueChanged<T> = Arc<dyn Fn(T) + Send + Sync>;
 /// # Examples
 ///
 /// ```rust
-/// use flui_foundation::ValueGetter;
 /// use std::sync::Arc;
+///
+/// use flui_foundation::ValueGetter;
 ///
 /// let get_value: ValueGetter<i32> = Arc::new(|| 42);
 /// assert_eq!(get_value(), 42);
@@ -88,9 +92,12 @@ pub type ValueGetter<T> = Arc<dyn Fn() -> T + Send + Sync>;
 /// # Examples
 ///
 /// ```rust
+/// use std::sync::{
+///     Arc,
+///     atomic::{AtomicI32, Ordering},
+/// };
+///
 /// use flui_foundation::ValueSetter;
-/// use std::sync::Arc;
-/// use std::sync::atomic::{AtomicI32, Ordering};
 ///
 /// let counter = Arc::new(AtomicI32::new(0));
 /// let counter_clone = counter.clone();
@@ -111,8 +118,9 @@ pub type ValueSetter<T> = Arc<dyn Fn(T) + Send + Sync>;
 /// # Examples
 ///
 /// ```rust
-/// use flui_foundation::Predicate;
 /// use std::sync::Arc;
+///
+/// use flui_foundation::Predicate;
 ///
 /// let is_positive: Predicate<i32> = Arc::new(|value| value > 0);
 /// assert!(is_positive(5));
@@ -125,12 +133,11 @@ pub type Predicate<T> = Arc<dyn Fn(T) -> bool + Send + Sync>;
 /// # Examples
 ///
 /// ```rust
-/// use flui_foundation::ValueTransformer;
 /// use std::sync::Arc;
 ///
-/// let to_string: ValueTransformer<i32, String> = Arc::new(|value| {
-///     format!("Value: {}", value)
-/// });
+/// use flui_foundation::ValueTransformer;
+///
+/// let to_string: ValueTransformer<i32, String> = Arc::new(|value| format!("Value: {}", value));
 /// assert_eq!(to_string(42), "Value: 42");
 /// ```
 pub type ValueTransformer<T, R> = Arc<dyn Fn(T) -> R + Send + Sync>;
@@ -140,8 +147,9 @@ pub type ValueTransformer<T, R> = Arc<dyn Fn(T) -> R + Send + Sync>;
 /// # Examples
 ///
 /// ```rust
-/// use flui_foundation::FallibleCallback;
 /// use std::sync::Arc;
+///
+/// use flui_foundation::FallibleCallback;
 ///
 /// let validate: FallibleCallback<String> = Arc::new(|input| {
 ///     if input.is_empty() {
@@ -158,8 +166,9 @@ pub type FallibleCallback<T> = Arc<dyn Fn(T) -> Result<(), String> + Send + Sync
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+
+    use super::*;
 
     #[test]
     fn test_void_callback() {

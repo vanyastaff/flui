@@ -99,24 +99,17 @@ pub mod view;
 // ============================================================================
 
 // View traits
-pub use view::{
-    clear_error_view_builder, set_error_view_builder, BoxedElement, BoxedView, ElementBase,
-    ElementExt, ErrorElement, ErrorView, ErrorViewBuilder, FlutterError, InheritedElement,
-    InheritedView, IntoElement, IntoView, ParentData, ParentDataElement, ParentDataView,
-    ProxyElement, ProxyView, RenderElement, RenderView, RootRenderElement, RootRenderView,
-    StatefulElement, StatefulView, StatelessElement, StatelessView, View, ViewExt, ViewKey,
-    ViewState,
+// Binding
+pub use binding::{
+    AppExitResponse, AppLifecycleState, PredictiveBackEvent, RouteInformation, ViewFocusDirection,
+    ViewFocusEvent, ViewFocusState, WidgetsBinding, WidgetsBindingObserver,
 };
-
-// Keys
-pub use key::{GlobalKey, GlobalKeyId, ObjectKey, ValueKey};
-
 // Child helpers
 pub use child::{Child, Children};
-
+// Context
+pub use context::{BuildContext, BuildContextExt, ElementBuildContext, ElementBuildContextBuilder};
 // Element types
 pub use element::Lifecycle;
-
 // Notification system
 pub use element::{
     BoxedNotification, DragEndNotification, DragStartNotification, FocusNotification,
@@ -124,34 +117,31 @@ pub use element::{
     NotificationCallback, NotificationHandler, NotificationNode, ScrollNotification,
     SizeChangedNotification,
 };
-
-// Root element
-pub use element::{RootElement, RootElementImpl};
-
-// RenderObjectElement traits
-pub use element::{RenderObjectElement, RenderSlot, RenderTreeRootElement};
-
 // Slot types for multi-child elements
 pub use element::{ElementSlot, IndexedSlot, IndexedSlotBuilder};
-
-// Context
-pub use context::{BuildContext, BuildContextExt, ElementBuildContext, ElementBuildContextBuilder};
-
-// Tree management
-pub use owner::BuildOwner;
-pub use tree::{reconcile_children, ElementNode, ElementTree};
-
+// RenderObjectElement traits
+pub use element::{RenderObjectElement, RenderSlot, RenderTreeRootElement};
+// Root element
+pub use element::{RootElement, RootElementImpl};
+// Behavior types
+pub use element::{StatefulBehavior, StatelessBehavior};
 // Re-export from flui-foundation
 pub use flui_foundation::{ElementId, RenderId};
-
-// Binding
-pub use binding::{
-    AppExitResponse, AppLifecycleState, PredictiveBackEvent, RouteInformation, ViewFocusDirection,
-    ViewFocusEvent, ViewFocusState, WidgetsBinding, WidgetsBindingObserver,
-};
-
 // Logging re-exports from flui_log
-pub use flui_log::{debug, error, info, trace, warn, Level, Logger};
+pub use flui_log::{Level, Logger, debug, error, info, trace, warn};
+// Keys
+pub use key::{GlobalKey, GlobalKeyId, ObjectKey, ValueKey};
+// Tree management
+pub use owner::BuildOwner;
+pub use tree::{ElementNode, ElementTree, reconcile_children};
+pub use view::{
+    BoxedElement, BoxedView, ElementBase, ElementExt, ErrorElement, ErrorView, ErrorViewBuilder,
+    FlutterError, InheritedElement, InheritedView, IntoElement, IntoView, ParentData,
+    ParentDataElement, ParentDataView, ProxyElement, ProxyView, RenderElement, RenderView,
+    RootRenderElement, RootRenderView, StatefulElement, StatefulView, StatelessElement,
+    StatelessView, View, ViewExt, ViewKey, ViewState, clear_error_view_builder,
+    set_error_view_builder,
+};
 
 // ============================================================================
 // Prelude
@@ -163,24 +153,28 @@ pub use flui_log::{debug, error, info, trace, warn, Level, Logger};
 /// use flui_view::prelude::*;
 /// ```
 pub mod prelude {
-    pub use crate::binding::{
-        AppExitResponse, AppLifecycleState, PredictiveBackEvent, RouteInformation,
-        ViewFocusDirection, ViewFocusEvent, ViewFocusState, WidgetsBinding, WidgetsBindingObserver,
-    };
-    pub use crate::child::{Child, Children};
-    // Logging
-    pub use crate::context::{BuildContext, BuildContextExt};
-    pub use crate::element::{
-        ElementSlot, IndexedSlot, IndexedSlotBuilder, LayoutChangedNotification, Lifecycle,
-        NotifiableElement, Notification, NotificationNode, RootElement,
-    };
-    pub use crate::key::{GlobalKey, GlobalKeyId, ObjectKey, ValueKey};
-    pub use crate::owner::BuildOwner;
-    pub use crate::tree::{reconcile_children, ElementNode, ElementTree};
-    pub use crate::view::{
-        BoxedView, InheritedView, IntoView, ParentData, ParentDataView, ProxyView, RenderView,
-        StatefulView, StatelessView, View, ViewExt, ViewState,
-    };
     pub use flui_foundation::{ElementId, RenderId};
     pub use flui_log::{debug, error, info, trace, warn};
+
+    // Logging
+    pub use crate::context::{BuildContext, BuildContextExt};
+    pub use crate::{
+        binding::{
+            AppExitResponse, AppLifecycleState, PredictiveBackEvent, RouteInformation,
+            ViewFocusDirection, ViewFocusEvent, ViewFocusState, WidgetsBinding,
+            WidgetsBindingObserver,
+        },
+        child::{Child, Children},
+        element::{
+            ElementSlot, IndexedSlot, IndexedSlotBuilder, LayoutChangedNotification, Lifecycle,
+            NotifiableElement, Notification, NotificationNode, RootElement,
+        },
+        key::{GlobalKey, GlobalKeyId, ObjectKey, ValueKey},
+        owner::BuildOwner,
+        tree::{ElementNode, ElementTree, reconcile_children},
+        view::{
+            BoxedView, InheritedView, IntoView, ParentData, ParentDataView, ProxyView, RenderView,
+            StatefulView, StatelessView, View, ViewExt, ViewState,
+        },
+    };
 }

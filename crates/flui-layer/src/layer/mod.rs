@@ -4,7 +4,8 @@
 //!
 //! ## Leaf Layers
 //! - **CanvasLayer**: Standard canvas drawing commands (mutable)
-//! - **PictureLayer**: Recorded drawing commands (immutable, used by repaint boundaries)
+//! - **PictureLayer**: Recorded drawing commands (immutable, used by repaint
+//!   boundaries)
 //! - **TextureLayer**: External GPU texture rendering
 //! - **PlatformViewLayer**: Native view embedding
 //! - **PerformanceOverlayLayer**: Performance metrics display
@@ -102,6 +103,7 @@ pub use clip_rect::ClipRectLayer;
 pub use clip_rrect::ClipRRectLayer;
 pub use clip_superellipse::ClipSuperellipseLayer;
 pub use color_filter::ColorFilterLayer;
+use flui_types::geometry::{Pixels, Rect};
 pub use follower::FollowerLayer;
 pub use image_filter::ImageFilterLayer;
 pub use leader::{LayerLink, LeaderLayer};
@@ -115,8 +117,6 @@ pub use platform_view::{PlatformViewHitTestBehavior, PlatformViewId, PlatformVie
 pub use shader_mask::ShaderMaskLayer;
 pub use texture::TextureLayer;
 pub use transform::TransformLayer;
-
-use flui_types::geometry::{Pixels, Rect};
 
 /// Compositor layer - polymorphic layer types for advanced rendering
 ///
@@ -159,9 +159,8 @@ use flui_types::geometry::{Pixels, Rect};
 /// # Example
 ///
 /// ```rust
-/// use flui_layer::{Layer, CanvasLayer, ClipRectLayer, OpacityLayer};
-/// use flui_types::geometry::Rect;
-/// use flui_types::painting::Clip;
+/// use flui_layer::{CanvasLayer, ClipRectLayer, Layer, OpacityLayer};
+/// use flui_types::{geometry::Rect, painting::Clip};
 ///
 /// // Leaf layer
 /// let canvas_layer = Layer::Canvas(CanvasLayer::new());
@@ -182,7 +181,8 @@ pub enum Layer {
     /// Canvas layer - standard drawing commands (mutable)
     Canvas(CanvasLayer),
 
-    /// Picture layer - recorded drawing commands (immutable, for repaint boundaries)
+    /// Picture layer - recorded drawing commands (immutable, for repaint
+    /// boundaries)
     Picture(PictureLayer),
 
     /// Texture layer - external GPU texture
@@ -429,6 +429,28 @@ impl Layer {
     #[inline]
     pub fn is_linking(&self) -> bool {
         matches!(self, Layer::Leader(_) | Layer::Follower(_))
+    }
+
+    /// Returns true if this layer is known to be fully opaque.
+    ///
+    /// Conservative check used by `OcclusionTracker` to register opaque regions.
+    /// Only returns `true` for leaf layers that are guaranteed to draw solid
+    /// content with no transparency: `Canvas` and `Picture` layers (which always
+    /// fill their bounds), and `Texture` layers with opacity >= 1.0.
+    ///
+    /// Container/effect layers (clips, transforms, opacity, filters) return
+    /// `false` because their visual output depends on their children.
+    #[allow(clippy::match_same_arms)]
+    pub fn is_opaque(&self) -> bool {
+        match self {
+            // Canvas and Picture layers draw solid content into their bounds
+            Layer::Canvas(_) => true,
+            Layer::Picture(_) => true,
+            // Texture is opaque only if its opacity is >= 1.0
+            Layer::Texture(layer) => layer.is_opaque(),
+            // All other layers are conservatively treated as non-opaque
+            _ => false,
+        }
     }
 
     // ========== Downcasting ==========
@@ -968,9 +990,9 @@ impl LayerBounds for AnnotatedRegionLayer {
 
 #[cfg(test)]
 mod tests {
+    use flui_types::{geometry::px, painting::Clip};
+
     use super::*;
-    use flui_types::geometry::px;
-    use flui_types::painting::Clip;
 
     #[test]
     fn test_layer_from_canvas() {

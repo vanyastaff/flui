@@ -1,7 +1,8 @@
 /// Errors that can occur during geometry operations.
 ///
 /// This enum provides comprehensive error types for validating geometric data,
-/// detecting invalid operations, and handling edge cases in geometry computations.
+/// detecting invalid operations, and handling edge cases in geometry
+/// computations.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum GeometryError {
     // ========================================================================
@@ -274,7 +275,8 @@ impl GeometryError {
     // Predicates
     // ========================================================================
 
-    /// Returns `true` if this is a value validity error (NaN, infinite, or out of range).
+    /// Returns `true` if this is a value validity error (NaN, infinite, or out
+    /// of range).
     #[inline]
     pub fn is_validity_error(&self) -> bool {
         matches!(
@@ -283,7 +285,8 @@ impl GeometryError {
         )
     }
 
-    /// Returns `true` if this is a dimension error (negative, zero, or invalid size).
+    /// Returns `true` if this is a dimension error (negative, zero, or invalid
+    /// size).
     #[inline]
     pub fn is_dimension_error(&self) -> bool {
         matches!(
@@ -292,7 +295,8 @@ impl GeometryError {
         )
     }
 
-    /// Returns `true` if this is an arithmetic error (division by zero, overflow, underflow).
+    /// Returns `true` if this is an arithmetic error (division by zero,
+    /// overflow, underflow).
     #[inline]
     pub fn is_arithmetic_error(&self) -> bool {
         matches!(

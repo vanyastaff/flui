@@ -1,7 +1,9 @@
-//! IntoRenderObject trait for converting RenderBox/RenderSliver into storage-ready nodes.
+//! IntoRenderObject trait for converting RenderBox/RenderSliver into
+//! storage-ready nodes.
 //!
-//! This module provides the `IntoRenderObject` trait that replaces the old wrapper approach.
-//! Instead of wrapping concrete types in BoxWrapper/SliverWrapper, we directly convert them
+//! This module provides the `IntoRenderObject` trait that replaces the old
+//! wrapper approach. Instead of wrapping concrete types in
+//! BoxWrapper/SliverWrapper, we directly convert them
 //! into RenderEntry<Protocol> for storage in RenderTree.
 //!
 //! # Architecture
@@ -39,7 +41,8 @@
 //!
 //! 1. **No Wrapper Boilerplate**: Direct conversion to RenderEntry
 //! 2. **Better Type Safety**: Protocol system enforced at creation time
-//! 3. **Cleaner API**: `my_box.into_render_object()` vs `BoxWrapper::new(my_box)`
+//! 3. **Cleaner API**: `my_box.into_render_object()` vs
+//!    `BoxWrapper::new(my_box)`
 //! 4. **Storage Efficiency**: One less layer of indirection
 //! 5. **Protocol Flexibility**: Easy to add new protocols
 //!
@@ -81,9 +84,13 @@
 //! let id = tree.insert(node);
 //! ```
 
-use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
-use crate::storage::{RenderEntry, RenderNode};
-use crate::traits::{RenderBox, RenderSliver};
+use crate::{
+    protocol::{BoxProtocol, Protocol, SliverProtocol},
+    storage::{RenderEntry, RenderNode},
+    traits::{
+        HotReloadCapability, PaintEffectsCapability, RenderBox, RenderSliver, SemanticsCapability,
+    },
+};
 
 // ============================================================================
 // IntoRenderObject Trait
@@ -122,7 +129,13 @@ pub trait IntoRenderObject<P: Protocol>: Sized {
 
 impl<T> IntoRenderObject<BoxProtocol> for T
 where
-    T: RenderBox + Send + Sync + 'static,
+    T: RenderBox
+        + PaintEffectsCapability
+        + SemanticsCapability
+        + HotReloadCapability
+        + Send
+        + Sync
+        + 'static,
 {
     fn into_render_entry(self) -> RenderEntry<BoxProtocol> {
         // No adapter needed - blanket impl makes T: RenderObject<BoxProtocol>
@@ -140,7 +153,13 @@ where
 
 impl<T> IntoRenderObject<SliverProtocol> for T
 where
-    T: RenderSliver + Send + Sync + 'static,
+    T: RenderSliver
+        + PaintEffectsCapability
+        + SemanticsCapability
+        + HotReloadCapability
+        + Send
+        + Sync
+        + 'static,
 {
     fn into_render_entry(self) -> RenderEntry<SliverProtocol> {
         // No adapter needed - blanket impl makes T: RenderObject<SliverProtocol>
@@ -157,19 +176,23 @@ where
 // ============================================================================
 //
 // Adapters are no longer needed because:
-// 1. Blanket impl in render_box.rs automatically implements RenderObject<BoxProtocol> for all RenderBox types
-// 2. Blanket impl in render_sliver.rs automatically implements RenderObject<SliverProtocol> for all RenderSliver types
+// 1. Blanket impl in render_box.rs automatically implements
+//    RenderObject<BoxProtocol> for all RenderBox types
+// 2. Blanket impl in render_sliver.rs automatically implements
+//    RenderObject<SliverProtocol> for all RenderSliver types
 // 3. This eliminates an unnecessary layer of indirection
 // 4. Simpler API: Box::new(render_box) instead of Box::new(adapter)
 
 #[cfg(test)]
 mod tests {
+    use flui_tree::Leaf;
+    use flui_types::{Size, geometry::px};
+
     use super::*;
-    use flui_types::geometry::px;
-    use crate::arity::Leaf;
-    use crate::context::{BoxHitTestContext, BoxLayoutContext};
-    use crate::parent_data::BoxParentData;
-    use flui_types::Size;
+    use crate::{
+        context::{BoxHitTestContext, BoxLayoutContext},
+        parent_data::BoxParentData,
+    };
 
     #[derive(Debug)]
     struct TestBox {
@@ -177,6 +200,10 @@ mod tests {
     }
 
     impl flui_foundation::Diagnosticable for TestBox {}
+
+    impl PaintEffectsCapability for TestBox {}
+    impl SemanticsCapability for TestBox {}
+    impl HotReloadCapability for TestBox {}
 
     impl RenderBox for TestBox {
         type Arity = Leaf;

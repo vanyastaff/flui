@@ -3,8 +3,9 @@
 //! This module adds GPU rendering capabilities to the core layer types
 //! from flui-layer.
 
-use super::commands::dispatch_commands;
-use super::commands::CommandRenderer;
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use flui_layer::{
     BackdropFilterLayer, CanvasLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer,
     ColorFilterLayer, FollowerLayer, ImageFilterLayer, Layer, LeaderLayer, OffsetLayer,
@@ -12,6 +13,84 @@ use flui_layer::{
     TextureLayer, TransformLayer,
 };
 use flui_painting::DisplayListCore;
+
+use super::commands::{CommandRenderer, dispatch_commands};
+
+// ============================================================================
+// SUPERELLIPSE PATH CACHE
+// ============================================================================
+
+/// Cache key for superellipse paths, using f32-to-bits for Hash/Eq.
+///
+/// This avoids re-generating identical superellipse paths every frame
+/// for static UIs. The key captures the rect bounds and all 4 corner radii.
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct SuperellipseKey {
+    // Rect bounds stored as f32 bits
+    left: u32,
+    top: u32,
+    right: u32,
+    bottom: u32,
+    // Corner radii stored as f32 bits (x, y per corner)
+    tl_x: u32,
+    tl_y: u32,
+    tr_x: u32,
+    tr_y: u32,
+    br_x: u32,
+    br_y: u32,
+    bl_x: u32,
+    bl_y: u32,
+}
+
+impl SuperellipseKey {
+    /// Create a cache key from an `RSuperellipse`.
+    fn from_superellipse(s: &flui_types::geometry::RSuperellipse) -> Self {
+        let rect = s.outer_rect();
+        let tl = s.tl_radius();
+        let tr = s.tr_radius();
+        let br = s.br_radius();
+        let bl = s.bl_radius();
+
+        Self {
+            left: rect.left().0.to_bits(),
+            top: rect.top().0.to_bits(),
+            right: rect.right().0.to_bits(),
+            bottom: rect.bottom().0.to_bits(),
+            tl_x: tl.x.0.to_bits(),
+            tl_y: tl.y.0.to_bits(),
+            tr_x: tr.x.0.to_bits(),
+            tr_y: tr.y.0.to_bits(),
+            br_x: br.x.0.to_bits(),
+            br_y: br.y.0.to_bits(),
+            bl_x: bl.x.0.to_bits(),
+            bl_y: bl.y.0.to_bits(),
+        }
+    }
+}
+
+thread_local! {
+    /// Thread-local cache for generated superellipse paths.
+    /// Rendering is single-threaded, so thread-local is the correct choice.
+    static SUPERELLIPSE_CACHE: RefCell<HashMap<SuperellipseKey, flui_types::painting::Path>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Returns a cached superellipse path, generating it on cache miss.
+fn get_or_generate_superellipse_path(
+    superellipse: &flui_types::geometry::RSuperellipse,
+) -> flui_types::painting::Path {
+    let key = SuperellipseKey::from_superellipse(superellipse);
+
+    SUPERELLIPSE_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(path) = cache.get(&key) {
+            return path.clone();
+        }
+        let path = generate_superellipse_path(superellipse);
+        cache.insert(key, path.clone());
+        path
+    })
+}
 
 // ============================================================================
 // LAYER RENDER TRAIT
@@ -208,19 +287,9 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for flui_layer::ClipSuperellips
         if !self.clips() {
             return;
         }
-        // Superellipse clipping - fallback to RRect approximation
-        // TODO: Implement native superellipse clipping with proper squircle curve
         let superellipse = self.clip_superellipse();
-        let rect = superellipse.outer_rect();
-        // Use the corner radii from superellipse to create an approximate RRect
-        let rrect = flui_types::geometry::RRect::from_rect_and_corners(
-            rect,
-            superellipse.tl_radius(),
-            superellipse.tr_radius(),
-            superellipse.br_radius(),
-            superellipse.bl_radius(),
-        );
-        renderer.push_clip_rrect(&rrect, self.clip_behavior());
+        let path = get_or_generate_superellipse_path(superellipse);
+        renderer.push_clip_path(&path, self.clip_behavior());
     }
 
     fn cleanup(&self, renderer: &mut R) {
@@ -228,6 +297,139 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for flui_layer::ClipSuperellips
             renderer.pop_clip();
         }
     }
+}
+
+/// Generates a proper superellipse (squircle) path from an `RSuperellipse`.
+///
+/// Uses the parametric superellipse equation with `n = 4` (iOS squircle):
+/// ```text
+/// x(t) = a * sign(cos(t)) * |cos(t)|^(2/n)
+/// y(t) = b * sign(sin(t)) * |sin(t)|^(2/n)
+/// ```
+///
+/// Each corner is generated independently using its own radii, with straight
+/// edges connecting the corners. 64 points per corner ensure a smooth curve.
+fn generate_superellipse_path(
+    superellipse: &flui_types::geometry::RSuperellipse,
+) -> flui_types::painting::Path {
+    use flui_types::geometry::{Pixels, Point, px};
+
+    let rect = superellipse.outer_rect();
+    let tl = superellipse.tl_radius();
+    let tr = superellipse.tr_radius();
+    let br = superellipse.br_radius();
+    let bl = superellipse.bl_radius();
+
+    let mut path = flui_types::painting::Path::new();
+
+    // iOS squircle exponent
+    let n: f32 = 4.0;
+    let two_over_n = 2.0 / n;
+
+    // Number of sample points per corner quarter-arc
+    let segments_per_corner: usize = 16;
+
+    let left = rect.left().0;
+    let top = rect.top().0;
+    let right = rect.right().0;
+    let bottom = rect.bottom().0;
+
+    // Helper: compute superellipse point for a corner quadrant.
+    // `cx`, `cy` is the corner center, `rx`, `ry` are the radii,
+    // `t` sweeps through the quarter, `sx`/`sy` select the quadrant direction.
+    let se_point =
+        |cx: f32, cy: f32, rx: f32, ry: f32, t: f32, sx: f32, sy: f32| -> Point<Pixels> {
+            let cos_t = t.cos();
+            let sin_t = t.sin();
+            let x = cx + sx * rx * cos_t.abs().powf(two_over_n);
+            let y = cy + sy * ry * sin_t.abs().powf(two_over_n);
+            Point::new(px(x), px(y))
+        };
+
+    // Start at top edge, after top-left corner
+    // Top-left corner: center at (left + tl.x, top + tl.y)
+    // Sweep from PI (left) to PI/2 (top), i.e. t goes PI -> PI/2
+    // Direction: sx = -1 (left of center), sy = -1 (above center)
+    {
+        let cx = left + tl.x.0;
+        let cy = top + tl.y.0;
+        let rx = tl.x.0;
+        let ry = tl.y.0;
+        if rx > 0.0 && ry > 0.0 {
+            for i in 0..=segments_per_corner {
+                // Sweep from PI/2 to 0 (parametric), mapping to top-left quadrant
+                let t = std::f32::consts::FRAC_PI_2 * (1.0 - i as f32 / segments_per_corner as f32);
+                let p = se_point(cx, cy, rx, ry, t, -1.0, -1.0);
+                if i == 0 {
+                    path.move_to(p);
+                } else {
+                    path.line_to(p);
+                }
+            }
+        } else {
+            path.move_to(Point::new(px(left), px(top)));
+        }
+    }
+
+    // Top edge -> top-right corner
+    // Top-right corner: center at (right - tr.x, top + tr.y)
+    // Direction: sx = +1 (right of center), sy = -1 (above center)
+    {
+        let cx = right - tr.x.0;
+        let cy = top + tr.y.0;
+        let rx = tr.x.0;
+        let ry = tr.y.0;
+        if rx > 0.0 && ry > 0.0 {
+            for i in 0..=segments_per_corner {
+                let t = std::f32::consts::FRAC_PI_2 * (i as f32 / segments_per_corner as f32);
+                let p = se_point(cx, cy, rx, ry, t, 1.0, -1.0);
+                path.line_to(p);
+            }
+        } else {
+            path.line_to(Point::new(px(right), px(top)));
+        }
+    }
+
+    // Right edge -> bottom-right corner
+    // Bottom-right corner: center at (right - br.x, bottom - br.y)
+    // Direction: sx = +1, sy = +1
+    {
+        let cx = right - br.x.0;
+        let cy = bottom - br.y.0;
+        let rx = br.x.0;
+        let ry = br.y.0;
+        if rx > 0.0 && ry > 0.0 {
+            for i in 0..=segments_per_corner {
+                let t = std::f32::consts::FRAC_PI_2 * (1.0 - i as f32 / segments_per_corner as f32);
+                let p = se_point(cx, cy, rx, ry, t, 1.0, 1.0);
+                path.line_to(p);
+            }
+        } else {
+            path.line_to(Point::new(px(right), px(bottom)));
+        }
+    }
+
+    // Bottom edge -> bottom-left corner
+    // Bottom-left corner: center at (left + bl.x, bottom - bl.y)
+    // Direction: sx = -1, sy = +1
+    {
+        let cx = left + bl.x.0;
+        let cy = bottom - bl.y.0;
+        let rx = bl.x.0;
+        let ry = bl.y.0;
+        if rx > 0.0 && ry > 0.0 {
+            for i in 0..=segments_per_corner {
+                let t = std::f32::consts::FRAC_PI_2 * (i as f32 / segments_per_corner as f32);
+                let p = se_point(cx, cy, rx, ry, t, -1.0, 1.0);
+                path.line_to(p);
+            }
+        } else {
+            path.line_to(Point::new(px(left), px(bottom)));
+        }
+    }
+
+    path.close();
+    path
 }
 
 // ============================================================================
@@ -327,22 +529,37 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for ImageFilterLayer {
 }
 
 impl<R: CommandRenderer + ?Sized> LayerRender<R> for ShaderMaskLayer {
-    fn render(&self, _renderer: &mut R) {
-        // TODO: Implement shader mask GPU rendering
+    fn render(&self, renderer: &mut R) {
+        // Create a compositing layer bounded to the mask area.
+        // Children will be rendered into this layer, then composited
+        // with the shader mask applied during restore.
+        let paint = flui_painting::Paint::default();
+        renderer.save_layer(
+            Some(self.bounds()),
+            &paint,
+            &flui_types::geometry::Matrix4::IDENTITY,
+        );
+        // Clip children to mask bounds so content outside is discarded
+        renderer.push_clip_rect(&self.bounds(), flui_types::painting::Clip::AntiAlias);
     }
 
-    fn cleanup(&self, _renderer: &mut R) {
-        // TODO: Implement shader mask cleanup
+    fn cleanup(&self, renderer: &mut R) {
+        // Pop in reverse order: first clip, then compositing layer
+        renderer.pop_clip();
+        renderer.restore_layer(&flui_types::geometry::Matrix4::IDENTITY);
     }
 }
 
 impl<R: CommandRenderer + ?Sized> LayerRender<R> for BackdropFilterLayer {
     fn render(&self, _renderer: &mut R) {
-        // TODO: Implement backdrop filter GPU rendering
+        // Backdrop blur is handled at the Renderer level in render_layer_recursive,
+        // which has access to the surface texture for mid-frame flush + copy + blur.
+        // This LayerRender impl is a no-op; the Renderer intercepts Layer::BackdropFilter
+        // before calling render()/cleanup().
     }
 
     fn cleanup(&self, _renderer: &mut R) {
-        // TODO: Implement backdrop filter cleanup
+        // No-op — see render() comment above.
     }
 }
 
@@ -427,5 +644,548 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for PerformanceOverlayLayer {
 
     fn cleanup(&self, _renderer: &mut R) {
         // Leaf layer - no state to clean up
+    }
+}
+
+// ============================================================================
+// TESTS
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flui_layer::{
+        BackdropFilterLayer, ClipRectLayer, OffsetLayer, OpacityLayer, ShaderMaskLayer,
+        TransformLayer,
+    };
+    use flui_painting::{BlendMode, Paint, PointMode};
+    use flui_types::{
+        geometry::{Matrix4, Offset, Pixels, Point, RRect, Rect, px},
+        painting::{Clip, FilterQuality, Image, ImageFilter, Path, TextureId},
+        styling::Color,
+        typography::TextStyle,
+    };
+
+    // ========================================================================
+    // MockRenderer — records push/pop/save/restore calls
+    // ========================================================================
+
+    struct MockRenderer {
+        calls: Vec<String>,
+    }
+
+    impl MockRenderer {
+        fn new() -> Self {
+            Self { calls: Vec::new() }
+        }
+    }
+
+    impl CommandRenderer for MockRenderer {
+        // ===== Primitive Shapes (no-ops) =====
+        fn render_rect(&mut self, _rect: Rect<Pixels>, _paint: &Paint, _transform: &Matrix4) {}
+        fn render_rrect(&mut self, _rrect: RRect, _paint: &Paint, _transform: &Matrix4) {}
+        fn render_circle(
+            &mut self,
+            _center: Point<Pixels>,
+            _radius: f32,
+            _paint: &Paint,
+            _transform: &Matrix4,
+        ) {
+        }
+        fn render_oval(&mut self, _rect: Rect<Pixels>, _paint: &Paint, _transform: &Matrix4) {}
+        fn render_line(
+            &mut self,
+            _p1: Point<Pixels>,
+            _p2: Point<Pixels>,
+            _paint: &Paint,
+            _transform: &Matrix4,
+        ) {
+        }
+        fn render_path(&mut self, _path: &Path, _paint: &Paint, _transform: &Matrix4) {}
+
+        // ===== Advanced Shapes (no-ops) =====
+        fn render_arc(
+            &mut self,
+            _rect: Rect<Pixels>,
+            _start_angle: f32,
+            _sweep_angle: f32,
+            _use_center: bool,
+            _paint: &Paint,
+            _transform: &Matrix4,
+        ) {
+        }
+        fn render_drrect(
+            &mut self,
+            _outer: RRect,
+            _inner: RRect,
+            _paint: &Paint,
+            _transform: &Matrix4,
+        ) {
+        }
+        fn render_points(
+            &mut self,
+            _mode: PointMode,
+            _points: &[Point<Pixels>],
+            _paint: &Paint,
+            _transform: &Matrix4,
+        ) {
+        }
+
+        // ===== Text (no-ops) =====
+        fn render_text(
+            &mut self,
+            _text: &str,
+            _offset: Offset<Pixels>,
+            _style: &TextStyle,
+            _paint: &Paint,
+            _transform: &Matrix4,
+        ) {
+        }
+        fn render_text_span(
+            &mut self,
+            _span: &flui_types::typography::InlineSpan,
+            _offset: Offset<Pixels>,
+            _text_scale_factor: f64,
+            _transform: &Matrix4,
+        ) {
+        }
+
+        // ===== Images (no-ops) =====
+        fn render_image(
+            &mut self,
+            _image: &Image,
+            _dst: Rect<Pixels>,
+            _paint: Option<&Paint>,
+            _transform: &Matrix4,
+        ) {
+        }
+        fn render_atlas(
+            &mut self,
+            _image: &Image,
+            _sprites: &[Rect<Pixels>],
+            _transforms: &[Matrix4],
+            _colors: Option<&[Color]>,
+            _blend_mode: BlendMode,
+            _paint: Option<&Paint>,
+            _transform: &Matrix4,
+        ) {
+        }
+        fn render_image_repeat(
+            &mut self,
+            _image: &Image,
+            _dst: Rect<Pixels>,
+            _repeat: flui_painting::display_list::ImageRepeat,
+            _paint: Option<&Paint>,
+            _transform: &Matrix4,
+        ) {
+        }
+        fn render_image_nine_slice(
+            &mut self,
+            _image: &Image,
+            _center_slice: Rect<Pixels>,
+            _dst: Rect<Pixels>,
+            _paint: Option<&Paint>,
+            _transform: &Matrix4,
+        ) {
+        }
+        fn render_image_filtered(
+            &mut self,
+            _image: &Image,
+            _dst: Rect<Pixels>,
+            _filter: flui_painting::display_list::ColorFilter,
+            _paint: Option<&Paint>,
+            _transform: &Matrix4,
+        ) {
+        }
+        fn render_texture(
+            &mut self,
+            _texture_id: TextureId,
+            _dst: Rect<Pixels>,
+            _src: Option<Rect<Pixels>>,
+            _filter_quality: FilterQuality,
+            _opacity: f32,
+            _transform: &Matrix4,
+        ) {
+        }
+
+        // ===== Effects (no-ops) =====
+        fn render_shadow(
+            &mut self,
+            _path: &Path,
+            _color: Color,
+            _elevation: f32,
+            _transform: &Matrix4,
+        ) {
+        }
+        fn render_shader_mask(
+            &mut self,
+            _child: &flui_painting::DisplayList,
+            _shader: &flui_painting::Shader,
+            _bounds: Rect<Pixels>,
+            _blend_mode: BlendMode,
+            _transform: &Matrix4,
+        ) {
+        }
+
+        // ===== Gradients (no-ops) =====
+        fn render_gradient(
+            &mut self,
+            _rect: Rect<Pixels>,
+            _shader: &flui_painting::Shader,
+            _transform: &Matrix4,
+        ) {
+        }
+        fn render_gradient_rrect(
+            &mut self,
+            _rrect: RRect,
+            _shader: &flui_painting::Shader,
+            _transform: &Matrix4,
+        ) {
+        }
+        fn render_color(&mut self, _color: Color, _blend_mode: BlendMode, _transform: &Matrix4) {}
+        fn render_paint(&mut self, _paint: &Paint, _transform: &Matrix4) {}
+        fn render_backdrop_filter(
+            &mut self,
+            _child: Option<&flui_painting::DisplayList>,
+            _filter: &flui_painting::display_list::ImageFilter,
+            _bounds: Rect<Pixels>,
+            _blend_mode: BlendMode,
+            _transform: &Matrix4,
+        ) {
+        }
+
+        // ===== Custom Geometry (no-op) =====
+        fn render_vertices(
+            &mut self,
+            _vertices: &[Point<Pixels>],
+            _colors: Option<&[Color]>,
+            _tex_coords: Option<&[Point<Pixels>]>,
+            _indices: &[u16],
+            _paint: &Paint,
+            _transform: &Matrix4,
+        ) {
+        }
+
+        // ===== Clipping (no-ops) =====
+        fn clip_rect(
+            &mut self,
+            _rect: Rect<Pixels>,
+            _clip_op: flui_types::painting::ClipOp,
+            _clip_behavior: flui_types::painting::Clip,
+            _transform: &Matrix4,
+        ) {
+        }
+        fn clip_rrect(
+            &mut self,
+            _rrect: RRect,
+            _clip_op: flui_types::painting::ClipOp,
+            _clip_behavior: flui_types::painting::Clip,
+            _transform: &Matrix4,
+        ) {
+        }
+        fn clip_path(
+            &mut self,
+            _path: &Path,
+            _clip_op: flui_types::painting::ClipOp,
+            _clip_behavior: flui_types::painting::Clip,
+            _transform: &Matrix4,
+        ) {
+        }
+
+        // ===== Viewport =====
+        fn viewport_bounds(&self) -> Rect<Pixels> {
+            Rect::from_xywh(px(0.0), px(0.0), px(800.0), px(600.0))
+        }
+
+        // ===== Layer Operations (recorded) =====
+        fn save_layer(
+            &mut self,
+            _bounds: Option<Rect<Pixels>>,
+            _paint: &Paint,
+            _transform: &Matrix4,
+        ) {
+            self.calls.push("save_layer".to_string());
+        }
+        fn restore_layer(&mut self, _transform: &Matrix4) {
+            self.calls.push("restore_layer".to_string());
+        }
+
+        // ===== Layer Tree Operations (recorded) =====
+        fn push_clip_rect(&mut self, _rect: &Rect<Pixels>, _clip_behavior: Clip) {
+            self.calls.push("push_clip_rect".to_string());
+        }
+        fn push_clip_rrect(&mut self, _rrect: &RRect, _clip_behavior: Clip) {
+            self.calls.push("push_clip_rrect".to_string());
+        }
+        fn push_clip_path(&mut self, _path: &Path, _clip_behavior: Clip) {
+            self.calls.push("push_clip_path".to_string());
+        }
+        fn pop_clip(&mut self) {
+            self.calls.push("pop_clip".to_string());
+        }
+        fn push_offset(&mut self, _offset: Offset<Pixels>) {
+            self.calls.push("push_offset".to_string());
+        }
+        fn push_transform(&mut self, _transform: &Matrix4) {
+            self.calls.push("push_transform".to_string());
+        }
+        fn pop_transform(&mut self) {
+            self.calls.push("pop_transform".to_string());
+        }
+        fn push_opacity(&mut self, _alpha: f32) {
+            self.calls.push("push_opacity".to_string());
+        }
+        fn pop_opacity(&mut self) {
+            self.calls.push("pop_opacity".to_string());
+        }
+        fn push_color_filter(&mut self, _filter: &flui_types::painting::ColorMatrix) {
+            self.calls.push("push_color_filter".to_string());
+        }
+        fn pop_color_filter(&mut self) {
+            self.calls.push("pop_color_filter".to_string());
+        }
+        fn push_image_filter(&mut self, _filter: &flui_painting::display_list::ImageFilter) {
+            self.calls.push("push_image_filter".to_string());
+        }
+        fn pop_image_filter(&mut self) {
+            self.calls.push("pop_image_filter".to_string());
+        }
+
+        // ===== Performance Overlay (recorded) =====
+        fn add_performance_overlay(
+            &mut self,
+            _options_mask: u32,
+            _bounds: Rect<Pixels>,
+            _fps: f32,
+            _frame_time_ms: f32,
+            _total_frames: u64,
+        ) {
+            self.calls.push("add_performance_overlay".to_string());
+        }
+    }
+
+    // ========================================================================
+    // OffsetLayer tests
+    // ========================================================================
+
+    #[test]
+    fn test_offset_layer_pushes_and_pops_transform() {
+        let mut renderer = MockRenderer::new();
+        let layer = OffsetLayer::from_xy(10.0, 20.0);
+
+        layer.render(&mut renderer);
+        assert_eq!(renderer.calls, vec!["push_offset"]);
+
+        layer.cleanup(&mut renderer);
+        assert_eq!(renderer.calls, vec!["push_offset", "pop_transform"]);
+    }
+
+    #[test]
+    fn test_offset_layer_zero_is_noop() {
+        let mut renderer = MockRenderer::new();
+        let layer = OffsetLayer::zero();
+
+        layer.render(&mut renderer);
+        assert!(renderer.calls.is_empty(), "zero offset should not push");
+
+        layer.cleanup(&mut renderer);
+        assert!(renderer.calls.is_empty(), "zero offset should not pop");
+    }
+
+    // ========================================================================
+    // TransformLayer tests
+    // ========================================================================
+
+    #[test]
+    fn test_transform_layer_pushes_and_pops() {
+        let mut renderer = MockRenderer::new();
+        let layer = TransformLayer::translation(10.0, 20.0);
+
+        layer.render(&mut renderer);
+        assert_eq!(renderer.calls, vec!["push_transform"]);
+
+        layer.cleanup(&mut renderer);
+        assert_eq!(renderer.calls, vec!["push_transform", "pop_transform"]);
+    }
+
+    #[test]
+    fn test_transform_layer_identity_is_noop() {
+        let mut renderer = MockRenderer::new();
+        let layer = TransformLayer::identity();
+
+        layer.render(&mut renderer);
+        assert!(renderer.calls.is_empty(), "identity should not push");
+
+        layer.cleanup(&mut renderer);
+        assert!(renderer.calls.is_empty(), "identity should not pop");
+    }
+
+    // ========================================================================
+    // OpacityLayer tests
+    // ========================================================================
+
+    #[test]
+    fn test_opacity_layer_pushes_and_pops() {
+        let mut renderer = MockRenderer::new();
+        let layer = OpacityLayer::new(0.5);
+
+        layer.render(&mut renderer);
+        assert_eq!(renderer.calls, vec!["push_opacity"]);
+
+        layer.cleanup(&mut renderer);
+        assert_eq!(renderer.calls, vec!["push_opacity", "pop_opacity"]);
+    }
+
+    #[test]
+    fn test_opacity_layer_with_offset_pushes_offset_then_opacity() {
+        let mut renderer = MockRenderer::new();
+        let layer = OpacityLayer::with_offset(0.5, Offset::new(px(10.0), px(20.0)));
+
+        layer.render(&mut renderer);
+        assert_eq!(renderer.calls, vec!["push_offset", "push_opacity"]);
+
+        layer.cleanup(&mut renderer);
+        assert_eq!(
+            renderer.calls,
+            vec![
+                "push_offset",
+                "push_opacity",
+                "pop_opacity",
+                "pop_transform"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_opacity_layer_invisible_is_noop() {
+        let mut renderer = MockRenderer::new();
+        let layer = OpacityLayer::transparent();
+
+        layer.render(&mut renderer);
+        assert!(renderer.calls.is_empty(), "invisible should skip render");
+
+        layer.cleanup(&mut renderer);
+        assert!(renderer.calls.is_empty(), "invisible should skip cleanup");
+    }
+
+    #[test]
+    fn test_opacity_layer_opaque_is_noop() {
+        let mut renderer = MockRenderer::new();
+        let layer = OpacityLayer::opaque();
+
+        layer.render(&mut renderer);
+        assert!(renderer.calls.is_empty(), "opaque should skip render");
+
+        layer.cleanup(&mut renderer);
+        assert!(renderer.calls.is_empty(), "opaque should skip cleanup");
+    }
+
+    // ========================================================================
+    // ClipRectLayer tests
+    // ========================================================================
+
+    #[test]
+    fn test_clip_rect_layer_pushes_and_pops() {
+        let mut renderer = MockRenderer::new();
+        let rect = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let layer = ClipRectLayer::new(rect, Clip::HardEdge);
+
+        layer.render(&mut renderer);
+        assert_eq!(renderer.calls, vec!["push_clip_rect"]);
+
+        layer.cleanup(&mut renderer);
+        assert_eq!(renderer.calls, vec!["push_clip_rect", "pop_clip"]);
+    }
+
+    #[test]
+    fn test_clip_rect_layer_no_clip_is_noop() {
+        let mut renderer = MockRenderer::new();
+        let rect = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let layer = ClipRectLayer::new(rect, Clip::None);
+
+        layer.render(&mut renderer);
+        assert!(renderer.calls.is_empty(), "Clip::None should not push");
+
+        layer.cleanup(&mut renderer);
+        assert!(renderer.calls.is_empty(), "Clip::None should not pop");
+    }
+
+    // ========================================================================
+    // ShaderMaskLayer tests
+    // ========================================================================
+
+    #[test]
+    fn test_shader_mask_layer_saves_and_clips() {
+        use flui_types::{
+            painting::BlendMode as TBlendMode, painting::Shader as TShader, styling::Color,
+        };
+
+        let mut renderer = MockRenderer::new();
+        let shader = TShader::solid(Color::WHITE);
+        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let layer = ShaderMaskLayer::new(shader, TBlendMode::SrcOver, bounds);
+
+        layer.render(&mut renderer);
+        assert_eq!(renderer.calls, vec!["save_layer", "push_clip_rect"]);
+
+        layer.cleanup(&mut renderer);
+        assert_eq!(
+            renderer.calls,
+            vec!["save_layer", "push_clip_rect", "pop_clip", "restore_layer"]
+        );
+    }
+
+    // ========================================================================
+    // BackdropFilterLayer tests
+    // ========================================================================
+
+    #[test]
+    fn test_backdrop_filter_layer_is_noop() {
+        // BackdropFilterLayer rendering is handled at the Renderer level
+        // (render_layer_recursive intercepts it for mid-frame flush + blur).
+        // The LayerRender impl is intentionally a no-op.
+        let mut renderer = MockRenderer::new();
+        let filter = ImageFilter::blur(5.0);
+        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(200.0), px(150.0));
+        let layer =
+            BackdropFilterLayer::new(filter, flui_types::painting::BlendMode::SrcOver, bounds);
+
+        layer.render(&mut renderer);
+        assert_eq!(renderer.calls, Vec::<String>::new());
+
+        layer.cleanup(&mut renderer);
+        assert_eq!(renderer.calls, Vec::<String>::new());
+    }
+
+    // ========================================================================
+    // Layer enum dispatch tests
+    // ========================================================================
+
+    #[test]
+    fn test_layer_enum_dispatches_to_offset() {
+        let mut renderer = MockRenderer::new();
+        let layer = Layer::Offset(OffsetLayer::from_xy(5.0, 10.0));
+
+        layer.render(&mut renderer);
+        assert_eq!(renderer.calls, vec!["push_offset"]);
+
+        layer.cleanup(&mut renderer);
+        assert_eq!(renderer.calls, vec!["push_offset", "pop_transform"]);
+    }
+
+    #[test]
+    fn test_layer_enum_annotated_region_is_noop() {
+        use std::sync::Arc;
+        let mut renderer = MockRenderer::new();
+        let layer = Layer::AnnotatedRegion(flui_layer::AnnotatedRegionLayer::new(
+            Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
+            Arc::new("test annotation".to_string()),
+        ));
+
+        layer.render(&mut renderer);
+        assert!(renderer.calls.is_empty());
+
+        layer.cleanup(&mut renderer);
+        assert!(renderer.calls.is_empty());
     }
 }

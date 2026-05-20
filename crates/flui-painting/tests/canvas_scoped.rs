@@ -1,10 +1,13 @@
 //! Tests for closure-based scoped Canvas operations
 
-use flui_painting::prelude::*;
-use flui_types::geometry::{px, Matrix4, Point, RRect, Rect};
-use flui_types::painting::Path;
-use flui_types::styling::Color;
 use std::f32::consts::PI;
+
+use flui_painting::prelude::*;
+use flui_types::{
+    geometry::{Matrix4, Point, RRect, Rect, px},
+    painting::Path,
+    styling::Color,
+};
 
 #[test]
 fn test_with_save_restores_transform() {

@@ -8,7 +8,7 @@ use flui_foundation::ElementId;
 use flui_tree::{
     iter::{Ancestors, BreadthFirstIter, DepthFirstIter, DescendantsWithDepth},
     prelude::*,
-    visitor::{for_each, visit_depth_first, CollectVisitor, MaxDepthVisitor},
+    visitor::{CollectVisitor, MaxDepthVisitor, for_each, visit_depth_first},
 };
 
 // ============================================================================

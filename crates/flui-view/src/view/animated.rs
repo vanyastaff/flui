@@ -1,11 +1,13 @@
 //! AnimatedView - Views that automatically rebuild when animations change.
 //!
-//! AnimatedViews provide automatic subscription to Animation/Listenable changes,
-//! eliminating boilerplate code for animated widgets.
+//! AnimatedViews provide automatic subscription to Animation/Listenable
+//! changes, eliminating boilerplate code for animated widgets.
+
+use std::sync::Arc;
+
+use flui_foundation::Listenable;
 
 use super::stateful::StatefulView;
-use flui_foundation::Listenable;
-use std::sync::Arc;
 
 /// A View that automatically rebuilds when an animation changes.
 ///
@@ -127,13 +129,19 @@ macro_rules! impl_animated_view {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::context::BuildContext;
-    use crate::element::{AnimationBehavior, Lifecycle};
-    use crate::view::{AnimatedElement, ElementBase, View, ViewState};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
     use flui_foundation::ChangeNotifier;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
+
+    use super::*;
+    use crate::{
+        context::BuildContext,
+        element::{AnimationBehavior, Lifecycle},
+        view::{AnimatedElement, ElementBase, View, ViewState},
+    };
 
     // Test animated view
     #[derive(Clone)]
@@ -155,8 +163,7 @@ mod tests {
         fn create_element(&self) -> Box<dyn super::super::view::ElementBase> {
             // Create a minimal element for testing
             use super::super::stateless::StatelessView;
-            use crate::element::StatelessBehavior;
-            use crate::view::StatelessElement;
+            use crate::{element::StatelessBehavior, view::StatelessElement};
 
             #[derive(Clone)]
             struct MinimalView;

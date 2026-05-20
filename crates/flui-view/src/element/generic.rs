@@ -42,17 +42,24 @@
 //! }
 //! ```
 
-use super::arity::ElementArity;
-use super::child_storage::ElementChildStorage;
-use crate::element::Lifecycle;
-use crate::view::{ElementBase, View};
+use std::{
+    any::{Any, TypeId},
+    marker::PhantomData,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
+
 use flui_foundation::{ElementId, ListenerCallback, RenderId};
 use flui_rendering::pipeline::PipelineOwner;
 use parking_lot::RwLock;
-use std::any::{Any, TypeId};
-use std::marker::PhantomData;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+
+use super::{arity::ElementArity, child_storage::ElementChildStorage};
+use crate::{
+    element::Lifecycle,
+    view::{ElementBase, View},
+};
 
 /// Generic element core with arity-based child management.
 ///
@@ -63,10 +70,10 @@ use std::sync::Arc;
 ///
 /// # Type Parameters
 ///
-/// * `V` - The View type this element manages. Must be cloneable because
-///         Views are recreated each build cycle.
-/// * `A` - The arity type (Leaf/Single/Optional/Variable) determining
-///         how many children this element can have.
+/// * `V` - The View type this element manages. Must be cloneable because Views
+///   are recreated each build cycle.
+/// * `A` - The arity type (Leaf/Single/Optional/Variable) determining how many
+///   children this element can have.
 ///
 /// # Design Pattern
 ///
@@ -269,12 +276,13 @@ where
 
     /// Update or create the child element with a new view.
     ///
-    /// For Single/Optional arity, this updates the existing child or creates new.
-    /// For Variable arity, use `update_or_create_children` instead.
+    /// For Single/Optional arity, this updates the existing child or creates
+    /// new. For Variable arity, use `update_or_create_children` instead.
     ///
     /// # Arguments
     ///
     /// * `child_view` - The new child View
+    #[allow(clippy::needless_pass_by_value)] // Box<dyn View> ownership transfer is intentional for API consistency
     pub fn update_or_create_child(&mut self, child_view: Box<dyn View>) {
         if self.children.is_empty() {
             // First build - create child element
@@ -322,6 +330,7 @@ where
     /// # Arguments
     ///
     /// * `child_views` - The new child Views
+    #[allow(clippy::needless_pass_by_value)] // Vec ownership transfer is intentional for API consistency
     pub fn update_or_create_children(&mut self, child_views: Vec<Box<dyn View>>) {
         if self.children.is_empty() {
             // First build - create children
@@ -387,7 +396,8 @@ where
     ///
     /// # Arguments
     ///
-    /// * `owner` - Arc<dyn Any> that should downcast to Arc<RwLock<PipelineOwner>>
+    /// * `owner` - Arc<dyn Any> that should downcast to
+    ///   Arc<RwLock<PipelineOwner>>
     pub fn set_pipeline_owner_any(&mut self, owner: Arc<dyn Any + Send + Sync>) {
         if let Ok(pipeline_owner) = owner.downcast::<RwLock<PipelineOwner>>() {
             self.pipeline_owner = Some(pipeline_owner);

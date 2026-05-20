@@ -1,7 +1,8 @@
 //! LayerTree - Tree storage for compositor layers
 //!
-//! This module implements the fourth of FLUI's five trees (View, Element, Render, Layer, Semantics).
-//! Following Flutter's architecture, Layers are stored in a separate tree for compositor operations.
+//! This module implements the fourth of FLUI's five trees (View, Element,
+//! Render, Layer, Semantics). Following Flutter's architecture, Layers are
+//! stored in a separate tree for compositor operations.
 //!
 //! # Architecture
 //!
@@ -16,8 +17,8 @@
 //!
 //! # Tree Trait Integration
 //!
-//! LayerTree implements `TreeRead<LayerId>` and `TreeNav<LayerId>` from flui-tree,
-//! enabling generic tree algorithms and visitors.
+//! LayerTree implements `TreeRead<LayerId>` and `TreeNav<LayerId>` from
+//! flui-tree, enabling generic tree algorithms and visitors.
 //!
 //! ```rust,ignore
 //! use flui_layer::LayerTree;

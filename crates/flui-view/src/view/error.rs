@@ -22,11 +22,12 @@
 //! );
 //! ```
 
+use std::{any::TypeId, sync::RwLock};
+
+use flui_foundation::ElementId;
+
 use super::view::{ElementBase, View};
 use crate::element::Lifecycle;
-use flui_foundation::ElementId;
-use std::any::TypeId;
-use std::sync::RwLock;
 
 /// Factory function type for creating custom error widgets.
 ///
@@ -151,10 +152,10 @@ impl ErrorView {
     /// Build an error view using the global builder or default.
     pub fn build_error_view(error: &FlutterError) -> Box<dyn View> {
         // Check for custom builder
-        if let Ok(guard) = ERROR_VIEW_BUILDER.read() {
-            if let Some(builder) = *guard {
-                return builder(error);
-            }
+        if let Ok(guard) = ERROR_VIEW_BUILDER.read()
+            && let Some(builder) = *guard
+        {
+            return builder(error);
         }
 
         // Default: use ErrorView

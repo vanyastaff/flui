@@ -7,7 +7,8 @@ use super::{Simulation, Tolerance};
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum SpringType {
-    /// Critical damping - returns to rest as quickly as possible without oscillating
+    /// Critical damping - returns to rest as quickly as possible without
+    /// oscillating
     Critical,
 
     /// Under-damped - oscillates before coming to rest

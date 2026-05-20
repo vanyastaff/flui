@@ -1,14 +1,17 @@
 //! Platform window trait
 //!
 //! Provides a thin abstraction over platform windows for testability
-//! and flexibility. Includes per-window callback registration for event delivery.
+//! and flexibility. Includes per-window callback registration for event
+//! delivery.
 
-use super::input::{DispatchEventResult, Modifiers, PlatformInput};
+use std::{any::Any, sync::Arc};
+
 use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
-use std::any::Any;
-use std::sync::Arc;
 
-use super::display::PlatformDisplay;
+use super::{
+    display::PlatformDisplay,
+    input::{DispatchEventResult, Modifiers, PlatformInput},
+};
 
 // ==================== Value Types ====================
 
@@ -64,8 +67,9 @@ use winit::window::Window;
 /// # Callback Registration
 ///
 /// Per-window callbacks use `&self` (not `&mut self`) with interior mutability.
-/// This allows registering callbacks on shared references (`Arc<dyn PlatformWindow>`).
-/// Callbacks are invoked by the platform's event loop when native events arrive.
+/// This allows registering callbacks on shared references (`Arc<dyn
+/// PlatformWindow>`). Callbacks are invoked by the platform's event loop when
+/// native events arrive.
 ///
 /// The take/restore dispatch pattern ensures reentrancy safety:
 /// the callback storage lock is released before the callback is invoked.
@@ -189,8 +193,8 @@ pub trait PlatformWindow: Send + Sync {
 
     /// Register a callback for input events (pointer, keyboard)
     ///
-    /// The callback receives a `PlatformInput` and returns a `DispatchEventResult`
-    /// indicating whether the event was consumed.
+    /// The callback receives a `PlatformInput` and returns a
+    /// `DispatchEventResult` indicating whether the event was consumed.
     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult + Send>) {
         let _ = callback;
     }
@@ -233,14 +237,16 @@ pub trait PlatformWindow: Send + Sync {
 
     /// Register a callback for focus changes
     ///
-    /// Called with `true` when the window gains focus, `false` when it loses focus.
+    /// Called with `true` when the window gains focus, `false` when it loses
+    /// focus.
     fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
         let _ = callback;
     }
 
     /// Register a callback for mouse hover changes
     ///
-    /// Called with `true` when the mouse enters the window, `false` when it leaves.
+    /// Called with `true` when the mouse enters the window, `false` when it
+    /// leaves.
     fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
         let _ = callback;
     }
@@ -250,7 +256,8 @@ pub trait PlatformWindow: Send + Sync {
         let _ = callback;
     }
 
-    // ==================== Window Handles (for GPU integration) ====================
+    // ==================== Window Handles (for GPU integration)
+    // ====================
 
     /// Get a window handle for creating GPU surfaces (wgpu, etc.)
     ///
@@ -294,10 +301,13 @@ pub trait PlatformWindow: Send + Sync {
 /// Concrete winit window wrapper
 ///
 /// Wraps `winit::window::Window` to implement `PlatformWindow`.
+/// Includes per-window callbacks for event delivery using the
+/// take/restore dispatch pattern for reentrancy safety.
 pub struct WinitWindow {
     window: Arc<Window>,
-    is_focused: bool,
-    is_visible: bool,
+    is_focused: parking_lot::Mutex<bool>,
+    is_visible: parking_lot::Mutex<bool>,
+    callbacks: crate::shared::WindowCallbacks,
 }
 
 #[cfg(feature = "winit-backend")]
@@ -306,8 +316,9 @@ impl WinitWindow {
     pub fn new(window: Arc<Window>) -> Self {
         Self {
             window,
-            is_focused: true,
-            is_visible: true,
+            is_focused: parking_lot::Mutex::new(true),
+            is_visible: parking_lot::Mutex::new(true),
+            callbacks: crate::shared::WindowCallbacks::new(),
         }
     }
 
@@ -316,14 +327,19 @@ impl WinitWindow {
         &self.window
     }
 
+    /// Get a reference to the per-window callbacks
+    pub fn callbacks(&self) -> &crate::shared::WindowCallbacks {
+        &self.callbacks
+    }
+
     /// Update focus state
-    pub fn set_focused(&mut self, focused: bool) {
-        self.is_focused = focused;
+    pub fn set_focused(&self, focused: bool) {
+        *self.is_focused.lock() = focused;
     }
 
     /// Update visibility state
-    pub fn set_visible(&mut self, visible: bool) {
-        self.is_visible = visible;
+    pub fn set_visible(&self, visible: bool) {
+        *self.is_visible.lock() = visible;
     }
 }
 
@@ -356,11 +372,80 @@ impl PlatformWindow for WinitWindow {
     }
 
     fn is_focused(&self) -> bool {
-        self.is_focused
+        *self.is_focused.lock()
     }
 
     fn is_visible(&self) -> bool {
-        self.is_visible
+        *self.is_visible.lock()
+    }
+
+    fn set_title(&self, title: &str) {
+        self.window.set_title(title);
+    }
+
+    fn minimize(&self) {
+        self.window.set_minimized(true);
+    }
+
+    fn maximize(&self) {
+        self.window.set_maximized(true);
+    }
+
+    fn restore(&self) {
+        self.window.set_minimized(false);
+        self.window.set_maximized(false);
+    }
+
+    fn toggle_fullscreen(&self) {
+        use winit::window::Fullscreen;
+        let current = self.window.fullscreen();
+        if current.is_some() {
+            self.window.set_fullscreen(None);
+        } else {
+            self.window
+                .set_fullscreen(Some(Fullscreen::Borderless(None)));
+        }
+    }
+
+    fn close(&self) {
+        self.callbacks.dispatch_close();
+        self.window.set_visible(false);
+    }
+
+    fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult + Send>) {
+        *self.callbacks.on_input.lock() = Some(callback);
+    }
+
+    fn on_request_frame(&self, callback: Box<dyn FnMut() + Send>) {
+        *self.callbacks.on_request_frame.lock() = Some(callback);
+    }
+
+    fn on_resize(&self, callback: Box<dyn FnMut(Size<Pixels>, f32) + Send>) {
+        *self.callbacks.on_resize.lock() = Some(callback);
+    }
+
+    fn on_moved(&self, callback: Box<dyn FnMut() + Send>) {
+        *self.callbacks.on_moved.lock() = Some(callback);
+    }
+
+    fn on_close(&self, callback: Box<dyn FnOnce() + Send>) {
+        *self.callbacks.on_close.lock() = Some(callback);
+    }
+
+    fn on_should_close(&self, callback: Box<dyn FnMut() -> bool + Send>) {
+        *self.callbacks.on_should_close.lock() = Some(callback);
+    }
+
+    fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        *self.callbacks.on_active_status_change.lock() = Some(callback);
+    }
+
+    fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        *self.callbacks.on_hover_status_change.lock() = Some(callback);
+    }
+
+    fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
+        *self.callbacks.on_appearance_changed.lock() = Some(callback);
     }
 
     fn as_winit(&self) -> Option<&Arc<Window>> {

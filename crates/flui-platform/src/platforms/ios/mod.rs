@@ -11,7 +11,8 @@
 //!
 //! # Current Status
 //!
-//! ⚠️ **NOT IMPLEMENTED** - This is a stub that returns `unimplemented!()` for all operations.
+//! ⚠️ **NOT IMPLEMENTED** - This is a stub that returns `unimplemented!()` for
+//! all operations.
 //!
 //! # Implementation Roadmap
 //!
@@ -118,9 +119,11 @@
 //! - `core-graphics = "0.22"` - Core Graphics bindings
 //! - `icrate` - Modern Objective-C 2.0 bindings
 
-use crate::traits::*;
-use anyhow::Result;
 use std::sync::Arc;
+
+use anyhow::Result;
+
+use crate::traits::*;
 
 /// iOS platform implementation (stub)
 ///
@@ -153,7 +156,9 @@ impl IOSPlatform {
     ///
     /// Always panics with "iOS platform not yet implemented"
     pub fn new() -> Result<Self> {
-        unimplemented!("iOS platform not yet implemented - use winit backend or wait for native UIKit implementation")
+        unimplemented!(
+            "iOS platform not yet implemented - use winit backend or wait for native UIKit implementation"
+        )
     }
 
     /// Initialize from UIApplication
@@ -175,20 +180,12 @@ impl Platform for IOSPlatform {
         unimplemented!("iOS main queue executor not implemented")
     }
 
-    fn text_system(&self) -> Arc<dyn PlatformTextSystem> {
-        unimplemented!("iOS Core Text system not implemented")
-    }
-
-    fn run(&self, _on_finish_launching: Box<dyn FnOnce()>) {
+    fn run(self: Box<Self>, _on_finish_launching: Box<dyn FnOnce()>) {
         unimplemented!("iOS UIApplicationMain run loop not implemented")
     }
 
     fn quit(&self) {
         unimplemented!("iOS quit (not recommended by Apple) not implemented")
-    }
-
-    fn request_frame(&self) {
-        unimplemented!("iOS CADisplayLink frame request not implemented")
     }
 
     fn active_window(&self) -> Option<WindowId> {

@@ -2,7 +2,7 @@
 //!
 //! Demonstrates how to initialize and use cross-platform logging.
 
-use flui_log::{debug, error, info, trace, warn, Logger};
+use flui_log::{Logger, debug, error, info, trace, warn};
 
 fn main() {
     // Initialize logging with default configuration

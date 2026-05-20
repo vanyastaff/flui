@@ -7,12 +7,14 @@
 //! - RTL and bidirectional text
 //! - Line metrics
 
-use flui_painting::text_layout::detect_text_direction;
-use flui_painting::{DisplayListCore, TextPainter};
-use flui_types::geometry::{px, Offset};
-use flui_types::styling::Color;
-use flui_types::typography::{
-    FontStyle, FontWeight, InlineSpan, TextAlign, TextDirection, TextPosition, TextSpan, TextStyle,
+use flui_painting::{DisplayListCore, TextPainter, detect_text_direction};
+use flui_types::{
+    geometry::{Offset, px},
+    styling::Color,
+    typography::{
+        FontStyle, FontWeight, InlineSpan, TextAlign, TextDirection, TextPosition, TextSpan,
+        TextStyle,
+    },
 };
 
 // ============================================================================

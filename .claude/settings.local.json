@@ -17,7 +17,20 @@
       "Skill(rust-best-practices)",
       "Skill(rust-best-practices:*)",
       "mcp__filesystem__search_files",
-      "WebFetch(domain:microsoft.github.io)"
+      "WebFetch(domain:microsoft.github.io)",
+      "Bash(ping:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo test:*)",
+      "mcp__plugin_context7_context7__resolve-library-id",
+      "Bash(find:*)",
+      "mcp__deepwiki__ask_question",
+      "mcp__filesystem__read_media_file",
+      "Bash(Select-String -Pattern \"flui-hot-reload|flui-app\")",
+      "Bash(cargo build:*)",
+      "Bash(rustc --version)",
+      "Bash(bash \"C:/Users/vanya/.claude/plugins/cache/compound-engineering-plugin/compound-engineering/3.8.2/skills/ce-setup/scripts/check-health\" --version 3.8.2)",
+      "Bash(ls ../../../.flutter/flutter-master/packages/flutter/lib/src/ 2>/dev/null)"
     ]
   }
 }

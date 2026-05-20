@@ -5,7 +5,16 @@
 # Compiled files and executables
 /target/
 debug/
-.claude
+
+# Claude Code project config — ignore the directory contents by default, but
+# track the pieces meant to be shared with teammates (settings, hooks).
+# Use `.claude/*` (wildcard contents) so the directory itself stays
+# traversable for the `!` re-includes below.
+.claude/*
+!.claude/settings.json
+!.claude/hooks
+!.claude/hooks/*
+
 .agents
 
 /%TEMP%/
@@ -164,3 +173,5 @@ flamegraph.svg
 
 # Auto Claude data directory
 .auto-claude/
+
+.compound-engineering/*.local.yaml

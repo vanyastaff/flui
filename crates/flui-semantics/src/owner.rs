@@ -7,9 +7,7 @@ use std::sync::Arc;
 
 use flui_foundation::SemanticsId;
 
-use crate::node::SemanticsNode;
-use crate::tree::SemanticsTree;
-use crate::update::SemanticsNodeData;
+use crate::{node::SemanticsNode, tree::SemanticsTree, update::SemanticsNodeData};
 
 // ============================================================================
 // CALLBACK TYPE
@@ -362,8 +360,9 @@ impl Default for SemanticsOwner {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
 
     #[test]
     fn test_semantics_owner_new() {

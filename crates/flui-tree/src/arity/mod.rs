@@ -1,7 +1,8 @@
 //! Advanced compile-time arity system for tree nodes.
 //!
-//! This module provides a production-grade, zero-cost abstraction for expressing
-//! and validating child counts using advanced Rust type system features:
+//! This module provides a production-grade, zero-cost abstraction for
+//! expressing and validating child counts using advanced Rust type system
+//! features:
 //!
 //! - **Const Generics** for compile-time size validation
 //! - **GAT (Generic Associated Types)** for flexible accessors
@@ -33,7 +34,7 @@
 //! # Example
 //!
 //! ```
-//! use flui_tree::arity::{Arity, Single, Variable, ArityStorage};
+//! use flui_tree::arity::{Arity, ArityStorage, Single, Variable};
 //!
 //! // Single child container
 //! struct RenderPadding {
@@ -80,40 +81,28 @@ pub use accessors::{
     TypeInfo,
     TypedChildren,
 };
-
-// ============================================================================
-// RE-EXPORTS - Runtime
-// ============================================================================
-
-pub use runtime::{PerformanceHint, RuntimeArity};
-
-// ============================================================================
-// RE-EXPORTS - Error
-// ============================================================================
-
-pub use error::ArityError;
-
-// ============================================================================
-// RE-EXPORTS - Trait
-// ============================================================================
-
-pub use traits::Arity;
-
-// ============================================================================
-// RE-EXPORTS - Types
-// ============================================================================
-
-pub use types::{AtLeast, Exact, Leaf, Never, Optional, Range, Single, Variable};
-
-// ============================================================================
-// RE-EXPORTS - Storage
-// ============================================================================
-
-pub use arity_storage::{ArityStorage, ArityStorageView};
-pub use storage::{ChildrenStorage, ChildrenStorageExt};
-
 // ============================================================================
 // RE-EXPORTS - Aliases
 // ============================================================================
-
 pub use aliases::{LeafStorage, OptionalChildStorage, SingleChildStorage, VariableChildrenStorage};
+// ============================================================================
+// RE-EXPORTS - Storage
+// ============================================================================
+pub use arity_storage::{ArityStorage, ArityStorageView};
+// ============================================================================
+// RE-EXPORTS - Error
+// ============================================================================
+pub use error::ArityError;
+// ============================================================================
+// RE-EXPORTS - Runtime
+// ============================================================================
+pub use runtime::{PerformanceHint, RuntimeArity};
+pub use storage::{ChildrenStorage, ChildrenStorageExt};
+// ============================================================================
+// RE-EXPORTS - Trait
+// ============================================================================
+pub use traits::Arity;
+// ============================================================================
+// RE-EXPORTS - Types
+// ============================================================================
+pub use types::{AtLeast, Exact, Leaf, Never, Optional, Range, Single, Variable};

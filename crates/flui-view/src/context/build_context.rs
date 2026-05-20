@@ -8,8 +8,9 @@
 //! This corresponds to Flutter's `BuildContext` abstract class.
 //! In Flutter, `Element` implements `BuildContext` - same pattern here.
 
-use flui_foundation::ElementId;
 use std::any::TypeId;
+
+use flui_foundation::ElementId;
 
 /// Context provided to Views during the build phase.
 ///
@@ -94,10 +95,12 @@ pub trait BuildContext: Send + Sync {
     ///
     /// # Returns
     ///
-    /// The data if an ancestor InheritedView of that type exists, None otherwise.
+    /// The data if an ancestor InheritedView of that type exists, None
+    /// otherwise.
     fn depend_on_inherited(&self, type_id: TypeId) -> Option<&dyn std::any::Any>;
 
-    /// Look up data from an ancestor InheritedView WITHOUT registering a dependency.
+    /// Look up data from an ancestor InheritedView WITHOUT registering a
+    /// dependency.
     ///
     /// Unlike `depend_on_inherited`, this does NOT cause rebuilds when the
     /// InheritedView changes. Use this for one-time lookups where you don't
@@ -134,7 +137,8 @@ pub trait BuildContext: Send + Sync {
 
     /// Get the root ancestor State of a specific type.
     ///
-    /// Unlike `find_ancestor_state`, this finds the furthest ancestor, not nearest.
+    /// Unlike `find_ancestor_state`, this finds the furthest ancestor, not
+    /// nearest.
     fn find_root_ancestor_state(&self, type_id: TypeId) -> Option<&dyn std::any::Any>;
 
     // ========================================================================

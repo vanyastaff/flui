@@ -1,8 +1,8 @@
 //! Lock-free render state flags with Flutter compliance.
 //!
 //! This module implements Flutter's RenderObject dirty flag system using atomic
-//! operations for thread-safe, lock-free access. All operations are single atomic
-//! instructions with no locks or contention.
+//! operations for thread-safe, lock-free access. All operations are single
+//! atomic instructions with no locks or contention.
 //!
 //! # Flutter RenderObject Flags
 //!
@@ -90,9 +90,12 @@
 //! }
 //! ```
 
+use std::{
+    fmt,
+    sync::atomic::{AtomicU32, Ordering},
+};
+
 use bitflags::bitflags;
-use std::fmt;
-use std::sync::atomic::{AtomicU32, Ordering};
 
 bitflags! {
     /// Per-render-node state flags stored in a compact bitset.
@@ -141,7 +144,8 @@ bitflags! {
     /// Bit 7: HAS_OVERFLOW (debug only)
     /// Bit 8: NEEDS_LAYOUT_PROPAGATION
     /// Bit 9: NEEDS_PAINT_PROPAGATION
-    /// Bits 10-31: Reserved for future use
+    /// Bit 10: WAS_REPAINT_BOUNDARY
+    /// Bits 11-31: Reserved for future use
     /// ```
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct RenderFlags: u32 {
@@ -235,6 +239,22 @@ bitflags! {
         /// Internal flag used during paint phase to track
         /// which nodes need to notify their parents.
         const NEEDS_PAINT_PROPAGATION = 1 << 9;
+
+        /// Previous frame's `IS_REPAINT_BOUNDARY` value.
+        ///
+        /// Written by the paint phase (`PipelineOwner::paint_node_recursive`)
+        /// when a node is painted. Read by compositing-bits propagation to
+        /// detect a transition into or out of repaint-boundary status.
+        ///
+        /// Hoisted off the `RenderObject<P>` trait surface (Flutter stores
+        /// this on the render object as `_wasRepaintBoundary`; in FLUI it
+        /// lives here so the paint phase can flip the bit through a single
+        /// atomic store rather than acquiring a write lock on the trait
+        /// object). See `docs/PORT.md` Refusal trigger 1 and the U2 exemplar
+        /// refactor that introduced this flag.
+        ///
+        /// Flutter equivalent: `_wasRepaintBoundary` field on `RenderObject`.
+        const WAS_REPAINT_BOUNDARY = 1 << 10;
     }
 }
 
@@ -321,6 +341,9 @@ impl fmt::Display for RenderFlags {
         if self.contains(Self::HAS_GEOMETRY) {
             flags.push("HAS_GEOMETRY");
         }
+        if self.contains(Self::WAS_REPAINT_BOUNDARY) {
+            flags.push("WAS_REPAINT_BOUNDARY");
+        }
         #[cfg(debug_assertions)]
         if self.contains(Self::HAS_OVERFLOW) {
             flags.push("HAS_OVERFLOW");
@@ -336,8 +359,9 @@ impl fmt::Display for RenderFlags {
 
 /// Atomic wrapper for RenderFlags providing lock-free operations.
 ///
-/// This wrapper provides thread-safe flag operations using atomic compare-and-swap
-/// operations. It's 10-50x faster than RwLock for hot-path checks.
+/// This wrapper provides thread-safe flag operations using atomic
+/// compare-and-swap operations. It's 10-50x faster than RwLock for hot-path
+/// checks.
 ///
 /// # Performance
 ///
@@ -409,9 +433,7 @@ impl AtomicRenderFlags {
     /// ```rust
     /// use flui_rendering::core::{AtomicRenderFlags, RenderFlags};
     ///
-    /// let flags = AtomicRenderFlags::new(
-    ///     RenderFlags::NEEDS_LAYOUT | RenderFlags::NEEDS_PAINT
-    /// );
+    /// let flags = AtomicRenderFlags::new(RenderFlags::NEEDS_LAYOUT | RenderFlags::NEEDS_PAINT);
     /// assert!(flags.needs_layout());
     /// ```
     pub const fn new(flags: RenderFlags) -> Self {
@@ -579,9 +601,7 @@ impl AtomicRenderFlags {
     /// ```rust
     /// use flui_rendering::core::{AtomicRenderFlags, RenderFlags};
     ///
-    /// let flags = AtomicRenderFlags::new(
-    ///     RenderFlags::NEEDS_LAYOUT | RenderFlags::NEEDS_PAINT
-    /// );
+    /// let flags = AtomicRenderFlags::new(RenderFlags::NEEDS_LAYOUT | RenderFlags::NEEDS_PAINT);
     /// flags.clear();
     /// assert!(flags.is_clean());
     /// ```
@@ -787,6 +807,30 @@ impl AtomicRenderFlags {
     #[inline]
     pub fn is_repaint_boundary(&self) -> bool {
         self.contains(RenderFlags::IS_REPAINT_BOUNDARY)
+    }
+
+    /// Sets the previous-frame repaint-boundary value.
+    ///
+    /// Written by the paint phase after a node is painted. Reads happen
+    /// in compositing-bits propagation to detect repaint-boundary state
+    /// transitions.
+    ///
+    /// Flutter equivalent: `_wasRepaintBoundary = value` (field assignment).
+    #[inline]
+    pub fn set_was_repaint_boundary(&self, was_boundary: bool) {
+        if was_boundary {
+            self.set(RenderFlags::WAS_REPAINT_BOUNDARY);
+        } else {
+            self.remove(RenderFlags::WAS_REPAINT_BOUNDARY);
+        }
+    }
+
+    /// Returns the previous-frame repaint-boundary value.
+    ///
+    /// Flutter equivalent: `_wasRepaintBoundary` (field read).
+    #[inline]
+    pub fn was_repaint_boundary(&self) -> bool {
+        self.contains(RenderFlags::WAS_REPAINT_BOUNDARY)
     }
 
     /// Marks that the render object has geometry.

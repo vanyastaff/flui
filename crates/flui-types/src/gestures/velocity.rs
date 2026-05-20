@@ -3,8 +3,9 @@
 //! This module provides types for tracking and estimating velocity
 //! of pointer movements.
 
-use crate::geometry::{Offset, Pixels};
 use std::time::Duration;
+
+use crate::geometry::{Offset, Pixels};
 
 /// A velocity in two dimensions
 ///
@@ -26,8 +27,7 @@ use std::time::Duration;
 /// # Examples
 ///
 /// ```
-/// use flui_types::gestures::Velocity;
-/// use flui_types::Offset;
+/// use flui_types::{Offset, gestures::Velocity};
 ///
 /// let velocity = Velocity::new(Offset::new(100.0, 50.0));
 /// assert_eq!(velocity.pixels_per_second, Offset::new(100.0, 50.0));
@@ -57,8 +57,7 @@ impl Velocity {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::gestures::Velocity;
-    /// use flui_types::Offset;
+    /// use flui_types::{Offset, gestures::Velocity};
     ///
     /// let velocity = Velocity::new(Offset::new(100.0, -50.0));
     /// assert_eq!(velocity.pixels_per_second.dx, 100.0);
@@ -111,21 +110,19 @@ impl Velocity {
 
     /// Create a velocity from an offset traveled over a duration.
     ///
-    /// This is the inverse of `distance_over_duration()`. Useful for calculating
-    /// velocity from gesture tracking data.
+    /// This is the inverse of `distance_over_duration()`. Useful for
+    /// calculating velocity from gesture tracking data.
     ///
     /// # Examples
     ///
     /// ```
-    /// use flui_types::gestures::Velocity;
-    /// use flui_types::Offset;
     /// use std::time::Duration;
     ///
+    /// use flui_types::{Offset, gestures::Velocity};
+    ///
     /// // Moved 100px right and 50px down in 100ms
-    /// let velocity = Velocity::from_offset_over_duration(
-    ///     Offset::new(100.0, 50.0),
-    ///     Duration::from_millis(100)
-    /// );
+    /// let velocity =
+    ///     Velocity::from_offset_over_duration(Offset::new(100.0, 50.0), Duration::from_millis(100));
     ///
     /// // Velocity should be 1000px/s right, 500px/s down
     /// assert!((velocity.dx() - 1000.0).abs() < 0.1);
@@ -148,8 +145,7 @@ impl Velocity {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::gestures::Velocity;
-    /// use flui_types::Offset;
+    /// use flui_types::{Offset, gestures::Velocity};
     ///
     /// let velocity = Velocity::new(Offset::new(3.0, 4.0));
     /// assert_eq!(velocity.magnitude(), 5.0);
@@ -167,9 +163,9 @@ impl Velocity {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::gestures::Velocity;
-    /// use flui_types::Offset;
     /// use std::f32::consts::PI;
+    ///
+    /// use flui_types::{Offset, gestures::Velocity};
     ///
     /// let velocity = Velocity::new(Offset::new(1.0, 0.0));
     /// assert!((velocity.direction() - 0.0).abs() < 0.01);
@@ -188,8 +184,7 @@ impl Velocity {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::gestures::Velocity;
-    /// use flui_types::Offset;
+    /// use flui_types::{Offset, gestures::Velocity};
     ///
     /// assert!(Velocity::ZERO.is_zero());
     /// assert!(!Velocity::new(Offset::new(1.0, 0.0)).is_zero());
@@ -205,8 +200,7 @@ impl Velocity {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::gestures::Velocity;
-    /// use flui_types::Offset;
+    /// use flui_types::{Offset, gestures::Velocity};
     ///
     /// let valid = Velocity::new(Offset::new(100.0, 50.0));
     /// assert!(valid.is_finite());
@@ -222,13 +216,13 @@ impl Velocity {
 
     /// Clamps the magnitude of the velocity
     ///
-    /// If the magnitude exceeds `max`, scales the velocity to have magnitude `max`.
+    /// If the magnitude exceeds `max`, scales the velocity to have magnitude
+    /// `max`.
     ///
     /// # Examples
     ///
     /// ```
-    /// use flui_types::gestures::Velocity;
-    /// use flui_types::Offset;
+    /// use flui_types::{Offset, gestures::Velocity};
     ///
     /// let velocity = Velocity::new(Offset::new(100.0, 0.0));
     /// let clamped = velocity.clamp_magnitude(0.0, 50.0);
@@ -256,8 +250,7 @@ impl Velocity {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::gestures::Velocity;
-    /// use flui_types::Offset;
+    /// use flui_types::{Offset, gestures::Velocity};
     ///
     /// let velocity = Velocity::new(Offset::new(100.0, -50.0));
     /// let negated = velocity.negate();
@@ -274,8 +267,7 @@ impl Velocity {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::gestures::Velocity;
-    /// use flui_types::Offset;
+    /// use flui_types::{Offset, gestures::Velocity};
     ///
     /// let velocity = Velocity::new(Offset::new(100.0, 50.0));
     /// let scaled = velocity.scale(0.5);
@@ -294,9 +286,9 @@ impl Velocity {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::gestures::Velocity;
-    /// use flui_types::Offset;
     /// use std::time::Duration;
+    ///
+    /// use flui_types::{Offset, gestures::Velocity};
     ///
     /// let velocity = Velocity::new(Offset::new(100.0, 0.0));
     /// let distance = velocity.distance_over_duration(Duration::from_secs(1));
@@ -314,8 +306,7 @@ impl Velocity {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::gestures::Velocity;
-    /// use flui_types::Offset;
+    /// use flui_types::{Offset, gestures::Velocity};
     ///
     /// let velocity = Velocity::new(Offset::new(100.0, 50.0));
     /// assert_eq!(velocity.dx(), 100.0);
@@ -331,8 +322,7 @@ impl Velocity {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::gestures::Velocity;
-    /// use flui_types::Offset;
+    /// use flui_types::{Offset, gestures::Velocity};
     ///
     /// let velocity = Velocity::new(Offset::new(100.0, 50.0));
     /// assert_eq!(velocity.dy(), 50.0);
@@ -359,9 +349,9 @@ impl Default for Velocity {
 /// # Examples
 ///
 /// ```
-/// use flui_types::gestures::VelocityEstimate;
-/// use flui_types::Offset;
 /// use std::time::Duration;
+///
+/// use flui_types::{Offset, gestures::VelocityEstimate};
 ///
 /// let estimate = VelocityEstimate::new(
 ///     Offset::new(100.0, 50.0),
@@ -397,9 +387,9 @@ impl VelocityEstimate {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::gestures::VelocityEstimate;
-    /// use flui_types::Offset;
     /// use std::time::Duration;
+    ///
+    /// use flui_types::{Offset, gestures::VelocityEstimate};
     ///
     /// let estimate = VelocityEstimate::new(
     ///     Offset::new(100.0, 50.0),
@@ -429,9 +419,9 @@ impl VelocityEstimate {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::gestures::VelocityEstimate;
-    /// use flui_types::Offset;
     /// use std::time::Duration;
+    ///
+    /// use flui_types::{Offset, gestures::VelocityEstimate};
     ///
     /// let estimate = VelocityEstimate::new(
     ///     Offset::ZERO,
@@ -455,16 +445,12 @@ impl VelocityEstimate {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::gestures::VelocityEstimate;
-    /// use flui_types::Offset;
     /// use std::time::Duration;
     ///
-    /// let reliable = VelocityEstimate::new(
-    ///     Offset::ZERO,
-    ///     Offset::ZERO,
-    ///     Duration::from_millis(16),
-    ///     0.8,
-    /// );
+    /// use flui_types::{Offset, gestures::VelocityEstimate};
+    ///
+    /// let reliable =
+    ///     VelocityEstimate::new(Offset::ZERO, Offset::ZERO, Duration::from_millis(16), 0.8);
     /// assert!(reliable.is_reliable());
     /// ```
     #[inline]
@@ -478,9 +464,9 @@ impl VelocityEstimate {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::gestures::VelocityEstimate;
-    /// use flui_types::Offset;
     /// use std::time::Duration;
+    ///
+    /// use flui_types::{Offset, gestures::VelocityEstimate};
     ///
     /// let valid = VelocityEstimate::new(
     ///     Offset::new(100.0, 50.0),
@@ -502,14 +488,15 @@ impl VelocityEstimate {
 
     /// Returns whether the estimate is valid
     ///
-    /// An estimate is valid if all values are finite and confidence is in [0, 1].
+    /// An estimate is valid if all values are finite and confidence is in [0,
+    /// 1].
     ///
     /// # Examples
     ///
     /// ```
-    /// use flui_types::gestures::VelocityEstimate;
-    /// use flui_types::Offset;
     /// use std::time::Duration;
+    ///
+    /// use flui_types::{Offset, gestures::VelocityEstimate};
     ///
     /// let valid = VelocityEstimate::new(
     ///     Offset::new(100.0, 50.0),
@@ -538,9 +525,9 @@ impl VelocityEstimate {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::gestures::VelocityEstimate;
-    /// use flui_types::Offset;
     /// use std::time::Duration;
+    ///
+    /// use flui_types::{Offset, gestures::VelocityEstimate};
     ///
     /// let estimate = VelocityEstimate::new(
     ///     Offset::ZERO,

@@ -5,8 +5,8 @@
 //! - Rect::intersect: <20ns
 //! - Rect::union: <20ns
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use flui_types::geometry::{px, Point, Rect, Size, Vec2};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use flui_types::geometry::{Point, Rect, Size, Vec2, px};
 
 fn point_distance_benchmark(c: &mut Criterion) {
     let p1 = Point::new(px(10.0), px(20.0));

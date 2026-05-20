@@ -1,8 +1,6 @@
 //! View keys for element identity and reconciliation
-//!
 // Allow unsafe code in this module - it's required for NonZeroU64::new_unchecked
 #![allow(unsafe_code)]
-//!
 //! This module provides key types for view identity tracking:
 //!
 //! # Simple Keys (Copy, lightweight)
@@ -46,11 +44,13 @@
 //! AnimatedWidget::new().with_view_key(UniqueKey::new())
 //! ```
 
-use std::any::{Any, TypeId};
-use std::fmt;
-use std::hash::{Hash, Hasher};
-use std::num::NonZeroU64;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    any::{Any, TypeId},
+    fmt,
+    hash::{Hash, Hasher},
+    num::NonZeroU64,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 /// View key with niche optimization
 ///
@@ -133,7 +133,8 @@ impl Key {
     /// # Panics
     ///
     /// Panics if `u64::MAX` keys have been created (practically impossible).
-    /// This prevents undefined behavior from `NonZeroU64::new_unchecked(0)` after overflow.
+    /// This prevents undefined behavior from `NonZeroU64::new_unchecked(0)`
+    /// after overflow.
     #[inline]
     pub fn new() -> Self {
         static COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -665,9 +666,9 @@ const fn const_fnv1a_hash(bytes: &[u8]) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::{collections::HashSet, mem::size_of};
+
     use super::*;
-    use std::collections::HashSet;
-    use std::mem::size_of;
 
     #[test]
     fn test_niche_optimization() {

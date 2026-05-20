@@ -1,6 +1,7 @@
 //! Sealed trait pattern implementation with extension points
 //!
-//! This module provides sealed traits with **extension points** for custom implementations.
+//! This module provides sealed traits with **extension points** for custom
+//! implementations.
 //!
 //! # Architecture
 //!
@@ -9,8 +10,8 @@
 //! 1. **Sealed traits** (internal) - cannot be implemented directly
 //! 2. **Extension traits** (public) - can be implemented by external crates
 //!
-//! When you implement an extension trait, you automatically get the sealed trait
-//! via blanket implementation.
+//! When you implement an extension trait, you automatically get the sealed
+//! trait via blanket implementation.
 //!
 //! # Example: Custom Gesture Recognizer
 //!
@@ -36,10 +37,9 @@
 //! arena.add(pointer_id, Arc::new(recognizer));
 //! ```
 
-use crate::ids::PointerId;
-use flui_types::geometry::Pixels;
+use flui_types::geometry::{Offset, Pixels};
 
-use flui_types::geometry::Offset;
+use crate::ids::PointerId;
 
 // ============================================================================
 // Extension Traits (PUBLIC - implement these for custom types)
@@ -175,14 +175,16 @@ pub mod hit_testable {
 
 /// Sealed trait for gesture recognizers.
 ///
-/// **Do not implement directly.** Instead, implement [`CustomGestureRecognizer`].
+/// **Do not implement directly.** Instead, implement
+/// [`CustomGestureRecognizer`].
 pub mod gesture_recognizer {
     pub trait Sealed {}
 }
 
 /// Sealed trait for arena members.
 ///
-/// **Do not implement directly.** Instead, implement [`CustomGestureRecognizer`].
+/// **Do not implement directly.** Instead, implement
+/// [`CustomGestureRecognizer`].
 pub mod arena_member {
     pub trait Sealed {}
 

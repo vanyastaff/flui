@@ -1,7 +1,8 @@
 //! Rich HitTestContext with ergonomic API for hit testing operations.
 //!
-//! This module provides `HitTestContext`, a high-level wrapper around the hit test
-//! capability traits that offers ergonomic APIs for common hit testing patterns.
+//! This module provides `HitTestContext`, a high-level wrapper around the hit
+//! test capability traits that offers ergonomic APIs for common hit testing
+//! patterns.
 //!
 //! # Features
 //!
@@ -32,14 +33,18 @@
 //! }
 //! ```
 
-use flui_types::geometry::{Matrix4, Offset, Rect};
-use flui_types::Pixels;
+use flui_tree::Arity;
+use flui_types::{
+    Pixels,
+    geometry::{Matrix4, Offset, Rect},
+};
 
-use crate::arity::Arity;
-use crate::parent_data::ParentData;
-use crate::protocol::{
-    BoxHitTest, BoxHitTestEntry, HitTestCapability, HitTestContextApi, MainAxisPosition, Protocol,
-    SliverHitTest,
+use crate::{
+    parent_data::ParentData,
+    protocol::{
+        BoxHitTest, BoxHitTestEntry, HitTestCapability, HitTestContextApi, MainAxisPosition,
+        Protocol, SliverHitTest,
+    },
 };
 
 // ============================================================================
@@ -141,7 +146,8 @@ where
         self.inner.push_offset(offset);
     }
 
-    /// Executes a closure with a pushed transform, automatically popping afterward.
+    /// Executes a closure with a pushed transform, automatically popping
+    /// afterward.
     pub fn with_transform<F, R>(&mut self, transform: Matrix4, f: F) -> R
     where
         F: FnOnce(&mut Self) -> R,
@@ -152,7 +158,8 @@ where
         result
     }
 
-    /// Executes a closure with a pushed offset, automatically popping afterward.
+    /// Executes a closure with a pushed offset, automatically popping
+    /// afterward.
     pub fn with_offset<F, R>(&mut self, offset: Offset, f: F) -> R
     where
         F: FnOnce(&mut Self) -> R,

@@ -3,8 +3,10 @@
 //! Describes the space occupied by a sliver after layout, including
 //! paint extent, scroll extent, and cache regions.
 
-use std::fmt;
-use std::hash::{Hash, Hasher};
+use std::{
+    fmt,
+    hash::{Hash, Hasher},
+};
 
 /// Layout output describing space occupied by a sliver.
 ///
@@ -120,7 +122,8 @@ impl SliverGeometry {
 
     /// Creates geometry with basic extents.
     ///
-    /// Sets paint_extent as layout and cache extent, visible if paint_extent > 0.
+    /// Sets paint_extent as layout and cache extent, visible if paint_extent >
+    /// 0.
     #[inline]
     #[must_use]
     pub const fn new(scroll_extent: f32, paint_extent: f32, paint_origin: f32) -> Self {
@@ -413,8 +416,9 @@ impl fmt::Display for SliverGeometry {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::collections::HashSet;
+
+    use super::*;
 
     #[test]
     fn test_hash_equality() {

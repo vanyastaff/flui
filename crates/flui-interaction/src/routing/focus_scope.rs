@@ -1,9 +1,11 @@
 //! Focus tree nodes for keyboard navigation (Flutter-compatible architecture)
 //!
-//! This module provides Flutter-compatible focus management using a tree structure:
+//! This module provides Flutter-compatible focus management using a tree
+//! structure:
 //!
 //! - [`FocusNode`] - A node in the focus tree that can receive keyboard focus
-//! - [`FocusScopeNode`] - A special FocusNode that groups descendants and tracks focus history
+//! - [`FocusScopeNode`] - A special FocusNode that groups descendants and
+//!   tracks focus history
 //! - [`FocusAttachment`] - RAII handle for attaching FocusNode to the tree
 //! - [`FocusTraversalPolicy`] - Determines Tab/Shift+Tab navigation order
 //!
@@ -24,7 +26,8 @@
 //! Key concepts from Flutter:
 //! - Focus nodes form a **tree** parallel to the widget tree
 //! - `FocusScopeNode` restricts traversal and remembers focus history
-//! - `hasFocus` = any descendant has focus, `hasPrimaryFocus` = this node has focus
+//! - `hasFocus` = any descendant has focus, `hasPrimaryFocus` = this node has
+//!   focus
 //! - Nodes must be attached via `FocusAttachment` lifecycle
 //!
 //! # Example
@@ -53,16 +56,19 @@
 //! - [Flutter FocusScopeNode](https://api.flutter.dev/flutter/widgets/FocusScopeNode-class.html)
 //! - [Understanding Flutter's keyboard focus system](https://docs.flutter.dev/ui/interactivity/focus)
 
-use flui_types::geometry::Pixels;
+use std::{
+    cmp::Ordering,
+    collections::VecDeque,
+    sync::{
+        Arc, Weak,
+        atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering},
+    },
+};
+
+use flui_types::geometry::{Offset, Pixels, Rect};
 use parking_lot::{Mutex, RwLock};
-use std::cmp::Ordering;
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
-use std::sync::{Arc, Weak};
 
 use crate::events::KeyEvent;
-use flui_types::geometry::{Offset, Rect};
-
 // Re-export FocusNodeId from ids module
 pub use crate::ids::FocusNodeId;
 
@@ -290,11 +296,11 @@ impl FocusNode {
     ///
     /// This is `true` if any node in this subtree has primary focus.
     pub fn has_focus(&self) -> bool {
-        if let Some(manager) = self.manager.read().as_ref().and_then(|w| w.upgrade()) {
-            if let Some(focused_id) = manager.primary_focus() {
-                // Check if focused node is this node or a descendant
-                return self.id == focused_id || self.has_descendant(focused_id);
-            }
+        if let Some(manager) = self.manager.read().as_ref().and_then(|w| w.upgrade())
+            && let Some(focused_id) = manager.primary_focus()
+        {
+            // Check if focused node is this node or a descendant
+            return self.id == focused_id || self.has_descendant(focused_id);
         }
         false
     }
@@ -383,10 +389,10 @@ impl FocusNode {
     ///
     /// Returns the result indicating whether the event was handled.
     pub fn handle_key_event(&self, event: &KeyEvent) -> KeyEventResult {
-        if let Some(handler) = self.on_key_event.read().as_ref() {
-            if handler(event) {
-                return KeyEventResult::Handled;
-            }
+        if let Some(handler) = self.on_key_event.read().as_ref()
+            && handler(event)
+        {
+            return KeyEventResult::Handled;
         }
         KeyEventResult::Ignored
     }
@@ -646,10 +652,10 @@ impl FocusScopeNode {
     /// Sets focus to the first focusable child.
     pub fn set_first_focus(self: &Arc<Self>) {
         let nodes = self.collect_focusable_nodes();
-        if let Some(first) = nodes.first() {
-            if let Some(manager) = self.inner.manager.read().as_ref().and_then(|w| w.upgrade()) {
-                manager.set_primary_focus(Some(first.id()));
-            }
+        if let Some(first) = nodes.first()
+            && let Some(manager) = self.inner.manager.read().as_ref().and_then(|w| w.upgrade())
+        {
+            manager.set_primary_focus(Some(first.id()));
         }
     }
 
@@ -658,11 +664,11 @@ impl FocusScopeNode {
         let nodes = self.collect_focusable_nodes();
         let policy = self.traversal_policy.read().clone();
 
-        if let Some(next_id) = policy.find_next(current, &nodes) {
-            if let Some(manager) = self.inner.manager.read().as_ref().and_then(|w| w.upgrade()) {
-                manager.set_primary_focus(Some(next_id));
-                return true;
-            }
+        if let Some(next_id) = policy.find_next(current, &nodes)
+            && let Some(manager) = self.inner.manager.read().as_ref().and_then(|w| w.upgrade())
+        {
+            manager.set_primary_focus(Some(next_id));
+            return true;
         }
         false
     }
@@ -672,11 +678,11 @@ impl FocusScopeNode {
         let nodes = self.collect_focusable_nodes();
         let policy = self.traversal_policy.read().clone();
 
-        if let Some(prev_id) = policy.find_previous(current, &nodes) {
-            if let Some(manager) = self.inner.manager.read().as_ref().and_then(|w| w.upgrade()) {
-                manager.set_primary_focus(Some(prev_id));
-                return true;
-            }
+        if let Some(prev_id) = policy.find_previous(current, &nodes)
+            && let Some(manager) = self.inner.manager.read().as_ref().and_then(|w| w.upgrade())
+        {
+            manager.set_primary_focus(Some(prev_id));
+            return true;
         }
         false
     }
@@ -794,8 +800,9 @@ impl FocusTraversalPolicy for ReadingOrderPolicy {
 }
 
 impl ReadingOrderPolicy {
-    /// Returns indices into `nodes` sorted by reading order (top-to-bottom, left-to-right).
-    /// Avoids cloning Arc<FocusNode> — only sorts lightweight indices.
+    /// Returns indices into `nodes` sorted by reading order (top-to-bottom,
+    /// left-to-right). Avoids cloning Arc<FocusNode> — only sorts
+    /// lightweight indices.
     fn sorted_indices(&self, nodes: &[Arc<FocusNode>]) -> Vec<usize> {
         let mut indices: Vec<usize> = (0..nodes.len()).collect();
         indices.sort_by(|&a, &b| {
@@ -1007,7 +1014,8 @@ impl FocusManagerInner {
     }
 
     pub fn set_primary_focus(&self, node_id: Option<FocusNodeId>) {
-        // Single write lock to atomically read previous and write new (avoids TOCTOU race)
+        // Single write lock to atomically read previous and write new (avoids TOCTOU
+        // race)
         let previous = {
             let mut focus = self.primary_focus.write();
             let previous = *focus;
@@ -1019,12 +1027,11 @@ impl FocusManagerInner {
         };
 
         // Record in enclosing scope's history
-        if let Some(id) = node_id {
-            if let Some(node) = self.find_node(id) {
-                if let Some(scope) = node.enclosing_scope() {
-                    scope.record_focus(id);
-                }
-            }
+        if let Some(id) = node_id
+            && let Some(node) = self.find_node(id)
+            && let Some(scope) = node.enclosing_scope()
+        {
+            scope.record_focus(id);
         }
 
         // Notify listeners

@@ -1,11 +1,12 @@
 //! Window mode tests (T016-T020)
 //!
-//! Tests window modes (Normal, Minimized, Maximized, Fullscreen) and DPI handling.
+//! Tests window modes (Normal, Minimized, Maximized, Fullscreen) and DPI
+//! handling.
 //!
 //! Run with: cargo test -p flui-platform --test window_modes
 
-use flui_platform::{current_platform, WindowOptions};
-use flui_types::geometry::{px, Size};
+use flui_platform::{WindowOptions, current_platform};
+use flui_types::geometry::{Size, px};
 
 /// T016: Test window mode transitions (Normal, Maximized, Fullscreen)
 #[test]
@@ -177,7 +178,8 @@ fn test_dpi_scaling_change() {
                 initial_scale
             );
 
-            // Typical scale factors: 1.0 (96 DPI), 1.25 (120 DPI), 1.5 (144 DPI), 2.0 (192 DPI)
+            // Typical scale factors: 1.0 (96 DPI), 1.25 (120 DPI), 1.5 (144 DPI), 2.0 (192
+            // DPI)
             assert!(
                 initial_scale >= 1.0 && initial_scale <= 3.0,
                 "Scale factor should be reasonable (1.0-3.0), got {}",

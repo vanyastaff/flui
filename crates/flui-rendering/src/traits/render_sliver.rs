@@ -1,19 +1,15 @@
 //! RenderSliver trait for scrollable content layout.
 
-use flui_types::geometry::px;
-use flui_types::prelude::AxisDirection;
-use flui_types::{Pixels, Rect, Size};
+use flui_tree::Arity;
+use flui_types::{Offset, Pixels, Rect, Size, geometry::px, prelude::AxisDirection};
 
-use crate::arity::Arity;
-use crate::constraints::{SliverConstraints, SliverGeometry};
-use flui_types::Offset;
-
-use crate::context::{
-    CanvasContext, SliverHitTestContext, SliverLayoutContext, SliverPaintContext,
+use crate::{
+    constraints::{SliverConstraints, SliverGeometry},
+    context::{CanvasContext, SliverHitTestContext, SliverLayoutContext, SliverPaintContext},
+    parent_data::ParentData,
+    protocol::SliverProtocol,
+    traits::RenderObject,
 };
-use crate::parent_data::ParentData;
-use crate::protocol::SliverProtocol;
-use crate::traits::RenderObject;
 
 // ============================================================================
 // RenderSliver Trait
@@ -60,7 +56,8 @@ use crate::traits::RenderObject;
 /// }
 /// ```
 ///
-/// Implementations are automatically bridged to `RenderObject<SliverProtocol>` via blanket impl.
+/// Implementations are automatically bridged to `RenderObject<SliverProtocol>`
+/// via blanket impl.
 pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static {
     /// The arity of this render sliver (Leaf, Optional, Variable, etc.)
     type Arity: Arity;
@@ -103,7 +100,8 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static 
     ///
     /// This is used by viewports with a center sliver to adjust the
     /// scroll offset to account for slivers that grow in both directions.
-    /// Only the center sliver and slivers before it should return a non-zero value.
+    /// Only the center sliver and slivers before it should return a non-zero
+    /// value.
     ///
     /// # Flutter Equivalence
     ///
@@ -245,7 +243,8 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static 
     ///
     /// # Flutter Equivalence
     ///
-    /// Corresponds to `RenderSliver.getAbsoluteSizeRelativeToOrigin` in Flutter.
+    /// Corresponds to `RenderSliver.getAbsoluteSizeRelativeToOrigin` in
+    /// Flutter.
     fn get_absolute_size_relative_to_origin(&self, paint_extent: f32) -> Size {
         // By default, same as get_absolute_size
         // Override for slivers that need special handling
@@ -325,33 +324,41 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static 
 // Blanket Implementation of RenderObject<SliverProtocol> for RenderSliver
 // ============================================================================
 
-/// Automatic implementation of RenderObject<SliverProtocol> for all RenderSliver types.
+/// Automatic implementation of RenderObject<SliverProtocol> for all
+/// RenderSliver types.
 ///
 /// This blanket impl bridges the typed RenderSliver API (with Arity/ParentData)
 /// and the protocol-specific RenderObject<P> trait needed for storage.
 ///
 /// # Architecture Note
 ///
-/// The `perform_layout_raw` and `hit_test_raw` methods are **protocol bridges only**.
-/// See the RenderBox blanket impl documentation for detailed explanation.
+/// The `perform_layout_raw` and `hit_test_raw` methods are **protocol bridges
+/// only**. See the RenderBox blanket impl documentation for detailed
+/// explanation.
 impl<T> RenderObject<SliverProtocol> for T
 where
-    T: RenderSliver + flui_foundation::Diagnosticable,
+    T: RenderSliver
+        + flui_foundation::Diagnosticable
+        + crate::traits::PaintEffectsCapability
+        + crate::traits::SemanticsCapability
+        + crate::traits::HotReloadCapability,
 {
     fn perform_layout_raw(
         &mut self,
         _constraints: crate::protocol::ProtocolConstraints<SliverProtocol>,
     ) -> crate::protocol::ProtocolGeometry<SliverProtocol> {
         // Protocol bridge only - returns current geometry.
-        // Real layout flows through RenderSliver::perform_layout() with SliverLayoutContext.
+        // Real layout flows through RenderSliver::perform_layout() with
+        // SliverLayoutContext.
         *self.geometry()
     }
 
     fn paint(&self, _context: &mut CanvasContext, _offset: Offset) {
         // Protocol bridge only - no-op.
-        // Real painting flows through RenderSliver::paint() with SliverPaintContext,
-        // which provides children access and paint_child() callbacks.
-        // The pipeline creates the proper context and calls RenderSliver::paint() directly.
+        // Real painting flows through RenderSliver::paint() with
+        // SliverPaintContext, which provides children access and
+        // paint_child() callbacks. The pipeline creates the proper
+        // context and calls RenderSliver::paint() directly.
     }
 
     fn hit_test_raw(
@@ -360,7 +367,8 @@ where
         _position: crate::protocol::ProtocolPosition<SliverProtocol>,
     ) -> bool {
         // Protocol bridge only - returns false.
-        // Real hit testing flows through RenderSliver::hit_test() with SliverHitTestContext.
+        // Real hit testing flows through RenderSliver::hit_test() with
+        // SliverHitTestContext.
         false
     }
 

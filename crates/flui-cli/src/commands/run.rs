@@ -330,6 +330,146 @@ fn ensure_flui_project() -> CliResult<()> {
     Ok(())
 }
 
+/// Execute scene-only hot-reload mode for Android.
+///
+/// Watches the scene crate's `src/` directory for changes and rebuilds/pushes
+/// the scene plugin `.so` to the device without restarting the app.
+/// The host app detects the new `.so` via mtime polling and reloads automatically.
+pub fn execute_scene(
+    scene_crate: &str,
+    package: &str,
+    target: &str,
+    release: bool,
+    verbose: bool,
+) -> CliResult<()> {
+    use flui_build::android::AndroidBuilder;
+    use notify_debouncer_mini::{new_debouncer, DebouncedEventKind};
+
+    let mode = if release { "release" } else { "debug" };
+    cliclack::intro(style(" flui run --scene ").on_magenta().black())?;
+    cliclack::log::info(format!(
+        "Scene hot-reload: {} ({}, {})",
+        style(scene_crate).cyan(),
+        style(target).cyan(),
+        style(mode).cyan()
+    ))?;
+
+    let workspace_root = std::env::current_dir()?;
+    let builder = AndroidBuilder::new(&workspace_root).map_err(|e| CliError::BuildFailed {
+        platform: "android".to_string(),
+        details: e.to_string(),
+    })?;
+
+    let lib_name = "libflui_scene.so";
+
+    // Initial build + push
+    cliclack::log::step("Building scene plugin...")?;
+    let start = Instant::now();
+
+    let rt = tokio::runtime::Runtime::new()?;
+    let so_path = rt
+        .block_on(builder.build_scene_plugin(target, scene_crate, release))
+        .map_err(|e| CliError::BuildFailed {
+            platform: "android".to_string(),
+            details: e.to_string(),
+        })?;
+
+    cliclack::log::success(format!(
+        "Built in {:.2}s: {}",
+        start.elapsed().as_secs_f64(),
+        style(so_path.display()).dim()
+    ))?;
+
+    cliclack::log::step("Pushing to device...")?;
+    rt.block_on(builder.push_scene_plugin(&so_path, package, lib_name))
+        .map_err(|e| CliError::BuildFailed {
+            platform: "android".to_string(),
+            details: e.to_string(),
+        })?;
+    cliclack::log::success("Plugin pushed to device")?;
+
+    // Watch scene crate src/ for changes
+    let scene_src = workspace_root
+        .join("examples")
+        .join(scene_crate.replace("flui-", ""))
+        .join("src");
+
+    if !scene_src.exists() {
+        // Try alternative path pattern
+        let alt = workspace_root
+            .join("examples")
+            .join(scene_crate)
+            .join("src");
+        if !alt.exists() {
+            return Err(CliError::BuildFailed {
+                platform: "android".to_string(),
+                details: format!("Scene crate src/ not found at {:?} or {:?}", scene_src, alt),
+            });
+        }
+    }
+
+    cliclack::log::info(format!(
+        "Watching {} for changes...",
+        style(scene_src.display()).dim()
+    ))?;
+
+    let (tx, rx) = mpsc::channel();
+    let mut debouncer = new_debouncer(Duration::from_millis(300), tx)
+        .map_err(|e| CliError::context(e, "Failed to create file watcher"))?;
+
+    debouncer
+        .watcher()
+        .watch(
+            &scene_src,
+            notify_debouncer_mini::notify::RecursiveMode::Recursive,
+        )
+        .map_err(|e| CliError::context(e, "Failed to watch scene crate"))?;
+
+    loop {
+        match rx.recv() {
+            Ok(Ok(events)) => {
+                if !events.iter().any(|e| e.kind == DebouncedEventKind::Any) {
+                    continue;
+                }
+
+                log_changed_files(&events)?;
+
+                let start = Instant::now();
+                cliclack::log::step("Rebuilding scene plugin...")?;
+
+                match rt.block_on(builder.build_scene_plugin(target, scene_crate, release)) {
+                    Ok(so) => {
+                        let build_time = start.elapsed();
+                        cliclack::log::step("Pushing to device...")?;
+                        match rt.block_on(builder.push_scene_plugin(&so, package, lib_name)) {
+                            Ok(()) => {
+                                cliclack::log::success(format!(
+                                    "Updated in {:.2}s",
+                                    build_time.as_secs_f64()
+                                ))?;
+                            }
+                            Err(e) => {
+                                cliclack::log::warning(format!("Push failed: {e}"))?;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        cliclack::log::warning(format!("Build failed: {e}"))?;
+                        cliclack::log::info("Fix errors and save to retry...")?;
+                    }
+                }
+            }
+            Ok(Err(errors)) => {
+                tracing::warn!("Watch errors: {:?}", errors);
+            }
+            Err(_) => break,
+        }
+    }
+
+    cliclack::outro(style("Scene hot-reload stopped").green())?;
+    Ok(())
+}
+
 /// Select the default device based on host OS.
 #[expect(
     clippy::unnecessary_wraps,

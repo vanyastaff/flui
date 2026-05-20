@@ -5,9 +5,9 @@
 //! **Source:** `flutter/packages/flutter/lib/src/painting/clip.dart`
 //! **Lines:** 1-95 (Flutter 3.24)
 //!
-//! This module provides the [`ClipContext`] trait, which is the base abstraction
-//! for clip operations. In Flutter, `ClipContext` is an abstract class that
-//! `PaintingContext` extends.
+//! This module provides the [`ClipContext`] trait, which is the base
+//! abstraction for clip operations. In Flutter, `ClipContext` is an abstract
+//! class that `PaintingContext` extends.
 //!
 //! # Architecture
 //!
@@ -32,12 +32,12 @@
 //! }
 //! ```
 
-use crate::Canvas;
-use flui_types::geometry::Pixels;
 use flui_types::{
-    geometry::{RRect, Rect},
+    geometry::{Pixels, RRect, Rect},
     painting::{Clip, Path},
 };
+
+use crate::Canvas;
 
 // ============================================================================
 // CLIP CONTEXT TRAIT
@@ -65,7 +65,8 @@ use flui_types::{
 /// Unlike Flutter where `PaintingContext extends ClipContext`, in Rust we use
 /// a trait with default implementations. This provides:
 ///
-/// - **Composition over inheritance**: Any type with a canvas can implement this
+/// - **Composition over inheritance**: Any type with a canvas can implement
+///   this
 /// - **Testability**: Easy to create mock contexts for testing
 /// - **Zero runtime cost**: Default implementations are inlined
 pub trait ClipContext {
@@ -82,9 +83,12 @@ pub trait ClipContext {
     /// # Arguments
     ///
     /// * `rect` - Rectangle to clip to
-    /// * `clip_behavior` - How to perform the clip (anti-aliasing, save layer, etc.)
-    /// * `bounds` - Bounds hint for the painting operation (used for optimization)
-    /// * `painter` - Closure that performs the painting within the clipped region
+    /// * `clip_behavior` - How to perform the clip (anti-aliasing, save layer,
+    ///   etc.)
+    /// * `bounds` - Bounds hint for the painting operation (used for
+    ///   optimization)
+    /// * `painter` - Closure that performs the painting within the clipped
+    ///   region
     ///
     /// # Flutter Equivalence
     ///
@@ -275,8 +279,9 @@ pub trait ClipContext {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::px;
+
+    use super::*;
 
     /// Test implementation of ClipContext for unit testing
     struct TestClipContext {

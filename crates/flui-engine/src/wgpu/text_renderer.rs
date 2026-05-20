@@ -3,16 +3,14 @@
 //! This module integrates glyphon for GPU-accelerated text rendering.
 //! Handles font loading, glyph atlas management, and text layout.
 
-use wgpu::{Device, MultisampleState, Queue, TextureFormat};
-
-#[cfg(feature = "wgpu-backend")]
-use glyphon::{Cache, FontSystem, SwashCache, TextAtlas, TextRenderer as GlyphonRenderer};
-
 use flui_types::{
-    geometry::{DevicePixels, Point},
+    geometry::{DevicePixels, Pixels, Point},
     styling::Color,
     typography::TextStyle,
 };
+#[cfg(feature = "wgpu-backend")]
+use glyphon::{Cache, FontSystem, SwashCache, TextAtlas, TextRenderer as GlyphonRenderer};
+use wgpu::{Device, MultisampleState, Queue, TextureFormat};
 
 /// Text rendering system
 ///
@@ -84,22 +82,30 @@ impl TextRenderingSystem {
         }
     }
 
-    /// Render prepared text runs
+    /// Render prepared text runs by delegating to the working TextRenderer
     ///
     /// # Arguments
     ///
-    /// * `device` - GPU device
-    /// * `queue` - GPU queue
+    /// * `_device` - GPU device (reserved for future use)
+    /// * `_queue` - GPU queue (reserved for future use)
     /// * `runs` - Text runs to render
-    pub fn render_text_runs(&mut self, _device: &Device, _queue: &Queue, runs: &[TextRun]) {
-        // TODO: Implement actual glyphon rendering
-        // This requires:
-        // 1. Convert TextRun to glyphon::TextArea
-        // 2. Shape text using font_system
-        // 3. Upload glyphs to atlas
-        // 4. Render using text_renderer
-
-        tracing::trace!(count = runs.len(), "Rendering text runs");
+    /// * `text_renderer` - The underlying TextRenderer that handles actual rendering
+    pub fn render_text_runs(
+        &mut self,
+        _device: &Device,
+        _queue: &Queue,
+        runs: &[TextRun],
+        text_renderer: &mut super::text::TextRenderer,
+    ) {
+        for run in runs {
+            let font_size = run.style.font_size.unwrap_or(14.0) as f32;
+            let position = Point::new(
+                Pixels(run.position.x.0 as f32),
+                Pixels(run.position.y.0 as f32),
+            );
+            text_renderer.add_text(&run.text, position, font_size, run.color);
+        }
+        tracing::trace!(count = runs.len(), "Delegated text runs to TextRenderer");
     }
 
     /// Trim the glyph atlas to free unused space
@@ -134,7 +140,13 @@ impl TextRenderingSystem {
     }
 
     /// Render text runs (no-op without wgpu backend)
-    pub fn render_text_runs(&mut self, _device: &Device, _queue: &Queue, _runs: &[TextRun]) {
+    pub fn render_text_runs(
+        &mut self,
+        _device: &Device,
+        _queue: &Queue,
+        _runs: &[TextRun],
+        _text_renderer: &mut super::text::TextRenderer,
+    ) {
         // No-op
     }
 
@@ -192,19 +204,19 @@ impl TextRun {
     }
 }
 
-#[cfg(all(test, feature = "enable-wgpu-tests"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
-    fn px(value: f32) -> DevicePixels {
-        DevicePixels(value as i32)
+    fn px(value: i32) -> DevicePixels {
+        DevicePixels(value)
     }
 
     #[test]
     fn test_text_run_creation() {
         let run = TextRun::new(
             "Hello".to_string(),
-            Point::new(px(10.0), px(20.0)),
+            Point::new(px(10), px(20)),
             TextStyle::default(),
             Color::BLACK,
         );
@@ -218,7 +230,7 @@ mod tests {
     fn test_text_run_empty() {
         let run = TextRun::new(
             String::new(),
-            Point::new(px(0.0), px(0.0)),
+            Point::new(px(0), px(0)),
             TextStyle::default(),
             Color::BLACK,
         );
@@ -231,5 +243,55 @@ mod tests {
     fn test_text_rendering_system_exists() {
         // Compile-time check
         let _ = std::marker::PhantomData::<TextRenderingSystem>;
+    }
+
+    #[test]
+    fn test_text_rendering_system_prepare_returns_valid_run() {
+        let style = TextStyle {
+            font_size: Some(24.0),
+            ..TextStyle::default()
+        };
+        let position = Point::new(px(100), px(200));
+        let color = Color::rgba(255, 0, 0, 255);
+
+        let run = TextRun::new("Test text".to_string(), position, style.clone(), color);
+
+        assert_eq!(run.text, "Test text");
+        assert_eq!(run.position.x, px(100));
+        assert_eq!(run.position.y, px(200));
+        assert_eq!(run.style.font_size, Some(24.0));
+        assert_eq!(run.color, color);
+    }
+
+    #[test]
+    fn test_text_run_batch_collection() {
+        let runs: Vec<TextRun> = vec![
+            TextRun::new(
+                "First".to_string(),
+                Point::new(px(0), px(0)),
+                TextStyle::default(),
+                Color::BLACK,
+            ),
+            TextRun::new(
+                "Second".to_string(),
+                Point::new(px(100), px(0)),
+                TextStyle::default(),
+                Color::WHITE,
+            ),
+            TextRun::new(
+                "Third".to_string(),
+                Point::new(px(200), px(0)),
+                TextStyle::default(),
+                Color::rgba(128, 128, 128, 255),
+            ),
+        ];
+
+        assert_eq!(runs.len(), 3);
+        assert_eq!(runs[0].text, "First");
+        assert_eq!(runs[1].text, "Second");
+        assert_eq!(runs[2].text, "Third");
+        assert_eq!(runs[0].position.x, px(0));
+        assert_eq!(runs[1].position.x, px(100));
+        assert_eq!(runs[2].position.x, px(200));
     }
 }

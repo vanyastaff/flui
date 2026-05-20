@@ -1,11 +1,14 @@
 //! Tree trait implementations for LayerTree
 //!
-//! This module implements `TreeRead<LayerId>` and `TreeNav<LayerId>` from flui-tree,
-//! enabling generic tree algorithms and visitors to work with LayerTree.
+//! This module implements `TreeRead<LayerId>` and `TreeNav<LayerId>` from
+//! flui-tree, enabling generic tree algorithms and visitors to work with
+//! LayerTree.
 
 use flui_foundation::LayerId;
-use flui_tree::iter::{AllSiblings, Ancestors, DescendantsWithDepth};
-use flui_tree::{TreeNav, TreeRead};
+use flui_tree::{
+    iter::{AllSiblings, Ancestors, DescendantsWithDepth},
+    TreeNav, TreeRead,
+};
 
 use super::layer_tree::{LayerNode, LayerTree};
 

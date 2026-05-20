@@ -1,14 +1,15 @@
 //! wgpu Window - Platform-driven GPU rendering integration test
 //!
 //! Demonstrates the full integration path:
-//! flui-platform (Platform::run + PlatformWindow) -> raw-window-handle -> wgpu -> GPU
+//! flui-platform (Platform::run + PlatformWindow) -> raw-window-handle -> wgpu
+//! -> GPU
 //!
 //! Run with: cargo run --example wgpu_window
 
-use flui_platform::traits::PlatformWindow;
-use flui_platform::{current_platform, WindowOptions};
-use flui_types::geometry::{px, Size};
 use std::sync::{Arc, Mutex};
+
+use flui_platform::{WindowOptions, current_platform, traits::PlatformWindow};
+use flui_types::geometry::{Size, px};
 
 /// Wrapper that implements HasWindowHandle + HasDisplayHandle
 /// by delegating to PlatformWindow trait methods.
@@ -188,61 +189,65 @@ fn main() {
     let platform = current_platform().expect("Failed to initialize platform");
     tracing::info!("Platform: {}", platform.name());
 
-    let platform_for_ready = platform.clone();
+    let options = WindowOptions {
+        title: "FLUI Platform + wgpu".to_string(),
+        size: Size::new(px(800.0), px(600.0)),
+        resizable: true,
+        visible: true,
+        decorated: true,
+        min_size: None,
+        max_size: None,
+    };
+
+    // Create window before running the event loop (run() takes ownership)
+    let window: Arc<dyn PlatformWindow> = Arc::from(
+        platform
+            .open_window(options)
+            .expect("Failed to open window"),
+    );
+
+    tracing::info!(
+        "Window created: {:?} @ {:.1}x scale",
+        window.physical_size(),
+        window.scale_factor()
+    );
+
+    // Create GPU state from PlatformWindow
+    let gpu = Arc::new(Mutex::new(GpuState::new(&window)));
+
+    // Register frame callback
+    let gpu_for_frame = Arc::clone(&gpu);
+    window.on_request_frame(Box::new(move || {
+        gpu_for_frame.lock().unwrap().render_frame();
+    }));
+
+    // Register resize callback
+    let gpu_for_resize = Arc::clone(&gpu);
+    window.on_resize(Box::new(move |size, scale_factor| {
+        let width = (size.width.0 * scale_factor) as u32;
+        let height = (size.height.0 * scale_factor) as u32;
+        gpu_for_resize.lock().unwrap().resize(width, height);
+    }));
+
+    // Register input callback for logging
+    window.on_input(Box::new(|input| {
+        tracing::trace!("Input: {:?}", input);
+        flui_platform::traits::DispatchEventResult {
+            propagate: true,
+            default_prevented: false,
+        }
+    }));
+
+    // Request first frame
+    window.request_redraw();
+
+    tracing::info!("Setup complete - starting event loop with wgpu rendering");
 
     platform.run(Box::new(move || {
-        let options = WindowOptions {
-            title: "FLUI Platform + wgpu".to_string(),
-            size: Size::new(px(800.0), px(600.0)),
-            resizable: true,
-            visible: true,
-            decorated: true,
-            min_size: None,
-            max_size: None,
-        };
-
-        let window: Arc<dyn PlatformWindow> = Arc::from(
-            platform_for_ready
-                .open_window(options)
-                .expect("Failed to open window"),
-        );
-
-        tracing::info!(
-            "Window created: {:?} @ {:.1}x scale",
-            window.physical_size(),
-            window.scale_factor()
-        );
-
-        // Create GPU state from PlatformWindow
-        let gpu = Arc::new(Mutex::new(GpuState::new(&window)));
-
-        // Register frame callback
-        let gpu_for_frame = Arc::clone(&gpu);
-        window.on_request_frame(Box::new(move || {
-            gpu_for_frame.lock().unwrap().render_frame();
-        }));
-
-        // Register resize callback
-        let gpu_for_resize = Arc::clone(&gpu);
-        window.on_resize(Box::new(move |size, scale_factor| {
-            let width = (size.width.0 * scale_factor) as u32;
-            let height = (size.height.0 * scale_factor) as u32;
-            gpu_for_resize.lock().unwrap().resize(width, height);
-        }));
-
-        // Register input callback for logging
-        window.on_input(Box::new(|input| {
-            tracing::trace!("Input: {:?}", input);
-            flui_platform::traits::DispatchEventResult {
-                propagate: true,
-                default_prevented: false,
-            }
-        }));
-
-        // Request first frame
-        window.request_redraw();
-
-        tracing::info!("Setup complete - window is live with wgpu rendering");
+        tracing::info!("Platform ready");
+        // Keep window and gpu alive via closure capture
+        let _window = &window;
+        let _gpu = &gpu;
     }));
 
     tracing::info!("Application finished");

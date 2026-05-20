@@ -1,16 +1,46 @@
 //! Platform executor implementations
 //!
 //! Provides async executors for background and foreground task execution.
-//! Background executor uses Tokio runtime, foreground executor uses flume channels.
-//! Both return [`Task<T>`] handles for awaiting results.
+//! Background executor uses Tokio runtime, foreground executor uses flume
+//! channels. Both return [`Task<T>`] handles for awaiting results.
 
-use crate::task::{Priority, Task};
-use crate::traits::PlatformExecutor;
+use std::{future::Future, sync::Arc, time::Duration};
+
 use parking_lot::Mutex;
-use std::future::Future;
-use std::sync::Arc;
-use std::time::Duration;
 use tokio::runtime::Runtime;
+
+use crate::{
+    task::{Priority, Task},
+    traits::PlatformExecutor,
+};
+
+/// Lightweight block_on for foreground futures.
+///
+/// Polls the future in a loop, yielding the thread between polls.
+/// Suitable for futures that resolve quickly (UI updates, oneshot channels,
+/// `async { value }`). Avoids the overhead of creating a full tokio runtime
+/// per task.
+fn simple_block_on<F: Future>(future: F) -> F::Output {
+    use std::pin::pin;
+    use std::sync::Arc;
+    use std::task::{Context, Poll, Wake, Waker};
+
+    struct NoopWaker;
+    impl Wake for NoopWaker {
+        fn wake(self: Arc<Self>) {}
+    }
+
+    let waker = Waker::from(Arc::new(NoopWaker));
+    let mut cx = Context::from_waker(&waker);
+    let mut future = pin!(future);
+
+    loop {
+        match future.as_mut().poll(&mut cx) {
+            Poll::Ready(result) => return result,
+            Poll::Pending => std::thread::yield_now(),
+        }
+    }
+}
 
 /// Background executor for multi-threaded async tasks
 ///
@@ -114,8 +144,8 @@ impl Default for BackgroundExecutor {
 /// Foreground executor for UI thread task execution
 ///
 /// Executes tasks on the main UI thread using a message queue pattern.
-/// Tasks are submitted via an unbounded flume channel and must be polled/drained
-/// by the platform's message loop.
+/// Tasks are submitted via an unbounded flume channel and must be
+/// polled/drained by the platform's message loop.
 ///
 /// # Architecture
 ///
@@ -170,17 +200,13 @@ impl ForegroundExecutor {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let sender = self.sender.clone();
 
-        // We need a runtime handle to drive the future on the foreground thread.
+        // We need to drive the future on the foreground thread.
         // Wrap the future execution and result sending in a closure.
         if let Err(e) = sender.send(Box::new(move || {
-            // Create a minimal runtime to poll the future to completion
-            // on the foreground thread. For simple futures (e.g., async { 42 }),
-            // this completes immediately.
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("Failed to create foreground task runtime");
-            let result = rt.block_on(future);
+            // Use a lightweight block_on instead of creating a full tokio
+            // runtime per task. Foreground futures are expected to resolve
+            // quickly (UI updates, oneshot channels, async { value }).
+            let result = simple_block_on(future);
             let _ = tx.send(result);
         })) {
             tracing::error!("Failed to send task to foreground executor: {:?}", e);
@@ -245,8 +271,9 @@ impl Default for ForegroundExecutor {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    use super::*;
 
     #[test]
     fn test_background_executor_spawn() {

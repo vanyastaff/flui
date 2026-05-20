@@ -14,9 +14,8 @@
 #![cfg(target_os = "windows")]
 #![allow(unused)]
 
-use flui_platform::traits::Platform;
-use flui_platform::{WindowOptions, WindowsPlatform};
-use flui_types::geometry::{px, Size};
+use flui_platform::{WindowOptions, WindowsPlatform, traits::Platform};
+use flui_types::geometry::{Size, px};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
@@ -31,8 +30,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("automatically applied by flui-platform!");
     println!();
 
-    // Create platform
-    let platform = WindowsPlatform::new()?;
+    // Create platform (Box<dyn Platform> - run() takes ownership)
+    let platform: Box<dyn Platform> = Box::new(WindowsPlatform::new()?);
 
     // Create window - Windows 11 features applied automatically!
     let options = WindowOptions {

@@ -1,13 +1,16 @@
 //! Text rendering using glyphon
 //!
-//! This module provides a clean wrapper around glyphon for GPU-accelerated text rendering.
-//! Follows KISS principle: simple API that handles batching and rendering internally.
+//! This module provides a clean wrapper around glyphon for GPU-accelerated text
+//! rendering. Follows KISS principle: simple API that handles batching and
+//! rendering internally.
 //!
 //! # Caching Strategy
 //!
 //! Text layout is expensive (shaping, line breaking, metrics calculation).
 //! We cache `Buffer` objects keyed by (text, font_size) to avoid re-layout
 //! when the same text is rendered in subsequent frames.
+
+use std::collections::HashMap;
 
 use flui_types::{
     geometry::{Pixels, Point},
@@ -17,7 +20,6 @@ use glyphon::{
     Attrs, Buffer, Cache, Color as GlyphonColor, Family, FontSystem, Metrics, Resolution, Shaping,
     SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer as GlyphonRenderer, Viewport,
 };
-use std::collections::HashMap;
 
 /// Cache key for text buffers
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -136,7 +138,8 @@ impl TextRenderer {
         tracing::trace!("Loaded embedded Roboto-Regular font");
 
         // TODO: Add more embedded fonts if needed (Bold, Italic, etc.)
-        // const ROBOTO_BOLD: &[u8] = include_bytes!("../../assets/fonts/Roboto-Bold.ttf");
+        // const ROBOTO_BOLD: &[u8] =
+        // include_bytes!("../../assets/fonts/Roboto-Bold.ttf");
         // fs.db_mut().load_font_data(ROBOTO_BOLD.to_vec());
     }
 
@@ -341,19 +344,25 @@ impl TextRenderer {
             .text_areas_data
             .iter()
             .filter_map(|(key, position, color)| {
-                self.buffer_cache.get(key).map(|cached| TextArea {
-                    buffer: &cached.buffer,
-                    left: position.x.0,
-                    top: position.y.0,
-                    scale: 1.0,
-                    bounds: TextBounds {
-                        left: 0,
-                        top: 0,
-                        right: size.0 as i32,
-                        bottom: size.1 as i32,
-                    },
-                    default_color: *color,
-                    custom_glyphs: &[],
+                self.buffer_cache.get(key).map(|cached| {
+                    #[allow(clippy::cast_possible_wrap)]
+                    let right = size.0 as i32;
+                    #[allow(clippy::cast_possible_wrap)]
+                    let bottom = size.1 as i32;
+                    TextArea {
+                        buffer: &cached.buffer,
+                        left: position.x.0,
+                        top: position.y.0,
+                        scale: 1.0,
+                        bounds: TextBounds {
+                            left: 0,
+                            top: 0,
+                            right,
+                            bottom,
+                        },
+                        default_color: *color,
+                        custom_glyphs: &[],
+                    }
                 })
             })
             .collect();
@@ -369,7 +378,7 @@ impl TextRenderer {
                 text_areas,
                 &mut self.swash_cache,
             )
-            .map_err(|e| format!("Failed to prepare text: {:?}", e))?;
+            .map_err(|e| format!("Failed to prepare text: {e:?}"))?;
 
         // Render text
         let mut text_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -389,13 +398,13 @@ impl TextRenderer {
 
         self.renderer
             .render(&self.text_atlas, &self.viewport, &mut text_pass)
-            .map_err(|e| format!("Failed to render text: {:?}", e))?;
+            .map_err(|e| format!("Failed to render text: {e:?}"))?;
 
         // Clear batch data for next frame (but keep cache!)
         self.text_areas_data.clear();
 
         // Periodically prune cache
-        if self.current_frame % 60 == 0 {
+        if self.current_frame.is_multiple_of(60) {
             self.prune_cache();
         }
 
@@ -420,7 +429,8 @@ mod tests {
 
     #[test]
     fn test_text_batching() {
-        // Note: Can't test without wgpu device, but we can test the API structure
-        // This would need integration tests with a headless device
+        // Note: Can't test without wgpu device, but we can test the API
+        // structure This would need integration tests with a headless
+        // device
     }
 }

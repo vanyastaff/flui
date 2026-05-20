@@ -70,7 +70,7 @@ pub enum PlatformViewHitTestBehavior {
 /// # Example
 ///
 /// ```rust
-/// use flui_layer::{PlatformViewLayer, PlatformViewId, PlatformViewHitTestBehavior};
+/// use flui_layer::{PlatformViewHitTestBehavior, PlatformViewId, PlatformViewLayer};
 /// use flui_types::geometry::Rect;
 ///
 /// // Embed a map view
@@ -83,7 +83,8 @@ pub enum PlatformViewHitTestBehavior {
 /// let web_view = PlatformViewLayer::new(
 ///     PlatformViewId::new(2),
 ///     Rect::from_xywh(0.0, 0.0, 800.0, 600.0),
-/// ).with_hit_test_behavior(PlatformViewHitTestBehavior::Defer);
+/// )
+/// .with_hit_test_behavior(PlatformViewHitTestBehavior::Defer);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PlatformViewLayer {
@@ -176,8 +177,9 @@ unsafe impl Sync for PlatformViewLayer {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::px;
+
+    use super::*;
 
     #[test]
     fn test_platform_view_id() {

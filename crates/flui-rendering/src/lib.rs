@@ -52,10 +52,7 @@
 // Some render objects have many configuration parameters
 #![allow(clippy::too_many_arguments)]
 
-pub mod arity;
 pub mod binding;
-pub mod child_handle;
-pub mod children_access;
 pub mod constraints;
 pub mod context;
 pub mod delegates;
@@ -80,32 +77,25 @@ pub mod layer {
 /// Prelude module for convenient imports.
 pub mod prelude {
     // Arity system
-    pub use crate::arity::{Arity, Leaf, Optional, Single, Variable};
+    // Re-export RenderId from flui_foundation
+    pub use flui_foundation::{RenderId, SemanticsId};
+    pub use flui_interaction::{HitTestBehavior, HitTestEntry, HitTestResult, HitTestTarget};
+    // Re-export commonly used types from flui_types
+    pub use flui_types::{Offset, Point, RRect, Rect, Size};
 
-    // Child handles
-    pub use crate::child_handle::ChildHandle;
-
-    // Children access
-    pub use crate::children_access::{ChildState, ChildrenAccess};
-
+    // Per-child layout state (lives in box_protocol since it's a
+    // BoxLayoutCtx implementation detail; re-exported here for
+    // convenience via the public-facing `protocol` module surface).
+    pub use crate::protocol::ChildState;
+    // Constraints from this crate
+    pub use crate::constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry};
     // Context types for RenderBox and RenderSliver
     pub use crate::context::{
         BoxHitTestContext, BoxLayoutContext, BoxPaintContext, PaintContext, SliverHitTestContext,
         SliverLayoutContext, SliverPaintContext,
     };
-
-    pub use crate::binding::{
-        debug_dump_layer_tree, debug_dump_pipeline_owner_tree, debug_dump_render_tree,
-        debug_dump_semantics_tree, HitTestDispatcher, HitTestable, PipelineManifold,
-        RendererBinding,
-    };
-    pub use crate::delegates::{
-        AspectRatioDelegate, CenterLayoutDelegate, CustomClipper, CustomPainter, FlowDelegate,
-        FlowPaintingContext, MultiChildLayoutContext, MultiChildLayoutDelegate, RectClipper,
-        SemanticsBuilder, SingleChildLayoutDelegate, SliverGridDelegate,
-        SliverGridDelegateWithFixedCrossAxisCount, SliverGridDelegateWithMaxCrossAxisExtent,
-        SliverGridLayout,
-    };
+    // Error types
+    pub use crate::error::{RenderError, RenderResult};
     // Hit testing - only protocol-specific types (base types come from flui_interaction)
     pub use crate::hit_testing::{
         BoxHitTestEntry, BoxHitTestResult, MatrixTransformPart, PointerEventKind,
@@ -116,57 +106,53 @@ pub mod prelude {
         CursorIcon, MouseCursorSession, MouseTracker, MouseTrackerAnnotation, MouseTrackerHitTest,
         PointerEnterEvent, PointerExitEvent, PointerHoverEvent,
     };
-    pub use crate::parent_data::{
-        BoxParentData, ContainerBoxParentData, FlexFit, FlexParentData, ParentData,
-        SliverGridParentData, SliverMultiBoxAdaptorParentData, SliverParentData,
-        SliverPhysicalParentData, StackParentData,
-    };
-    pub use crate::pipeline::{Canvas, CanvasContext, Paint, PaintStyle, PipelineOwner};
-    pub use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
-    pub use crate::semantics::{
-        SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsNodeUpdate,
-        SemanticsOwner, SemanticsTreeUpdate,
-    };
-    pub use crate::traits::{RenderBox, RenderObject, TextBaseline};
-
-    // Error types
-    pub use crate::error::{RenderError, RenderResult};
-
-    pub use crate::view::{
-        CacheExtentStyle, CompositeResult, FixedViewportOffset, RenderAbstractViewport, RenderView,
-        RevealedOffset, ScrollDirection, ScrollableViewportOffset, SliverPaintOrder,
-        ViewConfiguration, ViewportOffset,
-    };
-    pub use flui_foundation::SemanticsId;
-    pub use flui_interaction::{HitTestBehavior, HitTestEntry, HitTestResult, HitTestTarget};
-
-    // Constraints from this crate
-    pub use crate::constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry};
-
-    // Tree types
-    pub use crate::storage::{RenderNode, RenderTree};
-
     // Protocol adapters for RenderBox -> RenderObject<BoxProtocol> bridging
     pub use crate::protocol::IntoRenderObject;
-
-    // Re-export commonly used types from flui_types
-    pub use flui_types::{Offset, Point, RRect, Rect, Size};
-
-    // Re-export RenderId from flui_foundation
-    pub use flui_foundation::RenderId;
+    // Arity types (canonical home: flui_tree)
+    pub use flui_tree::{Arity, Leaf, Optional, Single, Variable};
+    // Tree types
+    pub use crate::storage::{RenderNode, RenderTree};
+    pub use crate::{
+        binding::{
+            RendererBinding, debug_dump_layer_tree, debug_dump_pipeline_owner_tree,
+            debug_dump_render_tree, debug_dump_semantics_tree,
+        },
+        delegates::{
+            AspectRatioDelegate, CenterLayoutDelegate, CustomClipper, CustomPainter, FlowDelegate,
+            FlowPaintingContext, MultiChildLayoutContext, MultiChildLayoutDelegate, RectClipper,
+            SemanticsBuilder, SingleChildLayoutDelegate, SliverGridDelegate,
+            SliverGridDelegateWithFixedCrossAxisCount, SliverGridDelegateWithMaxCrossAxisExtent,
+            SliverGridLayout,
+        },
+        parent_data::{
+            BoxParentData, ContainerBoxParentData, FlexFit, FlexParentData, ParentData,
+            SliverGridParentData, SliverMultiBoxAdaptorParentData, SliverParentData,
+            SliverPhysicalParentData, StackParentData,
+        },
+        pipeline::{Canvas, CanvasContext, Paint, PaintStyle, PipelineOwner},
+        protocol::{BoxProtocol, Protocol, SliverProtocol},
+        semantics::{
+            SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsNodeUpdate,
+            SemanticsOwner, SemanticsTreeUpdate,
+        },
+        traits::{RenderBox, RenderObject, TextBaseline},
+        view::{
+            CacheExtentStyle, CompositeResult, FixedViewportOffset, RenderAbstractViewport,
+            RenderView, RevealedOffset, ScrollDirection, ScrollableViewportOffset,
+            SliverPaintOrder, ViewConfiguration, ViewportOffset,
+        },
+    };
 }
 
 // Re-export key types at crate root
-pub use error::{RenderError, RenderResult};
-pub use parent_data::ParentData;
-pub use pipeline::{CanvasContext, PipelineOwner};
-pub use traits::RenderObject;
-
 // Context system
 pub use context::{
     BoxHitTestContext, BoxLayoutContext, BoxPaintContext, HitTestContext, LayoutContext,
     PaintContext, SliverHitTestContext, SliverLayoutContext, SliverPaintContext,
 };
+pub use error::{RenderError, RenderResult};
+pub use parent_data::ParentData;
+pub use pipeline::{CanvasContext, PipelineOwner};
 pub use protocol::{
     // Marker traits
     BaselineProtocol,
@@ -196,3 +182,4 @@ pub use protocol::{
     SliverLayout,
     SliverProtocol,
 };
+pub use traits::RenderObject;

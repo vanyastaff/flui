@@ -6,13 +6,16 @@
 //!
 //! # Flutter Equivalent
 //!
-//! This corresponds to Flutter's `Notification` class and `NotifiableElementMixin`:
+//! This corresponds to Flutter's `Notification` class and
+//! `NotifiableElementMixin`:
 //! - `Notification.dispatch()` → start bubbling
 //! - `NotificationListener` → widget that handles notifications
 //! - `NotifiableElementMixin` → element mixin for notification handling
 
-use std::any::{Any, TypeId};
-use std::sync::Arc;
+use std::{
+    any::{Any, TypeId},
+    sync::Arc,
+};
 
 /// A notification that can bubble up the element tree.
 ///
@@ -143,11 +146,11 @@ impl NotificationNode {
     /// or the root is reached.
     pub fn dispatch_notification(&self, notification: &dyn Notification) {
         // Try the current handler
-        if let Some(ref handler) = self.handler {
-            if handler.handle(notification) {
-                // Notification was handled, stop bubbling
-                return;
-            }
+        if let Some(ref handler) = self.handler
+            && handler.handle(notification)
+        {
+            // Notification was handled, stop bubbling
+            return;
         }
 
         // Continue to parent

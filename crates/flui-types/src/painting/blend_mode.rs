@@ -40,7 +40,8 @@ pub enum BlendMode {
     /// This corresponds to the "src-out" Porter-Duff operator.
     SrcOut,
 
-    /// Show the destination image, but only where the two images do not overlap.
+    /// Show the destination image, but only where the two images do not
+    /// overlap.
     ///
     /// This corresponds to the "dst-out" Porter-Duff operator.
     DstOut,
@@ -55,7 +56,8 @@ pub enum BlendMode {
     /// This corresponds to the "dst-atop" Porter-Duff operator.
     DstATop,
 
-    /// Apply a bitwise XOR operator when compositing the source and destination.
+    /// Apply a bitwise XOR operator when compositing the source and
+    /// destination.
     ///
     /// This corresponds to the "xor" Porter-Duff operator.
     Xor,
@@ -67,11 +69,13 @@ pub enum BlendMode {
 
     /// Multiply the color components of the source and destination images.
     ///
-    /// This can only darken the colors. This corresponds to the "modulate" Porter-Duff operator.
+    /// This can only darken the colors. This corresponds to the "modulate"
+    /// Porter-Duff operator.
     Modulate,
 
     // Advanced blend modes (non-Porter-Duff)
-    /// Multiply the inverse of the components of the source and destination images.
+    /// Multiply the inverse of the components of the source and destination
+    /// images.
     ///
     /// This can only lighten the colors.
     Screen,

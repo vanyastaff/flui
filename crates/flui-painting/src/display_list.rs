@@ -10,14 +10,14 @@
 //! Canvas::draw_rect() → DisplayList::push(DrawRect) → PictureLayer → WgpuPainter
 //! ```
 
+use std::{sync::Arc, time::Duration};
+
 use flui_types::{
     geometry::{Matrix4, Offset, Pixels, Point, RRect, Rect, Size},
     painting::{Image, Path},
     styling::Color,
     typography::{InlineSpan, TextStyle},
 };
-use std::sync::Arc;
-use std::time::Duration;
 
 /// A pointer event for hit testing in display lists.
 ///
@@ -69,8 +69,9 @@ impl PointerEvent {
 
 // Re-export types that are part of the public API
 pub use flui_types::painting::{
-    effects::ImageFilter, image::ColorFilter, image::ImageRepeat, BlendMode, FilterQuality, Paint,
-    PointMode, Shader, TextureId,
+    BlendMode, Clip, ClipOp, FilterQuality, Paint, PointMode, Shader, TextureId,
+    effects::ImageFilter,
+    image::{ColorFilter, ImageRepeat},
 };
 
 /// Handler for pointer events in a hit region
@@ -196,8 +197,8 @@ pub mod private {
 /// Core DisplayList API providing fundamental access methods.
 ///
 /// This trait defines the minimal interface for accessing display list data.
-/// It is sealed to prevent external implementations, allowing the library to add
-/// methods to [`DisplayListExt`] in the future without breaking changes.
+/// It is sealed to prevent external implementations, allowing the library to
+/// add methods to [`DisplayListExt`] in the future without breaking changes.
 ///
 /// # Implementation
 ///
@@ -207,8 +208,8 @@ pub mod private {
 /// - `Box<DisplayList>`
 /// - `&DisplayList`
 ///
-/// All implementors automatically receive extension methods from [`DisplayListExt`]
-/// via a blanket implementation.
+/// All implementors automatically receive extension methods from
+/// [`DisplayListExt`] via a blanket implementation.
 ///
 /// # Examples
 ///
@@ -229,13 +230,14 @@ pub mod private {
 pub trait DisplayListCore: private::Sealed {
     /// Returns an iterator over all commands in this display list.
     ///
-    /// The iterator yields references to [`DrawCommand`]s in the order they were recorded.
+    /// The iterator yields references to [`DrawCommand`]s in the order they
+    /// were recorded.
     fn commands(&self) -> impl Iterator<Item = &DrawCommand>;
 
     /// Returns the bounding rectangle containing all drawing operations.
     ///
-    /// The bounds are calculated incrementally as commands are added and represent
-    /// the union of all command bounds.
+    /// The bounds are calculated incrementally as commands are added and
+    /// represent the union of all command bounds.
     fn bounds(&self) -> Rect<Pixels>;
 
     /// Returns the total number of commands in this display list.
@@ -256,9 +258,9 @@ pub trait DisplayListCore: private::Sealed {
 
 /// Extension trait providing convenient filtering and query methods.
 ///
-/// This trait is automatically implemented for all types implementing [`DisplayListCore`]
-/// via a blanket implementation. It provides zero-cost methods for filtering, counting,
-/// and analyzing drawing commands.
+/// This trait is automatically implemented for all types implementing
+/// [`DisplayListCore`] via a blanket implementation. It provides zero-cost
+/// methods for filtering, counting, and analyzing drawing commands.
 ///
 /// # Automatic Implementation
 ///
@@ -330,8 +332,8 @@ pub trait DisplayListExt: DisplayListCore {
 
     /// Returns an iterator over shape drawing commands.
     ///
-    /// Includes rectangles, circles, paths, ovals, and other geometric primitives.
-    /// Excludes text and images.
+    /// Includes rectangles, circles, paths, ovals, and other geometric
+    /// primitives. Excludes text and images.
     fn shape_commands(&self) -> impl Iterator<Item = &DrawCommand> {
         self.commands().filter(|cmd| cmd.is_shape())
     }
@@ -354,7 +356,8 @@ pub trait DisplayListExt: DisplayListCore {
     ///
     /// # Performance
     ///
-    /// O(n) where n is the number of commands. Iterates through all commands once.
+    /// O(n) where n is the number of commands. Iterates through all commands
+    /// once.
     ///
     /// # Examples
     ///
@@ -761,7 +764,8 @@ impl DisplayList {
     ///
     /// # Arguments
     ///
-    /// * `opacity` - Value between 0.0 (fully transparent) and 1.0 (fully opaque)
+    /// * `opacity` - Value between 0.0 (fully transparent) and 1.0 (fully
+    ///   opaque)
     ///
     /// # Performance
     ///
@@ -810,8 +814,8 @@ impl Default for DisplayList {
 
 /// Detailed statistics about a [`DisplayList`]'s contents.
 ///
-/// Provides counts of different command types to help analyze rendering complexity
-/// and optimize performance.
+/// Provides counts of different command types to help analyze rendering
+/// complexity and optimize performance.
 ///
 /// # Examples
 ///
@@ -909,7 +913,7 @@ impl DisplayListStats {
     ///     50,  // shapes
     ///     20,  // images
     ///     10,  // text
-    ///     0    // hit_regions
+    ///     0,   // hit_regions
     /// );
     /// ```
     #[allow(clippy::too_many_arguments)]
@@ -943,7 +947,14 @@ impl std::fmt::Display for DisplayListStats {
         write!(
             f,
             "DisplayList: {} commands ({} shapes, {} images, {} text, {} clips, {} effects, {} layers), {} hit regions",
-            self.total, self.shapes, self.images, self.text, self.clip, self.effect, self.layer, self.hit_regions
+            self.total,
+            self.shapes,
+            self.images,
+            self.text,
+            self.clip,
+            self.effect,
+            self.layer,
+            self.hit_regions
         )
     }
 }
@@ -985,6 +996,10 @@ pub enum DrawCommand {
     ClipRect {
         /// Rectangle to clip to
         rect: Rect<Pixels>,
+        /// Set operation (Intersect or Difference)
+        clip_op: ClipOp,
+        /// Anti-aliasing behavior
+        clip_behavior: Clip,
         /// Transform at recording time
         transform: Matrix4,
     },
@@ -993,6 +1008,10 @@ pub enum DrawCommand {
     ClipRRect {
         /// Rounded rectangle to clip to
         rrect: RRect,
+        /// Set operation (Intersect or Difference)
+        clip_op: ClipOp,
+        /// Anti-aliasing behavior
+        clip_behavior: Clip,
         /// Transform at recording time
         transform: Matrix4,
     },
@@ -1001,6 +1020,10 @@ pub enum DrawCommand {
     ClipPath {
         /// Path to clip to
         path: Path,
+        /// Set operation (Intersect or Difference)
+        clip_op: ClipOp,
+        /// Anti-aliasing behavior
+        clip_behavior: Clip,
         /// Transform at recording time
         transform: Matrix4,
     },
@@ -1131,8 +1154,8 @@ pub enum DrawCommand {
     /// Draw an image with 9-slice/9-patch scaling
     ///
     /// Draws the image with a center slice that scales while corners and edges
-    /// are drawn at their natural size. This is useful for resizable UI elements
-    /// like buttons, panels, and chat bubbles.
+    /// are drawn at their natural size. This is useful for resizable UI
+    /// elements like buttons, panels, and chat bubbles.
     DrawImageNineSlice {
         /// Image to draw
         image: Image,
@@ -1207,8 +1230,8 @@ pub enum DrawCommand {
     // === Gradient Drawing Commands ===
     /// Draw a gradient-filled rectangle
     ///
-    /// This command renders a rectangle filled with the specified gradient shader.
-    /// Supports linear, radial, and sweep gradients.
+    /// This command renders a rectangle filled with the specified gradient
+    /// shader. Supports linear, radial, and sweep gradients.
     DrawGradient {
         /// Rectangle to fill
         rect: Rect<Pixels>,
@@ -1220,7 +1243,8 @@ pub enum DrawCommand {
 
     /// Draw a gradient-filled rounded rectangle
     ///
-    /// This command renders a rounded rectangle filled with the specified gradient.
+    /// This command renders a rounded rectangle filled with the specified
+    /// gradient.
     DrawGradientRRect {
         /// Rounded rectangle to fill
         rrect: RRect,
@@ -1232,8 +1256,9 @@ pub enum DrawCommand {
 
     /// Apply a shader as a mask to child content
     ///
-    /// This command wraps a sub-DisplayList (child content) and applies a shader
-    /// as an alpha mask. The shader determines the opacity at each pixel.
+    /// This command wraps a sub-DisplayList (child content) and applies a
+    /// shader as an alpha mask. The shader determines the opacity at each
+    /// pixel.
     ///
     /// # Shader Types
     ///
@@ -1367,6 +1392,18 @@ pub enum DrawCommand {
         transform: Matrix4,
     },
 
+    /// Fill entire canvas with a Paint (color, shader, blend mode)
+    ///
+    /// This is the full-featured version of `DrawColor` that supports
+    /// shaders and all paint properties. Fills the entire viewport
+    /// with the given paint styling.
+    DrawPaint {
+        /// Paint to fill with (color, shader, blend mode, etc.)
+        paint: Paint,
+        /// Transform at recording time
+        transform: Matrix4,
+    },
+
     /// Draw multiple sprites from a texture atlas
     DrawAtlas {
         /// Source image (atlas texture)
@@ -1390,12 +1427,14 @@ pub enum DrawCommand {
     ///
     /// This is similar to `save()` but creates an offscreen buffer for the
     /// subsequent drawing commands. When `RestoreLayer` is called, the layer
-    /// is composited back with the specified paint settings (opacity, blend mode, etc.).
+    /// is composited back with the specified paint settings (opacity, blend
+    /// mode, etc.).
     ///
     /// # Use Cases
     ///
     /// - **Opacity effects**: Apply uniform transparency to a group of drawings
-    /// - **Blend modes**: Apply complex blending to multiple overlapping elements
+    /// - **Blend modes**: Apply complex blending to multiple overlapping
+    ///   elements
     /// - **Anti-aliasing**: Get clean edges when clipping overlapping content
     ///
     /// # Performance
@@ -1419,7 +1458,8 @@ pub enum DrawCommand {
     SaveLayer {
         /// Bounds of the layer (None = unbounded, clips to current clip)
         bounds: Option<Rect<Pixels>>,
-        /// Paint to apply when compositing the layer (opacity, blend mode, etc.)
+        /// Paint to apply when compositing the layer (opacity, blend mode,
+        /// etc.)
         paint: Paint,
         /// Transform at recording time
         transform: Matrix4,
@@ -1438,8 +1478,9 @@ pub enum DrawCommand {
 impl DrawCommand {
     /// Apply opacity to the Paint in this command.
     ///
-    /// Creates a new DrawCommand with the Paint's opacity multiplied by the given value.
-    /// This is used by DisplayList::to_opacity() to implement opacity effects.
+    /// Creates a new DrawCommand with the Paint's opacity multiplied by the
+    /// given value. This is used by DisplayList::to_opacity() to implement
+    /// opacity effects.
     ///
     /// # Arguments
     ///
@@ -1705,6 +1746,10 @@ impl DrawCommand {
                 blend_mode: *blend_mode,
                 transform: *transform,
             },
+            Self::DrawPaint { paint, transform } => Self::DrawPaint {
+                paint: paint.clone().with_opacity(opacity),
+                transform: *transform,
+            },
 
             // ─────────────────────────────────────────────────────────────────
             // Child commands: Recursively apply opacity to DisplayList
@@ -1760,7 +1805,8 @@ impl DrawCommand {
     /// Returns the bounding rectangle of this command (if applicable)
     ///
     /// Used to calculate the DisplayList's overall bounds.
-    /// This returns transformed screen-space bounds (local bounds transformed by the command's matrix).
+    /// This returns transformed screen-space bounds (local bounds transformed
+    /// by the command's matrix).
     fn bounds(&self) -> Option<Rect<Pixels>> {
         match self {
             DrawCommand::DrawRect {
@@ -1959,8 +2005,8 @@ impl DrawCommand {
 
                 combined_bounds
             }
-            DrawCommand::DrawColor { .. } => {
-                // DrawColor fills entire canvas, no specific bounds
+            DrawCommand::DrawColor { .. } | DrawCommand::DrawPaint { .. } => {
+                // DrawColor/DrawPaint fill entire canvas, no specific bounds
                 None
             }
             DrawCommand::DrawGradient {
@@ -2059,7 +2105,8 @@ impl DrawCommand {
         matches!(self.kind(), CommandKind::Draw)
     }
 
-    /// Returns `true` if this is an effect command (shader mask, backdrop filter).
+    /// Returns `true` if this is an effect command (shader mask, backdrop
+    /// filter).
     #[inline]
     pub fn is_effect(&self) -> bool {
         matches!(self.kind(), CommandKind::Effect)
@@ -2145,6 +2192,7 @@ impl DrawCommand {
             | DrawCommand::DrawPoints { transform, .. }
             | DrawCommand::DrawVertices { transform, .. }
             | DrawCommand::DrawColor { transform, .. }
+            | DrawCommand::DrawPaint { transform, .. }
             | DrawCommand::DrawAtlas { transform, .. }
             | DrawCommand::SaveLayer { transform, .. }
             | DrawCommand::RestoreLayer { transform, .. } => *transform,
@@ -2168,6 +2216,7 @@ impl DrawCommand {
             | DrawCommand::DrawDRRect { paint, .. }
             | DrawCommand::DrawPoints { paint, .. }
             | DrawCommand::DrawVertices { paint, .. }
+            | DrawCommand::DrawPaint { paint, .. }
             | DrawCommand::SaveLayer { paint, .. } => Some(paint),
 
             DrawCommand::DrawImage { paint, .. }
@@ -2218,6 +2267,7 @@ impl DrawCommand {
             | DrawCommand::DrawPoints { transform, .. }
             | DrawCommand::DrawVertices { transform, .. }
             | DrawCommand::DrawColor { transform, .. }
+            | DrawCommand::DrawPaint { transform, .. }
             | DrawCommand::DrawAtlas { transform, .. }
             | DrawCommand::SaveLayer { transform, .. }
             | DrawCommand::RestoreLayer { transform, .. } => transform,
@@ -2268,7 +2318,8 @@ impl AsMut<[DrawCommand]> for DisplayList {
 
 /// Allow iterating over DisplayList directly with `for cmd in &display_list`
 ///
-/// This provides ergonomic iteration over commands without needing to call `.commands()`.
+/// This provides ergonomic iteration over commands without needing to call
+/// `.commands()`.
 ///
 /// # Examples
 ///
@@ -2333,8 +2384,9 @@ impl IndexMut<usize> for DisplayList {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::px;
+
+    use super::*;
 
     #[test]
     fn test_display_list_creation() {

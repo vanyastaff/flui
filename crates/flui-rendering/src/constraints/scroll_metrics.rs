@@ -1,11 +1,14 @@
 //! Scroll metrics for tracking scroll state and position.
 //!
-//! Provides types for representing scroll position, bounds, and progress tracking
-//! in scrollable viewports.
+//! Provides types for representing scroll position, bounds, and progress
+//! tracking in scrollable viewports.
+
+use std::{
+    fmt,
+    hash::{Hash, Hasher},
+};
 
 use flui_types::layout::Axis;
-use std::fmt;
-use std::hash::{Hash, Hasher};
 
 /// Common scroll metrics interface.
 ///
@@ -385,8 +388,9 @@ impl fmt::Debug for FixedExtentMetrics {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::collections::HashSet;
+
+    use super::*;
 
     #[test]
     fn test_scroll_metrics_trait() {

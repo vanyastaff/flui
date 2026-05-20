@@ -10,7 +10,8 @@
 //! - It computes layout metrics (width, height, baselines)
 //! - It records text drawing commands to [`Canvas`]
 //!
-//! The actual GPU text rendering is handled by `flui_engine` using glyphon/cosmic-text.
+//! The actual GPU text rendering is handled by `flui_engine` using
+//! glyphon/cosmic-text.
 //!
 //! # Examples
 //!
@@ -34,14 +35,15 @@
 //! painter.paint(&mut canvas, Offset::ZERO);
 //! ```
 
-use flui_types::geometry::{Offset, Pixels, Size};
-use flui_types::typography::{
-    InlineSpan, LineMetrics, PlaceholderDimensions, StrutStyle, TextAlign, TextBox, TextDirection,
-    TextHeightBehavior, TextPosition, TextRange, TextWidthBasis,
+use flui_types::{
+    geometry::{Offset, Pixels, Size},
+    typography::{
+        InlineSpan, LineMetrics, PlaceholderDimensions, StrutStyle, TextAlign, TextBox,
+        TextDirection, TextHeightBehavior, TextPosition, TextRange, TextWidthBasis,
+    },
 };
 
-use crate::text_layout::TextLayout;
-use crate::Canvas;
+use crate::{Canvas, text_layout::TextLayout};
 
 /// Default font size when none is specified.
 pub const DEFAULT_FONT_SIZE: f32 = 14.0;
@@ -56,7 +58,8 @@ pub const DEFAULT_FONT_SIZE: f32 = 14.0;
 /// 1. Create with [`TextPainter::new`] or builder methods
 /// 2. Set text and configuration
 /// 3. Call [`layout`](TextPainter::layout) to compute metrics
-/// 4. Read metrics like [`width`](TextPainter::width), [`height`](TextPainter::height)
+/// 4. Read metrics like [`width`](TextPainter::width),
+///    [`height`](TextPainter::height)
 /// 5. Call [`paint`](TextPainter::paint) to render
 ///
 /// # Thread Safety
@@ -268,7 +271,8 @@ impl TextPainter {
 
     /// Sets the text to paint.
     ///
-    /// After calling this, you must call [`layout`](Self::layout) before painting.
+    /// After calling this, you must call [`layout`](Self::layout) before
+    /// painting.
     pub fn set_text(&mut self, text: Option<InlineSpan>) {
         if self.text != text {
             self.text = text;
@@ -379,6 +383,7 @@ impl TextPainter {
     /// painter.layout(0.0, 200.0);
     /// println!("Width: {}", painter.width());
     /// ```
+    #[allow(clippy::expect_used)] // Documented precondition: text and text_direction must be set
     pub fn layout(&mut self, min_width: f32, max_width: f32) {
         assert!(
             !max_width.is_nan() && !min_width.is_nan(),
@@ -386,12 +391,11 @@ impl TextPainter {
         );
 
         // Check if we can reuse the cached layout
-        if let Some(cache) = &self.layout_cache {
-            if (cache.min_width - min_width).abs() < f32::EPSILON
-                && (cache.max_width - max_width).abs() < f32::EPSILON
-            {
-                return;
-            }
+        if let Some(cache) = &self.layout_cache
+            && (cache.min_width - min_width).abs() < f32::EPSILON
+            && (cache.max_width - max_width).abs() < f32::EPSILON
+        {
+            return;
         }
 
         let text = self
@@ -427,7 +431,14 @@ impl TextPainter {
         // Get font size from style or use default
         let font_size = text
             .style()
-            .and_then(|s| s.font_size.map(|f| f as f32))
+            .and_then(|s| {
+                s.font_size.map(|f| {
+                    #[allow(clippy::cast_possible_truncation)]
+                    // f64 font size to f32 is intentional
+                    let size = f as f32;
+                    size
+                })
+            })
             .unwrap_or(DEFAULT_FONT_SIZE);
 
         let scaled_font_size = font_size * self.text_scale_factor;
@@ -454,8 +465,10 @@ impl TextPainter {
         let layout_result = layout.metrics();
 
         // Check max lines constraint
+        #[allow(clippy::cast_possible_truncation)]
+        // line_count will never exceed u32::MAX in practice
         let line_count = layout_result.line_count as u32;
-        let did_exceed_max_lines = self.max_lines.map_or(false, |max| line_count > max);
+        let did_exceed_max_lines = self.max_lines.is_some_and(|max| line_count > max);
 
         // Apply min_width constraint
         let width = layout_result.width.max(min_width);
@@ -512,6 +525,7 @@ impl TextPainter {
     ///
     /// Panics if [`layout`](Self::layout) has not been called.
     #[must_use]
+    #[allow(clippy::expect_used)] // Documented precondition: layout() must be called first
     pub fn size(&self) -> Size<Pixels> {
         self.layout_cache
             .as_ref()
@@ -545,6 +559,7 @@ impl TextPainter {
     ///
     /// Panics if [`layout`](Self::layout) has not been called.
     #[must_use]
+    #[allow(clippy::expect_used)] // Documented precondition: layout() must be called first
     pub fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> f32 {
         let cache = self
             .layout_cache
@@ -563,6 +578,7 @@ impl TextPainter {
     ///
     /// Panics if [`layout`](Self::layout) has not been called.
     #[must_use]
+    #[allow(clippy::expect_used)] // Documented precondition: layout() must be called first
     pub fn did_exceed_max_lines(&self) -> bool {
         self.layout_cache
             .as_ref()
@@ -592,6 +608,7 @@ impl TextPainter {
     /// // Draw cursor at caret_offset
     /// ```
     #[must_use]
+    #[allow(clippy::expect_used)] // Documented precondition: layout() must be called first
     pub fn get_offset_for_caret(&mut self, position: TextPosition) -> Offset<Pixels> {
         let cache = self
             .layout_cache
@@ -599,13 +616,14 @@ impl TextPainter {
             .expect("layout() must be called before get_offset_for_caret()");
 
         let offset = cache.layout.get_offset_for_caret(position);
-        let combined = offset + cache.paint_offset;
-        combined
+
+        offset + cache.paint_offset
     }
 
     /// Returns the text position for a screen offset.
     ///
-    /// This is used for hit testing (e.g., converting mouse clicks to text positions).
+    /// This is used for hit testing (e.g., converting mouse clicks to text
+    /// positions).
     ///
     /// # Arguments
     ///
@@ -623,6 +641,7 @@ impl TextPainter {
     /// // position.offset is the character index
     /// ```
     #[must_use]
+    #[allow(clippy::expect_used)] // Documented precondition: layout() must be called first
     pub fn get_position_for_offset(&self, offset: Offset<Pixels>) -> TextPosition {
         let cache = self
             .layout_cache
@@ -649,6 +668,7 @@ impl TextPainter {
     /// }
     /// ```
     #[must_use]
+    #[allow(clippy::expect_used)] // Documented precondition: layout() must be called first
     pub fn get_line_metrics(&self) -> Vec<LineMetrics> {
         let cache = self
             .layout_cache
@@ -681,6 +701,7 @@ impl TextPainter {
     /// }
     /// ```
     #[must_use]
+    #[allow(clippy::expect_used)] // Documented precondition: layout() must be called first
     pub fn get_boxes_for_selection(&self, start: usize, end: usize) -> Vec<TextBox> {
         let cache = self
             .layout_cache
@@ -717,6 +738,7 @@ impl TextPainter {
     /// // Select text from boundary.start to boundary.end
     /// ```
     #[must_use]
+    #[allow(clippy::expect_used)] // Documented precondition: layout() must be called first
     pub fn get_word_boundary(&self, position: TextPosition) -> TextRange {
         let cache = self
             .layout_cache
@@ -745,6 +767,7 @@ impl TextPainter {
     /// painter.layout(0.0, 200.0);
     /// painter.paint(&mut canvas, Offset::new(10.0, 10.0));
     /// ```
+    #[allow(clippy::expect_used)] // Documented precondition: layout() must be called first, text must be set
     pub fn paint(&self, canvas: &mut Canvas, offset: Offset<Pixels>) {
         let cache = self
             .layout_cache
@@ -785,9 +808,9 @@ pub enum TextBaseline {
 
 #[cfg(test)]
 mod tests {
+    use flui_types::{geometry::px, typography::TextSpan};
+
     use super::*;
-    use flui_types::geometry::px;
-    use flui_types::typography::TextSpan;
 
     #[test]
     fn test_text_painter_new() {

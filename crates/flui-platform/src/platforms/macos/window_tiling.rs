@@ -1,8 +1,8 @@
 //! macOS Window Tiling API (Sequoia 15+)
 //!
-//! This module provides support for macOS's native window tiling feature introduced
-//! in macOS Sequoia 15. Window tiling allows apps to suggest tile layouts for
-//! multi-window workflows, similar to Windows Snap Layouts.
+//! This module provides support for macOS's native window tiling feature
+//! introduced in macOS Sequoia 15. Window tiling allows apps to suggest tile
+//! layouts for multi-window workflows, similar to Windows Snap Layouts.
 //!
 //! # Platform Requirements
 //!
@@ -22,8 +22,10 @@
 //! window.enable_tiling(config)?;
 //! ```
 
-use flui_types::geometry::{Rect, Size};
-use flui_types::Pixels;
+use flui_types::{
+    Pixels,
+    geometry::{Rect, Size},
+};
 
 // ============================================================================
 // Tiling Configuration
@@ -31,7 +33,8 @@ use flui_types::Pixels;
 
 /// Window tiling configuration for macOS Sequoia 15+.
 ///
-/// Configures how windows should be tiled when using macOS's native tiling feature.
+/// Configures how windows should be tiled when using macOS's native tiling
+/// feature.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TilingConfiguration {
     /// Primary window tile position.

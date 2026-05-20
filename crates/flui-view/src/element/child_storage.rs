@@ -11,12 +11,13 @@
 //! - PipelineOwner propagation
 //! - Recursive building
 
-use crate::view::{ElementBase, View};
+use std::{any::Any, sync::Arc};
+
 use flui_foundation::{ElementId, RenderId};
 use flui_rendering::pipeline::PipelineOwner;
 use parking_lot::RwLock;
-use std::any::Any;
-use std::sync::Arc;
+
+use crate::view::{ElementBase, View};
 
 /// Trait for managing element children with different arities.
 ///
@@ -201,11 +202,7 @@ impl ElementChildStorage for SingleChildStorage {
     }
 
     fn len(&self) -> usize {
-        if self.child.is_some() {
-            1
-        } else {
-            0
-        }
+        if self.child.is_some() { 1 } else { 0 }
     }
 
     fn create_from_view(&mut self, view: &dyn View) {
@@ -322,11 +319,7 @@ impl ElementChildStorage for OptionalChildStorage {
     }
 
     fn len(&self) -> usize {
-        if self.child.is_some() {
-            1
-        } else {
-            0
-        }
+        if self.child.is_some() { 1 } else { 0 }
     }
 
     fn create_from_view(&mut self, view: &dyn View) {
@@ -535,11 +528,11 @@ impl ElementChildStorage for VariableChildStorage {
     }
 
     fn first_child(&self) -> Option<&dyn ElementBase> {
-        self.children.first().map(|b| b.as_ref())
+        self.children.first().map(std::convert::AsRef::as_ref)
     }
 
     fn first_child_mut(&mut self) -> Option<&mut dyn ElementBase> {
-        self.children.first_mut().map(|b| b.as_mut())
+        self.children.first_mut().map(std::convert::AsMut::as_mut)
     }
 }
 

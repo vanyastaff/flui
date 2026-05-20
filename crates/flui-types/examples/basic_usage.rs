@@ -7,8 +7,10 @@
 //! - Size: Dimensions
 //! - Color: RGBA colors with blending
 
-use flui_types::geometry::{px, Edges, Point, Rect, Size};
-use flui_types::styling::Color;
+use flui_types::{
+    geometry::{Edges, Point, Rect, Size, px},
+    styling::Color,
+};
 
 fn main() {
     println!("=== FLUI Types Basic Usage ===\n");

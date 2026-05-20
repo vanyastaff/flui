@@ -3,18 +3,21 @@
 //! This module provides the SliverProtocol and its capability implementations:
 //! - [`SliverProtocol`]: Main protocol type for scrollable content
 //! - [`SliverLayout`]: Layout capability (SliverConstraints → SliverGeometry)
-//! - [`SliverHitTest`]: Hit test capability (MainAxisPosition → SliverHitTestResult)
+//! - [`SliverHitTest`]: Hit test capability (MainAxisPosition →
+//!   SliverHitTestResult)
 
+use flui_tree::Arity;
 use flui_types::geometry::{Matrix4, Offset, Rect};
 
-use crate::arity::Arity;
-use crate::constraints::{Constraints, SliverConstraints, SliverGeometry};
-use crate::parent_data::{ParentData, SliverParentData};
-use crate::protocol::box_protocol::BoxProtocol;
-use crate::protocol::capabilities::{
-    HitTestCapability, HitTestContextApi, LayoutCapability, LayoutContextApi,
+use crate::{
+    constraints::{Constraints, SliverConstraints, SliverGeometry},
+    parent_data::{ParentData, SliverParentData},
+    protocol::{
+        box_protocol::BoxProtocol,
+        capabilities::{HitTestCapability, HitTestContextApi, LayoutCapability, LayoutContextApi},
+        protocol::{Protocol, ProtocolCompatible, sealed},
+    },
 };
-use crate::protocol::protocol::{sealed, Protocol, ProtocolCompatible};
 
 // ============================================================================
 // SLIVER PROTOCOL
@@ -22,8 +25,9 @@ use crate::protocol::protocol::{sealed, Protocol, ProtocolCompatible};
 
 /// Sliver protocol for scrollable viewport children.
 ///
-/// Slivers are laid out along a single scrolling axis with viewport constraints.
-/// Used by scrollable widgets: ListView, GridView, CustomScrollView, etc.
+/// Slivers are laid out along a single scrolling axis with viewport
+/// constraints. Used by scrollable widgets: ListView, GridView,
+/// CustomScrollView, etc.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SliverProtocol;
 
@@ -92,7 +96,7 @@ impl SliverConstraintsCacheKey {
     /// Returns `None` if any float value is NaN.
     pub fn from_constraints(c: &SliverConstraints) -> Option<Self> {
         // NaN check helper
-        let is_nan = |v: f32| v != v;
+        let is_nan = |v: f32| v.is_nan();
 
         if is_nan(c.cross_axis_extent)
             || is_nan(c.viewport_main_axis_extent)

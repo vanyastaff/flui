@@ -9,7 +9,8 @@ pub enum TextBaseline {
     /// Ideographic baseline (used for CJK scripts).
     ///
     /// This is the baseline used for Chinese, Japanese, and Korean scripts.
-    /// In these scripts, the baseline is typically at the bottom of the character box.
+    /// In these scripts, the baseline is typically at the bottom of the
+    /// character box.
     Ideographic,
 }
 

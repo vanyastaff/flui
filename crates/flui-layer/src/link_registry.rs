@@ -21,7 +21,7 @@
 //! # Usage
 //!
 //! ```rust
-//! use flui_layer::{LayerTree, LinkRegistry, LeaderLayer, FollowerLayer, LayerLink, Layer};
+//! use flui_layer::{FollowerLayer, Layer, LayerLink, LayerTree, LeaderLayer, LinkRegistry};
 //! use flui_types::geometry::{Offset, Size};
 //!
 //! let mut tree = LayerTree::new();
@@ -37,7 +37,12 @@
 //! let follower_id = tree.insert(Layer::Follower(follower));
 //!
 //! // Register in the link registry
-//! registry.register_leader(link, leader_id, Offset::new(50.0, 100.0), Size::new(100.0, 30.0));
+//! registry.register_leader(
+//!     link,
+//!     leader_id,
+//!     Offset::new(50.0, 100.0),
+//!     Size::new(100.0, 30.0),
+//! );
 //! registry.register_follower(follower_id, link);
 //!
 //! // Query followers for a leader
@@ -192,7 +197,8 @@ impl LinkRegistry {
 
     /// Registers a follower layer.
     ///
-    /// Also adds the follower to the leader's follower list if the leader exists.
+    /// Also adds the follower to the leader's follower list if the leader
+    /// exists.
     pub fn register_follower(&mut self, follower_id: LayerId, link: LayerLink) {
         self.followers.insert(follower_id, link);
 
@@ -301,7 +307,8 @@ impl LinkRegistry {
         count
     }
 
-    /// Rebuilds follower lists in all leaders based on current follower registrations.
+    /// Rebuilds follower lists in all leaders based on current follower
+    /// registrations.
     ///
     /// Call this after bulk modifications to ensure consistency.
     pub fn rebuild_follower_lists(&mut self) {
@@ -325,8 +332,9 @@ impl LinkRegistry {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flui_types::geometry::px;
+
+    use super::*;
 
     fn make_link() -> LayerLink {
         LayerLink::new()

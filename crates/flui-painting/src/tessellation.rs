@@ -38,6 +38,7 @@
 //!          stroke_result.indices.len());
 //! ```
 
+use flui_types::painting::{Path, PathCommand};
 #[cfg(feature = "tessellation")]
 use lyon::lyon_tessellation::{
     BuffersBuilder, FillOptions, FillTessellator, FillVertex, StrokeOptions, StrokeTessellator,
@@ -45,8 +46,6 @@ use lyon::lyon_tessellation::{
 };
 #[cfg(feature = "tessellation")]
 use lyon::path::Path as LyonPath;
-
-use flui_types::painting::{Path, PathCommand};
 
 // ============================================================================
 // PUBLIC API
@@ -104,7 +103,8 @@ impl TessellatedPath {
 /// Options for path tessellation.
 #[derive(Clone, Debug)]
 pub struct TessellationOptions {
-    /// Tolerance for curve approximation (smaller = more triangles, higher quality).
+    /// Tolerance for curve approximation (smaller = more triangles, higher
+    /// quality).
     ///
     /// Default: 0.1 pixels
     pub tolerance: f32,
@@ -146,7 +146,8 @@ impl TessellationOptions {
 
 /// Tessellates a filled path into triangles.
 ///
-/// Converts the path into a triangle mesh suitable for GPU rendering with a fill shader.
+/// Converts the path into a triangle mesh suitable for GPU rendering with a
+/// fill shader.
 ///
 /// # Arguments
 ///
@@ -155,7 +156,8 @@ impl TessellationOptions {
 ///
 /// # Returns
 ///
-/// A `TessellatedPath` containing vertices and indices, or an error if tessellation fails.
+/// A `TessellatedPath` containing vertices and indices, or an error if
+/// tessellation fails.
 ///
 /// # Examples
 ///
@@ -175,7 +177,7 @@ pub fn tessellate_fill(
     options: &TessellationOptions,
 ) -> Result<TessellatedPath, TessellationError> {
     // Convert Path to lyon::Path
-    let lyon_path = path_to_lyon(path)?;
+    let lyon_path = path_to_lyon(path);
 
     // Create tessellator
     let mut tessellator = FillTessellator::new();
@@ -205,7 +207,8 @@ pub fn tessellate_fill(
 
 /// Tessellates a stroked path into triangles.
 ///
-/// Converts the path outline into a triangle mesh suitable for GPU rendering with a stroke shader.
+/// Converts the path outline into a triangle mesh suitable for GPU rendering
+/// with a stroke shader.
 ///
 /// # Arguments
 ///
@@ -215,7 +218,8 @@ pub fn tessellate_fill(
 ///
 /// # Returns
 ///
-/// A `TessellatedPath` containing vertices and indices, or an error if tessellation fails.
+/// A `TessellatedPath` containing vertices and indices, or an error if
+/// tessellation fails.
 ///
 /// # Examples
 ///
@@ -236,7 +240,7 @@ pub fn tessellate_stroke(
     options: &TessellationOptions,
 ) -> Result<TessellatedPath, TessellationError> {
     // Convert Path to lyon::Path
-    let lyon_path = path_to_lyon(path)?;
+    let lyon_path = path_to_lyon(path);
 
     // Create tessellator
     let mut tessellator = StrokeTessellator::new();
@@ -274,9 +278,8 @@ pub fn tessellate_stroke(
 
 /// Converts a FLUI Path to a Lyon Path.
 #[cfg(feature = "tessellation")]
-fn path_to_lyon(path: &Path) -> Result<LyonPath, TessellationError> {
-    use lyon::geom::euclid::Point2D;
-    use lyon::path::Winding;
+fn path_to_lyon(path: &Path) -> LyonPath {
+    use lyon::{geom::euclid::Point2D, path::Winding};
 
     let mut builder = LyonPath::builder();
     let mut path_started = false;
@@ -291,11 +294,11 @@ fn path_to_lyon(path: &Path) -> Result<LyonPath, TessellationError> {
                 path_started = true;
             }
             PathCommand::LineTo(p) => {
-                if !path_started {
+                if path_started {
+                    builder.line_to(Point2D::new(p.x.0, p.y.0));
+                } else {
                     builder.begin(Point2D::new(p.x.0, p.y.0));
                     path_started = true;
-                } else {
-                    builder.line_to(Point2D::new(p.x.0, p.y.0));
                 }
             }
             PathCommand::QuadraticTo(ctrl, to) => {
@@ -386,7 +389,7 @@ fn path_to_lyon(path: &Path) -> Result<LyonPath, TessellationError> {
         builder.end(false);
     }
 
-    Ok(builder.build())
+    builder.build()
 }
 
 // ============================================================================
@@ -440,9 +443,12 @@ pub fn tessellate_stroke(
 
 #[cfg(all(test, feature = "tessellation"))]
 mod tests {
+    use flui_types::{
+        Point,
+        geometry::{Rect, px},
+    };
+
     use super::*;
-    use flui_types::geometry::{px, Rect};
-    use flui_types::Point;
 
     #[test]
     fn test_tessellate_fill_circle() {

@@ -6,7 +6,7 @@
 //! - Offset magnitude and normalization
 //! - Geometric invariants and properties
 
-use flui_types::geometry::{px, Offset, Pixels, Point, Rect, Size, Vec2};
+use flui_types::geometry::{Offset, Pixels, Point, Rect, Size, Vec2, px};
 
 // ============================================================================
 // T039-T040: Point distance calculations
@@ -59,7 +59,8 @@ fn test_point_distance_squared() {
 
 #[test]
 fn test_point_triangle_inequality() {
-    // For any three points A, B, C: distance(A, B) + distance(B, C) >= distance(A, C)
+    // For any three points A, B, C: distance(A, B) + distance(B, C) >= distance(A,
+    // C)
     let a = Point::new(px(0.0), px(0.0));
     let b = Point::new(px(10.0), px(0.0));
     let c = Point::new(px(10.0), px(10.0));

@@ -5,7 +5,7 @@
 //! This demonstrates hierarchical logging with timing information.
 
 #[cfg(feature = "pretty")]
-use flui_log::{info, warn, Logger};
+use flui_log::{Logger, info, warn};
 
 #[cfg(feature = "pretty")]
 #[tracing::instrument]
