@@ -1,9 +1,9 @@
 //! RenderBox trait for 2D box layout with Arity-based child management.
 
+use flui_tree::Arity;
 use flui_types::{Offset, Point, Rect, Size};
 
 use crate::{
-    arity::Arity,
     constraints::BoxConstraints,
     context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext, CanvasContext},
     hit_testing::HitTestBehavior,

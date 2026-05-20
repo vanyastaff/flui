@@ -6,10 +6,10 @@
 //! - [`SliverHitTest`]: Hit test capability (MainAxisPosition →
 //!   SliverHitTestResult)
 
+use flui_tree::Arity;
 use flui_types::geometry::{Matrix4, Offset, Rect};
 
 use crate::{
-    arity::Arity,
     constraints::{Constraints, SliverConstraints, SliverGeometry},
     parent_data::{ParentData, SliverParentData},
     protocol::{

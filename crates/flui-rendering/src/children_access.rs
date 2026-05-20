@@ -31,13 +31,10 @@
 use std::marker::PhantomData;
 
 use flui_foundation::RenderId;
+use flui_tree::{Arity, Leaf, Optional, Single, Variable};
 use flui_types::{Offset, Size};
 
-use crate::{
-    arity::{Arity, Leaf, Optional, Single, Variable},
-    child_handle::ChildHandle,
-    parent_data::ParentData,
-};
+use crate::{child_handle::ChildHandle, parent_data::ParentData};
 
 // ============================================================================
 // ChildState - Per-child state storage

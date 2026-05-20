@@ -1,9 +1,9 @@
 //! RenderOpacity - applies transparency to a single child.
 
+use flui_tree::Single;
 use flui_types::{Offset, Point, Rect, Size};
 
 use crate::{
-    arity::Single,
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
     traits::RenderBox,

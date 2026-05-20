@@ -5,13 +5,13 @@
 //! - [`BoxLayout`]: Layout capability (BoxConstraints → Size)
 //! - [`BoxHitTest`]: Hit test capability (Offset → BoxHitTestResult)
 
+use flui_tree::Arity;
 use flui_types::{
     Size,
     geometry::{Matrix4, Offset, Point, Rect},
 };
 
 use crate::{
-    arity::Arity,
     constraints::{BoxConstraints, Constraints},
     parent_data::{BoxParentData, ParentData},
     protocol::{
@@ -436,10 +436,10 @@ impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, BoxHitTest, A, P>
 
 #[cfg(test)]
 mod tests {
+    use flui_tree::Leaf;
     use flui_types::geometry::px;
 
     use super::*;
-    use crate::arity::Leaf;
 
     #[test]
     fn test_box_protocol_name() {

@@ -33,13 +33,13 @@
 //! }
 //! ```
 
+use flui_tree::Arity;
 use flui_types::{
     Pixels,
     geometry::{Matrix4, Offset, Rect},
 };
 
 use crate::{
-    arity::Arity,
     parent_data::ParentData,
     protocol::{
         BoxHitTest, BoxHitTestEntry, HitTestCapability, HitTestContextApi, MainAxisPosition,

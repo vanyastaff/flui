@@ -1,9 +1,9 @@
 //! RenderFlex - lays out children in a row or column.
 
+use flui_tree::Variable;
 use flui_types::{Offset, Pixels, Point, Rect, Size, geometry::px};
 
 use crate::{
-    arity::Variable,
     constraints::BoxConstraints,
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::{FlexFit, FlexParentData},

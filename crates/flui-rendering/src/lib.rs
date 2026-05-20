@@ -52,7 +52,6 @@
 // Some render objects have many configuration parameters
 #![allow(clippy::too_many_arguments)]
 
-pub mod arity;
 pub mod binding;
 pub mod child_handle;
 pub mod children_access;
@@ -111,10 +110,11 @@ pub mod prelude {
     };
     // Protocol adapters for RenderBox -> RenderObject<BoxProtocol> bridging
     pub use crate::protocol::IntoRenderObject;
+    // Arity types (canonical home: flui_tree)
+    pub use flui_tree::{Arity, Leaf, Optional, Single, Variable};
     // Tree types
     pub use crate::storage::{RenderNode, RenderTree};
     pub use crate::{
-        arity::{Arity, Leaf, Optional, Single, Variable},
         binding::{
             RendererBinding, debug_dump_layer_tree, debug_dump_pipeline_owner_tree,
             debug_dump_render_tree, debug_dump_semantics_tree,

@@ -30,10 +30,10 @@
 //! }
 //! ```
 
+use flui_tree::Arity;
 use flui_types::{Pixels, Size, geometry::Offset};
 
 use crate::{
-    arity::Arity,
     constraints::{BoxConstraints, Constraints},
     parent_data::ParentData,
     protocol::{BoxLayout, LayoutCapability, LayoutContextApi, Protocol},

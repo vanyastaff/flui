@@ -171,11 +171,11 @@ where
 
 #[cfg(test)]
 mod tests {
+    use flui_tree::Leaf;
     use flui_types::{Size, geometry::px};
 
     use super::*;
     use crate::{
-        arity::Leaf,
         context::{BoxHitTestContext, BoxLayoutContext},
         parent_data::BoxParentData,
     };

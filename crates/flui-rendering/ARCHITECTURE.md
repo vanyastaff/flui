@@ -233,16 +233,6 @@ Requires:
 
 **Dependencies:** none. The user-decision to keep the `Send + Sync + 'static` bound (made during the Mythos planning dialogue) means the broader trait-bound-relaxation half of Step 11 is also off the table; only the extension-trait split remains and is deferred per above.
 
-### Fully delete `src/arity.rs` (currently trimmed re-export shim)
-
-**File:** [`src/arity.rs`](src/arity.rs).
-
-**Goal:** today the module is a 14-LOC re-export shim that exists only to avoid churning 18+ call sites inside `flui-rendering` that import via `crate::arity::X`. The canonical home of arity types is `flui_tree::arity`. Eliminate the indirection by rewiring all internal call sites to `flui_tree::*` and deleting the file.
-
-**Shape:** mechanical sweep. Each call site with `arity::X` inside a `use crate::{...}` block becomes a sibling `use flui_tree::X;` at top. Around 18 files affected (mostly under `protocol/`, `objects/`, `context/`, `traits/`, plus `children_access.rs` which itself is queued for deletion in Mythos Step 5b). Update `lib.rs` prelude to re-export from `flui_tree` directly.
-
-**Dependencies:** none. Can co-land with Mythos Step 5b (deleting `child_handle.rs` + `children_access.rs`) as one cleanup commit.
-
 ### Audit pre-existing clippy issues in `src/objects/flex.rs`
 
 **File:** [`src/objects/flex.rs`](src/objects/flex.rs) lines 261, 280, 321, 322, 367.

@@ -37,14 +37,11 @@
 //! }
 //! ```
 
+use flui_tree::{Arity, Leaf, Optional, Single, Variable};
 use flui_types::Offset;
 
 use super::{Canvas, canvas::CanvasContext};
-use crate::{
-    arity::{Arity, Leaf, Optional, Single, Variable},
-    parent_data::ParentData,
-    protocol::Protocol,
-};
+use crate::{parent_data::ParentData, protocol::Protocol};
 
 // ============================================================================
 // PaintChildCallback - Function type for painting children

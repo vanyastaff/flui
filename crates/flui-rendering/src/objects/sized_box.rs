@@ -1,9 +1,9 @@
 //! RenderSizedBox - forces specific size constraints.
 
+use flui_tree::Leaf;
 use flui_types::{Pixels, Point, Rect, Size};
 
 use crate::{
-    arity::Leaf,
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
     traits::RenderBox,

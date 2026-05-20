@@ -6,9 +6,10 @@
 
 use std::{fmt::Debug, hash::Hash};
 
+use flui_tree::Arity;
 use flui_types::geometry::Offset;
 
-use crate::{arity::Arity, parent_data::ParentData};
+use crate::parent_data::ParentData;
 
 // ============================================================================
 // LAYOUT CAPABILITY

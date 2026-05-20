@@ -1,10 +1,10 @@
 //! RenderColoredBox - a simple colored rectangle.
 
 use flui_painting::Paint;
+use flui_tree::Leaf;
 use flui_types::{Color, Point, Rect, Size, geometry::px};
 
 use crate::{
-    arity::Leaf,
     context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext},
     parent_data::BoxParentData,
     traits::RenderBox,

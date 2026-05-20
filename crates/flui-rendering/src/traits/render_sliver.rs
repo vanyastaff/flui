@@ -1,9 +1,9 @@
 //! RenderSliver trait for scrollable content layout.
 
+use flui_tree::Arity;
 use flui_types::{Offset, Pixels, Rect, Size, geometry::px, prelude::AxisDirection};
 
 use crate::{
-    arity::Arity,
     constraints::{SliverConstraints, SliverGeometry},
     context::{CanvasContext, SliverHitTestContext, SliverLayoutContext, SliverPaintContext},
     parent_data::ParentData,

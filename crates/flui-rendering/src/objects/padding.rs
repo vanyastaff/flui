@@ -1,9 +1,9 @@
 //! RenderPadding - adds padding around a single child.
 
+use flui_tree::Single;
 use flui_types::{EdgeInsets, Offset, Pixels, Point, Rect, Size, geometry::px};
 
 use crate::{
-    arity::Single,
     constraints::BoxConstraints,
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
