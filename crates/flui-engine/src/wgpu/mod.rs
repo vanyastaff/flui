@@ -50,7 +50,6 @@ mod backend;
 mod buffer_pool;
 mod buffers;
 mod commands;
-mod compositor;
 #[cfg(debug_assertions)]
 mod debug;
 #[cfg(target_os = "windows")]
@@ -75,7 +74,6 @@ pub mod path_cache;
 mod pipeline;
 mod pipelines;
 mod renderer;
-mod scene;
 #[allow(dead_code)]
 mod shader_compiler;
 mod shaders;
@@ -108,8 +106,6 @@ pub use buffer_pool::{BufferPool, BufferPoolStats};
 pub use buffers::{BufferManager, DynamicBuffer};
 // Command rendering (re-exported from crate root)
 pub use commands::{CommandRenderer, dispatch_command, dispatch_commands};
-// Compositor
-pub use compositor::{Compositor, RenderContext, TransformStack};
 #[cfg(debug_assertions)]
 pub use debug::DebugBackend;
 // External texture registry
@@ -127,7 +123,6 @@ pub use painter::WgpuPainter;
 pub use pipelines::{PipelineBuilder, PipelineCache};
 // Renderer (cross-platform GPU renderer)
 pub use renderer::{GpuCapabilities, Renderer};
-pub use scene::{Scene, SceneBuilder};
 // Shader compilation
 pub use shader_compiler::{ShaderCache, ShaderType};
 // Tessellator
