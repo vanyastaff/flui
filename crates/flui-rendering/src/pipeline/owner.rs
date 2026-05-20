@@ -26,6 +26,13 @@ use super::{
 /// via [`PipelineOwner::new_with_capacity`].
 const DEFAULT_DIRTY_CHANNEL_CAPACITY: usize = 256;
 
+/// Maximum render-tree recursion depth during layout. Going deeper means
+/// the parent-child layout has cycled or the tree is pathologically
+/// deep. The pipeline aborts the offending subtree, surfaces
+/// [`RenderError::LayoutDepthExceeded`] via tracing, and continues with
+/// the next dirty root. Mythos Step 12 (2026-05-20).
+pub const LAYOUT_DEPTH_LIMIT: usize = 1024;
+
 // ============================================================================
 // Pipeline ID Counter
 // ============================================================================
@@ -602,8 +609,9 @@ impl PipelineOwner<Idle> {
 
             // Process each dirty node
             for dirty_node in dirty_nodes {
-                // Layout this node with synchronous child layout support
-                self.layout_node_with_children(dirty_node.id);
+                // Layout this node with synchronous child layout support.
+                // Depth starts at 0; recursion limit enforced inside.
+                self.layout_node_with_children(dirty_node.id, 0);
             }
 
             self.debug_doing_layout = false;
@@ -627,7 +635,20 @@ impl PipelineOwner<Idle> {
     ///
     /// Uses RwLock on RenderNode to allow parent to hold a lock while
     /// children are being laid out through separate locks.
-    fn layout_node_with_children(&mut self, render_id: RenderId) {
+    fn layout_node_with_children(&mut self, render_id: RenderId, depth: usize) {
+        // Mythos Step 12: bound recursion depth to detect infinite
+        // parent-child cycles. Going past LAYOUT_DEPTH_LIMIT surfaces
+        // RenderError::LayoutDepthExceeded via tracing and aborts the
+        // offending subtree without panicking.
+        if depth > LAYOUT_DEPTH_LIMIT {
+            tracing::error!(
+                error = ?crate::error::RenderError::layout_depth_exceeded(LAYOUT_DEPTH_LIMIT),
+                ?render_id,
+                "layout_node_with_children: depth limit exceeded; aborting subtree"
+            );
+            return;
+        }
+
         // Check if node exists and needs layout
         let needs_layout = {
             if let Some(render_node) = self.render_tree.get(render_id) {
@@ -670,8 +691,10 @@ impl PipelineOwner<Idle> {
                 // Propagate constraints from parent to child
                 self.propagate_constraints_to_child(render_id, *child_id);
 
-                // Recursively layout the child (depth-first)
-                self.layout_node_with_children(*child_id);
+                // Recursively layout the child (depth-first), incrementing
+                // the recursion-depth counter so LAYOUT_DEPTH_LIMIT can
+                // catch infinite cycles.
+                self.layout_node_with_children(*child_id, depth + 1);
             }
 
             // STEP 3: Sync child size to parent's ChildState BEFORE parent layout

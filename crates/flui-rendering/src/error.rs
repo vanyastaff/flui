@@ -129,6 +129,55 @@ pub enum RenderError {
         /// Description of the error.
         message: String,
     },
+
+    // ========================================================================
+    // Mythos Step 12 -- structured terminal failures
+    // ========================================================================
+    /// Geometry returned from a render object's `perform_layout` is
+    /// structurally invalid (NaN, negative dimensions, larger than
+    /// `f32::MAX / 2`, etc.). The frame is dropped; the previous
+    /// geometry remains valid.
+    #[error("invalid geometry from {render_object}: {reason}")]
+    InvalidGeometry {
+        /// Static debug name of the offending render object.
+        render_object: &'static str,
+        /// Reason the geometry failed validation.
+        reason: &'static str,
+    },
+
+    /// A render object received an unbounded constraint where it
+    /// expected bounded input. The parent must provide bounds (e.g.
+    /// wrap the child in a `SizedBox` or `Container`).
+    #[error("unbounded constraint at {render_object}; parent must provide bounds")]
+    UnboundedConstraint {
+        /// Static debug name of the render object that needed bounds.
+        render_object: &'static str,
+    },
+
+    /// Layout traversal exceeded the depth limit. Almost always
+    /// indicates infinite parent-child recursion in user code.
+    #[error("layout depth limit exceeded ({limit}); infinite recursion suspected")]
+    LayoutDepthExceeded {
+        /// The depth limit that was exceeded.
+        limit: usize,
+    },
+
+    /// A render object's `perform_layout` or `paint` panicked. The
+    /// pipeline catches via `std::panic::catch_unwind`, drops the
+    /// in-flight frame, and surfaces this variant so the caller can
+    /// decide (drop the node, retry next frame, abort).
+    ///
+    /// `catch_unwind` plumbing is queued in
+    /// `crates/flui-rendering/ARCHITECTURE.md` Outstanding refactors;
+    /// the variant exists today so consumers can pattern-match against
+    /// the eventual surface.
+    #[error("render object {render_object} panicked during {phase}")]
+    Poisoned {
+        /// Static debug name of the offending render object.
+        render_object: &'static str,
+        /// Phase during which the panic occurred (e.g. `"layout"`).
+        phase: &'static str,
+    },
 }
 
 /// Result type alias for render operations.
@@ -174,6 +223,32 @@ impl RenderError {
     pub fn child_handle(message: impl Into<String>) -> Self {
         Self::ChildHandleError {
             message: message.into(),
+        }
+    }
+
+    /// Creates an InvalidGeometry error.
+    pub fn invalid_geometry(render_object: &'static str, reason: &'static str) -> Self {
+        Self::InvalidGeometry {
+            render_object,
+            reason,
+        }
+    }
+
+    /// Creates an UnboundedConstraint error.
+    pub fn unbounded_constraint(render_object: &'static str) -> Self {
+        Self::UnboundedConstraint { render_object }
+    }
+
+    /// Creates a LayoutDepthExceeded error.
+    pub fn layout_depth_exceeded(limit: usize) -> Self {
+        Self::LayoutDepthExceeded { limit }
+    }
+
+    /// Creates a Poisoned error.
+    pub fn poisoned(render_object: &'static str, phase: &'static str) -> Self {
+        Self::Poisoned {
+            render_object,
+            phase,
         }
     }
 }

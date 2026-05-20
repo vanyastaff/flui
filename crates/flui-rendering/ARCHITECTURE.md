@@ -154,6 +154,32 @@ Concrete cleanups visible from `flui-rendering` outward, sized for an `/aif-impl
 
 **Dependencies:** none.
 
+### `catch_unwind` plumbing for `RenderError::Poisoned` (deferred from Mythos Step 12)
+
+**Files:** [`src/pipeline/owner.rs`](src/pipeline/owner.rs), [`src/traits/render_object.rs`](src/traits/render_object.rs).
+
+**Goal:** the `RenderError::Poisoned { render_object, phase }` variant landed in Mythos Step 12, but the actual `std::panic::catch_unwind` plumbing around `perform_layout_raw` / `paint` / `hit_test_raw` trait calls is not yet in place. A third-party render object panicking inside one of these methods still aborts the process today.
+
+**Shape:** wrap every trait call site in `pipeline/owner.rs` with `catch_unwind`:
+
+```rust
+match std::panic::catch_unwind(AssertUnwindSafe(|| {
+    render_object.perform_layout_raw(constraints)
+})) {
+    Ok(geometry) => /* normal path */,
+    Err(_) => return Err(RenderError::poisoned(render_object.debug_name(), "layout")),
+}
+```
+
+Requires:
+- `RenderObject<P>::debug_name(&self) -> &'static str` accessor (already in Mythos Step 11 design; add as a trait method with `type_name::<Self>()` default).
+- `flush_layout` / `flush_paint` / `flush_semantics` signatures change from `()` to `RenderResult<()>` so the error can propagate.
+- `RendererBinding::draw_frame` updates to handle the new return type (drop the frame, log, retry next tick).
+
+**Why deferred:** flips the return type of the entire flush_* surface, rippling into flui-app's draw loop. Land alongside Mythos Step 7 finalization (per-phase method redistribution) which already touches the same call shapes.
+
+**Dependencies:** debug_name method on RenderObject; or use TypeId-based name lookup as a fallback.
+
 ### Per-phase method redistribution (Mythos Step 7 finalization)
 
 **Files:** [`src/pipeline/owner.rs`](src/pipeline/owner.rs), [`crates/flui-app/src/bindings/renderer_binding.rs`](../../crates/flui-app/src/bindings/renderer_binding.rs).
