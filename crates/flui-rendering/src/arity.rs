@@ -1,48 +1,15 @@
-//! Arity system for compile-time child count constraints.
+//! Arity types re-exported from [`flui_tree`].
 //!
-//! This module re-exports the Arity types from `flui-tree` for use in
-//! the rendering system. Arity determines how many children a render
-//! object can have at compile time.
+//! This module is a transitional re-export shim. The canonical home of the
+//! arity primitives is `flui_tree::arity`; this module exists only so that
+//! the existing 18+ call sites inside `flui-rendering` can continue to write
+//! `use crate::arity::X` without churn. New code should import directly
+//! from `flui_tree`.
 //!
-//! # Arity Types
-//!
-//! | Type       | Children | Use Case                        |
-//! |------------|----------|---------------------------------|
-//! | `Leaf`     | 0        | Text, Image, ColoredBox         |
-//! | `Single`   | 1        | Padding, Center, Align          |
-//! | `Optional` | 0 or 1   | Container, DecoratedBox         |
-//! | `Variable` | 0+       | Row, Column, Stack, Flex        |
-//!
-//! # Example
-//!
-//! ```ignore
-//! use flui_rendering::arity::{Arity, Leaf, Single, Variable};
-//! use flui_rendering::traits::RenderBox;
-//!
-//! // Leaf - no children
-//! struct RenderText { text: String }
-//! impl RenderBox for RenderText {
-//!     type Arity = Leaf;
-//!     // ...
-//! }
-//!
-//! // Single - exactly one child
-//! struct RenderPadding { padding: EdgeInsets }
-//! impl RenderBox for RenderPadding {
-//!     type Arity = Single;
-//!     // ...
-//! }
-//!
-//! // Variable - any number of children
-//! struct RenderColumn { children: Vec<...> }
-//! impl RenderBox for RenderColumn {
-//!     type Arity = Variable;
-//!     // ...
-//! }
-//! ```
+//! Mythos Step 5a (2026-05-20): trimmed from 48 LOC of duplicated docs +
+//! dead `TreeChildrenAccess` alias to the minimum re-export. The full
+//! deletion of this module + rewire of internal call sites to `flui_tree`
+//! is tracked in `crates/flui-rendering/ARCHITECTURE.md` under "Outstanding
+//! refactors".
 
-// Re-export from flui-tree
-pub use flui_tree::{
-    Arity, ArityStorage, ArityStorageView, ChildrenAccess as TreeChildrenAccess, Leaf, Optional,
-    Single, Variable,
-};
+pub use flui_tree::{Arity, ArityStorage, ArityStorageView, Leaf, Optional, Single, Variable};
