@@ -163,10 +163,6 @@ impl fmt::Debug for AnnotatedRegionLayer {
     }
 }
 
-// Thread safety is ensured by AnnotationValue = Arc<dyn Any + Send + Sync>
-unsafe impl Send for AnnotatedRegionLayer {}
-unsafe impl Sync for AnnotatedRegionLayer {}
-
 // ============================================================================
 // COMMON ANNOTATION TYPES
 // ============================================================================

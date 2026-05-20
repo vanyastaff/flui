@@ -20,7 +20,7 @@ Triggers are seeded from observed friction in the workspace. Forward-looking tri
 
 **Back-references:** [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) v2.2.0 Anti-Patterns ("`Arc<Mutex<>>` for tree structures"); [`STRATEGY.md`](../STRATEGY.md) "sync hot path".
 
-**Regex (used by `just port-check`):** `RwLock<\s*Box<\s*dyn\s+RenderObject` (storage-shaped violations).
+**Regex (used by `just port-check`):** `RwLock<\s*Box<\s*dyn\s+(RenderObject|Layer\b|ContainerLayer)` (storage-shaped violations). Scope extended in Mythos Step 13 of the `flui-layer` chain to cover `crates/flui-layer/src/` and to match `dyn Layer` / `dyn ContainerLayer` shapes as well.
 
 ### 2. `Box<dyn RenderObject<_>>` wrapped in any interior-mutability primitive in render storage
 
@@ -32,7 +32,7 @@ The *funnel* signatures (`tree.rs::insert_box`, view → render `From` impls) ac
 
 **Back-references:** [`.ai-factory/ARCHITECTURE.md`](../.ai-factory/ARCHITECTURE.md) example "`RenderBad { children: Vec<Box<dyn RenderObject>> }` — forbidden"; [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) Principle IV.
 
-**Regex:** `(RwLock|Mutex|RefCell|Cell|UnsafeCell)<\s*Box<\s*dyn\s+RenderObject` constrained to render-storage modules.
+**Regex:** `(RwLock|Mutex|RefCell|Cell|UnsafeCell)<\s*Box<\s*dyn\s+(RenderObject|Layer\b|ContainerLayer)` constrained to render-storage modules and `crates/flui-layer/src/`. Scope and trait-name set extended in Mythos Step 13 of the `flui-layer` chain.
 
 ### 3. `async fn` on `View::build`, `RenderObject::layout`, `RenderObject::paint`
 
@@ -40,7 +40,7 @@ The *funnel* signatures (`tree.rs::insert_box`, view → render `From` impls) ac
 
 **Back-references:** [`STRATEGY.md`](../STRATEGY.md) "sync hot path, async на краях"; permitted at IO (`flui-assets`), scheduler (`flui-scheduler`), build pipeline (`flui-build`) only.
 
-**Regex:** `async\s+fn\s+(build|layout|paint|perform_layout)\b` constrained to `crates/flui-{rendering,view,painting}/src/**`.
+**Regex:** `async\s+fn\s+(build|layout|paint|perform_layout|composite|render|fire_composition_callbacks)\b` constrained to `crates/flui-{rendering,view,painting,layer}/src/**`. Scope and verb set extended in Mythos Step 13 of the `flui-layer` chain to catch layer-level async (`composite`, `render`, `fire_composition_callbacks`).
 
 **Whitelist:** `crates/flui-view/src/binding.rs` route-notification handlers (`handle_pop_route`, `handle_push_route`, `handle_commit_back_gesture`, `handle_request_app_exit`) are async per Flutter's `SystemChannels` callback shape; they sit on the binding layer, not the render path.
 
@@ -58,7 +58,7 @@ The *funnel* signatures (`tree.rs::insert_box`, view → render `From` impls) ac
 
 **Why:** per-frame allocations are the largest controllable frame-budget tax. `Arc::clone` is cheap individually but compounds across hundreds of render objects times 60 frames per second. Caller is asked to pass `&Arc<T>` or `&T` rather than clone.
 
-**Regex:** `Arc::clone\(|\.clone\(\)` inside files matching `crates/flui-rendering/src/objects/**/*.rs` paint methods (review-gated; the regex over-matches by design and the whitelist is empty by intent).
+**Regex:** `Arc::clone\(` constrained to `crates/flui-rendering/src/objects/**/*.rs` and `crates/flui-engine/src/wgpu/layer_render.rs` (the per-layer wgpu walk; scope extended in Mythos Step 13 of the `flui-layer` chain as a forward-looking guard).
 
 ### 6. Recursive `Box<dyn View>` stored in element child collections
 
@@ -179,7 +179,7 @@ Four other crates carry `crates/<crate>/docs/ARCHITECTURE.md` files (`flui-paint
 | `flui-painting` | `crates/flui-painting/docs/ARCHITECTURE.md` (pre-template) | Active |
 | `flui-semantics` | Not yet templated | Active |
 | `flui-scheduler` | Not yet templated | Active |
-| `flui-layer` | Not yet templated | Active |
+| [`flui-layer`](../crates/flui-layer/ARCHITECTURE.md) | Templated 2026-05-20 (Mythos chain) | Active |
 | `flui-interaction` | `crates/flui-interaction/docs/ARCHITECTURE.md` (pre-template; precedent for `## Thread safety` format) | Active |
 | `flui-engine` | Not yet templated | Active |
 | `flui-log` | Not yet templated | Active |

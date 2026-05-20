@@ -5,8 +5,8 @@
 //! for repaint boundary layers.
 
 use flui_types::{
-    geometry::{Pixels, Rect, Vec2},
     Offset,
+    geometry::{Pixels, Rect, Vec2},
 };
 
 /// Layer that applies a simple offset to its children.
@@ -128,10 +128,6 @@ impl OffsetLayer {
         self.offset = Offset::new(self.offset.dx + offset.dx, self.offset.dy + offset.dy);
     }
 }
-
-// Thread safety (Copy type, always safe)
-unsafe impl Send for OffsetLayer {}
-unsafe impl Sync for OffsetLayer {}
 
 #[cfg(test)]
 mod tests {

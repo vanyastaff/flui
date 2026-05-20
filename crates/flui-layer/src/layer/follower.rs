@@ -231,10 +231,6 @@ impl FollowerLayer {
     }
 }
 
-// Thread safety
-unsafe impl Send for FollowerLayer {}
-unsafe impl Sync for FollowerLayer {}
-
 #[cfg(test)]
 mod tests {
     use flui_types::geometry::px;

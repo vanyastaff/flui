@@ -163,13 +163,9 @@ impl ClipPathLayer {
     }
 }
 
-// Thread safety
-unsafe impl Send for ClipPathLayer {}
-unsafe impl Sync for ClipPathLayer {}
-
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::{px, Point};
+    use flui_types::geometry::{Point, px};
 
     use super::*;
 

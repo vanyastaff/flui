@@ -95,12 +95,14 @@
 
 mod compositor;
 pub mod damage;
-mod handle;
+mod error;
 mod link_registry;
 mod scene;
 
 pub mod layer;
 pub mod tree;
+
+pub use error::{LayerError, LayerResult};
 
 // ============================================================================
 // RE-EXPORTS - Layer Types
@@ -114,23 +116,8 @@ pub use compositor::{CompositorStats, SceneBuilder, SceneCompositor};
 // RE-EXPORTS - Foundation Types
 // ============================================================================
 pub use flui_foundation::LayerId;
-// ============================================================================
-// RE-EXPORTS - Handle
-// ============================================================================
-pub use handle::{
-    AnnotatedRegionLayerHandle, AnyLayerHandle, BackdropFilterLayerHandle, CanvasLayerHandle,
-    ClipPathLayerHandle, ClipRRectLayerHandle, ClipRectLayerHandle, ColorFilterLayerHandle,
-    FollowerLayerHandle, ImageFilterLayerHandle, LayerHandle, LeaderLayerHandle, OffsetLayerHandle,
-    OpacityLayerHandle, PlatformViewLayerHandle, ShaderMaskLayerHandle, TextureLayerHandle,
-    TransformLayerHandle,
-};
 // Re-export annotation search types
 pub use layer::annotation::{AnnotationEntry, AnnotationResult, AnnotationSearchOptions};
-// Re-export composition callback types
-pub use layer::composition_callback::{
-    CompositionCallbackHandle, CompositionCallbackId, CompositionCallbackRegistry,
-    HasCompositionCallbacks,
-};
 pub use layer::{
     // Annotation layers
     AnnotatedRegionLayer,
@@ -176,7 +163,7 @@ pub use layer::{
 // RE-EXPORTS - Link Registry
 // ============================================================================
 pub use link_registry::{LeaderInfo, LinkRegistry};
-pub use scene::Scene;
+pub use scene::{CompositionCallback, Scene};
 // ============================================================================
 // RE-EXPORTS - Tree
 // ============================================================================
@@ -200,8 +187,6 @@ pub mod prelude {
     pub use crate::{AnnotatedRegionLayer, SemanticLabel, SystemUiOverlayStyle};
     // Annotation search
     pub use crate::{AnnotationEntry, AnnotationResult, AnnotationSearchOptions};
-    // Handle
-    pub use crate::{AnyLayerHandle, LayerHandle};
     // Effect layers
     pub use crate::{
         BackdropFilterLayer, ColorFilterLayer, ImageFilterLayer, OpacityLayer, ShaderMaskLayer,
@@ -213,7 +198,7 @@ pub mod prelude {
     // Clip layers
     pub use crate::{ClipPathLayer, ClipRRectLayer, ClipRectLayer, ClipSuperellipseLayer};
     // Composition callbacks
-    pub use crate::{CompositionCallbackRegistry, HasCompositionCallbacks};
+    pub use crate::CompositionCallback;
     // Linking layers
     pub use crate::{FollowerLayer, LayerLink, LeaderLayer};
     // Core types
@@ -240,7 +225,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[cfg(test)]
 mod tests {
     use flui_types::{
-        geometry::{px, Rect},
+        geometry::{Rect, px},
         painting::Clip,
     };
 

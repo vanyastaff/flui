@@ -4,8 +4,8 @@
 //! Corresponds to Flutter's `TransformLayer`.
 
 use flui_types::{
-    geometry::{Pixels, Point, Rect},
     Matrix4,
+    geometry::{Pixels, Point, Rect},
 };
 
 /// Layer that applies a full matrix transformation to its children.
@@ -222,10 +222,6 @@ impl Default for TransformLayer {
         Self::identity()
     }
 }
-
-// Thread safety
-unsafe impl Send for TransformLayer {}
-unsafe impl Sync for TransformLayer {}
 
 #[cfg(test)]
 mod tests {

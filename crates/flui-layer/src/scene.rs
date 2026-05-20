@@ -37,9 +37,50 @@
 //! ```
 
 use flui_foundation::LayerId;
+use std::fmt;
+
 use flui_types::{Pixels, Size};
 
 use crate::{layer::Layer, link_registry::LinkRegistry, tree::LayerTree};
+
+// ============================================================================
+// COMPOSITION CALLBACK
+// ============================================================================
+
+/// A one-shot callback invoked when a [`Scene`] finalises compositing.
+///
+/// Stored on the owning [`Scene`] via [`Scene::add_composition_callback`] and
+/// fired by [`Scene::fire_composition_callbacks`]. The callback is consumed on
+/// fire; re-registration is the caller's responsibility.
+///
+/// The closure is `FnOnce() + Send + 'static` so it can carry owned state
+/// across the build / fire boundary and survive a move to the render thread.
+pub struct CompositionCallback(Box<dyn FnOnce() + Send + 'static>);
+
+impl CompositionCallback {
+    /// Wraps a closure in a callback. Prefer [`Scene::add_composition_callback`]
+    /// for the canonical registration path.
+    #[inline]
+    pub fn new<F>(callback: F) -> Self
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        Self(Box::new(callback))
+    }
+
+    /// Consumes the callback and invokes it.
+    #[inline]
+    pub fn fire(self) {
+        (self.0)();
+    }
+}
+
+impl fmt::Debug for CompositionCallback {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CompositionCallback")
+            .finish_non_exhaustive()
+    }
+}
 
 // ============================================================================
 // SCENE
@@ -74,6 +115,9 @@ pub struct Scene {
     /// Leader-follower link registry for this scene
     link_registry: LinkRegistry,
 
+    /// One-shot callbacks fired when this scene finalises compositing.
+    composition_callbacks: Vec<CompositionCallback>,
+
     /// Frame number for debugging
     frame_number: u64,
 }
@@ -86,6 +130,7 @@ impl Scene {
             layer_tree: LayerTree::new(),
             root: None,
             link_registry: LinkRegistry::new(),
+            composition_callbacks: Vec::new(),
             frame_number: 0,
         }
     }
@@ -102,6 +147,7 @@ impl Scene {
             layer_tree,
             root,
             link_registry: LinkRegistry::new(),
+            composition_callbacks: Vec::new(),
             frame_number,
         }
     }
@@ -119,6 +165,7 @@ impl Scene {
             layer_tree,
             root,
             link_registry,
+            composition_callbacks: Vec::new(),
             frame_number,
         }
     }
@@ -134,8 +181,67 @@ impl Scene {
             layer_tree: tree,
             root: Some(root_id),
             link_registry: LinkRegistry::new(),
+            composition_callbacks: Vec::new(),
             frame_number,
         }
+    }
+
+    // ========================================================================
+    // COMPOSITION CALLBACKS
+    // ========================================================================
+
+    /// Registers a one-shot callback to fire when this scene finalises
+    /// compositing.
+    ///
+    /// Callbacks are consumed on fire (see [`fire_composition_callbacks`]).
+    /// Re-registration is the caller's responsibility.
+    ///
+    /// [`fire_composition_callbacks`]: Self::fire_composition_callbacks
+    pub fn add_composition_callback<F>(&mut self, callback: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        self.composition_callbacks
+            .push(CompositionCallback::new(callback));
+    }
+
+    /// Returns the number of pending composition callbacks.
+    #[inline]
+    pub fn composition_callback_count(&self) -> usize {
+        self.composition_callbacks.len()
+    }
+
+    /// Fires every registered composition callback exactly once, in
+    /// registration order.
+    ///
+    /// The callback list is drained -- subsequent calls fire nothing until
+    /// new callbacks are added.
+    ///
+    /// Each callback is wrapped in [`std::panic::catch_unwind`] to isolate
+    /// programmer error in a single callback from the rest. A poisoned
+    /// callback yields one [`LayerError::CallbackPoisoned`] entry in the
+    /// returned vec; subsequent callbacks still fire. This mirrors the
+    /// rendering crate's `Poisoned` shape introduced in Mythos Step 12 of
+    /// the `flui-rendering` chain (commit `dc0fa1ad`).
+    ///
+    /// [`LayerError::CallbackPoisoned`]: crate::LayerError::CallbackPoisoned
+    #[tracing::instrument(skip_all, name = "fire_composition_callbacks", fields(n = self.composition_callbacks.len()))]
+    pub fn fire_composition_callbacks(&mut self) -> Vec<crate::LayerError> {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let mut errors = Vec::new();
+        for callback in self.composition_callbacks.drain(..) {
+            // `AssertUnwindSafe` here documents that callbacks are
+            // self-contained `FnOnce() + Send` -- a panic in one callback
+            // does not tear scene-level invariants (the callback list is
+            // already drained by `drain(..)` before fire).
+            if let Err(_payload) = catch_unwind(AssertUnwindSafe(|| callback.fire())) {
+                errors.push(crate::LayerError::CallbackPoisoned {
+                    panic_type: "composition_callback",
+                });
+            }
+        }
+        errors
     }
 
     /// Returns the viewport size.
@@ -198,12 +304,16 @@ impl Scene {
         self.layer_tree.len()
     }
 
-    /// Disposes the scene, releasing any resources.
+    /// Returns a [`SceneBuilder`] that mutates this scene's layer tree.
     ///
-    /// After calling dispose, the scene should not be used.
-    pub fn dispose(self) {
-        // Scene is consumed, resources released via Drop
-        drop(self);
+    /// Convenience wrapper over `SceneBuilder::new(&mut scene.layer_tree)`.
+    /// The builder borrows the scene's tree exclusively; root and metadata
+    /// remain on the scene and are not touched by the builder.
+    ///
+    /// [`SceneBuilder`]: crate::compositor::SceneBuilder
+    #[inline]
+    pub fn builder(&mut self) -> crate::compositor::SceneBuilder<'_> {
+        crate::compositor::SceneBuilder::new(&mut self.layer_tree)
     }
 }
 
@@ -213,8 +323,9 @@ impl Default for Scene {
     }
 }
 
-// Scene can be sent to render thread
-unsafe impl Send for Scene {}
+// `Scene: Send` is auto-derived from its fields (`LayerTree`, `LinkRegistry`,
+// `Vec<CompositionCallback>` whose payload is `FnOnce() + Send + 'static`).
+// No `unsafe impl` is needed -- Mythos Step 3 deletion.
 
 // ============================================================================
 // SCENE BUILDER INTEGRATION
@@ -260,7 +371,7 @@ impl crate::compositor::SceneBuilder<'_> {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::{geometry::px, Offset};
+    use flui_types::{Offset, geometry::px};
 
     use super::*;
     use crate::CanvasLayer;
@@ -340,14 +451,28 @@ mod tests {
     }
 
     #[test]
-    fn test_scene_dispose() {
+    fn test_scene_drop_consumes() {
+        // Mythos Step 8: `Scene::dispose(self)` (which just called
+        // `drop(self)`) was deleted; `drop(scene)` is the idiomatic
+        // replacement.
         let scene = Scene::from_layer(
             Size::new(px(800.0), px(600.0)),
             Layer::Canvas(CanvasLayer::new()),
             0,
         );
-        scene.dispose();
-        // Scene is consumed, no further use possible
+        drop(scene);
+        // Scene is consumed by drop; no further use possible.
+    }
+
+    #[test]
+    fn test_scene_builder_method() {
+        let mut scene = Scene::empty(Size::new(px(100.0), px(100.0)));
+        {
+            let mut builder = scene.builder();
+            let _ = builder.add_canvas(CanvasLayer::new());
+        }
+        // Builder dropped; scene retains the tree but does not auto-set root.
+        assert_eq!(scene.layer_count(), 1);
     }
 
     #[test]
@@ -364,5 +489,101 @@ mod tests {
         // Now create scene with the tree
         let scene = Scene::new(Size::new(px(800.0), px(600.0)), tree, root_id, 0);
         assert!(scene.has_content());
+    }
+
+    // ========================================================================
+    // COMPOSITION CALLBACK TESTS (U2)
+    // ========================================================================
+
+    #[test]
+    fn test_composition_callback_register_and_fire() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let mut scene = Scene::empty(Size::new(px(100.0), px(100.0)));
+        assert_eq!(scene.composition_callback_count(), 0);
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let c1 = Arc::clone(&counter);
+        scene.add_composition_callback(move || {
+            c1.fetch_add(1, Ordering::SeqCst);
+        });
+        let c2 = Arc::clone(&counter);
+        scene.add_composition_callback(move || {
+            c2.fetch_add(10, Ordering::SeqCst);
+        });
+
+        assert_eq!(scene.composition_callback_count(), 2);
+
+        scene.fire_composition_callbacks();
+        assert_eq!(counter.load(Ordering::SeqCst), 11);
+        assert_eq!(scene.composition_callback_count(), 0);
+
+        // Re-firing is a no-op (callbacks consumed).
+        scene.fire_composition_callbacks();
+        assert_eq!(counter.load(Ordering::SeqCst), 11);
+    }
+
+    #[test]
+    fn test_composition_callback_poison_isolation() {
+        // Mythos Step 9: a panicking callback must be caught and reported as
+        // `LayerError::CallbackPoisoned` without preventing subsequent
+        // callbacks from firing. This mirrors the rendering crate's
+        // `Poisoned` shape (commit dc0fa1ad).
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let mut scene = Scene::empty(Size::ZERO);
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        let c1 = Arc::clone(&counter);
+        scene.add_composition_callback(move || {
+            c1.fetch_add(1, Ordering::SeqCst);
+        });
+        scene.add_composition_callback(|| {
+            panic!("intentional poison in callback 2");
+        });
+        let c3 = Arc::clone(&counter);
+        scene.add_composition_callback(move || {
+            c3.fetch_add(100, Ordering::SeqCst);
+        });
+
+        let errors = scene.fire_composition_callbacks();
+        // Two non-panicking callbacks each ran exactly once.
+        assert_eq!(counter.load(Ordering::SeqCst), 101);
+        // Exactly one poisoned callback was reported.
+        assert_eq!(errors.len(), 1);
+        assert!(matches!(
+            errors[0],
+            crate::LayerError::CallbackPoisoned { .. }
+        ));
+        // Callback list is drained even on poison.
+        assert_eq!(scene.composition_callback_count(), 0);
+    }
+
+    #[test]
+    fn test_scene_builder_pop_underflow() {
+        // Mythos Step 9: SceneBuilder::pop returns Result instead of
+        // panicking on empty stack. `try_pop` stays as the panic-free
+        // probe form.
+        let mut tree = LayerTree::new();
+        let mut builder = crate::SceneBuilder::new(&mut tree);
+
+        let err = builder.pop().unwrap_err();
+        assert!(matches!(err, crate::LayerError::BuilderStackUnderflow));
+
+        // try_pop is the panic-free probe; returns Option.
+        assert!(builder.try_pop().is_none());
+    }
+
+    #[test]
+    fn test_composition_callback_empty_fire_is_noop() {
+        let mut scene = Scene::empty(Size::ZERO);
+        scene.fire_composition_callbacks();
+        assert_eq!(scene.composition_callback_count(), 0);
     }
 }

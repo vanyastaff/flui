@@ -3,7 +3,7 @@
 //! This layer applies image filters (blur, dilate, erode, etc.) to its
 //! children. Corresponds to Flutter's `ImageFilterLayer`.
 
-use flui_types::{geometry::Pixels, painting::effects::ImageFilter, Offset};
+use flui_types::{Offset, geometry::Pixels, painting::effects::ImageFilter};
 
 /// Layer that applies an image filter to its children.
 ///
@@ -185,10 +185,6 @@ impl ImageFilterLayer {
         matches!(self.filter, ImageFilter::Erode { .. })
     }
 }
-
-// Thread safety
-unsafe impl Send for ImageFilterLayer {}
-unsafe impl Sync for ImageFilterLayer {}
 
 #[cfg(test)]
 mod tests {

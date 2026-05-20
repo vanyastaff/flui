@@ -64,13 +64,16 @@ check() {
 # -----------------------------------------------------------------------------
 # Trigger 1 -- RwLock<Box<dyn RenderObject ...>> in render/view crates.
 # This is the canonical exemplar violation at flui-rendering/src/storage/entry.rs.
+# Mythos Step 13 of the flui-layer chain added `crates/flui-layer/src` to the
+# scope so the same shape is refused on the layer-storage type if reintroduced.
 # -----------------------------------------------------------------------------
 check "1" \
-  "RwLock<Box<dyn RenderObject<...>>> in render/view crates" \
-  'RwLock<\s*Box<\s*dyn\s+RenderObject' \
+  "RwLock<Box<dyn ...>> in render/view/layer crates" \
+  'RwLock<\s*Box<\s*dyn\s+(RenderObject|Layer\b|ContainerLayer)' \
   --type rust \
   crates/flui-rendering/src \
-  crates/flui-view/src
+  crates/flui-view/src \
+  crates/flui-layer/src
 
 # -----------------------------------------------------------------------------
 # Trigger 2 -- Box<dyn RenderObject<...>> wrapped in an interior-mutability
@@ -85,26 +88,32 @@ check "1" \
 # generalises to the others.
 # -----------------------------------------------------------------------------
 check "2" \
-  "Box<dyn RenderObject<...>> wrapped in interior-mutability primitive in render storage" \
-  '(RwLock|Mutex|RefCell|Cell|UnsafeCell)<\s*Box<\s*dyn\s+RenderObject' \
+  "Box<dyn ...> wrapped in interior-mutability primitive in render/view/layer storage" \
+  '(RwLock|Mutex|RefCell|Cell|UnsafeCell)<\s*Box<\s*dyn\s+(RenderObject|Layer\b|ContainerLayer)' \
   --type rust \
   crates/flui-rendering/src/storage \
-  crates/flui-view/src/element
+  crates/flui-view/src/element \
+  crates/flui-layer/src
 
 # -----------------------------------------------------------------------------
-# Trigger 3 -- async fn build/layout/paint/perform_layout in render hot path.
+# Trigger 3 -- async fn build/layout/paint/perform_layout/composite/render in
+# render/layer hot path.
 # Whitelist: route-notification handlers in flui-view/src/binding.rs are async
 # per Flutter SystemChannels callback semantics -- they sit on the binding
 # layer, not the render path. Excluded by file glob.
+# Mythos Step 13 of the flui-layer chain extended the verb set to include
+# `composite`, `render`, and `fire_composition_callbacks` so layer-level
+# async violations are caught at the same trigger.
 # -----------------------------------------------------------------------------
 check "3" \
-  "async fn build/layout/paint/perform_layout in render hot path" \
-  'async\s+fn\s+(build|layout|paint|perform_layout)\b' \
+  "async fn build/layout/paint/perform_layout/composite/render/fire_composition_callbacks in render/layer hot path" \
+  'async\s+fn\s+(build|layout|paint|perform_layout|composite|render|fire_composition_callbacks)\b' \
   --type rust \
   --glob '!**/binding.rs' \
   crates/flui-rendering/src \
   crates/flui-view/src \
-  crates/flui-painting/src
+  crates/flui-painting/src \
+  crates/flui-layer/src
 
 # -----------------------------------------------------------------------------
 # Trigger 4 -- Mutex on dirty-list state mutated during build/layout/paint.
@@ -122,16 +131,20 @@ check "4" \
   crates/flui-rendering/src
 
 # -----------------------------------------------------------------------------
-# Trigger 5 -- Arc::clone inside per-frame paint loop.
-# Forward-looking. Scope is render-object paint impls only.
+# Trigger 5 -- Arc::clone inside per-frame paint/composite loop.
+# Forward-looking. Scope:
+#   - flui-rendering/src/objects (per-render-object paint impls)
+#   - flui-engine/src/wgpu/layer_render.rs (per-layer wgpu walk; extended in
+#     Mythos Step 13 of the flui-layer chain)
 # -----------------------------------------------------------------------------
 check "5" \
-  "Arc::clone in per-frame paint loop (crates/flui-rendering/src/objects/)" \
+  "Arc::clone in per-frame paint/composite loop" \
   'Arc::clone\(' \
   --type rust \
   --glob '!**/test*.rs' \
   --glob '!**/tests/**' \
-  crates/flui-rendering/src/objects
+  crates/flui-rendering/src/objects \
+  crates/flui-engine/src/wgpu/layer_render.rs
 
 # -----------------------------------------------------------------------------
 # Trigger 6 -- recursive Box<dyn View> stored in element child collections.

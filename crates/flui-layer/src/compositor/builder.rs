@@ -1,49 +1,16 @@
-//! Scene compositor for building layer hierarchies
+//! Stack-based [] for constructing layer hierarchies.
 //!
-//! This module provides a stack-based compositor API similar to Flutter's
-//! SceneBuilder. It allows building complex layer trees using push/pop
-//! operations.
-//!
-//! # Architecture
-//!
-//! The compositor maintains a stack of layer IDs. Each `push_*` operation
-//! creates a new layer and pushes it onto the stack. Content is added to the
-//! current top-of-stack layer. `pop()` removes the top layer from the stack.
-//!
-//! # Example
-//!
-//! ```rust
-//! use flui_layer::{CanvasLayer, LayerTree, OffsetLayer, OpacityLayer, SceneBuilder};
-//! use flui_types::Offset;
-//!
-//! let mut tree = LayerTree::new();
-//! let mut builder = SceneBuilder::new(&mut tree);
-//!
-//! // Push an offset layer
-//! builder.push_offset(Offset::new(10.0, 20.0));
-//!
-//! // Push opacity layer as child
-//! builder.push_opacity(0.5);
-//!
-//! // Add canvas content
-//! let canvas = CanvasLayer::new();
-//! builder.add_canvas(canvas);
-//!
-//! // Pop back up
-//! builder.pop();
-//! builder.pop();
-//!
-//! // Build returns the root layer ID
-//! let root_id = builder.build();
-//! ```
+//! Extracted from `compositor.rs` in Mythos Step 10. The builder is the
+//! canonical scene-construction API; `LayerTree::push_*` helpers were
+//! deleted in Step 5.
 
 use flui_foundation::LayerId;
 use flui_types::{
+    Matrix4,
     geometry::{Pixels, RRect, Rect},
     painting::{
-        effects::ColorMatrix, BlendMode, Clip, FilterQuality, ImageFilter, Path, Shader, TextureId,
+        BlendMode, Clip, FilterQuality, ImageFilter, Path, Shader, TextureId, effects::ColorMatrix,
     },
-    Matrix4,
 };
 
 use crate::{
@@ -512,29 +479,21 @@ impl<'a> SceneBuilder<'a> {
     /// After popping, subsequent operations will add children to the
     /// previous parent layer.
     ///
-    /// # Panics
+    /// Returns `Err(LayerError::BuilderStackUnderflow)` if the stack is
+    /// empty -- programmer error in the paint phase. For the panic-free
+    /// probe form, use [`try_pop`].
     ///
-    /// Panics if the stack is empty.
+    /// [`try_pop`]: Self::try_pop
     ///
-    /// # Example
+    /// # Mythos
     ///
-    /// ```rust
-    /// use flui_layer::{LayerTree, SceneBuilder};
-    /// use flui_types::Offset;
-    ///
-    /// let mut tree = LayerTree::new();
-    /// let mut builder = SceneBuilder::new(&mut tree);
-    ///
-    /// builder.push_offset(Offset::new(10.0, 20.0));
-    /// builder.push_opacity(0.5);
-    /// builder.pop(); // Back to offset layer
-    /// builder.pop(); // Stack is now empty
-    /// ```
-    pub fn pop(&mut self) {
-        let _ = self
-            .stack
+    /// Replaces a previous `expect("SceneBuilder::pop called on empty stack")`
+    /// panic with a structured error in Step 9.
+    pub fn pop(&mut self) -> crate::LayerResult<()> {
+        self.stack
             .pop()
-            .expect("SceneBuilder::pop called on empty stack");
+            .map(|_| ())
+            .ok_or(crate::LayerError::BuilderStackUnderflow)
     }
 
     /// Pops the current layer, returning its ID.
@@ -582,6 +541,7 @@ impl<'a> SceneBuilder<'a> {
     ///
     /// assert!(root.is_some());
     /// ```
+    #[tracing::instrument(skip_all, name = "scene_build", fields(depth = self.depth()))]
     pub fn build(self) -> Option<LayerId> {
         self.root
     }
@@ -593,383 +553,5 @@ impl<'a> SceneBuilder<'a> {
         let root = self.root.take();
         self.stack.clear();
         root
-    }
-}
-
-// ============================================================================
-// SCENE COMPOSITOR
-// ============================================================================
-
-/// High-level compositor for managing multiple scenes.
-///
-/// SceneCompositor provides utilities for compositing multiple layer trees,
-/// managing retained layers, and optimizing layer reuse.
-#[derive(Debug, Default)]
-pub struct SceneCompositor {
-    /// Retained layer roots from previous frames
-    retained: Vec<LayerId>,
-
-    /// Statistics for debugging
-    stats: CompositorStats,
-}
-
-/// Statistics about compositor operations.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct CompositorStats {
-    /// Number of layers created this frame
-    pub layers_created: usize,
-
-    /// Number of retained layers reused
-    pub layers_reused: usize,
-
-    /// Number of layers removed
-    pub layers_removed: usize,
-
-    /// Current total layer count
-    pub total_layers: usize,
-}
-
-impl SceneCompositor {
-    /// Creates a new SceneCompositor.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Returns current compositor statistics.
-    pub fn stats(&self) -> CompositorStats {
-        self.stats
-    }
-
-    /// Resets statistics for a new frame.
-    pub fn reset_stats(&mut self) {
-        self.stats = CompositorStats::default();
-    }
-
-    /// Marks a layer subtree for retention.
-    ///
-    /// Retained layers can be reused across frames without rebuilding.
-    pub fn retain(&mut self, layer_id: LayerId) {
-        if !self.retained.contains(&layer_id) {
-            self.retained.push(layer_id);
-        }
-    }
-
-    /// Returns all retained layer IDs.
-    pub fn retained_layers(&self) -> &[LayerId] {
-        &self.retained
-    }
-
-    /// Checks if a layer is retained.
-    pub fn is_retained(&self, layer_id: LayerId) -> bool {
-        self.retained.contains(&layer_id)
-    }
-
-    /// Clears all retained layers.
-    pub fn clear_retained(&mut self) {
-        self.retained.clear();
-    }
-
-    /// Removes a layer from retention.
-    pub fn release(&mut self, layer_id: LayerId) {
-        self.retained.retain(|&id| id != layer_id);
-    }
-
-    /// Updates statistics after frame composition.
-    pub fn update_stats(&mut self, tree: &LayerTree) {
-        self.stats.total_layers = tree.len();
-    }
-}
-
-// ============================================================================
-// TESTS
-// ============================================================================
-
-#[cfg(test)]
-mod tests {
-    use flui_types::{geometry::px, Offset};
-
-    use super::*;
-
-    #[test]
-    fn test_scene_builder_new() {
-        let mut tree = LayerTree::new();
-        let builder = SceneBuilder::new(&mut tree);
-
-        assert_eq!(builder.depth(), 0);
-        assert!(builder.current().is_none());
-        assert!(builder.root().is_none());
-    }
-
-    #[test]
-    fn test_scene_builder_push_offset() {
-        let mut tree = LayerTree::new();
-        let mut builder = SceneBuilder::new(&mut tree);
-
-        let id = builder.push_offset(Offset::new(px(10.0), px(20.0)));
-
-        assert_eq!(builder.depth(), 1);
-        assert_eq!(builder.current(), Some(id));
-        assert_eq!(builder.root(), Some(id));
-    }
-
-    #[test]
-    fn test_scene_builder_push_pop() {
-        let mut tree = LayerTree::new();
-        let mut builder = SceneBuilder::new(&mut tree);
-
-        let offset_id = builder.push_offset(Offset::new(px(10.0), px(20.0)));
-        assert_eq!(builder.depth(), 1);
-
-        let opacity_id = builder.push_opacity(0.5);
-        assert_eq!(builder.depth(), 2);
-
-        builder.pop();
-        assert_eq!(builder.depth(), 1);
-        assert_eq!(builder.current(), Some(offset_id));
-
-        builder.pop();
-        assert_eq!(builder.depth(), 0);
-
-        // Root should still be offset
-        assert_eq!(builder.root(), Some(offset_id));
-
-        // Verify tree structure
-        let children = tree.children(offset_id).unwrap();
-        assert_eq!(children.len(), 1);
-        assert_eq!(children[0], opacity_id);
-    }
-
-    #[test]
-    fn test_scene_builder_add_canvas() {
-        let mut tree = LayerTree::new();
-        let mut builder = SceneBuilder::new(&mut tree);
-
-        let offset_id = builder.push_offset(Offset::ZERO);
-        let canvas_id = builder.add_canvas(CanvasLayer::new());
-
-        // Canvas should not be pushed onto stack
-        assert_eq!(builder.depth(), 1);
-        assert_eq!(builder.current(), Some(offset_id));
-
-        // Finish building to release borrow
-        let _root = builder.build();
-
-        // Now we can check tree structure
-        let children = tree.children(offset_id).unwrap();
-        assert!(children.contains(&canvas_id));
-    }
-
-    #[test]
-    fn test_scene_builder_add_picture() {
-        use flui_painting::Canvas;
-        use flui_types::{painting::Paint, Color, Rect};
-
-        let mut tree = LayerTree::new();
-        let mut builder = SceneBuilder::new(&mut tree);
-
-        // Record a picture
-        let mut canvas = Canvas::new();
-        canvas.draw_rect(
-            Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0)),
-            &Paint::fill(Color::RED),
-        );
-        let picture = canvas.finish();
-
-        // Add picture to scene
-        let offset_id = builder.push_offset(Offset::ZERO);
-        let picture_id = builder.add_picture(picture);
-
-        // Picture should not be pushed onto stack
-        assert_eq!(builder.depth(), 1);
-        assert_eq!(builder.current(), Some(offset_id));
-
-        // Finish building to release borrow
-        let _root = builder.build();
-
-        // Verify tree structure
-        let children = tree.children(offset_id).unwrap();
-        assert!(children.contains(&picture_id));
-
-        // Verify layer type
-        let layer = tree.get_layer(picture_id).unwrap();
-        assert!(layer.is_picture());
-    }
-
-    #[test]
-    fn test_scene_builder_add_texture() {
-        let mut tree = LayerTree::new();
-        let mut builder = SceneBuilder::new(&mut tree);
-
-        let _ = builder.push_offset(Offset::ZERO);
-        let texture_id = builder.add_texture(
-            TextureId::new(42),
-            Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0)),
-        );
-
-        let _ = builder.build();
-
-        let layer = tree.get_layer(texture_id).unwrap();
-        assert!(layer.is_texture());
-    }
-
-    #[test]
-    fn test_scene_builder_nested_transforms() {
-        let mut tree = LayerTree::new();
-        let mut builder = SceneBuilder::new(&mut tree);
-
-        // Build: offset -> opacity -> transform -> canvas
-        let _ = builder.push_offset(Offset::new(px(100.0), px(50.0)));
-        let _ = builder.push_opacity(0.8);
-        let _ = builder.push_transform(Matrix4::scaling(2.0, 2.0, 1.0));
-        let _ = builder.add_canvas(CanvasLayer::new());
-        builder.pop();
-        builder.pop();
-        builder.pop();
-
-        let root = builder.build().unwrap();
-        assert!(tree.get_layer(root).unwrap().is_offset());
-    }
-
-    #[test]
-    fn test_scene_builder_clip_rect() {
-        let mut tree = LayerTree::new();
-        let mut builder = SceneBuilder::new(&mut tree);
-
-        let clip_id = builder.push_clip_rect(
-            Rect::from_ltwh(px(0.0), px(0.0), px(200.0), px(200.0)),
-            Clip::HardEdge,
-        );
-        builder.pop();
-
-        let layer = tree.get_layer(clip_id).unwrap();
-        assert!(layer.is_clip_rect());
-    }
-
-    #[test]
-    fn test_scene_builder_build() {
-        let mut tree = LayerTree::new();
-        let mut builder = SceneBuilder::new(&mut tree);
-
-        let _ = builder.push_offset(Offset::ZERO);
-        let _ = builder.add_canvas(CanvasLayer::new());
-        builder.pop();
-
-        let root = builder.build();
-        assert!(root.is_some());
-
-        // Tree should have root set
-        assert_eq!(tree.root(), root);
-    }
-
-    #[test]
-    fn test_scene_builder_build_and_reset() {
-        let mut tree = LayerTree::new();
-        let mut builder = SceneBuilder::new(&mut tree);
-
-        let _ = builder.push_offset(Offset::ZERO);
-        builder.pop();
-
-        let root1 = builder.build_and_reset();
-        assert!(root1.is_some());
-        assert!(builder.root().is_none());
-        assert_eq!(builder.depth(), 0);
-
-        // Can build another scene
-        let _ = builder.push_opacity(1.0);
-        builder.pop();
-
-        let root2 = builder.build_and_reset();
-        assert!(root2.is_some());
-        assert_ne!(root1, root2);
-    }
-
-    #[test]
-    fn test_scene_builder_pop_to_depth() {
-        let mut tree = LayerTree::new();
-        let mut builder = SceneBuilder::new(&mut tree);
-
-        let _ = builder.push_offset(Offset::ZERO);
-        let _ = builder.push_opacity(0.5);
-        let _ = builder.push_transform(Matrix4::IDENTITY);
-        assert_eq!(builder.depth(), 3);
-
-        builder.pop_to_depth(1);
-        assert_eq!(builder.depth(), 1);
-
-        builder.pop_to_depth(0);
-        assert_eq!(builder.depth(), 0);
-    }
-
-    #[test]
-    fn test_scene_builder_try_pop() {
-        let mut tree = LayerTree::new();
-        let mut builder = SceneBuilder::new(&mut tree);
-
-        assert!(builder.try_pop().is_none());
-
-        let id = builder.push_offset(Offset::ZERO);
-        assert_eq!(builder.try_pop(), Some(id));
-        assert!(builder.try_pop().is_none());
-    }
-
-    #[test]
-    fn test_scene_compositor_new() {
-        let compositor = SceneCompositor::new();
-        assert!(compositor.retained_layers().is_empty());
-    }
-
-    #[test]
-    fn test_scene_compositor_retain() {
-        let mut compositor = SceneCompositor::new();
-        let id = LayerId::new(1);
-
-        compositor.retain(id);
-        assert!(compositor.is_retained(id));
-        assert_eq!(compositor.retained_layers().len(), 1);
-
-        // Retaining same ID again should not duplicate
-        compositor.retain(id);
-        assert_eq!(compositor.retained_layers().len(), 1);
-    }
-
-    #[test]
-    fn test_scene_compositor_release() {
-        let mut compositor = SceneCompositor::new();
-        let id = LayerId::new(1);
-
-        compositor.retain(id);
-        assert!(compositor.is_retained(id));
-
-        compositor.release(id);
-        assert!(!compositor.is_retained(id));
-    }
-
-    #[test]
-    fn test_scene_compositor_clear_retained() {
-        let mut compositor = SceneCompositor::new();
-
-        compositor.retain(LayerId::new(1));
-        compositor.retain(LayerId::new(2));
-        compositor.retain(LayerId::new(3));
-
-        assert_eq!(compositor.retained_layers().len(), 3);
-
-        compositor.clear_retained();
-        assert!(compositor.retained_layers().is_empty());
-    }
-
-    #[test]
-    fn test_scene_compositor_stats() {
-        let mut compositor = SceneCompositor::new();
-        let mut tree = LayerTree::new();
-
-        let _ = tree.insert(Layer::Canvas(CanvasLayer::new()));
-        let _ = tree.insert(Layer::Canvas(CanvasLayer::new()));
-
-        compositor.update_stats(&tree);
-        assert_eq!(compositor.stats().total_layers, 2);
-
-        compositor.reset_stats();
-        assert_eq!(compositor.stats().total_layers, 0);
     }
 }
