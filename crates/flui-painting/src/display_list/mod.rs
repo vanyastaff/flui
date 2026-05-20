@@ -116,16 +116,6 @@ impl DisplayList {
         self.commands.push(command);
     }
 
-    /// Returns an iterator over mutable command references.
-    ///
-    /// Demoted to `pub(crate)` in Mythos chain U10. External callers
-    /// should mutate via the existing public API
-    /// (`apply_transform`/`filter`/`map`/`to_opacity`) instead of
-    /// touching commands directly.
-    pub(crate) fn commands_mut(&mut self) -> impl Iterator<Item = &mut DrawCommand> {
-        self.commands.iter_mut()
-    }
-
     /// Returns statistics about this display list (overrides
     /// extension trait).
     ///
