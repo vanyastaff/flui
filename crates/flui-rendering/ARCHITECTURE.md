@@ -154,6 +154,16 @@ Concrete cleanups visible from `flui-rendering` outward, sized for an `/aif-impl
 
 **Dependencies:** none.
 
+### Extension-trait split of `RenderObject<P>` (deferred from Mythos Step 11)
+
+**Files:** [`src/traits/render_object.rs`](src/traits/render_object.rs).
+
+**Goal:** the Mythos design (Section 3) prescribed splitting capability-specific methods on `RenderObject<P>` (e.g. `describe_semantics_configuration`, `paint_alpha`, `paint_transform`, `reassemble`) into extension traits (`SemanticsCapability`, `PaintEffectsCapability`, `HotReloadCapability`). Today the methods carry sensible default impls and the trait surface is already lean (17 methods, 6 required); the cost-benefit of moving them out into extension traits — 7 impl-file rewrites in `src/objects/` plus a `flui-view` boundary update — does not pay back its churn at the current scale.
+
+**Shape:** when a second render object actually overrides one of these methods (e.g. a future `RenderParagraph` overriding `describe_semantics_configuration`), revisit. Move that one method to a capability trait at that point. Premature now.
+
+**Dependencies:** none. The user-decision to keep the `Send + Sync + 'static` bound (made during the Mythos planning dialogue) means the broader trait-bound-relaxation half of Step 11 is also off the table; only the extension-trait split remains and is deferred per above.
+
 ### Fully delete `src/arity.rs` (currently trimmed re-export shim)
 
 **File:** [`src/arity.rs`](src/arity.rs).
