@@ -106,8 +106,13 @@ where
     B: ElementBehavior<V, A> + std::fmt::Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Element")
-            .field("core", &self.core)
+        // Use the behavior's kind name so type aliases like `StatelessElement`
+        // and `StatefulElement` render with a familiar struct name. The core
+        // is flattened into the same struct so `Debug` output keeps the
+        // `lifecycle` field accessible at the top level.
+        f.debug_struct(self.behavior.debug_kind())
+            .field("lifecycle", &self.core.lifecycle())
+            .field("depth", &self.core.depth())
             .field("behavior", &self.behavior)
             .finish()
     }
@@ -160,9 +165,13 @@ where
     // ========================================================================
 
     fn update(&mut self, new_view: &dyn View) {
+        // Snapshot the previous view so `on_view_updated` can pass it to state
+        // hooks (e.g. `ViewState::did_update_view`).
+        let old_view = self.core.view().clone();
         if self.core.update_view(new_view) {
             // Notify behavior of update
             self.behavior.on_update(&self.core);
+            self.behavior.on_view_updated(&self.core, &old_view);
         }
     }
 
@@ -182,9 +191,11 @@ where
 
     fn activate(&mut self) {
         self.core.activate();
+        self.behavior.on_activate(&mut self.core);
     }
 
     fn deactivate(&mut self) {
+        self.behavior.on_deactivate(&mut self.core);
         self.core.deactivate();
     }
 }
