@@ -1,8 +1,9 @@
 ---
 title: "feat: Flutter → FLUI port methodology playbook"
 type: feat
-status: active
+status: completed
 date: 2026-05-19
+completed: 2026-05-20
 origin: docs/brainstorms/flutter-port-methodology-requirements.md
 ---
 
