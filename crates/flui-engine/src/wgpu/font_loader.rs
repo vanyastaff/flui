@@ -54,8 +54,9 @@ impl FontLoader {
     /// # Errors
     /// Returns an error if the file cannot be read.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn load_file(font_system: &mut FontSystem, path: &str) -> anyhow::Result<()> {
-        let bytes = std::fs::read(path)?;
+    pub fn load_file(font_system: &mut FontSystem, path: &str) -> crate::error::RenderResult<()> {
+        let bytes = std::fs::read(path)
+            .map_err(|e| crate::error::RenderError::resource(format!("font load {path}: {e}")))?;
         font_system.db_mut().load_font_data(bytes);
         tracing::debug!(path, "Loaded font from file");
         Ok(())
@@ -77,10 +78,17 @@ impl FontLoader {
     /// Returns an error if the directory cannot be read. Individual
     /// font files that fail to read are skipped with a warning.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn load_directory(font_system: &mut FontSystem, dir: &str) -> anyhow::Result<usize> {
+    pub fn load_directory(
+        font_system: &mut FontSystem,
+        dir: &str,
+    ) -> crate::error::RenderResult<usize> {
         let mut count = 0;
-        for entry in std::fs::read_dir(dir)? {
-            let entry = entry?;
+        for entry in std::fs::read_dir(dir)
+            .map_err(|e| crate::error::RenderError::resource(format!("font dir read {dir}: {e}")))?
+        {
+            let entry = entry.map_err(|e| {
+                crate::error::RenderError::resource(format!("font dir entry {dir}: {e}"))
+            })?;
             let path = entry.path();
             if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                 let ext_lower = ext.to_lowercase();
