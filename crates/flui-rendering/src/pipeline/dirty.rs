@@ -101,3 +101,25 @@ impl DirtySets {
         self.needs_semantics.clear();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::mem::size_of;
+
+    use super::*;
+
+    // Mythos Step 14: static memory-footprint assertions.
+
+    #[test]
+    fn dirty_node_is_two_usize() {
+        // RenderId(NonZeroUsize, 8) + usize(8) = 16 bytes on 64-bit.
+        assert!(size_of::<DirtyNode>() <= 16);
+    }
+
+    #[test]
+    fn dirty_sets_fits_one_cache_line_of_pointers() {
+        // Four Vec headers (24 bytes each on 64-bit) = 96 bytes; should
+        // never grow beyond that without an explicit re-budget.
+        assert!(size_of::<DirtySets>() <= 96);
+    }
+}

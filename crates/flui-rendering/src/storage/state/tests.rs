@@ -2,6 +2,7 @@
 
 use std::{
     collections::HashMap,
+    mem::size_of,
     sync::{Arc, Mutex},
 };
 
@@ -9,8 +10,39 @@ use flui_foundation::ElementId;
 use flui_types::{Offset, geometry::px};
 
 use super::*;
-use crate::protocol::Protocol;
+use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
 use crate::storage::flags::RenderFlags;
+
+// ========================================================================
+// Mythos Step 14 -- static memory-footprint assertions
+// ========================================================================
+//
+// These tests guard the data-oriented design budgets documented in
+// `docs/designs/2026-05-20-mythos-flui-rendering-redesign.md` Section 9.
+// If a future change blows up the per-node size, these tests fail
+// loudly rather than the regression sneaking in unobserved.
+
+#[test]
+fn render_state_box_fits_budget() {
+    // RenderState<BoxProtocol> = AtomicRenderFlags(4) + OnceCell<Size>
+    // + OnceCell<BoxConstraints> + AtomicOffset(8) + PhantomData(0).
+    // Documented estimate: 44-60 bytes. Cap at 128 to leave room for
+    // future fields without forcing a re-budget on every commit.
+    let actual = size_of::<RenderState<BoxProtocol>>();
+    assert!(
+        actual <= 128,
+        "RenderState<BoxProtocol> grew beyond budget: {actual} bytes (cap 128)"
+    );
+}
+
+#[test]
+fn render_state_sliver_fits_budget() {
+    let actual = size_of::<RenderState<SliverProtocol>>();
+    assert!(
+        actual <= 192,
+        "RenderState<SliverProtocol> grew beyond budget: {actual} bytes (cap 192)"
+    );
+}
 
 // Mock tree for testing dirty propagation
 struct MockTree {

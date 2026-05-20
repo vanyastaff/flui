@@ -154,6 +154,23 @@ Concrete cleanups visible from `flui-rendering` outward, sized for an `/aif-impl
 
 **Dependencies:** none.
 
+### Criterion benchmarks for Mythos Step 14 (deferred -- needs workload generator)
+
+**Files:** new `crates/flui-rendering/benches/frame_throughput.rs`.
+
+**Goal:** Mythos Step 14 prescribed profiling a 1000-node and a 10,000-node frame to verify (a) no `Arc::clone` in the paint loop, (b) cache layout of `RenderEntry<P>`, (c) regressions vs pre-refactor numbers. Today the static memory-footprint assertions landed in `pipeline/dirty.rs` and `storage/state/tests.rs` (see Mythos Step 14 commit); the runtime benchmarks did not.
+
+**Shape:** add a `benches/frame_throughput.rs` Criterion benchmark that:
+- Builds a synthetic render tree of N nodes (parametric, e.g. N ∈ {100, 1000, 10000}).
+- Marks the root dirty and runs one full `run_frame`.
+- Measures wall-clock time, peak memory, and (with `cargo flamegraph`) hot-loop hot spots.
+
+Criterion is already in `flui-rendering` dev-dependencies. The bench harness needs a workload generator (`fn build_flex_tree(depth: u32, children: u32) -> ...`) that produces realistic structures from the existing `objects/` catalog.
+
+**Why deferred:** the workload generator + benchmark is its own scope of work and is best landed when there are real performance questions to answer (a frame is dropping, a particular operation feels slow, etc.). Premature optimisation guidance landed without observed evidence wastes effort.
+
+**Dependencies:** none beyond existing dev-deps.
+
 ### Property, loom, and miri test coverage (deferred from Mythos Step 13)
 
 **Files:** new `crates/flui-rendering/tests/proptest_tree.rs`, new `crates/flui-rendering/tests/loom_handle.rs`, miri CI invocation.
