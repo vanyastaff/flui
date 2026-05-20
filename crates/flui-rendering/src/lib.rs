@@ -53,8 +53,6 @@
 #![allow(clippy::too_many_arguments)]
 
 pub mod binding;
-pub mod child_handle;
-pub mod children_access;
 pub mod constraints;
 pub mod context;
 pub mod delegates;
@@ -85,10 +83,10 @@ pub mod prelude {
     // Re-export commonly used types from flui_types
     pub use flui_types::{Offset, Point, RRect, Rect, Size};
 
-    // Child handles
-    pub use crate::child_handle::ChildHandle;
-    // Children access
-    pub use crate::children_access::{ChildState, ChildrenAccess};
+    // Per-child layout state (lives in box_protocol since it's a
+    // BoxLayoutCtx implementation detail; re-exported here for
+    // convenience via the public-facing `protocol` module surface).
+    pub use crate::protocol::ChildState;
     // Constraints from this crate
     pub use crate::constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry};
     // Context types for RenderBox and RenderSliver

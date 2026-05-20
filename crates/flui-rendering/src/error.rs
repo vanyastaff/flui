@@ -120,15 +120,8 @@ pub enum RenderError {
     #[error("semantics system not enabled")]
     SemanticsNotEnabled,
 
-    // ========================================================================
-    // Child Handle Errors
-    // ========================================================================
-    /// Child handle operation failed.
-    #[error("child handle operation failed: {message}")]
-    ChildHandleError {
-        /// Description of the error.
-        message: String,
-    },
+    // ChildHandleError variant removed in Mythos Step 5b along with the
+    // child_handle.rs / children_access.rs modules it served.
 
     // ========================================================================
     // Mythos Step 12 -- structured terminal failures
@@ -215,13 +208,6 @@ impl RenderError {
     /// Creates a semantics error.
     pub fn semantics(message: impl Into<String>) -> Self {
         Self::SemanticsError {
-            message: message.into(),
-        }
-    }
-
-    /// Creates a child handle error.
-    pub fn child_handle(message: impl Into<String>) -> Self {
-        Self::ChildHandleError {
             message: message.into(),
         }
     }

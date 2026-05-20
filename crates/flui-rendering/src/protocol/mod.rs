@@ -67,6 +67,9 @@ pub use box_protocol::{
     BoxLayoutCtx,
     // Protocol
     BoxProtocol,
+    // Per-child layout state (moved here from the deleted
+    // children_access.rs in Mythos Step 5b)
+    ChildState,
 };
 // ============================================================================
 // CAPABILITY EXPORTS

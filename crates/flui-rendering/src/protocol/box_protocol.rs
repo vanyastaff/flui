@@ -5,6 +5,7 @@
 //! - [`BoxLayout`]: Layout capability (BoxConstraints → Size)
 //! - [`BoxHitTest`]: Hit test capability (Offset → BoxHitTestResult)
 
+use flui_foundation::RenderId;
 use flui_tree::Arity;
 use flui_types::{
     Size,
@@ -19,6 +20,58 @@ use crate::{
         protocol::{BidirectionalProtocol, Protocol, ProtocolCompatible, sealed},
     },
 };
+
+// ============================================================================
+// CHILD STATE
+// ============================================================================
+//
+// Per-child layout-time bookkeeping owned by `BoxLayoutCtx`. Previously
+// lived in `crates/flui-rendering/src/children_access.rs` alongside a
+// 500-LOC closure-based iterator (`ChildrenAccess`) and the
+// `ChildHandle` wrapper in `child_handle.rs` -- both fought the borrow
+// checker for users that never appeared, so Mythos Step 5b deleted them
+// outright. `ChildState<P>` itself stays because it IS the data shape
+// `BoxLayoutContextApi::layout_child` / `position_child` /
+// `child_geometry` / `child_parent_data` need.
+
+/// Per-child layout-time state held by [`BoxLayoutCtx`].
+///
+/// Created by the pipeline before invoking a parent's `perform_layout`,
+/// mutated through `BoxLayoutContextApi::layout_child` /
+/// `position_child`, and read during the subsequent paint phase.
+#[derive(Debug)]
+pub struct ChildState<P: ParentData + Default> {
+    /// Render ID of this child.
+    pub id: RenderId,
+    /// Computed size after layout.
+    pub size: Size,
+    /// Position offset set by parent.
+    pub offset: Offset,
+    /// Parent data for this child.
+    pub parent_data: P,
+}
+
+impl<P: ParentData + Default> ChildState<P> {
+    /// Creates a new child state with default values.
+    pub fn new(id: RenderId) -> Self {
+        Self {
+            id,
+            size: Size::ZERO,
+            offset: Offset::ZERO,
+            parent_data: P::default(),
+        }
+    }
+
+    /// Creates a new child state with specific parent data.
+    pub fn with_parent_data(id: RenderId, parent_data: P) -> Self {
+        Self {
+            id,
+            size: Size::ZERO,
+            offset: Offset::ZERO,
+            parent_data,
+        }
+    }
+}
 
 // ============================================================================
 // BOX PROTOCOL
@@ -140,7 +193,7 @@ pub struct BoxLayoutCtx<'ctx, A: Arity, P: ParentData + Default> {
     constraints: BoxConstraints,
     geometry: Option<Size>,
     /// Reference to children states for position_child to update offsets.
-    children: Option<&'ctx mut Vec<crate::children_access::ChildState<P>>>,
+    children: Option<&'ctx mut Vec<ChildState<P>>>,
     /// Child render IDs for tree lookup during layout_child.
     child_ids: Option<&'ctx [flui_foundation::RenderId]>,
     /// Callback to perform synchronous child layout through RenderTree.
@@ -165,7 +218,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
     /// Creates a new box layout context with children access.
     pub fn with_children(
         constraints: BoxConstraints,
-        children: &'ctx mut Vec<crate::children_access::ChildState<P>>,
+        children: &'ctx mut Vec<ChildState<P>>,
     ) -> Self {
         Self {
             constraints,
@@ -185,7 +238,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
     /// RenderTree.
     pub fn with_layout_callback(
         constraints: BoxConstraints,
-        children: &'ctx mut Vec<crate::children_access::ChildState<P>>,
+        children: &'ctx mut Vec<ChildState<P>>,
         child_ids: &'ctx [flui_foundation::RenderId],
         layout_child_callback: LayoutChildCallback<'ctx>,
     ) -> Self {
