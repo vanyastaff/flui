@@ -62,18 +62,23 @@ check() {
 }
 
 # -----------------------------------------------------------------------------
-# Trigger 1 -- RwLock<Box<dyn RenderObject ...>> in render/view crates.
-# This is the canonical exemplar violation at flui-rendering/src/storage/entry.rs.
-# Mythos Step 13 of the flui-layer chain added `crates/flui-layer/src` to the
-# scope so the same shape is refused on the layer-storage type if reintroduced.
+# Trigger 1 -- RwLock<Box<dyn RenderObject ...>> in render/view/layer/painting
+# crates. This is the canonical exemplar violation at
+# flui-rendering/src/storage/entry.rs. Mythos Step 13 of the flui-layer chain
+# added `crates/flui-layer/src` to the scope; Mythos Step 13 of the
+# flui-painting chain added `crates/flui-painting/src` as a forward-looking
+# guard (today's flui-painting has no RenderObject/Layer/ContainerLayer trait
+# objects -- the crate is #[forbid(unsafe_code)] and uses closed enums -- but
+# the scope extension catches any reintroduction post-split).
 # -----------------------------------------------------------------------------
 check "1" \
-  "RwLock<Box<dyn ...>> in render/view/layer crates" \
+  "RwLock<Box<dyn ...>> in render/view/layer/painting crates" \
   'RwLock<\s*Box<\s*dyn\s+(RenderObject|Layer\b|ContainerLayer)' \
   --type rust \
   crates/flui-rendering/src \
   crates/flui-view/src \
-  crates/flui-layer/src
+  crates/flui-layer/src \
+  crates/flui-painting/src
 
 # -----------------------------------------------------------------------------
 # Trigger 2 -- Box<dyn RenderObject<...>> wrapped in an interior-mutability
@@ -88,12 +93,13 @@ check "1" \
 # generalises to the others.
 # -----------------------------------------------------------------------------
 check "2" \
-  "Box<dyn ...> wrapped in interior-mutability primitive in render/view/layer storage" \
+  "Box<dyn ...> wrapped in interior-mutability primitive in render/view/layer/painting storage" \
   '(RwLock|Mutex|RefCell|Cell|UnsafeCell)<\s*Box<\s*dyn\s+(RenderObject|Layer\b|ContainerLayer)' \
   --type rust \
   crates/flui-rendering/src/storage \
   crates/flui-view/src/element \
-  crates/flui-layer/src
+  crates/flui-layer/src \
+  crates/flui-painting/src
 
 # -----------------------------------------------------------------------------
 # Trigger 3 -- async fn build/layout/paint/perform_layout/composite/render in
