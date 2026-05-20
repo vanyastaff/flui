@@ -52,8 +52,6 @@ mod buffers;
 mod commands;
 #[cfg(debug_assertions)]
 mod debug;
-#[cfg(target_os = "windows")]
-pub mod dx12;
 #[allow(dead_code)]
 pub mod effects;
 mod effects_pipeline;
@@ -63,8 +61,6 @@ pub mod font_loader;
 mod instancing;
 // NOTE: integration_tests.rs removed - needs rewrite for new
 // Pixels/DevicePixels API
-#[cfg(target_os = "macos")]
-pub mod metal;
 mod multi_draw;
 pub mod occlusion;
 mod offscreen;
@@ -83,8 +79,6 @@ mod text_renderer;
 pub mod texture_cache;
 mod texture_pool;
 mod vertex;
-#[cfg(any(target_os = "linux", target_os = "android"))]
-pub mod vulkan;
 
 // ============================================================================
 // LAYER RENDERING
