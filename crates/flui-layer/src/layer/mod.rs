@@ -89,8 +89,13 @@ mod shader_mask;
 // Annotation search system
 pub mod annotation;
 
+// LayerBounds trait + impls (Mythos Step 6).
+mod bounds;
+
 // Generated is_*/as_*/as_*_mut accessors on the Layer enum (Mythos Step 4).
 mod dispatch;
+
+pub use bounds::LayerBounds;
 
 // Re-exports
 pub use annotated_region::{
@@ -344,7 +349,6 @@ impl Layer {
             _ => false,
         }
     }
-
 }
 
 // ============================================================================
@@ -486,82 +490,6 @@ impl From<FollowerLayer> for Layer {
 impl From<AnnotatedRegionLayer> for Layer {
     fn from(layer: AnnotatedRegionLayer) -> Self {
         Layer::AnnotatedRegion(layer)
-    }
-}
-
-// ============================================================================
-// LAYER BOUNDS TRAIT
-// ============================================================================
-
-/// Trait for layers that have bounds.
-pub trait LayerBounds {
-    /// Returns the bounding rectangle of this layer.
-    fn bounds(&self) -> Rect<Pixels>;
-}
-
-impl LayerBounds for CanvasLayer {
-    fn bounds(&self) -> Rect<Pixels> {
-        self.bounds()
-    }
-}
-
-impl LayerBounds for ClipRectLayer {
-    fn bounds(&self) -> Rect<Pixels> {
-        self.bounds()
-    }
-}
-
-impl LayerBounds for ClipRRectLayer {
-    fn bounds(&self) -> Rect<Pixels> {
-        self.bounds()
-    }
-}
-
-impl LayerBounds for ClipPathLayer {
-    fn bounds(&self) -> Rect<Pixels> {
-        self.bounds()
-    }
-}
-
-impl LayerBounds for ClipSuperellipseLayer {
-    fn bounds(&self) -> Rect<Pixels> {
-        self.bounds()
-    }
-}
-
-impl LayerBounds for ShaderMaskLayer {
-    fn bounds(&self) -> Rect<Pixels> {
-        self.bounds()
-    }
-}
-
-impl LayerBounds for BackdropFilterLayer {
-    fn bounds(&self) -> Rect<Pixels> {
-        self.bounds()
-    }
-}
-
-impl LayerBounds for TextureLayer {
-    fn bounds(&self) -> Rect<Pixels> {
-        self.bounds()
-    }
-}
-
-impl LayerBounds for PlatformViewLayer {
-    fn bounds(&self) -> Rect<Pixels> {
-        self.bounds()
-    }
-}
-
-impl LayerBounds for LeaderLayer {
-    fn bounds(&self) -> Rect<Pixels> {
-        self.bounds()
-    }
-}
-
-impl LayerBounds for AnnotatedRegionLayer {
-    fn bounds(&self) -> Rect<Pixels> {
-        self.bounds()
     }
 }
 
