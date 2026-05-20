@@ -154,6 +154,20 @@ Concrete cleanups visible from `flui-rendering` outward, sized for an `/aif-impl
 
 **Dependencies:** none.
 
+### Property, loom, and miri test coverage (deferred from Mythos Step 13)
+
+**Files:** new `crates/flui-rendering/tests/proptest_tree.rs`, new `crates/flui-rendering/tests/loom_handle.rs`, miri CI invocation.
+
+**Goal:** Mythos Step 13 prescribed four test classes; this work landed only the compile_fail typestate doctests (the cheapest of the four) plus the targeted unit tests added alongside each refactor (disjoint-borrow tree, VisualUpdateNotifier, PipelineOwnerHandle). The three deferred classes are:
+
+- **Property tests** for tree consistency: invariants that hold over any sequence of insert/mark_dirty/run_frame operations -- every reachable RenderId has a state, every dirty RenderId is in the dirty set, no orphans. Needs the `proptest` crate as a dev-dependency.
+- **Loom tests** for `AtomicRenderFlags` set/clear/read interleaving + `PipelineOwnerHandle` send/recv sequencing. Needs the `loom` crate gated on `#[cfg(loom)]`.
+- **Miri CI gate** for the disjoint-borrow `unsafe` block in `RenderTree::get_two_mut` / `get_parent_and_children_mut`. Today the unsafe is unit-tested for behavior; miri-checking the aliasing model is a CI extension (e.g. `cargo +nightly miri test -p flui-rendering`).
+
+**Shape:** each class is a new file under `crates/flui-rendering/tests/` plus a dev-dependency. Adding all three at once would expand the Mythos chain into infrastructure work; they are properly scoped as a follow-up commit.
+
+**Dependencies:** none beyond crate dev-deps.
+
 ### `catch_unwind` plumbing for `RenderError::Poisoned` (deferred from Mythos Step 12)
 
 **Files:** [`src/pipeline/owner.rs`](src/pipeline/owner.rs), [`src/traits/render_object.rs`](src/traits/render_object.rs).

@@ -13,6 +13,48 @@
 //! does **not** make transitions consume `self` -- that comes in Step 7
 //! once every caller has been updated.
 //!
+//! # Compile-time enforcement examples (Mythos Step 13)
+//!
+//! `flush_layout`, `flush_compositing_bits`, `flush_paint`,
+//! `flush_semantics`, and `run_frame` live on `PipelineOwner<Idle>`.
+//! Calling them on a transitioned phase fails at compile time:
+//!
+//! ```compile_fail
+//! use flui_rendering::pipeline::PipelineOwner;
+//! let owner = PipelineOwner::new();        // <Idle>
+//! let owner = owner.into_layout();         // <Layout>
+//! owner.flush_layout();                    // error[E0599]: method not found in <Layout>
+//! ```
+//!
+//! ```compile_fail
+//! use flui_rendering::pipeline::PipelineOwner;
+//! let owner = PipelineOwner::new();        // <Idle>
+//! let owner = owner.into_layout();         // <Layout>
+//! let (_owner, _layer) = owner.run_frame(); // error[E0599]: run_frame is on <Idle> only
+//! ```
+//!
+//! The phase markers are sealed in this module; downstream crates cannot
+//! invent a new `PipelinePhase` impl:
+//!
+//! ```compile_fail
+//! struct CustomPhase;
+//! impl flui_rendering::pipeline::PipelinePhase for CustomPhase {
+//!     const NAME: &'static str = "Custom";   // error[E0277]: not Sealed
+//! }
+//! ```
+//!
+//! The legitimate transition sequence type-checks and runs:
+//!
+//! ```
+//! use flui_rendering::pipeline::PipelineOwner;
+//! let owner = PipelineOwner::new();        // <Idle>
+//! let owner = owner.into_layout();         // <Layout>
+//! let owner = owner.into_compositing();    // <Compositing>
+//! let owner = owner.into_paint();          // <PaintPhase>
+//! let owner = owner.into_semantics();      // <Semantics>
+//! let _owner = owner.finish();             // back to <Idle>
+//! ```
+//!
 //! ## States
 //!
 //! ```text
