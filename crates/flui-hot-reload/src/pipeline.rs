@@ -125,43 +125,38 @@ impl PluginPipeline {
     ///
     /// Runs all four phases:
     /// 1. **Build** — Rebuild dirty elements (calls user's `build()` methods)
-    /// 2. **Layout** — Compute sizes via `flush_layout()`
-    /// 3. **Paint** — Generate display lists via `flush_paint()`
-    /// 4. **Scene** — Extract `LayerTree` and create `Scene`
+    /// 2. **Layout / Compositing / Paint / Semantics** — Via the
+    ///    typestate-driven `PipelineOwner::run_frame` (Mythos Step 7).
+    /// 3. **Scene** — Extract `LayerTree` and create `Scene`
     pub fn draw_frame(&mut self, width: f32, height: f32) -> Scene {
         // Phase 1: Build (rebuild dirty elements)
         if self.widgets.has_pending_builds() {
             self.widgets.draw_frame();
         }
 
-        // Phase 2 & 3: Layout + Compositing + Paint
-        //
-        // Always mark the root as needing paint so we produce a fresh LayerTree.
-        // Unlike AppBinding (which skips frames when nothing is dirty and the
-        // previous frame is still on-screen), the plugin must return a Scene
-        // every time it's called — the host expects a new opaque pointer.
-        {
-            let mut pipeline = self.pipeline_owner.write();
-
-            // Force repaint: mark root dirty so flush_paint() always produces a LayerTree.
-            // Without this, subsequent calls after the first frame return an empty scene
-            // because take_layer_tree() consumes the tree and nodes are no longer dirty.
-            if let Some(root_id) = pipeline.root_id() {
-                pipeline.add_node_needing_paint(root_id, 0);
+        // Phase 2: Run the full frame through the typestate-driven
+        // pipeline. Force-mark the root dirty first so we always produce
+        // a fresh LayerTree -- unlike AppBinding (which skips frames when
+        // nothing is dirty and the previous frame is still on-screen),
+        // the plugin must return a Scene every time it's called: the
+        // host expects a new opaque pointer.
+        let layer_tree = {
+            let mut guard = self.pipeline_owner.write();
+            if let Some(root_id) = guard.root_id() {
+                guard.add_node_needing_paint(root_id, 0);
             } else {
                 log("draw_frame: WARNING — no root_id in pipeline");
             }
+            let owner = std::mem::take(&mut *guard);
+            let (owner, layer_tree) = owner.run_frame();
+            *guard = owner;
+            layer_tree
+        };
 
-            pipeline.flush_layout();
-            pipeline.flush_compositing_bits();
-            pipeline.flush_paint();
-        }
-
-        // Phase 4: Extract Scene from LayerTree
+        // Phase 3: Extract Scene from LayerTree
         let size = Size::new(px(width), px(height));
-        let mut pipeline = self.pipeline_owner.write();
 
-        if let Some(layer_tree) = pipeline.take_layer_tree() {
+        if let Some(layer_tree) = layer_tree {
             let root = layer_tree.root();
             Scene::new(size, layer_tree, root, 1)
         } else {

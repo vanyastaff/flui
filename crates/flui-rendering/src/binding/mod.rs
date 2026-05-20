@@ -70,12 +70,17 @@ use crate::{
 /// 1. **Animation** - Tickers and animations update (handled by
 ///    SchedulerBinding)
 /// 2. **Build** - Widget tree rebuilds (handled by WidgetsBinding)
-/// 3. **Layout** - [`flush_layout`](PipelineOwner::flush_layout)
-/// 4. **Compositing bits** -
-///    [`flush_compositing_bits`](PipelineOwner::flush_compositing_bits)
-/// 5. **Paint** - [`flush_paint`](PipelineOwner::flush_paint)
+/// 3. **Layout** - `PipelineOwner::<Layout>::run_layout`
+/// 4. **Compositing bits** - `PipelineOwner::<Compositing>::run_compositing`
+/// 5. **Paint** - `PipelineOwner::<PaintPhase>::run_paint`
 /// 6. **Compositing** - Send layers to GPU
-/// 7. **Semantics** - [`flush_semantics`](PipelineOwner::flush_semantics)
+/// 7. **Semantics** - `PipelineOwner::<Semantics>::run_semantics`
+///
+/// Mythos Step 7 (2026-05-20) lifted these phase methods out of
+/// `PipelineOwner<Idle>` and onto their phase-typed impls. The
+/// orchestrator is [`PipelineOwner::<Idle>::run_frame`], which
+/// composes the four phase transitions and returns the owner back at
+/// `Idle` plus the produced layer tree.
 pub trait RendererBinding: Send + Sync {
     // ========================================================================
     // Pipeline / Manifold (formerly PipelineManifold)
@@ -214,25 +219,27 @@ pub trait RendererBinding: Send + Sync {
 
     /// Pump the rendering pipeline to generate a frame.
     ///
-    /// This is the main entry point for frame production. It:
-    /// 1. Flushes layout
-    /// 2. Flushes compositing bits
-    /// 3. Flushes paint
-    /// 4. Composites frames (if sending to engine)
-    /// 5. Flushes semantics (if sending to engine)
+    /// This is the main entry point for frame production. Uses
+    /// `mem::replace` to consume the owner out of the `RwLock`, drive
+    /// it through `run_frame` (which composes all four phase transitions),
+    /// and put it back. Semantics now runs inside `run_frame`, so the
+    /// `send_frames_to_engine` branch only handles compositing for the
+    /// engine handoff.
+    ///
+    /// Mythos Step 7 finalization (2026-05-20).
     fn draw_frame(&self) {
         let root_owner = self.root_pipeline_owner();
 
-        // Phase 3: Layout
-        root_owner.write().flush_layout();
+        // Consume the owner through the typestate transitions.
+        let layer_tree = {
+            let mut guard = root_owner.write();
+            let owner = std::mem::take(&mut *guard);
+            let (owner, layer_tree) = owner.run_frame();
+            *guard = owner;
+            layer_tree
+        };
 
-        // Phase 4: Compositing bits
-        root_owner.write().flush_compositing_bits();
-
-        // Phase 5: Paint
-        root_owner.write().flush_paint();
-
-        // Phase 6 & 7: Composite and Semantics (only if sending frames)
+        // Phase 6: Composite frames (only if sending frames)
         if self.send_frames_to_engine() {
             // Composite each render view
             for (_, view) in self.render_views().read().iter() {
@@ -240,10 +247,12 @@ pub trait RendererBinding: Send + Sync {
                 let _result = view_guard.composite_frame();
                 // In a real implementation, send to GPU here
             }
-
-            // Phase 7: Semantics
-            root_owner.write().flush_semantics();
         }
+
+        // Hand the produced layer tree to the compositor (the actual
+        // wiring is concrete-binding territory; defaults discard it
+        // because no compositor is available at the trait level).
+        let _ = layer_tree;
     }
 
     // ========================================================================

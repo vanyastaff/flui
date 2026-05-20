@@ -11,7 +11,7 @@ The deeper architectural write-ups for individual subsystems (protocol, layout, 
 | Flutter source | FLUI module | Notes |
 |---|---|---|
 | `.flutter/flutter-master/packages/flutter/lib/src/rendering/object.dart` | [`src/storage/entry.rs`](src/storage/entry.rs), [`src/storage/state.rs`](src/storage/state.rs), [`src/storage/flags.rs`](src/storage/flags.rs), [`src/traits/render_object.rs`](src/traits/render_object.rs) | The `RenderObject` base class is split: trait surface in `traits/render_object.rs`, owned storage in `storage/entry.rs`, mutable per-frame state in `storage/state.rs`, atomic flags in `storage/flags.rs`. The Flutter `AbstractNode` parent-linkage role is in [`src/storage/links.rs`](src/storage/links.rs). |
-| `.flutter/flutter-master/packages/flutter/lib/src/rendering/object.dart` `PipelineOwner` (line 1019+) | [`src/pipeline/owner.rs`](src/pipeline/owner.rs) | Single-threaded phase serialisation (`flush_layout`, `flush_paint`, `flush_compositing_bits`, semantics). Holds the root node and dirty lists. The `debug_doing_layout` / `debug_doing_paint` flags on the owner are the FLUI analog of Flutter's `_debugActiveLayout` / `_debugDoingThisPaint` static asserts. |
+| `.flutter/flutter-master/packages/flutter/lib/src/rendering/object.dart` `PipelineOwner` (line 1019+) | [`src/pipeline/owner.rs`](src/pipeline/owner.rs) | Single-threaded phase serialisation. Flutter's `flushLayout` / `flushCompositingBits` / `flushPaint` / `flushSemantics` map to FLUI's `run_layout` / `run_compositing` / `run_paint` / `run_semantics`, each living on the matching `PipelineOwner<Phase>` impl block (typestate-enforced ordering, Mythos Step 7). Holds the root node and dirty lists. The `debug_doing_layout` / `debug_doing_paint` flags on the owner are the FLUI runtime analog of Flutter's `_debugActiveLayout` / `_debugDoingThisPaint` static asserts (kept as a debug-build cross-check; the type system is the load-bearing enforcement). |
 | `.flutter/flutter-master/packages/flutter/lib/src/rendering/box.dart` | [`src/protocol/box_protocol.rs`](src/protocol/box_protocol.rs), [`src/parent_data/box_parent_data.rs`](src/parent_data/box_parent_data.rs) | `BoxConstraints`, `BoxParentData`, `Size`-based geometry. |
 | `.flutter/flutter-master/packages/flutter/lib/src/rendering/sliver.dart` | [`src/protocol/sliver_protocol.rs`](src/protocol/sliver_protocol.rs), [`src/parent_data/sliver_parent_data.rs`](src/parent_data/sliver_parent_data.rs) | Sliver protocol for scrollable layout. |
 | `RenderObjectWithChildMixin`, `ContainerRenderObjectMixin` (`object.dart` lines 4160-4400+) | [`src/storage/links.rs`](src/storage/links.rs), [`src/parent_data/container_mixin.rs`](src/parent_data/container_mixin.rs) | Single-child + variable-children storage. Flutter uses Dart linked lists; FLUI stores `Vec<RenderId>` on the parent. |
@@ -210,18 +210,6 @@ Requires:
 **Why deferred:** flips the return type of the entire flush_* surface, rippling into flui-app's draw loop. Land alongside Mythos Step 7 finalization (per-phase method redistribution) which already touches the same call shapes.
 
 **Dependencies:** debug_name method on RenderObject; or use TypeId-based name lookup as a fallback.
-
-### Per-phase method redistribution (Mythos Step 7 finalization)
-
-**Files:** [`src/pipeline/owner.rs`](src/pipeline/owner.rs), [`crates/flui-app/src/bindings/renderer_binding.rs`](../../crates/flui-app/src/bindings/renderer_binding.rs).
-
-**Goal:** today the typestate scaffold from Mythos Step 1 + the `run_frame` consuming convenience from Mythos Step 7 coexist with the legacy `flush_*` methods on `PipelineOwner<Idle>`. Full migration moves `flush_layout` to `impl PipelineOwner<Layout>` (renamed `run_layout`), `flush_paint` to `<PaintPhase>`, etc., so the compiler refuses to run paint on an owner that hasn't been transitioned to `<PaintPhase>` first.
-
-**Shape:** the legacy `RendererBinding::draw_frame` in `flui-app` calls `owner.write().flush_*()` four times. Migration replaces those four calls with one `let owner = std::mem::replace(...); let (owner, layer_tree) = owner.run_frame(); *guard = owner;` pattern. The `flush_*` methods are then removed (or marked `#[deprecated]`).
-
-**Why deferred:** the migration is mechanical but touches the binding singleton's locking pattern + the singleton's draw-loop call shape. Bundling that with the typestate-skeleton commits would have expanded the diff into `flui-app` significantly. Land as a follow-up commit when the binding is being touched for other reasons (e.g. when the Step 11 extension-trait split finally lands and ripples through the impls anyway).
-
-**Dependencies:** none beyond the Mythos Step 1 + Step 7 baseline.
 
 ### Extension-trait split of `RenderObject<P>` (deferred from Mythos Step 11)
 

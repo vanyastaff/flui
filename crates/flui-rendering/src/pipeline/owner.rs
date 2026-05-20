@@ -1,4 +1,10 @@
 //! PipelineOwner manages the rendering pipeline.
+//!
+//! Mythos Step 7 finalization (2026-05-20): the four pipeline phases now
+//! own their work as `run_*` methods on the phase-specific impls. The
+//! legacy `flush_*` aliases on `PipelineOwner<Idle>` are gone. Calling
+//! `run_paint` on `<Idle>` is a compile error -- see the `compile_fail`
+//! doctest at the end of `pipeline/phase.rs`.
 
 use std::{
     marker::PhantomData,
@@ -49,23 +55,34 @@ static PIPELINE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 /// The pipeline owner:
 /// - Stores the root render object
 /// - Tracks dirty nodes needing layout/paint/semantics
-/// - Coordinates flush operations for each phase
-/// - Supports hierarchical pipeline ownership
+/// - Coordinates phase work via consuming phase transitions
+/// - Holds the layer tree produced by the most recent paint phase
 ///
 /// # Flutter Equivalence
 ///
 /// This corresponds to Flutter's `PipelineOwner` class in
-/// `rendering/object.dart`.
+/// `rendering/object.dart`. Where Flutter uses runtime `_debugDoingThis*`
+/// asserts to enforce phase ordering, FLUI lifts the question into the
+/// type system: each phase's `run_*` method lives only on the matching
+/// `PipelineOwner<PhaseMarker>` impl block.
 ///
 /// # Pipeline Phases
 ///
-/// Call these methods in order during each frame:
+/// Use [`run_frame`](Self::run_frame) for the typestate-driven orchestration:
 ///
-/// 1. [`flush_layout`](Self::flush_layout) - Update layout
-/// 2. [`flush_compositing_bits`](Self::flush_compositing_bits) - Update layer
-///    needs
-/// 3. [`flush_paint`](Self::flush_paint) - Generate paint commands
-/// 4. [`flush_semantics`](Self::flush_semantics) - Update accessibility tree
+/// ```text
+/// Idle ─into_layout()──▶ Layout ─run_layout()──▶ into_compositing()
+///        ▲                                        │
+///        │                                        ▼
+///        │                                   Compositing ─run_compositing()─▶ into_paint()
+///        │                                                                     │
+///        │                                                                     ▼
+///        │                                                                Paint ─run_paint()─▶ into_semantics()
+///        │                                                                                      │
+///        │                                                                                      ▼
+///        │                                                                                  Semantics ─run_semantics()─▶ finish()
+///        └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+/// ```
 ///
 /// # Multi-window
 ///
@@ -146,6 +163,10 @@ impl Default for PipelineOwner<Idle> {
     }
 }
 
+// ============================================================================
+// Idle-only impl: constructors + orchestration
+// ============================================================================
+
 impl PipelineOwner<Idle> {
     /// Creates a new pipeline owner in the [`Idle`] phase with the
     /// default dirty-channel capacity ([`DEFAULT_DIRTY_CHANNEL_CAPACITY`],
@@ -215,6 +236,51 @@ impl PipelineOwner<Idle> {
         }
     }
 
+    /// Transitions an idle pipeline into the [`Layout`] phase.
+    ///
+    /// Consumes `self`; once transitioned out of `Idle`, the legacy
+    /// idle-only API (constructors, `run_frame`) is no longer reachable
+    /// until you return through [`finish`](PipelineOwner::<Semantics>::finish).
+    pub fn into_layout(self) -> PipelineOwner<Layout> {
+        rebind_phase(self)
+    }
+
+    // ========================================================================
+    // Full-frame orchestrator (Mythos Step 7)
+    // ========================================================================
+
+    /// Runs a full frame: layout -> compositing-bits -> paint -> semantics.
+    /// Consumes `self`, returns the owner back at [`Idle`] plus the layer
+    /// tree produced by the paint phase (if any).
+    ///
+    /// The phase transitions are the load-bearing mechanism here -- each
+    /// `run_*` method lives only on its matching phase's impl block, so
+    /// the type system enforces the ordering. There is no runtime branch
+    /// that could call `run_paint` before `run_layout`.
+    pub fn run_frame(self) -> (PipelineOwner<Idle>, Option<LayerTree>) {
+        let mut owner = self.into_layout();
+        owner.run_layout();
+        let mut owner = owner.into_compositing();
+        owner.run_compositing();
+        let mut owner = owner.into_paint();
+        owner.run_paint();
+        let mut owner = owner.into_semantics();
+        owner.run_semantics();
+        let layer_tree = owner.take_layer_tree();
+        (owner.finish(), layer_tree)
+    }
+}
+
+// ============================================================================
+// Phase-agnostic accessors / setters / insertion (Mythos Step 7)
+// ============================================================================
+//
+// These methods are pure data access or side-effect-free notifier wiring.
+// They are valid in any phase: the borrow checker still gates `&mut self`
+// against the type-state transitions, but the methods themselves don't
+// care which phase the owner is in.
+
+impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// Returns the unique identifier for this pipeline owner.
     #[inline]
     pub fn id(&self) -> u64 {
@@ -269,11 +335,11 @@ impl PipelineOwner<Idle> {
     /// Drains the pending dirty-request channel into the local
     /// [`DirtySets`].
     ///
-    /// Call at phase boundaries (today: at the start of `flush_layout`
-    /// / `flush_paint` etc.; Mythos Step 7 will move this into the
-    /// consuming phase transitions). Non-blocking; processes every
-    /// request available at the time of call and returns the count
-    /// drained.
+    /// Called at phase boundaries by the typestate transitions; producers
+    /// (background asset loaders, async work) write into the channel via
+    /// [`PipelineOwnerHandle::request_mark_dirty`] and the owner observes
+    /// them on the next frame. Non-blocking; processes every request
+    /// available at the time of call and returns the count drained.
     pub fn drain_pending_dirty(&mut self) -> usize {
         let mut drained = 0;
         while let Ok(req) = self.dirty_rx.try_recv() {
@@ -333,6 +399,10 @@ impl PipelineOwner<Idle> {
     ///
     /// This removes the layer tree from the pipeline owner, returning ownership
     /// to the caller. Useful for passing to the compositor.
+    ///
+    /// Phase-agnostic: works in any phase. `run_frame` calls this on
+    /// `<Semantics>` to extract the layer tree before transitioning back to
+    /// `<Idle>`.
     pub fn take_layer_tree(&mut self) -> Option<LayerTree> {
         self.last_layer_tree.take()
     }
@@ -456,14 +526,6 @@ impl PipelineOwner<Idle> {
         id
     }
 
-    // Hierarchical-pipelines API (`adopt_child` / `drop_child` /
-    // `child_count` / `children`) was removed in Mythos Step 9 along
-    // with the `children: Vec<Arc<RwLock<PipelineOwner>>>` field. Flutter
-    // models multi-window via nested PipelineOwners; FLUI's `flui-app`
-    // owns multiple PipelineOwner instances side-by-side instead.
-    // See docs/designs/2026-05-20-mythos-flui-rendering-redesign.md
-    // Section 12 (Rejected Designs -- "Hierarchical pipeline owners").
-
     // ========================================================================
     // Dirty Node Access (Flutter API)
     // ========================================================================
@@ -471,7 +533,7 @@ impl PipelineOwner<Idle> {
     /// Returns the nodes needing layout.
     ///
     /// These are relayout boundaries that need to be laid out in the next
-    /// [`flush_layout`](Self::flush_layout) pass.
+    /// layout phase.
     #[inline]
     pub fn nodes_needing_layout(&self) -> &[DirtyNode] {
         &self.dirty.needs_layout
@@ -480,7 +542,7 @@ impl PipelineOwner<Idle> {
     /// Returns the nodes needing paint.
     ///
     /// These are repaint boundaries that need to be painted in the next
-    /// [`flush_paint`](Self::flush_paint) pass.
+    /// paint phase.
     #[inline]
     pub fn nodes_needing_paint(&self) -> &[DirtyNode] {
         &self.dirty.needs_paint
@@ -543,7 +605,7 @@ impl PipelineOwner<Idle> {
     }
 
     // ========================================================================
-    // Semantics
+    // Semantics enablement (data access, phase-agnostic)
     // ========================================================================
 
     /// Returns whether semantics are enabled.
@@ -563,8 +625,75 @@ impl PipelineOwner<Idle> {
     }
 
     // ========================================================================
-    // Layout Phase
+    // Debug
     // ========================================================================
+
+    /// Returns whether layout is currently being performed.
+    #[inline]
+    pub fn debug_doing_layout(&self) -> bool {
+        self.debug_doing_layout
+    }
+
+    /// Returns whether paint is currently being performed.
+    #[inline]
+    pub fn debug_doing_paint(&self) -> bool {
+        self.debug_doing_paint
+    }
+
+    /// Returns whether semantics update is currently being performed.
+    #[inline]
+    pub fn debug_doing_semantics(&self) -> bool {
+        self.debug_doing_semantics
+    }
+
+    /// Returns whether any pipeline phase is currently active.
+    #[inline]
+    pub fn debug_doing_any_phase(&self) -> bool {
+        self.debug_doing_layout || self.debug_doing_paint || self.debug_doing_semantics
+    }
+
+    /// Returns the total number of dirty nodes across all lists.
+    pub fn dirty_node_count(&self) -> usize {
+        self.dirty.needs_layout.len()
+            + self.dirty.needs_compositing.len()
+            + self.dirty.needs_paint.len()
+            + self.dirty.needs_semantics.len()
+    }
+
+    /// Returns whether there are any dirty nodes.
+    #[inline]
+    pub fn has_dirty_nodes(&self) -> bool {
+        !self.dirty.needs_layout.is_empty()
+            || !self.dirty.needs_compositing.is_empty()
+            || !self.dirty.needs_paint.is_empty()
+            || !self.dirty.needs_semantics.is_empty()
+    }
+
+    /// Clears all dirty node lists without processing them.
+    ///
+    /// Use with caution - this discards pending work.
+    pub fn clear_all_dirty_nodes(&mut self) {
+        self.dirty.needs_layout.clear();
+        self.dirty.needs_compositing.clear();
+        self.dirty.needs_paint.clear();
+        self.dirty.needs_semantics.clear();
+    }
+}
+
+// ============================================================================
+// Layout phase: run_layout + helpers
+// ============================================================================
+
+impl PipelineOwner<Layout> {
+    /// Transitions a layout-phase pipeline into the [`Compositing`] phase.
+    pub fn into_compositing(self) -> PipelineOwner<Compositing> {
+        rebind_phase(self)
+    }
+
+    /// Returns to [`Idle`] from the layout phase (e.g. on error abort).
+    pub fn into_idle(self) -> PipelineOwner<Idle> {
+        rebind_phase(self)
+    }
 
     /// Updates layout for all dirty render objects.
     ///
@@ -581,10 +710,8 @@ impl PipelineOwner<Idle> {
     /// `perform_layout` can call `layout_child()` which triggers
     /// synchronous child layout through the RenderTree. The child is laid
     /// out immediately and returns its size.
-    ///
-    /// After processing own nodes, recursively flushes child pipeline owners.
-    pub fn flush_layout(&mut self) {
-        tracing::debug!("flush_layout: {} nodes", self.dirty.needs_layout.len());
+    pub fn run_layout(&mut self) {
+        tracing::debug!("run_layout: {} nodes", self.dirty.needs_layout.len());
 
         // Process own dirty nodes if any
         // Flutter pattern: while loop to handle nodes added during layout
@@ -600,7 +727,7 @@ impl PipelineOwner<Idle> {
             dirty_nodes.sort_unstable_by_key(|node| node.depth);
 
             tracing::debug!(
-                "flush_layout: sorted order (shallow-first) = {:?}",
+                "run_layout: sorted order (shallow-first) = {:?}",
                 dirty_nodes
                     .iter()
                     .map(|n| (n.id, n.depth))
@@ -616,8 +743,6 @@ impl PipelineOwner<Idle> {
 
             self.debug_doing_layout = false;
         }
-
-        // Hierarchical-pipelines child flush removed in Mythos Step 9.
     }
 
     /// Lays out a single node with depth-first child layout.
@@ -630,11 +755,6 @@ impl PipelineOwner<Idle> {
     ///
     /// This ensures that when parent's `perform_layout` calls `layout_child()`,
     /// the child's size is already cached and available.
-    ///
-    /// # Interior Mutability
-    ///
-    /// Uses RwLock on RenderNode to allow parent to hold a lock while
-    /// children are being laid out through separate locks.
     fn layout_node_with_children(&mut self, render_id: RenderId, depth: usize) {
         // Mythos Step 12: bound recursion depth to detect infinite
         // parent-child cycles. Going past LAYOUT_DEPTH_LIMIT surfaces
@@ -717,10 +837,22 @@ impl PipelineOwner<Idle> {
     /// ChildState with the child's resulting size. This allows the parent's
     /// `layout_child()` to return the correct size.
     fn sync_child_size_to_parent(&mut self, _child_id: RenderId) {}
+}
 
-    // ========================================================================
-    // Compositing Bits Phase
-    // ========================================================================
+// ============================================================================
+// Compositing phase: run_compositing
+// ============================================================================
+
+impl PipelineOwner<Compositing> {
+    /// Transitions a compositing-phase pipeline into the [`PaintPhase`] phase.
+    pub fn into_paint(self) -> PipelineOwner<PaintPhase> {
+        rebind_phase(self)
+    }
+
+    /// Returns to [`Idle`] from the compositing phase.
+    pub fn into_idle(self) -> PipelineOwner<Idle> {
+        rebind_phase(self)
+    }
 
     /// Updates compositing bits for all dirty render objects.
     ///
@@ -730,11 +862,9 @@ impl PipelineOwner<Idle> {
     ///
     /// Nodes are sorted by depth (shallow first). This matches Flutter's
     /// `flushCompositingBits` behavior.
-    ///
-    /// After processing own nodes, recursively flushes child pipeline owners.
-    pub fn flush_compositing_bits(&mut self) {
+    pub fn run_compositing(&mut self) {
         tracing::debug!(
-            "flush_compositing_bits: {} nodes",
+            "run_compositing: {} nodes",
             self.dirty.needs_compositing.len()
         );
 
@@ -762,13 +892,23 @@ impl PipelineOwner<Idle> {
             );
         }
         self.dirty.needs_compositing.clear();
+    }
+}
 
-        // Hierarchical-pipelines child flush removed in Mythos Step 9.
+// ============================================================================
+// Paint phase: run_paint + helpers
+// ============================================================================
+
+impl PipelineOwner<PaintPhase> {
+    /// Transitions a paint-phase pipeline into the [`Semantics`] phase.
+    pub fn into_semantics(self) -> PipelineOwner<Semantics> {
+        rebind_phase(self)
     }
 
-    // ========================================================================
-    // Paint Phase
-    // ========================================================================
+    /// Returns to [`Idle`] from the paint phase.
+    pub fn into_idle(self) -> PipelineOwner<Idle> {
+        rebind_phase(self)
+    }
 
     /// Paints all dirty render objects.
     ///
@@ -778,10 +918,8 @@ impl PipelineOwner<Idle> {
     ///
     /// Nodes are sorted by depth (deep first) so children are painted before
     /// their parents. This matches Flutter's `flushPaint` behavior.
-    ///
-    /// After processing own nodes, recursively flushes child pipeline owners.
-    pub fn flush_paint(&mut self) {
-        tracing::debug!("flush_paint: {} nodes", self.dirty.needs_paint.len());
+    pub fn run_paint(&mut self) {
+        tracing::debug!("run_paint: {} nodes", self.dirty.needs_paint.len());
 
         // Process own dirty nodes if any
         if !self.dirty.needs_paint.is_empty() {
@@ -807,7 +945,7 @@ impl PipelineOwner<Idle> {
                 && let Some(root_node) = self.render_tree.get(root_id)
             {
                 let paint_bounds = root_node.paint_bounds();
-                tracing::debug!("flush_paint: painting root with bounds {:?}", paint_bounds);
+                tracing::debug!("run_paint: painting root with bounds {:?}", paint_bounds);
 
                 // Create CanvasContext
                 let mut context = CanvasContext::new(paint_bounds);
@@ -818,15 +956,13 @@ impl PipelineOwner<Idle> {
                 // Store the resulting layer tree
                 self.last_layer_tree = Some(context.into_layer_tree());
                 tracing::debug!(
-                    "flush_paint: layer tree has {} layers",
+                    "run_paint: layer tree has {} layers",
                     self.last_layer_tree.as_ref().map(|t| t.len()).unwrap_or(0)
                 );
             }
 
             self.debug_doing_paint = false;
         }
-
-        // Hierarchical-pipelines child flush removed in Mythos Step 9.
     }
 
     /// Recursively paints a node and its children with accumulated offset.
@@ -990,10 +1126,17 @@ impl PipelineOwner<Idle> {
             entry.state().set_was_repaint_boundary(true);
         }
     }
+}
 
-    // ========================================================================
-    // Semantics Phase
-    // ========================================================================
+// ============================================================================
+// Semantics phase: run_semantics
+// ============================================================================
+
+impl PipelineOwner<Semantics> {
+    /// Completes the frame and returns to [`Idle`].
+    pub fn finish(self) -> PipelineOwner<Idle> {
+        rebind_phase(self)
+    }
 
     /// Updates semantics for all dirty render objects.
     ///
@@ -1005,17 +1148,12 @@ impl PipelineOwner<Idle> {
     /// The geometries of children depend on ancestors' transforms and clips,
     /// so parents must be processed first. This matches Flutter's
     /// `flushSemantics`.
-    ///
-    /// After processing own nodes, recursively flushes child pipeline owners.
-    pub fn flush_semantics(&mut self) {
+    pub fn run_semantics(&mut self) {
         if !self.semantics_enabled() {
             return;
         }
 
-        tracing::debug!(
-            "flush_semantics: {} nodes",
-            self.dirty.needs_semantics.len()
-        );
+        tracing::debug!("run_semantics: {} nodes", self.dirty.needs_semantics.len());
 
         self.debug_doing_semantics = true;
 
@@ -1035,179 +1173,6 @@ impl PipelineOwner<Idle> {
         }
 
         self.debug_doing_semantics = false;
-    }
-
-    /// Flushes all pipeline phases in the correct order.
-    ///
-    /// This is a convenience method that calls all flush methods in sequence:
-    /// 1. `flush_layout()`
-    /// 2. `flush_compositing_bits()`
-    /// 3. `flush_paint()`
-    /// 4. `flush_semantics()`
-    pub fn flush_all(&mut self) {
-        self.flush_layout();
-        self.flush_compositing_bits();
-        self.flush_paint();
-        self.flush_semantics();
-    }
-
-    // ========================================================================
-    // Debug
-    // ========================================================================
-
-    /// Returns whether layout is currently being performed.
-    #[inline]
-    pub fn debug_doing_layout(&self) -> bool {
-        self.debug_doing_layout
-    }
-
-    /// Returns whether paint is currently being performed.
-    #[inline]
-    pub fn debug_doing_paint(&self) -> bool {
-        self.debug_doing_paint
-    }
-
-    /// Returns whether semantics update is currently being performed.
-    #[inline]
-    pub fn debug_doing_semantics(&self) -> bool {
-        self.debug_doing_semantics
-    }
-
-    /// Returns whether any pipeline phase is currently active.
-    #[inline]
-    pub fn debug_doing_any_phase(&self) -> bool {
-        self.debug_doing_layout || self.debug_doing_paint || self.debug_doing_semantics
-    }
-
-    /// Returns the total number of dirty nodes across all lists.
-    pub fn dirty_node_count(&self) -> usize {
-        self.dirty.needs_layout.len()
-            + self.dirty.needs_compositing.len()
-            + self.dirty.needs_paint.len()
-            + self.dirty.needs_semantics.len()
-    }
-
-    /// Returns whether there are any dirty nodes.
-    #[inline]
-    pub fn has_dirty_nodes(&self) -> bool {
-        !self.dirty.needs_layout.is_empty()
-            || !self.dirty.needs_compositing.is_empty()
-            || !self.dirty.needs_paint.is_empty()
-            || !self.dirty.needs_semantics.is_empty()
-    }
-
-    /// Clears all dirty node lists without processing them.
-    ///
-    /// Use with caution - this discards pending work.
-    pub fn clear_all_dirty_nodes(&mut self) {
-        self.dirty.needs_layout.clear();
-        self.dirty.needs_compositing.clear();
-        self.dirty.needs_paint.clear();
-        self.dirty.needs_semantics.clear();
-    }
-}
-
-// ============================================================================
-// Phase transitions (Mythos Step 1 -- non-consuming rebind)
-// ============================================================================
-//
-// Step 1 adds the phantom-typed Phase parameter and the transition
-// methods that rebind the parameter. They are not yet consuming: the
-// `into_*` methods take `self` by value but Step 7 will tighten this so
-// that, e.g., `run_paint` cannot be reached without first transitioning
-// through `into_paint` from a layout-and-composited pipeline. Today they
-// are convertor methods that always succeed.
-//
-// The transitions update the runtime `debug_doing_*` flags as a runtime
-// safety net during the migration; once Step 7 lands, those flags can be
-// removed because the type system carries the same information.
-
-impl PipelineOwner<Idle> {
-    /// Transitions an idle pipeline into the [`Layout`] phase.
-    ///
-    /// Step 1 rebind only -- no behavior change. Step 7 will gate this on
-    /// the pipeline being free of in-flight phase work.
-    pub fn into_layout(self) -> PipelineOwner<Layout> {
-        rebind_phase(self)
-    }
-}
-
-impl PipelineOwner<Layout> {
-    /// Transitions a layout-phase pipeline into the [`Compositing`] phase.
-    pub fn into_compositing(self) -> PipelineOwner<Compositing> {
-        rebind_phase(self)
-    }
-
-    /// Returns to [`Idle`] from the layout phase (e.g. on error abort).
-    pub fn into_idle(self) -> PipelineOwner<Idle> {
-        rebind_phase(self)
-    }
-}
-
-impl PipelineOwner<Compositing> {
-    /// Transitions a compositing-phase pipeline into the [`PaintPhase`] phase.
-    pub fn into_paint(self) -> PipelineOwner<PaintPhase> {
-        rebind_phase(self)
-    }
-
-    /// Returns to [`Idle`] from the compositing phase.
-    pub fn into_idle(self) -> PipelineOwner<Idle> {
-        rebind_phase(self)
-    }
-}
-
-impl PipelineOwner<PaintPhase> {
-    /// Transitions a paint-phase pipeline into the [`Semantics`] phase.
-    pub fn into_semantics(self) -> PipelineOwner<Semantics> {
-        rebind_phase(self)
-    }
-
-    /// Returns to [`Idle`] from the paint phase.
-    pub fn into_idle(self) -> PipelineOwner<Idle> {
-        rebind_phase(self)
-    }
-}
-
-impl PipelineOwner<Semantics> {
-    /// Completes the frame and returns to [`Idle`].
-    pub fn finish(self) -> PipelineOwner<Idle> {
-        rebind_phase(self)
-    }
-}
-
-// ============================================================================
-// Phase-typed full-frame convenience (Mythos Step 7)
-// ============================================================================
-//
-// `run_frame` is the typestate-enforced entry point: consume the idle
-// owner, run all four phases via the existing `flush_*` methods, and
-// return the owner back at [`Idle`] plus the produced layer tree.
-//
-// The phase transitions (`into_layout` / `into_compositing` / etc.) are
-// non-consuming-of-state rebinds today; the typestate is enforced at
-// the type level via PhantomData, but the actual frame work still
-// happens through the legacy `flush_*` methods on `<Idle>` (kept to
-// avoid breaking `flui-app::RenderingFlutterBinding::draw_frame`). Full
-// per-phase method redistribution (`run_layout` on `<Layout>` only,
-// `run_paint` on `<PaintPhase>` only, etc.) is queued in
-// `crates/flui-rendering/ARCHITECTURE.md` Outstanding refactors as a
-// follow-up that needs flui-app draw-loop refactoring in lockstep.
-
-impl PipelineOwner<Idle> {
-    /// Runs a full frame: layout -> compositing-bits -> paint -> semantics.
-    /// Consumes `self`, returns the owner back at [`Idle`] plus the
-    /// produced layer tree (if any).
-    ///
-    /// Mythos Step 7 (2026-05-20) -- the typestate-enforced full-frame
-    /// convenience. Existing callers using `flush_*` directly still
-    /// work; new callers should prefer `run_frame`.
-    pub fn run_frame(mut self) -> (PipelineOwner<Idle>, Option<LayerTree>) {
-        self.flush_layout();
-        self.flush_compositing_bits();
-        self.flush_paint();
-        self.flush_semantics();
-        let layer_tree = self.last_layer_tree.take();
-        (self, layer_tree)
     }
 }
 
@@ -1278,30 +1243,31 @@ mod tests {
     }
 
     #[test]
-    fn test_pipeline_owner_flush_layout() {
+    fn test_pipeline_owner_run_layout() {
         let mut owner = PipelineOwner::new();
         owner.add_node_needing_layout(RenderId::new(1), 0);
         owner.add_node_needing_layout(RenderId::new(2), 1);
 
-        owner.flush_layout();
+        let mut owner = owner.into_layout();
+        owner.run_layout();
 
         assert!(owner.nodes_needing_layout().is_empty());
     }
 
     #[test]
-    fn test_pipeline_owner_flush_all() {
+    fn test_pipeline_owner_run_frame() {
         let mut owner = PipelineOwner::new();
         owner.add_node_needing_layout(RenderId::new(1), 0);
         owner.add_node_needing_paint(RenderId::new(2), 1);
         owner.add_node_needing_compositing_bits_update(RenderId::new(3), 2);
 
-        owner.flush_all();
+        let (owner, _layer_tree) = owner.run_frame();
 
         assert!(!owner.has_dirty_nodes());
     }
 
     #[test]
-    fn test_flush_layout_sorts_by_depth_shallow_first() {
+    fn test_run_layout_sorts_by_depth_shallow_first() {
         let mut owner = PipelineOwner::new();
         // Add nodes in reverse depth order
         owner.add_node_needing_layout(RenderId::new(3), 2); // deepest
@@ -1313,21 +1279,24 @@ mod tests {
         assert_eq!(owner.nodes_needing_layout()[1].depth, 0);
         assert_eq!(owner.nodes_needing_layout()[2].depth, 1);
 
-        owner.flush_layout();
+        let mut owner = owner.into_layout();
+        owner.run_layout();
 
         // After flush, list is cleared
         assert!(owner.nodes_needing_layout().is_empty());
     }
 
     #[test]
-    fn test_flush_paint_sorts_by_depth_deep_first() {
+    fn test_run_paint_sorts_by_depth_deep_first() {
         let mut owner = PipelineOwner::new();
         // Add nodes in shallow-first order
         owner.add_node_needing_paint(RenderId::new(1), 0); // shallowest
         owner.add_node_needing_paint(RenderId::new(2), 1); // middle
         owner.add_node_needing_paint(RenderId::new(3), 2); // deepest
 
-        owner.flush_paint();
+        let owner = owner.into_layout().into_compositing();
+        let mut owner = owner.into_paint();
+        owner.run_paint();
 
         // After flush, list is cleared
         assert!(owner.nodes_needing_paint().is_empty());

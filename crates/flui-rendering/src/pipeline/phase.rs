@@ -3,27 +3,28 @@
 //! Per docs/designs/2026-05-20-mythos-flui-rendering-redesign.md, the
 //! `PipelineOwner` carries a phantom type parameter `Phase: PipelinePhase`
 //! that lifts the runtime "what frame phase am I in" question into the
-//! type system. The four runtime `debug_doing_*` bool fields on
-//! `PipelineOwner` will be retired in Mythos Step 7 once consuming
-//! phase transitions land; until then they coexist as a runtime safety
-//! net.
+//! type system. Mythos Step 7 (2026-05-20) finalized the design: each
+//! `run_*` method now lives only on its phase's impl block, so calling
+//! `run_paint` on `<Idle>` or `run_layout` on `<Compositing>` is a
+//! compile error, not a runtime assert.
 //!
-//! This file lands the markers and the sealed trait so the rest of the
-//! crate can begin annotating phase-specific impls. Step 1 deliberately
-//! does **not** make transitions consume `self` -- that comes in Step 7
-//! once every caller has been updated.
+//! # Compile-time enforcement examples (Mythos Step 13 + Step 7)
 //!
-//! # Compile-time enforcement examples (Mythos Step 13)
-//!
-//! `flush_layout`, `flush_compositing_bits`, `flush_paint`,
-//! `flush_semantics`, and `run_frame` live on `PipelineOwner<Idle>`.
-//! Calling them on a transitioned phase fails at compile time:
+//! `run_layout`, `run_compositing`, `run_paint`, and `run_semantics`
+//! each live on the matching phase's impl block. Calling them on the
+//! wrong phase (or on `<Idle>`) fails at compile time:
 //!
 //! ```compile_fail
 //! use flui_rendering::pipeline::PipelineOwner;
 //! let owner = PipelineOwner::new();        // <Idle>
-//! let owner = owner.into_layout();         // <Layout>
-//! owner.flush_layout();                    // error[E0599]: method not found in <Layout>
+//! owner.run_paint();                       // error[E0599]: run_paint is on <PaintPhase> only
+//! ```
+//!
+//! ```compile_fail
+//! use flui_rendering::pipeline::PipelineOwner;
+//! let owner = PipelineOwner::new();        // <Idle>
+//! let mut owner = owner.into_layout();     // <Layout>
+//! owner.run_paint();                       // error[E0599]: run_paint is on <PaintPhase>, not <Layout>
 //! ```
 //!
 //! ```compile_fail
@@ -48,11 +49,23 @@
 //! ```
 //! use flui_rendering::pipeline::PipelineOwner;
 //! let owner = PipelineOwner::new();        // <Idle>
-//! let owner = owner.into_layout();         // <Layout>
-//! let owner = owner.into_compositing();    // <Compositing>
-//! let owner = owner.into_paint();          // <PaintPhase>
-//! let owner = owner.into_semantics();      // <Semantics>
+//! let mut owner = owner.into_layout();     // <Layout>
+//! owner.run_layout();
+//! let mut owner = owner.into_compositing();// <Compositing>
+//! owner.run_compositing();
+//! let mut owner = owner.into_paint();      // <PaintPhase>
+//! owner.run_paint();
+//! let mut owner = owner.into_semantics();  // <Semantics>
+//! owner.run_semantics();
 //! let _owner = owner.finish();             // back to <Idle>
+//! ```
+//!
+//! And the convenience orchestrator:
+//!
+//! ```
+//! use flui_rendering::pipeline::PipelineOwner;
+//! let owner = PipelineOwner::new();
+//! let (_owner, _layer_tree) = owner.run_frame();
 //! ```
 //!
 //! ## States
@@ -70,10 +83,8 @@
 //!     └─────────────────── Semantics
 //! ```
 //!
-//! Transitions are stateless renames; they consume nothing yet, only
-//! retag the phantom parameter. When Mythos Step 7 promotes them to
-//! `self`-consuming, the borrow checker will refuse to call `run_paint`
-//! before `into_paint`.
+//! Transitions consume `self`, so the borrow checker (not a runtime
+//! flag) enforces that you cannot call `run_paint` before `into_paint`.
 
 use core::marker::PhantomData;
 
@@ -103,21 +114,22 @@ pub trait PipelinePhase: sealed::Sealed + 'static {
 /// Default phase: no frame work in progress.
 ///
 /// Insertion / removal / mark-dirty operations are valid in this phase
-/// once the consuming transitions land (Step 7). Today, every existing
-/// `PipelineOwner` call is on `<Idle>` by virtue of the default type
-/// parameter.
+/// via the phase-agnostic accessors on `impl<Phase: PipelinePhase>
+/// PipelineOwner<Phase>`. The phase-specific work (`run_layout`,
+/// `run_compositing`, `run_paint`, `run_semantics`) lives elsewhere; on
+/// `<Idle>` only the constructors and `run_frame` are reachable.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Idle;
 
-/// Layout phase: `flush_layout` / `run_layout` may execute.
+/// Layout phase: `run_layout` may execute.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Layout;
 
-/// Compositing-bits phase: `flush_compositing_bits` may execute.
+/// Compositing-bits phase: `run_compositing` may execute.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Compositing;
 
-/// Paint phase: `flush_paint` / `run_paint` may execute.
+/// Paint phase: `run_paint` may execute.
 ///
 /// Named with a `Phase` suffix to avoid a collision with
 /// `flui_types::painting::Paint` (the canvas paint style type) that is
@@ -125,7 +137,7 @@ pub struct Compositing;
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PaintPhase;
 
-/// Semantics phase: `flush_semantics` may execute.
+/// Semantics phase: `run_semantics` may execute.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Semantics;
 

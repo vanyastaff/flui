@@ -369,21 +369,24 @@ impl AppBinding {
             }
         }
 
-        // Phase 2 & 3: Layout and Paint (using shared_pipeline_owner)
-        {
-            let mut pipeline = self.shared_pipeline_owner.write();
-            pipeline.flush_layout();
-            pipeline.flush_compositing_bits();
-            pipeline.flush_paint();
-            pipeline.flush_semantics();
-        }
+        // Phase 2 & 3: Layout, Compositing, Paint, Semantics through the
+        // typestate-driven orchestrator. Mythos Step 7 finalization
+        // (2026-05-20): the four `flush_*` calls are gone; `run_frame`
+        // is the single entry point and the layer tree comes back as
+        // its second return value.
+        let layer_tree = {
+            let mut guard = self.shared_pipeline_owner.write();
+            let owner = std::mem::take(&mut *guard);
+            let (owner, layer_tree) = owner.run_frame();
+            *guard = owner;
+            layer_tree
+        };
 
         // Phase 4: Create Scene from LayerTree
         let size = constraints.constrain(Size::ZERO);
         let frame_number = self.frames_rendered.load(Ordering::Relaxed) + 1;
 
-        let mut pipeline = self.shared_pipeline_owner.write();
-        if let Some(layer_tree) = pipeline.take_layer_tree() {
+        if let Some(layer_tree) = layer_tree {
             // Create scene from layer tree
             let root = layer_tree.root();
             let scene = Scene::new(size, layer_tree, root, frame_number);

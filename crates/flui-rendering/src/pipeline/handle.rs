@@ -9,8 +9,9 @@
 //! [`DirtyRequest`] over a bounded [`crossbeam_channel`] to the owner.
 //!
 //! The owner drains the channel into its [`DirtySets`] at a defined point
-//! in each frame (today: at the start of `flush_layout` / `flush_paint`;
-//! eventually under Mythos Step 7, at phase transitions).
+//! in each frame -- typically at the start of `run_layout` (and any other
+//! `run_*` phase) where the producer-side mark-dirty signals must be
+//! observed before that phase's work begins.
 //!
 //! ## Backpressure
 //!

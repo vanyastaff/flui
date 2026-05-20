@@ -395,19 +395,22 @@ impl RendererBinding for RenderingFlutterBinding {
     }
 
     fn draw_frame(&self) {
-        // Call default implementation
+        // Mythos Step 7 finalization (2026-05-20): use mem::take +
+        // run_frame to consume the owner through the typestate
+        // transitions. The four `flush_*` calls collapse to one
+        // `run_frame()` orchestration; semantics now runs inside
+        // run_frame regardless of `send_frames_to_engine`, so the only
+        // gated work below is the per-view composite handoff.
         let root_owner = self.root_pipeline_owner();
+        let layer_tree = {
+            let mut guard = root_owner.write();
+            let owner = std::mem::take(&mut *guard);
+            let (owner, layer_tree) = owner.run_frame();
+            *guard = owner;
+            layer_tree
+        };
 
-        // Phase 3: Layout
-        root_owner.write().flush_layout();
-
-        // Phase 4: Compositing bits
-        root_owner.write().flush_compositing_bits();
-
-        // Phase 5: Paint
-        root_owner.write().flush_paint();
-
-        // Phase 6 & 7: Composite and Semantics (only if sending frames)
+        // Phase 6: Composite frames (only if sending frames)
         if self.send_frames_to_engine() {
             // Composite each render view
             for (_, view) in self.render_views.read().iter() {
@@ -416,12 +419,14 @@ impl RendererBinding for RenderingFlutterBinding {
                 // In a real implementation, send to GPU here
             }
 
-            // Phase 7: Semantics
-            root_owner.write().flush_semantics();
-
             // Mark first frame sent
             self.first_frame_sent.store(true, Ordering::Relaxed);
         }
+
+        // The produced layer tree is the responsibility of the
+        // concrete compositor wiring; today this binding does not own
+        // one, so we drop the value here intentionally.
+        let _ = layer_tree;
     }
 
     fn perform_semantics_action(
