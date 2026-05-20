@@ -51,11 +51,24 @@ mod buffer_pool;
 mod buffers;
 #[cfg(debug_assertions)]
 mod debug;
+/// Gradient + shadow + blur instance descriptors consumed by `painter.rs`'s
+/// instanced-batch pipelines. `#[allow(dead_code)]` retained at the module
+/// level because several builder/constant items (`ShadowParams::elevation_*`,
+/// `BlurIntensity`, `LinearGradientBuilder`) are forward-looking helpers that
+/// painter.rs has not yet wired into a public API; deletion would be premature
+/// before painter.rs's internal cleanup.
 #[allow(dead_code)]
 pub mod effects;
 mod effects_pipeline;
 mod external_texture_registry;
 pub mod font_loader;
+/// GPU instance-buffer types: `RectInstance`, `CircleInstance`, `ArcInstance`,
+/// `TextureInstance`, gradient instances. Most variants are consumed by
+/// `painter.rs`. `#[allow(dead_code)]` retained because several constructor
+/// shortcuts (`rounded_rect`, `with_transform`, `ellipse`, `with_rotation`)
+/// are forward-looking helpers not yet wired into painter.rs's public surface;
+/// the per-item audit + deletion is tracked in
+/// `crates/flui-engine/ARCHITECTURE.md` `## Outstanding refactors`.
 #[allow(dead_code)]
 mod instancing;
 // NOTE: integration_tests.rs removed - needs rewrite for new
@@ -65,16 +78,23 @@ pub mod occlusion;
 mod offscreen;
 mod painter;
 pub mod path_cache;
+/// Pipeline key types + descriptors consumed by `painter.rs`'s pipeline cache.
+/// `#[allow(dead_code)]` retained because the `PipelineKey::from_color` /
+/// related constructors are not yet wired into painter.rs's pipeline
+/// construction. Per-item audit tracked in ARCHITECTURE.md.
 #[allow(dead_code)]
 mod pipeline;
 mod pipelines;
 mod renderer;
+/// Shader cache for offscreen pipelines (`OffscreenRenderer` mask/blur/morph).
+/// `#[allow(dead_code)]` retained because `ShaderCache::cached_count` and
+/// `ShaderCache::clear` introspection methods are forward-looking devtools
+/// helpers; deletion is tracked in ARCHITECTURE.md Outstanding refactors.
 #[allow(dead_code)]
 mod shader_compiler;
 mod shaders;
 mod tessellator;
 mod text;
-mod text_renderer;
 pub mod texture_cache;
 mod texture_pool;
 mod vertex;
@@ -123,9 +143,6 @@ pub use renderer::{GpuCapabilities, Renderer};
 pub use shader_compiler::{ShaderCache, ShaderType};
 // Tessellator
 pub use tessellator::Tessellator;
-// Text rendering (feature-gated)
-#[cfg(feature = "wgpu-backend")]
-pub use text_renderer::{TextRenderingSystem, TextRun};
 // Texture pool
 pub use texture_pool::{GpuTexture, PoolStats, PooledTexture, TextureDesc, TexturePool};
 // Vertex types

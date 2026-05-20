@@ -1,7 +1,11 @@
-// Engine crate is under active development — many types contain wgpu handles
-// that don't implement Debug, and many fields/constants are reserved for future
-// rendering paths not yet wired up.
-#![allow(dead_code, missing_debug_implementations)]
+// Engine crate -- many types contain wgpu handles that don't implement Debug.
+// `missing_debug_implementations` stays suppressed because wgpu's resource
+// handles (Device, Queue, Texture, Buffer, etc.) intentionally do not impl
+// Debug (large, not human-readable). The `dead_code` global suppression was
+// removed in Mythos U10; surviving `#[allow(dead_code)]` markers are scoped
+// to specific modules where forward-looking infrastructure has named consumers
+// that are not yet wired up.
+#![allow(missing_debug_implementations)]
 // GPU capability structs legitimately use many bools; field name postfixes
 // are unavoidable when wrapping distinct pipeline/stack types.
 #![allow(

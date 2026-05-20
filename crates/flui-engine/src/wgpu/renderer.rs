@@ -130,7 +130,13 @@ struct RenderContext {
 
 /// Cross-platform GPU renderer
 pub struct Renderer {
+    // `instance` and `adapter` are kept alive for the lifetime of the renderer
+    // because `wgpu::Surface<'static>` and `wgpu::Device` depend on them. They
+    // are not read post-init in production code; the `#[allow(dead_code)]`
+    // markers document that the keep-alive shape is intentional.
+    #[allow(dead_code)]
     instance: wgpu::Instance,
+    #[allow(dead_code)]
     adapter: wgpu::Adapter,
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
