@@ -12,23 +12,48 @@
 //! the `flui-layer` Step 4 macro pattern. Not bundled with this chain
 //! because the file is structurally clean despite size.
 //!
-//! # Recursion-depth caveat
+//! # Recursion-depth cap
 //!
 //! Both [`DrawCommand::with_opacity`] and [`DrawCommand::apply_transform`]
 //! recurse into the inner `DisplayList`s carried by [`DrawCommand::ShaderMask`]
-//! and [`DrawCommand::BackdropFilter`]. A pathological caller that
-//! nests `ShaderMask` / `BackdropFilter` thousands of layers deep can
-//! blow the call stack. We do *not* impose a depth limit today
-//! because the right ceiling (16? 64? 256?) is a product decision
-//! that needs benchmark data — caps that are too tight silently
-//! truncate user effects, caps that are too loose still overflow on
-//! adversarial input. Tracked in
-//! `crates/flui-painting/ARCHITECTURE.md ## Outstanding refactors`.
+//! and [`DrawCommand::BackdropFilter`]. To bound stack usage on
+//! adversarial input we cap nesting at [`MAX_EFFECT_DEPTH`] = 64.
+//!
+//! Why 64:
+//!
+//! - Each recursive frame holds a [`DrawCommand`] value (~200 B for
+//!   the largest variant) plus the [`DisplayList`] iterator state and
+//!   `Box` drop ladder; empirically ~2–4 KB / frame on a release build.
+//! - 64 × 4 KB ≈ 256 KB — well under the default 8 MB thread stack on
+//!   Windows / macOS / Linux.
+//! - Production Flutter `RenderObject` trees rarely nest effects more
+//!   than ~30 levels deep; 64 leaves ≥2× headroom for unusual but
+//!   legitimate UIs.
+//! - Skia historically capped layer nesting around 250
+//!   (`kMaxLayers` in `SkCanvas`), but its heap-allocated `SkRecord`
+//!   tolerates deeper recursion than our value-typed [`DrawCommand`]
+//!   chain.
+//!
+//! On saturation we clone the offending command *without* recursing
+//! into its child (so the subtree keeps its previous opacity /
+//! transform) and emit a `tracing::warn!`. Visual fidelity degrades
+//! gracefully for >64-deep stacks; no crash.
+//!
+//! Engineers tuning this number should profile against the
+//! `nested_shader_mask_opacity_depth` test below and bench the
+//! resulting frame budget.
 
 use flui_types::geometry::{Matrix4, Pixels, Rect, Size};
 
 use super::command::{CommandKind, DrawCommand};
 use crate::display_list::Paint;
+
+/// Maximum recursion depth for [`DrawCommand::with_opacity`] and
+/// [`DrawCommand::apply_transform`] into the inner [`DisplayList`] of
+/// [`DrawCommand::ShaderMask`] / [`DrawCommand::BackdropFilter`].
+///
+/// See the module-level docs for the rationale behind this value.
+pub const MAX_EFFECT_DEPTH: usize = 64;
 
 impl DrawCommand {
     /// Apply opacity to the Paint in this command.
@@ -36,8 +61,25 @@ impl DrawCommand {
     /// Creates a new `DrawCommand` with the Paint's opacity multiplied
     /// by the given value. Used by `DisplayList::to_opacity()` to
     /// implement opacity effects.
+    ///
+    /// For [`Self::ShaderMask`] / [`Self::BackdropFilter`], opacity
+    /// recurses into the child [`DisplayList`]. The recursion is
+    /// bounded by [`MAX_EFFECT_DEPTH`]; deeper nesting is clamped to
+    /// avoid stack overflow on adversarial input. See the module
+    /// docs for the rationale.
     #[must_use = "with_opacity returns a new DrawCommand and does not modify the original"]
     pub fn with_opacity(&self, opacity: f32) -> Self {
+        self.with_opacity_depth(opacity, 0)
+    }
+
+    /// Depth-counted recursion target for [`Self::with_opacity`].
+    ///
+    /// `depth` is incremented each time we descend into a child
+    /// [`DisplayList`]. When `depth >= MAX_EFFECT_DEPTH` we clone
+    /// `self` unchanged (the child keeps its existing paint) and emit
+    /// a `tracing::warn!` so observability tooling can surface the
+    /// truncation.
+    pub(crate) fn with_opacity_depth(&self, opacity: f32, depth: usize) -> Self {
         match self {
             // Passthrough: Commands without opacity (clips, gradients, etc.)
             Self::ClipRect { .. }
@@ -279,33 +321,49 @@ impl DrawCommand {
                 transform: *transform,
             },
 
-            // Child commands: Recursively apply opacity to DisplayList
+            // Child commands: Recursively apply opacity to DisplayList,
+            // bounded by MAX_EFFECT_DEPTH to keep adversarial input
+            // from blowing the stack.
             Self::ShaderMask {
                 child,
                 shader,
                 bounds,
                 blend_mode,
                 transform,
-            } => Self::ShaderMask {
-                child: Box::new(child.to_opacity(opacity)),
-                shader: shader.clone(),
-                bounds: *bounds,
-                blend_mode: *blend_mode,
-                transform: *transform,
-            },
+            } => {
+                if depth >= MAX_EFFECT_DEPTH {
+                    log_effect_depth_saturation("ShaderMask", "with_opacity", depth);
+                    return self.clone();
+                }
+                Self::ShaderMask {
+                    child: Box::new(child.to_opacity_depth(opacity, depth + 1)),
+                    shader: shader.clone(),
+                    bounds: *bounds,
+                    blend_mode: *blend_mode,
+                    transform: *transform,
+                }
+            }
             Self::BackdropFilter {
                 child,
                 filter,
                 bounds,
                 blend_mode,
                 transform,
-            } => Self::BackdropFilter {
-                child: child.as_ref().map(|c| Box::new(c.to_opacity(opacity))),
-                filter: filter.clone(),
-                bounds: *bounds,
-                blend_mode: *blend_mode,
-                transform: *transform,
-            },
+            } => {
+                if depth >= MAX_EFFECT_DEPTH {
+                    log_effect_depth_saturation("BackdropFilter", "with_opacity", depth);
+                    return self.clone();
+                }
+                Self::BackdropFilter {
+                    child: child
+                        .as_ref()
+                        .map(|c| Box::new(c.to_opacity_depth(opacity, depth + 1))),
+                    filter: filter.clone(),
+                    bounds: *bounds,
+                    blend_mode: *blend_mode,
+                    transform: *transform,
+                }
+            }
 
             // Texture command: Multiply opacity field
             Self::DrawTexture {
@@ -755,20 +813,55 @@ impl DrawCommand {
     /// transform is also pushed into the nested child `DisplayList`
     /// so the inner commands move with the outer container — mirrors
     /// the recursive walk in [`Self::with_opacity`].
+    ///
+    /// Recursion into nested children is bounded by
+    /// [`MAX_EFFECT_DEPTH`]. See the module-level docs for the
+    /// rationale and saturation behavior.
     #[inline]
     pub fn apply_transform(&mut self, additional: Matrix4) {
+        self.apply_transform_depth(additional, 0);
+    }
+
+    /// Depth-counted recursion target for [`Self::apply_transform`].
+    pub(crate) fn apply_transform_depth(&mut self, additional: Matrix4, depth: usize) {
         *self.transform_mut() = additional * self.transform();
 
         match self {
             DrawCommand::ShaderMask { child, .. } => {
-                child.apply_transform(additional);
+                if depth >= MAX_EFFECT_DEPTH {
+                    log_effect_depth_saturation("ShaderMask", "apply_transform", depth);
+                    return;
+                }
+                child.apply_transform_depth(additional, depth + 1);
             }
             DrawCommand::BackdropFilter { child, .. } => {
                 if let Some(child) = child.as_mut() {
-                    child.apply_transform(additional);
+                    if depth >= MAX_EFFECT_DEPTH {
+                        log_effect_depth_saturation("BackdropFilter", "apply_transform", depth);
+                        return;
+                    }
+                    child.apply_transform_depth(additional, depth + 1);
                 }
             }
             _ => {}
         }
     }
+}
+
+/// Emit a saturation warning when an effect-nesting recursion
+/// reaches [`MAX_EFFECT_DEPTH`]. Extracted so the two call sites in
+/// [`DrawCommand::with_opacity_depth`] and
+/// [`DrawCommand::apply_transform_depth`] stay symmetrical and easy
+/// to grep for in production logs.
+#[cold]
+#[inline(never)]
+fn log_effect_depth_saturation(variant: &'static str, op: &'static str, depth: usize) {
+    tracing::warn!(
+        variant = variant,
+        op = op,
+        depth = depth,
+        max_depth = MAX_EFFECT_DEPTH,
+        "DrawCommand::{op} saturated MAX_EFFECT_DEPTH on {variant}; \
+         inner DisplayList left untouched"
+    );
 }

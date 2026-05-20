@@ -157,10 +157,21 @@ impl DisplayList {
     /// Applies a transform to all commands in this display list.
     ///
     /// Modifies commands in-place. Useful for positioning cached
-    /// display lists.
+    /// display lists. Recursion into nested
+    /// [`DrawCommand::ShaderMask`] / [`DrawCommand::BackdropFilter`]
+    /// children is bounded by
+    /// [`command_ops::MAX_EFFECT_DEPTH`](crate::display_list::command_ops::MAX_EFFECT_DEPTH).
     pub fn apply_transform(&mut self, transform: Matrix4) {
+        self.apply_transform_depth(transform, 0);
+    }
+
+    /// Depth-counted recursion target for
+    /// [`Self::apply_transform`]. Called by
+    /// [`DrawCommand::apply_transform_depth`] when descending into a
+    /// nested child `DisplayList`.
+    pub(crate) fn apply_transform_depth(&mut self, transform: Matrix4, depth: usize) {
         for cmd in &mut self.commands {
-            cmd.apply_transform(transform);
+            cmd.apply_transform_depth(transform, depth);
         }
         self.recalculate_bounds();
     }
@@ -289,25 +300,37 @@ impl DisplayList {
     ///
     /// # Performance
     ///
-    /// O(N) where N is the number of commands.
+    /// O(N) where N is the number of commands. Recursion into nested
+    /// [`DrawCommand::ShaderMask`] / [`DrawCommand::BackdropFilter`]
+    /// children is bounded by
+    /// [`command_ops::MAX_EFFECT_DEPTH`](crate::display_list::command_ops::MAX_EFFECT_DEPTH).
     #[must_use = "to_opacity returns a new DisplayList and does not modify the original"]
     #[tracing::instrument(skip(self), fields(
         commands = self.commands.len(),
         opacity = opacity,
     ))]
     pub fn to_opacity(&self, opacity: f32) -> Self {
+        self.to_opacity_depth(opacity, 0)
+    }
+
+    /// Depth-counted recursion target for [`Self::to_opacity`].
+    ///
+    /// Called by [`DrawCommand::with_opacity_depth`] when descending
+    /// into a nested child `DisplayList`.
+    pub(crate) fn to_opacity_depth(&self, opacity: f32, depth: usize) -> Self {
         let opacity = opacity.clamp(0.0, 1.0);
 
         tracing::debug!(
             commands = self.commands.len(),
             clamped_opacity = opacity,
+            depth = depth,
             "Applying opacity to DisplayList"
         );
 
         let commands = self
             .commands
             .iter()
-            .map(|cmd| cmd.with_opacity(opacity))
+            .map(|cmd| cmd.with_opacity_depth(opacity, depth))
             .collect();
 
         Self {
