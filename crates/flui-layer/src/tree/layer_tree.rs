@@ -5,9 +5,9 @@
 
 use flui_foundation::{ElementId, LayerId};
 use flui_types::{
+    Matrix4, Offset,
     geometry::{Pixels, RRect, Rect},
     painting::{Clip, Path},
-    Matrix4, Offset,
 };
 use slab::Slab;
 
@@ -1619,7 +1619,7 @@ mod tests {
         // Test Flutter's pattern: root -> transform -> clip -> opacity -> content
         use std::f32::consts::PI;
 
-        use flui_types::{geometry::Rect, painting::Clip, Matrix4, Offset};
+        use flui_types::{Matrix4, Offset, geometry::Rect, painting::Clip};
 
         use crate::layer::{CanvasLayer, OffsetLayer};
 

@@ -260,7 +260,7 @@ impl crate::compositor::SceneBuilder<'_> {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::{geometry::px, Offset};
+    use flui_types::{Offset, geometry::px};
 
     use super::*;
     use crate::CanvasLayer;

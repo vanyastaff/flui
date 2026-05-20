@@ -95,7 +95,6 @@
 
 mod compositor;
 pub mod damage;
-mod handle;
 mod link_registry;
 mod scene;
 
@@ -114,16 +113,6 @@ pub use compositor::{CompositorStats, SceneBuilder, SceneCompositor};
 // RE-EXPORTS - Foundation Types
 // ============================================================================
 pub use flui_foundation::LayerId;
-// ============================================================================
-// RE-EXPORTS - Handle
-// ============================================================================
-pub use handle::{
-    AnnotatedRegionLayerHandle, AnyLayerHandle, BackdropFilterLayerHandle, CanvasLayerHandle,
-    ClipPathLayerHandle, ClipRRectLayerHandle, ClipRectLayerHandle, ColorFilterLayerHandle,
-    FollowerLayerHandle, ImageFilterLayerHandle, LayerHandle, LeaderLayerHandle, OffsetLayerHandle,
-    OpacityLayerHandle, PlatformViewLayerHandle, ShaderMaskLayerHandle, TextureLayerHandle,
-    TransformLayerHandle,
-};
 // Re-export annotation search types
 pub use layer::annotation::{AnnotationEntry, AnnotationResult, AnnotationSearchOptions};
 // Re-export composition callback types
@@ -200,8 +189,6 @@ pub mod prelude {
     pub use crate::{AnnotatedRegionLayer, SemanticLabel, SystemUiOverlayStyle};
     // Annotation search
     pub use crate::{AnnotationEntry, AnnotationResult, AnnotationSearchOptions};
-    // Handle
-    pub use crate::{AnyLayerHandle, LayerHandle};
     // Effect layers
     pub use crate::{
         BackdropFilterLayer, ColorFilterLayer, ImageFilterLayer, OpacityLayer, ShaderMaskLayer,
@@ -240,7 +227,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[cfg(test)]
 mod tests {
     use flui_types::{
-        geometry::{px, Rect},
+        geometry::{Rect, px},
         painting::Clip,
     };
 

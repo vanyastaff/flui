@@ -102,7 +102,7 @@ unsafe impl Sync for ShaderMaskLayer {}
 #[cfg(test)]
 mod tests {
     use flui_types::{
-        geometry::{px, Offset},
+        geometry::{Offset, px},
         styling::Color,
     };
 

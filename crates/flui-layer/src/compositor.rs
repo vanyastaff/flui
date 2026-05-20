@@ -39,11 +39,11 @@
 
 use flui_foundation::LayerId;
 use flui_types::{
+    Matrix4,
     geometry::{Pixels, RRect, Rect},
     painting::{
-        effects::ColorMatrix, BlendMode, Clip, FilterQuality, ImageFilter, Path, Shader, TextureId,
+        BlendMode, Clip, FilterQuality, ImageFilter, Path, Shader, TextureId, effects::ColorMatrix,
     },
-    Matrix4,
 };
 
 use crate::{
@@ -686,7 +686,7 @@ impl SceneCompositor {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::{geometry::px, Offset};
+    use flui_types::{Offset, geometry::px};
 
     use super::*;
 
@@ -762,7 +762,7 @@ mod tests {
     #[test]
     fn test_scene_builder_add_picture() {
         use flui_painting::Canvas;
-        use flui_types::{painting::Paint, Color, Rect};
+        use flui_types::{Color, Rect, painting::Paint};
 
         let mut tree = LayerTree::new();
         let mut builder = SceneBuilder::new(&mut tree);
