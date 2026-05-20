@@ -24,6 +24,20 @@ use super::{LineInfo, TextLayoutResult, measure::style_to_attrs};
 ///
 /// cosmic-text requires a `FontSystem` for font discovery and shaping.
 /// We use a global instance with interior mutability for convenience.
+///
+/// # Poisoning caveat
+///
+/// We deliberately use `parking_lot::Mutex`, which does *not* poison
+/// the lock when a panic occurs while it is held. If `cosmic-text`
+/// panics mid-`set_text` or mid-`shape_until_scroll` (e.g. an internal
+/// invariant trips during font fallback), the surviving `FontSystem`
+/// is conceptually corrupt but no subsequent caller will observe a
+/// `PoisonError`. We accept that today because (a) cosmic-text panics
+/// are rare in practice, and (b) `std::sync::Mutex`'s poisoning would
+/// force every call site to `match` the lock result. A `catch_unwind`
+/// wrapper around `set_text` / `shape_until_scroll` is the
+/// principled fix and is tracked in
+/// `crates/flui-painting/ARCHITECTURE.md ## Outstanding refactors`.
 static FONT_SYSTEM: OnceLock<Mutex<FontSystem>> = OnceLock::new();
 
 /// Gets or initializes the global font system.
@@ -62,6 +76,11 @@ impl TextLayout {
         line_height: Option<f32>,
         direction: TextDirection,
     ) -> Self {
+        debug_assert!(
+            font_size > 0.0 && font_size.is_finite(),
+            "TextLayout::new font_size must be positive and finite, got {font_size}"
+        );
+
         let mut font_system = font_system().lock();
 
         let line_height = line_height.unwrap_or(font_size * 1.2);

@@ -11,6 +11,19 @@
 //! a hand-written `macro_rules!` `gen_command_accessors!` mirroring
 //! the `flui-layer` Step 4 macro pattern. Not bundled with this chain
 //! because the file is structurally clean despite size.
+//!
+//! # Recursion-depth caveat
+//!
+//! Both [`DrawCommand::with_opacity`] and [`DrawCommand::apply_transform`]
+//! recurse into the inner `DisplayList`s carried by [`DrawCommand::ShaderMask`]
+//! and [`DrawCommand::BackdropFilter`]. A pathological caller that
+//! nests `ShaderMask` / `BackdropFilter` thousands of layers deep can
+//! blow the call stack. We do *not* impose a depth limit today
+//! because the right ceiling (16? 64? 256?) is a product decision
+//! that needs benchmark data — caps that are too tight silently
+//! truncate user effects, caps that are too loose still overflow on
+//! adversarial input. Tracked in
+//! `crates/flui-painting/ARCHITECTURE.md ## Outstanding refactors`.
 
 use flui_types::geometry::{Matrix4, Pixels, Rect, Size};
 
@@ -737,9 +750,25 @@ impl DrawCommand {
 
     /// Applies an additional transform to this command.
     ///
-    /// The new transform is multiplied with the existing one.
+    /// The new transform is multiplied with the existing one. For
+    /// container commands (`ShaderMask`, `BackdropFilter`) the
+    /// transform is also pushed into the nested child `DisplayList`
+    /// so the inner commands move with the outer container — mirrors
+    /// the recursive walk in [`Self::with_opacity`].
     #[inline]
     pub fn apply_transform(&mut self, additional: Matrix4) {
         *self.transform_mut() = additional * self.transform();
+
+        match self {
+            DrawCommand::ShaderMask { child, .. } => {
+                child.apply_transform(additional);
+            }
+            DrawCommand::BackdropFilter { child, .. } => {
+                if let Some(child) = child.as_mut() {
+                    child.apply_transform(additional);
+                }
+            }
+            _ => {}
+        }
     }
 }

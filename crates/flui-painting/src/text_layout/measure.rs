@@ -63,6 +63,11 @@ pub fn measure_text(
     max_width: Option<f32>,
     line_height: Option<f32>,
 ) -> TextLayoutResult {
+    debug_assert!(
+        font_size > 0.0 && font_size.is_finite(),
+        "measure_text font_size must be positive and finite, got {font_size}"
+    );
+
     let mut font_system = font_system().lock();
 
     let line_height = line_height.unwrap_or(font_size * 1.2);

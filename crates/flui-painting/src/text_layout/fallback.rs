@@ -45,6 +45,11 @@ impl TextLayout {
         line_height: Option<f32>,
         direction: TextDirection,
     ) -> Self {
+        debug_assert!(
+            font_size > 0.0 && font_size.is_finite(),
+            "TextLayout::new font_size must be positive and finite, got {font_size}"
+        );
+
         let line_height = line_height.unwrap_or(font_size * 1.2);
         let char_count = text.chars().count();
         let estimated_width = char_count as f32 * font_size * 0.5;
@@ -196,6 +201,11 @@ pub fn measure_text(
     max_width: Option<f32>,
     _line_height: Option<f32>,
 ) -> TextLayoutResult {
+    debug_assert!(
+        font_size > 0.0 && font_size.is_finite(),
+        "measure_text font_size must be positive and finite, got {font_size}"
+    );
+
     let char_count = text.chars().count();
     let estimated_width = char_count as f32 * font_size * 0.5;
     let line_height = font_size * 1.2;

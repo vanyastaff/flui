@@ -16,6 +16,12 @@
 //!   is the load-bearing one for `flui-layer::Layer::Picture`
 //!   retained-layer caching.
 //!
+//! Nested wrappers (`Arc<Box<DisplayList>>`, `Box<Arc<DisplayList>>`,
+//! `Rc<...>`) are *not* in the impl set. Callers that need a doubly
+//! wrapped display list should `.as_ref()` down to the underlying
+//! `DisplayList` (or to one of the four supported wrappers) before
+//! invoking `DisplayListCore` / `DisplayListExt` methods.
+//!
 //! Sealing prevents external `impl DisplayListCore for MyType` while
 //! preserving the ability to add methods to `DisplayListExt` without
 //! breaking changes.

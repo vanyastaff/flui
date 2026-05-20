@@ -129,3 +129,86 @@ fn test_canvas_finish_clean_after_balanced_save_restore() {
     let display_list = canvas.finish();
     assert_eq!(display_list.len(), 0);
 }
+
+/// `Canvas::reset()` must clear commands, transform, clip stack, and
+/// save stack back to a fresh-canvas state.
+#[test]
+fn test_canvas_reset_returns_to_fresh_state() {
+    let mut canvas = Canvas::new();
+    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(10.0), px(10.0));
+    canvas.draw_rect(rect, &Paint::fill(Color::RED));
+    canvas.save();
+    canvas.translate(50.0, 50.0);
+    canvas.save();
+    assert!(!canvas.is_empty());
+    assert_eq!(canvas.save_count(), 3);
+
+    canvas.reset();
+
+    assert!(canvas.is_empty());
+    // After reset, save_count is the implicit 1 of a fresh canvas.
+    assert_eq!(canvas.save_count(), 1);
+}
+
+/// `Canvas::clear_commands()` must drop recorded commands but preserve
+/// the save stack and current transform.
+#[test]
+fn test_canvas_clear_commands_preserves_state() {
+    let mut canvas = Canvas::new();
+    canvas.save();
+    canvas.translate(25.0, 25.0);
+    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(10.0), px(10.0));
+    canvas.draw_rect(rect, &Paint::fill(Color::BLUE));
+    assert_eq!(canvas.display_list().len(), 1);
+    let before_count = canvas.save_count();
+
+    canvas.clear_commands();
+
+    assert_eq!(canvas.display_list().len(), 0);
+    // State (save stack, transform) survives `clear_commands`.
+    assert_eq!(canvas.save_count(), before_count);
+
+    // Pop the save we still have outstanding so finish() does not
+    // trip the unrestored-save debug_assert.
+    canvas.restore();
+    let dl = canvas.finish();
+    assert_eq!(dl.len(), 0);
+}
+
+/// `Canvas::add_hit_region` must route through to the underlying
+/// `DisplayList` so the region surfaces in `hit_regions()` after
+/// finish.
+#[test]
+fn test_canvas_add_hit_region_round_trips_through_finish() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use flui_painting::{HitRegion, HitRegionHandler};
+
+    let counter = Arc::new(AtomicUsize::new(0));
+    let counter_clone = counter.clone();
+    let handler: HitRegionHandler = Arc::new(move |_evt| {
+        counter_clone.fetch_add(1, Ordering::Relaxed);
+    });
+
+    let mut canvas = Canvas::new();
+    let bounds = Rect::from_ltrb(px(10.0), px(10.0), px(50.0), px(50.0));
+    canvas.add_hit_region(HitRegion::new(bounds, handler));
+
+    let dl = canvas.finish();
+
+    assert_eq!(dl.hit_regions().len(), 1);
+    assert!(
+        dl.hit_regions()[0].contains(Point::new(px(20.0), px(20.0))),
+        "hit region bounds must round-trip through finish()"
+    );
+    // The handler is the same `Arc<dyn Fn>` we registered; invoke it
+    // to confirm it survived the round trip.
+    use flui_painting::display_list::{PointerEvent, PointerEventKind};
+    (dl.hit_regions()[0].handler)(&PointerEvent::new(
+        PointerEventKind::Down,
+        flui_types::geometry::Offset::new(px(20.0), px(20.0)),
+        0,
+    ));
+    assert_eq!(counter.load(Ordering::Relaxed), 1);
+}

@@ -344,11 +344,29 @@ impl Canvas {
     ///
     /// Replays all commands from the `DisplayList`. Useful for caching
     /// and reusing drawing commands.
+    ///
+    /// # Performance
+    ///
+    /// This always clones `picture`'s command vector (`O(N)`), even
+    /// when `self` is empty. The zero-copy path is
+    /// [`Self::extend_from`], which takes the source `Canvas` by
+    /// value and swaps the vectors when `self` is empty (`O(1)`).
+    /// Prefer `extend_from` when you control the source canvas;
+    /// `draw_picture` is the right choice when the same `DisplayList`
+    /// is replayed multiple times.
     pub fn draw_picture(&mut self, picture: &DisplayList) {
         self.display_list.append(picture.clone());
     }
 
     /// Draws multiple sprites from a texture atlas.
+    ///
+    /// `sprites[i]` is drawn under `transforms[i]`; if `colors` is
+    /// `Some`, `colors[i]` tints the i-th sprite. The renderer
+    /// (`flui-engine`) walks these vectors with `zip`, which silently
+    /// truncates if lengths differ. A debug assertion catches the
+    /// shape mismatch up front during tests; the release path falls
+    /// through to `zip`'s truncation (cheaper than runtime checking
+    /// in the hot path).
     pub fn draw_atlas(
         &mut self,
         image: Image,
@@ -358,6 +376,19 @@ impl Canvas {
         blend_mode: BlendMode,
         paint: Option<&Paint>,
     ) {
+        debug_assert_eq!(
+            sprites.len(),
+            transforms.len(),
+            "Canvas::draw_atlas sprites and transforms length mismatch"
+        );
+        if let Some(ref c) = colors {
+            debug_assert_eq!(
+                sprites.len(),
+                c.len(),
+                "Canvas::draw_atlas sprites and colors length mismatch"
+            );
+        }
+
         self.display_list.push(DrawCommand::DrawAtlas {
             image,
             sprites,

@@ -38,6 +38,7 @@ use crate::display_list::{
 /// the command.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub enum DrawCommand {
     // === Clipping Commands ===
     /// Clip to a rectangle.

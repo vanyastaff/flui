@@ -124,6 +124,17 @@ impl Canvas {
     /// layer is composited back using the specified paint settings
     /// (opacity, blend mode, color filter, etc.).
     ///
+    /// # Paint validation
+    ///
+    /// This method does *not* clamp `paint.color.alpha_f32()` into
+    /// `[0.0, 1.0]` — the caller is expected to hand in a validated
+    /// `Paint`. Use [`Self::save_layer_opacity`] (which performs
+    /// `opacity.clamp(0.0, 1.0)` before forwarding) if your opacity
+    /// value comes from untrusted input. Passing an out-of-range
+    /// alpha here lets the value reach the GPU backend, which may
+    /// over-saturate or produce undefined blend behaviour depending
+    /// on the wgpu target.
+    ///
     /// # Performance
     ///
     /// `save_layer` is relatively expensive because it:

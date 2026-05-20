@@ -210,17 +210,25 @@ impl ImageCache {
 
     /// Evicts images if over limits.
     fn evict_if_needed(&self) {
+        const MAX_EVICTION_ITERATIONS: usize = 1000;
+
         let max_images = self.max_images.load(Ordering::Relaxed);
         let max_bytes = self.max_size_bytes.load(Ordering::Relaxed);
 
         // Simple LRU-like eviction: remove oldest entries
-        // In a real implementation, we'd track access time
-        loop {
+        // In a real implementation, we'd track access time.
+        //
+        // The exit predicate is racy against concurrent `put` calls on
+        // other threads: if a parallel inserter keeps pace with our
+        // eviction, the loop will never observe count/size under the
+        // limit. Cap the iteration count to guarantee forward progress
+        // and warn so the racy state is observable in logs.
+        for _ in 0..MAX_EVICTION_ITERATIONS {
             let count = self.cache.read().len();
             let size = self.current_size_bytes.load(Ordering::Relaxed);
 
             if count <= max_images && size <= max_bytes {
-                break;
+                return;
             }
 
             // Remove first entry (simple eviction strategy)
@@ -232,9 +240,14 @@ impl ImageCache {
             if let Some(key) = key_to_remove {
                 self.evict(&key);
             } else {
-                break;
+                return;
             }
         }
+
+        tracing::warn!(
+            cap = MAX_EVICTION_ITERATIONS,
+            "ImageCache::evict_if_needed hit iteration cap; concurrent inserts may be outpacing eviction"
+        );
     }
 }
 
@@ -276,9 +289,19 @@ impl SystemFontsNotifier {
     }
 
     /// Notifies all listeners that fonts have changed.
+    ///
+    /// Listeners are snapshotted into a local `Vec` (cloning the
+    /// `Arc<dyn Fn>`s) before the read lock is released and the
+    /// callbacks are invoked. Without this, a listener that calls
+    /// [`Self::add_listener`] or [`Self::remove_listener`] reentrantly
+    /// from inside its own body would deadlock against the read guard
+    /// we still held here.
     pub fn notify_listeners(&self) {
-        let listeners = self.listeners.read();
-        for listener in listeners.iter() {
+        let snapshot: Vec<Arc<dyn Fn() + Send + Sync>> = {
+            let listeners = self.listeners.read();
+            listeners.iter().cloned().collect()
+        };
+        for listener in &snapshot {
             listener();
         }
     }

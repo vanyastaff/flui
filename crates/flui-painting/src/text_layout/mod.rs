@@ -27,13 +27,13 @@ use flui_types::{
 };
 
 #[cfg(feature = "text")]
-pub mod detect;
+pub(crate) mod detect;
 #[cfg(not(feature = "text"))]
-pub mod fallback;
+pub(crate) mod fallback;
 #[cfg(feature = "text")]
-pub mod layout;
+pub(crate) mod layout;
 #[cfg(feature = "text")]
-pub mod measure;
+pub(crate) mod measure;
 
 #[cfg(feature = "text")]
 pub use detect::detect_text_direction;
@@ -122,4 +122,3 @@ impl LineInfo {
         self.len() == 0
     }
 }
-

@@ -256,7 +256,18 @@ impl Canvas {
     }
 
     /// Draws a debug grid overlay.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `spacing` is non-positive (`<= 0.0`), NaN, or
+    /// `INFINITY` — otherwise the `while x += spacing` loops below
+    /// run forever (or step by zero).
     pub fn debug_grid(&mut self, bounds: Rect<Pixels>, spacing: f32, color: Color) {
+        assert!(
+            spacing > 0.0 && spacing.is_finite(),
+            "Canvas::debug_grid spacing must be positive and finite, got {spacing}"
+        );
+
         let paint = Paint::stroke(color, 0.5);
 
         let mut x = bounds.left();

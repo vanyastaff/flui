@@ -64,6 +64,25 @@ impl Canvas {
     ///
     /// Used by layer caching (RepaintBoundary) to replay cached
     /// drawing commands at a specified offset.
+    ///
+    /// # Limitation
+    ///
+    /// The current `save() / translate(offset) / append() / restore()`
+    /// dance only affects *new* commands recorded between save and
+    /// restore. The appended `DisplayList`'s commands already carry
+    /// their original transforms baked in at recording time (see
+    /// [`crate::display_list::DisplayList::append`], which performs a
+    /// `mem::swap` or `Vec::append` without rewriting the per-command
+    /// transform fields). As a result, the `offset` argument is
+    /// silently dropped for the appended commands.
+    ///
+    /// Callers that need the offset to actually shift the cached
+    /// drawing must first clone the display list and rewrite the
+    /// transforms in place via
+    /// [`crate::display_list::DisplayList::apply_transform`] with a
+    /// translation matrix matching `offset`, then call
+    /// [`Self::append_display_list`] (or [`Self::extend_from`] from a
+    /// canvas built around it).
     pub fn append_display_list_at_offset(
         &mut self,
         display_list: &DisplayList,

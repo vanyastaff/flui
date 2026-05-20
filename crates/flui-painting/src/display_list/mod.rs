@@ -181,6 +181,17 @@ impl DisplayList {
 
     /// Filters commands, keeping only those that satisfy the
     /// predicate.
+    ///
+    /// # Limitation
+    ///
+    /// `hit_regions` are cloned wholesale onto the result, but the
+    /// commands they were registered against may have been filtered
+    /// out. Regions are tied to their original drawing commands by
+    /// bounds (not by a 1:1 index into `commands`), so we cannot
+    /// safely drop "orphaned" regions without re-running the predicate
+    /// against region bounds — and the predicate operates on
+    /// `DrawCommand`, not `HitRegion`. Callers that need region
+    /// consistency should rebuild hit regions after filtering.
     #[must_use = "filter returns a new DisplayList and does not modify the original"]
     pub fn filter<F>(&self, predicate: F) -> Self
     where
@@ -203,6 +214,15 @@ impl DisplayList {
     }
 
     /// Maps each command through a function.
+    ///
+    /// # Limitation
+    ///
+    /// `hit_regions` are cloned through unchanged, even though `f`
+    /// may rewrite the underlying command bounds. Regions are tied to
+    /// commands by bounds (not by a 1:1 index), so a mapping that
+    /// translates commands won't translate their associated hit
+    /// regions. Callers that mutate command geometry should rebuild
+    /// the regions after mapping.
     #[must_use = "map returns a new DisplayList and does not modify the original"]
     pub fn map<F>(&self, f: F) -> Self
     where

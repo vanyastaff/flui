@@ -22,6 +22,10 @@ impl TextPainter {
     /// Panics if `text` or `text_direction` is not set.
     #[allow(clippy::expect_used)] // Documented precondition: text and text_direction must be set
     pub fn layout(&mut self, min_width: f32, max_width: f32) {
+        // NaN is forbidden, but `+INFINITY` is the documented "no max
+        // width" sentinel — `compute_paint_offset` and the cosmic-text
+        // path below detect `!is_finite()` and skip alignment shifts /
+        // width clamping. Do not tighten this to `is_finite()`.
         assert!(
             !max_width.is_nan() && !min_width.is_nan(),
             "Width constraints must not be NaN"

@@ -122,15 +122,19 @@ impl TextPainter {
     /// called.
     #[allow(clippy::expect_used)] // Documented precondition: layout() must be called first, text must be set
     pub fn paint(&self, canvas: &mut Canvas, offset: Offset<Pixels>) {
-        let cache = self
-            .layout_cache
-            .as_ref()
-            .expect("layout() must be called before paint()");
-
+        // Check `text` first: it is the *root-cause* precondition.
+        // If both `text` and `layout_cache` are unset, "text must be
+        // set" is the actionable message — the cache only exists
+        // because `layout()` ran, and `layout()` requires `text`.
         let text = self
             .text
             .as_ref()
             .expect("TextPainter.text must be set before paint");
+
+        let cache = self
+            .layout_cache
+            .as_ref()
+            .expect("layout() must be called before paint()");
 
         let paint_offset = offset + cache.paint_offset;
 

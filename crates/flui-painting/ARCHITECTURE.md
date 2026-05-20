@@ -31,7 +31,7 @@ The Flutter `Canvas` API is split between `dart:ui` (the engine binding) and `pa
 | `dart:ui` `Picture` (immutable recording) | [`src/lib.rs`](src/lib.rs) `pub type Picture = DisplayList` | Flutter-parity alias. |
 | `dart:ui` `Canvas.drawX` underlying engine command vocabulary | [`src/display_list/command.rs`](src/display_list/command.rs) -- `DrawCommand` enum (29 variants) | Closed enum (no `Box<dyn Drawable>` plugin trait). Same shape as `flui-layer::Layer` enum. |
 | `dart:ui` engine command dispatch | [`src/display_list/command_ops.rs`](src/display_list/command_ops.rs) -- `with_opacity`, `bounds`, `transform`, `paint`, `kind`, `is_*`, `apply_transform` | ~1,200 LOC of per-variant pattern matches. |
-| Sealed-extension-trait pattern (FLUI-side; no Flutter analog) | [`src/display_list/sealed.rs`](src/display_list/sealed.rs) -- `DisplayListCore` + `DisplayListExt` + 4 blanket impls | Cross-crate seam consumed by `flui-layer::Layer::Picture` (Arc-shared retained layers) and `flui-engine`'s wgpu backend. |
+| Sealed-extension-trait pattern (FLUI-side; no Flutter analog) | [`src/display_list/sealed.rs`](src/display_list/sealed.rs) -- `DisplayListCore` + `DisplayListExt` + 4 blanket impls | Cross-crate seam consumed by `flui-layer::Layer::Picture` (stores `Picture = DisplayList` by value today; the `Arc<DisplayList>` blanket impl is a forward-compatible shape for future retained-layer sharing) and `flui-engine`'s wgpu backend. |
 | `DisplayListStats` (FLUI invention for command-count stats) | [`src/display_list/stats.rs`](src/display_list/stats.rs) | |
 | Flutter `dart:ui` `PointerEvent` -- minimal subset | [`src/display_list/hit_region.rs`](src/display_list/hit_region.rs) | Hit-region recording; full event system in `flui-interaction`. |
 | `painting/clip.dart` `ClipContext` abstract class | [`src/clip_context.rs`](src/clip_context.rs) | Cross-crate seam (1 prod impl: `CanvasContext` in `flui-rendering`). 3 default `clip_*_and_paint` methods. |
@@ -67,11 +67,11 @@ This section records places where the Rust shape diverges from the Dart/Skia sha
 
 **Rule:** Verdict §12 rejected design #10; precedent: `flui-rendering`'s extension-trait split (commit `d0e53c63`).
 
-**Choice:** `DisplayListCore` is sealed via the `private::Sealed` marker trait; `DisplayListExt` is a blanket-implemented superset of helpers (filter iterators, count stats). Four blanket impls: `DisplayList`, `Arc<DisplayList>`, `Box<DisplayList>`, `&DisplayList`. The `Arc<DisplayList>` impl is load-bearing for `flui-layer::Layer::Picture` retained-layer caching.
+**Choice:** `DisplayListCore` is sealed via the `private::Sealed` marker trait; `DisplayListExt` is a blanket-implemented superset of helpers (filter iterators, count stats). Four blanket impls: `DisplayList`, `Arc<DisplayList>`, `Box<DisplayList>`, `&DisplayList`. `flui-layer::Layer::Picture` currently stores `Picture = DisplayList` by value (see [`crates/flui-layer/src/layer/picture.rs`](../flui-layer/src/layer/picture.rs)); the `Arc<DisplayList>` blanket impl is kept as a forward-compatible shape for retained-layer sharing across frames.
 
 **Alternatives:**
-- Demote `DisplayListCore` to `pub(crate)` and expose only `DisplayList` directly -- rejected. The `Arc<DisplayList>` blanket impl is consumed by `flui-engine`'s wgpu backend via `display_list.commands()` on the `Arc`; demoting would force the engine into explicit `Arc::deref` at every call site.
-- Replace the trait pair with inherent methods on `DisplayList` -- rejected. The blanket-on-smart-pointer pattern is exactly what makes `Arc<DisplayList>` ergonomic for retained layers; inherent methods would not generalise.
+- Demote `DisplayListCore` to `pub(crate)` and expose only `DisplayList` directly -- rejected. The trait is the cross-crate seam that lets `flui-engine`'s wgpu backend accept any of the four supported wrappers via `display_list.commands()`; demoting would force callers into explicit `.deref()` at every call site.
+- Replace the trait pair with inherent methods on `DisplayList` -- rejected. The blanket-on-smart-pointer pattern is what makes `Arc<DisplayList>` ergonomic for the eventual retained-layer use case; inherent methods would not generalise.
 
 **Accepted trade-off:** External callers must import `DisplayListCore` (or use the prelude) to access `.commands()` / `.bounds()` / `.len()` on `DisplayList`. The flui-rendering chain hit this friction and resolved it via prelude import; flui-engine's wgpu backend does the same.
 
@@ -137,7 +137,7 @@ The crate is `#[forbid(unsafe_code)]` at [`src/lib.rs:151`](src/lib.rs) before a
 |---|---|---|---|
 | `Canvas` ([`src/canvas/mod.rs`](src/canvas/mod.rs)) | Owned struct | Auto-`Send` + auto-`!Sync` | No interior mutability on Canvas itself. Recording is single-threaded by design. |
 | `DisplayList` ([`src/display_list/mod.rs`](src/display_list/mod.rs)) | Owned struct | Auto-`Send + Sync` | Consumed-once value; immutable from public API after `Canvas::finish()`. |
-| `Arc<DisplayList>` (in `flui-layer::Layer::Picture`) | `Arc<>` wrap | Send + Sync via `Arc` | Used for retained-layer caching across frames. Read-only via `DisplayListCore`. |
+| `Arc<DisplayList>` blanket impl ([`src/display_list/sealed.rs`](src/display_list/sealed.rs)) | `Arc<>` wrap | Send + Sync via `Arc` | Forward-compatible blanket impl for future retained-layer caching across frames. `flui-layer::Layer::Picture` stores `Picture = DisplayList` by value today. Read-only via `DisplayListCore`. |
 | `HitRegionHandler` = `Arc<dyn Fn(&PointerEvent) + Send + Sync>` ([`src/display_list/hit_region.rs`](src/display_list/hit_region.rs)) | `Arc<dyn Fn>` | Per-hit-region heap allocation | Recording-time only; off per-command hot path. |
 | `Paint`, `Path`, `Shader`, `Image` etc. (re-exported from `flui_types::painting`) | Owned values | Auto-`Send + Sync` | Validated at construction in `flui-types`. |
 | `binding::ImageCache::cache` ([`src/binding.rs`](src/binding.rs)) | `RwLock<HashMap<String, CachedImage>>` | Shared infrastructure | Off per-command hot path per [`docs/PORT.md`](../../docs/PORT.md) lock-decision table. |
@@ -305,7 +305,9 @@ Concrete cleanups visible from `flui-painting` outward, sized for an `/aif-imple
 
 **Files:** New `src/display_list/dispatch.rs`; modifies `command_ops.rs`.
 
-**Named blockers:** None -- this is a pure cleanup. Filed as Outstanding because the chain's primary scope was structural split, not in-file refactoring. The 1,200 LOC of pattern matches are structurally clean.
+**Named blockers:**
+- The macro must mirror `DrawCommand`'s per-variant payload shapes 1:1, but each of the 29 variants has a distinct named-field set (`rect+paint+transform` vs. `path+paint+transform` vs. `child+filter+bounds+blend_mode+transform`). A bare `macro_rules!` arm cannot synthesise the field tokens from a single variant name, so the choices are: (a) hand-list every variant's payload tuple at the macro invocation site (defeats the LOC win) or (b) introduce the [`paste`](https://crates.io/crates/paste) crate as a workspace dependency so the macro can stamp out `transform_mut`/`transform`/`apply_transform` arms from the variant name alone.
+- Pick the `paste` adoption path. Coordinate workspace-wide: `flui-layer`'s Step 4 macro and `flui-engine`'s dispatch table would benefit from the same dep, so dep introduction should be a workspace-level decision rather than a per-crate one.
 
 **Reference:** `flui-layer` Step 4 commit `366f6c10`.
 
@@ -332,13 +334,11 @@ Concrete cleanups visible from `flui-painting` outward, sized for an `/aif-imple
 **Named blockers:**
 - CI infra extension.
 
-### "Doctest sweep" (if needed)
+### "Doctest sweep" (completed during code-review fixup pass 2)
 
 **Goal:** Verify all ~20 doc examples in the post-split files compile cleanly.
 
-**Files:** All `src/canvas/*.rs`, `src/display_list/*.rs`, `src/text_layout/*.rs`, `src/text_painter/*.rs`.
-
-**Named blockers:** None -- this is mechanical verification work. Filed as Outstanding because the chain did not run `cargo test -p flui-painting --doc` as a verification gate (lib + integration tests suffice for the chain's scope).
+**Status:** Completed during code-review fixup pass 2. `cargo test -p flui-painting --doc` ran clean: 19 doctests detected, 18 marked `rust,ignore` by design (they show idiomatic usage that depends on `prelude::*` imports we deliberately keep out of doc-test isolation), 1 executable doctest passed, 0 failures.
 
 ---
 
@@ -346,6 +346,7 @@ Concrete cleanups visible from `flui-painting` outward, sized for an `/aif-imple
 
 - **Net unsafe delta for this chain: 0.** The crate is and stays `#[forbid(unsafe_code)]` at [`src/lib.rs:151`](src/lib.rs).
 - **Net LOC delta in `src/` production code:** approximately -2,000 LOC across the 4 god-module splits + dead-code deletions (canvas.rs 3305 → canvas/ 2187; display_list.rs 2434 → display_list/ 2016; text_layout.rs 1243 → text_layout/ 1161; text_painter.rs 990 → text_painter/ 873; binding.rs trimmed; WarmUpCanvas + ShaderWarmUp + DefaultShaderWarmUp deletions). New `tests/` integration files add ~580 LOC (4 files extracted from inline test blocks).
+- **Post-fixup test counts** (after code-review fixup pass 2): `cargo test -p flui-painting --lib` → 23 passing; `cargo test -p flui-painting --tests` → 141 passing across 13 integration files with default features; `cargo test --no-default-features -p flui-painting --tests` → 75 passing (cosmic-text-shape-dependent tests cfg-gated out, fallback tests cfg-gated in). Combined lib+tests under default features: 164; combined lib+tests under no-default features: 93.
 - **`port-check.sh` re-confirmed in Mythos chain Step 13** to cover the post-split `crates/flui-painting/src/` subdirectories (Triggers 1, 2, 3).
 - **Companion docs preserved.** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) + [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) + [`docs/README.md`](docs/README.md) stay alongside this templated file per the [`docs/PORT.md`](../../docs/PORT.md) graft instructions.
 - **CLAUDE.md drift** noted in `## Friction log`. Not addressed by this chain.
