@@ -517,6 +517,40 @@ impl GestureRecognizer for DragGestureRecognizer {
     }
 }
 
+// =============================================================================
+// Canonical trait hierarchy adoption (U18)
+// =============================================================================
+//
+// Flutter parity: `monodrag.dart:81 sealed class DragGestureRecognizer
+// extends OneSequenceGestureRecognizer`. Drag is OneSequence (NOT
+// PrimaryPointer) — it tracks a single sequence but doesn't have the
+// pre-acceptance deadline semantics of PrimaryPointer recognizers.
+
+impl crate::recognizers::OneSequenceGestureRecognizer for DragGestureRecognizer {
+    fn tracked_pointers(&self) -> Vec<PointerId> {
+        self.state
+            .primary_pointer()
+            .map(|p| vec![p])
+            .unwrap_or_default()
+    }
+
+    fn resolve_pointer(&self, _pointer: PointerId, disposition: crate::arena::GestureDisposition) {
+        match disposition {
+            crate::arena::GestureDisposition::Accepted => {
+                // No-op — Drag callbacks fire from event handlers, not arena
+                // resolution. accept_gesture below mirrors.
+            }
+            crate::arena::GestureDisposition::Rejected => {
+                self.state.reject();
+            }
+        }
+    }
+
+    fn stop_tracking_pointer(&self, _pointer: PointerId) {
+        self.state.stop_tracking();
+    }
+}
+
 impl GestureArenaMember for DragGestureRecognizer {
     fn accept_gesture(&self, _pointer: PointerId) {
         // We won the arena - gesture is accepted

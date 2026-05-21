@@ -624,6 +624,42 @@ impl GestureRecognizer for ScaleGestureRecognizer {
     }
 }
 
+// =============================================================================
+// Canonical trait hierarchy adoption (U19)
+// =============================================================================
+//
+// Flutter parity: `scale.dart:345 ScaleGestureRecognizer extends
+// OneSequenceGestureRecognizer`. Scale tracks multiple pointers (2+
+// for pinch) but resolves as a single sequence in the arena.
+
+impl crate::recognizers::OneSequenceGestureRecognizer for ScaleGestureRecognizer {
+    fn tracked_pointers(&self) -> Vec<PointerId> {
+        // Scale's RecognizerBase only tracks the primary pointer; richer
+        // multi-pointer tracking lives on ScaleGestureRecognizer's own
+        // internal state. Return what RecognizerBase knows for the canonical
+        // single-pointer arena protocol.
+        self.state
+            .primary_pointer()
+            .map(|p| vec![p])
+            .unwrap_or_default()
+    }
+
+    fn resolve_pointer(&self, _pointer: PointerId, disposition: crate::arena::GestureDisposition) {
+        match disposition {
+            crate::arena::GestureDisposition::Accepted => {
+                // No-op — Scale callbacks fire from event handlers.
+            }
+            crate::arena::GestureDisposition::Rejected => {
+                self.state.reject();
+            }
+        }
+    }
+
+    fn stop_tracking_pointer(&self, _pointer: PointerId) {
+        self.state.stop_tracking();
+    }
+}
+
 impl GestureArenaMember for ScaleGestureRecognizer {
     fn accept_gesture(&self, _pointer: PointerId) {
         // We won the arena - gesture is accepted
