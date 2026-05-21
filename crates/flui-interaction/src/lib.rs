@@ -154,9 +154,10 @@ pub mod timer;
 pub mod processing;
 
 // ============================================================================
-// Testing utilities
+// Testing utilities — gated behind `testing` Cargo feature (U29)
 // ============================================================================
 
+#[cfg(any(test, feature = "testing"))]
 pub mod testing;
 
 // ============================================================================
@@ -232,8 +233,9 @@ pub use settings::{
 pub use signal_resolver::{PointerSignalResolver, SignalPriority};
 pub use team::{GestureArenaTeam, TeamEntry};
 // ============================================================================
-// Re-exports: Testing Utilities
+// Re-exports: Testing Utilities (U29 feature-gated)
 // ============================================================================
+#[cfg(any(test, feature = "testing"))]
 pub use testing::{
     GestureBuilder, GesturePlayer, GestureRecorder, GestureRecording, ModifiersBuilder,
     RecordedEvent, RecordedEventType,
@@ -279,7 +281,8 @@ pub mod prelude {
     };
     // Extension traits for custom types
     pub use crate::sealed::{CustomGestureRecognizer, CustomHitTestable};
-    // Testing
+    // Testing (U29 feature-gated)
+    #[cfg(any(test, feature = "testing"))]
     pub use crate::testing::{GestureBuilder, GesturePlayer, GestureRecorder};
     // Traits
     pub use crate::traits::{
