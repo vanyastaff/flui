@@ -692,8 +692,14 @@ impl CanvasContext {
 // ClipContext Implementation for CanvasContext
 // ============================================================================
 
-impl super::ClipContext for CanvasContext {
+impl flui_painting::ClipContext for CanvasContext {
     fn canvas(&mut self) -> &mut Canvas {
+        // Inherent `CanvasContext::canvas` shadows the trait method here
+        // (Rust method resolution prefers inherent methods over trait
+        // methods at the same name + signature). The inherent has the
+        // side-effecting `start_recording()` call we need; the trait
+        // method is just the exposure point for `flui_painting::ClipContext`
+        // default-method bodies.
         self.canvas()
     }
 }
