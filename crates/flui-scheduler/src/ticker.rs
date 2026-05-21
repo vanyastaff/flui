@@ -73,20 +73,38 @@ fn next_ticker_id() -> TickerId {
 /// Ticker callback - receives elapsed time in seconds
 pub type TickerCallback = Box<dyn FnMut(f64) + Send>;
 
-/// Ticker provider trait
+/// Ticker provider trait — Flutter-faithful factory shape.
+///
+/// Flutter parity: [`ticker.dart:248`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart)
+/// `Ticker createTicker(TickerCallback)`. The provider vends an owned
+/// [`Ticker`] preloaded with the caller-supplied callback; the caller drives
+/// state transitions via `start`/`stop`/`mute`/`unmute`/`dispose`.
 ///
 /// This trait allows different parts of the framework to provide ticker
 /// functionality without tight coupling to the scheduler.
 pub trait TickerProvider: Send + Sync {
-    /// Schedule a tick callback for the next frame
+    /// Create a fresh ticker preloaded with the given callback.
     ///
-    /// The callback will be invoked on the next frame. The `f64` parameter
-    /// is reserved for frame timing information but is typically `0.0` since
-    /// individual `Ticker` and `ScheduledTicker` instances track their own
-    /// start times and compute elapsed time internally.
+    /// Returns a ticker in [`TickerState::Idle`]. The caller must call
+    /// `start()` to begin ticking. Auto-scheduling integration with the
+    /// provider's frame loop lands in U15 (ScheduledTicker absorption).
     ///
-    /// This matches Flutter's `TickerProvider` behavior where the provider
-    /// just schedules when ticks occur, not how elapsed time is computed.
+    /// Flutter parity: `ticker.dart:248 Ticker createTicker(TickerCallback)`.
+    fn create_ticker(&self, on_tick: TickerCallback) -> Ticker {
+        let mut ticker = Ticker::new();
+        ticker.set_pending_callback(on_tick);
+        ticker
+    }
+
+    /// Schedule a tick callback for the next frame.
+    ///
+    /// **Deprecated:** prefer [`create_ticker`](Self::create_ticker) (Flutter
+    /// factory shape). Retained for ScheduledTicker compatibility until U15
+    /// absorbs it.
+    ///
+    /// The `f64` parameter is reserved for frame timing information but is
+    /// typically `0.0` since individual ticker instances track their own
+    /// start times.
     fn schedule_tick(&self, callback: Box<dyn FnOnce(f64) + Send>);
 
     /// Schedule a tick with type-safe elapsed time
@@ -215,6 +233,18 @@ impl Ticker {
     #[inline]
     pub fn is_disposed(&self) -> bool {
         self.disposed.load(Ordering::Acquire)
+    }
+
+    /// Pre-load a callback to be used when `start()` is called without
+    /// passing one.
+    ///
+    /// Used by [`TickerProvider::create_ticker`] (Flutter factory shape) to
+    /// vend a ticker preloaded with its tick callback. The callback is
+    /// installed into [`TickerInner::callback`] when [`start`](Self::start) is
+    /// next invoked without a callback argument; explicit `start(callback)`
+    /// overrides any preloaded value.
+    pub(crate) fn set_pending_callback(&mut self, callback: TickerCallback) {
+        self.inner.lock().callback = Some(callback);
     }
 
     /// Dispose of the ticker — idempotent.
