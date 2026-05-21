@@ -74,6 +74,21 @@ pub struct TapGestureRecognizer {
     /// only fires after `BaseTapGestureRecognizer._checkDown` resolves
     /// `_sentTapDown = true` post-arena). Cleared on accept or reject.
     pending_down: Arc<Mutex<Option<TapDetails>>>,
+
+    /// Pending tap-up details captured at handle_event Up; fired by
+    /// handle_tap_up *after* arena resolution confirms acceptance.
+    /// PR #87 review finding — pre-fix code fired on_tap_up + on_tap
+    /// during handle_tap_up unconditionally, but `handle_event::Up` is
+    /// dispatched to every arena member; only the eventual arena winner
+    /// should fire user callbacks.
+    pending_up: Arc<Mutex<Option<TapDetails>>>,
+
+    /// Arena-resolution outcome flag set by `accept_gesture` /
+    /// `reject_gesture`. Read by `handle_tap_up` *after*
+    /// `state.stop_tracking()` returns (which triggers arena.sweep).
+    /// `Some(true)` = won, `Some(false)` = lost, `None` = pending.
+    /// Reset to None on each new add_pointer cycle.
+    accepted: Arc<Mutex<Option<bool>>>,
 }
 
 impl std::fmt::Debug for TapGestureRecognizer {
@@ -110,6 +125,8 @@ impl TapGestureRecognizer {
             gesture_state: Arc::new(Mutex::new(TapState::Ready)),
             settings: Arc::new(Mutex::new(GestureSettings::default())),
             pending_down: Arc::new(Mutex::new(None)),
+            pending_up: Arc::new(Mutex::new(None)),
+            accepted: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -124,6 +141,8 @@ impl TapGestureRecognizer {
             gesture_state: Arc::new(Mutex::new(TapState::Ready)),
             settings: Arc::new(Mutex::new(settings)),
             pending_down: Arc::new(Mutex::new(None)),
+            pending_up: Arc::new(Mutex::new(None)),
+            accepted: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -218,41 +237,45 @@ impl TapGestureRecognizer {
 
     /// Handle tap up event.
     ///
-    /// Per Flutter parity: on Up the recognizer claims victory in the
-    /// arena (fires `on_tap_down` lazily via accept_gesture, then
-    /// `on_tap_up` + `on_tap`). The arena callback path is the canonical
-    /// firing site; this method fires immediately after arena accept
-    /// landing simultaneously via the synchronous arena.resolve.
+    /// PR #87 review-driven restructure: records pending_up, initiates
+    /// arena resolution via `state.stop_tracking()`, then fires user
+    /// callbacks ONLY if arena confirmed acceptance. Eliminates the prior
+    /// assumption that pointer-up implies victory (some competing
+    /// recognizers also receive Up events without winning).
     fn handle_tap_up(&self, position: Offset<Pixels>, kind: PointerType) {
         let current_state = *self.gesture_state.lock();
 
         if current_state == TapState::Down {
-            // Successful tap! Reset state, fire pending tap_down post-arena,
-            // then up + tap callbacks.
             *self.gesture_state.lock() = TapState::Ready;
-
-            // Ensure on_tap_down fires before on_tap_up + on_tap (Flutter
-            // parity — even if arena accept didn't yet fire the pending
-            // down, the Up sequence implies acceptance).
-            self.fire_pending_tap_down();
-
             let details = TapDetails {
                 global_position: position,
                 local_position: position,
                 kind,
             };
+            // Record pending Up — fired only after arena confirms accept.
+            *self.pending_up.lock() = Some(details);
 
-            if let Some(callback) = self.callbacks.lock().on_tap_up.clone() {
-                callback(details.clone());
-            }
-
-            if let Some(callback) = self.callbacks.lock().on_tap.clone() {
-                callback(details);
-            }
-
-            // Accept in arena (resolves synchronously, triggers
-            // GestureArenaMember::accept_gesture on each member).
+            // Trigger arena resolution. This synchronously dispatches to
+            // either `accept_gesture` or `reject_gesture` below, which sets
+            // `self.accepted`.
             self.state.stop_tracking();
+
+            // After arena resolution: fire callbacks if we won.
+            let accepted = self.accepted.lock().unwrap_or(false);
+            if accepted {
+                // Fire on_tap_down first (Flutter ordering), then up + tap.
+                // fire_pending_tap_down takes the pending_down; idempotent.
+                self.fire_pending_tap_down();
+                let Some(up_details) = self.pending_up.lock().take() else {
+                    return;
+                };
+                if let Some(callback) = self.callbacks.lock().on_tap_up.clone() {
+                    callback(up_details.clone());
+                }
+                if let Some(callback) = self.callbacks.lock().on_tap.clone() {
+                    callback(up_details);
+                }
+            }
         }
     }
 
@@ -311,6 +334,11 @@ impl TapGestureRecognizer {
 
 impl GestureRecognizer for TapGestureRecognizer {
     fn add_pointer(&self, pointer: PointerId, position: Offset<Pixels>) {
+        // Reset accepted flag + pending_up for the new sequence (PR #87
+        // review fix — flags from a prior gesture must not bleed into
+        // the new one).
+        *self.accepted.lock() = None;
+        *self.pending_up.lock() = None;
         // Start tracking this pointer
         // Create Arc from self for arena tracking
         let recognizer = Arc::new(self.clone());
@@ -375,16 +403,25 @@ impl GestureRecognizer for TapGestureRecognizer {
 
 impl GestureArenaMember for TapGestureRecognizer {
     fn accept_gesture(&self, _pointer: PointerId) {
-        // We won the arena — fire pending tap_down callback if not yet
-        // dispatched by handle_tap_up. Flutter parity at
-        // tap.dart::_BaseTapGestureRecognizer::acceptGesture.
-        self.fire_pending_tap_down();
+        // PR #87 review fix (P1): do NOT invoke user callbacks here. The
+        // arena holds its internal lock while dispatching accept_gesture
+        // → calling user code from this site is a lock-during-callback
+        // hazard (user callback may re-enter arena, panic, or block).
+        // Instead just record acceptance — the handle_tap_up path (or
+        // dispose path) reads this flag after arena resolve returns.
+        *self.accepted.lock() = Some(true);
     }
 
     fn reject_gesture(&self, _pointer: PointerId) {
-        // We lost the arena — clear pending tap_down (we never won) and
-        // fire on_tap_cancel for the user.
+        // Same lock-during-callback concern as accept_gesture. Record
+        // rejection; let the gesture-up / dispose path fire on_tap_cancel
+        // outside the arena lock.
+        *self.accepted.lock() = Some(false);
         *self.pending_down.lock() = None;
+        *self.pending_up.lock() = None;
+        // Fire on_tap_cancel outside arena lock via the recognizer's
+        // existing cancel handler (which only touches recognizer-owned
+        // locks, not arena's).
         if let Some(pos) = self.state.initial_position() {
             self.handle_tap_cancel(pos, PointerType::Touch);
         }
