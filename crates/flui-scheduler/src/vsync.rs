@@ -382,14 +382,9 @@ impl VsyncScheduler {
         let target = self.frame_interval_us.value();
         let actual = inner.stats.avg_interval.value();
 
-        // Within 5% tolerance — absolute difference for u64 monotonic durations.
+        // Within 5% tolerance.
         let tolerance = target / 20;
-        let diff = if actual > target {
-            actual - target
-        } else {
-            target - actual
-        };
-        diff <= tolerance
+        actual.abs_diff(target) <= tolerance
     }
 }
 
