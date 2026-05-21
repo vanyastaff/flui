@@ -80,7 +80,7 @@ fn sdRoundedSuperellipse(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
     let q = abs(p) - b + vec2<f32>(r3);
 
     if (q.x < 0.0 && q.y < 0.0) {
-        return max(q.x, q.y);
+        return max(q.x, q.y) - r3;
     }
 
     if (r3 <= 0.0) {

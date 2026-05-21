@@ -75,9 +75,13 @@ fn sdRoundedSuperellipse(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
     // inner (non-rounded) rect.
     let q = abs(p) - b + vec2<f32>(r3);
 
-    // Inner-rect region: both q components negative → axis-aligned rect SDF.
+    // Inner-rect region: both q components negative. Reduces to the
+    // standard rounded-rect interior distance `max(q.x, q.y) - r3` so
+    // the SDF stays continuous at the corner-to-interior boundary
+    // (matches `sdRoundedBox`'s interior branch exactly — curve choice
+    // only differs in the corner region).
     if (q.x < 0.0 && q.y < 0.0) {
-        return max(q.x, q.y);
+        return max(q.x, q.y) - r3;
     }
 
     // Corner region: clamp negatives to zero, normalize by radius, then
