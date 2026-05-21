@@ -309,6 +309,21 @@ pub trait CommandRenderer {
         transform: &Matrix4,
     );
 
+    /// Generate (or retrieve from cache) a tessellated path for an
+    /// `RSuperellipse`.
+    ///
+    /// Used by `ClipSuperellipseLayer::render` for the layer-tree
+    /// path-tessellation route. The default implementation freshly
+    /// generates the path every call via the iOS-squircle math
+    /// (`n = 4`, ~64 sample points per corner) and does NOT cache —
+    /// suitable for `DebugBackend` / `MockRenderer` where performance
+    /// is not the concern. The production `Backend` overrides to
+    /// consult its `Painter`-owned `SuperellipsePathCache` so identical
+    /// superellipses across frames reuse the cached tessellation.
+    fn superellipse_path(&mut self, rse: RSuperellipse) -> Path {
+        crate::wgpu::layer_render::generate_superellipse_path(&rse)
+    }
+
     // ===== Viewport Information =====
 
     /// Get the viewport bounds

@@ -324,6 +324,16 @@ pub struct WgpuPainter {
     /// Cache for tessellated path geometry (avoids re-tessellation of identical paths)
     path_cache: super::path_cache::PathCache,
 
+    /// Cache for tessellated superellipse (iOS-squircle) paths.
+    ///
+    /// Mirrors [`PathCache`](super::path_cache::PathCache) ownership: per-
+    /// Painter, single-threaded, with `max_entries` + frame-based eviction.
+    /// Replaces the previously-unbounded `thread_local!` cache in
+    /// `layer_render.rs`. Consulted by `Backend::superellipse_path`
+    /// override; the trait default for non-Painter backends regenerates
+    /// without caching.
+    superellipse_cache: super::superellipse_cache::SuperellipsePathCache,
+
     // ===== Text Rendering =====
     /// Glyphon-based text renderer
     text_renderer: TextRenderer,
@@ -893,6 +903,7 @@ impl WgpuPainter {
             external_texture_registry,
             tessellator,
             path_cache: super::path_cache::PathCache::new(512),
+            superellipse_cache: super::superellipse_cache::SuperellipsePathCache::new(256),
             text_renderer,
             transform_stack,
             current_transform,
@@ -997,8 +1008,9 @@ impl WgpuPainter {
         view: &wgpu::TextureView,
         encoder: &mut wgpu::CommandEncoder,
     ) -> crate::error::RenderResult<()> {
-        // Advance path cache frame counter and evict stale entries
+        // Advance path cache frame counters and evict stale entries
         self.path_cache.advance_frame();
+        self.superellipse_cache.advance_frame();
 
         // Log rendering stats
         let text_count = self.text_renderer.text_count();
