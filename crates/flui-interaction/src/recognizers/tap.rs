@@ -68,6 +68,12 @@ pub struct TapGestureRecognizer {
 
     /// Gesture settings (device-specific tolerances)
     settings: Arc<Mutex<GestureSettings>>,
+
+    /// Pending tap-down details captured at add_pointer, fired on
+    /// arena accept (Flutter parity at tap.dart — `on_tap_down` callback
+    /// only fires after `BaseTapGestureRecognizer._checkDown` resolves
+    /// `_sentTapDown = true` post-arena). Cleared on accept or reject.
+    pending_down: Arc<Mutex<Option<TapDetails>>>,
 }
 
 impl std::fmt::Debug for TapGestureRecognizer {
@@ -103,6 +109,7 @@ impl TapGestureRecognizer {
             callbacks: Arc::new(Mutex::new(TapCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(TapState::Ready)),
             settings: Arc::new(Mutex::new(GestureSettings::default())),
+            pending_down: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -116,6 +123,7 @@ impl TapGestureRecognizer {
             callbacks: Arc::new(Mutex::new(TapCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(TapState::Ready)),
             settings: Arc::new(Mutex::new(settings)),
+            pending_down: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -182,28 +190,51 @@ impl TapGestureRecognizer {
         self
     }
 
-    /// Handle tap down event
+    /// Handle tap down event — records pending down details + transitions
+    /// state. The `on_tap_down` callback is NOT fired here; per Flutter
+    /// parity at `tap.dart::_BaseTapGestureRecognizer::_checkDown`, the
+    /// callback fires only after arena accept (see [`accept_gesture`]).
     fn handle_tap_down(&self, position: Offset<Pixels>, kind: PointerType) {
         *self.gesture_state.lock() = TapState::Down;
+        *self.pending_down.lock() = Some(TapDetails {
+            global_position: position,
+            local_position: position,
+            kind,
+        });
+    }
 
-        // Call on_tap_down callback
+    /// Fire pending `on_tap_down` callback, if any. Called from
+    /// `accept_gesture` once arena resolves us as the winner. Matches
+    /// Flutter `tap.dart::_checkDown`'s `_sentTapDown` guard — fires
+    /// exactly once per gesture sequence.
+    fn fire_pending_tap_down(&self) {
+        let Some(details) = self.pending_down.lock().take() else {
+            return;
+        };
         if let Some(callback) = self.callbacks.lock().on_tap_down.clone() {
-            let details = TapDetails {
-                global_position: position,
-                local_position: position,
-                kind,
-            };
             callback(details);
         }
     }
 
-    /// Handle tap up event
+    /// Handle tap up event.
+    ///
+    /// Per Flutter parity: on Up the recognizer claims victory in the
+    /// arena (fires `on_tap_down` lazily via accept_gesture, then
+    /// `on_tap_up` + `on_tap`). The arena callback path is the canonical
+    /// firing site; this method fires immediately after arena accept
+    /// landing simultaneously via the synchronous arena.resolve.
     fn handle_tap_up(&self, position: Offset<Pixels>, kind: PointerType) {
         let current_state = *self.gesture_state.lock();
 
         if current_state == TapState::Down {
-            // Successful tap!
+            // Successful tap! Reset state, fire pending tap_down post-arena,
+            // then up + tap callbacks.
             *self.gesture_state.lock() = TapState::Ready;
+
+            // Ensure on_tap_down fires before on_tap_up + on_tap (Flutter
+            // parity — even if arena accept didn't yet fire the pending
+            // down, the Up sequence implies acceptance).
+            self.fire_pending_tap_down();
 
             let details = TapDetails {
                 global_position: position,
@@ -211,18 +242,16 @@ impl TapGestureRecognizer {
                 kind,
             };
 
-            // Call on_tap_up callback
             if let Some(callback) = self.callbacks.lock().on_tap_up.clone() {
                 callback(details.clone());
             }
 
-            // Call on_tap callback
             if let Some(callback) = self.callbacks.lock().on_tap.clone() {
                 callback(details);
             }
 
-            // We won! Accept in arena
-            // Note: Arena resolution happens via GestureArenaMember trait
+            // Accept in arena (resolves synchronously, triggers
+            // GestureArenaMember::accept_gesture on each member).
             self.state.stop_tracking();
         }
     }
@@ -346,12 +375,16 @@ impl GestureRecognizer for TapGestureRecognizer {
 
 impl GestureArenaMember for TapGestureRecognizer {
     fn accept_gesture(&self, _pointer: PointerId) {
-        // We won the arena - gesture is accepted
-        // Callbacks already called in handle_tap_up
+        // We won the arena — fire pending tap_down callback if not yet
+        // dispatched by handle_tap_up. Flutter parity at
+        // tap.dart::_BaseTapGestureRecognizer::acceptGesture.
+        self.fire_pending_tap_down();
     }
 
     fn reject_gesture(&self, _pointer: PointerId) {
-        // We lost the arena - cancel the gesture
+        // We lost the arena — clear pending tap_down (we never won) and
+        // fire on_tap_cancel for the user.
+        *self.pending_down.lock() = None;
         if let Some(pos) = self.state.initial_position() {
             self.handle_tap_cancel(pos, PointerType::Touch);
         }
