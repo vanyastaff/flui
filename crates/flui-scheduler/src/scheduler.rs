@@ -30,7 +30,7 @@
 //! ## Example
 //!
 //! ```rust
-//! use flui_scheduler::{Priority, Scheduler, traits::AnimationPriority};
+//! use flui_scheduler::{Priority, Scheduler};
 //!
 //! let scheduler = Scheduler::new();
 //!
@@ -82,7 +82,6 @@ use crate::{
     id::{CallbackId, IdGenerator},
     task::{Priority, TaskQueue},
     ticker::TickerProvider,
-    traits::PriorityLevel,
     vsync::VsyncScheduler,
 };
 
@@ -854,11 +853,6 @@ impl Scheduler {
         self.task_queue.add(priority, callback);
     }
 
-    /// Add a task with compile-time priority checking
-    pub fn add_task_typed<P: PriorityLevel>(&self, callback: impl FnOnce() + Send + 'static) {
-        self.task_queue.add_typed::<P>(callback);
-    }
-
     /// Get task queue reference
     pub fn task_queue(&self) -> &TaskQueue {
         &self.task_queue
@@ -1535,27 +1529,6 @@ impl BindingBase for Scheduler {
 // Implement singleton pattern via macro
 impl_binding_singleton!(Scheduler);
 
-// Arc-compatible singleton for AnimationController compatibility
-static ARC_INSTANCE: std::sync::OnceLock<Arc<Scheduler>> = std::sync::OnceLock::new();
-
-impl Scheduler {
-    /// Get Arc-wrapped singleton instance.
-    ///
-    /// This is needed for APIs that require `Arc<Scheduler>` (e.g.,
-    /// AnimationController). The Arc wraps a new Scheduler instance that is
-    /// separate from the static singleton, but both will be ticked by the
-    /// same event loop since they share the same thread.
-    ///
-    /// **Important:** The caller must ensure this scheduler is ticked by
-    /// calling `handle_begin_frame()` and `handle_draw_frame()` in the
-    /// event loop.
-    pub fn arc_instance() -> Arc<Scheduler> {
-        ARC_INSTANCE
-            .get_or_init(|| Arc::new(Scheduler::new()))
-            .clone()
-    }
-}
-
 impl TickerProvider for Scheduler {
     fn schedule_tick(&self, callback: Box<dyn FnOnce(f64) + Send>) {
         // Schedule as transient callback for next frame
@@ -1636,7 +1609,6 @@ impl Default for SchedulerBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::traits::{AnimationPriority, BuildPriority, IdlePriority, UserInputPriority};
 
     #[test]
     fn test_scheduler_phase_lifecycle() {
@@ -1715,28 +1687,6 @@ mod tests {
 
         let c4 = Arc::clone(&counter);
         scheduler.add_task(Priority::Animation, move || c4.lock().push(2));
-
-        scheduler.execute_frame();
-
-        assert_eq!(*counter.lock(), vec![1, 2, 3, 4]);
-    }
-
-    #[test]
-    fn test_typed_task_execution() {
-        let scheduler = Scheduler::new();
-        let counter = Arc::new(Mutex::new(Vec::new()));
-
-        let c1 = Arc::clone(&counter);
-        scheduler.add_task_typed::<IdlePriority>(move || c1.lock().push(4));
-
-        let c2 = Arc::clone(&counter);
-        scheduler.add_task_typed::<UserInputPriority>(move || c2.lock().push(1));
-
-        let c3 = Arc::clone(&counter);
-        scheduler.add_task_typed::<BuildPriority>(move || c3.lock().push(3));
-
-        let c4 = Arc::clone(&counter);
-        scheduler.add_task_typed::<AnimationPriority>(move || c4.lock().push(2));
 
         scheduler.execute_frame();
 

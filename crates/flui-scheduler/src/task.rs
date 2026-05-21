@@ -6,7 +6,6 @@
 //!
 //! - [`Priority`] - Task priority enum (UserInput, Animation, Build, Idle)
 //! - [`Task`] - A scheduled task with priority and callback
-//! - [`TypedTask`] - Compile-time priority checking via phantom types
 //! - [`TaskQueue`] - Priority-based task queue
 //!
 //! ## Priority Levels
@@ -15,32 +14,14 @@
 //! 2. **Animation** - Animation tickers, interpolations
 //! 3. **Build** - Widget tree rebuilds
 //! 4. **Idle** (lowest) - Background work, GC, telemetry
-//!
-//! ## Type-Safe Task Creation
-//!
-//! ```rust
-//! use flui_scheduler::{
-//!     task::{Priority, TypedTask},
-//!     traits::UserInputPriority,
-//! };
-//!
-//! // Type-safe task creation with compile-time priority
-//! let task = TypedTask::<UserInputPriority>::new(|| {
-//!     println!("High priority task!");
-//! });
-//!
-//! assert_eq!(task.priority(), Priority::UserInput);
-//! ```
 
-use std::{cmp::Ordering, collections::BinaryHeap, marker::PhantomData, sync::Arc};
+use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
 use parking_lot::Mutex;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
-
-use crate::traits::PriorityLevel;
 
 /// Generate the next unique task ID using a global atomic counter.
 fn next_task_id() -> TaskId {
@@ -199,92 +180,6 @@ impl std::fmt::Debug for Task {
     }
 }
 
-/// A task with compile-time priority checking
-///
-/// Uses the typestate pattern to encode priority in the type system.
-/// This allows compile-time verification of task priorities.
-///
-/// ## Example
-///
-/// ```rust
-/// use flui_scheduler::{
-///     task::TypedTask,
-///     traits::{IdlePriority, UserInputPriority},
-/// };
-///
-/// fn process_input_task(task: TypedTask<UserInputPriority>) {
-///     task.execute();
-/// }
-///
-/// // This compiles
-/// let input_task = TypedTask::<UserInputPriority>::new(|| {});
-/// process_input_task(input_task);
-///
-/// // This would NOT compile:
-/// // let idle_task = TypedTask::<IdlePriority>::new(|| {});
-/// // process_input_task(idle_task); // Type error!
-/// ```
-pub struct TypedTask<P: PriorityLevel> {
-    id: TaskId,
-    callback: Box<dyn FnOnce() + Send>,
-    _priority: PhantomData<P>,
-}
-
-impl<P: PriorityLevel> TypedTask<P> {
-    /// Create a new typed task
-    pub fn new<F>(callback: F) -> Self
-    where
-        F: FnOnce() + Send + 'static,
-    {
-        Self {
-            id: next_task_id(),
-            callback: Box::new(callback),
-            _priority: PhantomData,
-        }
-    }
-
-    /// Get task ID
-    #[inline]
-    pub fn id(&self) -> TaskId {
-        self.id
-    }
-
-    /// Get task priority (from type)
-    #[inline]
-    pub fn priority(&self) -> Priority {
-        P::VALUE
-    }
-
-    /// Get priority name
-    #[inline]
-    pub fn priority_name(&self) -> &'static str {
-        P::NAME
-    }
-
-    /// Execute the task
-    pub fn execute(self) {
-        (self.callback)();
-    }
-
-    /// Convert to untyped Task
-    pub fn into_task(self) -> Task {
-        Task {
-            id: self.id,
-            priority: P::VALUE,
-            callback: self.callback,
-        }
-    }
-}
-
-impl<P: PriorityLevel> std::fmt::Debug for TypedTask<P> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TypedTask")
-            .field("id", &self.id)
-            .field("priority", &P::NAME)
-            .finish_non_exhaustive()
-    }
-}
-
 /// Wrapper for priority queue ordering (higher priority first)
 struct PriorityTask(Task);
 
@@ -317,18 +212,13 @@ impl Ord for PriorityTask {
 /// Tasks are executed in priority order:
 /// UserInput > Animation > Build > Idle
 ///
-/// ## Type-Safe Task Addition
+/// ## Task Addition
 ///
 /// ```rust
-/// use flui_scheduler::{task::TaskQueue, traits::AnimationPriority};
+/// use flui_scheduler::task::TaskQueue;
 ///
 /// let queue = TaskQueue::new();
-///
-/// // Add with runtime priority
 /// queue.add(flui_scheduler::Priority::Animation, || {});
-///
-/// // Add with type-safe priority
-/// queue.add_typed::<AnimationPriority>(|| {});
 /// ```
 #[derive(Clone)]
 pub struct TaskQueue {
@@ -361,16 +251,6 @@ impl TaskQueue {
         F: FnOnce() + Send + 'static,
     {
         self.add_task(Task::new(priority, callback));
-    }
-
-    /// Add a typed task (compile-time priority checking)
-    pub fn add_typed<P: PriorityLevel>(&self, callback: impl FnOnce() + Send + 'static) {
-        self.add_task(Task::new(P::VALUE, callback));
-    }
-
-    /// Add a TypedTask to the queue
-    pub fn add_typed_task<P: PriorityLevel>(&self, task: TypedTask<P>) {
-        self.add_task(task.into_task());
     }
 
     /// Get the next task (highest priority)
@@ -524,7 +404,6 @@ impl PriorityCount {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::traits::{AnimationPriority, BuildPriority, IdlePriority, UserInputPriority};
 
     #[test]
     fn test_priority_ordering() {
@@ -569,28 +448,6 @@ mod tests {
         assert_eq!(queue.pop().unwrap().priority(), Priority::Build);
         assert_eq!(queue.pop().unwrap().priority(), Priority::Idle);
         assert!(queue.pop().is_none());
-    }
-
-    #[test]
-    fn test_typed_task() {
-        let task = TypedTask::<UserInputPriority>::new(|| {});
-        assert_eq!(task.priority(), Priority::UserInput);
-        assert_eq!(task.priority_name(), "UserInput");
-    }
-
-    #[test]
-    fn test_typed_task_queue() {
-        let queue = TaskQueue::new();
-
-        queue.add_typed::<IdlePriority>(|| {});
-        queue.add_typed::<UserInputPriority>(|| {});
-        queue.add_typed::<BuildPriority>(|| {});
-        queue.add_typed::<AnimationPriority>(|| {});
-
-        assert_eq!(queue.pop().unwrap().priority(), Priority::UserInput);
-        assert_eq!(queue.pop().unwrap().priority(), Priority::Animation);
-        assert_eq!(queue.pop().unwrap().priority(), Priority::Build);
-        assert_eq!(queue.pop().unwrap().priority(), Priority::Idle);
     }
 
     #[test]

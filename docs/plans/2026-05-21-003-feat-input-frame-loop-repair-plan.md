@@ -257,6 +257,18 @@ Each unit has:
 - **Test scenarios**: covers AE-IDs + edge cases
 - **Verification**: per-commit gates
 
+<!-- Execution parallelism plan (orchestrator annotation, added pre-Wave 1):
+  Wave 1: Lane A = U1 (scheduler-only). Lane B = U2 → U3 → U4 serial (all touch flui-interaction/lib.rs).
+          Physical cargo target dir contention → serial execution within coordinator.
+  Wave 2: U6 depends on U1. U5 depends on U2+U3. U7/U8/U9 independent. Mostly parallel-eligible by file ownership; serial by build contention.
+  Wave 3: U10 → U11 → U12 strict serial.
+  Wave 4: U13 → {U14, U15, U16-U22} fan-out, U16-U22 each touches recognizers/mod.rs export list → coordinate exports.
+          U23 + U24 after recognizer migration; U24 requires R-V5 manual flui-animation smoke.
+  Wave 5: U25 + U26 independent file ownership, run after Wave 4.
+  Wave 6: U27 + U28 + U29 independent.
+  Wave 7: U30 → U31 → U32 strict serial; U32 includes audit Part IV closure annotation.
+-->
+
 ### U1. Scheduler zero-dep deletion
 
 **Goal:** Delete ~1,000 LOC of zero-consumer scheduler scaffolding.
