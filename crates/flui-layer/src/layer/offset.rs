@@ -212,8 +212,19 @@ mod tests {
 
     #[test]
     fn test_offset_layer_clone_copy() {
+        // Compile-time bound checks — fail to compile if `Clone` or `Copy`
+        // are ever removed from `OffsetLayer`.
+        fn assert_clone<T: Clone>() {}
+        fn assert_copy<T: Copy>() {}
+        assert_clone::<OffsetLayer>();
+        assert_copy::<OffsetLayer>();
+
         let layer = OffsetLayer::new(Offset::new(px(10.0), px(20.0)));
-        let cloned = layer;
+        #[allow(
+            clippy::clone_on_copy,
+            reason = "intentionally exercise the explicit Clone path; the test name promises it"
+        )]
+        let cloned = layer.clone();
         let copied = layer; // Copy
 
         assert_eq!(layer, cloned);
