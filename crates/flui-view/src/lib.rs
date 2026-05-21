@@ -139,8 +139,7 @@ pub use view::{
     FlutterError, InheritedElement, InheritedView, IntoElement, IntoView, ParentData,
     ParentDataElement, ParentDataView, ProxyElement, ProxyView, RenderElement, RenderView,
     RootRenderElement, RootRenderView, StatefulElement, StatefulView, StatelessElement,
-    StatelessView, View, ViewExt, ViewKey, ViewState, clear_error_view_builder,
-    set_error_view_builder,
+    StatelessView, View, ViewExt, ViewState, clear_error_view_builder, set_error_view_builder,
 };
 
 // ============================================================================

@@ -89,27 +89,13 @@ pub trait View: Downcast + DynClone + Send + Sync + 'static {
     /// - Preserving state across reorderings
     /// - GlobalKey lookups
     /// - Efficient reconciliation
-    fn key(&self) -> Option<&dyn ViewKey> {
+    fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
         None
     }
 }
 
 impl_downcast!(View);
 clone_trait_object!(View);
-
-/// Trait for View keys used in reconciliation.
-///
-/// Keys help the framework match old and new Views during reconciliation.
-pub trait ViewKey: Send + Sync + std::fmt::Debug {
-    /// Get the type ID of this key for comparison.
-    fn key_type_id(&self) -> TypeId;
-
-    /// Check if this key equals another key.
-    fn key_eq(&self, other: &dyn ViewKey) -> bool;
-
-    /// Get the hash of this key for HashMap lookups.
-    fn key_hash(&self) -> u64;
-}
 
 /// Base trait for Elements that can be boxed.
 ///
@@ -382,4 +368,26 @@ mod tests {
     // Basic compile-time checks
     fn _assert_view_is_object_safe(_: &dyn View) {}
     fn _assert_element_base_is_object_safe(_: &dyn ElementBase) {}
+
+    // AE7: `View::key()` accepts any flui_foundation::ViewKey impl
+    // (GlobalKey, ValueKey, UniqueKey, ObjectKey) without an `as` cast.
+    // Compile-time check that `&ValueKey<i32>` and `&UniqueKey`
+    // (foundation ViewKey impls) coerce to
+    // `Option<&dyn flui_foundation::ViewKey>` - the exact return type of
+    // `View::key()`. This mirrors what a `View::key()` body does without
+    // requiring a full View impl.
+    fn _assert_view_key_accepts_concrete_impls() {
+        use flui_foundation::{UniqueKey, ValueKey};
+
+        // ValueKey<T> where T: Clone + Hash + Eq + Send + Sync + Debug
+        static VALUE_KEY: ValueKey<i32> = ValueKey::new(42);
+        let _: Option<&dyn flui_foundation::ViewKey> = Some(&VALUE_KEY);
+
+        // UniqueKey
+        let unique = UniqueKey::new();
+        let _: Option<&dyn flui_foundation::ViewKey> = Some(&unique);
+
+        // None branch (default View::key() impl)
+        let _: Option<&dyn flui_foundation::ViewKey> = None;
+    }
 }
