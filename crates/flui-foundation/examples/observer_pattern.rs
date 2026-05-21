@@ -8,15 +8,12 @@
     reason = "examples define types where they read best, alongside the prose explaining them"
 )]
 
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-    thread,
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 
-use flui_foundation::{HashedObserverList, ObserverList, SyncObserverList};
+use flui_foundation::ObserverList;
 
 fn main() {
     println!("=== FLUI Foundation: Observer Pattern Example ===\n");
@@ -98,67 +95,9 @@ fn main() {
     println!();
 
     // -------------------------------------------------------------------------
-    // Thread-safe SyncObserverList
-    // -------------------------------------------------------------------------
-    println!("3. SyncObserverList (Thread-safe)");
-    println!("   --------------------------------");
-
-    let observers: Arc<SyncObserverList<i32>> = Arc::new(SyncObserverList::new());
-
-    // Spawn threads to add observers concurrently
-    let handles: Vec<_> = (0..5)
-        .map(|i| {
-            let obs = Arc::clone(&observers);
-            thread::spawn(move || {
-                let _id = obs.add(i * 10);
-                println!("   Thread {i} added observer with value {}", i * 10);
-            })
-        })
-        .collect();
-
-    // Wait for all threads
-    for handle in handles {
-        handle.join().unwrap();
-    }
-
-    println!("   Total observers: {}", observers.len());
-
-    // Iterate safely
-    print!("   Values: ");
-    observers.for_each(|v| print!("{v} "));
-    println!("\n");
-
-    // -------------------------------------------------------------------------
-    // HashedObserverList for O(1) operations
-    // -------------------------------------------------------------------------
-    println!("4. HashedObserverList (O(1) Operations)");
-    println!("   -------------------------------------");
-
-    let observers: HashedObserverList<String> = HashedObserverList::new();
-
-    // Add many observers
-    let ids: Vec<_> = (0..10)
-        .map(|i| observers.add(format!("Observer_{i}")))
-        .collect();
-
-    println!("   Added {} observers", observers.len());
-
-    // Remove specific observers by ID
-    observers.remove(ids[0]);
-    observers.remove(ids[5]);
-    observers.remove(ids[9]);
-
-    println!("   After removing 3 by ID: {} remain", observers.len());
-
-    // Iterate
-    print!("   Remaining: ");
-    observers.for_each(|s| print!("{s} "));
-    println!("\n");
-
-    // -------------------------------------------------------------------------
     // Real-world example: Event dispatcher
     // -------------------------------------------------------------------------
-    println!("5. Event Dispatcher Pattern");
+    println!("3. Event Dispatcher Pattern");
     println!("   --------------------------");
 
     type EventCallback = Box<dyn Fn(&str) + Send + Sync>;

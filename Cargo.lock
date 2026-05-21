@@ -1216,7 +1216,6 @@ name = "flui-foundation"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.10.0",
- "dashmap",
  "flui-types",
  "parking_lot",
  "serde",

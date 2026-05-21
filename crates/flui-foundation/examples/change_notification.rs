@@ -13,7 +13,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use flui_foundation::{ChangeNotifier, Listenable, MergedListenable, ValueNotifier};
+use flui_foundation::{ChangeNotifier, Listenable, ValueNotifier};
 
 fn main() {
     println!("=== FLUI Foundation: Change Notification Example ===\n");
@@ -125,29 +125,9 @@ fn main() {
     println!();
 
     // -------------------------------------------------------------------------
-    // MergedListenable - Combine multiple notifiers
-    // -------------------------------------------------------------------------
-    println!("4. MergedListenable");
-    println!("   ------------------");
-
-    let notifier_a = ChangeNotifier::new();
-    let notifier_b = ChangeNotifier::new();
-
-    let merged = MergedListenable::new(vec![Box::new(notifier_a), Box::new(notifier_b)]);
-
-    let _listener = merged.add_listener(Arc::new(|| {
-        println!("   [Merged] Received notification!");
-    }));
-
-    println!("   Source count: {}", merged.source_count());
-    println!("   Calling merged.notify()...");
-    merged.notify();
-    println!();
-
-    // -------------------------------------------------------------------------
     // Removing Listeners
     // -------------------------------------------------------------------------
-    println!("5. Removing Listeners");
+    println!("4. Removing Listeners");
     println!("   --------------------");
 
     let notifier = ChangeNotifier::new();

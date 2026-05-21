@@ -226,11 +226,9 @@ pub use id::{
 };
 pub use key::{Key, KeyRef, Keyed, UniqueKey, ValueKey, ViewKey, WithKey};
 // Change notification (Listenable pattern)
-pub use notifier::{
-    ChangeNotifier, Listenable, ListenerCallback, MergedListenable, ValueListenable, ValueNotifier,
-};
+pub use notifier::{ChangeNotifier, Listenable, ListenerCallback, ValueListenable, ValueNotifier};
 // Observer lists
-pub use observer::{HashedObserverList, ObserverList, SyncObserverList};
+pub use observer::ObserverList;
 // WASM compatibility
 pub use wasm::{WasmNotSend, WasmNotSendSync};
 
@@ -266,8 +264,6 @@ pub mod prelude {
         FluiError,
         // Keys
         HasInstance,
-        // Observer lists
-        HashedObserverList,
         IS_DESKTOP,
         IS_MOBILE,
         IS_WEB,
@@ -282,14 +278,13 @@ pub mod prelude {
         Listenable,
         ListenerCallback,
         ListenerId,
-        MergedListenable,
+        // Observer lists
         ObserverId,
         ObserverList,
         Predicate,
         RELEASE_MODE,
         RenderId,
         SemanticsId,
-        SyncObserverList,
         UniqueKey,
         ValueChanged,
         ValueGetter,

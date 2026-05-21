@@ -6,7 +6,6 @@
 //! - **Listenable**: Base trait for objects that notify listeners
 //! - **ChangeNotifier**: Manages a list of listeners and notifies them
 //! - **ValueNotifier**: A ChangeNotifier that holds a single value
-//! - **MergedListenable**: Combines multiple listenables
 //!
 //! # Example
 //!
@@ -395,129 +394,6 @@ impl<T: Clone + Send + Sync> ValueListenable<T> for ValueNotifier<T> {
     }
 }
 
-/// A listenable that merges multiple listenables.
-///
-/// Similar to Flutter's `Listenable.merge()`.
-///
-/// When any source listenable notifies, all listeners registered on this
-/// merged listenable are notified.
-pub struct MergedListenable {
-    listenables: Vec<Box<dyn Listenable + Send>>,
-    notifier: ChangeNotifier,
-    /// Listener IDs for the subscriptions on each source, used for cleanup.
-    #[allow(dead_code)]
-    source_listener_ids: Vec<ListenerId>,
-}
-
-impl fmt::Debug for MergedListenable {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("MergedListenable")
-            .field("source_count", &self.listenables.len())
-            .field("listeners", &self.notifier.len())
-            .finish_non_exhaustive()
-    }
-}
-
-impl MergedListenable {
-    /// Create a new merged listenable from multiple listenables.
-    ///
-    /// Subscribes to each source so that when any source notifies,
-    /// this merged listenable forwards the notification to its own listeners.
-    #[must_use]
-    pub fn new(listenables: Vec<Box<dyn Listenable + Send>>) -> Self {
-        let notifier = ChangeNotifier::new();
-        let mut source_listener_ids = Vec::with_capacity(listenables.len());
-
-        for source in &listenables {
-            let forwarding_notifier = notifier.clone();
-            let id = source.add_listener(Arc::new(move || {
-                forwarding_notifier.notify_listeners();
-            }));
-            source_listener_ids.push(id);
-        }
-
-        Self {
-            listenables,
-            notifier,
-            source_listener_ids,
-        }
-    }
-
-    /// Create an empty merged listenable
-    #[must_use]
-    #[inline]
-    pub fn empty() -> Self {
-        Self {
-            listenables: Vec::new(),
-            notifier: ChangeNotifier::new(),
-            source_listener_ids: Vec::new(),
-        }
-    }
-
-    /// Notify all listeners.
-    #[inline]
-    pub fn notify(&self) {
-        self.notifier.notify_listeners();
-    }
-
-    /// Returns the number of merged listenables
-    #[must_use]
-    #[inline]
-    pub fn source_count(&self) -> usize {
-        self.listenables.len()
-    }
-
-    /// Returns the number of listeners currently registered
-    #[must_use]
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.notifier.len()
-    }
-
-    /// Checks if there are no listeners registered
-    #[must_use]
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.notifier.is_empty()
-    }
-
-    /// Whether any listeners are currently registered
-    #[must_use]
-    #[inline]
-    pub fn has_listeners(&self) -> bool {
-        self.notifier.has_listeners()
-    }
-}
-
-impl Drop for MergedListenable {
-    fn drop(&mut self) {
-        for (source, id) in self.listenables.iter().zip(self.source_listener_ids.iter()) {
-            source.remove_listener(*id);
-        }
-    }
-}
-
-impl Default for MergedListenable {
-    #[inline]
-    fn default() -> Self {
-        Self::empty()
-    }
-}
-
-impl Listenable for MergedListenable {
-    fn add_listener(&self, listener: ListenerCallback) -> ListenerId {
-        self.notifier.add_listener(listener)
-    }
-
-    fn remove_listener(&self, id: ListenerId) {
-        self.notifier.remove_listener(id);
-    }
-
-    fn remove_all_listeners(&self) {
-        self.notifier.remove_all_listeners();
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -745,65 +621,6 @@ mod tests {
 
         assert_eq!(counter1.load(Ordering::SeqCst), 1);
         assert_eq!(counter2.load(Ordering::SeqCst), 2);
-    }
-
-    #[test]
-    fn test_merged_listenable() {
-        let notifier1 = ChangeNotifier::new();
-        let notifier2 = ChangeNotifier::new();
-
-        let merged = MergedListenable::new(vec![Box::new(notifier1), Box::new(notifier2)]);
-
-        assert_eq!(merged.source_count(), 2);
-        assert!(merged.is_empty());
-
-        let counter = Arc::new(AtomicUsize::new(0));
-        let counter_clone = Arc::clone(&counter);
-
-        let _ = merged.add_listener(Arc::new(move || {
-            counter_clone.fetch_add(1, Ordering::SeqCst);
-        }));
-
-        assert!(!merged.is_empty());
-        assert_eq!(merged.len(), 1);
-
-        merged.notify();
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn test_merged_listenable_default() {
-        let merged = MergedListenable::default();
-        assert_eq!(merged.source_count(), 0);
-        assert!(merged.is_empty());
-    }
-
-    #[test]
-    fn test_merged_listenable_debug() {
-        let merged = MergedListenable::default();
-        let debug = format!("{merged:?}");
-        assert!(debug.contains("MergedListenable"));
-    }
-
-    #[test]
-    fn test_merged_listenable_forwards_notifications() {
-        let a = ValueNotifier::new(1);
-        let b = ValueNotifier::new(2);
-        let merged = MergedListenable::new(vec![Box::new(a.clone()), Box::new(b.clone())]);
-        let count = Arc::new(AtomicUsize::new(0));
-        let count2 = count.clone();
-        merged.add_listener(Arc::new(move || {
-            count2.fetch_add(1, Ordering::SeqCst);
-        }));
-
-        // Mutate through the original (shares ChangeNotifier with the boxed clone)
-        let mut a = a;
-        a.set_value(10);
-        assert_eq!(count.load(Ordering::SeqCst), 1);
-
-        let mut b = b;
-        b.set_value(20);
-        assert_eq!(count.load(Ordering::SeqCst), 2);
     }
 
     #[cfg(feature = "serde")]
