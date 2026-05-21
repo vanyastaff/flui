@@ -2340,25 +2340,24 @@ fn test_scheduler_phase_from_u8() {
     assert_eq!(SchedulerPhase::try_from_u8(0), Some(SchedulerPhase::Idle));
     assert_eq!(
         SchedulerPhase::try_from_u8(1),
-        SchedulerPhase::TransientCallbacks
+        Some(SchedulerPhase::TransientCallbacks)
     );
     assert_eq!(
         SchedulerPhase::try_from_u8(2),
-        SchedulerPhase::MidFrameMicrotasks
+        Some(SchedulerPhase::MidFrameMicrotasks)
     );
     assert_eq!(
         SchedulerPhase::try_from_u8(3),
-        SchedulerPhase::PersistentCallbacks
+        Some(SchedulerPhase::PersistentCallbacks)
     );
     assert_eq!(
         SchedulerPhase::try_from_u8(4),
-        SchedulerPhase::PostFrameCallbacks
+        Some(SchedulerPhase::PostFrameCallbacks)
     );
 }
 
 #[test]
-#[should_panic(expected = "Invalid SchedulerPhase value")]
-fn test_scheduler_phase_from_u8_invalid() {
+fn test_scheduler_phase_try_from_u8_invalid() {
     assert!(SchedulerPhase::try_from_u8(5).is_none());
 }
 
@@ -2388,16 +2387,30 @@ fn test_scheduler_phase_can_transition_to() {
 
 #[test]
 fn test_app_lifecycle_state_from_u8() {
-    assert_eq!(AppLifecycleState::try_from_u8(0), Some(AppLifecycleState::Resumed));
-    assert_eq!(AppLifecycleState::try_from_u8(1), Some(AppLifecycleState::Inactive));
-    assert_eq!(AppLifecycleState::try_from_u8(2), Some(AppLifecycleState::Hidden));
-    assert_eq!(AppLifecycleState::try_from_u8(3), Some(AppLifecycleState::Paused));
-    assert_eq!(AppLifecycleState::try_from_u8(4), Some(AppLifecycleState::Detached));
+    assert_eq!(
+        AppLifecycleState::try_from_u8(0),
+        Some(AppLifecycleState::Resumed)
+    );
+    assert_eq!(
+        AppLifecycleState::try_from_u8(1),
+        Some(AppLifecycleState::Inactive)
+    );
+    assert_eq!(
+        AppLifecycleState::try_from_u8(2),
+        Some(AppLifecycleState::Hidden)
+    );
+    assert_eq!(
+        AppLifecycleState::try_from_u8(3),
+        Some(AppLifecycleState::Paused)
+    );
+    assert_eq!(
+        AppLifecycleState::try_from_u8(4),
+        Some(AppLifecycleState::Detached)
+    );
 }
 
 #[test]
-#[should_panic(expected = "Invalid AppLifecycleState value")]
-fn test_app_lifecycle_state_from_u8_invalid() {
+fn test_app_lifecycle_state_try_from_u8_invalid() {
     assert!(AppLifecycleState::try_from_u8(5).is_none());
 }
 
