@@ -512,6 +512,61 @@ impl GestureRecognizer for LongPressGestureRecognizer {
     }
 }
 
+// =============================================================================
+// Canonical trait hierarchy adoption (U17)
+// =============================================================================
+//
+// Flutter parity: `long_press.dart:262 LongPressGestureRecognizer extends
+// PrimaryPointerGestureRecognizer`.
+
+impl crate::recognizers::OneSequenceGestureRecognizer for LongPressGestureRecognizer {
+    fn tracked_pointers(&self) -> Vec<PointerId> {
+        self.state
+            .primary_pointer()
+            .map(|p| vec![p])
+            .unwrap_or_default()
+    }
+
+    fn resolve_pointer(&self, _pointer: PointerId, disposition: crate::arena::GestureDisposition) {
+        match disposition {
+            crate::arena::GestureDisposition::Accepted => {
+                // No-op — long-press callbacks fire from timer/up handlers,
+                // not from arena resolution. accept_gesture below mirrors.
+            }
+            crate::arena::GestureDisposition::Rejected => {
+                self.state.reject();
+            }
+        }
+    }
+
+    fn stop_tracking_pointer(&self, _pointer: PointerId) {
+        self.state.stop_tracking();
+    }
+}
+
+impl crate::recognizers::PrimaryPointerGestureRecognizer for LongPressGestureRecognizer {
+    fn initial_position(&self) -> Option<Offset<Pixels>> {
+        self.state.initial_position()
+    }
+
+    fn deadline(&self) -> Option<std::time::Duration> {
+        // LongPress has a pre-acceptance deadline from settings.
+        Some(self.settings.lock().long_press_timeout())
+    }
+
+    fn did_exceed_deadline(&self) {
+        // LongPress accepts on deadline (opposite of default Reject) —
+        // Flutter parity at long_press.dart::didExceedDeadline calls
+        // resolve(GestureDisposition.accepted).
+        use crate::recognizers::OneSequenceGestureRecognizer;
+        self.resolve(crate::arena::GestureDisposition::Accepted);
+    }
+
+    fn handle_primary_pointer(&self, event: &PointerEvent) {
+        <Self as GestureRecognizer>::handle_event(self, event);
+    }
+}
+
 impl GestureArenaMember for LongPressGestureRecognizer {
     fn accept_gesture(&self, _pointer: PointerId) {
         // We won the arena - gesture is accepted

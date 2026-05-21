@@ -15,7 +15,7 @@ use std::time::Duration;
 use flui_types::{Offset, geometry::Pixels};
 
 use crate::{
-    ids::PointerId, recognizers::one_sequence::OneSequenceGestureRecognizer,
+    recognizers::one_sequence::OneSequenceGestureRecognizer,
     sealed::gesture_recognizer::Sealed as GestureRecognizerSealed,
 };
 
@@ -27,9 +27,6 @@ use crate::{
 pub trait PrimaryPointerGestureRecognizer:
     OneSequenceGestureRecognizer + GestureRecognizerSealed
 {
-    /// The pointer ID currently being tracked as primary, if any.
-    fn primary_pointer(&self) -> Option<PointerId>;
-
     /// The position of the primary pointer at down event.
     fn initial_position(&self) -> Option<Offset<Pixels>>;
 

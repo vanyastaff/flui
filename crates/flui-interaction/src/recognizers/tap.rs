@@ -401,6 +401,51 @@ impl GestureRecognizer for TapGestureRecognizer {
     }
 }
 
+// =============================================================================
+// Canonical trait hierarchy adoption (U16)
+// =============================================================================
+//
+// Flutter parity: `tap.dart:202 BaseTapGestureRecognizer extends
+// PrimaryPointerGestureRecognizer`. The PR #85 / U13 trait infrastructure
+// at one_sequence.rs + primary_pointer.rs is now implemented for Tap.
+
+impl crate::recognizers::OneSequenceGestureRecognizer for TapGestureRecognizer {
+    fn tracked_pointers(&self) -> Vec<PointerId> {
+        self.state
+            .primary_pointer()
+            .map(|p| vec![p])
+            .unwrap_or_default()
+    }
+
+    fn resolve_pointer(&self, _pointer: PointerId, disposition: crate::arena::GestureDisposition) {
+        match disposition {
+            crate::arena::GestureDisposition::Accepted => {
+                // Arena accepted us — same path as accept_gesture below.
+                *self.accepted.lock() = Some(true);
+            }
+            crate::arena::GestureDisposition::Rejected => {
+                self.state.reject();
+            }
+        }
+    }
+
+    fn stop_tracking_pointer(&self, _pointer: PointerId) {
+        self.state.stop_tracking();
+    }
+}
+
+impl crate::recognizers::PrimaryPointerGestureRecognizer for TapGestureRecognizer {
+    fn initial_position(&self) -> Option<Offset<Pixels>> {
+        self.state.initial_position()
+    }
+
+    fn handle_primary_pointer(&self, event: &PointerEvent) {
+        // Tap dispatches all primary-pointer events through handle_event;
+        // delegate via the supertrait method.
+        <Self as GestureRecognizer>::handle_event(self, event);
+    }
+}
+
 impl GestureArenaMember for TapGestureRecognizer {
     fn accept_gesture(&self, _pointer: PointerId) {
         // PR #87 review fix (P1): do NOT invoke user callbacks here. The
