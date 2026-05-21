@@ -16,74 +16,109 @@
 //! (`GlobalKey::current_element`, `with_current_state`) need to look up
 //! a key hash WITHOUT having an owner reference in scope.
 //!
-//! The pragmatic Rust answer is a process-wide handle protected by a
-//! lock. We don't host one registry per `WidgetsBinding` instance
-//! because:
+//! # Decoupling shape
 //!
-//! 1. The application always has exactly one active `WidgetsBinding`
-//!    (`impl_binding_singleton!`). Multiple bindings in a single process
-//!    are explicitly an anti-pattern in Flutter's docs as well.
-//! 2. Tests that spin up local `BuildOwner` + `ElementTree` (the
-//!    `ancestor_finders.rs` style) install the handle via
-//!    [`crate::test_only_set_global_key_registry`] and clear it after.
-//!
-//! The handle is a pair of `Arc<RwLock<_>>` references. `current_element`
-//! and `with_current_state` acquire a brief read-lock — the lookup
-//! lifetime never escapes the closure callback.
+//! The registry handle is a pair of type-erased closures rather than
+//! direct `Arc<RwLock<ElementTree>>` / `Arc<RwLock<BuildOwner>>` field
+//! references. That keeps the framework's storage layout free —
+//! `WidgetsBinding` continues to own its `BuildOwner` and `ElementTree`
+//! inline behind a single `RwLock<WidgetsBindingInner>` — and the
+//! registry just captures `WidgetsBinding::instance()` inside its
+//! closures so reads go through whatever shape the binding uses. Tests
+//! install a different pair of closures pointing at mock state.
 //!
 //! # Thread-safety
 //!
-//! The handle is wrapped in `parking_lot::RwLock<Option<GlobalKeyRegistryHandle>>`.
+//! The handle slot is wrapped in `parking_lot::RwLock<Option<GlobalKeyRegistryHandle>>`.
 //! Install / take operations are serialized; concurrent reads through
-//! `with_registry` are fine.
+//! `with_registry` are fine. The closures themselves must be
+//! `Fn + Send + Sync` so they can be called from any thread.
 
 use std::sync::Arc;
 
 use flui_foundation::ElementId;
 use parking_lot::RwLock;
 
-use crate::{owner::BuildOwner, tree::ElementTree, view::ElementBase};
+use crate::view::ElementBase;
 
-/// Snapshot of the framework's element tree + build owner that
-/// `GlobalKey` lookups consult.
+/// Snapshot of the framework's global-key lookup surface that
+/// `GlobalKey::current_element` / `with_current_state` consult.
 ///
-/// Held inside the module-private `REGISTRY` slot. `WidgetsBinding`
-/// installs one of these on construction and clears it on drop /
-/// detach; tests use [`crate::test_only_set_global_key_registry`].
-#[derive(Clone, Debug)]
-pub struct GlobalKeyRegistryHandle {
-    pub(crate) tree: Arc<RwLock<ElementTree>>,
-    pub(crate) owner: Arc<RwLock<BuildOwner>>,
+/// Held inside the module-private `REGISTRY` slot.
+/// [`WidgetsBinding::new`](crate::WidgetsBinding::new) installs one of
+/// these on construction (the binding's drop also clears it); tests use
+/// [`crate::test_only_set_global_key_registry`].
+///
+/// The struct is `Clone` so internal copies stay cheap — both
+/// invariants funnel through the same `Arc`-shared closure pair.
+#[derive(Clone)]
+pub(crate) struct GlobalKeyRegistryHandle {
+    inner: Arc<GlobalKeyRegistryInner>,
+}
+
+/// Lookup closure type — resolve a key hash back to an `ElementId`.
+/// Returns `None` when no element with that hash is currently mounted.
+type LookupFn = dyn Fn(u64) -> Option<ElementId> + Send + Sync;
+
+/// Visit closure type — call the inner `FnMut` once with the
+/// `&dyn ElementBase` at the given id. Type-erased here because trait
+/// objects can't carry per-call generics; the result-extraction shim
+/// for [`GlobalKeyRegistryHandle::with_element`]'s generic `R` return
+/// lives in the inner `FnMut`.
+type VisitFn = dyn Fn(ElementId, &mut dyn FnMut(&dyn ElementBase)) + Send + Sync;
+
+struct GlobalKeyRegistryInner {
+    lookup: Box<LookupFn>,
+    visit: Box<VisitFn>,
+}
+
+impl std::fmt::Debug for GlobalKeyRegistryHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GlobalKeyRegistryHandle").finish()
+    }
 }
 
 impl GlobalKeyRegistryHandle {
-    /// Resolve a key hash back to the `ElementId` currently holding it.
+    /// Build a handle from two closures.
     ///
-    /// Acquires a brief read-lock on the build owner. Returns `None`
-    /// when no element with that hash is currently mounted.
-    pub fn lookup_element(&self, key_hash: u64) -> Option<ElementId> {
-        self.owner.read().element_for_global_key(key_hash)
+    /// `lookup` resolves `key_hash` → `Option<ElementId>`. `visit` calls
+    /// the inner `FnMut` once with the `&dyn ElementBase` at the given
+    /// id; if no element exists at the id, the inner `FnMut` is simply
+    /// not called and `with_element` returns `None`.
+    pub(crate) fn new<L, V>(lookup: L, visit: V) -> Self
+    where
+        L: Fn(u64) -> Option<ElementId> + Send + Sync + 'static,
+        V: Fn(ElementId, &mut dyn FnMut(&dyn ElementBase)) + Send + Sync + 'static,
+    {
+        Self {
+            inner: Arc::new(GlobalKeyRegistryInner {
+                lookup: Box::new(lookup),
+                visit: Box::new(visit),
+            }),
+        }
+    }
+
+    /// Resolve a key hash back to the `ElementId` currently holding it.
+    pub(crate) fn lookup_element(&self, key_hash: u64) -> Option<ElementId> {
+        (self.inner.lookup)(key_hash)
     }
 
     /// Apply `f` to the `&dyn ElementBase` at the given id, returning
     /// the closure's result. Returns `None` when the id is no longer
-    /// present in the tree (e.g. the element was finalized between the
-    /// `lookup_element` resolution and the second read-lock).
-    ///
-    /// Acquires a separate read-lock on the element tree. The lookup
-    /// is two-phase (resolve id, then re-borrow for the callback) so
-    /// the build-owner read-lock drops before the tree read-lock fires
-    /// — mirrors the two-phase pattern in
-    /// [`crate::context::ElementBuildContext::find_root_ancestor_state`]
-    /// (plan §U11).
-    pub fn with_element<R>(
+    /// present in the tree.
+    pub(crate) fn with_element<R>(
         &self,
         id: ElementId,
         f: impl FnOnce(&dyn ElementBase) -> R,
     ) -> Option<R> {
-        let tree = self.tree.read();
-        let node = tree.get(id)?;
-        Some(f(node.element()))
+        let mut result = None;
+        let mut f_opt = Some(f);
+        (self.inner.visit)(id, &mut |elem: &dyn ElementBase| {
+            if let Some(f) = f_opt.take() {
+                result = Some(f(elem));
+            }
+        });
+        result
     }
 }
 
@@ -99,13 +134,13 @@ static REGISTRY: RwLock<Option<GlobalKeyRegistryHandle>> = RwLock::new(None);
 /// if returned, can be re-installed by the caller later — useful for
 /// nesting in tests, although the standard pattern is install-then-
 /// clear via the public test_only_* shims in `crate::lib`.
-pub fn install_registry(handle: GlobalKeyRegistryHandle) -> Option<GlobalKeyRegistryHandle> {
+pub(crate) fn install_registry(handle: GlobalKeyRegistryHandle) -> Option<GlobalKeyRegistryHandle> {
     let mut slot = REGISTRY.write();
     slot.replace(handle)
 }
 
 /// Remove the currently-installed handle. Returns the previous handle.
-pub fn take_registry() -> Option<GlobalKeyRegistryHandle> {
+pub(crate) fn take_registry() -> Option<GlobalKeyRegistryHandle> {
     REGISTRY.write().take()
 }
 

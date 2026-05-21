@@ -267,9 +267,10 @@ impl ElementTree {
         // R14 state migration. Before creating a fresh element, check
         // whether `view` has a `GlobalKey` whose hash points at a
         // currently-inactive element. If so, pull it back to the new
-        // parent + slot and re-activate (Flutter `_retakeInactiveElement`).
+        // parent + slot, re-activate, AND apply the new view config
+        // (`framework.dart:4581`).
         if let Some(hash) = global_key_hash_of(view)
-            && let Some(retaken_id) = try_retake_inactive(self, owner, hash, parent, slot)
+            && let Some(retaken_id) = try_retake_inactive(self, owner, hash, view, parent, slot)
         {
             return retaken_id;
         }
@@ -542,6 +543,7 @@ fn try_retake_inactive(
     tree: &mut ElementTree,
     owner: &mut crate::ElementOwner<'_>,
     hash: u64,
+    view: &dyn View,
     new_parent: ElementId,
     new_slot: usize,
 ) -> Option<ElementId> {
@@ -566,6 +568,16 @@ fn try_retake_inactive(
 
     // Re-activate the element. `Lifecycle::Inactive` → `Active`.
     node.element.activate();
+
+    // Apply the NEW view configuration to the re-taken element. Without
+    // this the element keeps the stale view config from before it was
+    // deactivated — state persists (the whole point of GlobalKey
+    // reparenting) but the view fields, child-list shape, and any
+    // update hooks (`didUpdateWidget`-equivalent) would be silently
+    // skipped. Flutter's `_retakeInactiveElement` does the same in
+    // `framework.dart:4581` (`element.update(newWidget)`) right after
+    // activating.
+    node.element.update(view, owner);
 
     tracing::debug!(
         candidate = ?candidate_id,

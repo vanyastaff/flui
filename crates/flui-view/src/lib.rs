@@ -120,10 +120,21 @@ mod test_only_global_key_registry {
     /// **Not for production code.** Production binds the handle inside
     /// `WidgetsBinding::new`.
     pub fn test_only_set_global_key_registry(
-        tree: Arc<RwLock<ElementTree>>,
-        owner: Arc<RwLock<BuildOwner>>,
+        tree: &Arc<RwLock<ElementTree>>,
+        owner: &Arc<RwLock<BuildOwner>>,
     ) {
-        let _ = install_registry(GlobalKeyRegistryHandle { tree, owner });
+        let owner_for_lookup = Arc::clone(owner);
+        let tree_for_visit = Arc::clone(tree);
+        let handle = GlobalKeyRegistryHandle::new(
+            move |hash| owner_for_lookup.read().element_for_global_key(hash),
+            move |id, f| {
+                let tree = tree_for_visit.read();
+                if let Some(node) = tree.get(id) {
+                    f(node.element());
+                }
+            },
+        );
+        let _ = install_registry(handle);
     }
 
     /// Clear the process-wide registry handle. No-op if no handle was

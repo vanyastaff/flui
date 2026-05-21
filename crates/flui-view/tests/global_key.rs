@@ -163,7 +163,7 @@ fn global_key_current_state_after_mount() {
         .mount_root(&counter, &mut owner.write().element_owner_mut());
 
     // Install the registry handle so `current_*` finds this tree.
-    flui_view::test_only_set_global_key_registry(tree.clone(), owner.clone());
+    flui_view::test_only_set_global_key_registry(&tree, &owner);
 
     let resolved_id = key.current_element();
     assert_eq!(
@@ -222,7 +222,7 @@ fn global_key_state_migrates_to_new_parent_slot() {
     );
 
     // Make state mutation observable via sentinel.
-    flui_view::test_only_set_global_key_registry(tree.clone(), owner.clone());
+    flui_view::test_only_set_global_key_registry(&tree, &owner);
     assert!(set_sentinel(&tree, &key, 0xCAFE_BABE));
 
     // Soft-remove from parent A — should push to inactive (Flutter
@@ -284,7 +284,7 @@ fn global_key_returns_none_after_full_unmount() {
         .write()
         .mount_root(&counter, &mut owner.write().element_owner_mut());
 
-    flui_view::test_only_set_global_key_registry(tree.clone(), owner.clone());
+    flui_view::test_only_set_global_key_registry(&tree, &owner);
     assert_eq!(key.current_element(), Some(id));
 
     // Soft-remove (push to inactive).
@@ -398,7 +398,7 @@ fn global_key_construction_accepts_any_type() {
 #[test]
 fn global_key_state_preserved_across_100_reparents() {
     let (tree, owner) = fresh_tree();
-    flui_view::test_only_set_global_key_registry(tree.clone(), owner.clone());
+    flui_view::test_only_set_global_key_registry(&tree, &owner);
 
     // Two parents we alternate between.
     let parent_a = tree
