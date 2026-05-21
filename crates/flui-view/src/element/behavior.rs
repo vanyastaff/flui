@@ -127,6 +127,23 @@ where
     ) -> Option<&mut dyn crate::element::InheritedElementAccess> {
         None
     }
+
+    /// Borrow this behavior's persistent `ViewState` as `&dyn Any` if
+    /// this is `StatefulBehavior<V>` (the only behavior that owns user-
+    /// visible state).
+    ///
+    /// Default returns `None`; only `StatefulBehavior<V>` overrides this
+    /// to hand out `&self.state as &dyn Any`. Used by
+    /// [`BuildContext::find_ancestor_state`] (plan §U11, R7) to surface
+    /// the typed `ViewState` to the dispatch boundary without naming
+    /// `V` at the object-safe trait surface.
+    ///
+    /// Flutter parity: `framework.dart:5132`
+    /// `findAncestorStateOfType<T>` reads `element.state` after a
+    /// runtime-type check.
+    fn state_as_any(&self) -> Option<&dyn std::any::Any> {
+        None
+    }
 }
 
 // ============================================================================
@@ -268,6 +285,17 @@ where
 {
     fn debug_kind(&self) -> &'static str {
         "StatefulElement"
+    }
+
+    /// Expose the owned `ViewState` (`V::State`) as `&dyn Any` so
+    /// [`BuildContext::find_ancestor_state`] / `find_root_ancestor_state`
+    /// (plan §U11, R7/R8) can downcast at the dispatch boundary.
+    ///
+    /// `V::State: 'static` is guaranteed by the [`ViewState`] trait
+    /// bound, so the resulting `&dyn Any` has a well-defined `TypeId`
+    /// equal to `TypeId::of::<V::State>()`.
+    fn state_as_any(&self) -> Option<&dyn std::any::Any> {
+        Some(&self.state as &dyn std::any::Any)
     }
 
     fn perform_build(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
@@ -776,6 +804,12 @@ where
 {
     fn debug_kind(&self) -> &'static str {
         "AnimatedElement"
+    }
+
+    /// Delegate to the composed `StatefulBehavior` so animated elements
+    /// participate in ancestor-state lookups (plan §U11, R7/R8).
+    fn state_as_any(&self) -> Option<&dyn std::any::Any> {
+        <StatefulBehavior<V> as ElementBehavior<V, A>>::state_as_any(&self.stateful)
     }
 
     fn perform_build(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {

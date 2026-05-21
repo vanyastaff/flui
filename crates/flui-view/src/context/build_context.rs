@@ -136,19 +136,71 @@ pub trait BuildContext: Send + Sync {
 
     /// Get the nearest ancestor View of a specific type.
     ///
-    /// Similar to `find_ancestor_element` but returns the View configuration.
-    fn find_ancestor_view(&self, type_id: TypeId) -> Option<&dyn std::any::Any>;
-
-    /// Get the nearest ancestor State of a specific type.
+    /// Similar to `find_ancestor_element` but reads the View configuration
+    /// itself rather than the `ElementId`.
     ///
-    /// Useful for StatefulViews to find parent states.
-    fn find_ancestor_state(&self, type_id: TypeId) -> Option<&dyn std::any::Any>;
-
-    /// Get the root ancestor State of a specific type.
+    /// # Callback form
     ///
-    /// Unlike `find_ancestor_state`, this finds the furthest ancestor, not
-    /// nearest.
-    fn find_root_ancestor_state(&self, type_id: TypeId) -> Option<&dyn std::any::Any>;
+    /// The closure receives a reference to the matched ancestor View as
+    /// `&dyn Any` and runs synchronously while the implementation holds
+    /// the necessary tree-read-lock — this preserves the
+    /// declarative-build invariant (Constitution Principle 5) AND avoids
+    /// extending a `&self` borrow into the rest of `build()`. The typed
+    /// wrapper [`BuildContextExt::find_ancestor`] handles `TypeId`
+    /// resolution and downcast.
+    ///
+    /// Returns `true` if an ancestor View of that type was found and the
+    /// callback was invoked; `false` otherwise. The callback is invoked
+    /// at most once.
+    ///
+    /// Plan §U11 / R6. Flutter parity: `framework.dart:5122`
+    /// `findAncestorWidgetOfExactType<T>`.
+    fn find_ancestor_view(
+        &self,
+        type_id: TypeId,
+        callback: &mut dyn FnMut(&dyn std::any::Any),
+    ) -> bool;
+
+    /// Get the nearest ancestor `ViewState` of a specific type.
+    ///
+    /// `type_id` keys off the **State** type (`TypeId::of::<V::State>()`),
+    /// not the StatefulView type — Flutter's
+    /// `findAncestorStateOfType<T extends State>` does the same: it
+    /// matches against the State runtime type, since two different
+    /// StatefulWidgets may share a State subtype.
+    ///
+    /// Same callback shape as [`find_ancestor_view`]: synchronous
+    /// callback while the read-lock is held, no borrow extension.
+    ///
+    /// Plan §U11 / R7. Flutter parity: `framework.dart:5132`
+    /// `findAncestorStateOfType<T>`.
+    ///
+    /// [`find_ancestor_view`]: BuildContext::find_ancestor_view
+    fn find_ancestor_state(
+        &self,
+        type_id: TypeId,
+        callback: &mut dyn FnMut(&dyn std::any::Any),
+    ) -> bool;
+
+    /// Get the root-most ancestor `ViewState` of a specific type.
+    ///
+    /// Unlike [`find_ancestor_state`], walks **all** the way to the
+    /// root and yields the **furthest** matching ancestor, not the
+    /// nearest. Useful for reaching a top-level navigator/scaffold
+    /// state from a deeply nested view.
+    ///
+    /// Same callback shape and `type_id` semantics as
+    /// [`find_ancestor_state`].
+    ///
+    /// Plan §U11 / R8. Flutter parity: `framework.dart:5146`
+    /// `findRootAncestorStateOfType<T>`.
+    ///
+    /// [`find_ancestor_state`]: BuildContext::find_ancestor_state
+    fn find_root_ancestor_state(
+        &self,
+        type_id: TypeId,
+        callback: &mut dyn FnMut(&dyn std::any::Any),
+    ) -> bool;
 
     // ========================================================================
     // RenderObject Access
@@ -272,28 +324,101 @@ pub trait BuildContextExt: BuildContext {
         result
     }
 
-    /// Find the nearest ancestor View of type T.
+    /// Find the nearest ancestor View of type `V` and apply `f` to it.
+    ///
+    /// Typed callback wrapper over [`BuildContext::find_ancestor_view`].
+    /// The closure receives `&V` and returns any derived value `R` —
+    /// typically a cloned field. Does NOT register a dependency
+    /// (ancestor lookups are read-only walks; only `depend_on` records
+    /// dependents).
+    ///
+    /// Callback form chosen over `Option<&V>` to preserve the
+    /// declarative-build invariant (Constitution Principle 5) and avoid
+    /// extending the ancestor-view borrow across the rest of `build()`.
+    /// See plan §D2.
+    ///
+    /// Plan §U11 / R6. Flutter parity: `framework.dart:5122`
+    /// `findAncestorWidgetOfExactType<T>`.
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// let scaffold: Option<&Scaffold> = ctx.find_ancestor::<Scaffold>();
+    /// let title: Option<String> =
+    ///     ctx.find_ancestor::<Scaffold, _>(|s| s.title.clone());
     /// ```
-    fn find_ancestor<T: 'static>(&self) -> Option<&T> {
-        self.find_ancestor_view(TypeId::of::<T>())
-            .and_then(|any| any.downcast_ref::<T>())
+    fn find_ancestor<V: 'static, R>(&self, f: impl FnOnce(&V) -> R) -> Option<R> {
+        let mut result: Option<R> = None;
+        let mut once = Some(f);
+        self.find_ancestor_view(TypeId::of::<V>(), &mut |any| {
+            if let (Some(typed), Some(call)) = (any.downcast_ref::<V>(), once.take()) {
+                result = Some(call(typed));
+            }
+        });
+        result
     }
 
-    /// Find the nearest ancestor State of type T.
+    /// Find the nearest ancestor `ViewState` of type `S` and apply `f`.
+    ///
+    /// Typed callback wrapper over [`BuildContext::find_ancestor_state`].
+    /// `S` is the State type itself (e.g. `MyCounterState`), not the
+    /// owning StatefulView — Flutter's `findAncestorStateOfType<T>` does
+    /// the same: it keys off the State runtime type.
+    ///
+    /// Same callback contract as [`find_ancestor`]: synchronous run, no
+    /// borrow extension. Does NOT register a dependency.
+    ///
+    /// Plan §U11 / R7. Flutter parity: `framework.dart:5132`
+    /// `findAncestorStateOfType<T>`.
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// let state: Option<&ScaffoldState> = ctx.find_state::<ScaffoldState>();
+    /// let count: Option<i32> =
+    ///     ctx.find_state::<CounterState, _>(|s| s.count);
     /// ```
-    fn find_state<T: 'static>(&self) -> Option<&T> {
-        self.find_ancestor_state(TypeId::of::<T>())
-            .and_then(|any| any.downcast_ref::<T>())
+    ///
+    /// [`find_ancestor`]: BuildContextExt::find_ancestor
+    fn find_state<S: 'static, R>(&self, f: impl FnOnce(&S) -> R) -> Option<R> {
+        let mut result: Option<R> = None;
+        let mut once = Some(f);
+        self.find_ancestor_state(TypeId::of::<S>(), &mut |any| {
+            if let (Some(typed), Some(call)) = (any.downcast_ref::<S>(), once.take()) {
+                result = Some(call(typed));
+            }
+        });
+        result
+    }
+
+    /// Find the **root-most** ancestor `ViewState` of type `S` and apply `f`.
+    ///
+    /// Unlike [`find_state`], walks all the way to the root of the
+    /// element tree and invokes the callback on the **furthest**
+    /// matching State, not the nearest. Useful for reaching a top-level
+    /// navigator/scaffold from a deeply nested view.
+    ///
+    /// Same callback contract as [`find_state`]: synchronous run, no
+    /// borrow extension. Does NOT register a dependency.
+    ///
+    /// Plan §U11 / R8. Flutter parity: `framework.dart:5146`
+    /// `findRootAncestorStateOfType<T>`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let navigator_route: Option<String> =
+    ///     ctx.find_root_state::<NavigatorState, _>(|s| s.current_route.clone());
+    /// ```
+    ///
+    /// [`find_state`]: BuildContextExt::find_state
+    fn find_root_state<S: 'static, R>(&self, f: impl FnOnce(&S) -> R) -> Option<R> {
+        let mut result: Option<R> = None;
+        let mut once = Some(f);
+        self.find_root_ancestor_state(TypeId::of::<S>(), &mut |any| {
+            if let (Some(typed), Some(call)) = (any.downcast_ref::<S>(), once.take()) {
+                result = Some(call(typed));
+            }
+        });
+        result
     }
 }
 

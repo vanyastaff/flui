@@ -405,6 +405,49 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     fn as_inherited_mut(&mut self) -> Option<&mut dyn crate::element::InheritedElementAccess> {
         None
     }
+
+    // ========================================================================
+    // Ancestor-finder protocol (U11 / R6, R7, R8)
+    // ========================================================================
+
+    /// Borrow the View configuration this element holds as `&dyn Any`.
+    ///
+    /// Returns `None` by the default impl; the unified `Element<V, A, B>`
+    /// overrides it to hand out `&ElementCore::view` as `&dyn Any` so
+    /// [`BuildContext::find_ancestor_view`] can downcast at the dispatch
+    /// boundary without naming `V` at the trait surface.
+    ///
+    /// The reference is borrowed for the lifetime of the immutable
+    /// borrow on this element — the caller's typed-callback wrapper
+    /// runs synchronously while the tree-read-lock is held, never
+    /// extending the borrow into the rest of `build()`. Plan §U11.
+    ///
+    /// Flutter parity: `framework.dart:5122`
+    /// `findAncestorWidgetOfExactType<T>` — reads `element.widget` once
+    /// the ancestor is identified.
+    fn view_as_any(&self) -> Option<&dyn std::any::Any> {
+        None
+    }
+
+    /// Borrow this element's persistent `ViewState` as `&dyn Any` if
+    /// this is a `StatefulElement<V>`.
+    ///
+    /// Returns `None` for every behavior other than `StatefulBehavior<V>`
+    /// (which yields `Some(&self.behavior.state)`). Used by
+    /// [`BuildContext::find_ancestor_state`] and
+    /// [`BuildContext::find_root_ancestor_state`] (plan §U11) to surface
+    /// the typed `ViewState` without leaking `V` into the object-safe
+    /// trait surface.
+    ///
+    /// Flutter parity: `framework.dart:5132`
+    /// `findAncestorStateOfType<T>` and `framework.dart:5146`
+    /// `findRootAncestorStateOfType<T>` both read `element.state` on a
+    /// `StatefulElement` after the runtime-type check succeeds. We do
+    /// the equivalent runtime-type check via `TypeId::of::<S>()` keyed
+    /// off `V::State`.
+    fn state_as_any(&self) -> Option<&dyn std::any::Any> {
+        None
+    }
 }
 
 impl_downcast!(ElementBase);

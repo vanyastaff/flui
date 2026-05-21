@@ -160,6 +160,49 @@ impl ElementBuildContext {
         }
     }
 
+    /// Walk strict-ancestors (parent and up) of `self.element_id`,
+    /// invoking `predicate(&dyn ElementBase) -> ControlFlow<R>` for each
+    /// visited element. Returns `Some(R)` if the predicate breaks with
+    /// `ControlFlow::Break`, or `None` if every ancestor is exhausted
+    /// without a break.
+    ///
+    /// Shared helper for the U11 trio
+    /// ([`find_ancestor_view`](BuildContext::find_ancestor_view),
+    /// [`find_ancestor_state`](BuildContext::find_ancestor_state),
+    /// [`find_root_ancestor_state`](BuildContext::find_root_ancestor_state)).
+    /// The first two stop on the first match; the last continues to root
+    /// and the caller tracks the root-most match in `R` by accumulating
+    /// across `Continue` returns.
+    ///
+    /// The tree read-lock is held for the duration of the walk so the
+    /// `&dyn ElementBase` reference handed to `predicate` cannot escape
+    /// the closure — preserves the declarative-build invariant
+    /// (Constitution Principle 5).
+    ///
+    /// Flutter parity: `framework.dart:5104-5160`
+    /// `_ancestorRenderObjectElement` / `findAncestorStateOfType` /
+    /// `findRootAncestorStateOfType` — Flutter uses an inline
+    /// `Element ancestor = _parent` loop with the same break-on-match
+    /// shape.
+    fn walk_strict_ancestors<R>(
+        &self,
+        mut predicate: impl FnMut(&dyn crate::view::ElementBase) -> std::ops::ControlFlow<R>,
+    ) -> Option<R> {
+        let tree = self.tree.read();
+
+        let mut current_id = self.element_id;
+        loop {
+            let node = tree.get(current_id)?;
+            let parent_id = node.parent()?;
+            let parent_node = tree.get(parent_id)?;
+            match predicate(parent_node.element()) {
+                std::ops::ControlFlow::Break(result) => return Some(result),
+                std::ops::ControlFlow::Continue(()) => {}
+            }
+            current_id = parent_id;
+        }
+    }
+
     /// Create a minimal context for use when full tree/owner aren't available.
     ///
     /// This is useful for StatelessElement::perform_build where we just need
@@ -316,20 +359,130 @@ impl BuildContext for ElementBuildContext {
         }
     }
 
-    fn find_ancestor_view(&self, type_id: TypeId) -> Option<&dyn Any> {
-        // Similar lifetime issue as depend_on_inherited
-        let _ = type_id;
-        None
+    fn find_ancestor_view(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
+        // Walk strict-ancestors, break on the first whose View's
+        // TypeId matches. The callback runs inside `walk_strict_ancestors`
+        // while the tree read-lock is held — preserves declarative-build
+        // invariant.
+        //
+        // Flutter parity: `framework.dart:5122`
+        // `findAncestorWidgetOfExactType<T>` returns `element.widget` of
+        // the first ancestor whose widget runtimeType equals T. No
+        // dependency recording (this is a read-only walk).
+        let invoked = self.walk_strict_ancestors::<()>(|element| {
+            if element.view_type_id() == type_id
+                && let Some(view_any) = element.view_as_any()
+            {
+                callback(view_any);
+                return std::ops::ControlFlow::Break(());
+            }
+            std::ops::ControlFlow::Continue(())
+        });
+        invoked.is_some()
     }
 
-    fn find_ancestor_state(&self, type_id: TypeId) -> Option<&dyn Any> {
-        let _ = type_id;
-        None
+    fn find_ancestor_state(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
+        // Walk strict-ancestors, break on the first whose State's
+        // `TypeId` (via `Any::type_id`) matches. Stateless elements
+        // return `None` from `state_as_any`, so they're skipped.
+        //
+        // Flutter parity: `framework.dart:5132`
+        // `findAncestorStateOfType<T extends State>` matches against
+        // the State runtime type (T is the State subtype, not the
+        // StatefulWidget). We do the same: `type_id` is
+        // `TypeId::of::<S>()` where S is the State type.
+        let invoked = self.walk_strict_ancestors::<()>(|element| {
+            if let Some(state_any) = element.state_as_any()
+                && (*state_any).type_id() == type_id
+            {
+                callback(state_any);
+                return std::ops::ControlFlow::Break(());
+            }
+            std::ops::ControlFlow::Continue(())
+        });
+        invoked.is_some()
     }
 
-    fn find_root_ancestor_state(&self, type_id: TypeId) -> Option<&dyn Any> {
-        let _ = type_id;
-        None
+    fn find_root_ancestor_state(
+        &self,
+        type_id: TypeId,
+        callback: &mut dyn FnMut(&dyn Any),
+    ) -> bool {
+        // Walk strict-ancestors all the way to root, recording the
+        // root-most (i.e. the last visited matching) ancestor's
+        // `ElementId`. After the walk, run the callback against that
+        // ancestor's state inside a fresh read-lock.
+        //
+        // Two-phase shape (resolve id, then re-borrow for callback) is
+        // used because the in-loop predicate would need to both
+        // mutably borrow the accumulator (to remember the last match)
+        // AND mutably borrow `callback: &mut dyn FnMut` (to invoke it
+        // on that last match). The two-phase approach keeps each
+        // borrow disjoint and gives us O(depth) walks with no clones
+        // — the tree is single-threaded during build, so the re-lock
+        // is essentially free.
+        //
+        // The shared `walk_strict_ancestors` helper isn't reused here
+        // because it surfaces `&dyn ElementBase` but not the matching
+        // ancestor's id, and root-most matching needs the id to fetch
+        // state via the second borrow. Keeping the helper minimal
+        // (no id-yielding variant) is a YAGNI call for U11; if U12 or
+        // a future unit needs id-yielding walks we can widen the
+        // surface then.
+        //
+        // Flutter parity: `framework.dart:5146`
+        // `findRootAncestorStateOfType<T>` — Flutter walks
+        // `element._parent` repeatedly, updating a local `ancestor`
+        // whenever a match is found, and returns `ancestor?.state` at
+        // the end.
+        let mut root_most: Option<ElementId> = None;
+
+        // Phase 1: walk all strict-ancestors, record the root-most match.
+        // Use `walk_strict_ancestors` with a closure that captures
+        // `root_most` mutably and always returns `Continue` so the walk
+        // exhausts the entire ancestor chain. We need the matching
+        // ancestor's `ElementId`, but the walker only exposes
+        // `&dyn ElementBase` — we work around that by parameterising R
+        // on `Option<ElementId>` and threading the candidate id through
+        // the closure via a small index counter. Simpler still: do the
+        // walk inline but in a `while let` shape that satisfies
+        // clippy::while_let_loop while keeping the same semantics.
+        {
+            let tree = self.tree.read();
+            let mut next_id: Option<ElementId> = Some(self.element_id);
+            while let Some(current_id) = next_id {
+                let Some(node) = tree.get(current_id) else {
+                    break;
+                };
+                let Some(parent_id) = node.parent() else {
+                    break;
+                };
+                let Some(parent_node) = tree.get(parent_id) else {
+                    break;
+                };
+                if let Some(state_any) = parent_node.element().state_as_any()
+                    && (*state_any).type_id() == type_id
+                {
+                    root_most = Some(parent_id);
+                }
+                next_id = Some(parent_id);
+            }
+        }
+
+        // Phase 2: invoke the callback against the root-most match.
+        let Some(matched_id) = root_most else {
+            return false;
+        };
+
+        let tree = self.tree.read();
+        let Some(matched_node) = tree.get(matched_id) else {
+            return false;
+        };
+        let Some(state_any) = matched_node.element().state_as_any() else {
+            return false;
+        };
+        callback(state_any);
+        true
     }
 
     fn find_render_object(&self) -> Option<RenderId> {

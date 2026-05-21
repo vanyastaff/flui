@@ -176,6 +176,24 @@ where
     }
 
     // ========================================================================
+    // Ancestor-finder protocol (U11 / R6, R7, R8)
+    //
+    // Both accessors route through the behavior. `view_as_any` is
+    // uniform across every behavior — the View configuration always
+    // lives in `ElementCore` — so we hand out the core's view directly.
+    // `state_as_any` is behavior-specific: only `StatefulBehavior<V>`
+    // overrides the default `None`.
+    // ========================================================================
+
+    fn view_as_any(&self) -> Option<&dyn Any> {
+        Some(self.core.view() as &dyn Any)
+    }
+
+    fn state_as_any(&self) -> Option<&dyn Any> {
+        self.behavior.state_as_any()
+    }
+
+    // ========================================================================
     // Lifecycle Methods with Behavior Hooks
     // ========================================================================
 
