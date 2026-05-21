@@ -15,7 +15,7 @@ use std::sync::Arc;
 use flui_types::{Offset, geometry::Pixels, gestures::ForcePressDetails};
 use parking_lot::Mutex;
 
-use super::recognizer::{GestureRecognizer, GestureRecognizerState};
+use super::recognizer::{GestureRecognizer, RecognizerBase};
 use crate::{
     arena::GestureArenaMember, events::PointerEvent, ids::PointerId, settings::GestureSettings,
 };
@@ -73,7 +73,7 @@ pub type ForcePressEndCallback = Arc<dyn Fn(ForcePressDetails) + Send + Sync>;
 #[derive(Clone)]
 pub struct ForcePressGestureRecognizer {
     /// Base state (arena, tracking, etc.)
-    state: GestureRecognizerState,
+    state: RecognizerBase,
 
     /// Callbacks
     callbacks: Arc<Mutex<ForcePressCallbacks>>,
@@ -143,7 +143,7 @@ impl ForcePressGestureRecognizer {
     /// Create a new force press recognizer with gesture arena
     pub fn new(arena: crate::arena::GestureArena) -> Arc<Self> {
         Arc::new(Self {
-            state: GestureRecognizerState::new(arena),
+            state: RecognizerBase::new(arena),
             callbacks: Arc::new(Mutex::new(ForcePressCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(ForcePressState::default())),
             settings: Arc::new(Mutex::new(GestureSettings::default())),
@@ -158,7 +158,7 @@ impl ForcePressGestureRecognizer {
         settings: GestureSettings,
     ) -> Arc<Self> {
         Arc::new(Self {
-            state: GestureRecognizerState::new(arena),
+            state: RecognizerBase::new(arena),
             callbacks: Arc::new(Mutex::new(ForcePressCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(ForcePressState::default())),
             settings: Arc::new(Mutex::new(settings)),

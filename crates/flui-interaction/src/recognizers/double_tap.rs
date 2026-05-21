@@ -18,7 +18,7 @@ use std::{
 use flui_types::{Offset, geometry::Pixels};
 use parking_lot::Mutex;
 
-use super::recognizer::{GestureRecognizer, GestureRecognizerState};
+use super::recognizer::{GestureRecognizer, RecognizerBase};
 use crate::{
     arena::GestureArenaMember,
     events::{PointerEvent, PointerEventExt, PointerType},
@@ -62,7 +62,7 @@ pub struct DoubleTapDetails {
 #[derive(Clone)]
 pub struct DoubleTapGestureRecognizer {
     /// Base state (arena, tracking, etc.)
-    state: GestureRecognizerState,
+    state: RecognizerBase,
 
     /// Callbacks
     callbacks: Arc<Mutex<DoubleTapCallbacks>>,
@@ -126,7 +126,7 @@ impl DoubleTapGestureRecognizer {
     /// Create a new double tap recognizer with gesture arena
     pub fn new(arena: crate::arena::GestureArena) -> Arc<Self> {
         Arc::new(Self {
-            state: GestureRecognizerState::new(arena),
+            state: RecognizerBase::new(arena),
             callbacks: Arc::new(Mutex::new(DoubleTapCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(DoubleTapState::default())),
             settings: Arc::new(Mutex::new(GestureSettings::default())),
@@ -139,7 +139,7 @@ impl DoubleTapGestureRecognizer {
         settings: GestureSettings,
     ) -> Arc<Self> {
         Arc::new(Self {
-            state: GestureRecognizerState::new(arena),
+            state: RecognizerBase::new(arena),
             callbacks: Arc::new(Mutex::new(DoubleTapCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(DoubleTapState::default())),
             settings: Arc::new(Mutex::new(settings)),

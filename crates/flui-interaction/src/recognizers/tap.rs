@@ -14,7 +14,7 @@ use std::sync::Arc;
 use flui_types::{Offset, geometry::Pixels};
 use parking_lot::Mutex;
 
-use super::recognizer::{GestureRecognizer, GestureRecognizerState};
+use super::recognizer::{GestureRecognizer, RecognizerBase};
 use crate::{
     arena::GestureArenaMember,
     events::{PointerEvent, PointerType},
@@ -58,7 +58,7 @@ pub struct TapDetails {
 #[derive(Clone)]
 pub struct TapGestureRecognizer {
     /// Base state (arena, tracking, etc.)
-    state: GestureRecognizerState,
+    state: RecognizerBase,
 
     /// Callbacks
     callbacks: Arc<Mutex<TapCallbacks>>,
@@ -99,7 +99,7 @@ impl TapGestureRecognizer {
     /// Create a new tap recognizer with gesture arena
     pub fn new(arena: crate::arena::GestureArena) -> Arc<Self> {
         Arc::new(Self {
-            state: GestureRecognizerState::new(arena),
+            state: RecognizerBase::new(arena),
             callbacks: Arc::new(Mutex::new(TapCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(TapState::Ready)),
             settings: Arc::new(Mutex::new(GestureSettings::default())),
@@ -112,7 +112,7 @@ impl TapGestureRecognizer {
         settings: GestureSettings,
     ) -> Arc<Self> {
         Arc::new(Self {
-            state: GestureRecognizerState::new(arena),
+            state: RecognizerBase::new(arena),
             callbacks: Arc::new(Mutex::new(TapCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(TapState::Ready)),
             settings: Arc::new(Mutex::new(settings)),

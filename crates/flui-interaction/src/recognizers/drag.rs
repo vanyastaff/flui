@@ -17,7 +17,7 @@ use flui_types::{
 };
 use parking_lot::Mutex;
 
-use super::recognizer::{GestureRecognizer, GestureRecognizerState};
+use super::recognizer::{GestureRecognizer, RecognizerBase};
 use crate::{
     arena::GestureArenaMember,
     events::{PointerEvent, PointerEventExt, PointerType},
@@ -126,7 +126,7 @@ pub type DragCancelCallback = Arc<dyn Fn() + Send + Sync>;
 #[derive(Clone)]
 pub struct DragGestureRecognizer {
     /// Base state (arena, tracking, etc.)
-    state: GestureRecognizerState,
+    state: RecognizerBase,
 
     /// Drag axis constraint
     axis: DragAxis,
@@ -202,7 +202,7 @@ impl DragGestureRecognizer {
     /// Create a new drag recognizer with gesture arena and axis constraint
     pub fn new(arena: crate::arena::GestureArena, axis: DragAxis) -> Arc<Self> {
         Arc::new(Self {
-            state: GestureRecognizerState::new(arena),
+            state: RecognizerBase::new(arena),
             axis,
             callbacks: Arc::new(Mutex::new(DragCallbacks::default())),
             drag_state: Arc::new(Mutex::new(DragState::default())),
@@ -217,7 +217,7 @@ impl DragGestureRecognizer {
         settings: GestureSettings,
     ) -> Arc<Self> {
         Arc::new(Self {
-            state: GestureRecognizerState::new(arena),
+            state: RecognizerBase::new(arena),
             axis,
             callbacks: Arc::new(Mutex::new(DragCallbacks::default())),
             drag_state: Arc::new(Mutex::new(DragState::default())),

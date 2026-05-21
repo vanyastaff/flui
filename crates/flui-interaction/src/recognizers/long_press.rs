@@ -19,7 +19,7 @@ use std::{
 use flui_types::{Offset, geometry::Pixels};
 use parking_lot::Mutex;
 
-use super::recognizer::{GestureRecognizer, GestureRecognizerState};
+use super::recognizer::{GestureRecognizer, RecognizerBase};
 use crate::{
     arena::GestureArenaMember,
     events::{PointerEvent, PointerType},
@@ -98,7 +98,7 @@ pub struct LongPressDetails {
 #[derive(Clone)]
 pub struct LongPressGestureRecognizer {
     /// Base state (arena, tracking, etc.)
-    state: GestureRecognizerState,
+    state: RecognizerBase,
 
     /// Callbacks
     callbacks: Arc<Mutex<LongPressCallbacks>>,
@@ -160,7 +160,7 @@ impl LongPressGestureRecognizer {
     /// Create a new long press recognizer with gesture arena
     pub fn new(arena: crate::arena::GestureArena) -> Arc<Self> {
         Arc::new(Self {
-            state: GestureRecognizerState::new(arena),
+            state: RecognizerBase::new(arena),
             callbacks: Arc::new(Mutex::new(LongPressCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(LongPressState::default())),
             settings: Arc::new(Mutex::new(GestureSettings::default())),
@@ -173,7 +173,7 @@ impl LongPressGestureRecognizer {
         settings: GestureSettings,
     ) -> Arc<Self> {
         Arc::new(Self {
-            state: GestureRecognizerState::new(arena),
+            state: RecognizerBase::new(arena),
             callbacks: Arc::new(Mutex::new(LongPressCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(LongPressState::default())),
             settings: Arc::new(Mutex::new(settings)),
