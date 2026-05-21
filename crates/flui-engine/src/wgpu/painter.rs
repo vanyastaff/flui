@@ -359,11 +359,26 @@ pub struct WgpuPainter {
     /// Used to restore clip state on `restore()`.
     rrect_clip_stack: Vec<[f32; 8]>,
 
+    /// SDF rsuperellipse clip stack (for save/restore).
+    ///
+    /// Stack of `[f32; 12]` superellipse clip uniforms — 4 floats outer
+    /// rect (x, y, w, h) + 8 floats per-corner radii (rx/ry per 4 corners
+    /// in tl, tr, br, bl order). Mirrors the `rrect_clip_stack` shape with
+    /// a wider tuple to carry the per-corner separate-axis radii.
+    rsuperellipse_clip_stack: Vec<[f32; 12]>,
+
     /// Current SDF rounded rectangle clip.
     /// All zeros means no clip is active.
     /// When non-zero, each new instance gets this clip data so the fragment
     /// shader can perform per-pixel SDF clipping without a stencil buffer.
     current_rrect_clip: [f32; 8],
+
+    /// Active SDF rsuperellipse clip uniform (zero when no clip is active).
+    ///
+    /// Tuple layout: indices 0-3 = outer rect `(x, y, w, h)`; indices 4-11
+    /// = per-corner radii `(tl_x, tl_y, tr_x, tr_y, br_x, br_y, bl_x, bl_y)`.
+    /// Exponent `n = 4` is hardcoded in the WGSL shader, not stored here.
+    current_rsuperellipse_clip: [f32; 12],
 
     // ===== Opacity/Layer Stack =====
     /// Stack of opacity values for save_layer/restore_layer
@@ -911,6 +926,8 @@ impl WgpuPainter {
             current_scissor: None,
             rrect_clip_stack: Vec::new(),
             current_rrect_clip: [0.0; 8],
+            rsuperellipse_clip_stack: Vec::new(),
+            current_rsuperellipse_clip: [0.0; 12],
             opacity_stack: Vec::new(),
             current_opacity: 1.0,
             layer_stack: Vec::new(),
@@ -3253,6 +3270,10 @@ impl WgpuPainter {
 
         // Save current SDF rrect clip
         self.rrect_clip_stack.push(self.current_rrect_clip);
+
+        // Save current SDF rsuperellipse clip
+        self.rsuperellipse_clip_stack
+            .push(self.current_rsuperellipse_clip);
     }
 
     pub fn restore(&mut self) {
@@ -3273,6 +3294,13 @@ impl WgpuPainter {
                 self.current_rrect_clip = clip;
             } else {
                 self.current_rrect_clip = [0.0; 8];
+            }
+
+            // Restore SDF rsuperellipse clip state
+            if let Some(clip) = self.rsuperellipse_clip_stack.pop() {
+                self.current_rsuperellipse_clip = clip;
+            } else {
+                self.current_rsuperellipse_clip = [0.0; 12];
             }
 
             #[cfg(debug_assertions)]
