@@ -1135,6 +1135,18 @@ impl Scheduler {
         )
         .unwrap_or(AppLifecycleState::Detached);
 
+        // Auto-toggle frames_enabled per Flutter parity at
+        // binding.dart:414-441. Resumed/Inactive keep rendering active
+        // (Inactive means visible-but-unfocused — split screen, modal — still
+        // needs to draw). Hidden/Paused/Detached disable the frame loop.
+        let should_render = matches!(
+            new_state,
+            AppLifecycleState::Resumed | AppLifecycleState::Inactive
+        );
+        self.binding
+            .frames_enabled
+            .store(should_render, Ordering::Release);
+
         // Only notify if state actually changed
         if old_state != new_state {
             // Notify listeners (clone to avoid holding lock during callbacks)
