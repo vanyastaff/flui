@@ -205,7 +205,7 @@ impl FrameBudget {
     /// Create a new frame budget for target FPS
     pub fn new(target_fps: u32) -> Self {
         Self {
-            frame_duration: FrameDuration::from_fps(target_fps),
+            frame_duration: FrameDuration::try_from_fps(target_fps).expect("fps > 0"),
             frame_start: None,
             policy: BudgetPolicy::SkipIdle,
             phase_timing: PhaseTiming::default(),
@@ -446,7 +446,7 @@ impl FrameBudget {
 
     /// Set the target FPS
     pub fn set_target_fps(&mut self, target_fps: u32) {
-        self.frame_duration = FrameDuration::from_fps(target_fps);
+        self.frame_duration = FrameDuration::try_from_fps(target_fps).expect("fps > 0");
     }
 
     /// Get target FPS
@@ -596,7 +596,10 @@ impl FrameBudgetBuilder {
     pub fn build(self) -> FrameBudget {
         let frame_duration = self
             .frame_duration
-            .or_else(|| self.target_fps.map(FrameDuration::from_fps))
+            .or_else(|| {
+                self.target_fps
+                    .map(|fps| FrameDuration::try_from_fps(fps).expect("fps > 0"))
+            })
             .unwrap_or(FrameDuration::FPS_60);
 
         let mut budget = FrameBudget::with_duration(frame_duration);

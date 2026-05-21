@@ -30,7 +30,7 @@
 //! ## Example
 //!
 //! ```rust
-//! use flui_scheduler::{Priority, Scheduler, traits::AnimationPriority};
+//! use flui_scheduler::{Priority, Scheduler};
 //!
 //! let scheduler = Scheduler::new();
 //!
@@ -82,7 +82,6 @@ use crate::{
     id::{CallbackId, IdGenerator},
     task::{Priority, TaskQueue},
     ticker::TickerProvider,
-    traits::PriorityLevel,
     vsync::VsyncScheduler,
 };
 
@@ -245,19 +244,6 @@ impl FrameSkipPolicy {
             2 => Some(Self::SkipToLatest),
             3 => Some(Self::LimitedSkip),
             _ => None,
-        }
-    }
-
-    /// Convert from u8 representation (for atomic storage)
-    ///
-    /// # Panics
-    /// Panics if the value is not a valid FrameSkipPolicy discriminant.
-    /// For fallible conversion, use [`try_from_u8`](Self::try_from_u8).
-    #[inline]
-    pub const fn from_u8(value: u8) -> Self {
-        match Self::try_from_u8(value) {
-            Some(v) => v,
-            None => panic!("Invalid FrameSkipPolicy value"),
         }
     }
 
@@ -438,7 +424,7 @@ impl Scheduler {
 
     /// Create a scheduler with custom target FPS
     pub fn with_target_fps(target_fps: u32) -> Self {
-        Self::with_frame_duration(FrameDuration::from_fps(target_fps))
+        Self::with_frame_duration(FrameDuration::try_from_fps(target_fps).expect("fps > 0"))
     }
 
     /// Create a scheduler with specific frame duration
@@ -493,12 +479,18 @@ impl Scheduler {
 
     /// Get current scheduler phase
     pub fn phase(&self) -> SchedulerPhase {
-        SchedulerPhase::from_u8(self.frame.scheduler_phase.load(Ordering::Acquire))
+        // Saturating default to Idle on invalid atomic byte (Principle 6:
+        // never panic in production paths). Invalid byte is unreachable in
+        // normal operation; this is defensive against memory corruption only.
+        SchedulerPhase::try_from_u8(self.frame.scheduler_phase.load(Ordering::Acquire))
+            .unwrap_or(SchedulerPhase::Idle)
     }
 
     /// Set scheduler phase with validation
     fn set_scheduler_phase(&self, new_phase: SchedulerPhase) {
-        let current = SchedulerPhase::from_u8(self.frame.scheduler_phase.load(Ordering::Acquire));
+        let current =
+            SchedulerPhase::try_from_u8(self.frame.scheduler_phase.load(Ordering::Acquire))
+                .unwrap_or(SchedulerPhase::Idle);
         debug_assert!(
             current.can_transition_to(new_phase),
             "Invalid phase transition: {:?} -> {:?}",
@@ -854,11 +846,6 @@ impl Scheduler {
         self.task_queue.add(priority, callback);
     }
 
-    /// Add a task with compile-time priority checking
-    pub fn add_task_typed<P: PriorityLevel>(&self, callback: impl FnOnce() + Send + 'static) {
-        self.task_queue.add_typed::<P>(callback);
-    }
-
     /// Get task queue reference
     pub fn task_queue(&self) -> &TaskQueue {
         &self.task_queue
@@ -870,7 +857,7 @@ impl Scheduler {
 
     /// Set target FPS
     pub fn set_target_fps(&self, fps: u32) {
-        let frame_duration = FrameDuration::from_fps(fps);
+        let frame_duration = FrameDuration::try_from_fps(fps).expect("fps > 0");
         *self.frame.frame_duration.lock() = frame_duration;
         *self.frame.budget.lock() = FrameBudget::new(fps);
     }
@@ -1032,7 +1019,8 @@ impl Scheduler {
 
     /// Get current frame skip policy
     pub fn frame_skip_policy(&self) -> FrameSkipPolicy {
-        FrameSkipPolicy::from_u8(self.frame.frame_skip_policy.load(Ordering::Acquire))
+        FrameSkipPolicy::try_from_u8(self.frame.frame_skip_policy.load(Ordering::Acquire))
+            .unwrap_or(FrameSkipPolicy::Never)
     }
 
     /// Set maximum frames to skip (for LimitedSkip policy)
@@ -1062,7 +1050,9 @@ impl Scheduler {
 
         let elapsed_ms = last.elapsed().as_secs_f64() * 1000.0;
         let frame_budget_ms = self.frame.frame_duration.lock().as_ms().value();
-        let policy = FrameSkipPolicy::from_u8(self.frame.frame_skip_policy.load(Ordering::Acquire));
+        let policy =
+            FrameSkipPolicy::try_from_u8(self.frame.frame_skip_policy.load(Ordering::Acquire))
+                .unwrap_or(FrameSkipPolicy::Never);
         let max_skip = *self.frame.max_frame_skip.lock();
 
         policy.frames_to_skip(elapsed_ms, frame_budget_ms, max_skip)
@@ -1108,7 +1098,8 @@ impl Scheduler {
     ///
     /// Returns the current state of the application as seen by the platform.
     pub fn lifecycle_state(&self) -> AppLifecycleState {
-        AppLifecycleState::from_u8(self.binding.lifecycle_state.load(Ordering::Acquire))
+        AppLifecycleState::try_from_u8(self.binding.lifecycle_state.load(Ordering::Acquire))
+            .unwrap_or(AppLifecycleState::Detached)
     }
 
     /// Handle a lifecycle state change from the platform
@@ -1137,11 +1128,24 @@ impl Scheduler {
     #[tracing::instrument(skip(self))]
     pub fn handle_app_lifecycle_state_change(&self, new_state: AppLifecycleState) {
         // Atomically swap state and get old value
-        let old_state = AppLifecycleState::from_u8(
+        let old_state = AppLifecycleState::try_from_u8(
             self.binding
                 .lifecycle_state
                 .swap(new_state as u8, Ordering::AcqRel),
+        )
+        .unwrap_or(AppLifecycleState::Detached);
+
+        // Auto-toggle frames_enabled per Flutter parity at
+        // binding.dart:414-441. Resumed/Inactive keep rendering active
+        // (Inactive means visible-but-unfocused — split screen, modal — still
+        // needs to draw). Hidden/Paused/Detached disable the frame loop.
+        let should_render = matches!(
+            new_state,
+            AppLifecycleState::Resumed | AppLifecycleState::Inactive
         );
+        self.binding
+            .frames_enabled
+            .store(should_render, Ordering::Release);
 
         // Only notify if state actually changed
         if old_state != new_state {
@@ -1535,27 +1539,6 @@ impl BindingBase for Scheduler {
 // Implement singleton pattern via macro
 impl_binding_singleton!(Scheduler);
 
-// Arc-compatible singleton for AnimationController compatibility
-static ARC_INSTANCE: std::sync::OnceLock<Arc<Scheduler>> = std::sync::OnceLock::new();
-
-impl Scheduler {
-    /// Get Arc-wrapped singleton instance.
-    ///
-    /// This is needed for APIs that require `Arc<Scheduler>` (e.g.,
-    /// AnimationController). The Arc wraps a new Scheduler instance that is
-    /// separate from the static singleton, but both will be ticked by the
-    /// same event loop since they share the same thread.
-    ///
-    /// **Important:** The caller must ensure this scheduler is ticked by
-    /// calling `handle_begin_frame()` and `handle_draw_frame()` in the
-    /// event loop.
-    pub fn arc_instance() -> Arc<Scheduler> {
-        ARC_INSTANCE
-            .get_or_init(|| Arc::new(Scheduler::new()))
-            .clone()
-    }
-}
-
 impl TickerProvider for Scheduler {
     fn schedule_tick(&self, callback: Box<dyn FnOnce(f64) + Send>) {
         // Schedule as transient callback for next frame
@@ -1589,7 +1572,7 @@ impl SchedulerBuilder {
 
     /// Set target FPS
     pub fn target_fps(mut self, fps: u32) -> Self {
-        self.frame_duration = FrameDuration::from_fps(fps);
+        self.frame_duration = FrameDuration::try_from_fps(fps).expect("fps > 0");
         self
     }
 
@@ -1620,7 +1603,7 @@ impl SchedulerBuilder {
         }
 
         if let Some(refresh_rate) = self.vsync_refresh_rate {
-            scheduler.set_vsync(VsyncScheduler::new(refresh_rate));
+            scheduler.set_vsync(VsyncScheduler::try_new(refresh_rate).expect("refresh > 0"));
         }
 
         scheduler
@@ -1636,7 +1619,6 @@ impl Default for SchedulerBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::traits::{AnimationPriority, BuildPriority, IdlePriority, UserInputPriority};
 
     #[test]
     fn test_scheduler_phase_lifecycle() {
@@ -1715,28 +1697,6 @@ mod tests {
 
         let c4 = Arc::clone(&counter);
         scheduler.add_task(Priority::Animation, move || c4.lock().push(2));
-
-        scheduler.execute_frame();
-
-        assert_eq!(*counter.lock(), vec![1, 2, 3, 4]);
-    }
-
-    #[test]
-    fn test_typed_task_execution() {
-        let scheduler = Scheduler::new();
-        let counter = Arc::new(Mutex::new(Vec::new()));
-
-        let c1 = Arc::clone(&counter);
-        scheduler.add_task_typed::<IdlePriority>(move || c1.lock().push(4));
-
-        let c2 = Arc::clone(&counter);
-        scheduler.add_task_typed::<UserInputPriority>(move || c2.lock().push(1));
-
-        let c3 = Arc::clone(&counter);
-        scheduler.add_task_typed::<BuildPriority>(move || c3.lock().push(3));
-
-        let c4 = Arc::clone(&counter);
-        scheduler.add_task_typed::<AnimationPriority>(move || c4.lock().push(2));
 
         scheduler.execute_frame();
 

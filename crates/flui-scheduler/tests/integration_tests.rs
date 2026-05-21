@@ -19,7 +19,7 @@ use flui_scheduler::{
     scheduler::{FrameSkipPolicy, Scheduler, SchedulerBuilder},
     task::{Priority, TaskQueue},
     ticker::{ScheduledTicker, Ticker, TickerCanceled, TickerFuture, TickerState},
-    vsync::{VsyncDrivenScheduler, VsyncMode, VsyncScheduler},
+    vsync::{VsyncMode, VsyncScheduler},
 };
 
 // ============================================================================
@@ -259,7 +259,7 @@ fn test_ticker_canceled_error() {
 
 #[test]
 fn test_vsync_scheduler_basic() {
-    let vsync = VsyncScheduler::new(60);
+    let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
 
     assert_eq!(vsync.refresh_rate(), 60);
     assert!(!vsync.is_active());
@@ -271,31 +271,8 @@ fn test_vsync_scheduler_basic() {
 }
 
 #[test]
-fn test_vsync_driven_scheduler() {
-    let scheduler = Arc::new(Scheduler::new());
-    let vsync_scheduler = VsyncDrivenScheduler::new(scheduler.clone(), 60);
-
-    assert_eq!(vsync_scheduler.refresh_rate(), 60);
-    assert!(!vsync_scheduler.is_active());
-
-    let call_count = Arc::new(AtomicU32::new(0));
-
-    let c = Arc::clone(&call_count);
-    scheduler.add_persistent_frame_callback(Arc::new(move |_| {
-        c.fetch_add(1, Ordering::SeqCst);
-    }));
-
-    // Enable auto-execute and trigger vsync
-    vsync_scheduler.set_auto_execute(true);
-    vsync_scheduler.on_vsync();
-
-    // Check that scheduler was created correctly
-    assert_eq!(vsync_scheduler.refresh_rate(), 60);
-}
-
-#[test]
 fn test_vsync_modes() {
-    let vsync = VsyncScheduler::with_mode(60, VsyncMode::Adaptive);
+    let vsync = VsyncScheduler::try_with_mode(60, VsyncMode::Adaptive).expect("refresh > 0");
     assert_eq!(vsync.mode(), VsyncMode::Adaptive);
 
     vsync.set_mode(VsyncMode::On);
@@ -477,14 +454,14 @@ fn test_duration_conversions() {
     let secs = ms.to_seconds();
     assert!((secs.value() - 1.0).abs() < 0.001);
 
-    let frame_duration = FrameDuration::from_fps(60);
+    let frame_duration = FrameDuration::try_from_fps(60).expect("fps > 0");
     assert!((frame_duration.fps() - 60.0).abs() < 0.1);
     assert!((frame_duration.as_ms().value() - 16.667).abs() < 0.1);
 }
 
 #[test]
 fn test_frame_duration_budget_check() {
-    let frame_duration = FrameDuration::from_fps(60);
+    let frame_duration = FrameDuration::try_from_fps(60).expect("fps > 0");
 
     // Under budget
     let elapsed = Milliseconds::new(10.0);
@@ -577,15 +554,15 @@ fn test_cancel_nonexistent_callback() {
 }
 
 #[test]
-fn test_double_start_ticker() {
+#[cfg(debug_assertions)]
+#[should_panic(expected = "A ticker was started twice")]
+fn test_double_start_ticker_panics_in_debug() {
+    // Flutter parity: ticker.dart:188 throws FlutterError('A ticker was
+    // started twice.'). Post-U10 (7d93611d) FLUI debug-asserts the same
+    // contract instead of silently overwriting the active callback.
     let mut ticker = Ticker::new();
-
     ticker.start(|_| {});
-    assert_eq!(ticker.state(), TickerState::Active);
-
-    // Starting again should replace the callback
     ticker.start(|_| {});
-    assert_eq!(ticker.state(), TickerState::Active);
 }
 
 #[test]
@@ -600,7 +577,7 @@ fn test_mute_idle_ticker() {
 #[test]
 fn test_scheduler_builder_configuration() {
     let scheduler = SchedulerBuilder::new()
-        .frame_duration(FrameDuration::from_fps(30))
+        .frame_duration(FrameDuration::try_from_fps(30).expect("fps > 0"))
         .build();
 
     // Scheduler should be created successfully
@@ -910,19 +887,19 @@ fn test_scheduler_binding_debug_assert_no_time_dilation() {
     let scheduler = Scheduler::new();
 
     // Ensure default
-    set_time_dilation(1.0);
+    set_time_dilation(1.0).expect("positive finite time dilation");
 
     // Should pass with default
     assert!(scheduler.debug_assert_no_time_dilation("test"));
 
     // Set dilation
-    set_time_dilation(2.0);
+    set_time_dilation(2.0).expect("positive finite time dilation");
 
     // Should fail now
     assert!(!scheduler.debug_assert_no_time_dilation("test"));
 
     // Reset
-    set_time_dilation(1.0);
+    set_time_dilation(1.0).expect("positive finite time dilation");
     assert!(scheduler.debug_assert_no_time_dilation("test"));
 }
 
@@ -965,97 +942,6 @@ fn test_performance_mode_handle_dispose() {
 // ============================================================================
 // Extended Traits Tests (for coverage)
 // ============================================================================
-
-#[test]
-fn test_priority_ext_skip_threshold() {
-    use flui_scheduler::traits::PriorityExt;
-
-    let user_threshold = Priority::UserInput.skip_threshold();
-    assert_eq!(user_threshold.value(), 100.0);
-
-    let animation_threshold = Priority::Animation.skip_threshold();
-    assert_eq!(animation_threshold.value(), 100.0);
-
-    let build_threshold = Priority::Build.skip_threshold();
-    assert_eq!(build_threshold.value(), 90.0);
-
-    let idle_threshold = Priority::Idle.skip_threshold();
-    assert_eq!(idle_threshold.value(), 80.0);
-}
-
-#[test]
-fn test_frame_timing_ext() {
-    use flui_scheduler::{frame::FrameTiming, traits::FrameTimingExt};
-
-    let timing = FrameTiming::new(60);
-
-    // Test extension methods
-    let elapsed = timing.elapsed();
-    assert!(elapsed.value() >= 0.0);
-
-    let elapsed_secs = timing.elapsed_seconds();
-    assert!(elapsed_secs.value() >= 0.0);
-
-    let remaining = timing.remaining();
-    assert!(remaining.value() >= 0.0);
-
-    let frame_duration = timing.frame_duration();
-    assert!(frame_duration.fps() > 0.0);
-
-    let utilization = timing.utilization();
-    assert!(utilization.value() >= 0.0);
-}
-
-#[test]
-fn test_frame_budget_ext() {
-    use flui_scheduler::traits::FrameBudgetExt;
-
-    let budget = FrameBudget::new(60);
-
-    // Test extension methods
-    let elapsed = budget.elapsed();
-    assert!(elapsed.value() >= 0.0);
-
-    let remaining = budget.remaining();
-    assert!(remaining.value() >= 0.0);
-
-    let frame_duration = budget.frame_duration();
-    assert!((frame_duration.fps() - 60.0).abs() < 1.0);
-
-    let utilization = budget.utilization_percent();
-    assert!(utilization.value() >= 0.0);
-
-    // Test should_execute
-    assert!(budget.should_execute(Priority::UserInput));
-    assert!(budget.should_execute(Priority::Animation));
-    assert!(budget.should_execute(Priority::Build));
-    assert!(budget.should_execute(Priority::Idle));
-}
-
-#[test]
-fn test_priority_level_constants() {
-    use flui_scheduler::traits::{
-        AnimationPriority, BuildPriority, IdlePriority, PriorityLevel, UserInputPriority,
-    };
-
-    // Test NAME constants
-    assert_eq!(UserInputPriority::NAME, "UserInput");
-    assert_eq!(AnimationPriority::NAME, "Animation");
-    assert_eq!(BuildPriority::NAME, "Build");
-    assert_eq!(IdlePriority::NAME, "Idle");
-
-    // Test LEVEL constants
-    assert_eq!(UserInputPriority::LEVEL, 3);
-    assert_eq!(AnimationPriority::LEVEL, 2);
-    assert_eq!(BuildPriority::LEVEL, 1);
-    assert_eq!(IdlePriority::LEVEL, 0);
-
-    // Test VALUE constants
-    assert_eq!(UserInputPriority::VALUE, Priority::UserInput);
-    assert_eq!(AnimationPriority::VALUE, Priority::Animation);
-    assert_eq!(BuildPriority::VALUE, Priority::Build);
-    assert_eq!(IdlePriority::VALUE, Priority::Idle);
-}
 
 // ============================================================================
 // Extended Budget Tests (for coverage)
@@ -1256,7 +1142,7 @@ fn test_vsync_mode_properties() {
 
 #[test]
 fn test_vsync_scheduler_start_stop() {
-    let vsync = VsyncScheduler::new(60);
+    let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
 
     assert!(!vsync.is_active());
     vsync.start();
@@ -1267,7 +1153,7 @@ fn test_vsync_scheduler_start_stop() {
 
 #[test]
 fn test_vsync_scheduler_callback() {
-    let vsync = VsyncScheduler::new(60);
+    let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
     let called = Arc::new(AtomicU32::new(0));
 
     let c = Arc::clone(&called);
@@ -1288,7 +1174,7 @@ fn test_vsync_scheduler_callback() {
 
 #[test]
 fn test_vsync_scheduler_time_tracking() {
-    let vsync = VsyncScheduler::new(60);
+    let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
 
     // No vsync yet
     assert!(vsync.time_since_vsync().is_none());
@@ -1322,7 +1208,7 @@ fn test_vsync_stats() {
 
 #[test]
 fn test_vsync_scheduler_stats() {
-    let vsync = VsyncScheduler::new(60);
+    let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
 
     // Initial stats
     let stats = vsync.stats();
@@ -1348,7 +1234,7 @@ fn test_vsync_scheduler_stats() {
 
 #[test]
 fn test_vsync_scheduler_is_at_target_rate() {
-    let vsync = VsyncScheduler::new(60);
+    let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
 
     // No data - should return true
     assert!(vsync.is_at_target_rate());
@@ -1368,13 +1254,13 @@ fn test_vsync_scheduler_is_at_target_rate() {
 #[test]
 fn test_vsync_scheduler_frame_intervals() {
     // Test different refresh rates
-    let vsync_60 = VsyncScheduler::new(60);
+    let vsync_60 = VsyncScheduler::try_new(60).expect("refresh > 0");
     let interval_60 = vsync_60.frame_interval();
-    assert!((interval_60.value() - 16_666).abs() < 100);
+    assert!(interval_60.value().abs_diff(16_666) < 100);
 
-    let vsync_120 = VsyncScheduler::new(120);
+    let vsync_120 = VsyncScheduler::try_new(120).expect("refresh > 0");
     let interval_120 = vsync_120.frame_interval();
-    assert!((interval_120.value() - 8_333).abs() < 100);
+    assert!(interval_120.value().abs_diff(8_333) < 100);
 
     // Test frame_interval_duration
     let duration = vsync_60.frame_interval_duration();
@@ -1384,7 +1270,7 @@ fn test_vsync_scheduler_frame_intervals() {
 
 #[test]
 fn test_vsync_scheduler_wait_for_vsync() {
-    let vsync = VsyncScheduler::new(60);
+    let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
 
     // Off mode - no waiting
     vsync.set_mode(VsyncMode::Off);
@@ -1406,107 +1292,10 @@ fn test_vsync_scheduler_default() {
 
 #[test]
 fn test_vsync_scheduler_debug() {
-    let vsync = VsyncScheduler::new(60);
+    let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
     let debug_str = format!("{:?}", vsync);
     assert!(debug_str.contains("VsyncScheduler"));
     assert!(debug_str.contains("refresh_rate"));
-}
-
-#[test]
-fn test_vsync_driven_scheduler_full_lifecycle() {
-    let scheduler = Arc::new(Scheduler::new());
-    let driven = VsyncDrivenScheduler::new(scheduler.clone(), 60);
-
-    // Test start/stop
-    driven.start();
-    assert!(driven.is_active());
-
-    // Test mode changes
-    driven.set_mode(VsyncMode::Adaptive);
-    assert_eq!(driven.mode(), VsyncMode::Adaptive);
-
-    // Test stats
-    let _ = driven.stats();
-
-    // Test predict_next_vsync
-    let _ = driven.predict_next_vsync();
-
-    // Test scheduler accessor
-    assert!(Arc::ptr_eq(driven.scheduler(), &scheduler));
-
-    // Test vsync accessor
-    let _ = driven.vsync();
-
-    driven.stop();
-    assert!(!driven.is_active());
-}
-
-#[test]
-fn test_vsync_driven_scheduler_auto_execute() {
-    let scheduler = Arc::new(Scheduler::new());
-    let driven = VsyncDrivenScheduler::new(scheduler.clone(), 60);
-
-    driven.start();
-
-    // Default auto_execute is true
-    assert!(driven.auto_execute());
-
-    // Disable auto_execute
-    driven.set_auto_execute(false);
-    assert!(!driven.auto_execute());
-
-    // on_vsync with auto_execute disabled shouldn't execute frame
-    driven.on_vsync();
-    // Can't easily verify callback wasn't called
-
-    // Enable auto_execute
-    driven.set_auto_execute(true);
-    assert!(driven.auto_execute());
-}
-
-#[test]
-fn test_vsync_driven_scheduler_with_mode() {
-    let scheduler = Arc::new(Scheduler::new());
-    let driven = VsyncDrivenScheduler::with_mode(scheduler, 120, VsyncMode::TripleBuffer);
-
-    assert_eq!(driven.refresh_rate(), 120);
-    assert_eq!(driven.mode(), VsyncMode::TripleBuffer);
-}
-
-#[test]
-fn test_vsync_driven_scheduler_debug() {
-    let scheduler = Arc::new(Scheduler::new());
-    let driven = VsyncDrivenScheduler::new(scheduler, 60);
-
-    let debug_str = format!("{:?}", driven);
-    assert!(debug_str.contains("VsyncDrivenScheduler"));
-}
-
-#[test]
-fn test_vsync_driven_scheduler_wait_and_execute() {
-    let scheduler = Arc::new(Scheduler::new());
-    let driven = VsyncDrivenScheduler::new(scheduler.clone(), 1000); // High refresh for fast test
-
-    driven.vsync().set_mode(VsyncMode::Off); // No actual wait
-    driven.start();
-
-    // This should execute a frame
-    driven.wait_and_execute();
-
-    // Frame should have been executed
-    assert_eq!(scheduler.frame_count(), 1);
-}
-
-#[test]
-fn test_vsync_driven_scheduler_inactive_on_vsync() {
-    let scheduler = Arc::new(Scheduler::new());
-    let driven = VsyncDrivenScheduler::new(scheduler.clone(), 60);
-
-    // Don't start - on_vsync should do nothing
-    driven.on_vsync();
-
-    // No frame executed
-    assert_eq!(scheduler.frame_count(), 0);
 }
 
 // ============================================================================
@@ -1677,68 +1466,6 @@ fn test_id_generator_default() {
     assert_eq!(generator.current(), 1);
 }
 
-#[test]
-fn test_handle() {
-    use flui_scheduler::id::FrameHandle;
-
-    let handle = FrameHandle::new(10, 5);
-
-    assert_eq!(handle.index(), 10);
-    assert_eq!(handle.generation(), 5);
-
-    // Test next_generation
-    let next = handle.next_generation();
-    assert_eq!(next.index(), 10);
-    assert_eq!(next.generation(), 6);
-}
-
-#[test]
-fn test_handle_pack_unpack() {
-    use flui_scheduler::id::TaskHandle;
-
-    let original = TaskHandle::new(12345, 67890);
-    let packed = original.pack();
-    let unpacked = TaskHandle::unpack(packed);
-
-    assert_eq!(original.index(), unpacked.index());
-    assert_eq!(original.generation(), unpacked.generation());
-}
-
-#[test]
-fn test_handle_display() {
-    use flui_scheduler::id::FrameHandle;
-
-    let handle = FrameHandle::new(42, 7);
-    let display = format!("{}", handle);
-
-    assert!(display.contains("Frame"));
-    assert!(display.contains("42"));
-    assert!(display.contains("7"));
-}
-
-#[test]
-fn test_handle_debug() {
-    use flui_scheduler::id::FrameHandle;
-
-    let handle = FrameHandle::new(42, 7);
-    let debug = format!("{:?}", handle);
-
-    assert!(debug.contains("FrameHandle"));
-    assert!(debug.contains("42"));
-    assert!(debug.contains("gen=7"));
-}
-
-#[test]
-fn test_handle_generation_wrap() {
-    use flui_scheduler::id::FrameHandle;
-
-    let handle = FrameHandle::new(0, u32::MAX);
-    let next = handle.next_generation();
-
-    // Should wrap around
-    assert_eq!(next.generation(), 0);
-}
-
 // ============================================================================
 // Extended Duration Tests (57% -> 80%+)
 // ============================================================================
@@ -1832,16 +1559,6 @@ fn test_seconds_is_zero() {
 }
 
 #[test]
-fn test_seconds_to_ms() {
-    use flui_scheduler::duration::Seconds;
-
-    let secs = Seconds::new(1.5);
-    let ms = secs.to_ms();
-
-    assert_eq!(ms.value(), 1500.0);
-}
-
-#[test]
 fn test_seconds_arithmetic() {
     use flui_scheduler::duration::Seconds;
 
@@ -1903,20 +1620,10 @@ fn test_microseconds() {
 }
 
 #[test]
-fn test_microseconds_to_ms() {
+fn test_microseconds_from_u64() {
     use flui_scheduler::duration::Microseconds;
 
-    let us = Microseconds::new(1000);
-    let ms = us.to_ms();
-
-    assert_eq!(ms.value(), 1.0);
-}
-
-#[test]
-fn test_microseconds_from_i64() {
-    use flui_scheduler::duration::Microseconds;
-
-    let us: Microseconds = 1000_i64.into();
+    let us: Microseconds = 1000_u64.into();
     assert_eq!(us.value(), 1000);
 }
 
@@ -1941,7 +1648,7 @@ fn test_frame_duration_constants() {
 
 #[test]
 fn test_frame_duration_as_seconds() {
-    let fd = FrameDuration::from_fps(60);
+    let fd = FrameDuration::try_from_fps(60).expect("fps > 0");
     let secs = fd.as_seconds();
 
     assert!((secs.value() - 0.01667).abs() < 0.001);
@@ -1949,7 +1656,7 @@ fn test_frame_duration_as_seconds() {
 
 #[test]
 fn test_frame_duration_utilization() {
-    let fd = FrameDuration::from_fps(60);
+    let fd = FrameDuration::try_from_fps(60).expect("fps > 0");
 
     let elapsed = Milliseconds::new(8.333); // 50% of 16.67ms
     let util = fd.utilization(elapsed);
@@ -1959,7 +1666,7 @@ fn test_frame_duration_utilization() {
 
 #[test]
 fn test_frame_duration_is_deadline_near() {
-    let fd = FrameDuration::from_fps(60);
+    let fd = FrameDuration::try_from_fps(60).expect("fps > 0");
 
     // 50% - not near
     assert!(!fd.is_deadline_near(Milliseconds::new(8.333)));
@@ -1970,7 +1677,7 @@ fn test_frame_duration_is_deadline_near() {
 
 #[test]
 fn test_frame_duration_is_janky() {
-    let fd = FrameDuration::from_fps(60);
+    let fd = FrameDuration::try_from_fps(60).expect("fps > 0");
 
     // Under budget - not janky
     assert!(!fd.is_janky(Milliseconds::new(10.0)));
@@ -1987,7 +1694,7 @@ fn test_frame_duration_default() {
 
 #[test]
 fn test_frame_duration_display() {
-    let fd = FrameDuration::from_fps(60);
+    let fd = FrameDuration::try_from_fps(60).expect("fps > 0");
     let display = format!("{}", fd);
 
     assert!(display.contains("ms"));
@@ -2400,52 +2107,6 @@ fn test_task_debug() {
 }
 
 #[test]
-fn test_typed_task() {
-    use flui_scheduler::{task::TypedTask, traits::UserInputPriority};
-
-    let task = TypedTask::<UserInputPriority>::new(|| {});
-
-    assert_eq!(task.priority(), Priority::UserInput);
-}
-
-#[test]
-fn test_typed_task_execute() {
-    use flui_scheduler::{task::TypedTask, traits::AnimationPriority};
-
-    let executed = Arc::new(AtomicU32::new(0));
-    let e = Arc::clone(&executed);
-
-    let task = TypedTask::<AnimationPriority>::new(move || {
-        e.fetch_add(1, Ordering::SeqCst);
-    });
-
-    task.execute();
-
-    assert_eq!(executed.load(Ordering::SeqCst), 1);
-}
-
-#[test]
-fn test_typed_task_id() {
-    use flui_scheduler::{task::TypedTask, traits::BuildPriority};
-
-    let task = TypedTask::<BuildPriority>::new(|| {});
-    let id = task.id();
-
-    // ID should be valid (non-zero)
-    assert!(id.get() > 0);
-}
-
-#[test]
-fn test_typed_task_debug() {
-    use flui_scheduler::{task::TypedTask, traits::IdlePriority};
-
-    let task = TypedTask::<IdlePriority>::new(|| {});
-    let debug = format!("{:?}", task);
-
-    assert!(debug.contains("TypedTask"));
-}
-
-#[test]
 fn test_task_queue_is_empty() {
     let queue = TaskQueue::new();
     assert!(queue.is_empty());
@@ -2635,17 +2296,6 @@ fn test_frame_budget_builder() {
 }
 
 #[test]
-fn test_frame_budget_builder_frame_duration() {
-    use flui_scheduler::budget::FrameBudgetBuilder;
-
-    let budget = FrameBudgetBuilder::new()
-        .frame_duration(FrameDuration::FPS_30)
-        .build();
-
-    assert!((budget.target_fps() as i32 - 30).abs() <= 1);
-}
-
-#[test]
 fn test_frame_budget_builder_default() {
     use flui_scheduler::budget::FrameBudgetBuilder;
 
@@ -2681,90 +2331,34 @@ fn test_frame_budget_jank_percentage_empty() {
 // Extended Traits Tests (64% -> 80%+)
 // ============================================================================
 
-#[test]
-fn test_priority_ext_should_skip_all_policies() {
-    use flui_scheduler::{budget::BudgetPolicy, traits::PriorityExt};
-
-    // Continue policy - nothing skipped
-    assert!(!Priority::UserInput.should_skip(BudgetPolicy::Continue));
-    assert!(!Priority::Animation.should_skip(BudgetPolicy::Continue));
-    assert!(!Priority::Build.should_skip(BudgetPolicy::Continue));
-    assert!(!Priority::Idle.should_skip(BudgetPolicy::Continue));
-
-    // SkipIdle policy
-    assert!(!Priority::UserInput.should_skip(BudgetPolicy::SkipIdle));
-    assert!(!Priority::Animation.should_skip(BudgetPolicy::SkipIdle));
-    assert!(!Priority::Build.should_skip(BudgetPolicy::SkipIdle));
-    assert!(Priority::Idle.should_skip(BudgetPolicy::SkipIdle));
-
-    // SkipIdleAndBuild policy
-    assert!(!Priority::UserInput.should_skip(BudgetPolicy::SkipIdleAndBuild));
-    assert!(!Priority::Animation.should_skip(BudgetPolicy::SkipIdleAndBuild));
-    assert!(Priority::Build.should_skip(BudgetPolicy::SkipIdleAndBuild));
-    assert!(Priority::Idle.should_skip(BudgetPolicy::SkipIdleAndBuild));
-
-    // StopAll policy
-    assert!(Priority::UserInput.should_skip(BudgetPolicy::StopAll));
-    assert!(Priority::Animation.should_skip(BudgetPolicy::StopAll));
-    assert!(Priority::Build.should_skip(BudgetPolicy::StopAll));
-    assert!(Priority::Idle.should_skip(BudgetPolicy::StopAll));
-}
-
-#[test]
-fn test_to_milliseconds_trait() {
-    use flui_scheduler::traits::ToMilliseconds;
-
-    let duration = Duration::from_millis(100);
-    let ms = duration.to_ms();
-    assert_eq!(ms.value(), 100.0);
-
-    let f: f64 = 50.0;
-    let ms = f.to_ms();
-    assert_eq!(ms.value(), 50.0);
-}
-
-#[test]
-fn test_to_seconds_trait() {
-    use flui_scheduler::traits::ToSeconds;
-
-    let duration = Duration::from_secs(2);
-    let secs = duration.to_secs();
-    assert_eq!(secs.value(), 2.0);
-
-    let f: f64 = 1.5;
-    let secs = f.to_secs();
-    assert_eq!(secs.value(), 1.5);
-}
-
 // ============================================================================
 // Extended Frame Tests (71% -> 80%+)
 // ============================================================================
 
 #[test]
 fn test_scheduler_phase_from_u8() {
-    assert_eq!(SchedulerPhase::from_u8(0), SchedulerPhase::Idle);
+    assert_eq!(SchedulerPhase::try_from_u8(0), Some(SchedulerPhase::Idle));
     assert_eq!(
-        SchedulerPhase::from_u8(1),
-        SchedulerPhase::TransientCallbacks
+        SchedulerPhase::try_from_u8(1),
+        Some(SchedulerPhase::TransientCallbacks)
     );
     assert_eq!(
-        SchedulerPhase::from_u8(2),
-        SchedulerPhase::MidFrameMicrotasks
+        SchedulerPhase::try_from_u8(2),
+        Some(SchedulerPhase::MidFrameMicrotasks)
     );
     assert_eq!(
-        SchedulerPhase::from_u8(3),
-        SchedulerPhase::PersistentCallbacks
+        SchedulerPhase::try_from_u8(3),
+        Some(SchedulerPhase::PersistentCallbacks)
     );
     assert_eq!(
-        SchedulerPhase::from_u8(4),
-        SchedulerPhase::PostFrameCallbacks
+        SchedulerPhase::try_from_u8(4),
+        Some(SchedulerPhase::PostFrameCallbacks)
     );
 }
 
 #[test]
-#[should_panic(expected = "Invalid SchedulerPhase value")]
-fn test_scheduler_phase_from_u8_invalid() {
-    let _ = SchedulerPhase::from_u8(5);
+fn test_scheduler_phase_try_from_u8_invalid() {
+    assert!(SchedulerPhase::try_from_u8(5).is_none());
 }
 
 #[test]
@@ -2793,17 +2387,31 @@ fn test_scheduler_phase_can_transition_to() {
 
 #[test]
 fn test_app_lifecycle_state_from_u8() {
-    assert_eq!(AppLifecycleState::from_u8(0), AppLifecycleState::Resumed);
-    assert_eq!(AppLifecycleState::from_u8(1), AppLifecycleState::Inactive);
-    assert_eq!(AppLifecycleState::from_u8(2), AppLifecycleState::Hidden);
-    assert_eq!(AppLifecycleState::from_u8(3), AppLifecycleState::Paused);
-    assert_eq!(AppLifecycleState::from_u8(4), AppLifecycleState::Detached);
+    assert_eq!(
+        AppLifecycleState::try_from_u8(0),
+        Some(AppLifecycleState::Resumed)
+    );
+    assert_eq!(
+        AppLifecycleState::try_from_u8(1),
+        Some(AppLifecycleState::Inactive)
+    );
+    assert_eq!(
+        AppLifecycleState::try_from_u8(2),
+        Some(AppLifecycleState::Hidden)
+    );
+    assert_eq!(
+        AppLifecycleState::try_from_u8(3),
+        Some(AppLifecycleState::Paused)
+    );
+    assert_eq!(
+        AppLifecycleState::try_from_u8(4),
+        Some(AppLifecycleState::Detached)
+    );
 }
 
 #[test]
-#[should_panic(expected = "Invalid AppLifecycleState value")]
-fn test_app_lifecycle_state_from_u8_invalid() {
-    let _ = AppLifecycleState::from_u8(5);
+fn test_app_lifecycle_state_try_from_u8_invalid() {
+    assert!(AppLifecycleState::try_from_u8(5).is_none());
 }
 
 #[test]
@@ -2965,15 +2573,15 @@ fn test_time_dilation_same_value() {
     use flui_scheduler::config::{set_time_dilation, time_dilation};
 
     // Set to a value
-    set_time_dilation(2.0);
+    set_time_dilation(2.0).expect("positive finite time dilation");
     assert_eq!(time_dilation(), 2.0);
 
     // Set to same value - should be no-op
-    set_time_dilation(2.0);
+    set_time_dilation(2.0).expect("positive finite time dilation");
     assert_eq!(time_dilation(), 2.0);
 
     // Reset
-    set_time_dilation(1.0);
+    set_time_dilation(1.0).expect("positive finite time dilation");
 }
 
 #[test]
@@ -3003,135 +2611,23 @@ fn test_scheduler_adjust_for_epoch() {
     let scheduler = Scheduler::new();
 
     // Without dilation
-    set_time_dilation(1.0);
+    set_time_dilation(1.0).expect("positive finite time dilation");
     let adjusted = scheduler.adjust_for_epoch(Duration::from_secs(10));
     assert!(adjusted.as_secs() <= 10);
 
     // With dilation
-    set_time_dilation(2.0);
+    set_time_dilation(2.0).expect("positive finite time dilation");
     scheduler.reset_epoch();
     let _adjusted = scheduler.adjust_for_epoch(Duration::from_millis(100));
     // Result depends on epoch
 
     // Reset
-    set_time_dilation(1.0);
+    set_time_dilation(1.0).expect("positive finite time dilation");
 }
 
 // =============================================================================
 // Additional Traits Coverage Tests
 // =============================================================================
-
-#[test]
-fn test_frame_timing_ext_elapsed() {
-    use flui_scheduler::{frame::FrameTimingBuilder, traits::FrameTimingExt};
-
-    let timing = FrameTimingBuilder::new().target_fps(60).build();
-
-    // Test elapsed via trait (UFCS to ensure trait method is called)
-    let elapsed = FrameTimingExt::elapsed(&timing);
-    assert!(elapsed.value() >= 0.0);
-
-    // Test elapsed_seconds (unique to trait)
-    let elapsed_secs = FrameTimingExt::elapsed_seconds(&timing);
-    assert!(elapsed_secs.value() >= 0.0);
-}
-
-#[test]
-fn test_frame_timing_ext_remaining() {
-    use flui_scheduler::{frame::FrameTimingBuilder, traits::FrameTimingExt};
-
-    let timing = FrameTimingBuilder::new().target_fps(60).build();
-
-    // Test remaining budget via trait (UFCS)
-    let remaining = FrameTimingExt::remaining(&timing);
-    // Initially remaining should be close to target (~16.67ms for 60fps)
-    assert!(remaining.value() <= 17.0);
-}
-
-#[test]
-fn test_frame_timing_ext_frame_duration() {
-    use flui_scheduler::{frame::FrameTimingBuilder, traits::FrameTimingExt};
-
-    let timing = FrameTimingBuilder::new().target_fps(60).build();
-
-    // Use UFCS to call trait method
-    let frame_duration = FrameTimingExt::frame_duration(&timing);
-    // Just verify the method is callable and returns valid result
-    let fps = frame_duration.fps();
-    assert!(fps > 0.0, "fps should be positive");
-}
-
-#[test]
-fn test_frame_timing_ext_utilization() {
-    use flui_scheduler::{frame::FrameTimingBuilder, traits::FrameTimingExt};
-
-    let timing = FrameTimingBuilder::new().target_fps(60).build();
-
-    // Use UFCS to call trait method
-    let util = FrameTimingExt::utilization(&timing);
-    // Initially utilization should be low
-    assert!(util.value() >= 0.0);
-}
-
-#[test]
-fn test_frame_budget_ext_elapsed() {
-    use flui_scheduler::{budget::FrameBudget, traits::FrameBudgetExt};
-
-    let budget = FrameBudget::new(60);
-
-    // Use UFCS to call trait method
-    let elapsed = FrameBudgetExt::elapsed(&budget);
-    assert!(elapsed.value() >= 0.0);
-}
-
-#[test]
-fn test_frame_budget_ext_remaining() {
-    use flui_scheduler::{budget::FrameBudget, traits::FrameBudgetExt};
-
-    let budget = FrameBudget::new(60);
-
-    // Use UFCS to call trait method
-    let remaining = FrameBudgetExt::remaining(&budget);
-    // Should have budget remaining
-    assert!(remaining.value() >= 0.0);
-}
-
-#[test]
-fn test_frame_budget_ext_frame_duration() {
-    use flui_scheduler::{budget::FrameBudget, traits::FrameBudgetExt};
-
-    let budget = FrameBudget::new(60);
-
-    // Use UFCS to call trait method
-    let frame_duration = FrameBudgetExt::frame_duration(&budget);
-    let fps = frame_duration.fps();
-    assert!(fps > 0.0, "fps should be positive");
-}
-
-#[test]
-fn test_frame_budget_ext_utilization_percent() {
-    use flui_scheduler::{budget::FrameBudget, traits::FrameBudgetExt};
-
-    let budget = FrameBudget::new(60);
-
-    // Use UFCS to call trait method
-    let util = FrameBudgetExt::utilization_percent(&budget);
-    // Initially should be low utilization
-    assert!(util.value() >= 0.0 && util.value() <= 100.0);
-}
-
-#[test]
-fn test_frame_budget_ext_should_execute() {
-    use flui_scheduler::{budget::FrameBudget, task::Priority, traits::FrameBudgetExt};
-
-    let budget = FrameBudget::new(60);
-
-    // Use UFCS to call trait method - with low utilization, all priorities should
-    // execute
-    assert!(FrameBudgetExt::should_execute(&budget, Priority::Idle));
-    assert!(FrameBudgetExt::should_execute(&budget, Priority::Animation));
-    assert!(FrameBudgetExt::should_execute(&budget, Priority::UserInput));
-}
 
 #[test]
 fn test_ticker_provider_schedule_tick_typed() {

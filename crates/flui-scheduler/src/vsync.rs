@@ -4,8 +4,9 @@
 //! maintain smooth animation.
 //!
 //! **Note**: `wait_for_vsync()` currently uses `thread::sleep` for timing
-//! simulation. Real platform VSync integration comes from `flui-platform` via
-//! `VsyncDrivenScheduler::on_vsync()`.
+//! simulation. Real platform VSync integration comes from `flui-platform` by
+//! routing platform vsync callbacks into `Scheduler::handle_begin_frame` +
+//! `handle_draw_frame` directly.
 //!
 //! ## Type-Safe Timing
 //!
@@ -15,7 +16,7 @@
 //!     vsync::{VsyncMode, VsyncScheduler},
 //! };
 //!
-//! let vsync = VsyncScheduler::new(60);
+//! let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
 //! let interval = vsync.frame_interval();
 //!
 //! assert_eq!(interval.value(), 16666); // ~16.67ms in microseconds
@@ -29,6 +30,15 @@ use serde::{Deserialize, Serialize};
 use web_time::Instant;
 
 use crate::duration::{Microseconds, Milliseconds};
+
+/// Configuration error for [`VsyncScheduler`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum InvalidVsyncConfig {
+    /// `refresh_rate == 0` rejected — no meaningful frame interval.
+    #[error("refresh_rate must be greater than 0")]
+    ZeroRefreshRate,
+}
 
 /// VSync callback - called when vsync signal arrives
 pub type VsyncCallback = Box<dyn FnMut(Instant) + Send>;
@@ -132,7 +142,7 @@ struct VsyncInner {
 /// ```
 /// use flui_scheduler::vsync::{VsyncMode, VsyncScheduler};
 ///
-/// let vsync = VsyncScheduler::new(60);
+/// let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
 /// assert_eq!(vsync.refresh_rate(), 60);
 /// assert_eq!(vsync.mode(), VsyncMode::On);
 ///
@@ -160,14 +170,17 @@ impl VsyncScheduler {
     /// # Arguments
     /// * `refresh_rate` - Display refresh rate in Hz (e.g., 60, 120, 144)
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `refresh_rate` is 0.
-    pub fn new(refresh_rate: u32) -> Self {
-        assert!(refresh_rate > 0, "Refresh rate must be greater than 0");
-        let frame_interval_us = Microseconds::new(1_000_000 / refresh_rate as i64);
+    /// Returns [`InvalidVsyncConfig::ZeroRefreshRate`] if `refresh_rate == 0`
+    /// (no meaningful frame interval can be computed).
+    pub fn try_new(refresh_rate: u32) -> Result<Self, InvalidVsyncConfig> {
+        if refresh_rate == 0 {
+            return Err(InvalidVsyncConfig::ZeroRefreshRate);
+        }
+        let frame_interval_us = Microseconds::new(1_000_000 / refresh_rate as u64);
 
-        Self {
+        Ok(Self {
             refresh_rate,
             frame_interval_us,
             inner: Arc::new(Mutex::new(VsyncInner {
@@ -178,14 +191,18 @@ impl VsyncScheduler {
                 stats: VsyncStats::default(),
                 interval_history: VecDeque::with_capacity(60),
             })),
-        }
+        })
     }
 
-    /// Create with a specific VSync mode
-    pub fn with_mode(refresh_rate: u32, mode: VsyncMode) -> Self {
-        let scheduler = Self::new(refresh_rate);
+    /// Create with a specific VSync mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidVsyncConfig::ZeroRefreshRate`] if `refresh_rate == 0`.
+    pub fn try_with_mode(refresh_rate: u32, mode: VsyncMode) -> Result<Self, InvalidVsyncConfig> {
+        let scheduler = Self::try_new(refresh_rate)?;
         scheduler.inner.lock().mode = mode;
-        scheduler
+        Ok(scheduler)
     }
 
     /// Set vsync mode
@@ -296,7 +313,7 @@ impl VsyncScheduler {
 
         // Calculate interval from last vsync
         if let Some(last) = inner.last_vsync {
-            let interval = Microseconds::new(now.duration_since(last).as_micros() as i64);
+            let interval = Microseconds::new(now.duration_since(last).as_micros() as u64);
 
             // Update history
             inner.interval_history.push_back(interval);
@@ -305,8 +322,8 @@ impl VsyncScheduler {
             }
 
             // Calculate average
-            let sum: i64 = inner.interval_history.iter().map(|i| i.value()).sum();
-            let avg = Microseconds::new(sum / inner.interval_history.len() as i64);
+            let sum: u64 = inner.interval_history.iter().map(|i| i.value()).sum();
+            let avg = Microseconds::new(sum / inner.interval_history.len() as u64);
 
             // Update stats
             inner.stats.last_interval = interval;
@@ -365,188 +382,16 @@ impl VsyncScheduler {
         let target = self.frame_interval_us.value();
         let actual = inner.stats.avg_interval.value();
 
-        // Within 5% tolerance
+        // Within 5% tolerance.
         let tolerance = target / 20;
-        (actual - target).abs() <= tolerance
+        actual.abs_diff(target) <= tolerance
     }
 }
 
 impl Default for VsyncScheduler {
     fn default() -> Self {
-        Self::new(60) // Default to 60Hz
-    }
-}
-
-// =============================================================================
-// VsyncDriverdScheduler - Integrates VsyncScheduler with Scheduler
-// =============================================================================
-
-/// A VSync-driven scheduler that automatically calls
-/// handleBeginFrame/handleDrawFrame
-///
-/// This provides Flutter-like integration where vsync signals automatically
-/// drive the frame execution pipeline.
-///
-/// # Examples
-///
-/// ```rust
-/// use std::sync::Arc;
-///
-/// use flui_scheduler::{Scheduler, VsyncDrivenScheduler};
-///
-/// let scheduler = Arc::new(Scheduler::new());
-/// let vsync_driven = VsyncDrivenScheduler::new(scheduler.clone(), 60);
-///
-/// // Start the vsync loop (in a real app, this would be driven by the platform)
-/// vsync_driven.start();
-///
-/// // Simulate a vsync signal
-/// vsync_driven.on_vsync();
-///
-/// // The scheduler's frame was executed automatically
-/// assert!(scheduler.frame_count() > 0);
-/// ```
-pub struct VsyncDrivenScheduler {
-    /// The vsync scheduler
-    vsync: VsyncScheduler,
-
-    /// The main scheduler to drive
-    scheduler: Arc<crate::scheduler::Scheduler>,
-
-    /// Whether to auto-execute frames on vsync
-    auto_execute: Arc<Mutex<bool>>,
-}
-
-impl VsyncDrivenScheduler {
-    /// Create a new VSync-driven scheduler
-    pub fn new(scheduler: Arc<crate::scheduler::Scheduler>, refresh_rate: u32) -> Self {
-        let vsync = VsyncScheduler::new(refresh_rate);
-
-        Self {
-            vsync,
-            scheduler,
-            auto_execute: Arc::new(Mutex::new(true)),
-        }
-    }
-
-    /// Create with a specific VSync mode
-    pub fn with_mode(
-        scheduler: Arc<crate::scheduler::Scheduler>,
-        refresh_rate: u32,
-        mode: VsyncMode,
-    ) -> Self {
-        let vsync = VsyncScheduler::with_mode(refresh_rate, mode);
-
-        Self {
-            vsync,
-            scheduler,
-            auto_execute: Arc::new(Mutex::new(true)),
-        }
-    }
-
-    /// Start the vsync loop
-    pub fn start(&self) {
-        self.vsync.start();
-    }
-
-    /// Stop the vsync loop
-    pub fn stop(&self) {
-        self.vsync.stop();
-    }
-
-    /// Check if active
-    pub fn is_active(&self) -> bool {
-        self.vsync.is_active()
-    }
-
-    /// Enable/disable auto frame execution
-    pub fn set_auto_execute(&self, enabled: bool) {
-        *self.auto_execute.lock() = enabled;
-    }
-
-    /// Check if auto frame execution is enabled
-    pub fn auto_execute(&self) -> bool {
-        *self.auto_execute.lock()
-    }
-
-    /// Called when a vsync signal arrives
-    ///
-    /// This drives the scheduler through its frame lifecycle:
-    /// 1. handle_begin_frame (TransientCallbacks - animations)
-    /// 2. handle_draw_frame (PersistentCallbacks - rendering)
-    pub fn on_vsync(&self) {
-        if !self.is_active() {
-            return;
-        }
-
-        let vsync_time = Instant::now();
-
-        // Update vsync statistics
-        self.vsync.signal_vsync();
-
-        // Auto-execute frame if enabled
-        if *self.auto_execute.lock() {
-            self.scheduler.handle_begin_frame(vsync_time);
-            self.scheduler.handle_draw_frame();
-        }
-    }
-
-    /// Wait for next vsync and execute frame
-    ///
-    /// Blocking call that waits for vsync, then executes a frame.
-    pub fn wait_and_execute(&self) {
-        if !self.is_active() {
-            return;
-        }
-
-        let vsync_time = self.vsync.wait_for_vsync();
-        self.vsync.signal_vsync();
-        self.scheduler.handle_begin_frame(vsync_time);
-        self.scheduler.handle_draw_frame();
-    }
-
-    /// Get the underlying scheduler
-    pub fn scheduler(&self) -> &Arc<crate::scheduler::Scheduler> {
-        &self.scheduler
-    }
-
-    /// Get the underlying vsync scheduler
-    pub fn vsync(&self) -> &VsyncScheduler {
-        &self.vsync
-    }
-
-    /// Get VSync mode
-    pub fn mode(&self) -> VsyncMode {
-        self.vsync.mode()
-    }
-
-    /// Set VSync mode
-    pub fn set_mode(&self, mode: VsyncMode) {
-        self.vsync.set_mode(mode);
-    }
-
-    /// Get refresh rate
-    pub fn refresh_rate(&self) -> u32 {
-        self.vsync.refresh_rate()
-    }
-
-    /// Get VSync statistics
-    pub fn stats(&self) -> VsyncStats {
-        self.vsync.stats()
-    }
-
-    /// Predict next vsync time
-    pub fn predict_next_vsync(&self) -> Option<Instant> {
-        self.vsync.predict_next_vsync()
-    }
-}
-
-impl std::fmt::Debug for VsyncDrivenScheduler {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("VsyncDrivenScheduler")
-            .field("vsync", &self.vsync)
-            .field("auto_execute", &self.auto_execute())
-            .finish()
+        // 60 Hz is statically valid; try_new only errors on refresh_rate == 0.
+        Self::try_new(60).expect("60 Hz is a valid refresh rate")
     }
 }
 
@@ -570,7 +415,7 @@ mod tests {
 
     #[test]
     fn test_vsync_modes() {
-        let vsync = VsyncScheduler::new(60);
+        let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
         assert_eq!(vsync.mode(), VsyncMode::On);
 
         vsync.set_mode(VsyncMode::Off);
@@ -582,18 +427,18 @@ mod tests {
 
     #[test]
     fn test_frame_interval() {
-        let vsync_60 = VsyncScheduler::new(60);
+        let vsync_60 = VsyncScheduler::try_new(60).expect("refresh > 0");
         let interval_60 = vsync_60.frame_interval();
         assert_eq!(interval_60, Microseconds::new(16_666)); // ~16.67ms
 
-        let vsync_120 = VsyncScheduler::new(120);
+        let vsync_120 = VsyncScheduler::try_new(120).expect("refresh > 0");
         let interval_120 = vsync_120.frame_interval();
         assert_eq!(interval_120, Microseconds::new(8_333)); // ~8.33ms
     }
 
     #[test]
     fn test_vsync_callback() {
-        let vsync = VsyncScheduler::new(60);
+        let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
         let counter = Arc::new(AtomicU32::new(0));
 
         let c = Arc::clone(&counter);
@@ -610,7 +455,7 @@ mod tests {
 
     #[test]
     fn test_time_tracking() {
-        let vsync = VsyncScheduler::new(60);
+        let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
         assert!(vsync.time_since_vsync().is_none());
 
         vsync.signal_vsync();
@@ -622,7 +467,7 @@ mod tests {
 
     #[test]
     fn test_vsync_stats() {
-        let vsync = VsyncScheduler::new(60);
+        let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
 
         vsync.signal_vsync();
         std::thread::sleep(Duration::from_millis(16));
@@ -649,75 +494,8 @@ mod tests {
 
     #[test]
     fn test_frame_interval_ms() {
-        let vsync = VsyncScheduler::new(60);
+        let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
         let ms = vsync.frame_interval_ms();
         assert!((ms.value() - 16.666).abs() < 0.1);
-    }
-
-    // VsyncDrivenScheduler tests
-
-    #[test]
-    fn test_vsync_driven_scheduler_creation() {
-        let scheduler = Arc::new(crate::scheduler::Scheduler::new());
-        let driven = VsyncDrivenScheduler::new(scheduler.clone(), 60);
-
-        assert_eq!(driven.refresh_rate(), 60);
-        assert_eq!(driven.mode(), VsyncMode::On);
-        assert!(!driven.is_active());
-        assert!(driven.auto_execute());
-    }
-
-    #[test]
-    fn test_vsync_driven_scheduler_start_stop() {
-        let scheduler = Arc::new(crate::scheduler::Scheduler::new());
-        let driven = VsyncDrivenScheduler::new(scheduler, 60);
-
-        driven.start();
-        assert!(driven.is_active());
-
-        driven.stop();
-        assert!(!driven.is_active());
-    }
-
-    #[test]
-    fn test_vsync_driven_scheduler_executes_frames() {
-        let scheduler = Arc::new(crate::scheduler::Scheduler::new());
-        let driven = VsyncDrivenScheduler::new(scheduler.clone(), 60);
-
-        driven.start();
-
-        assert_eq!(scheduler.frame_count(), 0);
-
-        driven.on_vsync();
-        assert_eq!(scheduler.frame_count(), 1);
-
-        driven.on_vsync();
-        assert_eq!(scheduler.frame_count(), 2);
-    }
-
-    #[test]
-    fn test_vsync_driven_scheduler_auto_execute_disabled() {
-        let scheduler = Arc::new(crate::scheduler::Scheduler::new());
-        let driven = VsyncDrivenScheduler::new(scheduler.clone(), 60);
-
-        driven.start();
-        driven.set_auto_execute(false);
-
-        driven.on_vsync();
-        // Should not execute frame when auto_execute is false
-        assert_eq!(scheduler.frame_count(), 0);
-
-        driven.set_auto_execute(true);
-        driven.on_vsync();
-        assert_eq!(scheduler.frame_count(), 1);
-    }
-
-    #[test]
-    fn test_vsync_driven_scheduler_with_mode() {
-        let scheduler = Arc::new(crate::scheduler::Scheduler::new());
-        let driven = VsyncDrivenScheduler::with_mode(scheduler, 120, VsyncMode::Adaptive);
-
-        assert_eq!(driven.refresh_rate(), 120);
-        assert_eq!(driven.mode(), VsyncMode::Adaptive);
     }
 }

@@ -49,32 +49,18 @@
 //! - Cancels low-priority work if over budget
 //! - Provides frame skip policies
 //!
-//! ## Advanced Type System Features
+//! ## Type-Safe Duration Wrappers
 //!
-//! This crate leverages Rust's advanced type system for zero-cost safety:
-//!
-//! ### Typestate Pattern
-//! Compile-time state machine for tickers:
-//! ```rust
-//! use flui_scheduler::typestate::{Active, Idle, TypestateTicker};
-//!
-//! let ticker: TypestateTicker<Idle> = TypestateTicker::new();
-//! let ticker: TypestateTicker<Active> = ticker.start(|elapsed| {});
-//! ticker.tick(); // Only available in Active state!
-//! let ticker: TypestateTicker<Idle> = ticker.stop();
-//! ```
-//!
-//! ### Newtype Pattern
-//! Type-safe duration wrappers prevent unit mixing:
 //! ```rust
 //! use flui_scheduler::duration::{FrameDuration, Milliseconds};
 //!
 //! let elapsed = Milliseconds::new(10.0); // 10ms elapsed
-//! let budget = FrameDuration::from_fps(60); // ~16.67ms budget
+//! let budget = FrameDuration::try_from_fps(60).expect("fps > 0"); // ~16.67ms budget
 //! assert!(!budget.is_over_budget(elapsed)); // Still under budget!
 //! ```
 //!
-//! ### Type-Safe IDs
+//! ## Type-Safe IDs
+//!
 //! Foundation markers prevent ID type confusion:
 //! ```rust
 //! use flui_scheduler::id::IdGenerator;
@@ -85,16 +71,6 @@
 //! let frame_id = frame_gen.next();
 //! let task_id = task_gen.next();
 //! // These are different types - can't be mixed!
-//! ```
-//!
-//! ### Typed Tasks
-//! Compile-time priority checking:
-//! ```rust
-//! use flui_scheduler::{task::TypedTask, traits::UserInputPriority};
-//!
-//! let task = TypedTask::<UserInputPriority>::new(|| {
-//!     println!("High priority!");
-//! });
 //! ```
 //!
 //! ## Example Usage
@@ -137,13 +113,7 @@
 //! All types are [`Send`] + [`Sync`] and safe for use in multi-threaded
 //! contexts.
 //!
-//! ## Preludes
-//!
-//! Two prelude modules are provided for convenient imports:
-//!
-//! - [`prelude`] - Core types for basic scheduling
-//! - [`prelude_advanced`] - Includes typestate tickers, typed IDs, and typed
-//!   tasks
+//! ## Prelude
 //!
 //! ```rust
 //! use flui_scheduler::prelude::*;
@@ -166,11 +136,9 @@ pub mod task;
 pub mod ticker;
 pub mod vsync;
 
-// Advanced type system modules
+// Type-safe primitives
 pub mod duration;
 pub mod id;
-pub mod traits;
-pub mod typestate;
 
 // Re-exports - Core types
 pub use budget::{
@@ -190,56 +158,21 @@ pub use frame::{
     SchedulerPhase,
 };
 // Re-exports - ID types (unified with flui-foundation)
-pub use id::{CallbackId, FrameHandle, Handle, Id, IdGenerator, Marker, TaskHandle, markers};
+pub use id::{CallbackId, Id, IdGenerator, Marker, markers};
 pub use scheduler::{FrameCompletionFuture, FrameSkipPolicy, Scheduler, SchedulerBuilder};
-pub use task::{Priority, PriorityCount, Task, TaskId, TaskQueue, TypedTask};
+pub use task::{Priority, PriorityCount, Task, TaskId, TaskQueue};
 pub use ticker::{
     ScheduledTicker, ScheduledTickerCallback, Ticker, TickerCallback, TickerCanceled, TickerFuture,
     TickerFutureOrCancel, TickerGroup, TickerId, TickerProvider, TickerState,
 };
-// Re-exports - Trait types
-pub use traits::{
-    AnimationPriority, BuildPriority, FrameBudgetExt, FrameTimingExt, IdlePriority, PriorityExt,
-    PriorityLevel, ToMilliseconds, ToSeconds, UserInputPriority,
-};
-// Re-exports - Typestate types
-pub use typestate::{
-    Active, Idle, Muted, Stopped, TickerState as TypestateTickerState, TypestateTicker,
-};
-pub use vsync::{VsyncCallback, VsyncDrivenScheduler, VsyncMode, VsyncScheduler, VsyncStats};
+pub use vsync::{VsyncCallback, VsyncMode, VsyncScheduler, VsyncStats};
 
 /// Prelude for common scheduler types
 pub mod prelude {
-    // Core types
-    // Duration types
-    // Extension traits for convenient method access
     pub use crate::{
         BudgetPolicy, FrameBudget, FrameId, FramePhase, FrameTiming, OneShotFrameCallback,
         Priority, ScheduledTicker, Scheduler, SchedulerPhase, Task, TaskId, TaskQueue, Ticker,
         TickerProvider, TickerState,
         duration::{FrameDuration, Milliseconds, Percentage, Seconds},
-        traits::{FrameBudgetExt, FrameTimingExt, PriorityExt, ToMilliseconds, ToSeconds},
-    };
-}
-
-/// Advanced prelude with typestate and type-safe IDs
-pub mod prelude_advanced {
-    // Type-safe IDs
-    // Typed tasks
-    // Type-level priorities
-    // Typestate ticker
-    // Additional types
-    pub use crate::{
-        AllPhaseStats, FrameBudgetBuilder, FrameTimingBuilder, PhaseStats, PriorityCount,
-        SchedulerBuilder, TickerGroup, VsyncMode, VsyncStats,
-    };
-    pub use crate::{
-        id::{FrameHandle, Handle, Id, IdGenerator},
-        prelude::*,
-        task::TypedTask,
-        traits::{
-            AnimationPriority, BuildPriority, IdlePriority, PriorityLevel, UserInputPriority,
-        },
-        typestate::{Active, Idle, Muted, Stopped, TickerState, TypestateTicker},
     };
 }

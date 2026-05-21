@@ -48,15 +48,18 @@ pub trait GestureRecognizer: GestureArenaMember + Send + Sync {
     fn primary_pointer(&self) -> Option<PointerId>;
 }
 
-/// Base state for gesture recognizers
+/// Base composition data for gesture recognizers.
 ///
 /// Provides common functionality that all recognizers need:
 /// - Arena membership
 /// - Primary pointer tracking
 /// - Initial position tracking
 /// - Disposal
+///
+/// Renamed from `GestureRecognizerState` in U5 to free that name for the
+/// canonical Flutter `GestureRecognizerState` FSM enum (see below).
 #[derive(Clone)]
-pub struct GestureRecognizerState {
+pub struct RecognizerBase {
     /// Gesture arena for conflict resolution
     arena: GestureArena,
 
@@ -70,8 +73,8 @@ pub struct GestureRecognizerState {
     disposed: Arc<Mutex<bool>>,
 }
 
-impl GestureRecognizerState {
-    /// Create new recognizer state with arena
+impl RecognizerBase {
+    /// Create new recognizer base data with arena
     pub fn new(arena: GestureArena) -> Self {
         Self {
             arena,
@@ -166,9 +169,9 @@ impl GestureRecognizerState {
     }
 }
 
-impl std::fmt::Debug for GestureRecognizerState {
+impl std::fmt::Debug for RecognizerBase {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("GestureRecognizerState")
+        f.debug_struct("RecognizerBase")
             .field("primary_pointer", &self.primary_pointer())
             .field("initial_position", &self.initial_position())
             .field("disposed", &self.is_disposed())
@@ -176,25 +179,33 @@ impl std::fmt::Debug for GestureRecognizerState {
     }
 }
 
-/// Gesture state enum
+/// Canonical gesture recognizer FSM state, matching Flutter
+/// [`recognizer.dart:585`](https://github.com/flutter/flutter/blob/master/packages/flutter/lib/src/gestures/recognizer.dart)
+/// `GestureRecognizerState` enum.
 ///
-/// Tracks what state a gesture recognizer is in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GestureState {
-    /// Ready to start tracking
+/// A recognizer cycles `Ready` → `Possible` → (`Ready` | `Defunct`) and stays
+/// in `Defunct` until all tracked pointers are removed, at which point it
+/// returns to `Ready` for the next sequence.
+///
+/// Concrete recognizers typically retain a richer private FSM (e.g. Tap's
+/// down-then-up timing, DoubleTap's between-tap window) but expose progress
+/// through this canonical 3-state enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum GestureRecognizerState {
+    /// The recognizer is ready to start recognizing a gesture.
+    #[default]
     Ready,
 
-    /// Possible - might become a gesture
+    /// The sequence of pointer events seen thus far is consistent with the
+    /// gesture this recognizer is attempting to recognize but the gesture has
+    /// not been accepted definitively.
     Possible,
 
-    /// Started - gesture has begun
-    Started,
-
-    /// Accepted - won the arena
-    Accepted,
-
-    /// Rejected - lost the arena or explicitly rejected
-    Rejected,
+    /// Further pointer events cannot cause this recognizer to recognize the
+    /// gesture until the recognizer returns to [`Ready`] (typically when all
+    /// tracked pointers are removed).
+    Defunct,
 }
 
 /// Constants for gesture recognition
@@ -233,41 +244,44 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_recognizer_state_creation() {
+    fn test_recognizer_base_creation() {
         let arena = GestureArena::new();
-        let state = GestureRecognizerState::new(arena);
+        let base = RecognizerBase::new(arena);
 
-        assert_eq!(state.primary_pointer(), None);
-        assert_eq!(state.initial_position(), None);
-        assert!(!state.is_disposed());
+        assert_eq!(base.primary_pointer(), None);
+        assert_eq!(base.initial_position(), None);
+        assert!(!base.is_disposed());
     }
 
     #[test]
-    fn test_recognizer_state_tracking() {
+    fn test_recognizer_base_tracking() {
         let arena = GestureArena::new();
-        let state = GestureRecognizerState::new(arena);
+        let base = RecognizerBase::new(arena);
 
         let pointer = PointerId::new(1);
         let position = Offset::new(Pixels(100.0), Pixels(200.0));
 
-        state.set_primary_pointer(Some(pointer));
-        state.set_initial_position(Some(position));
+        base.set_primary_pointer(Some(pointer));
+        base.set_initial_position(Some(position));
 
-        assert_eq!(state.primary_pointer(), Some(pointer));
-        assert_eq!(state.initial_position(), Some(position));
+        assert_eq!(base.primary_pointer(), Some(pointer));
+        assert_eq!(base.initial_position(), Some(position));
 
-        state.stop_tracking();
-        assert_eq!(state.primary_pointer(), None);
-        assert_eq!(state.initial_position(), None);
+        base.stop_tracking();
+        assert_eq!(base.primary_pointer(), None);
+        assert_eq!(base.initial_position(), None);
     }
 
     #[test]
-    fn test_gesture_state_enum() {
-        let state = GestureState::Ready;
-        assert_eq!(state, GestureState::Ready);
+    fn test_gesture_recognizer_state_enum() {
+        let state = GestureRecognizerState::Ready;
+        assert_eq!(state, GestureRecognizerState::Ready);
 
-        let state = GestureState::Started;
-        assert_ne!(state, GestureState::Ready);
+        let state = GestureRecognizerState::Possible;
+        assert_ne!(state, GestureRecognizerState::Ready);
+
+        let state = GestureRecognizerState::Defunct;
+        assert_ne!(state, GestureRecognizerState::Possible);
     }
 
     #[test]

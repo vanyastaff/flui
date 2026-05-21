@@ -1394,6 +1394,7 @@ dependencies = [
  "flui-foundation",
  "parking_lot",
  "serde",
+ "thiserror 2.0.17",
  "tracing",
  "web-time",
 ]

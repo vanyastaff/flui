@@ -18,7 +18,7 @@ use std::{
 use flui_types::{Offset, geometry::Pixels};
 use parking_lot::Mutex;
 
-use super::recognizer::{GestureRecognizer, GestureRecognizerState};
+use super::recognizer::{GestureRecognizer, RecognizerBase};
 use crate::{
     arena::GestureArenaMember,
     events::{PointerEvent, PointerType},
@@ -68,7 +68,7 @@ pub struct MultiTapDetails {
 #[derive(Clone)]
 pub struct MultiTapGestureRecognizer {
     /// Base state (arena, tracking, etc.)
-    state: GestureRecognizerState,
+    state: RecognizerBase,
 
     /// Required number of simultaneous pointers
     required_pointer_count: usize,
@@ -160,7 +160,7 @@ impl MultiTapGestureRecognizer {
             required_pointer_count
         );
         Arc::new(Self {
-            state: GestureRecognizerState::new(arena),
+            state: RecognizerBase::new(arena),
             required_pointer_count,
             callbacks: Arc::new(Mutex::new(MultiTapCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(MultiTapState::default())),
@@ -181,7 +181,7 @@ impl MultiTapGestureRecognizer {
             required_pointer_count
         );
         Arc::new(Self {
-            state: GestureRecognizerState::new(arena),
+            state: RecognizerBase::new(arena),
             required_pointer_count,
             callbacks: Arc::new(Mutex::new(MultiTapCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(MultiTapState::default())),
@@ -457,6 +457,10 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
 
     fn dispose(&self) {
         self.state.mark_disposed();
+        // Reject arena entries + clear tracked pointer (Flutter parity:
+        // gestures/recognizer.dart:485-493 disposing GestureRecognizer
+        // clears arena state for tracked pointers).
+        self.state.reject();
         self.callbacks.lock().on_multi_tap = None;
         self.callbacks.lock().on_multi_tap_cancel = None;
     }

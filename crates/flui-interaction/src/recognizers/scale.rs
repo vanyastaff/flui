@@ -14,7 +14,7 @@ use std::{collections::HashMap, sync::Arc, time::Instant};
 use flui_types::{Offset, geometry::Pixels};
 use parking_lot::Mutex;
 
-use super::recognizer::{GestureRecognizer, GestureRecognizerState};
+use super::recognizer::{GestureRecognizer, RecognizerBase};
 use crate::{
     arena::GestureArenaMember, events::PointerEvent, ids::PointerId, processing::VelocityTracker,
 };
@@ -102,7 +102,7 @@ pub struct ScaleEndDetails {
 #[derive(Clone)]
 pub struct ScaleGestureRecognizer {
     /// Base state (arena, tracking, etc.)
-    state: GestureRecognizerState,
+    state: RecognizerBase,
 
     /// Callbacks
     callbacks: Arc<Mutex<ScaleCallbacks>>,
@@ -189,7 +189,7 @@ impl ScaleGestureRecognizer {
     /// Create a new scale recognizer with gesture arena
     pub fn new(arena: crate::arena::GestureArena) -> Arc<Self> {
         Arc::new(Self {
-            state: GestureRecognizerState::new(arena),
+            state: RecognizerBase::new(arena),
             callbacks: Arc::new(Mutex::new(ScaleCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(ScaleState::default())),
             min_scale_delta: 0.05, // 5% change minimum
@@ -609,6 +609,10 @@ impl GestureRecognizer for ScaleGestureRecognizer {
 
     fn dispose(&self) {
         self.state.mark_disposed();
+        // Reject arena entries + clear tracked pointer (Flutter parity:
+        // gestures/recognizer.dart:485-493 disposing GestureRecognizer
+        // clears arena state for tracked pointers).
+        self.state.reject();
         self.callbacks.lock().on_start = None;
         self.callbacks.lock().on_update = None;
         self.callbacks.lock().on_end = None;
