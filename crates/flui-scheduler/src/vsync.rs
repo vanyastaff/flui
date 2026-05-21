@@ -178,7 +178,7 @@ impl VsyncScheduler {
         if refresh_rate == 0 {
             return Err(InvalidVsyncConfig::ZeroRefreshRate);
         }
-        let frame_interval_us = Microseconds::new(1_000_000 / refresh_rate as i64);
+        let frame_interval_us = Microseconds::new(1_000_000 / refresh_rate as u64);
 
         Ok(Self {
             refresh_rate,
@@ -313,7 +313,7 @@ impl VsyncScheduler {
 
         // Calculate interval from last vsync
         if let Some(last) = inner.last_vsync {
-            let interval = Microseconds::new(now.duration_since(last).as_micros() as i64);
+            let interval = Microseconds::new(now.duration_since(last).as_micros() as u64);
 
             // Update history
             inner.interval_history.push_back(interval);
@@ -322,8 +322,8 @@ impl VsyncScheduler {
             }
 
             // Calculate average
-            let sum: i64 = inner.interval_history.iter().map(|i| i.value()).sum();
-            let avg = Microseconds::new(sum / inner.interval_history.len() as i64);
+            let sum: u64 = inner.interval_history.iter().map(|i| i.value()).sum();
+            let avg = Microseconds::new(sum / inner.interval_history.len() as u64);
 
             // Update stats
             inner.stats.last_interval = interval;
@@ -382,9 +382,14 @@ impl VsyncScheduler {
         let target = self.frame_interval_us.value();
         let actual = inner.stats.avg_interval.value();
 
-        // Within 5% tolerance
+        // Within 5% tolerance — absolute difference for u64 monotonic durations.
         let tolerance = target / 20;
-        (actual - target).abs() <= tolerance
+        let diff = if actual > target {
+            actual - target
+        } else {
+            target - actual
+        };
+        diff <= tolerance
     }
 }
 

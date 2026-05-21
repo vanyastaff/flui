@@ -107,7 +107,7 @@ impl Milliseconds {
     /// Convert to microseconds
     #[inline]
     pub fn to_micros(self) -> Microseconds {
-        Microseconds::new((self.0 * 1000.0) as i64)
+        Microseconds::new((self.0 * 1000.0).max(0.0) as u64)
     }
 
     /// Check if this duration is zero
@@ -385,10 +385,14 @@ impl From<f64> for Seconds {
 // Microseconds Newtype
 // =============================================================================
 
-/// Type-safe microseconds wrapper (integer precision)
+/// Type-safe microseconds wrapper (unsigned integer precision).
+///
+/// Durations are monotonically non-negative; this is u64-backed matching
+/// [`std::time::Duration`]'s representation. Eliminates the prior
+/// `i64`-backed panic path on negative-to-`Duration` conversion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct Microseconds(i64);
+pub struct Microseconds(u64);
 
 impl Microseconds {
     /// Zero microseconds
@@ -399,13 +403,13 @@ impl Microseconds {
 
     /// Create a new microseconds value
     #[inline]
-    pub const fn new(us: i64) -> Self {
+    pub const fn new(us: u64) -> Self {
         Self(us)
     }
 
     /// Get the raw value
     #[inline]
-    pub const fn value(self) -> i64 {
+    pub const fn value(self) -> u64 {
         self.0
     }
 
@@ -415,35 +419,17 @@ impl Microseconds {
         Milliseconds::new(self.0 as f64 / 1000.0)
     }
 
-    /// Try to convert to std::time::Duration
-    ///
-    /// Returns `None` if the value is negative, as `std::time::Duration` cannot
-    /// represent negative durations.
+    /// Convert to [`std::time::Duration`]. Infallible — `Microseconds` is
+    /// non-negative by construction.
     #[inline]
-    pub fn try_to_std_duration(self) -> Option<std::time::Duration> {
-        if self.0 >= 0 {
-            Some(std::time::Duration::from_micros(self.0 as u64))
-        } else {
-            None
-        }
+    pub const fn to_std_duration(self) -> std::time::Duration {
+        std::time::Duration::from_micros(self.0)
     }
 
-    /// Convert to std::time::Duration
-    ///
-    /// # Panics
-    ///
-    /// Panics if the value is negative, as `std::time::Duration` cannot
-    /// represent negative durations. Prefer
-    /// [`try_to_std_duration`](Self::try_to_std_duration) for fallible
-    /// conversion.
+    /// Saturating subtraction (returns ZERO if rhs > self).
     #[inline]
-    pub fn to_std_duration(self) -> std::time::Duration {
-        self.try_to_std_duration().unwrap_or_else(|| {
-            panic!(
-                "Cannot convert negative Microseconds ({}) to Duration",
-                self.0
-            )
-        })
+    pub const fn saturating_sub(self, other: Self) -> Self {
+        Self(self.0.saturating_sub(other.0))
     }
 }
 
@@ -453,9 +439,9 @@ impl fmt::Display for Microseconds {
     }
 }
 
-impl From<i64> for Microseconds {
+impl From<u64> for Microseconds {
     #[inline]
-    fn from(value: i64) -> Self {
+    fn from(value: u64) -> Self {
         Self(value)
     }
 }
@@ -463,14 +449,12 @@ impl From<i64> for Microseconds {
 impl From<std::time::Duration> for Microseconds {
     #[inline]
     fn from(duration: std::time::Duration) -> Self {
-        Self(duration.as_micros() as i64)
+        // `as u64` saturates at u64::MAX on Durations exceeding ~584,000 years
+        Self(duration.as_micros() as u64)
     }
 }
 
 impl From<Microseconds> for std::time::Duration {
-    /// # Panics
-    ///
-    /// Panics if the `Microseconds` value is negative.
     #[inline]
     fn from(us: Microseconds) -> Self {
         us.to_std_duration()
@@ -746,24 +730,11 @@ mod tests {
     }
 
     #[test]
-    fn test_try_to_std_duration() {
-        let positive = Microseconds::new(1000);
-        assert_eq!(
-            positive.try_to_std_duration(),
-            Some(std::time::Duration::from_micros(1000))
-        );
-
-        let zero = Microseconds::ZERO;
-        assert_eq!(zero.try_to_std_duration(), Some(std::time::Duration::ZERO));
-
-        let negative = Microseconds::new(-100);
-        assert_eq!(negative.try_to_std_duration(), None);
-    }
-
-    #[test]
-    #[should_panic(expected = "Cannot convert negative Microseconds")]
-    fn test_negative_microseconds_panics() {
-        let negative = Microseconds::new(-100);
-        let _ = negative.to_std_duration();
+    fn test_microseconds_saturating_sub() {
+        let a = Microseconds::new(100);
+        let b = Microseconds::new(50);
+        assert_eq!(a.saturating_sub(b), Microseconds::new(50));
+        // Underflow saturates to zero (post-U8: no negative Microseconds).
+        assert_eq!(b.saturating_sub(a), Microseconds::ZERO);
     }
 }

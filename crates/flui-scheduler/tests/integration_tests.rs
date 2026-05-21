@@ -1256,11 +1256,11 @@ fn test_vsync_scheduler_frame_intervals() {
     // Test different refresh rates
     let vsync_60 = VsyncScheduler::try_new(60).expect("refresh > 0");
     let interval_60 = vsync_60.frame_interval();
-    assert!((interval_60.value() - 16_666).abs() < 100);
+    assert!(interval_60.value().abs_diff(16_666) < 100);
 
     let vsync_120 = VsyncScheduler::try_new(120).expect("refresh > 0");
     let interval_120 = vsync_120.frame_interval();
-    assert!((interval_120.value() - 8_333).abs() < 100);
+    assert!(interval_120.value().abs_diff(8_333) < 100);
 
     // Test frame_interval_duration
     let duration = vsync_60.frame_interval_duration();
@@ -1620,10 +1620,10 @@ fn test_microseconds() {
 }
 
 #[test]
-fn test_microseconds_from_i64() {
+fn test_microseconds_from_u64() {
     use flui_scheduler::duration::Microseconds;
 
-    let us: Microseconds = 1000_i64.into();
+    let us: Microseconds = 1000_u64.into();
     assert_eq!(us.value(), 1000);
 }
 
