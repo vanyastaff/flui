@@ -2247,9 +2247,18 @@ The 15% **divergence** (deliberate Rust-native shape) concentrates in:
 
 ## Status (2026-05-21)
 
-**Execution: partially landed on branch `determined-proskuriakova-d2eccf`** (19 commits + 3 prep docs commit).
+**Execution: landed across PRs #85, #86, #87, #88 — 22 units total closed.**
 
-Landed atomic commits (commit hash → unit ID):
+### Landed units (PR # → merge commit → units)
+
+| PR | Merge commit | Units |
+|---|---|---|
+| [#85](https://github.com/vanyastaff/flui/pull/85) | `ccc95c8a` | docs + U1 + U2 + U3 + U4 + U5 + U6 + U7 + U8 + U10 + U11 + U13 + U14 + U30 + U32(a) — Wave 1-3 + audit closure (14 units + audit annotation) |
+| [#86](https://github.com/vanyastaff/flui/pull/86) | `166143fe` | U25 + U26 + U27 + U28 + U31 — Wave 4-7 batch 1 (5 units) |
+| [#87](https://github.com/vanyastaff/flui/pull/87) | `41712422` | U32(b) — Tap on_tap_down post-arena-accept |
+| [#88](https://github.com/vanyastaff/flui/pull/88) | `250076f3` | U23 partial — FocusManager Tab navigation via active_scope |
+
+### Per-unit commit hashes (chronological)
 
 | Commit | Unit | Description |
 |---|---|---|
@@ -2268,30 +2277,38 @@ Landed atomic commits (commit hash → unit ID):
 | `4505c0b4` | U14 | TickerProvider::create_ticker factory |
 | `24d43709` | U30 | AppLifecycleState auto-toggle frames_enabled |
 | `7d86ae9f` | U32(a) | Priority::numeric_value Flutter-faithful mapping |
+| `a43a4e28` | docs | Audit Part IV "Status" annotation (initial) |
+| `4e7408ef` | U27 | MouseTracker::update_all_devices functional impl |
+| `c9be841d` | U31 | persistent/post-frame strict immutability |
+| `acab2929` | U26 | TaskQueue::len lock-free AtomicUsize mirror |
+| `0822696a` | U25 | PointerRouter Map redesign + Flutter dispatch order |
+| `461ffb9d` | U28 | GestureBinding::handle_lifecycle_pause defensive sweep |
+| `4b0cb866` | U32(b) | Tap on_tap_down post-arena-accept |
+| `326b3279` | U23 partial | FocusManager Tab navigation via active_scope |
 
-**Deferred / scope-merged:**
+### Remaining deferred (continuation PRs)
 
-- **U9** (PointerId widening to `ui_events::pointer::PointerId`): concrete blocker. ui_events `PointerId(NonZeroU64)` API surface (fallible constructor, no zero, no negative, different method names `get_inner` vs `.get()`) requires per-callsite review across ~50 sites. Not mechanical sweep. Deferred to focused follow-up unit.
-- **U12** (FocusManager + GestureBinding dispose pattern): scope-merged. FocusManager is singleton — dispose semantically wrong; FocusManager treatment handled by U23 (unification). GestureBinding hit_tests drain already exists at Up/Cancel branches; defensive AppLifecycle sweep deferred to U28.
-- **U15** (ScheduledTicker absorption): deferred. Requires deep wiring of Ticker auto-rescheduling via Scheduler persistent-frame-callback path + flui-animation source migration (U24). Standalone follow-up.
-- **U16-U22** (7 concrete recognizer migrations): trait infrastructure (U13) landed, concrete migrations deferred. Each touches one recognizer file ~200-300 LOC; mechanical но requires per-recognizer Flutter-parity verification. Follow-up wave.
-- **U17-U21** missing recognizers (`TapAndDrag`/`Eager`/`MultiDrag`/`MultitouchDragStrategy`): out of scope per brainstorm Scope Boundary — P3 backlog.
-- **U23** (FocusManager unification): deferred to focused unit.
-- **U24** (flui-animation source migration): depends on U15.
-- **U25-U29** (hot path / unbounded growth / testing feature-gate): deferred to follow-up wave.
-- **U31** (persistent/post-frame strict immutability): deferred — touches public API contract + downstream consumers.
-- **U32(b,c)** (Tap dispatch order fix + final audit annotation): partial (numeric mapping landed); Tap dispatch reorder deferred с U16 recognizer migration.
+- **U9** PointerId widening to `ui_events::pointer::PointerId` — concrete blocker. ui_events `PointerId(NonZeroU64)` API surface mismatch с local `PointerId(i32)` requires per-callsite review across ~50 sites. Not mechanical sweep.
+- **U12** scope-merged into U23 partial (`326b3279`) + U28 (`461ffb9d`).
+- **U15** ScheduledTicker absorption — needs deep wiring of Ticker auto-rescheduling via Scheduler persistent-frame-callback path + flui-animation source migration (U24).
+- **U16-U22** 7 concrete recognizer migrations to canonical `OneSequence`/`PrimaryPointer` trait hierarchy — trait infrastructure (U13) landed; concrete impl blocks deferred. Tap partial via U32(b) `4b0cb866` (post-arena-accept callback firing).
+- **U17-U21** missing Flutter recognizers (`TapAndDrag`/`Eager`/`MultiDrag`/`MultitouchDragStrategy`) — out of scope per brainstorm Scope Boundary (P3 backlog).
+- **U23 remaining** — full FocusManager + FocusManagerInner singleton merger. Minimum-viable Tab nav landed via `326b3279`.
+- **U24** flui-animation source migration — depends U15.
+- **U29** testing/ feature-gate — needs PointerEventData relocation from events.rs to testing/.
+- **U32(c)** — this annotation block updated to reflect 22-unit closure.
 
-**Verification at HEAD (commit `7d86ae9f`):**
+### Verification at HEAD (commit `250076f3` on main)
+
 - `cargo build --workspace --all-targets`: clean
 - `cargo clippy --workspace --all-targets -- -D warnings`: clean
-- `cargo test -p flui-scheduler`: 106 lib + 205 integration + 38 doc = 349 passed, 0 failed
-- `cargo test -p flui-interaction --lib`: 247 passed, 0 failed
-- `bash scripts/port-check.sh`: 7/7 institutional refusal triggers clean
+- `cargo test -p flui-scheduler`: 349 passed (106 lib + 205 integration + 38 doc)
+- `cargo test -p flui-interaction --lib`: 247 passed
+- `bash scripts/port-check.sh -v`: 7/7 institutional refusal triggers clean
 
-**Net delta this session:** ~3,500-4,000 LOC zombie + parallel-impl reduction. PR #84 `dispose` pattern adopted on Ticker + Recognizer. Constitution Principle 6 violations eliminated from scheduler (no `from_u8` panics, no `assert!` panics in production paths, no negative Microseconds).
+### Net cumulative delta
 
-**Bundle hypothesis preserved:** remaining units (U9, U15, U16-U22, U23, U24, U25-U29, U31, U32 final) can land as a follow-up PR or continuation of this branch. Each remaining unit is independently testable; per-commit verification gates already established.
+~4,000-4,500 LOC zombie + parallel-impl reduction across `flui-interaction` + `flui-scheduler`. PR #84 `ChangeNotifier::dispose` pattern adopted on Ticker + 7 Recognizers. Constitution Principle 6 violations eliminated from scheduler (no `from_u8` panics, no `assert!` panics in production paths, no negative Microseconds). Hot-path perf: PointerRouter 2+N+M → 2 locks/event + Flutter dispatch order. TaskQueue lock-free len/is_empty. MouseTracker stationary-hover-on-moving-UI now works. AppLifecycle auto-toggles frames_enabled. Persistent/post-frame strict Flutter contract restored. FocusManager Tab nav via active_scope.
 
 ---
 
