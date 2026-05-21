@@ -548,22 +548,40 @@ impl BuildContext for ElementBuildContext {
     }
 
     fn dispatch_notification(&self, notification: &dyn Notification) {
-        let tree = self.tree.read();
+        // Walk strict-ancestors (self-exclusive, parent-first) and invoke
+        // each ancestor's object-safe
+        // [`ElementBase::on_notification`](crate::view::ElementBase::on_notification)
+        // handler. The bubble stops on the first ancestor that returns
+        // `true` (handled); a `false` return continues the walk; reaching
+        // the root with no `true` exhausts the walk silently.
+        //
+        // The notification is coerced from `&dyn Notification` to
+        // `&dyn Any` via the `Any` supertrait (Rust 1.86+ trait upcasting,
+        // stable in this workspace). `TypeId::of::<N>()` for the static
+        // type is recovered from the notification value itself via
+        // `Any::type_id` — sound because `Notification: Any` guarantees
+        // the concrete-type vtable carries it.
+        //
+        // Flutter parity: `notification_listener.dart:67`
+        // (`Notification.dispatch`) walks `_parent`, invoking each
+        // `_NotificationElement.onNotification` handler with the typed
+        // notification and stopping when one returns `true`.
+        //
+        // Plan §U13 / R10 / AE6. Single-`dyn`-boundary discipline per
+        // Constitution Principle 4: the walk uses `&dyn ElementBase` (the
+        // existing tree shape) but the handler call site is the only
+        // place a typed downcast happens, in the listener Element's own
+        // `on_notification` body.
+        let notification_any: &dyn Any = notification;
+        let type_id = notification_any.type_id();
 
-        // Bubble up from current element
-        let mut current_id = self.element_id;
-        while let Some(node) = tree.get(current_id) {
-            // Check if this element handles the notification
-            // This requires NotifiableElement trait check
-            // For now, just walk up
-            let _ = notification;
-
-            let Some(parent_id) = node.parent() else {
-                break;
-            };
-
-            current_id = parent_id;
-        }
+        self.walk_strict_ancestors::<()>(|ancestor| {
+            if ancestor.on_notification(type_id, notification_any) {
+                std::ops::ControlFlow::Break(())
+            } else {
+                std::ops::ControlFlow::Continue(())
+            }
+        });
     }
 }
 

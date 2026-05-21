@@ -39,17 +39,45 @@ use std::{
 /// notification.dispatch(ctx);
 /// ```
 ///
+/// # Plan §D3 decision
+///
+/// `Notification: Any + Send + Sync + 'static` is the **marker** trait —
+/// it is opaque and `Any` is the downcast vehicle. The object-safe
+/// `ElementBase::on_notification(TypeId, &dyn Any) -> bool` handler
+/// protocol does the runtime-type check + downcast at the dispatch
+/// boundary; user-impls don't need to provide any methods, the empty
+/// body `impl Notification for MyEvent {}` is enough. Plan U13 / R10.
+///
 /// # Flutter Equivalent
 ///
-/// Corresponds to Flutter's `Notification` abstract class.
-pub trait Notification: Send + Sync + 'static {
+/// Corresponds to Flutter's `Notification` abstract class
+/// (`notification_listener.dart:39`).
+pub trait Notification: Any + Send + Sync + 'static {
     /// Get the type ID of this notification for type checking.
-    fn notification_type_id(&self) -> TypeId {
+    ///
+    /// Default impl uses `TypeId::of::<Self>()`; override is rarely
+    /// needed. Kept for API ergonomics — `dispatch_notification` itself
+    /// reads the `TypeId` off the static `N` at the generic call-site
+    /// rather than via this virtual call.
+    fn notification_type_id(&self) -> TypeId
+    where
+        Self: Sized,
+    {
         TypeId::of::<Self>()
     }
 
-    /// Get this notification as an Any reference for downcasting.
-    fn as_any(&self) -> &dyn Any;
+    /// Get this notification as an `Any` reference for downcasting.
+    ///
+    /// Default impl returns `self` — sound because `Notification: Any`
+    /// makes the `&Self` -> `&dyn Any` coercion automatic. User-impls
+    /// like `impl Notification for ScrollNotification {}` work without
+    /// any method body. Plan U13.
+    fn as_any(&self) -> &dyn Any
+    where
+        Self: Sized,
+    {
+        self
+    }
 
     /// Dispatch this notification to the element tree.
     ///
@@ -79,24 +107,40 @@ pub type BoxedNotification = Box<dyn Notification>;
 /// Return `false` to continue bubbling to ancestors.
 pub type NotificationCallback<T> = Box<dyn Fn(&T) -> bool + Send + Sync>;
 
-/// Trait for elements that can receive notifications.
+/// Opt-in **typed** handler trait for elements that intercept a
+/// specific notification type `N`.
 ///
-/// Elements that implement this trait can intercept notifications
-/// as they bubble up the tree.
+/// `NotifiableElement<N>` is the ergonomic surface for callers who want
+/// a strongly-typed `fn on_notification(&self, &N) -> bool` callback.
+/// Internally the dispatcher does NOT walk via `dyn NotifiableElement<N>`
+/// — it walks via the object-safe
+/// [`ElementBase::on_notification`](crate::view::ElementBase::on_notification)
+/// `(TypeId, &dyn Any) -> bool` handler, which translates the typed
+/// callback to the object-safe shape at the impl site. This keeps the
+/// single-`dyn`-boundary discipline (Constitution Principle 4; plan §D3).
+///
+/// Default impl returns `false` (no-op), so Elements only need to
+/// override when they actually want to intercept notifications of type
+/// `N`.
 ///
 /// # Flutter Equivalent
 ///
-/// Corresponds to Flutter's `NotifiableElementMixin`.
-pub trait NotifiableElement: Send + Sync {
-    /// Called when a notification arrives at this element.
+/// Corresponds to Flutter's `NotifiableElementMixin` + the per-listener
+/// `_NotificationElement<T extends Notification>`
+/// (`notification_listener.dart:127`). Flutter parameterises the
+/// listener element on `T`; we mirror that with `N`.
+pub trait NotifiableElement<N: Notification>: crate::view::ElementBase {
+    /// Called when a notification of type `N` arrives at this element
+    /// during bubble dispatch.
     ///
     /// Return `true` to cancel bubbling (notification handled).
     /// Return `false` to allow the notification to continue bubbling.
     ///
-    /// # Arguments
-    ///
-    /// * `notification` - The notification being dispatched
-    fn on_notification(&self, notification: &dyn Notification) -> bool;
+    /// Default returns `false`. Override on elements that want typed
+    /// handler semantics.
+    fn on_notification(&self, _notification: &N) -> bool {
+        false
+    }
 }
 
 /// A node in the notification tree for efficient dispatch.

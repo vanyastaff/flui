@@ -474,6 +474,41 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     fn render_id(&self) -> Option<flui_foundation::RenderId> {
         None
     }
+
+    // ========================================================================
+    // Notification handler protocol (U13 / R10)
+    // ========================================================================
+
+    /// Object-safe notification handler invoked by
+    /// [`BuildContext::dispatch_notification`] during ancestor bubble walks.
+    ///
+    /// `type_id` is `TypeId::of::<N>()` for the static notification type
+    /// `N` captured at the dispatch call-site. `notification` is the
+    /// notification value coerced to `&dyn Any` so this method can stay
+    /// object-safe (Constitution Principle 4: single `dyn` boundary at
+    /// dispatch — not `dyn`-everywhere). Implementations must:
+    ///
+    /// 1. Check `type_id` against the static `TypeId::of::<N>()` of the
+    ///    notification type they care about — skip if mismatch.
+    /// 2. Downcast `notification` via `<dyn Any>::downcast_ref::<N>()`.
+    /// 3. Invoke their typed handler (e.g. the typed
+    ///    [`NotifiableElement<N>`](crate::element::NotifiableElement)
+    ///    wrapper) and return its `bool`.
+    ///
+    /// Default returns `false` so non-listener elements are skipped
+    /// cleanly during the bubble walk. The unified `Element<V, A, B>`
+    /// overrides this to delegate through the behavior, which in turn
+    /// keeps the default unless the user opts in.
+    ///
+    /// Returning `true` cancels the bubble; `false` lets it continue to
+    /// the next ancestor. Plan U13 / R10. Flutter parity:
+    /// `notification_listener.dart:127`
+    /// (`_NotificationElement.onNotification`) performs the same
+    /// runtime-type check + downcast + typed-callback chain.
+    fn on_notification(&self, type_id: std::any::TypeId, notification: &dyn std::any::Any) -> bool {
+        let _ = (type_id, notification);
+        false
+    }
 }
 
 impl_downcast!(ElementBase);

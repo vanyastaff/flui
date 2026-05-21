@@ -208,6 +208,22 @@ where
     }
 
     // ========================================================================
+    // Notification handler protocol (U13 / R10)
+    //
+    // Routes through the behavior. The trait-default `false` keeps
+    // non-listener elements out of the bubble walk. Production
+    // listener behaviors (e.g. a future NotificationListener<N> widget)
+    // override `ElementBehavior::on_notification` to translate the
+    // object-safe `(TypeId, &dyn Any)` shape into the typed
+    // `NotifiableElement<N>` callback at the impl site — single dyn
+    // boundary at dispatch only (plan §D3, Constitution Principle 4).
+    // ========================================================================
+
+    fn on_notification(&self, type_id: std::any::TypeId, notification: &dyn Any) -> bool {
+        self.behavior.on_notification(type_id, notification)
+    }
+
+    // ========================================================================
     // Lifecycle Methods with Behavior Hooks
     // ========================================================================
 

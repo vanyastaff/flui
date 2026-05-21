@@ -162,6 +162,25 @@ where
     fn render_id(&self) -> Option<flui_foundation::RenderId> {
         None
     }
+
+    /// Object-safe notification handler hook routed from
+    /// [`ElementBase::on_notification`](crate::view::ElementBase::on_notification)
+    /// during bubble dispatch (plan §U13 / R10).
+    ///
+    /// Default returns `false` — non-listener behaviors are skipped
+    /// cleanly. A future production `NotificationListener<N>` widget will
+    /// override this in a dedicated `NotificationListenerBehavior<N>`
+    /// (out of scope for U13 — the integration tests in
+    /// `tests/notifications.rs` exercise the protocol via a hand-rolled
+    /// `ElementBase` impl so the wiring is validated end-to-end without
+    /// adding production scaffolding the framework doesn't yet need).
+    ///
+    /// Flutter parity: `notification_listener.dart:127`
+    /// (`_NotificationElement.onNotification`).
+    fn on_notification(&self, type_id: std::any::TypeId, notification: &dyn std::any::Any) -> bool {
+        let _ = (type_id, notification);
+        false
+    }
 }
 
 // ============================================================================
