@@ -1,7 +1,7 @@
 ---
 date: 2026-05-21
 type: feat
-status: active
+status: completed
 origin: docs/brainstorms/superellipse-cache-and-sdf-requirements.md
 depth: deep
 target_crates: flui-engine, flui-painting (test infra only)

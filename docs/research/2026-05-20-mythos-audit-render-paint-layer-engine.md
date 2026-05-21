@@ -482,6 +482,35 @@ thread_local! { static SUPERELLIPSE_CACHE: RefCell<SuperellipseCache> = ...; }
 
 ### Step 5 — Performance-oriented restructuring
 
+> **Status (2026-05-21): item 14 complete.** `SUPERELLIPSE_CACHE` bounded per the audit ask AND the real iOS-squircle SDF clip landed in the same batch (closes the PR #82 follow-up gap). Landed on branch `feat/superellipse-sdf` as a 12-unit chain matching the PR #81/#82 atomic-commit-per-finding shape. Highlights:
+>
+> - `SuperellipsePathCache` mirrors `PathCache` shape (max_entries, last_used_frame, advance_frame eviction, hits/misses stats, tracing::debug! on eviction). Default `max_entries = 256`. The thread_local-static cache that previously lived in `layer_render.rs` is deleted; ownership moved onto `WgpuPainter` (same per-Painter pattern as PathCache).
+> - `CommandRenderer::superellipse_path` trait method added so `ClipSuperellipseLayer::render` consults the Painter-owned cache via `Backend::superellipse_path` override; `DebugBackend`/`MockRenderer` inherit the default fallback (regenerate-each-call, no caching).
+> - **10k-key stress test** (the audit's explicit ask) asserts cache size = `max_entries` exactly after 10000 unique inserts. Completes in <1s.
+> - **Real iOS-squircle SDF** lands in `common/sdf.wgsl::sdRoundedSuperellipse` and is inlined into `rect_instanced.wgsl` per the existing inlining convention. Per-instance `clip_kind: u32` flag selects between `sdRoundedBox` (kind=1) and `sdRoundedSuperellipse` (kind=2). `Painter::clip_rsuperellipse` populates `current_rsuperellipse_clip: [f32; 12]` + applies the bounding-rect scissor; `Backend::clip_rsuperellipse` override fires the path. `CommandRenderer::clip_rsuperellipse`'s trait default still routes to `clip_rrect` approximation for non-Painter backends.
+> - **SDF math validated** by a CPU-side smoke test that transliterates the WGSL into Rust and verifies the superellipse SDF measurably differs from the rrect SDF at a corner-curvature sample point while matching the rrect SDF deep inside the inner rect and along axis-edge midway points. The smoke test caught and fixed a bug in the first-draft inner-rect WGSL formula (missing `- r3` term making the SDF discontinuous at the corner-to-interior boundary).
+>
+> Commits (in order on the worktree branch):
+> - `55dfbb39` — docs: brainstorm + plan source-of-truth docs.
+> - `33176df5` — U1: introduce `SuperellipsePathCache` struct mirroring `PathCache` shape.
+> - `bcae70d7` — U2-U4 (combined per workspace-compile invariant): migrate cache to Painter ownership + add `CommandRenderer::superellipse_path` trait method + update `ClipSuperellipseLayer::render` call site.
+> - `4141f50f` — U5: 10k-key stress test (audit's explicit ask).
+> - `418b42d3` — U6: `sdRoundedSuperellipse` WGSL function in `common/sdf.wgsl`.
+> - `31ae93f9` — U7: `current_rsuperellipse_clip` + clip stack on Painter.
+> - `c28be7ea` — U8: `Painter::clip_rsuperellipse` method (uniform + scissor).
+> - `e3c58dd3` — U9: extend `rect_instanced.wgsl` with per-instance `clip_kind` flag dispatching between sdRoundedBox and sdRoundedSuperellipse.
+> - `49691980` — U10: `Backend::clip_rsuperellipse` + `Backend::superellipse_path` overrides.
+> - `43099c36` — U11: SDF smoke test (CPU-side) + fix to inner-rect formula caught by the test.
+> - `e8997084` — U7/U8/U9/U11 clippy fixups (float_cmp / similar_names / format args on the new code).
+>
+> **Deferred to follow-up** (per plan Scope Boundaries):
+> - Cross-shader superellipse-clip integration. `circle_instanced.wgsl`, `texture_instanced.wgsl`, `shape.wgsl`, `gradients/*.wgsl`, `effects/*.wgsl` keep the existing rrect-only clip path; when their downstream draws fall under an active superellipse clip, the clip degrades to the rrect bounding-box approximation. Per-shader integration is a separate follow-up.
+> - Cross-backend SDF parity. DebugBackend / MockRenderer use the trait default rrect approximation.
+> - GPU-rendered golden-image regression suite.
+> - Criterion benchmark comparing SDF vs path-tessellation per-frame cost.
+> - Configurable superellipse exponent (`n` ships hardcoded to 4 per Flutter iOS-squircle).
+> - Separate-axis-radius interpretation: the per-instance clip averages each corner's rx/ry into a single radius for first-pass simplicity; widening the instance buffer to carry the full 8 radii is a follow-up if perfectly-elliptical superellipses need pixel-perfect clipping.
+
 14. **Bound `SUPERELLIPSE_CACHE`** in [layer_render.rs:71](../../crates/flui-engine/src/wgpu/layer_render.rs). Mirror the `PathCache` shape (max_entries, last_used_frame, advance_frame eviction). Add a memory-budget metric so this never recurs invisibly. Add a stress test that emits 10k unique superellipse keys and asserts cache size stays ≤ max_entries.
 15. **Track Paint/Path clone storm** for `DisplayList`. Land Paint interning + `Cow<Path>` only after a Criterion benchmark proves it pays. Today it's a known cost without measurement.
 
