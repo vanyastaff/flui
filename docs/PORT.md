@@ -20,7 +20,7 @@ Triggers are seeded from observed friction in the workspace. Forward-looking tri
 
 **Back-references:** [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) v2.2.0 Anti-Patterns ("`Arc<Mutex<>>` for tree structures"); [`STRATEGY.md`](../STRATEGY.md) "sync hot path".
 
-**Regex (used by `just port-check`):** `RwLock<\s*Box<\s*dyn\s+(RenderObject|Layer\b|ContainerLayer)` (storage-shaped violations). Scope extended in Mythos Step 13 of the `flui-layer` chain to cover `crates/flui-layer/src/` and to match `dyn Layer` / `dyn ContainerLayer` shapes as well.
+**Regex (used by `just port-check`):** `RwLock<\s*Box<\s*dyn\s+(RenderObject|Layer\b|ContainerLayer)` (storage-shaped violations). Scope extended in Mythos Step 13 of the `flui-layer` chain to cover `crates/flui-layer/src/` and to match `dyn Layer` / `dyn ContainerLayer` shapes as well. Re-confirmed in Mythos Step 13 of the `flui-painting` chain to cover the post-split `crates/flui-painting/src/` subdirectories (`canvas/`, `display_list/`, `text_layout/`, `text_painter/`) as a forward-looking guard.
 
 ### 2. `Box<dyn RenderObject<_>>` wrapped in any interior-mutability primitive in render storage
 
@@ -32,7 +32,7 @@ The *funnel* signatures (`tree.rs::insert_box`, view → render `From` impls) ac
 
 **Back-references:** [`.ai-factory/ARCHITECTURE.md`](../.ai-factory/ARCHITECTURE.md) example "`RenderBad { children: Vec<Box<dyn RenderObject>> }` — forbidden"; [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) Principle IV.
 
-**Regex:** `(RwLock|Mutex|RefCell|Cell|UnsafeCell)<\s*Box<\s*dyn\s+(RenderObject|Layer\b|ContainerLayer)` constrained to render-storage modules and `crates/flui-layer/src/`. Scope and trait-name set extended in Mythos Step 13 of the `flui-layer` chain.
+**Regex:** `(RwLock|Mutex|RefCell|Cell|UnsafeCell)<\s*Box<\s*dyn\s+(RenderObject|Layer\b|ContainerLayer)` constrained to render-storage modules, `crates/flui-layer/src/`, and `crates/flui-painting/src/`. Scope and trait-name set extended in Mythos Step 13 of the `flui-layer` chain; re-confirmed for the post-split `flui-painting` subdirectories in Mythos Step 13 of the `flui-painting` chain.
 
 ### 3. `async fn` on `View::build`, `RenderObject::layout`, `RenderObject::paint`
 
@@ -40,7 +40,7 @@ The *funnel* signatures (`tree.rs::insert_box`, view → render `From` impls) ac
 
 **Back-references:** [`STRATEGY.md`](../STRATEGY.md) "sync hot path, async на краях"; permitted at IO (`flui-assets`), scheduler (`flui-scheduler`), build pipeline (`flui-build`) only.
 
-**Regex:** `async\s+fn\s+(build|layout|paint|perform_layout|composite|render|fire_composition_callbacks)\b` constrained to `crates/flui-{rendering,view,painting,layer}/src/**`. Scope and verb set extended in Mythos Step 13 of the `flui-layer` chain to catch layer-level async (`composite`, `render`, `fire_composition_callbacks`).
+**Regex:** `async\s+fn\s+(build|layout|paint|perform_layout|composite|render|fire_composition_callbacks)\b` constrained to `crates/flui-{rendering,view,painting,layer}/src/**`. Scope and verb set extended in Mythos Step 13 of the `flui-layer` chain to catch layer-level async (`composite`, `render`, `fire_composition_callbacks`). Re-confirmed in Mythos Step 13 of the `flui-painting` chain to recurse into the post-split `crates/flui-painting/src/` subdirectories (rg recurses naturally; verified via `bash scripts/port-check.sh -v`).
 
 **Whitelist:** `crates/flui-view/src/binding.rs` route-notification handlers (`handle_pop_route`, `handle_push_route`, `handle_commit_back_gesture`, `handle_request_app_exit`) are async per Flutter's `SystemChannels` callback shape; they sit on the binding layer, not the render path.
 
@@ -176,7 +176,7 @@ Four other crates carry `crates/<crate>/docs/ARCHITECTURE.md` files (`flui-paint
 | `flui-types` | Not yet templated | Active |
 | `flui-tree` | Not yet templated | Active |
 | `flui-platform` | Not yet templated | Active |
-| `flui-painting` | `crates/flui-painting/docs/ARCHITECTURE.md` (pre-template) | Active |
+| [`flui-painting`](../crates/flui-painting/ARCHITECTURE.md) | Templated 2026-05-20 (Mythos chain) | Active |
 | `flui-semantics` | Not yet templated | Active |
 | `flui-scheduler` | Not yet templated | Active |
 | [`flui-layer`](../crates/flui-layer/ARCHITECTURE.md) | Templated 2026-05-20 (Mythos chain) | Active |

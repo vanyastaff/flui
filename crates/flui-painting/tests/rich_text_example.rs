@@ -1,3 +1,4 @@
+#![cfg(feature = "text")]
 //! Rich Text Example
 //!
 //! This module demonstrates advanced text painting features including:
@@ -6,6 +7,10 @@
 //! - Text selection
 //! - RTL and bidirectional text
 //! - Line metrics
+//!
+//! Gated on `feature = "text"` because the tests build on
+//! [`flui_painting::TextPainter`] / `detect_text_direction`, which are
+//! only present when cosmic-text-backed text layout is compiled in.
 
 use flui_painting::{DisplayListCore, TextPainter, detect_text_direction};
 use flui_types::{
