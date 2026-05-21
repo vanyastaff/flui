@@ -27,12 +27,11 @@ View Tree (immutable) → Element Tree (mutable) → Render Tree (layout/paint)
 **Active crates:**
 - Foundation: `flui-types`, `flui-foundation`, `flui-tree`
 - Platform: `flui-platform` (MVP development - cross-platform support)
-- Core: `flui-layer`, `flui-semantics`, `flui-interaction`, `flui-painting`
-- Framework: `flui-scheduler`, `flui-engine`, `flui-log`, `flui-app`
-- Tools: `flui-build` (async PlatformBuilder)
+- Core: `flui-layer`, `flui-semantics`, `flui-interaction`, `flui-painting`, `flui-hot-reload`
+- Framework: `flui-scheduler`, `flui-engine`, `flui-log`, `flui-rendering`, `flui-view`, `flui-app`
 
 **Temporarily disabled until integration complete:**
-- `flui-rendering`, `flui-view`, `flui-animation`, `flui-reactivity`, `flui-devtools`, `flui-cli`
+- `flui-animation`, `flui-reactivity`, `flui-devtools`, `flui-cli`, `flui-build`
 
 **Current Priority**: Complete flui-platform MVP
 
