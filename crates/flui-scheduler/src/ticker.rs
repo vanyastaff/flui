@@ -279,9 +279,10 @@ impl Ticker {
         true
     }
 
-    /// Start the ticker with a callback
+    /// Start the ticker with a callback.
     ///
     /// The callback receives the elapsed time in seconds since start.
+    /// Overrides any callback pre-loaded via [`TickerProvider::create_ticker`].
     ///
     /// # Panics
     ///
@@ -293,6 +294,21 @@ impl Ticker {
     where
         F: FnMut(f64) + Send + 'static,
     {
+        self.start_inner(Some(Box::new(callback)));
+    }
+
+    /// Start the ticker using the callback installed via
+    /// [`TickerProvider::create_ticker`].
+    ///
+    /// Returns immediately as no-op if no callback is pre-loaded — fixes
+    /// PR #85 reviewer finding (P1) where create_ticker stored the
+    /// callback but start required a fresh one, leaving the pre-loaded
+    /// callback unreachable.
+    pub fn start_default(&mut self) {
+        self.start_inner(None);
+    }
+
+    fn start_inner(&mut self, callback: Option<TickerCallback>) {
         if !self.assert_not_disposed("start") {
             return;
         }
@@ -305,9 +321,20 @@ impl Ticker {
         if inner.state == TickerState::Active {
             tracing::error!(ticker_id = ?self.id, "Ticker::start called while already Active");
         }
+        if let Some(cb) = callback {
+            // Explicit callback overrides any pre-loaded one from create_ticker.
+            inner.callback = Some(cb);
+        } else if inner.callback.is_none() {
+            // No explicit callback, no pre-loaded callback — start is a no-op
+            // (tick has nothing to dispatch). Logged for diagnostic.
+            tracing::warn!(
+                ticker_id = ?self.id,
+                "Ticker::start_default called without a pre-loaded callback (no-op)"
+            );
+            return;
+        }
         inner.state = TickerState::Active;
         inner.start_time = Some(Instant::now());
-        inner.callback = Some(Box::new(callback));
         inner.muted_elapsed = Seconds::ZERO;
     }
 

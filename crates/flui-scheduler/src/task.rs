@@ -280,7 +280,13 @@ impl TaskQueue {
 
     /// Add a task to the queue
     pub fn add_task(&self, task: Task) {
-        self.queue.lock().push(PriorityTask(task));
+        let mut queue = self.queue.lock();
+        queue.push(PriorityTask(task));
+        // Update the atomic len mirror BEFORE releasing the heap mutex.
+        // Otherwise concurrent observers see a window where the heap
+        // contains the new task but `len()` still reads the old value
+        // (PR #86 review finding — atomic update outside critical section
+        // creates TOCTOU between heap mutation and atomic mirror update).
         self.len.fetch_add(1, AtomicOrdering::AcqRel);
     }
 
@@ -294,8 +300,11 @@ impl TaskQueue {
 
     /// Get the next task (highest priority)
     pub fn pop(&self) -> Option<Task> {
-        let popped = self.queue.lock().pop().map(|pt| pt.0);
+        let mut queue = self.queue.lock();
+        let popped = queue.pop().map(|pt| pt.0);
         if popped.is_some() {
+            // Decrement inside the critical section — matches add_task
+            // ordering so observers don't see len > heap-size or vice versa.
             self.len.fetch_sub(1, AtomicOrdering::AcqRel);
         }
         popped
@@ -336,13 +345,15 @@ impl TaskQueue {
                     break;
                 }
             }
+            // Atomic len decrement inside the critical section (still
+            // holding queue lock) — matches add_task / pop ordering.
+            if !batch.is_empty() {
+                self.len.fetch_sub(batch.len(), AtomicOrdering::AcqRel);
+            }
             batch
         };
 
         let count = tasks.len();
-        if count > 0 {
-            self.len.fetch_sub(count, AtomicOrdering::AcqRel);
-        }
         for task in tasks {
             task.execute();
         }
@@ -363,13 +374,13 @@ impl TaskQueue {
                     break;
                 }
             }
+            if !batch.is_empty() {
+                self.len.fetch_sub(batch.len(), AtomicOrdering::AcqRel);
+            }
             batch
         };
 
         let count = tasks.len();
-        if count > 0 {
-            self.len.fetch_sub(count, AtomicOrdering::AcqRel);
-        }
         for task in tasks {
             task.execute();
         }
@@ -386,13 +397,14 @@ impl TaskQueue {
             while let Some(pt) = queue.pop() {
                 batch.push(pt.0);
             }
+            // Decrement atomic len inside the critical section.
+            if !batch.is_empty() {
+                self.len.fetch_sub(batch.len(), AtomicOrdering::AcqRel);
+            }
             batch
         };
 
         let count = tasks.len();
-        if count > 0 {
-            self.len.fetch_sub(count, AtomicOrdering::AcqRel);
-        }
         for task in tasks {
             task.execute();
         }

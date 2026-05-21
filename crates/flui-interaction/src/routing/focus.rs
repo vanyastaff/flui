@@ -34,7 +34,10 @@
 //! FocusManager::global().unfocus();
 //! ```
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, atomic::AtomicBool},
+};
 
 use parking_lot::RwLock;
 
@@ -113,6 +116,10 @@ pub struct FocusManager {
     /// (no traversal possible — app didn't wire a scope). Closes audit
     /// Finding I-4 (Tab navigation public API was `tracing::warn!` stub).
     active_scope: RwLock<Option<Arc<FocusScopeNode>>>,
+
+    /// Latches first missing-active-scope warn so repeated Tab presses
+    /// don't spam logs. PR #88 review fix.
+    missing_scope_warned: AtomicBool,
 }
 
 impl std::fmt::Debug for FocusManager {
@@ -132,6 +139,7 @@ impl Default for FocusManager {
             key_handlers: RwLock::new(HashMap::new()),
             global_key_handlers: RwLock::new(Vec::new()),
             active_scope: RwLock::new(None),
+            missing_scope_warned: AtomicBool::new(false),
         }
     }
 }
@@ -142,13 +150,7 @@ impl FocusManager {
     /// This is a singleton - the same instance is returned every time.
     pub fn global() -> &'static FocusManager {
         static INSTANCE: std::sync::OnceLock<FocusManager> = std::sync::OnceLock::new();
-        INSTANCE.get_or_init(|| FocusManager {
-            focused: RwLock::new(None),
-            listeners: RwLock::new(Vec::new()),
-            key_handlers: RwLock::new(HashMap::new()),
-            global_key_handlers: RwLock::new(Vec::new()),
-            active_scope: RwLock::new(None),
-        })
+        INSTANCE.get_or_init(FocusManager::default)
     }
 
     /// Set the active focus scope used for Tab navigation traversal.
@@ -159,6 +161,10 @@ impl FocusManager {
     /// `focus_previous_in_scope`.
     pub fn set_active_scope(&self, scope: Option<Arc<FocusScopeNode>>) {
         *self.active_scope.write() = scope;
+        // Reset the warn-latch so re-clearing the scope after wiring
+        // produces a fresh diagnostic.
+        self.missing_scope_warned
+            .store(false, std::sync::atomic::Ordering::Release);
     }
 
     /// Returns the currently active focus scope, if any.
@@ -171,12 +177,23 @@ impl FocusManager {
     /// Normally you should use `global()` instead.
     #[cfg(test)]
     fn new() -> Self {
-        Self {
-            focused: RwLock::new(None),
-            listeners: RwLock::new(Vec::new()),
-            key_handlers: RwLock::new(HashMap::new()),
-            global_key_handlers: RwLock::new(Vec::new()),
-            active_scope: RwLock::new(None),
+        Self::default()
+    }
+
+    /// Helper: warn-once for missing active scope. PR #88 review fix —
+    /// the prior `tracing::warn!` fired on every Tab press, spamming
+    /// logs on key-repeat.
+    fn warn_missing_scope(&self, op: &'static str) {
+        if !self
+            .missing_scope_warned
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            tracing::warn!(
+                op,
+                "FocusManager::{op}: no active focus scope set — call \
+                 FocusManager::set_active_scope at app init to enable \
+                 Tab/Shift+Tab navigation",
+            );
         }
     }
 
@@ -296,28 +313,38 @@ impl FocusManager {
             return false;
         };
         let Some(scope) = self.active_scope() else {
-            tracing::warn!(
-                "focus_next: no active focus scope set — call FocusManager::set_active_scope at app init"
-            );
+            self.warn_missing_scope("focus_next");
             return false;
         };
-        scope.focus_next_in_scope(current)
+        let Some(next_id) = scope.next_focusable_id(current) else {
+            return false;
+        };
+        // PR #88 review fix: route through request_focus so the singleton's
+        // focused field + listeners + key-routing surface stay in sync
+        // with the FocusScopeNode tree.
+        self.request_focus(next_id);
+        true
     }
 
     /// Transfer focus to the previous focusable element via the active
     /// scope's traversal policy (Shift+Tab).
     ///
-    /// See [`focus_next`] for behavior contract.
+    /// See [`focus_next`] for behavior contract — same singleton-sync fix
+    /// applied here.
     pub fn focus_previous(&self) -> bool {
         let Some(current) = *self.focused.read() else {
             tracing::trace!("focus_previous: no element currently focused");
             return false;
         };
         let Some(scope) = self.active_scope() else {
-            tracing::warn!("focus_previous: no active focus scope set");
+            self.warn_missing_scope("focus_previous");
             return false;
         };
-        scope.focus_previous_in_scope(current)
+        let Some(prev_id) = scope.previous_focusable_id(current) else {
+            return false;
+        };
+        self.request_focus(prev_id);
+        true
     }
 
     /// Check if any element has focus.

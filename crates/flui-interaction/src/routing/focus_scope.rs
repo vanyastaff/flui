@@ -659,14 +659,32 @@ impl FocusScopeNode {
         }
     }
 
-    /// Focuses the next node in this scope.
-    pub fn focus_next_in_scope(&self, current: FocusNodeId) -> bool {
+    /// Compute the next focusable node ID per the scope's traversal
+    /// policy without mutating any focus state.
+    ///
+    /// Returns `None` if no next focusable exists. Use this instead of
+    /// [`focus_next_in_scope`] when the caller (e.g. the singleton
+    /// [`crate::FocusManager`]) needs to update its own focused state.
+    pub fn next_focusable_id(&self, current: FocusNodeId) -> Option<FocusNodeId> {
         let nodes = self.collect_focusable_nodes();
         let policy = self.traversal_policy.read().clone();
+        policy.find_next(current, &nodes)
+    }
 
-        if let Some(next_id) = policy.find_next(current, &nodes)
-            && let Some(manager) = self.inner.manager.read().as_ref().and_then(|w| w.upgrade())
-        {
+    /// Compute the previous focusable node ID per the scope's traversal
+    /// policy without mutating any focus state.
+    pub fn previous_focusable_id(&self, current: FocusNodeId) -> Option<FocusNodeId> {
+        let nodes = self.collect_focusable_nodes();
+        let policy = self.traversal_policy.read().clone();
+        policy.find_previous(current, &nodes)
+    }
+
+    /// Focuses the next node in this scope.
+    pub fn focus_next_in_scope(&self, current: FocusNodeId) -> bool {
+        let Some(next_id) = self.next_focusable_id(current) else {
+            return false;
+        };
+        if let Some(manager) = self.inner.manager.read().as_ref().and_then(|w| w.upgrade()) {
             manager.set_primary_focus(Some(next_id));
             return true;
         }
@@ -675,12 +693,10 @@ impl FocusScopeNode {
 
     /// Focuses the previous node in this scope.
     pub fn focus_previous_in_scope(&self, current: FocusNodeId) -> bool {
-        let nodes = self.collect_focusable_nodes();
-        let policy = self.traversal_policy.read().clone();
-
-        if let Some(prev_id) = policy.find_previous(current, &nodes)
-            && let Some(manager) = self.inner.manager.read().as_ref().and_then(|w| w.upgrade())
-        {
+        let Some(prev_id) = self.previous_focusable_id(current) else {
+            return false;
+        };
+        if let Some(manager) = self.inner.manager.read().as_ref().and_then(|w| w.upgrade()) {
             manager.set_primary_focus(Some(prev_id));
             return true;
         }

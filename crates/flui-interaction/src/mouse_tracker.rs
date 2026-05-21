@@ -423,7 +423,11 @@ impl MouseTracker {
                     .collect();
 
                 let cursor_changed = state.current_cursor != new_cursor;
-                state.active_regions = new_regions.clone();
+                // Move new_regions into state — PR #86 review (Copilot)
+                // flagged the prior `.clone()` as unnecessary; new_regions
+                // isn't referenced after this point (entered/exited/hovering
+                // already snapshotted via SmallVec collects above).
+                state.active_regions = new_regions;
                 state.current_cursor = new_cursor;
 
                 // Collect callbacks now that state mutation is done — inner
