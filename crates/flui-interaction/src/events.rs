@@ -124,13 +124,22 @@ pub enum Event {
 }
 
 // ============================================================================
-// Compatibility PointerEventData struct
+// Compatibility PointerEventData struct (testing-only)
 // ============================================================================
+//
+// U29: PointerEventData + PointerEventKind + make_*_event helpers are
+// gated behind `#[cfg(any(test, feature = "testing"))]`. Pre-U29 they
+// shipped in release binaries; only the testing/ submodule and the
+// in-crate test modules consume them. Gating eliminates the legacy
+// compat surface from release builds without forcing call-site
+// migration in the testing module.
 
-/// Base pointer event data for gesture recognition.
+/// Base pointer event data for gesture recognition (test-only).
 ///
 /// This struct provides compatibility with legacy gesture recognizers
-/// while wrapping W3C-compliant ui-events underneath.
+/// while wrapping W3C-compliant ui-events underneath. Available only
+/// under `#[cfg(any(test, feature = "testing"))]`.
+#[cfg(any(test, feature = "testing"))]
 #[derive(Debug, Clone)]
 pub struct PointerEventData {
     /// Position in global coordinates
@@ -149,6 +158,7 @@ pub struct PointerEventData {
     pub time_stamp: u64,
 }
 
+#[cfg(any(test, feature = "testing"))]
 impl PointerEventData {
     /// Create new pointer event data
     pub fn new(position: Offset<Pixels>, device_kind: PointerType) -> Self {
@@ -509,10 +519,16 @@ impl From<&PointerScrollEvent> for ScrollEventData {
 }
 
 // ============================================================================
-// Test helper functions
+// Test helper functions — gated behind `testing` feature
 // ============================================================================
+//
+// U29: these `make_*_event` helpers + `PointerEventData` / `PointerEventKind`
+// only compile in test builds or when the `testing` Cargo feature is
+// active. Removes ~480 LOC of legacy compat construction surface from
+// release binaries.
 
 /// Create a PointerEvent::Down for testing
+#[cfg(any(test, feature = "testing"))]
 pub fn make_down_event(position: Offset<Pixels>, pointer_type: PointerType) -> PointerEvent {
     use ui_events::pointer::{
         ContactGeometry, PointerButtonEvent, PointerOrientation, PointerState,
@@ -546,6 +562,7 @@ pub fn make_down_event(position: Offset<Pixels>, pointer_type: PointerType) -> P
     })
 }
 
+#[cfg(any(test, feature = "testing"))]
 /// Create a PointerEvent::Up for testing
 pub fn make_up_event(position: Offset<Pixels>, pointer_type: PointerType) -> PointerEvent {
     use ui_events::pointer::{
@@ -580,6 +597,7 @@ pub fn make_up_event(position: Offset<Pixels>, pointer_type: PointerType) -> Poi
     })
 }
 
+#[cfg(any(test, feature = "testing"))]
 /// Create a PointerEvent::Move for testing
 pub fn make_move_event(position: Offset<Pixels>, pointer_type: PointerType) -> PointerEvent {
     use ui_events::pointer::{ContactGeometry, PointerOrientation, PointerState, PointerUpdate};
@@ -613,6 +631,7 @@ pub fn make_move_event(position: Offset<Pixels>, pointer_type: PointerType) -> P
     })
 }
 
+#[cfg(any(test, feature = "testing"))]
 /// Create a PointerEvent::Cancel for testing
 pub fn make_cancel_event(pointer_type: PointerType) -> PointerEvent {
     PointerEvent::Cancel(PointerInfo {
@@ -690,6 +709,7 @@ pub fn extract_pointer_id(event: &PointerEvent) -> crate::ids::PointerId {
     crate::ids::PointerId::new(raw_id)
 }
 
+#[cfg(any(test, feature = "testing"))]
 /// Kind of pointer event for event construction
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PointerEventKind {
@@ -703,6 +723,7 @@ pub enum PointerEventKind {
     Cancel,
 }
 
+#[cfg(any(test, feature = "testing"))]
 /// Create a PointerEvent from PointerEventData
 pub fn make_pointer_event(kind: PointerEventKind, data: PointerEventData) -> PointerEvent {
     use ui_events::pointer::{

@@ -44,5 +44,12 @@ tokio = { workspace = true, features = ["full"] }
 [features]
 default = []
 
+# Gates the `testing/` submodule (gesture recording, replay, builders)
+# plus `PointerEventData` / `PointerEventKind` / `make_*_event` compat
+# helpers from `events.rs`. Off by default — opt in via dev-dependencies
+# or downstream `flui-interaction = { features = ["testing"] }`.
+# Auto-enabled in test builds via `cfg(any(test, feature = "testing"))`.
+testing = []
+
 # Serialization support (if needed in the future)
 serde = ["flui-types/serde"]
