@@ -420,6 +420,30 @@ impl GestureBinding {
         self.hit_tests.clear();
     }
 
+    /// Defensive cleanup for app-lifecycle pause / detach transitions.
+    ///
+    /// Drains the per-pointer hit-test cache. Call this from the app
+    /// binding when `AppLifecycleState` transitions to `Paused`, `Hidden`,
+    /// or `Detached` — pointer-down events landed before the lifecycle
+    /// change may never receive a corresponding Up/Cancel (the platform
+    /// may suspend us before the user lifts the finger). The Up/Cancel
+    /// branch in [`handle_pointer_event`] already drains entries on
+    /// normal completion; this method covers the abnormal-disconnect
+    /// case audit Finding I-8 raised.
+    ///
+    /// Closes audit Finding I-8 (hit_tests DashMap leak on device
+    /// disconnect mid-down).
+    pub fn handle_lifecycle_pause(&self) {
+        let cleared = self.hit_tests.len();
+        if cleared > 0 {
+            tracing::debug!(
+                cleared,
+                "GestureBinding draining hit_tests on lifecycle pause"
+            );
+            self.hit_tests.clear();
+        }
+    }
+
     /// Get the number of active pointers (with cached hit tests).
     #[inline]
     pub fn active_pointer_count(&self) -> usize {
