@@ -49,6 +49,8 @@ pub enum ClipShape {
     Rect(Rect<Pixels>),
     /// Rounded-rectangle clip.
     RRect(flui_types::geometry::RRect),
+    /// Rounded-superellipse clip (Flutter `RSuperellipse`).
+    RSuperellipse(flui_types::geometry::RSuperellipse),
     /// Path clip; boxed for variant size uniformity.
     Path(Box<flui_types::painting::Path>),
 }
