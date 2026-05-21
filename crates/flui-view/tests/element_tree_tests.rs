@@ -510,9 +510,11 @@ fn test_element_node_debug() {
 
 #[test]
 fn test_tree_send_sync() {
-    // ElementTree should be Send + Sync. Note: this may fail if ElementBase
-    // isn't Send + Sync. In that case, we'd need to verify the trait bounds;
-    // for now this test is a placeholder.
+    // Compile-time assertion: ElementTree must be Send + Sync. The bound
+    // check fails to compile if the property regresses (e.g., a new non-
+    // Send/Sync field is added to ElementBase or to the tree itself).
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<ElementTree>();
 }
 
 // ============================================================================

@@ -442,17 +442,6 @@ fn test_multiple_build_cycles() {
 }
 
 // ============================================================================
-// Thread Safety Tests
-// ============================================================================
-
-#[test]
-fn test_build_owner_send_sync() {
-    // BuildOwner should NOT be Send + Sync in the general case because it
-    // holds references to the tree during build. This is intentional for
-    // safety; no compile-time assertion is required.
-}
-
-// ============================================================================
 // Memory Layout Tests
 // ============================================================================
 
