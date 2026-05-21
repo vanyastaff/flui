@@ -48,9 +48,13 @@ impl Canvas {
 
     /// Clips to a rounded superellipse (Flutter `RSuperellipse`).
     ///
-    /// Uses default clip behavior (intersect, anti-aliased). The
-    /// rounded-superellipse SDF gives smoother corner falloff than the
-    /// elliptical arcs used by `clip_rrect`.
+    /// Uses default clip behavior (intersect, anti-aliased). Records a
+    /// `DrawCommand::ClipRSuperellipse` carrying the rounded-superellipse
+    /// (iOS-squircle) intent. Exact corner-curve rendering is
+    /// backend-dependent: the `CommandRenderer::clip_rsuperellipse` default
+    /// approximates via `clip_rrect` against the outer rect plus per-corner
+    /// radii, while a backend may override with a real superellipse SDF for
+    /// pixel-perfect parity.
     pub fn clip_rsuperellipse(&mut self, rsuperellipse: RSuperellipse) {
         self.clip_stack
             .push(ClipShape::RSuperellipse(rsuperellipse));

@@ -178,9 +178,13 @@ pub trait ClipContext {
 
     /// Clips to a rounded superellipse and paints content within.
     ///
-    /// The rounded-superellipse (Flutter `RSuperellipse`) uses a smoother
-    /// corner falloff than the elliptical arcs of `RRect`, matching the iOS
-    /// squircle shape.
+    /// The rounded-superellipse (Flutter `RSuperellipse`) carries the
+    /// iOS-squircle corner-curve intent. Exact rendering is
+    /// backend-dependent: the engine's `CommandRenderer::clip_rsuperellipse`
+    /// default approximates via `clip_rrect` against the outer rect plus
+    /// per-corner radii, and a backend may override with a real superellipse
+    /// SDF for pixel-perfect parity. The trait surface itself matches
+    /// Flutter's `clipRSuperellipseAndPaint`.
     ///
     /// # Arguments
     ///

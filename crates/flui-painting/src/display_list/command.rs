@@ -67,10 +67,18 @@ pub enum DrawCommand {
 
     /// Clip to a rounded superellipse (Flutter `RSuperellipse`).
     ///
-    /// Same shape as [`Self::ClipRRect`] but uses the rounded-superellipse
-    /// SDF for corner geometry (smoother corner falloff than the elliptical
-    /// arcs used by `RRect`). Matches Flutter's `Canvas.clipRSuperellipse`
-    /// and `ClipContext.clipRSuperellipseAndPaint`.
+    /// Same shape carrier as [`Self::ClipRRect`]; the *intent* is the
+    /// rounded-superellipse (iOS-squircle) corner curve, which has a
+    /// smoother falloff than the elliptical arcs used by `RRect`. Exact
+    /// rendering is backend-dependent: the `CommandRenderer::clip_rsuperellipse`
+    /// default falls back to an `RRect` approximation built from the
+    /// superellipse's outer rect plus per-corner radii, and a backend may
+    /// override with a real superellipse SDF for pixel-perfect parity (see
+    /// `flui-engine::wgpu::layer_render::get_or_generate_superellipse_path`
+    /// for the path-tessellation route used by `ClipSuperellipseLayer`).
+    /// Matches Flutter's `Canvas.clipRSuperellipse` and
+    /// `ClipContext.clipRSuperellipseAndPaint` at the command-vocabulary
+    /// level.
     ClipRSuperellipse {
         /// Rounded superellipse to clip to.
         rsuperellipse: RSuperellipse,
