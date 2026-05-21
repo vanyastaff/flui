@@ -25,6 +25,20 @@ authors:
 >
 > Goal: identify zombie abstractions, parallel type systems, half-implemented hooks, and seams without callers — without breaking active integration with `flui-rendering` or sliding into cosmetic churn.
 
+---
+
+## Post-audit correction (2026-05-21)
+
+> **`flui-tree` is intentional unified-tree infrastructure, not zombie code.**
+>
+> The auditor classified `flui-tree`'s `Depth`/`AtomicDepth`, `Mountable`/`Unmountable` typestate, `TreeVisitor`/`TreeCursor`/`TreePath`/`ChildDiff`/`Node` traits as deletable (Finding #4, ~10K LOC). That recommendation contradicts the crate's design intent and is **inverted** for execution planning.
+>
+> Per [`STRATEGY.md`](../../STRATEGY.md) "Behavior loyal, structure Rust-native": Flutter has four parallel tree implementations (Element / RenderObject / Layer / Semantics) each with its own bespoke traversal. `flui-tree` exists as **one unified Rust trait API** (`TreeRead`/`TreeNav`/`TreeWrite` + Arity system + typestate + visitors + cursors) that all four trees should build on top of. The crate was deliberately created by @vanyastaff as Rust-native consolidation of Flutter's multi-tree problem.
+>
+> **Implication for the priority order below**: Finding #4 stays in the doc as a record of the auditor's observation but the *action* changes from "delete ~10K LOC" to "migrate production consumers (`flui-rendering`, `flui-layer`, `flui-semantics`, `flui-view`) TO the unified `flui-tree` API". Zero-consumer = migration gap, not deletion signal. Concrete abstractions that turn out to be wrong-shaped get redesigned, not removed.
+>
+> Findings #1, #2, #3, #5, and #6-onwards remain valid as written.
+
 ## Table of Contents
 
 - [Part I — Self-Audit Findings](#part-i--self-audit-findings)
@@ -961,7 +975,7 @@ Flutter uses `int` for IDs in many places (FrameCallbackId, ObserverId, etc.). F
 | **1** | **Fix BuildContext stubs** — pick callback API (`with_inherited<T, R>`), mark current `depend_on_inherited`/etc. as `#[deprecated]` + actually-working under new name. Wire `dispatch_notification` to check `NotifiableElement::on_notification`. | The single most-used user-facing API of any UI framework is non-functional. Flutter cross-ref confirms 5+ critical methods are stubs. |
 | **2** | **Wire `GlobalKey` registry** — plumb `&mut BuildOwner` through `ElementBase::mount/unmount`. Make `GlobalKey::current_element` read the registry. | Second most-used API. Flutter pattern at framework.dart:3148+ is well-defined; FLUI has the registry + the methods, just no wiring. |
 | **3** | **Resolve type-system collisions** — delete `flui_view::view::view::ViewKey` (retype `View::key` → `flui_foundation::ViewKey`). Delete `flui_tree::iter::slot` (911 LOC; collides with flui-view::IndexedSlot). Delete `flui-foundation::TargetPlatform` (keep flui-types). | Public API ambiguity blocks downstream code. ViewKey collision means GlobalKey can't be returned from View::key. |
-| **4** | **flui-tree compression** — delete `visitor/` (2550 LOC), `iter/cursor.rs` (1057 LOC), `iter/path.rs` (1150 LOC) [keep IndexPath as `pub(crate)` for hot-reload], `diff.rs` (1234 LOC), `traits/node.rs` (305 LOC). Demote `depth.rs` to ≤200 LOC at `pub(crate)`. Demote `state.rs` typestate to `pub(crate)`. | Estimated ~10K LOC win. No production consumers exist for any of these. Cuts cold compile time + doc surface significantly. |
+| **4** (inverted per [post-audit correction](#post-audit-correction-2026-05-21)) | **Migrate production crates TO `flui-tree` unified API.** Pick one consumer (likely `flui-rendering::pipeline::owner` — already uses raw `usize` for depth at `pipeline/owner.rs:513`) and migrate it to use `flui-tree::Depth`/`TreeRead`/`TreeNav`. Repeat for `flui-layer`, `flui-semantics`, `flui-view`. Redesign any `flui-tree` abstraction that turns out incompatible with real use cases — do not delete by default. | Closes the "zero production consumers" gap the auditor flagged. The unified-tree API is the architectural ставка; production crates writing bespoke traversals is the bug, not `flui-tree`'s existence. Largest scope item on this list. |
 | **5** | **flui-foundation cleanup** — `pub(crate)` `MergedListenable` + `HashedObserverList` + `SyncObserverList`. Drop `dashmap` dep. Delete `FluiError` (keep `FoundationError`). Audit unused ID types (scheduler reinvents Handle<T>). | Removes API surface ambiguity, removes one transitive dep, removes one of two error types. |
 | **6** | **Add `ChangeNotifier::dispose` + disposed-state assertion** matching Flutter (change_notifier.dart:181, 376). | Production listeners can outlive the notifier silently today — no diagnostic. Flutter has explicit asserts. |
 | **7** | **Implement `view/root.rs:487,494` `unimplemented!()`** OR delete the stale path. WidgetsBinding::attach_root_widget has working pipeline owner plumbing at binding.rs:563-571 — likely the legacy paths are dead. | Constitution forbids `unimplemented!()` in production paths. |
