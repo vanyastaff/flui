@@ -1,7 +1,7 @@
 ---
 date: 2026-05-21
 type: feat
-status: active
+status: completed
 origin: docs/brainstorms/framework-spine-repair-requirements.md
 audit_origin: docs/research/2026-05-21-view-tree-foundation-audit.md
 depth: deep

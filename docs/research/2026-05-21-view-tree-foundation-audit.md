@@ -970,6 +970,36 @@ Flutter uses `int` for IDs in many places (FrameCallbackId, ObserverId, etc.). F
 
 # Part III — Combined Priority Order
 
+## Completion status (2026-05-21)
+
+Findings **#1, #2, #3, #5, #6, #7, #8** of Part III closed by [`docs/plans/2026-05-21-002-feat-framework-spine-repair-plan.md`](../plans/2026-05-21-002-feat-framework-spine-repair-plan.md) — atomic-commit-per-unit shape across 17 units on branch `feat/framework-spine-repair`:
+
+| Finding | Unit | Commit |
+|---------|------|--------|
+| #3 TargetPlatform collision (one of three) | U1 | `a740b28a` |
+| #3 ViewKey collision (one of three) | U2 | `64e438bf` |
+| #3 IndexedSlot collision (one of three) | U3 | `de4c8265` |
+| #5 Listenable/Observer bloat + dashmap drop | U4 | `c009156a` |
+| #5 FluiError deletion | U5 | `2cdf792b` |
+| #6 ChangeNotifier::dispose + disposed-state assert | U6 | `b0c914bf` |
+| #5 ID-type audit (17 deletions, 11 kept) | U7 | `67afd624` |
+| #2 ElementOwner split-borrow + Element lifecycle plumbing | U8 | `e05ff86c` |
+| #1 BuildContext::depend_on_inherited + InheritedBehavior::on_view_updated | U9 | `318540e4` |
+| #1 BuildContext::get_inherited (non-recording) | U10 | `109c81d1` |
+| #1 BuildContext::find_ancestor_view/state/root_state | U11 | `613ebeef` |
+| #1 BuildContext::find_render_object | U12 | `1f627e4b` |
+| #1 BuildContext::dispatch_notification + NotifiableElement | U13 | `e3c7ac2c` |
+| #2 GlobalKey register/unregister + state migration + lookup | U14 | `0b99e247` |
+| #7 unimplemented!() removal in view/root.rs | U15 | `f884b6ac` |
+| Behavior commons extraction | U16 | `b3ecb45c` |
+| Audit annotation + plan status flip | U17 | (this commit) |
+
+Finding **#4** (full `flui-tree` migration) deferred to follow-up multi-PR series per [post-audit correction](#post-audit-correction-2026-05-21). One tiny precursor (IndexedSlot, U3) landed; the full consumer migration of `flui-rendering` / `flui-layer` / `flui-semantics` / remaining `flui-view` paths is planned separately.
+
+Findings **#9** (integration tests for the formerly-stubbed APIs) and **#10** (defer items) remain open as written.
+
+---
+
 | Priority | Action | Why now |
 |----------|--------|---------|
 | **1** | **Fix BuildContext stubs** — pick callback API (`with_inherited<T, R>`), mark current `depend_on_inherited`/etc. as `#[deprecated]` + actually-working under new name. Wire `dispatch_notification` to check `NotifiableElement::on_notification`. | The single most-used user-facing API of any UI framework is non-functional. Flutter cross-ref confirms 5+ critical methods are stubs. |
