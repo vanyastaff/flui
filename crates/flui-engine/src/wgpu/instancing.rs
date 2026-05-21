@@ -129,11 +129,14 @@ impl RectInstance {
     #[must_use]
     pub fn with_clip_rrect(mut self, clip: [f32; 8]) -> Self {
         self.clip_rrect = clip;
-        self.clip_kind = if clip == [0.0; 8] {
-            [0; 4]
-        } else {
-            [1, 0, 0, 0]
-        };
+        // Exact equality against the bit-exact `[0.0; 8]` "no clip" sentinel —
+        // never set via arithmetic, so ULP slop is not a concern.
+        #[expect(
+            clippy::float_cmp,
+            reason = "exact comparison against the bit-exact `[0.0; 8]` 'no clip' sentinel"
+        )]
+        let is_empty = clip == [0.0; 8];
+        self.clip_kind = if is_empty { [0; 4] } else { [1, 0, 0, 0] };
         self
     }
 
@@ -152,7 +155,13 @@ impl RectInstance {
     /// avg(bl_x,bl_y)]`.
     #[must_use]
     pub fn with_clip_rsuperellipse(mut self, superellipse_clip: [f32; 12]) -> Self {
-        if superellipse_clip == [0.0; 12] {
+        // Exact equality against the bit-exact `[0.0; 12]` "no clip" sentinel.
+        #[expect(
+            clippy::float_cmp,
+            reason = "exact comparison against the bit-exact `[0.0; 12]` 'no clip' sentinel"
+        )]
+        let is_empty = superellipse_clip == [0.0; 12];
+        if is_empty {
             self.clip_rrect = [0.0; 8];
             self.clip_kind = [0; 4];
             return self;

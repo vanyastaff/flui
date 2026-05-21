@@ -3500,7 +3500,16 @@ impl WgpuPainter {
         &self,
         instance: super::instancing::RectInstance,
     ) -> super::instancing::RectInstance {
-        if self.current_rsuperellipse_clip != [0.0; 12] {
+        // Exact equality against the all-zero "no clip active" sentinel is
+        // intentional: the field is set bit-exact to `[0.0; 12]` whenever
+        // the clip is cleared, never via arithmetic that would introduce
+        // ULP noise.
+        #[expect(
+            clippy::float_cmp,
+            reason = "exact comparison against the bit-exact `[0.0; 12]` 'no clip' sentinel"
+        )]
+        let superellipse_active = self.current_rsuperellipse_clip != [0.0; 12];
+        if superellipse_active {
             instance.with_clip_rsuperellipse(self.current_rsuperellipse_clip)
         } else {
             instance.with_clip_rrect(self.current_rrect_clip)
@@ -3514,6 +3523,10 @@ impl WgpuPainter {
     /// scissor for early rasterizer rejection, and relies on
     /// `rect_instanced.wgsl`'s per-pixel SDF evaluation to clip pixels
     /// outside the iOS-squircle curve (wired in U9 / U10).
+    #[allow(
+        clippy::similar_names,
+        reason = "tl_r/tr_r/br_r/bl_r mirror the rsuperellipse-corner field names; renaming would obscure intent"
+    )]
     pub fn clip_rsuperellipse(&mut self, rse: flui_types::geometry::RSuperellipse) {
         // Apply current transform to outer rect (identical AABB logic to
         // `clip_rrect`).
