@@ -179,6 +179,20 @@ pub mod hit_testable {
 /// [`CustomGestureRecognizer`].
 pub mod gesture_recognizer {
     pub trait Sealed {}
+
+    // Blanket impl: any CustomGestureRecognizer automatically gets Sealed
+    impl<T: super::CustomGestureRecognizer> Sealed for T {}
+
+    // Built-in gesture recognizers — same impl list as arena_member::Sealed
+    // below. Required so `impl OneSequenceGestureRecognizer for X`
+    // (which has `: Sealed` supertrait bound) compiles for these types.
+    impl Sealed for crate::recognizers::TapGestureRecognizer {}
+    impl Sealed for crate::recognizers::DoubleTapGestureRecognizer {}
+    impl Sealed for crate::recognizers::LongPressGestureRecognizer {}
+    impl Sealed for crate::recognizers::DragGestureRecognizer {}
+    impl Sealed for crate::recognizers::ScaleGestureRecognizer {}
+    impl Sealed for crate::recognizers::MultiTapGestureRecognizer {}
+    impl Sealed for crate::recognizers::ForcePressGestureRecognizer {}
 }
 
 /// Sealed trait for arena members.

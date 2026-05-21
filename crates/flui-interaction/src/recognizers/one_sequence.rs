@@ -13,8 +13,7 @@
 //! shaped, sealed canonical trait ready for the migration wave.
 
 use crate::{
-    arena::GestureDisposition, events::PointerEvent, ids::PointerId,
-    recognizers::recognizer::GestureRecognizer,
+    arena::GestureDisposition, ids::PointerId, recognizers::recognizer::GestureRecognizer,
     sealed::gesture_recognizer::Sealed as GestureRecognizerSealed,
 };
 
@@ -30,10 +29,9 @@ pub trait OneSequenceGestureRecognizer: GestureRecognizer + GestureRecognizerSea
     /// Flutter parity: `recognizer.dart:415 _trackedPointers: Set<int>`.
     fn tracked_pointers(&self) -> Vec<PointerId>;
 
-    /// Handle a single pointer event for one of the tracked pointers.
-    ///
-    /// Flutter parity: `recognizer.dart:445 @protected void handleEvent(PointerEvent event)`.
-    fn handle_event(&self, event: &PointerEvent);
+    // `handle_event` inherited from the supertrait `GestureRecognizer`; one
+    // concrete impl satisfies both contracts. Flutter parity:
+    // `recognizer.dart:445 @protected void handleEvent(PointerEvent event)`.
 
     /// Resolve this recognizer's arena entries with the given disposition.
     ///
