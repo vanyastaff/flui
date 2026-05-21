@@ -61,6 +61,6 @@ pub use drag::DragGestureRecognizer;
 pub use force_press::ForcePressGestureRecognizer;
 pub use long_press::LongPressGestureRecognizer;
 pub use multi_tap::MultiTapGestureRecognizer;
-pub use recognizer::{GestureRecognizer, GestureRecognizerState, GestureState, constants};
+pub use recognizer::{GestureRecognizer, GestureRecognizerState, RecognizerBase, constants};
 pub use scale::ScaleGestureRecognizer;
 pub use tap::TapGestureRecognizer;
