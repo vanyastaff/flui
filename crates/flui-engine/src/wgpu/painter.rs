@@ -3466,6 +3466,28 @@ impl WgpuPainter {
         );
     }
 
+    /// Look up or generate a tessellated superellipse path via the
+    /// Painter-owned bounded cache.
+    ///
+    /// Consulted by `Backend::superellipse_path` (the `CommandRenderer`
+    /// trait override) so `ClipSuperellipseLayer::render`'s layer-tree
+    /// clip path benefits from frame-bounded caching. On a miss the path
+    /// is generated via `generate_superellipse_path` (the iOS-squircle
+    /// math) and inserted; eviction follows PathCache semantics
+    /// (`max_entries` + `last_used_frame`).
+    pub(crate) fn superellipse_path(
+        &mut self,
+        rse: &flui_types::geometry::RSuperellipse,
+    ) -> flui_types::painting::Path {
+        let key = super::superellipse_cache::SuperellipseKey::from_superellipse(rse);
+        if let Some(path) = self.superellipse_cache.get(&key) {
+            return path;
+        }
+        let path = super::layer_render::generate_superellipse_path(rse);
+        self.superellipse_cache.insert(key, path.clone());
+        path
+    }
+
     /// Apply the currently-active SDF clip (rrect or rsuperellipse) to a
     /// `RectInstance`.
     ///
