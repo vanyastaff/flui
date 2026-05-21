@@ -62,20 +62,26 @@ check() {
 }
 
 # -----------------------------------------------------------------------------
-# Trigger 1 -- RwLock<Box<dyn RenderObject ...>> in render/view/layer/engine crates.
-# This is the canonical exemplar violation at flui-rendering/src/storage/entry.rs.
-# Mythos Step 13 of the flui-layer chain added `crates/flui-layer/src` to the
-# scope. Mythos Step 9 of the flui-engine chain added `crates/flui-engine/src`
-# to the scope so the same shape is refused on engine-storage types if
-# reintroduced (e.g. RwLock<Box<dyn CommandRenderer>>).
+# Trigger 1 -- RwLock<Box<dyn RenderObject ...>> in render/view/layer/painting/
+# engine crates. This is the canonical exemplar violation at
+# flui-rendering/src/storage/entry.rs. Mythos Step 13 of the flui-layer chain
+# added `crates/flui-layer/src` to the scope; Mythos Step 13 of the
+# flui-painting chain added `crates/flui-painting/src` as a forward-looking
+# guard (today's flui-painting has no RenderObject/Layer/ContainerLayer trait
+# objects -- the crate is #[forbid(unsafe_code)] and uses closed enums -- but
+# the scope extension catches any reintroduction post-split). Mythos Step 9 of
+# the flui-engine chain added `crates/flui-engine/src` plus the `CommandRenderer`
+# trait-name to the regex so engine-storage types (`Backend`, etc.) are caught
+# if wrapped in `RwLock<Box<dyn CommandRenderer>>`.
 # -----------------------------------------------------------------------------
 check "1" \
-  "RwLock<Box<dyn ...>> in render/view/layer/engine crates" \
+  "RwLock<Box<dyn ...>> in render/view/layer/painting/engine crates" \
   'RwLock<\s*Box<\s*dyn\s+(RenderObject|Layer\b|ContainerLayer|CommandRenderer)' \
   --type rust \
   crates/flui-rendering/src \
   crates/flui-view/src \
   crates/flui-layer/src \
+  crates/flui-painting/src \
   crates/flui-engine/src
 
 # -----------------------------------------------------------------------------
@@ -91,12 +97,13 @@ check "1" \
 # generalises to the others.
 # -----------------------------------------------------------------------------
 check "2" \
-  "Box<dyn ...> wrapped in interior-mutability primitive in render/view/layer/engine storage" \
+  "Box<dyn ...> wrapped in interior-mutability primitive in render/view/layer/painting/engine storage" \
   '(RwLock|Mutex|RefCell|Cell|UnsafeCell)<\s*Box<\s*dyn\s+(RenderObject|Layer\b|ContainerLayer|CommandRenderer)' \
   --type rust \
   crates/flui-rendering/src/storage \
   crates/flui-view/src/element \
   crates/flui-layer/src \
+  crates/flui-painting/src \
   crates/flui-engine/src
 
 # -----------------------------------------------------------------------------

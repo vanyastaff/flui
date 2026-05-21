@@ -1,16 +1,19 @@
 //! PaintingBinding - Binding for the painting library.
 //!
-//! Provides image caching, shader warm-up, and system font notifications.
+//! Provides image caching and system font notifications.
 //!
 //! # Flutter Equivalence
 //!
 //! Corresponds to Flutter's `PaintingBinding` mixin from
-//! `painting/binding.dart`.
+//! `painting/binding.dart`. Flutter's shader-warm-up subsystem was
+//! deleted in Mythos chain step 2 (decorative; `execute()` was a stub
+//! and no production caller relied on it). Real offscreen-canvas-backed
+//! warm-up is tracked in `crates/flui-painting/ARCHITECTURE.md`
+//! `## Outstanding refactors`.
 //!
 //! # Features
 //!
 //! - [`ImageCache`] - Caches decoded images for reuse
-//! - [`ShaderWarmUp`] - Pre-compiles shaders to avoid jank
 //! - System font change notifications
 //! - Memory pressure handling
 
@@ -23,10 +26,7 @@ use std::{
 };
 
 use flui_foundation::{BindingBase, HasInstance, impl_binding_singleton};
-use flui_types::{
-    Size,
-    geometry::{Half, Pixels, Radius, px},
-};
+use flui_types::{Size, geometry::Pixels};
 use parking_lot::RwLock;
 
 // ============================================================================
@@ -210,17 +210,25 @@ impl ImageCache {
 
     /// Evicts images if over limits.
     fn evict_if_needed(&self) {
+        const MAX_EVICTION_ITERATIONS: usize = 1000;
+
         let max_images = self.max_images.load(Ordering::Relaxed);
         let max_bytes = self.max_size_bytes.load(Ordering::Relaxed);
 
         // Simple LRU-like eviction: remove oldest entries
-        // In a real implementation, we'd track access time
-        loop {
+        // In a real implementation, we'd track access time.
+        //
+        // The exit predicate is racy against concurrent `put` calls on
+        // other threads: if a parallel inserter keeps pace with our
+        // eviction, the loop will never observe count/size under the
+        // limit. Cap the iteration count to guarantee forward progress
+        // and warn so the racy state is observable in logs.
+        for _ in 0..MAX_EVICTION_ITERATIONS {
             let count = self.cache.read().len();
             let size = self.current_size_bytes.load(Ordering::Relaxed);
 
             if count <= max_images && size <= max_bytes {
-                break;
+                return;
             }
 
             // Remove first entry (simple eviction strategy)
@@ -232,88 +240,13 @@ impl ImageCache {
             if let Some(key) = key_to_remove {
                 self.evict(&key);
             } else {
-                break;
+                return;
             }
         }
-    }
-}
 
-// ============================================================================
-// ShaderWarmUp
-// ============================================================================
-
-/// Trait for shader warm-up implementations.
-///
-/// Shader compilation can cause jank during animations. By pre-compiling
-/// shaders during startup, we can avoid this.
-///
-/// # Flutter Equivalence
-///
-/// Corresponds to Flutter's `ShaderWarmUp` class from
-/// `painting/shader_warm_up.dart`.
-pub trait ShaderWarmUp: Send + Sync {
-    /// The size of the canvas to use for warm-up.
-    ///
-    /// Defaults to 100x100 logical pixels.
-    fn size(&self) -> Size<Pixels> {
-        Size::new(px(100.0), px(100.0))
-    }
-
-    /// Paints the warm-up scene onto the canvas.
-    ///
-    /// Implementations should draw shapes that trigger shader compilation
-    /// for commonly used effects.
-    fn warm_up_on_canvas(&self, canvas: &mut dyn WarmUpCanvas);
-
-    /// Executes the shader warm-up.
-    ///
-    /// This is called during binding initialization.
-    fn execute(&self) {
-        // Create a temporary canvas and paint the warm-up scene
-        tracing::debug!("Executing shader warm-up with size {:?}", self.size());
-        // In a real implementation, we'd create an offscreen canvas here
-    }
-}
-
-/// Canvas interface for shader warm-up.
-///
-/// A minimal canvas interface used during warm-up.
-pub trait WarmUpCanvas {
-    /// Draws a rectangle.
-    fn draw_rect(&mut self, rect: flui_types::Rect<flui_types::geometry::Pixels>);
-
-    /// Draws a rounded rectangle.
-    fn draw_rrect(&mut self, rrect: flui_types::RRect);
-
-    /// Draws a circle.
-    fn draw_circle(&mut self, center: flui_types::Offset<Pixels>, radius: f32);
-
-    /// Draws a path.
-    fn draw_path(&mut self, path: &[flui_types::Offset<Pixels>]);
-}
-
-/// Default shader warm-up that draws common shapes.
-#[derive(Debug, Default)]
-pub struct DefaultShaderWarmUp;
-
-impl ShaderWarmUp for DefaultShaderWarmUp {
-    fn warm_up_on_canvas(&self, canvas: &mut dyn WarmUpCanvas) {
-        let size = self.size();
-
-        // Draw various shapes to trigger shader compilation
-        canvas.draw_rect(flui_types::Rect::from_ltwh(
-            px(0.0),
-            px(0.0),
-            size.width,
-            size.height,
-        ));
-        canvas.draw_rrect(flui_types::RRect::from_rect_and_radius(
-            flui_types::Rect::from_ltwh(px(10.0), px(10.0), px(80.0), px(80.0)),
-            Radius::circular(px(10.0)),
-        ));
-        canvas.draw_circle(
-            flui_types::Offset::new(size.width.half(), size.height.half()),
-            30.0,
+        tracing::warn!(
+            cap = MAX_EVICTION_ITERATIONS,
+            "ImageCache::evict_if_needed hit iteration cap; concurrent inserts may be outpacing eviction"
         );
     }
 }
@@ -356,9 +289,19 @@ impl SystemFontsNotifier {
     }
 
     /// Notifies all listeners that fonts have changed.
+    ///
+    /// Listeners are snapshotted into a local `Vec` (cloning the
+    /// `Arc<dyn Fn>`s) before the read lock is released and the
+    /// callbacks are invoked. Without this, a listener that calls
+    /// [`Self::add_listener`] or [`Self::remove_listener`] reentrantly
+    /// from inside its own body would deadlock against the read guard
+    /// we still held here.
     pub fn notify_listeners(&self) {
-        let listeners = self.listeners.read();
-        for listener in listeners.iter() {
+        let snapshot: Vec<Arc<dyn Fn() + Send + Sync>> = {
+            let listeners = self.listeners.read();
+            listeners.iter().cloned().collect()
+        };
+        for listener in &snapshot {
             listener();
         }
     }
@@ -370,20 +313,28 @@ impl SystemFontsNotifier {
 
 /// Binding for the painting library.
 ///
-/// Provides image caching, shader warm-up, and system font notifications.
+/// Provides image caching and system font notifications.
 ///
 /// # Flutter Equivalence
 ///
 /// Corresponds to Flutter's `PaintingBinding` mixin.
+///
+/// # Trimmed surface (Mythos chain U2/U3)
+///
+/// Flutter's shader-warm-up subsystem was deleted -- the trait had one
+/// stub impl whose `execute()` body documented "in a real implementation,
+/// we'd create an offscreen canvas here"; no production caller relied
+/// on warm-up to bootstrap shader compilation. The optional warm-up
+/// field on this binding, the `with_*` constructor variant, and the
+/// `set_*` setter all went with it. Real offscreen-canvas-backed
+/// warm-up is tracked in `crates/flui-painting/ARCHITECTURE.md`
+/// `## Outstanding refactors`.
 pub struct PaintingBinding {
     /// The image cache singleton.
     image_cache: ImageCache,
 
     /// System fonts notifier.
     system_fonts: SystemFontsNotifier,
-
-    /// Optional shader warm-up.
-    shader_warm_up: Option<Box<dyn ShaderWarmUp>>,
 }
 
 impl std::fmt::Debug for PaintingBinding {
@@ -394,7 +345,6 @@ impl std::fmt::Debug for PaintingBinding {
                 "image_cache_size_bytes",
                 &self.image_cache.current_size_bytes(),
             )
-            .field("has_shader_warm_up", &self.shader_warm_up.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -411,18 +361,6 @@ impl PaintingBinding {
         let mut binding = Self {
             image_cache: ImageCache::new(),
             system_fonts: SystemFontsNotifier::new(),
-            shader_warm_up: None,
-        };
-        binding.init_instances();
-        binding
-    }
-
-    /// Creates a painting binding with a custom shader warm-up.
-    pub fn with_shader_warm_up(warm_up: Box<dyn ShaderWarmUp>) -> Self {
-        let mut binding = Self {
-            image_cache: ImageCache::new(),
-            system_fonts: SystemFontsNotifier::new(),
-            shader_warm_up: Some(warm_up),
         };
         binding.init_instances();
         binding
@@ -443,26 +381,22 @@ impl PaintingBinding {
         &self.system_fonts
     }
 
-    /// Sets the shader warm-up.
-    ///
-    /// Must be called before [`init_instances`](BindingBase::init_instances).
-    pub fn set_shader_warm_up(&mut self, warm_up: Box<dyn ShaderWarmUp>) {
-        self.shader_warm_up = Some(warm_up);
-    }
-
     /// Handles memory pressure by clearing the image cache.
+    #[tracing::instrument(skip(self))]
     pub fn handle_memory_pressure(&self) {
         tracing::info!("Memory pressure: clearing image cache");
         self.image_cache.clear();
     }
 
     /// Evicts a specific asset from the cache.
+    #[tracing::instrument(skip(self))]
     pub fn evict(&self, asset: &str) {
         self.image_cache.evict(asset);
         self.image_cache.clear_live_images();
     }
 
     /// Handles a system message (e.g., font change notification).
+    #[tracing::instrument(skip(self))]
     pub fn handle_system_message(&self, message_type: &str) {
         if message_type == "fontsChange" {
             tracing::debug!("System fonts changed");
@@ -473,12 +407,6 @@ impl PaintingBinding {
 
 impl BindingBase for PaintingBinding {
     fn init_instances(&mut self) {
-        // Execute shader warm-up if configured
-        if let Some(warm_up) = &self.shader_warm_up {
-            warm_up.execute();
-            tracing::debug!("Shader warm-up completed");
-        }
-
         tracing::info!("PaintingBinding initialized");
     }
 }
@@ -504,6 +432,8 @@ pub fn image_cache() -> &'static ImageCache {
 
 #[cfg(test)]
 mod tests {
+    use flui_types::geometry::px;
+
     use super::*;
 
     #[test]

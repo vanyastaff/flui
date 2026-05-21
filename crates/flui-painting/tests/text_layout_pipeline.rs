@@ -1,8 +1,15 @@
+#![cfg(feature = "text")]
 //! Integration tests for the TextLayout pipeline wiring.
 //!
 //! Validates that cosmic-text TextLayout is properly connected to TextPainter
 //! and produces correct DrawCommand entries on Canvas. This covers the full
 //! measurement -> layout -> paint pipeline.
+//!
+//! Gated on `feature = "text"` because several assertions (RTL detection,
+//! `\n`-driven multi-line counts) are intrinsic to the cosmic-text shaping
+//! path; the no-`text` fallback emits character-count-based estimates that
+//! cannot satisfy them. Fallback coverage lives in
+//! [`text_layout_fallback`](crate::text_layout_fallback).
 
 use flui_painting::{
     Canvas, DisplayListCore, TextPainter, detect_text_direction, measure_inline_span, measure_text,

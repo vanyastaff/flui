@@ -731,9 +731,16 @@ println!("Hit regions: {}", stats.hit_regions);
 let mut display_list = canvas.finish();
 display_list.apply_transform(Matrix4::translation(50.0, 50.0, 0.0));
 
-// Transform individual command
-let cmd = &mut display_list.commands_mut().next().unwrap();
-cmd.apply_transform(Matrix4::rotation_z(PI / 4.0));
+// Per-command transformation: use the public `map` API (returns a new
+// DisplayList). Direct mutable command access (`commands_mut`) is
+// crate-private since Mythos chain U10; the `map` / `filter` /
+// `apply_transform` / `to_opacity` surface covers the legitimate
+// transformation patterns without exposing the underlying Vec.
+let rotated = display_list.map(|cmd| {
+    let mut out = cmd.clone();
+    out.apply_transform(Matrix4::rotation_z(PI / 4.0));
+    out
+});
 
 // Access command transform
 if let Some(transform) = cmd.transform() {
