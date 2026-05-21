@@ -56,7 +56,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use web_time::Instant;
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::duration::Seconds;
 
@@ -179,6 +179,15 @@ pub struct Ticker {
 
     /// All mutable state behind a single lock
     inner: Arc<Mutex<TickerInner>>,
+
+    /// Disposed-state flag (lock-free).
+    ///
+    /// Set once on `dispose()`. After that, all public methods are no-ops in
+    /// release mode and panic via `debug_assert!` in debug. Matches the PR #84
+    /// `ChangeNotifier::dispose` pattern at
+    /// [`flui-foundation/src/notifier.rs`](../../crates/flui-foundation/src/notifier.rs)
+    /// and Flutter [`ticker.dart:362-379`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart).
+    disposed: Arc<AtomicBool>,
 }
 
 impl Ticker {
@@ -192,6 +201,7 @@ impl Ticker {
                 callback: None,
                 muted_elapsed: Seconds::ZERO,
             })),
+            disposed: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -201,14 +211,70 @@ impl Ticker {
         self.id
     }
 
+    /// Returns true if `dispose()` has been called.
+    #[inline]
+    pub fn is_disposed(&self) -> bool {
+        self.disposed.load(Ordering::Acquire)
+    }
+
+    /// Dispose of the ticker — idempotent.
+    ///
+    /// Clears the callback, sets state to Stopped, and marks disposed.
+    /// Subsequent calls to `start`/`stop`/`mute`/`unmute`/`reset`/`tick`
+    /// panic in debug builds via [`debug_assert!`] and emit a
+    /// `tracing::warn!` + no-op in release.
+    ///
+    /// Mirrors Flutter [`ticker.dart:362-379`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart)
+    /// `@mustCallSuper dispose()` semantics and PR #84's `ChangeNotifier::dispose`
+    /// adoption template.
+    pub fn dispose(&mut self) {
+        if self.disposed.swap(true, Ordering::Release) {
+            return; // already disposed — idempotent
+        }
+        let mut inner = self.inner.lock();
+        inner.state = TickerState::Stopped;
+        inner.callback = None;
+        inner.start_time = None;
+    }
+
+    /// Debug-assert that this ticker hasn't been disposed. Release builds
+    /// emit a tracing warning instead of panicking.
+    #[inline]
+    fn assert_not_disposed(&self, op: &'static str) -> bool {
+        if self.disposed.load(Ordering::Acquire) {
+            debug_assert!(false, "Ticker::{op} called after dispose");
+            tracing::warn!(op, ticker_id = ?self.id, "Ticker used after dispose");
+            return false;
+        }
+        true
+    }
+
     /// Start the ticker with a callback
     ///
     /// The callback receives the elapsed time in seconds since start.
+    ///
+    /// # Panics
+    ///
+    /// Debug-asserts that the ticker has not been disposed and that it is
+    /// not already in [`TickerState::Active`] (matches Flutter
+    /// [`ticker.dart:188`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart)
+    /// `throw FlutterError('A ticker was started twice.')`).
     pub fn start<F>(&mut self, callback: F)
     where
         F: FnMut(f64) + Send + 'static,
     {
+        if !self.assert_not_disposed("start") {
+            return;
+        }
         let mut inner = self.inner.lock();
+        debug_assert!(
+            inner.state != TickerState::Active,
+            "A ticker was started twice (id={:?})",
+            self.id
+        );
+        if inner.state == TickerState::Active {
+            tracing::error!(ticker_id = ?self.id, "Ticker::start called while already Active");
+        }
         inner.state = TickerState::Active;
         inner.start_time = Some(Instant::now());
         inner.callback = Some(Box::new(callback));
@@ -227,6 +293,9 @@ impl Ticker {
     ///
     /// This permanently stops the ticker. Call `start()` to restart.
     pub fn stop(&mut self) {
+        if !self.assert_not_disposed("stop") {
+            return;
+        }
         let mut inner = self.inner.lock();
         inner.state = TickerState::Stopped;
         inner.callback = None;
@@ -237,6 +306,9 @@ impl Ticker {
     /// This temporarily pauses the ticker without clearing the callback.
     /// Time does not advance while muted.
     pub fn mute(&mut self) {
+        if !self.assert_not_disposed("mute") {
+            return;
+        }
         let mut inner = self.inner.lock();
         if inner.state == TickerState::Active {
             if let Some(start) = inner.start_time {
@@ -250,6 +322,9 @@ impl Ticker {
     ///
     /// Resumes a muted ticker. Time continues from where it was paused.
     pub fn unmute(&mut self) {
+        if !self.assert_not_disposed("unmute") {
+            return;
+        }
         let mut inner = self.inner.lock();
         if inner.state == TickerState::Muted {
             let now = Instant::now();
@@ -346,11 +421,22 @@ impl Ticker {
 
     /// Reset the ticker to initial state
     pub fn reset(&mut self) {
+        if !self.assert_not_disposed("reset") {
+            return;
+        }
         let mut inner = self.inner.lock();
         inner.state = TickerState::Idle;
         inner.start_time = None;
         inner.callback = None;
         inner.muted_elapsed = Seconds::ZERO;
+    }
+}
+
+impl Drop for Ticker {
+    fn drop(&mut self) {
+        if !self.disposed.load(Ordering::Acquire) {
+            self.dispose();
+        }
     }
 }
 
@@ -1180,6 +1266,55 @@ mod tests {
         fn schedule_tick(&self, callback: Box<dyn FnOnce(f64) + Send>) {
             callback(0.0);
         }
+    }
+
+    #[test]
+    fn test_ticker_dispose_is_idempotent() {
+        let mut ticker = Ticker::new();
+        ticker.start(|_| {});
+        assert!(!ticker.is_disposed());
+        ticker.dispose();
+        assert!(ticker.is_disposed());
+        ticker.dispose(); // idempotent — no panic, no state change
+        assert!(ticker.is_disposed());
+    }
+
+    #[test]
+    fn test_ticker_drop_disposes() {
+        let mut ticker = Ticker::new();
+        ticker.start(|_| {});
+        // Take Arc clone of disposed flag to observe after drop
+        let disposed_flag = ticker.disposed.clone();
+        drop(ticker);
+        assert!(disposed_flag.load(Ordering::Acquire));
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    fn test_ticker_use_after_dispose_panics_in_debug() {
+        let mut ticker = Ticker::new();
+        ticker.dispose();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ticker.start(|_| {});
+        }));
+        assert!(
+            result.is_err(),
+            "start() after dispose should panic in debug"
+        );
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    fn test_ticker_started_twice_panics_in_debug() {
+        let mut ticker = Ticker::new();
+        ticker.start(|_| {});
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ticker.start(|_| {});
+        }));
+        assert!(
+            result.is_err(),
+            "start() while Active should panic in debug"
+        );
     }
 
     #[test]
