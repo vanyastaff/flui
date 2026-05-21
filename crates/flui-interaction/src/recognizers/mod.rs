@@ -7,20 +7,21 @@
 //! ```text
 //! GestureArenaMember (trait)
 //!     │
-//!     ├── GestureRecognizer (trait) - base with add_pointer, handle_event
-//!     │       │
-//!     │       └── OneSequenceGestureRecognizer (trait) - single pointer tracking
-//!     │               │
-//!     │               └── PrimaryPointerGestureRecognizer (trait) - state machine + deadline
-//!     │
-//!     └── Concrete Recognizers
-//!         ├── TapGestureRecognizer
-//!         ├── LongPressGestureRecognizer
-//!         ├── DoubleTapGestureRecognizer
-//!         ├── DragGestureRecognizer
-//!         ├── ScaleGestureRecognizer
-//!         └── ...
+//!     └── GestureRecognizer (trait) - base with add_pointer, handle_event
+//!             │
+//!             └── Concrete Recognizers
+//!                 ├── TapGestureRecognizer
+//!                 ├── LongPressGestureRecognizer
+//!                 ├── DoubleTapGestureRecognizer
+//!                 ├── DragGestureRecognizer
+//!                 ├── ScaleGestureRecognizer
+//!                 └── ...
 //! ```
+//!
+//! Note: The canonical Flutter trait hierarchy
+//! `GestureRecognizer ← OneSequenceGestureRecognizer ← PrimaryPointerGestureRecognizer`
+//! is re-introduced as proper traits in U13 of the input-frame-loop-repair
+//! plan; the zero-consumer scaffolds previously living here were deleted in U3.
 //!
 //! # Available Recognizers
 //!
@@ -31,12 +32,6 @@
 //! - [`ScaleGestureRecognizer`] - Pinch-to-zoom detection
 //! - [`MultiTapGestureRecognizer`] - Multi-finger tap detection
 //! - [`ForcePressGestureRecognizer`] - Force/pressure touch detection
-//!
-//! # Base Traits
-//!
-//! - [`OneSequenceGestureRecognizer`] - For gestures tracking a single pointer
-//! - [`PrimaryPointerGestureRecognizer`] - Adds state machine and deadline
-//!   support
 //!
 //! # Example
 //!
@@ -50,10 +45,6 @@
 //!     });
 //! ```
 
-// Base traits
-pub mod one_sequence;
-pub mod primary_pointer;
-
 // Concrete recognizers
 pub mod double_tap;
 pub mod drag;
@@ -64,18 +55,12 @@ pub mod recognizer;
 pub mod scale;
 pub mod tap;
 
-// Re-export base traits
 // Re-export concrete recognizers
 pub use double_tap::DoubleTapGestureRecognizer;
 pub use drag::DragGestureRecognizer;
 pub use force_press::ForcePressGestureRecognizer;
 pub use long_press::LongPressGestureRecognizer;
 pub use multi_tap::MultiTapGestureRecognizer;
-pub use one_sequence::{OneSequenceGestureRecognizer, OneSequenceState};
-pub use primary_pointer::{
-    GestureRecognizerState as PrimaryPointerState, PrimaryPointerGestureRecognizer,
-    PrimaryPointerState as PrimaryPointerStateHelper,
-};
 pub use recognizer::{GestureRecognizer, GestureRecognizerState, GestureState, constants};
 pub use scale::ScaleGestureRecognizer;
 pub use tap::TapGestureRecognizer;
