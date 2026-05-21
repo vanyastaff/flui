@@ -95,6 +95,11 @@ impl TextLayout {
     }
 
     /// Returns the text position for a screen offset (estimated).
+    ///
+    /// `TextPosition.offset` is a character offset (per its
+    /// `flui_types` doc), so we clamp to `chars().count()`, not
+    /// `text.len()` — the latter is a byte count and would point past
+    /// the last character for non-ASCII strings.
     pub fn get_position_for_offset(&self, offset: Offset<Pixels>) -> TextPosition {
         let avg_char_width = self.font_size * 0.5;
         let char_index = if avg_char_width > 0.0 {
@@ -102,8 +107,8 @@ impl TextLayout {
         } else {
             0
         };
-        let max_offset = self.text.len();
-        TextPosition::new(char_index.min(max_offset), TextAffinity::Downstream)
+        let max_char_offset = self.text.chars().count();
+        TextPosition::new(char_index.min(max_char_offset), TextAffinity::Downstream)
     }
 
     /// Returns line metrics for all lines in the layout (estimated).
@@ -170,17 +175,26 @@ impl TextLayout {
 
     /// Returns the word boundary at the given text position
     /// (estimated).
+    ///
+    /// `TextPosition.offset` is a character offset (per its
+    /// `flui_types` doc), so we walk the string by `char` rather
+    /// than by byte to avoid splitting multi-byte UTF-8 codepoints.
+    /// Word-boundary semantics here are deliberately
+    /// "non-whitespace-run" — full UAX #29 word segmentation would
+    /// require pulling in `unicode-segmentation`; the fallback path
+    /// is best-effort and only used when the `text` feature is off.
     pub fn get_word_boundary(&self, position: TextPosition) -> TextRange {
-        let bytes = self.text.as_bytes();
-        let offset = position.offset.min(bytes.len());
+        let chars: Vec<char> = self.text.chars().collect();
+        let total = chars.len();
+        let offset = position.offset.min(total);
 
         let mut start = offset;
-        while start > 0 && bytes.get(start - 1).is_some_and(|&b| b != b' ') {
+        while start > 0 && !chars[start - 1].is_whitespace() {
             start -= 1;
         }
 
         let mut end = offset;
-        while end < bytes.len() && bytes.get(end).is_some_and(|&b| b != b' ') {
+        while end < total && !chars[end].is_whitespace() {
             end += 1;
         }
 

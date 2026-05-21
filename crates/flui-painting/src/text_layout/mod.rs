@@ -7,8 +7,12 @@
 //! The 1,243-LOC `text_layout.rs` god module was split into a
 //! `text_layout/` directory. The unnecessary
 //! `#[cfg(feature = "text")] mod inner` indirection was flattened:
-//! the cfg attribute now sits on the `pub mod text_layout;`
-//! declaration in `lib.rs`, not on a `mod inner` wrapper.
+//! the `pub mod text_layout;` declaration in `lib.rs` is now
+//! unconditional, and the cfg attributes sit per-submodule below
+//! (`detect`/`layout`/`measure` gated `feature = "text"`,
+//! `fallback` gated `not(feature = "text")`). The shared
+//! `TextLayoutResult` and `LineInfo` types live at the module root
+//! with no cfg gate so they are visible under both feature flavors.
 //!
 //! Files:
 //!
@@ -16,10 +20,6 @@
 //! - [`layout`]   -- `#[cfg(feature = "text")]` `FONT_SYSTEM` static + `TextLayout` struct + cursor/hit-test methods.
 //! - [`measure`]  -- `#[cfg(feature = "text")]` `measure_text` + `measure_inline_span` + `style_to_attrs` helpers.
 //! - [`fallback`] -- `#[cfg(not(feature = "text"))]` stub `TextLayout` + stub `detect_text_direction` + stub `measure_*`.
-//!
-//! `TextLayoutResult` and `LineInfo` are structurally identical
-//! between the cosmic-text impl and the fallback impl, so they live
-//! at the module root (no cfg gate).
 
 use flui_types::{
     geometry::{Pixels, Size, px},

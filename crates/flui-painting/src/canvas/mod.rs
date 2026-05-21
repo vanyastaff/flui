@@ -27,20 +27,19 @@
 //! # Concern split (Mythos chain U4)
 //!
 //! The 3,305-LOC `canvas.rs` god module was split into eight
-//! concern-based submodules:
+//! concern-based files: this `mod.rs` plus seven submodules.
 //!
+//! - `mod.rs` (this file) -- the `Canvas` struct, lifecycle (`new`,
+//!   `finish`, `reset`, `clear_commands`), queries (`is_empty`,
+//!   `len`, `bounds`, `display_list`), `AsRef<DisplayList>`, and
+//!   the hit-region recording surface.
 //! - [`state`]       -- `CanvasState`, `ClipShape`, save/restore/save_layer.
 //! - [`transform`]   -- translate/scale/rotate/skew/transform.
 //! - [`clipping`]    -- clip_rect/clip_rrect/clip_path + bounds queries.
 //! - [`drawing`]     -- 29 primary `draw_*` methods (one per DrawCommand variant).
 //! - [`scoped`]      -- 12 `with_*` closure-based scoped helpers.
 //! - [`composition`] -- extend_from/extend/merge/append_* multi-canvas ops + static constructors.
-//! - [`sugar`]       -- chaining API + batch ops + conditional draws + grid/repeat patterns + debug viz + convenience shapes.
-//!
-//! This module (`mod.rs`) carries the `Canvas` struct itself plus its
-//! lifecycle (`new`, `finish`, `reset`, `clear_commands`), queries
-//! (`is_empty`, `len`, `bounds`, `display_list`), the
-//! `AsRef<DisplayList>` impl, and the hit-region recording surface.
+//! - [`sugar`]       -- chaining API + batch ops + conditional draws + grid/repeat patterns + debug viz + convenience shapes (further split into `sugar/{batch,conditional,grid,debug,shapes,chain}.rs` in the code-review fixup pass).
 
 use flui_types::geometry::{Matrix4, Pixels, Rect};
 

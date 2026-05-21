@@ -58,6 +58,10 @@ pub(super) fn font_system() -> &'static Mutex<FontSystem> {
 pub struct TextLayout {
     /// The underlying cosmic-text buffer.
     buffer: Buffer,
+    /// Source text, kept for byte-based queries (e.g.
+    /// `get_word_boundary`) that need to inspect characters around a
+    /// caret without re-walking every glyph in every layout run.
+    text: String,
     /// Font size used for layout.
     font_size: f32,
     /// Line height used for layout.
@@ -95,6 +99,7 @@ impl TextLayout {
 
         Self {
             buffer,
+            text: text.to_string(),
             font_size,
             line_height,
             direction,
@@ -377,37 +382,67 @@ impl TextLayout {
     }
 
     /// Returns the word boundary at the given text position.
+    ///
+    /// The implementation expands left and right from `position.offset`
+    /// (a byte offset into `self.text`, matching cosmic-text's
+    /// `glyph.start` convention used elsewhere in this module) over
+    /// runs of non-whitespace characters. Multi-byte UTF-8 codepoints
+    /// are stepped via `str::char_indices` so we never split inside a
+    /// codepoint.
+    ///
+    /// Semantics are deliberately "non-whitespace run", not full
+    /// UAX #29 word segmentation; full segmentation would need the
+    /// `unicode-segmentation` crate, which is filed as an
+    /// `Outstanding refactor`. The previous implementation was
+    /// O(n²) in the glyph count *and* incorrect for the common ASCII
+    /// case (every byte index was a glyph start, so every call
+    /// returned the entire line).
     pub fn get_word_boundary(&self, position: TextPosition) -> TextRange {
-        let mut char_positions: Vec<usize> = Vec::new();
+        let text = self.text.as_str();
+        let total = text.len();
+        let mut offset = position.offset.min(total);
 
-        for run in self.buffer.layout_runs() {
-            for glyph in run.glyphs {
-                char_positions.push(glyph.start);
-            }
+        // Snap to the nearest preceding char boundary so we never
+        // dereference inside a multi-byte codepoint.
+        while offset > 0 && !text.is_char_boundary(offset) {
+            offset -= 1;
         }
 
-        let offset = position.offset;
+        let bytes = text.as_bytes();
 
-        let mut word_start = offset;
-        for i in (0..offset).rev() {
-            if char_positions.contains(&i) {
-                word_start = i;
-            } else {
+        // Walk left across non-whitespace bytes. We can scan by byte
+        // because every char-boundary byte of an ASCII whitespace
+        // character is itself ASCII (0..0x80), and continuation bytes
+        // (0x80..0xC0) are never whitespace. The result is always a
+        // valid char boundary because the moment we hit a whitespace
+        // byte we stop one byte *after* it (or at 0).
+        let mut start = offset;
+        while start > 0 {
+            let prev = bytes[start - 1];
+            if prev.is_ascii_whitespace() {
                 break;
             }
-        }
-
-        let mut word_end = offset;
-        let max_pos = char_positions.last().copied().unwrap_or(0);
-        for i in offset..=max_pos {
-            if char_positions.contains(&i) {
-                word_end = i + 1;
-            } else {
-                break;
+            // Step over continuation bytes to the next char start.
+            start -= 1;
+            while start > 0 && !text.is_char_boundary(start) {
+                start -= 1;
             }
         }
 
-        TextRange::new(word_start, word_end)
+        // Walk right across non-whitespace.
+        let mut end = offset;
+        while end < total {
+            let cur = bytes[end];
+            if cur.is_ascii_whitespace() {
+                break;
+            }
+            end += 1;
+            while end < total && !text.is_char_boundary(end) {
+                end += 1;
+            }
+        }
+
+        TextRange::new(start, end)
     }
 }
 

@@ -140,3 +140,52 @@ fn fallback_measure_inline_span_proxies_to_measure_text() {
     let expected = measure_text("abcdef", None, 14.0, None, None);
     assert!((result.width - expected.width).abs() < f32::EPSILON);
 }
+
+/// Regression test for fallback `get_position_for_offset` clamping
+/// to byte length (Copilot PR #80 comment #3273541350).
+///
+/// The previous fallback clamped using `self.text.len()` (byte
+/// length). For non-ASCII text that produces an offset that may
+/// land past the last character. The fix clamps to
+/// `text.chars().count()` to match the `TextPosition.offset`
+/// character-offset convention.
+#[test]
+fn fallback_position_for_offset_clamps_to_char_count() {
+    use flui_painting::TextLayout;
+    use flui_types::{geometry::Offset, geometry::px, typography::TextDirection};
+
+    // "café" — 4 chars, 5 bytes.
+    let layout = TextLayout::new("café", None, 14.0, None, None, TextDirection::Ltr);
+
+    // Massive offset: should clamp to char count (4), not byte length (5).
+    let pos = layout.get_position_for_offset(Offset::new(px(10_000.0), px(0.0)));
+    assert!(
+        pos.offset <= 4,
+        "fallback position offset must clamp to char count (4), got {}",
+        pos.offset
+    );
+}
+
+/// Regression test for fallback `get_word_boundary` byte-walk bug
+/// (Copilot PR #80 comment #3273541377).
+///
+/// The previous fallback walked `self.text.as_bytes()` treating
+/// `position.offset` as a byte index — would split multi-byte
+/// codepoints for non-ASCII text. The fix walks via
+/// `text.chars().collect()` so word boundaries always land on
+/// character boundaries.
+#[test]
+fn fallback_word_boundary_handles_non_ascii() {
+    use flui_painting::TextLayout;
+    use flui_types::typography::{TextAffinity, TextDirection, TextPosition};
+
+    // "café world" — fallback treats offset as char index.
+    let layout = TextLayout::new("café world", None, 14.0, None, None, TextDirection::Ltr);
+
+    // Cursor inside "café" at char index 2.
+    let pos = TextPosition::new(2, TextAffinity::Downstream);
+    let word = layout.get_word_boundary(pos);
+
+    assert_eq!(word.start, 0, "word should start at 'c' (char 0)");
+    assert_eq!(word.end, 4, "word should end after 'é' (char 4)");
+}

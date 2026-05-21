@@ -14,8 +14,12 @@
 //! # Concern split (Mythos chain U5)
 //!
 //! The 2,434-LOC `display_list.rs` god module was split into six
-//! concern-based submodules:
+//! concern-based files: this `mod.rs` plus five submodules.
 //!
+//! - `mod.rs` (this file) -- the `DisplayList` struct, mutation
+//!   methods (`apply_transform`/`filter`/`map`/`to_opacity`/`clear`),
+//!   iteration adapters, and the `pub(crate)` `push`/`append` entry
+//!   points used by `Canvas`.
 //! - [`command`]      -- 29-variant `DrawCommand` enum + `CommandKind`.
 //! - [`command_ops`]  -- `DrawCommand` impl block (with_opacity, bounds, transform, paint, kind, is_*, apply_transform).
 //! - [`sealed`]       -- sealed extension-trait pair (`DisplayListCore` + `DisplayListExt`) + 4 blanket impls.

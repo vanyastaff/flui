@@ -8,16 +8,34 @@
 //! cargo run --example simple_tessellation -p flui_painting --features tessellation
 //! ```
 
+// Stub main for `cargo build --no-default-features` so the example
+// still compiles even though the `tessellation` module is gated out.
+#[cfg(not(feature = "tessellation"))]
+fn main() {
+    eprintln!(
+        "simple_tessellation requires the `tessellation` feature; \
+         re-run with `cargo run --example simple_tessellation -p flui-painting --features tessellation`."
+    );
+}
+
+#[cfg(not(feature = "tessellation"))]
+mod _disabled {
+    // Keeps the file empty when the feature is off.
+}
+
+#[cfg(feature = "tessellation")]
 use flui_painting::{
     prelude::*,
     tessellation::{TessellationOptions, tessellate_fill, tessellate_stroke},
 };
+#[cfg(feature = "tessellation")]
 use flui_types::{
     geometry::{Point, Rect, px},
     painting::Path,
     styling::Color,
 };
 
+#[cfg(feature = "tessellation")]
 fn main() {
     println!("===========================================");
     println!("  FLUI Painting Tessellation Demo");

@@ -261,3 +261,77 @@ fn test_nested_composition() {
     // Should have all 3 commands
     assert_eq!(parent_list.len(), 3);
 }
+
+/// Regression test for `Canvas::append_display_list_at_offset`
+/// (Copilot PR #80 comment #3273541481).
+///
+/// The previous implementation called `save() / translate(offset) /
+/// append() / restore()`. `Canvas::translate` only mutates the
+/// canvas's *current* transform for *future* recorded commands;
+/// `DisplayList::append` then moves the appended commands in
+/// unchanged with their original baked transforms, so the `offset`
+/// argument was silently dropped.
+///
+/// The fixed implementation clones the source list and calls
+/// `DisplayList::apply_transform` with a translation matrix before
+/// appending, so the per-command transforms reflect the offset.
+#[test]
+fn append_display_list_at_offset_actually_shifts_commands() {
+    use flui_types::geometry::{Matrix4, Offset};
+
+    // Build a child DisplayList containing one rect at origin.
+    let mut child = Canvas::new();
+    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(10.0), px(10.0));
+    child.draw_rect(rect, &Paint::fill(Color::RED));
+    let child_list = child.finish();
+
+    // Append into a parent at offset (50, 25).
+    let mut parent = Canvas::new();
+    parent.append_display_list_at_offset(&child_list, Offset::new(px(50.0), px(25.0)));
+
+    let dl = parent.finish();
+    assert_eq!(dl.len(), 1);
+
+    // The single command should now carry a non-identity transform.
+    let cmd = dl.commands().next().expect("one command appended");
+    let xform = cmd.transform();
+    assert!(
+        xform != Matrix4::identity(),
+        "appended command must carry a non-identity transform after offset shift; got {xform:?}"
+    );
+
+    // Bounds should reflect the offset translation.
+    let bounds = dl.bounds();
+    assert!(
+        bounds.left().0 >= 50.0 - 0.01,
+        "bounds.left should be >= 50.0 after offset, got {}",
+        bounds.left().0
+    );
+    assert!(
+        bounds.top().0 >= 25.0 - 0.01,
+        "bounds.top should be >= 25.0 after offset, got {}",
+        bounds.top().0
+    );
+}
+
+/// Zero-offset path still works: no clone-and-transform overhead,
+/// commands pass through unchanged.
+#[test]
+fn append_display_list_at_offset_zero_is_passthrough() {
+    use flui_types::geometry::Offset;
+
+    let mut child = Canvas::new();
+    child.draw_rect(
+        Rect::from_ltrb(px(5.0), px(5.0), px(15.0), px(15.0)),
+        &Paint::fill(Color::BLUE),
+    );
+    let child_list = child.finish();
+    let child_bounds = child_list.bounds();
+
+    let mut parent = Canvas::new();
+    parent.append_display_list_at_offset(&child_list, Offset::new(px(0.0), px(0.0)));
+
+    let dl = parent.finish();
+    assert_eq!(dl.len(), 1);
+    assert_eq!(dl.bounds(), child_bounds);
+}

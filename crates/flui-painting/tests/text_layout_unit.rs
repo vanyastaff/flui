@@ -210,3 +210,55 @@ fn test_measure_inline_span_smoke() {
     assert!(result.width > 0.0);
     assert_eq!(result.line_count, 1);
 }
+
+/// Regression test for the `get_word_boundary` O(n²) ASCII-degenerate
+/// bug (Copilot PR #80 comment #3273541280).
+///
+/// The previous implementation pushed every `glyph.start` into a
+/// `Vec<usize>` then called `char_positions.contains(&i)` for each `i`
+/// in a left/right expansion loop. For ASCII text every byte index
+/// matched a glyph start, so the function returned `(0, line_len)` —
+/// the entire line — for every cursor position, instead of the
+/// non-whitespace run around the cursor.
+#[test]
+fn get_word_boundary_returns_word_not_whole_line() {
+    use flui_painting::TextLayout;
+    use flui_types::typography::{TextAffinity, TextDirection, TextPosition};
+
+    let mut layout = TextLayout::new(
+        "the quick brown fox",
+        None,
+        14.0,
+        None,
+        None,
+        TextDirection::Ltr,
+    );
+    let _ = layout.metrics(); // ensure shaped.
+
+    // Cursor inside "quick" (byte offset 6 = inside 'q-u-i-c-k').
+    let pos = TextPosition::new(6, TextAffinity::Downstream);
+    let word = layout.get_word_boundary(pos);
+
+    assert_eq!(word.start, 4, "word should start at 'q' (byte 4)");
+    assert_eq!(word.end, 9, "word should end after 'k' (byte 9)");
+}
+
+/// Confirms `get_word_boundary` does not split inside multi-byte
+/// UTF-8 codepoints.
+#[test]
+fn get_word_boundary_handles_non_ascii() {
+    use flui_painting::TextLayout;
+    use flui_types::typography::{TextAffinity, TextDirection, TextPosition};
+
+    // "café" — 'é' is 2 bytes (0xC3 0xA9). Total len = 5 bytes.
+    let mut layout =
+        TextLayout::new("café world", None, 14.0, None, None, TextDirection::Ltr);
+    let _ = layout.metrics();
+
+    // Cursor right after "café" (byte 5).
+    let pos = TextPosition::new(5, TextAffinity::Downstream);
+    let word = layout.get_word_boundary(pos);
+
+    assert_eq!(word.start, 0, "word should start at 'c' (byte 0)");
+    assert_eq!(word.end, 5, "word should end after 'é' (byte 5)");
+}

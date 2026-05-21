@@ -9,7 +9,7 @@
 //! `DisplayList::append`); subsequent appends are O(N) where N is the
 //! child's command count.
 
-use flui_types::geometry::{Offset, Pixels, px};
+use flui_types::geometry::{Matrix4, Offset, Pixels, px};
 
 use super::Canvas;
 use crate::display_list::{DisplayList, DisplayListCore};
@@ -65,24 +65,21 @@ impl Canvas {
     /// Used by layer caching (RepaintBoundary) to replay cached
     /// drawing commands at a specified offset.
     ///
-    /// # Limitation
+    /// The implementation clones the source list and rewrites every
+    /// command's baked-in transform via
+    /// [`DisplayList::apply_transform`] with a translation matching
+    /// `offset` before appending. Without this rewrite the appended
+    /// commands keep their original transforms (recorded against the
+    /// child canvas's origin) and the `offset` argument silently
+    /// drops on the floor; `Canvas::translate` only mutates the
+    /// canvas's *current* transform for *future* recorded commands,
+    /// not for ones that came in through `append`.
     ///
-    /// The current `save() / translate(offset) / append() / restore()`
-    /// dance only affects *new* commands recorded between save and
-    /// restore. The appended `DisplayList`'s commands already carry
-    /// their original transforms baked in at recording time (see
-    /// [`crate::display_list::DisplayList::append`], which performs a
-    /// `mem::swap` or `Vec::append` without rewriting the per-command
-    /// transform fields). As a result, the `offset` argument is
-    /// silently dropped for the appended commands.
+    /// # Performance
     ///
-    /// Callers that need the offset to actually shift the cached
-    /// drawing must first clone the display list and rewrite the
-    /// transforms in place via
-    /// [`crate::display_list::DisplayList::apply_transform`] with a
-    /// translation matrix matching `offset`, then call
-    /// [`Self::append_display_list`] (or [`Self::extend_from`] from a
-    /// canvas built around it).
+    /// O(N) clone + O(N) transform-rewrite, where N = `display_list.len()`.
+    /// For the zero-offset shortcut we still pay one clone (necessary
+    /// because the input is `&DisplayList`).
     pub fn append_display_list_at_offset(
         &mut self,
         display_list: &DisplayList,
@@ -93,10 +90,9 @@ impl Canvas {
             return;
         }
 
-        self.save();
-        self.translate(offset.dx.0, offset.dy.0);
-        self.display_list.append(display_list.clone());
-        self.restore();
+        let mut shifted = display_list.clone();
+        shifted.apply_transform(Matrix4::translation(offset.dx.0, offset.dy.0, 0.0));
+        self.display_list.append(shifted);
     }
 
     /// Appends a cached `DisplayList` directly (no offset).
