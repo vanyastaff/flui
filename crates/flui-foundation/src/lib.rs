@@ -156,8 +156,6 @@ pub mod error;
 // ============================================================================
 
 // Core types - IDs for all tree levels
-// Assertions and error handling
-pub use assert::FluiError;
 // Binding infrastructure
 pub use binding::{BindingBase, HasInstance, check_instance};
 // Callbacks
@@ -260,8 +258,6 @@ pub mod prelude {
         ElementId,
         // Callbacks
         FallibleCallback,
-        // Assertions
-        FluiError,
         // Keys
         HasInstance,
         IS_DESKTOP,
