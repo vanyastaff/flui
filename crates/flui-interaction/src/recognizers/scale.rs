@@ -609,6 +609,10 @@ impl GestureRecognizer for ScaleGestureRecognizer {
 
     fn dispose(&self) {
         self.state.mark_disposed();
+        // Reject arena entries + clear tracked pointer (Flutter parity:
+        // gestures/recognizer.dart:485-493 disposing GestureRecognizer
+        // clears arena state for tracked pointers).
+        self.state.reject();
         self.callbacks.lock().on_start = None;
         self.callbacks.lock().on_update = None;
         self.callbacks.lock().on_end = None;

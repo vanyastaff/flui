@@ -457,6 +457,10 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
 
     fn dispose(&self) {
         self.state.mark_disposed();
+        // Reject arena entries + clear tracked pointer (Flutter parity:
+        // gestures/recognizer.dart:485-493 disposing GestureRecognizer
+        // clears arena state for tracked pointers).
+        self.state.reject();
         self.callbacks.lock().on_multi_tap = None;
         self.callbacks.lock().on_multi_tap_cancel = None;
     }

@@ -327,6 +327,10 @@ impl GestureRecognizer for TapGestureRecognizer {
 
     fn dispose(&self) {
         self.state.mark_disposed();
+        // Reject arena entries + clear tracked pointer (Flutter parity:
+        // gestures/recognizer.dart:485-493 disposing GestureRecognizer
+        // clears arena state for tracked pointers).
+        self.state.reject();
         let mut callbacks = self.callbacks.lock();
         callbacks.on_tap_down = None;
         callbacks.on_tap_move = None;
