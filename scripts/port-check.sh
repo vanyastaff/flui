@@ -62,23 +62,27 @@ check() {
 }
 
 # -----------------------------------------------------------------------------
-# Trigger 1 -- RwLock<Box<dyn RenderObject ...>> in render/view/layer/painting
-# crates. This is the canonical exemplar violation at
+# Trigger 1 -- RwLock<Box<dyn RenderObject ...>> in render/view/layer/painting/
+# engine crates. This is the canonical exemplar violation at
 # flui-rendering/src/storage/entry.rs. Mythos Step 13 of the flui-layer chain
 # added `crates/flui-layer/src` to the scope; Mythos Step 13 of the
 # flui-painting chain added `crates/flui-painting/src` as a forward-looking
 # guard (today's flui-painting has no RenderObject/Layer/ContainerLayer trait
 # objects -- the crate is #[forbid(unsafe_code)] and uses closed enums -- but
-# the scope extension catches any reintroduction post-split).
+# the scope extension catches any reintroduction post-split). Mythos Step 9 of
+# the flui-engine chain added `crates/flui-engine/src` plus the `CommandRenderer`
+# trait-name to the regex so engine-storage types (`Backend`, etc.) are caught
+# if wrapped in `RwLock<Box<dyn CommandRenderer>>`.
 # -----------------------------------------------------------------------------
 check "1" \
-  "RwLock<Box<dyn ...>> in render/view/layer/painting crates" \
-  'RwLock<\s*Box<\s*dyn\s+(RenderObject|Layer\b|ContainerLayer)' \
+  "RwLock<Box<dyn ...>> in render/view/layer/painting/engine crates" \
+  'RwLock<\s*Box<\s*dyn\s+(RenderObject|Layer\b|ContainerLayer|CommandRenderer)' \
   --type rust \
   crates/flui-rendering/src \
   crates/flui-view/src \
   crates/flui-layer/src \
-  crates/flui-painting/src
+  crates/flui-painting/src \
+  crates/flui-engine/src
 
 # -----------------------------------------------------------------------------
 # Trigger 2 -- Box<dyn RenderObject<...>> wrapped in an interior-mutability
@@ -93,33 +97,40 @@ check "1" \
 # generalises to the others.
 # -----------------------------------------------------------------------------
 check "2" \
-  "Box<dyn ...> wrapped in interior-mutability primitive in render/view/layer/painting storage" \
-  '(RwLock|Mutex|RefCell|Cell|UnsafeCell)<\s*Box<\s*dyn\s+(RenderObject|Layer\b|ContainerLayer)' \
+  "Box<dyn ...> wrapped in interior-mutability primitive in render/view/layer/painting/engine storage" \
+  '(RwLock|Mutex|RefCell|Cell|UnsafeCell)<\s*Box<\s*dyn\s+(RenderObject|Layer\b|ContainerLayer|CommandRenderer)' \
   --type rust \
   crates/flui-rendering/src/storage \
   crates/flui-view/src/element \
   crates/flui-layer/src \
-  crates/flui-painting/src
+  crates/flui-painting/src \
+  crates/flui-engine/src
 
 # -----------------------------------------------------------------------------
 # Trigger 3 -- async fn build/layout/paint/perform_layout/composite/render in
-# render/layer hot path.
+# render/layer/engine hot path.
 # Whitelist: route-notification handlers in flui-view/src/binding.rs are async
 # per Flutter SystemChannels callback semantics -- they sit on the binding
 # layer, not the render path. Excluded by file glob.
 # Mythos Step 13 of the flui-layer chain extended the verb set to include
 # `composite`, `render`, and `fire_composition_callbacks` so layer-level
 # async violations are caught at the same trigger.
+# Mythos Step 9 of the flui-engine chain extended the verb set to include
+# `submit`, `present`, `render_scene`, `render_layer_recursive`, and
+# `handle_backdrop_filter` so engine-level async violations are caught.
+# `new` and `new_offscreen` are NOT in the verb set because they are async
+# at the wgpu boundary (setup-phase; acceptable per the strategy clause).
 # -----------------------------------------------------------------------------
 check "3" \
-  "async fn build/layout/paint/perform_layout/composite/render/fire_composition_callbacks in render/layer hot path" \
-  'async\s+fn\s+(build|layout|paint|perform_layout|composite|render|fire_composition_callbacks)\b' \
+  "async fn build/layout/paint/perform_layout/composite/render/submit/present/render_scene/render_layer_recursive/handle_backdrop_filter/fire_composition_callbacks in render/layer/engine hot path" \
+  'async\s+fn\s+(build|layout|paint|perform_layout|composite|render|fire_composition_callbacks|submit|present|render_scene|render_layer_recursive|handle_backdrop_filter)\b' \
   --type rust \
   --glob '!**/binding.rs' \
   crates/flui-rendering/src \
   crates/flui-view/src \
   crates/flui-painting/src \
-  crates/flui-layer/src
+  crates/flui-layer/src \
+  crates/flui-engine/src
 
 # -----------------------------------------------------------------------------
 # Trigger 4 -- Mutex on dirty-list state mutated during build/layout/paint.
@@ -142,6 +153,28 @@ check "4" \
 #   - flui-rendering/src/objects (per-render-object paint impls)
 #   - flui-engine/src/wgpu/layer_render.rs (per-layer wgpu walk; extended in
 #     Mythos Step 13 of the flui-layer chain)
+#
+# *** SCOPE EXCLUSIONS BELOW ARE TRACKED-OUTSTANDING-REFACTOR WHITELISTS ***
+#
+# `flui-engine/src/wgpu/backend.rs` is NOT in the scope yet because it has
+# known per-frame `Arc::clone` sites at lines 121-122 (offscreen-painter
+# cache initialisation) and lines 408-409 (`render_shader_mask` accessor
+# pattern). Both are documented as Friction log entries in
+# `crates/flui-engine/ARCHITECTURE.md` and tracked as Outstanding refactor #1
+# (`Arc<Mutex<OffscreenRenderer>>` -> direct ownership + `Backend<'a>`). When
+# the refactor lands, `backend.rs` MUST be added to this trigger's scope in
+# the same PR so regressions are caught against the post-refactor shape.
+#
+# `flui-engine/src/wgpu/renderer.rs` is NOT in the scope because:
+# - `Renderer::new` and `new_offscreen` perform setup-phase `Arc::clone(&device)`
+#   / `Arc::clone(&queue)` calls that amortise across the renderer's lifetime
+#   (acceptable per the strategy clause).
+# - The canonical per-frame clones at lines 656-657 (RenderContext
+#   construction) are documented as Friction log entries and tracked as
+#   Outstanding refactor #3 (Per-frame Arc::clone -> borrowed references;
+#   depends on Outstanding refactor #1). When that refactor lands, `renderer.rs`
+#   should be added to this trigger's scope with a function-level exclusion
+#   for `Renderer::new` / `new_offscreen` (setup-phase) only.
 # -----------------------------------------------------------------------------
 check "5" \
   "Arc::clone in per-frame paint/composite loop" \
@@ -165,6 +198,71 @@ check "6" \
   crates/flui-view/src/element
 
 # -----------------------------------------------------------------------------
+# Trigger 7 -- Arc<Mutex<*>> or Arc<RwLock<*>> on a *Renderer / *Pool / wgpu::*
+# field inside crates/flui-engine/src/wgpu/.
+# Forward-looking. Added in Mythos Step 9 of the flui-engine chain. Catches
+# regressions of the Arc<parking_lot::Mutex<OffscreenRenderer>> and
+# Arc<Mutex<TexturePoolInner>> shapes documented as Outstanding refactors in
+# crates/flui-engine/ARCHITECTURE.md.
+#
+# Today's known sites at crate root, intentionally surfaced as Friction log
+# entries in ARCHITECTURE.md, do match this trigger and will be expected to
+# be reported once the corresponding Outstanding refactor lands. Until then,
+# the trigger is INFORMATIONAL on Friction-log-tracked sites; the regex is
+# narrow enough that any NEW Arc<Mutex<>>/Arc<RwLock<>> on a *Renderer /
+# *Pool / wgpu::* field is a regression that should be addressed.
+#
+# Scope excludes test files (`!**/test*.rs`, `!**/tests/**`) so test fixtures
+# are not flagged.
+#
+# *** FILE-GLOB EXCLUSIONS BELOW ARE TRACKED-OUTSTANDING-REFACTOR WHITELISTS ***
+#
+# Three files contain the EXACT patterns this trigger is designed to catch:
+#   - `texture_pool.rs:71,224`  -- `Arc<Mutex<TexturePoolInner>>` (R10; tracked
+#                                  as Outstanding refactor #2 in
+#                                  `crates/flui-engine/ARCHITECTURE.md`).
+#   - `renderer.rs:147`         -- `Arc<parking_lot::Mutex<OffscreenRenderer>>`
+#                                  (R9; tracked as Outstanding refactor #1).
+#   - `backend.rs:26,45,57`     -- same `Arc<Mutex<OffscreenRenderer>>` shape,
+#                                  symmetric with renderer.rs (R9).
+#
+# The Mythos chain (PR feat/flui-engine-mythos-redesign) DEFERRED these three
+# refactors to follow-up work per ARCHITECTURE.md `## Outstanding refactors`.
+# To avoid port-check fire-on-known-violation, the three files are whitelisted
+# below. **When the corresponding Outstanding refactor lands (i.e., the
+# Arc<Mutex<>> shape is removed from a file), the matching `--glob !**/<file>`
+# exclusion below MUST be removed in the same PR** so this trigger then catches
+# regressions against the post-refactor shape.
+#
+# Cross-reference: see `crates/flui-engine/ARCHITECTURE.md` ## Friction log
+# entry "Arc<parking_lot::Mutex<OffscreenRenderer>>" and "Arc<Mutex<
+# TexturePoolInner>>" for the deferral rationale.
+# -----------------------------------------------------------------------------
+#
+# Regex shape (anchored + grouped per Copilot review on PR #79):
+#   ^\s+(pub\s+)?\w+\s*:\s*(Option<\s*)?Arc<\s*(parking_lot::)?(Mutex|RwLock)<\s*((super::)?(\w+::)*\w*(Renderer|Pool)\w*|wgpu::\w+)
+# Anchors to struct-field syntax: leading whitespace + optional `pub` + ident
+# + `:`. Inner alternation `((super::)?(\w+::)*\w*(Renderer|Pool)\w*|wgpu::\w+)`
+# is grouped so `wgpu::*` matches only at the outer-type position, not as a
+# bleed-through into the `Renderer|Pool` arm. Path segments (`super::`,
+# `\w+::`) allow `super::offscreen::OffscreenRenderer` and similar. Trailing
+# `\w*` on the Renderer/Pool arm catches names like `TexturePoolInner` where
+# `Pool` is not at the end of the identifier. `(Option<\s*)?` catches both
+# `Arc<...>` direct fields and `Option<Arc<...>>` fields (the shape used by
+# `Renderer::offscreen`).
+# -----------------------------------------------------------------------------
+check "7" \
+  "Arc<(Mutex|RwLock)<*Renderer|*Pool|wgpu::*>> struct field in flui-engine wgpu module" \
+  '^\s+(pub\s+)?\w+\s*:\s*(Option<\s*)?Arc<\s*(parking_lot::)?(Mutex|RwLock)<\s*((super::)?(\w+::)*\w*(Renderer|Pool)\w*|wgpu::\w+)' \
+  --type rust \
+  --glob '!**/test*.rs' \
+  --glob '!**/tests/**' \
+  --glob '!**/texture_pool.rs' \
+  --glob '!**/renderer.rs' \
+  --glob '!**/backend.rs' \
+  crates/flui-engine/src/wgpu
+
+# -----------------------------------------------------------------------------
 # Summary
 # -----------------------------------------------------------------------------
 if [[ "${violations}" -gt 0 ]]; then
@@ -173,5 +271,5 @@ if [[ "${violations}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "port-check: all six refusal triggers clean"
+echo "port-check: all seven refusal triggers clean"
 exit 0

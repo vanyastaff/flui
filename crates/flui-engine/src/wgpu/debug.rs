@@ -10,7 +10,7 @@ use flui_types::{
     typography::TextStyle,
 };
 
-use super::commands::CommandRenderer;
+use crate::traits::CommandRenderer;
 
 /// Debug backend that logs all commands to tracing.
 #[derive(Debug)]

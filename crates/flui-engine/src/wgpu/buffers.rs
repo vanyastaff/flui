@@ -142,7 +142,9 @@ pub struct BufferManager {
     /// Uniform buffer for viewport transform
     uniform_buffer: Buffer,
 
-    /// GPU device
+    /// GPU device. Stored as an `Arc<Device>` keep-alive for buffer creation;
+    /// no direct read access in current production paths.
+    #[allow(dead_code)]
     device: Arc<Device>,
 }
 

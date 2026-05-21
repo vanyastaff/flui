@@ -49,44 +49,55 @@ mod atlas;
 mod backend;
 mod buffer_pool;
 mod buffers;
-mod commands;
-mod compositor;
 #[cfg(debug_assertions)]
 mod debug;
-#[cfg(target_os = "windows")]
-pub mod dx12;
+/// Gradient + shadow + blur instance descriptors consumed by `painter.rs`'s
+/// instanced-batch pipelines. `#[allow(dead_code)]` retained at the module
+/// level because several builder/constant items (`ShadowParams::elevation_*`,
+/// `BlurIntensity`, `LinearGradientBuilder`) are forward-looking helpers that
+/// painter.rs has not yet wired into a public API; deletion would be premature
+/// before painter.rs's internal cleanup.
 #[allow(dead_code)]
 pub mod effects;
 mod effects_pipeline;
 mod external_texture_registry;
 pub mod font_loader;
+/// GPU instance-buffer types: `RectInstance`, `CircleInstance`, `ArcInstance`,
+/// `TextureInstance`, gradient instances. Most variants are consumed by
+/// `painter.rs`. `#[allow(dead_code)]` retained because several constructor
+/// shortcuts (`rounded_rect`, `with_transform`, `ellipse`, `with_rotation`)
+/// are forward-looking helpers not yet wired into painter.rs's public surface;
+/// the per-item audit + deletion is tracked in
+/// `crates/flui-engine/ARCHITECTURE.md` `## Outstanding refactors`.
 #[allow(dead_code)]
 mod instancing;
 // NOTE: integration_tests.rs removed - needs rewrite for new
 // Pixels/DevicePixels API
-#[cfg(target_os = "macos")]
-pub mod metal;
 mod multi_draw;
 pub mod occlusion;
 mod offscreen;
 mod painter;
 pub mod path_cache;
+/// Pipeline key types + descriptors consumed by `painter.rs`'s pipeline cache.
+/// `#[allow(dead_code)]` retained because the `PipelineKey::from_color` /
+/// related constructors are not yet wired into painter.rs's pipeline
+/// construction. Per-item audit tracked in ARCHITECTURE.md.
 #[allow(dead_code)]
 mod pipeline;
 mod pipelines;
 mod renderer;
-mod scene;
+/// Shader cache for offscreen pipelines (`OffscreenRenderer` mask/blur/morph).
+/// `#[allow(dead_code)]` retained because `ShaderCache::cached_count` and
+/// `ShaderCache::clear` introspection methods are forward-looking devtools
+/// helpers; deletion is tracked in ARCHITECTURE.md Outstanding refactors.
 #[allow(dead_code)]
 mod shader_compiler;
 mod shaders;
 mod tessellator;
 mod text;
-mod text_renderer;
 pub mod texture_cache;
 mod texture_pool;
 mod vertex;
-#[cfg(any(target_os = "linux", target_os = "android"))]
-pub mod vulkan;
 
 // ============================================================================
 // LAYER RENDERING
@@ -107,9 +118,10 @@ pub use backend::Backend;
 pub use buffer_pool::{BufferPool, BufferPoolStats};
 pub use buffers::{BufferManager, DynamicBuffer};
 // Command rendering (re-exported from crate root)
-pub use commands::{CommandRenderer, dispatch_command, dispatch_commands};
-// Compositor
-pub use compositor::{Compositor, RenderContext, TransformStack};
+pub use crate::{
+    commands::{dispatch_command, dispatch_commands},
+    traits::CommandRenderer,
+};
 #[cfg(debug_assertions)]
 pub use debug::DebugBackend;
 // External texture registry
@@ -127,14 +139,10 @@ pub use painter::WgpuPainter;
 pub use pipelines::{PipelineBuilder, PipelineCache};
 // Renderer (cross-platform GPU renderer)
 pub use renderer::{GpuCapabilities, Renderer};
-pub use scene::{Scene, SceneBuilder};
 // Shader compilation
 pub use shader_compiler::{ShaderCache, ShaderType};
 // Tessellator
 pub use tessellator::Tessellator;
-// Text rendering (feature-gated)
-#[cfg(feature = "wgpu-backend")]
-pub use text_renderer::{TextRenderingSystem, TextRun};
 // Texture pool
 pub use texture_pool::{GpuTexture, PoolStats, PooledTexture, TextureDesc, TexturePool};
 // Vertex types
@@ -143,5 +151,4 @@ pub use vertex::{ImageInstance, PathVertex, RectInstance, RectVertex, Vertex};
 // Font loading utilities
 pub use font_loader::FontLoader;
 
-// Painter (WgpuPainter is the concrete implementation, Painter trait from crate::traits)
-pub use crate::traits::Painter;
+// Painter (WgpuPainter is the concrete implementation; Painter trait deleted in Mythos U5)

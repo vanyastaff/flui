@@ -85,6 +85,20 @@ pub enum RenderError {
     #[error("Failed to create resource: {0}")]
     ResourceCreation(String),
 
+    /// Filesystem-backed resource (font, shader file, asset) failed to load.
+    ///
+    /// Preserves the underlying `std::io::Error` via `#[source]` so callers can
+    /// match on `io::ErrorKind::{NotFound, PermissionDenied, ...}` without
+    /// re-parsing the formatted message.
+    #[error("Resource I/O failure ({context})")]
+    ResourceIo {
+        /// Caller-supplied context (e.g. `"font load /path/to/font.ttf"`).
+        context: String,
+        /// Underlying `std::io::Error`.
+        #[source]
+        source: std::io::Error,
+    },
+
     // ========================================================================
     // Initialization errors
     // ========================================================================
@@ -95,12 +109,27 @@ pub enum RenderError {
     #[error("Failed to create surface: {0}")]
     SurfaceCreation(#[source] Box<dyn Error + Send + Sync>),
 
-    /// No suitable GPU adapter found
+    /// No suitable GPU adapter found (sentinel; carries no underlying error).
     ///
-    /// No GPU was found that meets the requirements (e.g., supports required
-    /// features, is compatible with the surface).
+    /// Use this variant when `request_adapter` returns no underlying error
+    /// (e.g. the future resolved to `None` semantically). For wgpu 25.x+
+    /// `Result<Adapter, RequestAdapterError>` returns prefer
+    /// [`RenderError::AdapterRequest`] which preserves the wgpu diagnostic
+    /// (`NotFound { active_backends, requested_backends, supported_backends,
+    /// no_fallback_backends, no_adapter_backends, incompatible_surface_backends }`)
+    /// via `#[source]`.
     #[error("No suitable GPU adapter found")]
     NoAdapter,
+
+    /// Adapter request failed with a backend-specific diagnostic payload.
+    ///
+    /// Wraps wgpu's `RequestAdapterError` (or any other backend-specific
+    /// adapter-acquisition error) via `#[source]` so operators get the full
+    /// diagnostic context (`NotFound { active_backends, ... }`,
+    /// `EnvNotSet`, ...). Use this in preference to [`RenderError::NoAdapter`]
+    /// when the underlying API exposes structured diagnostics.
+    #[error("GPU adapter request failed: {0}")]
+    AdapterRequest(#[source] Box<dyn Error + Send + Sync>),
 
     /// Failed to create GPU device
     ///
@@ -112,12 +141,6 @@ pub enum RenderError {
     // ========================================================================
     // Rendering errors
     // ========================================================================
-    /// Error during painting operations
-    ///
-    /// An error occurred while executing paint commands.
-    #[error("Painter error: {0}")]
-    PainterError(String),
-
     /// Shader compilation or linking failed
     ///
     /// The shader source couldn't be compiled or linked.
@@ -130,6 +153,15 @@ pub enum RenderError {
     /// etc.)
     #[error("Pipeline error: {0}")]
     PipelineError(String),
+
+    /// Text rendering (glyphon prepare/render) failed.
+    ///
+    /// Carries the underlying glyphon error message via String because
+    /// `glyphon::PrepareError` and `glyphon::RenderError` are private
+    /// implementation types in older glyphon releases; we preserve the
+    /// formatted error context.
+    #[error("Text render error: {0}")]
+    TextRender(String),
 
     // ========================================================================
     // State errors
@@ -170,10 +202,30 @@ impl RenderError {
         RenderError::DeviceCreation(Box::new(error))
     }
 
-    /// Create a painter error from a string
+    /// Create an adapter-request error from any error type.
+    ///
+    /// Wraps the underlying `RequestAdapterError` (or equivalent) via
+    /// `#[source]` so the diagnostic chain is preserved.
     #[must_use]
-    pub fn painter<S: Into<String>>(msg: S) -> Self {
-        RenderError::PainterError(msg.into())
+    pub fn adapter_request<E>(error: E) -> Self
+    where
+        E: Error + Send + Sync + 'static,
+    {
+        RenderError::AdapterRequest(Box::new(error))
+    }
+
+    /// Create a filesystem-resource-load error from an [`std::io::Error`].
+    ///
+    /// `context` is a caller-supplied free-form description (e.g.
+    /// `"font load /path/to/font.ttf"`); the underlying `io::Error` is
+    /// preserved via `#[source]` so callers can match on
+    /// [`std::io::ErrorKind`].
+    #[must_use]
+    pub fn resource_io<S: Into<String>>(context: S, source: std::io::Error) -> Self {
+        RenderError::ResourceIo {
+            context: context.into(),
+            source,
+        }
     }
 
     /// Create a shader error from a string
@@ -186,6 +238,12 @@ impl RenderError {
     #[must_use]
     pub fn pipeline<S: Into<String>>(msg: S) -> Self {
         RenderError::PipelineError(msg.into())
+    }
+
+    /// Create a text-render error from a string.
+    #[must_use]
+    pub fn text_render<S: Into<String>>(msg: S) -> Self {
+        RenderError::TextRender(msg.into())
     }
 
     /// Create a resource creation error from a string
@@ -216,6 +274,7 @@ impl RenderError {
             self,
             RenderError::OutOfMemory
                 | RenderError::NoAdapter
+                | RenderError::AdapterRequest(_)
                 | RenderError::DeviceCreation(_)
                 | RenderError::SurfaceCreation(_)
                 | RenderError::NotInitialized
@@ -240,10 +299,6 @@ mod tests {
         assert_eq!(
             RenderError::NoAdapter.to_string(),
             "No suitable GPU adapter found"
-        );
-        assert_eq!(
-            RenderError::painter("test error").to_string(),
-            "Painter error: test error"
         );
     }
 

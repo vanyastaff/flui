@@ -298,6 +298,7 @@ impl TextRenderer {
     /// * `view` - Texture view to render to
     /// * `encoder` - Command encoder
     /// * `size` - Viewport size (width, height)
+    #[must_use = "errors must be propagated or handled"]
     pub fn render(
         &mut self,
         device: &wgpu::Device,
@@ -305,7 +306,7 @@ impl TextRenderer {
         view: &wgpu::TextureView,
         encoder: &mut wgpu::CommandEncoder,
         size: (u32, u32),
-    ) -> Result<(), String> {
+    ) -> crate::error::RenderResult<()> {
         // Increment frame counter
         self.current_frame += 1;
 
@@ -378,7 +379,7 @@ impl TextRenderer {
                 text_areas,
                 &mut self.swash_cache,
             )
-            .map_err(|e| format!("Failed to prepare text: {e:?}"))?;
+            .map_err(|e| crate::error::RenderError::text_render(format!("prepare: {e:?}")))?;
 
         // Render text
         let mut text_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -398,7 +399,7 @@ impl TextRenderer {
 
         self.renderer
             .render(&self.text_atlas, &self.viewport, &mut text_pass)
-            .map_err(|e| format!("Failed to render text: {e:?}"))?;
+            .map_err(|e| crate::error::RenderError::text_render(format!("render: {e:?}")))?;
 
         // Clear batch data for next frame (but keep cache!)
         self.text_areas_data.clear();

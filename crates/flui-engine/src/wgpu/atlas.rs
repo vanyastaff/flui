@@ -96,7 +96,9 @@ pub struct TextureAtlas {
     /// Atlas height
     height: u32,
 
-    /// Texture format
+    /// Texture format (stored at construction; queried via the underlying
+    /// `wgpu::Texture` at runtime, not via this field).
+    #[allow(dead_code)]
     format: TextureFormat,
 
     /// Current shelf Y position

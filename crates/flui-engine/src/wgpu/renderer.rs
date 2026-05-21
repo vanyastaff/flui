@@ -34,12 +34,10 @@
 
 use std::sync::Arc;
 
-use anyhow::Result;
 use wgpu;
 
 use super::occlusion::OcclusionTracker;
-use crate::error::RenderError;
-use crate::traits::Painter;
+use crate::error::{RenderError, RenderResult};
 
 /// GPU backend capabilities
 #[derive(Debug, Clone)]
@@ -132,7 +130,13 @@ struct RenderContext {
 
 /// Cross-platform GPU renderer
 pub struct Renderer {
+    // `instance` and `adapter` are kept alive for the lifetime of the renderer
+    // because `wgpu::Surface<'static>` and `wgpu::Device` depend on them. They
+    // are not read post-init in production code; the `#[allow(dead_code)]`
+    // markers document that the keep-alive shape is intentional.
+    #[allow(dead_code)]
     instance: wgpu::Instance,
+    #[allow(dead_code)]
     adapter: wgpu::Adapter,
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
@@ -169,7 +173,7 @@ impl Renderer {
     /// let renderer = Renderer::new(&window).await?;
     /// println!("Using backend: {:?}", renderer.capabilities().backend);
     /// ```
-    pub async fn new<W>(window: &W) -> Result<Self>
+    pub async fn new<W>(window: &W) -> RenderResult<Self>
     where
         W: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle,
     {
@@ -185,11 +189,23 @@ impl Renderer {
         });
 
         // Create surface — requires unsafe: wgpu surface creation from raw window
-        // handle
+        // handle.
+        //
+        // SAFETY: the caller (typically flui-app) guarantees the window handle
+        // remains valid for the lifetime of the returned `Renderer` (and thus the
+        // `wgpu::Surface<'static>` it holds). This invariant is honoured by
+        // flui-app's `App` which owns the winit window for the application's
+        // lifetime. Both `SurfaceTargetUnsafe::from_window` and
+        // `Instance::create_surface_unsafe` carry this requirement; we audit it
+        // here once for the combined block.
         #[allow(unsafe_code)]
         let surface = unsafe {
-            instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::from_window(window)?)
-        }?;
+            let surface_target = wgpu::SurfaceTargetUnsafe::from_window(window)
+                .map_err(RenderError::surface_creation)?;
+            instance
+                .create_surface_unsafe(surface_target)
+                .map_err(RenderError::surface_creation)?
+        };
 
         // Request adapter
         let adapter = instance
@@ -198,7 +214,8 @@ impl Renderer {
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
             })
-            .await?;
+            .await
+            .map_err(RenderError::adapter_request)?;
 
         // Detect capabilities
         let capabilities = GpuCapabilities::detect(&adapter);
@@ -219,7 +236,8 @@ impl Renderer {
                 memory_hints: wgpu::MemoryHints::default(),
                 trace: wgpu::Trace::default(),
             })
-            .await?;
+            .await
+            .map_err(RenderError::device_creation)?;
 
         let device = Arc::new(device);
         let queue = Arc::new(queue);
@@ -290,7 +308,7 @@ impl Renderer {
     /// Create an offscreen renderer (no window surface)
     ///
     /// Useful for headless rendering, tests, and compute-only tasks.
-    pub async fn new_offscreen() -> Result<Self> {
+    pub async fn new_offscreen() -> RenderResult<Self> {
         let backends = Self::select_backend();
 
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
@@ -304,7 +322,8 @@ impl Renderer {
                 compatible_surface: None,
                 force_fallback_adapter: false,
             })
-            .await?;
+            .await
+            .map_err(RenderError::adapter_request)?;
 
         let capabilities = GpuCapabilities::detect(&adapter);
 
@@ -316,7 +335,8 @@ impl Renderer {
                 memory_hints: wgpu::MemoryHints::default(),
                 trace: wgpu::Trace::default(),
             })
-            .await?;
+            .await
+            .map_err(RenderError::device_creation)?;
 
         Ok(Self {
             instance,

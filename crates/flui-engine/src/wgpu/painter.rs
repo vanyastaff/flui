@@ -24,7 +24,6 @@ use super::{
     text::TextRenderer,
     vertex::Vertex,
 };
-use crate::traits::Painter;
 
 /// A recorded batch of tessellated geometry sharing the same pipeline key.
 ///
@@ -992,11 +991,12 @@ impl WgpuPainter {
     /// * `view` - Texture view to render to
     /// * `encoder` - Command encoder
     #[tracing::instrument(level = "trace", skip_all)]
+    #[must_use = "errors must be propagated or handled"]
     pub fn render(
         &mut self,
         view: &wgpu::TextureView,
         encoder: &mut wgpu::CommandEncoder,
-    ) -> Result<(), String> {
+    ) -> crate::error::RenderResult<()> {
         // Advance path cache frame counter and evict stale entries
         self.path_cache.advance_frame();
 
@@ -2005,18 +2005,30 @@ impl WgpuPainter {
     }
 }
 
-// ===== Painter Trait Implementation =====
+// ===== Public Drawing API =====
+//
+// These methods used to be the `impl Painter for WgpuPainter` trait impl;
+// the `Painter` trait was deleted in Mythos U5 (1 production impl, 6 default
+// `tracing::warn!("not implemented")` impls, no second backend planned).
+// The methods stay as inherent on `WgpuPainter` for direct use by `Backend`
+// (the CommandRenderer impl) and external callers like `examples/painting_demo`.
 
 // GPU rendering routinely converts between f32/u8/u32/i32 for pixel
 // coordinates, color channels, and buffer indices. These truncations are
 // intentional.
+//
+// `missing_docs` is allowed on this impl block: the methods were originally
+// trait methods carrying their docs on the trait declaration; redocumenting
+// every one here is deferred to a follow-up doc-sweep (recorded in
+// crates/flui-engine/ARCHITECTURE.md `## Outstanding refactors`).
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
-    clippy::cast_possible_wrap
+    clippy::cast_possible_wrap,
+    missing_docs
 )]
-impl Painter for WgpuPainter {
-    fn rect(&mut self, rect: Rect<Pixels>, paint: &Paint) {
+impl WgpuPainter {
+    pub fn rect(&mut self, rect: Rect<Pixels>, paint: &Paint) {
         #[cfg(debug_assertions)]
         tracing::trace!("WgpuPainter::rect: rect={:?}, paint={:?}", rect, paint);
 
@@ -2097,7 +2109,7 @@ impl Painter for WgpuPainter {
         }
     }
 
-    fn rrect(&mut self, rrect: RRect, paint: &Paint) {
+    pub fn rrect(&mut self, rrect: RRect, paint: &Paint) {
         if paint.style == PaintStyle::Fill {
             // Check for shader (gradient) — dispatch to gradient pipeline
             if paint.has_shader() {
@@ -2154,7 +2166,7 @@ impl Painter for WgpuPainter {
         }
     }
 
-    fn circle(&mut self, center: Point<Pixels>, radius: f32, paint: &Paint) {
+    pub fn circle(&mut self, center: Point<Pixels>, radius: f32, paint: &Paint) {
         #[cfg(debug_assertions)]
         tracing::trace!(
             "WgpuPainter::circle: center={:?}, radius={}, paint={:?}",
@@ -2212,7 +2224,7 @@ impl Painter for WgpuPainter {
         }
     }
 
-    fn oval(&mut self, rect: Rect<Pixels>, paint: &Paint) {
+    pub fn oval(&mut self, rect: Rect<Pixels>, paint: &Paint) {
         #[cfg(debug_assertions)]
         tracing::trace!("WgpuPainter::oval: rect={:?}, paint={:?}", rect, paint);
 
@@ -2229,7 +2241,7 @@ impl Painter for WgpuPainter {
         }
     }
 
-    fn draw_arc(
+    pub fn draw_arc(
         &mut self,
         rect: Rect<Pixels>,
         start_angle: f32,
@@ -2306,7 +2318,7 @@ impl Painter for WgpuPainter {
         }
     }
 
-    fn draw_drrect(&mut self, outer: RRect, inner: RRect, paint: &Paint) {
+    pub fn draw_drrect(&mut self, outer: RRect, inner: RRect, paint: &Paint) {
         #[cfg(debug_assertions)]
         tracing::trace!(
             "WgpuPainter::draw_drrect: outer={:?}, inner={:?}, paint={:?}",
@@ -2331,7 +2343,7 @@ impl Painter for WgpuPainter {
         }
     }
 
-    fn line(&mut self, p1: Point<Pixels>, p2: Point<Pixels>, paint: &Paint) {
+    pub fn line(&mut self, p1: Point<Pixels>, p2: Point<Pixels>, paint: &Paint) {
         #[cfg(debug_assertions)]
         tracing::trace!(
             "WgpuPainter::line: p1={:?}, p2={:?}, paint={:?}",
@@ -2363,7 +2375,7 @@ impl Painter for WgpuPainter {
         }
     }
 
-    fn text(&mut self, text: &str, position: Point<Pixels>, font_size: f32, paint: &Paint) {
+    pub fn text(&mut self, text: &str, position: Point<Pixels>, font_size: f32, paint: &Paint) {
         #[cfg(debug_assertions)]
         tracing::trace!(
             "WgpuPainter::text: text='{}', position={:?}, size={}, color={:?}",
@@ -2381,7 +2393,7 @@ impl Painter for WgpuPainter {
             .add_text(text, transformed_position, font_size, paint.color);
     }
 
-    fn texture(&mut self, texture_id: TextureId, dst_rect: Rect<Pixels>) {
+    pub fn texture(&mut self, texture_id: TextureId, dst_rect: Rect<Pixels>) {
         #[cfg(debug_assertions)]
         tracing::trace!(
             "WgpuPainter::texture: id={:?}, dst_rect={:?}",
@@ -2419,7 +2431,7 @@ impl Painter for WgpuPainter {
         // The texture bind group is created per-batch with the actual texture
     }
 
-    fn draw_path(&mut self, path: &flui_types::painting::path::Path, paint: &Paint) {
+    pub fn draw_path(&mut self, path: &flui_types::painting::path::Path, paint: &Paint) {
         // Compute cache key from path geometry + paint tessellation parameters
         let path_hash = super::path_cache::PathCache::compute_path_hash(
             path,
@@ -2472,7 +2484,7 @@ impl Painter for WgpuPainter {
         }
     }
 
-    fn draw_image(&mut self, image: &flui_types::painting::Image, dst_rect: Rect<Pixels>) {
+    pub fn draw_image(&mut self, image: &flui_types::painting::Image, dst_rect: Rect<Pixels>) {
         #[cfg(debug_assertions)]
         tracing::trace!(
             "WgpuPainter::draw_image: size={}x{}, dst={:?}",
@@ -2515,7 +2527,7 @@ impl Painter for WgpuPainter {
         }
     }
 
-    fn draw_image_repeat(
+    pub fn draw_image_repeat(
         &mut self,
         image: &flui_types::painting::Image,
         dst: Rect<Pixels>,
@@ -2574,7 +2586,7 @@ impl Painter for WgpuPainter {
         }
     }
 
-    fn draw_image_nine_slice(
+    pub fn draw_image_nine_slice(
         &mut self,
         image: &flui_types::painting::Image,
         center_slice: Rect<Pixels>,
@@ -2758,7 +2770,7 @@ impl Painter for WgpuPainter {
         }
     }
 
-    fn draw_image_filtered(
+    pub fn draw_image_filtered(
         &mut self,
         image: &flui_types::painting::Image,
         dst: Rect<Pixels>,
@@ -2884,7 +2896,7 @@ impl Painter for WgpuPainter {
         }
     }
 
-    fn draw_shadow(
+    pub fn draw_shadow(
         &mut self,
         path: &flui_types::painting::path::Path,
         color: flui_types::styling::Color,
@@ -2954,7 +2966,7 @@ impl Painter for WgpuPainter {
         }
     }
 
-    fn draw_vertices(
+    pub fn draw_vertices(
         &mut self,
         vertices: &[Point<Pixels>],
         colors: Option<&[flui_types::styling::Color]>,
@@ -3021,7 +3033,7 @@ impl Painter for WgpuPainter {
         );
     }
 
-    fn draw_atlas(
+    pub fn draw_atlas(
         &mut self,
         image: &flui_types::painting::Image,
         sprites: &[Rect<Pixels>],
@@ -3112,7 +3124,7 @@ impl Painter for WgpuPainter {
         }
     }
 
-    fn draw_texture(
+    pub fn draw_texture(
         &mut self,
         texture_id: flui_types::painting::TextureId,
         dst: Rect<Pixels>,
@@ -3204,7 +3216,7 @@ impl Painter for WgpuPainter {
 
     // ===== Transform Stack =====
 
-    fn save(&mut self) {
+    pub fn save(&mut self) {
         #[cfg(debug_assertions)]
         tracing::trace!(
             "WgpuPainter::save: stack depth={}",
@@ -3223,7 +3235,7 @@ impl Painter for WgpuPainter {
         self.rrect_clip_stack.push(self.current_rrect_clip);
     }
 
-    fn restore(&mut self) {
+    pub fn restore(&mut self) {
         if let Some(transform) = self.transform_stack.pop() {
             self.current_transform = transform;
 
@@ -3254,7 +3266,7 @@ impl Painter for WgpuPainter {
         }
     }
 
-    fn translate(&mut self, offset: Offset<Pixels>) {
+    pub fn translate(&mut self, offset: Offset<Pixels>) {
         #[cfg(debug_assertions)]
         tracing::trace!("WgpuPainter::translate: offset={:?}", offset);
 
@@ -3262,7 +3274,7 @@ impl Painter for WgpuPainter {
         self.current_transform *= translation;
     }
 
-    fn rotate(&mut self, angle: f32) {
+    pub fn rotate(&mut self, angle: f32) {
         #[cfg(debug_assertions)]
         tracing::trace!("WgpuPainter::rotate: angle={}", angle);
 
@@ -3270,7 +3282,7 @@ impl Painter for WgpuPainter {
         self.current_transform *= rotation;
     }
 
-    fn scale(&mut self, sx: f32, sy: f32) {
+    pub fn scale(&mut self, sx: f32, sy: f32) {
         #[cfg(debug_assertions)]
         tracing::trace!("WgpuPainter::scale: sx={}, sy={}", sx, sy);
 
@@ -3280,7 +3292,7 @@ impl Painter for WgpuPainter {
 
     // ===== Clipping =====
 
-    fn clip_rect(&mut self, rect: Rect<Pixels>) {
+    pub fn clip_rect(&mut self, rect: Rect<Pixels>) {
         // Apply current transform to get screen-space coordinates
         let transform = self.current_transform;
 
@@ -3353,7 +3365,7 @@ impl Painter for WgpuPainter {
         );
     }
 
-    fn clip_rrect(&mut self, rrect: RRect) {
+    pub fn clip_rrect(&mut self, rrect: RRect) {
         // SDF-based rounded rectangle clipping: pass clip bounds and radii
         // to each instance so the fragment shader can do per-pixel SDF clipping.
         // This avoids stencil buffers and tessellation entirely.
@@ -3400,7 +3412,7 @@ impl Painter for WgpuPainter {
         );
     }
 
-    fn clip_path(&mut self, _path: &Path) {
+    pub fn clip_path(&mut self, _path: &Path) {
         // Path clipping requires stencil buffer or path tessellation
         // This is a complex feature that needs:
         // 1. Stencil buffer configuration in render pass
@@ -3424,7 +3436,7 @@ impl Painter for WgpuPainter {
 
     // ===== Viewport Information =====
 
-    fn viewport_bounds(&self) -> Rect<Pixels> {
+    pub fn viewport_bounds(&self) -> Rect<Pixels> {
         Rect::from_ltrb(
             px(0.0),
             px(0.0),
@@ -3435,7 +3447,7 @@ impl Painter for WgpuPainter {
 
     // ===== Layer Operations (Opacity) =====
 
-    fn save_layer(&mut self, bounds: Option<Rect<Pixels>>, paint: &Paint) {
+    pub fn save_layer(&mut self, bounds: Option<Rect<Pixels>>, paint: &Paint) {
         let paint_alpha = f32::from(paint.color.a) / 255.0;
         let layer_opacity = self.current_opacity * paint_alpha;
 
@@ -3464,7 +3476,7 @@ impl Painter for WgpuPainter {
         );
     }
 
-    fn restore_layer(&mut self) {
+    pub fn restore_layer(&mut self) {
         if let Some(saved) = self.layer_stack.pop() {
             // Capture the offscreen content drawn since save_layer
             let offscreen_segment =
