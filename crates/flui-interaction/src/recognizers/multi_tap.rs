@@ -423,6 +423,9 @@ impl MultiTapGestureRecognizer {
 
 impl GestureRecognizer for MultiTapGestureRecognizer {
     fn add_pointer(&self, pointer: PointerId, position: Offset<Pixels>) {
+        if !self.state.assert_not_disposed("add_pointer") {
+            return;
+        }
         // For the first pointer, track with arena
         if self.gesture_state.lock().pointers.is_empty() {
             let recognizer = Arc::new(self.clone());
@@ -433,6 +436,9 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
     }
 
     fn handle_event(&self, event: &PointerEvent) {
+        if !self.state.assert_not_disposed("handle_event") {
+            return;
+        }
         match event {
             PointerEvent::Move(data) => {
                 // In a real implementation, we'd need to know which pointer this is

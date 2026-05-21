@@ -334,6 +334,9 @@ impl TapGestureRecognizer {
 
 impl GestureRecognizer for TapGestureRecognizer {
     fn add_pointer(&self, pointer: PointerId, position: Offset<Pixels>) {
+        if !self.state.assert_not_disposed("add_pointer") {
+            return;
+        }
         // Reset accepted flag + pending_up for the new sequence (PR #87
         // review fix — flags from a prior gesture must not bleed into
         // the new one).
@@ -349,6 +352,9 @@ impl GestureRecognizer for TapGestureRecognizer {
     }
 
     fn handle_event(&self, event: &PointerEvent) {
+        if !self.state.assert_not_disposed("handle_event") {
+            return;
+        }
         // Only process if we're tracking a pointer
         if self.state.primary_pointer().is_none() {
             return;

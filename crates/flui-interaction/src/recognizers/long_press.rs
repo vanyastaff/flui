@@ -456,6 +456,9 @@ impl LongPressGestureRecognizer {
 
 impl GestureRecognizer for LongPressGestureRecognizer {
     fn add_pointer(&self, pointer: PointerId, position: Offset<Pixels>) {
+        if !self.state.assert_not_disposed("add_pointer") {
+            return;
+        }
         // Start tracking this pointer
         let recognizer = Arc::new(self.clone());
         self.state.start_tracking(pointer, position, &recognizer);
@@ -465,6 +468,9 @@ impl GestureRecognizer for LongPressGestureRecognizer {
     }
 
     fn handle_event(&self, event: &PointerEvent) {
+        if !self.state.assert_not_disposed("handle_event") {
+            return;
+        }
         // Only process if we're tracking a pointer
         if self.state.primary_pointer().is_none() {
             return;

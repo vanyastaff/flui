@@ -574,6 +574,9 @@ impl ScaleGestureRecognizer {
 
 impl GestureRecognizer for ScaleGestureRecognizer {
     fn add_pointer(&self, pointer: PointerId, position: Offset<Pixels>) {
+        if !self.state.assert_not_disposed("add_pointer") {
+            return;
+        }
         // For the first pointer, track with arena
         if self.gesture_state.lock().pointers.is_empty() {
             let recognizer = Arc::new(self.clone());
@@ -584,6 +587,9 @@ impl GestureRecognizer for ScaleGestureRecognizer {
     }
 
     fn handle_event(&self, event: &PointerEvent) {
+        if !self.state.assert_not_disposed("handle_event") {
+            return;
+        }
         match event {
             PointerEvent::Move(data) => {
                 // We need to figure out which pointer this is
