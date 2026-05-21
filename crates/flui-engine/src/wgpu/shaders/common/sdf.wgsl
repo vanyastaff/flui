@@ -50,6 +50,55 @@ fn sdRoundedBox(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
     return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - r3;
 }
 
+/// Rounded superellipse (iOS-squircle) signed distance field.
+///
+/// Same signature as `sdRoundedBox` so callers can swap between them by
+/// branching on a clip-kind flag. The corner curve uses Flutter's
+/// iOS-squircle parametric form with `n = 4` hardcoded — matches the
+/// `generate_superellipse_path` math used by `ClipSuperellipseLayer`'s
+/// path-tessellation fallback. The interior (non-corner) regions reduce
+/// to the standard axis-aligned rect SDF.
+///
+/// p: point to test (centered at origin)
+/// b: half-extents (half width, half height)
+/// r: corner radii [top-left, top-right, bottom-right, bottom-left]
+///
+/// Reference: Flutter painting/clip.dart + `n = 4` from
+/// `flui-engine::wgpu::layer_render::generate_superellipse_path`.
+fn sdRoundedSuperellipse(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
+    // Per-corner radius selection (identical branchless pattern to
+    // sdRoundedBox).
+    let r2 = select(r.zw, r.xy, p.x > 0.0);
+    let r3 = select(r2.y, r2.x, p.y > 0.0);
+
+    // `q` is the corner-local distance vector: positive when outside the
+    // inner (non-rounded) rect.
+    let q = abs(p) - b + vec2<f32>(r3);
+
+    // Inner-rect region: both q components negative → axis-aligned rect SDF.
+    if (q.x < 0.0 && q.y < 0.0) {
+        return max(q.x, q.y);
+    }
+
+    // Corner region: clamp negatives to zero, normalize by radius, then
+    // evaluate the n=4 superellipse curve `|x/r|^4 + |y/r|^4 = 1`.
+    // Distance scales by r3 so the SDF stays in pixel units.
+    //
+    // Guard against r3 == 0 (degenerate corner with no rounding) — fall
+    // back to the standard rect SDF which doesn't divide by r.
+    if (r3 <= 0.0) {
+        return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0)));
+    }
+
+    let ax = max(q.x, 0.0) / r3;
+    let ay = max(q.y, 0.0) / r3;
+    // For n=4: `(ax^4 + ay^4)^(1/4)`. `sqrt(sqrt(x))` is exactly
+    // equivalent and avoids the non-integer-exponent `pow()` cost on
+    // some GPUs.
+    let n_norm = sqrt(sqrt(ax * ax * ax * ax + ay * ay * ay * ay));
+    return (n_norm - 1.0) * r3;
+}
+
 /// Oriented box (rectangle with rotation)
 /// p: point to test
 /// b: half-extents
