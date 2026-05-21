@@ -1,24 +1,29 @@
-//! Acceptance + edge-case tests for the U11 ancestor-finder trio on
-//! `BuildContext`:
+//! Acceptance + edge-case tests for the U11 ancestor-finder trio and
+//! the U12 render-object finder on `BuildContext`:
 //!
 //! - `find_ancestor_view` / `find_ancestor` (R6) — nearest View match.
 //! - `find_ancestor_state` / `find_state` (R7) — nearest State match.
 //! - `find_root_ancestor_state` / `find_root_state` (R8) — root-most
 //!   State match.
+//! - `find_render_object` (R9) — nearest `RenderId` from a
+//!   `RenderElement` ancestor.
 //!
 //! Test fixtures use the same `mount_root` / `insert` shape as
 //! `inherited_dependency.rs`. The dependent-tracking concerns of U9/U10
 //! are out of scope here: these finders are read-only walks per Flutter
 //! parity (`framework.dart:5122-5160` —
 //! `findAncestorWidgetOfExactType<T>`,
-//! `findAncestorStateOfType<T>`, `findRootAncestorStateOfType<T>`).
+//! `findAncestorStateOfType<T>`, `findRootAncestorStateOfType<T>`,
+//! `findAncestorRenderObjectOfType<T>`).
 
 use std::sync::Arc;
 
+use flui_rendering::{objects::RenderSizedBox, pipeline::PipelineOwner};
+use flui_types::geometry::px;
 use flui_view::{
     BuildContext, BuildContextExt, BuildOwner, ElementBase, ElementBuildContext, ElementTree,
-    StatefulBehavior, StatefulElement, StatefulView, StatelessBehavior, StatelessElement,
-    StatelessView, View, ViewState,
+    RenderElement, RenderView, StatefulBehavior, StatefulElement, StatefulView, StatelessBehavior,
+    StatelessElement, StatelessView, View, ViewState, element::RenderBehavior,
 };
 use parking_lot::RwLock;
 
@@ -81,6 +86,36 @@ impl StatelessView for LabeledView {
 impl View for LabeledView {
     fn create_element(&self) -> Box<dyn ElementBase> {
         Box::new(StatelessElement::new(self, StatelessBehavior))
+    }
+}
+
+/// A leaf RenderView used for R9 (find_render_object). Mirrors the
+/// fixture in `src/view/render.rs#tests::SizedBoxView` but lives in
+/// this integration-test module so it can sit in a real `ElementTree`
+/// with a `PipelineOwner` attached at the root.
+#[derive(Clone)]
+struct SizedBoxView {
+    width: f32,
+    height: f32,
+}
+
+impl RenderView for SizedBoxView {
+    type Protocol = flui_rendering::protocol::BoxProtocol;
+    type RenderObject = RenderSizedBox;
+
+    fn create_render_object(&self) -> Self::RenderObject {
+        RenderSizedBox::new(Some(px(self.width)), Some(px(self.height)))
+    }
+
+    fn update_render_object(&self, _render_object: &mut Self::RenderObject) {
+        // RenderSizedBox doesn't carry mutable dimensions post-creation;
+        // tests don't depend on update_render_object semantics.
+    }
+}
+
+impl View for SizedBoxView {
+    fn create_element(&self) -> Box<dyn ElementBase> {
+        Box::new(RenderElement::new(self, RenderBehavior::new()))
     }
 }
 
@@ -528,6 +563,92 @@ fn find_root_ancestor_state_with_non_matching_intermediate() {
 // ============================================================================
 // Callback contract: closure runs at most once per invocation
 // ============================================================================
+
+// ============================================================================
+// R9: find_render_object returns the nearest RenderElement ancestor's RenderId
+// ============================================================================
+
+#[test]
+fn find_render_object_returns_nearest_render_id() {
+    // Tree shape: SizedBoxView (root, has render_id) -> Spacer -> DummyChild.
+    // From DummyChild, find_render_object() should return Some(render_id)
+    // matching the root's RenderBehavior::render_id.
+    //
+    // The PipelineOwner is required so RenderBehavior::on_mount actually
+    // creates the RenderObject and populates `render_id` — without it,
+    // the behavior keeps render_id = None and the lookup would yield
+    // None even though the ancestor IS a RenderElement.
+    let tree = Arc::new(RwLock::new(ElementTree::new()));
+    let owner = Arc::new(RwLock::new(BuildOwner::new()));
+    let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
+
+    let sized = SizedBoxView {
+        width: 100.0,
+        height: 100.0,
+    };
+    let sized_id = tree.write().mount_root_with_pipeline_owner(
+        &sized,
+        Some(Arc::clone(&pipeline_owner)),
+        &mut owner.write().element_owner_mut(),
+    );
+
+    // Capture the root's render_id via ElementBase::render_id directly,
+    // so the assertion below pins the value the finder must return.
+    let expected_render_id = {
+        let tree_read = tree.read();
+        tree_read
+            .get(sized_id)
+            .and_then(|node| node.element().render_id())
+            .expect("root SizedBoxView mounted with PipelineOwner should have a render_id")
+    };
+
+    let spacer_id =
+        tree.write()
+            .insert(&Spacer, sized_id, 0, &mut owner.write().element_owner_mut());
+
+    let child_id = tree.write().insert(
+        &DummyChild,
+        spacer_id,
+        0,
+        &mut owner.write().element_owner_mut(),
+    );
+
+    let ctx = ElementBuildContext::for_element(child_id, tree, owner).unwrap();
+
+    let found = ctx.find_render_object();
+    assert_eq!(
+        found,
+        Some(expected_render_id),
+        "find_render_object should return the nearest RenderElement ancestor's RenderId"
+    );
+}
+
+#[test]
+fn find_render_object_returns_none_when_no_render_ancestor() {
+    // Tree shape: Spacer -> DummyChild. No RenderElement in the chain;
+    // every ancestor's `ElementBase::render_id` returns the trait default
+    // None, so the strict-ancestor walk exhausts without a break.
+    let (tree, owner) = create_tree_and_owner();
+
+    let spacer_id = tree
+        .write()
+        .mount_root(&Spacer, &mut owner.write().element_owner_mut());
+
+    let child_id = tree.write().insert(
+        &DummyChild,
+        spacer_id,
+        0,
+        &mut owner.write().element_owner_mut(),
+    );
+
+    let ctx = ElementBuildContext::for_element(child_id, tree, owner).unwrap();
+
+    let found = ctx.find_render_object();
+    assert_eq!(
+        found, None,
+        "non-render ancestor chain -> None per Flutter parity (framework.dart:5160)"
+    );
+}
 
 #[test]
 fn find_ancestor_view_callback_runs_at_most_once() {

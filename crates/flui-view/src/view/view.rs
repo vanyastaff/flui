@@ -448,6 +448,32 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     fn state_as_any(&self) -> Option<&dyn std::any::Any> {
         None
     }
+
+    // ========================================================================
+    // RenderObject-finder protocol (U12 / R9)
+    // ========================================================================
+
+    /// Borrow this element's `RenderId` if it is a `RenderElement<V>`
+    /// (a `Element<V, Variable, RenderBehavior<V>>`) whose `on_mount`
+    /// already created its `RenderObject`.
+    ///
+    /// Returns `None` for every behavior other than `RenderBehavior<V>`
+    /// AND for `RenderElement`s that have not yet been mounted with a
+    /// `PipelineOwner` (in which case `RenderBehavior::render_id` is
+    /// still `None`). Used by [`BuildContext::find_render_object`]
+    /// (plan §U12) to surface the nearest ancestor's `RenderId` without
+    /// extending a `&self` borrow — `RenderId` is `Copy`, so the
+    /// non-callback signature is sound (plan §D2).
+    ///
+    /// Flutter parity: `framework.dart:5160`
+    /// `findAncestorRenderObjectOfType<T>` walks `_parent` and reads
+    /// `(ancestor as RenderObjectElement).renderObject` once the
+    /// runtime-type check succeeds. We do the equivalent strict-ancestor
+    /// walk and read `RenderBehavior::render_id` at the dispatch
+    /// boundary.
+    fn render_id(&self) -> Option<flui_foundation::RenderId> {
+        None
+    }
 }
 
 impl_downcast!(ElementBase);

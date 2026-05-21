@@ -486,9 +486,28 @@ impl BuildContext for ElementBuildContext {
     }
 
     fn find_render_object(&self) -> Option<RenderId> {
-        // Walk down to find first RenderObject
-        // For now, return None - this requires RenderElement integration
-        None
+        // Walk strict-ancestors, break on the first whose
+        // `ElementBase::render_id` returns `Some`. Only
+        // `RenderBehavior<V>` overrides the trait default — every other
+        // behavior (Stateless / Proxy / Inherited / Stateful / Animation)
+        // keeps `None`, so non-render ancestors are skipped cleanly.
+        //
+        // Non-callback signature is sound: `RenderId` is `Copy`, so we
+        // can hand it out directly without extending a `&self` borrow
+        // into the rest of `build()` (plan §D2).
+        //
+        // Flutter parity: `framework.dart:5160`
+        // `findAncestorRenderObjectOfType<T>` — Flutter walks `_parent`
+        // and returns the first matching `RenderObjectElement`'s
+        // `renderObject`. We do the equivalent walk and read
+        // `RenderBehavior::render_id` at the dispatch boundary.
+        self.walk_strict_ancestors(|ancestor| {
+            if let Some(id) = ancestor.render_id() {
+                std::ops::ControlFlow::Break(id)
+            } else {
+                std::ops::ControlFlow::Continue(())
+            }
+        })
     }
 
     fn visit_ancestor_elements(&self, visitor: &mut dyn FnMut(ElementId) -> bool) {

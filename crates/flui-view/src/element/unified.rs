@@ -194,6 +194,20 @@ where
     }
 
     // ========================================================================
+    // RenderObject-finder protocol (U12 / R9)
+    //
+    // Routes through the behavior. Only `RenderBehavior<V>` overrides
+    // the default `None` — and even then, returns `None` until
+    // `on_mount` ran with a `PipelineOwner` in scope. Stateless / Proxy
+    // / Inherited / Stateful / Animation behaviors all keep the
+    // trait-default `None`.
+    // ========================================================================
+
+    fn render_id(&self) -> Option<RenderId> {
+        self.behavior.render_id()
+    }
+
+    // ========================================================================
     // Lifecycle Methods with Behavior Hooks
     // ========================================================================
 

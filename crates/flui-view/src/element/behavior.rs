@@ -144,6 +144,24 @@ where
     fn state_as_any(&self) -> Option<&dyn std::any::Any> {
         None
     }
+
+    /// Return the `RenderId` of this behavior's `RenderObject` if it has
+    /// one — i.e. if this is `RenderBehavior<V>` and `on_mount` ran with
+    /// a `PipelineOwner` in scope.
+    ///
+    /// Default returns `None`; only `RenderBehavior<V>` overrides this
+    /// (`AnimationBehavior` composes `StatefulBehavior`, not `RenderBehavior`,
+    /// so it keeps the default). Used by
+    /// [`BuildContext::find_render_object`] (plan §U12, R9) to surface
+    /// the nearest ancestor's `RenderId` to the dispatch boundary.
+    ///
+    /// Flutter parity: `framework.dart:5160`
+    /// `findAncestorRenderObjectOfType<T>` reads
+    /// `(ancestor as RenderObjectElement).renderObject` after a
+    /// runtime-type check.
+    fn render_id(&self) -> Option<flui_foundation::RenderId> {
+        None
+    }
 }
 
 // ============================================================================
@@ -419,6 +437,17 @@ where
 {
     fn debug_kind(&self) -> &'static str {
         "RenderObjectElement"
+    }
+
+    /// Expose the behavior's `RenderId` (set by `on_mount` once a
+    /// `PipelineOwner` is in scope) so [`BuildContext::find_render_object`]
+    /// (plan §U12, R9) can surface it to the dispatch boundary.
+    ///
+    /// Returns `None` until `on_mount` has run with a PipelineOwner —
+    /// matches Flutter's behavior where `findAncestorRenderObjectOfType`
+    /// returns `null` for an unmounted `RenderObjectElement`.
+    fn render_id(&self) -> Option<flui_foundation::RenderId> {
+        self.render_id
     }
 
     fn perform_build(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
