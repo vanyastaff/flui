@@ -355,4 +355,54 @@ mod tests {
         let k2 = SuperellipseKey::from_superellipse(&rse);
         assert_eq!(k1, k2, "key stable across calls");
     }
+
+    /// Covers AE2 (R6): the audit Step 5 item 14 stress test.
+    ///
+    /// Insert 10 000 unique superellipse keys into a cache with the
+    /// production-default `max_entries = 256` and verify the cache
+    /// size never exceeds the cap. The LRU-by-`last_used_frame`
+    /// eviction inside `insert` enforces the bound; this test proves
+    /// that bound holds under adversarial input.
+    #[test]
+    fn stress_10k_unique_keys_respects_max_entries() {
+        const MAX_ENTRIES: usize = 256;
+        const N: u32 = 10_000;
+
+        let mut cache = SuperellipsePathCache::new(MAX_ENTRIES);
+
+        for i in 0..N {
+            cache.insert(make_key(i), make_path());
+
+            // Periodically advance the frame to simulate real-world
+            // frame progression alongside the insertion churn. Some
+            // entries may get evicted by frame staleness in addition
+            // to capacity pressure, but the cap never breaks.
+            if i % 1000 == 0 {
+                cache.advance_frame();
+            }
+
+            // Sample the invariant every 1000 iterations so the test
+            // fails fast if the cap is ever exceeded mid-loop.
+            if i % 1000 == 0 {
+                assert!(
+                    cache.stats().2 <= MAX_ENTRIES,
+                    "cache size {} exceeded max_entries {} at iteration {}",
+                    cache.stats().2,
+                    MAX_ENTRIES,
+                    i,
+                );
+            }
+        }
+
+        // Final invariant: cache holds exactly MAX_ENTRIES after the
+        // pressure (`N > MAX_ENTRIES`, so the cache is saturated).
+        assert_eq!(
+            cache.stats().2,
+            MAX_ENTRIES,
+            "after {} unique inserts into a {}-capacity cache, expected exactly {} entries",
+            N,
+            MAX_ENTRIES,
+            MAX_ENTRIES,
+        );
+    }
 }
