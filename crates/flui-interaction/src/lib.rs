@@ -97,7 +97,6 @@
 //! ## Core Infrastructure
 //! - [`ids`] - Type-safe identifiers (PointerId, FocusNodeId, etc.)
 //! - [`traits`] - Core traits and extension traits
-//! - [`typestate`] - Typestate pattern implementations
 //! - [`sealed`] - Sealed trait infrastructure (internal)
 //!
 //! ## Event Routing
@@ -132,7 +131,6 @@
 pub mod ids;
 pub mod sealed;
 pub mod traits;
-pub mod typestate;
 
 // ============================================================================
 // Event routing
