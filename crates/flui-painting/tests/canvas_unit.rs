@@ -204,9 +204,8 @@ fn test_canvas_add_hit_region_round_trips_through_finish() {
     );
     // The handler is the same `Arc<dyn Fn>` we registered; invoke it
     // to confirm it survived the round trip.
-    use flui_painting::display_list::{PointerEvent, PointerEventKind};
-    (dl.hit_regions()[0].handler)(&PointerEvent::new(
-        PointerEventKind::Down,
+    (dl.hit_regions()[0].handler)(&flui_painting::display_list::PointerEvent::new(
+        flui_painting::display_list::PointerEventKind::Down,
         flui_types::geometry::Offset::new(px(20.0), px(20.0)),
         0,
     ));

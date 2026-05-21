@@ -129,7 +129,7 @@ fn main() {
     println!("\n--- Layout at scroll_offset=500 ---");
     let constraints = SliverConstraints {
         scroll_offset: 500.0,
-        ..constraints.clone()
+        ..constraints
     };
 
     let geometry = sliver_list.compute_geometry(&constraints);
@@ -147,7 +147,7 @@ fn main() {
     println!("\n--- Layout at scroll_offset=4500 (near end) ---");
     let constraints = SliverConstraints {
         scroll_offset: 4500.0,
-        ..constraints.clone()
+        ..constraints
     };
 
     let geometry = sliver_list.compute_geometry(&constraints);

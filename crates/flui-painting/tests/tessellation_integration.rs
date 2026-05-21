@@ -84,7 +84,7 @@ mod tessellation_tests {
         // Debug: print path commands
         println!("Path commands:");
         for (i, cmd) in path.commands().iter().enumerate() {
-            println!("  {}: {:?}", i, cmd);
+            println!("  {i}: {cmd:?}");
         }
 
         let result = tessellate_fill(&path, &TessellationOptions::default()).unwrap();

@@ -233,11 +233,15 @@ fn test_observer_event_handling() {
     // Add observers
     let sum1 = Arc::clone(&sum);
     let id1 = observers.add(Box::new(move |value| {
+        // Test passes only positive i32 values; cast to usize is safe here.
+        #[allow(clippy::cast_sign_loss)]
         sum1.fetch_add(value as usize, Ordering::SeqCst);
     }));
 
     let sum2 = Arc::clone(&sum);
     let _id2 = observers.add(Box::new(move |value| {
+        // Test passes only positive i32 values; cast to usize is safe here.
+        #[allow(clippy::cast_sign_loss)]
         sum2.fetch_add((value * 2) as usize, Ordering::SeqCst);
     }));
 

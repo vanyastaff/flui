@@ -130,6 +130,10 @@ impl OffsetLayer {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "tests compare exact f32 values they just set; ULP slop would mask real regressions"
+)]
 mod tests {
     use flui_types::geometry::px;
 
@@ -208,7 +212,18 @@ mod tests {
 
     #[test]
     fn test_offset_layer_clone_copy() {
+        // Compile-time bound checks — fail to compile if `Clone` or `Copy`
+        // are ever removed from `OffsetLayer`.
+        fn assert_clone<T: Clone>() {}
+        fn assert_copy<T: Copy>() {}
+        assert_clone::<OffsetLayer>();
+        assert_copy::<OffsetLayer>();
+
         let layer = OffsetLayer::new(Offset::new(px(10.0), px(20.0)));
+        #[allow(
+            clippy::clone_on_copy,
+            reason = "intentionally exercise the explicit Clone path; the test name promises it"
+        )]
         let cloned = layer.clone();
         let copied = layer; // Copy
 

@@ -442,6 +442,10 @@ pub fn tessellate_stroke(
 // ============================================================================
 
 #[cfg(all(test, feature = "tessellation"))]
+#[allow(
+    clippy::unwrap_used,
+    reason = "test code: unwrap-panic IS the assertion path"
+)]
 mod tests {
     use flui_types::{
         Point,

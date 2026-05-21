@@ -750,7 +750,7 @@ mod tests {
 
         // Layer tree should have picture layer
         let tree = context.into_layer_tree();
-        assert!(tree.len() >= 1);
+        assert!(!tree.is_empty());
     }
 
     #[test]

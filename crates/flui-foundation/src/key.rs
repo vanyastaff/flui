@@ -753,12 +753,12 @@ mod tests {
     fn test_debug_display() {
         let key = Key::from_u64(42).unwrap();
 
-        assert_eq!(format!("{:?}", key), "Key(42)");
-        assert_eq!(format!("{}", key), "42");
+        assert_eq!(format!("{key:?}"), "Key(42)");
+        assert_eq!(format!("{key}"), "42");
 
         let key_ref = KeyRef::from(key);
-        assert_eq!(format!("{:?}", key_ref), "KeyRef(42)");
-        assert_eq!(format!("{}", key_ref), "42");
+        assert_eq!(format!("{key_ref:?}"), "KeyRef(42)");
+        assert_eq!(format!("{key_ref}"), "42");
     }
 
     #[test]

@@ -676,17 +676,18 @@ impl Renderer {
             // screen changed, limit GPU work to the damaged region.
             // `damage_rect()` returns `None` for full repaint (no scissor needed),
             // `Some(rect)` for partial damage.
-            if let Some(damage) = self.damage_tracker.damage_rect() {
-                if damage.width().0 > 0.0 && damage.height().0 > 0.0 {
-                    backend.painter_mut().clip_rect(damage);
-                    tracing::trace!(
-                        left = damage.left().0,
-                        top = damage.top().0,
-                        width = damage.width().0,
-                        height = damage.height().0,
-                        "Damage scissor applied"
-                    );
-                }
+            if let Some(damage) = self.damage_tracker.damage_rect()
+                && damage.width().0 > 0.0
+                && damage.height().0 > 0.0
+            {
+                backend.painter_mut().clip_rect(damage);
+                tracing::trace!(
+                    left = damage.left().0,
+                    top = damage.top().0,
+                    width = damage.width().0,
+                    height = damage.height().0,
+                    "Damage scissor applied"
+                );
             }
 
             // Depth-first traversal of layer tree
@@ -775,22 +776,22 @@ impl Renderer {
         }
 
         // Special handling for BackdropFilter — requires mid-frame flush + copy
-        if let flui_layer::Layer::BackdropFilter(bf_layer) = layer {
-            if ctx.supports_copy_src {
-                Self::handle_backdrop_filter(
-                    bf_layer,
-                    node,
-                    tree,
-                    backend,
-                    ctx,
-                    surface_texture,
-                    surface_view,
-                    occlusion,
-                );
-                return;
-            }
-            // Fall through to normal LayerRender path (clip + filter fallback)
+        if let flui_layer::Layer::BackdropFilter(bf_layer) = layer
+            && ctx.supports_copy_src
+        {
+            Self::handle_backdrop_filter(
+                bf_layer,
+                node,
+                tree,
+                backend,
+                ctx,
+                surface_texture,
+                surface_view,
+                occlusion,
+            );
+            return;
         }
+        // Fall through to normal LayerRender path (clip + filter fallback)
 
         // Normal path: render → children → cleanup
         layer.render(backend);
@@ -813,16 +814,16 @@ impl Renderer {
         // Register opaque regions after rendering so that subsequent layers
         // (siblings rendered later in traversal order) can be culled.
         // Only leaf layers known to draw solid content are registered.
-        if layer.is_opaque() {
-            if let Some(bounds) = layer.bounds() {
-                let x = bounds.left().0;
-                let y = bounds.top().0;
-                let w = bounds.width().0;
-                let h = bounds.height().0;
+        if layer.is_opaque()
+            && let Some(bounds) = layer.bounds()
+        {
+            let x = bounds.left().0;
+            let y = bounds.top().0;
+            let w = bounds.width().0;
+            let h = bounds.height().0;
 
-                if w > 0.0 && h > 0.0 {
-                    occlusion.add_opaque(x, y, w, h);
-                }
+            if w > 0.0 && h > 0.0 {
+                occlusion.add_opaque(x, y, w, h);
             }
         }
     }
@@ -835,7 +836,12 @@ impl Renderer {
     /// 3. Apply Dual Kawase blur via `OffscreenRenderer::render_blur`
     /// 4. Queue blurred result for compositing back to the surface
     /// 5. Render children on top
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::too_many_arguments,
+        reason = "backdrop-filter pipeline needs the surface texture/view, occlusion tracker, and layer-tree context to do its job — splitting these into a helper struct adds indirection without clarity"
+    )]
     fn handle_backdrop_filter(
         bf_layer: &flui_layer::BackdropFilterLayer,
         node: &flui_layer::tree::LayerNode,
@@ -852,26 +858,25 @@ impl Renderer {
 
         // Extract sigma from blur filter; other filter types fall back to
         // normal child rendering (no GPU blur support yet).
-        let sigma = match bf_layer.filter() {
-            ImageFilter::Blur { sigma_x, sigma_y } => (*sigma_x + *sigma_y) / 2.0,
-            _ => {
-                tracing::warn!(
-                    "Backdrop filter type not supported for GPU blur, rendering children only"
+        let sigma = if let ImageFilter::Blur { sigma_x, sigma_y } = bf_layer.filter() {
+            f32::midpoint(*sigma_x, *sigma_y)
+        } else {
+            tracing::warn!(
+                "Backdrop filter type not supported for GPU blur, rendering children only"
+            );
+            let children: Vec<_> = node.children().to_vec();
+            for child_id in children {
+                Self::render_layer_recursive(
+                    tree,
+                    child_id,
+                    backend,
+                    ctx,
+                    surface_texture,
+                    surface_view,
+                    occlusion,
                 );
-                let children: Vec<_> = node.children().to_vec();
-                for child_id in children {
-                    Self::render_layer_recursive(
-                        tree,
-                        child_id,
-                        backend,
-                        ctx,
-                        surface_texture,
-                        surface_view,
-                        occlusion,
-                    );
-                }
-                return;
             }
+            return;
         };
 
         // 1. Flush current painter batches to the surface so pixels are available

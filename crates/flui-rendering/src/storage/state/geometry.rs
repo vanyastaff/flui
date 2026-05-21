@@ -81,14 +81,15 @@ impl<P: Protocol> RenderState<P> {
     /// Clears the geometry to allow relayout.
     ///
     /// Must be called before `set_geometry()` if geometry already exists.
-    /// Usually called automatically when `mark_needs_layout()` is called.
+    /// Production callers typically invoke this immediately before
+    /// registering the element with `PipelineOwner::add_node_needing_layout`.
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// // Force relayout
+    /// // Force relayout — pair with PipelineOwner registration.
     /// state.clear_geometry();
-    /// state.mark_needs_layout(element_id, tree);
+    /// pipeline_owner.add_node_needing_layout(element_id);
     /// ```
     #[inline]
     pub fn clear_geometry(&mut self) {
@@ -229,7 +230,8 @@ impl RenderState<BoxProtocol> {
     ///
     /// ```rust,ignore
     /// if !state.has_size(new_size) {
-    ///     state.mark_needs_layout(element_id, tree);
+    ///     state.clear_geometry();
+    ///     pipeline_owner.add_node_needing_layout(element_id);
     /// }
     /// ```
     #[inline]

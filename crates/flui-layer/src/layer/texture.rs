@@ -208,6 +208,10 @@ impl Default for TextureLayer {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "tests compare exact f32 values they just set; ULP slop would mask real regressions"
+)]
 mod tests {
     use flui_types::geometry::px;
 
@@ -311,11 +315,22 @@ mod tests {
 
     #[test]
     fn test_texture_layer_clone_copy() {
+        // Compile-time bound checks — fail to compile if `Clone` or `Copy`
+        // are ever removed from `TextureLayer`.
+        fn assert_clone<T: Clone>() {}
+        fn assert_copy<T: Copy>() {}
+        assert_clone::<TextureLayer>();
+        assert_copy::<TextureLayer>();
+
         let layer = TextureLayer::new(
             TextureId::new(1),
             Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
         );
-        let copied = layer;
+        let copied = layer; // Copy
+        #[allow(
+            clippy::clone_on_copy,
+            reason = "intentionally exercise the explicit Clone path; the test name promises it"
+        )]
         let cloned = layer.clone();
 
         assert_eq!(layer, copied);

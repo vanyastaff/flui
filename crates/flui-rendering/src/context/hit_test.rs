@@ -328,7 +328,7 @@ where
 mod tests {
     #[test]
     fn test_hit_test_context_compiles() {
-        // This test just verifies the module compiles
-        assert!(true);
+        // This test just verifies the module compiles — empty body is enough
+        // because failure surfaces at `cargo build`, not at assert time.
     }
 }

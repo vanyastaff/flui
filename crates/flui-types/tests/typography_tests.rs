@@ -190,10 +190,10 @@ fn test_text_direction_is_ltr() {
 #[test]
 fn test_text_overflow_variants() {
     // Test that all variants are constructible
-    let _clip = TextOverflow::Clip;
-    let _ellipsis = TextOverflow::Ellipsis;
-    let _fade = TextOverflow::Fade;
-    let _visible = TextOverflow::Visible;
+    let _ = TextOverflow::Clip;
+    let _ = TextOverflow::Ellipsis;
+    let _ = TextOverflow::Fade;
+    let _ = TextOverflow::Visible;
 
     // Can't compare without PartialEq, but construction is valid
 }
@@ -211,7 +211,7 @@ fn test_text_overflow_default() {
 
 #[test]
 fn test_text_overflow_all_variants() {
-    let variants = vec![
+    let variants = [
         TextOverflow::Clip,
         TextOverflow::Ellipsis,
         TextOverflow::Fade,

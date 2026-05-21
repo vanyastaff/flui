@@ -134,7 +134,7 @@ mod tests {
     #[test]
     fn test_build_mode_constants() {
         // One of these must be true
-        assert!(DEBUG_MODE || RELEASE_MODE);
+        const { assert!(DEBUG_MODE || RELEASE_MODE) };
         // They are mutually exclusive
         assert_ne!(DEBUG_MODE, RELEASE_MODE);
     }

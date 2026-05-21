@@ -167,6 +167,10 @@ impl Default for OpacityLayer {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "tests compare exact f32 values they just set; ULP slop would mask real regressions"
+)]
 mod tests {
     use flui_types::geometry::px;
 

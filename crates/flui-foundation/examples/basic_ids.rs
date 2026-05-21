@@ -30,7 +30,7 @@ fn main() {
     element_names.insert(elem2, "Header");
     element_names.insert(elem3, "Content");
 
-    println!("   Element names: {:?}", element_names);
+    println!("   Element names: {element_names:?}");
     println!();
 
     // -------------------------------------------------------------------------

@@ -258,7 +258,7 @@ impl RenderBox for RenderFlex {
         }
 
         // Add spacing to inflexible total
-        let total_spacing = px(self.spacing * (child_count - 1).max(0) as f32);
+        let total_spacing = px(self.spacing * (child_count - 1) as f32);
         inflexible_main += total_spacing;
 
         // Calculate available main-axis extent
@@ -277,51 +277,49 @@ impl RenderBox for RenderFlex {
         // Pass 2: Layout flex children, distributing remaining space
         if total_flex > 0 {
             for i in 0..child_count {
-                if let Some(flex) = flex_factors[i] {
-                    if flex > 0 {
-                        let allocated = remaining * (flex as f32 / total_flex as f32);
+                if let Some(flex) = flex_factors[i]
+                    && flex > 0
+                {
+                    let allocated = remaining * (flex as f32 / total_flex as f32);
 
-                        let child_constraints = match (self.direction, flex_fits[i]) {
-                            (FlexDirection::Horizontal, FlexFit::Tight) => BoxConstraints::new(
-                                allocated,
-                                allocated,
-                                constraints.min_height,
-                                constraints.max_height,
-                            ),
-                            (FlexDirection::Horizontal, FlexFit::Loose) => BoxConstraints::new(
-                                Pixels::ZERO,
-                                allocated,
-                                constraints.min_height,
-                                constraints.max_height,
-                            ),
-                            (FlexDirection::Vertical, FlexFit::Tight) => BoxConstraints::new(
-                                constraints.min_width,
-                                constraints.max_width,
-                                allocated,
-                                allocated,
-                            ),
-                            (FlexDirection::Vertical, FlexFit::Loose) => BoxConstraints::new(
-                                constraints.min_width,
-                                constraints.max_width,
-                                Pixels::ZERO,
-                                allocated,
-                            ),
-                        };
+                    let child_constraints = match (self.direction, flex_fits[i]) {
+                        (FlexDirection::Horizontal, FlexFit::Tight) => BoxConstraints::new(
+                            allocated,
+                            allocated,
+                            constraints.min_height,
+                            constraints.max_height,
+                        ),
+                        (FlexDirection::Horizontal, FlexFit::Loose) => BoxConstraints::new(
+                            Pixels::ZERO,
+                            allocated,
+                            constraints.min_height,
+                            constraints.max_height,
+                        ),
+                        (FlexDirection::Vertical, FlexFit::Tight) => BoxConstraints::new(
+                            constraints.min_width,
+                            constraints.max_width,
+                            allocated,
+                            allocated,
+                        ),
+                        (FlexDirection::Vertical, FlexFit::Loose) => BoxConstraints::new(
+                            constraints.min_width,
+                            constraints.max_width,
+                            Pixels::ZERO,
+                            allocated,
+                        ),
+                    };
 
-                        let child_size = ctx.layout_child(i, child_constraints);
-                        child_sizes[i] = Some(child_size);
-                        max_cross = max_cross.max(self.cross_size(child_size));
-                    }
+                    let child_size = ctx.layout_child(i, child_constraints);
+                    child_sizes[i] = Some(child_size);
+                    max_cross = max_cross.max(self.cross_size(child_size));
                 }
             }
         }
 
         // Calculate total main from all laid-out children
         let mut total_main = Pixels::ZERO;
-        for child_size in &child_sizes {
-            if let Some(s) = child_size {
-                total_main += self.main_size(*s);
-            }
+        for s in child_sizes.iter().flatten() {
+            total_main += self.main_size(*s);
         }
         total_main += total_spacing;
 
@@ -364,8 +362,8 @@ impl RenderBox for RenderFlex {
         self.child_offsets.clear();
         self.child_offsets.reserve(child_count);
 
-        for i in 0..child_count {
-            let child_size = child_sizes[i].unwrap_or(Size::ZERO);
+        for (i, slot) in child_sizes.iter().enumerate().take(child_count) {
+            let child_size = slot.unwrap_or(Size::ZERO);
 
             // Calculate cross axis offset based on alignment
             let cross_offset = match self.cross_axis_alignment {

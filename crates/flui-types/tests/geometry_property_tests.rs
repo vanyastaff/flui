@@ -198,10 +198,7 @@ fn test_size_area_is_width_times_height() {
         let expected = w * h;
         assert!(
             (area - expected).abs() < 1e-4,
-            "Area must equal width * height: {:?}.area() = {}, expected {}",
-            size,
-            area,
-            expected
+            "Area must equal width * height: {size:?}.area() = {area}, expected {expected}"
         );
     }
 }

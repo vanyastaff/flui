@@ -155,7 +155,6 @@ pub use parent_data::ParentData;
 pub use pipeline::{CanvasContext, PipelineOwner};
 pub use protocol::{
     // Marker traits
-    BaselineProtocol,
     BidirectionalProtocol,
     // Concrete capabilities
     BoxHitTest,
@@ -165,7 +164,6 @@ pub use protocol::{
     // Capability traits
     HitTestCapability,
     HitTestContextApi,
-    IntrinsicProtocol,
     LayoutCapability,
     LayoutContextApi,
     Protocol,

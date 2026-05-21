@@ -94,9 +94,7 @@ pub use capabilities::{
 pub use into_render_object::IntoRenderObject;
 pub use protocol::{
     // Marker traits
-    BaselineProtocol,
     BidirectionalProtocol,
-    IntrinsicProtocol,
     // Protocol trait
     Protocol,
     ProtocolCompatible,
@@ -138,7 +136,6 @@ pub use crate::traits::RenderObject;
 pub mod prelude {
     pub use super::{
         // Marker traits
-        BaselineProtocol,
         BidirectionalProtocol,
         // Concrete capabilities
         BoxHitTest,
@@ -148,7 +145,6 @@ pub mod prelude {
         // Capability traits
         HitTestCapability,
         HitTestContextApi,
-        IntrinsicProtocol,
         LayoutCapability,
         LayoutContextApi,
         // Protocol trait

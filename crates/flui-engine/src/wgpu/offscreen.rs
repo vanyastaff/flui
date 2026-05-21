@@ -536,7 +536,7 @@ impl OffscreenRenderer {
                         vertex: wgpu::VertexState {
                             module: downsample_module,
                             entry_point: Some("vs_main"),
-                            buffers: &[vertex_buffer_layout.clone()],
+                            buffers: std::slice::from_ref(&vertex_buffer_layout),
                             compilation_options: wgpu::PipelineCompilationOptions::default(),
                         },
                         fragment: Some(wgpu::FragmentState {
@@ -642,7 +642,18 @@ impl OffscreenRenderer {
     ///
     /// A new `PooledTexture` containing the blurred result at the original resolution.
     pub fn render_blur(&mut self, input: &PooledTexture, sigma: f32) -> PooledTexture {
-        let iterations = ((sigma / 2.0).ceil() as u32).clamp(1, 5);
+        // `sigma` flows in from public APIs (BlurFilter constructors) that do
+        // not clamp non-negative, so explicitly clamp to `[0, ∞)` in float
+        // space before the `as u32` cast. The `.clamp(1, 5)` then bounds the
+        // result; truncation is the documented integer-iteration count and
+        // sign loss is impossible after the float-space clamp.
+        let sigma_nonneg = sigma.max(0.0);
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "sigma_nonneg is ≥0 by the line above; the cast is bounded by .clamp(1, 5)"
+        )]
+        let iterations = ((sigma_nonneg / 2.0).ceil() as u32).clamp(1, 5);
         let offset = sigma.max(1.0);
 
         tracing::debug!(
@@ -923,7 +934,7 @@ impl OffscreenRenderer {
                         vertex: wgpu::VertexState {
                             module: dilate_module,
                             entry_point: Some("vs_main"),
-                            buffers: &[vertex_buffer_layout.clone()],
+                            buffers: std::slice::from_ref(&vertex_buffer_layout),
                             compilation_options: wgpu::PipelineCompilationOptions::default(),
                         },
                         fragment: Some(wgpu::FragmentState {

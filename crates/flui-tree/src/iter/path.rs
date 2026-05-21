@@ -1010,12 +1010,12 @@ mod tests {
     #[test]
     fn test_tree_path_display() {
         let path = TreePath::from_slice(&[ElementId::new(1), ElementId::new(2)]);
-        let display = format!("{}", path);
-        assert!(display.contains("1"));
-        assert!(display.contains("2"));
+        let display = format!("{path}");
+        assert!(display.contains('1'));
+        assert!(display.contains('2'));
 
         let empty = TreePath::<ElementId>::empty();
-        assert_eq!(format!("{}", empty), "(empty)");
+        assert_eq!(format!("{empty}"), "(empty)");
     }
 
     #[test]
@@ -1092,13 +1092,13 @@ mod tests {
     #[test]
     fn test_index_path_display() {
         let path = IndexPath::new(&[0, 2, 1]);
-        let display = format!("{}", path);
-        assert!(display.contains("0"));
-        assert!(display.contains("2"));
-        assert!(display.contains("1"));
+        let display = format!("{path}");
+        assert!(display.contains('0'));
+        assert!(display.contains('2'));
+        assert!(display.contains('1'));
 
         let root = IndexPath::root();
-        assert_eq!(format!("{}", root), "[root]");
+        assert_eq!(format!("{root}"), "[root]");
     }
 
     // === EDGE-CASE TESTS ===

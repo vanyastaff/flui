@@ -3,6 +3,11 @@
 //! This example demonstrates the efficient observer list implementations
 //! for managing event listeners and callbacks.
 
+#![allow(
+    clippy::items_after_statements,
+    reason = "examples define types where they read best, alongside the prose explaining them"
+)]
+
 use std::{
     sync::{
         Arc,

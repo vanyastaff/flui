@@ -431,6 +431,10 @@ pub fn image_cache() -> &'static ImageCache {
 // ============================================================================
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    reason = "test code: unwrap-panic IS the assertion path"
+)]
 mod tests {
     use flui_types::geometry::px;
 

@@ -173,7 +173,7 @@ impl GpuState {
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
 
-        if self.frame_count % 60 == 0 {
+        if self.frame_count.is_multiple_of(60) {
             tracing::info!("Frame {}", self.frame_count);
         }
     }

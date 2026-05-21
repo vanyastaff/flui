@@ -2393,7 +2393,7 @@ mod tests {
     fn test_unit_type_safety() {
         // This test verifies that different units cannot be mixed at compile time
         let logical = px(100.0);
-        let _scaled = ScaledPixels(150.0);
+        let _ = ScaledPixels(150.0);
 
         // These would fail to compile (type mismatch):
         // let _ = logical + scaled; // ❌

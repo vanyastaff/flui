@@ -94,7 +94,7 @@ fn example_cursor_positioning() {
     let positions = [0, 5, 7, 13];
     for offset in positions {
         let caret_offset = painter.get_offset_for_caret(TextPosition::upstream(offset));
-        println!("Cursor at offset {}: {:?}", offset, caret_offset);
+        println!("Cursor at offset {offset}: {caret_offset:?}");
     }
 
     // Cursor positions should increase with offset
@@ -340,8 +340,8 @@ fn example_direction_detection() {
 
     for (text, expected) in test_cases {
         let detected = detect_text_direction(text);
-        println!("'{}' -> {:?}", text, detected);
-        assert_eq!(detected, expected, "Direction mismatch for '{}'", text);
+        println!("'{text}' -> {detected:?}");
+        assert_eq!(detected, expected, "Direction mismatch for '{text}'");
     }
 }
 

@@ -7,7 +7,7 @@
 //! - Axis utilities (perpendicular, direction)
 
 use flui_types::{
-    geometry::{Edges, Offset, Point, Rect, Size, px},
+    geometry::{Edges, Rect, Size, px},
     layout::{
         Alignment, Axis, AxisDirection, BoxConstraints, CrossAxisAlignment, MainAxisAlignment,
         MainAxisSize, Orientation,

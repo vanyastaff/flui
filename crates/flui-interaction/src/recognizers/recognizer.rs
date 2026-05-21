@@ -272,8 +272,8 @@ mod tests {
 
     #[test]
     fn test_constants() {
-        assert!(constants::TAP_SLOP > 0.0);
-        assert!(constants::DRAG_SLOP > 0.0);
-        assert!(constants::MIN_FLING_VELOCITY > 0.0);
+        const { assert!(constants::TAP_SLOP > 0.0) };
+        const { assert!(constants::DRAG_SLOP > 0.0) };
+        const { assert!(constants::MIN_FLING_VELOCITY > 0.0) };
     }
 }

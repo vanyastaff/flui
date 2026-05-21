@@ -34,7 +34,7 @@ fn test_displays_enumeration() {
     // Empty is OK for headless, but most systems have at least one
     if platform.name() != "Headless" {
         assert!(
-            displays.len() >= 1,
+            !displays.is_empty(),
             "Non-headless platform should have at least one display"
         );
     }
@@ -310,7 +310,7 @@ fn test_windows_enum_display_monitors() {
 
     // Windows should detect at least the primary display
     assert!(
-        displays.len() >= 1,
+        !displays.is_empty(),
         "Windows should have at least one display"
     );
 

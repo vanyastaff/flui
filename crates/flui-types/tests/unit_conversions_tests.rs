@@ -7,7 +7,7 @@
 //! - Round-trip conversions
 
 use flui_types::geometry::{
-    DevicePixels, Pixels, Rems, ScaledPixels, device_px, px, rems, scaled_px,
+    Pixels, device_px, px, rems, scaled_px,
 };
 
 // ============================================================================
@@ -248,10 +248,7 @@ fn test_round_trip_rems_pixels_fractional_base() {
     let epsilon = 1e-5;
     assert!(
         (back_rems.get() - original_rems.get()).abs() < epsilon,
-        "Round-trip failed: {} -> {} -> {}",
-        original_rems,
-        pixels,
-        back_rems
+        "Round-trip failed: {original_rems} -> {pixels} -> {back_rems}"
     );
 }
 

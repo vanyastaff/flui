@@ -129,7 +129,7 @@ mod tests {
     #[test]
     fn test_canvas_layer_debug() {
         let layer = CanvasLayer::new();
-        let debug = format!("{:?}", layer);
+        let debug = format!("{layer:?}");
         assert!(debug.contains("CanvasLayer"));
     }
 }

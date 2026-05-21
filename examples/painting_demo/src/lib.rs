@@ -622,7 +622,7 @@ fn draw_transforms(painter: &mut flui_engine::WgpuPainter, y: f32) {
     for (i, s) in [0.5_f32, 0.75, 1.0, 1.25].iter().enumerate() {
         painter.save();
         painter.scale(*s, *s);
-        let alpha = (100 + i as u8 * 40).min(255);
+        let alpha = 100 + i as u8 * 40;
         painter.rect(
             rect(-30.0, -20.0, 60.0, 40.0),
             &Paint::fill(Color::rgba(100, 200, 255, alpha)),

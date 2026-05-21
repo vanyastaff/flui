@@ -25,16 +25,16 @@ fn main() {
     let element1 = ElementId::new(1);
     let element2 = ElementId::new(42);
 
-    println!("  Element 1 ID: {}", element1);
-    println!("  Element 2 ID: {}", element2);
+    println!("  Element 1 ID: {element1}");
+    println!("  Element 2 ID: {element2}");
     println!("  Are they equal? {}", element1 == element2);
 
     // Key - for widget identity across rebuilds
     let key1 = Key::new();
     let key2 = Key::new();
 
-    println!("  Key 1: {}", key1);
-    println!("  Key 2: {}", key2);
+    println!("  Key 1: {key1}");
+    println!("  Key 2: {key2}");
     println!("  Keys are unique: {}", key1 != key2);
     println!();
 
@@ -138,12 +138,12 @@ fn main() {
     let id_error = FoundationError::invalid_id(0, "ElementId cannot be zero");
     let listener_error = FoundationError::listener_error("add", "listener callback failed");
 
-    println!("  ID Error: {}", id_error);
+    println!("  ID Error: {id_error}");
     println!("  Category: {}", id_error.category());
     println!("  Recoverable: {}", id_error.is_recoverable());
     println!();
 
-    println!("  Listener Error: {}", listener_error);
+    println!("  Listener Error: {listener_error}");
     println!("  Category: {}", listener_error.category());
     println!("  Recoverable: {}", listener_error.is_recoverable());
     println!();

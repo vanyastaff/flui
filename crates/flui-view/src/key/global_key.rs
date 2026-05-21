@@ -199,7 +199,7 @@ mod tests {
     #[test]
     fn test_global_key_debug() {
         let key = GlobalKey::<i32>::new();
-        let debug = format!("{:?}", key);
+        let debug = format!("{key:?}");
 
         assert!(debug.contains("GlobalKey"));
         assert!(debug.contains("i32"));

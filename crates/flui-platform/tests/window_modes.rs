@@ -181,7 +181,7 @@ fn test_dpi_scaling_change() {
             // Typical scale factors: 1.0 (96 DPI), 1.25 (120 DPI), 1.5 (144 DPI), 2.0 (192
             // DPI)
             assert!(
-                initial_scale >= 1.0 && initial_scale <= 3.0,
+                (1.0..=3.0).contains(&initial_scale),
                 "Scale factor should be reasonable (1.0-3.0), got {}",
                 initial_scale
             );
@@ -235,7 +235,7 @@ fn test_per_monitor_dpi() {
 
         // Verify scale factor is reasonable
         assert!(
-            scale >= 1.0 && scale <= 3.0,
+            (1.0..=3.0).contains(&scale),
             "Display {} scale factor should be 1.0-3.0, got {}",
             idx + 1,
             scale

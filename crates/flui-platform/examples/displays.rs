@@ -6,7 +6,6 @@
 //! Run with: `cargo run -p flui-platform --example displays`
 
 use flui_platform::current_platform;
-use tracing_subscriber;
 
 fn main() -> anyhow::Result<()> {
     // Initialize tracing

@@ -22,6 +22,7 @@ use flui_view::{
 
 #[derive(Clone)]
 struct SimpleStatelessView {
+    #[expect(dead_code, reason = "exercised only by the derived Clone impl")]
     label: String,
 }
 

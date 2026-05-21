@@ -385,6 +385,7 @@ mod tests {
 
     #[derive(Clone)]
     struct TestView {
+        #[expect(dead_code, reason = "exercised only by the derived Clone impl")]
         name: String,
     }
 
@@ -424,7 +425,7 @@ mod tests {
 
     #[test]
     fn test_context_builder() {
-        let (builder, tree, owner) = ElementBuildContextBuilder::new().with_new_tree_and_owner();
+        let (builder, tree, _owner) = ElementBuildContextBuilder::new().with_new_tree_and_owner();
 
         let view = TestView {
             name: "test".to_string(),

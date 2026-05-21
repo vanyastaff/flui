@@ -713,10 +713,10 @@ impl Tessellator {
 
         let intervals = &dash_pattern.intervals;
         // Normalize: if odd number of intervals, conceptually double the array
-        let effective_intervals: Vec<f32> = if intervals.len() % 2 != 0 {
-            intervals.iter().chain(intervals.iter()).copied().collect()
-        } else {
+        let effective_intervals: Vec<f32> = if intervals.len().is_multiple_of(2) {
             intervals.clone()
+        } else {
+            intervals.iter().chain(intervals.iter()).copied().collect()
         };
 
         let cycle_length: f32 = effective_intervals.iter().sum();
@@ -738,9 +738,9 @@ impl Tessellator {
                     segments.push((current_pos, to));
                     current_pos = to;
                 }
-                PathEvent::End { .. } => {}
-                PathEvent::Quadratic { .. } | PathEvent::Cubic { .. } => {
-                    // flattened() should have converted these to lines
+                PathEvent::End { .. } | PathEvent::Quadratic { .. } | PathEvent::Cubic { .. } => {
+                    // End is a no-op; Quadratic/Cubic should have been flattened
+                    // to lines by `flattened()` above.
                 }
             }
         }
@@ -767,7 +767,7 @@ impl Tessellator {
             remaining_in_interval = effective_intervals[interval_idx];
         }
         remaining_in_interval -= phase - consumed;
-        let is_drawing = interval_idx % 2 == 0; // Even indices are dashes, odd are gaps
+        let is_drawing = interval_idx.is_multiple_of(2); // Even indices are dashes, odd are gaps
 
         let mut drawing = is_drawing;
         let mut remaining = remaining_in_interval;
@@ -799,14 +799,12 @@ impl Tessellator {
                 let end_x = from.x + dir_x * (offset + consume);
                 let end_y = from.y + dir_y * (offset + consume);
 
-                if drawing {
-                    if let Some(ref mut builder) = current_builder {
-                        if !started_subpath {
-                            builder.begin(lyon::geom::point(start_x, start_y), &[]);
-                            started_subpath = true;
-                        }
-                        builder.line_to(lyon::geom::point(end_x, end_y), &[]);
+                if drawing && let Some(ref mut builder) = current_builder {
+                    if !started_subpath {
+                        builder.begin(lyon::geom::point(start_x, start_y), &[]);
+                        started_subpath = true;
                     }
+                    builder.line_to(lyon::geom::point(end_x, end_y), &[]);
                 }
 
                 remaining -= consume;
@@ -822,7 +820,7 @@ impl Tessellator {
                         started_subpath = false;
                     }
                     interval_idx = (interval_idx + 1) % effective_intervals.len();
-                    drawing = interval_idx % 2 == 0;
+                    drawing = interval_idx.is_multiple_of(2);
                     remaining = effective_intervals[interval_idx];
                     if drawing {
                         current_builder = Some(Path::builder_with_attributes(0));
@@ -834,11 +832,12 @@ impl Tessellator {
         }
 
         // Finish any in-progress dash
-        if drawing && started_subpath {
-            if let Some(mut builder) = current_builder.take() {
-                builder.end(false);
-                dash_paths.push(builder.build());
-            }
+        if drawing
+            && started_subpath
+            && let Some(mut builder) = current_builder.take()
+        {
+            builder.end(false);
+            dash_paths.push(builder.build());
         }
 
         // Now tessellate all dash sub-paths and combine the geometry

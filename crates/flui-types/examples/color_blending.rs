@@ -57,7 +57,7 @@ fn create_colors_example() {
     // RGBA colors (with transparency)
     let semi_red = Color::rgba(255, 0, 0, 128);
     println!("\n   RGBA (semi-transparent):");
-    println!("   Semi-transparent red: {:?}", semi_red);
+    println!("   Semi-transparent red: {semi_red:?}");
 
     // From hex strings
     println!("\n   From hex strings:");
@@ -160,7 +160,7 @@ fn practical_examples() {
     // Overlay/Modal background
     println!("\n   Modal Overlay:");
     let overlay = Color::rgba(0, 0, 0, 128); // 50% black
-    println!("   Overlay: {:?}", overlay);
+    println!("   Overlay: {overlay:?}");
     let page_color = Color::rgb(255, 255, 255);
     let dimmed_page = overlay.blend_over(page_color);
     println!("   Dimmed page: {}", dimmed_page.to_hex());
@@ -168,7 +168,7 @@ fn practical_examples() {
     // Shadow
     println!("\n   Drop Shadow:");
     let shadow = Color::rgba(0, 0, 0, 51); // ~20% black
-    println!("   Shadow color: {:?}", shadow);
+    println!("   Shadow color: {shadow:?}");
 }
 
 fn gradient_example() {
@@ -209,5 +209,5 @@ fn accessibility_example() {
     println!("\n   Focus indicators:");
     let focus_color = Color::from_hex("#2196F3").unwrap();
     let focus_ring = focus_color.with_alpha(128); // 50% opacity
-    println!("   Focus ring: {:?}", focus_ring);
+    println!("   Focus ring: {focus_ring:?}");
 }

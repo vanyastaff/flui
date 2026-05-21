@@ -456,10 +456,10 @@ mod tests {
         registry.register_follower(follower1, link);
         registry.register_follower(follower2, link);
 
-        let followers = registry.followers_for_link(&link);
-        assert_eq!(followers.len(), 2);
-        assert!(followers.contains(&follower1));
-        assert!(followers.contains(&follower2));
+        let registered = registry.followers_for_link(&link);
+        assert_eq!(registered.len(), 2);
+        assert!(registered.contains(&follower1));
+        assert!(registered.contains(&follower2));
     }
 
     #[test]

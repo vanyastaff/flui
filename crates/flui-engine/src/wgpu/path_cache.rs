@@ -77,15 +77,15 @@ impl PathCache {
     /// evicted to make room.
     pub fn insert(&mut self, path_hash: u64, vertices: Vec<[f32; 2]>, indices: Vec<u32>) {
         // Evict oldest entry when at capacity
-        if self.entries.len() >= self.max_entries && !self.entries.contains_key(&path_hash) {
-            if let Some(&oldest_key) = self
+        if self.entries.len() >= self.max_entries
+            && !self.entries.contains_key(&path_hash)
+            && let Some(&oldest_key) = self
                 .entries
                 .iter()
                 .min_by_key(|(_, v)| v.last_used_frame)
                 .map(|(k, _)| k)
-            {
-                self.entries.remove(&oldest_key);
-            }
+        {
+            self.entries.remove(&oldest_key);
         }
 
         self.entries.insert(
@@ -176,27 +176,24 @@ fn hash_command(cmd: &PathCommand, hasher: &mut DefaultHasher) {
 
     match cmd {
         PathCommand::MoveTo(p) | PathCommand::LineTo(p) => {
-            hash_point(p, hasher);
+            hash_point(*p, hasher);
         }
         PathCommand::QuadraticTo(cp, ep) => {
-            hash_point(cp, hasher);
-            hash_point(ep, hasher);
+            hash_point(*cp, hasher);
+            hash_point(*ep, hasher);
         }
         PathCommand::CubicTo(cp1, cp2, ep) => {
-            hash_point(cp1, hasher);
-            hash_point(cp2, hasher);
-            hash_point(ep, hasher);
+            hash_point(*cp1, hasher);
+            hash_point(*cp2, hasher);
+            hash_point(*ep, hasher);
         }
         PathCommand::Close => {}
-        PathCommand::AddRect(r) => {
+        PathCommand::AddRect(r) | PathCommand::AddOval(r) => {
             hash_rect(r, hasher);
         }
         PathCommand::AddCircle(center, radius) => {
-            hash_point(center, hasher);
+            hash_point(*center, hasher);
             radius.to_bits().hash(hasher);
-        }
-        PathCommand::AddOval(r) => {
-            hash_rect(r, hasher);
         }
         PathCommand::AddArc(r, start, sweep) => {
             hash_rect(r, hasher);
@@ -207,7 +204,7 @@ fn hash_command(cmd: &PathCommand, hasher: &mut DefaultHasher) {
 }
 
 /// Hash a `Point<Pixels>` by its f32 bit patterns.
-fn hash_point(p: &flui_types::Point<flui_types::geometry::Pixels>, hasher: &mut DefaultHasher) {
+fn hash_point(p: flui_types::Point<flui_types::geometry::Pixels>, hasher: &mut DefaultHasher) {
     p.x.0.to_bits().hash(hasher);
     p.y.0.to_bits().hash(hasher);
 }

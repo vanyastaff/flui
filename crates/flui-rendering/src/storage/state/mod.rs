@@ -1,19 +1,23 @@
-//! Protocol-specific render state storage with Flutter-compliant dirty
-//! tracking.
+//! Protocol-specific render state storage.
 //!
-//! This module provides lock-free state management for render objects following
-//! Flutter's exact dirty propagation semantics:
-//! - Atomic flags for lock-free dirty tracking (10x faster than RwLock)
-//! - Smart propagation that respects relayout/repaint boundaries
-//! - Intrinsic size invalidation with parent notification
-//! - Pipeline owner integration for efficient batch processing
+//! This module provides lock-free state storage for render objects:
+//! - Atomic flags for lock-free dirty tracking
+//! - Write-once geometry and constraints using `OnceCell`
+//! - Atomic offset updates for paint positioning
+//! - Boundary accessors (relayout/repaint) for pipeline-owner registration
+//!
+//! Production dirty marking does **not** live here. It is driven by
+//! `PipelineOwner::add_node_needing_layout / add_node_needing_paint` invoked
+//! from `flui-view` and `flui-hot-reload`. The boundary-aware propagation
+//! methods that previously hung off `RenderState<P>` were removed in U3 of
+//! the flui-rendering Phase 1 zombie cleanup as unreachable code; see the
+//! `propagation` submodule's `RenderDirtyPropagation` trait, which is
+//! preserved at `pub(crate)` visibility as a cost-cheap option for a possible
+//! future viewport-invalidation hook (audit Step 4 item 13).
 //!
 //! # Design Philosophy
 //!
-//! - **Flutter-compatible**: Exact Flutter RenderObject dirty tracking
-//!   semantics
 //! - **Lock-free when possible**: Atomic operations for hot paths
-//! - **Smart propagation**: Boundary-aware upward propagation
 //! - **Cache-friendly**: Optimized memory layout for performance
 //! - **Zero-cost abstractions**: No overhead for unused features
 //!
@@ -27,28 +31,7 @@
 //!  └── offset: AtomicOffset (lock-free atomic updates)
 //! ```
 //!
-//! # Flutter Protocol Compliance
-//!
-//! ## Dirty Propagation Rules
-//!
-//! 1. **markNeedsLayout()**:
-//!    - If already dirty → early return (optimization)
-//!    - Mark self dirty
-//!    - If NOT relayout boundary → propagate to parent recursively
-//!    - If IS relayout boundary → register with pipeline owner
-//!
-//! 2. **markParentNeedsLayout()**:
-//!    - Mark self dirty
-//!    - ALWAYS propagate to parent (even if relayout boundary)
-//!    - Used when intrinsic size changes
-//!
-//! 3. **markNeedsPaint()**:
-//!    - If already dirty → early return
-//!    - Mark self dirty
-//!    - If NOT repaint boundary → propagate to parent
-//!    - If IS repaint boundary → register with pipeline owner
-//!
-//! # Performance Optimizations
+//! # Performance Notes
 //!
 //! ## Lock-Free Dirty Flags
 //!
@@ -63,13 +46,6 @@
 //! - First layout: One atomic CAS to initialize
 //! - Subsequent reads: Zero-cost (just a pointer load)
 //! - Relayout: Clear and reinitialize (rare operation)
-//!
-//! ## Smart Boundary Detection
-//!
-//! Early propagation termination at boundaries:
-//! - Relayout boundary: Stop layout propagation
-//! - Repaint boundary: Stop paint propagation
-//! - Reduces work in large trees (O(log n) instead of O(n))
 //!
 //! # Examples
 //!
@@ -92,38 +68,6 @@
 //! // Read geometry many times during paint (zero-cost)
 //! let size = state.geometry();
 //! ```
-//!
-//! ## Flutter-Style Dirty Tracking
-//!
-//! ```rust,ignore
-//! // Mark needs layout with automatic propagation
-//! state.mark_needs_layout(element_id, tree);
-//! // → Propagates up to first relayout boundary
-//! // → Boundary registers with pipeline owner
-//!
-//! // Mark parent needs layout (for intrinsic changes)
-//! state.mark_parent_needs_layout(element_id, tree);
-//! // → ALWAYS propagates up (even through boundaries)
-//! // → Used when min/max intrinsic size changes
-//!
-//! // Mark needs paint with boundary awareness
-//! state.mark_needs_paint(element_id, tree);
-//! // → Propagates up to first repaint boundary
-//! // → Boundary registers with pipeline owner
-//! ```
-//!
-//! ## Relayout Boundary Optimization
-//!
-//! ```rust,ignore
-//! // Mark as relayout boundary to prevent propagation
-//! state.set_relayout_boundary(true);
-//!
-//! // Now layout changes stop here
-//! state.mark_needs_layout(element_id, tree);
-//! // → Does NOT propagate to parent
-//! // → Registers this element with pipeline owner
-//! // → Parent unaffected (huge performance win!)
-//! ```
 
 use std::marker::PhantomData;
 
@@ -145,11 +89,15 @@ mod tests;
 
 // Re-export the dirty-propagation trait at this module's path so the
 // in-crate import path (`crate::storage::state::RenderDirtyPropagation`)
-// remains the same as before the split. The `#[allow(unused_imports)]`
-// silences a benign warning when no module currently consumes the trait
-// outside the `propagation` submodule and its tests.
+// remains the same as before the split. Visibility is `pub(crate)` after
+// U3 deleted the impl bulk; the trait shape is preserved as a cost-cheap
+// option for a possible future viewport-invalidation hook (see the
+// `PRESERVED_FOR` marker on the trait declaration). The
+// `#[allow(unused_imports)]` is kept conservatively because no in-crate
+// consumer currently imports the trait outside the `propagation`
+// submodule.
 #[allow(unused_imports)]
-pub use propagation::RenderDirtyPropagation;
+pub(crate) use propagation::RenderDirtyPropagation;
 
 use offset::AtomicOffset;
 
@@ -168,14 +116,17 @@ pub type SliverRenderState = RenderState<SliverProtocol>;
 // RENDER STATE
 // ============================================================================
 
-/// Protocol-specific render state storage with Flutter-compliant dirty
-/// tracking.
+/// Protocol-specific render state storage.
 ///
 /// This struct provides efficient storage for render object state with:
 /// - Lock-free dirty flags using atomic operations
-/// - Smart propagation that respects boundaries
+/// - Boundary accessors (relayout/repaint) for pipeline-owner registration
 /// - Write-once geometry and constraints using `OnceCell`
 /// - Atomic offset updates for paint positioning
+///
+/// Boundary-aware dirty propagation is **not** performed here. Production
+/// dirty marking goes through `PipelineOwner::add_node_needing_layout /
+/// add_node_needing_paint` invoked from `flui-view` and `flui-hot-reload`.
 ///
 /// # Memory Layout
 ///

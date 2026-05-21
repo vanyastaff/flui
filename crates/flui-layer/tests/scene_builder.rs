@@ -3,12 +3,11 @@
 //! Extracted from `src/compositor.rs` inline tests in Mythos Step 10.
 
 use flui_foundation::LayerId;
-use flui_layer::{CanvasLayer, CompositorStats, Layer, LayerTree, SceneBuilder, SceneCompositor};
-use flui_painting::Canvas;
+use flui_layer::{CanvasLayer, Layer, LayerTree, SceneBuilder, SceneCompositor};
 use flui_types::{
-    Color, Matrix4, Offset, Rect,
+    Matrix4, Offset, Rect,
     geometry::px,
-    painting::{Clip, Paint, TextureId},
+    painting::{Clip, TextureId},
 };
 
 #[test]

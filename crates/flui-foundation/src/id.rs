@@ -743,7 +743,7 @@ mod tests {
     #[test]
     fn test_raw_id_try_zip() {
         assert!(RawId::try_zip(0).is_none());
-        assert_eq!(RawId::try_zip(42).map(|id| id.unzip()), Some(42));
+        assert_eq!(RawId::try_zip(42).map(super::RawId::unzip), Some(42));
     }
 
     #[test]
@@ -753,7 +753,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "ID index must be non-zero")]
     fn test_id_zero_panics() {
         let _ = ElementId::zip(0);
     }
@@ -761,7 +761,7 @@ mod tests {
     #[test]
     fn test_id_try_zip() {
         assert!(RenderId::try_zip(0).is_none());
-        assert_eq!(LayerId::try_zip(42).map(|id| id.unzip()), Some(42));
+        assert_eq!(LayerId::try_zip(42).map(super::Id::unzip), Some(42));
     }
 
     #[test]
@@ -798,7 +798,7 @@ mod tests {
     #[test]
     fn test_debug_format() {
         let id = ViewId::zip(42);
-        let debug = format!("{:?}", id);
+        let debug = format!("{id:?}");
         assert!(debug.contains("View"));
         assert!(debug.contains("42"));
     }
@@ -806,7 +806,7 @@ mod tests {
     #[test]
     fn test_display_format() {
         let id = ElementId::zip(42);
-        let display = format!("{}", id);
+        let display = format!("{id}");
         assert!(display.contains("Element"));
         assert!(display.contains("42"));
     }
@@ -860,7 +860,7 @@ mod tests {
 
         // new_checked is alias for try_zip
         assert!(ViewId::new_checked(0).is_none());
-        assert_eq!(ViewId::new_checked(42).map(|id| id.get()), Some(42));
+        assert_eq!(ViewId::new_checked(42).map(super::Id::get), Some(42));
     }
 
     #[test]

@@ -71,9 +71,8 @@ impl DamageTracker {
         }
 
         let mut iter = self.regions.iter();
-        let first = match iter.next() {
-            Some(r) => r,
-            None => return Some(Rect::ZERO),
+        let Some(first) = iter.next() else {
+            return Some(Rect::ZERO);
         };
 
         let mut result = *first;

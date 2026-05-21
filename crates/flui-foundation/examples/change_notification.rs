@@ -3,6 +3,11 @@
 //! This example demonstrates the reactive change notification system,
 //! similar to Flutter's ChangeNotifier pattern.
 
+#![allow(
+    clippy::items_after_statements,
+    reason = "examples define types where they read best, alongside the prose explaining them"
+)]
+
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
