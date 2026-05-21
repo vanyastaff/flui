@@ -84,6 +84,7 @@ impl DrawCommand {
             // Passthrough: Commands without opacity (clips, gradients, etc.)
             Self::ClipRect { .. }
             | Self::ClipRRect { .. }
+            | Self::ClipRSuperellipse { .. }
             | Self::ClipPath { .. }
             | Self::DrawTextSpan { .. }
             | Self::DrawGradient { .. }
@@ -587,6 +588,7 @@ impl DrawCommand {
             } => Some(transform.transform_rect(bounds)),
             DrawCommand::ClipRect { .. }
             | DrawCommand::ClipRRect { .. }
+            | DrawCommand::ClipRSuperellipse { .. }
             | DrawCommand::ClipPath { .. } => None,
             DrawCommand::DrawText {
                 offset,
@@ -613,6 +615,7 @@ impl DrawCommand {
         match self {
             DrawCommand::ClipRect { .. }
             | DrawCommand::ClipRRect { .. }
+            | DrawCommand::ClipRSuperellipse { .. }
             | DrawCommand::ClipPath { .. } => CommandKind::Clip,
 
             DrawCommand::SaveLayer { .. } | DrawCommand::RestoreLayer { .. } => CommandKind::Layer,
@@ -702,6 +705,7 @@ impl DrawCommand {
         match self {
             DrawCommand::ClipRect { transform, .. }
             | DrawCommand::ClipRRect { transform, .. }
+            | DrawCommand::ClipRSuperellipse { transform, .. }
             | DrawCommand::ClipPath { transform, .. }
             | DrawCommand::DrawLine { transform, .. }
             | DrawCommand::DrawRect { transform, .. }
@@ -775,6 +779,7 @@ impl DrawCommand {
         match self {
             DrawCommand::ClipRect { transform, .. }
             | DrawCommand::ClipRRect { transform, .. }
+            | DrawCommand::ClipRSuperellipse { transform, .. }
             | DrawCommand::ClipPath { transform, .. }
             | DrawCommand::DrawLine { transform, .. }
             | DrawCommand::DrawRect { transform, .. }

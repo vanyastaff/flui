@@ -13,7 +13,7 @@
 //! `Box<dyn Drawable>` boundary the wgpu backend cannot translate.
 
 use flui_types::{
-    geometry::{Matrix4, Offset, Pixels, Point, RRect, Rect, Size},
+    geometry::{Matrix4, Offset, Pixels, Point, RRect, RSuperellipse, Rect, Size},
     painting::{Image, Path},
     styling::Color,
     typography::{InlineSpan, TextStyle},
@@ -57,6 +57,23 @@ pub enum DrawCommand {
     ClipRRect {
         /// Rounded rectangle to clip to.
         rrect: RRect,
+        /// Set operation (Intersect or Difference).
+        clip_op: ClipOp,
+        /// Anti-aliasing behavior.
+        clip_behavior: Clip,
+        /// Transform at recording time.
+        transform: Matrix4,
+    },
+
+    /// Clip to a rounded superellipse (Flutter `RSuperellipse`).
+    ///
+    /// Same shape as [`Self::ClipRRect`] but uses the rounded-superellipse
+    /// SDF for corner geometry (smoother corner falloff than the elliptical
+    /// arcs used by `RRect`). Matches Flutter's `Canvas.clipRSuperellipse`
+    /// and `ClipContext.clipRSuperellipseAndPaint`.
+    ClipRSuperellipse {
+        /// Rounded superellipse to clip to.
+        rsuperellipse: RSuperellipse,
         /// Set operation (Intersect or Difference).
         clip_op: ClipOp,
         /// Anti-aliasing behavior.
