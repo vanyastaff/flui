@@ -38,7 +38,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use parking_lot::RwLock;
 
-use crate::{events::KeyEvent, ids::FocusNodeId};
+use crate::{events::KeyEvent, ids::FocusNodeId, routing::focus_scope::FocusScopeNode};
 
 // Re-export FocusNodeId for convenience
 
@@ -105,6 +105,14 @@ pub struct FocusManager {
 
     /// Global key event handlers (called for all key events).
     global_key_handlers: RwLock<Vec<KeyEventCallback>>,
+
+    /// Active focus scope used for Tab navigation traversal.
+    ///
+    /// Set via [`FocusManager::set_active_scope`] from the app binding at
+    /// init. When None, [`focus_next`] / [`focus_previous`] return false
+    /// (no traversal possible — app didn't wire a scope). Closes audit
+    /// Finding I-4 (Tab navigation public API was `tracing::warn!` stub).
+    active_scope: RwLock<Option<Arc<FocusScopeNode>>>,
 }
 
 impl std::fmt::Debug for FocusManager {
@@ -123,6 +131,7 @@ impl Default for FocusManager {
             listeners: RwLock::new(Vec::new()),
             key_handlers: RwLock::new(HashMap::new()),
             global_key_handlers: RwLock::new(Vec::new()),
+            active_scope: RwLock::new(None),
         }
     }
 }
@@ -138,7 +147,23 @@ impl FocusManager {
             listeners: RwLock::new(Vec::new()),
             key_handlers: RwLock::new(HashMap::new()),
             global_key_handlers: RwLock::new(Vec::new()),
+            active_scope: RwLock::new(None),
         })
+    }
+
+    /// Set the active focus scope used for Tab navigation traversal.
+    ///
+    /// Call this from the app binding when constructing the focus tree
+    /// (usually at app init). [`focus_next`] / [`focus_previous`] delegate
+    /// to the active scope's `focus_next_in_scope` /
+    /// `focus_previous_in_scope`.
+    pub fn set_active_scope(&self, scope: Option<Arc<FocusScopeNode>>) {
+        *self.active_scope.write() = scope;
+    }
+
+    /// Returns the currently active focus scope, if any.
+    pub fn active_scope(&self) -> Option<Arc<FocusScopeNode>> {
+        self.active_scope.read().clone()
     }
 
     /// Create a new focus manager (for testing).
@@ -151,6 +176,7 @@ impl FocusManager {
             listeners: RwLock::new(Vec::new()),
             key_handlers: RwLock::new(HashMap::new()),
             global_key_handlers: RwLock::new(Vec::new()),
+            active_scope: RwLock::new(None),
         }
     }
 
@@ -257,30 +283,41 @@ impl FocusManager {
         }
     }
 
-    /// Transfer focus to the next focusable element.
+    /// Transfer focus to the next focusable element via the active scope's
+    /// traversal policy (Tab key).
     ///
-    /// This is called when user presses Tab.
-    /// Implementation requires traversing the UI tree to find the next
-    /// focusable element.
-    ///
-    /// # Note
-    ///
-    /// This requires focus scope and traversal policy support, which is not yet
-    /// implemented.
-    pub fn focus_next(&self) {
-        tracing::warn!("focus_next() not yet implemented - needs focus scope support");
+    /// Requires [`FocusManager::set_active_scope`] to have been called from
+    /// the app binding. Returns `true` if focus advanced, `false` if no
+    /// active scope is set, no element is currently focused, or the
+    /// traversal policy returned None.
+    pub fn focus_next(&self) -> bool {
+        let Some(current) = *self.focused.read() else {
+            tracing::trace!("focus_next: no element currently focused");
+            return false;
+        };
+        let Some(scope) = self.active_scope() else {
+            tracing::warn!(
+                "focus_next: no active focus scope set — call FocusManager::set_active_scope at app init"
+            );
+            return false;
+        };
+        scope.focus_next_in_scope(current)
     }
 
-    /// Transfer focus to the previous focusable element.
+    /// Transfer focus to the previous focusable element via the active
+    /// scope's traversal policy (Shift+Tab).
     ///
-    /// This is called when user presses Shift+Tab.
-    ///
-    /// # Note
-    ///
-    /// This requires focus scope and traversal policy support, which is not yet
-    /// implemented.
-    pub fn focus_previous(&self) {
-        tracing::warn!("focus_previous() not yet implemented - needs focus scope support");
+    /// See [`focus_next`] for behavior contract.
+    pub fn focus_previous(&self) -> bool {
+        let Some(current) = *self.focused.read() else {
+            tracing::trace!("focus_previous: no element currently focused");
+            return false;
+        };
+        let Some(scope) = self.active_scope() else {
+            tracing::warn!("focus_previous: no active focus scope set");
+            return false;
+        };
+        scope.focus_previous_in_scope(current)
     }
 
     /// Check if any element has focus.
