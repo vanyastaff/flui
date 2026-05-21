@@ -33,7 +33,7 @@
 //! ```
 
 use flui_types::{
-    geometry::{Pixels, RRect, Rect},
+    geometry::{Pixels, RRect, RSuperellipse, Rect},
     painting::{Clip, Path},
 };
 
@@ -56,6 +56,7 @@ use crate::Canvas;
 ///   Canvas get canvas;
 ///   void clipPathAndPaint(Path path, Clip clipBehavior, Rect bounds, VoidCallback painter);
 ///   void clipRRectAndPaint(RRect rrect, Clip clipBehavior, Rect bounds, VoidCallback painter);
+///   void clipRSuperellipseAndPaint(RSuperellipse rse, Clip clipBehavior, Rect bounds, VoidCallback painter);
 ///   void clipRectAndPaint(Rect rect, Clip clipBehavior, Rect bounds, VoidCallback painter);
 /// }
 /// ```
@@ -72,8 +73,11 @@ use crate::Canvas;
 pub trait ClipContext {
     /// Returns a mutable reference to the canvas.
     ///
-    /// This is the only method that implementors must provide.
-    fn canvas_mut(&mut self) -> &mut Canvas;
+    /// This is the only method that implementors must provide. Named `canvas`
+    /// (no `_mut` suffix) to match Flutter's `Canvas get canvas` getter; the
+    /// trait is `&mut self -> &mut Canvas` so Rust's `wrong_self_convention`
+    /// lint does not fire on the missing suffix.
+    fn canvas(&mut self) -> &mut Canvas;
 
     /// Clips to a rectangle and paints content within.
     ///
@@ -171,6 +175,55 @@ pub trait ClipContext {
         );
     }
 
+    /// Clips to a rounded superellipse and paints content within.
+    ///
+    /// The rounded-superellipse (Flutter `RSuperellipse`) uses a smoother
+    /// corner falloff than the elliptical arcs of `RRect`, matching the iOS
+    /// squircle shape.
+    ///
+    /// # Arguments
+    ///
+    /// * `rsuperellipse` - Rounded superellipse to clip to
+    /// * `clip_behavior` - How to perform the clip
+    /// * `bounds` - Bounds hint for the painting operation
+    /// * `painter` - Closure that performs the painting
+    ///
+    /// # Flutter Equivalence
+    ///
+    /// ```dart
+    /// // Flutter
+    /// context.clipRSuperellipseAndPaint(rse, Clip.antiAlias, bounds, () {
+    ///   // paint content
+    /// });
+    /// ```
+    #[inline]
+    fn clip_rsuperellipse_and_paint<F>(
+        &mut self,
+        rsuperellipse: RSuperellipse,
+        clip_behavior: Clip,
+        bounds: Rect<Pixels>,
+        painter: F,
+    ) where
+        F: FnOnce(&mut Self),
+    {
+        self.clip_and_paint_impl(
+            |canvas, do_anti_alias| {
+                canvas.clip_rsuperellipse_ext(
+                    rsuperellipse,
+                    flui_types::painting::ClipOp::Intersect,
+                    if do_anti_alias {
+                        Clip::AntiAlias
+                    } else {
+                        Clip::HardEdge
+                    },
+                );
+            },
+            clip_behavior,
+            bounds,
+            painter,
+        );
+    }
+
     /// Clips to an arbitrary path and paints content within.
     ///
     /// # Arguments
@@ -246,30 +299,33 @@ pub trait ClipContext {
         C: FnOnce(&mut Canvas, bool),
         F: FnOnce(&mut Self),
     {
-        // Handle Clip::None - no clipping needed
-        if clip_behavior == Clip::None {
-            painter(self);
-            return;
-        }
+        // Flutter parity: `save()` runs unconditionally, including for
+        // `Clip::None`. The clip-call step is the only thing `Clip::None`
+        // skips — save/restore around the painter still happens so nested
+        // contexts observe consistent canvas state. Matches
+        // `painting/clip.dart::_clipAndPaint` lines 21-37.
+        self.canvas().save();
 
-        // Save canvas state
-        // For AntiAliasWithSaveLayer, we need to save a layer to get proper
-        // edge anti-aliasing when content overlaps the clip boundary
-        if clip_behavior == Clip::AntiAliasWithSaveLayer {
-            self.canvas_mut().save_layer_alpha(Some(bounds), 255);
-        } else {
-            self.canvas_mut().save();
-        }
-
-        // Apply clip with appropriate anti-aliasing
         let do_anti_alias = clip_behavior.is_anti_aliased();
-        canvas_clip_call(self.canvas_mut(), do_anti_alias);
+        match clip_behavior {
+            Clip::None => {
+                // No clip-call step; save/restore still bracket the painter.
+            }
+            Clip::HardEdge | Clip::AntiAlias => {
+                canvas_clip_call(self.canvas(), do_anti_alias);
+            }
+            Clip::AntiAliasWithSaveLayer => {
+                canvas_clip_call(self.canvas(), true);
+                self.canvas().save_layer_alpha(Some(bounds), 255);
+            }
+        }
 
-        // Execute painter within clipped region
         painter(self);
 
-        // Restore canvas state (also restores layer if save_layer was used)
-        self.canvas_mut().restore();
+        if clip_behavior == Clip::AntiAliasWithSaveLayer {
+            self.canvas().restore();
+        }
+        self.canvas().restore();
     }
 }
 
@@ -279,7 +335,7 @@ pub trait ClipContext {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
+    use flui_types::geometry::{Radius, px};
 
     use super::*;
 
@@ -300,7 +356,7 @@ mod tests {
     }
 
     impl ClipContext for TestClipContext {
-        fn canvas_mut(&mut self) -> &mut Canvas {
+        fn canvas(&mut self) -> &mut Canvas {
             &mut self.canvas
         }
     }
@@ -319,20 +375,32 @@ mod tests {
         assert!(painted);
     }
 
+    /// Covers AE1 (R4): `Clip::None` no longer short-circuits the
+    /// save/restore bracket. Flutter saves the canvas, runs the painter,
+    /// then restores — even when no clip call is issued. This locks in
+    /// that semantic against the prior FLUI short-circuit code path.
     #[test]
-    fn test_clip_none_skips_clipping() {
+    fn clip_none_still_saves_and_restores_around_painter() {
         let mut ctx = TestClipContext::new();
         let rect = Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0));
         let bounds = rect;
 
-        let initial_save_count = ctx.canvas.save_count();
-
-        ctx.clip_rect_and_paint(rect, Clip::None, bounds, |_ctx| {
-            // Painter executes
+        let before = ctx.canvas.save_count();
+        let mut observed_inside: Option<usize> = None;
+        ctx.clip_rect_and_paint(rect, Clip::None, bounds, |ctx| {
+            observed_inside = Some(ctx.canvas().save_count());
         });
+        let after = ctx.canvas.save_count();
 
-        // Save count should be unchanged (no save/restore for Clip::None)
-        assert_eq!(ctx.canvas.save_count(), initial_save_count);
+        assert_eq!(
+            observed_inside,
+            Some(before + 1),
+            "save_count inside the painter must be one greater than before"
+        );
+        assert_eq!(
+            after, before,
+            "save_count after the call must return to the pre-call value"
+        );
     }
 
     #[test]
@@ -351,6 +419,21 @@ mod tests {
         });
 
         assert!(painted);
+    }
+
+    #[test]
+    fn test_clip_rsuperellipse_and_paint() {
+        let mut ctx = TestClipContext::new();
+        let rect = Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let rse = RSuperellipse::from_rect_and_radius(rect, Radius::circular(px(12.0)));
+        let bounds = rse.outer_rect();
+
+        let mut painted = false;
+        ctx.clip_rsuperellipse_and_paint(rse, Clip::AntiAlias, bounds, |_ctx| {
+            painted = true;
+        });
+
+        assert!(painted, "rsuperellipse painter callback must execute");
     }
 
     #[test]
