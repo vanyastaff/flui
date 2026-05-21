@@ -31,7 +31,7 @@ use std::{
     ops::Deref,
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 
@@ -110,10 +110,28 @@ pub trait ValueListenable<T>: Listenable {
 /// API.
 ///
 /// Similar to Flutter's `ChangeNotifier`.
+///
+/// # Disposal
+///
+/// After [`dispose`] has been called, the notifier is no longer usable:
+/// [`add_listener`], [`notify_listeners`], and [`remove_listener`] panic in
+/// debug builds via `debug_assert!` and degrade to a `tracing::warn!` + no-op
+/// in release builds. Mirrors Flutter's `ChangeNotifier.dispose` and
+/// `_debugAssertNotDisposed` semantics
+/// (flutter/lib/src/foundation/change_notifier.dart:181, :376).
+///
+/// `is_disposed` is shared across clones via `Arc<AtomicBool>` so that a
+/// listener-callback holding its own clone sees disposal performed elsewhere.
+///
+/// [`dispose`]: ChangeNotifier::dispose
+/// [`add_listener`]: Listenable::add_listener
+/// [`notify_listeners`]: ChangeNotifier::notify_listeners
+/// [`remove_listener`]: Listenable::remove_listener
 #[derive(Clone)]
 pub struct ChangeNotifier {
     listeners: Arc<Mutex<HashMap<ListenerId, ListenerCallback>>>,
     next_id: Arc<AtomicUsize>,
+    is_disposed: Arc<AtomicBool>,
 }
 
 impl Default for ChangeNotifier {
@@ -138,6 +156,7 @@ impl ChangeNotifier {
         Self {
             listeners: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicUsize::new(1)),
+            is_disposed: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -147,6 +166,69 @@ impl ChangeNotifier {
         ListenerId::new(id)
     }
 
+    /// Returns `true` if [`dispose`](Self::dispose) has been called on this
+    /// notifier (or any of its clones — the disposed state is shared).
+    #[must_use]
+    #[inline]
+    pub fn is_disposed(&self) -> bool {
+        self.is_disposed.load(Ordering::Acquire)
+    }
+
+    /// Discards listeners and marks this notifier as disposed.
+    ///
+    /// After this is called, the notifier is not in a usable state:
+    /// subsequent calls to [`add_listener`], [`notify_listeners`], or
+    /// [`remove_listener`] panic in debug builds via `debug_assert!` and
+    /// degrade to a `tracing::warn!` + no-op in release builds.
+    ///
+    /// Mirrors Flutter's `ChangeNotifier.dispose` at
+    /// `flutter/lib/src/foundation/change_notifier.dart:376`. Disposal does
+    /// NOT notify listeners; consumers must decide whether to notify before
+    /// calling `dispose`.
+    ///
+    /// This method is **idempotent**: calling it again is a no-op (no panic).
+    /// Takes `&self` rather than `&mut self` because the notifier is
+    /// internally `Clone` over `Arc<...>` and a listener-callback may need
+    /// to call `dispose` on its own clone (the snapshot-then-fire path in
+    /// [`notify_listeners`] makes this reentrancy-safe).
+    ///
+    /// [`add_listener`]: Listenable::add_listener
+    /// [`notify_listeners`]: Self::notify_listeners
+    /// [`remove_listener`]: Listenable::remove_listener
+    pub fn dispose(&self) {
+        // Idempotent: second call sees true and exits.
+        if self.is_disposed.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        self.listeners.lock().clear();
+    }
+
+    /// Debug-asserts that this notifier has not been disposed.
+    ///
+    /// In debug builds, panics with `"ChangeNotifier used after dispose"`
+    /// via `debug_assert!`. In release builds, emits a `tracing::warn!` and
+    /// returns `true` to indicate the caller should early-return as a no-op
+    /// per plan §D7 (Flutter parity: release degrades gracefully).
+    ///
+    /// Returns `true` if the notifier is disposed (caller should no-op),
+    /// `false` if usable.
+    ///
+    /// Mirrors Flutter's `_debugAssertNotDisposed`
+    /// (`change_notifier.dart:181`).
+    #[inline]
+    fn check_disposed(&self) -> bool {
+        if self.is_disposed.load(Ordering::Acquire) {
+            debug_assert!(
+                false,
+                "ChangeNotifier used after dispose: once dispose() has been \
+                 called, the notifier can no longer be used"
+            );
+            tracing::warn!("ChangeNotifier used after dispose");
+            return true;
+        }
+        false
+    }
+
     /// Call all the registered listeners.
     ///
     /// Callbacks are cloned (cheap `Arc` ref-count bump) and the lock is
@@ -154,7 +236,19 @@ impl ChangeNotifier {
     /// when a callback calls `add_listener` or `remove_listener` on the
     /// same notifier, matching Flutter's `ChangeNotifier.notifyListeners()`
     /// re-entrancy semantics.
+    ///
+    /// # Disposal
+    ///
+    /// Panics in debug builds (no-ops in release) if called after
+    /// [`dispose`](Self::dispose). The disposed-state check runs at the
+    /// entry to this method; once past it, the in-flight snapshot is
+    /// immune to subsequent disposal until iteration completes — a
+    /// listener-callback calling `dispose` mid-notify does NOT break the
+    /// current iteration.
     pub fn notify_listeners(&self) {
+        if self.check_disposed() {
+            return;
+        }
         let callbacks: Vec<ListenerCallback> = self.listeners.lock().values().cloned().collect();
         for callback in &callbacks {
             callback();
@@ -185,16 +279,26 @@ impl ChangeNotifier {
 
 impl Listenable for ChangeNotifier {
     fn add_listener(&self, listener: ListenerCallback) -> ListenerId {
+        if self.check_disposed() {
+            // Release-mode no-op: return a fresh id that is not registered.
+            return self.next_id();
+        }
         let id = self.next_id();
         self.listeners.lock().insert(id, listener);
         id
     }
 
     fn remove_listener(&self, id: ListenerId) {
+        if self.check_disposed() {
+            return;
+        }
         self.listeners.lock().remove(&id);
     }
 
     fn remove_all_listeners(&self) {
+        if self.check_disposed() {
+            return;
+        }
         self.listeners.lock().clear();
     }
 }
@@ -632,5 +736,104 @@ mod tests {
 
         let deserialized: ListenerId = serde_json::from_str(&json).unwrap();
         assert_eq!(id, deserialized);
+    }
+
+    // ------------------------------------------------------------------
+    // U6: ChangeNotifier::dispose + disposed-state assertion (R19, AE12)
+    //
+    // Mirrors Flutter's `ChangeNotifier.dispose` at
+    // flutter/lib/src/foundation/change_notifier.dart:181 (debugAssertNotDisposed)
+    // and :376 (dispose). Tests added first (TEST-FIRST per plan exec note);
+    // implementation follows.
+    // ------------------------------------------------------------------
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "ChangeNotifier used after dispose")]
+    fn dispose_then_add_listener_debug_asserts() {
+        let notifier = ChangeNotifier::new();
+        notifier.dispose();
+        // Must panic in debug builds (release degrades to tracing::warn! +
+        // no-op; release-mode behavior is sanity-checked separately).
+        let _ = notifier.add_listener(Arc::new(|| {}));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "ChangeNotifier used after dispose")]
+    fn dispose_then_notify_debug_asserts() {
+        let notifier = ChangeNotifier::new();
+        notifier.dispose();
+        notifier.notify_listeners();
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "ChangeNotifier used after dispose")]
+    fn dispose_then_remove_listener_debug_asserts() {
+        let notifier = ChangeNotifier::new();
+        let id = notifier.add_listener(Arc::new(|| {}));
+        notifier.dispose();
+        notifier.remove_listener(id);
+    }
+
+    #[test]
+    fn dispose_is_idempotent() {
+        let notifier = ChangeNotifier::new();
+        let _ = notifier.add_listener(Arc::new(|| {}));
+        assert_eq!(notifier.len(), 1);
+
+        notifier.dispose();
+        assert_eq!(notifier.len(), 0, "dispose must clear listeners");
+        assert!(
+            notifier.is_disposed(),
+            "is_disposed must be true after dispose"
+        );
+
+        // Second dispose is a no-op — must NOT panic.
+        notifier.dispose();
+        assert_eq!(notifier.len(), 0);
+        assert!(notifier.is_disposed());
+    }
+
+    #[test]
+    fn dispose_during_notify_iteration_safe() {
+        // Reentrancy guarantee: a listener-callback may call `dispose` on the
+        // notifier mid-`notify_listeners`. The snapshot-then-fire path at
+        // ChangeNotifier::notify_listeners captures the callback set under the
+        // mutex before invoking; the in-flight iteration completes without
+        // panic. After the iteration, `is_disposed == true` only affects
+        // subsequent outside calls.
+        let notifier = ChangeNotifier::new();
+        let notifier_for_callback = notifier.clone();
+        let other_ran = Arc::new(AtomicUsize::new(0));
+        let other_ran_clone = Arc::clone(&other_ran);
+
+        // Listener #1: disposes the notifier mid-iteration.
+        let _ = notifier.add_listener(Arc::new(move || {
+            notifier_for_callback.dispose();
+        }));
+        // Listener #2: increments counter — proves iteration completes after
+        // mid-flight dispose (snapshot was already taken).
+        let _ = notifier.add_listener(Arc::new(move || {
+            other_ran_clone.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        // Must not panic — even though listener #1 sets is_disposed during
+        // iteration, the snapshot is in-flight; the disposed-state check
+        // ran at entry to notify_listeners, before the snapshot.
+        notifier.notify_listeners();
+
+        // Listener #2 must have run (it was in the snapshot taken before
+        // listener #1 fired).
+        assert_eq!(
+            other_ran.load(Ordering::SeqCst),
+            1,
+            "snapshot-then-fire must complete iteration even if dispose called mid-flight"
+        );
+
+        // After the iteration, the notifier is disposed.
+        assert!(notifier.is_disposed());
+        assert_eq!(notifier.len(), 0, "dispose cleared listeners");
     }
 }
