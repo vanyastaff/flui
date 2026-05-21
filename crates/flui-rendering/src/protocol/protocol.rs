@@ -9,8 +9,7 @@ use std::fmt::Debug;
 use flui_tree::Arity;
 
 use super::capabilities::{
-    HitTestCapability, LayoutCapability, ProtocolConstraints, ProtocolGeometry, ProtocolHitTestCtx,
-    ProtocolLayoutCtx,
+    HitTestCapability, LayoutCapability, ProtocolGeometry, ProtocolHitTestCtx, ProtocolLayoutCtx,
 };
 use crate::parent_data::ParentData;
 
@@ -86,27 +85,6 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
 
 /// Protocols supporting bidirectional layout (both main-axis directions).
 pub trait BidirectionalProtocol: Protocol {}
-
-/// Protocols supporting intrinsic dimension queries before layout.
-pub trait IntrinsicProtocol: Protocol {
-    /// Compute minimum intrinsic main-axis extent for given cross-axis extent.
-    fn compute_min_intrinsic_main_axis(
-        constraints: &ProtocolConstraints<Self>,
-        cross_axis: f32,
-    ) -> f32;
-
-    /// Compute maximum intrinsic main-axis extent for given cross-axis extent.
-    fn compute_max_intrinsic_main_axis(
-        constraints: &ProtocolConstraints<Self>,
-        cross_axis: f32,
-    ) -> f32;
-}
-
-/// Protocols supporting baseline alignment for text and inline content.
-pub trait BaselineProtocol: Protocol {
-    /// Distance from top edge to baseline, or None if no baseline.
-    fn get_distance_to_baseline(geometry: &ProtocolGeometry<Self>) -> Option<f32>;
-}
 
 // ============================================================================
 // PROTOCOL COMPATIBILITY
