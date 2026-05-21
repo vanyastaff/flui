@@ -54,17 +54,29 @@ pub trait ElementChildStorage: Default + Send + Sync + std::fmt::Debug + 'static
     /// For Single arity, updates the single child or creates if missing.
     /// For Variable arity, reconciles the children list with new views.
     /// For Leaf arity, this is a no-op.
-    fn update_with_view(&mut self, view: &dyn View);
+    ///
+    /// Threads the [`ElementOwner`](crate::ElementOwner) split-borrow
+    /// handle into the child's `update` call so downstream registries
+    /// (dependent sets, dirty heap) stay coherent. Plan §U8.
+    fn update_with_view(&mut self, view: &dyn View, owner: &mut crate::ElementOwner<'_>);
 
     /// Update existing child element(s) with multiple views.
     ///
-    /// Used by Variable arity for updating multiple children.
-    fn update_with_views(&mut self, views: &[Box<dyn View>]);
+    /// Used by Variable arity for updating multiple children. Threads
+    /// the owner handle into each child's `update` call.
+    fn update_with_views(&mut self, views: &[Box<dyn View>], owner: &mut crate::ElementOwner<'_>);
 
     /// Mount all children.
     ///
     /// Called after children are created to mount them into the tree.
-    fn mount_children(&mut self, parent: Option<ElementId>, depth: usize);
+    /// Threads the owner handle into each child's `mount` call so
+    /// `GlobalKey` registration / dirty scheduling can take effect.
+    fn mount_children(
+        &mut self,
+        parent: Option<ElementId>,
+        depth: usize,
+        owner: &mut crate::ElementOwner<'_>,
+    );
 
     /// Propagate PipelineOwner and parent RenderId to all children.
     ///
@@ -79,12 +91,19 @@ pub trait ElementChildStorage: Default + Send + Sync + std::fmt::Debug + 'static
     fn activate_children(&mut self);
 
     /// Unmount all children (permanently removed from tree).
-    fn unmount_children(&mut self);
+    ///
+    /// Threads the owner handle into each child's `unmount` call so
+    /// `GlobalKey` deregistration / dependent-set cleanup can take
+    /// effect during the recursive unmount.
+    fn unmount_children(&mut self, owner: &mut crate::ElementOwner<'_>);
 
     /// Recursively build all children.
     ///
-    /// Calls `perform_build()` on all child elements.
-    fn perform_build_children(&mut self);
+    /// Calls `perform_build()` on all child elements. Threads the owner
+    /// handle so descendants can schedule rebuilds for inherited-data
+    /// dependents (U9) without re-borrowing the
+    /// [`BuildOwner`](crate::BuildOwner).
+    fn perform_build_children(&mut self, owner: &mut crate::ElementOwner<'_>);
 
     /// Visit all children with a closure.
     ///
@@ -127,15 +146,24 @@ impl ElementChildStorage for NoChildStorage {
         // No children allowed
     }
 
-    fn update_with_view(&mut self, _view: &dyn View) {
+    fn update_with_view(&mut self, _view: &dyn View, _owner: &mut crate::ElementOwner<'_>) {
         // No children to update
     }
 
-    fn update_with_views(&mut self, _views: &[Box<dyn View>]) {
+    fn update_with_views(
+        &mut self,
+        _views: &[Box<dyn View>],
+        _owner: &mut crate::ElementOwner<'_>,
+    ) {
         // No children to update
     }
 
-    fn mount_children(&mut self, _parent: Option<ElementId>, _depth: usize) {
+    fn mount_children(
+        &mut self,
+        _parent: Option<ElementId>,
+        _depth: usize,
+        _owner: &mut crate::ElementOwner<'_>,
+    ) {
         // No children to mount
     }
 
@@ -155,11 +183,11 @@ impl ElementChildStorage for NoChildStorage {
         // No children to activate
     }
 
-    fn unmount_children(&mut self) {
+    fn unmount_children(&mut self, _owner: &mut crate::ElementOwner<'_>) {
         // No children to unmount
     }
 
-    fn perform_build_children(&mut self) {
+    fn perform_build_children(&mut self, _owner: &mut crate::ElementOwner<'_>) {
         // No children to build
     }
 
@@ -218,26 +246,31 @@ impl ElementChildStorage for SingleChildStorage {
         }
     }
 
-    fn update_with_view(&mut self, view: &dyn View) {
+    fn update_with_view(&mut self, view: &dyn View, owner: &mut crate::ElementOwner<'_>) {
         if let Some(ref mut child) = self.child {
             // Update existing child
-            child.update(view);
+            child.update(view, owner);
         } else {
             // Create new child if missing
             self.child = Some(view.create_element());
         }
     }
 
-    fn update_with_views(&mut self, views: &[Box<dyn View>]) {
+    fn update_with_views(&mut self, views: &[Box<dyn View>], owner: &mut crate::ElementOwner<'_>) {
         // Single arity - use only the first view
         if let Some(view) = views.first() {
-            self.update_with_view(view.as_ref());
+            self.update_with_view(view.as_ref(), owner);
         }
     }
 
-    fn mount_children(&mut self, parent: Option<ElementId>, depth: usize) {
+    fn mount_children(
+        &mut self,
+        parent: Option<ElementId>,
+        depth: usize,
+        owner: &mut crate::ElementOwner<'_>,
+    ) {
         if let Some(ref mut child) = self.child {
-            child.mount(parent, depth);
+            child.mount(parent, depth, owner);
         }
     }
 
@@ -265,16 +298,16 @@ impl ElementChildStorage for SingleChildStorage {
         }
     }
 
-    fn unmount_children(&mut self) {
+    fn unmount_children(&mut self, owner: &mut crate::ElementOwner<'_>) {
         if let Some(ref mut child) = self.child {
-            child.unmount();
+            child.unmount(owner);
         }
         self.child = None;
     }
 
-    fn perform_build_children(&mut self) {
+    fn perform_build_children(&mut self, owner: &mut crate::ElementOwner<'_>) {
         if let Some(ref mut child) = self.child {
-            child.perform_build();
+            child.perform_build(owner);
         }
     }
 
@@ -332,26 +365,31 @@ impl ElementChildStorage for OptionalChildStorage {
         }
     }
 
-    fn update_with_view(&mut self, view: &dyn View) {
+    fn update_with_view(&mut self, view: &dyn View, owner: &mut crate::ElementOwner<'_>) {
         if let Some(ref mut child) = self.child {
-            child.update(view);
+            child.update(view, owner);
         } else {
             self.child = Some(view.create_element());
         }
     }
 
-    fn update_with_views(&mut self, views: &[Box<dyn View>]) {
+    fn update_with_views(&mut self, views: &[Box<dyn View>], owner: &mut crate::ElementOwner<'_>) {
         if let Some(view) = views.first() {
-            self.update_with_view(view.as_ref());
+            self.update_with_view(view.as_ref(), owner);
         } else {
             // No views provided - clear child
-            self.unmount_children();
+            self.unmount_children(owner);
         }
     }
 
-    fn mount_children(&mut self, parent: Option<ElementId>, depth: usize) {
+    fn mount_children(
+        &mut self,
+        parent: Option<ElementId>,
+        depth: usize,
+        owner: &mut crate::ElementOwner<'_>,
+    ) {
         if let Some(ref mut child) = self.child {
-            child.mount(parent, depth);
+            child.mount(parent, depth, owner);
         }
     }
 
@@ -379,16 +417,16 @@ impl ElementChildStorage for OptionalChildStorage {
         }
     }
 
-    fn unmount_children(&mut self) {
+    fn unmount_children(&mut self, owner: &mut crate::ElementOwner<'_>) {
         if let Some(ref mut child) = self.child {
-            child.unmount();
+            child.unmount(owner);
         }
         self.child = None;
     }
 
-    fn perform_build_children(&mut self) {
+    fn perform_build_children(&mut self, owner: &mut crate::ElementOwner<'_>) {
         if let Some(ref mut child) = self.child {
-            child.perform_build();
+            child.perform_build(owner);
         }
     }
 
@@ -446,20 +484,20 @@ impl ElementChildStorage for VariableChildStorage {
         }
     }
 
-    fn update_with_view(&mut self, _view: &dyn View) {
+    fn update_with_view(&mut self, _view: &dyn View, _owner: &mut crate::ElementOwner<'_>) {
         // For Variable arity, use update_with_views instead
         tracing::warn!(
             "VariableChildStorage::update_with_view called - use update_with_views instead"
         );
     }
 
-    fn update_with_views(&mut self, views: &[Box<dyn View>]) {
+    fn update_with_views(&mut self, views: &[Box<dyn View>], owner: &mut crate::ElementOwner<'_>) {
         // Simple reconciliation: match by index
         // TODO: In a full implementation, this would use keys for reordering
         for (i, view) in views.iter().enumerate() {
             if let Some(child) = self.children.get_mut(i) {
                 // Update existing child
-                child.update(view.as_ref());
+                child.update(view.as_ref(), &mut *owner);
             } else {
                 // Create new child
                 self.children.push(view.create_element());
@@ -470,15 +508,20 @@ impl ElementChildStorage for VariableChildStorage {
         if views.len() < self.children.len() {
             for mut child in self.children.drain(views.len()..) {
                 // Unmount removed children before dropping
-                child.unmount();
+                child.unmount(&mut *owner);
                 drop(child);
             }
         }
     }
 
-    fn mount_children(&mut self, parent: Option<ElementId>, depth: usize) {
+    fn mount_children(
+        &mut self,
+        parent: Option<ElementId>,
+        depth: usize,
+        owner: &mut crate::ElementOwner<'_>,
+    ) {
         for (i, child) in self.children.iter_mut().enumerate() {
-            child.mount(parent, depth + i);
+            child.mount(parent, depth + i, &mut *owner);
         }
     }
 
@@ -508,16 +551,16 @@ impl ElementChildStorage for VariableChildStorage {
         }
     }
 
-    fn unmount_children(&mut self) {
+    fn unmount_children(&mut self, owner: &mut crate::ElementOwner<'_>) {
         for child in &mut self.children {
-            child.unmount();
+            child.unmount(&mut *owner);
         }
         self.children.clear();
     }
 
-    fn perform_build_children(&mut self) {
+    fn perform_build_children(&mut self, owner: &mut crate::ElementOwner<'_>) {
         for child in &mut self.children {
-            child.perform_build();
+            child.perform_build(&mut *owner);
         }
     }
 

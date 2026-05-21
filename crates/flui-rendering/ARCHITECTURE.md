@@ -159,16 +159,6 @@ Concrete cleanups visible from `flui-rendering` outward, sized for an `/aif-impl
 
 **Dependencies:** disjoint-borrow primitive (above).
 
-### Migrate `RootRenderElement::attach_to_pipeline_owner` / `detach_from_pipeline_owner`
-
-**File:** [`crates/flui-view/src/view/root.rs`](../flui-view/src/view/root.rs) lines 482, 489.
-
-**Goal:** today both methods are `unimplemented!()` blockers. The migration is documented inline in the TODO comments at lines 477-481 and 486-488: insert into `pipeline_owner.render_tree_mut()`, get a `RenderId` back, call `set_root_id(Some(id))`, store the `RenderId` instead of the legacy `Arc<RwLock<RenderView>>` handle. Detach inverts.
-
-**Shape:** straightforward `Arc<RwLock<RenderView>>` → `RenderId` migration. Adopt the ID-offset pattern.
-
-**Dependencies:** none beyond the U2 baseline.
-
 ### Move `RenderEntry<P>::clear_needs_paint` / `clear_needs_layout` to `RenderState<P>`
 
 **File:** [`src/storage/entry.rs`](src/storage/entry.rs).

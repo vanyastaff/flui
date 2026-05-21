@@ -168,7 +168,7 @@ impl View for BoxedView {
         self.0.can_update(old)
     }
 
-    fn key(&self) -> Option<&dyn super::view::ViewKey> {
+    fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
         self.0.key()
     }
 }

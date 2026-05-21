@@ -100,8 +100,13 @@ impl PluginPipeline {
             log("ERROR: failed to downcast to RootRenderElement");
         }
 
-        // Mount the element tree (creates RenderViewObject, inserts into RenderTree)
-        root_element.mount(None, 0);
+        // Mount the element tree (creates RenderViewObject, inserts into
+        // RenderTree). Plan §U8: thread the ElementOwner split-borrow
+        // handle through the recursive mount so descendant lifecycle calls
+        // can register `GlobalKey`s / schedule rebuilds.
+        widgets.with_build_owner_mut(|build_owner| {
+            root_element.mount(None, 0, &mut build_owner.element_owner_mut());
+        });
 
         // Diagnostic: verify pipeline state after mount
         {

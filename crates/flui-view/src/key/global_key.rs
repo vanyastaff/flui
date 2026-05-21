@@ -8,13 +8,12 @@ use std::{
     fmt,
     hash::{Hash, Hasher},
     marker::PhantomData,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use flui_foundation::{ElementId, ViewKey};
+
+use crate::view::ElementBase;
 
 /// A key that provides access to the element from anywhere.
 ///
@@ -48,10 +47,25 @@ use flui_foundation::{ElementId, ViewKey};
 ///
 /// Global keys have overhead compared to local keys because they
 /// maintain a registry. Use sparingly.
-#[derive(Clone)]
 pub struct GlobalKey<T: 'static> {
     id: u64,
+    /// `fn() -> T` keeps `GlobalKey<T>` covariant in `T` without
+    /// requiring `T: Send + Sync`. The marker is also why the manual
+    /// `Clone` impl below sidesteps the `T: Clone` bound a derive
+    /// would impose — `PhantomData<fn() -> T>` is always `Clone +
+    /// Copy` regardless of `T`.
     _marker: PhantomData<fn() -> T>,
+}
+
+// Manual `Clone` impl: do NOT require `T: Clone`. A `GlobalKey<T>` is
+// just an `id` + a phantom marker, so cloning is trivial.
+impl<T: 'static> Clone for GlobalKey<T> {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            _marker: PhantomData,
+        }
+    }
 }
 
 impl<T: 'static> GlobalKey<T> {
@@ -73,23 +87,74 @@ impl<T: 'static> GlobalKey<T> {
 
     /// Get the current element ID associated with this key.
     ///
-    /// Returns `None` if the element is not currently mounted.
+    /// Returns `None` if no element registered under this `GlobalKey`'s
+    /// hash is currently mounted in the registered build owner.
+    ///
+    /// # Registry access
+    ///
+    /// Reads the thread-local / process-wide registry handle installed
+    /// by the active `WidgetsBinding` (production) or by the test
+    /// harness via [`crate::test_only_set_global_key_registry`]. When
+    /// no handle is installed the method returns `None` — this is the
+    /// quiescent state expected in pure-unit tests that bypass the
+    /// framework binding.
+    ///
+    /// Flutter parity: `framework.dart:3163`
+    /// `GlobalKey._currentElement` — reads `BuildOwner._globalKeyRegistry`
+    /// indexed by the key. We hash-key the registry instead because
+    /// `Box<dyn ViewKey>` would need `Hash + Eq` blanket-impls and
+    /// hash collisions are documented (§I4).
     #[must_use]
-    pub const fn current_element(&self) -> Option<ElementId> {
-        // TODO: Implement via GlobalKeyRegistry
-        None
+    pub fn current_element(&self) -> Option<ElementId> {
+        crate::key::registry::with_registry(|registry| registry.lookup_element(self.id)).flatten()
     }
 
-    /// Get the current state associated with this key.
+    /// Run `f` against the current state of the element registered under
+    /// this key, downcasting to `R` first.
     ///
-    /// Only works for `StatefulView` widgets.
+    /// Returns `None` if:
+    /// - No element is currently registered for this key, OR
+    /// - The matched element has no state (e.g. it's a `StatelessElement`), OR
+    /// - The state's runtime type doesn't match `T`.
+    ///
+    /// `T` is the type the `GlobalKey<T>` was instantiated with — by
+    /// convention this is the `ViewState` impl tied to the keyed
+    /// `StatefulView`. The match is enforced via `Any::downcast_ref::<T>`
+    /// at the dispatch boundary so non-`StatefulView` keys (e.g.
+    /// `GlobalKey<i32>`) simply never resolve, no compile error.
+    ///
+    /// The callback shape (`R` returned, state borrowed for the duration
+    /// of the call) lets callers extract a snapshot without leaking the
+    /// borrow into the rest of `build()`. Same pattern as
+    /// [`crate::BuildContext::find_state`] (plan §U11).
+    ///
+    /// Flutter parity: `framework.dart:3170`
+    /// `GlobalKey<T extends State>.currentState` — returns `T?` after
+    /// a runtime-type check. We surface a closure-callback variant so
+    /// the read-lock on the element tree drops before the caller does
+    /// anything substantial with the value.
     #[must_use]
-    pub const fn current_state(&self) -> Option<Arc<T>>
+    pub fn with_current_state<R>(&self, f: impl FnOnce(&T) -> R) -> Option<R>
     where
-        T: Send + Sync,
+        T: 'static,
     {
-        // TODO: Implement via GlobalKeyRegistry
-        None
+        let element_id = self.current_element()?;
+
+        // `with_registry` yields `Option<...>` itself (None when no
+        // handle is installed), `with_element` yields another
+        // `Option<...>` (None when the id is no longer in the tree),
+        // and the inner closure also yields `Option<R>` (None when
+        // the state downcast fails). Triple-Option flattens to one
+        // `Option<R>` via two flatten() / one ? chain.
+        crate::key::registry::with_registry(|registry| {
+            registry.with_element(element_id, |element: &dyn ElementBase| {
+                let state_any = element.state_as_any()?;
+                let typed = state_any.downcast_ref::<T>()?;
+                Some(f(typed))
+            })
+        })
+        .flatten() // peel the with_registry None layer
+        .flatten() // peel the with_element None layer
     }
 }
 
@@ -147,6 +212,10 @@ impl<T: 'static> ViewKey for GlobalKey<T> {
 
     fn debug_fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "GlobalKey<{}>({})", std::any::type_name::<T>(), self.id)
+    }
+
+    fn is_global_key(&self) -> bool {
+        true
     }
 }
 

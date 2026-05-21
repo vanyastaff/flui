@@ -4,8 +4,8 @@
 //! efficiently using keys and position matching.
 
 use flui_view::{
-    BuildContext, ElementBase, ElementTree, Lifecycle, StatelessBehavior, StatelessElement,
-    StatelessView, View, reconcile_children,
+    BuildContext, BuildOwner, ElementBase, ElementTree, Lifecycle, StatelessBehavior,
+    StatelessElement, StatelessView, View, reconcile_children,
 };
 
 // ============================================================================
@@ -55,10 +55,11 @@ impl View for DifferentView {
 #[test]
 fn test_reconcile_empty_to_empty() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let root = SimpleView { id: 0 };
-    let parent = tree.mount_root(&root);
+    let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
 
-    let result = reconcile_children(&mut tree, parent, &[], &[]);
+    let result = reconcile_children(&mut tree, parent, &[], &[], &mut owner.element_owner_mut());
 
     assert!(result.is_empty());
 }
@@ -66,15 +67,22 @@ fn test_reconcile_empty_to_empty() {
 #[test]
 fn test_reconcile_empty_to_some() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let root = SimpleView { id: 0 };
-    let parent = tree.mount_root(&root);
+    let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
 
     let v1 = SimpleView { id: 1 };
     let v2 = SimpleView { id: 2 };
     let v3 = SimpleView { id: 3 };
     let new_views: Vec<&dyn View> = vec![&v1, &v2, &v3];
 
-    let result = reconcile_children(&mut tree, parent, &[], &new_views);
+    let result = reconcile_children(
+        &mut tree,
+        parent,
+        &[],
+        &new_views,
+        &mut owner.element_owner_mut(),
+    );
 
     assert_eq!(result.len(), 3);
     assert_eq!(tree.len(), 4); // root + 3 children
@@ -89,16 +97,23 @@ fn test_reconcile_empty_to_some() {
 #[test]
 fn test_reconcile_some_to_empty() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let root = SimpleView { id: 0 };
-    let parent = tree.mount_root(&root);
+    let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
 
     // Create children
     let v1 = SimpleView { id: 1 };
     let v2 = SimpleView { id: 2 };
-    let child1 = tree.insert(&v1, parent, 0);
-    let child2 = tree.insert(&v2, parent, 1);
+    let child1 = tree.insert(&v1, parent, 0, &mut owner.element_owner_mut());
+    let child2 = tree.insert(&v2, parent, 1, &mut owner.element_owner_mut());
 
-    let result = reconcile_children(&mut tree, parent, &[child1, child2], &[]);
+    let result = reconcile_children(
+        &mut tree,
+        parent,
+        &[child1, child2],
+        &[],
+        &mut owner.element_owner_mut(),
+    );
 
     assert!(result.is_empty());
     assert!(!tree.contains(child1));
@@ -113,21 +128,28 @@ fn test_reconcile_some_to_empty() {
 #[test]
 fn test_reconcile_same_type_same_length() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let root = SimpleView { id: 0 };
-    let parent = tree.mount_root(&root);
+    let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
 
     // Old children
     let v1_old = SimpleView { id: 1 };
     let v2_old = SimpleView { id: 2 };
-    let child1 = tree.insert(&v1_old, parent, 0);
-    let child2 = tree.insert(&v2_old, parent, 1);
+    let child1 = tree.insert(&v1_old, parent, 0, &mut owner.element_owner_mut());
+    let child2 = tree.insert(&v2_old, parent, 1, &mut owner.element_owner_mut());
 
     // New views (same type, different id)
     let v1_new = SimpleView { id: 10 };
     let v2_new = SimpleView { id: 20 };
     let new_views: Vec<&dyn View> = vec![&v1_new, &v2_new];
 
-    let result = reconcile_children(&mut tree, parent, &[child1, child2], &new_views);
+    let result = reconcile_children(
+        &mut tree,
+        parent,
+        &[child1, child2],
+        &new_views,
+        &mut owner.element_owner_mut(),
+    );
 
     // Should reuse existing elements
     assert_eq!(result.len(), 2);
@@ -138,12 +160,13 @@ fn test_reconcile_same_type_same_length() {
 #[test]
 fn test_reconcile_different_type_replaces() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let root = SimpleView { id: 0 };
-    let parent = tree.mount_root(&root);
+    let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
 
     // Old child (SimpleView)
     let v_old = SimpleView { id: 1 };
-    let old_child = tree.insert(&v_old, parent, 0);
+    let old_child = tree.insert(&v_old, parent, 0, &mut owner.element_owner_mut());
 
     // New view (DifferentView - different type)
     let v_new = DifferentView {
@@ -151,7 +174,13 @@ fn test_reconcile_different_type_replaces() {
     };
     let new_views: Vec<&dyn View> = vec![&v_new];
 
-    let result = reconcile_children(&mut tree, parent, &[old_child], &new_views);
+    let result = reconcile_children(
+        &mut tree,
+        parent,
+        &[old_child],
+        &new_views,
+        &mut owner.element_owner_mut(),
+    );
 
     // Should create new element
     assert_eq!(result.len(), 1);
@@ -166,14 +195,15 @@ fn test_reconcile_different_type_replaces() {
 #[test]
 fn test_reconcile_grow_list() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let root = SimpleView { id: 0 };
-    let parent = tree.mount_root(&root);
+    let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
 
     // Start with 2 children
     let v1 = SimpleView { id: 1 };
     let v2 = SimpleView { id: 2 };
-    let child1 = tree.insert(&v1, parent, 0);
-    let child2 = tree.insert(&v2, parent, 1);
+    let child1 = tree.insert(&v1, parent, 0, &mut owner.element_owner_mut());
+    let child2 = tree.insert(&v2, parent, 1, &mut owner.element_owner_mut());
 
     // Grow to 4
     let v1_new = SimpleView { id: 1 };
@@ -182,7 +212,13 @@ fn test_reconcile_grow_list() {
     let v4_new = SimpleView { id: 4 };
     let new_views: Vec<&dyn View> = vec![&v1_new, &v2_new, &v3_new, &v4_new];
 
-    let result = reconcile_children(&mut tree, parent, &[child1, child2], &new_views);
+    let result = reconcile_children(
+        &mut tree,
+        parent,
+        &[child1, child2],
+        &new_views,
+        &mut owner.element_owner_mut(),
+    );
 
     assert_eq!(result.len(), 4);
     // First two should be reused
@@ -196,18 +232,19 @@ fn test_reconcile_grow_list() {
 #[test]
 fn test_reconcile_shrink_list() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let root = SimpleView { id: 0 };
-    let parent = tree.mount_root(&root);
+    let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
 
     // Start with 4 children
     let v1 = SimpleView { id: 1 };
     let v2 = SimpleView { id: 2 };
     let v3 = SimpleView { id: 3 };
     let v4 = SimpleView { id: 4 };
-    let child1 = tree.insert(&v1, parent, 0);
-    let child2 = tree.insert(&v2, parent, 1);
-    let child3 = tree.insert(&v3, parent, 2);
-    let child4 = tree.insert(&v4, parent, 3);
+    let child1 = tree.insert(&v1, parent, 0, &mut owner.element_owner_mut());
+    let child2 = tree.insert(&v2, parent, 1, &mut owner.element_owner_mut());
+    let child3 = tree.insert(&v3, parent, 2, &mut owner.element_owner_mut());
+    let child4 = tree.insert(&v4, parent, 3, &mut owner.element_owner_mut());
 
     // Shrink to 2
     let v1_new = SimpleView { id: 1 };
@@ -219,6 +256,7 @@ fn test_reconcile_shrink_list() {
         parent,
         &[child1, child2, child3, child4],
         &new_views,
+        &mut owner.element_owner_mut(),
     );
 
     assert_eq!(result.len(), 2);
@@ -237,16 +275,17 @@ fn test_reconcile_shrink_list() {
 #[test]
 fn test_reconcile_type_mismatch_mid_list() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let root = SimpleView { id: 0 };
-    let parent = tree.mount_root(&root);
+    let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
 
     // Old: [SimpleView, SimpleView, SimpleView]
     let v1 = SimpleView { id: 1 };
     let v2 = SimpleView { id: 2 };
     let v3 = SimpleView { id: 3 };
-    let child1 = tree.insert(&v1, parent, 0);
-    let child2 = tree.insert(&v2, parent, 1);
-    let child3 = tree.insert(&v3, parent, 2);
+    let child1 = tree.insert(&v1, parent, 0, &mut owner.element_owner_mut());
+    let child2 = tree.insert(&v2, parent, 1, &mut owner.element_owner_mut());
+    let child3 = tree.insert(&v3, parent, 2, &mut owner.element_owner_mut());
 
     // New: [SimpleView, DifferentView, SimpleView]
     let v1_new = SimpleView { id: 1 };
@@ -256,7 +295,13 @@ fn test_reconcile_type_mismatch_mid_list() {
     let v3_new = SimpleView { id: 3 };
     let new_views: Vec<&dyn View> = vec![&v1_new, &v2_new, &v3_new];
 
-    let result = reconcile_children(&mut tree, parent, &[child1, child2, child3], &new_views);
+    let result = reconcile_children(
+        &mut tree,
+        parent,
+        &[child1, child2, child3],
+        &new_views,
+        &mut owner.element_owner_mut(),
+    );
 
     assert_eq!(result.len(), 3);
     // First should be reused (same type at same position)
@@ -273,16 +318,17 @@ fn test_reconcile_type_mismatch_mid_list() {
 #[test]
 fn test_reconcile_matches_from_end() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let root = SimpleView { id: 0 };
-    let parent = tree.mount_root(&root);
+    let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
 
     // Old: [SimpleView, SimpleView, SimpleView]
     let v1 = SimpleView { id: 1 };
     let v2 = SimpleView { id: 2 };
     let v3 = SimpleView { id: 3 };
-    let child1 = tree.insert(&v1, parent, 0);
-    let child2 = tree.insert(&v2, parent, 1);
-    let child3 = tree.insert(&v3, parent, 2);
+    let child1 = tree.insert(&v1, parent, 0, &mut owner.element_owner_mut());
+    let child2 = tree.insert(&v2, parent, 1, &mut owner.element_owner_mut());
+    let child3 = tree.insert(&v3, parent, 2, &mut owner.element_owner_mut());
 
     // New: [DifferentView, SimpleView, SimpleView]
     // The algorithm should:
@@ -295,7 +341,13 @@ fn test_reconcile_matches_from_end() {
     let v3_new = SimpleView { id: 3 };
     let new_views: Vec<&dyn View> = vec![&v1_new, &v2_new, &v3_new];
 
-    let result = reconcile_children(&mut tree, parent, &[child1, child2, child3], &new_views);
+    let result = reconcile_children(
+        &mut tree,
+        parent,
+        &[child1, child2, child3],
+        &new_views,
+        &mut owner.element_owner_mut(),
+    );
 
     assert_eq!(result.len(), 3);
     // First is new (different type)
@@ -311,14 +363,15 @@ fn test_reconcile_matches_from_end() {
 #[test]
 fn test_reconcile_large_list_same_type() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let root = SimpleView { id: 0 };
-    let parent = tree.mount_root(&root);
+    let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
 
     // Create 100 old children
     let old_views: Vec<SimpleView> = (1..=100).map(|i| SimpleView { id: i }).collect();
     let mut old_children = Vec::new();
     for (i, view) in old_views.iter().enumerate() {
-        let child = tree.insert(view, parent, i);
+        let child = tree.insert(view, parent, i, &mut owner.element_owner_mut());
         old_children.push(child);
     }
 
@@ -326,7 +379,13 @@ fn test_reconcile_large_list_same_type() {
     let new_views: Vec<SimpleView> = (101..=200).map(|i| SimpleView { id: i }).collect();
     let new_view_refs: Vec<&dyn View> = new_views.iter().map(|v| v as &dyn View).collect();
 
-    let result = reconcile_children(&mut tree, parent, &old_children, &new_view_refs);
+    let result = reconcile_children(
+        &mut tree,
+        parent,
+        &old_children,
+        &new_view_refs,
+        &mut owner.element_owner_mut(),
+    );
 
     assert_eq!(result.len(), 100);
     // All should be reused (same type)
@@ -338,14 +397,15 @@ fn test_reconcile_large_list_same_type() {
 #[test]
 fn test_reconcile_large_growth() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let root = SimpleView { id: 0 };
-    let parent = tree.mount_root(&root);
+    let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
 
     // Start with 10 children
     let old_views: Vec<SimpleView> = (1..=10).map(|i| SimpleView { id: i }).collect();
     let mut old_children = Vec::new();
     for (i, view) in old_views.iter().enumerate() {
-        let child = tree.insert(view, parent, i);
+        let child = tree.insert(view, parent, i, &mut owner.element_owner_mut());
         old_children.push(child);
     }
 
@@ -353,7 +413,13 @@ fn test_reconcile_large_growth() {
     let new_views: Vec<SimpleView> = (1..=100).map(|i| SimpleView { id: i }).collect();
     let new_view_refs: Vec<&dyn View> = new_views.iter().map(|v| v as &dyn View).collect();
 
-    let result = reconcile_children(&mut tree, parent, &old_children, &new_view_refs);
+    let result = reconcile_children(
+        &mut tree,
+        parent,
+        &old_children,
+        &new_view_refs,
+        &mut owner.element_owner_mut(),
+    );
 
     assert_eq!(result.len(), 100);
     // First 10 should be reused
@@ -369,16 +435,23 @@ fn test_reconcile_large_growth() {
 #[test]
 fn test_reconcile_single_to_single() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let root = SimpleView { id: 0 };
-    let parent = tree.mount_root(&root);
+    let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
 
     let v_old = SimpleView { id: 1 };
-    let child = tree.insert(&v_old, parent, 0);
+    let child = tree.insert(&v_old, parent, 0, &mut owner.element_owner_mut());
 
     let v_new = SimpleView { id: 2 };
     let new_views: Vec<&dyn View> = vec![&v_new];
 
-    let result = reconcile_children(&mut tree, parent, &[child], &new_views);
+    let result = reconcile_children(
+        &mut tree,
+        parent,
+        &[child],
+        &new_views,
+        &mut owner.element_owner_mut(),
+    );
 
     assert_eq!(result.len(), 1);
     assert_eq!(result[0], child); // Reused
@@ -387,18 +460,25 @@ fn test_reconcile_single_to_single() {
 #[test]
 fn test_reconcile_single_to_many() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let root = SimpleView { id: 0 };
-    let parent = tree.mount_root(&root);
+    let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
 
     let v_old = SimpleView { id: 1 };
-    let child = tree.insert(&v_old, parent, 0);
+    let child = tree.insert(&v_old, parent, 0, &mut owner.element_owner_mut());
 
     let v1 = SimpleView { id: 1 };
     let v2 = SimpleView { id: 2 };
     let v3 = SimpleView { id: 3 };
     let new_views: Vec<&dyn View> = vec![&v1, &v2, &v3];
 
-    let result = reconcile_children(&mut tree, parent, &[child], &new_views);
+    let result = reconcile_children(
+        &mut tree,
+        parent,
+        &[child],
+        &new_views,
+        &mut owner.element_owner_mut(),
+    );
 
     assert_eq!(result.len(), 3);
     assert_eq!(result[0], child); // First reused
@@ -407,20 +487,27 @@ fn test_reconcile_single_to_many() {
 #[test]
 fn test_reconcile_many_to_single() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let root = SimpleView { id: 0 };
-    let parent = tree.mount_root(&root);
+    let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
 
     let v1 = SimpleView { id: 1 };
     let v2 = SimpleView { id: 2 };
     let v3 = SimpleView { id: 3 };
-    let child1 = tree.insert(&v1, parent, 0);
-    let child2 = tree.insert(&v2, parent, 1);
-    let child3 = tree.insert(&v3, parent, 2);
+    let child1 = tree.insert(&v1, parent, 0, &mut owner.element_owner_mut());
+    let child2 = tree.insert(&v2, parent, 1, &mut owner.element_owner_mut());
+    let child3 = tree.insert(&v3, parent, 2, &mut owner.element_owner_mut());
 
     let v_new = SimpleView { id: 1 };
     let new_views: Vec<&dyn View> = vec![&v_new];
 
-    let result = reconcile_children(&mut tree, parent, &[child1, child2, child3], &new_views);
+    let result = reconcile_children(
+        &mut tree,
+        parent,
+        &[child1, child2, child3],
+        &new_views,
+        &mut owner.element_owner_mut(),
+    );
 
     assert_eq!(result.len(), 1);
     assert_eq!(result[0], child1); // First reused
@@ -440,20 +527,27 @@ fn test_reconcile_is_linear_time() {
 
     for size in sizes {
         let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
         let root = SimpleView { id: 0 };
-        let parent = tree.mount_root(&root);
+        let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
 
         let old_views: Vec<SimpleView> = (1..=size).map(|i| SimpleView { id: i }).collect();
         let mut old_children = Vec::new();
         for (i, view) in old_views.iter().enumerate() {
-            let child = tree.insert(view, parent, i);
+            let child = tree.insert(view, parent, i, &mut owner.element_owner_mut());
             old_children.push(child);
         }
 
         let new_views: Vec<SimpleView> = (1..=size).map(|i| SimpleView { id: i + size }).collect();
         let new_view_refs: Vec<&dyn View> = new_views.iter().map(|v| v as &dyn View).collect();
 
-        let result = reconcile_children(&mut tree, parent, &old_children, &new_view_refs);
+        let result = reconcile_children(
+            &mut tree,
+            parent,
+            &old_children,
+            &new_view_refs,
+            &mut owner.element_owner_mut(),
+        );
 
         assert_eq!(result.len(), size as usize);
     }

@@ -242,8 +242,9 @@ mod tests {
     fn test_stateful_element_dispose() {
         let view = TestCounter { initial: 10 };
         let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
-        element.mount(None, 0);
-        element.unmount();
+        let mut owner = crate::BuildOwner::new();
+        element.mount(None, 0, &mut owner.element_owner_mut());
+        element.unmount(&mut owner.element_owner_mut());
 
         assert!(element.state().disposed);
         assert_eq!(element.lifecycle(), Lifecycle::Defunct);

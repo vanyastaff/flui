@@ -98,13 +98,13 @@ mod tests {
         fn lifecycle(&self) -> Lifecycle {
             Lifecycle::Active
         }
-        fn update(&mut self, _: &dyn View) {}
+        fn update(&mut self, _: &dyn View, _: &mut crate::ElementOwner<'_>) {}
         fn mark_needs_build(&mut self) {}
-        fn perform_build(&mut self) {}
-        fn mount(&mut self, _: Option<ElementId>, _: usize) {}
+        fn perform_build(&mut self, _: &mut crate::ElementOwner<'_>) {}
+        fn mount(&mut self, _: Option<ElementId>, _: usize, _: &mut crate::ElementOwner<'_>) {}
         fn deactivate(&mut self) {}
         fn activate(&mut self) {}
-        fn unmount(&mut self) {}
+        fn unmount(&mut self, _: &mut crate::ElementOwner<'_>) {}
         fn visit_children(&self, _: &mut dyn FnMut(ElementId)) {}
         fn depth(&self) -> usize {
             0
@@ -151,7 +151,8 @@ mod tests {
         };
 
         let mut element = ProxyElement::new(&view, ProxyBehavior);
-        element.mount(None, 0);
+        let mut owner = crate::BuildOwner::new();
+        element.mount(None, 0, &mut owner.element_owner_mut());
 
         assert_eq!(element.lifecycle(), Lifecycle::Active);
     }
@@ -164,14 +165,15 @@ mod tests {
         };
 
         let mut element = ProxyElement::new(&view, ProxyBehavior);
-        element.mount(None, 0);
+        let mut owner = crate::BuildOwner::new();
+        element.mount(None, 0, &mut owner.element_owner_mut());
 
         let new_view = TestProxyView {
             child: DummyChild,
             enabled: false,
         };
 
-        element.update(&new_view);
+        element.update(&new_view, &mut owner.element_owner_mut());
         // Element is marked dirty after update
     }
 
@@ -183,8 +185,9 @@ mod tests {
         };
 
         let mut element = ProxyElement::new(&view, ProxyBehavior);
-        element.mount(None, 0);
-        element.unmount();
+        let mut owner = crate::BuildOwner::new();
+        element.mount(None, 0, &mut owner.element_owner_mut());
+        element.unmount(&mut owner.element_owner_mut());
 
         assert_eq!(element.lifecycle(), Lifecycle::Defunct);
     }

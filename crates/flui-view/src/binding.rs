@@ -450,6 +450,16 @@ impl WidgetsBinding {
     /// Create a new WidgetsBinding.
     ///
     /// Note: Prefer using `WidgetsBinding::instance()` for singleton access.
+    ///
+    /// # GlobalKey registry installation
+    ///
+    /// Constructing the binding also installs a process-wide
+    /// [`GlobalKey`](crate::GlobalKey) lookup handle pointed at this
+    /// binding's singleton instance (`WidgetsBinding::instance()`), so
+    /// `GlobalKey::current_element` / `with_current_state` resolve to
+    /// the actively-mounted element tree in production. Tests that
+    /// bypass the binding install their own handle via the explicit
+    /// `crate::test_only_set_global_key_registry` shim.
     pub fn new() -> Self {
         let mut binding = Self {
             inner: RwLock::new(WidgetsBindingInner {
@@ -471,7 +481,39 @@ impl WidgetsBinding {
             ready_to_produce_frames: AtomicBool::new(false),
         };
         binding.init_instances();
+        Self::install_global_key_registry();
         binding
+    }
+
+    /// Install a closure-based `GlobalKey` registry handle pointing at
+    /// the singleton `WidgetsBinding::instance()`.
+    ///
+    /// The handle's `lookup` and `visit` closures capture the binding's
+    /// `&'static` singleton reference (produced by
+    /// `impl_binding_singleton!`) and acquire the binding's
+    /// `RwLock<WidgetsBindingInner>` read-lock per call. No additional
+    /// `Arc<RwLock<_>>` wrapping is needed on the binding's storage —
+    /// the singleton lifetime carries the registry's reachability.
+    ///
+    /// Idempotent: the registry slot is a `RwLock<Option<…>>`, so calls
+    /// past the first replace the previous handle with an equivalent
+    /// one.
+    fn install_global_key_registry() {
+        let handle = crate::key::registry::GlobalKeyRegistryHandle::new(
+            |hash| {
+                let binding = <WidgetsBinding as flui_foundation::HasInstance>::instance();
+                let inner = binding.inner.read();
+                inner.build_owner.element_for_global_key(hash)
+            },
+            |id, f| {
+                let binding = <WidgetsBinding as flui_foundation::HasInstance>::instance();
+                let inner = binding.inner.read();
+                if let Some(node) = inner.element_tree.get(id) {
+                    f(node.element());
+                }
+            },
+        );
+        let _ = crate::key::registry::install_registry(handle);
     }
 
     /// Set the PipelineOwner for render tree management.
@@ -560,11 +602,22 @@ impl WidgetsBinding {
         );
 
         // Mount root element with PipelineOwner
-        // This ensures RenderObjectElements can create their RenderObjects
+        // This ensures RenderObjectElements can create their RenderObjects.
+        // Split the borrow so the BuildOwner-derived ElementOwner handle and
+        // the ElementTree borrow don't overlap.
         let pipeline_owner = inner.pipeline_owner.clone();
-        let root_id = inner
-            .element_tree
-            .mount_root_with_pipeline_owner(view, pipeline_owner);
+        let root_id = {
+            let WidgetsBindingInner {
+                ref mut build_owner,
+                ref mut element_tree,
+                ..
+            } = *inner;
+            element_tree.mount_root_with_pipeline_owner(
+                view,
+                pipeline_owner,
+                &mut build_owner.element_owner_mut(),
+            )
+        };
         inner.root_element = Some(root_id);
 
         // Schedule initial build
@@ -586,7 +639,12 @@ impl WidgetsBinding {
 
         if let Some(root_id) = inner.root_element.take() {
             // Remove root element (this clears the tree since it's the root)
-            let _ = inner.element_tree.remove(root_id);
+            let WidgetsBindingInner {
+                ref mut build_owner,
+                ref mut element_tree,
+                ..
+            } = *inner;
+            let _ = element_tree.remove(root_id, &mut build_owner.element_owner_mut());
             tracing::debug!(?root_id, "Root widget detached");
         }
     }
@@ -1153,12 +1211,17 @@ mod tests {
             self.lifecycle
         }
 
-        fn mount(&mut self, _parent: Option<flui_foundation::ElementId>, slot: usize) {
+        fn mount(
+            &mut self,
+            _parent: Option<flui_foundation::ElementId>,
+            slot: usize,
+            _owner: &mut crate::ElementOwner<'_>,
+        ) {
             self.depth = slot;
             self.lifecycle = crate::Lifecycle::Active;
         }
 
-        fn unmount(&mut self) {
+        fn unmount(&mut self, _owner: &mut crate::ElementOwner<'_>) {
             self.lifecycle = crate::Lifecycle::Defunct;
         }
 
@@ -1170,11 +1233,11 @@ mod tests {
             self.lifecycle = crate::Lifecycle::Inactive;
         }
 
-        fn update(&mut self, _new_view: &dyn View) {}
+        fn update(&mut self, _new_view: &dyn View, _owner: &mut crate::ElementOwner<'_>) {}
 
         fn mark_needs_build(&mut self) {}
 
-        fn perform_build(&mut self) {
+        fn perform_build(&mut self, _owner: &mut crate::ElementOwner<'_>) {
             // Leaf - no children to build
         }
 

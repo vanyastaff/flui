@@ -114,7 +114,7 @@ fn test_build_scope_clears_dirty() {
     let mut tree = ElementTree::new();
 
     let view = TestView { id: 1 };
-    let root_id = tree.mount_root(&view);
+    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
 
     owner.schedule_build_for(root_id, 0);
     assert!(owner.has_dirty_elements());
@@ -134,9 +134,14 @@ fn test_build_scope_processes_in_depth_order() {
     let child_view = TestView { id: 1 };
     let grandchild_view = TestView { id: 2 };
 
-    let root_id = tree.mount_root(&root_view);
-    let child_id = tree.insert(&child_view, root_id, 0);
-    let grandchild_id = tree.insert(&grandchild_view, child_id, 0);
+    let root_id = tree.mount_root(&root_view, &mut owner.element_owner_mut());
+    let child_id = tree.insert(&child_view, root_id, 0, &mut owner.element_owner_mut());
+    let grandchild_id = tree.insert(
+        &grandchild_view,
+        child_id,
+        0,
+        &mut owner.element_owner_mut(),
+    );
 
     // Schedule in reverse depth order
     owner.schedule_build_for(grandchild_id, 2);
@@ -155,13 +160,13 @@ fn test_build_scope_skips_removed_elements() {
     let mut tree = ElementTree::new();
 
     let view = TestView { id: 1 };
-    let root_id = tree.mount_root(&view);
+    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
 
     // Schedule element for rebuild
     owner.schedule_build_for(root_id, 0);
 
     // Remove element before build
-    tree.remove(root_id);
+    tree.remove(root_id, &mut owner.element_owner_mut());
 
     // Should not panic
     owner.build_scope(&mut tree);
@@ -175,7 +180,7 @@ fn test_build_scope_skips_inactive_elements() {
     let mut tree = ElementTree::new();
 
     let view = TestView { id: 1 };
-    let root_id = tree.mount_root(&view);
+    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
 
     // Schedule element for rebuild
     owner.schedule_build_for(root_id, 0);
@@ -344,9 +349,14 @@ fn test_depth_ordering_shallowest_first() {
     let child_view = TestView { id: 1 };
     let grandchild_view = TestView { id: 2 };
 
-    let root_id = tree.mount_root(&root_view);
-    let child_id = tree.insert(&child_view, root_id, 0);
-    let grandchild_id = tree.insert(&grandchild_view, child_id, 0);
+    let root_id = tree.mount_root(&root_view, &mut owner.element_owner_mut());
+    let child_id = tree.insert(&child_view, root_id, 0, &mut owner.element_owner_mut());
+    let grandchild_id = tree.insert(
+        &grandchild_view,
+        child_id,
+        0,
+        &mut owner.element_owner_mut(),
+    );
 
     // Schedule in random order
     owner.schedule_build_for(child_id, 1);
@@ -391,9 +401,9 @@ fn test_full_build_cycle() {
     let child1_view = TestView { id: 1 };
     let child2_view = TestView { id: 2 };
 
-    let root_id = tree.mount_root(&root_view);
-    let child1_id = tree.insert(&child1_view, root_id, 0);
-    let child2_id = tree.insert(&child2_view, root_id, 1);
+    let root_id = tree.mount_root(&root_view, &mut owner.element_owner_mut());
+    let child1_id = tree.insert(&child1_view, root_id, 0, &mut owner.element_owner_mut());
+    let child2_id = tree.insert(&child2_view, root_id, 1, &mut owner.element_owner_mut());
 
     // Mark elements dirty
     tree.mark_needs_build(root_id);
@@ -423,7 +433,7 @@ fn test_multiple_build_cycles() {
     let mut tree = ElementTree::new();
 
     let view = TestView { id: 1 };
-    let root_id = tree.mount_root(&view);
+    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
 
     // First cycle
     owner.schedule_build_for(root_id, 0);

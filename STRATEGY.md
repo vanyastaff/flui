@@ -1,6 +1,6 @@
 ---
 name: FLUI
-last_updated: 2026-05-19
+last_updated: 2026-05-21
 ---
 
 # FLUI Strategy
@@ -17,7 +17,7 @@ Flutter-style three-tree архитектура (View → Element → Render) п
 
 **Архитектурные принципы порта.** Три правила решают конфликты Dart↔Rust mapping'а:
 
-- **Behavior loyal, structure Rust-native.** Алгоритмы (build/layout/paint, lifecycle FSM, dependency tracking InheritedWidget, child reconciliation через keys) портируются 1:1 из `.flutter/`. Shape данных — Rust-native: trait + generic вместо inheritance, `Option<T>` + `NonZeroUsize` ID offset вместо nullable refs, Slab arena вместо tree pointers, `Result<T, E>` + `thiserror` вместо exceptions.
+- **Behavior loyal, structure Rust-native.** Алгоритмы (build/layout/paint, lifecycle FSM, dependency tracking InheritedWidget, child reconciliation через keys) портируются 1:1 из `.flutter/`. Shape данных — Rust-native: trait + generic вместо inheritance, `Option<T>` + `NonZeroUsize` ID offset вместо nullable refs, Slab arena вместо tree pointers, `Result<T, E>` + `thiserror` вместо exceptions. **`flui-tree` крейт — прямое применение этого принципа к самим деревьям**: Flutter имеет four parallel tree implementations (Element / RenderObject / Layer / Semantics) каждое со своей traversal logic; `flui-tree` существует как unified Rust trait API (`TreeRead`/`TreeNav`/`TreeWrite` + `Arity` system + `Mountable`/`Unmountable` typestate + visitors/cursors/diffs) поверх которого все four trees должны строиться. Zero-consumer abstractions в `flui-tree` — это migration gap (production crates ещё пишут bespoke traversals), не deletion signal; миграция consumers К unified API делается, не наоборот.
 - **Compile-time over runtime** где возможно. Arity system (`Leaf`/`Single`/`Optional`/`Variable`) ловит arity-mismatch на этапе компиляции, а не paint. Typestate (`BuilderContextBuilder<P, Pr>`) валидирует Android/iOS/Desktop/Web config. Sealed traits (`PlatformBuilder`) дают exhaustive match. TypeId-registry для InheritedView lookup — единственное допустимое runtime-reflection окно.
 - **Sync hot path, async на краях.** Render pipeline (build → layout → paint → composite) строго синхронен; frame budget critical, async overhead неприемлем. Async OK на границах: IO в `flui-assets`, scheduler в `flui-scheduler`, build pipeline в `flui-build`. Никакого `async fn` в `View::build` или `RenderObject::paint`.
 

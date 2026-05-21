@@ -14,7 +14,6 @@
 //! - **Change Notification**: Observable patterns for reactive UI updates
 //! - **Callbacks**: `VoidCallback`, `ValueChanged`, and other callback type
 //!   aliases
-//! - **Platform**: `TargetPlatform` for platform detection
 //! - **Observer Lists**: Efficient observer/listener collections
 //! - **Diagnostics**: Debugging and introspection utilities
 //! - **Error Handling**: Standardized error types and utilities
@@ -143,7 +142,6 @@ pub mod consts;
 pub mod id;
 pub mod key;
 pub mod observer;
-pub mod platform;
 pub mod wasm;
 
 // Reactive programming - change notification and observables
@@ -158,8 +156,6 @@ pub mod error;
 // ============================================================================
 
 // Core types - IDs for all tree levels
-// Assertions and error handling
-pub use assert::FluiError;
 // Binding infrastructure
 pub use binding::{BindingBase, HasInstance, check_instance};
 // Callbacks
@@ -180,61 +176,34 @@ pub use debug::{
 // Error handling
 pub use error::{FoundationError, Result};
 pub use id::{
-    // Animation/Scheduler IDs
-    AnimationId,
-    // Platform/System IDs
-    DeviceId,
-    // Debug/Inspector IDs
-    DiagnosticsId,
     // Core tree IDs (5-tree architecture)
     ElementId,
-    EmbedderId,
-    // Group/Region IDs
-    FocusId,
+    // Scheduler IDs (consumed by flui-scheduler)
     FrameCallbackId,
     FrameId,
-    // Gesture IDs
-    GestureId,
-    GroupId,
     // Generic ID system
     Id,
     Identifier,
     Index,
-    // Keyboard IDs
-    KeyId,
     LayerId,
     // Listener/Observer IDs
     ListenerId,
-    LocationId,
     Marker,
-    MotionEventId,
     ObserverId,
-    PlatformViewId,
-    PointerId,
-    ProductId,
     RawId,
     RenderId,
-    // Navigation/Restoration IDs
-    RestorationScopeId,
-    RouteId,
     SemanticsId,
     TaskId,
-    TextureId,
     TickerId,
-    VendorId,
     ViewId,
     // Marker types module
     markers,
 };
 pub use key::{Key, KeyRef, Keyed, UniqueKey, ValueKey, ViewKey, WithKey};
 // Change notification (Listenable pattern)
-pub use notifier::{
-    ChangeNotifier, Listenable, ListenerCallback, MergedListenable, ValueListenable, ValueNotifier,
-};
+pub use notifier::{ChangeNotifier, Listenable, ListenerCallback, ValueListenable, ValueNotifier};
 // Observer lists
-pub use observer::{HashedObserverList, ObserverList, SyncObserverList};
-// Platform
-pub use platform::TargetPlatform;
+pub use observer::ObserverList;
 // WASM compatibility
 pub use wasm::{WasmNotSend, WasmNotSendSync};
 
@@ -266,12 +235,8 @@ pub mod prelude {
         ElementId,
         // Callbacks
         FallibleCallback,
-        // Assertions
-        FluiError,
         // Keys
         HasInstance,
-        // Observer lists
-        HashedObserverList,
         IS_DESKTOP,
         IS_MOBILE,
         IS_WEB,
@@ -286,16 +251,13 @@ pub mod prelude {
         Listenable,
         ListenerCallback,
         ListenerId,
-        MergedListenable,
+        // Observer lists
         ObserverId,
         ObserverList,
         Predicate,
         RELEASE_MODE,
         RenderId,
         SemanticsId,
-        SyncObserverList,
-        // Platform
-        TargetPlatform,
         UniqueKey,
         ValueChanged,
         ValueGetter,

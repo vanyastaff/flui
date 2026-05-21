@@ -13,10 +13,10 @@ use std::{
 
 use flui_foundation::{
     ChangeNotifier, DiagnosticLevel, Diagnosticable, DiagnosticsBuilder, DiagnosticsNode,
-    ElementId, FoundationError, HashedObserverList, Key, LayerId, Listenable, ListenerId,
-    MergedListenable, ObserverId, ObserverList, RenderId, Result, SemanticsId, SyncObserverList,
-    TargetPlatform, ValueNotifier, ViewId, error::ErrorContext,
+    ElementId, FoundationError, Key, LayerId, Listenable, ListenerId, ObserverList, RenderId,
+    Result, SemanticsId, ValueNotifier, ViewId, error::ErrorContext,
 };
+use flui_types::platform::TargetPlatform;
 
 // ============================================================================
 // ID System Integration Tests
@@ -199,26 +199,6 @@ fn test_value_notifier_complex_state() {
     assert_eq!(change_count.load(Ordering::SeqCst), 2);
 }
 
-/// Test merged listenable for combining state sources
-#[test]
-fn test_merged_listenable() {
-    let notifier1 = ChangeNotifier::new();
-    let notifier2 = ChangeNotifier::new();
-
-    let merged = MergedListenable::new(vec![Box::new(notifier1.clone()), Box::new(notifier2)]);
-
-    let notification_count = Arc::new(AtomicUsize::new(0));
-    let count_clone = Arc::clone(&notification_count);
-
-    let _ = merged.add_listener(Arc::new(move || {
-        count_clone.fetch_add(1, Ordering::SeqCst);
-    }));
-
-    // Notify through merged
-    merged.notify();
-    assert_eq!(notification_count.load(Ordering::SeqCst), 1);
-}
-
 // ============================================================================
 // Observer System Integration Tests
 // ============================================================================
@@ -264,48 +244,6 @@ fn test_observer_event_handling() {
 
     // Only second observer: 20
     assert_eq!(sum.load(Ordering::SeqCst), 20);
-}
-
-/// Test thread-safe observer list
-#[test]
-fn test_concurrent_observers() {
-    let observers: Arc<SyncObserverList<i32>> = Arc::new(SyncObserverList::new());
-
-    // Add observers from multiple threads
-    let handles: Vec<_> = (0..10)
-        .map(|i| {
-            let obs = Arc::clone(&observers);
-            std::thread::spawn(move || {
-                let _ = obs.add(i);
-            })
-        })
-        .collect();
-
-    for handle in handles {
-        handle.join().unwrap();
-    }
-
-    assert_eq!(observers.len(), 10);
-}
-
-/// Test hashed observer list for large collections
-#[test]
-fn test_hashed_observer_list_performance() {
-    let observers: HashedObserverList<String> = HashedObserverList::new();
-
-    // Add many observers
-    let ids: Vec<ObserverId> = (0..1000)
-        .map(|i| observers.add(format!("Observer {i}")))
-        .collect();
-
-    assert_eq!(observers.len(), 1000);
-
-    // Remove every other observer
-    for id in ids.iter().step_by(2) {
-        observers.remove(*id);
-    }
-
-    assert_eq!(observers.len(), 500);
 }
 
 // ============================================================================
@@ -455,18 +393,17 @@ fn test_error_recovery() {
 // Platform Integration Tests
 // ============================================================================
 
-/// Test platform detection
+/// Test platform detection via the canonical type in `flui-types`.
 #[test]
 fn test_platform_detection() {
     let platform = TargetPlatform::current();
 
-    // At least one category should be true
-    let is_any_platform = platform.is_desktop() || platform.is_mobile() || platform.is_web();
-    assert!(is_any_platform);
-
-    // Platform should have a string representation
+    // Platform should have a non-empty static string identifier.
     let platform_str = platform.as_str();
     assert!(!platform_str.is_empty());
+
+    // Default matches current.
+    assert_eq!(TargetPlatform::default(), platform);
 }
 
 // ============================================================================

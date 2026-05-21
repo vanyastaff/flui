@@ -12,8 +12,8 @@ use std::{
 };
 
 use flui_view::{
-    BuildContext, ElementBase, Lifecycle, StatefulBehavior, StatefulElement, StatefulView,
-    StatelessBehavior, StatelessElement, StatelessView, View, ViewState,
+    BuildContext, BuildOwner, ElementBase, Lifecycle, StatefulBehavior, StatefulElement,
+    StatefulView, StatelessBehavior, StatelessElement, StatelessView, View, ViewState,
 };
 
 // ============================================================================
@@ -80,8 +80,9 @@ fn test_stateless_element_mount() {
         label: "Mount".to_string(),
     };
     let mut element = StatelessElement::new(&view, StatelessBehavior);
+    let mut owner = BuildOwner::new();
 
-    element.mount(None, 0);
+    element.mount(None, 0, &mut owner.element_owner_mut());
 
     assert_eq!(element.lifecycle(), Lifecycle::Active);
 }
@@ -96,10 +97,11 @@ fn test_stateless_element_update() {
     };
 
     let mut element = StatelessElement::new(&view1, StatelessBehavior);
-    element.mount(None, 0);
+    let mut owner = BuildOwner::new();
+    element.mount(None, 0, &mut owner.element_owner_mut());
 
     // Update with new view of same type
-    element.update(&view2);
+    element.update(&view2, &mut owner.element_owner_mut());
 
     // Element should still be valid
     assert_eq!(element.lifecycle(), Lifecycle::Active);
@@ -111,10 +113,11 @@ fn test_stateless_element_mark_needs_build() {
         label: "Dirty".to_string(),
     };
     let mut element = StatelessElement::new(&view, StatelessBehavior);
-    element.mount(None, 0);
+    let mut owner = BuildOwner::new();
+    element.mount(None, 0, &mut owner.element_owner_mut());
 
     // perform_build clears dirty flag
-    element.perform_build();
+    element.perform_build(&mut owner.element_owner_mut());
 
     // mark_needs_build sets it again
     element.mark_needs_build();
@@ -187,7 +190,8 @@ fn test_stateful_view_create_state() {
 fn test_stateful_element_state_persistence() {
     let view = CounterView { initial_count: 0 };
     let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
-    element.mount(None, 0);
+    let mut owner = BuildOwner::new();
+    element.mount(None, 0, &mut owner.element_owner_mut());
 
     // Modify state
     element.state().count.store(42, Ordering::SeqCst);
@@ -200,7 +204,8 @@ fn test_stateful_element_state_persistence() {
 fn test_stateful_element_set_state() {
     let view = CounterView { initial_count: 0 };
     let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
-    element.mount(None, 0);
+    let mut owner = BuildOwner::new();
+    element.mount(None, 0, &mut owner.element_owner_mut());
 
     // Use set_state helper
     element.set_state(|state| {
@@ -216,13 +221,14 @@ fn test_stateful_element_update_calls_did_update_view() {
     let view2 = CounterView { initial_count: 10 };
 
     let mut element = StatefulElement::new(&view1, StatefulBehavior::new(&view1));
-    element.mount(None, 0);
+    let mut owner = BuildOwner::new();
+    element.mount(None, 0, &mut owner.element_owner_mut());
 
     let update_count = element.state().update_count.clone();
     assert_eq!(update_count.load(Ordering::SeqCst), 0);
 
     // Update with new view
-    element.update(&view2);
+    element.update(&view2, &mut owner.element_owner_mut());
 
     assert_eq!(update_count.load(Ordering::SeqCst), 1);
 }
@@ -231,14 +237,15 @@ fn test_stateful_element_update_calls_did_update_view() {
 fn test_stateful_element_multiple_updates() {
     let view = CounterView { initial_count: 0 };
     let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
-    element.mount(None, 0);
+    let mut owner = BuildOwner::new();
+    element.mount(None, 0, &mut owner.element_owner_mut());
 
     let update_count = element.state().update_count.clone();
 
     // Multiple updates
     for i in 1..=5 {
         let new_view = CounterView { initial_count: i };
-        element.update(&new_view);
+        element.update(&new_view, &mut owner.element_owner_mut());
     }
 
     assert_eq!(update_count.load(Ordering::SeqCst), 5);
@@ -305,7 +312,8 @@ impl View for LifecycleCallbackView {
 fn test_stateful_deactivate_callback_called() {
     let view = LifecycleCallbackView;
     let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
-    element.mount(None, 0);
+    let mut owner = BuildOwner::new();
+    element.mount(None, 0, &mut owner.element_owner_mut());
 
     let deactivate_count = element.state().deactivate_called.clone();
     assert_eq!(deactivate_count.load(Ordering::SeqCst), 0);
@@ -319,7 +327,8 @@ fn test_stateful_deactivate_callback_called() {
 fn test_stateful_activate_callback_called() {
     let view = LifecycleCallbackView;
     let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
-    element.mount(None, 0);
+    let mut owner = BuildOwner::new();
+    element.mount(None, 0, &mut owner.element_owner_mut());
     element.deactivate();
 
     let activate_count = element.state().activate_called.clone();
@@ -334,12 +343,13 @@ fn test_stateful_activate_callback_called() {
 fn test_stateful_dispose_callback_called_on_unmount() {
     let view = LifecycleCallbackView;
     let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
-    element.mount(None, 0);
+    let mut owner = BuildOwner::new();
+    element.mount(None, 0, &mut owner.element_owner_mut());
 
     let dispose_count = element.state().dispose_called.clone();
     assert_eq!(dispose_count.load(Ordering::SeqCst), 0);
 
-    element.unmount();
+    element.unmount(&mut owner.element_owner_mut());
 
     assert_eq!(dispose_count.load(Ordering::SeqCst), 1);
 }
@@ -355,8 +365,9 @@ fn test_separate_elements_have_separate_state() {
     let mut element1 = StatefulElement::new(&view, StatefulBehavior::new(&view));
     let mut element2 = StatefulElement::new(&view, StatefulBehavior::new(&view));
 
-    element1.mount(None, 0);
-    element2.mount(None, 1);
+    let mut owner = BuildOwner::new();
+    element1.mount(None, 0, &mut owner.element_owner_mut());
+    element2.mount(None, 1, &mut owner.element_owner_mut());
 
     // Modify state of element1
     element1.state().count.store(100, Ordering::SeqCst);

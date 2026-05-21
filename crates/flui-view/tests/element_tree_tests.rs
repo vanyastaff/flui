@@ -5,8 +5,8 @@
 
 use flui_foundation::ElementId;
 use flui_view::{
-    BuildContext, ElementBase, ElementTree, Lifecycle, StatelessBehavior, StatelessElement,
-    StatelessView, View,
+    BuildContext, BuildOwner, ElementBase, ElementTree, Lifecycle, StatelessBehavior,
+    StatelessElement, StatelessView, View,
 };
 
 // ============================================================================
@@ -55,9 +55,10 @@ fn test_tree_with_capacity() {
 #[test]
 fn test_mount_root() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let view = TestView { id: 1 };
 
-    let root_id = tree.mount_root(&view);
+    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
 
     assert!(!tree.is_empty());
     assert_eq!(tree.len(), 1);
@@ -68,9 +69,10 @@ fn test_mount_root() {
 #[test]
 fn test_mount_root_activates_element() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let view = TestView { id: 1 };
 
-    let root_id = tree.mount_root(&view);
+    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
 
     let node = tree.get(root_id).unwrap();
     assert_eq!(node.element().lifecycle(), Lifecycle::Active);
@@ -79,11 +81,12 @@ fn test_mount_root_activates_element() {
 #[test]
 fn test_insert_child() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let root_view = TestView { id: 0 };
     let child_view = TestView { id: 1 };
 
-    let root_id = tree.mount_root(&root_view);
-    let child_id = tree.insert(&child_view, root_id, 0);
+    let root_id = tree.mount_root(&root_view, &mut owner.element_owner_mut());
+    let child_id = tree.insert(&child_view, root_id, 0, &mut owner.element_owner_mut());
 
     assert_eq!(tree.len(), 2);
     assert!(tree.contains(child_id));
@@ -92,11 +95,12 @@ fn test_insert_child() {
 #[test]
 fn test_insert_child_sets_parent() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let root_view = TestView { id: 0 };
     let child_view = TestView { id: 1 };
 
-    let root_id = tree.mount_root(&root_view);
-    let child_id = tree.insert(&child_view, root_id, 0);
+    let root_id = tree.mount_root(&root_view, &mut owner.element_owner_mut());
+    let child_id = tree.insert(&child_view, root_id, 0, &mut owner.element_owner_mut());
 
     let child_node = tree.get(child_id).unwrap();
     assert_eq!(child_node.parent(), Some(root_id));
@@ -105,11 +109,12 @@ fn test_insert_child_sets_parent() {
 #[test]
 fn test_insert_child_sets_slot() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let root_view = TestView { id: 0 };
     let child_view = TestView { id: 1 };
 
-    let root_id = tree.mount_root(&root_view);
-    let child_id = tree.insert(&child_view, root_id, 5);
+    let root_id = tree.mount_root(&root_view, &mut owner.element_owner_mut());
+    let child_id = tree.insert(&child_view, root_id, 5, &mut owner.element_owner_mut());
 
     let child_node = tree.get(child_id).unwrap();
     assert_eq!(child_node.slot(), 5);
@@ -118,11 +123,12 @@ fn test_insert_child_sets_slot() {
 #[test]
 fn test_insert_child_sets_depth() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let root_view = TestView { id: 0 };
     let child_view = TestView { id: 1 };
 
-    let root_id = tree.mount_root(&root_view);
-    let child_id = tree.insert(&child_view, root_id, 0);
+    let root_id = tree.mount_root(&root_view, &mut owner.element_owner_mut());
+    let child_id = tree.insert(&child_view, root_id, 0, &mut owner.element_owner_mut());
 
     let child_node = tree.get(child_id).unwrap();
     assert_eq!(child_node.depth(), 1);
@@ -135,9 +141,10 @@ fn test_insert_child_sets_depth() {
 #[test]
 fn test_get_existing_element() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let view = TestView { id: 42 };
 
-    let id = tree.mount_root(&view);
+    let id = tree.mount_root(&view, &mut owner.element_owner_mut());
     let node = tree.get(id);
 
     assert!(node.is_some());
@@ -156,9 +163,10 @@ fn test_get_nonexistent_element() {
 #[test]
 fn test_get_mut() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let view = TestView { id: 1 };
 
-    let id = tree.mount_root(&view);
+    let id = tree.mount_root(&view, &mut owner.element_owner_mut());
     let node = tree.get_mut(id);
 
     assert!(node.is_some());
@@ -167,9 +175,10 @@ fn test_get_mut() {
 #[test]
 fn test_contains() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let view = TestView { id: 1 };
 
-    let id = tree.mount_root(&view);
+    let id = tree.mount_root(&view, &mut owner.element_owner_mut());
     let fake_id = ElementId::new(999);
 
     assert!(tree.contains(id));
@@ -183,12 +192,13 @@ fn test_contains() {
 #[test]
 fn test_remove_element() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let view = TestView { id: 1 };
 
-    let id = tree.mount_root(&view);
+    let id = tree.mount_root(&view, &mut owner.element_owner_mut());
     assert!(tree.contains(id));
 
-    let removed = tree.remove(id);
+    let removed = tree.remove(id, &mut owner.element_owner_mut());
 
     assert!(removed.is_some());
     assert!(!tree.contains(id));
@@ -198,12 +208,13 @@ fn test_remove_element() {
 #[test]
 fn test_remove_clears_root() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let view = TestView { id: 1 };
 
-    let id = tree.mount_root(&view);
+    let id = tree.mount_root(&view, &mut owner.element_owner_mut());
     assert!(tree.root().is_some());
 
-    tree.remove(id);
+    tree.remove(id, &mut owner.element_owner_mut());
 
     assert!(tree.root().is_none());
 }
@@ -211,10 +222,11 @@ fn test_remove_clears_root() {
 #[test]
 fn test_remove_unmounts_element() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let view = TestView { id: 1 };
 
-    let id = tree.mount_root(&view);
-    let removed_node = tree.remove(id).unwrap();
+    let id = tree.mount_root(&view, &mut owner.element_owner_mut());
+    let removed_node = tree.remove(id, &mut owner.element_owner_mut()).unwrap();
 
     assert_eq!(removed_node.element().lifecycle(), Lifecycle::Defunct);
 }
@@ -222,9 +234,10 @@ fn test_remove_unmounts_element() {
 #[test]
 fn test_remove_nonexistent_returns_none() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let fake_id = ElementId::new(999);
 
-    let removed = tree.remove(fake_id);
+    let removed = tree.remove(fake_id, &mut owner.element_owner_mut());
 
     assert!(removed.is_none());
 }
@@ -236,11 +249,12 @@ fn test_remove_nonexistent_returns_none() {
 #[test]
 fn test_update_element() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let view1 = TestView { id: 1 };
     let view2 = TestView { id: 2 };
 
-    let id = tree.mount_root(&view1);
-    tree.update(id, &view2);
+    let id = tree.mount_root(&view1, &mut owner.element_owner_mut());
+    tree.update(id, &view2, &mut owner.element_owner_mut());
 
     // Element should still exist
     assert!(tree.contains(id));
@@ -249,9 +263,10 @@ fn test_update_element() {
 #[test]
 fn test_mark_needs_build() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let view = TestView { id: 1 };
 
-    let id = tree.mount_root(&view);
+    let id = tree.mount_root(&view, &mut owner.element_owner_mut());
     tree.mark_needs_build(id);
 
     // Element should still be valid
@@ -265,9 +280,10 @@ fn test_mark_needs_build() {
 #[test]
 fn test_deactivate_element() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let view = TestView { id: 1 };
 
-    let id = tree.mount_root(&view);
+    let id = tree.mount_root(&view, &mut owner.element_owner_mut());
     tree.deactivate(id);
 
     let node = tree.get(id).unwrap();
@@ -277,9 +293,10 @@ fn test_deactivate_element() {
 #[test]
 fn test_activate_element() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let view = TestView { id: 1 };
 
-    let id = tree.mount_root(&view);
+    let id = tree.mount_root(&view, &mut owner.element_owner_mut());
     tree.deactivate(id);
     tree.activate(id);
 
@@ -303,9 +320,10 @@ fn test_iter_empty_tree() {
 #[test]
 fn test_iter_single_element() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let view = TestView { id: 1 };
 
-    let id = tree.mount_root(&view);
+    let id = tree.mount_root(&view, &mut owner.element_owner_mut());
 
     let ids: Vec<_> = tree.iter().collect();
 
@@ -316,13 +334,14 @@ fn test_iter_single_element() {
 #[test]
 fn test_iter_multiple_elements() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let root_view = TestView { id: 0 };
     let child1 = TestView { id: 1 };
     let child2 = TestView { id: 2 };
 
-    let root_id = tree.mount_root(&root_view);
-    let child1_id = tree.insert(&child1, root_id, 0);
-    let child2_id = tree.insert(&child2, root_id, 1);
+    let root_id = tree.mount_root(&root_view, &mut owner.element_owner_mut());
+    let child1_id = tree.insert(&child1, root_id, 0, &mut owner.element_owner_mut());
+    let child2_id = tree.insert(&child2, root_id, 1, &mut owner.element_owner_mut());
 
     let ids: Vec<_> = tree.iter().collect();
 
@@ -335,9 +354,10 @@ fn test_iter_multiple_elements() {
 #[test]
 fn test_iter_nodes() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let view = TestView { id: 1 };
 
-    let id = tree.mount_root(&view);
+    let id = tree.mount_root(&view, &mut owner.element_owner_mut());
 
     let nodes: Vec<_> = tree.iter_nodes().collect();
 
@@ -352,15 +372,16 @@ fn test_iter_nodes() {
 #[test]
 fn test_deep_tree_depth_tracking() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let view = TestView { id: 0 };
 
     // Build a chain: root -> child1 -> child2 -> ... -> child10
-    let root_id = tree.mount_root(&view);
+    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
     let mut parent_id = root_id;
 
     for i in 1..=10 {
         let child_view = TestView { id: i };
-        let child_id = tree.insert(&child_view, parent_id, 0);
+        let child_id = tree.insert(&child_view, parent_id, 0, &mut owner.element_owner_mut());
         parent_id = child_id;
     }
 
@@ -375,15 +396,21 @@ fn test_deep_tree_depth_tracking() {
 #[test]
 fn test_wide_tree() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let root_view = TestView { id: 0 };
 
-    let root_id = tree.mount_root(&root_view);
+    let root_id = tree.mount_root(&root_view, &mut owner.element_owner_mut());
 
     // Add 100 children
     let mut child_ids = Vec::new();
     for i in 1..=100 {
         let child_view = TestView { id: i };
-        let child_id = tree.insert(&child_view, root_id, i as usize - 1);
+        let child_id = tree.insert(
+            &child_view,
+            root_id,
+            i as usize - 1,
+            &mut owner.element_owner_mut(),
+        );
         child_ids.push(child_id);
     }
 
@@ -404,9 +431,10 @@ fn test_wide_tree() {
 #[test]
 fn test_element_id_is_nonzero() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let view = TestView { id: 1 };
 
-    let id = tree.mount_root(&view);
+    let id = tree.mount_root(&view, &mut owner.element_owner_mut());
 
     // ElementId should be 1-based (NonZeroUsize)
     assert!(id.get() >= 1);
@@ -415,11 +443,12 @@ fn test_element_id_is_nonzero() {
 #[test]
 fn test_element_ids_are_unique() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let root_view = TestView { id: 0 };
     let child_view = TestView { id: 1 };
 
-    let root_id = tree.mount_root(&root_view);
-    let child_id = tree.insert(&child_view, root_id, 0);
+    let root_id = tree.mount_root(&root_view, &mut owner.element_owner_mut());
+    let child_id = tree.insert(&child_view, root_id, 0, &mut owner.element_owner_mut());
 
     assert_ne!(root_id, child_id);
 }
@@ -427,15 +456,16 @@ fn test_element_ids_are_unique() {
 #[test]
 fn test_element_id_reuse_after_removal() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let view1 = TestView { id: 1 };
     let view2 = TestView { id: 2 };
 
     // Insert and remove first element
-    let id1 = tree.mount_root(&view1);
-    tree.remove(id1);
+    let id1 = tree.mount_root(&view1, &mut owner.element_owner_mut());
+    tree.remove(id1, &mut owner.element_owner_mut());
 
     // Insert second element - may reuse the slot
-    let id2 = tree.mount_root(&view2);
+    let id2 = tree.mount_root(&view2, &mut owner.element_owner_mut());
 
     // The new element should be valid
     assert!(tree.contains(id2));
@@ -457,14 +487,20 @@ fn test_tree_memory_layout() {
 #[test]
 fn test_large_tree_operations() {
     let mut tree = ElementTree::with_capacity(1000);
+    let mut owner = BuildOwner::new();
     let root_view = TestView { id: 0 };
 
-    let root_id = tree.mount_root(&root_view);
+    let root_id = tree.mount_root(&root_view, &mut owner.element_owner_mut());
 
     // Insert 1000 children
     for i in 1..=1000 {
         let child_view = TestView { id: i };
-        tree.insert(&child_view, root_id, i as usize - 1);
+        tree.insert(
+            &child_view,
+            root_id,
+            i as usize - 1,
+            &mut owner.element_owner_mut(),
+        );
     }
 
     assert_eq!(tree.len(), 1001);
@@ -482,9 +518,10 @@ fn test_large_tree_operations() {
 #[test]
 fn test_tree_debug() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let view = TestView { id: 1 };
 
-    tree.mount_root(&view);
+    tree.mount_root(&view, &mut owner.element_owner_mut());
 
     let debug_str = format!("{:?}", tree);
     assert!(debug_str.contains("ElementTree"));
@@ -494,9 +531,10 @@ fn test_tree_debug() {
 #[test]
 fn test_element_node_debug() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let view = TestView { id: 1 };
 
-    let id = tree.mount_root(&view);
+    let id = tree.mount_root(&view, &mut owner.element_owner_mut());
     let node = tree.get(id).unwrap();
 
     let debug_str = format!("{:?}", node);
@@ -524,10 +562,11 @@ fn test_tree_send_sync() {
 #[test]
 fn test_operations_on_empty_tree() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let fake_id = ElementId::new(1);
 
     // These should not panic
-    tree.update(fake_id, &TestView { id: 0 });
+    tree.update(fake_id, &TestView { id: 0 }, &mut owner.element_owner_mut());
     tree.mark_needs_build(fake_id);
     tree.deactivate(fake_id);
     tree.activate(fake_id);
@@ -538,11 +577,12 @@ fn test_operations_on_empty_tree() {
 #[test]
 fn test_double_mount_root() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let view1 = TestView { id: 1 };
     let view2 = TestView { id: 2 };
 
-    let id1 = tree.mount_root(&view1);
-    let id2 = tree.mount_root(&view2);
+    let id1 = tree.mount_root(&view1, &mut owner.element_owner_mut());
+    let id2 = tree.mount_root(&view2, &mut owner.element_owner_mut());
 
     // Second mount should create a new root
     // Both elements should exist, but root should be id2

@@ -153,7 +153,12 @@ impl crate::view::ElementBase for RootElementImpl {
         self.lifecycle
     }
 
-    fn mount(&mut self, parent: Option<ElementId>, slot: usize) {
+    fn mount(
+        &mut self,
+        parent: Option<ElementId>,
+        slot: usize,
+        _owner: &mut crate::ElementOwner<'_>,
+    ) {
         // Root elements must have no parent
         debug_assert!(parent.is_none(), "Root element cannot have a parent");
         debug_assert!(slot == 0, "Root element slot must be 0");
@@ -166,7 +171,7 @@ impl crate::view::ElementBase for RootElementImpl {
         self.needs_build = true;
     }
 
-    fn unmount(&mut self) {
+    fn unmount(&mut self, _owner: &mut crate::ElementOwner<'_>) {
         self.lifecycle = crate::element::Lifecycle::Defunct;
         self.child = None;
     }
@@ -179,7 +184,7 @@ impl crate::view::ElementBase for RootElementImpl {
         self.lifecycle = crate::element::Lifecycle::Inactive;
     }
 
-    fn update(&mut self, _new_view: &dyn crate::view::View) {
+    fn update(&mut self, _new_view: &dyn crate::view::View, _owner: &mut crate::ElementOwner<'_>) {
         // Root elements typically don't update from views
         self.mark_needs_build();
     }
@@ -188,7 +193,7 @@ impl crate::view::ElementBase for RootElementImpl {
         self.needs_build = true;
     }
 
-    fn perform_build(&mut self) {
+    fn perform_build(&mut self, _owner: &mut crate::ElementOwner<'_>) {
         self.needs_build = false;
         // Actual build logic would rebuild the child tree
     }
@@ -229,7 +234,8 @@ mod tests {
         let owner = Arc::new(BuildOwner::new());
 
         root.assign_owner(owner);
-        root.mount(None, 0);
+        let mut handle_owner = BuildOwner::new();
+        root.mount(None, 0, &mut handle_owner.element_owner_mut());
 
         assert_eq!(root.lifecycle(), crate::element::Lifecycle::Active);
     }
@@ -243,7 +249,8 @@ mod tests {
         root.assign_owner(owner);
         // This should panic - root elements can't have parents
         let fake_parent = ElementId::new(1);
-        root.mount(Some(fake_parent), 0);
+        let mut handle_owner = BuildOwner::new();
+        root.mount(Some(fake_parent), 0, &mut handle_owner.element_owner_mut());
     }
 
     #[test]
@@ -252,7 +259,11 @@ mod tests {
         let owner = Arc::new(BuildOwner::new());
 
         root.assign_owner(owner);
-        root.mount(None, 0);
+        let mut handle_owner = BuildOwner::new();
+        {
+            let mut handle = handle_owner.element_owner_mut();
+            root.mount(None, 0, &mut handle);
+        }
         assert_eq!(root.lifecycle(), crate::element::Lifecycle::Active);
 
         root.deactivate();
@@ -261,7 +272,10 @@ mod tests {
         root.activate();
         assert_eq!(root.lifecycle(), crate::element::Lifecycle::Active);
 
-        root.unmount();
+        {
+            let mut handle = handle_owner.element_owner_mut();
+            root.unmount(&mut handle);
+        }
         assert_eq!(root.lifecycle(), crate::element::Lifecycle::Defunct);
     }
 

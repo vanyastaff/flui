@@ -188,12 +188,17 @@ check "5" \
 # -----------------------------------------------------------------------------
 # Trigger 6 -- recursive Box<dyn View> stored in element child collections.
 # Scope: struct field declarations under flui-view/src/element/. Field-only
-# pattern (trailing comma); funnel parameters in trait method signatures are
-# acceptable transient borrows and are excluded by the trailing-comma anchor.
+# pattern anchored to EXACTLY 4-space indent (top-level struct fields). Funnel
+# parameters in multi-line function signatures sit at 8+ spaces and are excluded
+# by the indent anchor (the trailing-comma alone was not enough — multi-line
+# parameters also end in comma — so the indent depth distinguishes).
+# Nested struct fields would also live at 8+ spaces; per PORT.md trigger 6
+# "Box<dyn View> ... as a struct field in element child collections", the
+# concern is the top-level element-tree storage shape, not nested helpers.
 # -----------------------------------------------------------------------------
 check "6" \
   "Box<dyn View> stored as a struct field in element child collections" \
-  '^\s+(pub\s+)?\w+\s*:\s*(Vec<\s*)?Box<\s*dyn\s+View\b[^,]*,\s*$' \
+  '^    (pub\s+)?\w+\s*:\s*(Vec<\s*)?Box<\s*dyn\s+View\b[^,]*,\s*$' \
   --type rust \
   crates/flui-view/src/element
 

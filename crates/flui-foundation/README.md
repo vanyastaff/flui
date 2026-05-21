@@ -13,11 +13,11 @@ FLUI Foundation provides fundamental building blocks used throughout the FLUI UI
 - **Tree IDs**: Type-safe `Id<T>` with wgpu-style marker traits for all tree levels
 - **Keys**: `Key`, `ValueKey`, `UniqueKey` for widget identity (GlobalKey/ObjectKey in flui-view)
 - **Change Notification**: Observable patterns for reactive UI updates
-- **Observer Lists**: Efficient `ObserverList`, `SyncObserverList`, `HashedObserverList`
+- **Observer Lists**: Efficient `ObserverList` with O(1) add/remove by ID
 - **Diagnostics**: Rich debugging and introspection utilities
 - **Error Handling**: Standardized `FoundationError` with context chaining
 - **Callbacks**: Type-safe callback aliases (`VoidCallback`, `ValueChanged`, etc.)
-- **Platform Detection**: `TargetPlatform` for cross-platform code
+- **Platform Detection**: re-exported from `flui-types` — see `flui_types::platform::TargetPlatform`
 - **WASM Support**: `WasmNotSendSync` trait for web compatibility
 - **Thread Safety**: All types designed for multi-threaded contexts
 
@@ -142,22 +142,14 @@ value.update(|v| *v += 1);   // Update with closure
 ### Observer Lists
 
 ```rust
-use flui_foundation::{ObserverList, SyncObserverList, HashedObserverList};
+use flui_foundation::ObserverList;
 
-// Basic observer list (not thread-safe)
+// O(1) add/remove by ID, slot reuse, NOT thread-safe — wrap in your
+// own synchronization primitive (e.g. `parking_lot::RwLock`) for
+// concurrent access.
 let mut observers: ObserverList<i32> = ObserverList::new();
 let id = observers.add(42);
 observers.remove(id);
-
-// Thread-safe observer list
-let sync_observers: SyncObserverList<i32> = SyncObserverList::new();
-sync_observers.add(42);
-sync_observers.for_each(|v| println!("{}", v));
-
-// Hash-based for O(1) operations on large collections
-let hashed: HashedObserverList<String> = HashedObserverList::new();
-let id = hashed.add("observer".to_string());
-hashed.remove(id);
 ```
 
 ### WASM Compatibility
@@ -176,17 +168,18 @@ fn use_in_thread<T: WasmNotSendSync>(value: T) {
 
 ### Platform Detection
 
+Platform detection lives in the lower-layer `flui-types` crate. Import it
+from there:
+
 ```rust
-use flui_foundation::TargetPlatform;
+use flui_types::platform::TargetPlatform;
 
 let platform = TargetPlatform::current();
 
 if platform.is_desktop() {
-    println!("Running on desktop: {}", platform.as_str());
+    // desktop branch
 } else if platform.is_mobile() {
-    println!("Running on mobile");
-} else if platform.is_web() {
-    println!("Running in browser");
+    // mobile branch
 }
 ```
 
@@ -300,8 +293,8 @@ All foundation types are designed for multi-threaded use:
 - **IDs**: `Send + Sync` (Copy types via `WasmNotSendSync`)
 - **Keys**: `Send + Sync` (Copy types with atomic generation)
 - **ChangeNotifier**: `Send + Sync` with `parking_lot::Mutex`
-- **SyncObserverList**: Thread-safe with `RwLock`
-- **HashedObserverList**: Lock-free with `DashMap`
+- **ObserverList**: Not thread-safe by itself; wrap in your own
+  synchronization primitive for concurrent access
 
 ## Feature Flags
 

@@ -8,6 +8,16 @@
 
 mod global_key;
 mod object_key;
+pub(crate) mod registry;
+
+// Registry install/take/handle stay crate-private. Production install
+// happens in `crate::WidgetsBinding::new`; tests use the explicit
+// `crate::test_only_*` shims. Exposing these would let downstream code
+// arbitrarily replace the process-wide registry and break the
+// `GlobalKey::current_*` invariants the binding installs. Callers
+// inside the crate reach the registry helpers via
+// `crate::key::registry::{install_registry, take_registry,
+// GlobalKeyRegistryHandle}` directly.
 
 // Re-export widget-layer keys (source of truth is here)
 // Re-export foundation keys for convenience

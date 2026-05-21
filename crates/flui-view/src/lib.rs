@@ -94,6 +94,57 @@ pub mod owner;
 pub mod tree;
 pub mod view;
 
+// Test-only global-key registry shims. Live in `lib.rs` rather than
+// `key/mod.rs` so the public name is `flui_view::test_only_*` — short,
+// clearly tagged as test-only via the prefix. Production code installs
+// the registry handle inside `WidgetsBinding`; tests bypass the binding
+// and need this entrypoint.
+mod test_only_global_key_registry {
+    use std::sync::Arc;
+
+    use parking_lot::RwLock;
+
+    use crate::{
+        key::registry::{GlobalKeyRegistryHandle, install_registry, take_registry},
+        owner::BuildOwner,
+        tree::ElementTree,
+    };
+
+    /// Install the given `ElementTree` + `BuildOwner` as the
+    /// process-wide registry source for `GlobalKey::current_*` lookups.
+    ///
+    /// Tests in `tests/global_key.rs` install a handle pointing to a
+    /// local tree, run their assertions, then call
+    /// [`test_only_clear_global_key_registry`].
+    ///
+    /// **Not for production code.** Production binds the handle inside
+    /// `WidgetsBinding::new`.
+    pub fn test_only_set_global_key_registry(
+        tree: &Arc<RwLock<ElementTree>>,
+        owner: &Arc<RwLock<BuildOwner>>,
+    ) {
+        let owner_for_lookup = Arc::clone(owner);
+        let tree_for_visit = Arc::clone(tree);
+        let handle = GlobalKeyRegistryHandle::new(
+            move |hash| owner_for_lookup.read().element_for_global_key(hash),
+            move |id, f| {
+                let tree = tree_for_visit.read();
+                if let Some(node) = tree.get(id) {
+                    f(node.element());
+                }
+            },
+        );
+        let _ = install_registry(handle);
+    }
+
+    /// Clear the process-wide registry handle. No-op if no handle was
+    /// installed. Tests call this in their teardown so subsequent
+    /// tests start from a quiescent state.
+    pub fn test_only_clear_global_key_registry() {
+        let _ = take_registry();
+    }
+}
+
 // ============================================================================
 // Re-exports
 // ============================================================================
@@ -117,8 +168,8 @@ pub use element::{
     NotificationCallback, NotificationHandler, NotificationNode, ScrollNotification,
     SizeChangedNotification,
 };
-// Slot types for multi-child elements
-pub use element::{ElementSlot, IndexedSlot, IndexedSlotBuilder};
+// Slot types for multi-child elements (re-exported from flui-tree, canonical home)
+pub use element::{ElementSlot, IndexedSlot};
 // RenderObjectElement traits
 pub use element::{RenderObjectElement, RenderSlot, RenderTreeRootElement};
 // Root element
@@ -131,16 +182,20 @@ pub use flui_foundation::{ElementId, RenderId};
 pub use flui_log::{Level, Logger, debug, error, info, trace, warn};
 // Keys
 pub use key::{GlobalKey, GlobalKeyId, ObjectKey, ValueKey};
+// Test-only handle for `GlobalKey::current_*` lookup. Production code
+// installs the handle via `WidgetsBinding`; tests bypass the binding.
+pub use test_only_global_key_registry::{
+    test_only_clear_global_key_registry, test_only_set_global_key_registry,
+};
 // Tree management
-pub use owner::BuildOwner;
+pub use owner::{BuildOwner, ElementOwner};
 pub use tree::{ElementNode, ElementTree, reconcile_children};
 pub use view::{
     BoxedElement, BoxedView, ElementBase, ElementExt, ErrorElement, ErrorView, ErrorViewBuilder,
     FlutterError, InheritedElement, InheritedView, IntoElement, IntoView, ParentData,
     ParentDataElement, ParentDataView, ProxyElement, ProxyView, RenderElement, RenderView,
     RootRenderElement, RootRenderView, StatefulElement, StatefulView, StatelessElement,
-    StatelessView, View, ViewExt, ViewKey, ViewState, clear_error_view_builder,
-    set_error_view_builder,
+    StatelessView, View, ViewExt, ViewState, clear_error_view_builder, set_error_view_builder,
 };
 
 // ============================================================================
@@ -166,11 +221,11 @@ pub mod prelude {
         },
         child::{Child, Children},
         element::{
-            ElementSlot, IndexedSlot, IndexedSlotBuilder, LayoutChangedNotification, Lifecycle,
-            NotifiableElement, Notification, NotificationNode, RootElement,
+            ElementSlot, IndexedSlot, LayoutChangedNotification, Lifecycle, NotifiableElement,
+            Notification, NotificationNode, RootElement,
         },
         key::{GlobalKey, GlobalKeyId, ObjectKey, ValueKey},
-        owner::BuildOwner,
+        owner::{BuildOwner, ElementOwner},
         tree::{ElementNode, ElementTree, reconcile_children},
         view::{
             BoxedView, InheritedView, IntoView, ParentData, ParentDataView, ProxyView, RenderView,

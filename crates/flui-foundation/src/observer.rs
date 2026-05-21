@@ -7,8 +7,6 @@
 //!
 //! - `ObserverList<T>` - Observer management with O(1) add/remove via `HashMap`
 //!   index
-//! - `HashedObserverList<T>` - Hash-based for unique observers with O(1)
-//!   operations
 //!
 //! # Examples
 //!
@@ -29,12 +27,7 @@
 //! observers.remove(id1);
 //! ```
 
-use std::{
-    collections::{HashMap, VecDeque},
-    sync::atomic::{AtomicUsize, Ordering},
-};
-
-use parking_lot::RwLock;
+use std::collections::{HashMap, VecDeque};
 
 use crate::id::ObserverId;
 
@@ -46,7 +39,7 @@ use crate::id::ObserverId;
 /// # Thread Safety
 ///
 /// This type is NOT thread-safe by itself. For concurrent access,
-/// use `SyncObserverList` or wrap in your own synchronization.
+/// wrap in your own synchronization primitive (e.g. `parking_lot::RwLock`).
 #[derive(Debug)]
 pub struct ObserverList<T> {
     observers: VecDeque<Option<(ObserverId, T)>>,
@@ -192,188 +185,6 @@ impl<T: Clone> Clone for ObserverList<T> {
     }
 }
 
-/// A thread-safe observer list using `parking_lot::RwLock`.
-///
-/// This wraps `ObserverList` with a read-write lock for safe concurrent access.
-///
-/// # Examples
-///
-/// ```rust
-/// use std::sync::Arc;
-///
-/// use flui_foundation::SyncObserverList;
-///
-/// let observers: Arc<SyncObserverList<i32>> = Arc::new(SyncObserverList::new());
-///
-/// // Can be shared across threads
-/// let observers_clone = observers.clone();
-/// std::thread::spawn(move || {
-///     observers_clone.add(42);
-/// });
-/// ```
-#[derive(Debug, Default)]
-pub struct SyncObserverList<T> {
-    inner: RwLock<ObserverList<T>>,
-}
-
-impl<T> SyncObserverList<T> {
-    /// Creates a new empty sync observer list.
-    #[inline]
-    #[must_use]
-    #[allow(clippy::missing_const_for_fn)] // RwLock::new is not const
-    pub fn new() -> Self {
-        Self {
-            inner: RwLock::new(ObserverList::new()),
-        }
-    }
-
-    /// Returns the number of observers.
-    #[inline]
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.inner.read().len()
-    }
-
-    /// Returns true if the list is empty.
-    #[inline]
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.inner.read().is_empty()
-    }
-
-    /// Adds an observer to the list.
-    pub fn add(&self, observer: T) -> ObserverId {
-        self.inner.write().add(observer)
-    }
-
-    /// Removes an observer by its ID.
-    pub fn remove(&self, id: ObserverId) -> Option<T> {
-        self.inner.write().remove(id)
-    }
-
-    /// Executes a function for each observer.
-    ///
-    /// Clones observer entries while holding the read lock, then releases the
-    /// lock before invoking callbacks. This prevents deadlocks when a callback
-    /// tries to add or remove observers on the same list.
-    pub fn for_each<F>(&self, mut f: F)
-    where
-        F: FnMut(&T),
-        T: Clone,
-    {
-        let snapshot: Vec<T> = {
-            let guard = self.inner.read();
-            guard.iter().cloned().collect()
-        };
-        for observer in &snapshot {
-            f(observer);
-        }
-    }
-
-    /// Clears all observers.
-    pub fn clear(&self) {
-        self.inner.write().clear();
-    }
-}
-
-/// A hash-based observer list using `dashmap` for O(1) concurrent operations.
-///
-/// This is optimized for:
-/// - Frequent concurrent add/remove operations
-/// - When observer identity is by ID, not value equality
-///
-/// # Examples
-///
-/// ```rust
-/// use std::sync::Arc;
-///
-/// use flui_foundation::HashedObserverList;
-///
-/// let observers: HashedObserverList<String> = HashedObserverList::new();
-///
-/// let id = observers.add("observer1".to_string());
-/// observers.add("observer2".to_string());
-///
-/// observers.for_each(|s| println!("{}", s));
-///
-/// observers.remove(id);
-/// ```
-#[derive(Debug)]
-pub struct HashedObserverList<T> {
-    observers: dashmap::DashMap<ObserverId, T>,
-    next_id: AtomicUsize,
-}
-
-impl<T> HashedObserverList<T> {
-    /// Creates a new empty hashed observer list.
-    #[inline]
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            observers: dashmap::DashMap::new(),
-            next_id: AtomicUsize::new(1),
-        }
-    }
-
-    /// Creates a new hashed observer list with the specified capacity.
-    #[inline]
-    #[must_use]
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self {
-            observers: dashmap::DashMap::with_capacity(capacity),
-            next_id: AtomicUsize::new(1),
-        }
-    }
-
-    /// Returns the number of observers.
-    #[inline]
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.observers.len()
-    }
-
-    /// Returns true if the list is empty.
-    #[inline]
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.observers.is_empty()
-    }
-
-    /// Adds an observer to the list.
-    pub fn add(&self, observer: T) -> ObserverId {
-        let id_val = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let id = ObserverId::new(id_val);
-        self.observers.insert(id, observer);
-        id
-    }
-
-    /// Removes an observer by its ID.
-    pub fn remove(&self, id: ObserverId) -> Option<T> {
-        self.observers.remove(&id).map(|(_, v)| v)
-    }
-
-    /// Executes a function for each observer.
-    pub fn for_each<F>(&self, mut f: F)
-    where
-        F: FnMut(&T),
-    {
-        for entry in &self.observers {
-            f(entry.value());
-        }
-    }
-
-    /// Clears all observers.
-    pub fn clear(&self) {
-        self.observers.clear();
-    }
-}
-
-impl<T> Default for HashedObserverList<T> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -445,66 +256,6 @@ mod tests {
         list.compact();
         assert_eq!(list.observers.len(), 1); // Only 1 slot now
         assert_eq!(list.len(), 1);
-    }
-
-    #[test]
-    fn test_sync_observer_list() {
-        let list = SyncObserverList::new();
-
-        let id1 = list.add(1);
-        let id2 = list.add(2);
-
-        assert_eq!(list.len(), 2);
-
-        let mut sum = 0;
-        list.for_each(|&v| sum += v);
-        assert_eq!(sum, 3);
-
-        list.remove(id1);
-        assert_eq!(list.len(), 1);
-
-        list.remove(id2);
-        assert!(list.is_empty());
-    }
-
-    #[test]
-    fn test_hashed_observer_list() {
-        let list: HashedObserverList<i32> = HashedObserverList::new();
-
-        let id1 = list.add(1);
-        let id2 = list.add(2);
-
-        assert_eq!(list.len(), 2);
-
-        let mut sum = 0;
-        list.for_each(|&v| sum += v);
-        assert_eq!(sum, 3);
-
-        assert_eq!(list.remove(id1), Some(1));
-        assert_eq!(list.len(), 1);
-
-        assert_eq!(list.remove(id2), Some(2));
-        assert!(list.is_empty());
-    }
-
-    #[test]
-    fn test_sync_observer_list_no_deadlock_on_add_during_iterate() {
-        let list = SyncObserverList::new();
-        let _id1 = list.add(42);
-
-        // Before the fix, for_each held a read lock during iteration.
-        // If a callback tried to add/remove, it would deadlock.
-        // Now it snapshots and releases the lock first.
-        let mut seen = Vec::new();
-        list.for_each(|&val| {
-            seen.push(val);
-            // This would have deadlocked before the fix because add()
-            // requires a write lock while for_each held a read lock.
-            let _new_id = list.add(val + 1);
-        });
-        assert_eq!(seen, vec![42]);
-        // The observer added during iteration should now be present
-        assert_eq!(list.len(), 2);
     }
 
     #[test]

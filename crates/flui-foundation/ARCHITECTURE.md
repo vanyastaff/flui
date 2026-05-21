@@ -518,19 +518,10 @@ switch (defaultTargetPlatform) {
 }
 ```
 
-**FLUI:**
-```rust
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TargetPlatform {
-    Android,
-    Fuchsia,
-    IOS,
-    Linux,
-    MacOS,
-    Windows,
-    Web,
-}
-```
+**FLUI:** `TargetPlatform` lives in `flui-types::platform::target_platform`
+(canonical home — Constitution Principle 2 "Strict Crate Dependency DAG").
+The enum is marked `#[non_exhaustive]` and ships seven variants:
+`iOS`, `Android`, `Linux`, `MacOS`, `Windows`, `Fuchsia`, `Unknown`.
 
 ---
 
@@ -672,7 +663,7 @@ return SynchronousFuture<RestorationBucket?>(_rootBucket);
 |------|-----------|-------|-----|
 | `BindingBase::INITIALIZED` flag | `&'static AtomicBool` | `binding.rs:135, 180-182` | One-shot initialisation guard for a binding singleton. Set-once, then read-only. Off any hot path. |
 | `GlobalKey` ID counter | `AtomicU64` (static) | `key.rs:140, 462` | Monotonic key allocator. `fetch_add` only, no contention pattern. Off any hot path. |
-| `Notifier::listeners` | `Arc<parking_lot::Mutex<HashMap<ListenerId, ListenerCallback>>>` | `notifier.rs:116, 140` | Listener registry held during register/unregister/notify. Notifier callbacks are invoked outside the lock (clone-then-iterate pattern established in [`docs/plans/2026-03-31-core-crates-hardening.md`](../../docs/plans/2026-03-31-core-crates-hardening.md) Task 3 for `SyncObserverList`). Not on the render hot path; consumed by the build phase and by `flui-reactivity` (currently disabled). |
+| `Notifier::listeners` | `Arc<parking_lot::Mutex<HashMap<ListenerId, ListenerCallback>>>` | `notifier.rs:116, 140` | Listener registry held during register/unregister/notify. Notifier callbacks are invoked outside the lock (clone-then-iterate pattern from [`docs/plans/2026-03-31-core-crates-hardening.md`](../../docs/plans/2026-03-31-core-crates-hardening.md) Task 3). Not on the render hot path; consumed by the build phase and by `flui-reactivity` (currently disabled). |
 | `Notifier::next_id` | `Arc<AtomicUsize>` | `notifier.rs:117, 141` | Listener-ID allocator. `fetch_add` only. |
 
 No `RwLock` in `flui-foundation`. No primitive listed here sits inside `perform_layout` / `paint` / `View::build`.

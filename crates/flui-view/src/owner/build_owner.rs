@@ -20,9 +20,33 @@ use crate::tree::ElementTree;
 ///
 /// Sorted by depth (shallowest first) for top-down processing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct DirtyElement {
+pub(crate) struct DirtyElement {
     id: ElementId,
     depth: usize,
+}
+
+impl DirtyElement {
+    /// Construct a new dirty-elements heap entry.
+    pub(crate) fn new(id: ElementId, depth: usize) -> Self {
+        Self { id, depth }
+    }
+
+    /// The element id queued for rebuild.
+    pub(crate) fn id(&self) -> ElementId {
+        self.id
+    }
+
+    /// Depth used to order the heap (shallowest first).
+    ///
+    /// Currently consumed only by inline tests; U9+ will read it during
+    /// dirty-element drain dispatching. The `Ord` impl reads
+    /// `self.depth` directly (private field access from the same `impl`
+    /// block), so the accessor stays on the surface for future
+    /// `ElementOwner` consumers.
+    #[allow(dead_code)]
+    pub(crate) fn depth(&self) -> usize {
+        self.depth
+    }
 }
 
 impl Ord for DirtyElement {
@@ -56,13 +80,24 @@ impl PartialOrd for DirtyElement {
 /// - Track inactive elements for finalization
 pub struct BuildOwner {
     /// Elements that need rebuild, sorted by depth.
-    dirty_elements: BinaryHeap<Reverse<DirtyElement>>,
+    ///
+    /// `pub(crate)` so [`ElementOwner`](super::ElementOwner)'s
+    /// split-borrow can pin a `&mut` reference to just this field
+    /// during the recursive Element traversal — no full `&mut
+    /// BuildOwner` needed.
+    pub(crate) dirty_elements: BinaryHeap<Reverse<DirtyElement>>,
 
     /// Set of dirty element IDs (for deduplication).
-    dirty_set: std::collections::HashSet<ElementId>,
+    ///
+    /// `pub(crate)` for the [`ElementOwner`](super::ElementOwner)
+    /// split-borrow.
+    pub(crate) dirty_set: std::collections::HashSet<ElementId>,
 
     /// GlobalKey registry: key hash -> element ID.
-    global_keys: HashMap<u64, ElementId>,
+    ///
+    /// `pub(crate)` for the [`ElementOwner`](super::ElementOwner)
+    /// split-borrow.
+    pub(crate) global_keys: HashMap<u64, ElementId>,
 
     /// InheritedElement registry: TypeId -> element ID.
     /// Used for O(1) InheritedView lookup.
@@ -70,7 +105,10 @@ pub struct BuildOwner {
 
     /// Elements that have been deactivated and are pending unmount.
     /// These are unmounted in `finalize_tree()`.
-    inactive_elements: Vec<InactiveElement>,
+    ///
+    /// `pub(crate)` for the [`ElementOwner`](super::ElementOwner)
+    /// split-borrow.
+    pub(crate) inactive_elements: Vec<InactiveElement>,
 
     /// Whether we're currently in a build phase.
     #[cfg(debug_assertions)]
@@ -81,15 +119,42 @@ pub struct BuildOwner {
     scope_depth: usize,
 
     /// Callback to be called when a build is scheduled.
+    ///
+    /// `pub(crate)` so the [`ElementOwner`](super::ElementOwner)
+    /// split-borrow can fire it from `schedule_build_for` without
+    /// re-borrowing the owner.
     #[allow(clippy::type_complexity)]
-    on_build_scheduled: Option<Box<dyn Fn() + Send + Sync>>,
+    pub(crate) on_build_scheduled: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 /// An element that has been deactivated and is pending unmount.
+///
+/// Made `pub(crate)` so [`ElementOwner`](super::ElementOwner) can hold a
+/// `&mut Vec<InactiveElement>` split-borrow reference. End-of-frame
+/// finalization (`BuildOwner::finalize_tree`) drains the queue
+/// deepest-first using the recorded `depth`.
 #[derive(Debug, Clone, Copy)]
-struct InactiveElement {
+pub(crate) struct InactiveElement {
     id: ElementId,
     depth: usize,
+}
+
+impl InactiveElement {
+    /// Construct a new inactive-element record.
+    pub(crate) fn new(id: ElementId, depth: usize) -> Self {
+        Self { id, depth }
+    }
+
+    /// The element id queued for end-of-frame unmount.
+    pub(crate) fn id(&self) -> ElementId {
+        self.id
+    }
+
+    /// Depth used to order finalization (deepest first).
+    #[allow(dead_code)] // Used by finalize_tree's sort, kept for symmetry.
+    pub(crate) fn depth(&self) -> usize {
+        self.depth
+    }
 }
 
 impl Default for BuildOwner {
@@ -133,12 +198,32 @@ impl BuildOwner {
     pub fn schedule_build_for(&mut self, id: ElementId, depth: usize) {
         if self.dirty_set.insert(id) {
             self.dirty_elements
-                .push(Reverse(DirtyElement { id, depth }));
+                .push(Reverse(DirtyElement::new(id, depth)));
 
             // Notify that a build was scheduled
             if let Some(ref callback) = self.on_build_scheduled {
                 callback();
             }
+        }
+    }
+
+    /// Acquire an [`ElementOwner`](super::ElementOwner) split-borrow
+    /// handle for the duration of an Element lifecycle traversal.
+    ///
+    /// The returned handle holds disjoint `&mut` references to
+    /// `global_keys`, `dirty_elements`, `dirty_set`, and
+    /// `inactive_elements` — every field an `Element::mount` /
+    /// `unmount` / `update` path may write. The borrow checker proves
+    /// non-aliasing because each field is borrowed once.
+    ///
+    /// Threading reference: `docs/plans/2026-05-21-002-feat-framework-spine-repair-plan.md` §U8, §D1.
+    pub fn element_owner_mut(&mut self) -> super::ElementOwner<'_> {
+        super::ElementOwner {
+            global_keys: &mut self.global_keys,
+            dirty_elements: &mut self.dirty_elements,
+            dirty_set: &mut self.dirty_set,
+            inactive_elements: &mut self.inactive_elements,
+            on_build_scheduled: self.on_build_scheduled.as_deref(),
         }
     }
 
@@ -169,15 +254,29 @@ impl BuildOwner {
             self.scope_depth += 1;
         }
 
-        // Process dirty elements in depth order
+        // Process dirty elements in depth order.
+        //
+        // Each iteration pops one entry, then builds it with a fresh
+        // split-borrow handle. We cannot pre-build the handle once
+        // across the whole loop because `pop()` mutates
+        // `self.dirty_elements` (one of the fields the handle aliases);
+        // popping each iteration's entry first releases that aliasing
+        // before the handle is reborrowed.
         while let Some(Reverse(dirty)) = self.dirty_elements.pop() {
-            self.dirty_set.remove(&dirty.id);
+            self.dirty_set.remove(&dirty.id());
 
             // Skip if element no longer exists
-            if let Some(node) = tree.get_mut(dirty.id) {
+            if let Some(node) = tree.get_mut(dirty.id()) {
                 // Only rebuild if still active
                 if node.element().lifecycle().can_build() {
-                    node.element_mut().perform_build();
+                    let mut element_owner = super::ElementOwner {
+                        global_keys: &mut self.global_keys,
+                        dirty_elements: &mut self.dirty_elements,
+                        dirty_set: &mut self.dirty_set,
+                        inactive_elements: &mut self.inactive_elements,
+                        on_build_scheduled: self.on_build_scheduled.as_deref(),
+                    };
+                    node.element_mut().perform_build(&mut element_owner);
                 }
             }
         }
@@ -198,14 +297,14 @@ impl BuildOwner {
     /// Called when an element is deactivated (e.g., its parent rebuilds without
     /// it). The element will be unmounted in `finalize_tree()`.
     pub fn add_to_inactive(&mut self, id: ElementId, depth: usize) {
-        self.inactive_elements.push(InactiveElement { id, depth });
+        self.inactive_elements.push(InactiveElement::new(id, depth));
     }
 
     /// Remove an element from the inactive list.
     ///
     /// Called when an element is reactivated (e.g., moved via GlobalKey).
     pub fn remove_from_inactive(&mut self, id: ElementId) {
-        self.inactive_elements.retain(|e| e.id != id);
+        self.inactive_elements.retain(|e| e.id() != id);
     }
 
     /// Check if there are inactive elements pending unmount.
@@ -232,27 +331,43 @@ impl BuildOwner {
 
         // Sort by depth (deepest first for unmounting)
         self.inactive_elements
-            .sort_by_key(|entry| std::cmp::Reverse(entry.depth));
+            .sort_by_key(|entry| std::cmp::Reverse(entry.depth()));
 
-        // Take ownership of inactive elements to avoid borrow conflicts
-        let inactive_elements: Vec<_> = self.inactive_elements.drain(..).collect();
+        // Take ownership of inactive elements to avoid borrow conflicts.
+        // `mem::take` snapshots the queue before the recursive unmount so
+        // mid-iteration `ElementOwner::push_inactive` calls (e.g. children
+        // deactivating as a parent unmounts) land in the *next* frame's
+        // queue rather than re-entering this drain — same snapshot-then-fire
+        // discipline as `ChangeNotifier::notify_listeners` (foundation
+        // notifier.rs:158-163).
+        let inactive_elements: Vec<_> = std::mem::take(&mut self.inactive_elements);
 
         // Collect all elements to unmount (including children)
         let mut elements_to_unmount = Vec::new();
         for inactive in &inactive_elements {
-            Self::collect_elements_to_unmount(tree, inactive.id, &mut elements_to_unmount);
+            Self::collect_elements_to_unmount(tree, inactive.id(), &mut elements_to_unmount);
         }
 
-        // Unmount all elements (deepest first - already sorted by collect order)
+        // Build the split-borrow handle once for the entire unmount sweep.
+        // The handle survives `tree.get_mut` borrows because it points into
+        // disjoint `BuildOwner` fields.
+        let mut element_owner = super::ElementOwner {
+            global_keys: &mut self.global_keys,
+            dirty_elements: &mut self.dirty_elements,
+            dirty_set: &mut self.dirty_set,
+            inactive_elements: &mut self.inactive_elements,
+            on_build_scheduled: self.on_build_scheduled.as_deref(),
+        };
+
+        // Finalize all elements (deepest first - already sorted by collect order).
+        //
+        // `remove_finalized` (plan §U14 / R14) bypasses the soft-remove
+        // path that `remove` takes for keyed elements. At this point
+        // we've already given mid-frame state migration its chance —
+        // anything still in the inactive queue is genuinely going away,
+        // so we slab-remove + unregister the GlobalKey directly.
         for id in elements_to_unmount.iter().rev() {
-            if let Some(node) = tree.get_mut(*id) {
-                node.element_mut().unmount();
-            }
-        }
-
-        // Remove all elements from tree
-        for id in elements_to_unmount {
-            tree.remove(id);
+            tree.remove_finalized(*id, &mut element_owner);
         }
 
         tracing::debug!("Finalize tree complete");
@@ -305,6 +420,16 @@ impl BuildOwner {
     /// Look up an element by GlobalKey.
     pub fn element_for_global_key(&self, key_hash: u64) -> Option<ElementId> {
         self.global_keys.get(&key_hash).copied()
+    }
+
+    /// Number of `GlobalKey`s currently registered.
+    ///
+    /// Test surface — production code reads
+    /// [`BuildOwner::element_for_global_key`] on a single hash rather
+    /// than scanning size. Tests use this to confirm the registry
+    /// stays at the expected size across mount / unmount cycles.
+    pub fn global_keys_len(&self) -> usize {
+        self.global_keys.len()
     }
 
     // ========================================================================
@@ -399,12 +524,17 @@ mod tests {
             self.lifecycle
         }
 
-        fn mount(&mut self, _parent: Option<ElementId>, slot: usize) {
+        fn mount(
+            &mut self,
+            _parent: Option<ElementId>,
+            slot: usize,
+            _owner: &mut super::super::ElementOwner<'_>,
+        ) {
             self.depth = slot;
             self.lifecycle = Lifecycle::Active;
         }
 
-        fn unmount(&mut self) {
+        fn unmount(&mut self, _owner: &mut super::super::ElementOwner<'_>) {
             self.lifecycle = Lifecycle::Defunct;
         }
 
@@ -416,11 +546,11 @@ mod tests {
             self.lifecycle = Lifecycle::Inactive;
         }
 
-        fn update(&mut self, _new_view: &dyn View) {}
+        fn update(&mut self, _new_view: &dyn View, _owner: &mut super::super::ElementOwner<'_>) {}
 
         fn mark_needs_build(&mut self) {}
 
-        fn perform_build(&mut self) {
+        fn perform_build(&mut self, _owner: &mut super::super::ElementOwner<'_>) {
             // Leaf - no children to build
         }
 
@@ -466,7 +596,7 @@ mod tests {
         let mut tree = ElementTree::new();
 
         let view = TestView;
-        let root_id = tree.mount_root(&view);
+        let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
 
         owner.schedule_build_for(root_id, 0);
         assert!(owner.has_dirty_elements());
@@ -490,13 +620,13 @@ mod tests {
 
         // Should process shallowest first
         let Reverse(first) = owner.dirty_elements.pop().unwrap();
-        assert_eq!(first.depth, 0);
+        assert_eq!(first.depth(), 0);
 
         let Reverse(second) = owner.dirty_elements.pop().unwrap();
-        assert_eq!(second.depth, 1);
+        assert_eq!(second.depth(), 1);
 
         let Reverse(third) = owner.dirty_elements.pop().unwrap();
-        assert_eq!(third.depth, 2);
+        assert_eq!(third.depth(), 2);
     }
 
     #[test]

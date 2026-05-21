@@ -3448,6 +3448,12 @@ impl WgpuPainter {
         let r_bl = rrect.bottom_left.x.0.max(rrect.bottom_left.y.0);
 
         self.current_rrect_clip = [x, y, w, h, r_tl, r_tr, r_br, r_bl];
+        // Clear any previously-set rsuperellipse clip so `apply_active_clip`
+        // doesn't keep applying the squircle SDF after the caller has
+        // switched to a plain rrect clip. The two clip kinds are mutually
+        // exclusive at the per-instance `clip_kind` level — setting one
+        // must invalidate the other.
+        self.current_rsuperellipse_clip = [0.0; 12];
 
         // Also apply bounding-box scissor clip for early rejection by the rasterizer
         self.clip_rect(rrect.rect);
@@ -3555,6 +3561,11 @@ impl WgpuPainter {
             x, y, w, h, tl_r.x.0, tl_r.y.0, tr_r.x.0, tr_r.y.0, br_r.x.0, br_r.y.0, bl_r.x.0,
             bl_r.y.0,
         ];
+        // Clear any previously-set rrect clip so `apply_active_clip`
+        // doesn't fall back to it. Mirror of the corresponding clear in
+        // `clip_rrect`; the two clip kinds are mutually exclusive at the
+        // per-instance `clip_kind` level.
+        self.current_rrect_clip = [0.0; 8];
 
         // Bounding-box scissor for early rasterizer rejection (same pattern
         // as `clip_rrect`).

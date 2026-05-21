@@ -161,32 +161,101 @@ where
     }
 
     // ========================================================================
+    // Inherited-element protocol (U9 / R4)
+    //
+    // Delegates to the behavior; only `InheritedBehavior<V>` returns
+    // `Some(...)`. Every other behavior keeps the trait-default `None`.
+    // ========================================================================
+
+    fn as_inherited(&self) -> Option<&dyn crate::element::InheritedElementAccess> {
+        self.behavior.as_inherited_access()
+    }
+
+    fn as_inherited_mut(&mut self) -> Option<&mut dyn crate::element::InheritedElementAccess> {
+        self.behavior.as_inherited_access_mut()
+    }
+
+    // ========================================================================
+    // Ancestor-finder protocol (U11 / R6, R7, R8)
+    //
+    // Both accessors route through the behavior. `view_as_any` is
+    // uniform across every behavior — the View configuration always
+    // lives in `ElementCore` — so we hand out the core's view directly.
+    // `state_as_any` is behavior-specific: only `StatefulBehavior<V>`
+    // overrides the default `None`.
+    // ========================================================================
+
+    fn view_as_any(&self) -> Option<&dyn Any> {
+        Some(self.core.view() as &dyn Any)
+    }
+
+    fn state_as_any(&self) -> Option<&dyn Any> {
+        self.behavior.state_as_any()
+    }
+
+    // ========================================================================
+    // RenderObject-finder protocol (U12 / R9)
+    //
+    // Routes through the behavior. Only `RenderBehavior<V>` overrides
+    // the default `None` — and even then, returns `None` until
+    // `on_mount` ran with a `PipelineOwner` in scope. Stateless / Proxy
+    // / Inherited / Stateful / Animation behaviors all keep the
+    // trait-default `None`.
+    // ========================================================================
+
+    fn render_id(&self) -> Option<RenderId> {
+        self.behavior.render_id()
+    }
+
+    // ========================================================================
+    // Notification handler protocol (U13 / R10)
+    //
+    // Routes through the behavior. The trait-default `false` keeps
+    // non-listener elements out of the bubble walk. Production
+    // listener behaviors (e.g. a future NotificationListener<N> widget)
+    // override `ElementBehavior::on_notification` to translate the
+    // object-safe `(TypeId, &dyn Any)` shape into the typed
+    // `NotifiableElement<N>` callback at the impl site — single dyn
+    // boundary at dispatch only (plan §D3, Constitution Principle 4).
+    // ========================================================================
+
+    fn on_notification(&self, type_id: std::any::TypeId, notification: &dyn Any) -> bool {
+        self.behavior.on_notification(type_id, notification)
+    }
+
+    // ========================================================================
     // Lifecycle Methods with Behavior Hooks
     // ========================================================================
 
-    fn update(&mut self, new_view: &dyn View) {
+    fn update(&mut self, new_view: &dyn View, owner: &mut crate::ElementOwner<'_>) {
         // Snapshot the previous view so `on_view_updated` can pass it to state
-        // hooks (e.g. `ViewState::did_update_view`).
+        // hooks (e.g. `ViewState::did_update_view`,
+        // `InheritedBehavior::on_view_updated` for dependent notification).
         let old_view = self.core.view().clone();
         if self.core.update_view(new_view) {
             // Notify behavior of update
             self.behavior.on_update(&self.core);
-            self.behavior.on_view_updated(&self.core, &old_view);
+            self.behavior.on_view_updated(&self.core, &old_view, owner);
         }
     }
 
-    fn perform_build(&mut self) {
-        self.behavior.perform_build(&mut self.core);
+    fn perform_build(&mut self, owner: &mut crate::ElementOwner<'_>) {
+        self.behavior.perform_build(&mut self.core, owner);
     }
 
-    fn mount(&mut self, parent: Option<ElementId>, slot: usize) {
-        self.core.mount(parent, slot);
-        self.behavior.on_mount(&mut self.core);
+    fn mount(
+        &mut self,
+        parent: Option<ElementId>,
+        slot: usize,
+        owner: &mut crate::ElementOwner<'_>,
+    ) {
+        self.core.mount(parent, slot, owner);
+        self.behavior.on_mount(&mut self.core, owner);
     }
 
-    fn unmount(&mut self) {
-        self.behavior.on_unmount(&mut self.core);
-        self.core.unmount();
+    fn unmount(&mut self, owner: &mut crate::ElementOwner<'_>) {
+        self.behavior.on_unmount(&mut self.core, owner);
+        self.core.unmount(owner);
     }
 
     fn activate(&mut self) {
@@ -357,9 +426,13 @@ where
         self.behavior.data()
     }
 
-    /// Register a dependent element.
-    pub fn add_dependent(&mut self, element: ElementId) {
-        self.behavior.add_dependent(element);
+    /// Register a dependent element with its tree depth.
+    ///
+    /// `depth` is the dependent's depth in the element tree, used by
+    /// `BuildOwner::schedule_build_for` when this InheritedElement
+    /// rebuilds with `update_should_notify == true`.
+    pub fn add_dependent(&mut self, element: ElementId, depth: usize) {
+        self.behavior.add_dependent(element, depth);
     }
 
     /// Remove a dependent element.
@@ -367,8 +440,8 @@ where
         self.behavior.remove_dependent(element);
     }
 
-    /// Get all dependent elements.
-    pub fn dependents(&self) -> &[ElementId] {
+    /// Get all dependent elements as an id -> depth map.
+    pub fn dependents(&self) -> &std::collections::HashMap<ElementId, usize> {
         self.behavior.dependents()
     }
 }

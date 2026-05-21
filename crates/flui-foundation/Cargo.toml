@@ -17,7 +17,6 @@ workspace = true
 
 [dependencies]
 bitflags = { workspace = true }
-dashmap = { workspace = true }
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
@@ -27,6 +26,7 @@ serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
+flui-types = { path = "../flui-types" }
 serde_json = { workspace = true }
 
 [features]

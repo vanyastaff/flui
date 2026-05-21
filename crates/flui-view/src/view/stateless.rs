@@ -124,7 +124,8 @@ mod tests {
             text: "Hello".to_string(),
         };
         let mut element = StatelessElement::new(&view, StatelessBehavior);
-        element.mount(None, 0);
+        let mut owner = crate::BuildOwner::new();
+        element.mount(None, 0, &mut owner.element_owner_mut());
         assert_eq!(element.lifecycle(), Lifecycle::Active);
     }
 }

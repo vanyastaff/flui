@@ -9,8 +9,9 @@ use std::sync::{
 };
 
 use flui_view::{
-    BuildContext, ElementBase, ElementTree, Lifecycle, StatefulBehavior, StatefulElement,
-    StatefulView, StatelessBehavior, StatelessElement, StatelessView, View, ViewState,
+    BuildContext, BuildOwner, ElementBase, ElementTree, Lifecycle, StatefulBehavior,
+    StatefulElement, StatefulView, StatelessBehavior, StatelessElement, StatelessView, View,
+    ViewState,
 };
 
 // ============================================================================
@@ -141,10 +142,11 @@ fn test_element_initial_lifecycle() {
 fn test_element_mount_transitions_to_active() {
     let view = TrackingView { id: 1 };
     let mut element = StatelessElement::new(&view, StatelessBehavior);
+    let mut owner = BuildOwner::new();
 
     assert_eq!(element.lifecycle(), Lifecycle::Initial);
 
-    element.mount(None, 0);
+    element.mount(None, 0, &mut owner.element_owner_mut());
 
     assert_eq!(element.lifecycle(), Lifecycle::Active);
 }
@@ -153,8 +155,9 @@ fn test_element_mount_transitions_to_active() {
 fn test_element_deactivate_transitions_to_inactive() {
     let view = TrackingView { id: 1 };
     let mut element = StatelessElement::new(&view, StatelessBehavior);
+    let mut owner = BuildOwner::new();
 
-    element.mount(None, 0);
+    element.mount(None, 0, &mut owner.element_owner_mut());
     assert_eq!(element.lifecycle(), Lifecycle::Active);
 
     element.deactivate();
@@ -165,8 +168,9 @@ fn test_element_deactivate_transitions_to_inactive() {
 fn test_element_activate_transitions_to_active() {
     let view = TrackingView { id: 1 };
     let mut element = StatelessElement::new(&view, StatelessBehavior);
+    let mut owner = BuildOwner::new();
 
-    element.mount(None, 0);
+    element.mount(None, 0, &mut owner.element_owner_mut());
     element.deactivate();
     assert_eq!(element.lifecycle(), Lifecycle::Inactive);
 
@@ -178,9 +182,10 @@ fn test_element_activate_transitions_to_active() {
 fn test_element_unmount_transitions_to_defunct() {
     let view = TrackingView { id: 1 };
     let mut element = StatelessElement::new(&view, StatelessBehavior);
+    let mut owner = BuildOwner::new();
 
-    element.mount(None, 0);
-    element.unmount();
+    element.mount(None, 0, &mut owner.element_owner_mut());
+    element.unmount(&mut owner.element_owner_mut());
 
     assert_eq!(element.lifecycle(), Lifecycle::Defunct);
 }
@@ -199,11 +204,12 @@ fn test_stateful_element_dispose_called_on_unmount() {
     };
 
     let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
-    element.mount(None, 0);
+    let mut owner = BuildOwner::new();
+    element.mount(None, 0, &mut owner.element_owner_mut());
 
     assert!(!disposed.load(Ordering::SeqCst));
 
-    element.unmount();
+    element.unmount(&mut owner.element_owner_mut());
 
     assert!(disposed.load(Ordering::SeqCst));
 }
@@ -218,7 +224,8 @@ fn test_stateful_element_deactivate_callback() {
     };
 
     let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
-    element.mount(None, 0);
+    let mut owner = BuildOwner::new();
+    element.mount(None, 0, &mut owner.element_owner_mut());
 
     assert_eq!(deactivated.load(Ordering::SeqCst), 0);
 
@@ -237,7 +244,8 @@ fn test_stateful_element_activate_callback() {
     };
 
     let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
-    element.mount(None, 0);
+    let mut owner = BuildOwner::new();
+    element.mount(None, 0, &mut owner.element_owner_mut());
     element.deactivate();
 
     assert_eq!(activated.load(Ordering::SeqCst), 0);
@@ -258,7 +266,8 @@ fn test_stateful_element_multiple_deactivate_activate_cycles() {
     };
 
     let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
-    element.mount(None, 0);
+    let mut owner = BuildOwner::new();
+    element.mount(None, 0, &mut owner.element_owner_mut());
 
     // First cycle
     element.deactivate();
@@ -283,9 +292,10 @@ fn test_stateful_element_multiple_deactivate_activate_cycles() {
 #[test]
 fn test_tree_mount_root_activates_element() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let view = TrackingView { id: 1 };
 
-    let root_id = tree.mount_root(&view);
+    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
 
     let node = tree.get(root_id).unwrap();
     assert_eq!(node.element().lifecycle(), Lifecycle::Active);
@@ -294,11 +304,12 @@ fn test_tree_mount_root_activates_element() {
 #[test]
 fn test_tree_insert_activates_element() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let root_view = TrackingView { id: 0 };
     let child_view = TrackingView { id: 1 };
 
-    let root_id = tree.mount_root(&root_view);
-    let child_id = tree.insert(&child_view, root_id, 0);
+    let root_id = tree.mount_root(&root_view, &mut owner.element_owner_mut());
+    let child_id = tree.insert(&child_view, root_id, 0, &mut owner.element_owner_mut());
 
     let child_node = tree.get(child_id).unwrap();
     assert_eq!(child_node.element().lifecycle(), Lifecycle::Active);
@@ -307,10 +318,13 @@ fn test_tree_insert_activates_element() {
 #[test]
 fn test_tree_remove_unmounts_element() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let view = TrackingView { id: 1 };
 
-    let root_id = tree.mount_root(&view);
-    let removed_node = tree.remove(root_id).unwrap();
+    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
+    let removed_node = tree
+        .remove(root_id, &mut owner.element_owner_mut())
+        .unwrap();
 
     assert_eq!(removed_node.element().lifecycle(), Lifecycle::Defunct);
 }
@@ -318,9 +332,10 @@ fn test_tree_remove_unmounts_element() {
 #[test]
 fn test_tree_deactivate_element() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let view = TrackingView { id: 1 };
 
-    let root_id = tree.mount_root(&view);
+    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
     tree.deactivate(root_id);
 
     let node = tree.get(root_id).unwrap();
@@ -330,9 +345,10 @@ fn test_tree_deactivate_element() {
 #[test]
 fn test_tree_activate_element() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let view = TrackingView { id: 1 };
 
-    let root_id = tree.mount_root(&view);
+    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
     tree.deactivate(root_id);
     tree.activate(root_id);
 
@@ -347,9 +363,10 @@ fn test_tree_activate_element() {
 #[test]
 fn test_root_depth_is_zero() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let view = TrackingView { id: 1 };
 
-    let root_id = tree.mount_root(&view);
+    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
 
     let node = tree.get(root_id).unwrap();
     assert_eq!(node.depth(), 0);
@@ -358,13 +375,19 @@ fn test_root_depth_is_zero() {
 #[test]
 fn test_child_depth_is_parent_plus_one() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let root_view = TrackingView { id: 0 };
     let child_view = TrackingView { id: 1 };
     let grandchild_view = TrackingView { id: 2 };
 
-    let root_id = tree.mount_root(&root_view);
-    let child_id = tree.insert(&child_view, root_id, 0);
-    let grandchild_id = tree.insert(&grandchild_view, child_id, 0);
+    let root_id = tree.mount_root(&root_view, &mut owner.element_owner_mut());
+    let child_id = tree.insert(&child_view, root_id, 0, &mut owner.element_owner_mut());
+    let grandchild_id = tree.insert(
+        &grandchild_view,
+        child_id,
+        0,
+        &mut owner.element_owner_mut(),
+    );
 
     assert_eq!(tree.get(root_id).unwrap().depth(), 0);
     assert_eq!(tree.get(child_id).unwrap().depth(), 1);
@@ -378,9 +401,10 @@ fn test_child_depth_is_parent_plus_one() {
 #[test]
 fn test_root_slot_is_zero() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let view = TrackingView { id: 1 };
 
-    let root_id = tree.mount_root(&view);
+    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
 
     let node = tree.get(root_id).unwrap();
     assert_eq!(node.slot(), 0);
@@ -389,15 +413,16 @@ fn test_root_slot_is_zero() {
 #[test]
 fn test_child_slot_assignment() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let root_view = TrackingView { id: 0 };
     let child1 = TrackingView { id: 1 };
     let child2 = TrackingView { id: 2 };
     let child3 = TrackingView { id: 3 };
 
-    let root_id = tree.mount_root(&root_view);
-    let child1_id = tree.insert(&child1, root_id, 0);
-    let child2_id = tree.insert(&child2, root_id, 1);
-    let child3_id = tree.insert(&child3, root_id, 2);
+    let root_id = tree.mount_root(&root_view, &mut owner.element_owner_mut());
+    let child1_id = tree.insert(&child1, root_id, 0, &mut owner.element_owner_mut());
+    let child2_id = tree.insert(&child2, root_id, 1, &mut owner.element_owner_mut());
+    let child3_id = tree.insert(&child3, root_id, 2, &mut owner.element_owner_mut());
 
     assert_eq!(tree.get(child1_id).unwrap().slot(), 0);
     assert_eq!(tree.get(child2_id).unwrap().slot(), 1);
@@ -411,9 +436,10 @@ fn test_child_slot_assignment() {
 #[test]
 fn test_root_has_no_parent() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let view = TrackingView { id: 1 };
 
-    let root_id = tree.mount_root(&view);
+    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
 
     let node = tree.get(root_id).unwrap();
     assert!(node.parent().is_none());
@@ -422,11 +448,12 @@ fn test_root_has_no_parent() {
 #[test]
 fn test_child_has_correct_parent() {
     let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
     let root_view = TrackingView { id: 0 };
     let child_view = TrackingView { id: 1 };
 
-    let root_id = tree.mount_root(&root_view);
-    let child_id = tree.insert(&child_view, root_id, 0);
+    let root_id = tree.mount_root(&root_view, &mut owner.element_owner_mut());
+    let child_id = tree.insert(&child_view, root_id, 0, &mut owner.element_owner_mut());
 
     let child_node = tree.get(child_id).unwrap();
     assert_eq!(child_node.parent(), Some(root_id));
@@ -451,4 +478,70 @@ fn test_lifecycle_send_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
 
     assert_send_sync::<Lifecycle>();
+}
+
+// ============================================================================
+// Characterization Tests for U8 (`ElementOwner` threading)
+// ============================================================================
+//
+// These tests pin the observable mount/unmount/update invariants that U8's
+// signature-threading refactor must preserve. They were authored BEFORE the
+// `&mut ElementOwner` parameter was threaded through `ElementBase` so that any
+// regression in the lifecycle FSM during the rewire is caught immediately.
+//
+// Invariants asserted:
+// - After `mount(parent, slot)` the element transitions Initial → Active.
+// - After `unmount()` the element transitions to Defunct.
+// - A child mounted via `ElementTree::insert` is stored at the recorded
+//   parent + slot + (parent_depth + 1).
+
+#[test]
+fn char_mount_transitions_initial_to_active() {
+    let view = TrackingView { id: 7 };
+    let mut element = StatelessElement::new(&view, StatelessBehavior);
+    assert_eq!(element.lifecycle(), Lifecycle::Initial);
+
+    let mut owner = BuildOwner::new();
+    let mut element_owner = owner.element_owner_mut();
+    element.mount(None, 0, &mut element_owner);
+
+    assert_eq!(element.lifecycle(), Lifecycle::Active);
+}
+
+#[test]
+fn char_unmount_transitions_active_to_defunct() {
+    let view = TrackingView { id: 8 };
+    let mut element = StatelessElement::new(&view, StatelessBehavior);
+
+    let mut owner = BuildOwner::new();
+    {
+        let mut element_owner = owner.element_owner_mut();
+        element.mount(None, 0, &mut element_owner);
+    }
+    assert_eq!(element.lifecycle(), Lifecycle::Active);
+
+    let mut element_owner = owner.element_owner_mut();
+    element.unmount(&mut element_owner);
+    assert_eq!(element.lifecycle(), Lifecycle::Defunct);
+}
+
+#[test]
+fn char_tree_insert_records_parent_slot_depth() {
+    // Verifies the multi-child threading path: ElementTree::insert mounts a
+    // child via the same owner-threaded entry point, and the resulting node
+    // exposes the recorded parent/slot/depth.
+    let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
+
+    let root_view = TrackingView { id: 0 };
+    let child_view = TrackingView { id: 1 };
+
+    let root_id = tree.mount_root(&root_view, &mut owner.element_owner_mut());
+    let child_id = tree.insert(&child_view, root_id, 3, &mut owner.element_owner_mut());
+
+    let child_node = tree.get(child_id).expect("child must be present in tree");
+    assert_eq!(child_node.parent(), Some(root_id));
+    assert_eq!(child_node.slot(), 3);
+    assert_eq!(child_node.depth(), 1);
+    assert_eq!(child_node.element().lifecycle(), Lifecycle::Active);
 }
