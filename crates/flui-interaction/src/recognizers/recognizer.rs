@@ -123,6 +123,28 @@ impl RecognizerBase {
         *self.disposed.lock() = true;
     }
 
+    /// Debug-assert that the recognizer has not been disposed.
+    ///
+    /// Adopts the PR #84 `ChangeNotifier::dispose` lifecycle pattern at
+    /// [`crates/flui-foundation/src/notifier.rs`](../../crates/flui-foundation/src/notifier.rs)
+    /// — use-after-dispose triggers a `debug_assert!` panic in debug
+    /// builds + `tracing::warn!` + no-op semantics in release.
+    ///
+    /// Returns `true` if the recognizer is still live (call sites should
+    /// proceed); `false` if disposed (call sites should early-return).
+    #[inline]
+    pub fn assert_not_disposed(&self, op: &'static str) -> bool {
+        if self.is_disposed() {
+            debug_assert!(
+                false,
+                "Recognizer::{op} called after dispose (use-after-dispose)"
+            );
+            tracing::warn!(op, "Recognizer used after dispose");
+            return false;
+        }
+        true
+    }
+
     /// Start tracking a pointer
     ///
     /// Sets this as the primary pointer and stores initial position.
