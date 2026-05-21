@@ -117,8 +117,8 @@ pub use element::{
     NotificationCallback, NotificationHandler, NotificationNode, ScrollNotification,
     SizeChangedNotification,
 };
-// Slot types for multi-child elements
-pub use element::{ElementSlot, IndexedSlot, IndexedSlotBuilder};
+// Slot types for multi-child elements (re-exported from flui-tree, canonical home)
+pub use element::{ElementSlot, IndexedSlot};
 // RenderObjectElement traits
 pub use element::{RenderObjectElement, RenderSlot, RenderTreeRootElement};
 // Root element
@@ -165,8 +165,8 @@ pub mod prelude {
         },
         child::{Child, Children},
         element::{
-            ElementSlot, IndexedSlot, IndexedSlotBuilder, LayoutChangedNotification, Lifecycle,
-            NotifiableElement, Notification, NotificationNode, RootElement,
+            ElementSlot, IndexedSlot, LayoutChangedNotification, Lifecycle, NotifiableElement,
+            Notification, NotificationNode, RootElement,
         },
         key::{GlobalKey, GlobalKeyId, ObjectKey, ValueKey},
         owner::BuildOwner,

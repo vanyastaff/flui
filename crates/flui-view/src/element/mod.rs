@@ -11,7 +11,6 @@ mod lifecycle;
 mod notification;
 mod render_object_element;
 mod root;
-mod slot;
 
 // New generic infrastructure
 pub mod arity;
@@ -19,6 +18,12 @@ pub mod behavior;
 pub mod child_storage;
 pub mod generic;
 pub mod unified;
+
+use flui_foundation::ElementId;
+// Slot types live in flui-tree (canonical home per `flui-tree-unified-interface-intent`
+// memory + STRATEGY.md "Behavior loyal, structure Rust-native"). flui-view re-exports
+// the bare `IndexedSlot` and aliases `ElementSlot` to its `ElementId` instantiation.
+pub use flui_tree::IndexedSlot;
 
 // Re-export commonly used arity and generic types
 pub use arity::{ElementArity, Leaf, Optional, Single, Variable};
@@ -40,8 +45,36 @@ pub use notification::{
 };
 pub use render_object_element::{RenderObjectElement, RenderSlot, RenderTreeRootElement};
 pub use root::{RootElement, RootElementImpl};
-pub use slot::{ElementSlot, IndexedSlot, IndexedSlotBuilder};
 pub use unified::Element;
+
+/// Slot describing a child element's position in its parent's children list.
+///
+/// Type alias for `flui_tree::IndexedSlot<ElementId>`. The slot tracks the
+/// child's 0-based index plus an optional previous-sibling `ElementId` (the
+/// payload semantics view-local code used to spell `IndexedSlot<Option<ElementId>>`).
+///
+/// # Flutter equivalent
+///
+/// Mirrors Flutter's `IndexedSlot<T extends Element?>` used by
+/// `MultiChildRenderObjectElement` for O(1) child insertion. The previous-sibling
+/// reference enables in-place reordering without re-mounting.
+///
+/// # Example
+///
+/// ```rust
+/// use flui_foundation::ElementId;
+/// use flui_view::ElementSlot;
+///
+/// let first = ElementSlot::first();
+/// assert_eq!(first.index(), 0);
+/// assert!(first.is_first());
+/// assert!(first.previous().is_none());
+///
+/// let second = first.next(ElementId::new(1));
+/// assert_eq!(second.index(), 1);
+/// assert_eq!(second.previous(), Some(ElementId::new(1)));
+/// ```
+pub type ElementSlot = IndexedSlot<ElementId>;
 
 // ============================================================================
 // Type Aliases for Ergonomic Element Creation
