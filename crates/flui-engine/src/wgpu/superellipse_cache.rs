@@ -399,10 +399,7 @@ mod tests {
         assert_eq!(
             cache.stats().2,
             MAX_ENTRIES,
-            "after {} unique inserts into a {}-capacity cache, expected exactly {} entries",
-            N,
-            MAX_ENTRIES,
-            MAX_ENTRIES,
+            "after {N} unique inserts into a {MAX_ENTRIES}-capacity cache, expected exactly {MAX_ENTRIES} entries",
         );
     }
 }

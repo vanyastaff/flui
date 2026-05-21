@@ -184,10 +184,11 @@ impl ShaderCache {
         {
             let cache = self.cache.read();
             if let Some(shader) = cache.get(&shader_type)
-                && shader.module.is_some() {
-                    tracing::trace!("Shader module cache hit: {:?}", shader_type);
-                    return Arc::clone(shader);
-                }
+                && shader.module.is_some()
+            {
+                tracing::trace!("Shader module cache hit: {:?}", shader_type);
+                return Arc::clone(shader);
+            }
         }
 
         // Slow path: need to compile the module (write lock)
@@ -195,9 +196,10 @@ impl ShaderCache {
 
         // Double-check: another thread may have compiled it while we waited
         if let Some(shader) = cache.get(&shader_type)
-            && shader.module.is_some() {
-                return Arc::clone(shader);
-            }
+            && shader.module.is_some()
+        {
+            return Arc::clone(shader);
+        }
 
         // Get or create the source
         let source = shader_type.source_code().to_string();
