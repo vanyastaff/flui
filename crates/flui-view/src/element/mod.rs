@@ -16,6 +16,7 @@ mod root;
 // New generic infrastructure
 pub mod arity;
 pub mod behavior;
+pub(crate) mod behavior_commons;
 pub mod child_storage;
 pub mod generic;
 pub mod unified;

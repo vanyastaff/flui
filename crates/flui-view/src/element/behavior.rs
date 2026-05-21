@@ -216,19 +216,17 @@ where
     }
 
     fn perform_build(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
-        if !core.should_build() {
-            tracing::trace!("StatelessBehavior::perform_build skipped");
+        if !super::behavior_commons::should_build_with_trace(core, "StatelessBehavior") {
             return;
         }
-
-        tracing::debug!("StatelessBehavior::perform_build starting");
-
         let ctx = ElementBuildContext::new_minimal(core.depth());
         let child_view = core.view().build(&ctx);
-        core.update_or_create_child(child_view, owner);
-        core.clear_dirty();
-
-        tracing::debug!("StatelessBehavior::perform_build completed");
+        super::behavior_commons::finish_single_child_build(
+            core,
+            child_view,
+            "StatelessBehavior",
+            owner,
+        );
     }
 }
 
@@ -265,19 +263,7 @@ where
     }
 
     fn perform_build(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
-        if !core.should_build() {
-            tracing::trace!("ProxyBehavior::perform_build skipped");
-            return;
-        }
-
-        tracing::debug!("ProxyBehavior::perform_build starting");
-
-        let child_view = core.view().child();
-        let child_view_boxed = dyn_clone::clone_box(child_view);
-        core.update_or_create_child(child_view_boxed, owner);
-        core.clear_dirty();
-
-        tracing::debug!("ProxyBehavior::perform_build completed");
+        super::behavior_commons::build_proxy_style(core, "ProxyBehavior", owner, V::child);
     }
 }
 
@@ -338,24 +324,24 @@ where
     fn perform_build(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
         let ctx = ElementBuildContext::new_minimal(core.depth());
 
-        // Initialize state on first build
+        // Initialize state on first build — must run before the
+        // `should_build` guard so a freshly-mounted `StatefulView` calls
+        // `init_state` exactly once even if the element is clean.
         if !self.initialized {
             self.state.init_state(&ctx);
             self.initialized = true;
         }
 
-        if !core.should_build() {
-            tracing::trace!("StatefulBehavior::perform_build skipped");
+        if !super::behavior_commons::should_build_with_trace(core, "StatefulBehavior") {
             return;
         }
-
-        tracing::debug!("StatefulBehavior::perform_build starting");
-
         let child_view = self.state.build(core.view(), &ctx);
-        core.update_or_create_child(child_view, owner);
-        core.clear_dirty();
-
-        tracing::debug!("StatefulBehavior::perform_build completed");
+        super::behavior_commons::finish_single_child_build(
+            core,
+            child_view,
+            "StatefulBehavior",
+            owner,
+        );
     }
 
     fn on_unmount(&mut self, _core: &mut ElementCore<V, A>, _owner: &mut crate::ElementOwner<'_>) {
@@ -538,37 +524,20 @@ where
     }
 
     fn on_unmount(&mut self, core: &mut ElementCore<V, A>, _owner: &mut crate::ElementOwner<'_>) {
-        // Remove from RenderTree
-        if let Some(render_id) = self.render_id
-            && let Some(pipeline_owner) = core.pipeline_owner()
-        {
-            let mut owner = pipeline_owner.write();
-            owner.render_tree_mut().remove(render_id);
-            tracing::debug!(
-                "RenderBehavior::on_unmount removed render_id={:?}",
-                render_id
-            );
-        }
-
+        super::behavior_commons::remove_render_object_from_tree(
+            core,
+            self.render_id,
+            "RenderBehavior",
+        );
         self.render_id = None;
     }
 
     fn on_update(&mut self, core: &ElementCore<V, A>) {
-        // Mark RenderObject for layout/paint
-        if let Some(render_id) = self.render_id
-            && let Some(pipeline_owner) = core.pipeline_owner()
-        {
-            let mut owner = pipeline_owner.write();
-            let tree_depth = owner.render_tree().depth(render_id).unwrap_or(0);
-
-            owner.add_node_needing_layout(render_id, tree_depth as usize);
-            owner.add_node_needing_paint(render_id, tree_depth as usize);
-
-            tracing::debug!(
-                "RenderBehavior::on_update marked render_id={:?} dirty",
-                render_id
-            );
-        }
+        super::behavior_commons::mark_render_needs_layout_and_paint(
+            core,
+            self.render_id,
+            "RenderBehavior",
+        );
     }
 }
 
@@ -704,20 +673,8 @@ where
     }
 
     fn perform_build(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
-        if !core.should_build() {
-            tracing::trace!("InheritedBehavior::perform_build skipped");
-            return;
-        }
-
-        tracing::debug!("InheritedBehavior::perform_build starting");
-
-        // Like ProxyView, InheritedView just returns the child directly
-        let child_view = core.view().child();
-        let child_view_boxed = dyn_clone::clone_box(child_view);
-        core.update_or_create_child(child_view_boxed, owner);
-        core.clear_dirty();
-
-        tracing::debug!("InheritedBehavior::perform_build completed");
+        // Like ProxyView, InheritedView just returns the child directly.
+        super::behavior_commons::build_proxy_style(core, "InheritedBehavior", owner, V::child);
     }
 
     fn on_view_updated(
