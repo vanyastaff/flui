@@ -3464,6 +3464,64 @@ impl WgpuPainter {
         );
     }
 
+    /// Set an SDF rounded-superellipse clip (iOS-squircle).
+    ///
+    /// Parallel to [`Self::clip_rrect`]: populates `current_rsuperellipse_clip`
+    /// with the bounding rect + per-corner radii, applies a bounding-rect
+    /// scissor for early rasterizer rejection, and relies on
+    /// `rect_instanced.wgsl`'s per-pixel SDF evaluation to clip pixels
+    /// outside the iOS-squircle curve (wired in U9 / U10).
+    pub fn clip_rsuperellipse(&mut self, rse: flui_types::geometry::RSuperellipse) {
+        // Apply current transform to outer rect (identical AABB logic to
+        // `clip_rrect`).
+        let transform = self.current_transform;
+        let rect = rse.outer_rect();
+
+        let (x, y, w, h) = if transform == glam::Mat4::IDENTITY {
+            (rect.left().0, rect.top().0, rect.width().0, rect.height().0)
+        } else {
+            let tl = transform * glam::Vec4::new(rect.left().0, rect.top().0, 0.0, 1.0);
+            let br = transform * glam::Vec4::new(rect.right().0, rect.bottom().0, 0.0, 1.0);
+            let min_x = tl.x.min(br.x);
+            let min_y = tl.y.min(br.y);
+            let max_x = tl.x.max(br.x);
+            let max_y = tl.y.max(br.y);
+            (min_x, min_y, max_x - min_x, max_y - min_y)
+        };
+
+        // Per-corner separate-axis radii (rx, ry per corner).
+        let tl_r = rse.tl_radius();
+        let tr_r = rse.tr_radius();
+        let br_r = rse.br_radius();
+        let bl_r = rse.bl_radius();
+
+        self.current_rsuperellipse_clip = [
+            x, y, w, h, tl_r.x.0, tl_r.y.0, tr_r.x.0, tr_r.y.0, br_r.x.0, br_r.y.0, bl_r.x.0,
+            bl_r.y.0,
+        ];
+
+        // Bounding-box scissor for early rasterizer rejection (same pattern
+        // as `clip_rrect`).
+        self.clip_rect(rect);
+
+        #[cfg(debug_assertions)]
+        tracing::trace!(
+            "WgpuPainter::clip_rsuperellipse: SDF clip set [{:.1}, {:.1}, {:.1}, {:.1}] radii=[(tl {:.1},{:.1}) (tr {:.1},{:.1}) (br {:.1},{:.1}) (bl {:.1},{:.1})]",
+            x,
+            y,
+            w,
+            h,
+            tl_r.x.0,
+            tl_r.y.0,
+            tr_r.x.0,
+            tr_r.y.0,
+            br_r.x.0,
+            br_r.y.0,
+            bl_r.x.0,
+            bl_r.y.0,
+        );
+    }
+
     pub fn clip_path(&mut self, _path: &Path) {
         // Path clipping requires stencil buffer or path tessellation
         // This is a complex feature that needs:
