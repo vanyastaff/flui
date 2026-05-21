@@ -161,17 +161,33 @@ where
     }
 
     // ========================================================================
+    // Inherited-element protocol (U9 / R4)
+    //
+    // Delegates to the behavior; only `InheritedBehavior<V>` returns
+    // `Some(...)`. Every other behavior keeps the trait-default `None`.
+    // ========================================================================
+
+    fn as_inherited(&self) -> Option<&dyn crate::element::InheritedElementAccess> {
+        self.behavior.as_inherited_access()
+    }
+
+    fn as_inherited_mut(&mut self) -> Option<&mut dyn crate::element::InheritedElementAccess> {
+        self.behavior.as_inherited_access_mut()
+    }
+
+    // ========================================================================
     // Lifecycle Methods with Behavior Hooks
     // ========================================================================
 
-    fn update(&mut self, new_view: &dyn View, _owner: &mut crate::ElementOwner<'_>) {
+    fn update(&mut self, new_view: &dyn View, owner: &mut crate::ElementOwner<'_>) {
         // Snapshot the previous view so `on_view_updated` can pass it to state
-        // hooks (e.g. `ViewState::did_update_view`).
+        // hooks (e.g. `ViewState::did_update_view`,
+        // `InheritedBehavior::on_view_updated` for dependent notification).
         let old_view = self.core.view().clone();
         if self.core.update_view(new_view) {
             // Notify behavior of update
             self.behavior.on_update(&self.core);
-            self.behavior.on_view_updated(&self.core, &old_view);
+            self.behavior.on_view_updated(&self.core, &old_view, owner);
         }
     }
 
@@ -186,11 +202,11 @@ where
         owner: &mut crate::ElementOwner<'_>,
     ) {
         self.core.mount(parent, slot, owner);
-        self.behavior.on_mount(&mut self.core);
+        self.behavior.on_mount(&mut self.core, owner);
     }
 
     fn unmount(&mut self, owner: &mut crate::ElementOwner<'_>) {
-        self.behavior.on_unmount(&mut self.core);
+        self.behavior.on_unmount(&mut self.core, owner);
         self.core.unmount(owner);
     }
 
@@ -362,9 +378,13 @@ where
         self.behavior.data()
     }
 
-    /// Register a dependent element.
-    pub fn add_dependent(&mut self, element: ElementId) {
-        self.behavior.add_dependent(element);
+    /// Register a dependent element with its tree depth.
+    ///
+    /// `depth` is the dependent's depth in the element tree, used by
+    /// `BuildOwner::schedule_build_for` when this InheritedElement
+    /// rebuilds with `update_should_notify == true`.
+    pub fn add_dependent(&mut self, element: ElementId, depth: usize) {
+        self.behavior.add_dependent(element, depth);
     }
 
     /// Remove a dependent element.
@@ -372,8 +392,8 @@ where
         self.behavior.remove_dependent(element);
     }
 
-    /// Get all dependent elements.
-    pub fn dependents(&self) -> &[ElementId] {
+    /// Get all dependent elements as an id -> depth map.
+    pub fn dependents(&self) -> &std::collections::HashMap<ElementId, usize> {
         self.behavior.dependents()
     }
 }

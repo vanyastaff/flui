@@ -632,8 +632,10 @@ fn test_context_builder_send_sync() {
 // ============================================================================
 
 #[test]
-fn test_depend_on_returns_none() {
-    // depend_on returns None because of lifetime issues with RwLock
+fn test_depend_on_returns_none_when_no_inherited_ancestor() {
+    // depend_on returns None when no InheritedView<T> ancestor exists.
+    // Acceptance coverage for `BuildContextExt::depend_on` (plan §U9
+    // edge case "no-ancestor None").
     let (tree, owner) = create_tree_and_owner();
 
     let view = SimpleView {
@@ -645,13 +647,14 @@ fn test_depend_on_returns_none() {
 
     let ctx = ElementBuildContext::for_element(root_id, tree, owner).unwrap();
 
-    let result: Option<&String> = ctx.depend_on::<String>();
+    let result: Option<String> = ctx.depend_on::<String, String>(|s| s.clone());
     assert!(result.is_none());
 }
 
 #[test]
-fn test_get_returns_none() {
-    // get returns None because of lifetime issues with RwLock
+fn test_get_returns_none_when_no_inherited_ancestor() {
+    // `get_inherited` callback-form parity with depend_on: returns
+    // None when no ancestor of type `T` exists.
     let (tree, owner) = create_tree_and_owner();
 
     let view = SimpleView {
@@ -663,7 +666,7 @@ fn test_get_returns_none() {
 
     let ctx = ElementBuildContext::for_element(root_id, tree, owner).unwrap();
 
-    let result: Option<&i32> = ctx.get::<i32>();
+    let result: Option<i32> = ctx.get::<i32, i32>(|v| *v);
     assert!(result.is_none());
 }
 

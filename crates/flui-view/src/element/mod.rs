@@ -7,6 +7,7 @@
 //! - Child element relationships
 //! - RenderObject connections
 
+mod inherited_access;
 mod lifecycle;
 mod notification;
 mod render_object_element;
@@ -36,6 +37,7 @@ pub use child_storage::{
     VariableChildStorage,
 };
 pub use generic::ElementCore;
+pub use inherited_access::InheritedElementAccess;
 pub use lifecycle::Lifecycle;
 pub use notification::{
     BoxedNotification, DragEndNotification, DragStartNotification, FocusNotification,

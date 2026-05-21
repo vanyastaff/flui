@@ -87,29 +87,38 @@ pub trait BuildContext: Send + Sync {
     /// This registers a dependency - when the InheritedView's data changes,
     /// this Element will be rebuilt and `did_change_dependencies()` called.
     ///
-    /// Uses O(1) hash table lookup, not O(n) parent walk.
+    /// # Callback form
     ///
-    /// # Type Parameters
+    /// The closure receives a reference to the matched InheritedView as
+    /// `&dyn Any` and runs synchronously while the implementation holds
+    /// the necessary tree-lock — this preserves the declarative-build
+    /// invariant (Constitution Principle 5) AND avoids extending a
+    /// `&self` borrow into the rest of `build()`. The typed wrapper
+    /// [`BuildContextExt::depend_on`] handles `TypeId` resolution and
+    /// downcast.
     ///
-    /// * `type_id` - The TypeId of the InheritedView to look up
+    /// Returns `true` if an ancestor InheritedView of that type was
+    /// found and the callback was invoked; `false` otherwise.
     ///
-    /// # Returns
-    ///
-    /// The data if an ancestor InheritedView of that type exists, None
-    /// otherwise.
-    fn depend_on_inherited(&self, type_id: TypeId) -> Option<&dyn std::any::Any>;
+    /// Plan §U9 / R4. Flutter parity: `framework.dart:5081`
+    /// `dependOnInheritedWidgetOfExactType`.
+    fn depend_on_inherited(
+        &self,
+        type_id: TypeId,
+        callback: &mut dyn FnMut(&dyn std::any::Any),
+    ) -> bool;
 
     /// Look up data from an ancestor InheritedView WITHOUT registering a
     /// dependency.
     ///
-    /// Unlike `depend_on_inherited`, this does NOT cause rebuilds when the
-    /// InheritedView changes. Use this for one-time lookups where you don't
-    /// need to track changes.
+    /// Unlike [`depend_on_inherited`], this does NOT cause rebuilds when
+    /// the InheritedView changes. Use this for one-time lookups where
+    /// you don't need to track changes.
     ///
-    /// # Type Parameters
+    /// Same callback shape as `depend_on_inherited`.
     ///
-    /// * `type_id` - The TypeId of the InheritedView to look up
-    fn get_inherited(&self, type_id: TypeId) -> Option<&dyn std::any::Any>;
+    /// [`depend_on_inherited`]: BuildContext::depend_on_inherited
+    fn get_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn std::any::Any)) -> bool;
 
     // ========================================================================
     // Ancestor Lookups
@@ -212,32 +221,55 @@ pub trait BuildContext: Send + Sync {
 pub trait BuildContextExt: BuildContext {
     /// Look up data from an ancestor InheritedView (with dependency).
     ///
-    /// This is the typed version of `depend_on_inherited`.
-    /// Registers a dependency - this Element rebuilds when data changes.
+    /// Typed callback wrapper over [`BuildContext::depend_on_inherited`].
+    /// The closure receives `&T` (the InheritedView) and returns any
+    /// derived value `R` — typically a cloned `Data` field. Registers
+    /// a dependency: when the InheritedView's data changes, this
+    /// Element rebuilds.
+    ///
+    /// Callback form chosen over `Option<&T>` to preserve the
+    /// declarative-build invariant (Constitution Principle 5) and avoid
+    /// extending the inherited-data borrow across the rest of
+    /// `build()`. See plan §D2.
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// let theme: Option<&ThemeData> = ctx.depend_on::<Theme>();
+    /// // Clone the entire data:
+    /// let theme: Option<ThemeData> = ctx.depend_on::<Theme, _>(|t| t.data().clone());
+    /// // Or extract a single field:
+    /// let color: Option<u32> = ctx.depend_on::<Theme, _>(|t| t.primary_color);
     /// ```
-    fn depend_on<T: 'static>(&self) -> Option<&T> {
-        self.depend_on_inherited(TypeId::of::<T>())
-            .and_then(|any| any.downcast_ref::<T>())
+    fn depend_on<T: 'static, R>(&self, f: impl FnOnce(&T) -> R) -> Option<R> {
+        let mut result: Option<R> = None;
+        let mut once = Some(f);
+        self.depend_on_inherited(TypeId::of::<T>(), &mut |any| {
+            if let (Some(typed), Some(call)) = (any.downcast_ref::<T>(), once.take()) {
+                result = Some(call(typed));
+            }
+        });
+        result
     }
 
     /// Look up data from an ancestor InheritedView (without dependency).
     ///
-    /// This is the typed version of `get_inherited`.
-    /// Does NOT register a dependency - use for one-time lookups.
+    /// Typed callback wrapper over [`BuildContext::get_inherited`]. Does
+    /// NOT register a dependency — use for one-time lookups.
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// let config: Option<&AppConfig> = ctx.get::<AppConfig>();
+    /// let config_name: Option<String> = ctx.get::<AppConfig, _>(|c| c.name.clone());
     /// ```
-    fn get<T: 'static>(&self) -> Option<&T> {
-        self.get_inherited(TypeId::of::<T>())
-            .and_then(|any| any.downcast_ref::<T>())
+    fn get<T: 'static, R>(&self, f: impl FnOnce(&T) -> R) -> Option<R> {
+        let mut result: Option<R> = None;
+        let mut once = Some(f);
+        self.get_inherited(TypeId::of::<T>(), &mut |any| {
+            if let (Some(typed), Some(call)) = (any.downcast_ref::<T>(), once.take()) {
+                result = Some(call(typed));
+            }
+        });
+        result
     }
 
     /// Find the nearest ancestor View of type T.

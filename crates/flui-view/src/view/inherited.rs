@@ -220,17 +220,21 @@ mod tests {
         let dep1 = ElementId::new(1);
         let dep2 = ElementId::new(2);
 
-        element.behavior_mut().add_dependent(dep1);
-        element.behavior_mut().add_dependent(dep2);
+        element.behavior_mut().add_dependent(dep1, 3);
+        element.behavior_mut().add_dependent(dep2, 4);
         assert_eq!(element.behavior().dependents().len(), 2);
+        assert_eq!(element.behavior().dependents().get(&dep1), Some(&3));
+        assert_eq!(element.behavior().dependents().get(&dep2), Some(&4));
 
-        // Adding same dependent again should not duplicate
-        element.behavior_mut().add_dependent(dep1);
+        // Adding same dependent again should overwrite depth (idempotent
+        // dedup via HashMap key) — not duplicate.
+        element.behavior_mut().add_dependent(dep1, 5);
         assert_eq!(element.behavior().dependents().len(), 2);
+        assert_eq!(element.behavior().dependents().get(&dep1), Some(&5));
 
         element.behavior_mut().remove_dependent(dep1);
         assert_eq!(element.behavior().dependents().len(), 1);
-        assert_eq!(element.behavior().dependents()[0], dep2);
+        assert!(element.behavior().dependents().contains_key(&dep2));
     }
 
     #[test]

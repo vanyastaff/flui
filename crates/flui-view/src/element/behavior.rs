@@ -4,7 +4,7 @@
 //! view type (Stateless, Proxy, Stateful, Render). Behaviors encapsulate the
 //! view-specific logic while the unified Element handles all common operations.
 
-use std::marker::PhantomData;
+use std::{collections::HashMap, marker::PhantomData};
 
 use flui_foundation::{ElementId, ListenerId, RenderId};
 use flui_rendering::{
@@ -43,12 +43,20 @@ where
     fn perform_build(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>);
 
     /// Called after mount to perform behavior-specific setup.
+    ///
+    /// The split-borrow `owner` handle is threaded through so behaviors
+    /// can register themselves in `BuildOwner` registries
+    /// (`InheritedBehavior::on_mount` uses it to register its `TypeId`
+    /// for O(1) `depend_on_inherited` lookups). Plan §U9.
     #[allow(unused_variables)]
-    fn on_mount(&mut self, core: &mut ElementCore<V, A>) {}
+    fn on_mount(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {}
 
     /// Called before unmount to perform behavior-specific cleanup.
+    ///
+    /// `owner` is threaded through so behaviors can unregister themselves
+    /// from `BuildOwner` registries (mirror of `on_mount`).
     #[allow(unused_variables)]
-    fn on_unmount(&mut self, core: &mut ElementCore<V, A>) {}
+    fn on_unmount(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {}
 
     /// Called after view update to perform behavior-specific reactions.
     #[allow(unused_variables)]
@@ -73,9 +81,22 @@ where
     ///
     /// `on_update` already fires for generic post-update reactions; this hook
     /// exists for behaviors that need the prior view (e.g. `StatefulBehavior`
-    /// forwarding to `ViewState::did_update_view`).
+    /// forwarding to `ViewState::did_update_view`, or `InheritedBehavior`
+    /// scheduling rebuilds for its dependents when
+    /// `update_should_notify(old)` is true — see Flutter
+    /// `framework.dart:6414` `InheritedElement.notifyClients`).
+    ///
+    /// The split-borrow `owner` handle is threaded through so behaviors
+    /// can call `ElementOwner::schedule_build_for` for affected
+    /// descendants. Plan §U9.
     #[allow(unused_variables)]
-    fn on_view_updated(&mut self, core: &ElementCore<V, A>, old_view: &V) {}
+    fn on_view_updated(
+        &mut self,
+        core: &ElementCore<V, A>,
+        old_view: &V,
+        owner: &mut crate::ElementOwner<'_>,
+    ) {
+    }
 
     /// The kind name used when formatting the parent `Element` with `Debug`.
     ///
@@ -84,6 +105,27 @@ where
     /// name in logs and snapshot tests.
     fn debug_kind(&self) -> &'static str {
         "Element"
+    }
+
+    /// Cast this behavior as an `InheritedElementAccess` object-safe view.
+    ///
+    /// Returns `None` for every behavior except
+    /// [`InheritedBehavior`], whose override returns `Some(self)`. The
+    /// unified `Element::as_inherited` delegates to this so
+    /// `BuildContext::depend_on_inherited` (plan §U9, Flutter
+    /// `framework.dart:5081`) can record dependents and read the view
+    /// without naming `V` at the call site.
+    fn as_inherited_access(&self) -> Option<&dyn crate::element::InheritedElementAccess> {
+        None
+    }
+
+    /// Mutable variant of [`as_inherited_access`].
+    ///
+    /// [`as_inherited_access`]: ElementBehavior::as_inherited_access
+    fn as_inherited_access_mut(
+        &mut self,
+    ) -> Option<&mut dyn crate::element::InheritedElementAccess> {
+        None
     }
 }
 
@@ -251,7 +293,7 @@ where
         tracing::debug!("StatefulBehavior::perform_build completed");
     }
 
-    fn on_unmount(&mut self, _core: &mut ElementCore<V, A>) {
+    fn on_unmount(&mut self, _core: &mut ElementCore<V, A>, _owner: &mut crate::ElementOwner<'_>) {
         self.state.dispose();
     }
 
@@ -263,7 +305,12 @@ where
         self.state.deactivate();
     }
 
-    fn on_view_updated(&mut self, _core: &ElementCore<V, A>, old_view: &V) {
+    fn on_view_updated(
+        &mut self,
+        _core: &ElementCore<V, A>,
+        old_view: &V,
+        _owner: &mut crate::ElementOwner<'_>,
+    ) {
         self.state.did_update_view(old_view);
     }
 }
@@ -379,7 +426,7 @@ where
         );
     }
 
-    fn on_mount(&mut self, core: &mut ElementCore<V, A>) {
+    fn on_mount(&mut self, core: &mut ElementCore<V, A>, _owner: &mut crate::ElementOwner<'_>) {
         // Create RenderObject and insert into RenderTree
         if let Some(pipeline_owner) = core.pipeline_owner() {
             tracing::info!("RenderBehavior::on_mount creating RenderObject");
@@ -414,7 +461,7 @@ where
         }
     }
 
-    fn on_unmount(&mut self, core: &mut ElementCore<V, A>) {
+    fn on_unmount(&mut self, core: &mut ElementCore<V, A>, _owner: &mut crate::ElementOwner<'_>) {
         // Remove from RenderTree
         if let Some(render_id) = self.render_id
             && let Some(pipeline_owner) = core.pipeline_owner()
@@ -466,23 +513,56 @@ where
 /// Behavior for InheritedView elements.
 ///
 /// Manages dependents tracking and data caching. Similar to ProxyView but with
-/// update_should_notify logic to optimize dependent rebuilds.
+/// `update_should_notify` logic to optimize dependent rebuilds.
+///
+/// # Dependents map
+///
+/// Stored as `HashMap<ElementId, usize>` — dependent id mapped to its
+/// depth in the element tree. The depth is captured at
+/// `depend_on_inherited` time and used during `on_view_updated` to call
+/// `ElementOwner::schedule_build_for(dep_id, dep_depth)` without an
+/// extra tree traversal (the tree is not in scope at `on_view_updated`
+/// time because we only see `ElementCore<V, A>`).
+///
+/// Flutter parity: `framework.dart:6252` `_dependents:
+/// HashMap<Element, Object?>` in `InheritedElement`. Flutter uses a
+/// HashMap because dependents may attach dependency aspects (the
+/// `Object?` value); we will gain that capability in U10 if we expand
+/// `aspect` support — for now the value slot holds the depth.
 #[derive(Debug)]
 pub struct InheritedBehavior<V: InheritedView> {
     /// Cached data for dependents.
     pub data: V::Data,
+    /// Cached clone of the inherited view itself.
+    ///
+    /// `BuildContext::depend_on_inherited` must hand a `&V` to the
+    /// caller's typed callback (Flutter's `dependOnInheritedWidgetOfExactType`
+    /// returns the widget, not the data). The unified element's view
+    /// lives in `ElementCore`, but the
+    /// [`InheritedElementAccess`](crate::element::InheritedElementAccess)
+    /// trait surface only carries `&mut InheritedBehavior<V>` through
+    /// the behavior-trait routing — so we cache a clone of the view
+    /// here, refreshed on every `on_view_updated`.
+    pub view_cache: V,
     /// Elements that depend on this InheritedElement.
-    pub dependents: Vec<ElementId>,
+    ///
+    /// Maps each dependent's `ElementId` -> its tree depth (captured at
+    /// the time `depend_on_inherited` was called). The depth is needed
+    /// for `BuildOwner::schedule_build_for(id, depth)` so the rebuild
+    /// heap orders dependents correctly without a separate tree walk.
+    pub dependents: HashMap<ElementId, usize>,
     /// Marker for view type.
     _phantom: PhantomData<V>,
 }
 
 impl<V: InheritedView> InheritedBehavior<V> {
-    /// Create a new InheritedBehavior by extracting data from the view.
+    /// Create a new InheritedBehavior by extracting data + view clone
+    /// from the source view.
     pub fn new(view: &V) -> Self {
         Self {
             data: view.data().clone(),
-            dependents: Vec::new(),
+            view_cache: view.clone(),
+            dependents: HashMap::new(),
             _phantom: PhantomData,
         }
     }
@@ -492,21 +572,39 @@ impl<V: InheritedView> InheritedBehavior<V> {
         &self.data
     }
 
-    /// Register a dependent element.
-    pub fn add_dependent(&mut self, element: ElementId) {
-        if !self.dependents.contains(&element) {
-            self.dependents.push(element);
-        }
+    /// Register a dependent element with its tree depth.
+    ///
+    /// Idempotent: re-registering the same `element` overwrites its
+    /// stored depth (depths can change across reconciliation, so the
+    /// latest call wins). HashMap inherently dedups on key. Plan §U9.
+    pub fn add_dependent(&mut self, element: ElementId, depth: usize) {
+        self.dependents.insert(element, depth);
     }
 
     /// Remove a dependent element.
     pub fn remove_dependent(&mut self, element: ElementId) {
-        self.dependents.retain(|&id| id != element);
+        self.dependents.remove(&element);
     }
 
-    /// Get all dependent elements.
-    pub fn dependents(&self) -> &[ElementId] {
+    /// Get all dependent elements (id -> depth map).
+    pub fn dependents(&self) -> &HashMap<ElementId, usize> {
         &self.dependents
+    }
+}
+
+impl<V> crate::element::InheritedElementAccess for InheritedBehavior<V>
+where
+    V: InheritedView,
+{
+    fn view_as_any(&self) -> &dyn std::any::Any {
+        // Expose the cached view-clone as `&dyn Any` so the caller's
+        // typed downcast (`.downcast_ref::<V>()`) can succeed inside
+        // `BuildContextExt::depend_on`.
+        &self.view_cache as &dyn std::any::Any
+    }
+
+    fn record_dependent(&mut self, dependent: ElementId, depth: usize) {
+        self.add_dependent(dependent, depth);
     }
 }
 
@@ -517,6 +615,16 @@ where
 {
     fn debug_kind(&self) -> &'static str {
         "InheritedElement"
+    }
+
+    fn as_inherited_access(&self) -> Option<&dyn crate::element::InheritedElementAccess> {
+        Some(self)
+    }
+
+    fn as_inherited_access_mut(
+        &mut self,
+    ) -> Option<&mut dyn crate::element::InheritedElementAccess> {
+        Some(self)
     }
 
     fn perform_build(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
@@ -536,19 +644,42 @@ where
         tracing::debug!("InheritedBehavior::perform_build completed");
     }
 
-    fn on_update(&mut self, core: &ElementCore<V, A>) {
-        // Check if dependents should be notified
-        // In a full implementation, we would get the old view and compare
-        // For now, we update the cached data
+    fn on_view_updated(
+        &mut self,
+        core: &ElementCore<V, A>,
+        old_view: &V,
+        owner: &mut crate::ElementOwner<'_>,
+    ) {
+        // Refresh cached data + view-clone each update.
         self.data = core.view().data().clone();
+        self.view_cache = core.view().clone();
 
-        // TODO: Mark all dependents as needing rebuild if update_should_notify returns
-        // true This is handled by BuildOwner in a full implementation
-        tracing::debug!("InheritedBehavior::on_update data cached");
+        // Compare old vs new view; if `update_should_notify` returns
+        // true, schedule rebuild for every dependent.
+        //
+        // Flutter parity: `framework.dart:6414`
+        // `InheritedElement.notifyClients(InheritedWidget old)` calls
+        // `widget.updateShouldNotify(old)` and on true iterates
+        // `_dependents.keys` to enqueue each dependent for build.
+        if core.view().update_should_notify(old_view) {
+            tracing::debug!(
+                "InheritedBehavior::on_view_updated notifying {} dependents",
+                self.dependents.len()
+            );
+            for (&dep_id, &dep_depth) in &self.dependents {
+                owner.schedule_build_for(dep_id, dep_depth);
+            }
+        } else {
+            tracing::trace!(
+                "InheritedBehavior::on_view_updated no notify (update_should_notify=false)"
+            );
+        }
     }
 
-    fn on_unmount(&mut self, _core: &mut ElementCore<V, A>) {
-        // Clear dependents on unmount
+    fn on_unmount(&mut self, _core: &mut ElementCore<V, A>, _owner: &mut crate::ElementOwner<'_>) {
+        // Clear dependents on unmount; stale ids would otherwise be
+        // pushed onto `BuildOwner::dirty_elements` heap on a subsequent
+        // view-update.
         let count = self.dependents.len();
         self.dependents.clear();
         tracing::debug!("InheritedBehavior::on_unmount cleared {} dependents", count);
@@ -652,9 +783,9 @@ where
         self.stateful.perform_build(core, owner);
     }
 
-    fn on_mount(&mut self, core: &mut ElementCore<V, A>) {
+    fn on_mount(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
         // First, let StatefulBehavior do its setup (initialize state)
-        self.stateful.on_mount(core);
+        self.stateful.on_mount(core, owner);
 
         // Then subscribe to the listenable
         let listenable = core.view().listenable();
@@ -665,7 +796,7 @@ where
         tracing::debug!("AnimationBehavior::on_mount subscribed to listenable");
     }
 
-    fn on_unmount(&mut self, core: &mut ElementCore<V, A>) {
+    fn on_unmount(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
         // Unsubscribe from the listenable
         if let Some(listener_id) = self.listener_id.take() {
             let listenable = core.view().listenable();
@@ -674,7 +805,7 @@ where
         }
 
         // Then let StatefulBehavior do its cleanup (dispose state)
-        self.stateful.on_unmount(core);
+        self.stateful.on_unmount(core, owner);
     }
 
     fn on_update(&mut self, core: &ElementCore<V, A>) {
@@ -705,7 +836,12 @@ where
         self.stateful.on_deactivate(core);
     }
 
-    fn on_view_updated(&mut self, core: &ElementCore<V, A>, old_view: &V) {
-        self.stateful.on_view_updated(core, old_view);
+    fn on_view_updated(
+        &mut self,
+        core: &ElementCore<V, A>,
+        old_view: &V,
+        owner: &mut crate::ElementOwner<'_>,
+    ) {
+        self.stateful.on_view_updated(core, old_view, owner);
     }
 }

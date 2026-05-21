@@ -382,6 +382,29 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     fn set_parent_render_id(&mut self, _parent_id: Option<flui_foundation::RenderId>) {
         // Default: no-op
     }
+
+    // ========================================================================
+    // Inherited-element protocol (U9 / R4)
+    // ========================================================================
+
+    /// Object-safe accessor onto this element if it is an
+    /// `InheritedElement<V>` (a `Element<V, Single, InheritedBehavior<V>>`).
+    ///
+    /// Returns `None` for every other behavior. Used by
+    /// [`BuildContext::depend_on_inherited`] (plan §U9) to read the
+    /// view as `&dyn Any` and to record this caller as a dependent.
+    ///
+    /// The default impl returns `None`. Only the unified `Element`
+    /// specialization for `InheritedBehavior<V>` overrides this in
+    /// `crates/flui-view/src/element/unified.rs`.
+    fn as_inherited(&self) -> Option<&dyn crate::element::InheritedElementAccess> {
+        None
+    }
+
+    /// Mutable variant of [`as_inherited`].
+    fn as_inherited_mut(&mut self) -> Option<&mut dyn crate::element::InheritedElementAccess> {
+        None
+    }
 }
 
 impl_downcast!(ElementBase);

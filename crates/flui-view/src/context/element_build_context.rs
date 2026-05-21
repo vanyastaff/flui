@@ -131,6 +131,35 @@ impl ElementBuildContext {
         &self.owner
     }
 
+    /// Walk ancestors of `self.element_id` looking for an element whose
+    /// `view_type_id()` matches `type_id`. Returns the first matching
+    /// ancestor's `ElementId`.
+    ///
+    /// Shared helper for U9 (`depend_on_inherited`) and U10
+    /// (`get_inherited`). Both perform the same ancestor scan; only the
+    /// dependent-recording side differs. Extracting the helper now also
+    /// gives U11/U12 an obvious reuse target.
+    ///
+    /// Flutter parity: `framework.dart:5028-5060` `getElementForInheritedWidgetOfExactType` —
+    /// Flutter uses a per-element `_inheritedElements: PersistentHashMap`,
+    /// flui walks the ancestor chain directly because the per-element
+    /// hash-map isn't necessary at our scale and avoids the
+    /// reconciliation-time map-clone cost.
+    fn walk_ancestors_for_inherited(&self, type_id: std::any::TypeId) -> Option<ElementId> {
+        let tree = self.tree.read();
+
+        let mut current_id = self.element_id;
+        loop {
+            let node = tree.get(current_id)?;
+            let parent_id = node.parent()?;
+            let parent_node = tree.get(parent_id)?;
+            if parent_node.element().view_type_id() == type_id {
+                return Some(parent_id);
+            }
+            current_id = parent_id;
+        }
+    }
+
     /// Create a minimal context for use when full tree/owner aren't available.
     ///
     /// This is useful for StatelessElement::perform_build where we just need
@@ -186,40 +215,87 @@ impl BuildContext for ElementBuildContext {
         None
     }
 
-    fn depend_on_inherited(&self, type_id: TypeId) -> Option<&dyn Any> {
-        // O(1) lookup via BuildOwner's inherited registry
-        let owner = self.owner.read();
-        let element_id = owner.inherited_element(type_id)?;
-        drop(owner);
+    fn depend_on_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
+        // Walk ancestors looking for an Element whose view_type_id
+        // matches; the first one is the nearest InheritedView<T>.
+        //
+        // Records this element in the matched InheritedElement's
+        // dependent map so a subsequent rebuild with
+        // `update_should_notify == true` schedules us for rebuild
+        // (R16, plan §U9).
+        //
+        // Flutter parity: `framework.dart:5081`
+        // `dependOnInheritedWidgetOfExactType` -> the matched
+        // `InheritedElement` then has `updateDependencies(self, null)`
+        // called on it (`framework.dart:5034`).
+        let Some(ancestor_id) = self.walk_ancestors_for_inherited(type_id) else {
+            return false;
+        };
 
-        // Get the inherited element and extract data
-        let tree = self.tree.read();
-        let node = tree.get(element_id)?;
+        // Acquire a write lock so we can mutate the matched
+        // InheritedElement's dependent map AND invoke the callback with
+        // the inherited view in the same critical section. Reading the
+        // view itself only needs a read lock, but we need write access
+        // to record the dependency, so a single write lock is
+        // sufficient.
+        let mut tree = self.tree.write();
+        let Some(node) = tree.get_mut(ancestor_id) else {
+            // Tree shape changed between lookup and write-lock; treat
+            // as miss. Should not happen under normal flow.
+            return false;
+        };
 
-        // TODO: Register dependency for rebuild notifications
-        // For now, just return the data
-        // The actual data extraction requires InheritedElement to expose its data
+        // Capture self's depth before we hand `node` out so we can
+        // record it as the dependent's depth (used by
+        // BuildOwner::schedule_build_for during R16 notify).
+        let self_depth = self.depth;
+        let self_id = self.element_id;
 
-        // Note: We can't return a reference to data inside RwLock guard
-        // This requires architectural changes - either:
-        // 1. Store inherited data separately with longer lifetime
-        // 2. Return owned data (clone)
-        // 3. Use callback pattern instead of returning reference
+        // The element behind `node.element_mut()` is a
+        // `Box<dyn ElementBase>`; downcast to the parametric
+        // `InheritedElement<V>` using its TypeId. Because we only have
+        // the user-facing TypeId (which is `TypeId::of::<V>()`, the
+        // view's TypeId), we can't directly downcast to
+        // `InheritedElement<V>` without `V` in scope. Instead we use
+        // the `InheritedElementAccess` object-safe protocol surface
+        // declared on `ElementBase` via the optional helper trait.
+        let Some(accessor) = node.element_mut().as_inherited_mut() else {
+            // Matched view-type but not actually an InheritedElement;
+            // means a non-inherited view shares the TypeId, which is
+            // impossible under TypeId semantics — defensive return.
+            return false;
+        };
 
-        let _ = node;
-        None // Placeholder - needs architectural solution
+        // Register dependency (id + depth).
+        accessor.record_dependent(self_id, self_depth);
+
+        // Hand the view out to the callback. The view reference is
+        // borrowed for the lifetime of the callback only; it cannot
+        // escape into `build()` because the closure is `FnOnce`.
+        let view_any = accessor.view_as_any();
+        callback(view_any);
+
+        true
     }
 
-    fn get_inherited(&self, type_id: TypeId) -> Option<&dyn Any> {
-        // Same as depend_on_inherited but without registering dependency
-        let owner = self.owner.read();
-        let element_id = owner.inherited_element(type_id)?;
-        drop(owner);
+    fn get_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
+        // Same ancestor walk as depend_on_inherited, but does NOT
+        // record a dependency. Reserved for U10 — for now we share the
+        // walk + downcast logic and skip the `record_dependent` call.
+        let Some(ancestor_id) = self.walk_ancestors_for_inherited(type_id) else {
+            return false;
+        };
 
         let tree = self.tree.read();
-        let _node = tree.get(element_id)?;
-
-        None // Placeholder - needs architectural solution
+        let Some(node) = tree.get(ancestor_id) else {
+            return false;
+        };
+        let Some(accessor) = node.element().as_inherited() else {
+            return false;
+        };
+        let view_any = accessor.view_as_any();
+        callback(view_any);
+        true
     }
 
     fn find_ancestor_element(&self, type_id: TypeId) -> Option<ElementId> {
