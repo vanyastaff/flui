@@ -24,6 +24,9 @@ parking_lot.workspace = true
 dashmap.workspace = true
 crossbeam.workspace = true
 
+# Error derive
+thiserror.workspace = true
+
 # Event notification for async completion callbacks
 event-listener = "5.3"
 

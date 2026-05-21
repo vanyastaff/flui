@@ -424,7 +424,7 @@ impl Scheduler {
 
     /// Create a scheduler with custom target FPS
     pub fn with_target_fps(target_fps: u32) -> Self {
-        Self::with_frame_duration(FrameDuration::from_fps(target_fps))
+        Self::with_frame_duration(FrameDuration::try_from_fps(target_fps).expect("fps > 0"))
     }
 
     /// Create a scheduler with specific frame duration
@@ -857,7 +857,7 @@ impl Scheduler {
 
     /// Set target FPS
     pub fn set_target_fps(&self, fps: u32) {
-        let frame_duration = FrameDuration::from_fps(fps);
+        let frame_duration = FrameDuration::try_from_fps(fps).expect("fps > 0");
         *self.frame.frame_duration.lock() = frame_duration;
         *self.frame.budget.lock() = FrameBudget::new(fps);
     }
@@ -1560,7 +1560,7 @@ impl SchedulerBuilder {
 
     /// Set target FPS
     pub fn target_fps(mut self, fps: u32) -> Self {
-        self.frame_duration = FrameDuration::from_fps(fps);
+        self.frame_duration = FrameDuration::try_from_fps(fps).expect("fps > 0");
         self
     }
 
@@ -1591,7 +1591,7 @@ impl SchedulerBuilder {
         }
 
         if let Some(refresh_rate) = self.vsync_refresh_rate {
-            scheduler.set_vsync(VsyncScheduler::new(refresh_rate));
+            scheduler.set_vsync(VsyncScheduler::try_new(refresh_rate).expect("refresh > 0"));
         }
 
         scheduler

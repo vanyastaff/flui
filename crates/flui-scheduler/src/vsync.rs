@@ -16,7 +16,7 @@
 //!     vsync::{VsyncMode, VsyncScheduler},
 //! };
 //!
-//! let vsync = VsyncScheduler::new(60);
+//! let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
 //! let interval = vsync.frame_interval();
 //!
 //! assert_eq!(interval.value(), 16666); // ~16.67ms in microseconds
@@ -30,6 +30,15 @@ use serde::{Deserialize, Serialize};
 use web_time::Instant;
 
 use crate::duration::{Microseconds, Milliseconds};
+
+/// Configuration error for [`VsyncScheduler`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum InvalidVsyncConfig {
+    /// `refresh_rate == 0` rejected — no meaningful frame interval.
+    #[error("refresh_rate must be greater than 0")]
+    ZeroRefreshRate,
+}
 
 /// VSync callback - called when vsync signal arrives
 pub type VsyncCallback = Box<dyn FnMut(Instant) + Send>;
@@ -133,7 +142,7 @@ struct VsyncInner {
 /// ```
 /// use flui_scheduler::vsync::{VsyncMode, VsyncScheduler};
 ///
-/// let vsync = VsyncScheduler::new(60);
+/// let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
 /// assert_eq!(vsync.refresh_rate(), 60);
 /// assert_eq!(vsync.mode(), VsyncMode::On);
 ///
@@ -161,14 +170,17 @@ impl VsyncScheduler {
     /// # Arguments
     /// * `refresh_rate` - Display refresh rate in Hz (e.g., 60, 120, 144)
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `refresh_rate` is 0.
-    pub fn new(refresh_rate: u32) -> Self {
-        assert!(refresh_rate > 0, "Refresh rate must be greater than 0");
+    /// Returns [`InvalidVsyncConfig::ZeroRefreshRate`] if `refresh_rate == 0`
+    /// (no meaningful frame interval can be computed).
+    pub fn try_new(refresh_rate: u32) -> Result<Self, InvalidVsyncConfig> {
+        if refresh_rate == 0 {
+            return Err(InvalidVsyncConfig::ZeroRefreshRate);
+        }
         let frame_interval_us = Microseconds::new(1_000_000 / refresh_rate as i64);
 
-        Self {
+        Ok(Self {
             refresh_rate,
             frame_interval_us,
             inner: Arc::new(Mutex::new(VsyncInner {
@@ -179,14 +191,18 @@ impl VsyncScheduler {
                 stats: VsyncStats::default(),
                 interval_history: VecDeque::with_capacity(60),
             })),
-        }
+        })
     }
 
-    /// Create with a specific VSync mode
-    pub fn with_mode(refresh_rate: u32, mode: VsyncMode) -> Self {
-        let scheduler = Self::new(refresh_rate);
+    /// Create with a specific VSync mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidVsyncConfig::ZeroRefreshRate`] if `refresh_rate == 0`.
+    pub fn try_with_mode(refresh_rate: u32, mode: VsyncMode) -> Result<Self, InvalidVsyncConfig> {
+        let scheduler = Self::try_new(refresh_rate)?;
         scheduler.inner.lock().mode = mode;
-        scheduler
+        Ok(scheduler)
     }
 
     /// Set vsync mode
@@ -374,7 +390,8 @@ impl VsyncScheduler {
 
 impl Default for VsyncScheduler {
     fn default() -> Self {
-        Self::new(60) // Default to 60Hz
+        // 60 Hz is statically valid; try_new only errors on refresh_rate == 0.
+        Self::try_new(60).expect("60 Hz is a valid refresh rate")
     }
 }
 
@@ -398,7 +415,7 @@ mod tests {
 
     #[test]
     fn test_vsync_modes() {
-        let vsync = VsyncScheduler::new(60);
+        let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
         assert_eq!(vsync.mode(), VsyncMode::On);
 
         vsync.set_mode(VsyncMode::Off);
@@ -410,18 +427,18 @@ mod tests {
 
     #[test]
     fn test_frame_interval() {
-        let vsync_60 = VsyncScheduler::new(60);
+        let vsync_60 = VsyncScheduler::try_new(60).expect("refresh > 0");
         let interval_60 = vsync_60.frame_interval();
         assert_eq!(interval_60, Microseconds::new(16_666)); // ~16.67ms
 
-        let vsync_120 = VsyncScheduler::new(120);
+        let vsync_120 = VsyncScheduler::try_new(120).expect("refresh > 0");
         let interval_120 = vsync_120.frame_interval();
         assert_eq!(interval_120, Microseconds::new(8_333)); // ~8.33ms
     }
 
     #[test]
     fn test_vsync_callback() {
-        let vsync = VsyncScheduler::new(60);
+        let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
         let counter = Arc::new(AtomicU32::new(0));
 
         let c = Arc::clone(&counter);
@@ -438,7 +455,7 @@ mod tests {
 
     #[test]
     fn test_time_tracking() {
-        let vsync = VsyncScheduler::new(60);
+        let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
         assert!(vsync.time_since_vsync().is_none());
 
         vsync.signal_vsync();
@@ -450,7 +467,7 @@ mod tests {
 
     #[test]
     fn test_vsync_stats() {
-        let vsync = VsyncScheduler::new(60);
+        let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
 
         vsync.signal_vsync();
         std::thread::sleep(Duration::from_millis(16));
@@ -477,7 +494,7 @@ mod tests {
 
     #[test]
     fn test_frame_interval_ms() {
-        let vsync = VsyncScheduler::new(60);
+        let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
         let ms = vsync.frame_interval_ms();
         assert!((ms.value() - 16.666).abs() < 0.1);
     }

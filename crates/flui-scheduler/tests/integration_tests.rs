@@ -259,7 +259,7 @@ fn test_ticker_canceled_error() {
 
 #[test]
 fn test_vsync_scheduler_basic() {
-    let vsync = VsyncScheduler::new(60);
+    let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
 
     assert_eq!(vsync.refresh_rate(), 60);
     assert!(!vsync.is_active());
@@ -272,7 +272,7 @@ fn test_vsync_scheduler_basic() {
 
 #[test]
 fn test_vsync_modes() {
-    let vsync = VsyncScheduler::with_mode(60, VsyncMode::Adaptive);
+    let vsync = VsyncScheduler::try_with_mode(60, VsyncMode::Adaptive).expect("refresh > 0");
     assert_eq!(vsync.mode(), VsyncMode::Adaptive);
 
     vsync.set_mode(VsyncMode::On);
@@ -454,14 +454,14 @@ fn test_duration_conversions() {
     let secs = ms.to_seconds();
     assert!((secs.value() - 1.0).abs() < 0.001);
 
-    let frame_duration = FrameDuration::from_fps(60);
+    let frame_duration = FrameDuration::try_from_fps(60).expect("fps > 0");
     assert!((frame_duration.fps() - 60.0).abs() < 0.1);
     assert!((frame_duration.as_ms().value() - 16.667).abs() < 0.1);
 }
 
 #[test]
 fn test_frame_duration_budget_check() {
-    let frame_duration = FrameDuration::from_fps(60);
+    let frame_duration = FrameDuration::try_from_fps(60).expect("fps > 0");
 
     // Under budget
     let elapsed = Milliseconds::new(10.0);
@@ -577,7 +577,7 @@ fn test_mute_idle_ticker() {
 #[test]
 fn test_scheduler_builder_configuration() {
     let scheduler = SchedulerBuilder::new()
-        .frame_duration(FrameDuration::from_fps(30))
+        .frame_duration(FrameDuration::try_from_fps(30).expect("fps > 0"))
         .build();
 
     // Scheduler should be created successfully
@@ -887,19 +887,19 @@ fn test_scheduler_binding_debug_assert_no_time_dilation() {
     let scheduler = Scheduler::new();
 
     // Ensure default
-    set_time_dilation(1.0);
+    set_time_dilation(1.0).expect("positive finite time dilation");
 
     // Should pass with default
     assert!(scheduler.debug_assert_no_time_dilation("test"));
 
     // Set dilation
-    set_time_dilation(2.0);
+    set_time_dilation(2.0).expect("positive finite time dilation");
 
     // Should fail now
     assert!(!scheduler.debug_assert_no_time_dilation("test"));
 
     // Reset
-    set_time_dilation(1.0);
+    set_time_dilation(1.0).expect("positive finite time dilation");
     assert!(scheduler.debug_assert_no_time_dilation("test"));
 }
 
@@ -1142,7 +1142,7 @@ fn test_vsync_mode_properties() {
 
 #[test]
 fn test_vsync_scheduler_start_stop() {
-    let vsync = VsyncScheduler::new(60);
+    let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
 
     assert!(!vsync.is_active());
     vsync.start();
@@ -1153,7 +1153,7 @@ fn test_vsync_scheduler_start_stop() {
 
 #[test]
 fn test_vsync_scheduler_callback() {
-    let vsync = VsyncScheduler::new(60);
+    let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
     let called = Arc::new(AtomicU32::new(0));
 
     let c = Arc::clone(&called);
@@ -1174,7 +1174,7 @@ fn test_vsync_scheduler_callback() {
 
 #[test]
 fn test_vsync_scheduler_time_tracking() {
-    let vsync = VsyncScheduler::new(60);
+    let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
 
     // No vsync yet
     assert!(vsync.time_since_vsync().is_none());
@@ -1208,7 +1208,7 @@ fn test_vsync_stats() {
 
 #[test]
 fn test_vsync_scheduler_stats() {
-    let vsync = VsyncScheduler::new(60);
+    let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
 
     // Initial stats
     let stats = vsync.stats();
@@ -1234,7 +1234,7 @@ fn test_vsync_scheduler_stats() {
 
 #[test]
 fn test_vsync_scheduler_is_at_target_rate() {
-    let vsync = VsyncScheduler::new(60);
+    let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
 
     // No data - should return true
     assert!(vsync.is_at_target_rate());
@@ -1254,11 +1254,11 @@ fn test_vsync_scheduler_is_at_target_rate() {
 #[test]
 fn test_vsync_scheduler_frame_intervals() {
     // Test different refresh rates
-    let vsync_60 = VsyncScheduler::new(60);
+    let vsync_60 = VsyncScheduler::try_new(60).expect("refresh > 0");
     let interval_60 = vsync_60.frame_interval();
     assert!((interval_60.value() - 16_666).abs() < 100);
 
-    let vsync_120 = VsyncScheduler::new(120);
+    let vsync_120 = VsyncScheduler::try_new(120).expect("refresh > 0");
     let interval_120 = vsync_120.frame_interval();
     assert!((interval_120.value() - 8_333).abs() < 100);
 
@@ -1270,7 +1270,7 @@ fn test_vsync_scheduler_frame_intervals() {
 
 #[test]
 fn test_vsync_scheduler_wait_for_vsync() {
-    let vsync = VsyncScheduler::new(60);
+    let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
 
     // Off mode - no waiting
     vsync.set_mode(VsyncMode::Off);
@@ -1292,7 +1292,7 @@ fn test_vsync_scheduler_default() {
 
 #[test]
 fn test_vsync_scheduler_debug() {
-    let vsync = VsyncScheduler::new(60);
+    let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
     let debug_str = format!("{:?}", vsync);
     assert!(debug_str.contains("VsyncScheduler"));
     assert!(debug_str.contains("refresh_rate"));
@@ -1648,7 +1648,7 @@ fn test_frame_duration_constants() {
 
 #[test]
 fn test_frame_duration_as_seconds() {
-    let fd = FrameDuration::from_fps(60);
+    let fd = FrameDuration::try_from_fps(60).expect("fps > 0");
     let secs = fd.as_seconds();
 
     assert!((secs.value() - 0.01667).abs() < 0.001);
@@ -1656,7 +1656,7 @@ fn test_frame_duration_as_seconds() {
 
 #[test]
 fn test_frame_duration_utilization() {
-    let fd = FrameDuration::from_fps(60);
+    let fd = FrameDuration::try_from_fps(60).expect("fps > 0");
 
     let elapsed = Milliseconds::new(8.333); // 50% of 16.67ms
     let util = fd.utilization(elapsed);
@@ -1666,7 +1666,7 @@ fn test_frame_duration_utilization() {
 
 #[test]
 fn test_frame_duration_is_deadline_near() {
-    let fd = FrameDuration::from_fps(60);
+    let fd = FrameDuration::try_from_fps(60).expect("fps > 0");
 
     // 50% - not near
     assert!(!fd.is_deadline_near(Milliseconds::new(8.333)));
@@ -1677,7 +1677,7 @@ fn test_frame_duration_is_deadline_near() {
 
 #[test]
 fn test_frame_duration_is_janky() {
-    let fd = FrameDuration::from_fps(60);
+    let fd = FrameDuration::try_from_fps(60).expect("fps > 0");
 
     // Under budget - not janky
     assert!(!fd.is_janky(Milliseconds::new(10.0)));
@@ -1694,7 +1694,7 @@ fn test_frame_duration_default() {
 
 #[test]
 fn test_frame_duration_display() {
-    let fd = FrameDuration::from_fps(60);
+    let fd = FrameDuration::try_from_fps(60).expect("fps > 0");
     let display = format!("{}", fd);
 
     assert!(display.contains("ms"));
@@ -2573,15 +2573,15 @@ fn test_time_dilation_same_value() {
     use flui_scheduler::config::{set_time_dilation, time_dilation};
 
     // Set to a value
-    set_time_dilation(2.0);
+    set_time_dilation(2.0).expect("positive finite time dilation");
     assert_eq!(time_dilation(), 2.0);
 
     // Set to same value - should be no-op
-    set_time_dilation(2.0);
+    set_time_dilation(2.0).expect("positive finite time dilation");
     assert_eq!(time_dilation(), 2.0);
 
     // Reset
-    set_time_dilation(1.0);
+    set_time_dilation(1.0).expect("positive finite time dilation");
 }
 
 #[test]
@@ -2611,18 +2611,18 @@ fn test_scheduler_adjust_for_epoch() {
     let scheduler = Scheduler::new();
 
     // Without dilation
-    set_time_dilation(1.0);
+    set_time_dilation(1.0).expect("positive finite time dilation");
     let adjusted = scheduler.adjust_for_epoch(Duration::from_secs(10));
     assert!(adjusted.as_secs() <= 10);
 
     // With dilation
-    set_time_dilation(2.0);
+    set_time_dilation(2.0).expect("positive finite time dilation");
     scheduler.reset_epoch();
     let _adjusted = scheduler.adjust_for_epoch(Duration::from_millis(100));
     // Result depends on epoch
 
     // Reset
-    set_time_dilation(1.0);
+    set_time_dilation(1.0).expect("positive finite time dilation");
 }
 
 // =============================================================================

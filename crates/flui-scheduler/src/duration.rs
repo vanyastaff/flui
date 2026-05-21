@@ -28,7 +28,7 @@
 //! let ms_from_secs: Milliseconds = secs.into();
 //!
 //! // FrameDuration for budget calculations
-//! let budget = FrameDuration::from_fps(60);
+//! let budget = FrameDuration::try_from_fps(60).expect("60 fps valid");
 //! assert!(budget.as_ms().value() - 16.67 < 0.01);
 //! ```
 
@@ -39,6 +39,15 @@ use std::{
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
+
+/// Configuration error for [`FrameDuration`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum InvalidDurationConfig {
+    /// `fps == 0` rejected — no meaningful per-frame duration.
+    #[error("fps must be greater than 0")]
+    ZeroFps,
+}
 
 // =============================================================================
 // Milliseconds Newtype
@@ -503,17 +512,19 @@ impl FrameDuration {
         target_ms: Milliseconds::new(6.944),
     };
 
-    /// Create a frame duration from target FPS
+    /// Create a frame duration from target FPS.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `fps` is 0.
+    /// Returns [`InvalidDurationConfig::ZeroFps`] if `fps == 0`.
     #[inline]
-    pub fn from_fps(fps: u32) -> Self {
-        assert!(fps > 0, "FPS must be greater than 0");
-        Self {
-            target_ms: Milliseconds::new(1000.0 / fps as f64),
+    pub fn try_from_fps(fps: u32) -> Result<Self, InvalidDurationConfig> {
+        if fps == 0 {
+            return Err(InvalidDurationConfig::ZeroFps);
         }
+        Ok(Self {
+            target_ms: Milliseconds::new(1000.0 / fps as f64),
+        })
     }
 
     /// Get target duration in milliseconds
@@ -680,7 +691,7 @@ mod tests {
 
     #[test]
     fn test_frame_duration() {
-        let budget = FrameDuration::from_fps(60);
+        let budget = FrameDuration::try_from_fps(60).expect("fps > 0");
 
         assert!((budget.as_ms().value() - 16.667).abs() < 0.001);
         assert!((budget.fps() - 60.0).abs() < 0.1);

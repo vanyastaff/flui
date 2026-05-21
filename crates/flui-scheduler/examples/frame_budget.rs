@@ -146,7 +146,7 @@ fn demo_budget_builder() {
 
     // Build with frame duration directly
     let budget_custom = FrameBudgetBuilder::new()
-        .frame_duration(FrameDuration::from_fps(144))
+        .frame_duration(FrameDuration::try_from_fps(144).expect("fps > 0"))
         .build();
 
     println!("\nCustom 144 FPS budget:");
@@ -159,7 +159,7 @@ fn demo_budget_builder() {
     // Demonstrate FrameDuration utilities
     println!("\n--- FrameDuration Utilities ---");
 
-    let duration = FrameDuration::from_fps(60);
+    let duration = FrameDuration::try_from_fps(60).expect("fps > 0");
     let elapsed = Milliseconds::new(10.0);
 
     println!("\nFor 60 FPS target with 10ms elapsed:");

@@ -75,32 +75,38 @@ pub fn time_dilation() -> f64 {
     f64::from_bits(TIME_DILATION.load(Ordering::Relaxed))
 }
 
-/// Set the time dilation factor.
+/// Configuration error for [`set_time_dilation`].
+#[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
+#[non_exhaustive]
+pub enum InvalidTimeDilation {
+    /// `value <= 0.0` rejected — non-positive scaling is undefined.
+    #[error("time dilation must be positive (got {0})")]
+    NonPositive(f64),
+    /// `value` is NaN or infinite — undefined math.
+    #[error("time dilation must be finite (got {0})")]
+    NonFinite(f64),
+}
+
+/// Set time dilation scaling factor (Flutter parity at
+/// `binding.dart::timeDilation`).
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics if `value` is not positive (must be > 0.0).
-///
-/// # Example
-///
-/// ```rust
-/// use flui_scheduler::config::{set_time_dilation, time_dilation};
-///
-/// // Slow down animations to 50% speed
-/// set_time_dilation(2.0);
-/// assert_eq!(time_dilation(), 2.0);
-///
-/// // Reset to normal
-/// set_time_dilation(1.0);
-/// ```
-pub fn set_time_dilation(value: f64) {
-    assert!(value > 0.0, "timeDilation must be positive");
+/// Returns [`InvalidTimeDilation::NonPositive`] if `value <= 0.0` and
+/// [`InvalidTimeDilation::NonFinite`] if `value` is NaN or infinite.
+pub fn set_time_dilation(value: f64) -> Result<(), InvalidTimeDilation> {
+    if !value.is_finite() {
+        return Err(InvalidTimeDilation::NonFinite(value));
+    }
+    if value <= 0.0 {
+        return Err(InvalidTimeDilation::NonPositive(value));
+    }
 
     let old_bits = TIME_DILATION.load(Ordering::Relaxed);
     let old_value = f64::from_bits(old_bits);
 
     if (old_value - value).abs() < f64::EPSILON {
-        return;
+        return Ok(());
     }
 
     // If scheduler is initialized, reset epoch first
@@ -109,6 +115,7 @@ pub fn set_time_dilation(value: f64) {
     }
 
     TIME_DILATION.store(value.to_bits(), Ordering::Relaxed);
+    Ok(())
 }
 
 // ============================================================================
@@ -244,27 +251,33 @@ mod tests {
     #[test]
     fn test_time_dilation() {
         // Reset to default
-        set_time_dilation(1.0);
+        set_time_dilation(1.0).expect("positive finite time dilation");
         assert!((time_dilation() - 1.0).abs() < f64::EPSILON);
 
         // Set to 2x (half speed)
-        set_time_dilation(2.0);
+        set_time_dilation(2.0).expect("positive finite time dilation");
         assert!((time_dilation() - 2.0).abs() < f64::EPSILON);
 
         // Reset
-        set_time_dilation(1.0);
+        set_time_dilation(1.0).expect("positive finite time dilation");
     }
 
     #[test]
-    #[should_panic(expected = "timeDilation must be positive")]
-    fn test_time_dilation_zero() {
-        set_time_dilation(0.0);
+    fn test_time_dilation_zero_returns_error() {
+        let result = set_time_dilation(0.0);
+        assert!(matches!(result, Err(InvalidTimeDilation::NonPositive(_))));
     }
 
     #[test]
-    #[should_panic(expected = "timeDilation must be positive")]
-    fn test_time_dilation_negative() {
-        set_time_dilation(-1.0);
+    fn test_time_dilation_negative_returns_error() {
+        let result = set_time_dilation(-1.0);
+        assert!(matches!(result, Err(InvalidTimeDilation::NonPositive(_))));
+    }
+
+    #[test]
+    fn test_time_dilation_nan_returns_error() {
+        let result = set_time_dilation(f64::NAN);
+        assert!(matches!(result, Err(InvalidTimeDilation::NonFinite(_))));
     }
 
     #[test]
@@ -322,16 +335,16 @@ mod tests {
         let epoch = Duration::from_secs(5);
 
         // Without dilation
-        set_time_dilation(1.0);
+        set_time_dilation(1.0).expect("positive finite time dilation");
         let adjusted = super::adjust_duration_for_epoch(raw, epoch);
         assert_eq!(adjusted, Duration::from_secs(5));
 
         // With 2x dilation (half speed)
-        set_time_dilation(2.0);
+        set_time_dilation(2.0).expect("positive finite time dilation");
         let adjusted = super::adjust_duration_for_epoch(raw, epoch);
         assert!((adjusted.as_secs_f64() - 2.5).abs() < 0.001);
 
         // Reset
-        set_time_dilation(1.0);
+        set_time_dilation(1.0).expect("positive finite time dilation");
     }
 }

@@ -55,7 +55,7 @@
 //! use flui_scheduler::duration::{FrameDuration, Milliseconds};
 //!
 //! let elapsed = Milliseconds::new(10.0); // 10ms elapsed
-//! let budget = FrameDuration::from_fps(60); // ~16.67ms budget
+//! let budget = FrameDuration::try_from_fps(60).expect("fps > 0"); // ~16.67ms budget
 //! assert!(!budget.is_over_budget(elapsed)); // Still under budget!
 //! ```
 //!

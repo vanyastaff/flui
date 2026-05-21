@@ -12,9 +12,9 @@
 //! use flui_scheduler::id::IdGenerator;
 //! use flui_foundation::markers;
 //!
-//! let gen = IdGenerator::<markers::Frame>::new();
-//! let frame1 = gen.next();
-//! let frame2 = gen.next();
+//! let id_gen = IdGenerator::<markers::Frame>::new();
+//! let frame1 = id_gen.next();
+//! let frame2 = id_gen.next();
 //! assert_ne!(frame1, frame2);
 //! ```
 
@@ -556,7 +556,7 @@ impl FrameTiming {
         Self {
             id: next_frame_id(),
             start_time: Instant::now(),
-            frame_duration: FrameDuration::from_fps(target_fps),
+            frame_duration: FrameDuration::try_from_fps(target_fps).expect("fps > 0"),
             phase: FramePhase::Idle,
         }
     }
@@ -732,7 +732,10 @@ impl FrameTimingBuilder {
     pub fn build(self) -> FrameTiming {
         let frame_duration = self
             .frame_duration
-            .or_else(|| self.target_fps.map(FrameDuration::from_fps))
+            .or_else(|| {
+                self.target_fps
+                    .map(|fps| FrameDuration::try_from_fps(fps).expect("fps > 0"))
+            })
             .unwrap_or(FrameDuration::FPS_60);
 
         let mut timing = FrameTiming::with_duration(frame_duration);
