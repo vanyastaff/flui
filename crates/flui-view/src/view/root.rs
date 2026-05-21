@@ -486,21 +486,16 @@ impl<V: View + Clone + Send + Sync + 'static> RenderTreeRootElement for RootRend
         }
     }
 
-    fn attach_to_pipeline_owner(&mut self) {
-        // TODO: Migrate to RenderTree-based approach
-        // 1. Insert RenderView into pipeline_owner.render_tree_mut()
-        // 2. Get RenderId back
-        // 3. Call pipeline_owner.set_root_id(Some(render_id))
-        // 4. Store render_id in self instead of Arc<RwLock<RenderView>>
-        unimplemented!("attach_to_pipeline_owner needs migration to RenderTree/RenderId")
-    }
-
-    fn detach_from_pipeline_owner(&mut self) {
-        // TODO: Migrate to RenderTree-based approach
-        // 1. Call pipeline_owner.set_root_id(None)
-        // 2. Remove from pipeline_owner.render_tree_mut()
-        unimplemented!("detach_from_pipeline_owner needs migration to RenderTree/RenderId")
-    }
+    // Attach / detach to the PipelineOwner is handled inline in `mount()`
+    // and `unmount()` above (see lines ~180-220): mount inserts the
+    // `RenderView` via `RenderViewAdapter` into
+    // `pipeline_owner.render_tree_mut()`, calls `set_root_id`, and
+    // requests a visual update; unmount inverts that sequence. The
+    // pre-Mythos `attach_to_pipeline_owner` / `detach_from_pipeline_owner`
+    // trait stubs were removed in framework-spine-repair U15 because
+    // their bodies were panicking placeholders (Constitution Principle 6
+    // forbids panic in production paths) and they had zero callers in
+    // the workspace.
 }
 
 #[cfg(test)]
