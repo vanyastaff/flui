@@ -325,6 +325,28 @@ pub trait ViewKey: Send + Sync + 'static {
     ///
     /// Returns `fmt::Error` if writing to the formatter fails.
     fn debug_fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
+
+    /// Whether this key is a `GlobalKey` (i.e. should be tracked in the
+    /// `BuildOwner` global-key registry for cross-tree lookup and
+    /// state-migration reparenting).
+    ///
+    /// Default returns `false`; only the widget-layer `GlobalKey<T>`
+    /// overrides this to return `true`. Used by `Element::mount` /
+    /// `ElementTree::insert` to decide whether to call
+    /// `ElementOwner::register_global_key` and by `ElementTree::remove`
+    /// to decide whether to soft-remove into the inactive queue (R13 /
+    /// R14, plan §U14).
+    ///
+    /// Flutter parity: `framework.dart:3148` keys the registry by
+    /// `GlobalKey` identity rather than by a hash AND a "this is a
+    /// global key" boolean. We split the check across the two methods
+    /// because `ViewKey::key_hash()` already returns `u64` from any key
+    /// impl (incl. `ValueKey`, `UniqueKey`, `ObjectKey`), and we need a
+    /// cheap, type-erased way to skip non-global keys without an `Any`
+    /// downcast at every mount site.
+    fn is_global_key(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Debug for dyn ViewKey {

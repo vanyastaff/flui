@@ -24,6 +24,20 @@ pub struct ElementNode {
     pub(crate) depth: usize,
     /// Slot index within parent's children.
     pub(crate) slot: usize,
+    /// Hash of the `GlobalKey` registered for this element, if any.
+    ///
+    /// Set at mount time by `ElementTree::insert` /
+    /// `::mount_root_with_pipeline_owner` when the view's
+    /// `View::key()` returns a key whose `ViewKey::is_global_key()` is
+    /// `true`. Read at end-of-frame `BuildOwner::finalize_tree` to
+    /// unregister the entry from `BuildOwner::global_keys`.
+    ///
+    /// Plan §U14 / R13 / R14. Flutter parity: keys are tracked on the
+    /// element itself in `framework.dart:2884`-ish via `Element._widget`
+    ///   + `Widget.key`; we mirror the effect with a side-channel hash
+    ///     because our `View` value is owned by `ElementCore` and not
+    ///     available at the dispatch boundary used for finalization.
+    pub(crate) registered_global_key_hash: Option<u64>,
 }
 
 impl ElementNode {
@@ -35,6 +49,7 @@ impl ElementNode {
             parent,
             depth,
             slot,
+            registered_global_key_hash: None,
         }
     }
 
@@ -61,6 +76,11 @@ impl ElementNode {
     /// Get the slot index.
     pub fn slot(&self) -> usize {
         self.slot
+    }
+
+    /// Hash of the `GlobalKey` registered for this element (if any).
+    pub fn registered_global_key_hash(&self) -> Option<u64> {
+        self.registered_global_key_hash
     }
 }
 
@@ -204,6 +224,17 @@ impl ElementTree {
         // Mount the element (now it has PipelineOwner set)
         self.nodes[slab_index].element.mount(None, 0, owner);
 
+        // R13: register GlobalKey on mount. The root element's view is
+        // queried here because the dispatch boundary at `Element::mount`
+        // can't read the typed `View::key()` (V isn't bounded by View
+        // there). Doing the check here keeps the wiring at the level
+        // where both `view: &dyn View` and `id` are simultaneously in
+        // scope.
+        if let Some(hash) = global_key_hash_of(view) {
+            register_global_key_with_collision_check(owner, hash, id);
+            self.nodes[slab_index].registered_global_key_hash = Some(hash);
+        }
+
         self.root = Some(id);
         id
     }
@@ -214,6 +245,18 @@ impl ElementTree {
     ///
     /// The split-borrow `owner` handle is threaded into the new
     /// element's `mount` call.
+    ///
+    /// # GlobalKey state migration
+    ///
+    /// If `view` carries a `GlobalKey` whose hash is already registered
+    /// to an element AND that element is currently in the inactive
+    /// queue (from a prior soft-remove this frame), the inactive
+    /// element is pulled back to the new parent/slot instead of a
+    /// fresh element being created. Its `ElementId` and persistent
+    /// state survive. Flutter parity:
+    /// `framework.dart:4571` `_retakeInactiveElement`.
+    ///
+    /// Plan §U14 / R14.
     pub fn insert(
         &mut self,
         view: &dyn View,
@@ -221,6 +264,16 @@ impl ElementTree {
         slot: usize,
         owner: &mut crate::ElementOwner<'_>,
     ) -> ElementId {
+        // R14 state migration. Before creating a fresh element, check
+        // whether `view` has a `GlobalKey` whose hash points at a
+        // currently-inactive element. If so, pull it back to the new
+        // parent + slot and re-activate (Flutter `_retakeInactiveElement`).
+        if let Some(hash) = global_key_hash_of(view)
+            && let Some(retaken_id) = try_retake_inactive(self, owner, hash, parent, slot)
+        {
+            return retaken_id;
+        }
+
         let element = view.create_element();
 
         // Get parent depth for calculating child depth
@@ -236,6 +289,12 @@ impl ElementTree {
         self.nodes[slab_index]
             .element
             .mount(Some(parent), slot, owner);
+
+        // R13: register the GlobalKey hash → id mapping.
+        if let Some(hash) = global_key_hash_of(view) {
+            register_global_key_with_collision_check(owner, hash, id);
+            self.nodes[slab_index].registered_global_key_hash = Some(hash);
+        }
 
         id
     }
@@ -260,11 +319,33 @@ impl ElementTree {
 
     /// Remove an element from the tree.
     ///
-    /// This unmounts the element and removes it from storage.
-    /// Does NOT automatically remove children - caller must handle that.
-    /// Threads the split-borrow owner handle into the unmount so
-    /// `GlobalKey` deregistration and dependent-set cleanup can take
-    /// effect (plan §U8).
+    /// # Soft vs eager removal
+    ///
+    /// - **Soft (keyed):** If the element carries a `GlobalKey` (i.e.
+    ///   `ElementNode::registered_global_key_hash` is `Some`), the
+    ///   element is deactivated and pushed onto
+    ///   `BuildOwner::inactive_elements` — the slab entry stays alive.
+    ///   This enables same-frame state migration: a subsequent
+    ///   `insert` with the same GlobalKey pulls the element back via
+    ///   [`try_retake_inactive`]. End-of-frame
+    ///   [`BuildOwner::finalize_tree`] drains any stragglers via
+    ///   [`Self::remove_finalized`] (full slab-remove + unregister).
+    ///   Flutter parity: `framework.dart:4636` `deactivateChild` +
+    ///   `framework.dart:2099` `_InactiveElements`.
+    /// - **Eager (un-keyed):** Behaves as before — `Element::unmount`
+    ///   then slab-remove. No deferred queue entry.
+    ///
+    /// This split matches Flutter's behavior where only elements
+    /// reachable by `GlobalKey` are deferred; ordinary unmounts are
+    /// processed inline.
+    ///
+    /// Does NOT automatically remove children — caller must handle that.
+    ///
+    /// Returns the `ElementNode` for an eager removal (so `BuildOwner`
+    /// gets back ownership) OR `None` for a soft removal (the node
+    /// still lives in the slab). Returns `None` if `id` doesn't exist.
+    ///
+    /// Plan §U14 / R14. Threads the split-borrow `owner` handle.
     pub fn remove(
         &mut self,
         id: ElementId,
@@ -272,21 +353,83 @@ impl ElementTree {
     ) -> Option<ElementNode> {
         let index = id.get() - 1;
 
-        if self.nodes.contains(index) {
-            // Unmount before removing
-            self.nodes[index].element.unmount(owner);
+        if !self.nodes.contains(index) {
+            return None;
+        }
 
-            let node = self.nodes.remove(index);
+        // R14 soft-remove for keyed elements: push to inactive queue
+        // without slab-removing. State stays intact for same-frame
+        // remount.
+        if self.nodes[index].registered_global_key_hash.is_some() {
+            let depth = self.nodes[index].depth;
+            self.nodes[index].element.deactivate();
+            owner.push_inactive(id, depth);
+            // Detach from active tree but keep the slot alive.
+            self.nodes[index].parent = None;
 
-            // Clear root if removing root
             if self.root == Some(id) {
                 self.root = None;
             }
 
-            Some(node)
-        } else {
-            None
+            tracing::debug!(
+                element_id = ?id,
+                hash = ?self.nodes[index].registered_global_key_hash,
+                "ElementTree::remove soft-removed keyed element into inactive queue"
+            );
+
+            // Soft-remove yields no owned node — the caller doesn't
+            // get the element back.
+            return None;
         }
+
+        // Eager path for un-keyed elements.
+        self.nodes[index].element.unmount(owner);
+
+        let node = self.nodes.remove(index);
+
+        if self.root == Some(id) {
+            self.root = None;
+        }
+
+        Some(node)
+    }
+
+    /// Fully remove an element that has already been unmounted (e.g.
+    /// from `BuildOwner::finalize_tree`'s end-of-frame drain).
+    ///
+    /// This bypasses the soft-remove path even for keyed elements:
+    /// the slab entry is freed and the `GlobalKey` registration is
+    /// cleared via `ElementOwner::unregister_global_key`. Plan §U14 /
+    /// R14. Flutter parity: `framework.dart:2118`
+    /// `_unmountAll` — the finalization phase that drains
+    /// `_inactiveElements` doesn't push back into the queue.
+    pub fn remove_finalized(
+        &mut self,
+        id: ElementId,
+        owner: &mut crate::ElementOwner<'_>,
+    ) -> Option<ElementNode> {
+        let index = id.get() - 1;
+
+        if !self.nodes.contains(index) {
+            return None;
+        }
+
+        // Unregister the GlobalKey if this element had one. We do it
+        // BEFORE `unmount` so the registry doesn't briefly resolve to
+        // a partially-unmounted element.
+        if let Some(hash) = self.nodes[index].registered_global_key_hash.take() {
+            owner.unregister_global_key(hash);
+        }
+
+        self.nodes[index].element.unmount(owner);
+
+        let node = self.nodes.remove(index);
+
+        if self.root == Some(id) {
+            self.root = None;
+        }
+
+        Some(node)
     }
 
     /// Update an element with a new view.
@@ -335,6 +478,103 @@ impl ElementTree {
             (id, node)
         })
     }
+}
+
+// ============================================================================
+// GlobalKey helpers (plan §U14 / R13, R14)
+// ============================================================================
+
+/// Extract the `GlobalKey` hash from a view's `View::key()` result, if
+/// any. Returns `None` for un-keyed views and for keyed views whose
+/// `ViewKey::is_global_key()` is `false` (e.g. `ValueKey`,
+/// `UniqueKey`, `ObjectKey`).
+///
+/// Centralises the "is this a global key, what's its hash?" check so
+/// the mount / soft-remove / retake paths all read it the same way.
+fn global_key_hash_of(view: &dyn View) -> Option<u64> {
+    let key = view.key()?;
+    if key.is_global_key() {
+        Some(key.key_hash())
+    } else {
+        None
+    }
+}
+
+/// Register the `(hash → id)` mapping on the owner. §I4 hash-collision
+/// policy: `debug_assert!` on collision in debug builds (matches
+/// Flutter's debug-panic-on-collision via the `assert(...)` inside
+/// `BuildOwner._registerGlobalKey` at `framework.dart:3160`). Release
+/// builds fall through to last-write-wins with a `tracing::error!` so
+/// the application doesn't crash on a stray collision.
+fn register_global_key_with_collision_check(
+    owner: &mut crate::ElementOwner<'_>,
+    hash: u64,
+    id: ElementId,
+) {
+    if let Some(existing) = owner.element_for_global_key(hash)
+        && existing != id
+    {
+        tracing::error!(
+            ?hash,
+            existing = ?existing,
+            new = ?id,
+            "GlobalKey hash collision: replacing existing registration"
+        );
+        #[cfg(debug_assertions)]
+        {
+            panic!(
+                "GlobalKey hash collision: hash {hash} already registered to {existing:?} \
+                 but new mount wants {id:?}"
+            );
+        }
+    }
+    owner.register_global_key(hash, id);
+}
+
+/// State-migration entry point. If `hash` resolves to an element
+/// currently in the inactive queue, pop it off and re-attach to
+/// `(new_parent, new_slot)`. Returns the migrated `ElementId` on
+/// success, or `None` when no retakeable element exists (caller falls
+/// back to creating a fresh element).
+///
+/// Flutter parity: `framework.dart:4571` `_retakeInactiveElement`.
+fn try_retake_inactive(
+    tree: &mut ElementTree,
+    owner: &mut crate::ElementOwner<'_>,
+    hash: u64,
+    new_parent: ElementId,
+    new_slot: usize,
+) -> Option<ElementId> {
+    let candidate_id = owner.element_for_global_key(hash)?;
+
+    // Only retake if the candidate is actually in the inactive queue.
+    // A candidate that's mounted elsewhere in the active tree is a
+    // collision, handled by `register_global_key_with_collision_check`.
+    if !owner.is_inactive(candidate_id) {
+        return None;
+    }
+
+    owner.remove_inactive(candidate_id);
+
+    let parent_depth = tree.get(new_parent).map_or(0, ElementNode::depth);
+    let index = candidate_id.get() - 1;
+
+    let node = tree.nodes.get_mut(index)?;
+    node.parent = Some(new_parent);
+    node.slot = new_slot;
+    node.depth = parent_depth + 1;
+
+    // Re-activate the element. `Lifecycle::Inactive` → `Active`.
+    node.element.activate();
+
+    tracing::debug!(
+        candidate = ?candidate_id,
+        new_parent = ?new_parent,
+        new_slot,
+        "ElementTree::insert retook inactive element for GlobalKey state migration"
+    );
+
+    Some(candidate_id)
 }
 
 impl std::fmt::Debug for ElementTree {

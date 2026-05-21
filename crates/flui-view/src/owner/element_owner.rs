@@ -174,6 +174,16 @@ impl ElementOwner<'_> {
         self.inactive_elements.retain(|entry| entry.id() != id);
     }
 
+    /// Whether the given element is currently queued for finalization.
+    ///
+    /// Used by `ElementTree::insert` to gate the U14 state-migration
+    /// retake: the GlobalKey registry's `Some(_)` entry could be stale
+    /// (the element is still active elsewhere) — only an entry that's
+    /// actually in the inactive queue is safe to re-attach.
+    pub fn is_inactive(&self, id: ElementId) -> bool {
+        self.inactive_elements.iter().any(|entry| entry.id() == id)
+    }
+
     /// Iterate over inactive entries without draining.
     ///
     /// `BuildOwner::finalize_tree` uses an owned-drain pattern with

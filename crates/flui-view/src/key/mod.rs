@@ -8,6 +8,9 @@
 
 mod global_key;
 mod object_key;
+pub(crate) mod registry;
+
+pub use registry::{GlobalKeyRegistryHandle, install_registry, take_registry};
 
 // Re-export widget-layer keys (source of truth is here)
 // Re-export foundation keys for convenience

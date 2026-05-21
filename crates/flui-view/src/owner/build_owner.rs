@@ -359,16 +359,15 @@ impl BuildOwner {
             on_build_scheduled: self.on_build_scheduled.as_deref(),
         };
 
-        // Unmount all elements (deepest first - already sorted by collect order)
+        // Finalize all elements (deepest first - already sorted by collect order).
+        //
+        // `remove_finalized` (plan §U14 / R14) bypasses the soft-remove
+        // path that `remove` takes for keyed elements. At this point
+        // we've already given mid-frame state migration its chance —
+        // anything still in the inactive queue is genuinely going away,
+        // so we slab-remove + unregister the GlobalKey directly.
         for id in elements_to_unmount.iter().rev() {
-            if let Some(node) = tree.get_mut(*id) {
-                node.element_mut().unmount(&mut element_owner);
-            }
-        }
-
-        // Remove all elements from tree
-        for id in elements_to_unmount {
-            tree.remove(id, &mut element_owner);
+            tree.remove_finalized(*id, &mut element_owner);
         }
 
         tracing::debug!("Finalize tree complete");
@@ -421,6 +420,16 @@ impl BuildOwner {
     /// Look up an element by GlobalKey.
     pub fn element_for_global_key(&self, key_hash: u64) -> Option<ElementId> {
         self.global_keys.get(&key_hash).copied()
+    }
+
+    /// Number of `GlobalKey`s currently registered.
+    ///
+    /// Test surface — production code reads
+    /// [`BuildOwner::element_for_global_key`] on a single hash rather
+    /// than scanning size. Tests use this to confirm the registry
+    /// stays at the expected size across mount / unmount cycles.
+    pub fn global_keys_len(&self) -> usize {
+        self.global_keys.len()
     }
 
     // ========================================================================
