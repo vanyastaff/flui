@@ -554,15 +554,15 @@ fn test_cancel_nonexistent_callback() {
 }
 
 #[test]
-fn test_double_start_ticker() {
+#[cfg(debug_assertions)]
+#[should_panic(expected = "A ticker was started twice")]
+fn test_double_start_ticker_panics_in_debug() {
+    // Flutter parity: ticker.dart:188 throws FlutterError('A ticker was
+    // started twice.'). Post-U10 (7d93611d) FLUI debug-asserts the same
+    // contract instead of silently overwriting the active callback.
     let mut ticker = Ticker::new();
-
     ticker.start(|_| {});
-    assert_eq!(ticker.state(), TickerState::Active);
-
-    // Starting again should replace the callback
     ticker.start(|_| {});
-    assert_eq!(ticker.state(), TickerState::Active);
 }
 
 #[test]
