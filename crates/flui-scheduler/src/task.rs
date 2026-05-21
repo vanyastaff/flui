@@ -250,6 +250,15 @@ impl Ord for PriorityTask {
 #[derive(Clone)]
 pub struct TaskQueue {
     queue: Arc<Mutex<BinaryHeap<PriorityTask>>>,
+    /// Lock-free mirror of the BinaryHeap length.
+    ///
+    /// Write-through on push / pop / drain operations. Allows callers like
+    /// `Scheduler::is_over_budget` to check queue depth without acquiring
+    /// the queue lock. Per Gjengset *Rust Atomics and Locks* Ch 3:
+    /// Acquire/Release ordering is sufficient because readers don't need
+    /// total ordering across multiple atomics — they only care about a
+    /// fresh observation of this single counter.
+    len: Arc<AtomicUsize>,
 }
 
 impl TaskQueue {
@@ -257,6 +266,7 @@ impl TaskQueue {
     pub fn new() -> Self {
         Self {
             queue: Arc::new(Mutex::new(BinaryHeap::new())),
+            len: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -264,12 +274,14 @@ impl TaskQueue {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             queue: Arc::new(Mutex::new(BinaryHeap::with_capacity(capacity))),
+            len: Arc::new(AtomicUsize::new(0)),
         }
     }
 
     /// Add a task to the queue
     pub fn add_task(&self, task: Task) {
         self.queue.lock().push(PriorityTask(task));
+        self.len.fetch_add(1, AtomicOrdering::AcqRel);
     }
 
     /// Add a task with priority
@@ -282,7 +294,11 @@ impl TaskQueue {
 
     /// Get the next task (highest priority)
     pub fn pop(&self) -> Option<Task> {
-        self.queue.lock().pop().map(|pt| pt.0)
+        let popped = self.queue.lock().pop().map(|pt| pt.0);
+        if popped.is_some() {
+            self.len.fetch_sub(1, AtomicOrdering::AcqRel);
+        }
+        popped
     }
 
     /// Peek at the next task without removing it
@@ -290,14 +306,17 @@ impl TaskQueue {
         self.queue.lock().peek().map(|pt| pt.0.priority)
     }
 
-    /// Get number of pending tasks
+    /// Get number of pending tasks (lock-free).
+    ///
+    /// Reads the atomic length mirror; no lock acquisition. See [`TaskQueue::len`]
+    /// field docs for ordering rationale.
     pub fn len(&self) -> usize {
-        self.queue.lock().len()
+        self.len.load(AtomicOrdering::Acquire)
     }
 
-    /// Check if queue is empty
+    /// Check if queue is empty (lock-free).
     pub fn is_empty(&self) -> bool {
-        self.queue.lock().is_empty()
+        self.len() == 0
     }
 
     /// Execute all tasks up to a certain priority
@@ -321,6 +340,9 @@ impl TaskQueue {
         };
 
         let count = tasks.len();
+        if count > 0 {
+            self.len.fetch_sub(count, AtomicOrdering::AcqRel);
+        }
         for task in tasks {
             task.execute();
         }
@@ -345,6 +367,9 @@ impl TaskQueue {
         };
 
         let count = tasks.len();
+        if count > 0 {
+            self.len.fetch_sub(count, AtomicOrdering::AcqRel);
+        }
         for task in tasks {
             task.execute();
         }
@@ -365,6 +390,9 @@ impl TaskQueue {
         };
 
         let count = tasks.len();
+        if count > 0 {
+            self.len.fetch_sub(count, AtomicOrdering::AcqRel);
+        }
         for task in tasks {
             task.execute();
         }
@@ -373,7 +401,12 @@ impl TaskQueue {
 
     /// Clear all pending tasks
     pub fn clear(&self) {
-        self.queue.lock().clear();
+        let mut queue = self.queue.lock();
+        let cleared = queue.len();
+        queue.clear();
+        if cleared > 0 {
+            self.len.fetch_sub(cleared, AtomicOrdering::AcqRel);
+        }
     }
 
     /// Get count of tasks at each priority level
