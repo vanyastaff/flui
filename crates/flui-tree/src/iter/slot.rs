@@ -746,7 +746,7 @@ mod tests {
     #[test]
     fn test_slot_display() {
         let slot = Slot::new(ElementId::new(1), 2, Depth::new(3));
-        let display = format!("{}", slot);
+        let display = format!("{slot}");
         assert!(display.contains("index=2"));
         assert!(display.contains("depth=3"));
     }
@@ -786,13 +786,13 @@ mod tests {
     #[test]
     fn test_indexed_slot_display() {
         let slot = IndexedSlot::new(2, Some(ElementId::new(5)));
-        let display = format!("{}", slot);
-        assert!(display.contains("2"));
-        assert!(display.contains("5"));
+        let display = format!("{slot}");
+        assert!(display.contains('2'));
+        assert!(display.contains('5'));
 
         let first = IndexedSlot::<ElementId>::first();
-        let display = format!("{}", first);
-        assert!(display.contains("0"));
+        let display = format!("{first}");
+        assert!(display.contains('0'));
     }
 
     // === SLOT ITER TESTS ===

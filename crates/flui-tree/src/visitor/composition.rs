@@ -479,11 +479,10 @@ mod tests {
                 children: Vec::new(),
             };
 
-            if let Some(parent_id) = parent {
-                if let Some(parent_node) = self.nodes.get_mut(&parent_id) {
+            if let Some(parent_id) = parent
+                && let Some(parent_node) = self.nodes.get_mut(&parent_id) {
                     parent_node.children.push(id);
                 }
-            }
 
             self.nodes.insert(id, node);
         }
@@ -620,7 +619,7 @@ mod tests {
 
         // Only collect even IDs
         let mut conditional: ConditionalVisitor<_, _, ElementId> =
-            ConditionalVisitor::new(collector, |id: ElementId, _| id.get() % 2 == 0);
+            ConditionalVisitor::new(collector, |id: ElementId, _| id.get().is_multiple_of(2));
 
         <ConditionalVisitor<_, _, _> as TreeVisitor<ElementId, TestTree>>::visit(
             &mut conditional,

@@ -71,13 +71,15 @@ pub struct PooledTexture {
     pool: Arc<Mutex<TexturePoolInner>>,
 }
 
-// Manual Debug because GpuTexture uses manual Debug
+// Manual Debug because GpuTexture uses manual Debug. The `pool` Arc field is
+// intentionally omitted — printing the inner `TexturePoolInner` would deadlock
+// if Debug is called while the pool lock is held.
 impl std::fmt::Debug for PooledTexture {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PooledTexture")
             .field("desc", &self.desc())
             .field("has_texture", &self.gpu_texture.is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

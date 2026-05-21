@@ -176,11 +176,11 @@ impl DrawSegment {
     /// Record an instance addition for a given scissor region tracker.
     /// Extends the last region if scissor matches, or creates a new one.
     fn push_scissor_region(regions: &mut Vec<ScissorRegion>, scissor: ScissorRect) {
-        if let Some(last) = regions.last_mut() {
-            if last.scissor == scissor {
-                last.count += 1;
-                return;
-            }
+        if let Some(last) = regions.last_mut()
+            && last.scissor == scissor
+        {
+            last.count += 1;
+            return;
         }
         regions.push(ScissorRegion {
             scissor,
@@ -1380,11 +1380,12 @@ impl WgpuPainter {
         let index_count = indices.len() as u32;
 
         // Try to extend the current batch if pipeline key AND scissor match
-        if let Some(last) = self.current_segment.tess_batches.last_mut() {
-            if last.pipeline_key == key && last.scissor == self.current_scissor {
-                last.index_count += index_count;
-                return;
-            }
+        if let Some(last) = self.current_segment.tess_batches.last_mut()
+            && last.pipeline_key == key
+            && last.scissor == self.current_scissor
+        {
+            last.index_count += index_count;
+            return;
         }
 
         // Pipeline key changed (or first batch) — start a new batch
@@ -1447,9 +1448,8 @@ impl WgpuPainter {
         paint: &Paint,
         corner_radii: [f32; 4],
     ) -> bool {
-        let shader = match &paint.shader {
-            Some(s) => s,
-            None => return false,
+        let Some(shader) = &paint.shader else {
+            return false;
         };
 
         let stops = Self::shader_to_gradient_stops(shader);
@@ -2586,6 +2586,10 @@ impl WgpuPainter {
         }
     }
 
+    #[allow(
+        clippy::type_complexity,
+        reason = "nine-slice src/dst tuple layout is local detail; refactoring into a named type adds no clarity"
+    )]
     pub fn draw_image_nine_slice(
         &mut self,
         image: &flui_types::painting::Image,
@@ -2770,6 +2774,10 @@ impl WgpuPainter {
         }
     }
 
+    #[allow(
+        clippy::many_single_char_names,
+        reason = "w/h/r/g/b/a are idiomatic in CPU-side color-matrix pixel loops"
+    )]
     pub fn draw_image_filtered(
         &mut self,
         image: &flui_types::painting::Image,
@@ -2808,10 +2816,10 @@ impl WgpuPainter {
                 let mut new_data = Vec::with_capacity(data.len());
 
                 for pixel in data.chunks_exact(4) {
-                    let r = pixel[0] as f32 / 255.0;
-                    let g = pixel[1] as f32 / 255.0;
-                    let b = pixel[2] as f32 / 255.0;
-                    let a = pixel[3] as f32 / 255.0;
+                    let r = f32::from(pixel[0]) / 255.0;
+                    let g = f32::from(pixel[1]) / 255.0;
+                    let b = f32::from(pixel[2]) / 255.0;
+                    let a = f32::from(pixel[3]) / 255.0;
 
                     let nr =
                         (matrix[0] * r + matrix[1] * g + matrix[2] * b + matrix[3] * a + matrix[4])
@@ -2852,8 +2860,8 @@ impl WgpuPainter {
 
                 for pixel in data.chunks_exact(4) {
                     for &ch in &pixel[..3] {
-                        let linear = ch as f32 / 255.0;
-                        let srgb = if linear <= 0.0031308 {
+                        let linear = f32::from(ch) / 255.0;
+                        let srgb = if linear <= 0.003_130_8 {
                             linear * 12.92
                         } else {
                             1.055 * linear.powf(1.0 / 2.4) - 0.055
@@ -2877,7 +2885,7 @@ impl WgpuPainter {
 
                 for pixel in data.chunks_exact(4) {
                     for &ch in &pixel[..3] {
-                        let srgb = ch as f32 / 255.0;
+                        let srgb = f32::from(ch) / 255.0;
                         let linear = if srgb <= 0.04045 {
                             srgb / 12.92
                         } else {
@@ -3365,6 +3373,10 @@ impl WgpuPainter {
         );
     }
 
+    #[allow(
+        clippy::similar_names,
+        reason = "r_tl/r_tr/r_br/r_bl mirror the rrect-corner field names; renaming would obscure intent"
+    )]
     pub fn clip_rrect(&mut self, rrect: RRect) {
         // SDF-based rounded rectangle clipping: pass clip bounds and radii
         // to each instance so the fragment shader can do per-pixel SDF clipping.

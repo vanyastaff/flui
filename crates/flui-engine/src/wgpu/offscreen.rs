@@ -536,7 +536,7 @@ impl OffscreenRenderer {
                         vertex: wgpu::VertexState {
                             module: downsample_module,
                             entry_point: Some("vs_main"),
-                            buffers: &[vertex_buffer_layout.clone()],
+                            buffers: std::slice::from_ref(&vertex_buffer_layout),
                             compilation_options: wgpu::PipelineCompilationOptions::default(),
                         },
                         fragment: Some(wgpu::FragmentState {
@@ -642,6 +642,10 @@ impl OffscreenRenderer {
     ///
     /// A new `PooledTexture` containing the blurred result at the original resolution.
     pub fn render_blur(&mut self, input: &PooledTexture, sigma: f32) -> PooledTexture {
+        // `sigma` is enforced non-negative by callers (blur radii); the
+        // `.ceil() as u32` is clamped to 1..=5 immediately, so truncation /
+        // sign loss are bounded and intentional.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let iterations = ((sigma / 2.0).ceil() as u32).clamp(1, 5);
         let offset = sigma.max(1.0);
 
@@ -923,7 +927,7 @@ impl OffscreenRenderer {
                         vertex: wgpu::VertexState {
                             module: dilate_module,
                             entry_point: Some("vs_main"),
-                            buffers: &[vertex_buffer_layout.clone()],
+                            buffers: std::slice::from_ref(&vertex_buffer_layout),
                             compilation_options: wgpu::PipelineCompilationOptions::default(),
                         },
                         fragment: Some(wgpu::FragmentState {

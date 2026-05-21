@@ -414,7 +414,7 @@ impl fmt::Debug for MergedListenable {
         f.debug_struct("MergedListenable")
             .field("source_count", &self.listenables.len())
             .field("listeners", &self.notifier.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -531,7 +531,7 @@ mod tests {
 
         assert!(id1 < id2);
         assert_eq!(id1.get(), 1);
-        assert_eq!(format!("{}", id1), "Listener(1)");
+        assert_eq!(format!("{id1}"), "Listener(1)");
     }
 
     #[test]
@@ -567,7 +567,7 @@ mod tests {
     #[test]
     fn test_change_notifier_debug() {
         let notifier = ChangeNotifier::new();
-        let debug = format!("{:?}", notifier);
+        let debug = format!("{notifier:?}");
         assert!(debug.contains("ChangeNotifier"));
     }
 
@@ -625,7 +625,7 @@ mod tests {
     #[test]
     fn test_value_notifier_debug() {
         let notifier = ValueNotifier::new(42);
-        let debug = format!("{:?}", notifier);
+        let debug = format!("{notifier:?}");
         assert!(debug.contains("ValueNotifier"));
         assert!(debug.contains("42"));
     }
@@ -633,7 +633,7 @@ mod tests {
     #[test]
     fn test_value_notifier_display() {
         let notifier = ValueNotifier::new(42);
-        assert_eq!(format!("{}", notifier), "42");
+        assert_eq!(format!("{notifier}"), "42");
     }
 
     #[test]
@@ -781,7 +781,7 @@ mod tests {
     #[test]
     fn test_merged_listenable_debug() {
         let merged = MergedListenable::default();
-        let debug = format!("{:?}", merged);
+        let debug = format!("{merged:?}");
         assert!(debug.contains("MergedListenable"));
     }
 

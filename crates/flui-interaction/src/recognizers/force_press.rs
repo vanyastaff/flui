@@ -322,16 +322,14 @@ impl ForcePressGestureRecognizer {
         state.current_pressure = pressure;
 
         match state.phase {
-            ForcePressPhase::Possible => {
-                // Check if pressure now exceeds start threshold
-                if state.current_pressure >= self.start_pressure {
-                    state.phase = ForcePressPhase::Started;
-                    let details = self.create_details(&state);
-                    drop(state);
+            ForcePressPhase::Possible if state.current_pressure >= self.start_pressure => {
+                // Pressure crossed the start threshold — fire on_start.
+                state.phase = ForcePressPhase::Started;
+                let details = self.create_details(&state);
+                drop(state);
 
-                    if let Some(callback) = self.callbacks.lock().on_start.clone() {
-                        callback(details);
-                    }
+                if let Some(callback) = self.callbacks.lock().on_start.clone() {
+                    callback(details);
                 }
             }
             ForcePressPhase::Started => {

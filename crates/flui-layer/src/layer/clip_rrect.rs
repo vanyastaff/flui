@@ -211,11 +211,11 @@ mod tests {
 
     #[test]
     fn test_clip_rrect_layer_bounds() {
-        let rect = Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0));
-        let rrect = RRect::from_rect_circular(rect, px(10.0));
+        let bounds_rect = Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0));
+        let rrect = RRect::from_rect_circular(bounds_rect, px(10.0));
         let layer = ClipRRectLayer::new(rrect, Clip::AntiAlias);
 
-        assert_eq!(layer.bounds(), rect);
+        assert_eq!(layer.bounds(), bounds_rect);
         assert_eq!(layer.bounds().width(), px(100.0));
         assert_eq!(layer.bounds().height(), px(50.0));
     }

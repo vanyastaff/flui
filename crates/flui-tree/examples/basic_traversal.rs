@@ -42,10 +42,10 @@ impl DemoTree {
         }));
 
         // Add to parent's children
-        if let Some(parent_id) = parent {
-            if let Some(Some(parent_node)) = self.nodes.get_mut(parent_id.get() - 1) {
-                parent_node.children.push(id);
-            }
+        if let Some(parent_id) = parent
+            && let Some(Some(parent_node)) = self.nodes.get_mut(parent_id.get() - 1)
+        {
+            parent_node.children.push(id);
         }
 
         id
@@ -130,9 +130,9 @@ fn main() {
     let feed = tree.insert("Feed", Some(app));
     let _profile = tree.insert("Profile", Some(app));
     let hero = tree.insert("Hero", Some(home));
-    let posts = tree.insert("Posts", Some(feed));
-    let post1 = tree.insert("Post1", Some(posts));
-    let post2 = tree.insert("Post2", Some(posts));
+    let post_section = tree.insert("Posts", Some(feed));
+    let post1 = tree.insert("Post1", Some(post_section));
+    let post2 = tree.insert("Post2", Some(post_section));
 
     println!("Tree structure:");
     println!("           App");
@@ -153,7 +153,7 @@ fn main() {
         .ancestors(post1)
         .map(|id| tree.name(id).unwrap())
         .collect();
-    println!("   Path to root: {:?}", ancestors);
+    println!("   Path to root: {ancestors:?}");
     println!();
 
     // ========================================================================
@@ -165,7 +165,7 @@ fn main() {
         .descendants(app)
         .map(|(id, _depth)| tree.name(id).unwrap())
         .collect();
-    println!("   {:?}", descendants);
+    println!("   {descendants:?}");
     println!();
 
     println!("📍 Descendants with depth:");
@@ -183,13 +183,13 @@ fn main() {
     let pre_order: Vec<_> = DepthFirstIter::pre_order(&tree, app)
         .map(|id| tree.name(id).unwrap())
         .collect();
-    println!("   {:?}", pre_order);
+    println!("   {pre_order:?}");
 
     println!("📍 Post-order DFS (children before parent):");
     let post_order: Vec<_> = DepthFirstIter::post_order(&tree, app)
         .map(|id| tree.name(id).unwrap())
         .collect();
-    println!("   {:?}", post_order);
+    println!("   {post_order:?}");
     println!();
 
     // ========================================================================
@@ -200,7 +200,7 @@ fn main() {
     let bfs: Vec<_> = BreadthFirstIter::new(&tree, app)
         .map(|id| tree.name(id).unwrap())
         .collect();
-    println!("   {:?}", bfs);
+    println!("   {bfs:?}");
     println!();
 
     // ========================================================================
@@ -216,10 +216,10 @@ fn main() {
     println!("   Is Post1 a leaf? {}", tree.is_leaf(post1));
     // Check if post1 is a descendant of feed
     let is_descendant = tree.ancestors(post1).any(|id| id == feed);
-    println!("   Is Post1 descendant of Feed? {}", is_descendant);
+    println!("   Is Post1 descendant of Feed? {is_descendant}");
     // Count subtree size
     let subtree_size = tree.descendants(feed).count();
-    println!("   Subtree size of Feed: {}", subtree_size);
+    println!("   Subtree size of Feed: {subtree_size}");
     println!();
 
     // ========================================================================

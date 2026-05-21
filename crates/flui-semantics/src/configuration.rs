@@ -967,7 +967,7 @@ mod tests {
 
         assert!(config.is_button());
         assert_eq!(config.is_enabled(), Some(true));
-        assert_eq!(config.label().map(|l| l.as_str()), Some("Submit"));
+        assert_eq!(config.label().map(super::super::properties::AttributedString::as_str), Some("Submit"));
         assert!(config.has_content());
     }
 
@@ -993,9 +993,9 @@ mod tests {
         config.set_decreased_value("45%");
 
         assert!(config.is_slider());
-        assert_eq!(config.value().map(|v| v.as_str()), Some("50%"));
-        assert_eq!(config.increased_value().map(|v| v.as_str()), Some("55%"));
-        assert_eq!(config.decreased_value().map(|v| v.as_str()), Some("45%"));
+        assert_eq!(config.value().map(super::super::properties::AttributedString::as_str), Some("50%"));
+        assert_eq!(config.increased_value().map(super::super::properties::AttributedString::as_str), Some("55%"));
+        assert_eq!(config.decreased_value().map(super::super::properties::AttributedString::as_str), Some("45%"));
     }
 
     #[test]
@@ -1022,7 +1022,7 @@ mod tests {
         parent.absorb(&child);
 
         assert!(parent.is_button());
-        assert_eq!(parent.label().map(|l| l.as_str()), Some("Child label"));
+        assert_eq!(parent.label().map(super::super::properties::AttributedString::as_str), Some("Child label"));
         assert_eq!(parent.is_enabled(), Some(true));
     }
 
@@ -1053,7 +1053,7 @@ mod tests {
 
         assert!(config.is_button());
         assert_eq!(config.is_enabled(), Some(true));
-        assert_eq!(config.label().map(|l| l.as_str()), Some("Test"));
+        assert_eq!(config.label().map(super::super::properties::AttributedString::as_str), Some("Test"));
     }
 
     #[test]

@@ -503,20 +503,26 @@ mod tests {
 
     #[test]
     fn test_unmounted_state() {
-        assert!(!Unmounted::IS_MOUNTED);
+        const { assert!(!Unmounted::IS_MOUNTED) };
         assert_eq!(Unmounted::name(), "Unmounted");
     }
 
     #[test]
     fn test_mounted_state() {
-        assert!(Mounted::IS_MOUNTED);
+        const { assert!(Mounted::IS_MOUNTED) };
         assert_eq!(Mounted::name(), "Mounted");
     }
 
     #[test]
     fn test_state_default() {
-        let _: Unmounted = Default::default();
-        let _: Mounted = Default::default();
+        // Confirm `Default` is implemented and constructs the expected unit
+        // struct without using the explicit `::default()` form (clippy's
+        // `default_constructed_unit_structs` lint nags otherwise).
+        fn requires_default<T: Default>() {}
+        requires_default::<Unmounted>();
+        requires_default::<Mounted>();
+        let _ = Unmounted;
+        let _ = Mounted;
     }
 
     #[test]

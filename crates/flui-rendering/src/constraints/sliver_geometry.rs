@@ -438,7 +438,7 @@ mod tests {
     #[test]
     fn test_zero_constant() {
         assert!(SliverGeometry::ZERO.is_zero());
-        assert!(!SliverGeometry::ZERO.visible);
+        const { assert!(!SliverGeometry::ZERO.visible) };
         assert_eq!(SliverGeometry::ZERO.scroll_extent, 0.0);
     }
 

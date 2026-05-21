@@ -1150,7 +1150,7 @@ mod tests {
     #[test]
     fn test_display() {
         let r = Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0));
-        let s = format!("{}", r);
+        let s = format!("{r}");
         assert!(s.contains("10"));
         assert!(s.contains("20"));
         assert!(s.contains("100"));

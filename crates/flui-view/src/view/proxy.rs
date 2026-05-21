@@ -115,6 +115,7 @@ mod tests {
     #[derive(Clone)]
     struct TestProxyView {
         child: DummyChild,
+        #[expect(dead_code, reason = "exercised only by the derived Clone impl")]
         enabled: bool,
     }
 

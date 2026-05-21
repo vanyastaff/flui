@@ -261,8 +261,8 @@ impl BufferPool {
         // We must call get_buffer_internal twice with disjoint borrows.
         // Since vertex_buffers and index_buffers are separate fields,
         // we split the borrow manually.
-        let allocations = &mut self.allocations as *mut usize;
-        let reuses = &mut self.reuses as *mut usize;
+        let allocations = &raw mut self.allocations;
+        let reuses = &raw mut self.reuses;
 
         let vertex_buf = Self::get_buffer_internal(
             device,
@@ -279,7 +279,7 @@ impl BufferPool {
         );
 
         // Convert to raw pointer to release the mutable borrow on vertex_buffers
-        let vertex_ptr = vertex_buf as *const Buffer;
+        let vertex_ptr = std::ptr::from_ref::<Buffer>(vertex_buf);
 
         let index_buf = Self::get_buffer_internal(
             device,

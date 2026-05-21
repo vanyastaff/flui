@@ -45,14 +45,14 @@ fn demonstrate_conversion(scale_factor: f32, display_name: &str) {
     // Layout: Designer specifies 100x100 logical pixels
     let logical_size = Size::new(px(100.0), px(100.0));
 
-    println!("   Layout (logical pixels): {:?}", logical_size);
+    println!("   Layout (logical pixels): {logical_size:?}");
 
     // Convert to device pixels for GPU rendering
     let device_width = logical_size.width.to_device_pixels(scale_factor);
     let device_height = logical_size.height.to_device_pixels(scale_factor);
     let device_size = Size::new(device_width, device_height);
 
-    println!("   Render (device pixels): {:?}", device_size);
+    println!("   Render (device pixels): {device_size:?}");
     println!(
         "   Physical pixels on {}: {}x{}",
         display_name,
@@ -65,8 +65,7 @@ fn demonstrate_conversion(scale_factor: f32, display_name: &str) {
     let back_to_logical_height = device_height.to_pixels(scale_factor);
 
     println!(
-        "   Round-trip check: {:?} x {:?}",
-        back_to_logical_width, back_to_logical_height
+        "   Round-trip check: {back_to_logical_width:?} x {back_to_logical_height:?}"
     );
 }
 
@@ -74,7 +73,7 @@ fn responsive_button_example() {
     // Button defined in logical pixels (44px touch target per iOS HIG)
     let button_rect = Rect::from_xywh(px(20.0), px(20.0), px(44.0), px(44.0));
 
-    println!("   Logical button: {:?}", button_rect);
+    println!("   Logical button: {button_rect:?}");
 
     // Render on different displays
     for (scale, name) in [(1.0, "1x"), (1.5, "1.5x"), (2.0, "2x"), (3.0, "3x")] {
@@ -104,7 +103,7 @@ fn gpu_pipeline_example() {
 
     // Step 1: Layout phase (logical pixels)
     let viewport = Rect::from_xywh(px(0.0), px(0.0), px(800.0), px(600.0));
-    println!("   1. Layout: Viewport = {:?}", viewport);
+    println!("   1. Layout: Viewport = {viewport:?}");
 
     // Step 2: Convert to device pixels for GPU
     let scale = 2.0; // Retina display
@@ -118,7 +117,7 @@ fn gpu_pipeline_example() {
             viewport.height().to_device_pixels(scale),
         ),
     );
-    println!("   2. GPU: Framebuffer = {:?}", gpu_viewport);
+    println!("   2. GPU: Framebuffer = {gpu_viewport:?}");
     println!(
         "      Physical resolution: {}x{}",
         gpu_viewport.width().get(),
@@ -137,14 +136,13 @@ fn gpu_pipeline_example() {
             clip_rect_logical.height().to_device_pixels(scale),
         ),
     );
-    println!("   3. Scissor: Clip region = {:?}", scissor_rect);
+    println!("   3. Scissor: Clip region = {scissor_rect:?}");
 
     // Step 4: Texture atlas coordinates (device pixels)
     let sprite_pos = Point::new(device_px(256), device_px(128));
     let sprite_size = Size::new(device_px(64), device_px(64));
     println!(
-        "   4. Texture: Atlas sprite at {:?}, size {:?}",
-        sprite_pos, sprite_size
+        "   4. Texture: Atlas sprite at {sprite_pos:?}, size {sprite_size:?}"
     );
 }
 

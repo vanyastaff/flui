@@ -81,13 +81,13 @@ mod tests {
     use super::*;
 
     // Compile-time checks that traits are properly implemented
-    fn _assert_element_arity_implemented<A: ElementArity>() {}
+    fn assert_element_arity_implemented<A: ElementArity>() {}
 
     #[test]
     fn test_arity_types_implement_element_arity() {
-        _assert_element_arity_implemented::<Leaf>();
-        _assert_element_arity_implemented::<Single>();
-        _assert_element_arity_implemented::<Optional>();
-        _assert_element_arity_implemented::<Variable>();
+        assert_element_arity_implemented::<Leaf>();
+        assert_element_arity_implemented::<Single>();
+        assert_element_arity_implemented::<Optional>();
+        assert_element_arity_implemented::<Variable>();
     }
 }

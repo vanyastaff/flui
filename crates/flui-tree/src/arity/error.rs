@@ -110,16 +110,16 @@ mod tests {
     #[test]
     fn test_error_display() {
         let err = ArityError::too_many(RuntimeArity::Optional, 2);
-        let msg = format!("{}", err);
+        let msg = format!("{err}");
         assert!(msg.contains("too many"));
         assert!(msg.contains("Optional"));
 
         let err = ArityError::too_few(RuntimeArity::AtLeast(3), 1);
-        let msg = format!("{}", err);
+        let msg = format!("{err}");
         assert!(msg.contains("too few"));
 
         let err = ArityError::invalid(RuntimeArity::Exact(5), 3);
-        let msg = format!("{}", err);
+        let msg = format!("{err}");
         assert!(msg.contains("invalid child count"));
     }
 }

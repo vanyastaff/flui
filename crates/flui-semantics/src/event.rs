@@ -289,12 +289,12 @@ mod tests {
         let mut event = SemanticsEvent::new(SemanticsEventType::Custom);
         event.set_string("key1", SmolStr::from("value1"));
         event.set_int("key2", 123);
-        event.set_float("key3", 3.14);
+        event.set_float("key3", 1.5);
         event.set_bool("key4", true);
 
         assert_eq!(event.get_string("key1"), Some("value1"));
         assert_eq!(event.get_int("key2"), Some(123));
-        assert_eq!(event.get_float("key3"), Some(3.14));
+        assert_eq!(event.get_float("key3"), Some(1.5));
         assert_eq!(event.get_bool("key4"), Some(true));
     }
 
@@ -302,7 +302,13 @@ mod tests {
     fn test_to_map() {
         let event = SemanticsEvent::tooltip("Test");
         let map = event.to_map();
-        assert_eq!(map.get("type").map(|s| s.as_str()), Some("tooltip"));
-        assert_eq!(map.get("message").map(|s| s.as_str()), Some("Test"));
+        assert_eq!(
+            map.get("type").map(smol_str::SmolStr::as_str),
+            Some("tooltip")
+        );
+        assert_eq!(
+            map.get("message").map(smol_str::SmolStr::as_str),
+            Some("Test")
+        );
     }
 }

@@ -183,23 +183,21 @@ impl ShaderCache {
         // Fast path: check if we already have a compiled module (read lock)
         {
             let cache = self.cache.read();
-            if let Some(shader) = cache.get(&shader_type) {
-                if shader.module.is_some() {
+            if let Some(shader) = cache.get(&shader_type)
+                && shader.module.is_some() {
                     tracing::trace!("Shader module cache hit: {:?}", shader_type);
                     return Arc::clone(shader);
                 }
-            }
         }
 
         // Slow path: need to compile the module (write lock)
         let mut cache = self.cache.write();
 
         // Double-check: another thread may have compiled it while we waited
-        if let Some(shader) = cache.get(&shader_type) {
-            if shader.module.is_some() {
+        if let Some(shader) = cache.get(&shader_type)
+            && shader.module.is_some() {
                 return Arc::clone(shader);
             }
-        }
 
         // Get or create the source
         let source = shader_type.source_code().to_string();
@@ -414,7 +412,7 @@ pub fn create_uniforms_from_shader(
             let by = bounds.top().0;
             let cx = if w > 0.0 { (center.dx.0 - bx) / w } else { 0.5 };
             let cy = if h > 0.0 { (center.dy.0 - by) / h } else { 0.5 };
-            let avg = (w + h) / 2.0;
+            let avg = f32::midpoint(w, h);
             let nr = if avg > 0.0 { *radius / avg } else { 0.5 };
             let center_color = colors.first().copied().unwrap_or(Color::WHITE);
             let edge_color = colors.last().copied().unwrap_or(Color::BLACK);

@@ -103,7 +103,7 @@ fn test_device_pixels_copy() {
 #[test]
 fn test_pixels_debug() {
     let p = Pixels(100.5);
-    let debug_str = format!("{:?}", p);
+    let debug_str = format!("{p:?}");
     assert!(debug_str.contains("100.5"));
 }
 

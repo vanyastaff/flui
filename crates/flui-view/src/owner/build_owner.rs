@@ -231,7 +231,8 @@ impl BuildOwner {
         );
 
         // Sort by depth (deepest first for unmounting)
-        self.inactive_elements.sort_by(|a, b| b.depth.cmp(&a.depth));
+        self.inactive_elements
+            .sort_by_key(|entry| std::cmp::Reverse(entry.depth));
 
         // Take ownership of inactive elements to avoid borrow conflicts
         let inactive_elements: Vec<_> = self.inactive_elements.drain(..).collect();

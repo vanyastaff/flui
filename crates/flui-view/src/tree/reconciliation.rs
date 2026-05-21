@@ -215,6 +215,7 @@ mod tests {
 
     #[derive(Clone)]
     struct TestView {
+        #[expect(dead_code, reason = "exercised only by the derived Clone impl")]
         id: u32,
     }
 

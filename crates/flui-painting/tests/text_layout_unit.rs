@@ -225,7 +225,7 @@ fn get_word_boundary_returns_word_not_whole_line() {
     use flui_painting::TextLayout;
     use flui_types::typography::{TextAffinity, TextDirection, TextPosition};
 
-    let mut layout = TextLayout::new(
+    let layout = TextLayout::new(
         "the quick brown fox",
         None,
         14.0,
@@ -251,7 +251,7 @@ fn get_word_boundary_handles_non_ascii() {
     use flui_types::typography::{TextAffinity, TextDirection, TextPosition};
 
     // "café" — 'é' is 2 bytes (0xC3 0xA9). Total len = 5 bytes.
-    let mut layout =
+    let layout =
         TextLayout::new("café world", None, 14.0, None, None, TextDirection::Ltr);
     let _ = layout.metrics();
 

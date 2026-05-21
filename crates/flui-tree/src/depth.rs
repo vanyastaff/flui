@@ -829,8 +829,8 @@ mod tests {
     #[test]
     fn test_depth_display() {
         let depth = Depth::new(42);
-        assert_eq!(format!("{}", depth), "42");
-        assert_eq!(format!("{:?}", depth), "Depth(42)");
+        assert_eq!(format!("{depth}"), "42");
+        assert_eq!(format!("{depth:?}"), "Depth(42)");
     }
 
     #[test]
@@ -962,17 +962,17 @@ mod tests {
             attempted: 300,
             max: 256,
         };
-        assert!(format!("{}", err).contains("300"));
+        assert!(format!("{err}").contains("300"));
 
         let err = DepthError::NoParentForRoot;
-        assert!(format!("{}", err).contains("root"));
+        assert!(format!("{err}").contains("root"));
 
         let err = DepthError::DepthMismatch {
             expected: 5,
             actual: 10,
         };
-        assert!(format!("{}", err).contains("5"));
-        assert!(format!("{}", err).contains("10"));
+        assert!(format!("{err}").contains('5'));
+        assert!(format!("{err}").contains("10"));
     }
 
     // === DEPTH AWARE TESTS ===

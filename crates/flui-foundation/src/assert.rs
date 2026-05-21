@@ -352,7 +352,7 @@ mod tests {
     #[test]
     fn test_flui_error_display() {
         let error = FluiError::new("Test", "Message");
-        assert_eq!(format!("{}", error), "Test: Message");
+        assert_eq!(format!("{error}"), "Test: Message");
     }
 
     #[test]

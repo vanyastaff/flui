@@ -147,6 +147,7 @@ mod tests {
     #[derive(Clone)]
     struct TestAnimatedView {
         listenable: Arc<ChangeNotifier>,
+        #[expect(dead_code, reason = "exercised only by the derived Clone impl")]
         value: i32,
     }
 

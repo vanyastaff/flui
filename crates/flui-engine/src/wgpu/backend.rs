@@ -103,11 +103,11 @@ impl Backend {
         format: wgpu::TextureFormat,
         size: (u32, u32),
     ) -> &mut WgpuPainter {
-        if let Some(ref painter) = self.offscreen_painter {
-            if painter.size() != size {
-                // Size changed — drop and recreate
-                self.offscreen_painter = None;
-            }
+        if let Some(ref painter) = self.offscreen_painter
+            && painter.size() != size
+        {
+            // Size changed — drop and recreate
+            self.offscreen_painter = None;
         }
 
         self.offscreen_painter.get_or_insert_with(|| {
@@ -963,6 +963,10 @@ impl CommandRenderer for Backend {
     fn push_color_filter(&mut self, filter: &flui_types::painting::ColorMatrix) {
         // Check if the matrix is identity (no transformation needed)
         let identity = flui_types::painting::ColorMatrix::identity();
+        // Exact f32 array comparison is intentional: identity is built from
+        // bit-exact constants, so a transitive equality check correctly fast-
+        // paths the no-op case without ULP slop.
+        #[allow(clippy::float_cmp)]
         if filter.values == identity.values {
             // Identity matrix: use a plain save so pop_color_filter stays balanced
             self.painter.save_layer(None, &Paint::fill(Color::WHITE));

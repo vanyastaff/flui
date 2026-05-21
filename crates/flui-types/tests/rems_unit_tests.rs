@@ -3,7 +3,7 @@
 //! Tests the Rems type for font-relative sizing, fulfilling User Story 4
 //! requirements.
 
-use flui_types::geometry::{IsZero, Pixels, Rems, px, rems, traits::Unit};
+use flui_types::geometry::{IsZero, Rems, px, rems, traits::Unit};
 
 // ============================================================================
 // T055: Rems::new() and arithmetic tests
@@ -239,13 +239,13 @@ fn test_rems_ordering() {
 #[test]
 fn test_rems_debug() {
     let r = rems(1.5);
-    let debug_str = format!("{:?}", r);
+    let debug_str = format!("{r:?}");
     assert!(debug_str.contains("1.5"));
 }
 
 #[test]
 fn test_rems_display() {
     let r = rems(2.5);
-    let display_str = format!("{}", r);
+    let display_str = format!("{r}");
     assert!(display_str.contains("2.5"));
 }

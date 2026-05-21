@@ -19,6 +19,7 @@ use flui_view::{
 
 #[derive(Clone)]
 struct TrackingView {
+    #[expect(dead_code, reason = "exercised only by the derived Clone impl")]
     id: u32,
 }
 

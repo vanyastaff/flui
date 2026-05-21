@@ -412,8 +412,8 @@ mod tests {
     #[test]
     fn test_normalization() {
         let c = SliverConstraints::default()
-            .with_scroll_offset(100.123456)
-            .with_remaining_paint_extent(500.987654);
+            .with_scroll_offset(100.123_46)
+            .with_remaining_paint_extent(500.987_64);
 
         let normalized = c.normalize();
 
@@ -454,7 +454,7 @@ mod tests {
 
         assert!(normalized.is_normalized_for_cache());
 
-        let unnormalized = SliverConstraints::default().with_scroll_offset(100.123456);
+        let unnormalized = SliverConstraints::default().with_scroll_offset(100.123_46);
 
         assert!(!unnormalized.is_normalized_for_cache());
     }

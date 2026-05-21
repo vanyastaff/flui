@@ -17,6 +17,7 @@ use flui_view::{
 
 #[derive(Clone)]
 struct TestView {
+    #[expect(dead_code, reason = "exercised only by the derived Clone impl")]
     id: u32,
 }
 
@@ -446,11 +447,9 @@ fn test_multiple_build_cycles() {
 
 #[test]
 fn test_build_owner_send_sync() {
-    fn assert_send_sync<T: Send + Sync>() {}
-
-    // BuildOwner should NOT be Send + Sync in the general case
-    // because it holds references to the tree during build
-    // This is intentional for safety
+    // BuildOwner should NOT be Send + Sync in the general case because it
+    // holds references to the tree during build. This is intentional for
+    // safety; no compile-time assertion is required.
 }
 
 // ============================================================================

@@ -916,11 +916,12 @@ mod tests {
 
     #[test]
     fn rems_ordering_and_hash() {
+        use std::collections::HashSet;
+
         assert!(rems(1.0) < rems(2.0));
         assert!(rems(2.0) > rems(1.0));
         assert_eq!(rems(1.0).cmp(&rems(1.0)), std::cmp::Ordering::Equal);
 
-        use std::collections::HashSet;
         let mut set = HashSet::new();
         set.insert(rems(1.0));
         set.insert(rems(1.0));
@@ -975,12 +976,13 @@ mod tests {
 
     #[test]
     fn percentage_copy_eq_hash_ord() {
+        use std::collections::HashSet;
+
         let a = Percentage::new(0.5);
         let b = a; // Copy
         assert_eq!(a, b);
         assert!(Percentage::new(0.3) < Percentage::new(0.7));
 
-        use std::collections::HashSet;
         let mut set = HashSet::new();
         set.insert(a);
         set.insert(b);

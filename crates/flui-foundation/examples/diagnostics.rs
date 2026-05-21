@@ -3,6 +3,11 @@
 //! This example demonstrates how to use the diagnostics system
 //! for debugging and introspection of UI components.
 
+#![allow(
+    clippy::items_after_statements,
+    reason = "examples define types where they read best, alongside the prose explaining them"
+)]
+
 use flui_foundation::{
     DiagnosticLevel, Diagnosticable, DiagnosticsBuilder, DiagnosticsNode, DiagnosticsProperty,
     DiagnosticsTreeStyle,

@@ -376,7 +376,7 @@ fn test_texture_atlas_coordinates() {
     assert!((u_min - 0.125).abs() < 0.001); // 128/1024
     assert!((v_min - 0.25).abs() < 0.001); // 256/1024
     assert!((u_max - 0.15625).abs() < 0.001); // 160/1024
-    assert!((v_max - 0.296875).abs() < 0.001); // 304/1024
+    assert!((v_max - 0.296_875).abs() < 0.001); // 304/1024
 }
 
 #[test]

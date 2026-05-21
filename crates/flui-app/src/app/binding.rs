@@ -400,10 +400,18 @@ impl AppBinding {
         let frame_number = self.frames_rendered.load(Ordering::Relaxed) + 1;
 
         if let Some(layer_tree) = layer_tree {
-            // Create scene from layer tree
+            // Create scene from layer tree. `Scene` is not currently
+            // Send+Sync (it owns `LayerTree` references that are tree-local
+            // until composition lands), so this Arc stays on the binding
+            // thread; making `Scene` Send+Sync is tracked under the engine
+            // composition redesign.
+            #[allow(clippy::arc_with_non_send_sync)]
             let root = layer_tree.root();
+            #[allow(clippy::arc_with_non_send_sync)]
             let scene = Scene::new(size, layer_tree, root, frame_number);
-            Some(Arc::new(scene))
+            #[allow(clippy::arc_with_non_send_sync)]
+            let arc = Arc::new(scene);
+            Some(arc)
         } else {
             // No new layer tree
             None

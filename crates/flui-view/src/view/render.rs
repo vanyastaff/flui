@@ -257,8 +257,8 @@ mod tests {
         let owner = pipeline_owner.read();
         let node = owner.render_tree().get(*render_id).unwrap();
         let render_obj = node.box_render_object();
-        let _sized_box = render_obj.as_any().downcast_ref::<RenderSizedBox>();
+        let sized_box = render_obj.as_any().downcast_ref::<RenderSizedBox>();
         // RenderSizedBox exists - that's enough to verify
-        assert!(_sized_box.is_some());
+        assert!(sized_box.is_some());
     }
 }

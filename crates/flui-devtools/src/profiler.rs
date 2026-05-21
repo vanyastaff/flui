@@ -505,8 +505,10 @@ mod tests {
 
     #[test]
     fn test_jank_detection() {
-        let mut config = DevToolsConfig::default();
-        config.jank_threshold_ms = 10.0; // 10ms threshold
+        let config = DevToolsConfig {
+            jank_threshold_ms: 10.0, // 10ms threshold
+            ..Default::default()
+        };
 
         let profiler = Profiler::with_config(config);
 
@@ -548,8 +550,10 @@ mod tests {
 
     #[test]
     fn test_frame_history_limit() {
-        let mut config = DevToolsConfig::default();
-        config.max_frame_history = 5;
+        let config = DevToolsConfig {
+            max_frame_history: 5,
+            ..Default::default()
+        };
 
         let profiler = Profiler::with_config(config);
 

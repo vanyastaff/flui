@@ -208,6 +208,10 @@ impl Default for TextureLayer {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "tests compare exact f32 values they just set; ULP slop would mask real regressions"
+)]
 mod tests {
     use flui_types::geometry::px;
 
@@ -316,7 +320,7 @@ mod tests {
             Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
         );
         let copied = layer;
-        let cloned = layer.clone();
+        let cloned = layer;
 
         assert_eq!(layer, copied);
         assert_eq!(layer, cloned);

@@ -130,6 +130,10 @@ impl OffsetLayer {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "tests compare exact f32 values they just set; ULP slop would mask real regressions"
+)]
 mod tests {
     use flui_types::geometry::px;
 
@@ -209,7 +213,7 @@ mod tests {
     #[test]
     fn test_offset_layer_clone_copy() {
         let layer = OffsetLayer::new(Offset::new(px(10.0), px(20.0)));
-        let cloned = layer.clone();
+        let cloned = layer;
         let copied = layer; // Copy
 
         assert_eq!(layer, cloned);

@@ -6,7 +6,7 @@
 //! - Offset magnitude and normalization
 //! - Geometric invariants and properties
 
-use flui_types::geometry::{Offset, Pixels, Point, Rect, Size, Vec2, px};
+use flui_types::geometry::{Offset, Point, Rect, Size, Vec2, px};
 
 // ============================================================================
 // T039-T040: Point distance calculations
@@ -99,8 +99,7 @@ fn test_offset_normalize() {
     let mag = normalized.distance();
     assert!(
         (mag.get() - 1.0).abs() < 0.001,
-        "Normalized vector should have magnitude 1.0, got {}",
-        mag
+        "Normalized vector should have magnitude 1.0, got {mag}"
     );
 
     // Direction should be preserved

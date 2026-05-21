@@ -236,18 +236,18 @@ impl DoubleTapGestureRecognizer {
 
         state.current_position = Some(position);
 
-        match state.phase {
-            DoubleTapPhase::FirstDown | DoubleTapPhase::SecondDown => {
-                // Check if moved too far (slop detection)
-                if self.check_slop(position) {
-                    // Moved too far, cancel
-                    state.phase = DoubleTapPhase::Cancelled;
-                    drop(state);
+        // Slop detection: only act on FirstDown / SecondDown when the finger
+        // has moved beyond the tap-slop tolerance.
+        if matches!(
+            state.phase,
+            DoubleTapPhase::FirstDown | DoubleTapPhase::SecondDown
+        ) && self.check_slop(position)
+        {
+            // Moved too far, cancel
+            state.phase = DoubleTapPhase::Cancelled;
+            drop(state);
 
-                    self.handle_cancel(position, kind);
-                }
-            }
-            _ => {}
+            self.handle_cancel(position, kind);
         }
     }
 

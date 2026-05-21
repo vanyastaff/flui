@@ -4,7 +4,9 @@
 //! - Color::lerp (mix): <20ns
 //! - Color::blend_over: <20ns
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use std::hint::black_box;
+
+use criterion::{Criterion, criterion_group, criterion_main};
 use flui_types::styling::Color;
 
 fn color_lerp_benchmark(c: &mut Criterion) {
@@ -12,7 +14,7 @@ fn color_lerp_benchmark(c: &mut Criterion) {
     let c2 = Color::rgb(0, 0, 255);
 
     c.bench_function("Color::lerp", |b| {
-        b.iter(|| black_box(Color::lerp(black_box(c1), black_box(c2), black_box(0.5))))
+        b.iter(|| black_box(Color::lerp(black_box(c1), black_box(c2), black_box(0.5))));
     });
 }
 
@@ -21,7 +23,7 @@ fn color_blend_over_benchmark(c: &mut Criterion) {
     let background = Color::rgb(0, 0, 255);
 
     c.bench_function("Color::blend_over", |b| {
-        b.iter(|| black_box(black_box(&foreground).blend_over(black_box(background))))
+        b.iter(|| black_box(black_box(&foreground).blend_over(black_box(background))));
     });
 }
 
@@ -29,7 +31,7 @@ fn color_lighten_benchmark(c: &mut Criterion) {
     let color = Color::rgb(100, 150, 200);
 
     c.bench_function("Color::lighten", |b| {
-        b.iter(|| black_box(black_box(&color).lighten(black_box(0.2))))
+        b.iter(|| black_box(black_box(&color).lighten(black_box(0.2))));
     });
 }
 
@@ -37,7 +39,7 @@ fn color_darken_benchmark(c: &mut Criterion) {
     let color = Color::rgb(100, 150, 200);
 
     c.bench_function("Color::darken", |b| {
-        b.iter(|| black_box(black_box(&color).darken(black_box(0.2))))
+        b.iter(|| black_box(black_box(&color).darken(black_box(0.2))));
     });
 }
 
@@ -45,13 +47,13 @@ fn color_with_alpha_benchmark(c: &mut Criterion) {
     let color = Color::rgb(100, 150, 200);
 
     c.bench_function("Color::with_alpha", |b| {
-        b.iter(|| black_box(black_box(&color).with_alpha(black_box(128))))
+        b.iter(|| black_box(black_box(&color).with_alpha(black_box(128))));
     });
 }
 
 fn color_from_hex_benchmark(c: &mut Criterion) {
     c.bench_function("Color::from_hex", |b| {
-        b.iter(|| black_box(Color::from_hex(black_box("#FF5733"))))
+        b.iter(|| black_box(Color::from_hex(black_box("#FF5733"))));
     });
 }
 
@@ -59,7 +61,7 @@ fn color_to_hex_benchmark(c: &mut Criterion) {
     let color = Color::rgb(255, 87, 51);
 
     c.bench_function("Color::to_hex", |b| {
-        b.iter(|| black_box(black_box(&color).to_hex()))
+        b.iter(|| black_box(black_box(&color).to_hex()));
     });
 }
 
@@ -68,7 +70,7 @@ fn color_multiply_benchmark(c: &mut Criterion) {
     let color2 = Color::rgb(200, 200, 200);
 
     c.bench_function("Color::multiply", |b| {
-        b.iter(|| black_box(black_box(&color1).multiply(black_box(color2))))
+        b.iter(|| black_box(black_box(&color1).multiply(black_box(color2))));
     });
 }
 

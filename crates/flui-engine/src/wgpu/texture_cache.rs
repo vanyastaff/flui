@@ -643,7 +643,7 @@ impl TextureCache {
             .filter(|(_, t)| t.use_count == 0)
             .map(|(id, t)| (id.clone(), t.size_bytes))
             .collect();
-        unused.sort_by(|a, b| b.1.cmp(&a.1));
+        unused.sort_by_key(|entry| std::cmp::Reverse(entry.1));
 
         let mut freed = 0usize;
         let mut evicted = 0usize;
@@ -812,7 +812,7 @@ mod unit_tests {
                 .filter(|(_, t)| t.use_count == 0)
                 .map(|(id, t)| (id.clone(), t.size_bytes))
                 .collect();
-            unused.sort_by(|a, b| b.1.cmp(&a.1));
+            unused.sort_by_key(|entry| std::cmp::Reverse(entry.1));
 
             let mut freed = 0usize;
             let mut evicted = 0usize;

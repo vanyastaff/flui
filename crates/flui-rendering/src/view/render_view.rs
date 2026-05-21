@@ -536,6 +536,26 @@ pub struct CompositeResult {
     pub device_pixel_ratio: f32,
 }
 
+// ============================================================================
+// Diagnosticable Implementation
+// ============================================================================
+
+impl Diagnosticable for RenderView {
+    fn debug_fill_properties(&self, properties: &mut DiagnosticsBuilder) {
+        properties.add("size", format!("{:?}", self.size));
+        if let Some(ref config) = self.configuration {
+            properties.add("devicePixelRatio", config.device_pixel_ratio());
+        }
+    }
+}
+
+impl HitTestTarget for RenderView {
+    fn handle_event(&self, event: &PointerEvent, entry: &HitTestEntry) {
+        // RenderView doesn't handle events, just implements the trait
+        let _ = (event, entry);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use flui_types::geometry::px;
@@ -606,25 +626,5 @@ mod tests {
 
         assert!((transform[0] - 2.0).abs() < 1e-6);
         assert!((transform[5] - 2.0).abs() < 1e-6);
-    }
-}
-
-// ============================================================================
-// Diagnosticable Implementation
-// ============================================================================
-
-impl Diagnosticable for RenderView {
-    fn debug_fill_properties(&self, properties: &mut DiagnosticsBuilder) {
-        properties.add("size", format!("{:?}", self.size));
-        if let Some(ref config) = self.configuration {
-            properties.add("devicePixelRatio", config.device_pixel_ratio());
-        }
-    }
-}
-
-impl HitTestTarget for RenderView {
-    fn handle_event(&self, event: &PointerEvent, entry: &HitTestEntry) {
-        // RenderView doesn't handle events, just implements the trait
-        let _ = (event, entry);
     }
 }

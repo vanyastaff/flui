@@ -199,19 +199,19 @@ mod tests {
     #[test]
     fn test_inherited_element_creation() {
         let provider = TestThemeProvider {
-            theme: TestTheme { color: 0xFF0000 },
+            theme: TestTheme { color: 0x00FF_0000 },
             child: DummyView,
         };
 
         let element = InheritedElement::new(&provider, InheritedBehavior::new(&provider));
-        assert_eq!(element.behavior().data().color, 0xFF0000);
+        assert_eq!(element.behavior().data().color, 0x00FF_0000);
         assert_eq!(element.core().lifecycle(), Lifecycle::Initial);
     }
 
     #[test]
     fn test_inherited_element_dependents() {
         let provider = TestThemeProvider {
-            theme: TestTheme { color: 0xFF0000 },
+            theme: TestTheme { color: 0x00FF_0000 },
             child: DummyView,
         };
 
@@ -236,17 +236,17 @@ mod tests {
     #[test]
     fn test_inherited_element_update_should_notify() {
         let provider1 = TestThemeProvider {
-            theme: TestTheme { color: 0xFF0000 },
+            theme: TestTheme { color: 0x00FF_0000 },
             child: DummyView,
         };
 
         let provider2 = TestThemeProvider {
-            theme: TestTheme { color: 0x00FF00 },
+            theme: TestTheme { color: 0x0000_FF00 },
             child: DummyView,
         };
 
         let provider_same = TestThemeProvider {
-            theme: TestTheme { color: 0xFF0000 },
+            theme: TestTheme { color: 0x00FF_0000 },
             child: DummyView,
         };
 

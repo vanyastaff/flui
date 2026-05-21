@@ -893,7 +893,7 @@ mod tests {
     #[test]
     fn test_diagnostics_property_display() {
         let prop = DiagnosticsProperty::new("width", 100);
-        assert_eq!(format!("{}", prop), "width: 100");
+        assert_eq!(format!("{prop}"), "width: 100");
     }
 
     #[test]

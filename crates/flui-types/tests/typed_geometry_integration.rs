@@ -292,7 +292,7 @@ fn test_complete_rendering_pipeline() {
     let gpu_x = ui_button.origin.x.0;
     let gpu_y = ui_button.origin.y.0;
     let gpu_width = ui_button.size.width.0;
-    let gpu_height = ui_button.size.height.0;
+    let _ = ui_button.size.height.0;
     assert_eq!(gpu_x, 10.0);
     assert_eq!(gpu_width, 100.0);
 

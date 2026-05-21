@@ -325,7 +325,7 @@ impl Shader {
                     data.extend_from_slice(&v.to_le_bytes());
                 }
 
-                let c1 = colors.get(1).map_or(c0, |c| color_to_f32x4(c));
+                let c1 = colors.get(1).map_or(c0, color_to_f32x4);
                 for v in &c1 {
                     data.extend_from_slice(&v.to_le_bytes());
                 }
@@ -347,7 +347,7 @@ impl Shader {
                 let cx = if w > 0.0 { (center.dx.0 - bx) / w } else { 0.5 };
                 let cy = if h > 0.0 { (center.dy.0 - by) / h } else { 0.5 };
                 // Normalize radius relative to average of width/height
-                let avg = (w + h) / 2.0;
+                let avg = f32::midpoint(w, h);
                 let nr = if avg > 0.0 { *radius / avg } else { 0.5 };
 
                 data.extend_from_slice(&cx.to_le_bytes());
@@ -360,7 +360,7 @@ impl Shader {
                     data.extend_from_slice(&v.to_le_bytes());
                 }
 
-                let c1 = colors.get(1).map_or(c0, |c| color_to_f32x4(c));
+                let c1 = colors.get(1).map_or(c0, color_to_f32x4);
                 for v in &c1 {
                     data.extend_from_slice(&v.to_le_bytes());
                 }

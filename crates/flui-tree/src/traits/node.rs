@@ -253,6 +253,7 @@ mod tests {
     // Mock node type
     #[derive(Debug)]
     struct TestNode {
+        #[expect(dead_code, reason = "field exercised by Debug derive only")]
         value: i32,
     }
 
@@ -262,7 +263,7 @@ mod tests {
 
     #[test]
     fn test_node_trait() {
-        let _node = TestNode { value: 42 };
+        let _ = TestNode { value: 42 };
         let id = TestId::zip(1);
         assert_eq!(id.get(), 1);
     }
@@ -285,7 +286,7 @@ mod tests {
         assert!(info.node_size > 0);
         assert!(info.id_size > 0);
 
-        let display = format!("{}", info);
+        let display = format!("{info}");
         assert!(display.contains("TestNode"));
         assert!(display.contains("TestId"));
     }

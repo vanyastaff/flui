@@ -870,11 +870,10 @@ mod tests {
                 children: Vec::new(),
             };
 
-            if let Some(parent_id) = parent {
-                if let Some(parent_node) = self.nodes.get_mut(&parent_id) {
+            if let Some(parent_id) = parent
+                && let Some(parent_node) = self.nodes.get_mut(&parent_id) {
                     parent_node.children.push(id);
                 }
-            }
 
             self.nodes.insert(id, node);
         }

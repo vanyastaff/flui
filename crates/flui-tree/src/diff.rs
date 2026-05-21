@@ -799,11 +799,10 @@ mod tests {
 
         fn add(&mut self, id: ElementId, parent: Option<ElementId>) {
             self.nodes.insert(id, (parent, Vec::new()));
-            if let Some(p) = parent {
-                if let Some((_, children)) = self.nodes.get_mut(&p) {
+            if let Some(p) = parent
+                && let Some((_, children)) = self.nodes.get_mut(&p) {
                     children.push(id);
                 }
-            }
         }
     }
 
@@ -892,7 +891,7 @@ mod tests {
             parent: ElementId::new(2),
             index: 3,
         };
-        let s = format!("{}", op);
+        let s = format!("{op}");
         assert!(s.contains("Insert"));
     }
 

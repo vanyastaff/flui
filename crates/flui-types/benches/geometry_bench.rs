@@ -5,7 +5,9 @@
 //! - Rect::intersect: <20ns
 //! - Rect::union: <20ns
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use std::hint::black_box;
+
+use criterion::{Criterion, criterion_group, criterion_main};
 use flui_types::geometry::{Point, Rect, Size, Vec2, px};
 
 fn point_distance_benchmark(c: &mut Criterion) {
@@ -13,7 +15,7 @@ fn point_distance_benchmark(c: &mut Criterion) {
     let p2 = Point::new(px(50.0), px(80.0));
 
     c.bench_function("Point::distance", |b| {
-        b.iter(|| black_box(p1.distance(black_box(p2))))
+        b.iter(|| black_box(p1.distance(black_box(p2))));
     });
 }
 
@@ -29,7 +31,7 @@ fn rect_intersect_benchmark(c: &mut Criterion) {
     let rect2 = Rect::from_xywh(px(50.0), px(50.0), px(100.0), px(100.0));
 
     c.bench_function("Rect::intersect", |b| {
-        b.iter(|| black_box(black_box(&rect1).intersect(black_box(&rect2))))
+        b.iter(|| black_box(black_box(&rect1).intersect(black_box(&rect2))));
     });
 }
 
@@ -38,7 +40,7 @@ fn rect_union_benchmark(c: &mut Criterion) {
     let rect2 = Rect::from_xywh(px(50.0), px(50.0), px(100.0), px(100.0));
 
     c.bench_function("Rect::union", |b| {
-        b.iter(|| black_box(black_box(&rect1).union(black_box(&rect2))))
+        b.iter(|| black_box(black_box(&rect1).union(black_box(&rect2))));
     });
 }
 
@@ -47,7 +49,7 @@ fn rect_contains_benchmark(c: &mut Criterion) {
     let point = Point::new(px(50.0), px(50.0));
 
     c.bench_function("Rect::contains", |b| {
-        b.iter(|| black_box(black_box(&rect).contains(black_box(point))))
+        b.iter(|| black_box(black_box(&rect).contains(black_box(point))));
     });
 }
 
@@ -55,7 +57,7 @@ fn rect_inflate_benchmark(c: &mut Criterion) {
     let rect = Rect::from_xywh(px(10.0), px(10.0), px(80.0), px(80.0));
 
     c.bench_function("Rect::inflate", |b| {
-        b.iter(|| black_box(black_box(&rect).inflate(black_box(px(10.0)), black_box(px(10.0)))))
+        b.iter(|| black_box(black_box(&rect).inflate(black_box(px(10.0)), black_box(px(10.0)))));
     });
 }
 
@@ -63,7 +65,7 @@ fn size_area_benchmark(c: &mut Criterion) {
     let size = Size::new(px(100.0), px(200.0));
 
     c.bench_function("Size::area", |b| {
-        b.iter(|| black_box(black_box(&size).area()))
+        b.iter(|| black_box(black_box(&size).area()));
     });
 }
 
@@ -76,7 +78,7 @@ fn rect_construction_benchmark(c: &mut Criterion) {
                 black_box(px(100.0)),
                 black_box(px(200.0)),
             ))
-        })
+        });
     });
 }
 

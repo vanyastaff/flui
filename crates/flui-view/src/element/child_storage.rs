@@ -541,26 +541,26 @@ mod tests {
     use super::*;
 
     // Basic compile-time checks
-    fn _assert_storage_implemented<S: ElementChildStorage>() {}
+    fn assert_storage_implemented<S: ElementChildStorage>() {}
 
     #[test]
     fn test_storage_types_implement_trait() {
-        _assert_storage_implemented::<NoChildStorage>();
-        _assert_storage_implemented::<SingleChildStorage>();
-        _assert_storage_implemented::<OptionalChildStorage>();
-        _assert_storage_implemented::<VariableChildStorage>();
+        assert_storage_implemented::<NoChildStorage>();
+        assert_storage_implemented::<SingleChildStorage>();
+        assert_storage_implemented::<OptionalChildStorage>();
+        assert_storage_implemented::<VariableChildStorage>();
     }
 
     #[test]
     fn test_no_child_storage() {
-        let storage = NoChildStorage::default();
+        let storage = NoChildStorage;
         assert!(storage.is_empty());
         assert_eq!(storage.len(), 0);
     }
 
     #[test]
     fn test_single_child_storage() {
-        let mut storage = SingleChildStorage::default();
+        let storage = SingleChildStorage::default();
         assert!(storage.is_empty());
         assert_eq!(storage.len(), 0);
 
@@ -570,7 +570,7 @@ mod tests {
 
     #[test]
     fn test_optional_child_storage() {
-        let mut storage = OptionalChildStorage::default();
+        let storage = OptionalChildStorage::default();
         assert!(storage.is_empty());
         assert_eq!(storage.len(), 0);
     }
