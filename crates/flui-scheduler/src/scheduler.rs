@@ -759,59 +759,36 @@ impl Scheduler {
         self.frame.frame_scheduled.store(true, Ordering::Release);
     }
 
-    /// Add a persistent frame callback
+    /// Add a persistent frame callback.
     ///
-    /// Fires every frame during PersistentCallbacks phase.
-    /// Use for the rendering pipeline (build/layout/paint).
+    /// Fires every frame during PersistentCallbacks phase. Use for the
+    /// rendering pipeline (build/layout/paint).
     ///
-    /// Returns a `CallbackId` that can be used to remove the callback.
-    pub fn add_persistent_frame_callback(&self, callback: RecurringFrameCallback) -> CallbackId {
+    /// Flutter parity at [`binding.dart:773`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/binding.dart):
+    /// "Persistent frame callbacks cannot be unregistered. Once registered,
+    /// they are called for every frame for the lifetime of the application."
+    /// Returns `()` — no removal handle.
+    pub fn add_persistent_frame_callback(&self, callback: RecurringFrameCallback) {
         let id = self.callbacks.id_gen.next();
         self.callbacks
             .persistent
             .lock()
             .push(CancellablePersistentCallback { id, callback });
-        id
     }
 
-    /// Remove a persistent frame callback by ID
-    ///
-    /// Returns `true` if the callback was found and removed.
-    pub fn remove_persistent_frame_callback(&self, id: CallbackId) -> bool {
-        let mut callbacks = self.callbacks.persistent.lock();
-        let original_len = callbacks.len();
-        callbacks.retain(|c| c.id != id);
-        callbacks.len() < original_len
-    }
-
-    /// Add a post-frame callback
+    /// Add a post-frame callback.
     ///
     /// Fires once after the current/next frame completes.
     ///
-    /// Returns a `CallbackId` that can be used to cancel the callback.
-    pub fn add_post_frame_callback(&self, callback: PostFrameCallback) -> CallbackId {
+    /// Flutter parity at [`binding.dart:802`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/binding.dart):
+    /// "Post-frame callbacks ... are called exactly once" and cannot be
+    /// cancelled before they fire. Returns `()` — no cancellation handle.
+    pub fn add_post_frame_callback(&self, callback: PostFrameCallback) {
         let id = self.callbacks.id_gen.next();
         self.callbacks
             .post_frame
             .lock()
             .push(CancellablePostFrameCallback { id, callback });
-        id
-    }
-
-    /// Cancel a post-frame callback by ID
-    ///
-    /// Returns `true` if the callback was found and cancelled.
-    pub fn cancel_post_frame_callback(&self, id: CallbackId) -> bool {
-        let mut callbacks = self.callbacks.post_frame.lock();
-        let original_len = callbacks.len();
-        callbacks.retain(|c| c.id != id);
-
-        if callbacks.len() < original_len {
-            return true;
-        }
-
-        self.callbacks.cancelled.insert(id, ());
-        false
     }
 
     // =========================================================================
@@ -1885,44 +1862,44 @@ mod tests {
     }
 
     #[test]
-    fn test_cancel_persistent_callback() {
+    fn test_persistent_callback_fires_every_frame() {
+        // Flutter parity: binding.dart:773 "Persistent frame callbacks
+        // cannot be unregistered. Once registered, they are called for every
+        // frame for the lifetime of the application." Pre-U31 commit FLUI
+        // diverged with `remove_persistent_frame_callback`; reverted to
+        // strict Flutter contract.
         let scheduler = Scheduler::new();
         let count = Arc::new(Mutex::new(0));
 
         let c = Arc::clone(&count);
-        let id = scheduler.add_persistent_frame_callback(Arc::new(move |_| {
+        scheduler.add_persistent_frame_callback(Arc::new(move |_| {
             *c.lock() += 1;
         }));
 
-        // Execute once - should fire
+        // Persistent fires every frame, no way to remove.
         scheduler.execute_frame();
-        assert_eq!(*count.lock(), 1);
-
-        // Remove the callback
-        assert!(scheduler.remove_persistent_frame_callback(id));
-
-        // Execute again - should NOT fire
         scheduler.execute_frame();
-        assert_eq!(*count.lock(), 1);
+        scheduler.execute_frame();
+        assert_eq!(*count.lock(), 3);
     }
 
     #[test]
-    fn test_cancel_post_frame_callback() {
+    fn test_post_frame_callback_fires_exactly_once() {
+        // Flutter parity: binding.dart:802 "Post-frame callbacks ... are
+        // called exactly once" and cannot be cancelled before they fire.
         let scheduler = Scheduler::new();
-        let called = Arc::new(Mutex::new(false));
+        let called = Arc::new(Mutex::new(0));
 
         let c = Arc::clone(&called);
-        let id = scheduler.add_post_frame_callback(Box::new(move |_| {
-            *c.lock() = true;
+        scheduler.add_post_frame_callback(Box::new(move |_| {
+            *c.lock() += 1;
         }));
 
-        // Cancel before frame executes
-        assert!(scheduler.cancel_post_frame_callback(id));
-
+        scheduler.execute_frame();
         scheduler.execute_frame();
 
-        // Callback should NOT have been called
-        assert!(!*called.lock());
+        // Post-frame fires exactly once even across multiple frames.
+        assert_eq!(*called.lock(), 1);
     }
 
     #[test]
@@ -1931,13 +1908,9 @@ mod tests {
 
         let id1 = scheduler.schedule_frame_callback(Box::new(|_| {}));
         let id2 = scheduler.schedule_frame_callback(Box::new(|_| {}));
-        let id3 = scheduler.add_persistent_frame_callback(Arc::new(|_| {}));
-        let id4 = scheduler.add_post_frame_callback(Box::new(|_| {}));
-
-        // All IDs should be unique
+        // persistent + post-frame no longer return CallbackId; only the
+        // transient schedule_frame_callback does. Both transient IDs differ.
         assert_ne!(id1, id2);
-        assert_ne!(id2, id3);
-        assert_ne!(id3, id4);
     }
 
     #[test]
