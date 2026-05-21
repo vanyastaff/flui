@@ -182,6 +182,11 @@ impl Canvas {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test code: expect/panic IS the assertion path"
+)]
 mod tests {
     use flui_types::geometry::{Radius, px};
 
