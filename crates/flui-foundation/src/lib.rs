@@ -176,48 +176,25 @@ pub use debug::{
 // Error handling
 pub use error::{FoundationError, Result};
 pub use id::{
-    // Animation/Scheduler IDs
-    AnimationId,
-    // Platform/System IDs
-    DeviceId,
-    // Debug/Inspector IDs
-    DiagnosticsId,
     // Core tree IDs (5-tree architecture)
     ElementId,
-    EmbedderId,
-    // Group/Region IDs
-    FocusId,
+    // Scheduler IDs (consumed by flui-scheduler)
     FrameCallbackId,
     FrameId,
-    // Gesture IDs
-    GestureId,
-    GroupId,
     // Generic ID system
     Id,
     Identifier,
     Index,
-    // Keyboard IDs
-    KeyId,
     LayerId,
     // Listener/Observer IDs
     ListenerId,
-    LocationId,
     Marker,
-    MotionEventId,
     ObserverId,
-    PlatformViewId,
-    PointerId,
-    ProductId,
     RawId,
     RenderId,
-    // Navigation/Restoration IDs
-    RestorationScopeId,
-    RouteId,
     SemanticsId,
     TaskId,
-    TextureId,
     TickerId,
-    VendorId,
     ViewId,
     // Marker types module
     markers,

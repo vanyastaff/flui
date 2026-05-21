@@ -547,76 +547,8 @@ ids! {
     pub type ObserverId Observer;
 
     // =====================================================================
-    // Platform/System IDs (from Flutter)
+    // Scheduler IDs (consumed by flui-scheduler)
     // =====================================================================
-
-    /// Texture ID - GPU texture identifier.
-    ///
-    /// References a texture registered with the engine for external content
-    /// like video frames or platform views.
-    pub type TextureId Texture;
-
-    /// Platform View ID - native view identifier.
-    ///
-    /// References a native platform view embedded in the Flutter view hierarchy.
-    pub type PlatformViewId PlatformView;
-
-    /// Device ID - input device identifier.
-    ///
-    /// Identifies different input devices (keyboards, mice, touch screens).
-    pub type DeviceId Device;
-
-    /// Pointer ID - pointer/touch identifier.
-    ///
-    /// Tracks individual touch points or pointer devices in multi-touch scenarios.
-    pub type PointerId Pointer;
-
-    /// Embedder ID - embedder identifier.
-    ///
-    /// Identifies the embedder that generated an event (for multi-view scenarios).
-    pub type EmbedderId Embedder;
-
-    // =====================================================================
-    // Keyboard IDs
-    // =====================================================================
-
-    /// Key ID - logical keyboard key identifier.
-    ///
-    /// Represents a logical key independent of physical keyboard layout.
-    pub type KeyId Key;
-
-    /// Vendor ID - hardware vendor identifier.
-    ///
-    /// Identifies the manufacturer of an input device.
-    pub type VendorId Vendor;
-
-    /// Product ID - hardware product identifier.
-    ///
-    /// Identifies a specific product model from a vendor.
-    pub type ProductId Product;
-
-    // =====================================================================
-    // Navigation/Restoration IDs
-    // =====================================================================
-
-    /// Restoration Scope ID - state restoration scope identifier.
-    ///
-    /// Used for state restoration to track restoration scopes across app restarts.
-    pub type RestorationScopeId RestorationScope;
-
-    /// Route ID - navigation route identifier.
-    ///
-    /// Identifies a route in the navigation stack.
-    pub type RouteId Route;
-
-    // =====================================================================
-    // Animation/Scheduler IDs
-    // =====================================================================
-
-    /// Animation ID - animation frame callback identifier.
-    ///
-    /// Returned when scheduling frame callbacks, used to cancel them.
-    pub type AnimationId Animation;
 
     /// Frame Callback ID - scheduler frame callback identifier.
     ///
@@ -637,48 +569,6 @@ ids! {
     ///
     /// Identifies tickers for animation timing callbacks.
     pub type TickerId Ticker;
-
-    // =====================================================================
-    // Gesture IDs
-    // =====================================================================
-
-    /// Motion Event ID - Android motion event identifier.
-    ///
-    /// Identifies motion events on Android platform for gesture handling.
-    pub type MotionEventId MotionEvent;
-
-    /// Gesture ID - gesture recognizer identifier.
-    ///
-    /// Identifies active gesture recognizers during gesture disambiguation.
-    pub type GestureId Gesture;
-
-    // =====================================================================
-    // Group/Region IDs
-    // =====================================================================
-
-    /// Group ID - tap region group identifier.
-    ///
-    /// Groups tap regions together for coordinated tap handling.
-    pub type GroupId Group;
-
-    /// Focus ID - focus node identifier.
-    ///
-    /// Identifies nodes in the focus tree for keyboard focus management.
-    pub type FocusId Focus;
-
-    // =====================================================================
-    // Debug/Inspector IDs
-    // =====================================================================
-
-    /// Diagnostics ID - widget inspector diagnostics identifier.
-    ///
-    /// Used by the widget inspector for object identification and tracking.
-    pub type DiagnosticsId Diagnostics;
-
-    /// Location ID - source location identifier.
-    ///
-    /// Identifies source code locations for debugging and error reporting.
-    pub type LocationId Location;
 }
 
 // =========================================================================
@@ -779,8 +669,8 @@ mod tests {
         assert_eq!(size_of::<RenderId>(), size);
         assert_eq!(size_of::<LayerId>(), size);
         assert_eq!(size_of::<SemanticsId>(), size);
-        assert_eq!(size_of::<TextureId>(), size);
-        assert_eq!(size_of::<PlatformViewId>(), size);
+        assert_eq!(size_of::<FrameId>(), size);
+        assert_eq!(size_of::<TaskId>(), size);
     }
 
     #[test]
@@ -864,16 +754,16 @@ mod tests {
     }
 
     #[test]
-    fn test_new_id_types() {
-        // Test some of the new Flutter-inspired ID types
-        let texture = TextureId::zip(1);
-        let platform_view = PlatformViewId::zip(2);
-        let device = DeviceId::zip(3);
-        let pointer = PointerId::zip(4);
+    fn test_scheduler_id_types() {
+        // Sanity-check the scheduler-consumer IDs survive the audit.
+        let frame = FrameId::zip(1);
+        let callback = FrameCallbackId::zip(2);
+        let task = TaskId::zip(3);
+        let ticker = TickerId::zip(4);
 
-        assert_eq!(texture.unzip(), 1);
-        assert_eq!(platform_view.unzip(), 2);
-        assert_eq!(device.unzip(), 3);
-        assert_eq!(pointer.unzip(), 4);
+        assert_eq!(frame.unzip(), 1);
+        assert_eq!(callback.unzip(), 2);
+        assert_eq!(task.unzip(), 3);
+        assert_eq!(ticker.unzip(), 4);
     }
 }
