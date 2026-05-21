@@ -7,27 +7,28 @@
 //!
 //! This module provides the [`ClipContext`] trait, which is the base
 //! abstraction for clip operations. In Flutter, `ClipContext` is an abstract
-//! class that `PaintingContext` extends.
+//! class that `PaintingContext` extends; in FLUI the production implementer
+//! is `flui_rendering::context::CanvasContext` (a `PaintingContext` type is
+//! not present in the current workspace).
 //!
 //! # Architecture
 //!
 //! ```text
 //! ClipContext (trait)  [flui_painting]
-//!     └── PaintingContext (implements)  [flui_rendering]
-//!             └── TestRecordingPaintingContext (for testing)
+//!     └── CanvasContext (implements)  [flui_rendering]
 //! ```
 //!
 //! # Usage
 //!
 //! ```rust,ignore
 //! use flui_painting::ClipContext;
-//! use flui_rendering::PaintingContext;
+//! use flui_rendering::context::CanvasContext;
 //! use flui_types::geometry::Pixels;
 //!
-//! fn paint(&self, ctx: &mut PaintingContext, offset: Offset<Pixels>) {
+//! fn paint(&self, ctx: &mut CanvasContext, offset: Offset<Pixels>) {
 //!     // ClipContext methods available directly:
 //!     ctx.clip_rect_and_paint(rect, Clip::AntiAlias, bounds, |ctx| {
-//!         ctx.paint_child(child_id, offset);
+//!         ctx.canvas().draw_rect(rect, &paint);
 //!     });
 //! }
 //! ```
