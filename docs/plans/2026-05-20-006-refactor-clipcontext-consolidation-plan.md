@@ -1,7 +1,7 @@
 ---
 date: 2026-05-20
 type: refactor
-status: active
+status: completed
 origin: docs/brainstorms/clipcontext-consolidation-requirements.md
 depth: standard
 target_crates: flui-painting, flui-rendering, flui-engine
