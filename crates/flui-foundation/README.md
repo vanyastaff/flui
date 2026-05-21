@@ -17,7 +17,7 @@ FLUI Foundation provides fundamental building blocks used throughout the FLUI UI
 - **Diagnostics**: Rich debugging and introspection utilities
 - **Error Handling**: Standardized `FoundationError` with context chaining
 - **Callbacks**: Type-safe callback aliases (`VoidCallback`, `ValueChanged`, etc.)
-- **Platform Detection**: `TargetPlatform` for cross-platform code
+- **Platform Detection**: re-exported from `flui-types` — see `flui_types::platform::TargetPlatform`
 - **WASM Support**: `WasmNotSendSync` trait for web compatibility
 - **Thread Safety**: All types designed for multi-threaded contexts
 
@@ -176,17 +176,18 @@ fn use_in_thread<T: WasmNotSendSync>(value: T) {
 
 ### Platform Detection
 
+Platform detection lives in the lower-layer `flui-types` crate. Import it
+from there:
+
 ```rust
-use flui_foundation::TargetPlatform;
+use flui_types::platform::TargetPlatform;
 
 let platform = TargetPlatform::current();
 
 if platform.is_desktop() {
-    println!("Running on desktop: {}", platform.as_str());
+    // desktop branch
 } else if platform.is_mobile() {
-    println!("Running on mobile");
-} else if platform.is_web() {
-    println!("Running in browser");
+    // mobile branch
 }
 ```
 

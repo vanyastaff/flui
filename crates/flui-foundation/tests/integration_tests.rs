@@ -15,8 +15,9 @@ use flui_foundation::{
     ChangeNotifier, DiagnosticLevel, Diagnosticable, DiagnosticsBuilder, DiagnosticsNode,
     ElementId, FoundationError, HashedObserverList, Key, LayerId, Listenable, ListenerId,
     MergedListenable, ObserverId, ObserverList, RenderId, Result, SemanticsId, SyncObserverList,
-    TargetPlatform, ValueNotifier, ViewId, error::ErrorContext,
+    ValueNotifier, ViewId, error::ErrorContext,
 };
+use flui_types::platform::TargetPlatform;
 
 // ============================================================================
 // ID System Integration Tests
@@ -455,18 +456,17 @@ fn test_error_recovery() {
 // Platform Integration Tests
 // ============================================================================
 
-/// Test platform detection
+/// Test platform detection via the canonical type in `flui-types`.
 #[test]
 fn test_platform_detection() {
     let platform = TargetPlatform::current();
 
-    // At least one category should be true
-    let is_any_platform = platform.is_desktop() || platform.is_mobile() || platform.is_web();
-    assert!(is_any_platform);
-
-    // Platform should have a string representation
+    // Platform should have a non-empty static string identifier.
     let platform_str = platform.as_str();
     assert!(!platform_str.is_empty());
+
+    // Default matches current.
+    assert_eq!(TargetPlatform::default(), platform);
 }
 
 // ============================================================================

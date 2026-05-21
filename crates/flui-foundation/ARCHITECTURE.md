@@ -518,19 +518,10 @@ switch (defaultTargetPlatform) {
 }
 ```
 
-**FLUI:**
-```rust
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TargetPlatform {
-    Android,
-    Fuchsia,
-    IOS,
-    Linux,
-    MacOS,
-    Windows,
-    Web,
-}
-```
+**FLUI:** `TargetPlatform` lives in `flui-types::platform::target_platform`
+(canonical home — Constitution Principle 2 "Strict Crate Dependency DAG").
+The enum is marked `#[non_exhaustive]` and ships seven variants:
+`iOS`, `Android`, `Linux`, `MacOS`, `Windows`, `Fuchsia`, `Unknown`.
 
 ---
 

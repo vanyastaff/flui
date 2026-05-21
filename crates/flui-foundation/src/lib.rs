@@ -14,7 +14,6 @@
 //! - **Change Notification**: Observable patterns for reactive UI updates
 //! - **Callbacks**: `VoidCallback`, `ValueChanged`, and other callback type
 //!   aliases
-//! - **Platform**: `TargetPlatform` for platform detection
 //! - **Observer Lists**: Efficient observer/listener collections
 //! - **Diagnostics**: Debugging and introspection utilities
 //! - **Error Handling**: Standardized error types and utilities
@@ -143,7 +142,6 @@ pub mod consts;
 pub mod id;
 pub mod key;
 pub mod observer;
-pub mod platform;
 pub mod wasm;
 
 // Reactive programming - change notification and observables
@@ -233,8 +231,6 @@ pub use notifier::{
 };
 // Observer lists
 pub use observer::{HashedObserverList, ObserverList, SyncObserverList};
-// Platform
-pub use platform::TargetPlatform;
 // WASM compatibility
 pub use wasm::{WasmNotSend, WasmNotSendSync};
 
@@ -294,8 +290,6 @@ pub mod prelude {
         RenderId,
         SemanticsId,
         SyncObserverList,
-        // Platform
-        TargetPlatform,
         UniqueKey,
         ValueChanged,
         ValueGetter,
