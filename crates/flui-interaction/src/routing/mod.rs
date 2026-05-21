@@ -29,9 +29,8 @@ mod pointer_router;
 pub use event_router::EventRouter;
 pub use focus::{FocusManager, KeyEventCallback};
 pub use focus_scope::{
-    DirectionalFocusPolicy, FocusNode, FocusNodeId, FocusScopeNode, FocusTraversalPolicy,
-    KeyEventHandler, KeyEventResult, OrderedTraversalPolicy, ReadingOrderPolicy,
-    TraversalDirection,
+    FocusNode, FocusNodeId, FocusScopeNode, FocusTraversalPolicy, KeyEventHandler, KeyEventResult,
+    ReadingOrderPolicy,
 };
 pub use hit_test::{
     EventPropagation, HitTestBehavior, HitTestEntry, HitTestResult, HitTestable,
