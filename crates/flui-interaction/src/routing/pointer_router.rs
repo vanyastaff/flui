@@ -213,34 +213,24 @@ impl PointerRouter {
     ///
     /// # Reentrancy Safety
     ///
-    /// Handlers can safely add or remove routes during dispatch:
-    /// - Routes added during dispatch take effect on the next event
-    /// - Routes removed during dispatch take effect immediately
+    /// Handlers added or removed *during* dispatch take effect on the next
+    /// event — current dispatch sees a snapshot of registration state taken
+    /// before the first handler fires. This matches Flutter
+    /// [`pointer_router.dart::route`](https://github.com/flutter/flutter/blob/master/packages/flutter/lib/src/gestures/pointer_router.dart)
+    /// behavior and eliminates the prior 2+N+M `RwLock::read()` count per
+    /// event (linear Arc::ptr_eq re-checks).
     ///
-    /// This is achieved by copying the route lists before dispatch and
-    /// checking if routes still exist before calling each handler.
+    /// Dispatch order is **per-pointer handlers first, then global handlers**
+    /// matching Flutter `pointer_router.dart:124` ordering. Per-pointer
+    /// handlers run in their registration order (insertion order in the
+    /// HashMap entry's Vec); global handlers fire afterward.
+    ///
+    /// Total lock acquisitions per event: 2 `read()`s (one per category),
+    /// down from 2+N+M.
     pub fn route(&self, event: &PointerEvent) {
         let pointer = get_pointer_id(event);
 
-        // Copy global handlers (for reentrancy safety)
-        let global_handlers: Vec<GlobalPointerHandler> =
-            self.global_handlers.read().iter().cloned().collect();
-
-        // Dispatch to global handlers, checking they still exist
-        for handler in global_handlers {
-            // Check if still registered (may have been removed by previous handler)
-            let still_registered = self
-                .global_handlers
-                .read()
-                .iter()
-                .any(|h| Arc::ptr_eq(h, &handler));
-
-            if still_registered {
-                handler(event);
-            }
-        }
-
-        // Copy per-pointer handlers (for reentrancy safety)
+        // Single read for per-pointer handlers — snapshot via clone.
         let pointer_handlers: Vec<PointerRouteHandler> = self
             .routes
             .read()
@@ -248,18 +238,18 @@ impl PointerRouter {
             .map(|h| h.iter().cloned().collect())
             .unwrap_or_default();
 
-        // Dispatch to per-pointer handlers, checking they still exist
-        for handler in pointer_handlers {
-            // Check if still registered (may have been removed by previous handler)
-            let still_registered = self
-                .routes
-                .read()
-                .get(&pointer)
-                .is_some_and(|handlers| handlers.iter().any(|h| Arc::ptr_eq(h, &handler)));
+        // Per-pointer handlers first (Flutter ordering).
+        for handler in &pointer_handlers {
+            handler(event);
+        }
 
-            if still_registered {
-                handler(event);
-            }
+        // Single read for global handlers — snapshot via clone.
+        let global_handlers: Vec<GlobalPointerHandler> =
+            self.global_handlers.read().iter().cloned().collect();
+
+        // Global handlers after per-pointer.
+        for handler in &global_handlers {
+            handler(event);
         }
     }
 
@@ -432,7 +422,10 @@ mod tests {
     }
 
     #[test]
-    fn test_global_before_per_pointer() {
+    fn test_per_pointer_before_global() {
+        // Flutter parity: pointer_router.dart:124 dispatches per-pointer
+        // handlers first, then global handlers. Post-U25 (acab2929+) FLUI
+        // matches this ordering — previously global fired first.
         let router = PointerRouter::new();
         let pointer = PointerId::new(0); // PRIMARY pointer
 
@@ -455,7 +448,7 @@ mod tests {
         router.route(&event);
 
         let calls = order.lock();
-        assert_eq!(*calls, vec!["global", "pointer"]);
+        assert_eq!(*calls, vec!["pointer", "global"]);
     }
 
     #[test]
@@ -609,7 +602,16 @@ mod tests {
         let event = make_event(0, Offset::new(Pixels(50.0), Pixels(50.0)));
         router.route(&event); // Should not deadlock
 
-        // handler2 should NOT be called because handler1 removed it
-        assert_eq!(handler2_called.load(Ordering::Relaxed), 0);
+        // Post-U25 semantics (snapshot-then-dispatch matching Flutter):
+        // handler2 IS called because the dispatch snapshot was taken before
+        // any handler fired. Removal takes effect on the next event.
+        // Old (pre-U25) FLUI checked still-registered per-handler at 2+N+M
+        // lock count; that contract removed for perf parity with Flutter.
+        assert_eq!(handler2_called.load(Ordering::Relaxed), 1);
+
+        // Second dispatch sees post-removal snapshot — handler2 not called.
+        let event2 = make_event(0, Offset::new(Pixels(50.0), Pixels(50.0)));
+        router.route(&event2);
+        assert_eq!(handler2_called.load(Ordering::Relaxed), 1);
     }
 }
