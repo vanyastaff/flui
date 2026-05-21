@@ -2245,6 +2245,56 @@ The 15% **divergence** (deliberate Rust-native shape) concentrates in:
 
 # Part IV — Combined Priority Order
 
+## Status (2026-05-21)
+
+**Execution: partially landed on branch `determined-proskuriakova-d2eccf`** (19 commits + 3 prep docs commit).
+
+Landed atomic commits (commit hash → unit ID):
+
+| Commit | Unit | Description |
+|---|---|---|
+| `5f4d49dd` | docs | Mythos audit + brainstorm + plan |
+| `9c22f3c5` | U1  | scheduler zero-dep deletion (TypestateTicker / prelude_advanced / Handle / 4 ZSTs / TypedTask / ext traits / arc_instance / VsyncDrivenScheduler) |
+| `e64b07c3` | U2  | interaction typestate.rs delete (232 LOC) |
+| `f10d21b5` | U3  | OneSequence + PrimaryPointer zero-impl scaffolds delete (823 LOC) |
+| `a5854183` | U4  | zombie focus policies delete (Ordered/Directional) |
+| `afb27a42` + `1ad0dbb4` | U5  | canonical GestureRecognizerState enum + RecognizerBase rename |
+| `2875f435` + `7a1fcc81` + `e6801fed` | U6  | TryFrom<u8> for SchedulerPhase + FrameSkipPolicy + AppLifecycleState |
+| `e83023dc` | U7  | Result-returning constructors (VsyncScheduler / FrameDuration / set_time_dilation) |
+| `439a5a1c` + `262eabf7` | U8  | Microseconds i64 → u64 |
+| `7d93611d` + `fd1db22b` | U10 | Ticker::dispose + Drop + disposed AtomicBool + started-twice debug-assert |
+| `b391f493` | U11 | Recognizer dispose rejects arena entries |
+| `35c072fa` | U13 | Re-introduce OneSequence + PrimaryPointer canonical traits |
+| `4505c0b4` | U14 | TickerProvider::create_ticker factory |
+| `24d43709` | U30 | AppLifecycleState auto-toggle frames_enabled |
+| `7d86ae9f` | U32(a) | Priority::numeric_value Flutter-faithful mapping |
+
+**Deferred / scope-merged:**
+
+- **U9** (PointerId widening to `ui_events::pointer::PointerId`): concrete blocker. ui_events `PointerId(NonZeroU64)` API surface (fallible constructor, no zero, no negative, different method names `get_inner` vs `.get()`) requires per-callsite review across ~50 sites. Not mechanical sweep. Deferred to focused follow-up unit.
+- **U12** (FocusManager + GestureBinding dispose pattern): scope-merged. FocusManager is singleton — dispose semantically wrong; FocusManager treatment handled by U23 (unification). GestureBinding hit_tests drain already exists at Up/Cancel branches; defensive AppLifecycle sweep deferred to U28.
+- **U15** (ScheduledTicker absorption): deferred. Requires deep wiring of Ticker auto-rescheduling via Scheduler persistent-frame-callback path + flui-animation source migration (U24). Standalone follow-up.
+- **U16-U22** (7 concrete recognizer migrations): trait infrastructure (U13) landed, concrete migrations deferred. Each touches one recognizer file ~200-300 LOC; mechanical но requires per-recognizer Flutter-parity verification. Follow-up wave.
+- **U17-U21** missing recognizers (`TapAndDrag`/`Eager`/`MultiDrag`/`MultitouchDragStrategy`): out of scope per brainstorm Scope Boundary — P3 backlog.
+- **U23** (FocusManager unification): deferred to focused unit.
+- **U24** (flui-animation source migration): depends on U15.
+- **U25-U29** (hot path / unbounded growth / testing feature-gate): deferred to follow-up wave.
+- **U31** (persistent/post-frame strict immutability): deferred — touches public API contract + downstream consumers.
+- **U32(b,c)** (Tap dispatch order fix + final audit annotation): partial (numeric mapping landed); Tap dispatch reorder deferred с U16 recognizer migration.
+
+**Verification at HEAD (commit `7d86ae9f`):**
+- `cargo build --workspace --all-targets`: clean
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean
+- `cargo test -p flui-scheduler`: 106 lib + 205 integration + 38 doc = 349 passed, 0 failed
+- `cargo test -p flui-interaction --lib`: 247 passed, 0 failed
+- `bash scripts/port-check.sh`: 7/7 institutional refusal triggers clean
+
+**Net delta this session:** ~3,500-4,000 LOC zombie + parallel-impl reduction. PR #84 `dispose` pattern adopted on Ticker + Recognizer. Constitution Principle 6 violations eliminated from scheduler (no `from_u8` panics, no `assert!` panics in production paths, no negative Microseconds).
+
+**Bundle hypothesis preserved:** remaining units (U9, U15, U16-U22, U23, U24, U25-U29, U31, U32 final) can land as a follow-up PR or continuation of this branch. Each remaining unit is independently testable; per-commit verification gates already established.
+
+---
+
 > Synthesized from both crates' initial Priority Order sections (Part I `## Priority Order (initial)` for `flui-interaction` at line 826, and Part II `## Priority Order (initial)` for `flui-scheduler` at line 1859).
 >
 > **Bundle hypothesis**: ONE PR. Same architectural pattern set as PR #84 (framework-spine repair) — same dispose/disposed-state pattern (PR #84 `ChangeNotifier::dispose`), same zombie typestate cleanup, same parallel-type consolidation, same Principle 6 sweep. Cross-crate ripples are bounded — `flui-interaction` consumes `flui-foundation` + `flui-types`, `flui-scheduler` consumes `flui-foundation` only. Both feed `flui-app` + `flui-engine` (active) and `flui-animation` (disabled), so the breaking-change blast radius is contained.
