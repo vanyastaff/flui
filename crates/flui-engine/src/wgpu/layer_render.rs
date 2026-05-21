@@ -3,9 +3,6 @@
 //! This module adds GPU rendering capabilities to the core layer types
 //! from flui-layer.
 
-use std::cell::RefCell;
-use std::collections::HashMap;
-
 use flui_layer::{
     BackdropFilterLayer, CanvasLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer,
     ColorFilterLayer, FollowerLayer, ImageFilterLayer, Layer, LeaderLayer, OffsetLayer,
@@ -17,80 +14,16 @@ use flui_painting::DisplayListCore;
 use crate::{commands::dispatch_commands, traits::CommandRenderer};
 
 // ============================================================================
-// SUPERELLIPSE PATH CACHE
+// SUPERELLIPSE PATH GENERATION
 // ============================================================================
-
-/// Cache key for superellipse paths, using f32-to-bits for Hash/Eq.
-///
-/// This avoids re-generating identical superellipse paths every frame
-/// for static UIs. The key captures the rect bounds and all 4 corner radii.
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct SuperellipseKey {
-    // Rect bounds stored as f32 bits
-    left: u32,
-    top: u32,
-    right: u32,
-    bottom: u32,
-    // Corner radii stored as f32 bits (x, y per corner)
-    tl_x: u32,
-    tl_y: u32,
-    tr_x: u32,
-    tr_y: u32,
-    br_x: u32,
-    br_y: u32,
-    bl_x: u32,
-    bl_y: u32,
-}
-
-impl SuperellipseKey {
-    /// Create a cache key from an `RSuperellipse`.
-    fn from_superellipse(s: &flui_types::geometry::RSuperellipse) -> Self {
-        let rect = s.outer_rect();
-        let tl = s.tl_radius();
-        let tr = s.tr_radius();
-        let br = s.br_radius();
-        let bl = s.bl_radius();
-
-        Self {
-            left: rect.left().0.to_bits(),
-            top: rect.top().0.to_bits(),
-            right: rect.right().0.to_bits(),
-            bottom: rect.bottom().0.to_bits(),
-            tl_x: tl.x.0.to_bits(),
-            tl_y: tl.y.0.to_bits(),
-            tr_x: tr.x.0.to_bits(),
-            tr_y: tr.y.0.to_bits(),
-            br_x: br.x.0.to_bits(),
-            br_y: br.y.0.to_bits(),
-            bl_x: bl.x.0.to_bits(),
-            bl_y: bl.y.0.to_bits(),
-        }
-    }
-}
-
-thread_local! {
-    /// Thread-local cache for generated superellipse paths.
-    /// Rendering is single-threaded, so thread-local is the correct choice.
-    static SUPERELLIPSE_CACHE: RefCell<HashMap<SuperellipseKey, flui_types::painting::Path>> =
-        RefCell::new(HashMap::new());
-}
-
-/// Returns a cached superellipse path, generating it on cache miss.
-fn get_or_generate_superellipse_path(
-    superellipse: &flui_types::geometry::RSuperellipse,
-) -> flui_types::painting::Path {
-    let key = SuperellipseKey::from_superellipse(superellipse);
-
-    SUPERELLIPSE_CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        if let Some(path) = cache.get(&key) {
-            return path.clone();
-        }
-        let path = generate_superellipse_path(superellipse);
-        cache.insert(key, path.clone());
-        path
-    })
-}
+//
+// The `SuperellipseKey` cache key + bounded `SuperellipsePathCache` moved
+// to `crate::wgpu::superellipse_cache` in U1 of the audit Step 5 item 14
+// follow-up. The previous `thread_local!` static cache was unbounded; the
+// new bounded cache lives on `WgpuPainter` (mirroring `PathCache`'s
+// ownership) and is consulted via `CommandRenderer::superellipse_path`'s
+// default + override impls. `generate_superellipse_path` remains here as
+// the math reference; both the cache and the trait default invoke it.
 
 // ============================================================================
 // LAYER RENDER TRAIT
@@ -287,8 +220,7 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for flui_layer::ClipSuperellips
         if !self.clips() {
             return;
         }
-        let superellipse = self.clip_superellipse();
-        let path = get_or_generate_superellipse_path(superellipse);
+        let path = renderer.superellipse_path(*self.clip_superellipse());
         renderer.push_clip_path(&path, self.clip_behavior());
     }
 
@@ -309,7 +241,10 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for flui_layer::ClipSuperellips
 ///
 /// Each corner is generated independently using its own radii, with straight
 /// edges connecting the corners. 64 points per corner ensure a smooth curve.
-fn generate_superellipse_path(
+///
+/// Exposed `pub(crate)` so `CommandRenderer::superellipse_path`'s default
+/// impl can call it for backends that don't own a Painter-side cache.
+pub(crate) fn generate_superellipse_path(
     superellipse: &flui_types::geometry::RSuperellipse,
 ) -> flui_types::painting::Path {
     use flui_types::geometry::{Pixels, Point, px};

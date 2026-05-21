@@ -874,6 +874,35 @@ impl CommandRenderer for Backend {
         });
     }
 
+    fn clip_rsuperellipse(
+        &mut self,
+        rsuperellipse: flui_types::geometry::RSuperellipse,
+        _clip_op: flui_types::painting::ClipOp,
+        _clip_behavior: flui_types::painting::Clip,
+        transform: &Matrix4,
+    ) {
+        // Override the trait default (which routes to clip_rrect against an
+        // approximating rounded rectangle). Delegate to the Painter's real
+        // SDF clip, populating `current_rsuperellipse_clip` so subsequent
+        // rect_instanced draws apply the iOS-squircle SDF (U9 wired the
+        // per-instance kind=2 path).
+        self.with_transform(transform, |painter| {
+            painter.clip_rsuperellipse(rsuperellipse);
+        });
+    }
+
+    fn superellipse_path(
+        &mut self,
+        rse: flui_types::geometry::RSuperellipse,
+    ) -> flui_types::painting::Path {
+        // Override the trait default (which freshly generates the path
+        // every call, no caching). Delegate to the Painter-owned bounded
+        // cache so identical superellipses across frames reuse the cached
+        // tessellation. Cache eviction follows PathCache semantics
+        // (`max_entries` + `last_used_frame`).
+        self.painter.superellipse_path(&rse)
+    }
+
     fn clip_path(
         &mut self,
         path: &Path,

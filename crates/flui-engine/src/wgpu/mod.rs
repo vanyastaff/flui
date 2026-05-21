@@ -93,6 +93,7 @@ mod renderer;
 #[allow(dead_code)]
 mod shader_compiler;
 mod shaders;
+pub mod superellipse_cache;
 mod tessellator;
 mod text;
 pub mod texture_cache;
@@ -103,7 +104,10 @@ mod vertex;
 // LAYER RENDERING
 // ============================================================================
 
-mod layer_render;
+pub(crate) mod layer_render;
+
+#[cfg(test)]
+mod sdf_smoke_test;
 
 // ============================================================================
 // PUBLIC API

@@ -324,6 +324,16 @@ pub struct WgpuPainter {
     /// Cache for tessellated path geometry (avoids re-tessellation of identical paths)
     path_cache: super::path_cache::PathCache,
 
+    /// Cache for tessellated superellipse (iOS-squircle) paths.
+    ///
+    /// Mirrors [`PathCache`](super::path_cache::PathCache) ownership: per-
+    /// Painter, single-threaded, with `max_entries` + frame-based eviction.
+    /// Replaces the previously-unbounded `thread_local!` cache in
+    /// `layer_render.rs`. Consulted by `Backend::superellipse_path`
+    /// override; the trait default for non-Painter backends regenerates
+    /// without caching.
+    superellipse_cache: super::superellipse_cache::SuperellipsePathCache,
+
     // ===== Text Rendering =====
     /// Glyphon-based text renderer
     text_renderer: TextRenderer,
@@ -349,11 +359,26 @@ pub struct WgpuPainter {
     /// Used to restore clip state on `restore()`.
     rrect_clip_stack: Vec<[f32; 8]>,
 
+    /// SDF rsuperellipse clip stack (for save/restore).
+    ///
+    /// Stack of `[f32; 12]` superellipse clip uniforms — 4 floats outer
+    /// rect (x, y, w, h) + 8 floats per-corner radii (rx/ry per 4 corners
+    /// in tl, tr, br, bl order). Mirrors the `rrect_clip_stack` shape with
+    /// a wider tuple to carry the per-corner separate-axis radii.
+    rsuperellipse_clip_stack: Vec<[f32; 12]>,
+
     /// Current SDF rounded rectangle clip.
     /// All zeros means no clip is active.
     /// When non-zero, each new instance gets this clip data so the fragment
     /// shader can perform per-pixel SDF clipping without a stencil buffer.
     current_rrect_clip: [f32; 8],
+
+    /// Active SDF rsuperellipse clip uniform (zero when no clip is active).
+    ///
+    /// Tuple layout: indices 0-3 = outer rect `(x, y, w, h)`; indices 4-11
+    /// = per-corner radii `(tl_x, tl_y, tr_x, tr_y, br_x, br_y, bl_x, bl_y)`.
+    /// Exponent `n = 4` is hardcoded in the WGSL shader, not stored here.
+    current_rsuperellipse_clip: [f32; 12],
 
     // ===== Opacity/Layer Stack =====
     /// Stack of opacity values for save_layer/restore_layer
@@ -893,6 +918,7 @@ impl WgpuPainter {
             external_texture_registry,
             tessellator,
             path_cache: super::path_cache::PathCache::new(512),
+            superellipse_cache: super::superellipse_cache::SuperellipsePathCache::new(256),
             text_renderer,
             transform_stack,
             current_transform,
@@ -900,6 +926,8 @@ impl WgpuPainter {
             current_scissor: None,
             rrect_clip_stack: Vec::new(),
             current_rrect_clip: [0.0; 8],
+            rsuperellipse_clip_stack: Vec::new(),
+            current_rsuperellipse_clip: [0.0; 12],
             opacity_stack: Vec::new(),
             current_opacity: 1.0,
             layer_stack: Vec::new(),
@@ -997,8 +1025,9 @@ impl WgpuPainter {
         view: &wgpu::TextureView,
         encoder: &mut wgpu::CommandEncoder,
     ) -> crate::error::RenderResult<()> {
-        // Advance path cache frame counter and evict stale entries
+        // Advance path cache frame counters and evict stale entries
         self.path_cache.advance_frame();
+        self.superellipse_cache.advance_frame();
 
         // Log rendering stats
         let text_count = self.text_renderer.text_count();
@@ -2052,8 +2081,10 @@ impl WgpuPainter {
                 let bottom_right = self.apply_transform(Point::new(rect.right(), rect.bottom()));
                 let transformed_rect =
                     Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
-                let instance = super::instancing::RectInstance::rect(transformed_rect, color)
-                    .with_clip_rrect(self.current_rrect_clip);
+                let instance = self.apply_active_clip(super::instancing::RectInstance::rect(
+                    transformed_rect,
+                    color,
+                ));
                 let _ = self.current_segment.rect_batch.add(instance);
                 DrawSegment::push_scissor_region(
                     &mut self.current_segment.rect_scissors,
@@ -2140,15 +2171,15 @@ impl WgpuPainter {
             };
 
             // Use GPU instancing for filled rounded rects (100x faster!)
-            let instance = super::instancing::RectInstance::rounded_rect_corners(
-                transformed_rect,
-                color,
-                rrect.top_left.x.0.max(rrect.top_left.y.0),
-                rrect.top_right.x.0.max(rrect.top_right.y.0),
-                rrect.bottom_right.x.0.max(rrect.bottom_right.y.0),
-                rrect.bottom_left.x.0.max(rrect.bottom_left.y.0),
-            )
-            .with_clip_rrect(self.current_rrect_clip);
+            let instance =
+                self.apply_active_clip(super::instancing::RectInstance::rounded_rect_corners(
+                    transformed_rect,
+                    color,
+                    rrect.top_left.x.0.max(rrect.top_left.y.0),
+                    rrect.top_right.x.0.max(rrect.top_right.y.0),
+                    rrect.bottom_right.x.0.max(rrect.bottom_right.y.0),
+                    rrect.bottom_left.x.0.max(rrect.bottom_left.y.0),
+                ));
             let _ = self.current_segment.rect_batch.add(instance);
             DrawSegment::push_scissor_region(
                 &mut self.current_segment.rect_scissors,
@@ -3241,6 +3272,10 @@ impl WgpuPainter {
 
         // Save current SDF rrect clip
         self.rrect_clip_stack.push(self.current_rrect_clip);
+
+        // Save current SDF rsuperellipse clip
+        self.rsuperellipse_clip_stack
+            .push(self.current_rsuperellipse_clip);
     }
 
     pub fn restore(&mut self) {
@@ -3261,6 +3296,13 @@ impl WgpuPainter {
                 self.current_rrect_clip = clip;
             } else {
                 self.current_rrect_clip = [0.0; 8];
+            }
+
+            // Restore SDF rsuperellipse clip state
+            if let Some(clip) = self.rsuperellipse_clip_stack.pop() {
+                self.current_rsuperellipse_clip = clip;
+            } else {
+                self.current_rsuperellipse_clip = [0.0; 12];
             }
 
             #[cfg(debug_assertions)]
@@ -3421,6 +3463,118 @@ impl WgpuPainter {
             r_tr,
             r_br,
             r_bl
+        );
+    }
+
+    /// Look up or generate a tessellated superellipse path via the
+    /// Painter-owned bounded cache.
+    ///
+    /// Consulted by `Backend::superellipse_path` (the `CommandRenderer`
+    /// trait override) so `ClipSuperellipseLayer::render`'s layer-tree
+    /// clip path benefits from frame-bounded caching. On a miss the path
+    /// is generated via `generate_superellipse_path` (the iOS-squircle
+    /// math) and inserted; eviction follows PathCache semantics
+    /// (`max_entries` + `last_used_frame`).
+    pub(crate) fn superellipse_path(
+        &mut self,
+        rse: &flui_types::geometry::RSuperellipse,
+    ) -> flui_types::painting::Path {
+        let key = super::superellipse_cache::SuperellipseKey::from_superellipse(rse);
+        if let Some(path) = self.superellipse_cache.get(&key) {
+            return path;
+        }
+        let path = super::layer_render::generate_superellipse_path(rse);
+        self.superellipse_cache.insert(key, path.clone());
+        path
+    }
+
+    /// Apply the currently-active SDF clip (rrect or rsuperellipse) to a
+    /// `RectInstance`.
+    ///
+    /// Branch order: if `current_rsuperellipse_clip` is non-trivial, the
+    /// superellipse clip wins (kind = 2). Otherwise the rrect clip slot
+    /// is used (kind = 1 when non-zero, kind = 0 when both are zero).
+    /// Centralizes the per-instance clip-kind selection so the two
+    /// `rect`/`rrect` batch-build sites don't drift apart.
+    fn apply_active_clip(
+        &self,
+        instance: super::instancing::RectInstance,
+    ) -> super::instancing::RectInstance {
+        // Exact equality against the all-zero "no clip active" sentinel is
+        // intentional: the field is set bit-exact to `[0.0; 12]` whenever
+        // the clip is cleared, never via arithmetic that would introduce
+        // ULP noise.
+        #[expect(
+            clippy::float_cmp,
+            reason = "exact comparison against the bit-exact `[0.0; 12]` 'no clip' sentinel"
+        )]
+        let superellipse_active = self.current_rsuperellipse_clip != [0.0; 12];
+        if superellipse_active {
+            instance.with_clip_rsuperellipse(self.current_rsuperellipse_clip)
+        } else {
+            instance.with_clip_rrect(self.current_rrect_clip)
+        }
+    }
+
+    /// Set an SDF rounded-superellipse clip (iOS-squircle).
+    ///
+    /// Parallel to [`Self::clip_rrect`]: populates `current_rsuperellipse_clip`
+    /// with the bounding rect + per-corner radii, applies a bounding-rect
+    /// scissor for early rasterizer rejection, and relies on
+    /// `rect_instanced.wgsl`'s per-pixel SDF evaluation to clip pixels
+    /// outside the iOS-squircle curve (wired in U9 / U10).
+    #[allow(
+        clippy::similar_names,
+        reason = "tl_r/tr_r/br_r/bl_r mirror the rsuperellipse-corner field names; renaming would obscure intent"
+    )]
+    pub fn clip_rsuperellipse(&mut self, rse: flui_types::geometry::RSuperellipse) {
+        // Apply current transform to outer rect (identical AABB logic to
+        // `clip_rrect`).
+        let transform = self.current_transform;
+        let rect = rse.outer_rect();
+
+        let (x, y, w, h) = if transform == glam::Mat4::IDENTITY {
+            (rect.left().0, rect.top().0, rect.width().0, rect.height().0)
+        } else {
+            let tl = transform * glam::Vec4::new(rect.left().0, rect.top().0, 0.0, 1.0);
+            let br = transform * glam::Vec4::new(rect.right().0, rect.bottom().0, 0.0, 1.0);
+            let min_x = tl.x.min(br.x);
+            let min_y = tl.y.min(br.y);
+            let max_x = tl.x.max(br.x);
+            let max_y = tl.y.max(br.y);
+            (min_x, min_y, max_x - min_x, max_y - min_y)
+        };
+
+        // Per-corner separate-axis radii (rx, ry per corner).
+        let tl_r = rse.tl_radius();
+        let tr_r = rse.tr_radius();
+        let br_r = rse.br_radius();
+        let bl_r = rse.bl_radius();
+
+        self.current_rsuperellipse_clip = [
+            x, y, w, h, tl_r.x.0, tl_r.y.0, tr_r.x.0, tr_r.y.0, br_r.x.0, br_r.y.0, bl_r.x.0,
+            bl_r.y.0,
+        ];
+
+        // Bounding-box scissor for early rasterizer rejection (same pattern
+        // as `clip_rrect`).
+        self.clip_rect(rect);
+
+        #[cfg(debug_assertions)]
+        tracing::trace!(
+            "WgpuPainter::clip_rsuperellipse: SDF clip set [{:.1}, {:.1}, {:.1}, {:.1}] radii=[(tl {:.1},{:.1}) (tr {:.1},{:.1}) (br {:.1},{:.1}) (bl {:.1},{:.1})]",
+            x,
+            y,
+            w,
+            h,
+            tl_r.x.0,
+            tl_r.y.0,
+            tr_r.x.0,
+            tr_r.y.0,
+            br_r.x.0,
+            br_r.y.0,
+            bl_r.x.0,
+            bl_r.y.0,
         );
     }
 
