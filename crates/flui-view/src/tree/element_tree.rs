@@ -145,8 +145,12 @@ impl ElementTree {
     /// Note: This method does NOT pass PipelineOwner to the element.
     /// For RenderObjectElements that need PipelineOwner, use
     /// `mount_root_with_pipeline_owner` instead.
-    pub fn mount_root(&mut self, view: &dyn View) -> ElementId {
-        self.mount_root_with_pipeline_owner(view, None)
+    pub fn mount_root(
+        &mut self,
+        view: &dyn View,
+        owner: &mut crate::ElementOwner<'_>,
+    ) -> ElementId {
+        self.mount_root_with_pipeline_owner(view, None, owner)
     }
 
     /// Mount a View as the root of the tree with PipelineOwner.
@@ -165,6 +169,10 @@ impl ElementTree {
     ///
     /// * `view` - The root View to mount
     /// * `pipeline_owner` - Optional PipelineOwner for render tree management
+    /// * `owner` - Split-borrow handle into the `BuildOwner`
+    ///   ([`ElementOwner`](crate::ElementOwner)) threaded into the
+    ///   element's `mount` call so `GlobalKey` registration / dirty
+    ///   scheduling can take effect during initial mount. Plan §U8.
     ///
     /// Returns the ElementId of the root element.
     #[allow(clippy::needless_pass_by_value)] // Arc is cloned into element, taking Option by value is idiomatic
@@ -172,14 +180,15 @@ impl ElementTree {
         &mut self,
         view: &dyn View,
         pipeline_owner: Option<Arc<RwLock<PipelineOwner>>>,
+        owner: &mut crate::ElementOwner<'_>,
     ) -> ElementId {
         let mut element = view.create_element();
 
         // Pass PipelineOwner to element BEFORE mounting
         // This is critical for RenderObjectElements to create their RenderObjects
-        if let Some(ref owner) = pipeline_owner {
+        if let Some(ref pipeline) = pipeline_owner {
             let owner_any: Arc<dyn std::any::Any + Send + Sync> =
-                Arc::clone(owner) as Arc<dyn std::any::Any + Send + Sync>;
+                Arc::clone(pipeline) as Arc<dyn std::any::Any + Send + Sync>;
             element.set_pipeline_owner_any(owner_any);
             tracing::debug!(
                 "ElementTree::mount_root_with_pipeline_owner: passed PipelineOwner to root element"
@@ -193,7 +202,7 @@ impl ElementTree {
         let id = ElementId::new(slab_index + 1);
 
         // Mount the element (now it has PipelineOwner set)
-        self.nodes[slab_index].element.mount(None, 0);
+        self.nodes[slab_index].element.mount(None, 0, owner);
 
         self.root = Some(id);
         id
@@ -202,7 +211,16 @@ impl ElementTree {
     /// Insert a new element as a child of the given parent.
     ///
     /// Returns the ElementId of the new element.
-    pub fn insert(&mut self, view: &dyn View, parent: ElementId, slot: usize) -> ElementId {
+    ///
+    /// The split-borrow `owner` handle is threaded into the new
+    /// element's `mount` call.
+    pub fn insert(
+        &mut self,
+        view: &dyn View,
+        parent: ElementId,
+        slot: usize,
+        owner: &mut crate::ElementOwner<'_>,
+    ) -> ElementId {
         let element = view.create_element();
 
         // Get parent depth for calculating child depth
@@ -215,7 +233,9 @@ impl ElementTree {
         let id = ElementId::new(slab_index + 1);
 
         // Mount the element
-        self.nodes[slab_index].element.mount(Some(parent), slot);
+        self.nodes[slab_index]
+            .element
+            .mount(Some(parent), slot, owner);
 
         id
     }
@@ -242,12 +262,19 @@ impl ElementTree {
     ///
     /// This unmounts the element and removes it from storage.
     /// Does NOT automatically remove children - caller must handle that.
-    pub fn remove(&mut self, id: ElementId) -> Option<ElementNode> {
+    /// Threads the split-borrow owner handle into the unmount so
+    /// `GlobalKey` deregistration and dependent-set cleanup can take
+    /// effect (plan §U8).
+    pub fn remove(
+        &mut self,
+        id: ElementId,
+        owner: &mut crate::ElementOwner<'_>,
+    ) -> Option<ElementNode> {
         let index = id.get() - 1;
 
         if self.nodes.contains(index) {
             // Unmount before removing
-            self.nodes[index].element.unmount();
+            self.nodes[index].element.unmount(owner);
 
             let node = self.nodes.remove(index);
 
@@ -264,10 +291,12 @@ impl ElementTree {
 
     /// Update an element with a new view.
     ///
-    /// The view must be compatible (same type) with the existing element.
-    pub fn update(&mut self, id: ElementId, view: &dyn View) {
+    /// The view must be compatible (same type) with the existing
+    /// element. Threads the split-borrow owner handle into the
+    /// update call.
+    pub fn update(&mut self, id: ElementId, view: &dyn View, owner: &mut crate::ElementOwner<'_>) {
         if let Some(node) = self.get_mut(id) {
-            node.element.update(view);
+            node.element.update(view, owner);
         }
     }
 
@@ -320,7 +349,7 @@ impl std::fmt::Debug for ElementTree {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BuildContext, StatelessElement, StatelessView, View};
+    use crate::{BuildContext, BuildOwner, StatelessElement, StatelessView, View};
 
     #[derive(Clone)]
     struct TestView {
@@ -352,11 +381,12 @@ mod tests {
     #[test]
     fn test_mount_root() {
         let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
         let view = TestView {
             name: "root".to_string(),
         };
 
-        let id = tree.mount_root(&view);
+        let id = tree.mount_root(&view, &mut owner.element_owner_mut());
 
         assert!(!tree.is_empty());
         assert_eq!(tree.len(), 1);
@@ -367,6 +397,7 @@ mod tests {
     #[test]
     fn test_insert_child() {
         let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
         let root_view = TestView {
             name: "root".to_string(),
         };
@@ -374,8 +405,8 @@ mod tests {
             name: "child".to_string(),
         };
 
-        let root_id = tree.mount_root(&root_view);
-        let child_id = tree.insert(&child_view, root_id, 0);
+        let root_id = tree.mount_root(&root_view, &mut owner.element_owner_mut());
+        let child_id = tree.insert(&child_view, root_id, 0, &mut owner.element_owner_mut());
 
         assert_eq!(tree.len(), 2);
         assert!(tree.contains(child_id));
@@ -389,14 +420,15 @@ mod tests {
     #[test]
     fn test_remove() {
         let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
         let view = TestView {
             name: "test".to_string(),
         };
 
-        let id = tree.mount_root(&view);
+        let id = tree.mount_root(&view, &mut owner.element_owner_mut());
         assert!(tree.contains(id));
 
-        let removed = tree.remove(id);
+        let removed = tree.remove(id, &mut owner.element_owner_mut());
         assert!(removed.is_some());
         assert!(!tree.contains(id));
         assert!(tree.root().is_none());

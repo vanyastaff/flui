@@ -411,7 +411,9 @@ mod tests {
         let view = TestView {
             name: "root".to_string(),
         };
-        let root_id = tree.write().mount_root(&view);
+        let root_id = tree
+            .write()
+            .mount_root(&view, &mut owner.write().element_owner_mut());
 
         // Create context for it
         let ctx = ElementBuildContext::for_element(root_id, tree.clone(), owner.clone());
@@ -425,12 +427,14 @@ mod tests {
 
     #[test]
     fn test_context_builder() {
-        let (builder, tree, _owner) = ElementBuildContextBuilder::new().with_new_tree_and_owner();
+        let (builder, tree, owner) = ElementBuildContextBuilder::new().with_new_tree_and_owner();
 
         let view = TestView {
             name: "test".to_string(),
         };
-        let root_id = tree.write().mount_root(&view);
+        let root_id = tree
+            .write()
+            .mount_root(&view, &mut owner.write().element_owner_mut());
 
         let ctx = builder.build_for(root_id);
         assert!(ctx.is_some());
@@ -444,7 +448,9 @@ mod tests {
         let view = TestView {
             name: "root".to_string(),
         };
-        let root_id = tree.write().mount_root(&view);
+        let root_id = tree
+            .write()
+            .mount_root(&view, &mut owner.write().element_owner_mut());
 
         let ctx = ElementBuildContext::for_element(root_id, tree.clone(), owner.clone()).unwrap();
 
@@ -471,9 +477,21 @@ mod tests {
             name: "grandchild".to_string(),
         };
 
-        let root_id = tree.write().mount_root(&root_view);
-        let child_id = tree.write().insert(&child_view, root_id, 0);
-        let grandchild_id = tree.write().insert(&grandchild_view, child_id, 0);
+        let root_id = tree
+            .write()
+            .mount_root(&root_view, &mut owner.write().element_owner_mut());
+        let child_id = tree.write().insert(
+            &child_view,
+            root_id,
+            0,
+            &mut owner.write().element_owner_mut(),
+        );
+        let grandchild_id = tree.write().insert(
+            &grandchild_view,
+            child_id,
+            0,
+            &mut owner.write().element_owner_mut(),
+        );
 
         // Create context for grandchild
         let ctx =
@@ -503,8 +521,15 @@ mod tests {
             name: "child".to_string(),
         };
 
-        let root_id = tree.write().mount_root(&view);
-        let child_id = tree.write().insert(&child_view, root_id, 0);
+        let root_id = tree
+            .write()
+            .mount_root(&view, &mut owner.write().element_owner_mut());
+        let child_id = tree.write().insert(
+            &child_view,
+            root_id,
+            0,
+            &mut owner.write().element_owner_mut(),
+        );
 
         let ctx = ElementBuildContext::for_element(child_id, tree, owner).unwrap();
 

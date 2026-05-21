@@ -235,13 +235,14 @@ mod tests {
         assert_eq!(listenable.len(), 0);
 
         // Mount the element
-        element.mount(None, 0);
+        let mut owner = crate::BuildOwner::new();
+        element.mount(None, 0, &mut owner.element_owner_mut());
 
         // After mount, listener should be subscribed
         assert_eq!(listenable.len(), 1);
 
         // Unmount
-        element.unmount();
+        element.unmount(&mut owner.element_owner_mut());
 
         // After unmount, listener should be unsubscribed
         assert_eq!(listenable.len(), 0);
@@ -258,7 +259,8 @@ mod tests {
         let mut element = AnimatedElement::new(&view, AnimationBehavior::new(&view));
 
         // Mount the element
-        element.mount(None, 0);
+        let mut owner = crate::BuildOwner::new();
+        element.mount(None, 0, &mut owner.element_owner_mut());
 
         // Element should be dirty after mount
         assert!(element.core().is_dirty());
@@ -274,7 +276,7 @@ mod tests {
         assert!(element.core().is_dirty());
 
         // Unmount
-        element.unmount();
+        element.unmount(&mut owner.element_owner_mut());
     }
 
     #[test]

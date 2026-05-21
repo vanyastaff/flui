@@ -219,7 +219,11 @@ impl AppBinding {
     /// Rebuild the stored root element.
     ///
     /// This triggers `perform_build()` on the root element which will
-    /// recursively rebuild the entire widget tree.
+    /// recursively rebuild the entire widget tree. Acquires an
+    /// [`ElementOwner`](flui_view::ElementOwner) split-borrow handle
+    /// from `WidgetsBinding`'s `BuildOwner` for the duration of the
+    /// build so descendants can register `GlobalKey`s / schedule
+    /// rebuilds (plan §U8).
     pub fn rebuild_root(&self) {
         tracing::trace!("rebuild_root: acquiring lock");
         let mut root = self.root_element.lock();
@@ -227,7 +231,10 @@ impl AppBinding {
         if let Some(ref mut element) = *root {
             element.mark_needs_build();
             tracing::trace!("rebuild_root: calling perform_build");
-            element.perform_build();
+            let widgets = self.widgets();
+            widgets.with_build_owner_mut(|build_owner| {
+                element.perform_build(&mut build_owner.element_owner_mut());
+            });
             tracing::debug!("Root element rebuilt");
         } else {
             tracing::warn!("rebuild_root called but no root element stored");

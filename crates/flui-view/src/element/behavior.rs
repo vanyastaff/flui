@@ -36,7 +36,11 @@ where
     A: ElementArity,
 {
     /// Perform the build operation for this view type.
-    fn perform_build(&mut self, core: &mut ElementCore<V, A>);
+    ///
+    /// The split-borrow `owner` handle is threaded through so child
+    /// elements created during this build can register `GlobalKey`s,
+    /// schedule rebuilds, etc. (plan §U8).
+    fn perform_build(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>);
 
     /// Called after mount to perform behavior-specific setup.
     #[allow(unused_variables)]
@@ -115,7 +119,7 @@ where
         "StatelessElement"
     }
 
-    fn perform_build(&mut self, core: &mut ElementCore<V, A>) {
+    fn perform_build(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
         if !core.should_build() {
             tracing::trace!("StatelessBehavior::perform_build skipped");
             return;
@@ -125,7 +129,7 @@ where
 
         let ctx = ElementBuildContext::new_minimal(core.depth());
         let child_view = core.view().build(&ctx);
-        core.update_or_create_child(child_view);
+        core.update_or_create_child(child_view, owner);
         core.clear_dirty();
 
         tracing::debug!("StatelessBehavior::perform_build completed");
@@ -164,7 +168,7 @@ where
         "ProxyElement"
     }
 
-    fn perform_build(&mut self, core: &mut ElementCore<V, A>) {
+    fn perform_build(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
         if !core.should_build() {
             tracing::trace!("ProxyBehavior::perform_build skipped");
             return;
@@ -174,7 +178,7 @@ where
 
         let child_view = core.view().child();
         let child_view_boxed = dyn_clone::clone_box(child_view);
-        core.update_or_create_child(child_view_boxed);
+        core.update_or_create_child(child_view_boxed, owner);
         core.clear_dirty();
 
         tracing::debug!("ProxyBehavior::perform_build completed");
@@ -224,7 +228,7 @@ where
         "StatefulElement"
     }
 
-    fn perform_build(&mut self, core: &mut ElementCore<V, A>) {
+    fn perform_build(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
         let ctx = ElementBuildContext::new_minimal(core.depth());
 
         // Initialize state on first build
@@ -241,7 +245,7 @@ where
         tracing::debug!("StatefulBehavior::perform_build starting");
 
         let child_view = self.state.build(core.view(), &ctx);
-        core.update_or_create_child(child_view);
+        core.update_or_create_child(child_view, owner);
         core.clear_dirty();
 
         tracing::debug!("StatefulBehavior::perform_build completed");
@@ -342,7 +346,7 @@ where
         "RenderObjectElement"
     }
 
-    fn perform_build(&mut self, core: &mut ElementCore<V, A>) {
+    fn perform_build(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
         if !core.should_build() {
             tracing::trace!(
                 "RenderBehavior::perform_build skipped render_id={:?}",
@@ -364,7 +368,7 @@ where
                 child_views.push(dyn_clone::clone_box(child_view));
             });
 
-            core.update_or_create_children(child_views);
+            core.update_or_create_children(child_views, owner);
         }
 
         core.clear_dirty();
@@ -515,7 +519,7 @@ where
         "InheritedElement"
     }
 
-    fn perform_build(&mut self, core: &mut ElementCore<V, A>) {
+    fn perform_build(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
         if !core.should_build() {
             tracing::trace!("InheritedBehavior::perform_build skipped");
             return;
@@ -526,7 +530,7 @@ where
         // Like ProxyView, InheritedView just returns the child directly
         let child_view = core.view().child();
         let child_view_boxed = dyn_clone::clone_box(child_view);
-        core.update_or_create_child(child_view_boxed);
+        core.update_or_create_child(child_view_boxed, owner);
         core.clear_dirty();
 
         tracing::debug!("InheritedBehavior::perform_build completed");
@@ -643,9 +647,9 @@ where
         "AnimatedElement"
     }
 
-    fn perform_build(&mut self, core: &mut ElementCore<V, A>) {
+    fn perform_build(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
         // Delegate to StatefulBehavior
-        self.stateful.perform_build(core);
+        self.stateful.perform_build(core, owner);
     }
 
     fn on_mount(&mut self, core: &mut ElementCore<V, A>) {

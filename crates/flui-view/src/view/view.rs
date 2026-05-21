@@ -150,13 +150,29 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     ///
     /// Called when the Element is first inserted. Sets up parent relationship
     /// and initializes state.
-    fn mount(&mut self, parent: Option<flui_foundation::ElementId>, slot: usize);
+    ///
+    /// # Arguments
+    ///
+    /// * `parent` - Parent `ElementId`, or `None` for the root element.
+    /// * `slot` - Slot/depth position assigned by the parent.
+    /// * `owner` - Split-borrow handle into [`BuildOwner`](crate::BuildOwner)
+    ///   (see [`ElementOwner`](crate::ElementOwner)). Implementations
+    ///   may use it to register `GlobalKey`s, schedule rebuilds, or
+    ///   thread it into recursive child `mount` calls. Plan §U8.
+    fn mount(
+        &mut self,
+        parent: Option<flui_foundation::ElementId>,
+        slot: usize,
+        owner: &mut crate::ElementOwner<'_>,
+    );
 
     /// Unmount this Element (permanently removed).
     ///
     /// Called when the Element is removed from the tree permanently.
-    /// Resources should be released.
-    fn unmount(&mut self);
+    /// Resources should be released. The split-borrow `owner` handle
+    /// is provided so implementations may unregister `GlobalKey`s and
+    /// recurse into child unmounts. Plan §U8.
+    fn unmount(&mut self, owner: &mut crate::ElementOwner<'_>);
 
     /// Activate this Element (re-inserted into tree).
     ///
@@ -175,9 +191,14 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
 
     /// Update this Element with a new View of the same type.
     ///
-    /// Called when the parent rebuilds and provides a new View configuration.
-    /// The Element should update its internal state to match the new View.
-    fn update(&mut self, new_view: &dyn View);
+    /// Called when the parent rebuilds and provides a new View
+    /// configuration. The Element should update its internal state to
+    /// match the new View.
+    ///
+    /// The split-borrow `owner` handle is provided so implementations
+    /// may schedule rebuilds for descendants whose `InheritedView`
+    /// dependencies changed (R16, U9 territory). Plan §U8.
+    fn update(&mut self, new_view: &dyn View, owner: &mut crate::ElementOwner<'_>);
 
     /// Mark this Element as needing a rebuild.
     ///
@@ -188,16 +209,20 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     ///
     /// Called by the framework when this Element is dirty.
     /// Calls `perform_build()` if needed.
-    fn rebuild(&mut self, force: bool) {
+    fn rebuild(&mut self, force: bool, owner: &mut crate::ElementOwner<'_>) {
         if force || self.lifecycle() == crate::element::Lifecycle::Active {
-            self.perform_build();
+            self.perform_build(owner);
         }
     }
 
     /// Perform the actual build phase.
     ///
-    /// Subclasses override this to rebuild their children.
-    fn perform_build(&mut self);
+    /// Subclasses override this to rebuild their children. The
+    /// split-borrow `owner` handle is threaded through so newly-mounted
+    /// child elements created during this build can register
+    /// `GlobalKey`s or schedule downstream rebuilds without re-borrowing
+    /// the [`BuildOwner`](crate::BuildOwner). Plan §U8.
+    fn perform_build(&mut self, owner: &mut crate::ElementOwner<'_>);
 
     // ========================================================================
     // Dependency Notifications

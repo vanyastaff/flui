@@ -166,7 +166,12 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
         self.depth
     }
 
-    fn mount(&mut self, parent: Option<ElementId>, _slot: usize) {
+    fn mount(
+        &mut self,
+        parent: Option<ElementId>,
+        _slot: usize,
+        element_owner: &mut crate::ElementOwner<'_>,
+    ) {
         // Root elements must have no parent
         debug_assert!(parent.is_none(), "RootRenderElement cannot have a parent");
 
@@ -202,10 +207,10 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
         }
 
         // Build child
-        self.perform_build();
+        self.perform_build(element_owner);
     }
 
-    fn unmount(&mut self) {
+    fn unmount(&mut self, element_owner: &mut crate::ElementOwner<'_>) {
         // Detach from PipelineOwner's RenderTree
         if let (Some(pipeline_owner), Some(render_id)) = (&self.pipeline_owner, self.render_id) {
             let mut owner = pipeline_owner.write();
@@ -216,7 +221,7 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
 
         // Unmount child
         if let Some(child) = &mut self.child_element {
-            child.unmount();
+            child.unmount(element_owner);
         }
         self.child_element = None;
 
@@ -237,7 +242,7 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
         }
     }
 
-    fn update(&mut self, new_view: &dyn View) {
+    fn update(&mut self, new_view: &dyn View, _element_owner: &mut crate::ElementOwner<'_>) {
         if let Some(v) = new_view.as_any().downcast_ref::<RootRenderView<V>>() {
             self.view = v.clone();
             // Update configuration if size changed
@@ -270,7 +275,7 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
         // Schedule rebuild
     }
 
-    fn perform_build(&mut self) {
+    fn perform_build(&mut self, element_owner: &mut crate::ElementOwner<'_>) {
         // Create child element from child View
         if self.child_element.is_none() {
             // First build - create child element
@@ -292,10 +297,13 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
                 );
             }
 
-            child_element.mount(None, 1); // Child's depth is 1 (root is 0)
+            // Child's depth is 1 (root is 0). Thread the split-borrow
+            // owner handle into the recursive mount + perform_build
+            // calls per plan §U8.
+            child_element.mount(None, 1, &mut *element_owner);
 
             // Child element needs to build its children too
-            child_element.perform_build();
+            child_element.perform_build(&mut *element_owner);
 
             // Attach child's RenderObject to RenderTree as child of RenderView
             // Get child's RenderId and establish parent-child relationship
@@ -331,8 +339,8 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
             // Rebuild - update child element
             if let Some(child) = &mut self.child_element {
                 let child_view: &dyn View = &self.view.child;
-                child.update(child_view);
-                child.perform_build();
+                child.update(child_view, &mut *element_owner);
+                child.perform_build(&mut *element_owner);
             }
         }
     }
@@ -525,13 +533,19 @@ mod tests {
             1
         }
 
-        fn mount(&mut self, _parent: Option<ElementId>, _slot: usize) {}
-        fn unmount(&mut self) {}
+        fn mount(
+            &mut self,
+            _parent: Option<ElementId>,
+            _slot: usize,
+            _owner: &mut crate::ElementOwner<'_>,
+        ) {
+        }
+        fn unmount(&mut self, _owner: &mut crate::ElementOwner<'_>) {}
         fn activate(&mut self) {}
         fn deactivate(&mut self) {}
-        fn update(&mut self, _new_view: &dyn View) {}
+        fn update(&mut self, _new_view: &dyn View, _owner: &mut crate::ElementOwner<'_>) {}
         fn mark_needs_build(&mut self) {}
-        fn perform_build(&mut self) {}
+        fn perform_build(&mut self, _owner: &mut crate::ElementOwner<'_>) {}
         fn visit_children(&self, _visitor: &mut dyn FnMut(ElementId)) {}
     }
 
@@ -553,7 +567,8 @@ mod tests {
         element.set_pipeline_owner(Arc::clone(&pipeline_owner));
 
         // Mount
-        element.mount(None, 0);
+        let mut build_owner = crate::BuildOwner::new();
+        element.mount(None, 0, &mut build_owner.element_owner_mut());
 
         assert_eq!(element.lifecycle(), Lifecycle::Active);
         // render_id is set after mount with pipeline owner

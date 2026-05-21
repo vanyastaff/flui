@@ -225,7 +225,10 @@ fn test_boxed_element_inner_mut() {
     let mut boxed = BoxedElement::new(view);
 
     // Mount the element
-    boxed.inner_mut().mount(None, 0);
+    let mut owner = flui_view::BuildOwner::new();
+    boxed
+        .inner_mut()
+        .mount(None, 0, &mut owner.element_owner_mut());
     assert_eq!(boxed.inner().lifecycle(), Lifecycle::Active);
 }
 

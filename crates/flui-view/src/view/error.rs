@@ -238,7 +238,7 @@ impl ElementBase for ErrorElement {
         self.depth
     }
 
-    fn update(&mut self, new_view: &dyn View) {
+    fn update(&mut self, new_view: &dyn View, _owner: &mut crate::ElementOwner<'_>) {
         if let Some(v) = new_view.as_any().downcast_ref::<ErrorView>() {
             self.view = v.clone();
         }
@@ -248,11 +248,16 @@ impl ElementBase for ErrorElement {
         // ErrorElement is a leaf - nothing to rebuild
     }
 
-    fn perform_build(&mut self) {
+    fn perform_build(&mut self, _owner: &mut crate::ElementOwner<'_>) {
         // ErrorElement is a leaf - nothing to build
     }
 
-    fn mount(&mut self, _parent: Option<ElementId>, _slot: usize) {
+    fn mount(
+        &mut self,
+        _parent: Option<ElementId>,
+        _slot: usize,
+        _owner: &mut crate::ElementOwner<'_>,
+    ) {
         self.lifecycle = Lifecycle::Active;
     }
 
@@ -264,7 +269,7 @@ impl ElementBase for ErrorElement {
         self.lifecycle = Lifecycle::Active;
     }
 
-    fn unmount(&mut self) {
+    fn unmount(&mut self, _owner: &mut crate::ElementOwner<'_>) {
         self.lifecycle = Lifecycle::Defunct;
     }
 
@@ -312,7 +317,8 @@ mod tests {
         let view = ErrorView::new("Test error");
         let mut element = ErrorElement::new(&view);
 
-        element.mount(None, 0);
+        let mut owner = crate::BuildOwner::new();
+        element.mount(None, 0, &mut owner.element_owner_mut());
         assert_eq!(element.lifecycle(), Lifecycle::Active);
     }
 

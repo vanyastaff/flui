@@ -180,7 +180,8 @@ mod tests {
         let mut element = RenderElement::new(&view, RenderBehavior::new());
 
         // Mount without PipelineOwner - should still set lifecycle but no render_id
-        element.mount(None, 0);
+        let mut build_owner = crate::BuildOwner::new();
+        element.mount(None, 0, &mut build_owner.element_owner_mut());
 
         assert_eq!(element.lifecycle(), Lifecycle::Active);
         assert!(element.render_id().is_none()); // No PipelineOwner, so no render_id
@@ -198,7 +199,8 @@ mod tests {
         let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
         element.set_pipeline_owner(Arc::clone(&pipeline_owner));
 
-        element.mount(None, 0);
+        let mut build_owner = crate::BuildOwner::new();
+        element.mount(None, 0, &mut build_owner.element_owner_mut());
 
         assert_eq!(element.lifecycle(), Lifecycle::Active);
         assert!(element.render_id().is_some());
@@ -219,12 +221,13 @@ mod tests {
 
         let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
         element.set_pipeline_owner(Arc::clone(&pipeline_owner));
-        element.mount(None, 0);
+        let mut build_owner = crate::BuildOwner::new();
+        element.mount(None, 0, &mut build_owner.element_owner_mut());
 
         let render_id = element.render_id().unwrap();
         assert!(pipeline_owner.read().render_tree().contains(render_id));
 
-        element.unmount();
+        element.unmount(&mut build_owner.element_owner_mut());
 
         assert_eq!(element.lifecycle(), Lifecycle::Defunct);
         assert!(element.render_id().is_none());
@@ -244,7 +247,8 @@ mod tests {
 
         let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
         element.set_pipeline_owner(Arc::clone(&pipeline_owner));
-        element.mount(None, 0);
+        let mut build_owner = crate::BuildOwner::new();
+        element.mount(None, 0, &mut build_owner.element_owner_mut());
 
         // Test RenderObjectElement methods - returns RenderId
         assert!(RenderObjectElement::render_object_any(&element).is_some());

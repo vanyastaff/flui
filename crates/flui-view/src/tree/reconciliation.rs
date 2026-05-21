@@ -53,6 +53,7 @@ pub fn reconcile_children(
     parent: ElementId,
     old_children: &[ElementId],
     new_views: &[&dyn View],
+    owner: &mut crate::ElementOwner<'_>,
 ) -> Vec<ElementId> {
     // Fast path: empty lists
     if old_children.is_empty() && new_views.is_empty() {
@@ -64,14 +65,14 @@ pub fn reconcile_children(
         return new_views
             .iter()
             .enumerate()
-            .map(|(slot, view)| tree.insert(*view, parent, slot))
+            .map(|(slot, view)| tree.insert(*view, parent, slot, &mut *owner))
             .collect();
     }
 
     // Fast path: all removed
     if new_views.is_empty() {
         for &child_id in old_children {
-            tree.remove(child_id);
+            tree.remove(child_id, &mut *owner);
         }
         return Vec::new();
     }
@@ -103,7 +104,7 @@ pub fn reconcile_children(
 
         if can_update_element(tree, old_id, new_view) {
             // Same type, update in place
-            tree.update(old_id, new_view);
+            tree.update(old_id, new_view, &mut *owner);
             result.push(old_id);
             used_old[old_index] = true;
             old_index += 1;
@@ -159,7 +160,7 @@ pub fn reconcile_children(
             && can_update_element(tree, old_id, new_view)
         {
             // Found match, update and reuse
-            tree.update(old_id, new_view);
+            tree.update(old_id, new_view, &mut *owner);
             result.push(old_id);
             old_keyed.remove(&key_hash);
 
@@ -171,20 +172,20 @@ pub fn reconcile_children(
         }
 
         // No match found, create new element
-        let new_id = tree.insert(new_view, parent, slot);
+        let new_id = tree.insert(new_view, parent, slot, &mut *owner);
         result.push(new_id);
     }
 
     // Add end matches (in reverse order since we collected them backwards)
     for (old_id, slot) in end_matches.into_iter().rev() {
-        tree.update(old_id, new_views[slot]);
+        tree.update(old_id, new_views[slot], &mut *owner);
         result.push(old_id);
     }
 
     // Phase 5: Remove unused old elements
     for (i, &was_used) in used_old.iter().enumerate() {
         if !was_used {
-            tree.remove(old_children[i]);
+            tree.remove(old_children[i], &mut *owner);
         }
     }
 
@@ -211,7 +212,7 @@ fn hash_type_id(type_id: &std::any::TypeId) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BuildContext, StatelessElement, StatelessView, View};
+    use crate::{BuildContext, BuildOwner, StatelessElement, StatelessView, View};
 
     #[derive(Clone)]
     struct TestView {
@@ -235,40 +236,56 @@ mod tests {
     #[test]
     fn test_reconcile_empty_to_empty() {
         let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
         let root = TestView { id: 0 };
-        let parent = tree.mount_root(&root);
+        let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
 
-        let result = reconcile_children(&mut tree, parent, &[], &[]);
+        let result =
+            reconcile_children(&mut tree, parent, &[], &[], &mut owner.element_owner_mut());
         assert!(result.is_empty());
     }
 
     #[test]
     fn test_reconcile_empty_to_some() {
         let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
         let root = TestView { id: 0 };
-        let parent = tree.mount_root(&root);
+        let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
 
         let v1 = TestView { id: 1 };
         let v2 = TestView { id: 2 };
         let new_views: Vec<&dyn View> = vec![&v1, &v2];
 
-        let result = reconcile_children(&mut tree, parent, &[], &new_views);
+        let result = reconcile_children(
+            &mut tree,
+            parent,
+            &[],
+            &new_views,
+            &mut owner.element_owner_mut(),
+        );
         assert_eq!(result.len(), 2);
     }
 
     #[test]
     fn test_reconcile_some_to_empty() {
         let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
         let root = TestView { id: 0 };
-        let parent = tree.mount_root(&root);
+        let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
 
         let v1 = TestView { id: 1 };
         let v2 = TestView { id: 2 };
 
-        let child1 = tree.insert(&v1, parent, 0);
-        let child2 = tree.insert(&v2, parent, 1);
+        let child1 = tree.insert(&v1, parent, 0, &mut owner.element_owner_mut());
+        let child2 = tree.insert(&v2, parent, 1, &mut owner.element_owner_mut());
 
-        let result = reconcile_children(&mut tree, parent, &[child1, child2], &[]);
+        let result = reconcile_children(
+            &mut tree,
+            parent,
+            &[child1, child2],
+            &[],
+            &mut owner.element_owner_mut(),
+        );
         assert!(result.is_empty());
         assert!(!tree.contains(child1));
         assert!(!tree.contains(child2));
@@ -277,21 +294,28 @@ mod tests {
     #[test]
     fn test_reconcile_same_length() {
         let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
         let root = TestView { id: 0 };
-        let parent = tree.mount_root(&root);
+        let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
 
         let v1 = TestView { id: 1 };
         let v2 = TestView { id: 2 };
 
-        let child1 = tree.insert(&v1, parent, 0);
-        let child2 = tree.insert(&v2, parent, 1);
+        let child1 = tree.insert(&v1, parent, 0, &mut owner.element_owner_mut());
+        let child2 = tree.insert(&v2, parent, 1, &mut owner.element_owner_mut());
 
         // Update with same types
         let v1_new = TestView { id: 10 };
         let v2_new = TestView { id: 20 };
         let new_views: Vec<&dyn View> = vec![&v1_new, &v2_new];
 
-        let result = reconcile_children(&mut tree, parent, &[child1, child2], &new_views);
+        let result = reconcile_children(
+            &mut tree,
+            parent,
+            &[child1, child2],
+            &new_views,
+            &mut owner.element_owner_mut(),
+        );
 
         // Should reuse existing elements
         assert_eq!(result.len(), 2);

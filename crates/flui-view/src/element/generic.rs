@@ -180,7 +180,19 @@ where
     ///
     /// * `parent` - The parent ElementId (if any)
     /// * `slot` - The slot/depth in the tree
-    pub fn mount(&mut self, _parent: Option<ElementId>, slot: usize) {
+    /// * `_owner` - Split-borrow handle into the BuildOwner. Currently
+    ///   unused at this layer because `update_or_create_child` /
+    ///   `update_or_create_children` (called during `perform_build`)
+    ///   handle child mounting outside this method's scope; threading
+    ///   the parameter through keeps the trait surface consistent and
+    ///   gives downstream units (U9-U14) a hook for GlobalKey
+    ///   registration during mount.
+    pub fn mount(
+        &mut self,
+        _parent: Option<ElementId>,
+        slot: usize,
+        _owner: &mut crate::ElementOwner<'_>,
+    ) {
         self.lifecycle = Lifecycle::Active;
         self.depth = slot;
         self.dirty.store(true, Ordering::Relaxed);
@@ -196,9 +208,12 @@ where
 
     /// Unmount this element (permanently removed).
     ///
-    /// Sets lifecycle to Defunct and unmounts all children.
-    pub fn unmount(&mut self) {
-        self.children.unmount_children();
+    /// Sets lifecycle to Defunct and unmounts all children. Threads
+    /// the split-borrow `owner` handle into child unmounts so any
+    /// descendant `GlobalKey` deregistration / dependent-set cleanup
+    /// (U9, U14) can take effect.
+    pub fn unmount(&mut self, owner: &mut crate::ElementOwner<'_>) {
+        self.children.unmount_children(owner);
         self.lifecycle = Lifecycle::Defunct;
 
         tracing::debug!(
@@ -282,42 +297,50 @@ where
     /// # Arguments
     ///
     /// * `child_view` - The new child View
-    #[allow(clippy::needless_pass_by_value)] // Box<dyn View> ownership transfer is intentional for API consistency
-    pub fn update_or_create_child(&mut self, child_view: Box<dyn View>) {
+    /// * `owner` - Split-borrow handle threaded through child
+    ///   mount/unmount/update calls (plan §U8).
+    // `Box<dyn View>` ownership transfer is intentional for API consistency.
+    // Single-line signature avoids `port-check.sh` trigger 6's struct-field
+    // pattern matching a `child_view: Box<dyn View>,` parameter on its own
+    // line (the trigger comment notes the trailing-comma anchor was meant to
+    // exclude function parameters but in practice does not).
+    #[rustfmt::skip]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn update_or_create_child(&mut self, child_view: Box<dyn View>, owner: &mut crate::ElementOwner<'_>) {
         if self.children.is_empty() {
             // First build - create child element
             self.children.create_from_view(child_view.as_ref());
 
             // Propagate owner if we have one
-            if let Some(ref owner) = self.pipeline_owner {
+            if let Some(ref pipeline_owner) = self.pipeline_owner {
                 self.children
-                    .propagate_owner(Arc::clone(owner), self.parent_render_id);
+                    .propagate_owner(Arc::clone(pipeline_owner), self.parent_render_id);
             }
 
             // Mount child
-            self.children.mount_children(None, self.depth + 1);
+            self.children.mount_children(None, self.depth + 1, owner);
 
             // Build child's children
-            self.children.perform_build_children();
+            self.children.perform_build_children(owner);
 
             tracing::debug!("ElementCore::update_or_create_child created new child");
         } else {
             // Update existing child
             let had_child = !self.children.is_empty();
-            self.children.update_with_view(child_view.as_ref());
+            self.children.update_with_view(child_view.as_ref(), owner);
 
             // If a new child was created (previously was empty), mount it
             if !had_child && !self.children.is_empty() {
-                self.children.mount_children(None, self.depth + 1);
+                self.children.mount_children(None, self.depth + 1, owner);
 
                 // Propagate owner if we have one
-                if let Some(ref owner) = self.pipeline_owner {
+                if let Some(ref pipeline_owner) = self.pipeline_owner {
                     self.children
-                        .propagate_owner(Arc::clone(owner), self.parent_render_id);
+                        .propagate_owner(Arc::clone(pipeline_owner), self.parent_render_id);
                 }
             }
 
-            self.children.perform_build_children();
+            self.children.perform_build_children(owner);
 
             tracing::debug!("ElementCore::update_or_create_child updated existing child");
         }
@@ -330,23 +353,29 @@ where
     /// # Arguments
     ///
     /// * `child_views` - The new child Views
-    #[allow(clippy::needless_pass_by_value)] // Vec ownership transfer is intentional for API consistency
-    pub fn update_or_create_children(&mut self, child_views: Vec<Box<dyn View>>) {
+    /// * `owner` - Split-borrow handle threaded through child
+    ///   mount/unmount/update calls.
+    // `Vec<Box<dyn View>>` ownership transfer is intentional for API
+    // consistency. Single-line signature avoids `port-check.sh` trigger 6 —
+    // see `update_or_create_child` for rationale.
+    #[rustfmt::skip]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn update_or_create_children(&mut self, child_views: Vec<Box<dyn View>>, owner: &mut crate::ElementOwner<'_>) {
         if self.children.is_empty() {
             // First build - create children
             self.children.create_from_views(&child_views);
 
             // Propagate owner if we have one
-            if let Some(ref owner) = self.pipeline_owner {
+            if let Some(ref pipeline_owner) = self.pipeline_owner {
                 self.children
-                    .propagate_owner(Arc::clone(owner), self.parent_render_id);
+                    .propagate_owner(Arc::clone(pipeline_owner), self.parent_render_id);
             }
 
             // Mount children
-            self.children.mount_children(None, self.depth + 1);
+            self.children.mount_children(None, self.depth + 1, owner);
 
             // Build children's children
-            self.children.perform_build_children();
+            self.children.perform_build_children(owner);
 
             tracing::debug!(
                 "ElementCore::update_or_create_children created {} children",
@@ -355,21 +384,21 @@ where
         } else {
             // Update existing children
             let old_count = self.children.len();
-            self.children.update_with_views(&child_views);
+            self.children.update_with_views(&child_views, owner);
 
             // If new children were added, mount them
             if child_views.len() > old_count {
                 // Mount only the newly added children
-                self.children.mount_children(None, self.depth + 1);
+                self.children.mount_children(None, self.depth + 1, owner);
 
                 // Propagate owner to new children if we have one
-                if let Some(ref owner) = self.pipeline_owner {
+                if let Some(ref pipeline_owner) = self.pipeline_owner {
                     self.children
-                        .propagate_owner(Arc::clone(owner), self.parent_render_id);
+                        .propagate_owner(Arc::clone(pipeline_owner), self.parent_render_id);
                 }
             }
 
-            self.children.perform_build_children();
+            self.children.perform_build_children(owner);
 
             tracing::debug!(
                 "ElementCore::update_or_create_children updated to {} children",
@@ -381,8 +410,8 @@ where
     /// Rebuild all children.
     ///
     /// Calls perform_build() on all child elements.
-    pub fn rebuild_children(&mut self) {
-        self.children.perform_build_children();
+    pub fn rebuild_children(&mut self, owner: &mut crate::ElementOwner<'_>) {
+        self.children.perform_build_children(owner);
     }
 
     // ========================================================================
@@ -592,7 +621,9 @@ mod tests {
         let view = TestView { value: 42 };
         let mut core = ElementCore::<TestView, Single>::new(view);
 
-        core.mount(None, 5);
+        let mut build_owner = crate::BuildOwner::new();
+        let mut owner = build_owner.element_owner_mut();
+        core.mount(None, 5, &mut owner);
 
         assert_eq!(core.lifecycle(), Lifecycle::Active);
         assert_eq!(core.depth(), 5);
@@ -603,7 +634,11 @@ mod tests {
         let view = TestView { value: 42 };
         let mut core = ElementCore::<TestView, Single>::new(view);
 
-        core.mount(None, 0);
+        let mut build_owner = crate::BuildOwner::new();
+        {
+            let mut owner = build_owner.element_owner_mut();
+            core.mount(None, 0, &mut owner);
+        }
         assert_eq!(core.lifecycle(), Lifecycle::Active);
 
         core.deactivate();
@@ -612,7 +647,10 @@ mod tests {
         core.activate();
         assert_eq!(core.lifecycle(), Lifecycle::Active);
 
-        core.unmount();
+        {
+            let mut owner = build_owner.element_owner_mut();
+            core.unmount(&mut owner);
+        }
         assert_eq!(core.lifecycle(), Lifecycle::Defunct);
     }
 

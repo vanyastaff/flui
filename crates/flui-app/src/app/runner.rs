@@ -247,8 +247,16 @@ where
         root_render_element.set_pipeline_owner(binding.render_pipeline_arc());
     }
 
-    // Mount the element (this creates RenderViewObject and inserts into RenderTree)
-    root_element.mount(None, 0);
+    // Mount the element (this creates RenderViewObject and inserts into
+    // RenderTree). Acquire a transient ElementOwner split-borrow handle
+    // from the WidgetsBinding's BuildOwner; the recursive mount path threads
+    // the same handle through every descendant lifecycle call (plan §U8).
+    {
+        let widgets = binding.widgets();
+        widgets.with_build_owner_mut(|build_owner| {
+            root_element.mount(None, 0, &mut build_owner.element_owner_mut());
+        });
+    }
 
     // Verify mounting succeeded
     if let Some(root_render_element) = root_element.as_any().downcast_ref::<RootRenderElement<V>>()

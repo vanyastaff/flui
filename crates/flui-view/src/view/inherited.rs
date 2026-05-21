@@ -154,13 +154,13 @@ mod tests {
         fn lifecycle(&self) -> Lifecycle {
             Lifecycle::Active
         }
-        fn update(&mut self, _: &dyn View) {}
+        fn update(&mut self, _: &dyn View, _: &mut crate::ElementOwner<'_>) {}
         fn mark_needs_build(&mut self) {}
-        fn perform_build(&mut self) {}
-        fn mount(&mut self, _: Option<ElementId>, _: usize) {}
+        fn perform_build(&mut self, _: &mut crate::ElementOwner<'_>) {}
+        fn mount(&mut self, _: Option<ElementId>, _: usize, _: &mut crate::ElementOwner<'_>) {}
         fn deactivate(&mut self) {}
         fn activate(&mut self) {}
-        fn unmount(&mut self) {}
+        fn unmount(&mut self, _: &mut crate::ElementOwner<'_>) {}
         fn visit_children(&self, _: &mut dyn FnMut(ElementId)) {}
         fn depth(&self) -> usize {
             0

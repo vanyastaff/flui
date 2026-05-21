@@ -132,7 +132,7 @@ pub use flui_log::{Level, Logger, debug, error, info, trace, warn};
 // Keys
 pub use key::{GlobalKey, GlobalKeyId, ObjectKey, ValueKey};
 // Tree management
-pub use owner::BuildOwner;
+pub use owner::{BuildOwner, ElementOwner};
 pub use tree::{ElementNode, ElementTree, reconcile_children};
 pub use view::{
     BoxedElement, BoxedView, ElementBase, ElementExt, ErrorElement, ErrorView, ErrorViewBuilder,
@@ -169,7 +169,7 @@ pub mod prelude {
             Notification, NotificationNode, RootElement,
         },
         key::{GlobalKey, GlobalKeyId, ObjectKey, ValueKey},
-        owner::BuildOwner,
+        owner::{BuildOwner, ElementOwner},
         tree::{ElementNode, ElementTree, reconcile_children},
         view::{
             BoxedView, InheritedView, IntoView, ParentData, ParentDataView, ProxyView, RenderView,

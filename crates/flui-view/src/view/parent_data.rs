@@ -228,7 +228,7 @@ impl<V: ParentDataView + Clone> ElementBase for ParentDataElement<V> {
         self.lifecycle
     }
 
-    fn update(&mut self, new_view: &dyn View) {
+    fn update(&mut self, new_view: &dyn View, _owner: &mut crate::ElementOwner<'_>) {
         // Use View::as_any() for safe downcasting
         if let Some(v) = new_view.as_any().downcast_ref::<V>() {
             self.view = v.clone();
@@ -242,7 +242,7 @@ impl<V: ParentDataView + Clone> ElementBase for ParentDataElement<V> {
         self.dirty = true;
     }
 
-    fn perform_build(&mut self) {
+    fn perform_build(&mut self, _owner: &mut crate::ElementOwner<'_>) {
         if !self.dirty || !self.lifecycle.can_build() {
             return;
         }
@@ -252,7 +252,12 @@ impl<V: ParentDataView + Clone> ElementBase for ParentDataElement<V> {
         self.dirty = false;
     }
 
-    fn mount(&mut self, _parent: Option<ElementId>, _slot: usize) {
+    fn mount(
+        &mut self,
+        _parent: Option<ElementId>,
+        _slot: usize,
+        _owner: &mut crate::ElementOwner<'_>,
+    ) {
         self.lifecycle = Lifecycle::Active;
         self.dirty = true;
     }
@@ -271,10 +276,10 @@ impl<V: ParentDataView + Clone> ElementBase for ParentDataElement<V> {
         }
     }
 
-    fn unmount(&mut self) {
+    fn unmount(&mut self, owner: &mut crate::ElementOwner<'_>) {
         self.lifecycle = Lifecycle::Defunct;
         if let Some(child) = &mut self.child {
-            child.unmount();
+            child.unmount(owner);
         }
         self.child = None;
         self.parent_data = None;
@@ -322,13 +327,13 @@ mod tests {
         fn lifecycle(&self) -> Lifecycle {
             Lifecycle::Active
         }
-        fn update(&mut self, _: &dyn View) {}
+        fn update(&mut self, _: &dyn View, _: &mut crate::ElementOwner<'_>) {}
         fn mark_needs_build(&mut self) {}
-        fn perform_build(&mut self) {}
-        fn mount(&mut self, _: Option<ElementId>, _: usize) {}
+        fn perform_build(&mut self, _: &mut crate::ElementOwner<'_>) {}
+        fn mount(&mut self, _: Option<ElementId>, _: usize, _: &mut crate::ElementOwner<'_>) {}
         fn deactivate(&mut self) {}
         fn activate(&mut self) {}
-        fn unmount(&mut self) {}
+        fn unmount(&mut self, _: &mut crate::ElementOwner<'_>) {}
         fn visit_children(&self, _: &mut dyn FnMut(ElementId)) {}
         fn depth(&self) -> usize {
             0
@@ -386,8 +391,12 @@ mod tests {
         };
 
         let mut element = ParentDataElement::new(&view);
-        element.mount(None, 0);
-        element.perform_build();
+        let mut owner = crate::BuildOwner::new();
+        {
+            let mut handle = owner.element_owner_mut();
+            element.mount(None, 0, &mut handle);
+            element.perform_build(&mut handle);
+        }
 
         assert_eq!(element.lifecycle(), Lifecycle::Active);
         assert!(element.parent_data().is_some());
@@ -406,8 +415,12 @@ mod tests {
         };
 
         let mut element = ParentDataElement::new(&view);
-        element.mount(None, 0);
-        element.perform_build();
+        let mut owner = crate::BuildOwner::new();
+        {
+            let mut handle = owner.element_owner_mut();
+            element.mount(None, 0, &mut handle);
+            element.perform_build(&mut handle);
+        }
 
         let new_view = TestFlexible {
             flex: 3.0,
@@ -415,7 +428,7 @@ mod tests {
             child: DummyChild,
         };
 
-        element.update(&new_view);
+        element.update(&new_view, &mut owner.element_owner_mut());
 
         let data = element.parent_data().unwrap();
         assert!((data.flex - 3.0).abs() < f64::EPSILON);

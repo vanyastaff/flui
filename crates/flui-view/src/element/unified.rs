@@ -164,7 +164,7 @@ where
     // Lifecycle Methods with Behavior Hooks
     // ========================================================================
 
-    fn update(&mut self, new_view: &dyn View) {
+    fn update(&mut self, new_view: &dyn View, _owner: &mut crate::ElementOwner<'_>) {
         // Snapshot the previous view so `on_view_updated` can pass it to state
         // hooks (e.g. `ViewState::did_update_view`).
         let old_view = self.core.view().clone();
@@ -175,18 +175,23 @@ where
         }
     }
 
-    fn perform_build(&mut self) {
-        self.behavior.perform_build(&mut self.core);
+    fn perform_build(&mut self, owner: &mut crate::ElementOwner<'_>) {
+        self.behavior.perform_build(&mut self.core, owner);
     }
 
-    fn mount(&mut self, parent: Option<ElementId>, slot: usize) {
-        self.core.mount(parent, slot);
+    fn mount(
+        &mut self,
+        parent: Option<ElementId>,
+        slot: usize,
+        owner: &mut crate::ElementOwner<'_>,
+    ) {
+        self.core.mount(parent, slot, owner);
         self.behavior.on_mount(&mut self.core);
     }
 
-    fn unmount(&mut self) {
+    fn unmount(&mut self, owner: &mut crate::ElementOwner<'_>) {
         self.behavior.on_unmount(&mut self.core);
-        self.core.unmount();
+        self.core.unmount(owner);
     }
 
     fn activate(&mut self) {
