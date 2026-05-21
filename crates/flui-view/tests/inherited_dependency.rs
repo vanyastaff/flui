@@ -1,5 +1,6 @@
-//! Acceptance + edge-case tests for `BuildContext::depend_on_inherited`
-//! and `InheritedBehavior::on_view_updated` dependent-notification.
+//! Acceptance + edge-case tests for `BuildContext::depend_on_inherited`,
+//! `InheritedBehavior::on_view_updated` dependent-notification, and
+//! `BuildContext::get_inherited` (non-recording read).
 //!
 //! Plan U9 coverage:
 //! - AE1 (R4): `depend_on_inherited::<T, _>` returns `Some(R)` and records
@@ -11,8 +12,16 @@
 //! - Edge: an unmounted dependent's `ElementId` does not panic when
 //!   `schedule_build_for` is invoked.
 //!
-//! Flutter parity: `framework.dart:5081` (`dependOnInheritedWidgetOfExactType`)
-//! and `framework.dart:6414` (`InheritedElement.notifyClients`).
+//! Plan U10 coverage:
+//! - AE3 (R5): `get_inherited::<T, _>` returns `Some(R)` BUT does NOT
+//!   record the caller in the InheritedElement's dependent map. Used for
+//!   one-time reads (settings/theme captured at mount).
+//! - Edge: no ancestor of `T` -> returns `None`, no dependent-set write.
+//!
+//! Flutter parity: `framework.dart:5081` (`dependOnInheritedWidgetOfExactType`),
+//! `framework.dart:5092` (`getInheritedWidgetOfExactType`, the
+//! non-recording read), and `framework.dart:6414`
+//! (`InheritedElement.notifyClients`).
 
 use std::{any::TypeId, sync::Arc};
 
@@ -341,4 +350,103 @@ fn unmounted_dependent_no_op_on_schedule() {
     // Lifecycle of the now-removed child can no longer be inspected, but
     // the test passes if the update path did not panic.
     let _ = Lifecycle::Defunct; // suppress unused-import lint if any
+}
+
+// ============================================================================
+// AE3 (U10 / R5): get_inherited returns the value WITHOUT recording a
+// dependent — Flutter parity framework.dart:5092
+// `getInheritedWidgetOfExactType` (no `updateDependencies` call).
+// ============================================================================
+
+#[test]
+fn get_inherited_returns_value_without_recording_dependent() {
+    // Tree: ThemeProvider (root) -> DummyChild (would-be dependent, but
+    // calls `get` not `depend_on`, so it must NOT be recorded).
+    let (tree, owner) = create_tree_and_owner();
+
+    let provider = ThemeProvider {
+        theme: MyTheme { color: 0x00FF_0000 },
+        child: DummyChild,
+    };
+
+    let provider_id = tree
+        .write()
+        .mount_root(&provider, &mut owner.write().element_owner_mut());
+
+    // Note: the BuildOwner inherited-element registry is irrelevant for
+    // `get_inherited` because the lookup walks ancestors directly via
+    // `walk_ancestors_for_inherited` (the shared helper U9 extracted).
+    // We register it anyway to mirror AE1's scaffolding.
+    owner
+        .write()
+        .register_inherited(TypeId::of::<ThemeProvider>(), provider_id);
+
+    let child_id = tree.write().insert(
+        &DummyChild,
+        provider_id,
+        0,
+        &mut owner.write().element_owner_mut(),
+    );
+
+    let ctx = ElementBuildContext::for_element(child_id, tree.clone(), owner.clone()).unwrap();
+
+    // Sibling assertion to AE1: same tree shape, same closure, but `get`
+    // instead of `depend_on`. The value is returned identically; only
+    // the dependent-set side-effect differs.
+    let color = ctx.get::<ThemeProvider, u32>(|view| view.theme.color);
+    assert_eq!(
+        color,
+        Some(0x00FF_0000),
+        "get should return the captured value (same as depend_on)"
+    );
+
+    // Critical assertion: the dependent map is EMPTY. If `get_inherited`
+    // were ever to call `record_dependent`, this would fail with
+    // `dependents().len() == 1`. The parallel to AE1
+    // (`depend_on_returns_value_and_records_dependent`) where the same
+    // tree shape yields `dependents().contains_key(&child_id) == true`
+    // is what locks down the non-recording semantic.
+    let tree_guard = tree.read();
+    let provider_node = tree_guard.get(provider_id).expect("provider exists");
+    let elem = provider_node
+        .element()
+        .downcast_ref::<InheritedElement<ThemeProvider>>()
+        .expect("provider is InheritedElement<ThemeProvider>");
+    assert!(
+        elem.dependents().is_empty(),
+        "get_inherited must NOT record the caller in the dependent map \
+         (Flutter parity framework.dart:5092 — getInheritedWidgetOfExactType \
+         does not call updateDependencies). Found {} entries: {:?}",
+        elem.dependents().len(),
+        elem.dependents().keys().collect::<Vec<_>>(),
+    );
+}
+
+// ============================================================================
+// Edge (U10): get_inherited returns None when no ancestor InheritedView
+// of that type exists — no dependent-set write happens because nothing
+// was found to write into.
+// ============================================================================
+
+#[test]
+fn get_inherited_returns_none_when_no_ancestor() {
+    let (tree, owner) = create_tree_and_owner();
+
+    // Tree: DummyChild (root) — NO ThemeProvider above
+    let root_id = tree
+        .write()
+        .mount_root(&DummyChild, &mut owner.write().element_owner_mut());
+
+    let ctx = ElementBuildContext::for_element(root_id, tree.clone(), owner.clone()).unwrap();
+    let result = ctx.get::<ThemeProvider, u32>(|view| view.theme.color);
+    assert_eq!(result, None, "no ThemeProvider ancestor -> None");
+
+    // BuildOwner inherited-element registry remains empty: no provider
+    // was ever mounted, no dependent-set write could have occurred.
+    assert_eq!(
+        owner
+            .read()
+            .inherited_element(TypeId::of::<ThemeProvider>()),
+        None,
+    );
 }
