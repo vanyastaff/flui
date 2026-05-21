@@ -2247,7 +2247,7 @@ The 15% **divergence** (deliberate Rust-native shape) concentrates in:
 
 ## Status (2026-05-21)
 
-**Execution: landed across PRs #85, #86, #87, #88 — 22 units total closed.**
+**Execution: landed across PRs #85, #86, #87, #88, #89 — 22 units total closed (14 + 5 + 1 + 1 + 1 = 22, where PR #89's U32(c) is the audit annotation update itself).**
 
 ### Landed units (PR # → merge commit → units)
 
@@ -2286,17 +2286,18 @@ The 15% **divergence** (deliberate Rust-native shape) concentrates in:
 | `4b0cb866` | U32(b) | Tap on_tap_down post-arena-accept |
 | `326b3279` | U23 partial | FocusManager Tab navigation via active_scope |
 
-### Remaining deferred (continuation PRs)
+### Remaining deferred / scope-merged (continuation PRs)
 
-- **U9** PointerId widening to `ui_events::pointer::PointerId` — concrete blocker. ui_events `PointerId(NonZeroU64)` API surface mismatch с local `PointerId(i32)` requires per-callsite review across ~50 sites. Not mechanical sweep.
+- **U9** PointerId widening to `ui_events::pointer::PointerId` — concrete blocker. ui_events `PointerId(NonZeroU64)` API surface mismatch vs. local `PointerId(i32)` requires per-callsite review across ~50 sites. Not mechanical sweep.
 - **U12** scope-merged into U23 partial (`326b3279`) + U28 (`461ffb9d`).
 - **U15** ScheduledTicker absorption — needs deep wiring of Ticker auto-rescheduling via Scheduler persistent-frame-callback path + flui-animation source migration (U24).
-- **U16-U22** 7 concrete recognizer migrations to canonical `OneSequence`/`PrimaryPointer` trait hierarchy — trait infrastructure (U13) landed; concrete impl blocks deferred. Tap partial via U32(b) `4b0cb866` (post-arena-accept callback firing).
-- **U17-U21** missing Flutter recognizers (`TapAndDrag`/`Eager`/`MultiDrag`/`MultitouchDragStrategy`) — out of scope per brainstorm Scope Boundary (P3 backlog).
+- **U16-U22** 7 concrete recognizer migrations to canonical `OneSequence`/`PrimaryPointer` trait hierarchy (Tap / LongPress / Drag / Scale / ForcePress / DoubleTap / MultiTap per plan unit numbering) — trait infrastructure (U13) landed; concrete impl blocks deferred. Tap partial via U32(b) `4b0cb866` (post-arena-accept callback firing).
+- **Missing Flutter recognizers** (`TapAndDrag`/`Eager`/`MultiDrag`/`MultitouchDragStrategy`) — out of scope per brainstorm Scope Boundary (P3 backlog). Distinct from U16-U22 above (those are the 7 existing FLUI recognizers migrating to canonical traits).
 - **U23 remaining** — full FocusManager + FocusManagerInner singleton merger. Minimum-viable Tab nav landed via `326b3279`.
 - **U24** flui-animation source migration — depends U15.
 - **U29** testing/ feature-gate — needs PointerEventData relocation from events.rs to testing/.
-- **U32(c)** — this annotation block updated to reflect 22-unit closure.
+<!-- U32(c) closed via PR #89 + post-review tweaks; counted in the 22-unit total above. -->
+- **PR-review follow-up fixes** — reviewer findings on PRs #85-#89 (Codex P1/P2 + Copilot inline) addressed in a separate follow-up PR (`fix/pr-review-followups` branch): Ticker `start_default` for pre-loaded callback, TaskQueue atomic-len inside critical section, MouseTracker `new_regions` move (no clone), Tap arena-gated callback firing via `accepted: Option<bool>` flag, FocusManager singleton-sync via `request_focus` + warn-once.
 
 ### Verification at HEAD (commit `250076f3` on main)
 
