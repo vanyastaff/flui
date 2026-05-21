@@ -354,13 +354,140 @@ impl MouseTracker {
         }
     }
 
-    /// Updates all mouse devices
+    /// Re-runs hit testing for every tracked mouse device at its last known
+    /// position and emits enter / exit / hover / cursor-change callbacks for
+    /// any region transitions.
     ///
-    /// This can be used to refresh hover state when the UI tree changes.
-    pub fn update_all_devices(&self) {
-        // In a full implementation, this would re-run hit tests for all devices
-        // For now, this is a placeholder
-        tracing::trace!("update_all_devices called");
+    /// Call this after the UI tree changes (e.g. an animation moves a
+    /// hoverable region under a stationary cursor). The MouseTracker has no
+    /// independent way to know hit-test layout changed; the caller provides
+    /// the current hit-test function and the tracker walks every device's
+    /// last position through it.
+    ///
+    /// Flutter parity: [`mouse_tracker.dart::_updateAllDevices`](https://github.com/flutter/flutter/blob/master/packages/flutter/lib/src/gestures/mouse_tracker.dart)
+    /// which re-runs the hit-tester after `_devicesUpdate` ticks.
+    pub fn update_all_devices<F>(&self, hit_test_fn: F)
+    where
+        F: Fn(Offset<Pixels>) -> HitTestResult,
+    {
+        struct DeviceWork {
+            device_id: DeviceId,
+            position: Offset<Pixels>,
+            enter_callbacks: SmallVec<[MouseEnterCallback; 4]>,
+            exit_callbacks: SmallVec<[MouseExitCallback; 4]>,
+            hover_callbacks: SmallVec<[MouseHoverCallback; 4]>,
+            cursor_callback: Option<CursorChangeCallback>,
+            new_cursor: CursorIcon,
+        }
+
+        // First pass: snapshot device positions under the lock.
+        // (Borrow scope kept tight so we can re-lock per-device below.)
+        let device_positions: Vec<(DeviceId, Offset<Pixels>)> = {
+            let inner = self.inner.lock();
+            inner
+                .devices
+                .iter()
+                .map(|(id, state)| (*id, state.last_position))
+                .collect()
+        };
+
+        let mut pending: Vec<DeviceWork> = Vec::with_capacity(device_positions.len());
+
+        for (device_id, position) in device_positions {
+            // Hit-test outside the lock — user closure may itself touch
+            // mouse-tracker state indirectly.
+            let result = hit_test_fn(position);
+            let new_regions: HashSet<RegionId> = result.iter().map(|entry| entry.target).collect();
+            let new_cursor = result.resolve_cursor();
+
+            // Second pass: re-acquire lock per device, diff against active
+            // regions, update state, collect callbacks.
+            let work = {
+                let mut inner = self.inner.lock();
+                let Some(state) = inner.devices.get_mut(&device_id) else {
+                    continue; // device removed between snapshot and now
+                };
+
+                let entered: SmallVec<[RegionId; 4]> = new_regions
+                    .difference(&state.active_regions)
+                    .copied()
+                    .collect();
+                let exited: SmallVec<[RegionId; 4]> = state
+                    .active_regions
+                    .difference(&new_regions)
+                    .copied()
+                    .collect();
+                let hovering: SmallVec<[RegionId; 4]> = new_regions
+                    .intersection(&state.active_regions)
+                    .copied()
+                    .collect();
+
+                let cursor_changed = state.current_cursor != new_cursor;
+                state.active_regions = new_regions.clone();
+                state.current_cursor = new_cursor;
+
+                // Collect callbacks now that state mutation is done — inner
+                // borrow re-shapes to immutable below.
+                let enter_callbacks: SmallVec<[MouseEnterCallback; 4]> = entered
+                    .iter()
+                    .filter_map(|id| {
+                        inner
+                            .annotations
+                            .get(id)
+                            .and_then(|ann| ann.on_enter.clone())
+                    })
+                    .collect();
+                let exit_callbacks: SmallVec<[MouseExitCallback; 4]> = exited
+                    .iter()
+                    .filter_map(|id| {
+                        inner
+                            .annotations
+                            .get(id)
+                            .and_then(|ann| ann.on_exit.clone())
+                    })
+                    .collect();
+                let hover_callbacks: SmallVec<[MouseHoverCallback; 4]> = hovering
+                    .iter()
+                    .filter_map(|id| {
+                        inner
+                            .annotations
+                            .get(id)
+                            .and_then(|ann| ann.on_hover.clone())
+                    })
+                    .collect();
+                let cursor_callback = if cursor_changed {
+                    inner.cursor_change_callback.clone()
+                } else {
+                    None
+                };
+
+                DeviceWork {
+                    device_id,
+                    position,
+                    enter_callbacks,
+                    exit_callbacks,
+                    hover_callbacks,
+                    cursor_callback,
+                    new_cursor,
+                }
+            };
+            pending.push(work);
+        }
+
+        for work in pending {
+            for cb in work.enter_callbacks {
+                cb(work.device_id, work.position);
+            }
+            for cb in work.exit_callbacks {
+                cb(work.device_id, work.position);
+            }
+            for cb in work.hover_callbacks {
+                cb(work.device_id, work.position);
+            }
+            if let Some(cb) = work.cursor_callback {
+                cb(work.device_id, work.new_cursor);
+            }
+        }
     }
 
     /// Checks if any mouse is currently connected
