@@ -108,13 +108,17 @@ impl<P: Protocol> RenderState<P> {
     /// Checks if this render object is a relayout boundary.
     ///
     /// Relayout boundaries prevent layout propagation upward in the tree,
-    /// improving performance by limiting relayout scope.
+    /// improving performance by limiting relayout scope. Production callers
+    /// inspect this flag during pipeline-owner-driven traversal; the
+    /// `mark_needs_layout`-style chain hangs off `PipelineOwner`, not off
+    /// `RenderState`.
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// if !state.is_relayout_boundary() {
-    ///     parent_state.mark_needs_layout(); // Propagate upward
+    /// if state.is_relayout_boundary() {
+    ///     // boundary owns its layout pass
+    ///     pipeline_owner.add_node_needing_layout(element_id);
     /// }
     /// ```
     #[inline]

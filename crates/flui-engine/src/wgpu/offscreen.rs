@@ -642,11 +642,18 @@ impl OffscreenRenderer {
     ///
     /// A new `PooledTexture` containing the blurred result at the original resolution.
     pub fn render_blur(&mut self, input: &PooledTexture, sigma: f32) -> PooledTexture {
-        // `sigma` is enforced non-negative by callers (blur radii); the
-        // `.ceil() as u32` is clamped to 1..=5 immediately, so truncation /
-        // sign loss are bounded and intentional.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let iterations = ((sigma / 2.0).ceil() as u32).clamp(1, 5);
+        // `sigma` flows in from public APIs (BlurFilter constructors) that do
+        // not clamp non-negative, so explicitly clamp to `[0, ∞)` in float
+        // space before the `as u32` cast. The `.clamp(1, 5)` then bounds the
+        // result; truncation is the documented integer-iteration count and
+        // sign loss is impossible after the float-space clamp.
+        let sigma_nonneg = sigma.max(0.0);
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "sigma_nonneg is ≥0 by the line above; the cast is bounded by .clamp(1, 5)"
+        )]
+        let iterations = ((sigma_nonneg / 2.0).ceil() as u32).clamp(1, 5);
         let offset = sigma.max(1.0);
 
         tracing::debug!(

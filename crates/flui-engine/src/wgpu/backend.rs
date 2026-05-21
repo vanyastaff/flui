@@ -963,10 +963,13 @@ impl CommandRenderer for Backend {
     fn push_color_filter(&mut self, filter: &flui_types::painting::ColorMatrix) {
         // Check if the matrix is identity (no transformation needed)
         let identity = flui_types::painting::ColorMatrix::identity();
-        // Exact f32 array comparison is intentional: identity is built from
-        // bit-exact constants, so a transitive equality check correctly fast-
-        // paths the no-op case without ULP slop.
-        #[allow(clippy::float_cmp)]
+        // Exact f32 array comparison is intentional: ColorMatrix::identity()
+        // is built from bit-exact 0.0/1.0 literals, so a transitive equality
+        // check correctly fast-paths the no-op case without ULP slop.
+        #[expect(
+            clippy::float_cmp,
+            reason = "identity matrix is bit-exact (0.0/1.0 literals); exact comparison is correct"
+        )]
         if filter.values == identity.values {
             // Identity matrix: use a plain save so pop_color_filter stays balanced
             self.painter.save_layer(None, &Paint::fill(Color::WHITE));

@@ -1,7 +1,7 @@
 ---
 date: 2026-05-20
 type: refactor
-status: active
+status: completed
 origin: docs/brainstorms/flui-rendering-zombie-cleanup-requirements.md
 depth: lightweight
 target_crate: flui-rendering

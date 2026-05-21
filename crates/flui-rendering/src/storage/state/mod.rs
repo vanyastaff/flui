@@ -116,14 +116,17 @@ pub type SliverRenderState = RenderState<SliverProtocol>;
 // RENDER STATE
 // ============================================================================
 
-/// Protocol-specific render state storage with Flutter-compliant dirty
-/// tracking.
+/// Protocol-specific render state storage.
 ///
 /// This struct provides efficient storage for render object state with:
 /// - Lock-free dirty flags using atomic operations
-/// - Smart propagation that respects boundaries
+/// - Boundary accessors (relayout/repaint) for pipeline-owner registration
 /// - Write-once geometry and constraints using `OnceCell`
 /// - Atomic offset updates for paint positioning
+///
+/// Boundary-aware dirty propagation is **not** performed here. Production
+/// dirty marking goes through `PipelineOwner::add_node_needing_layout /
+/// add_node_needing_paint` invoked from `flui-view` and `flui-hot-reload`.
 ///
 /// # Memory Layout
 ///

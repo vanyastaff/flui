@@ -400,16 +400,21 @@ impl AppBinding {
         let frame_number = self.frames_rendered.load(Ordering::Relaxed) + 1;
 
         if let Some(layer_tree) = layer_tree {
-            // Create scene from layer tree. `Scene` is not currently
-            // Send+Sync (it owns `LayerTree` references that are tree-local
-            // until composition lands), so this Arc stays on the binding
-            // thread; making `Scene` Send+Sync is tracked under the engine
-            // composition redesign.
-            #[allow(clippy::arc_with_non_send_sync)]
+            // Create scene from layer tree. `Scene` is `Send` (auto-derived
+            // from `LayerTree` + `LinkRegistry` + `Vec<CompositionCallback>`
+            // whose payload is `FnOnce() + Send + 'static`) but is *not*
+            // `Sync` because the `FnOnce + Send` callback payload itself is
+            // not `Sync`. Making `Scene: Sync` requires either dropping the
+            // composition-callback list or relaxing it to `Fn + Send + Sync`
+            // — tracked under the engine composition redesign. Until then,
+            // the binding thread is the sole reader of this `Arc<Scene>`,
+            // so the lint is suppressed with an honest justification.
             let root = layer_tree.root();
-            #[allow(clippy::arc_with_non_send_sync)]
             let scene = Scene::new(size, layer_tree, root, frame_number);
-            #[allow(clippy::arc_with_non_send_sync)]
+            #[expect(
+                clippy::arc_with_non_send_sync,
+                reason = "Scene: Send but !Sync due to CompositionCallback (FnOnce + Send + 'static, no Sync). Sole reader is the binding thread; relaxing the callback bound is tracked under the engine composition redesign."
+            )]
             let arc = Arc::new(scene);
             Some(arc)
         } else {

@@ -25,10 +25,11 @@ use crate::protocol::Protocol;
 // PRESERVED_FOR: future viewport-invalidation hook (audit Step 4 item 13
 // contemplates pinning down the production dirty-marking path; this trait
 // shape may or may not be adopted at that time — kept as cost-cheap option,
-// not as an endorsed design). `dead_code` is allowed because no in-crate
-// implementer or caller exists today; the PRESERVED_FOR marker is the
-// justification.
-#[allow(dead_code)]
+// not as an endorsed design).
+#[expect(
+    dead_code,
+    reason = "preserved as a cost-cheap option for a possible viewport-invalidation hook (see PRESERVED_FOR marker above); promoting to `expect` so the lint self-expires the moment a first implementer or caller appears"
+)]
 pub(crate) trait RenderDirtyPropagation {
     /// Gets the parent element ID, if any.
     fn parent(&self, id: ElementId) -> Option<ElementId>;
