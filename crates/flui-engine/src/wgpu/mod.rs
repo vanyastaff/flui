@@ -93,6 +93,7 @@ mod renderer;
 #[allow(dead_code)]
 mod shader_compiler;
 mod shaders;
+pub mod superellipse_cache;
 mod tessellator;
 mod text;
 pub mod texture_cache;
