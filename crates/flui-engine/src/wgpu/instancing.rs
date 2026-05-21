@@ -55,6 +55,21 @@ pub struct RectInstance {
     /// All zeros means no clip active. When non-zero, the fragment shader
     /// uses an SDF test to discard pixels outside this rounded rectangle.
     pub clip_rrect: [f32; 8],
+
+    /// Clip-kind flag tagging which SDF the fragment shader should evaluate
+    /// against `clip_rrect`.
+    ///
+    /// - `[0, _, _, _]` — no clip (also detected by `clip_rrect == [0; 8]`).
+    /// - `[1, _, _, _]` — `sdRoundedBox` (standard rounded rectangle).
+    /// - `[2, _, _, _]` — `sdRoundedSuperellipse` (iOS-squircle). For this
+    ///   kind, `clip_rrect[4..8]` carries the single-radius-per-corner
+    ///   `[r_tl, r_tr, r_br, r_bl]` interpretation (averaged from the
+    ///   superellipse's separate-axis rx/ry per corner).
+    ///
+    /// Stored as `[u32; 4]` for 16-byte alignment with surrounding vec4
+    /// instance attributes. Only the `.x` lane carries the kind; the other
+    /// three lanes are padding.
+    pub clip_kind: [u32; 4],
 }
 
 impl RectInstance {
@@ -67,6 +82,7 @@ impl RectInstance {
             corner_radii: [0.0; 4],
             transform: [1.0, 1.0, 0.0, 0.0], // Identity transform
             clip_rrect: [0.0; 8],
+            clip_kind: [0; 4],
         }
     }
 
@@ -79,6 +95,7 @@ impl RectInstance {
             corner_radii: [radius; 4],
             transform: [1.0, 1.0, 0.0, 0.0],
             clip_rrect: [0.0; 8],
+            clip_kind: [0; 4],
         }
     }
 
@@ -98,17 +115,63 @@ impl RectInstance {
             corner_radii: [top_left, top_right, bottom_right, bottom_left],
             transform: [1.0, 1.0, 0.0, 0.0],
             clip_rrect: [0.0; 8],
+            clip_kind: [0; 4],
         }
     }
 
-    /// Set the SDF clip rounded rectangle on this instance
+    /// Set the SDF clip rounded rectangle on this instance.
     ///
     /// The clip is specified as `[x, y, width, height, radius_tl, radius_tr, radius_br, radius_bl]`.
     /// All zeros means no clip. When non-zero, the fragment shader discards
     /// pixels that fall outside the rounded rectangle using an SDF test.
+    /// Sets `clip_kind = 1` (rrect) when the clip is non-trivial; leaves
+    /// `clip_kind = 0` when all-zero (no clip).
     #[must_use]
     pub fn with_clip_rrect(mut self, clip: [f32; 8]) -> Self {
         self.clip_rrect = clip;
+        self.clip_kind = if clip == [0.0; 8] {
+            [0; 4]
+        } else {
+            [1, 0, 0, 0]
+        };
+        self
+    }
+
+    /// Set an SDF clip rounded-superellipse (iOS-squircle) on this instance.
+    ///
+    /// The 12-float superellipse uniform produced by
+    /// `Painter::clip_rsuperellipse` carries separate-axis radii per corner.
+    /// At the per-instance level we average each corner's `rx`/`ry` into a
+    /// single radius to fit the existing `clip_rrect` slot — this is the
+    /// "single-radius-per-corner" first-pass interpretation called out in
+    /// the plan's Outstanding Questions Q9. Sets `clip_kind = 2`.
+    ///
+    /// Layout of `superellipse_clip`: `[x, y, w, h, tl_x, tl_y, tr_x, tr_y,
+    /// br_x, br_y, bl_x, bl_y]`. Layout in the resulting `clip_rrect` slot:
+    /// `[x, y, w, h, avg(tl_x,tl_y), avg(tr_x,tr_y), avg(br_x,br_y),
+    /// avg(bl_x,bl_y)]`.
+    #[must_use]
+    pub fn with_clip_rsuperellipse(mut self, superellipse_clip: [f32; 12]) -> Self {
+        if superellipse_clip == [0.0; 12] {
+            self.clip_rrect = [0.0; 8];
+            self.clip_kind = [0; 4];
+            return self;
+        }
+        let tl = 0.5 * (superellipse_clip[4] + superellipse_clip[5]);
+        let tr = 0.5 * (superellipse_clip[6] + superellipse_clip[7]);
+        let br = 0.5 * (superellipse_clip[8] + superellipse_clip[9]);
+        let bl = 0.5 * (superellipse_clip[10] + superellipse_clip[11]);
+        self.clip_rrect = [
+            superellipse_clip[0],
+            superellipse_clip[1],
+            superellipse_clip[2],
+            superellipse_clip[3],
+            tl,
+            tr,
+            br,
+            bl,
+        ];
+        self.clip_kind = [2, 0, 0, 0];
         self
     }
 
@@ -141,6 +204,8 @@ impl RectInstance {
             6 => Float32x4,
             // Clip rrect part 2: [radius_tl, radius_tr, radius_br, radius_bl] (location 7)
             7 => Float32x4,
+            // Clip kind: [kind, _pad, _pad, _pad] (location 8) — 0=none, 1=rrect, 2=rsuperellipse
+            8 => Uint32x4,
         ];
 
         wgpu::VertexBufferLayout {

@@ -2081,8 +2081,10 @@ impl WgpuPainter {
                 let bottom_right = self.apply_transform(Point::new(rect.right(), rect.bottom()));
                 let transformed_rect =
                     Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
-                let instance = super::instancing::RectInstance::rect(transformed_rect, color)
-                    .with_clip_rrect(self.current_rrect_clip);
+                let instance = self.apply_active_clip(super::instancing::RectInstance::rect(
+                    transformed_rect,
+                    color,
+                ));
                 let _ = self.current_segment.rect_batch.add(instance);
                 DrawSegment::push_scissor_region(
                     &mut self.current_segment.rect_scissors,
@@ -2169,15 +2171,15 @@ impl WgpuPainter {
             };
 
             // Use GPU instancing for filled rounded rects (100x faster!)
-            let instance = super::instancing::RectInstance::rounded_rect_corners(
-                transformed_rect,
-                color,
-                rrect.top_left.x.0.max(rrect.top_left.y.0),
-                rrect.top_right.x.0.max(rrect.top_right.y.0),
-                rrect.bottom_right.x.0.max(rrect.bottom_right.y.0),
-                rrect.bottom_left.x.0.max(rrect.bottom_left.y.0),
-            )
-            .with_clip_rrect(self.current_rrect_clip);
+            let instance =
+                self.apply_active_clip(super::instancing::RectInstance::rounded_rect_corners(
+                    transformed_rect,
+                    color,
+                    rrect.top_left.x.0.max(rrect.top_left.y.0),
+                    rrect.top_right.x.0.max(rrect.top_right.y.0),
+                    rrect.bottom_right.x.0.max(rrect.bottom_right.y.0),
+                    rrect.bottom_left.x.0.max(rrect.bottom_left.y.0),
+                ));
             let _ = self.current_segment.rect_batch.add(instance);
             DrawSegment::push_scissor_region(
                 &mut self.current_segment.rect_scissors,
@@ -3462,6 +3464,25 @@ impl WgpuPainter {
             r_br,
             r_bl
         );
+    }
+
+    /// Apply the currently-active SDF clip (rrect or rsuperellipse) to a
+    /// `RectInstance`.
+    ///
+    /// Branch order: if `current_rsuperellipse_clip` is non-trivial, the
+    /// superellipse clip wins (kind = 2). Otherwise the rrect clip slot
+    /// is used (kind = 1 when non-zero, kind = 0 when both are zero).
+    /// Centralizes the per-instance clip-kind selection so the two
+    /// `rect`/`rrect` batch-build sites don't drift apart.
+    fn apply_active_clip(
+        &self,
+        instance: super::instancing::RectInstance,
+    ) -> super::instancing::RectInstance {
+        if self.current_rsuperellipse_clip != [0.0; 12] {
+            instance.with_clip_rsuperellipse(self.current_rsuperellipse_clip)
+        } else {
+            instance.with_clip_rrect(self.current_rrect_clip)
+        }
     }
 
     /// Set an SDF rounded-superellipse clip (iOS-squircle).
