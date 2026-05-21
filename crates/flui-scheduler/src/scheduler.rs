@@ -247,19 +247,6 @@ impl FrameSkipPolicy {
         }
     }
 
-    /// Convert from u8 representation (for atomic storage)
-    ///
-    /// # Panics
-    /// Panics if the value is not a valid FrameSkipPolicy discriminant.
-    /// For fallible conversion, use [`try_from_u8`](Self::try_from_u8).
-    #[inline]
-    pub const fn from_u8(value: u8) -> Self {
-        match Self::try_from_u8(value) {
-            Some(v) => v,
-            None => panic!("Invalid FrameSkipPolicy value"),
-        }
-    }
-
     /// Calculate how many frames to skip given elapsed time since last frame
     ///
     /// # Arguments
@@ -492,12 +479,18 @@ impl Scheduler {
 
     /// Get current scheduler phase
     pub fn phase(&self) -> SchedulerPhase {
-        SchedulerPhase::from_u8(self.frame.scheduler_phase.load(Ordering::Acquire))
+        // Saturating default to Idle on invalid atomic byte (Principle 6:
+        // never panic in production paths). Invalid byte is unreachable in
+        // normal operation; this is defensive against memory corruption only.
+        SchedulerPhase::try_from_u8(self.frame.scheduler_phase.load(Ordering::Acquire))
+            .unwrap_or(SchedulerPhase::Idle)
     }
 
     /// Set scheduler phase with validation
     fn set_scheduler_phase(&self, new_phase: SchedulerPhase) {
-        let current = SchedulerPhase::from_u8(self.frame.scheduler_phase.load(Ordering::Acquire));
+        let current =
+            SchedulerPhase::try_from_u8(self.frame.scheduler_phase.load(Ordering::Acquire))
+                .unwrap_or(SchedulerPhase::Idle);
         debug_assert!(
             current.can_transition_to(new_phase),
             "Invalid phase transition: {:?} -> {:?}",
@@ -1026,7 +1019,8 @@ impl Scheduler {
 
     /// Get current frame skip policy
     pub fn frame_skip_policy(&self) -> FrameSkipPolicy {
-        FrameSkipPolicy::from_u8(self.frame.frame_skip_policy.load(Ordering::Acquire))
+        FrameSkipPolicy::try_from_u8(self.frame.frame_skip_policy.load(Ordering::Acquire))
+            .unwrap_or(FrameSkipPolicy::Never)
     }
 
     /// Set maximum frames to skip (for LimitedSkip policy)
@@ -1056,7 +1050,9 @@ impl Scheduler {
 
         let elapsed_ms = last.elapsed().as_secs_f64() * 1000.0;
         let frame_budget_ms = self.frame.frame_duration.lock().as_ms().value();
-        let policy = FrameSkipPolicy::from_u8(self.frame.frame_skip_policy.load(Ordering::Acquire));
+        let policy =
+            FrameSkipPolicy::try_from_u8(self.frame.frame_skip_policy.load(Ordering::Acquire))
+                .unwrap_or(FrameSkipPolicy::Never);
         let max_skip = *self.frame.max_frame_skip.lock();
 
         policy.frames_to_skip(elapsed_ms, frame_budget_ms, max_skip)
@@ -1102,7 +1098,8 @@ impl Scheduler {
     ///
     /// Returns the current state of the application as seen by the platform.
     pub fn lifecycle_state(&self) -> AppLifecycleState {
-        AppLifecycleState::from_u8(self.binding.lifecycle_state.load(Ordering::Acquire))
+        AppLifecycleState::try_from_u8(self.binding.lifecycle_state.load(Ordering::Acquire))
+            .unwrap_or(AppLifecycleState::Detached)
     }
 
     /// Handle a lifecycle state change from the platform
@@ -1131,11 +1128,12 @@ impl Scheduler {
     #[tracing::instrument(skip(self))]
     pub fn handle_app_lifecycle_state_change(&self, new_state: AppLifecycleState) {
         // Atomically swap state and get old value
-        let old_state = AppLifecycleState::from_u8(
+        let old_state = AppLifecycleState::try_from_u8(
             self.binding
                 .lifecycle_state
                 .swap(new_state as u8, Ordering::AcqRel),
-        );
+        )
+        .unwrap_or(AppLifecycleState::Detached);
 
         // Only notify if state actually changed
         if old_state != new_state {

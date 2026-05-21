@@ -103,19 +103,6 @@ impl SchedulerPhase {
         }
     }
 
-    /// Convert from u8 representation (for atomic storage)
-    ///
-    /// # Panics
-    /// Panics if the value is not a valid SchedulerPhase discriminant.
-    /// For fallible conversion, use [`try_from_u8`](Self::try_from_u8).
-    #[inline]
-    pub const fn from_u8(value: u8) -> Self {
-        match Self::try_from_u8(value) {
-            Some(v) => v,
-            None => panic!("Invalid SchedulerPhase value"),
-        }
-    }
-
     /// All phases in execution order
     pub const ALL: [SchedulerPhase; 5] = [
         SchedulerPhase::Idle,
@@ -296,19 +283,6 @@ impl AppLifecycleState {
             3 => Some(Self::Paused),
             4 => Some(Self::Detached),
             _ => None,
-        }
-    }
-
-    /// Convert from u8 representation (for atomic storage)
-    ///
-    /// # Panics
-    /// Panics if the value is not a valid AppLifecycleState discriminant.
-    /// For fallible conversion, use [`try_from_u8`](Self::try_from_u8).
-    #[inline]
-    pub const fn from_u8(value: u8) -> Self {
-        match Self::try_from_u8(value) {
-            Some(v) => v,
-            None => panic!("Invalid AppLifecycleState value"),
         }
     }
 
