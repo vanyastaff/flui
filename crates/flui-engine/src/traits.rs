@@ -12,7 +12,7 @@
 
 use flui_painting::{BlendMode, Paint, PointMode};
 use flui_types::{
-    geometry::{Matrix4, Offset, Pixels, Point, RRect, Rect},
+    geometry::{Matrix4, Offset, Pixels, Point, RRect, RSuperellipse, Rect},
     painting::{Image, Path, TextureId},
     styling::Color,
     typography::TextStyle,
@@ -271,6 +271,34 @@ pub trait CommandRenderer {
         clip_behavior: flui_types::painting::Clip,
         transform: &Matrix4,
     );
+
+    /// Set rounded-superellipse clip region (Flutter `RSuperellipse`).
+    ///
+    /// The rounded-superellipse uses a smoother corner falloff than the
+    /// elliptical arcs of `RRect`. The default implementation falls back to
+    /// `clip_rrect` against an approximating rounded rectangle built from
+    /// the superellipse's outer rect and per-corner radii. Backends that
+    /// can render the iOS-squircle SDF directly should override this for
+    /// pixel-perfect parity with Flutter.
+    fn clip_rsuperellipse(
+        &mut self,
+        rsuperellipse: RSuperellipse,
+        clip_op: flui_types::painting::ClipOp,
+        clip_behavior: flui_types::painting::Clip,
+        transform: &Matrix4,
+    ) {
+        // Default approximation: rrect built from outer_rect + per-corner radii.
+        // Visually close enough for hard-edge and most anti-aliased cases until
+        // a real superellipse SDF lands in the engine fragment shader.
+        let rrect = RRect::from_rect_and_corners(
+            rsuperellipse.outer_rect(),
+            rsuperellipse.tl_radius(),
+            rsuperellipse.tr_radius(),
+            rsuperellipse.br_radius(),
+            rsuperellipse.bl_radius(),
+        );
+        self.clip_rrect(rrect, clip_op, clip_behavior, transform);
+    }
 
     /// Set arbitrary path clip region
     fn clip_path(
