@@ -503,6 +503,38 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
     }
 }
 
+// =============================================================================
+// Canonical trait hierarchy adoption (U20)
+// =============================================================================
+//
+// Flutter parity: `force_press.dart:117 ForcePressGestureRecognizer extends
+// OneSequenceGestureRecognizer`.
+
+impl crate::recognizers::OneSequenceGestureRecognizer for ForcePressGestureRecognizer {
+    fn tracked_pointers(&self) -> Vec<PointerId> {
+        self.state
+            .primary_pointer()
+            .map(|p| vec![p])
+            .unwrap_or_default()
+    }
+
+    fn resolve_pointer(&self, _pointer: PointerId, disposition: crate::arena::GestureDisposition) {
+        match disposition {
+            crate::arena::GestureDisposition::Accepted => {
+                // No-op — ForcePress callbacks fire from event handlers
+                // (pressure threshold detection).
+            }
+            crate::arena::GestureDisposition::Rejected => {
+                self.state.reject();
+            }
+        }
+    }
+
+    fn stop_tracking_pointer(&self, _pointer: PointerId) {
+        self.state.stop_tracking();
+    }
+}
+
 impl GestureArenaMember for ForcePressGestureRecognizer {
     fn accept_gesture(&self, _pointer: PointerId) {
         // We won the arena - gesture is accepted
