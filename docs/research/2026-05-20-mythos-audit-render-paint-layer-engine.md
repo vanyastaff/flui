@@ -436,6 +436,16 @@ thread_local! { static SUPERELLIPSE_CACHE: RefCell<SuperellipseCache> = ...; }
 
 ### Step 1 — Safe deletions
 
+> **Status (2026-05-20): partially complete.** Items 1, 2, 3, and the `CLAUDE.md` fix landed on branch `naughty-jackson-324931` as the flui-rendering Phase 1 zombie cleanup. Item "delete duplicate `ClipContext`" (originally part of an earlier draft of Step 1) is **deferred to a separate brainstorm**: round-1 `ce-doc-review` uncovered a missed `CanvasContext` production implementer at [crates/flui-rendering/src/context/canvas.rs:695](../../crates/flui-rendering/src/context/canvas.rs) plus incompatible trait signatures between `flui-rendering::ClipContext` and `flui-painting::ClipContext` (closure shape, accessor name, typed-unit Rect divergence). Consolidating is a migration, not a deletion, and does not fit the "pure cleanup" framing of this Phase 1 batch.
+>
+> Commits (in order on the worktree branch):
+> - `dc07578b` — U1: delete commented `impl RenderObject for RenderView` (item 1).
+> - `326358b6` — U2: delete `IntrinsicProtocol` + `BaselineProtocol` (item 2).
+> - `eb1945a7` — U3: delete `RenderState<P>` propagation impl bulk + tests, preserve the `RenderDirtyPropagation` trait shape at `pub(crate)` visibility with a `PRESERVED_FOR` marker (revised from "delete the trait entirely" — see "Note on item 3 revision" below).
+> - `e7860ff5` — U4: reconcile `CLAUDE.md` crate-status with `Cargo.toml` ground truth (item 4 — widened to also fix `flui-build` from "active" → "disabled" and add `flui-hot-reload` to "active" per round-2 `ce-doc-review` finding).
+>
+> **Note on item 3 revision.** The audit originally proposed deleting the trait shape and rewriting tests onto `AtomicRenderFlags`. Round-1 `ce-doc-review` showed that `AtomicRenderFlags::set_needs_layout/paint` is **also** not the production dirty-marking path — production uses `PipelineOwner::add_node_needing_layout / add_node_needing_paint` invoked from `flui-view` and `flui-hot-reload`. Rewriting tests onto a different unreachable path would not improve coverage. The trait shape itself was preserved at `pub(crate)` with a `// PRESERVED_FOR:` marker (≈40 LOC vs the ~430 LOC of deleted impl bulk) on cost-prudence grounds — not as an endorsement of the shape for the future viewport-invalidation hook this Step 4 item 13 contemplates. Pinning down the production dirty-marking path with a real integration test remains a separately-scoped follow-up under Step 4 item 13.
+
 1. **Delete commented-out RenderObject impl** in [render_view.rs:524-720+](../../crates/flui-rendering/src/view/render_view.rs). Pure comment removal.
 2. **Delete `IntrinsicProtocol` and `BaselineProtocol`** from [protocol/protocol.rs:91,106](../../crates/flui-rendering/src/protocol/protocol.rs) plus prelude/lib.rs/protocol/mod.rs re-exports.
 3. **Delete `RenderDirtyPropagation` trait + propagation.rs entirely** ([storage/state/propagation.rs](../../crates/flui-rendering/src/storage/state/propagation.rs)). Remove `pub use propagation::RenderDirtyPropagation;` from [storage/state/mod.rs:152](../../crates/flui-rendering/src/storage/state/mod.rs). Rewrite tests in [storage/state/tests.rs](../../crates/flui-rendering/src/storage/state/tests.rs) — replace MockTree paths with direct `AtomicRenderFlags` assertions, or delete tests that exist only to exercise the trait.
