@@ -13,7 +13,7 @@
 //! `Box<dyn Drawable>` boundary the wgpu backend cannot translate.
 
 use flui_types::{
-    geometry::{Matrix4, Offset, Pixels, Point, RRect, Rect, Size},
+    geometry::{Matrix4, Offset, Pixels, Point, RRect, RSuperellipse, Rect, Size},
     painting::{Image, Path},
     styling::Color,
     typography::{InlineSpan, TextStyle},
@@ -57,6 +57,31 @@ pub enum DrawCommand {
     ClipRRect {
         /// Rounded rectangle to clip to.
         rrect: RRect,
+        /// Set operation (Intersect or Difference).
+        clip_op: ClipOp,
+        /// Anti-aliasing behavior.
+        clip_behavior: Clip,
+        /// Transform at recording time.
+        transform: Matrix4,
+    },
+
+    /// Clip to a rounded superellipse (Flutter `RSuperellipse`).
+    ///
+    /// Same shape carrier as [`Self::ClipRRect`]; the *intent* is the
+    /// rounded-superellipse (iOS-squircle) corner curve, which has a
+    /// smoother falloff than the elliptical arcs used by `RRect`. Exact
+    /// rendering is backend-dependent: the `CommandRenderer::clip_rsuperellipse`
+    /// default falls back to an `RRect` approximation built from the
+    /// superellipse's outer rect plus per-corner radii, and a backend may
+    /// override with a real superellipse SDF for pixel-perfect parity (see
+    /// `flui-engine::wgpu::layer_render::get_or_generate_superellipse_path`
+    /// for the path-tessellation route used by `ClipSuperellipseLayer`).
+    /// Matches Flutter's `Canvas.clipRSuperellipse` and
+    /// `ClipContext.clipRSuperellipseAndPaint` at the command-vocabulary
+    /// level.
+    ClipRSuperellipse {
+        /// Rounded superellipse to clip to.
+        rsuperellipse: RSuperellipse,
         /// Set operation (Intersect or Difference).
         clip_op: ClipOp,
         /// Anti-aliasing behavior.

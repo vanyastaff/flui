@@ -34,7 +34,7 @@ The Flutter `Canvas` API is split between `dart:ui` (the engine binding) and `pa
 | Sealed-extension-trait pattern (FLUI-side; no Flutter analog) | [`src/display_list/sealed.rs`](src/display_list/sealed.rs) -- `DisplayListCore` + `DisplayListExt` + 4 blanket impls | Cross-crate seam consumed by `flui-layer::Layer::Picture` (stores `Picture = DisplayList` by value today; the `Arc<DisplayList>` blanket impl is a forward-compatible shape for future retained-layer sharing) and `flui-engine`'s wgpu backend. |
 | `DisplayListStats` (FLUI invention for command-count stats) | [`src/display_list/stats.rs`](src/display_list/stats.rs) | |
 | Flutter `dart:ui` `PointerEvent` -- minimal subset | [`src/display_list/hit_region.rs`](src/display_list/hit_region.rs) | Hit-region recording; full event system in `flui-interaction`. |
-| `painting/clip.dart` `ClipContext` abstract class | [`src/clip_context.rs`](src/clip_context.rs) | Cross-crate seam (1 prod impl: `CanvasContext` in `flui-rendering`). 3 default `clip_*_and_paint` methods. |
+| `painting/clip.dart` `ClipContext` abstract class | [`src/clip_context.rs`](src/clip_context.rs) | Cross-crate seam (1 prod impl: `CanvasContext` in `flui-rendering`). 4 default `clip_*_and_paint` methods including `clip_rsuperellipse_and_paint` for Flutter parity. |
 | `painting/binding.dart` `PaintingBinding` mixin | [`src/binding.rs`](src/binding.rs) -- `PaintingBinding` singleton | Trimmed surface; `ShaderWarmUp` subsystem deleted in U2. |
 | `painting/image_cache.dart` `ImageCache` | [`src/binding.rs`](src/binding.rs) -- `ImageCache` struct | `RwLock<HashMap>` for cache + live_images; off the per-command hot path. |
 | `painting/binding.dart` `SystemFontsNotifier` | [`src/binding.rs`](src/binding.rs) -- `SystemFontsNotifier` struct | `RwLock<Vec<Arc<dyn Fn>>>` listener registry; setup-phase only. |
@@ -91,7 +91,7 @@ This section records places where the Rust shape diverges from the Dart/Skia sha
 
 **Rule:** Strategy clause "Composition over inheritance" but with awareness of cross-crate ergonomics.
 
-**Choice:** [`src/clip_context.rs`](src/clip_context.rs) carries the `ClipContext` trait with 3 default `clip_*_and_paint` methods. The trait's only required method is `canvas_mut(&mut self) -> &mut Canvas`. The trait has exactly 1 production impl (`CanvasContext` in `flui-rendering::context::canvas`) + 2 test impls.
+**Choice:** [`src/clip_context.rs`](src/clip_context.rs) carries the `ClipContext` trait with 4 default `clip_*_and_paint` methods (rect, rrect, rsuperellipse, path — full Flutter `painting/clip.dart` parity). The trait's only required method is `canvas(&mut self) -> &mut Canvas` (Flutter naming; the `&mut self -> &mut Canvas` signature does not need the Rust `_mut` suffix). The trait has exactly 1 production impl (`CanvasContext` in `flui-rendering::context::canvas`) + 1 test impl in `clip_context.rs`'s own tests module.
 
 **Alternatives:**
 - Demote the trait to `pub(crate)` and re-implement the 3 default methods as free functions taking `&mut Canvas` -- rejected. Would force `flui-rendering::CanvasContext` to call free functions awkwardly; the trait method dispatch is more ergonomic.
