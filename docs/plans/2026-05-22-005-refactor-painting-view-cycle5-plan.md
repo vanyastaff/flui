@@ -1,9 +1,10 @@
 ---
 title: "refactor: flui-painting × flui-view — Cycle 5 audit execution"
 type: refactor
-status: active
+status: completed
 date: 2026-05-22
 origin: docs/brainstorms/flui-painting-view-cycle5-requirements.md
+receipts: docs/research/2026-05-22-cycle5-receipts.md
 ---
 
 # refactor: flui-painting × flui-view — Cycle 5 audit execution
