@@ -160,6 +160,27 @@ impl HitTestEntry {
         self.scroll_handler = Some(handler);
         self
     }
+
+    /// Builder: set the entry's transform directly, bypassing the
+    /// `HitTestResult`'s transform stack.
+    ///
+    /// Use this when the caller has already computed the
+    /// global-to-local transform out-of-band (for example, from a
+    /// protocol-side `BoxHitTestResult` adapter that owns the
+    /// transform graph itself). The standard `HitTestResult::add`
+    /// captures the current transform stack via `last_transform()`;
+    /// this builder lets callers preserve a transform that the stack
+    /// does not currently hold.
+    ///
+    /// "Unchecked" here means the transform is not validated against
+    /// the result's transform stack -- not that it bypasses any
+    /// safety invariant. The receiver is still `&mut self` because
+    /// the field is private.
+    #[must_use]
+    pub fn with_transform_unchecked(mut self, transform: Matrix4) -> Self {
+        self.transform = Some(transform);
+        self
+    }
 }
 
 // ============================================================================
@@ -283,6 +304,44 @@ impl HitTestResult {
         } else if self.transforms.len() > 1 {
             self.transforms.pop();
         }
+    }
+
+    /// Pushes a paint-offset onto the transform stack and returns a
+    /// guard that pops the offset when dropped.
+    ///
+    /// This is the RAII counterpart to
+    /// [`push_offset`](Self::push_offset) +
+    /// [`pop_transform`](Self::pop_transform) and is the preferred
+    /// shape for protocol-side adapters (e.g.
+    /// `BoxHitTestResult::add_with_paint_offset`) that scope a
+    /// transform to a single hit-test step. The guard's `Drop` impl
+    /// guarantees the stack is balanced even if the inner closure
+    /// panics or returns early -- *Programming Rust* 2nd ed §22.2
+    /// "RAII Guards".
+    ///
+    /// # Flutter parity
+    ///
+    /// Mirrors `BoxHitTestResult::addWithPaintOffset` in
+    /// `rendering/box.dart`: the Flutter code uses a try/finally
+    /// pair around the pushOffset/popTransform sequence; Rust uses
+    /// `Drop` to express the same lifetime-scoped invariant.
+    #[must_use = "guard must be held for the scope where the transform applies"]
+    pub fn paint_offset_scope(&mut self, offset: Offset<Pixels>) -> TransformGuard<'_> {
+        self.push_offset(offset);
+        TransformGuard::new(self)
+    }
+
+    /// Pushes a paint-transform matrix onto the transform stack and
+    /// returns a guard that pops the matrix when dropped.
+    ///
+    /// See [`paint_offset_scope`](Self::paint_offset_scope) for
+    /// the rationale and Flutter-parity reference; this is the
+    /// matrix-typed sibling for callers that need a full 4x4
+    /// transform rather than a paint-offset.
+    #[must_use = "guard must be held for the scope where the transform applies"]
+    pub fn paint_transform_scope(&mut self, transform: Matrix4) -> TransformGuard<'_> {
+        self.push_transform(transform);
+        TransformGuard::new(self)
     }
 
     /// Returns the number of entries.
