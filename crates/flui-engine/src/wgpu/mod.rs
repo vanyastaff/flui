@@ -48,7 +48,15 @@
 mod atlas;
 mod backend;
 mod buffer_pool;
-mod buffers;
+// Cycle 4 wave 5 E-10: `buffers.rs` deleted. Module hosted
+// `DynamicBuffer` (auto-growing vertex/instance buffer) and
+// `BufferManager` (5-buffer GPU resource bag). Workspace grep
+// returned zero non-self consumers in any crate; the wgpu module
+// graph went through `buffer_pool.rs` (live, distinct logic --
+// reusable per-frame allocations) instead. The whole module was
+// dead code masked by the `pub use buffers::{...}` re-export at
+// `wgpu/mod.rs:148`, which itself had zero consumers (item-level
+// audit revealed both layers were dead).
 #[cfg(debug_assertions)]
 mod debug;
 /// Gradient + shadow + blur instance descriptors consumed by `painter.rs`'s
@@ -123,14 +131,34 @@ mod sdf_smoke_test;
 // PUBLIC API
 // ============================================================================
 
-// Scene types
-// Texture atlas
-pub use atlas::{AtlasEntry, AtlasRect, TextureAtlas};
-// Backend
+// ----------------------------------------------------------------------------
+// Cycle 4 wave 5 E-10: surface trim
+//
+// Workspace ripgrep of `flui_engine::wgpu::<Name>` returned consumers
+// ONLY for `Renderer` (4 callsites in flui-app); every other
+// `pub use` re-export here had zero external (non-flui-engine)
+// consumers AND zero in-crate consumers either (sibling modules
+// reach internal types via their module paths directly, not via
+// the re-export at this module level).
+//
+// The previously-`pub` re-exports were paying public-API
+// monomorphization + discoverability + stability cost for nothing.
+// They are deleted outright, NOT demoted to `pub(crate)`: a
+// `pub(crate) use` line with zero in-crate consumers is itself
+// dead code (rustc emits `unused_imports` for it under
+// `-D warnings`). The 30+ "dead-code" warnings the previous
+// wave-4 attempt produced were masking the real signal: the
+// re-exports were never wired into the module graph at this
+// level.
+//
+// `Backend`, `FontLoader`, `LayerRender`, `WgpuPainter`, `DebugBackend`,
+// `Renderer`, and the `commands::` / `traits::` re-exports stay
+// because they have verified consumers (either flui-app callsites
+// or lib.rs's crate-root re-export chain).
+// ----------------------------------------------------------------------------
+
+// Backend (external via lib.rs re-export at crate root)
 pub use backend::Backend;
-// Buffer management
-pub use buffer_pool::{BufferPool, BufferPoolStats};
-pub use buffers::{BufferManager, DynamicBuffer};
 // Command rendering (re-exported from crate root)
 pub use crate::{
     commands::{dispatch_command, dispatch_commands},
@@ -138,35 +166,9 @@ pub use crate::{
 };
 #[cfg(debug_assertions)]
 pub use debug::DebugBackend;
-// External texture registry
-pub use external_texture_registry::{ExternalTextureEntry, ExternalTextureRegistry};
-// Layer rendering
+// Layer rendering (external via lib.rs re-export at crate root)
 pub use layer_render::LayerRender;
-// Multi-draw indirect batching
-// Cycle 4 E-16: `MultiDrawStats` dropped from this re-export.
-// Workspace grep showed zero external consumers; the type stays
-// `pub` at its definition site for in-crate use but no longer
-// escapes the wgpu module's public surface.
-//
-// Cycle 4 E-11: `DrawCommand` renamed to `DrawIndirect` to resolve
-// the workspace-wide collision with `flui_painting::DrawCommand`
-// (a `DisplayList` op variant). The wgpu version is an indirect-
-// draw instance descriptor; `DrawIndirect` matches the
-// wgpu::util::DrawIndexedIndirectArgs lineage and disambiguates
-// at every import site.
-pub use multi_draw::{DrawIndexedIndirectArgs, DrawIndirect, MultiDrawBatcher, PipelineId};
-// Offscreen rendering. `PipelineManager` was deleted in cycle 4 E-3
-// (zombie wrapper carrying only an `Arc<ShaderCache>` field with 0
-// consumers); the real pipeline ownership lives in
-// `pipeline::PipelineCache` (singular -- the parallel `pipelines.rs`
-// plural module with its own competing `PipelineCache` was deleted in
-// cycle 4 E-6 with zero workspace consumers).
-pub use offscreen::{MaskedRenderResult, OffscreenRenderer};
 pub use painter::WgpuPainter;
-// Pipeline cache (cycle 4 E-6: re-export now points at the live
-// singular-name `pipeline::` module; the parallel `pipelines.rs`
-// plural module was deleted as zero-consumer dead code).
-pub use pipeline::PipelineCache;
 
 // Cycle 4 PR #112 review fix: deprecated migration shim for
 // `PipelineBuilder`, which was re-exported from the deleted
@@ -187,18 +189,9 @@ pub use pipeline::PipelineCache;
             This deprecated alias will be removed in cycle 5."
 )]
 pub type PipelineBuilder = ();
-// Renderer (cross-platform GPU renderer)
-pub use renderer::{GpuCapabilities, Renderer};
-// Shader compilation
-pub use shader_compiler::{ShaderCache, ShaderType};
-// Tessellator
-pub use tessellator::Tessellator;
-// Texture pool
-pub use texture_pool::{GpuTexture, PoolStats, PooledTexture, TextureDesc, TexturePool};
-// Vertex types
-pub use vertex::{ImageInstance, PathVertex, RectInstance, RectVertex, Vertex};
-
-// Font loading utilities
+// Renderer (the one and only externally-consumed wgpu/* type)
+pub use renderer::Renderer;
+// Font loading utilities (external via lib.rs re-export at crate root)
 pub use font_loader::FontLoader;
 
 // Painter (WgpuPainter is the concrete implementation; Painter trait deleted in Mythos U5)

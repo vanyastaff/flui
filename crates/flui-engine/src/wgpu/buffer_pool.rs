@@ -105,45 +105,15 @@ impl BufferPool {
         )
     }
 
-    /// Get or create an index buffer
-    pub fn get_index_buffer(
-        &mut self,
-        device: &Device,
-        queue: &wgpu::Queue,
-        label: &str,
-        contents: &[u8],
-    ) -> &Buffer {
-        Self::get_buffer_internal(
-            device,
-            queue,
-            label,
-            contents,
-            BufferUsages::INDEX | BufferUsages::COPY_DST,
-            &mut self.index_buffers,
-            &mut self.allocations,
-            &mut self.reuses,
-        )
-    }
-
-    /// Get or create a uniform buffer
-    pub fn get_uniform_buffer(
-        &mut self,
-        device: &Device,
-        queue: &wgpu::Queue,
-        label: &str,
-        contents: &[u8],
-    ) -> &Buffer {
-        Self::get_buffer_internal(
-            device,
-            queue,
-            label,
-            contents,
-            BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-            &mut self.uniform_buffers,
-            &mut self.allocations,
-            &mut self.reuses,
-        )
-    }
+    // Cycle 4 wave 5 E-10: `get_index_buffer` and `get_uniform_buffer`
+    // standalone entry points deleted -- zero workspace callers. The
+    // joint `get_vertex_and_index_buffers` (below) is the live index-
+    // buffer path (split-borrow to dodge the borrow checker), and
+    // uniform buffers don't go through this pool at all (pipeline
+    // construction creates them once via `device.create_buffer`).
+    // `index_buffers` / `uniform_buffers` Vec fields stay because
+    // `BufferPool::shrink` (also live below) drains all three pools,
+    // and the joint accessor writes into `index_buffers` directly.
 
     /// Internal: Get or create a buffer from specific pool
     #[allow(clippy::too_many_arguments)]
@@ -330,58 +300,33 @@ impl BufferPool {
         }
     }
 
-    /// Get statistics
+    /// Get statistics for the painter's per-frame log line.
+    ///
+    /// Cycle 4 wave 5 E-10: trimmed from a 6-field struct
+    /// (`vertex_buffers`/`index_buffers`/`uniform_buffers`/
+    /// `allocations`/`reuses`/`reuse_rate`) to a single field. The
+    /// other 5 were set on construction but read by zero callers
+    /// in the workspace; the painter's per-frame log line only
+    /// surfaces the cache-hit ratio.
     pub fn stats(&self) -> BufferPoolStats {
         BufferPoolStats {
-            vertex_buffers: self.vertex_buffers.len(),
-            index_buffers: self.index_buffers.len(),
-            uniform_buffers: self.uniform_buffers.len(),
-            allocations: self.allocations,
-            reuses: self.reuses,
             reuse_rate: self.reuse_rate(),
         }
     }
 
-    /// Shrink pool to reduce memory usage
-    ///
-    /// Removes unused buffers from the pool. Call this periodically
-    /// (e.g., every 60 frames) to prevent memory bloat.
-    pub fn shrink(&mut self) {
-        let before =
-            self.vertex_buffers.len() + self.index_buffers.len() + self.uniform_buffers.len();
-
-        self.vertex_buffers.retain(|entry| entry.in_use);
-        self.index_buffers.retain(|entry| entry.in_use);
-        self.uniform_buffers.retain(|entry| entry.in_use);
-
-        let after =
-            self.vertex_buffers.len() + self.index_buffers.len() + self.uniform_buffers.len();
-
-        #[cfg(debug_assertions)]
-        if before != after {
-            tracing::trace!(
-                "BufferPool::shrink: Removed {} unused buffers ({} → {})",
-                before - after,
-                before,
-                after
-            );
-        }
-    }
+    // Cycle 4 wave 5 E-10: `BufferPool::shrink` deleted. Workspace
+    // grep showed zero callers; the only `shrink()` callsites in
+    // flui-engine live on `TextureCache::shrink` (a different
+    // method). Buffer pools grow with batch size and there's no
+    // tear-down path that calls `.shrink()` -- the eventual
+    // budget-watching tool (separate cleanup wave) can reintroduce
+    // it if needed. The per-pool `retain(|e| e.in_use)` body is
+    // trivial to rewrite when that lands.
 }
 
-/// Buffer pool statistics
+/// Buffer pool statistics surfaced to the painter's per-frame log.
 #[derive(Debug, Clone, Copy)]
 pub struct BufferPoolStats {
-    /// Number of vertex buffers in pool
-    pub vertex_buffers: usize,
-    /// Number of index buffers in pool
-    pub index_buffers: usize,
-    /// Number of uniform buffers in pool
-    pub uniform_buffers: usize,
-    /// Total allocations made
-    pub allocations: usize,
-    /// Total reuses
-    pub reuses: usize,
     /// Reuse rate (0.0 to 1.0)
     pub reuse_rate: f32,
 }

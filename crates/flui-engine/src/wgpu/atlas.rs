@@ -57,13 +57,16 @@ impl AtlasRect {
 }
 
 /// Texture atlas entry
+///
+/// Cycle 4 wave 5 E-10: dropped the `image_id: u32` field. It was
+/// set on construction but read by zero consumers in the workspace
+/// -- the `HashMap<u32, AtlasEntry>` keying inside `TextureAtlas`
+/// is the canonical ID source, and the field was duplicate
+/// bookkeeping.
 #[derive(Clone, Debug)]
 pub struct AtlasEntry {
     /// Rectangle in atlas
     pub rect: AtlasRect,
-
-    /// Image ID
-    pub image_id: u32,
 }
 
 /// Maximum dimension (width or height) for images eligible for atlas packing.
@@ -179,7 +182,7 @@ impl TextureAtlas {
             let image_id = self.next_image_id;
             self.next_image_id += 1;
 
-            self.entries.insert(image_id, AtlasEntry { rect, image_id });
+            self.entries.insert(image_id, AtlasEntry { rect });
 
             Some((image_id, rect))
         } else {
@@ -195,7 +198,7 @@ impl TextureAtlas {
                 let image_id = self.next_image_id;
                 self.next_image_id += 1;
 
-                self.entries.insert(image_id, AtlasEntry { rect, image_id });
+                self.entries.insert(image_id, AtlasEntry { rect });
 
                 Some((image_id, rect))
             } else {
@@ -241,17 +244,14 @@ impl TextureAtlas {
         }
     }
 
-    /// Get atlas entry for an image
-    #[must_use]
-    pub fn get_entry(&self, image_id: u32) -> Option<&AtlasEntry> {
-        self.entries.get(&image_id)
-    }
-
-    /// Get the GPU texture
-    #[must_use]
-    pub fn texture(&self) -> &Texture {
-        &self.texture
-    }
+    // Cycle 4 wave 5 E-10: `get_entry(image_id)` and `texture()`
+    // getters deleted. Workspace grep returned zero callers for
+    // either; the entries `HashMap` is queried internally via
+    // `insert_image` / `pack_image` paths, and the texture is
+    // consumed exclusively through `create_view()` (live).
+    // `Texture` is wgpu's own type so the alternative `&self.texture`
+    // accessor is trivial to reintroduce if a future consumer needs
+    // direct access.
 
     /// Create a [`wgpu::TextureView`] for the atlas texture.
     ///
