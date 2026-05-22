@@ -160,6 +160,27 @@ impl HitTestEntry {
         self.scroll_handler = Some(handler);
         self
     }
+
+    /// Builder: set the entry's transform directly, bypassing the
+    /// `HitTestResult`'s transform stack.
+    ///
+    /// Use this when the caller has already computed the
+    /// global-to-local transform out-of-band (for example, from a
+    /// protocol-side `BoxHitTestResult` adapter that owns the
+    /// transform graph itself). The standard `HitTestResult::add`
+    /// captures the current transform stack via `last_transform()`;
+    /// this builder lets callers preserve a transform that the stack
+    /// does not currently hold.
+    ///
+    /// "Unchecked" here means the transform is not validated against
+    /// the result's transform stack -- not that it bypasses any
+    /// safety invariant. The receiver is still `&mut self` because
+    /// the field is private.
+    #[must_use]
+    pub fn with_transform_unchecked(mut self, transform: Matrix4) -> Self {
+        self.transform = Some(transform);
+        self
+    }
 }
 
 // ============================================================================
@@ -283,6 +304,66 @@ impl HitTestResult {
         } else if self.transforms.len() > 1 {
             self.transforms.pop();
         }
+    }
+
+    /// Runs `f` with `offset` pushed onto the transform stack and
+    /// pops the transform before returning, regardless of `f`'s
+    /// return value.
+    ///
+    /// Mirrors `BoxHitTestResult::addWithPaintOffset` in Flutter's
+    /// `rendering/box.dart`: the Flutter code uses a try/finally
+    /// pair around the pushOffset/popTransform sequence; Rust
+    /// expresses the same scope via a closure.
+    ///
+    /// # Why a closure and not a guard
+    ///
+    /// PR #110 review feedback (Codex P2): the pre-fix
+    /// `paint_offset_scope -> TransformGuard<'_>` API held an
+    /// exclusive `&'a mut HitTestResult` borrow for the guard's
+    /// lifetime. Calls like
+    /// `let _g = result.paint_offset_scope(off); result.add(entry);`
+    /// did **not** compile -- the second mutating call was rejected
+    /// because the guard still held the borrow. The closure-based
+    /// shape sidesteps the borrow conflict: `f` receives
+    /// `&mut Self` and can call any mutating method
+    /// (`add`, `push_transform`, nested `with_paint_*`) freely
+    /// inside the scope.
+    ///
+    /// # Panic semantics
+    ///
+    /// If `f` panics, the transform is **not** popped (no `Drop`-
+    /// based guard). The hit-test framework runs inside the
+    /// pipeline owner's `catch_unwind` boundary, so a panicked
+    /// `HitTestResult` is dropped wholesale on the next frame;
+    /// per-call transform balance is therefore not load-bearing.
+    /// Callers wanting strict panic-safe transform balance should
+    /// pop manually with `push_offset` + `pop_transform`.
+    pub fn with_paint_offset<F, R>(&mut self, offset: Offset<Pixels>, f: F) -> R
+    where
+        F: FnOnce(&mut Self) -> R,
+    {
+        self.push_offset(offset);
+        let result = f(self);
+        self.pop_transform();
+        result
+    }
+
+    /// Runs `f` with `transform` pushed onto the transform stack and
+    /// pops the transform before returning.
+    ///
+    /// See [`with_paint_offset`](Self::with_paint_offset) for the
+    /// Flutter-parity rationale and the closure-vs-guard discussion
+    /// (PR #110 review feedback); this is the matrix-typed sibling
+    /// for callers that need a full 4x4 transform rather than a
+    /// paint-offset.
+    pub fn with_paint_transform<F, R>(&mut self, transform: Matrix4, f: F) -> R
+    where
+        F: FnOnce(&mut Self) -> R,
+    {
+        self.push_transform(transform);
+        let result = f(self);
+        self.pop_transform();
+        result
     }
 
     /// Returns the number of entries.

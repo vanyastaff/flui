@@ -39,12 +39,11 @@ use std::{
 };
 
 use flui_foundation::{BindingBase, HasInstance, impl_binding_singleton};
-use flui_interaction::binding::GestureBinding;
+use flui_interaction::{MouseTracker, binding::GestureBinding};
 use flui_painting::PaintingBinding;
 use flui_rendering::{
     binding::RendererBinding,
     hit_testing::HitTestResult,
-    input::MouseTracker,
     pipeline::PipelineOwner,
     view::{RenderView, ViewConfiguration},
 };
@@ -84,7 +83,14 @@ pub struct RenderingFlutterBinding {
     render_views: RwLock<HashMap<u64, Arc<RwLock<RenderView>>>>,
 
     /// Mouse tracker for hover notification.
-    mouse_tracker: RwLock<MouseTracker>,
+    ///
+    /// Cycle 4 U-6: switched from the deleted rendering-side
+    /// `flui_rendering::input::MouseTracker` to the canonical
+    /// `flui_interaction::MouseTracker`. The latter is `Clone` with
+    /// `Arc<Mutex<inner>>` interior mutability, so the previous
+    /// `RwLock<...>` outer wrap is dropped -- it was double-wrapping
+    /// the same mutability concern.
+    mouse_tracker: MouseTracker,
 
     /// Whether semantics are enabled.
     semantics_enabled: AtomicBool,
@@ -140,15 +146,15 @@ impl RenderingFlutterBinding {
     /// This allows AppBinding to pass in the same `Arc<RwLock<PipelineOwner>>`
     /// that elements use, ensuring a single PipelineOwner instance at runtime.
     pub fn new_with_pipeline(pipeline_owner: Arc<RwLock<PipelineOwner>>) -> Self {
-        // Create a dummy hit test callback for now
-        // In practice, this gets replaced when the binding is fully initialized
-        let hit_test_callback: flui_rendering::input::MouseTrackerHitTest =
-            Arc::new(|_position, _view_id| HitTestResult::new());
-
+        // Cycle 4 U-6: the pre-cycle dummy `MouseTrackerHitTest`
+        // callback constructed here is gone -- the canonical
+        // `flui_interaction::MouseTracker` is parameterless. The
+        // hit-test function is passed at the `update_*` call site
+        // by the gesture binding, not stored on the tracker.
         let mut binding = Self {
             root_pipeline_owner: pipeline_owner,
             render_views: RwLock::new(HashMap::new()),
-            mouse_tracker: RwLock::new(MouseTracker::new(hit_test_callback)),
+            mouse_tracker: MouseTracker::new(),
             semantics_enabled: AtomicBool::new(false),
             semantics_listeners: RwLock::new(Vec::new()),
             first_frame_deferred_count: AtomicU32::new(0),
@@ -372,11 +378,30 @@ impl RendererBinding for RenderingFlutterBinding {
         &self.root_pipeline_owner
     }
 
-    fn render_views(&self) -> &RwLock<HashMap<u64, Arc<RwLock<RenderView>>>> {
-        &self.render_views
+    // R-6 reshape (cycle 4 Wave 2 U-1): the pre-cycle `render_views()`
+    // returned `&RwLock<HashMap<u64, Arc<RwLock<RenderView>>>>` and
+    // leaked the implementer's lock topology through the trait surface.
+    // Post-cycle the trait exposes four primitives; the
+    // `self.render_views: RwLock<HashMap<u64, Arc<RwLock<RenderView>>>>`
+    // private field stays as private storage (HashMap is still the
+    // canonical container; we just don't expose the lock graph anymore).
+    fn render_view(&self, view_id: u64) -> Option<Arc<RwLock<RenderView>>> {
+        self.render_views.read().get(&view_id).cloned()
     }
 
-    fn mouse_tracker(&self) -> &RwLock<MouseTracker> {
+    fn render_view_ids(&self) -> Vec<u64> {
+        self.render_views.read().keys().copied().collect()
+    }
+
+    fn insert_render_view(&self, view_id: u64, view: Arc<RwLock<RenderView>>) {
+        self.render_views.write().insert(view_id, view);
+    }
+
+    fn remove_render_view_by_id(&self, view_id: u64) -> Option<Arc<RwLock<RenderView>>> {
+        self.render_views.write().remove(&view_id)
+    }
+
+    fn mouse_tracker(&self) -> &MouseTracker {
         &self.mouse_tracker
     }
 
@@ -521,17 +546,20 @@ mod tests {
     fn test_render_view_management() {
         let binding = RenderingFlutterBinding::instance();
 
-        // Add a render view
+        // Add a render view (R-6 reshape: use the new
+        // `add_render_view_with_config` default-impl helper which
+        // delegates to `insert_render_view` after deriving the
+        // view-configuration).
         let view = Arc::new(RwLock::new(RenderView::new()));
-        binding.add_render_view(1, view.clone());
+        binding.add_render_view_with_config(1, view.clone());
 
-        assert!(binding.get_render_view(1).is_some());
-        assert!(binding.get_render_view(2).is_none());
+        assert!(binding.render_view(1).is_some());
+        assert!(binding.render_view(2).is_none());
 
         // Remove
-        let removed = binding.remove_render_view(1);
+        let removed = binding.remove_render_view_by_id(1);
         assert!(removed.is_some());
-        assert!(binding.get_render_view(1).is_none());
+        assert!(binding.render_view(1).is_none());
     }
 
     #[test]

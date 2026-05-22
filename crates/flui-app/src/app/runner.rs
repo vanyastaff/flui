@@ -279,7 +279,7 @@ where
 
         let renderer = binding.renderer();
         let view = Arc::new(parking_lot::RwLock::new(RenderView::new()));
-        renderer.add_render_view(0, view);
+        renderer.add_render_view_with_config(0, view);
         tracing::info!("RenderView registered for hit testing (view_id=0)");
     }
 

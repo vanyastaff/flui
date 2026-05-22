@@ -671,6 +671,13 @@ impl Renderer {
             } else {
                 Backend::new(painter)
             };
+            // Cycle 4 U-8: bind the frame surface so the
+            // DisplayList-level `render_backdrop_filter` path (U-9)
+            // can flush + blur the same surface the layer-level
+            // path already uses. Without this bind, that command
+            // path falls back to passthrough -- a visible regression
+            // vs Flutter.
+            backend.bind_surface(&view, &output.texture);
 
             // Apply damage rect as scissor optimization: when only part of the
             // screen changed, limit GPU work to the damaged region.
@@ -745,7 +752,7 @@ impl Renderer {
     fn render_layer_recursive(
         tree: &flui_layer::LayerTree,
         layer_id: flui_foundation::LayerId,
-        backend: &mut super::backend::Backend,
+        backend: &mut super::backend::Backend<'_>,
         ctx: &RenderContext,
         surface_texture: &wgpu::Texture,
         surface_view: &wgpu::TextureView,
@@ -846,7 +853,7 @@ impl Renderer {
         bf_layer: &flui_layer::BackdropFilterLayer,
         node: &flui_layer::tree::LayerNode,
         tree: &flui_layer::LayerTree,
-        backend: &mut super::backend::Backend,
+        backend: &mut super::backend::Backend<'_>,
         ctx: &RenderContext,
         surface_texture: &wgpu::Texture,
         surface_view: &wgpu::TextureView,

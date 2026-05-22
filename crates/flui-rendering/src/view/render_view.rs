@@ -12,7 +12,15 @@ use super::ViewConfiguration;
 use crate::{
     constraints::BoxConstraints,
     context::CanvasContext,
-    hit_testing::{HitTestEntry, HitTestResult, HitTestTarget, PointerEvent},
+    // Cycle 4 U-4: `HitTestResult` is re-exported from
+    // `flui_interaction::routing` via `hit_testing::mod`; the import
+    // path stays the same but the underlying type is now the
+    // interaction-side canonical one. The previous `HitTestTarget` +
+    // `PointerEvent` imports were dropped here alongside the deletion
+    // of `impl HitTestTarget for RenderView`. PR #110 review feedback
+    // dropped `HitTestEntry` here too once the root-sentinel add went
+    // away.
+    hit_testing::HitTestResult,
     parent_data::ParentData,
     pipeline::PipelineOwner,
 };
@@ -339,8 +347,30 @@ impl RenderView {
     // ========================================================================
 
     /// Determines the set of render objects located at the given position.
-    pub fn hit_test(&self, result: &mut HitTestResult, _position: Offset) -> bool {
-        result.add(HitTestEntry::new_render_view());
+    ///
+    /// Mirrors Flutter's `RenderView.hitTest`: returns `true` because
+    /// the view covers the entire surface, then delegates to child
+    /// traversal to populate the result with real hit entries.
+    ///
+    /// # Why no root-sentinel entry
+    ///
+    /// PR #110 review feedback: the pre-fix body added
+    /// `result.add(HitTestEntry::new(RenderId::new(1)))` as a "root
+    /// sentinel" mirroring the pre-U-4 `HitTestEntry::new_render_view()`
+    /// shape. The `RenderId::new(1)` value collides with whichever
+    /// real render node gets slab index 0 (FLUI's
+    /// Slab-0-based + IDs-1-based convention), so the sentinel
+    /// masquerades as a real node ID and makes the dispatch path
+    /// ambiguous. Post-fix the function adds NO sentinel; the
+    /// post-U-4 interaction-side `HitTestResult` carries handler
+    /// closures on entries, so an entry-less result correctly
+    /// dispatches zero handlers (the previous trait-dispatch shape
+    /// the sentinel was load-bearing for is gone).
+    ///
+    /// Child-traversal that populates the result with real hit
+    /// entries lands when the RenderView → child-render-object
+    /// dispatch plumbing materializes (separate audit item).
+    pub fn hit_test(&self, _result: &mut HitTestResult, _position: Offset) -> bool {
         true
     }
 
@@ -549,12 +579,14 @@ impl Diagnosticable for RenderView {
     }
 }
 
-impl HitTestTarget for RenderView {
-    fn handle_event(&self, event: &PointerEvent, entry: &HitTestEntry) {
-        // RenderView doesn't handle events, just implements the trait
-        let _ = (event, entry);
-    }
-}
+// Cycle 4 U-4: `impl HitTestTarget for RenderView` was deleted. The
+// pre-cycle body was a no-op (`let _ = (event, entry);`) -- the view
+// implemented the trait only to satisfy the trait-dispatch shape
+// `flui_rendering::hit_testing::HitTestResult` required. Post-U-4 the
+// result type is the data-typed `flui_interaction::routing::HitTestResult`
+// where entries carry handler closures directly; no trait impl is
+// needed on RenderView. The `HitTestTarget` trait itself is U-5's
+// deletion target.
 
 #[cfg(test)]
 mod tests {

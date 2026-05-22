@@ -163,8 +163,14 @@ static GLOBAL_TRACKER: once_cell::sync::Lazy<MouseTracker> =
     once_cell::sync::Lazy::new(MouseTracker::new);
 
 impl MouseTracker {
-    /// Creates a new mouse tracker
-    fn new() -> Self {
+    /// Creates a new mouse tracker.
+    ///
+    /// Most consumers want [`Self::global`] instead -- the framework
+    /// expects a single shared tracker per process. This constructor
+    /// is `pub` since cycle 4 R-9 (Wave 2 U-6) so a `RendererBinding`
+    /// implementation can hold its own instance when test isolation
+    /// or multi-window scoping demands one.
+    pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(MouseTrackerInner {
                 devices: HashMap::new(),
@@ -179,7 +185,15 @@ impl MouseTracker {
     pub fn global() -> &'static Self {
         &GLOBAL_TRACKER
     }
+}
 
+impl Default for MouseTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MouseTracker {
     /// Registers a mouse region annotation
     ///
     /// This should be called when a MouseRegion widget is mounted.
