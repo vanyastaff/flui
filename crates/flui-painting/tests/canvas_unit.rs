@@ -174,3 +174,51 @@ fn test_canvas_clear_commands_preserves_state() {
     let dl = canvas.finish();
     assert_eq!(dl.len(), 0);
 }
+
+// ===== draw_polyline (Cycle 5 U11 / audit P-6) =====
+
+/// `draw_polyline` over N points records N-1 line segments. The
+/// `windows(2)` shape (Cycle 5 U11 / audit P-6) handles `N < 2`
+/// correctly by yielding zero pairs, matching the pre-change
+/// behaviour exactly.
+#[test]
+fn test_draw_polyline_empty_records_nothing() {
+    let mut canvas = Canvas::new();
+    let paint = Paint::stroke(Color::BLACK, 1.0);
+    canvas.draw_polyline(&[], &paint);
+    assert_eq!(canvas.finish().len(), 0);
+}
+
+#[test]
+fn test_draw_polyline_single_point_records_nothing() {
+    let mut canvas = Canvas::new();
+    let paint = Paint::stroke(Color::BLACK, 1.0);
+    canvas.draw_polyline(&[Point::new(px(0.0), px(0.0))], &paint);
+    assert_eq!(canvas.finish().len(), 0);
+}
+
+#[test]
+fn test_draw_polyline_two_points_records_one_segment() {
+    let mut canvas = Canvas::new();
+    let paint = Paint::stroke(Color::BLACK, 1.0);
+    canvas.draw_polyline(
+        &[Point::new(px(0.0), px(0.0)), Point::new(px(10.0), px(10.0))],
+        &paint,
+    );
+    assert_eq!(canvas.finish().len(), 1);
+}
+
+#[test]
+fn test_draw_polyline_five_points_records_four_segments() {
+    let mut canvas = Canvas::new();
+    let paint = Paint::stroke(Color::BLACK, 1.0);
+    let points = [
+        Point::new(px(0.0), px(0.0)),
+        Point::new(px(10.0), px(10.0)),
+        Point::new(px(20.0), px(0.0)),
+        Point::new(px(30.0), px(10.0)),
+        Point::new(px(40.0), px(0.0)),
+    ];
+    canvas.draw_polyline(&points, &paint);
+    assert_eq!(canvas.finish().len(), 4);
+}

@@ -508,13 +508,12 @@ impl Canvas {
     }
 
     /// Draws a polyline (connected line segments).
+    ///
+    /// For `points.len() == 0` or `1`, nothing is recorded
+    /// (`<[_]>::windows(2)` yields no pairs).
     pub fn draw_polyline(&mut self, points: &[Point<Pixels>], paint: &Paint) {
-        if points.len() < 2 {
-            return;
-        }
-
-        for i in 0..points.len() - 1 {
-            self.draw_line(points[i], points[i + 1], paint);
+        for pair in points.windows(2) {
+            self.draw_line(pair[0], pair[1], paint);
         }
     }
 }
