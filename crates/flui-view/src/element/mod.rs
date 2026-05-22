@@ -41,9 +41,8 @@ pub use generic::ElementCore;
 pub use inherited_access::InheritedElementAccess;
 pub use lifecycle::Lifecycle;
 pub use notification::{
-    BoxedNotification, DragEndNotification, DragStartNotification, FocusNotification,
-    KeepAliveNotification, LayoutChangedNotification, NotifiableElement, Notification,
-    NotificationCallback, NotificationHandler, NotificationNode, ScrollNotification,
+    DragEndNotification, DragStartNotification, FocusNotification, KeepAliveNotification,
+    LayoutChangedNotification, NotifiableElement, Notification, ScrollNotification,
     SizeChangedNotification,
 };
 pub use render_object_element::{RenderObjectElement, RenderSlot, RenderTreeRootElement};
