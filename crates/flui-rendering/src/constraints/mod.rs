@@ -83,6 +83,12 @@
 
 mod box_constraints;
 mod direction;
+// Cycle 4 R-18: scroll_metrics gated behind `scrolling` feature
+// (default off). The trait + 2 impls had zero workspace consumers
+// pre-cycle; gating prevents the dead surface from compiling into
+// every dependent build while keeping the code available for the
+// scrolling integration that will eventually land.
+#[cfg(feature = "scrolling")]
 mod scroll_metrics;
 mod sliver_constraints;
 mod sliver_geometry;
@@ -91,6 +97,7 @@ use std::fmt;
 
 pub use box_constraints::BoxConstraints;
 pub use direction::GrowthDirection;
+#[cfg(feature = "scrolling")]
 pub use scroll_metrics::{FixedExtentMetrics, FixedScrollMetrics, ScrollMetrics};
 pub use sliver_constraints::SliverConstraints;
 pub use sliver_geometry::SliverGeometry;
@@ -153,7 +160,10 @@ pub trait Constraints: Clone + PartialEq + fmt::Debug + Send + Sync + 'static {
 /// ```
 pub mod prelude {
     pub use super::{
-        BoxConstraints, Constraints, FixedExtentMetrics, FixedScrollMetrics, GrowthDirection,
-        ScrollMetrics, SliverConstraints, SliverGeometry,
+        BoxConstraints, Constraints, GrowthDirection, SliverConstraints, SliverGeometry,
     };
+    // Cycle 4 R-18: scroll-metrics types in the prelude only when
+    // the `scrolling` feature is enabled.
+    #[cfg(feature = "scrolling")]
+    pub use super::{FixedExtentMetrics, FixedScrollMetrics, ScrollMetrics};
 }
