@@ -243,6 +243,30 @@ impl SemanticsTree {
             return;
         }
 
+        // Reject self-attachment outright — `parent_id == child_id` is a
+        // 1-cycle, the smallest possible.
+        if parent_id == child_id {
+            tracing::warn!(
+                ?parent_id,
+                "SemanticsTree::add_child rejected self-link (cycle)"
+            );
+            return;
+        }
+
+        // Reject attaching an ancestor of `parent_id` under it (would
+        // create an N-cycle). The cascading `remove` (U13) would follow
+        // such a cycle to unbounded recursion + stack overflow; this
+        // guard makes cycles impossible to enter via the public API.
+        if self.is_ancestor_of(child_id, parent_id) {
+            tracing::warn!(
+                ?parent_id,
+                ?child_id,
+                "SemanticsTree::add_child rejected cycle \
+                 (child is ancestor of parent)"
+            );
+            return;
+        }
+
         // 1. Detach from previous parent if one exists and differs.
         let prev_parent = self.get(child_id).and_then(SemanticsNode::parent);
         if let Some(prev) = prev_parent {
@@ -270,6 +294,32 @@ impl SemanticsTree {
         }
     }
 
+    /// Returns `true` if `candidate_ancestor` is an ancestor of `descendant`.
+    ///
+    /// Walk is bounded by the tree's slab size so a malformed parent
+    /// pointer cycle (which `add_child` no longer permits to be created)
+    /// can not hang the check.
+    fn is_ancestor_of(&self, candidate_ancestor: SemanticsId, descendant: SemanticsId) -> bool {
+        let mut current = Some(descendant);
+        let mut steps = 0;
+        let max_steps = self.nodes.len() + 1;
+        while let Some(id) = current {
+            if id == candidate_ancestor {
+                return true;
+            }
+            steps += 1;
+            if steps > max_steps {
+                tracing::warn!(
+                    "SemanticsTree::is_ancestor_of: walk exceeded slab \
+                     size — malformed parent pointers?"
+                );
+                return false;
+            }
+            current = self.get(id).and_then(SemanticsNode::parent);
+        }
+        false
+    }
+
     /// Removes a child from a parent SemanticsNode.
     pub fn remove_child(&mut self, parent_id: SemanticsId, child_id: SemanticsId) {
         // Update parent's children
@@ -295,12 +345,25 @@ impl SemanticsTree {
 
     // ========== Dirty Tracking ==========
 
-    /// Returns all dirty nodes in the tree.
+    /// Returns all dirty node ids in the tree.
     pub fn dirty_nodes(&self) -> impl Iterator<Item = SemanticsId> + '_ {
         self.nodes
             .iter()
             .filter(|(_, node)| node.is_dirty())
             .map(|(index, _)| SemanticsId::new(index + 1))
+    }
+
+    /// Returns `(id, &SemanticsNode)` pairs for every dirty node.
+    ///
+    /// Lets callers (notably [`crate::owner::SemanticsOwner::flush`]) walk
+    /// dirty nodes in a single pass without an intermediate
+    /// `Vec<SemanticsId>` collect that would force a per-frame heap
+    /// allocation when there is any dirt.
+    pub fn iter_dirty(&self) -> impl Iterator<Item = (SemanticsId, &SemanticsNode)> + '_ {
+        self.nodes
+            .iter()
+            .filter(|(_, node)| node.is_dirty())
+            .map(|(index, node)| (SemanticsId::new(index + 1), node))
     }
 
     /// Marks all nodes as clean.
@@ -890,6 +953,41 @@ mod slab_hygiene_tests {
         let phantom = SemanticsId::new(999);
         tree.add_child(parent, phantom);
         assert!(tree.get(parent).unwrap().children().is_empty());
+    }
+
+    // ----- PR #100 followup: cycle rejection -----
+
+    #[test]
+    fn add_child_rejects_self_link() {
+        let mut tree = SemanticsTree::new();
+        let id = tree.insert(empty_node());
+        tree.add_child(id, id);
+        assert!(tree.get(id).unwrap().children().is_empty());
+        assert!(tree.get(id).unwrap().parent().is_none());
+    }
+
+    #[test]
+    fn add_child_rejects_attaching_ancestor_under_descendant() {
+        let mut tree = SemanticsTree::new();
+        let root = tree.insert(empty_node());
+        let mid = tree.insert(empty_node());
+        let leaf = tree.insert(empty_node());
+        tree.add_child(root, mid);
+        tree.add_child(mid, leaf);
+
+        // Would create a 3-cycle: root → mid → leaf → root.
+        // Pre-rejection, `tree.remove(root)` would have recursed
+        // root → mid → leaf → root → … indefinitely.
+        tree.add_child(leaf, root);
+
+        // Tree shape unchanged after rejected call.
+        assert_eq!(tree.get(root).unwrap().parent(), None);
+        let empty: &[SemanticsId] = &[];
+        assert_eq!(tree.get(leaf).unwrap().children(), empty);
+        // Cascade terminates.
+        let removed = tree.remove(root);
+        assert!(removed.is_some());
+        assert_eq!(tree.len(), 0);
     }
 
     // ----- U13 remove cascade + remove_shallow -----

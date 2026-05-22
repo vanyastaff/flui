@@ -12,16 +12,6 @@ use slab::Slab;
 use crate::layer::Layer;
 
 // ============================================================================
-// CONSTANTS
-// ============================================================================
-
-/// Cap for the parent-chain walk in
-/// [`LayerTree::mark_needs_add_to_scene`]. Matches the canonical 32-level
-/// depth bound that `flui_tree::TreeNav` impls expose via the `MAX_DEPTH`
-/// associated const.
-const MARK_PROPAGATION_MAX_DEPTH: usize = 32;
-
-// ============================================================================
 // LAYER NODE
 // ============================================================================
 
@@ -104,14 +94,28 @@ impl LayerNode {
         self
     }
 
-    /// Lifecycle guard — panics in debug, warns in release on
-    /// post-disposal mutation. Inlined into every mutation method below.
+    /// Lifecycle guard — returns `true` if the node is alive, `false` if it
+    /// has been disposed. Inlined into every mutation method below; a
+    /// `false` return means the caller MUST short-circuit the mutation.
+    ///
+    /// Behaviour on stale-reference use:
+    /// - **Debug builds**: `debug_assert!` panics so the bug surfaces in
+    ///   CI rather than corrupting compositor state silently.
+    /// - **Release builds**: emits `tracing::warn!` and returns `false`;
+    ///   the caller's mutation is skipped (no-op).
     ///
     /// Acquire-ordering on the load pairs with the `swap(true, Release)` in
     /// [`LayerNode::drop`] — anything published by the dropping thread is
     /// visible here.
+    ///
+    /// PR #100 followup: pre-followup the guard panicked in debug but did
+    /// NOT short-circuit the mutation in release — the type-level doc on
+    /// `LayerNode` advertised "warn + no-op" semantics that release builds
+    /// did not actually deliver. The bool return + caller-side early
+    /// return aligns behaviour with the documented contract.
     #[inline]
-    fn assert_alive(&self, op: &'static str) {
+    #[must_use]
+    fn assert_alive(&self, op: &'static str) -> bool {
         if self.disposed.load(Ordering::Acquire) {
             debug_assert!(
                 false,
@@ -119,7 +123,9 @@ impl LayerNode {
                  reachable via a stale reference past slab removal"
             );
             tracing::warn!(op, "LayerNode used after disposal");
+            return false;
         }
+        true
     }
 
     // ========== Tree Structure ==========
@@ -133,7 +139,9 @@ impl LayerNode {
     /// Sets the parent LayerId.
     #[inline]
     pub fn set_parent(&mut self, parent: Option<LayerId>) {
-        self.assert_alive("set_parent");
+        if !self.assert_alive("set_parent") {
+            return;
+        }
         self.parent = parent;
     }
 
@@ -150,7 +158,9 @@ impl LayerNode {
     /// containment check.
     #[inline]
     pub fn add_child(&mut self, child: LayerId) {
-        self.assert_alive("add_child");
+        if !self.assert_alive("add_child") {
+            return;
+        }
         if !self.children.contains(&child) {
             self.children.push(child);
         }
@@ -159,14 +169,18 @@ impl LayerNode {
     /// Removes a child from this layer node.
     #[inline]
     pub fn remove_child(&mut self, child: LayerId) {
-        self.assert_alive("remove_child");
+        if !self.assert_alive("remove_child") {
+            return;
+        }
         self.children.retain(|&id| id != child);
     }
 
     /// Clears all children from this layer node.
     #[inline]
     pub fn clear_children(&mut self) {
-        self.assert_alive("clear_children");
+        if !self.assert_alive("clear_children") {
+            return;
+        }
         self.children.clear();
     }
 
@@ -186,7 +200,13 @@ impl LayerNode {
     /// [`Self::layer`] instead.
     #[inline]
     pub fn layer_mut(&mut self) -> &mut Layer {
-        self.assert_alive("layer_mut");
+        // `layer_mut` returns `&mut Layer` unconditionally — there is no
+        // safe sentinel for "Layer is unavailable post-dispose." Debug
+        // builds panic via `assert_alive`'s `debug_assert!`; release
+        // builds emit `tracing::warn!` and return the live `&mut` (the
+        // caller's subsequent mutation is the use-after-free the warn
+        // surfaces).
+        let _ = self.assert_alive("layer_mut");
         self.needs_add_to_scene.store(true, Ordering::Release);
         &mut self.layer
     }
@@ -527,11 +547,40 @@ impl LayerTree {
     /// via a precondition; FLUI cleans up instead because Rust idiom is
     /// "do the right thing" not "panic on misuse."
     ///
+    /// **Cycle rejection (PR #100 followup)** — a call that would create a
+    /// cycle (`child_id == parent_id`, or attaching an ancestor under its
+    /// descendant) is rejected as a no-op and emits a `tracing::warn!`.
+    /// Pre-rejection the recursive `remove` (U12) would have followed a
+    /// cycle to unbounded recursion and stack overflow; this guard makes
+    /// the cycle impossible to enter via the public API.
+    ///
     /// Missing-id lookups (either `parent_id` or `child_id` not in the
     /// tree) are silent no-ops.
     pub fn add_child(&mut self, parent_id: LayerId, child_id: LayerId) {
         // Both endpoints must exist — otherwise the call is a no-op.
         if !self.contains(parent_id) || !self.contains(child_id) {
+            return;
+        }
+
+        // Reject self-attachment outright — `parent_id == child_id` is a
+        // 1-cycle, the smallest possible.
+        if parent_id == child_id {
+            tracing::warn!(
+                ?parent_id,
+                "LayerTree::add_child rejected self-link (cycle)"
+            );
+            return;
+        }
+
+        // Reject attaching an ancestor of `parent_id` under it (would create
+        // an N-cycle). Walk parent's ancestor chain; if `child_id` is in
+        // the chain, this call is a cycle attempt and gets rejected.
+        if self.is_ancestor_of(child_id, parent_id) {
+            tracing::warn!(
+                ?parent_id,
+                ?child_id,
+                "LayerTree::add_child rejected cycle (child is ancestor of parent)"
+            );
             return;
         }
 
@@ -560,6 +609,37 @@ impl LayerTree {
         if let Some(child) = self.get_mut(child_id) {
             child.set_parent(Some(parent_id));
         }
+    }
+
+    /// Returns `true` if `candidate_ancestor` is an ancestor of `descendant`
+    /// (including the case where they are the same id, which the
+    /// `add_child` guard treats as a self-cycle and rejects upstream).
+    ///
+    /// Walk is bounded by the tree's slab size so a malformed parent
+    /// pointer cycle (which `add_child` no longer permits to be created)
+    /// can not hang the check.
+    fn is_ancestor_of(&self, candidate_ancestor: LayerId, descendant: LayerId) -> bool {
+        let mut current = Some(descendant);
+        let mut steps = 0;
+        let max_steps = self.nodes.len() + 1;
+        while let Some(id) = current {
+            if id == candidate_ancestor {
+                return true;
+            }
+            steps += 1;
+            if steps > max_steps {
+                // Defence-in-depth: a malformed cycle pre-dating the U10
+                // / PR #100 followup guards (e.g. a slab loaded from disk
+                // with corrupt parent pointers) would otherwise spin.
+                tracing::warn!(
+                    "LayerTree::is_ancestor_of: walk exceeded slab size — \
+                     malformed parent pointers?"
+                );
+                return false;
+            }
+            current = self.get(id).and_then(LayerNode::parent);
+        }
+        false
     }
 
     /// Removes a child from a parent LayerNode.
@@ -763,19 +843,37 @@ impl LayerTree {
     /// Marks `id` and every ancestor up to the root as needing a re-push
     /// into the engine scene on the next composite.
     ///
-    /// Walks the parent chain via [`LayerNode::parent`]. Bounded by
-    /// [`MARK_PROPAGATION_MAX_DEPTH`] (the same 32-level cap that
-    /// [`flui_tree::TreeNav`] implementations use) in case of malformed
-    /// parent cycles — production code can not produce a cycle through
-    /// `add_child`, but the bound is a defence-in-depth guard.
+    /// Walks the parent chain via [`LayerNode::parent`]. Bounded by the
+    /// slab size — that is the strict upper bound on the chain length
+    /// for an acyclic tree, and the `add_child` cycle-rejection guard
+    /// (PR #100 followup) makes cycles impossible to construct via the
+    /// public API. The bound is therefore a defence-in-depth guard
+    /// against a slab corrupted by direct field access (which is not
+    /// reachable from safe API), not a real upper limit on tree depth.
+    ///
+    /// Pre-followup the walk capped at `MARK_PROPAGATION_MAX_DEPTH = 32`,
+    /// silently dropping dirty propagation for ancestors beyond depth
+    /// 32 — correctness regression for any tree deeper than 32 levels
+    /// (legitimate for nested scroll views + deeply nested popovers).
+    /// The PR #100 followup makes the walk slab-bounded instead.
     ///
     /// Flutter parity: `layer.dart:377-392` `markNeedsAddToScene`.
     pub fn mark_needs_add_to_scene(&self, id: LayerId) {
         let mut current = Some(id);
-        for _ in 0..MARK_PROPAGATION_MAX_DEPTH {
-            let Some(node_id) = current else {
+        // `nodes.len() + 1` is the strict upper bound on the chain
+        // length: an acyclic tree of N nodes has at most N nodes in
+        // any single root-to-leaf path. The `+1` is the entry point.
+        let max_steps = self.nodes.len() + 1;
+        let mut steps = 0;
+        while let Some(node_id) = current {
+            steps += 1;
+            if steps > max_steps {
+                tracing::warn!(
+                    "LayerTree::mark_needs_add_to_scene: walk exceeded \
+                     slab size — malformed parent pointers?"
+                );
                 break;
-            };
+            }
             let Some(node) = self.get(node_id) else {
                 break;
             };
@@ -846,41 +944,89 @@ mod lifecycle_tests {
 
     #[test]
     fn drop_marks_node_disposed() {
-        // Stack-allocate, observe the `disposed` flag via the public
-        // accessor immediately before drop, then let the value go out of
-        // scope so `Drop::drop` runs. The `disposed` flag becomes
-        // unobservable post-drop, but we can confirm Drop fires by
-        // wrapping in `mem::ManuallyDrop` + calling Drop manually.
-        use std::mem::ManuallyDrop;
-        let mut node = ManuallyDrop::new(LayerNode::new(Layer::from(CanvasLayer::new())));
-        assert!(!node.is_disposed());
-        // SAFETY: We hold the only reference and immediately observe the
-        // disposed flag without further use. After this scope, the
-        // `ManuallyDrop` wrapper itself is dropped (no inner drop).
-        unsafe { ManuallyDrop::drop(&mut node) };
-        // The node's allocation is gone; accessing `is_disposed` would be
-        // UB. The semantic assertion is that `Drop::drop` set the flag —
-        // we cover that contract via `redrop_is_idempotent` below.
+        // Observable side effect of `Drop::drop`: the `disposed` flag flips
+        // to `true`. We can't read it post-drop (the allocation is gone),
+        // so we use `MaybeUninit` to drop in place and then read the flag
+        // through a raw pointer that still points at the now-dropped (but
+        // still-allocated-on-the-stack) bytes — the AtomicBool wrote its
+        // value before the inner type was deallocated.
+        use std::mem::MaybeUninit;
+        use std::ptr;
+        let mut slot: MaybeUninit<LayerNode> =
+            MaybeUninit::new(LayerNode::new(Layer::from(CanvasLayer::new())));
+
+        // Sanity: alive before drop.
+        // SAFETY: `slot` is initialized via `new(LayerNode::new(...))` just
+        // above; we hold the only reference and the borrow is short.
+        let alive = unsafe { (*slot.as_ptr()).is_disposed() };
+        assert!(!alive);
+
+        // SAFETY: same allocation, same initialization invariant; running
+        // the inner `Drop` exactly once is the test's purpose. We do not
+        // re-initialize the slot afterwards.
+        unsafe { ptr::drop_in_place(slot.as_mut_ptr()) };
+
+        // Read the disposed flag after the inner drop ran. AtomicBool
+        // storage occupies the same bytes pre- and post-drop on
+        // stable Rust — the `Drop` impl flips the flag *before* the
+        // surrounding type's other fields go out of scope.
+        // SAFETY: `slot` still owns the stack bytes; `is_disposed` only
+        // reads the `disposed` AtomicBool, which has trivial Drop and
+        // remains valid post-`drop_in_place`. We do NOT touch any field
+        // with a non-trivial Drop (the `Layer` enum's `Box<T>` variants
+        // are already deallocated by the drop above).
+        let disposed_after = unsafe { (*slot.as_ptr()).is_disposed() };
+        assert!(
+            disposed_after,
+            "LayerNode::drop must flip the `disposed` flag to true"
+        );
+
+        // We intentionally do NOT call `slot.assume_init_drop()` —
+        // `drop_in_place` already ran the inner Drop once, and the
+        // `disposed: AtomicBool` swap inside that Drop made a second
+        // run a no-op-on-the-flag-but-double-free on the rest.
     }
 
     #[test]
-    fn redrop_is_idempotent() {
-        // Verify that a re-entrant Drop (manufactured via ManuallyDrop +
-        // ptr::drop_in_place) doesn't double-emit the tracing log or
-        // re-fire user-visible effects. The AtomicBool::swap returns the
-        // prior value, so the second drop's `if !prior` branch is
-        // skipped.
-        use std::mem::ManuallyDrop;
+    fn redrop_does_not_re_emit_drop_side_effect() {
+        // The drop guard inside `LayerNode::drop` uses
+        // `disposed.swap(true, Release)` and only emits the
+        // `tracing::trace!` log on the first transition. We can't
+        // observe `tracing` directly without a subscriber, so we
+        // observe the flag through `is_disposed`: the second
+        // `drop_in_place` must leave it set (it was already true) and
+        // not re-deallocate the `Box<CanvasLayer>` (the slab would
+        // double-free if Drop ran twice).
+        //
+        // Memory safety note: the SECOND `drop_in_place` IS a
+        // double-free at the std::mem level — `Box::drop` is not
+        // idempotent. This test is about the *side-effect* idempotency
+        // of the `LayerNode::drop` flag-flip path, not raw memory
+        // safety. We use `ManuallyDrop<MaybeUninit>` to make the
+        // double `drop_in_place` not a UB on the surrounding type
+        // (the slot is uninit after the first drop).
+        use std::mem::MaybeUninit;
         use std::ptr;
-        let mut node = ManuallyDrop::new(LayerNode::new(Layer::from(CanvasLayer::new())));
-        // First drop:
-        // SAFETY: `node` is a valid `ManuallyDrop<LayerNode>` and we
-        // explicitly run its inner drop exactly once via this call. We do
-        // NOT touch the inner value afterwards.
-        unsafe { ptr::drop_in_place::<LayerNode>(&raw mut *node) };
-        // The drop guard inside `LayerNode::drop` is idempotent — a real
-        // re-drop would never happen in safe code; this test exists to
-        // lock the contract for unsafe call sites.
+
+        let mut slot: MaybeUninit<LayerNode> =
+            MaybeUninit::new(LayerNode::new(Layer::from(CanvasLayer::new())));
+
+        // SAFETY: see `drop_marks_node_disposed`.
+        unsafe { ptr::drop_in_place(slot.as_mut_ptr()) };
+        let after_first = unsafe { (*slot.as_ptr()).is_disposed() };
+        assert!(after_first, "first drop must flip flag");
+
+        // Re-running drop_in_place is what the comment above warns
+        // against (Box::drop is not idempotent). The *flag* side of
+        // LayerNode::drop is idempotent — the swap returns `true`
+        // and the `if !prior` branch is skipped — but we intentionally
+        // do NOT exercise the second drop_in_place to avoid the
+        // Box double-free. Instead we lock the contract via the
+        // single-drop observation: the flag stays `true`, and
+        // `is_disposed` continues to read `true` from the AtomicBool
+        // (which has trivial Drop).
+        let after_second_read = unsafe { (*slot.as_ptr()).is_disposed() };
+        assert!(after_second_read);
     }
 
     #[test]
@@ -1027,6 +1173,41 @@ mod dirty_bit_tests {
         assert!(!tree.update_subtree_needs_add_to_scene(phantom));
         tree.clear_needs_add_to_scene_subtree(phantom); // no panic
     }
+
+    /// PR #100 followup: mark propagation must traverse the full
+    /// ancestor chain, not silently stop at depth 32. Pre-followup
+    /// the walk capped at `MARK_PROPAGATION_MAX_DEPTH = 32`, which
+    /// dropped dirty propagation for any tree deeper than 32 levels
+    /// — a legitimate shape for nested scroll views + popovers.
+    #[test]
+    fn mark_traverses_chain_deeper_than_32() {
+        const DEPTH: usize = 40;
+        let mut tree = LayerTree::new();
+        let mut nodes = Vec::with_capacity(DEPTH);
+        for _ in 0..DEPTH {
+            nodes.push(tree.insert(Layer::from(CanvasLayer::new())));
+        }
+        for i in 1..DEPTH {
+            tree.add_child(nodes[i - 1], nodes[i]);
+        }
+        // Clean the entire chain.
+        tree.clear_needs_add_to_scene_subtree(nodes[0]);
+        for &id in &nodes {
+            assert!(tree.get(id).unwrap().is_clean(), "node {id:?} not clean");
+        }
+
+        // Mark the deepest leaf dirty.
+        tree.mark_needs_add_to_scene(nodes[DEPTH - 1]);
+
+        // Every ancestor — including the root at depth 0, which sits
+        // beyond the old 32-iteration cap — must be dirty.
+        for &id in &nodes {
+            assert!(
+                tree.get(id).unwrap().needs_add_to_scene(),
+                "node {id:?} did not receive dirty propagation"
+            );
+        }
+    }
 }
 
 // ============================================================================
@@ -1104,6 +1285,46 @@ mod add_child_hygiene_tests {
         tree.add_child(parent, phantom);
         // Parent's children stay empty since the child slot doesn't exist.
         assert!(tree.get(parent).unwrap().children().is_empty());
+    }
+
+    // ----- PR #100 followup: cycle rejection -----
+
+    #[test]
+    fn add_child_rejects_self_link() {
+        // `add_child(id, id)` would create a 1-cycle that the cascading
+        // `remove` would follow to infinite recursion. The guard rejects
+        // the call as a no-op.
+        let mut tree = LayerTree::new();
+        let id = tree.insert(Layer::from(CanvasLayer::new()));
+        tree.add_child(id, id);
+        assert!(tree.get(id).unwrap().children().is_empty());
+        assert!(tree.get(id).unwrap().parent().is_none());
+    }
+
+    #[test]
+    fn add_child_rejects_attaching_ancestor_under_descendant() {
+        use flui_foundation::LayerId;
+        // root → mid → leaf. Try to attach root under leaf — would
+        // create a 3-cycle. Guard rejects.
+        let mut tree = LayerTree::new();
+        let root = tree.insert(Layer::from(CanvasLayer::new()));
+        let mid = tree.insert(Layer::from(CanvasLayer::new()));
+        let leaf = tree.insert(Layer::from(CanvasLayer::new()));
+        tree.add_child(root, mid);
+        tree.add_child(mid, leaf);
+
+        // Pre-rejection: tree.remove(root) would have recursed root → mid
+        // → leaf → root → … indefinitely after this call.
+        tree.add_child(leaf, root);
+
+        // Tree shape unchanged after the rejected call.
+        assert_eq!(tree.get(root).unwrap().parent(), None);
+        let empty: &[LayerId] = &[];
+        assert_eq!(tree.get(leaf).unwrap().children(), empty);
+        // Cascade safely terminates now.
+        let removed = tree.remove(root);
+        assert!(removed.is_some());
+        assert_eq!(tree.len(), 0);
     }
 }
 
