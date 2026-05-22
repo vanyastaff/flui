@@ -113,10 +113,12 @@ pub enum TreeError {
 
     /// Internal error (should not happen).
     ///
-    /// Indicates a bug in the tree implementation. If you encounter
-    /// this error, please report it as a bug.
+    /// Indicates a bug in the tree implementation. Audit T-16:
+    /// payload `Box<str>` rather than `String` — internal-error
+    /// messages are read-only after construction, so `String`'s
+    /// growth-capacity overhead is wasted.
     #[error("internal error: {0}")]
-    Internal(String),
+    Internal(Box<str>),
 
     /// Arity violation — the operation breaches the per-node
     /// child-count contract (`Leaf` got a child, `Single` got more
@@ -194,7 +196,7 @@ impl TreeError {
 
     /// Creates an `Internal` error.
     #[inline]
-    pub fn internal(message: impl Into<String>) -> Self {
+    pub fn internal(message: impl Into<Box<str>>) -> Self {
         Self::Internal(message.into())
     }
 

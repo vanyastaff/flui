@@ -5,8 +5,15 @@
 //! - [`AllSiblings`]: All siblings of a node (excluding self)
 
 use flui_foundation::Identifier;
+use smallvec::SmallVec;
 
-use crate::traits::TreeNav;
+use crate::{depth::INLINE_TREE_DEPTH, traits::TreeNav};
+
+/// Children collected from the parent for sibling iteration.
+///
+/// Audit T-20: stack-allocated for typical sibling counts (32-wide
+/// flex/row layouts fit inline); spills to heap for wider rows.
+type SiblingsChildren<I> = SmallVec<[I; INLINE_TREE_DEPTH]>;
 
 /// Direction for sibling iteration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -75,8 +82,9 @@ pub enum SiblingsDirection {
 #[derive(Debug)]
 pub struct Siblings<'a, I: Identifier, T: TreeNav<I>> {
     _tree: &'a T,
-    /// Parent's children list (owned)
-    children: Vec<I>,
+    /// Parent's children list (owned). Stack-allocated for typical
+    /// sibling counts (audit T-20).
+    children: SiblingsChildren<I>,
     /// Current index in siblings list
     current_index: Option<usize>,
     /// Direction of iteration
@@ -99,12 +107,12 @@ impl<'a, I: Identifier, T: TreeNav<I>> Siblings<'a, I, T> {
     pub fn new(tree: &'a T, start: I, direction: SiblingsDirection, include_self: bool) -> Self {
         // Get parent and find index
         let (children, current_index) = if let Some(parent) = tree.parent(start) {
-            let sibs: Vec<_> = tree.children(parent).collect();
+            let sibs: SiblingsChildren<I> = tree.children(parent).collect();
             let idx = sibs.iter().position(|&id| id == start);
             (sibs, idx)
         } else {
             // No parent means no siblings
-            (Vec::new(), None)
+            (SiblingsChildren::new(), None)
         };
 
         Self {
@@ -262,8 +270,8 @@ impl<I: Identifier, T: TreeNav<I>> std::iter::ExactSizeIterator for Siblings<'_,
 #[derive(Debug)]
 pub struct AllSiblings<'a, I: Identifier, T: TreeNav<I>> {
     _tree: &'a T,
-    /// Parent's children list (owned)
-    children: Vec<I>,
+    /// Parent's children list (owned). Stack-allocated (audit T-20).
+    children: SiblingsChildren<I>,
     /// Current index in siblings list
     index: usize,
     /// The node to exclude
@@ -278,10 +286,10 @@ impl<'a, I: Identifier, T: TreeNav<I>> AllSiblings<'a, I, T> {
     /// * `tree` - The tree to iterate over
     /// * `node` - The node whose siblings to iterate (excluded from results)
     pub fn new(tree: &'a T, node: I) -> Self {
-        let children = if let Some(parent) = tree.parent(node) {
+        let children: SiblingsChildren<I> = if let Some(parent) = tree.parent(node) {
             tree.children(parent).collect()
         } else {
-            Vec::new()
+            SiblingsChildren::new()
         };
 
         Self {

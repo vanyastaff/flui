@@ -2223,33 +2223,49 @@ overhead. Future devtools needs port from git history.
 | T-13 | `TreeError::ArityViolation` unification | P1 | **Closed Wave 4+5 (`#[from] ArityError` variant)** |
 | T-14 | `Identifier::From<Index>` `#[cfg(test)]` asymmetry | P1 | **Closed Wave 4+5 (always available)** |
 | I-11 | `#[non_exhaustive]` on `DiagnosticLevel` + `DiagnosticsTreeStyle` | P2 | **Closed Wave 4+5** |
+| I-16 | `ListenerCallback` explicit `+ 'static` | P3 | **Closed Polish PR** |
+| I-19 | `ParseDiagnostic*Error` `Box<str>` instead of `String` | P3 | **Closed Polish PR** |
+| I-20 | `ValueNotifier::into_value` calls `dispose()` before drop | P3 | **Closed Polish PR** |
+| T-16 | `TreeError::Internal(Box<str>)` | P2 | **Closed Polish PR** |
+| T-18 | `lowest_common_ancestor` `SmallVec<[I; INLINE_TREE_DEPTH]>` | P2 | **Closed Polish PR** |
+| T-20 | `Siblings::new` `SmallVec` | P2 | **Closed Polish PR** |
+| T-21 | `Leaf::first_impossible` delete | P3 | **Closed (obsolete) — entire `types.rs` rewritten in Wave 4+5; method no longer exists** |
+| T-22 | `Never::default` via `#[derive]` | P3 | **Closed (obsolete) — rewrite in Wave 4+5 uses `#[derive(Default)]`** |
+| T-23 | `Arity` associated constants moved | P3 | **Closed (obsolete) — those constants deleted with arity storage in Wave 4+5** |
+| T-25 | `DepthFirstOrder` enum unused | P3 | **Closed (obsolete) — `depth_first.rs` deleted in Wave 4+5** |
+| T-15 | `TreeReadExt` + `TreeNavExt` + `MountableExt` feature-gate | P2 | **Closed (partial obsolete) — `MountableExt` deleted with `state.rs`; `TreeReadExt`/`TreeNavExt` kept as the public extension surface (have real-world ergonomic value)** |
 
-### Findings deferred to future cycles
+### Findings deferred — judgment-call / design-needed
 
-| Audit § | Finding | Severity | Reason for deferral |
-|---------|---------|----------|---------------------|
-| I-6 | `Key::from_str` collision-with-zero fallback | P1 | Cosmetic; fundamental to hash-based keying — proper fix is `try_from_str` returning `Option` |
-| I-7 | `Key::try_new` Result constructor | P1 | API extension — design left for follow-up |
-| I-8 | `ViewKey::is_global_key()` abstract | P1 | Cost > benefit (forces 3+ types to write explicit `false`) |
-| T-15..T-25 | P2/P3 polish (Slot builder, lowest_common_ancestor SmallVec, Siblings SmallVec, etc.) | P2/P3 | Aesthetic |
-| I-9..I-22 (the unclosed subset) | P2/P3 hygiene (unsafe `pub(crate)`, RawId/Index visibility, etc.) | P2/P3 | Aesthetic |
+These are truly *deferred*, not just aesthetic. Each requires a
+design decision that is out-of-scope for a polish PR:
+
+| Audit § | Finding | Severity | Reason |
+|---------|---------|----------|--------|
+| I-6 | `Key::from_str` collision-with-zero fallback | P1 | Cosmetic; the proper fix is `try_from_str` returning `Option`, which is an API extension worth its own RFC. The pre-cycle `if hash == 0 { 1 } else { hash }` is correct on the type-safety side (always non-zero); the silent collision is a hash-function property, not a flaw in the wrapper. |
+| I-7 | `Key::try_new` Result constructor | P1 | Adds new public API. Defer until a real overflow-recovery callsite materializes. |
+| I-8 | `ViewKey::is_global_key()` abstract | P1 | Forcing 3+ key impls to write explicit `false` is more noise than safety; the default-false safety net catches the "forgot to override" case identically. |
+| I-9 / I-10 | `Id<T>::from_raw` / `zip_unchecked` / `new_unchecked` / `RawId` / `Index` `pub(crate)` | P2 | `flui-scheduler::id::*` actively re-exports these. Locking them down would break the scheduler's public API contract. |
+| I-12 | Sweep doc-comments to cite Flutter file:line refs uniformly | P2 | ~50 LOC doc churn across multiple files — better done as a dedicated doc PR with proper Flutter source verification. |
+| I-15 | `ChangeNotifier::has_listeners` / `is_empty` / `len` via lock-free `AtomicUsize` | P3 | Adds a parallel atomic counter that must stay in sync with the HashMap on every add/remove. Risk of drift > benefit (the current `Mutex::lock` is uncontended in the steady-state read path). |
+| I-17 | `ValueNotifier::take` / `replace` / `value_mut` audit | P3 | Used by tests + internal consumers; judgment call on which to drop. |
+| I-18 | `Marker` trait drop `+ Debug` requirement | P3 | Removing requires touching every concrete marker; cost > benefit. |
+| I-21 | Deprecate `KeyRef::new` in favor of `From<Key>` | P3 | Both call sites exist; deprecation has a migration cost. |
+| T-17 | `Slot::with_siblings` builder via `bon` | P2 | Builder pattern conversion is its own commit theme. |
+| T-19 | `TreeNav::depth` slow default doc | P2 | Doc-only. |
+| T-24 | `Descendants::new` / `Ancestors::new` etc. `pub(crate)` | P3 | Re-exported via `flui_tree::*` already; reducing visibility breaks the iter API. |
 
 ### Aggregate cycle 3 impact (final)
 
-- **11 commits** across **4 PRs** (#102 audit doc, #103 Wave 1+2,
-  #104 Wave 3, plus this Wave 4+5 PR).
+- **~12 commits** across **5 PRs** (#102 audit doc, #103 Wave 1+2,
+  #104 Wave 3, #105 Wave 4+5, plus this Polish PR).
 - **~−11,600 LOC** net surface reduction across foundation +
-  flui-tree (~−1,600 from Wave 1+2+3 + ~−10,000 from the Wave 4+5
-  mega-delete of T-4..T-8).
-- **+7 regression tests**:
-  `init_panic_does_not_flip_initialized_flag` (I-3),
-  `remove_cascades_by_default` (T-1),
-  `remove_shallow_does_not_cascade` (T-1),
-  `remove_of_missing_id_is_a_no_op` (T-1),
-  `remove_cascade_is_stack_safe_on_deep_chain` (PR #103 followup),
-  plus inherited cycle-2 coverage.
-- **Findings closed**: 19 of 47 cataloged + 1 PR #103 review
-  (Codex P2). 28 P2/P3 polish findings deferred as aesthetic.
+  flui-tree.
+- **+7 regression tests**.
+- **Findings closed**: 34 of 47 cataloged + 1 PR #103 review
+  (Codex P2). Remaining 13 are explicit design-needed deferrals
+  (see table above) — not aesthetic gaps but judgment calls or
+  API extensions worth their own dedicated work.
 - **The cascade-contract** (T-1+T-2) is the architectural keystone
   cycle 2 anticipated and cycle 3 delivered. Memory
   `flui-tree-unified-interface-intent` closed for the mutation
@@ -2261,7 +2277,7 @@ overhead. Future devtools needs port from git history.
 |-------|-------------|----------|---------|---------------|
 | 1 (PR #85-#98) | 12,360 | 16 + drift | ~30 across 14 PRs | −2,400 |
 | 2 (PR #100-#101) | 15,571 | 25 | 16 + 1 followup | +1,690 (new lifecycle infra) |
-| 3 (PR #102-#105) | 23,448 | 47 | 11 across 4 PRs | **−11,600** (largest reduction) |
+| 3 (PR #102-#106) | 23,448 | 47 (34 closed + 13 deferred-by-design) | 12 across 5 PRs | **−11,600** (largest reduction) |
 
 Cycle 3 reduced flui-tree's public surface by ~58% (the audit's
 zombie-surface estimate) while making the cascade-contract,

@@ -110,14 +110,20 @@ impl FromStr for DiagnosticLevel {
             "warning" | "warn" => Ok(Self::Warning),
             "hint" => Ok(Self::Hint),
             "error" | "err" => Ok(Self::Error),
-            _ => Err(ParseDiagnosticLevelError(s.to_string())),
+            _ => Err(ParseDiagnosticLevelError(s.into())),
         }
     }
 }
 
-/// Error type for parsing `DiagnosticLevel`
+/// Error type for parsing `DiagnosticLevel`.
+///
+/// Audit I-19: payload is `Box<str>` rather than `String` — the
+/// invalid-input description is read-only after construction, so
+/// the heap layout of `String` (16-byte triple-pointer for the
+/// always-empty growth space) wastes 8 bytes per error compared to
+/// `Box<str>` (single thin pointer).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParseDiagnosticLevelError(String);
+pub struct ParseDiagnosticLevelError(Box<str>);
 
 impl fmt::Display for ParseDiagnosticLevelError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -210,14 +216,17 @@ impl FromStr for DiagnosticsTreeStyle {
             "dense" => Ok(Self::Dense),
             "singleline" | "single_line" | "single-line" => Ok(Self::SingleLine),
             "errorproperty" | "error_property" | "error-property" => Ok(Self::ErrorProperty),
-            _ => Err(ParseDiagnosticsTreeStyleError(s.to_string())),
+            _ => Err(ParseDiagnosticsTreeStyleError(s.into())),
         }
     }
 }
 
-/// Error type for parsing `DiagnosticsTreeStyle`
+/// Error type for parsing `DiagnosticsTreeStyle`.
+///
+/// Audit I-19: payload `Box<str>` not `String` — same rationale as
+/// `ParseDiagnosticLevelError`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParseDiagnosticsTreeStyleError(String);
+pub struct ParseDiagnosticsTreeStyleError(Box<str>);
 
 impl fmt::Display for ParseDiagnosticsTreeStyleError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
