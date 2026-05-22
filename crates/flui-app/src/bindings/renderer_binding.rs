@@ -39,12 +39,11 @@ use std::{
 };
 
 use flui_foundation::{BindingBase, HasInstance, impl_binding_singleton};
-use flui_interaction::binding::GestureBinding;
+use flui_interaction::{MouseTracker, binding::GestureBinding};
 use flui_painting::PaintingBinding;
 use flui_rendering::{
     binding::RendererBinding,
     hit_testing::HitTestResult,
-    input::MouseTracker,
     pipeline::PipelineOwner,
     view::{RenderView, ViewConfiguration},
 };
@@ -84,7 +83,14 @@ pub struct RenderingFlutterBinding {
     render_views: RwLock<HashMap<u64, Arc<RwLock<RenderView>>>>,
 
     /// Mouse tracker for hover notification.
-    mouse_tracker: RwLock<MouseTracker>,
+    ///
+    /// Cycle 4 U-6: switched from the deleted rendering-side
+    /// `flui_rendering::input::MouseTracker` to the canonical
+    /// `flui_interaction::MouseTracker`. The latter is `Clone` with
+    /// `Arc<Mutex<inner>>` interior mutability, so the previous
+    /// `RwLock<...>` outer wrap is dropped -- it was double-wrapping
+    /// the same mutability concern.
+    mouse_tracker: MouseTracker,
 
     /// Whether semantics are enabled.
     semantics_enabled: AtomicBool,
@@ -140,15 +146,15 @@ impl RenderingFlutterBinding {
     /// This allows AppBinding to pass in the same `Arc<RwLock<PipelineOwner>>`
     /// that elements use, ensuring a single PipelineOwner instance at runtime.
     pub fn new_with_pipeline(pipeline_owner: Arc<RwLock<PipelineOwner>>) -> Self {
-        // Create a dummy hit test callback for now
-        // In practice, this gets replaced when the binding is fully initialized
-        let hit_test_callback: flui_rendering::input::MouseTrackerHitTest =
-            Arc::new(|_position, _view_id| HitTestResult::new());
-
+        // Cycle 4 U-6: the pre-cycle dummy `MouseTrackerHitTest`
+        // callback constructed here is gone -- the canonical
+        // `flui_interaction::MouseTracker` is parameterless. The
+        // hit-test function is passed at the `update_*` call site
+        // by the gesture binding, not stored on the tracker.
         let mut binding = Self {
             root_pipeline_owner: pipeline_owner,
             render_views: RwLock::new(HashMap::new()),
-            mouse_tracker: RwLock::new(MouseTracker::new(hit_test_callback)),
+            mouse_tracker: MouseTracker::new(),
             semantics_enabled: AtomicBool::new(false),
             semantics_listeners: RwLock::new(Vec::new()),
             first_frame_deferred_count: AtomicU32::new(0),
@@ -395,7 +401,7 @@ impl RendererBinding for RenderingFlutterBinding {
         self.render_views.write().remove(&view_id)
     }
 
-    fn mouse_tracker(&self) -> &RwLock<MouseTracker> {
+    fn mouse_tracker(&self) -> &MouseTracker {
         &self.mouse_tracker
     }
 
