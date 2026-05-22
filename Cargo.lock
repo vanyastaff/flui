@@ -1220,6 +1220,7 @@ dependencies = [
  "parking_lot",
  "serde",
  "serde_json",
+ "smallvec",
  "thiserror 2.0.17",
  "tracing",
 ]
