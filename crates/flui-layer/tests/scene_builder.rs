@@ -252,39 +252,18 @@ fn test_scene_compositor_retain() {
     assert_eq!(compositor.retained_layers().len(), 1);
 }
 
-#[test]
-fn test_scene_compositor_release() {
-    let mut compositor = SceneCompositor::new();
-    let id = LayerId::new(1);
-
-    compositor.retain(id);
-    assert!(compositor.is_retained(id));
-
-    compositor.release(id);
-    assert!(!compositor.is_retained(id));
-}
-
-#[test]
-fn test_scene_compositor_clear_retained() {
-    let mut compositor = SceneCompositor::new();
-
-    compositor.retain(LayerId::new(1));
-    compositor.retain(LayerId::new(2));
-    compositor.retain(LayerId::new(3));
-
-    assert_eq!(compositor.retained_layers().len(), 3);
-
-    compositor.clear_retained();
-    assert!(compositor.retained_layers().is_empty());
-}
+// `release` and `clear_retained` removed in U1 (zero-consumer scaffolding).
+// SceneCompositor retention is currently write-only; reset must go through
+// a fresh `SceneCompositor::new()`. Tests covering those deleted methods
+// were removed alongside the methods.
 
 #[test]
 fn test_scene_compositor_stats() {
     let mut compositor = SceneCompositor::new();
     let mut tree = LayerTree::new();
 
-    let _ = tree.insert(Layer::Canvas(CanvasLayer::new()));
-    let _ = tree.insert(Layer::Canvas(CanvasLayer::new()));
+    let _ = tree.insert(Layer::from(CanvasLayer::new()));
+    let _ = tree.insert(Layer::from(CanvasLayer::new()));
 
     compositor.update_stats(&tree);
     assert_eq!(compositor.stats().total_layers, 2);

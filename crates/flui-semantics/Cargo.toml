@@ -10,6 +10,10 @@ categories = ["gui", "accessibility"]
 
 [features]
 default = []
+# Exposes test-only constructors (e.g. `SemanticsOwner::new_without_callback`)
+# to integration tests in downstream crates without leaking into production
+# builds. Per PR #93 testing-feature-gate pattern in flui-interaction.
+testing = []
 
 [dependencies]
 # Foundation - canonical ID types (SemanticsId)

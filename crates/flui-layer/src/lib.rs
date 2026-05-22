@@ -63,7 +63,7 @@
 //! use flui_tree::{TreeRead, TreeNav};
 //!
 //! let mut tree = LayerTree::new();
-//! let id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+//! let id = tree.insert(Layer::from(CanvasLayer::new()));
 //!
 //! // Use generic tree operations
 //! assert!(tree.contains(id));
@@ -242,7 +242,7 @@ mod tests {
         assert!(tree.is_empty());
 
         let canvas = CanvasLayer::new();
-        let id = tree.insert(Layer::Canvas(canvas));
+        let id = tree.insert(Layer::from(canvas));
 
         assert!(!tree.is_empty());
         assert_eq!(tree.len(), 1);
@@ -254,7 +254,7 @@ mod tests {
         let mut tree = LayerTree::new();
 
         // Leaf
-        let _ = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let _ = tree.insert(Layer::from(CanvasLayer::new()));
 
         // Clip layers
         let _ = tree.insert(Layer::ClipRect(ClipRectLayer::new(

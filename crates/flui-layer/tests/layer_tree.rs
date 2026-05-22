@@ -26,7 +26,7 @@ fn test_layer_tree_with_capacity() {
 #[test]
 fn test_layer_tree_insert() {
     let mut tree = LayerTree::new();
-    let layer = Layer::Canvas(CanvasLayer::new());
+    let layer = Layer::from(CanvasLayer::new());
     let id = tree.insert(layer);
 
     assert!(!tree.is_empty());
@@ -38,7 +38,7 @@ fn test_layer_tree_insert() {
 #[test]
 fn test_layer_tree_get() {
     let mut tree = LayerTree::new();
-    let layer = Layer::Canvas(CanvasLayer::new());
+    let layer = Layer::from(CanvasLayer::new());
     let id = tree.insert(layer);
 
     let node = tree.get(id);
@@ -49,7 +49,7 @@ fn test_layer_tree_get() {
 #[test]
 fn test_layer_tree_get_layer() {
     let mut tree = LayerTree::new();
-    let layer = Layer::Canvas(CanvasLayer::new());
+    let layer = Layer::from(CanvasLayer::new());
     let id = tree.insert(layer);
 
     let layer = tree.get_layer(id);
@@ -60,7 +60,7 @@ fn test_layer_tree_get_layer() {
 #[test]
 fn test_layer_tree_remove() {
     let mut tree = LayerTree::new();
-    let layer = Layer::Canvas(CanvasLayer::new());
+    let layer = Layer::from(CanvasLayer::new());
     let id = tree.insert(layer);
 
     assert!(tree.contains(id));
@@ -75,8 +75,8 @@ fn test_layer_tree_remove() {
 fn test_layer_tree_parent_child() {
     let mut tree = LayerTree::new();
 
-    let parent_layer = Layer::Canvas(CanvasLayer::new());
-    let child_layer = Layer::Canvas(CanvasLayer::new());
+    let parent_layer = Layer::from(CanvasLayer::new());
+    let child_layer = Layer::from(CanvasLayer::new());
 
     let parent_id = tree.insert(parent_layer);
     let child_id = tree.insert(child_layer);
@@ -97,8 +97,8 @@ fn test_layer_tree_parent_child() {
 fn test_layer_tree_remove_child() {
     let mut tree = LayerTree::new();
 
-    let parent_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-    let child_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+    let parent_id = tree.insert(Layer::from(CanvasLayer::new()));
+    let child_id = tree.insert(Layer::from(CanvasLayer::new()));
 
     tree.add_child(parent_id, child_id);
     assert_eq!(tree.children(parent_id).unwrap().len(), 1);
@@ -111,7 +111,7 @@ fn test_layer_tree_remove_child() {
 #[test]
 fn test_layer_tree_set_root() {
     let mut tree = LayerTree::new();
-    let id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+    let id = tree.insert(Layer::from(CanvasLayer::new()));
 
     assert!(tree.root().is_none());
     tree.set_root(Some(id));
@@ -121,7 +121,7 @@ fn test_layer_tree_set_root() {
 #[test]
 fn test_layer_tree_clear() {
     let mut tree = LayerTree::new();
-    let id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+    let id = tree.insert(Layer::from(CanvasLayer::new()));
     tree.set_root(Some(id));
 
     tree.clear();
@@ -132,8 +132,8 @@ fn test_layer_tree_clear() {
 #[test]
 fn test_layer_tree_iter() {
     let mut tree = LayerTree::new();
-    let id1 = tree.insert(Layer::Canvas(CanvasLayer::new()));
-    let id2 = tree.insert(Layer::Canvas(CanvasLayer::new()));
+    let id1 = tree.insert(Layer::from(CanvasLayer::new()));
+    let id2 = tree.insert(Layer::from(CanvasLayer::new()));
 
     let ids: Vec<_> = tree.layer_ids().collect();
     assert_eq!(ids.len(), 2);
@@ -144,7 +144,7 @@ fn test_layer_tree_iter() {
 #[test]
 fn test_layer_node_with_element_id() {
     let element_id = ElementId::new(42);
-    let node = LayerNode::new(Layer::Canvas(CanvasLayer::new())).with_element_id(element_id);
+    let node = LayerNode::new(Layer::from(CanvasLayer::new())).with_element_id(element_id);
 
     assert_eq!(node.element_id(), Some(element_id));
 }
@@ -152,19 +152,23 @@ fn test_layer_node_with_element_id() {
 #[test]
 fn test_layer_node_with_offset() {
     let offset = Offset::new(px(10.0), px(20.0));
-    let node = LayerNode::new(Layer::Canvas(CanvasLayer::new())).with_offset(offset);
+    let node = LayerNode::new(Layer::from(CanvasLayer::new())).with_offset(offset);
 
     assert_eq!(node.offset(), Some(offset));
 }
 
 #[test]
-fn test_layer_node_needs_compositing() {
-    let mut node = LayerNode::new(Layer::Canvas(CanvasLayer::new()));
-
-    assert!(node.needs_compositing()); // Default is true
-
-    node.set_needs_compositing(false);
-    assert!(!node.needs_compositing());
+fn test_layer_node_needs_compositing_delegates_to_enum() {
+    // After U1: needs_compositing() delegates to the Layer enum method.
+    // The pre-U1 cached field defaulted to `true` for every variant, which
+    // diverged from `Layer::needs_compositing` — Canvas/Picture/Offset and
+    // friends actually return `false`. Asserting the post-delegation
+    // contract here locks the answer to the variant-computed value.
+    let canvas = LayerNode::new(Layer::from(CanvasLayer::new()));
+    assert!(
+        !canvas.needs_compositing(),
+        "Canvas layer does not need compositing"
+    );
 }
 
 // ========== Layer Composition Tests ==========
@@ -174,10 +178,10 @@ fn test_clear_children() {
     let mut tree = LayerTree::new();
 
     // Create parent with multiple children
-    let parent_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-    let child1_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-    let child2_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-    let child3_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+    let parent_id = tree.insert(Layer::from(CanvasLayer::new()));
+    let child1_id = tree.insert(Layer::from(CanvasLayer::new()));
+    let child2_id = tree.insert(Layer::from(CanvasLayer::new()));
+    let child3_id = tree.insert(Layer::from(CanvasLayer::new()));
 
     tree.add_child(parent_id, child1_id);
     tree.add_child(parent_id, child2_id);
@@ -208,10 +212,10 @@ fn test_append_layer() {
     let mut tree = LayerTree::new();
 
     // Create container layer
-    let container_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+    let container_id = tree.insert(Layer::from(CanvasLayer::new()));
 
     // Create picture layer
-    let picture_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+    let picture_id = tree.insert(Layer::from(CanvasLayer::new()));
 
     // Append to container (Flutter PaintingContext pattern)
     tree.append_layer(container_id, picture_id);
@@ -229,10 +233,10 @@ fn test_append_layer() {
 fn test_append_layer_multiple_times() {
     let mut tree = LayerTree::new();
 
-    let container_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-    let layer1_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-    let layer2_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-    let layer3_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+    let container_id = tree.insert(Layer::from(CanvasLayer::new()));
+    let layer1_id = tree.insert(Layer::from(CanvasLayer::new()));
+    let layer2_id = tree.insert(Layer::from(CanvasLayer::new()));
+    let layer3_id = tree.insert(Layer::from(CanvasLayer::new()));
 
     // Append layers one by one
     tree.append_layer(container_id, layer1_id);
@@ -251,10 +255,10 @@ fn test_append_layer_multiple_times() {
 fn test_append_layers_bulk() {
     let mut tree = LayerTree::new();
 
-    let container_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-    let layer1_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-    let layer2_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-    let layer3_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+    let container_id = tree.insert(Layer::from(CanvasLayer::new()));
+    let layer1_id = tree.insert(Layer::from(CanvasLayer::new()));
+    let layer2_id = tree.insert(Layer::from(CanvasLayer::new()));
+    let layer3_id = tree.insert(Layer::from(CanvasLayer::new()));
 
     // Append multiple layers at once
     tree.append_layers(container_id, &[layer1_id, layer2_id, layer3_id]);
@@ -271,7 +275,7 @@ fn test_append_layers_bulk() {
 fn test_append_layers_empty() {
     let mut tree = LayerTree::new();
 
-    let container_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+    let container_id = tree.insert(Layer::from(CanvasLayer::new()));
 
     // Append empty slice - should be no-op
     tree.append_layers(container_id, &[]);
@@ -291,11 +295,11 @@ fn test_layer_composition_integration() {
     let mut tree = LayerTree::new();
 
     // Step 1: Create container
-    let container_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+    let container_id = tree.insert(Layer::from(CanvasLayer::new()));
 
     // Step 2: Append some picture layers
-    let picture1_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-    let picture2_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+    let picture1_id = tree.insert(Layer::from(CanvasLayer::new()));
+    let picture2_id = tree.insert(Layer::from(CanvasLayer::new()));
     tree.append_layers(container_id, &[picture1_id, picture2_id]);
 
     assert_eq!(tree.children(container_id).unwrap().len(), 2);
@@ -305,9 +309,9 @@ fn test_layer_composition_integration() {
     assert_eq!(tree.children(container_id).unwrap().len(), 0);
 
     // Append new layers
-    let new_picture1_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-    let new_picture2_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-    let new_picture3_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+    let new_picture1_id = tree.insert(Layer::from(CanvasLayer::new()));
+    let new_picture2_id = tree.insert(Layer::from(CanvasLayer::new()));
+    let new_picture3_id = tree.insert(Layer::from(CanvasLayer::new()));
     tree.append_layers(
         container_id,
         &[new_picture1_id, new_picture2_id, new_picture3_id],

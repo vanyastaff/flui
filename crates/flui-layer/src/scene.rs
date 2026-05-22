@@ -28,7 +28,7 @@
 //! // Create scene from a single layer
 //! let scene = Scene::from_layer(
 //!     Size::new(800.0, 600.0),
-//!     Layer::Canvas(CanvasLayer::new()),
+//!     Layer::from(CanvasLayer::new()),
 //!     0,
 //! );
 //!
@@ -256,12 +256,6 @@ impl Scene {
         &self.layer_tree
     }
 
-    /// Returns mutable layer tree (for rendering traversal).
-    #[inline]
-    pub fn layer_tree_mut(&mut self) -> &mut LayerTree {
-        &mut self.layer_tree
-    }
-
     /// Returns the root layer ID of the scene.
     #[inline]
     pub fn root(&self) -> Option<LayerId> {
@@ -278,6 +272,25 @@ impl Scene {
     #[inline]
     pub fn link_registry(&self) -> &LinkRegistry {
         &self.link_registry
+    }
+
+    /// Garbage-collects follower entries whose leader has left the tree.
+    ///
+    /// Returns the number of follower entries pruned.
+    ///
+    /// **Contract**: if you remove `LeaderLayer` or `FollowerLayer`
+    /// instances via `SceneBuilder` (or via direct tree mutation),
+    /// call `gc_orphaned_followers()` afterwards to prevent registry
+    /// growth across frames. The compositor itself does NOT run this
+    /// automatically — orphaned-follower retention is a design choice
+    /// per Flutter's `LayerHandle._unref` cascade, where follower
+    /// state is intentionally preserved across single-frame layer
+    /// disappearances (the leader may reappear in the next frame).
+    /// Explicit GC is the caller's responsibility.
+    ///
+    /// Delegates to [`LinkRegistry::remove_orphaned_followers`].
+    pub fn gc_orphaned_followers(&mut self) -> usize {
+        self.link_registry.remove_orphaned_followers()
     }
 
     /// Returns the frame number.
@@ -391,7 +404,7 @@ mod tests {
     fn test_scene_from_layer() {
         let scene = Scene::from_layer(
             Size::new(px(1920.0), px(1080.0)),
-            Layer::Canvas(CanvasLayer::new()),
+            Layer::from(CanvasLayer::new()),
             42,
         );
 
@@ -407,7 +420,7 @@ mod tests {
     #[test]
     fn test_scene_new_with_tree() {
         let mut tree = LayerTree::new();
-        let root_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let root_id = tree.insert(Layer::from(CanvasLayer::new()));
 
         let scene = Scene::new(Size::new(px(800.0), px(600.0)), tree, Some(root_id), 1);
 
@@ -419,7 +432,7 @@ mod tests {
     #[test]
     fn test_scene_with_links() {
         let mut tree = LayerTree::new();
-        let root_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let root_id = tree.insert(Layer::from(CanvasLayer::new()));
 
         let mut registry = LinkRegistry::new();
         let link = crate::LayerLink::new();
@@ -457,7 +470,7 @@ mod tests {
         // replacement.
         let scene = Scene::from_layer(
             Size::new(px(800.0), px(600.0)),
-            Layer::Canvas(CanvasLayer::new()),
+            Layer::from(CanvasLayer::new()),
             0,
         );
         drop(scene);

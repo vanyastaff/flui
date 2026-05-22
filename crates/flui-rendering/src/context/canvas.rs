@@ -230,7 +230,7 @@ impl CanvasContext {
                 let picture = canvas.finish();
                 if !picture.is_empty() {
                     let picture_layer = PictureLayer::new(picture);
-                    let layer_id = self.layer_tree.insert(Layer::Picture(picture_layer));
+                    let layer_id = self.layer_tree.insert(Layer::from(picture_layer));
 
                     // Add to current parent
                     if let Some(parent_id) = self.current_layer {
@@ -440,7 +440,7 @@ impl CanvasContext {
 
             let offset_path = clip_path.translate(offset);
             let clip_layer = ClipPathLayer::new(offset_path, Clip::AntiAlias);
-            let layer_id = self.layer_tree.insert(Layer::ClipPath(clip_layer));
+            let layer_id = self.layer_tree.insert(Layer::from(clip_layer));
 
             // Add to current parent
             if let Some(parent_id) = self.current_layer {

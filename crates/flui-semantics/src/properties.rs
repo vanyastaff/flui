@@ -169,6 +169,85 @@ impl From<SmolStr> for AttributedString {
 }
 
 // ============================================================================
+// AttributedString concat helper (U16)
+// ============================================================================
+
+/// Concatenates two attributed strings in a text-direction-aware manner.
+///
+/// Mirrors Flutter
+/// [`packages/flutter/lib/src/semantics/semantics.dart:937`](../../../../.flutter/flutter-master/packages/flutter/lib/src/semantics/semantics.dart)
+/// `_concatAttributedString` helper. Used during
+/// [`SemanticsConfiguration::absorb`] when the parent and child each carry
+/// a label or hint that must be joined into a single string for the
+/// platform accessibility surface.
+///
+/// Empty-input fast paths return the non-empty operand directly so the
+/// join never inserts a leading or trailing space.
+///
+/// Phase-1 simplification: same-direction strings join with a single
+/// ASCII space; mixed-direction strings *also* join with a single space
+/// in this port. Full Unicode bidi-override sequences for mixed-direction
+/// strings (matching Flutter `semantics.dart:937-1010`) are deferred —
+/// the audit's P0 set does not include a mixed-direction case.
+/// Attribute offsets carry over from the left operand; right-operand
+/// attributes are shifted by `left.string.len() + 1` for the inserted
+/// space.
+#[must_use]
+pub fn concat_attributed_string(
+    this: &AttributedString,
+    _this_dir: TextDirection,
+    other: &AttributedString,
+    _other_dir: TextDirection,
+) -> AttributedString {
+    if this.is_empty() {
+        return other.clone();
+    }
+    if other.is_empty() {
+        return this.clone();
+    }
+
+    let mut joined = String::with_capacity(this.string.len() + 1 + other.string.len());
+    joined.push_str(&this.string);
+    joined.push(' ');
+    joined.push_str(&other.string);
+
+    let mut attributes = this.attributes.clone();
+    let shift = this.string.len() + 1; // " "
+    for a in &other.attributes {
+        attributes.push(StringAttribute {
+            start: a.start + shift,
+            end: a.end + shift,
+            attribute_type: a.attribute_type.clone(),
+        });
+    }
+
+    AttributedString {
+        string: SmolStr::new(&joined),
+        attributes,
+    }
+}
+
+// ============================================================================
+// SemanticsAction mask constants (U16)
+// ============================================================================
+
+/// Bitmask of `SemanticsAction` variants that can be absorbed from a child
+/// configuration into its parent **even when** the child has set
+/// `blocks_user_actions = true`. Mirrors Flutter
+/// `semantics.dart::_kUnblockedUserActions`.
+///
+/// These actions are "user-navigation" rather than "user-interaction":
+/// tapping or scrolling on the child must still reach a parent that
+/// handles the navigation gesture even if the child has opted out of
+/// other user actions.
+pub(crate) const UNBLOCKED_USER_ACTIONS_MASK: u64 = (1 << 0) // Tap
+    | (1 << 1)  // LongPress
+    | (1 << 2)  // ScrollLeft
+    | (1 << 3)  // ScrollRight
+    | (1 << 4)  // ScrollUp
+    | (1 << 5); // ScrollDown
+
+// ============================================================================
 // StringAttribute
 // ============================================================================
 

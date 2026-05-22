@@ -60,20 +60,34 @@ macro_rules! gen_layer_accessors {
 
                 #[doc = concat!("Returns a shared reference to the inner [`",
                     stringify!($ty), "`] if this is a [`Layer::", stringify!($variant), "`].")]
+                ///
+                /// The accessor returns `&T` for both inline `Variant(T)` and
+                /// boxed `Variant(Box<T>)` storage forms via the
+                /// [`std::borrow::Borrow`] trait — `Box<T>: Borrow<T>` and the
+                /// blanket `T: Borrow<T>` impl let callers ignore the boxing
+                /// decision.
                 #[inline]
                 pub fn $as_fn(&self) -> Option<&$ty> {
                     match self {
-                        crate::layer::Layer::$variant(layer) => Some(layer),
+                        crate::layer::Layer::$variant(layer) => Some(
+                            <_ as ::std::borrow::Borrow<$ty>>::borrow(layer),
+                        ),
                         _ => None,
                     }
                 }
 
                 #[doc = concat!("Returns a mutable reference to the inner [`",
                     stringify!($ty), "`] if this is a [`Layer::", stringify!($variant), "`].")]
+                ///
+                /// Mirrors the [`std::borrow::BorrowMut`] indirection from the
+                /// shared accessor so inline and boxed variants share one
+                /// signature.
                 #[inline]
                 pub fn $as_mut_fn(&mut self) -> Option<&mut $ty> {
                     match self {
-                        crate::layer::Layer::$variant(layer) => Some(layer),
+                        crate::layer::Layer::$variant(layer) => Some(
+                            <_ as ::std::borrow::BorrowMut<$ty>>::borrow_mut(layer),
+                        ),
                         _ => None,
                     }
                 }

@@ -105,7 +105,7 @@ fn build_test_scene(width: f32, height: f32) -> Scene {
         &Paint::fill(Color::rgb(255, 200, 0)),
     );
 
-    let root_id = tree.insert(Layer::Canvas(canvas_layer));
+    let root_id = tree.insert(Layer::from(canvas_layer));
     Scene::new(Size::new(px(width), px(height)), tree, Some(root_id), 1)
 }
 

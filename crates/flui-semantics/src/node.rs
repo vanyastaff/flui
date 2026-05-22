@@ -6,8 +6,8 @@
 
 use flui_foundation::{ElementId, SemanticsId};
 use flui_types::{
-    geometry::{Pixels, Rect},
     Matrix4,
+    geometry::{Pixels, Rect},
 };
 
 // Use our optimized types from flui-semantics
@@ -69,8 +69,14 @@ pub struct SemanticsNode {
     /// Bounding rectangle in global coordinates.
     rect: Rect<Pixels>,
 
-    /// Transform matrix (stored as 4x4 column-major).
-    transform: Option<[f32; 16]>,
+    /// Transform matrix.
+    ///
+    /// Stored as the workspace-canonical [`Matrix4`] from `flui_types`
+    /// — the same representation `to_node_data()` exports. Pre-U19
+    /// stored as `Option<[f32; 16]>` and round-tripped through
+    /// `Matrix4::from` at export time; U19 unifies the representation
+    /// across the framework and drops the round-trip.
+    transform: Option<Matrix4>,
 
     // ========== State ==========
     /// Whether this node is marked dirty and needs update.
@@ -205,14 +211,14 @@ impl SemanticsNode {
         self.dirty = true;
     }
 
-    /// Returns the transform matrix.
+    /// Returns the transform matrix, if any.
     #[inline]
-    pub fn transform(&self) -> Option<&[f32; 16]> {
+    pub fn transform(&self) -> Option<&Matrix4> {
         self.transform.as_ref()
     }
 
     /// Sets the transform matrix.
-    pub fn set_transform(&mut self, transform: Option<[f32; 16]>) {
+    pub fn set_transform(&mut self, transform: Option<Matrix4>) {
         self.transform = transform;
         self.dirty = true;
     }
@@ -271,7 +277,7 @@ impl SemanticsNode {
             tooltip: self.config.tooltip().map(Into::into),
             text_direction: self.config.text_direction(),
             rect: self.rect,
-            transform: self.transform.map_or(Matrix4::IDENTITY, Matrix4::from),
+            transform: self.transform.unwrap_or(Matrix4::IDENTITY),
             children: self.children.iter().map(|c| (c.get() - 1) as u64).collect(),
             elevation: self.config.elevation(),
             thickness: self.config.thickness(),
@@ -288,11 +294,19 @@ impl SemanticsNode {
 
     // ========== Merging ==========
 
-    /// Merges another node's configuration into this one.
+    /// Absorbs another node's configuration + rect into this one.
     ///
-    /// Used when a non-boundary render object's semantics should be
-    /// merged into its parent boundary.
-    pub fn merge(&mut self, other: &SemanticsNode) {
+    /// Used when a non-boundary render object's semantics should be merged
+    /// into its parent boundary. Delegates to
+    /// [`SemanticsConfiguration::absorb`] for the config side and unions
+    /// the rectangles on the geometry side.
+    ///
+    /// **Naming**: renamed from `merge` → `absorb` in U20 for consistency
+    /// with [`SemanticsConfiguration::absorb`] and the Flutter convention
+    /// (Flutter has no separate `SemanticsNode.merge` — merging happens
+    /// via `SemanticsConfiguration.absorb` plus the tree-assembly walker;
+    /// FLUI keeps the convenience but aligns naming).
+    pub fn absorb(&mut self, other: &SemanticsNode) {
         self.config.absorb(&other.config);
 
         // Expand rect to include other's rect
@@ -397,11 +411,9 @@ mod tests {
         node.set_rect(rect);
         assert_eq!(node.rect(), rect);
 
-        let transform = [
-            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
-        ];
-        node.set_transform(Some(transform));
+        node.set_transform(Some(Matrix4::IDENTITY));
         assert!(node.transform().is_some());
+        assert_eq!(node.transform().copied(), Some(Matrix4::IDENTITY));
     }
 
     #[test]
@@ -422,7 +434,7 @@ mod tests {
     }
 
     #[test]
-    fn test_semantics_node_merge() {
+    fn test_semantics_node_absorb() {
         let mut node1 = SemanticsNode::new();
         node1.config_mut().set_label("First");
         node1.config_mut().set_button(true);
@@ -433,7 +445,7 @@ mod tests {
         node2.config_mut().set_enabled(Some(true));
         node2.set_rect(Rect::from_xywh(px(50.0), px(0.0), px(50.0), px(50.0)));
 
-        node1.merge(&node2);
+        node1.absorb(&node2);
 
         assert!(node1.config().is_button());
         assert_eq!(node1.config().is_enabled(), Some(true));
