@@ -36,7 +36,7 @@ use thiserror::Error;
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_engine::RenderError;
+/// use flui_engine::EngineError;
 ///
 /// fn render_frame() -> Result<(), EngineError> {
 ///     // ... rendering code ...
