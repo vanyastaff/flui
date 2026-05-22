@@ -93,10 +93,16 @@ impl DrawIndexedIndirectArgs {
         }
     }
 
-    /// Create command for quad instances
+    /// Create command for quad instances.
     ///
-    /// Quad has 6 indices (2 triangles)
-    pub fn quad_instances(instance_count: u32) -> Self {
+    /// Quad has 6 indices (2 triangles).
+    ///
+    /// Cycle 4 E-16: visibility demoted from `pub` to `pub(crate)`.
+    /// Sole callsite is `MultiDrawBatcher::add_quad_instances` at
+    /// line 181 in this same module; no workspace consumer needs
+    /// the function-path entry. Demotion trims the crate's public
+    /// surface without touching behavior.
+    pub(crate) fn quad_instances(instance_count: u32) -> Self {
         Self::new(6, instance_count)
     }
 }

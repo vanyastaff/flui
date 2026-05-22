@@ -143,9 +143,11 @@ pub use external_texture_registry::{ExternalTextureEntry, ExternalTextureRegistr
 // Layer rendering
 pub use layer_render::LayerRender;
 // Multi-draw indirect batching
-pub use multi_draw::{
-    DrawCommand, DrawIndexedIndirectArgs, MultiDrawBatcher, MultiDrawStats, PipelineId,
-};
+// Cycle 4 E-16: `MultiDrawStats` dropped from this re-export.
+// Workspace grep showed zero external consumers; the type stays
+// `pub` at its definition site for in-crate use but no longer
+// escapes the wgpu module's public surface.
+pub use multi_draw::{DrawCommand, DrawIndexedIndirectArgs, MultiDrawBatcher, PipelineId};
 // Offscreen rendering. `PipelineManager` was deleted in cycle 4 E-3
 // (zombie wrapper carrying only an `Arc<ShaderCache>` field with 0
 // consumers); the real pipeline ownership lives in
