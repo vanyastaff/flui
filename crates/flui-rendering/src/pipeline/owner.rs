@@ -916,18 +916,29 @@ impl PipelineOwner<Compositing> {
     /// Nodes are sorted by depth (shallow first). This matches Flutter's
     /// `flushCompositingBits` behavior.
     pub fn run_compositing(&mut self) -> crate::error::RenderResult<()> {
-        // Drain the dirty list in one step (`std::mem::take` matches
-        // the cycle-4 `run_semantics` shape from R-1). Pre-cycle this
-        // path sort-then-iterate-then-clear walked the list twice.
-        let mut dirty = std::mem::take(&mut self.dirty.needs_compositing);
-        if dirty.is_empty() {
+        // PR #109 review feedback: pre-fix this path used
+        // `std::mem::take(&mut self.dirty.needs_compositing)` to drain in
+        // one step. Take leaves an empty `Vec::new()` (capacity 0) behind,
+        // so every subsequent frame's first compositing push re-allocates.
+        // The compositing dirty list churns per-frame in any animated
+        // scene, so the realloc cost is hot-path. Switch to an in-place
+        // sort + iterate + clear pattern that preserves the Vec's backing
+        // capacity across frames (idiom: *Programming Rust* 2nd ed §11
+        // "Owned vs Borrowed", retain the allocation by retaining
+        // ownership).
+        if self.dirty.needs_compositing.is_empty() {
             return Ok(());
         }
-        tracing::debug!("run_compositing: {} nodes", dirty.len());
+        tracing::debug!(
+            "run_compositing: {} nodes",
+            self.dirty.needs_compositing.len()
+        );
 
         // Sort by depth (shallow first). Flutter:
         // `_nodesNeedingCompositingBitsUpdate.sort((a, b) => a.depth - b.depth)`.
-        dirty.sort_unstable_by_key(|node| node.depth);
+        self.dirty
+            .needs_compositing
+            .sort_unstable_by_key(|node| node.depth);
 
         // Cycle 4 R-4: pre-cycle this path emitted a `tracing::trace!`
         // per dirty node and returned `Ok(())` without actually
@@ -943,7 +954,12 @@ impl PipelineOwner<Compositing> {
         // boundary check) is its own follow-up that needs the
         // `RenderObject::always_needs_compositing` + `is_repaint_boundary`
         // bool accessors plumbed through the dyn surface.
-        for node in &dirty {
+        //
+        // Split-borrow: `self.dirty.needs_compositing` (immutable) and
+        // `self.render_tree` (immutable) are disjoint fields under
+        // Rust 2024's disjoint capture, so this loop compiles without
+        // a temporary clone.
+        for node in &self.dirty.needs_compositing {
             if self.render_tree.contains(node.id) {
                 tracing::warn!(
                     id = ?node.id,
@@ -954,6 +970,9 @@ impl PipelineOwner<Compositing> {
                 );
             }
         }
+        // `clear()` retains the Vec's allocated capacity; next frame's
+        // pushes amortise into the existing buffer.
+        self.dirty.needs_compositing.clear();
         Ok(())
     }
 }
@@ -1274,17 +1293,23 @@ impl PipelineOwner<Semantics> {
 
         self.debug_doing_semantics = true;
 
-        // Filter out nodes that still need layout (they're not ready for
-        // semantics). Flutter parity:
-        // `.where((object) => !object._needsLayout && object.owner == this)`.
-        // `std::mem::take` drains the dirty list in one step — pre-cycle 4
-        // used `to_vec()` + `clear()` which allocated twice.
-        let mut nodes_to_process: Vec<DirtyNode> = std::mem::take(&mut self.dirty.needs_semantics);
+        // PR #109 review feedback: pre-fix this path used
+        // `std::mem::take(&mut self.dirty.needs_semantics)` to drain in
+        // one step. Take leaves an empty `Vec::new()` (capacity 0)
+        // behind, so every subsequent semantics-enabled frame's first
+        // push re-allocates. Switch to an in-place sort + iterate +
+        // clear pattern that preserves the Vec's backing capacity
+        // across frames (idiom: *Programming Rust* 2nd ed §11 "Owned
+        // vs Borrowed", retain the allocation by retaining ownership).
+        // The Flutter-parity `where !object._needsLayout` filter the
+        // pre-cycle comment promised was never implemented; that gap
+        // lands when the real semantics-config build is wired (R-1
+        // follow-up).
 
         // Sort shallow-first matching Flutter's flushSemantics. Roots
         // dispatch before their descendants so a parent's config is
         // assembled before children fold into it.
-        nodes_to_process.sort_unstable_by_key(|n| n.depth);
+        self.dirty.needs_semantics.sort_unstable_by_key(|n| n.depth);
 
         // Cycle 4 R-1: pre-cycle the path panicked with
         // `unimplemented!()` once any node was queued — a Constitution
@@ -1297,7 +1322,12 @@ impl PipelineOwner<Semantics> {
         // `Ok(())`. The framework no longer aborts on semantics flips;
         // when the full `SemanticsOwner` integration lands, swap the
         // warn for the real config-build + owner-register call.
-        for dirty_node in &nodes_to_process {
+        //
+        // Split-borrow as in `run_compositing`: `self.dirty.needs_semantics`
+        // and `self.render_tree` are disjoint fields under Rust 2024
+        // disjoint capture, so the loop compiles without a temporary
+        // clone.
+        for dirty_node in &self.dirty.needs_semantics {
             if self.render_tree.contains(dirty_node.id) {
                 tracing::warn!(
                     id = ?dirty_node.id,
@@ -1308,6 +1338,9 @@ impl PipelineOwner<Semantics> {
                 );
             }
         }
+        // `clear()` retains the Vec's allocated capacity; next frame's
+        // pushes amortise into the existing buffer.
+        self.dirty.needs_semantics.clear();
 
         self.debug_doing_semantics = false;
         Ok(())
