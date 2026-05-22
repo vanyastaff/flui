@@ -101,7 +101,11 @@ pub mod prelude {
     // `SliverHitTestResult` exports here; the protocol-canonical
     // versions live in `crate::protocol` and are re-exported alongside
     // each `BoxProtocol`/`SliverProtocol` (see lib.rs protocol prelude).
-    pub use crate::hit_testing::{MatrixTransformPart, PointerEventKind};
+    // Cycle 4 U-5 dropped `PointerEventKind` alongside the deletion of
+    // the rendering-side `target.rs` module; canonical pointer-event
+    // types live in `flui_interaction::events` (re-exported at line 82
+    // via `flui_interaction::{HitTestTarget, ...}`).
+    pub use crate::hit_testing::MatrixTransformPart;
     // Re-export base hit testing types from flui_interaction (source of truth)
     pub use crate::input::{
         CursorIcon, MouseCursorSession, MouseTracker, MouseTrackerAnnotation, MouseTrackerHitTest,

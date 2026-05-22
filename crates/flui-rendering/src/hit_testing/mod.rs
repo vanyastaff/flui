@@ -1,57 +1,82 @@
 //! Hit testing infrastructure for pointer interaction.
 //!
-//! This module provides the complete hit testing system used to determine
-//! which render objects are located at a given position. This is essential
-//! for handling pointer events like taps, drags, and hovers.
+//! After cycle 4 R-7 + R-8 + R-9 consolidation (Wave 2), this module
+//! is a thin protocol-extension surface over
+//! `flui_interaction::routing` and `flui_interaction::mouse_tracker`.
+//! The canonical `HitTestResult` / `HitTestEntry` / `HitTestBehavior`
+//! types live in `flui-interaction` (Flutter's `gestures/` ↔
+//! `flui-interaction`); this module re-exports them for caller
+//! convenience and owns the rendering-protocol-specific
+//! `MatrixTransformPart` helper.
 //!
 //! # Key Types
 //!
-//! - [`HitTestResult`]: Accumulates hit test entries during traversal
-//! - [`HitTestEntry`]: An entry in the hit test path
-//! - [`HitTestTarget`]: Trait for objects that can handle hit test events
-//! - [`HitTestBehavior`]: Controls how hit testing proceeds (from
-//!   flui_interaction)
+//! - [`HitTestResult`]: re-exported from
+//!   [`flui_interaction::routing::HitTestResult`] -- canonical
+//!   result with `Vec<HitTestEntry>` + transform stack + handler
+//!   dispatch.
+//! - [`HitTestEntry`]: re-exported from
+//!   [`flui_interaction::routing::HitTestEntry`] -- carries
+//!   `target: RenderId`, optional handler/scroll_handler/cursor.
+//! - [`HitTestBehavior`]: re-exported from
+//!   [`flui_interaction::routing::HitTestBehavior`] -- standard
+//!   `DeferToChild` / `Opaque` / `Translucent` enum.
+//! - [`MatrixTransformPart`]: protocol-specific transform helper
+//!   used by the box/sliver hit-test capability types.
 //!
 //! # Protocol-Specific Types
 //!
-//! - [`BoxHitTestResult`], [`BoxHitTestEntry`]: For RenderBox hit testing
-//! - [`SliverHitTestResult`], [`SliverHitTestEntry`]: For RenderSliver hit
-//!   testing
+//! `BoxHitTestResult` / `BoxHitTestEntry` / `SliverHitTestResult` /
+//! `SliverHitTestEntry` are in `crate::protocol` (next to the
+//! `BoxProtocol` / `SliverProtocol` capability definitions). They
+//! lived here pre-cycle as parallels to the protocol-side versions,
+//! deleted in cycle 4 U-3.
+//!
+//! # Cycle 4 deletions (Wave 2)
+//!
+//! U-3 removed the parallel `BoxHitTestEntry` / `BoxHitTestResult` /
+//! `SliverHitTestEntry` / `SliverHitTestResult` structs.
+//!
+//! U-4 removed the rendering-side `HitTestResult` + `HitTestEntry`,
+//! replacing them with re-exports of the canonical interaction-side
+//! types.
+//!
+//! U-5 removed the entire `target.rs` module: the `HitTestTarget`
+//! trait, `PointerEvent`, `PointerDeviceKind`, and `PointerEventKind`.
+//! The trait had one production impl (`RenderView`, deleted in U-4)
+//! plus two file-private `DummyTarget` stubs (deleted in U-3/U-4
+//! alongside the structs that owned them). No remaining workspace
+//! consumers.
 //!
 //! # Flutter Equivalence
 //!
-//! This corresponds to Flutter's hit testing system in
-//! `gestures/hit_test.dart`.
+//! Mirrors Flutter's hit-testing split: `gestures/hit_test.dart`
+//! owns the base types (now `flui-interaction`), `rendering/box.dart`
+//! and `rendering/sliver.dart` own the protocol-specific wrappers
+//! (`crate::protocol`).
 //!
 //! # Example
 //!
 //! ```ignore
+//! use flui_rendering::hit_testing::HitTestResult;
+//! use flui_types::Offset;
+//!
 //! let mut result = HitTestResult::new();
 //! render_view.hit_test(&mut result, Offset::new(100.0, 200.0));
 //!
-//! // Process hit targets (front to back)
-//! for entry in result.path() {
-//!     if let Some(target) = entry.target.upgrade() {
-//!         target.handle_event(event, entry);
-//!     }
-//! }
+//! // Dispatch handlers attached to entries during traversal.
+//! result.dispatch(&pointer_event);
 //! ```
 
 mod entry;
 mod result;
-mod target;
 mod transform;
 
-// Re-export HitTestBehavior from flui_interaction (base type).
-// Cycle 4 U-3: parallel `BoxHitTestEntry`/`SliverHitTestEntry` (from
-// `entry.rs`) and `BoxHitTestResult`/`SliverHitTestResult` (from
-// `result.rs`) were deleted; the protocol-canonical versions live in
-// `crates/flui-rendering/src/protocol/box_protocol.rs` and
-// `crates/flui-rendering/src/protocol/sliver_protocol.rs`. The
-// trait-dispatch `HitTestEntry` + `HitTestResult` types remain here
-// and are U-4's migration target.
+// Canonical types re-exported from flui-interaction. Cycle 4 U-4
+// replaced the in-crate `HitTestEntry` + `HitTestResult` structs
+// with these re-exports; consumers' `use crate::hit_testing::HitTestResult`
+// imports compile unchanged.
 pub use entry::HitTestEntry;
 pub use flui_interaction::routing::HitTestBehavior;
 pub use result::HitTestResult;
-pub use target::{HitTestTarget, PointerDeviceKind, PointerEvent, PointerEventKind};
 pub use transform::MatrixTransformPart;
