@@ -758,19 +758,66 @@ impl WidgetsBinding {
         }
     }
 
-    /// Collect all element IDs in the tree recursively.
+    /// Iteratively collect every `(ElementId, depth)` pair reachable from
+    /// `id`, in pre-order DFS order (parent before its children, children
+    /// in `visit_children` order).
+    ///
+    /// Plan §U12 / R15 — audit V-16. The earlier recursive shape did
+    /// `result.extend(recursive_call(child))` once per child, so each
+    /// `extend` re-copied its child's entire subtree into the parent's
+    /// vec. For a balanced tree of N elements that totals `O(N log N)`
+    /// allocation+copy; for a degenerate chain (the FLUI worst case where
+    /// many `StatelessView`s nest linearly) it is `O(N²)`. The recursion
+    /// also burned stack proportional to tree depth.
+    ///
+    /// This implementation pre-sizes a single `Vec<(ElementId, usize)>`
+    /// to `tree.len()` (every node in the slab is at most one entry) and
+    /// drives the walk with an explicit `Vec` work-stack. Total work is
+    /// `O(N)` with one heap allocation amortised across the whole walk;
+    /// stack depth is the constant size of two `Vec`s.
+    ///
+    /// **Ordering contract.** The previous recursive shape pushed the
+    /// current node first, then for each child appended that child's
+    /// entire pre-order subtree before moving to the next child — i.e.
+    /// classic pre-order DFS in `visit_children` order. To preserve that
+    /// ordering on a LIFO work-stack we visit each node when popped and
+    /// then push its children **in reverse `visit_children` order**, so
+    /// the leftmost child is on top of the stack and popped next. The
+    /// per-element pop / visit / push-children sequence is identical to
+    /// the recursive function call sequence.
     fn collect_all_elements(
         tree: &ElementTree,
-        id: ElementId,
-        depth: usize,
+        root_id: ElementId,
+        root_depth: usize,
     ) -> Vec<(ElementId, usize)> {
-        let mut result = vec![(id, depth)];
+        // Tree-len upper-bounds the number of reachable nodes. We may
+        // visit strictly fewer (the walk is rooted at `root_id`, not the
+        // full slab), but over-reserving by a few entries is cheaper than
+        // reallocating during the walk.
+        let mut result: Vec<(ElementId, usize)> = Vec::with_capacity(tree.len());
+        let mut stack: Vec<(ElementId, usize)> = Vec::with_capacity(16);
+        let mut child_buf: Vec<ElementId> = Vec::with_capacity(8);
 
-        // Collect children
-        if let Some(node) = tree.get(id) {
+        stack.push((root_id, root_depth));
+
+        while let Some((id, depth)) = stack.pop() {
+            result.push((id, depth));
+
+            let Some(node) = tree.get(id) else {
+                continue;
+            };
+
+            // `visit_children` walks forward; we collect into a scratch
+            // buffer so we can push the children back onto the LIFO stack
+            // in reverse, preserving the recursive shape's pre-order
+            // visit order.
+            child_buf.clear();
             node.element().visit_children(&mut |child_id| {
-                result.extend(Self::collect_all_elements(tree, child_id, depth + 1));
+                child_buf.push(child_id);
             });
+            for child_id in child_buf.iter().rev() {
+                stack.push((*child_id, depth + 1));
+            }
         }
 
         result
@@ -1529,5 +1576,264 @@ mod tests {
             binding.attach_root_widget(&view),
             Err(AttachError::AlreadyAttached)
         ));
+    }
+
+    // ========================================================================
+    // V-16 collect_all_elements — iterative O(N) walk
+    // ========================================================================
+    //
+    // These tests pin the contract of
+    // `WidgetsBinding::collect_all_elements`:
+    //
+    // 1. It returns every `(ElementId, depth)` pair reachable from the
+    //    starting `root_id`, with depths offset by the supplied
+    //    `root_depth` (i.e. the root's recorded depth equals
+    //    `root_depth`, each child recorded depth equals `root_depth + 1`,
+    //    and so on).
+    // 2. The traversal is pre-order DFS in the order yielded by each
+    //    element's `visit_children` — parent first, then each child's
+    //    entire subtree before moving on to the next sibling.
+    // 3. Order is deterministic across runs.
+    // 4. Deep linear chains do not exhaust the stack (the walk is
+    //    iterative).
+
+    /// Test fixture element whose `visit_children` returns the IDs in
+    /// `children`. The element is configured manually after insertion via
+    /// `set_children` so the test can wire up arbitrary tree shapes
+    /// without relying on a full `View::build` round-trip.
+    #[derive(Default)]
+    struct MultiNodeElement {
+        depth: usize,
+        lifecycle: crate::Lifecycle,
+        children: Vec<flui_foundation::ElementId>,
+    }
+
+    impl MultiNodeElement {
+        fn new() -> Self {
+            Self {
+                depth: 0,
+                lifecycle: crate::Lifecycle::Initial,
+                children: Vec::new(),
+            }
+        }
+    }
+
+    impl crate::ElementBase for MultiNodeElement {
+        fn view_type_id(&self) -> TypeId {
+            TypeId::of::<MultiNodeView>()
+        }
+
+        fn depth(&self) -> usize {
+            self.depth
+        }
+
+        fn lifecycle(&self) -> crate::Lifecycle {
+            self.lifecycle
+        }
+
+        fn mount(
+            &mut self,
+            _parent: Option<flui_foundation::ElementId>,
+            slot: usize,
+            _owner: &mut crate::ElementOwner<'_>,
+        ) {
+            self.depth = slot;
+            self.lifecycle = crate::Lifecycle::Active;
+        }
+
+        fn unmount(&mut self, _owner: &mut crate::ElementOwner<'_>) {
+            self.lifecycle = crate::Lifecycle::Defunct;
+        }
+
+        fn activate(&mut self) {
+            self.lifecycle = crate::Lifecycle::Active;
+        }
+
+        fn deactivate(&mut self) {
+            self.lifecycle = crate::Lifecycle::Inactive;
+        }
+
+        fn update(&mut self, _new_view: &dyn View, _owner: &mut crate::ElementOwner<'_>) {}
+
+        fn mark_needs_build(&mut self) {}
+
+        fn perform_build(&mut self, _owner: &mut crate::ElementOwner<'_>) {}
+
+        fn visit_children(&self, visitor: &mut dyn FnMut(flui_foundation::ElementId)) {
+            for &child_id in &self.children {
+                visitor(child_id);
+            }
+        }
+    }
+
+    #[derive(Clone)]
+    struct MultiNodeView;
+
+    impl View for MultiNodeView {
+        fn create_element(&self) -> Box<dyn crate::ElementBase> {
+            Box::new(MultiNodeElement::new())
+        }
+    }
+
+    /// Helper: insert a `MultiNodeView` as a child of `parent`, returning
+    /// its new `ElementId`.
+    fn insert_multi_child(
+        tree: &mut crate::tree::ElementTree,
+        build_owner: &mut crate::BuildOwner,
+        parent: flui_foundation::ElementId,
+        slot: usize,
+    ) -> flui_foundation::ElementId {
+        let view = MultiNodeView;
+        tree.insert(&view, parent, slot, &mut build_owner.element_owner_mut())
+    }
+
+    /// Helper: configure the children list on the element backing `id`.
+    fn set_children_for(
+        tree: &mut crate::tree::ElementTree,
+        id: flui_foundation::ElementId,
+        children: Vec<flui_foundation::ElementId>,
+    ) {
+        let node = tree.get_mut(id).expect("node exists");
+        let element = node
+            .element_mut()
+            .as_any_mut()
+            .downcast_mut::<MultiNodeElement>()
+            .expect("element is MultiNodeElement");
+        element.children = children;
+    }
+
+    /// Happy path: a tree of `root → [a, b], a → [a1]`. The walk visits
+    /// every node with the correct depths, in pre-order DFS.
+    #[test]
+    fn test_collect_all_elements_happy_path() {
+        let mut tree = crate::tree::ElementTree::new();
+        let mut build_owner = crate::BuildOwner::new();
+
+        let root_id = tree.mount_root(&MultiNodeView, &mut build_owner.element_owner_mut());
+        let alpha = insert_multi_child(&mut tree, &mut build_owner, root_id, 0);
+        let bravo = insert_multi_child(&mut tree, &mut build_owner, root_id, 1);
+        let alpha_child = insert_multi_child(&mut tree, &mut build_owner, alpha, 0);
+
+        set_children_for(&mut tree, root_id, vec![alpha, bravo]);
+        set_children_for(&mut tree, alpha, vec![alpha_child]);
+
+        let walk = WidgetsBinding::collect_all_elements(&tree, root_id, 0);
+
+        assert_eq!(
+            walk,
+            vec![(root_id, 0), (alpha, 1), (alpha_child, 2), (bravo, 1)],
+            "pre-order DFS: parent before children, children in visit_children order"
+        );
+    }
+
+    /// Edge case: a deeply unbalanced chain. The iterative walk must
+    /// terminate without overflowing the stack. 1024 is well past the
+    /// 50-deep threshold the plan calls out and far past what naive
+    /// recursion would tolerate on Windows's smaller default thread
+    /// stack.
+    #[test]
+    fn test_collect_all_elements_deep_chain() {
+        let mut tree = crate::tree::ElementTree::new();
+        let mut build_owner = crate::BuildOwner::new();
+
+        let root_id = tree.mount_root(&MultiNodeView, &mut build_owner.element_owner_mut());
+
+        let mut ids = vec![root_id];
+        let mut current = root_id;
+        for _ in 0..1024 {
+            let next = insert_multi_child(&mut tree, &mut build_owner, current, 0);
+            set_children_for(&mut tree, current, vec![next]);
+            ids.push(next);
+            current = next;
+        }
+
+        let walk = WidgetsBinding::collect_all_elements(&tree, root_id, 0);
+
+        assert_eq!(walk.len(), ids.len(), "every chain node is visited");
+        for (i, &(id, depth)) in walk.iter().enumerate() {
+            assert_eq!(id, ids[i], "chain visit order is parent-first");
+            assert_eq!(depth, i, "depth grows with chain index");
+        }
+    }
+
+    /// Edge case: a wide shallow tree (root → 64 leaf children). The
+    /// walk must visit the root then every child in `visit_children`
+    /// order.
+    #[test]
+    fn test_collect_all_elements_wide_tree() {
+        let mut tree = crate::tree::ElementTree::new();
+        let mut build_owner = crate::BuildOwner::new();
+
+        let root_id = tree.mount_root(&MultiNodeView, &mut build_owner.element_owner_mut());
+
+        let mut children = Vec::with_capacity(64);
+        for slot in 0..64 {
+            children.push(insert_multi_child(
+                &mut tree,
+                &mut build_owner,
+                root_id,
+                slot,
+            ));
+        }
+        set_children_for(&mut tree, root_id, children.clone());
+
+        let walk = WidgetsBinding::collect_all_elements(&tree, root_id, 0);
+
+        assert_eq!(walk.len(), 1 + children.len());
+        assert_eq!(walk[0], (root_id, 0));
+        for (i, &child_id) in children.iter().enumerate() {
+            assert_eq!(walk[1 + i], (child_id, 1));
+        }
+    }
+
+    /// Stability: running the walk twice on the same tree returns the
+    /// exact same sequence — the iterative shape must not introduce
+    /// any ordering nondeterminism.
+    #[test]
+    fn test_collect_all_elements_is_deterministic() {
+        let mut tree = crate::tree::ElementTree::new();
+        let mut build_owner = crate::BuildOwner::new();
+
+        let root_id = tree.mount_root(&MultiNodeView, &mut build_owner.element_owner_mut());
+        let alpha = insert_multi_child(&mut tree, &mut build_owner, root_id, 0);
+        let bravo = insert_multi_child(&mut tree, &mut build_owner, root_id, 1);
+        let charlie = insert_multi_child(&mut tree, &mut build_owner, root_id, 2);
+        let bravo_first = insert_multi_child(&mut tree, &mut build_owner, bravo, 0);
+        let bravo_second = insert_multi_child(&mut tree, &mut build_owner, bravo, 1);
+
+        set_children_for(&mut tree, root_id, vec![alpha, bravo, charlie]);
+        set_children_for(&mut tree, bravo, vec![bravo_first, bravo_second]);
+
+        let first = WidgetsBinding::collect_all_elements(&tree, root_id, 0);
+        let second = WidgetsBinding::collect_all_elements(&tree, root_id, 0);
+
+        assert_eq!(first, second, "walk output is deterministic");
+        assert_eq!(
+            first,
+            vec![
+                (root_id, 0),
+                (alpha, 1),
+                (bravo, 1),
+                (bravo_first, 2),
+                (bravo_second, 2),
+                (charlie, 1),
+            ],
+        );
+    }
+
+    /// The `root_depth` argument is offset onto every recorded depth —
+    /// pin this so callers that recurse into a subtree at a non-zero
+    /// depth still get useful values.
+    #[test]
+    fn test_collect_all_elements_root_depth_offset() {
+        let mut tree = crate::tree::ElementTree::new();
+        let mut build_owner = crate::BuildOwner::new();
+
+        let root_id = tree.mount_root(&MultiNodeView, &mut build_owner.element_owner_mut());
+        let child_id = insert_multi_child(&mut tree, &mut build_owner, root_id, 0);
+        set_children_for(&mut tree, root_id, vec![child_id]);
+
+        let walk = WidgetsBinding::collect_all_elements(&tree, root_id, 5);
+        assert_eq!(walk, vec![(root_id, 5), (child_id, 6)]);
     }
 }
