@@ -96,11 +96,12 @@ pub mod prelude {
     };
     // Error types
     pub use crate::error::{RenderError, RenderResult};
-    // Hit testing - only protocol-specific types (base types come from flui_interaction)
-    pub use crate::hit_testing::{
-        BoxHitTestEntry, BoxHitTestResult, MatrixTransformPart, PointerEventKind,
-        SliverHitTestEntry, SliverHitTestResult,
-    };
+    // Hit testing. Cycle 4 U-3 removed the parallel
+    // `BoxHitTestEntry`/`BoxHitTestResult`/`SliverHitTestEntry`/
+    // `SliverHitTestResult` exports here; the protocol-canonical
+    // versions live in `crate::protocol` and are re-exported alongside
+    // each `BoxProtocol`/`SliverProtocol` (see lib.rs protocol prelude).
+    pub use crate::hit_testing::{MatrixTransformPart, PointerEventKind};
     // Re-export base hit testing types from flui_interaction (source of truth)
     pub use crate::input::{
         CursorIcon, MouseCursorSession, MouseTracker, MouseTrackerAnnotation, MouseTrackerHitTest,
