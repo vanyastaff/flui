@@ -158,6 +158,26 @@ pub use painter::WgpuPainter;
 // singular-name `pipeline::` module; the parallel `pipelines.rs`
 // plural module was deleted as zero-consumer dead code).
 pub use pipeline::PipelineCache;
+
+// Cycle 4 PR #112 review fix: deprecated migration shim for
+// `PipelineBuilder`, which was re-exported from the deleted
+// `pipelines.rs` (plural) module pre-cycle. Workspace grep showed
+// zero consumers; if a downstream consumer DID import the name,
+// they hit a `#[deprecated]` warning rather than an unresolved-symbol
+// error. The shim resolves to the unit type so any method call on it
+// will fail compilation immediately -- the type's role was to host
+// builder methods that no longer exist. One-cycle migration window
+// before the alias goes away in cycle 5.
+/// Deprecated migration shim — see cycle 4 E-6 / PR #112 review.
+#[deprecated(
+    since = "0.1.0",
+    note = "`PipelineBuilder` (from the deleted `wgpu::pipelines` \
+            module) had zero workspace consumers and was removed in \
+            cycle 4 E-6. There is no replacement; pipeline construction \
+            goes through `pipeline::PipelineCache` (singular) directly. \
+            This deprecated alias will be removed in cycle 5."
+)]
+pub type PipelineBuilder = ();
 // Renderer (cross-platform GPU renderer)
 pub use renderer::{GpuCapabilities, Renderer};
 // Shader compilation
