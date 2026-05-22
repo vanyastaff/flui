@@ -100,21 +100,33 @@ impl RenderTree {
         self.owner.as_ref()
     }
 
-    /// Sets the pipeline owner.
+    /// Stores the pipeline owner reference.
     ///
-    /// This will attach all existing nodes to the new owner.
+    /// # Semantics
     ///
-    /// # Note
+    /// This is a **store-only** operation: existing nodes already in the tree
+    /// are NOT walked, not attached to the new owner, and not notified of the
+    /// owner change. The caller is responsible for the attach/detach
+    /// lifecycle. Two recommended patterns:
     ///
-    /// Currently this only stores the owner reference. Full attach/detach
-    /// lifecycle would require:
-    /// 1. Iterating all nodes and calling their attach/detach methods
-    /// 2. Adding `attached` state tracking to RenderEntry
-    /// 3. Notifying the owner about all existing dirty nodes
+    /// 1. **Empty-tree set**: call [`set_owner`](Self::set_owner) BEFORE any
+    ///    nodes are inserted. Subsequent inserts attach to the stored owner
+    ///    via the regular insert path.
+    /// 2. **Per-node attach**: use [`PipelineOwner`]'s own insert /
+    ///    `add_node_needing_*` registration methods directly when adding
+    ///    nodes to an already-owned tree.
+    ///
+    /// # Cycle 4 R-12
+    ///
+    /// Pre-cycle the docstring promised "This will attach all existing nodes
+    /// to the new owner" — the impl never did that (silent no-op on existing
+    /// nodes). The lie was a real Constitution Principle 6 violation in the
+    /// docstring layer. Per audit R-12 the cycle-4 cleanup is the lower-cost
+    /// **honest-doc** path; Flutter parity (`RenderObject::attach` recursive
+    /// subtree walk) is a follow-up audit item that needs an
+    /// `attached: AtomicBool` on `RenderState<P>::flags` + owner-dirty-list
+    /// re-registration plumbing not yet in place.
     pub fn set_owner(&mut self, owner: Option<Arc<RwLock<PipelineOwner>>>) {
-        // Note: Full attach/detach lifecycle for existing nodes is not yet implemented.
-        // This would require iterating all nodes and calling
-        // render_object.attach(owner).
         self.owner = owner;
     }
 
