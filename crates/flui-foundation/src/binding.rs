@@ -185,10 +185,28 @@ macro_rules! impl_binding_singleton {
 
             fn instance() -> &'static Self {
                 static INSTANCE: std::sync::OnceLock<$binding> = std::sync::OnceLock::new();
-                INSTANCE.get_or_init(|| {
-                    Self::INITIALIZED.store(true, std::sync::atomic::Ordering::Release);
-                    <$binding>::new()
-                })
+                let inst = INSTANCE.get_or_init(<$binding>::new);
+                // INITIALIZED is flipped AFTER `<Self>::new()` returns
+                // (audit I-3 fix). Pre-fix, the store fired *inside* the
+                // `get_or_init` closure before `new()` returned, so an
+                // init-time panic would leave `INITIALIZED == true` while
+                // the `OnceLock` stayed empty (per `OnceLock::get_or_init`
+                // contract: "If this function panics, the cell is
+                // unchanged"). A subsequent `is_initialized() → true` →
+                // `instance()` caller would then either re-panic or, on
+                // contention, observe incoherent state.
+                //
+                // Post-fix: the store happens only on the successful path
+                // *after* `OnceLock` has accepted the value. On steady-
+                // state callers the store is a single atomic write per
+                // call, which is the cost of moving the flip out of the
+                // panic-vulnerable init closure. If the per-call atomic
+                // store becomes measurable in a profile, replace with
+                // `INITIALIZED.compare_exchange(false, true, Release,
+                // Relaxed).ok();` — that converts the steady-state path
+                // to a single atomic load + conditional CAS.
+                Self::INITIALIZED.store(true, std::sync::atomic::Ordering::Release);
+                inst
             }
         }
     };
@@ -268,5 +286,46 @@ mod tests {
         // Now check should work
         let binding = check_instance::<TestBinding>();
         assert!(binding.initialized);
+    }
+
+    // Audit I-3 regression: a panic inside `<Self>::new()` must NOT leave
+    // `INITIALIZED == true`. Tests a separate panicking binding type so
+    // the existing TestBinding singleton stays clean.
+    struct PanicBinding {
+        _never: (),
+    }
+
+    impl BindingBase for PanicBinding {
+        fn init_instances(&mut self) {}
+    }
+
+    impl PanicBinding {
+        fn new() -> Self {
+            panic!("PanicBinding::new panics by design — regression test");
+        }
+    }
+
+    impl_binding_singleton!(PanicBinding);
+
+    #[test]
+    fn init_panic_does_not_flip_initialized_flag() {
+        // Sanity: not yet initialized.
+        assert!(!PanicBinding::is_initialized());
+
+        // Force `instance()` into the panicking init path. We catch the
+        // panic so the rest of the test can run.
+        let result = std::panic::catch_unwind(|| {
+            let _ = PanicBinding::instance();
+        });
+        assert!(result.is_err(), "PanicBinding::new must propagate panic");
+
+        // Post-condition: `INITIALIZED` MUST still be `false`. Pre-I-3
+        // fix this assertion failed — the closure flipped `INITIALIZED`
+        // to `true` BEFORE `new()` was called.
+        assert!(
+            !PanicBinding::is_initialized(),
+            "init panic incorrectly flipped INITIALIZED to true \
+             (regression of audit I-3)"
+        );
     }
 }
