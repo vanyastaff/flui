@@ -18,6 +18,11 @@ workspace = true
 [dependencies]
 bitflags = { workspace = true }
 parking_lot = { workspace = true }
+# `SmallVec` for stack-allocated listener-callback snapshots in
+# `ChangeNotifier::notify_listeners` (audit I-4). Inline capacity 4
+# covers the common case of one or two listeners per notifier;
+# overflow spills to heap.
+smallvec = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 

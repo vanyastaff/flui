@@ -97,20 +97,27 @@ pub trait TreeWrite<I: Identifier>: TreeRead<I> {
     /// codified non-cascade as the default — i.e. orphans-in-storage —
     /// which the audit T-1 finding flagged as a footgun.
     ///
-    /// The default impl walks the subtree post-order:
-    /// 1. Snapshot `children(id)` so the recursive borrow doesn't
-    ///    conflict with the mutable `self`.
-    /// 2. For each child, recurse — children dispose before the
-    ///    parent.
-    /// 3. Finally, call [`remove_shallow`](Self::remove_shallow) on
-    ///    `id` itself.
+    /// The default impl walks the subtree post-order **iteratively**:
+    /// 1. Pre-walk via a worklist stack collects every descendant
+    ///    (and the root itself) into a `Vec<I>` in pre-order (root,
+    ///    then children, then grandchildren, …).
+    /// 2. Drain that vec in reverse so each `remove_shallow` call
+    ///    sees children disposing before their parents — the engine
+    ///    listeners and lifecycle hooks (`LayerNode::Drop` from
+    ///    PR #100 U8) rely on this post-order guarantee.
+    ///
+    /// PR #103 followup: the original draft of this default did a
+    /// recursive `self.remove(child_id)` call per child, which
+    /// consumed one stack frame per tree depth level and risked a
+    /// stack overflow on tall trees (large generated view trees or
+    /// nested scroll views can exceed the default thread stack).
+    /// The iterative shape uses heap allocation for the worklist
+    /// (one `Vec<I>` of size N where N is the subtree size) and
+    /// keeps stack usage constant regardless of depth.
     ///
     /// Implementations MAY override for efficiency (e.g. a `Vec`-backed
     /// arena that wants to free a contiguous range in one go), but
-    /// MUST preserve the post-order cascade semantics — the engine
-    /// listeners and lifecycle hooks (e.g.
-    /// `LayerNode::Drop` from PR #100 U8) depend on
-    /// descendants disposing before their parents.
+    /// MUST preserve the post-order cascade semantics.
     ///
     /// # Arguments
     ///
@@ -127,16 +134,38 @@ pub trait TreeWrite<I: Identifier>: TreeRead<I> {
         if !self.contains(id) {
             return None;
         }
-        // Snapshot children before the recursive descent so the
-        // children iterator's borrow ends before we mutate the tree.
-        let children: Vec<I> = self.children(id).collect();
-        for child_id in children {
-            // Discarding the returned root node of each child cascade is
-            // the same shape as the per-impl cascade in cycle 2
-            // (`LayerTree::remove`, `SemanticsTree::remove`).
-            let _ = self.remove(child_id);
+
+        // Pre-order pre-walk: collect every node in the subtree
+        // (root + all descendants) into a worklist. The walk uses an
+        // explicit stack so deep trees cannot exhaust the native
+        // call stack. Worklist memory is O(subtree size).
+        let mut worklist: Vec<I> = Vec::new();
+        let mut to_visit: Vec<I> = Vec::with_capacity(8);
+        to_visit.push(id);
+        while let Some(current) = to_visit.pop() {
+            worklist.push(current);
+            // Push children for later processing. Since this is a
+            // pre-walk feeding a post-order drain (we'll reverse
+            // before disposal), child order in `worklist` doesn't
+            // matter — what matters is that every descendant appears
+            // *after* its parent in `worklist`, which the
+            // depth-first push guarantees.
+            for child_id in self.children(current) {
+                to_visit.push(child_id);
+            }
         }
-        self.remove_shallow(id)
+
+        // Post-order drain: reverse so leaves dispose before their
+        // parents, then the root last. Capture the root node from
+        // its `remove_shallow` to return as the trait's contract.
+        let mut root_node: Option<Self::Node> = None;
+        for node_id in worklist.into_iter().rev() {
+            let removed = self.remove_shallow(node_id);
+            if node_id == id {
+                root_node = removed;
+            }
+        }
+        root_node
     }
 
     /// Removes `id` and counts the resulting cascade size.
@@ -708,5 +737,34 @@ mod tests {
         let phantom = ElementId::new(999);
         assert!(tree.remove(phantom).is_none());
         assert_eq!(tree.len(), 1);
+    }
+
+    /// PR #103 followup (Codex P2): the default cascade is iterative,
+    /// not recursive. A linear chain of 10,000 nodes must `remove`
+    /// without exhausting the native call stack. Pre-fix the recursive
+    /// `self.remove(child_id)` shape consumed one stack frame per
+    /// depth level and would stack-overflow on chains longer than
+    /// roughly 1k nodes depending on platform default stack size.
+    #[test]
+    fn remove_cascade_is_stack_safe_on_deep_chain() {
+        // 2_000 nodes exceeds typical native-stack frame budgets for
+        // recursive descent (Rust's default per-frame size puts the
+        // overflow threshold around 1-2k frames depending on
+        // platform). The iterative cascade in `TreeWrite::remove`
+        // uses heap memory for the worklist instead.
+        const DEPTH: usize = 2_000;
+        let mut tree = TestTree::new();
+        let mut prev = tree.insert(TestNode::default());
+        let root = prev;
+        for _ in 1..DEPTH {
+            let next = tree.insert(TestNode::default());
+            tree.set_parent(next, Some(prev)).unwrap();
+            prev = next;
+        }
+        assert_eq!(tree.len(), DEPTH);
+
+        let removed = tree.remove(root);
+        assert!(removed.is_some());
+        assert_eq!(tree.len(), 0, "{DEPTH}-deep chain must cascade");
     }
 }

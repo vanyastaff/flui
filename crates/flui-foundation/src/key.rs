@@ -135,6 +135,12 @@ impl Key {
     /// Panics if `u64::MAX` keys have been created (practically impossible).
     /// This prevents undefined behavior from `NonZeroU64::new_unchecked(0)`
     /// after overflow.
+    // Audit I-5: `Key` deliberately does NOT implement `Default`.
+    // Defaults must be deterministic; `Key::new()` bumps an atomic
+    // counter so every call returns a different value. Construction
+    // routes through `Key::new()` (unique) or `Key::from_u64`
+    // (deterministic).
+    #[allow(clippy::new_without_default)]
     #[inline]
     pub fn new() -> Self {
         static COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -202,15 +208,15 @@ impl Key {
     }
 }
 
-impl Default for Key {
-    /// Default key is generated uniquely
-    ///
-    /// Same as calling `Key::new()`.
-    #[inline]
-    fn default() -> Self {
-        Self::new()
-    }
-}
+// NOTE (audit I-5): `impl Default for Key` was removed in cycle 3.
+// `Key::default()` returning a fresh unique key violated the
+// least-surprise principle for `Default`: every call produced a
+// different value, which made `#[derive(Default)]` on parent types
+// silently break round-trip equality.
+//
+// Construction now goes through `Key::new()` (explicit unique
+// generation) or `Key::from_u64` (deterministic). Audit confirmed
+// zero in-workspace consumers of `Key::default()`.
 
 impl fmt::Debug for Key {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -480,6 +486,10 @@ pub struct UniqueKey {
 
 impl UniqueKey {
     /// Create a new unique key.
+    ///
+    /// Audit I-5: `Default` is deliberately not implemented — each
+    /// call returns a different value (atomic-counter bump).
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         static COUNTER: AtomicU64 = AtomicU64::new(1);
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -493,11 +503,10 @@ impl UniqueKey {
     }
 }
 
-impl Default for UniqueKey {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+// NOTE (audit I-5): `impl Default for UniqueKey` was removed —
+// same rationale as `Key`: defaults must be deterministic, but
+// `UniqueKey::new()` bumps an atomic counter per call.
+// `UniqueKey::new()` is the only constructor.
 
 impl fmt::Debug for UniqueKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -762,14 +771,11 @@ mod tests {
         assert!(set.contains(&key_copy));
     }
 
-    #[test]
-    fn test_default() {
-        let k1 = Key::default();
-        let k2 = Key::default();
-
-        // Default creates unique keys
-        assert_ne!(k1, k2);
-    }
+    // Audit I-5: `impl Default for Key` removed. The pre-cycle test
+    // `test_default` exercised the surprising "default returns a
+    // fresh unique key" behaviour that the finding flagged.
+    // `Key::new()` is the canonical construction path now;
+    // `test_new` and `test_uniqueness` cover the uniqueness contract.
 
     #[test]
     fn test_debug_display() {

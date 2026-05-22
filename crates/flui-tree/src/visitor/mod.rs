@@ -134,7 +134,12 @@ pub trait TreeVisitor<I: Identifier, T: TreeNav<I>>: sealed::Sealed {
     fn post_children(&mut self, _id: I, _depth: usize) {}
 
     /// Expected maximum tree depth for stack allocation.
-    const MAX_STACK_DEPTH: usize = 64;
+    ///
+    /// Defaults to [`crate::depth::INLINE_TREE_DEPTH`] (= 32) per
+    /// audit T-10's single-source-of-truth refactor. Implementations
+    /// override when their visitor walks a tree shape with deeper
+    /// expected nesting.
+    const MAX_STACK_DEPTH: usize = crate::depth::INLINE_TREE_DEPTH;
 
     /// Preferred batch size for bulk operations.
     const BATCH_SIZE: usize = 32;
@@ -175,7 +180,10 @@ pub trait TreeVisitorMut<I: Identifier, T: TreeNav<I>>: sealed::Sealed {
     }
 
     /// Stack allocation size hint.
-    const STACK_SIZE: usize = 48;
+    ///
+    /// Defaults to [`crate::depth::INLINE_TREE_DEPTH`] (= 32) per
+    /// audit T-10's single-source-of-truth refactor.
+    const STACK_SIZE: usize = crate::depth::INLINE_TREE_DEPTH;
 }
 
 /// Typed visitor with flexible result collection using GAT.

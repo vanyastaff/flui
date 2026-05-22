@@ -68,7 +68,9 @@ pub use arity::{
 // ============================================================================
 // RE-EXPORTS - Depth System
 // ============================================================================
-pub use depth::{AtomicDepth, Depth, DepthAware, DepthError, MAX_TREE_DEPTH, ROOT_DEPTH};
+pub use depth::{
+    AtomicDepth, Depth, DepthAware, DepthError, INLINE_TREE_DEPTH, MAX_TREE_DEPTH, ROOT_DEPTH,
+};
 // ============================================================================
 // RE-EXPORTS - Diff System
 // ============================================================================

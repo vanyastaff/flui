@@ -97,20 +97,26 @@ impl<I: Identifier, T: TreeNav<I>> Iterator for Descendants<'_, I, T> {
     type Item = I;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let current = self.stack.pop()?;
+        // Audit T-11: loop over missing-id skips instead of recursing
+        // via `self.next()`. Rust does NOT guarantee tail-call
+        // optimization — a long run of missing ids would otherwise
+        // build a deep `next()` call chain and risk stack overflow.
+        loop {
+            let current = self.stack.pop()?;
 
-        // Check if current exists
-        if !self.tree.contains(current) {
-            return self.next(); // Skip and try next
+            // Check if current exists
+            if !self.tree.contains(current) {
+                continue; // Skip and try next
+            }
+
+            // Push children in reverse order so first child is processed first.
+            let children: SmallVec<[I; 8]> = self.tree.children(current).collect();
+            for child in children.into_iter().rev() {
+                self.stack.push(child);
+            }
+
+            return Some(current);
         }
-
-        // Push children in reverse order (so first child is processed first)
-        let children: SmallVec<[I; 8]> = self.tree.children(current).collect();
-        for child in children.into_iter().rev() {
-            self.stack.push(child);
-        }
-
-        Some(current)
     }
 
     #[inline]
@@ -150,18 +156,23 @@ impl<I: Identifier, T: TreeNav<I>> Iterator for DescendantsWithDepth<'_, I, T> {
     type Item = (I, usize);
 
     fn next(&mut self) -> Option<Self::Item> {
-        let (current, depth) = self.stack.pop()?;
+        // Audit T-11: loop instead of `self.next()` recursion. Rust
+        // does NOT guarantee TCO; a long run of missing ids would
+        // otherwise deepen the call stack.
+        loop {
+            let (current, depth) = self.stack.pop()?;
 
-        if !self.tree.contains(current) {
-            return self.next();
+            if !self.tree.contains(current) {
+                continue;
+            }
+
+            let children: SmallVec<[I; 8]> = self.tree.children(current).collect();
+            for child in children.into_iter().rev() {
+                self.stack.push((child, depth + 1));
+            }
+
+            return Some((current, depth));
         }
-
-        let children: SmallVec<[I; 8]> = self.tree.children(current).collect();
-        for child in children.into_iter().rev() {
-            self.stack.push((child, depth + 1));
-        }
-
-        Some((current, depth))
     }
 
     #[inline]

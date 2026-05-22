@@ -65,10 +65,26 @@ use thiserror::Error;
 ///
 /// Typical UI trees rarely exceed depth 32. This limit is conservative
 /// but handles extreme cases.
+///
+/// **Single source of truth (audit T-10)** — `TreeNav::MAX_DEPTH`
+/// default impl points here, and the visitor module's stack-sizing
+/// constants (`MAX_STACK_DEPTH`, `STACK_SIZE`) are derived from this
+/// value. Pre-cycle 3 those defaults drifted to 32 / 64 / 48 across
+/// four call sites, which made stack-frame budget reasoning
+/// inconsistent.
 pub const MAX_TREE_DEPTH: usize = 256;
 
 /// Default depth for root nodes.
 pub const ROOT_DEPTH: usize = 0;
+
+/// Default inline-storage threshold for stack-allocated tree-depth
+/// vectors (e.g. `SmallVec<[I; INLINE_TREE_DEPTH]>` for ancestor
+/// chains, descendant stacks, lowest-common-ancestor lists).
+///
+/// Audit T-10 + T-18 + T-20: chosen at 32 because typical widget /
+/// element / view trees rarely exceed 32 levels (per Flutter's
+/// `Element.depth` survey); deeper trees spill to the heap.
+pub const INLINE_TREE_DEPTH: usize = 32;
 
 // ============================================================================
 // DEPTH

@@ -249,7 +249,17 @@ impl ChangeNotifier {
         if self.check_disposed() {
             return;
         }
-        let callbacks: Vec<ListenerCallback> = self.listeners.lock().values().cloned().collect();
+        // Audit I-4: stack-allocate the snapshot for the common case
+        // (1-4 listeners). Pre-cycle `Vec::new() + .collect()` forced
+        // a heap allocation on every notify, which adds up at frame
+        // rate for hot-path notifiers (scroll position, animation
+        // tick, drag value). `SmallVec<[_; 4]>` keeps the inline
+        // storage capacity 4 — when there are ≤4 listeners the
+        // snapshot is purely stack memory; ≥5 listeners spills to
+        // the heap (same as the pre-cycle path, but only for the
+        // tail).
+        let callbacks: smallvec::SmallVec<[ListenerCallback; 4]> =
+            self.listeners.lock().values().cloned().collect();
         for callback in &callbacks {
             callback();
         }
