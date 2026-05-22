@@ -21,6 +21,7 @@ use std::{fmt, str::FromStr};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
+#[non_exhaustive]
 pub enum DiagnosticLevel {
     /// Hidden diagnostic level.
     Hidden,
@@ -141,6 +142,7 @@ impl std::error::Error for ParseDiagnosticLevelError {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
+#[non_exhaustive]
 pub enum DiagnosticsTreeStyle {
     /// A style that is appropriate for displaying sparse trees.
     Sparse,

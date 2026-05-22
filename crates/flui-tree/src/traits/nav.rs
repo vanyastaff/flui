@@ -149,20 +149,35 @@ pub trait TreeNav<I: Identifier>: super::TreeRead<I> {
     ///
     /// # Default Implementation
     ///
-    /// Computes slot info from parent/children/depth.
+    /// Computes slot info from parent/children/depth via a single
+    /// streaming pass over the parent's children — no `Vec`
+    /// allocation (audit T-9). Pre-cycle the default collected the
+    /// parent's children into a `Vec<I>` for index lookup, which
+    /// allocated on every slot query.
     fn slot(&self, id: I) -> Option<Slot<I>> {
         let parent = self.parent(id)?;
-        let children: Vec<I> = self.children(parent).collect();
-        let index = children.iter().position(|&c| c == id)?;
+
+        // Single-pass scan: track previous, target index, and next
+        // sibling without materializing the children iterator.
+        let mut previous_sibling: Option<I> = None;
+        let mut index: Option<usize> = None;
+        let mut next_sibling: Option<I> = None;
+        let mut prev_candidate: Option<I> = None;
+        for (i, child) in self.children(parent).enumerate() {
+            if let Some(target_idx) = index {
+                // We've passed the target — `child` is the next sibling.
+                let _ = target_idx;
+                next_sibling = Some(child);
+                break;
+            }
+            if child == id {
+                index = Some(i);
+                previous_sibling = prev_candidate;
+            }
+            prev_candidate = Some(child);
+        }
+        let index = index?;
         let depth = Depth::new(self.depth(id));
-
-        let previous_sibling = if index > 0 {
-            Some(children[index - 1])
-        } else {
-            None
-        };
-
-        let next_sibling = children.get(index + 1).copied();
 
         Some(Slot::with_siblings(
             parent,

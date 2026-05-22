@@ -394,8 +394,13 @@ impl<T: Marker> core::ops::Add<Index> for Id<T> {
     }
 }
 
-// Test-only: Allow creating from usize for convenience
-#[cfg(test)]
+// Cycle 3 T-14: `From<Index> for Id<T>` is always available (was
+// `#[cfg(test)]` pre-cycle). The conversion is safe — `Id::zip`
+// wraps a 1-based usize and the niche-optimised `NonZeroUsize`
+// guarantees zero is rejected at the `From<RawId> for Index` step
+// upstream. Production callers gain `Id::from(some_index)` for
+// ergonomics; the explicit-conversion path via `Id::zip(idx)`
+// remains for callers that prefer the named constructor.
 impl<T: Marker> From<Index> for Id<T> {
     fn from(index: Index) -> Self {
         Self::zip(index)

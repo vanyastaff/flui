@@ -117,6 +117,18 @@ pub enum TreeError {
     /// this error, please report it as a bug.
     #[error("internal error: {0}")]
     Internal(String),
+
+    /// Arity violation — the operation breaches the per-node
+    /// child-count contract (`Leaf` got a child, `Single` got more
+    /// than one, `Optional` got more than one, etc.).
+    ///
+    /// Audit T-13: unifies the arity error surface — `ArityError`
+    /// lived in a separate module without a `TreeError` variant,
+    /// which forced callers that span both surfaces to compose two
+    /// error types. This variant adopts `#[from]` so `?`-propagation
+    /// from arity-storage code into tree-level code is one step.
+    #[error("arity violation: {0}")]
+    ArityViolation(#[from] crate::arity::ArityError),
 }
 
 impl TreeError {
@@ -206,7 +218,10 @@ impl TreeError {
             Self::InvalidParent { child, .. } => Some(*child),
             Self::MaxDepthExceeded { element, .. } => Some(*element),
 
-            Self::EmptyTree | Self::ConcurrentModification | Self::Internal(_) => None,
+            Self::EmptyTree
+            | Self::ConcurrentModification
+            | Self::Internal(_)
+            | Self::ArityViolation(_) => None,
         }
     }
 
