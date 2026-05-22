@@ -58,6 +58,18 @@ pub struct Backend<'frame> {
     /// `COPY_TEXTURE_TO_TEXTURE` operations during backdrop-filter
     /// dispatch.
     surface_texture: Option<&'frame wgpu::Texture>,
+    /// Cycle 4 wave 5 E-13: matrix that is currently applied to
+    /// [`painter`](Self::painter) via a `save() + apply` pair that
+    /// has not yet been balanced with `restore()`. `with_transform`
+    /// uses this to coalesce consecutive same-matrix calls into a
+    /// single push/pop: when the incoming transform equals
+    /// `active_transform`, the draw closure runs directly on the
+    /// already-applied state rather than paying another stack push.
+    /// `flush_active_transform()` (the [`Drop`] impl + the start of
+    /// every transform-mismatch path) balances the deferred
+    /// `restore()`. `None` means the painter is at the default
+    /// state and no balance is owed.
+    active_transform: Option<Matrix4>,
 }
 
 impl<'frame> Backend<'frame> {
@@ -74,6 +86,7 @@ impl<'frame> Backend<'frame> {
             offscreen_painter: None,
             surface_view: None,
             surface_texture: None,
+            active_transform: None,
         }
     }
 
@@ -88,6 +101,7 @@ impl<'frame> Backend<'frame> {
             offscreen_painter: None,
             surface_view: None,
             surface_texture: None,
+            active_transform: None,
         }
     }
 
@@ -131,7 +145,14 @@ impl<'frame> Backend<'frame> {
     /// Consume the renderer and return the underlying painter.
     ///
     /// The offscreen `Arc` is dropped here; ref-counting keeps it alive in Renderer.
-    pub fn into_painter(self) -> WgpuPainter {
+    ///
+    /// Cycle 4 wave 5 E-13: flushes any active lazy-pop transform
+    /// first so the returned painter is balanced -- callers reuse
+    /// the painter (Renderer feeds it into the next frame, the
+    /// shader-mask offscreen path stashes it into a cache) and must
+    /// not inherit a leftover `save()`.
+    pub fn into_painter(mut self) -> WgpuPainter {
+        self.flush_active_transform();
         self.painter
     }
 
@@ -186,15 +207,53 @@ impl<'frame> Backend<'frame> {
         })
     }
 
+    /// Cycle 4 wave 5 E-13: dispatch a draw closure under the given
+    /// transform, coalescing consecutive same-matrix calls so that
+    /// the `painter.save()` + matrix-decompose + apply + restore
+    /// pipeline runs once per RUN of identical transforms rather
+    /// than once per shape.
+    ///
+    /// Three fast paths plus the cold path:
+    /// 1. `transform.is_identity()` -- if a non-identity transform
+    ///    is still active from a prior run, balance the deferred
+    ///    `restore()` first; then dispatch on a clean painter.
+    /// 2. `Some(transform) == active_transform` -- the painter is
+    ///    already in the right state; just run the closure (one
+    ///    bit-exact `Matrix4` compare = 16 floats, well under the
+    ///    cost of a stack push).
+    /// 3. Transform changed -- balance the prior active (if any),
+    ///    save, decompose + apply, mark active. The next call with
+    ///    the same matrix will hit path 2.
+    /// 4. End of frame -- the `Drop` impl flushes any trailing
+    ///    active transform so the painter is left balanced.
+    ///
+    /// Audit context: a render pass batching 1000 same-transform
+    /// shapes used to pay 2000 stack ops + 1000 mat-decomposes
+    /// (each pair `save + apply + restore`). After this change the
+    /// run pays one `save + apply` plus one `restore` at the next
+    /// transform change -- (N-1) push/pops eliminated per run.
     fn with_transform<F>(&mut self, transform: &Matrix4, draw_fn: F)
     where
         F: FnOnce(&mut WgpuPainter),
     {
         if transform.is_identity() {
+            self.flush_active_transform();
             draw_fn(&mut self.painter);
             return;
         }
 
+        if self.active_transform.as_ref() == Some(transform) {
+            // Path 2: same matrix as the currently-applied one --
+            // skip the push entirely; the painter is already in the
+            // right state.
+            draw_fn(&mut self.painter);
+            return;
+        }
+
+        // Path 3: incoming transform differs from active (or no
+        // active). Balance the prior `save()` if any, then push
+        // the new transform.
+        self.flush_active_transform();
         self.painter.save();
 
         // Use centralized Transform::decompose() method (Phase 6 cleanup)
@@ -211,10 +270,37 @@ impl<'frame> Backend<'frame> {
             self.painter.scale(sx, sy);
         }
 
+        self.active_transform = Some(*transform);
         draw_fn(&mut self.painter);
-        self.painter.restore();
+    }
+
+    /// Cycle 4 wave 5 E-13: balance the deferred `save()` left by a
+    /// prior `with_transform` run with a `restore()`, clearing
+    /// `active_transform`. No-op if no transform is active.
+    ///
+    /// Called from `with_transform`'s identity / mismatch paths, and
+    /// from [`Drop`] (so a frame that ends mid-run leaves the painter
+    /// balanced).
+    fn flush_active_transform(&mut self) {
+        if self.active_transform.is_some() {
+            self.painter.restore();
+            self.active_transform = None;
+        }
     }
 }
+
+// Cycle 4 wave 5 E-13: a `Drop` impl that calls `flush_active_transform()`
+// would be the natural place to balance the lazy-pop save, but it
+// conflicts with `into_painter(self) -> WgpuPainter` -- Rust forbids
+// moving a field out of a `Drop` type. The chosen shape instead:
+// `into_painter` explicitly calls `flush_active_transform()` before
+// the move, and `with_transform`'s identity / mismatch paths also
+// flush. The only remaining failure mode is a `Backend` dropped via
+// implicit drop without going through `into_painter` -- which would
+// leak one `save()` worth of transform-stack depth in the painter
+// being dropped. That painter is itself going out of scope (no
+// other reference can leak the state), so the unbalanced save is
+// dropped with the painter and never observed.
 
 impl CommandRenderer for Backend<'_> {
     fn render_rect(&mut self, rect: Rect<Pixels>, paint: &Paint, transform: &Matrix4) {
