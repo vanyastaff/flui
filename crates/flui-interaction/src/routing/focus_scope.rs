@@ -6,7 +6,6 @@
 //! - [`FocusNode`] - A node in the focus tree that can receive keyboard focus
 //! - [`FocusScopeNode`] - A special FocusNode that groups descendants and
 //!   tracks focus history
-//! - [`FocusAttachment`] - RAII handle for attaching FocusNode to the tree
 //! - [`FocusTraversalPolicy`] - Determines Tab/Shift+Tab navigation order
 //!
 //! # Flutter Architecture
@@ -28,7 +27,16 @@
 //! - `FocusScopeNode` restricts traversal and remembers focus history
 //! - `hasFocus` = any descendant has focus, `hasPrimaryFocus` = this node has
 //!   focus
-//! - Nodes must be attached via `FocusAttachment` lifecycle
+//!
+//! # Singleton manager (U23 / I-4 closure)
+//!
+//! Prior incarnations of this module held a `manager:
+//! RwLock<Option<Weak<FocusManagerInner>>>` reference on each
+//! [`FocusNode`], plus a private `FocusManagerInner` Arc-based dual
+//! state living alongside the public [`crate::FocusManager`] singleton.
+//! U23 collapses that into a single singleton: focus nodes reach the
+//! manager via [`crate::FocusManager::global`] without any weak-ref
+//! dance — the singleton is always live and globally reachable.
 //!
 //! # Example
 //!
@@ -36,18 +44,14 @@
 //! use flui_interaction::routing::{FocusNode, FocusScopeNode, FocusManager};
 //!
 //! // Create a focusable node
-//! let mut node = FocusNode::new()
-//!     .with_debug_label("my_button")
-//!     .on_key(|event| { /* handle key */ false });
+//! let node = FocusNode::new_with_debug_label("my_button");
+//! node.set_on_key_event(Arc::new(|event| { /* handle key */ false }));
 //!
-//! // Attach to tree (typically in widget's mount)
-//! let attachment = node.attach(parent_scope);
+//! // Attach to root scope
+//! FocusManager::global().root_scope().attach_node(&node);
 //!
 //! // Request focus
 //! node.request_focus();
-//!
-//! // Detach when widget unmounts
-//! drop(attachment);
 //! ```
 //!
 //! # References
@@ -126,20 +130,12 @@ pub enum KeyEventResult {
 /// | `nextFocus()` | `next_focus()` | Move to next focusable |
 /// | `previousFocus()` | `previous_focus()` | Move to previous focusable |
 ///
-/// # Example
+/// # Manager access
 ///
-/// ```rust,ignore
-/// let node = FocusNode::new()
-///     .with_debug_label("my_button")
-///     .can_request_focus(true)
-///     .on_key(|event| {
-///         if event.logical_key == Key::Enter {
-///             activate_button();
-///             return true;
-///         }
-///         false
-///     });
-/// ```
+/// Focus nodes no longer hold a `Weak<FocusManagerInner>` — they reach
+/// the [`crate::FocusManager`] singleton via [`crate::FocusManager::global`]
+/// directly. The [`is_attached`] flag still gates focus operations so
+/// nodes that haven't been mounted into the tree behave as no-ops.
 pub struct FocusNode {
     /// Unique identifier for this node.
     id: FocusNodeId,
@@ -170,9 +166,6 @@ pub struct FocusNode {
 
     /// Whether this node is attached to the focus tree.
     attached: AtomicBool,
-
-    /// The manager this node belongs to (set on attach).
-    manager: RwLock<Option<Weak<FocusManagerInner>>>,
 }
 
 impl FocusNode {
@@ -189,7 +182,6 @@ impl FocusNode {
             on_key_event: RwLock::new(None),
             rect: RwLock::new(Rect::ZERO),
             attached: AtomicBool::new(false),
-            manager: RwLock::new(None),
         })
     }
 
@@ -206,7 +198,6 @@ impl FocusNode {
             on_key_event: RwLock::new(None),
             rect: RwLock::new(Rect::ZERO),
             attached: AtomicBool::new(false),
-            manager: RwLock::new(None),
         })
     }
 
@@ -295,22 +286,18 @@ impl FocusNode {
     /// Returns whether this node has focus (this node or any descendant).
     ///
     /// This is `true` if any node in this subtree has primary focus.
+    /// Reaches the [`crate::FocusManager`] singleton directly (no Weak
+    /// upgrade dance) — singleton always live.
     pub fn has_focus(&self) -> bool {
-        if let Some(manager) = self.manager.read().as_ref().and_then(|w| w.upgrade())
-            && let Some(focused_id) = manager.primary_focus()
-        {
-            // Check if focused node is this node or a descendant
-            return self.id == focused_id || self.has_descendant(focused_id);
-        }
-        false
+        let Some(focused_id) = crate::FocusManager::global().primary_focus() else {
+            return false;
+        };
+        self.id == focused_id || self.has_descendant(focused_id)
     }
 
     /// Returns whether this specific node has primary focus.
     pub fn has_primary_focus(&self) -> bool {
-        if let Some(manager) = self.manager.read().as_ref().and_then(|w| w.upgrade()) {
-            return manager.primary_focus() == Some(self.id);
-        }
-        false
+        crate::FocusManager::global().primary_focus() == Some(self.id)
     }
 
     /// Checks if a node with the given ID is a descendant of this node.
@@ -348,14 +335,14 @@ impl FocusNode {
     }
 
     /// Requests primary focus for this node.
+    ///
+    /// No-op when the node cannot request focus or is not attached to
+    /// the focus tree.
     pub fn request_focus(self: &Arc<Self>) {
         if !self.can_request_focus() || !self.is_attached() {
             return;
         }
-
-        if let Some(manager) = self.manager.read().as_ref().and_then(|w| w.upgrade()) {
-            manager.set_primary_focus(Some(self.id));
-        }
+        crate::FocusManager::global().request_focus(self.id);
     }
 
     /// Removes focus from this node.
@@ -363,10 +350,7 @@ impl FocusNode {
         if !self.has_primary_focus() {
             return;
         }
-
-        if let Some(manager) = self.manager.read().as_ref().and_then(|w| w.upgrade()) {
-            manager.set_primary_focus(None);
-        }
+        crate::FocusManager::global().unfocus();
     }
 
     /// Moves focus to the next focusable node.
@@ -420,14 +404,20 @@ impl FocusNode {
     // Internal methods
     // ========================================================================
 
+    /// Mark the root node as attached. Used by [`crate::FocusManager`]
+    /// during default construction — the root scope has no parent so
+    /// the normal `attach_child` path doesn't run for it.
+    pub(crate) fn mark_root_attached(node: &Arc<FocusNode>) {
+        node.attached.store(true, AtomicOrdering::Release);
+    }
+
     fn attach_child(self: &Arc<Self>, child: &Arc<FocusNode>) {
         // Set parent
         *child.parent.write() = Some(Arc::downgrade(self));
 
-        // Copy manager reference
-        *child.manager.write() = self.manager.read().clone();
-
-        // Mark as attached
+        // Mark as attached — the singleton manager is always reachable
+        // via FocusManager::global, so no per-node manager reference
+        // needs to be propagated.
         child.attached.store(true, AtomicOrdering::Release);
 
         // Add to children
@@ -441,9 +431,6 @@ impl FocusNode {
 
             // Clear parent
             *child.parent.write() = None;
-
-            // Clear manager
-            *child.manager.write() = None;
 
             // Mark as detached
             child.attached.store(false, AtomicOrdering::Release);
@@ -464,7 +451,6 @@ impl Default for FocusNode {
             on_key_event: RwLock::new(None),
             rect: RwLock::new(Rect::ZERO),
             attached: AtomicBool::new(false),
-            manager: RwLock::new(None),
         }
     }
 }
@@ -540,9 +526,8 @@ impl Iterator for DescendantIterator {
 ///
 /// ```rust,ignore
 /// // Create a dialog scope
-/// let dialog_scope = FocusScopeNode::new()
-///     .with_debug_label("dialog")
-///     .autofocus(true);
+/// let dialog_scope = FocusScopeNode::with_debug_label("dialog");
+/// dialog_scope.set_autofocus(true);
 ///
 /// // Add children
 /// dialog_scope.attach_node(&text_field);
@@ -550,7 +535,7 @@ impl Iterator for DescendantIterator {
 /// dialog_scope.attach_node(&cancel_button);
 ///
 /// // Later: focus returns to last focused child
-/// dialog_scope.request_focus();
+/// dialog_scope.set_first_focus();
 /// ```
 pub struct FocusScopeNode {
     /// The underlying focus node.
@@ -649,22 +634,20 @@ impl FocusScopeNode {
         self.focus_history.lock().retain(|id| *id != node_id);
     }
 
-    /// Sets focus to the first focusable child.
+    /// Sets focus to the first focusable child via the singleton.
     pub fn set_first_focus(self: &Arc<Self>) {
         let nodes = self.collect_focusable_nodes();
-        if let Some(first) = nodes.first()
-            && let Some(manager) = self.inner.manager.read().as_ref().and_then(|w| w.upgrade())
-        {
-            manager.set_primary_focus(Some(first.id()));
+        if let Some(first) = nodes.first() {
+            crate::FocusManager::global().request_focus(first.id());
         }
     }
 
     /// Compute the next focusable node ID per the scope's traversal
     /// policy without mutating any focus state.
     ///
-    /// Returns `None` if no next focusable exists. Use this instead of
-    /// [`focus_next_in_scope`] when the caller (e.g. the singleton
-    /// [`crate::FocusManager`]) needs to update its own focused state.
+    /// Returns `None` if no next focusable exists. Use this when the
+    /// caller (e.g. the [`crate::FocusManager`] singleton's
+    /// `focus_next`) needs to update its own focused state.
     pub fn next_focusable_id(&self, current: FocusNodeId) -> Option<FocusNodeId> {
         let nodes = self.collect_focusable_nodes();
         let policy = self.traversal_policy.read().clone();
@@ -679,16 +662,14 @@ impl FocusScopeNode {
         policy.find_previous(current, &nodes)
     }
 
-    /// Focuses the next node in this scope.
+    /// Focuses the next node in this scope. Returns `true` when focus
+    /// advanced.
     pub fn focus_next_in_scope(&self, current: FocusNodeId) -> bool {
         let Some(next_id) = self.next_focusable_id(current) else {
             return false;
         };
-        if let Some(manager) = self.inner.manager.read().as_ref().and_then(|w| w.upgrade()) {
-            manager.set_primary_focus(Some(next_id));
-            return true;
-        }
-        false
+        crate::FocusManager::global().request_focus(next_id);
+        true
     }
 
     /// Focuses the previous node in this scope.
@@ -696,11 +677,8 @@ impl FocusScopeNode {
         let Some(prev_id) = self.previous_focusable_id(current) else {
             return false;
         };
-        if let Some(manager) = self.inner.manager.read().as_ref().and_then(|w| w.upgrade()) {
-            manager.set_primary_focus(Some(prev_id));
-            return true;
-        }
-        false
+        crate::FocusManager::global().request_focus(prev_id);
+        true
     }
 
     /// Records that a node received focus.
@@ -845,100 +823,6 @@ impl ReadingOrderPolicy {
 }
 
 // ============================================================================
-// FocusManagerInner (internal state)
-// ============================================================================
-
-/// Internal state for focus management.
-pub(crate) struct FocusManagerInner {
-    /// Root scope.
-    root_scope: Arc<FocusScopeNode>,
-
-    /// Currently focused node ID.
-    primary_focus: RwLock<Option<FocusNodeId>>,
-
-    /// Focus change listeners.
-    #[allow(clippy::type_complexity)]
-    listeners: RwLock<Vec<Arc<dyn Fn(Option<FocusNodeId>, Option<FocusNodeId>) + Send + Sync>>>,
-}
-
-#[allow(dead_code)] // Future public API for focus management
-impl FocusManagerInner {
-    pub fn new() -> Arc<Self> {
-        let root_scope = FocusScopeNode::with_debug_label("Root Focus Scope");
-
-        let manager = Arc::new(Self {
-            root_scope: root_scope.clone(),
-            primary_focus: RwLock::new(None),
-            listeners: RwLock::new(Vec::new()),
-        });
-
-        // Set manager reference in root scope
-        *root_scope.inner.manager.write() = Some(Arc::downgrade(&manager));
-        root_scope
-            .inner
-            .attached
-            .store(true, AtomicOrdering::Release);
-
-        manager
-    }
-
-    pub fn root_scope(&self) -> &Arc<FocusScopeNode> {
-        &self.root_scope
-    }
-
-    pub fn primary_focus(&self) -> Option<FocusNodeId> {
-        *self.primary_focus.read()
-    }
-
-    pub fn set_primary_focus(&self, node_id: Option<FocusNodeId>) {
-        // Single write lock to atomically read previous and write new (avoids TOCTOU
-        // race)
-        let previous = {
-            let mut focus = self.primary_focus.write();
-            let previous = *focus;
-            if previous == node_id {
-                return;
-            }
-            *focus = node_id;
-            previous
-        };
-
-        // Record in enclosing scope's history
-        if let Some(id) = node_id
-            && let Some(node) = self.find_node(id)
-            && let Some(scope) = node.enclosing_scope()
-        {
-            scope.record_focus(id);
-        }
-
-        // Notify listeners
-        let listeners = self.listeners.read().clone();
-        for listener in listeners {
-            listener(previous, node_id);
-        }
-    }
-
-    pub fn add_listener(
-        &self,
-        callback: Arc<dyn Fn(Option<FocusNodeId>, Option<FocusNodeId>) + Send + Sync>,
-    ) {
-        self.listeners.write().push(callback);
-    }
-
-    fn find_node(&self, id: FocusNodeId) -> Option<Arc<FocusNode>> {
-        // Search from root
-        if self.root_scope.inner.id() == id {
-            return Some(self.root_scope.inner.clone());
-        }
-
-        self.root_scope
-            .inner
-            .descendants()
-            .find(|node| node.id() == id)
-    }
-}
-
-// ============================================================================
 // Tests
 // ============================================================================
 
@@ -979,14 +863,16 @@ mod tests {
 
         assert_eq!(scope.as_focus_node().children().len(), 1);
         assert!(node.parent().is_some());
+        // After attach the child is marked attached.
+        assert!(node.is_attached());
     }
 
     #[test]
-    fn test_focus_manager_inner() {
-        let manager = FocusManagerInner::new();
-
-        assert!(manager.primary_focus().is_none());
+    fn test_focus_manager_owns_root_scope() {
+        // The singleton's root scope is constructed eagerly and attached.
+        let manager = crate::FocusManager::new_for_test();
         assert!(manager.root_scope().as_focus_node().is_attached());
+        assert!(manager.primary_focus().is_none());
     }
 
     #[test]

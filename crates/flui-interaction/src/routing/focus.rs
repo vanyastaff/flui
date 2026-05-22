@@ -1,16 +1,33 @@
 //! Keyboard focus management
 //!
-//! FocusManager is a global singleton that tracks which UI element has keyboard
-//! focus. Only one element can have focus at a time.
+//! [`FocusManager`] is a global singleton that fronts the entire focus
+//! tree machinery — it owns the [`FocusScopeNode`] root, tracks the
+//! primary-focused node, notifies focus-change listeners, and routes
+//! key events through the registered handlers.
+//!
+//! Audit Finding I-4 closure (U23): prior dual structure (`FocusManager`
+//! singleton + private `FocusManagerInner` Arc<inner> co-existing with
+//! independent `primary_focus` + listener state) collapsed into a single
+//! singleton owning every focus invariant. [`FocusNode`] / [`FocusScopeNode`]
+//! reach the manager via [`FocusManager::global`] instead of holding a
+//! `Weak<FocusManagerInner>`.
 //!
 //! # Type System Features
 //!
-//! - **Newtype pattern**: `FocusNodeId` uses `NonZeroU64` for niche
-//!   optimization
-//! - **Singleton pattern**: Global focus manager via `OnceLock`
-//! - **parking_lot**: High-performance read-write locks
-//! - **FocusScope integration**: Tab/Shift+Tab navigation via
-//!   `FocusScopeManager`
+//! - **Newtype pattern**: [`FocusNodeId`] uses `NonZeroU64` for niche
+//!   optimization (so `Option<FocusNodeId>` is the same 8 bytes).
+//! - **Singleton pattern**: Global focus manager via `OnceLock`.
+//! - **parking_lot**: High-performance read-write locks.
+//! - **TOCTOU-safe**: Primary-focus updates take a single write lock
+//!   so concurrent `request_focus` callers cannot interleave a stale
+//!   read with a competing write.
+//!
+//! # Flutter parity
+//!
+//! Mirrors [`widgets/focus_manager.dart`](https://api.flutter.dev/flutter/widgets/FocusManager-class.html)
+//! `FocusManager` — singular `_primaryFocus` + `rootScope` + listener
+//! `ChangeNotifier` semantics. FLUI's singleton replaces Flutter's
+//! `WidgetsBinding.focusManager` accessor.
 //!
 //! # Example
 //!
@@ -27,23 +44,22 @@
 //!     println!("We have focus!");
 //! }
 //!
-//! // Tab navigation (uses FocusScopeManager)
+//! // Tab navigation (uses the root scope's traversal policy)
 //! FocusManager::global().focus_next();
 //!
 //! // Release focus
 //! FocusManager::global().unfocus();
 //! ```
 
-use std::{
-    collections::HashMap,
-    sync::{Arc, atomic::AtomicBool},
-};
+use std::{collections::HashMap, sync::Arc};
 
 use parking_lot::RwLock;
 
-use crate::{events::KeyEvent, ids::FocusNodeId, routing::focus_scope::FocusScopeNode};
-
-// Re-export FocusNodeId for convenience
+use crate::{
+    events::KeyEvent,
+    ids::FocusNodeId,
+    routing::focus_scope::{FocusNode, FocusScopeNode},
+};
 
 // ============================================================================
 // FocusChangeCallback
@@ -65,18 +81,29 @@ pub type KeyEventCallback = Arc<dyn Fn(&KeyEvent) -> bool + Send + Sync>;
 
 /// Global focus manager (singleton).
 ///
-/// Tracks which UI element currently has keyboard focus.
-/// Only one element can have focus at a time.
+/// Tracks which UI element currently has keyboard focus, owns the root
+/// [`FocusScopeNode`] of the focus tree, dispatches key events through
+/// per-node + global handlers, and notifies registered listeners on
+/// focus changes. Only one element can have focus at a time.
+///
+/// # Singleton ownership
+///
+/// `FocusManager::global()` returns a `&'static FocusManager` initialized
+/// once via [`OnceLock`]. On first access, [`Default`] eagerly creates the
+/// root [`FocusScopeNode`] so consumers can always reach
+/// [`FocusManager::root_scope`] without re-initialization.
 ///
 /// # Thread Safety
 ///
-/// FocusManager uses `parking_lot::RwLock` for efficient concurrent access.
-/// Reads (checking focus) are very fast and don't block each other.
+/// `FocusManager` uses `parking_lot::RwLock` for efficient concurrent
+/// reads. Primary-focus mutations take a single write lock to avoid
+/// read-then-write TOCTOU races against competing `request_focus`
+/// callers.
 ///
 /// # Niche Optimization
 ///
-/// `FocusNodeId` uses `NonZeroU64`, so `Option<FocusNodeId>` is the same size
-/// as `FocusNodeId` (8 bytes).
+/// `FocusNodeId` uses `NonZeroU64`, so `Option<FocusNodeId>` is the same
+/// size as `FocusNodeId` (8 bytes).
 ///
 /// # Example
 ///
@@ -97,8 +124,16 @@ pub type KeyEventCallback = Arc<dyn Fn(&KeyEvent) -> bool + Send + Sync>;
 /// FocusManager::global().unfocus();
 /// ```
 pub struct FocusManager {
-    /// Currently focused element (if any).
-    focused: RwLock<Option<FocusNodeId>>,
+    /// Root scope of the focus tree.
+    ///
+    /// Owned directly by the singleton (Flutter parity:
+    /// `FocusManager.rootScope`). Constructed eagerly in [`Default`] so
+    /// the root scope is always present — no Option dance, no
+    /// lazy-construction race.
+    root_scope: Arc<FocusScopeNode>,
+
+    /// Currently focused element (if any) — Flutter's `_primaryFocus`.
+    primary_focus: RwLock<Option<FocusNodeId>>,
 
     /// Listeners for focus changes.
     listeners: RwLock<Vec<FocusChangeCallback>>,
@@ -109,23 +144,18 @@ pub struct FocusManager {
     /// Global key event handlers (called for all key events).
     global_key_handlers: RwLock<Vec<KeyEventCallback>>,
 
-    /// Active focus scope used for Tab navigation traversal.
-    ///
-    /// Set via [`FocusManager::set_active_scope`] from the app binding at
-    /// init. When None, [`focus_next`] / [`focus_previous`] return false
-    /// (no traversal possible — app didn't wire a scope). Closes audit
-    /// Finding I-4 (Tab navigation public API was `tracing::warn!` stub).
+    /// Override scope used for Tab navigation traversal. When `None`
+    /// (the default), [`focus_next`] / [`focus_previous`] use
+    /// [`root_scope`]. App code can set this to a sub-scope to scope
+    /// traversal (matches Flutter modal-route scope semantics).
     active_scope: RwLock<Option<Arc<FocusScopeNode>>>,
-
-    /// Latches first missing-active-scope warn so repeated Tab presses
-    /// don't spam logs. PR #88 review fix.
-    missing_scope_warned: AtomicBool,
 }
 
 impl std::fmt::Debug for FocusManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FocusManager")
-            .field("focused", &*self.focused.read())
+            .field("primary_focus", &*self.primary_focus.read())
+            .field("root_scope_id", &self.root_scope.id())
             .field("listener_count", &self.listeners.read().len())
             .finish()
     }
@@ -133,13 +163,19 @@ impl std::fmt::Debug for FocusManager {
 
 impl Default for FocusManager {
     fn default() -> Self {
+        let root_scope = FocusScopeNode::with_debug_label("Root Focus Scope");
+        // Root scope is attached by definition — it has no parent
+        // because it IS the tree root. Mark attached so child-attach
+        // recursion treats it as live (audit parity with Flutter's
+        // root-scope-always-attached invariant).
+        FocusNode::mark_root_attached(root_scope.as_focus_node());
         Self {
-            focused: RwLock::new(None),
+            root_scope,
+            primary_focus: RwLock::new(None),
             listeners: RwLock::new(Vec::new()),
             key_handlers: RwLock::new(HashMap::new()),
             global_key_handlers: RwLock::new(Vec::new()),
             active_scope: RwLock::new(None),
-            missing_scope_warned: AtomicBool::new(false),
         }
     }
 }
@@ -147,60 +183,60 @@ impl Default for FocusManager {
 impl FocusManager {
     /// Get the global focus manager instance.
     ///
-    /// This is a singleton - the same instance is returned every time.
+    /// This is a singleton — the same instance is returned every time.
+    /// On first access the root [`FocusScopeNode`] is constructed.
     pub fn global() -> &'static FocusManager {
         static INSTANCE: std::sync::OnceLock<FocusManager> = std::sync::OnceLock::new();
         INSTANCE.get_or_init(FocusManager::default)
     }
 
-    /// Set the active focus scope used for Tab navigation traversal.
+    /// Returns the root focus scope.
     ///
-    /// Call this from the app binding when constructing the focus tree
-    /// (usually at app init). [`focus_next`] / [`focus_previous`] delegate
-    /// to the active scope's `focus_next_in_scope` /
-    /// `focus_previous_in_scope`.
-    pub fn set_active_scope(&self, scope: Option<Arc<FocusScopeNode>>) {
-        *self.active_scope.write() = scope;
-        // Reset the warn-latch so re-clearing the scope after wiring
-        // produces a fresh diagnostic.
-        self.missing_scope_warned
-            .store(false, std::sync::atomic::Ordering::Release);
+    /// Flutter parity: `FocusManager.rootScope`. Always present —
+    /// constructed eagerly in [`Default`]. Use this as the parent
+    /// when attaching focus nodes to the tree.
+    #[inline]
+    pub fn root_scope(&self) -> &Arc<FocusScopeNode> {
+        &self.root_scope
     }
 
-    /// Returns the currently active focus scope, if any.
-    pub fn active_scope(&self) -> Option<Arc<FocusScopeNode>> {
-        self.active_scope.read().clone()
+    /// Override the active scope for Tab navigation. Pass `None` to
+    /// fall back to the [`root_scope`].
+    ///
+    /// Useful for modal dialogs that need traversal scoped to dialog
+    /// descendants. Flutter equivalent: pushing a scope onto the
+    /// modal-route history.
+    pub fn set_active_scope(&self, scope: Option<Arc<FocusScopeNode>>) {
+        *self.active_scope.write() = scope;
+    }
+
+    /// Returns the active focus scope used for traversal. Defaults to
+    /// [`root_scope`] when no override is set.
+    pub fn active_scope(&self) -> Arc<FocusScopeNode> {
+        self.active_scope
+            .read()
+            .clone()
+            .unwrap_or_else(|| self.root_scope.clone())
     }
 
     /// Create a new focus manager (for testing).
     ///
     /// Normally you should use `global()` instead.
     #[cfg(test)]
-    fn new() -> Self {
+    pub(crate) fn new_for_test() -> Self {
         Self::default()
     }
 
-    /// Helper: warn-once for missing active scope. PR #88 review fix —
-    /// the prior `tracing::warn!` fired on every Tab press, spamming
-    /// logs on key-repeat.
-    fn warn_missing_scope(&self, op: &'static str) {
-        if !self
-            .missing_scope_warned
-            .swap(true, std::sync::atomic::Ordering::AcqRel)
-        {
-            tracing::warn!(
-                op,
-                "FocusManager::{op}: no active focus scope set — call \
-                 FocusManager::set_active_scope at app init to enable \
-                 Tab/Shift+Tab navigation",
-            );
-        }
-    }
-
-    /// Request focus for a node.
+    /// Request focus for a node. If another node had focus, it loses
+    /// focus. Focus-change listeners are notified.
     ///
-    /// If another node had focus, it loses focus.
-    /// Focus change listeners are notified.
+    /// Uses a single-write-lock TOCTOU-safe update so concurrent
+    /// callers cannot interleave a stale read with a competing write
+    /// — earlier dual-state design read with a separate read lock
+    /// before writing, allowing races.
+    ///
+    /// Records the new focus in the node's enclosing scope's history
+    /// (Flutter parity: `FocusScopeNode._focusedChild` history).
     ///
     /// # Example
     ///
@@ -209,30 +245,54 @@ impl FocusManager {
     /// FocusManager::global().request_focus(text_field);
     /// ```
     pub fn request_focus(&self, node_id: FocusNodeId) {
-        let previous = *self.focused.read();
+        self.set_primary_focus(Some(node_id));
+    }
 
-        if previous == Some(node_id) {
-            return; // Already focused
-        }
-
-        *self.focused.write() = Some(node_id);
+    /// Internal: single-write-lock primary-focus update + scope
+    /// history record + listener notification. Carries the
+    /// TOCTOU-safe pattern migrated from the prior
+    /// `FocusManagerInner::set_primary_focus`.
+    fn set_primary_focus(&self, node_id: Option<FocusNodeId>) {
+        // Single write lock: atomically read previous and write new
+        // (avoids TOCTOU race against concurrent request_focus calls).
+        let previous = {
+            let mut focus = self.primary_focus.write();
+            let previous = *focus;
+            if previous == node_id {
+                return;
+            }
+            *focus = node_id;
+            previous
+        };
 
         tracing::trace!(
             previous = ?previous.map(|id| id.get()),
-            new = node_id.get(),
+            new = ?node_id.map(|id| id.get()),
             "Focus changed"
         );
 
-        // Notify listeners
-        self.notify_listeners(previous, Some(node_id));
+        // Record in enclosing scope's history when focusing a node
+        // (mirrors Flutter `_setAsFocusedChildForScope`).
+        if let Some(id) = node_id
+            && let Some(node) = self.find_node(id)
+            && let Some(scope) = node.enclosing_scope()
+        {
+            scope.record_focus(id);
+        }
+
+        self.notify_listeners(previous, node_id);
     }
 
     /// Get the currently focused node (if any).
-    ///
-    /// Returns `None` if no element has focus.
     #[inline]
     pub fn focused(&self) -> Option<FocusNodeId> {
-        *self.focused.read()
+        *self.primary_focus.read()
+    }
+
+    /// Alias for [`focused`] — matches Flutter's `primaryFocus` getter.
+    #[inline]
+    pub fn primary_focus(&self) -> Option<FocusNodeId> {
+        *self.primary_focus.read()
     }
 
     /// Check if a specific node has focus.
@@ -246,7 +306,7 @@ impl FocusManager {
     /// ```
     #[inline]
     pub fn has_focus(&self, node_id: FocusNodeId) -> bool {
-        *self.focused.read() == Some(node_id)
+        *self.primary_focus.read() == Some(node_id)
     }
 
     /// Clear focus (no element focused).
@@ -256,23 +316,12 @@ impl FocusManager {
     /// - Window loses focus
     /// - Focused element is removed
     pub fn unfocus(&self) {
-        let previous = *self.focused.read();
-
-        if previous.is_none() {
-            return; // Already unfocused
-        }
-
-        *self.focused.write() = None;
-        tracing::trace!("Focus cleared");
-
-        // Notify listeners
-        self.notify_listeners(previous, None);
+        self.set_primary_focus(None);
     }
 
     /// Add a listener for focus changes.
     ///
-    /// Returns a callback that can be stored and used to check the current
-    /// focus. The listener is called whenever focus changes.
+    /// The listener is called whenever focus changes.
     ///
     /// # Example
     ///
@@ -285,72 +334,76 @@ impl FocusManager {
         self.listeners.write().push(callback);
     }
 
-    /// Remove all listeners.
-    ///
-    /// Useful for cleanup during shutdown.
+    /// Remove all listeners. Useful for cleanup during shutdown.
     pub fn clear_listeners(&self) {
         self.listeners.write().clear();
     }
 
     /// Notify all listeners of a focus change.
     fn notify_listeners(&self, previous: Option<FocusNodeId>, new: Option<FocusNodeId>) {
-        let listeners = self.listeners.read();
-        for listener in listeners.iter() {
+        // Clone the listener Vec so listener invocations can call
+        // `add_listener` / `clear_listeners` without deadlocking on
+        // our read lock (Flutter ChangeNotifier reentrancy semantics).
+        let listeners = self.listeners.read().clone();
+        for listener in &listeners {
             listener(previous, new);
         }
     }
 
-    /// Transfer focus to the next focusable element via the active scope's
-    /// traversal policy (Tab key).
+    /// Locate a focus node by ID by descending from the root scope.
     ///
-    /// Requires [`FocusManager::set_active_scope`] to have been called from
-    /// the app binding. Returns `true` if focus advanced, `false` if no
-    /// active scope is set, no element is currently focused, or the
-    /// traversal policy returned None.
+    /// Returns `None` if the node is not attached to the tree.
+    /// O(N) over tree nodes — used during focus-change history
+    /// recording (not on the per-event hot path).
+    pub(crate) fn find_node(&self, id: FocusNodeId) -> Option<Arc<FocusNode>> {
+        let root = self.root_scope.as_focus_node();
+        if root.id() == id {
+            return Some(root.clone());
+        }
+        root.descendants().find(|node| node.id() == id)
+    }
+
+    /// Transfer focus to the next focusable element via the active
+    /// scope's traversal policy (Tab key). The active scope defaults
+    /// to [`root_scope`] when no override is set via
+    /// [`set_active_scope`].
+    ///
+    /// Returns `true` if focus advanced, `false` if no element is
+    /// currently focused or the traversal policy returned `None`.
     pub fn focus_next(&self) -> bool {
-        let Some(current) = *self.focused.read() else {
+        let Some(current) = *self.primary_focus.read() else {
             tracing::trace!("focus_next: no element currently focused");
             return false;
         };
-        let Some(scope) = self.active_scope() else {
-            self.warn_missing_scope("focus_next");
-            return false;
-        };
+        let scope = self.active_scope();
         let Some(next_id) = scope.next_focusable_id(current) else {
             return false;
         };
-        // PR #88 review fix: route through request_focus so the singleton's
-        // focused field + listeners + key-routing surface stay in sync
-        // with the FocusScopeNode tree.
-        self.request_focus(next_id);
+        self.set_primary_focus(Some(next_id));
         true
     }
 
-    /// Transfer focus to the previous focusable element via the active
-    /// scope's traversal policy (Shift+Tab).
+    /// Transfer focus to the previous focusable element via the
+    /// active scope's traversal policy (Shift+Tab).
     ///
-    /// See [`focus_next`] for behavior contract — same singleton-sync fix
-    /// applied here.
+    /// See [`focus_next`] for behavior contract.
     pub fn focus_previous(&self) -> bool {
-        let Some(current) = *self.focused.read() else {
+        let Some(current) = *self.primary_focus.read() else {
             tracing::trace!("focus_previous: no element currently focused");
             return false;
         };
-        let Some(scope) = self.active_scope() else {
-            self.warn_missing_scope("focus_previous");
-            return false;
-        };
+        let scope = self.active_scope();
         let Some(prev_id) = scope.previous_focusable_id(current) else {
             return false;
         };
-        self.request_focus(prev_id);
+        self.set_primary_focus(Some(prev_id));
         true
     }
 
     /// Check if any element has focus.
     #[inline]
     pub fn is_focused(&self) -> bool {
-        self.focused.read().is_some()
+        self.primary_focus.read().is_some()
     }
 
     // ========================================================================
@@ -409,7 +462,7 @@ impl FocusManager {
     /// Dispatch a key event to the appropriate handler(s).
     ///
     /// Event routing order:
-    /// 1. Global handlers (in order added) - stop if any returns `true`
+    /// 1. Global handlers (in order added) — stop if any returns `true`
     /// 2. Focused node's handler (if any)
     ///
     /// Returns `true` if the event was handled.
@@ -423,19 +476,18 @@ impl FocusManager {
     /// }
     /// ```
     pub fn dispatch_key_event(&self, event: &KeyEvent) -> bool {
-        // First, try global handlers
-        {
-            let global_handlers = self.global_key_handlers.read();
-            for handler in global_handlers.iter() {
-                if handler(event) {
-                    tracing::trace!("Key event handled by global handler");
-                    return true;
-                }
+        // First, try global handlers — clone so the handler can mutate
+        // the global handler list without deadlocking.
+        let global_handlers = self.global_key_handlers.read().clone();
+        for handler in &global_handlers {
+            if handler(event) {
+                tracing::trace!("Key event handled by global handler");
+                return true;
             }
         }
 
         // Then, try focused node's handler
-        let focused = *self.focused.read();
+        let focused = *self.primary_focus.read();
         if let Some(node_id) = focused
             && let Some(handler) = self.key_handlers.read().get(&node_id).cloned()
             && handler(event)
@@ -468,8 +520,21 @@ mod tests {
     }
 
     #[test]
+    fn test_focus_manager_has_root_scope() {
+        let manager = FocusManager::new_for_test();
+        // Root scope is always present and attached.
+        assert!(manager.root_scope().as_focus_node().is_attached());
+        // Active scope falls back to root scope.
+        assert_eq!(
+            manager.active_scope().id(),
+            manager.root_scope().id(),
+            "active_scope should default to root_scope"
+        );
+    }
+
+    #[test]
     fn test_request_focus() {
-        let manager = FocusManager::new();
+        let manager = FocusManager::new_for_test();
         let node1 = FocusNodeId::new(1);
         let node2 = FocusNodeId::new(2);
 
@@ -493,7 +558,7 @@ mod tests {
 
     #[test]
     fn test_unfocus() {
-        let manager = FocusManager::new();
+        let manager = FocusManager::new_for_test();
         let node = FocusNodeId::new(42);
 
         // Give focus
@@ -509,7 +574,7 @@ mod tests {
 
     #[test]
     fn test_has_focus() {
-        let manager = FocusManager::new();
+        let manager = FocusManager::new_for_test();
         let node1 = FocusNodeId::new(1);
         let node2 = FocusNodeId::new(2);
 
@@ -543,7 +608,7 @@ mod tests {
     fn test_focus_listener() {
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        let manager = FocusManager::new();
+        let manager = FocusManager::new_for_test();
         let called = Arc::new(AtomicBool::new(false));
         let called_clone = called.clone();
 
@@ -561,7 +626,7 @@ mod tests {
     fn test_request_same_focus_no_change() {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
-        let manager = FocusManager::new();
+        let manager = FocusManager::new_for_test();
         let call_count = Arc::new(AtomicUsize::new(0));
         let count_clone = call_count.clone();
 
@@ -584,7 +649,7 @@ mod tests {
     fn test_clear_listeners() {
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        let manager = FocusManager::new();
+        let manager = FocusManager::new_for_test();
         let called = Arc::new(AtomicBool::new(false));
         let called_clone = called.clone();
 
@@ -605,7 +670,7 @@ mod tests {
     fn test_register_key_handler() {
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        let manager = FocusManager::new();
+        let manager = FocusManager::new_for_test();
         let node = FocusNodeId::new(1);
 
         assert!(!manager.has_key_handler(node));
@@ -634,7 +699,7 @@ mod tests {
 
         use crate::{events::keyboard::Code, testing::input::KeyEventBuilder};
 
-        let manager = FocusManager::new();
+        let manager = FocusManager::new_for_test();
         let node = FocusNodeId::new(1);
 
         let handled = Arc::new(AtomicBool::new(false));
@@ -666,7 +731,7 @@ mod tests {
 
         use crate::{events::keyboard::Code, testing::input::KeyEventBuilder};
 
-        let manager = FocusManager::new();
+        let manager = FocusManager::new_for_test();
         let node = FocusNodeId::new(1);
 
         let handled = Arc::new(AtomicBool::new(false));
@@ -695,7 +760,7 @@ mod tests {
 
         use crate::{events::keyboard::Code, testing::input::KeyEventBuilder};
 
-        let manager = FocusManager::new();
+        let manager = FocusManager::new_for_test();
 
         let global_handled = Arc::new(AtomicBool::new(false));
         let global_clone = global_handled.clone();
@@ -719,7 +784,7 @@ mod tests {
 
         use crate::{events::keyboard::Code, testing::input::KeyEventBuilder};
 
-        let manager = FocusManager::new();
+        let manager = FocusManager::new_for_test();
         let node = FocusNodeId::new(1);
 
         let global_called = Arc::new(AtomicBool::new(false));
@@ -759,7 +824,7 @@ mod tests {
 
         use crate::{events::keyboard::Code, testing::input::KeyEventBuilder};
 
-        let manager = FocusManager::new();
+        let manager = FocusManager::new_for_test();
         let node = FocusNodeId::new(1);
 
         let global_called = Arc::new(AtomicBool::new(false));
@@ -798,7 +863,7 @@ mod tests {
 
         use crate::{events::keyboard::Code, testing::input::KeyEventBuilder};
 
-        let manager = FocusManager::new();
+        let manager = FocusManager::new_for_test();
 
         let called = Arc::new(AtomicBool::new(false));
         let called_clone = called.clone();

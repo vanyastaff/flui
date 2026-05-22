@@ -70,9 +70,9 @@ if FocusManager::global().has_focus(node_id) {
     // Handle keyboard input
 }
 
-// Tab traversal
-FocusManager::global().next_focus();  // Tab
-FocusManager::global().previous_focus();  // Shift+Tab
+// Tab traversal (defaults to root scope's reading-order policy)
+FocusManager::global().focus_next();      // Tab
+FocusManager::global().focus_previous();  // Shift+Tab
 ```
 
 ### Gesture Recognition
