@@ -5,11 +5,11 @@
 //! accessibility features.
 
 use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
-use flui_foundation::{impl_binding_singleton, BindingBase};
+use flui_foundation::{BindingBase, impl_binding_singleton};
 use parking_lot::RwLock;
 
 use crate::{event::SemanticsEvent, role::Assertiveness};
@@ -160,6 +160,13 @@ pub struct SemanticsBinding {
     /// Callback for semantics action events.
     #[allow(clippy::type_complexity)]
     action_callback: RwLock<Option<Arc<dyn Fn(SemanticsActionEvent) + Send + Sync>>>,
+
+    /// Callback for semantics events dispatched via
+    /// [`SemanticsService::send_event`]. Set by the platform embedder when
+    /// the accessibility surface is brought up; cleared when the platform
+    /// goes silent. Mirrors [`Self::announce_callback`]'s shape.
+    #[allow(clippy::type_complexity)]
+    event_callback: RwLock<Option<Arc<dyn Fn(&SemanticsEvent) + Send + Sync>>>,
 }
 
 impl SemanticsBinding {
@@ -171,6 +178,7 @@ impl SemanticsBinding {
             accessibility_features: RwLock::new(AccessibilityFeatures::default()),
             announce_callback: RwLock::new(None),
             action_callback: RwLock::new(None),
+            event_callback: RwLock::new(None),
         }
     }
 
@@ -244,13 +252,16 @@ impl SemanticsBinding {
 
     /// Announces a message to assistive technology.
     ///
+    /// Uses the clone-and-release lock pattern (see [`Self::dispatch_event`]).
+    ///
     /// # Arguments
     ///
     /// * `message` - The message to announce.
     /// * `assertiveness` - How urgently to announce the message.
     pub fn announce(&self, message: &str, assertiveness: Assertiveness) {
-        if let Some(ref callback) = *self.announce_callback.read() {
-            callback(message, assertiveness);
+        let cb = self.announce_callback.read().as_ref().map(Arc::clone);
+        if let Some(cb) = cb {
+            cb(message, assertiveness);
         }
     }
 
@@ -269,8 +280,45 @@ impl SemanticsBinding {
     /// This is called by the platform when an assistive technology
     /// requests an action on a semantics node.
     pub fn dispatch_action(&self, event: SemanticsActionEvent) {
-        if let Some(ref callback) = *self.action_callback.read() {
-            callback(event);
+        // Clone-and-release: pull the Arc out of the read-lock and invoke
+        // outside the lock guard so the callback can reach back into the
+        // binding (e.g. read accessibility features) without deadlocking
+        // on its own lock.
+        let cb = self.action_callback.read().as_ref().map(Arc::clone);
+        if let Some(cb) = cb {
+            cb(event);
+        }
+    }
+
+    // ========== Semantics Events (U14) ==========
+
+    /// Sets the callback for semantics events dispatched via
+    /// [`SemanticsService::send_event`].
+    ///
+    /// Set by the platform embedder when the accessibility surface is
+    /// brought up; pass `None` (via re-setting to a no-op closure) when
+    /// the platform goes silent. Mirrors [`Self::set_announce_callback`].
+    pub fn set_event_callback<F>(&self, callback: F)
+    where
+        F: Fn(&SemanticsEvent) + Send + Sync + 'static,
+    {
+        *self.event_callback.write() = Some(Arc::new(callback));
+    }
+
+    /// Dispatches a semantics event to the registered platform callback.
+    ///
+    /// Uses the **clone-and-release** lock-handling pattern: the
+    /// `Arc<dyn Fn>` is cloned out of the read-lock before the callback
+    /// runs, so user code reaching back into the binding (e.g. reading
+    /// accessibility features or registering another callback) cannot
+    /// deadlock on the binding's own lock.
+    ///
+    /// Called by [`SemanticsService::send_event`] when the binding is
+    /// initialized.
+    pub fn dispatch_event(&self, event: &SemanticsEvent) {
+        let cb = self.event_callback.read().as_ref().map(Arc::clone);
+        if let Some(cb) = cb {
+            cb(event);
         }
     }
 }
@@ -404,11 +452,29 @@ impl SemanticsService {
         }
     }
 
-    /// Sends a semantics event to the platform.
-    #[allow(clippy::needless_pass_by_value)] // Will be consumed when routed to platform API
+    /// Sends a semantics event to the platform accessibility surface.
+    ///
+    /// Routes through [`SemanticsBinding::dispatch_event`] when the binding
+    /// is initialized; falls back to a `tracing::debug!` log otherwise (the
+    /// platform embedder hasn't called `set_event_callback` yet).
+    ///
+    /// Takes `event` by value to keep the call shape consistent with
+    /// Flutter's `dart:ui SemanticsService.sendEvent` (the engine
+    /// integration consumes the event), even though the dispatch path
+    /// hands the callback a borrow. The `let _ = event;` after the
+    /// log branch makes the unused-on-the-fallback-path branch explicit.
+    #[allow(clippy::needless_pass_by_value)] // consumed by future engine wiring
     pub fn send_event(event: SemanticsEvent) {
-        tracing::debug!(event = ?event, "SemanticsService::send_event");
-        // TODO: Route to platform accessibility API
+        use flui_foundation::HasInstance;
+
+        if SemanticsBinding::is_initialized() {
+            SemanticsBinding::instance().dispatch_event(&event);
+        } else {
+            tracing::debug!(
+                event = ?event,
+                "SemanticsService::send_event (binding not initialized)"
+            );
+        }
     }
 
     /// Announces a tooltip.
@@ -556,5 +622,52 @@ mod tests {
         );
         assert_eq!(event.node_id, 10);
         assert!(event.arguments.is_some());
+    }
+
+    #[test]
+    fn test_event_callback() {
+        use std::sync::atomic::AtomicUsize;
+
+        let binding = SemanticsBinding::new();
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let call_count_clone = Arc::clone(&call_count);
+
+        binding.set_event_callback(move |_event| {
+            call_count_clone.fetch_add(1, Ordering::SeqCst);
+        });
+
+        binding.dispatch_event(&SemanticsEvent::tooltip("hi"));
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
+
+        binding.dispatch_event(&SemanticsEvent::tooltip("again"));
+        assert_eq!(call_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn test_event_callback_clone_and_release_no_deadlock() {
+        // Verify the clone-and-release lock pattern: a callback that
+        // mutates binding state (registers another callback) must not
+        // deadlock on the binding's own RwLock.
+        let binding = Arc::new(SemanticsBinding::new());
+        let binding_clone = Arc::clone(&binding);
+
+        binding.set_event_callback(move |_event| {
+            // Reach back into the binding from inside the callback.
+            // Pre-cycle (`if let Some(ref cb) = *self.event_callback.read()`)
+            // would hold the read lock here, deadlocking on the write
+            // attempt below.
+            binding_clone.set_event_callback(|_| {});
+        });
+
+        binding.dispatch_event(&SemanticsEvent::tooltip("first"));
+        // If we got here, the clone-and-release pattern released the
+        // read lock before invoking the callback.
+    }
+
+    #[test]
+    fn test_dispatch_event_without_callback_is_a_no_op() {
+        // No callback registered — must not panic.
+        let binding = SemanticsBinding::new();
+        binding.dispatch_event(&SemanticsEvent::tooltip("nobody home"));
     }
 }
