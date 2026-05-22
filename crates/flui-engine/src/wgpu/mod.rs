@@ -83,7 +83,14 @@ pub mod path_cache;
 /// construction. Per-item audit tracked in ARCHITECTURE.md.
 #[allow(dead_code)]
 mod pipeline;
-mod pipelines;
+// Cycle 4 E-6: parallel `pipelines.rs` module (with its own
+// `PipelineCache` + `PipelineBuilder` structs, name-colliding with
+// `pipeline.rs`) was deleted. Workspace grep showed zero non-self
+// consumers of `pipelines::PipelineCache` / `pipelines::PipelineBuilder`
+// outside the re-export line below; `painter.rs:22` imports from
+// `pipeline` (singular), which is the live version. The audit
+// (R-7 entry E-6) had the singular/plural mapping reversed; the
+// outcome is the same — one of the two parallel modules dies.
 mod renderer;
 /// Shader cache for offscreen pipelines (`OffscreenRenderer` mask/blur/morph).
 /// `#[allow(dead_code)]` retained because `ShaderCache::cached_count` and
@@ -135,13 +142,18 @@ pub use layer_render::LayerRender;
 pub use multi_draw::{
     DrawCommand, DrawIndexedIndirectArgs, MultiDrawBatcher, MultiDrawStats, PipelineId,
 };
-// Offscreen rendering. `PipelineManager` was deleted in cycle 4 E-3 (zombie
-// wrapper carrying only an `Arc<ShaderCache>` field with 0 consumers); the
-// real pipeline ownership lives in `pipelines::PipelineCache`.
+// Offscreen rendering. `PipelineManager` was deleted in cycle 4 E-3
+// (zombie wrapper carrying only an `Arc<ShaderCache>` field with 0
+// consumers); the real pipeline ownership lives in
+// `pipeline::PipelineCache` (singular -- the parallel `pipelines.rs`
+// plural module with its own competing `PipelineCache` was deleted in
+// cycle 4 E-6 with zero workspace consumers).
 pub use offscreen::{MaskedRenderResult, OffscreenRenderer};
 pub use painter::WgpuPainter;
-// Pipeline management
-pub use pipelines::{PipelineBuilder, PipelineCache};
+// Pipeline cache (cycle 4 E-6: re-export now points at the live
+// singular-name `pipeline::` module; the parallel `pipelines.rs`
+// plural module was deleted as zero-consumer dead code).
+pub use pipeline::PipelineCache;
 // Renderer (cross-platform GPU renderer)
 pub use renderer::{GpuCapabilities, Renderer};
 // Shader compilation
