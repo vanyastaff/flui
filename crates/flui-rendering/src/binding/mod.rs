@@ -25,9 +25,10 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
+use flui_interaction::MouseTracker;
+
 use crate::{
     hit_testing::HitTestResult,
-    input::MouseTracker,
     pipeline::PipelineOwner,
     view::{RenderView, ViewConfiguration},
 };
@@ -236,7 +237,16 @@ pub trait RendererBinding: Send + Sync {
     // ========================================================================
 
     /// Returns the mouse tracker for hover notification.
-    fn mouse_tracker(&self) -> &RwLock<MouseTracker>;
+    ///
+    /// Cycle 4 U-6: the return type changed from
+    /// `&RwLock<MouseTracker>` to `&MouseTracker`. The interaction-
+    /// side [`flui_interaction::MouseTracker`] is `Clone` with
+    /// interior mutability (`Arc<Mutex<inner>>`), so the outer
+    /// `RwLock` wrapper the rendering-side tracker required is
+    /// double-wrapping. Implementers now expose the tracker
+    /// directly; callers needing a snapshot clone the handle
+    /// (cheap -- `Arc`-bump).
+    fn mouse_tracker(&self) -> &MouseTracker;
 
     // ========================================================================
     // Frame Production

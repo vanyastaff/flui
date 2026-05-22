@@ -58,7 +58,11 @@ pub mod context;
 pub mod delegates;
 pub mod error;
 pub mod hit_testing;
-pub mod input;
+// Cycle 4 U-6 deleted the rendering-side `input` module entirely.
+// Canonical `MouseTracker` + `MouseTrackerAnnotation` + cursor types
+// live in `flui_interaction` (Flutter's `gestures/mouse_tracker.dart`
+// equivalent). Consumers go through `flui_interaction::MouseTracker`
+// directly, or via the prelude re-export at the bottom of this file.
 pub mod parent_data;
 pub mod pipeline;
 pub mod protocol;
@@ -106,11 +110,14 @@ pub mod prelude {
     // types live in `flui_interaction::events` (re-exported at line 82
     // via `flui_interaction::{HitTestTarget, ...}`).
     pub use crate::hit_testing::MatrixTransformPart;
-    // Re-export base hit testing types from flui_interaction (source of truth)
-    pub use crate::input::{
-        CursorIcon, MouseCursorSession, MouseTracker, MouseTrackerAnnotation, MouseTrackerHitTest,
-        PointerEnterEvent, PointerExitEvent, PointerHoverEvent,
-    };
+    // Mouse-tracking surface (cycle 4 U-6: migrated from the deleted
+    // rendering-side `input` module to `flui_interaction`'s canonical
+    // types). `MouseCursorSession` / `PointerEnterEvent` /
+    // `PointerExitEvent` / `PointerHoverEvent` / `MouseTrackerHitTest`
+    // were rendering-specific helpers without flui-interaction-side
+    // equivalents; consumers needing them migrated to
+    // `flui_interaction::events`-based pointer-event handling.
+    pub use flui_interaction::{CursorIcon, MouseTracker, MouseTrackerAnnotation};
     // Protocol adapters for RenderBox -> RenderObject<BoxProtocol> bridging
     pub use crate::protocol::IntoRenderObject;
     // Arity types (canonical home: flui_tree)
