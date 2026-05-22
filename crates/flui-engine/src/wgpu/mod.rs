@@ -93,11 +93,14 @@ mod pipeline;
 // (R-7 entry E-6) had the singular/plural mapping reversed; the
 // outcome is the same — one of the two parallel modules dies.
 mod renderer;
-/// Shader cache for offscreen pipelines (`OffscreenRenderer` mask/blur/morph).
-/// `#[allow(dead_code)]` retained because `ShaderCache::cached_count` and
-/// `ShaderCache::clear` introspection methods are forward-looking devtools
-/// helpers; deletion is tracked in ARCHITECTURE.md Outstanding refactors.
-#[allow(dead_code)]
+/// Shader cache for offscreen pipelines (`OffscreenRenderer` mask /
+/// blur / morph). Cycle 4 E-7 dropped the module-level
+/// `#[allow(dead_code)]` mask: the only forward-looking helper
+/// (`ShaderCache::clear`) is now gated behind
+/// `#[cfg(feature = "devtools")]`, so default-build dead-code
+/// surfaces as an item-level lint rather than a broad module
+/// suppression. The audit also mentioned `cached_count` but no such
+/// method existed -- only `clear`.
 mod shader_compiler;
 mod shaders;
 pub mod superellipse_cache;

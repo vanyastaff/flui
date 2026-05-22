@@ -5,8 +5,12 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use bytemuck::{Pod, Zeroable};
-use flui_types::{painting::Shader, styling::Color};
+// Cycle 4 E-7 (extended): `bytemuck::{Pod, Zeroable}` + `Color`
+// imports dropped alongside the deletion of the 5 dead uniform
+// helpers (see comment block below). `Shader` is retained --
+// `ShaderType::from_shader` (live, 1 callsite in offscreen.rs) still
+// pattern-matches on the enum variants.
+use flui_types::painting::Shader;
 use parking_lot::RwLock;
 
 /// Shader type identifier
@@ -231,7 +235,17 @@ impl ShaderCache {
         let _ = self.get_or_compile(ShaderType::SweepGradientMask);
     }
 
-    /// Clear the cache
+    /// Clear the shader cache.
+    ///
+    /// Cycle 4 E-7: gated behind `#[cfg(feature = "devtools")]`.
+    /// The method has zero production callsites; its only legitimate
+    /// consumer is a devtools hot-reload / debug flush flow. Pre-
+    /// cycle the method shipped unconditionally under a module-level
+    /// `#[allow(dead_code)]` mask -- the cfg-gate replaces the
+    /// blanket lint suppression with a feature flag a devtools
+    /// build can opt into. The `devtools` feature is declared in
+    /// `Cargo.toml`; default builds skip the method entirely.
+    #[cfg(feature = "devtools")]
     pub fn clear(&self) {
         let mut cache = self.cache.write();
         cache.clear();
@@ -247,217 +261,21 @@ impl Default for ShaderCache {
 /// Uniform data for solid mask shader
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
-pub struct SolidMaskUniforms {
-    pub mask_color: [f32; 4], // RGBA
-}
-
-impl SolidMaskUniforms {
-    pub fn from_color(color: Color) -> Self {
-        Self {
-            mask_color: [
-                f32::from(color.r) / 255.0,
-                f32::from(color.g) / 255.0,
-                f32::from(color.b) / 255.0,
-                f32::from(color.a) / 255.0,
-            ],
-        }
-    }
-}
-
-/// Uniform data for linear gradient mask shader
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Pod, Zeroable)]
-pub struct LinearGradientUniforms {
-    pub start: [f32; 2],
-    pub end: [f32; 2],
-    pub start_color: [f32; 4],
-    pub end_color: [f32; 4],
-}
-
-impl LinearGradientUniforms {
-    pub fn new(start: (f32, f32), end: (f32, f32), start_color: Color, end_color: Color) -> Self {
-        Self {
-            start: [start.0, start.1],
-            end: [end.0, end.1],
-            start_color: [
-                f32::from(start_color.r) / 255.0,
-                f32::from(start_color.g) / 255.0,
-                f32::from(start_color.b) / 255.0,
-                f32::from(start_color.a) / 255.0,
-            ],
-            end_color: [
-                f32::from(end_color.r) / 255.0,
-                f32::from(end_color.g) / 255.0,
-                f32::from(end_color.b) / 255.0,
-                f32::from(end_color.a) / 255.0,
-            ],
-        }
-    }
-}
-
-/// Uniform data for radial gradient mask shader
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Pod, Zeroable)]
-pub struct RadialGradientUniforms {
-    pub center: [f32; 2],
-    pub radius: f32,
-    pub _padding: f32, // For 16-byte alignment
-    pub center_color: [f32; 4],
-    pub edge_color: [f32; 4],
-}
-
-impl RadialGradientUniforms {
-    pub fn new(center: (f32, f32), radius: f32, center_color: Color, edge_color: Color) -> Self {
-        Self {
-            center: [center.0, center.1],
-            radius,
-            _padding: 0.0,
-            center_color: [
-                f32::from(center_color.r) / 255.0,
-                f32::from(center_color.g) / 255.0,
-                f32::from(center_color.b) / 255.0,
-                f32::from(center_color.a) / 255.0,
-            ],
-            edge_color: [
-                f32::from(edge_color.r) / 255.0,
-                f32::from(edge_color.g) / 255.0,
-                f32::from(edge_color.b) / 255.0,
-                f32::from(edge_color.a) / 255.0,
-            ],
-        }
-    }
-}
-
-/// Uniform data for sweep gradient mask shader
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Pod, Zeroable)]
-pub struct SweepGradientUniforms {
-    pub center: [f32; 2],
-    pub start_angle: f32,
-    pub end_angle: f32,
-    pub start_color: [f32; 4],
-    pub end_color: [f32; 4],
-}
-
-impl SweepGradientUniforms {
-    pub fn new(
-        center: (f32, f32),
-        start_angle: f32,
-        end_angle: f32,
-        start_color: Color,
-        end_color: Color,
-    ) -> Self {
-        Self {
-            center: [center.0, center.1],
-            start_angle,
-            end_angle,
-            start_color: [
-                f32::from(start_color.r) / 255.0,
-                f32::from(start_color.g) / 255.0,
-                f32::from(start_color.b) / 255.0,
-                f32::from(start_color.a) / 255.0,
-            ],
-            end_color: [
-                f32::from(end_color.r) / 255.0,
-                f32::from(end_color.g) / 255.0,
-                f32::from(end_color.b) / 255.0,
-                f32::from(end_color.a) / 255.0,
-            ],
-        }
-    }
-}
-
-/// Create uniform buffer data from Shader
-///
-/// Uses `bytemuck` for safe type-to-bytes conversion without unsafe code.
-/// Coordinates in the Shader are absolute (typed Pixels); this function
-/// normalizes them relative to `bounds` for the GPU.
-#[must_use]
-pub fn create_uniforms_from_shader(
-    shader: &Shader,
-    bounds: flui_types::geometry::Rect<flui_types::geometry::Pixels>,
-) -> Vec<u8> {
-    match shader {
-        Shader::Solid { color } => {
-            let uniforms = SolidMaskUniforms::from_color(*color);
-            bytemuck::bytes_of(&uniforms).to_vec()
-        }
-        Shader::LinearGradient {
-            from, to, colors, ..
-        } => {
-            let w = bounds.width().0;
-            let h = bounds.height().0;
-            let bx = bounds.left().0;
-            let by = bounds.top().0;
-            let start = (
-                if w > 0.0 { (from.dx.0 - bx) / w } else { 0.0 },
-                if h > 0.0 { (from.dy.0 - by) / h } else { 0.0 },
-            );
-            let end = (
-                if w > 0.0 { (to.dx.0 - bx) / w } else { 0.0 },
-                if h > 0.0 { (to.dy.0 - by) / h } else { 0.0 },
-            );
-            let start_color = colors.first().copied().unwrap_or(Color::WHITE);
-            let end_color = colors.last().copied().unwrap_or(Color::BLACK);
-            let uniforms = LinearGradientUniforms::new(start, end, start_color, end_color);
-            bytemuck::bytes_of(&uniforms).to_vec()
-        }
-        Shader::RadialGradient {
-            center,
-            radius,
-            colors,
-            ..
-        } => {
-            let w = bounds.width().0;
-            let h = bounds.height().0;
-            let bx = bounds.left().0;
-            let by = bounds.top().0;
-            let cx = if w > 0.0 { (center.dx.0 - bx) / w } else { 0.5 };
-            let cy = if h > 0.0 { (center.dy.0 - by) / h } else { 0.5 };
-            let avg = f32::midpoint(w, h);
-            let nr = if avg > 0.0 { *radius / avg } else { 0.5 };
-            let center_color = colors.first().copied().unwrap_or(Color::WHITE);
-            let edge_color = colors.last().copied().unwrap_or(Color::BLACK);
-            let uniforms = RadialGradientUniforms::new((cx, cy), nr, center_color, edge_color);
-            bytemuck::bytes_of(&uniforms).to_vec()
-        }
-        Shader::SweepGradient {
-            center,
-            start_angle,
-            end_angle,
-            colors,
-            ..
-        } => {
-            let w = bounds.width().0;
-            let h = bounds.height().0;
-            let bx = bounds.left().0;
-            let by = bounds.top().0;
-            let cx = if w > 0.0 { (center.dx.0 - bx) / w } else { 0.5 };
-            let cy = if h > 0.0 { (center.dy.0 - by) / h } else { 0.5 };
-            let start_color = colors.first().copied().unwrap_or(Color::WHITE);
-            let end_color = colors.last().copied().unwrap_or(Color::BLACK);
-            let uniforms = SweepGradientUniforms::new(
-                (cx, cy),
-                *start_angle,
-                *end_angle,
-                start_color,
-                end_color,
-            );
-            bytemuck::bytes_of(&uniforms).to_vec()
-        }
-        // Image shader masks use full-opacity (white) solid mask because texture-based
-        // masking requires a separate texture binding slot that the current mask pipeline
-        // does not support. A dedicated image-mask pipeline is future work.
-        _ => {
-            tracing::debug!(
-                "create_uniforms_from_shader: unsupported shader variant, using white solid mask"
-            );
-            let uniforms = SolidMaskUniforms::from_color(Color::WHITE);
-            bytemuck::bytes_of(&uniforms).to_vec()
-        }
-    }
-}
-
+// Cycle 4 E-7 (extended): the 5 forward-looking uniform helpers
+// (`SolidMaskUniforms`, `LinearGradientUniforms`,
+// `RadialGradientUniforms`, `SweepGradientUniforms`, and the
+// `create_uniforms_from_shader` dispatcher) were deleted alongside
+// dropping the module-level `#[allow(dead_code)]` mask. The 4
+// `*Uniforms` structs existed only to be constructed from
+// `create_uniforms_from_shader`, which itself had zero workspace
+// consumers -- the shader-mask integration that was supposed to
+// drive them never materialized. When that integration lands it
+// will define its own uniform buffer shapes inline next to the
+// concrete bind-group layout consumer, not as forward-bait helpers.
+//
+// `Shader` (from `flui_types::painting`) is no longer needed in
+// this file -- only `Color` remains for the surviving
+// `ShaderType::*` enum metadata.
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod tests {
     use super::*;
