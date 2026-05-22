@@ -88,15 +88,14 @@ pub enum SemanticsAction {
     /// Focus action.
     Focus = 1 << 22,
 
-    /// Unfocus action.
-    Unfocus = 1 << 23,
-
-    /// Expand action (for expandable elements).
-    Expand = 1 << 24,
-
-    /// Collapse action (for expandable elements).
-    Collapse = 1 << 25,
-
+    // NOTE (U17): variants `Unfocus`, `Expand`, `Collapse` were removed
+    // from this enum to match Flutter's `dart:ui.SemanticsAction` wire
+    // format. The expand/collapse state lives on `SemanticsFlag` as
+    // `HasExpandedState` + `IsExpanded`; un-focus is folded into the
+    // platform's focus-management API rather than a discrete semantics
+    // action. Their former bit slots (1 << 23 / 24 / 25) are RESERVED
+    // and must not be reused for a new action without first realigning
+    // with the engine.
     /// Scroll to a specific offset.
     ScrollToOffset = 1 << 26,
 }
@@ -134,9 +133,6 @@ impl SemanticsAction {
             Self::MoveCursorBackwardByWord => "moveCursorBackwardByWord",
             Self::SetText => "setText",
             Self::Focus => "focus",
-            Self::Unfocus => "unfocus",
-            Self::Expand => "expand",
-            Self::Collapse => "collapse",
             Self::ScrollToOffset => "scrollToOffset",
         }
     }
@@ -167,9 +163,6 @@ impl SemanticsAction {
             Self::MoveCursorBackwardByWord,
             Self::SetText,
             Self::Focus,
-            Self::Unfocus,
-            Self::Expand,
-            Self::Collapse,
             Self::ScrollToOffset,
         ]
     }
@@ -209,10 +202,7 @@ impl SemanticsAction {
     pub fn is_focus_action(self) -> bool {
         matches!(
             self,
-            Self::Focus
-                | Self::Unfocus
-                | Self::DidGainAccessibilityFocus
-                | Self::DidLoseAccessibilityFocus
+            Self::Focus | Self::DidGainAccessibilityFocus | Self::DidLoseAccessibilityFocus
         )
     }
 }
