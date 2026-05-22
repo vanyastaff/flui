@@ -15,7 +15,7 @@ Companion deep-dive docs live in [`docs/`](docs/) and are kept alongside this te
 
 ## Flutter source mapping
 
-The Flutter `Canvas` API is split between `dart:ui` (the engine binding) and `package:flutter/src/painting/` (decoration/text/clip helpers). The `Skia SkCanvas` is the semantic reference for the recording API; cosmic-text + lyon are the Rust crates used in place of Skia's text shaping + path tessellation.
+The Flutter `Canvas` API is split between `dart:ui` (the engine binding) and `package:flutter/src/painting/` (decoration/text/clip helpers). The `Skia SkCanvas` is the semantic reference for the recording API; cosmic-text is the Rust crate used in place of Skia's text shaping; path tessellation lives in `flui-engine`, not in this crate.
 
 | Flutter / Skia source | FLUI module | Notes |
 |---|---|---|
@@ -41,9 +41,7 @@ The Flutter `Canvas` API is split between `dart:ui` (the engine binding) and `pa
 | `painting/text_painter.dart` `TextPainter` | [`src/text_painter/*`](src/text_painter/) -- 4 files | TextPainter struct + builder + getters + setters + layout + measure + paint + cursor. Split in Mythos chain Step 7. |
 | `painting/text_painter.dart` `TextBaseline` enum | [`src/text_painter/baseline.rs`](src/text_painter/baseline.rs) | |
 | cosmic-text 0.12 `Buffer` + `FontSystem` shaping API | [`src/text_layout/*`](src/text_layout/) -- 5 files | cosmic-text-backed text shaping. Split in Mythos chain Step 6; `mod inner` cfg indirection flattened. |
-| Flutter `TextDirection` detection (Unicode bidi) | [`src/text_layout/detect.rs`](src/text_layout/detect.rs) | Strong-LTR / strong-RTL / neutral Unicode codepoint ranges. |
-| lyon 1.0 `FillTessellator` + `StrokeTessellator` | [`src/tessellation.rs`](src/tessellation.rs) | Path → GPU triangle conversion. Untouched in this chain (already clean). |
-| `painting/shader_warm_up.dart` `ShaderWarmUp` abstract class | -- | **Deleted in Mythos chain Step 2.** Decorative subsystem; `execute()` was a stub. Real offscreen-canvas-backed warm-up tracked in Outstanding refactors. |
+| Flutter `TextDirection` detection (Unicode bidi) | [`src/text_layout/detect.rs`](src/text_layout/detect.rs) | Strong-LTR / strong-RTL / neutral Unicode codepoint ranges. || `painting/shader_warm_up.dart` `ShaderWarmUp` abstract class | -- | **Deleted in Mythos chain Step 2.** Decorative subsystem; `execute()` was a stub. Real offscreen-canvas-backed warm-up tracked in Outstanding refactors. |
 
 ---
 
@@ -147,8 +145,6 @@ The crate is `#[forbid(unsafe_code)]` at [`src/lib.rs:151`](src/lib.rs) before a
 | `binding::PaintingBinding` singleton | Process-wide via `impl_binding_singleton!` macro | `Send + Sync` | Single static instance; access serialised by the binding's own RwLock. |
 | `text_layout::layout::FONT_SYSTEM` ([`src/text_layout/layout.rs`](src/text_layout/layout.rs)) | `static OnceLock<Mutex<FontSystem>>` (feature-gated) | Lazy init + per-shape lock | cosmic-text font system; held during `Buffer::set_text` + `Buffer::shape_until_scroll`. Off per-command hot path; per-text-layout-creation. Lock contention on multi-text-widget workloads -- filed in Outstanding refactors as cosmic-text 0.13+ upgrade blocker. |
 | `SceneBuilder::stack` (per-Canvas owned) | Owned `Vec<...>` | Single-mutator | Borrow checker enforces single-writer-during-build at compile time. |
-| `tessellation` module ([`src/tessellation.rs`](src/tessellation.rs), feature-gated) | Stateless functions | -- | `lyon::FillTessellator`/`StrokeTessellator` instances are created per call; no shared state. |
-
 **Zero `unsafe impl Send/Sync` blocks anywhere in the crate.** `#[forbid(unsafe_code)]` at [`src/lib.rs:151`](src/lib.rs). Net unsafe delta for this chain: **0**.
 
 ---
