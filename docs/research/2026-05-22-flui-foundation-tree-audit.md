@@ -2176,10 +2176,78 @@ Cycle 3 (this audit): flui-foundation × flui-tree
 
 ---
 
-## Status (closed)
+## Status (partial — Wave 1+2 landed)
 
-*To be filled in by the cycle's final commit, mirroring cycle 2's PR #100 U24 status section.*
+**Branch** `feat/foundation-tree-repair-cycle3` (PR pending).
+
+Cycle 3 Wave 1+2 lands **5 atomic commits** covering the P0 critical
+correctness findings. The rest of the P1/P2/P3 items (T-4..T-8
+feature-gates of the visitor/diff/iter/arity-storage zombie surface,
+T-9 alloc reductions, T-10..T-12 depth + iter safety, T-13/T-14
+error/Identifier polish, I-4 ChangeNotifier hot-path, I-5..I-8 Key
+system polish, P2/P3 hygiene) are intentionally **deferred to
+follow-up cycle 3 PRs**. The cascade-contract work (T-1, T-2) is the
+architectural keystone — once merged, the deferred items can land as
+smaller mechanical batches without conflicts on the trait surface.
+
+### Finding disposition (Wave 1+2)
+
+| Audit § | Finding | Severity | Disposition |
+|---------|---------|----------|-------------|
+| I-1 | `ObserverList<T>` zero-consumer module | P0 | **Closed (deleted)** |
+| I-2 | `FoundationError` + `ErrorContext` zero-consumer | P0 | **Closed (deleted)** |
+| I-13 | `consts.rs::approx_equal*` zero-consumer | P2 | **Closed (deleted)** |
+| I-14 | `assert.rs::report_error!`/`report_warning!` zero-consumer | P2 | **Closed (deleted)** |
+| I-22 | `WasmNotSend` zero-consumer | P3 | **Closed (deleted)** |
+| T-3 | `state.rs` Mountable/Unmountable typestate (616 LOC) | P0 | **Closed (deleted)** |
+| I-3 | `BindingBase` `INITIALIZED.store` re-init-after-panic hazard | P0 | **Closed (fixed; +regression test)** |
+| T-1 | `TreeWrite::remove` non-cascade footgun | P0 | **Closed (cascade-by-default trait contract)** |
+| T-2 | `LayerTree`/`SemanticsTree` parallel mutation APIs | P0 | **Closed (consolidated into trait impl)** |
+
+### Findings deferred to follow-up cycle 3 PRs
+
+| Audit § | Finding | Severity | Reason for deferral |
+|---------|---------|----------|---------------------|
+| T-4 | Visitor surface zombie cleanup | P0 | ~2,550 LOC mechanical cfg-gating — dedicated PR |
+| T-5 | Feature-gate `diff.rs` | P0 | Same theme as T-4 |
+| T-6 | Feature-gate `iter/cursor.rs`+`path.rs`+`breadth_first.rs`+`depth_first.rs` | P0 | Same |
+| T-7 | Feature-gate `arity/{storage,arity_storage,accessors}.rs` | P0 | Same |
+| T-8 | Delete/cfg-gate `Node` trait | P1 | Bundle with T-4..T-7 |
+| T-9 | `TreeNav::slot` alloc | P1 | Hot-path tuning |
+| T-10 | Four-way `MAX_TREE_DEPTH` drift | P1 | Single-source-of-truth refactor |
+| T-11 | `Descendants::next` recursion | P1 | Stack-safety patch |
+| T-12 | `Ancestors::next` cycle check | P1 | Defense-in-depth (batch with T-11) |
+| T-13 | `TreeError::ArityViolation` | P1 | Error unification |
+| T-14 | `Identifier` `From<Index>` `#[cfg(test)]` | P1 | Polish |
+| I-4 | `ChangeNotifier::notify_listeners` alloc | P1 | SmallVec dep verification needed |
+| I-5..I-8 | Key system surprises | P1 | Key-system batch |
+| T-15..T-25, I-9..I-21 | P2/P3 hygiene | P2/P3 | Bulk follow-up |
+
+### Aggregate cycle 3 impact (Wave 1+2)
+
+- **5 commits**, all P0 correctness or critical-architecture.
+- **−1,500 LOC** net surface reduction across foundation + flui-tree.
+- **+5 regression tests** (`init_panic_does_not_flip_initialized_flag`,
+  `remove_cascades_by_default`, `remove_shallow_does_not_cascade`,
+  `remove_of_missing_id_is_a_no_op`, plus inherited cycle-2 coverage).
+- **The cascade-contract** (T-1+T-2) is the architectural keystone
+  cycle 2 anticipated and cycle 3 delivered. Memory
+  `flui-tree-unified-interface-intent` closed for the mutation
+  surface.
+
+### Aggregate cycle comparison
+
+| Cycle | Scope (LOC) | Findings | Commits | Net LOC delta |
+|-------|-------------|----------|---------|---------------|
+| 1 (PR #85-#98) | 12,360 | 16 + drift | ~30 across 14 PRs | −2,400 |
+| 2 (PR #100-#101) | 15,571 | 25 | 16 + 1 followup | +1,690 (new lifecycle infra) |
+| 3 (this PR + future) | 23,448 | 47 | 5 + deferred follow-ups | −1,500 (Wave 1+2 only) |
+
+Cycle 3 had the largest scope and the longest tail of deferrals; the
+"Wave 1+2 first, follow-ups separately" framing follows cycle 1's
+pattern of letting the architectural keystone land before mechanical
+cleanup.
 
 ---
 
-*End of audit. Awaiting plan + execute cycle.*
+*End of audit. Wave 1+2 closed. Follow-up PRs land the deferred items.*
