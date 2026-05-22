@@ -220,9 +220,10 @@ mod tests {
             }));
 
             if let Some(parent_id) = parent
-                && let Some(Some(p)) = self.nodes.get_mut(parent_id.get() - 1) {
-                    p.children.push(id);
-                }
+                && let Some(Some(p)) = self.nodes.get_mut(parent_id.get() - 1)
+            {
+                p.children.push(id);
+            }
 
             id
         }

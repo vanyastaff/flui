@@ -428,9 +428,10 @@ mod tests {
             // Remove from parent's children
             if let Some(node) = self.nodes.get(index)?.as_ref()
                 && let Some(parent_id) = node.parent
-                    && let Some(Some(parent)) = self.nodes.get_mut(parent_id.get() - 1) {
-                        parent.children.retain(|&child| child != id);
-                    }
+                && let Some(Some(parent)) = self.nodes.get_mut(parent_id.get() - 1)
+            {
+                parent.children.retain(|&child| child != id);
+            }
 
             self.nodes.get_mut(index)?.take()
         }
@@ -469,9 +470,10 @@ mod tests {
 
             // Remove from old parent's children
             if let Some(old_parent) = self.parent(child)
-                && let Some(Some(parent_node)) = self.nodes.get_mut(old_parent.get() - 1) {
-                    parent_node.children.retain(|&c| c != child);
-                }
+                && let Some(Some(parent_node)) = self.nodes.get_mut(old_parent.get() - 1)
+            {
+                parent_node.children.retain(|&c| c != child);
+            }
 
             // Update child's parent
             if let Some(Some(child_node)) = self.nodes.get_mut(child.get() - 1) {
@@ -481,9 +483,10 @@ mod tests {
             // Add to new parent's children
             if let Some(parent_id) = new_parent
                 && let Some(Some(parent_node)) = self.nodes.get_mut(parent_id.get() - 1)
-                    && !parent_node.children.contains(&child) {
-                        parent_node.children.push(child);
-                    }
+                && !parent_node.children.contains(&child)
+            {
+                parent_node.children.push(child);
+            }
 
             Ok(child)
         }
