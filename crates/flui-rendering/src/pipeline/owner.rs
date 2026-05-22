@@ -916,35 +916,44 @@ impl PipelineOwner<Compositing> {
     /// Nodes are sorted by depth (shallow first). This matches Flutter's
     /// `flushCompositingBits` behavior.
     pub fn run_compositing(&mut self) -> crate::error::RenderResult<()> {
-        tracing::debug!(
-            "run_compositing: {} nodes",
-            self.dirty.needs_compositing.len()
-        );
-
-        // Sort by depth (shallow first)
-        // Flutter: _nodesNeedingCompositingBitsUpdate.sort((a, b) => a.depth - b.depth)
-        self.dirty
-            .needs_compositing
-            .sort_unstable_by_key(|node| node.depth);
-
-        // Process dirty nodes
-        //
-        // Note: Full compositing bits update is not yet implemented.
-        // This would require:
-        // 1. PipelineOwner to hold a reference to RenderTree
-        // 2. Look up each render object by ID
-        // 3. Call render_object.update_compositing_bits()
-        //
-        // Currently we just clear the list - compositing works but
-        // may not be optimally batched.
-        for node in &self.dirty.needs_compositing {
-            tracing::trace!(
-                "compositing bits update: node id={} depth={} (batching not implemented)",
-                node.id,
-                node.depth
-            );
+        // Drain the dirty list in one step (`std::mem::take` matches
+        // the cycle-4 `run_semantics` shape from R-1). Pre-cycle this
+        // path sort-then-iterate-then-clear walked the list twice.
+        let mut dirty = std::mem::take(&mut self.dirty.needs_compositing);
+        if dirty.is_empty() {
+            return Ok(());
         }
-        self.dirty.needs_compositing.clear();
+        tracing::debug!("run_compositing: {} nodes", dirty.len());
+
+        // Sort by depth (shallow first). Flutter:
+        // `_nodesNeedingCompositingBitsUpdate.sort((a, b) => a.depth - b.depth)`.
+        dirty.sort_unstable_by_key(|node| node.depth);
+
+        // Cycle 4 R-4: pre-cycle this path emitted a `tracing::trace!`
+        // per dirty node and returned `Ok(())` without actually
+        // updating any compositing bit — a SILENT half-impl flagged
+        // as P0 "worse than R-1 because R-1 panics loudly; this just
+        // returns success with no work done."
+        //
+        // The honest stub: keep the walk (so callers see the dirty
+        // node ids in logs), but UPGRADE the per-node log to
+        // `tracing::warn!` so the missing-impl is visible in any
+        // production log scrape. The full Flutter parity
+        // (`_updateSubtreeCompositingBits` recursion + repaint-
+        // boundary check) is its own follow-up that needs the
+        // `RenderObject::always_needs_compositing` + `is_repaint_boundary`
+        // bool accessors plumbed through the dyn surface.
+        for node in &dirty {
+            if self.render_tree.contains(node.id) {
+                tracing::warn!(
+                    id = ?node.id,
+                    depth = node.depth,
+                    "run_compositing: compositing-bits update is a no-op until \
+                     `_updateSubtreeCompositingBits` recursion + repaint-boundary \
+                     dispatch land; this node's compositing flags are unchanged"
+                );
+            }
+        }
         Ok(())
     }
 }
@@ -1265,19 +1274,39 @@ impl PipelineOwner<Semantics> {
 
         self.debug_doing_semantics = true;
 
-        // Filter out nodes that still need layout (they're not ready for semantics)
-        // Flutter: .where((object) => !object._needsLayout && object.owner == this)
-        let nodes_to_process: Vec<DirtyNode> = self.dirty.needs_semantics.to_vec();
+        // Filter out nodes that still need layout (they're not ready for
+        // semantics). Flutter parity:
+        // `.where((object) => !object._needsLayout && object.owner == this)`.
+        // `std::mem::take` drains the dirty list in one step — pre-cycle 4
+        // used `to_vec()` + `clear()` which allocated twice.
+        let mut nodes_to_process: Vec<DirtyNode> = std::mem::take(&mut self.dirty.needs_semantics);
 
-        self.dirty.needs_semantics.clear();
+        // Sort shallow-first matching Flutter's flushSemantics. Roots
+        // dispatch before their descendants so a parent's config is
+        // assembled before children fold into it.
+        nodes_to_process.sort_unstable_by_key(|n| n.depth);
 
-        // Semantics system is not yet implemented
-        if !nodes_to_process.is_empty() {
-            unimplemented!(
-                "Semantics system not yet implemented - requires full semantics integration. \
-                 {} nodes need semantics updates",
-                nodes_to_process.len()
-            );
+        // Cycle 4 R-1: pre-cycle the path panicked with
+        // `unimplemented!()` once any node was queued — a Constitution
+        // Principle 6 violation in a hot-path callable from
+        // `RendererBinding::draw_frame` on every frame as soon as
+        // semantics_enabled() flipped true.
+        //
+        // Post-cycle: walk the dirty list, emit a `tracing::warn!`
+        // per node carrying the missing-integration hint, and return
+        // `Ok(())`. The framework no longer aborts on semantics flips;
+        // when the full `SemanticsOwner` integration lands, swap the
+        // warn for the real config-build + owner-register call.
+        for dirty_node in &nodes_to_process {
+            if self.render_tree.contains(dirty_node.id) {
+                tracing::warn!(
+                    id = ?dirty_node.id,
+                    depth = dirty_node.depth,
+                    "run_semantics: full SemanticsOwner integration pending; \
+                     semantics config build for this node is a no-op until \
+                     RenderObject → SemanticsConfiguration plumbing lands"
+                );
+            }
         }
 
         self.debug_doing_semantics = false;

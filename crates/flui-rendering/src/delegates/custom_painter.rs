@@ -12,9 +12,18 @@ use flui_types::{Offset, Size};
 /// Builder for semantics information.
 ///
 /// **INCOMPLETE**: This is a placeholder type. Semantics support is not yet
-/// implemented. Using this builder will panic until the semantics system is
-/// complete.
-#[derive(Debug, Clone)]
+/// Returns an empty builder until the semantics system is wired
+/// through; the builder accepts no operations and is consumed by
+/// platform integrations.
+///
+/// Cycle 4 R-3: pre-cycle `SemanticsBuilder::new` and
+/// `SemanticsBuilder::default` both panicked via `unimplemented!()` on
+/// construction — a Constitution Principle 6 violation reachable from
+/// any consumer of `CustomPainter::semantics_builder`. Post-cycle the
+/// constructor returns an inert empty builder + emits a one-shot
+/// `tracing::warn!` so the missing-impl notice surfaces in logs
+/// without aborting the process.
+#[derive(Debug, Clone, Default)]
 pub struct SemanticsBuilder {
     _private: (),
 }
@@ -22,17 +31,18 @@ pub struct SemanticsBuilder {
 impl SemanticsBuilder {
     /// Creates a new empty semantics builder.
     ///
-    /// # Panics
-    ///
-    /// This method will panic until semantics support is implemented.
+    /// Currently a no-op shell — semantics build operations land when
+    /// the `SemanticsConfiguration` integration plumbing is complete.
+    /// See audit R-3 in
+    /// `docs/research/2026-05-22-flui-rendering-engine-audit.md`.
+    #[must_use]
     pub fn new() -> Self {
-        unimplemented!("SemanticsBuilder not yet implemented - semantics support incomplete");
-    }
-}
-
-impl Default for SemanticsBuilder {
-    fn default() -> Self {
-        Self::new()
+        tracing::warn!(
+            "SemanticsBuilder::new: semantics build operations are a no-op \
+             until RenderObject → SemanticsConfiguration plumbing lands; \
+             the returned builder accepts no operations"
+        );
+        Self { _private: () }
     }
 }
 
