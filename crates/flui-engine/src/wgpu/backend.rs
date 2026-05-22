@@ -1275,6 +1275,27 @@ impl CommandRenderer for Backend<'_> {
 // receiving trait differs. See `crates/flui-engine/src/traits.rs`
 // for the trait-split rationale.
 
+// ColorMatrix row-major layout: `[r0-r4, g0-g4, b0-b4, a0-a4]`.
+// Each row holds (R-coeff, G-coeff, B-coeff, A-coeff, offset) for one
+// output channel: `out = m0*R + m1*G + m2*B + m3*A + m4`.
+// The alpha row sits at indices 15-19; the alpha-out coefficient on
+// alpha-in (`a3`, alpha scaling) is index 18, the alpha offset (`a4`)
+// is index 19. Naming these out keeps the push_color_filter +
+// ImageFilter::Matrix call sites readable (PR #115 review fix).
+const COLOR_MATRIX_ALPHA_SCALE_IDX: usize = 18;
+const COLOR_MATRIX_ALPHA_OFFSET_IDX: usize = 19;
+
+/// Extract (alpha_scale, alpha_offset, effective_alpha) from a
+/// `ColorMatrix`'s alpha row. All three values are clamped to `[0, 1]`.
+/// Helper shared by `push_color_filter` and the
+/// `ImageFilter::Matrix` branch of `push_image_filter`.
+fn color_matrix_effective_alpha(values: &[f32; 20]) -> (f32, f32, f32) {
+    let alpha_scale = values[COLOR_MATRIX_ALPHA_SCALE_IDX].clamp(0.0, 1.0);
+    let alpha_offset = values[COLOR_MATRIX_ALPHA_OFFSET_IDX].clamp(0.0, 1.0);
+    let effective = (alpha_scale + alpha_offset).clamp(0.0, 1.0);
+    (alpha_scale, alpha_offset, effective)
+}
+
 impl LayerStateStack for Backend<'_> {
     fn push_clip_rect(&mut self, rect: &Rect<Pixels>, _clip_behavior: flui_types::painting::Clip) {
         self.painter.save();
@@ -1351,10 +1372,13 @@ impl LayerStateStack for Backend<'_> {
             return;
         }
 
-        // Pragmatic approximation: extract opacity and tint from the color matrix.
-        let alpha_scale = filter.values[18].clamp(0.0, 1.0);
-        let alpha_offset = filter.values[19].clamp(0.0, 1.0);
-        let effective_alpha = (alpha_scale + alpha_offset).clamp(0.0, 1.0);
+        // Pragmatic approximation: extract opacity and tint from the
+        // color matrix. The alpha-row coefficient layout
+        // (`a3` = scale, `a4` = offset) lives in
+        // `color_matrix_effective_alpha`; see the helper comment
+        // above for the row-major index mapping.
+        let (_alpha_scale, _alpha_offset, effective_alpha) =
+            color_matrix_effective_alpha(&filter.values);
         let tinted = filter.apply([1.0, 1.0, 1.0, 1.0]);
 
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -1418,9 +1442,8 @@ impl LayerStateStack for Backend<'_> {
                 );
             }
             ImageFilter::Matrix(matrix) => {
-                let alpha_scale = matrix.values[18].clamp(0.0, 1.0);
-                let alpha_offset = matrix.values[19].clamp(0.0, 1.0);
-                let effective_alpha = (alpha_scale + alpha_offset).clamp(0.0, 1.0);
+                let (_alpha_scale, _alpha_offset, effective_alpha) =
+                    color_matrix_effective_alpha(&matrix.values);
                 let tinted = matrix.apply([1.0, 1.0, 1.0, 1.0]);
 
                 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
