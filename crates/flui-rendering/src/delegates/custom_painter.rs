@@ -4,29 +4,36 @@
 //! without creating a new render object. It provides methods for painting,
 //! hit testing, and accessibility.
 
-use std::{any::Any, fmt::Debug};
+use std::{any::Any, fmt::Debug, sync::Once};
 
 use flui_painting::Canvas;
 use flui_types::{Offset, Size};
 
 /// Builder for semantics information.
 ///
-/// **INCOMPLETE**: This is a placeholder type. Semantics support is not yet
-/// Returns an empty builder until the semantics system is wired
-/// through; the builder accepts no operations and is consumed by
-/// platform integrations.
+/// **INCOMPLETE**: This is a placeholder type. Semantics support is not
+/// yet wired; the builder accepts no operations and is consumed by
+/// platform integrations as an empty shell.
 ///
-/// Cycle 4 R-3: pre-cycle `SemanticsBuilder::new` and
-/// `SemanticsBuilder::default` both panicked via `unimplemented!()` on
-/// construction — a Constitution Principle 6 violation reachable from
-/// any consumer of `CustomPainter::semantics_builder`. Post-cycle the
-/// constructor returns an inert empty builder + emits a one-shot
+/// Cycle 4 R-3: pre-cycle `SemanticsBuilder::new` panicked via
+/// `unimplemented!()` on construction — a Constitution Principle 6
+/// violation reachable from any consumer of
+/// `CustomPainter::semantics_builder`. Post-cycle the constructor
+/// returns an inert empty builder and emits a **one-shot**
 /// `tracing::warn!` so the missing-impl notice surfaces in logs
-/// without aborting the process.
-#[derive(Debug, Clone, Default)]
+/// without aborting the process and without spamming per-construction.
+/// The one-shot gate uses [`std::sync::Once`]; the `Default` impl
+/// delegates to [`Self::new`] explicitly so the warn fires through
+/// either constructor path (PR #109 review feedback).
+#[derive(Debug, Clone)]
 pub struct SemanticsBuilder {
     _private: (),
 }
+
+/// One-shot guard so the "semantics not wired" warn fires at most once
+/// per process. Repeated construction during paint passes would
+/// otherwise produce log spam.
+static WARN_ONCE: Once = Once::new();
 
 impl SemanticsBuilder {
     /// Creates a new empty semantics builder.
@@ -35,14 +42,30 @@ impl SemanticsBuilder {
     /// the `SemanticsConfiguration` integration plumbing is complete.
     /// See audit R-3 in
     /// `docs/research/2026-05-22-flui-rendering-engine-audit.md`.
+    ///
+    /// On the first call per process emits a `tracing::warn!`; the
+    /// `Once` gate suppresses subsequent warns to avoid per-frame log
+    /// spam during paint passes.
     #[must_use]
     pub fn new() -> Self {
-        tracing::warn!(
-            "SemanticsBuilder::new: semantics build operations are a no-op \
-             until RenderObject → SemanticsConfiguration plumbing lands; \
-             the returned builder accepts no operations"
-        );
+        WARN_ONCE.call_once(|| {
+            tracing::warn!(
+                "SemanticsBuilder: semantics build operations are a no-op \
+                 until RenderObject → SemanticsConfiguration plumbing lands; \
+                 the returned builder accepts no operations (this warn fires \
+                 once per process)"
+            );
+        });
         Self { _private: () }
+    }
+}
+
+impl Default for SemanticsBuilder {
+    fn default() -> Self {
+        // Explicit delegation so the `Once`-gated warn fires regardless of
+        // which constructor the caller picks. The `#[derive(Default)]` we
+        // had pre-fix bypassed `new()` entirely (PR #109 review feedback).
+        Self::new()
     }
 }
 
