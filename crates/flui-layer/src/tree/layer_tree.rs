@@ -12,6 +12,16 @@ use slab::Slab;
 use crate::layer::Layer;
 
 // ============================================================================
+// CONSTANTS
+// ============================================================================
+
+/// Cap for the parent-chain walk in
+/// [`LayerTree::mark_needs_add_to_scene`]. Matches the canonical 32-level
+/// depth bound that `flui_tree::TreeNav` impls expose via the `MAX_DEPTH`
+/// associated const.
+const MARK_PROPAGATION_MAX_DEPTH: usize = 32;
+
+// ============================================================================
 // LAYER NODE
 // ============================================================================
 
@@ -58,6 +68,13 @@ pub struct LayerNode {
     /// Whether the node has been dropped. Set by [`Drop`]; once `true` the
     /// node MUST NOT be mutated again. Guarded by [`assert_alive`].
     disposed: AtomicBool,
+
+    // ========== Compositor dirty-bit (phase 2, U9) ==========
+    /// Whether this node's payload changed and needs to be re-pushed into the
+    /// engine scene on the next composite. Defaults to `true` (fresh nodes
+    /// have not yet been pushed). Cleared by the engine after a successful
+    /// scene build. Mirrors Flutter `layer.dart` `_needsAddToScene`.
+    needs_add_to_scene: AtomicBool,
 }
 
 impl LayerNode {
@@ -70,6 +87,8 @@ impl LayerNode {
             offset: None,
             element_id: None,
             disposed: AtomicBool::new(false),
+            // Fresh node has not yet been pushed into the scene.
+            needs_add_to_scene: AtomicBool::new(true),
         }
     }
 
@@ -154,9 +173,15 @@ impl LayerNode {
     }
 
     /// Returns mutable reference to the Layer.
+    ///
+    /// Implicitly marks this node dirty for the next composite, mirroring
+    /// Flutter `layer.dart` `markNeedsAddToScene`. Callers wanting to read
+    /// the layer without invalidating the cached scene should go through
+    /// [`Self::layer`] instead.
     #[inline]
     pub fn layer_mut(&mut self) -> &mut Layer {
         self.assert_alive("layer_mut");
+        self.needs_add_to_scene.store(true, Ordering::Release);
         &mut self.layer
     }
 
@@ -195,6 +220,43 @@ impl LayerNode {
     #[inline]
     pub fn is_disposed(&self) -> bool {
         self.disposed.load(Ordering::Acquire)
+    }
+
+    // ========== Compositor dirty-bit (phase 2, U9) ==========
+
+    /// Returns whether this node is *clean* — i.e. its current payload has
+    /// already been pushed into the engine scene and need not be pushed
+    /// again. The inverse of [`Self::needs_add_to_scene`].
+    #[inline]
+    pub fn is_clean(&self) -> bool {
+        !self.needs_add_to_scene.load(Ordering::Acquire)
+    }
+
+    /// Returns whether this node needs to be pushed into the engine scene on
+    /// the next composite. Defaults to `true` for freshly inserted nodes;
+    /// any mutation via [`Self::layer_mut`] flips it back to `true`; the
+    /// engine clears it after a successful scene build via
+    /// [`LayerTree::clear_needs_add_to_scene_subtree`].
+    #[inline]
+    pub fn needs_add_to_scene(&self) -> bool {
+        self.needs_add_to_scene.load(Ordering::Acquire)
+    }
+
+    /// Marks this node dirty without traversing the tree. Used by
+    /// [`LayerTree::mark_needs_add_to_scene`] when walking ancestors;
+    /// callers in flui-layer should prefer the tree-level helper which
+    /// also walks parents.
+    #[inline]
+    pub(crate) fn mark_needs_add_to_scene_local(&self) {
+        self.needs_add_to_scene.store(true, Ordering::Release);
+    }
+
+    /// Clears this node's dirty bit without traversing children. Used by
+    /// [`LayerTree::clear_needs_add_to_scene_subtree`] when the engine has
+    /// finished pushing the subtree into a scene.
+    #[inline]
+    pub(crate) fn clear_needs_add_to_scene_local(&self) {
+        self.needs_add_to_scene.store(false, Ordering::Release);
     }
 }
 
@@ -586,6 +648,83 @@ impl LayerTree {
             .iter_mut()
             .map(|(index, node)| (LayerId::new(index + 1), node))
     }
+
+    // ========== Compositor dirty-bit propagation (U9) ==========
+    //
+    // Mirrors Flutter `layer.dart`:
+    // - `markNeedsAddToScene`            (lines 377-392)
+    // - `updateSubtreeNeedsAddToScene`   (lines 495-521)
+    //
+    // The "mark" path walks ancestors top-up flipping every node dirty
+    // (anything in the path-to-root must be re-pushed because the parent
+    // owns the child layer reference). The "update" path is a post-order
+    // DFS that folds child dirty bits into the parent's bit so the engine
+    // can ask the root "is any descendant dirty?" with a single read.
+    //
+    // The walks are intentionally read-only on the tree (`&self`) — the
+    // dirty bit lives behind `AtomicBool` so no `&mut LayerNode` is
+    // required to flip it.
+
+    /// Marks `id` and every ancestor up to the root as needing a re-push
+    /// into the engine scene on the next composite.
+    ///
+    /// Walks the parent chain via [`LayerNode::parent`]. Bounded by
+    /// [`MARK_PROPAGATION_MAX_DEPTH`] (the same 32-level cap that
+    /// [`flui_tree::TreeNav`] implementations use) in case of malformed
+    /// parent cycles — production code can not produce a cycle through
+    /// `add_child`, but the bound is a defence-in-depth guard.
+    ///
+    /// Flutter parity: `layer.dart:377-392` `markNeedsAddToScene`.
+    pub fn mark_needs_add_to_scene(&self, id: LayerId) {
+        let mut current = Some(id);
+        for _ in 0..MARK_PROPAGATION_MAX_DEPTH {
+            let Some(node_id) = current else {
+                break;
+            };
+            let Some(node) = self.get(node_id) else {
+                break;
+            };
+            node.mark_needs_add_to_scene_local();
+            current = node.parent();
+        }
+    }
+
+    /// Post-order walks the subtree rooted at `root`, folding each child's
+    /// dirty bit into the parent so the parent reports `true` whenever any
+    /// descendant is dirty. Returns the resulting per-subtree dirty bit.
+    ///
+    /// Idempotent — repeated calls observe (and propagate) the same
+    /// per-node states.
+    ///
+    /// Flutter parity: `layer.dart:495-521` `updateSubtreeNeedsAddToScene`.
+    pub fn update_subtree_needs_add_to_scene(&self, root: LayerId) -> bool {
+        let Some(root_node) = self.get(root) else {
+            return false;
+        };
+        let mut any_dirty = root_node.needs_add_to_scene();
+        for &child_id in root_node.children() {
+            if self.update_subtree_needs_add_to_scene(child_id) {
+                any_dirty = true;
+            }
+        }
+        if any_dirty {
+            root_node.mark_needs_add_to_scene_local();
+        }
+        any_dirty
+    }
+
+    /// Recursively clears the dirty bit on `root` and every descendant.
+    /// Called by the engine after a successful scene-build pass — the
+    /// scene now reflects the layer payloads.
+    pub fn clear_needs_add_to_scene_subtree(&self, root: LayerId) {
+        let Some(root_node) = self.get(root) else {
+            return;
+        };
+        root_node.clear_needs_add_to_scene_local();
+        for &child_id in root_node.children() {
+            self.clear_needs_add_to_scene_subtree(child_id);
+        }
+    }
 }
 
 impl Default for LayerTree {
@@ -665,5 +804,132 @@ mod lifecycle_tests {
         // Verify pre-built guards on with-builders ran without panic.
         assert_eq!(node.parent(), Some(LayerId::new(2)));
         let _ = ElementId::new(1); // touch import.
+    }
+}
+
+// ============================================================================
+// COMPOSITOR DIRTY-BIT TESTS (U9 — phase 2)
+// ============================================================================
+
+#[cfg(test)]
+mod dirty_bit_tests {
+    use crate::layer::{CanvasLayer, Layer};
+
+    use super::{LayerNode, LayerTree};
+
+    /// Fresh nodes default to dirty (they have not been pushed yet).
+    #[test]
+    fn fresh_node_is_dirty() {
+        let node = LayerNode::new(Layer::from(CanvasLayer::new()));
+        assert!(node.needs_add_to_scene());
+        assert!(!node.is_clean());
+    }
+
+    /// `layer_mut()` flips the dirty bit even if the layer was previously
+    /// clean.
+    #[test]
+    fn layer_mut_marks_dirty() {
+        let mut node = LayerNode::new(Layer::from(CanvasLayer::new()));
+        node.clear_needs_add_to_scene_local();
+        assert!(node.is_clean());
+        let _ = node.layer_mut();
+        assert!(node.needs_add_to_scene());
+    }
+
+    /// `mark_needs_add_to_scene(id)` flips `id`, its parent, and the root.
+    #[test]
+    fn mark_propagates_to_root() {
+        let mut tree = LayerTree::new();
+        let root = tree.insert(Layer::from(CanvasLayer::new()));
+        let mid = tree.insert(Layer::from(CanvasLayer::new()));
+        let leaf = tree.insert(Layer::from(CanvasLayer::new()));
+        tree.add_child(root, mid);
+        tree.add_child(mid, leaf);
+
+        // Clean the whole subtree first.
+        tree.clear_needs_add_to_scene_subtree(root);
+        assert!(tree.get(root).unwrap().is_clean());
+        assert!(tree.get(mid).unwrap().is_clean());
+        assert!(tree.get(leaf).unwrap().is_clean());
+
+        tree.mark_needs_add_to_scene(leaf);
+
+        // Leaf, mid, and root all dirty.
+        assert!(tree.get(leaf).unwrap().needs_add_to_scene());
+        assert!(tree.get(mid).unwrap().needs_add_to_scene());
+        assert!(tree.get(root).unwrap().needs_add_to_scene());
+    }
+
+    /// `mark_needs_add_to_scene` does NOT touch sibling subtrees.
+    #[test]
+    fn mark_skips_siblings() {
+        let mut tree = LayerTree::new();
+        let root = tree.insert(Layer::from(CanvasLayer::new()));
+        let a = tree.insert(Layer::from(CanvasLayer::new()));
+        let b = tree.insert(Layer::from(CanvasLayer::new()));
+        tree.add_child(root, a);
+        tree.add_child(root, b);
+
+        tree.clear_needs_add_to_scene_subtree(root);
+        tree.mark_needs_add_to_scene(a);
+
+        assert!(tree.get(a).unwrap().needs_add_to_scene());
+        assert!(tree.get(root).unwrap().needs_add_to_scene());
+        // Sibling b stayed clean — its subtree was not in the mark path.
+        assert!(tree.get(b).unwrap().is_clean());
+    }
+
+    /// `update_subtree_needs_add_to_scene` reports any-descendant-dirty.
+    #[test]
+    fn update_subtree_folds_child_bits_into_parent() {
+        let mut tree = LayerTree::new();
+        let root = tree.insert(Layer::from(CanvasLayer::new()));
+        let a = tree.insert(Layer::from(CanvasLayer::new()));
+        let b = tree.insert(Layer::from(CanvasLayer::new()));
+        tree.add_child(root, a);
+        tree.add_child(root, b);
+
+        tree.clear_needs_add_to_scene_subtree(root);
+        // Dirty only the deepest child.
+        tree.get(a).unwrap().mark_needs_add_to_scene_local();
+
+        // Root's local bit is clean…
+        assert!(tree.get(root).unwrap().is_clean());
+        // …but the subtree-fold lifts the answer:
+        assert!(tree.update_subtree_needs_add_to_scene(root));
+        // …and the fold also writes back to root.
+        assert!(tree.get(root).unwrap().needs_add_to_scene());
+    }
+
+    /// `clear_needs_add_to_scene_subtree` clears the whole rooted subtree.
+    #[test]
+    fn clear_subtree_clears_root_and_descendants() {
+        let mut tree = LayerTree::new();
+        let root = tree.insert(Layer::from(CanvasLayer::new()));
+        let a = tree.insert(Layer::from(CanvasLayer::new()));
+        let b = tree.insert(Layer::from(CanvasLayer::new()));
+        tree.add_child(root, a);
+        tree.add_child(root, b);
+
+        // All start dirty (fresh insert default).
+        assert!(tree.get(root).unwrap().needs_add_to_scene());
+
+        tree.clear_needs_add_to_scene_subtree(root);
+
+        assert!(tree.get(root).unwrap().is_clean());
+        assert!(tree.get(a).unwrap().is_clean());
+        assert!(tree.get(b).unwrap().is_clean());
+    }
+
+    /// Missing-id lookups in the mark / update / clear paths must not panic.
+    #[test]
+    fn missing_id_is_a_no_op() {
+        use flui_foundation::LayerId;
+        let tree = LayerTree::new();
+        let phantom = LayerId::new(999);
+
+        tree.mark_needs_add_to_scene(phantom); // no panic
+        assert!(!tree.update_subtree_needs_add_to_scene(phantom));
+        tree.clear_needs_add_to_scene_subtree(phantom); // no panic
     }
 }
