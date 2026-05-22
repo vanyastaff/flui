@@ -626,7 +626,7 @@ mod tests {
                 *pressed_clone.lock() = true;
             });
 
-        let pointer = PointerId::new(1);
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
         let position = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Start long press
@@ -662,7 +662,7 @@ mod tests {
                 *cancelled_clone.lock() = true;
             });
 
-        let pointer = PointerId::new(1);
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
         let start_pos = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Start long press
@@ -692,7 +692,7 @@ mod tests {
                 *moved_clone.lock() = true;
             });
 
-        let pointer = PointerId::new(1);
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
         let position = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Start long press

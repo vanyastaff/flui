@@ -331,12 +331,15 @@ let drag = GestureBuilder::drag(
 
 ## Type-Safe IDs
 
-Newtype pattern prevents mixing ID types:
+Newtype pattern prevents mixing ID types. `PointerId` is re-exported from
+the `ui-events` crate (W3C-compliant `NonZeroU64`); `FocusNodeId` and
+`HandlerId` are crate-local `NonZeroU64` newtypes.
 
 ```rust
 use flui_interaction::{PointerId, FocusNodeId, HandlerId};
 
-let pointer = PointerId::new(0);
+// Primary pointer convention (was: `PointerId::new(0)` pre-U9).
+let pointer = PointerId::PRIMARY;
 let focus = FocusNodeId::new(42);
 
 // fn process(id: PointerId) { ... }

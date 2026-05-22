@@ -132,7 +132,7 @@ impl PointerRouter {
         let mut routes = self.routes.write();
         routes.entry(pointer).or_default().push(handler);
 
-        tracing::trace!(pointer = pointer.get(), "Added pointer route");
+        tracing::trace!(?pointer, "Added pointer route");
     }
 
     /// Remove a route handler for a specific pointer.
@@ -154,7 +154,7 @@ impl PointerRouter {
             }
 
             if removed {
-                tracing::trace!(pointer = pointer.get(), "Removed pointer route");
+                tracing::trace!(?pointer, "Removed pointer route");
             }
 
             removed
@@ -169,7 +169,7 @@ impl PointerRouter {
     pub fn remove_all_routes(&self, pointer: PointerId) {
         let mut routes = self.routes.write();
         if routes.remove(&pointer).is_some() {
-            tracing::trace!(pointer = pointer.get(), "Removed all routes for pointer");
+            tracing::trace!(?pointer, "Removed all routes for pointer");
         }
     }
 
@@ -314,7 +314,7 @@ mod tests {
     #[test]
     fn test_add_route() {
         let router = PointerRouter::new();
-        let pointer = PointerId::new(1);
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
 
         let handler = Arc::new(|_: &PointerEvent| {});
         router.add_route(pointer, handler);
@@ -326,7 +326,7 @@ mod tests {
     #[test]
     fn test_remove_route() {
         let router = PointerRouter::new();
-        let pointer = PointerId::new(1);
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
 
         let handler: PointerRouteHandler = Arc::new(|_: &PointerEvent| {});
         router.add_route(pointer, handler.clone());
@@ -340,7 +340,7 @@ mod tests {
     #[test]
     fn test_multiple_handlers() {
         let router = PointerRouter::new();
-        let pointer = PointerId::new(1);
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
 
         let handler1: PointerRouteHandler = Arc::new(|_: &PointerEvent| {});
         let handler2: PointerRouteHandler = Arc::new(|_: &PointerEvent| {});
@@ -357,7 +357,7 @@ mod tests {
     #[test]
     fn test_route_event() {
         let router = PointerRouter::new();
-        let pointer = PointerId::new(0); // PRIMARY pointer
+        let pointer = PointerId::PRIMARY; // PRIMARY pointer
 
         let call_count = Arc::new(AtomicUsize::new(0));
         let count_clone = call_count.clone();
@@ -377,7 +377,7 @@ mod tests {
     #[test]
     fn test_route_to_multiple_handlers() {
         let router = PointerRouter::new();
-        let pointer = PointerId::new(0); // PRIMARY pointer
+        let pointer = PointerId::PRIMARY; // PRIMARY pointer
 
         let call_count = Arc::new(AtomicUsize::new(0));
 
@@ -427,7 +427,7 @@ mod tests {
         // handlers first, then global handlers. Post-U25 (acab2929+) FLUI
         // matches this ordering — previously global fired first.
         let router = PointerRouter::new();
-        let pointer = PointerId::new(0); // PRIMARY pointer
+        let pointer = PointerId::PRIMARY; // PRIMARY pointer
 
         let order = Arc::new(Mutex::new(Vec::new()));
 
@@ -454,7 +454,7 @@ mod tests {
     #[test]
     fn test_remove_all_routes() {
         let router = PointerRouter::new();
-        let pointer = PointerId::new(1);
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
 
         let handler1 = Arc::new(|_: &PointerEvent| {});
         let handler2 = Arc::new(|_: &PointerEvent| {});
@@ -473,8 +473,11 @@ mod tests {
         let router = PointerRouter::new();
 
         let handler = Arc::new(|_: &PointerEvent| {});
-        router.add_route(PointerId::new(1), handler.clone());
-        router.add_route(PointerId::new(2), handler);
+        router.add_route(
+            PointerId::new(2).expect("nonzero pointer id"),
+            handler.clone(),
+        );
+        router.add_route(PointerId::new(3).expect("nonzero pointer id"), handler);
         router.add_global_handler(Arc::new(|_: &PointerEvent| {}));
 
         router.clear();
@@ -485,8 +488,8 @@ mod tests {
     #[test]
     fn test_wrong_pointer_not_called() {
         let router = PointerRouter::new();
-        let pointer1 = PointerId::new(1);
-        let pointer2 = PointerId::new(2);
+        let pointer1 = PointerId::new(2).expect("nonzero pointer id");
+        let pointer2 = PointerId::new(3).expect("nonzero pointer id");
 
         let called = Arc::new(AtomicUsize::new(0));
         let called_clone = called.clone();
@@ -519,7 +522,7 @@ mod tests {
     fn test_reentrancy_remove_self() {
         // Test that a handler can remove itself during dispatch
         let router = Arc::new(PointerRouter::new());
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         let call_count = Arc::new(AtomicUsize::new(0));
         let count_clone = call_count.clone();
@@ -530,7 +533,7 @@ mod tests {
             // Remove self during dispatch - this should work without deadlock
             // Note: We can't easily remove self here because we don't have the handler Arc
             // But we can remove all routes which exercises the same code path
-            router_clone.remove_all_routes(PointerId::new(0));
+            router_clone.remove_all_routes(PointerId::PRIMARY);
         });
 
         router.add_route(pointer, handler);
@@ -546,7 +549,7 @@ mod tests {
     fn test_reentrancy_add_handler() {
         // Test that a handler can add new handlers during dispatch
         let router = Arc::new(PointerRouter::new());
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         let second_called = Arc::new(AtomicUsize::new(0));
         let second_called_clone = second_called.clone();
@@ -558,7 +561,7 @@ mod tests {
             let new_handler: PointerRouteHandler = Arc::new(move |_: &PointerEvent| {
                 called.fetch_add(1, Ordering::Relaxed);
             });
-            router_clone.add_route(PointerId::new(0), new_handler);
+            router_clone.add_route(PointerId::PRIMARY, new_handler);
         });
 
         router.add_route(pointer, handler1);
@@ -579,7 +582,7 @@ mod tests {
     fn test_reentrancy_remove_other_handler() {
         // Test that a handler can remove another handler during dispatch
         let router = Arc::new(PointerRouter::new());
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         let handler2_called = Arc::new(AtomicUsize::new(0));
         let handler2_called_clone = handler2_called.clone();
@@ -592,7 +595,7 @@ mod tests {
         let router_clone = router.clone();
         let handler1: PointerRouteHandler = Arc::new(move |_: &PointerEvent| {
             // Remove handler2 during dispatch
-            router_clone.remove_route(PointerId::new(0), &handler2_for_remove);
+            router_clone.remove_route(PointerId::PRIMARY, &handler2_for_remove);
         });
 
         // Add handler1 first, then handler2

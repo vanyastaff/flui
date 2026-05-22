@@ -484,7 +484,7 @@ mod tests {
     fn test_team_add_creates_combiner() {
         let team = GestureArenaTeam::new();
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
         let member = MockMember::new(1);
 
         assert!(!team.contains(pointer));
@@ -499,7 +499,7 @@ mod tests {
     fn test_team_first_member_wins() {
         let team = GestureArenaTeam::new();
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         let member1 = MockMember::new(1);
         let member2 = MockMember::new(2);
@@ -520,7 +520,7 @@ mod tests {
         let captain = MockMember::new(0);
         let team = GestureArenaTeam::with_captain(captain.clone());
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         let member1 = MockMember::new(1);
         let member2 = MockMember::new(2);
@@ -540,7 +540,7 @@ mod tests {
     fn test_team_member_reject_removes_from_team() {
         let team = GestureArenaTeam::new();
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         let member1 = MockMember::new(1);
         let member2 = MockMember::new(2);
@@ -558,7 +558,7 @@ mod tests {
     fn test_team_all_reject_rejects_arena() {
         let team = GestureArenaTeam::new();
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         let member1 = MockMember::new(1);
         let member2 = MockMember::new(2);
@@ -588,7 +588,7 @@ mod tests {
     fn test_team_entry_debug_impl() {
         let team = GestureArenaTeam::new();
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
         let member = MockMember::new(1);
 
         let entry = team.add(pointer, member, &arena);
@@ -602,8 +602,8 @@ mod tests {
         let team = GestureArenaTeam::new();
         let arena = GestureArena::new();
 
-        let pointer1 = PointerId::new(0);
-        let pointer2 = PointerId::new(1);
+        let pointer1 = PointerId::PRIMARY;
+        let pointer2 = PointerId::new(2).expect("nonzero pointer id");
 
         let member1 = MockMember::new(1);
         let member2 = MockMember::new(2);

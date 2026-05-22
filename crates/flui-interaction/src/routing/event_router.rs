@@ -303,7 +303,7 @@ pub(crate) mod tests {
 
         // Add some state
         router.pointer_state.write().insert(
-            PointerId::new(0),
+            PointerId::PRIMARY,
             PointerStateTracking {
                 is_down: true,
                 last_position: Offset::new(Pixels(0.0), Pixels(0.0)),

@@ -467,7 +467,7 @@ mod tests {
                 *tapped_clone.lock() = true;
             });
 
-        let pointer = PointerId::new(1);
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
         let position = Offset::new(px(100.0), px(100.0));
 
         // First tap
@@ -500,7 +500,7 @@ mod tests {
                 *tapped_clone.lock() = true;
             });
 
-        let pointer = PointerId::new(1);
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
         let first_pos = Offset::new(px(100.0), px(100.0));
 
         // First tap
@@ -529,7 +529,7 @@ mod tests {
         let arena = GestureArena::new();
         let recognizer = DoubleTapGestureRecognizer::new(arena);
 
-        let pointer = PointerId::new(1);
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
         let position = Offset::new(px(100.0), px(100.0));
 
         // First tap

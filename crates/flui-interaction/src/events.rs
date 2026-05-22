@@ -235,15 +235,16 @@ impl PointerEventData {
             (Offset::ZERO, 0, PointerButtons::new())
         };
 
-        // Convert pointer ID: 0 for primary, hash for others
+        // Convert pointer ID into the legacy `device: i32` field.
+        // U9: ui_events PointerId carries `NonZeroU64`; clamp into the i32
+        // range used by the test-only `PointerEventData` compat surface.
+        // Primary pointer ⇒ 0 (preserves the pre-U9 mouse sentinel inside
+        // the testing layer); other pointers ⇒ low 31 bits of the
+        // NonZeroU64. Saturates on overflow (no platform produces
+        // pointer ids > i32::MAX in practice).
         let device = match info.pointer_id {
-            Some(id) if id.is_primary_pointer() => 0,
-            Some(id) => {
-                use std::hash::{Hash, Hasher};
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                id.hash(&mut hasher);
-                (hasher.finish() & 0x7FFFFFFF) as i32
-            }
+            Some(id) if id.is_primary_pointer() => 0_i32,
+            Some(id) => (id.get_inner().get() & 0x7FFF_FFFF) as i32,
             None => 0,
         };
 
@@ -329,23 +330,27 @@ impl InputEvent {
             InputEvent::DeviceAdded { device_id, .. } => Some(*device_id),
             InputEvent::DeviceRemoved { device_id } => Some(*device_id),
             InputEvent::Pointer(event) => {
-                // Extract pointer_id from the event
+                // Extract pointer_id from the event into the legacy
+                // `DeviceId = i32` surface. Primary pointer ⇒ 0;
+                // otherwise return the low 31 bits of the pointer id so
+                // that distinct pointers stay distinct DeviceIds.
+                //
+                // Pre-U9 this branch also folded `persistent_device_id`
+                // via `DefaultHasher` to produce a distinct DeviceId per
+                // physical device — that allocator-hitting hash ran on
+                // every hot-path event. Since `PersistentDeviceId`'s
+                // inner `NonZeroU64` is private and `pointer_id` already
+                // uniquely identifies the logical pointer for the legacy
+                // i32 surface, drop the hasher and lean on `pointer_id`
+                // directly. Callers needing physical-device stability
+                // should consume `PointerInfo::persistent_device_id`
+                // upstream rather than via this legacy DeviceId mapping.
                 let info = get_pointer_info(event)?;
-                // Use 0 for primary pointer, otherwise hash the persistent device ID
-                if info
-                    .pointer_id
-                    .map(|id| id.is_primary_pointer())
-                    .unwrap_or(true)
-                {
+                let id = info.pointer_id?;
+                if id.is_primary_pointer() {
                     Some(0)
-                } else if let Some(persistent_id) = info.persistent_device_id {
-                    // Use a simple hash of the persistent device ID
-                    use std::hash::{Hash, Hasher};
-                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                    persistent_id.hash(&mut hasher);
-                    Some((hasher.finish() & 0x7FFFFFFF) as DeviceId)
                 } else {
-                    Some(0)
+                    Some((id.get_inner().get() & 0x7FFF_FFFF) as DeviceId)
                 }
             }
             InputEvent::Keyboard(_) => None,
@@ -684,9 +689,20 @@ pub fn make_scroll_event(position: Offset<Pixels>, delta: Offset<Pixels>) -> Poi
 
 /// Extracts a stable `PointerId` from a `PointerEvent`.
 ///
-/// Returns `PointerId(0)` for the primary pointer, or a hashed ID for others.
-/// This is used by event routing, pointer routing, and raw input modules.
+/// Returns the event's `pointer_id` directly when present, falling back to
+/// [`PointerId::PRIMARY`] for events without a pointer id (e.g. virtual or
+/// uninitialised events). Used by event routing, pointer routing, and raw
+/// input modules as a single canonical extraction point.
+///
+/// Pre-U9 this fn allocated a fresh `DefaultHasher` on every event to fold
+/// the `NonZeroU64` id down into the local `PointerId(i32)`. After widening
+/// to `ui_events::pointer::PointerId` this is a zero-cost field load — the
+/// id is already in its canonical form.
+///
+/// Flutter parity: `gestures/binding.dart::_handlePointerEventImmediately`
+/// reads `event.pointer` directly with no transform.
 #[inline]
+#[must_use]
 pub fn extract_pointer_id(event: &PointerEvent) -> crate::ids::PointerId {
     let info = match event {
         PointerEvent::Down(e) => &e.pointer,
@@ -696,17 +712,7 @@ pub fn extract_pointer_id(event: &PointerEvent) -> crate::ids::PointerId {
         PointerEvent::Scroll(e) => &e.pointer,
         PointerEvent::Gesture(e) => &e.pointer,
     };
-    let raw_id = match info.pointer_id {
-        Some(p) if p.is_primary_pointer() => 0,
-        Some(p) => {
-            use std::hash::{Hash, Hasher};
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            p.hash(&mut hasher);
-            (hasher.finish() & 0x7FFFFFFF) as i32
-        }
-        None => 0,
-    };
-    crate::ids::PointerId::new(raw_id)
+    info.pointer_id.unwrap_or(crate::ids::PointerId::PRIMARY)
 }
 
 #[cfg(any(test, feature = "testing"))]

@@ -118,30 +118,11 @@ impl PointerEventExtTrait for PointerEvent {
     }
 
     fn pointer_id(&self) -> PointerId {
-        // Extract pointer ID from the event
-        let id = match self {
-            PointerEvent::Down(e) => e.pointer.pointer_id,
-            PointerEvent::Up(e) => e.pointer.pointer_id,
-            PointerEvent::Move(e) => e.pointer.pointer_id,
-            PointerEvent::Cancel(info) | PointerEvent::Enter(info) | PointerEvent::Leave(info) => {
-                info.pointer_id
-            }
-            PointerEvent::Scroll(e) => e.pointer.pointer_id,
-            PointerEvent::Gesture(e) => e.pointer.pointer_id,
-        };
-        // Use 0 for primary pointer, hash for others
-        let raw_id = match id {
-            Some(p) if p.is_primary_pointer() => 0,
-            Some(p) => {
-                // Use a simple hash based on memory representation
-                use std::hash::{Hash, Hasher};
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                p.hash(&mut hasher);
-                (hasher.finish() & 0x7FFFFFFF) as i32
-            }
-            None => 0,
-        };
-        PointerId::new(raw_id)
+        // U9: PointerId is `ui_events::pointer::PointerId(NonZeroU64)`.
+        // Delegate to the canonical extractor — zero-cost field load,
+        // no per-event hasher allocation. Matches Flutter
+        // `gestures/binding.dart` `event.pointer` semantics.
+        crate::events::extract_pointer_id(self)
     }
 
     fn is_down(&self) -> bool {

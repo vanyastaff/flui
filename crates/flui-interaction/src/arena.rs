@@ -476,7 +476,7 @@ impl ArenaEntryData {
 /// use flui_interaction::arena::{GestureArena, GestureDisposition, PointerId};
 ///
 /// let arena = GestureArena::new();
-/// let pointer = PointerId::new(0);
+/// let pointer = PointerId::PRIMARY;
 ///
 /// // Add recognizers to arena - returns entry handle
 /// let tap_entry = arena.add(pointer, tap_recognizer);
@@ -859,7 +859,7 @@ impl GestureArena {
             }
 
             tracing::trace!(
-                pointer = pointer.get(),
+                ?pointer,
                 elapsed_ms = entry.elapsed().as_millis(),
                 member_count = entry.members.len(),
                 "Force resolving arena due to timeout"
@@ -974,7 +974,7 @@ mod tests {
     #[test]
     fn test_arena_single_member_wins() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
         let member = Arc::new(MockMember::new());
 
         let _entry = arena.add(pointer, member.clone());
@@ -987,7 +987,7 @@ mod tests {
     #[test]
     fn test_arena_entry_resolve_accepted() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         let member1 = Arc::new(MockMember::new());
         let member2 = Arc::new(MockMember::new());
@@ -1010,7 +1010,7 @@ mod tests {
     #[test]
     fn test_arena_entry_resolve_rejected() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         let member1 = Arc::new(MockMember::new());
         let member2 = Arc::new(MockMember::new());
@@ -1034,7 +1034,7 @@ mod tests {
     #[test]
     fn test_arena_resolve_with_winner() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         let member1 = Arc::new(MockMember::new());
         let member2 = Arc::new(MockMember::new());
@@ -1055,7 +1055,7 @@ mod tests {
     #[test]
     fn test_arena_hold_and_release() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
         let member = Arc::new(MockMember::new());
 
         arena.add(pointer, member.clone());
@@ -1075,7 +1075,7 @@ mod tests {
     #[test]
     fn test_arena_sweep() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
         let member = Arc::new(MockMember::new());
 
         arena.add(pointer, member.clone());
@@ -1093,7 +1093,7 @@ mod tests {
         let arena = GestureArena::new();
         assert!(arena.is_empty());
 
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
         let member = Arc::new(MockMember::new());
 
         arena.add(pointer, member);
@@ -1106,7 +1106,7 @@ mod tests {
     #[test]
     fn test_arena_member_count() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         assert_eq!(arena.member_count(pointer), 0);
 
@@ -1129,7 +1129,7 @@ mod tests {
     #[test]
     fn test_arena_resolve_team() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         let member1 = Arc::new(MockMember::new());
         let member2 = Arc::new(MockMember::new());
@@ -1154,7 +1154,7 @@ mod tests {
     #[test]
     fn test_arena_winners_empty_when_not_resolved() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         arena.add(pointer, Arc::new(MockMember::new()));
 
@@ -1174,7 +1174,7 @@ mod tests {
     #[test]
     fn test_arena_elapsed_returns_duration() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         // No arena yet
         assert!(arena.elapsed(pointer).is_none());
@@ -1190,7 +1190,7 @@ mod tests {
     #[test]
     fn test_arena_has_timed_out_false_initially() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         arena.add(pointer, Arc::new(MockMember::new()));
 
@@ -1202,7 +1202,7 @@ mod tests {
     #[test]
     fn test_arena_has_timed_out_with_zero_duration() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         arena.add(pointer, Arc::new(MockMember::new()));
 
@@ -1213,7 +1213,7 @@ mod tests {
     #[test]
     fn test_arena_has_timed_out_false_for_resolved() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         let member = Arc::new(MockMember::new());
         arena.add(pointer, member.clone());
@@ -1226,7 +1226,7 @@ mod tests {
     #[test]
     fn test_force_resolve_if_timed_out() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         let member = Arc::new(MockMember::new());
         arena.add(pointer, member.clone());
@@ -1242,7 +1242,7 @@ mod tests {
     #[test]
     fn test_force_resolve_first_member_wins() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         let member1 = Arc::new(MockMember::new());
         let member2 = Arc::new(MockMember::new());
@@ -1264,7 +1264,7 @@ mod tests {
     #[test]
     fn test_force_resolve_does_nothing_if_held() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         let member = Arc::new(MockMember::new());
         arena.add(pointer, member.clone());
@@ -1281,7 +1281,7 @@ mod tests {
     #[test]
     fn test_force_resolve_does_nothing_if_already_resolved() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         let member = Arc::new(MockMember::new());
         arena.add(pointer, member.clone());
@@ -1295,7 +1295,7 @@ mod tests {
     #[test]
     fn test_force_resolve_does_nothing_if_not_timed_out() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         let member = Arc::new(MockMember::new());
         arena.add(pointer, member.clone());
@@ -1311,9 +1311,9 @@ mod tests {
     fn test_resolve_timed_out_arenas() {
         let arena = GestureArena::new();
 
-        let pointer1 = PointerId::new(0);
-        let pointer2 = PointerId::new(1);
-        let pointer3 = PointerId::new(2);
+        let pointer1 = PointerId::PRIMARY;
+        let pointer2 = PointerId::new(2).expect("nonzero pointer id");
+        let pointer3 = PointerId::new(3).expect("nonzero pointer id");
 
         let member1 = Arc::new(MockMember::new());
         let member2 = Arc::new(MockMember::new());
@@ -1346,7 +1346,7 @@ mod tests {
     #[test]
     fn test_resolve_default_timed_out_arenas() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         arena.add(pointer, Arc::new(MockMember::new()));
 
@@ -1358,7 +1358,7 @@ mod tests {
     #[test]
     fn test_force_resolve_with_no_members() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         // Create empty arena entry by adding and then we test empty case
         // Note: We need to create an arena entry first
@@ -1372,7 +1372,7 @@ mod tests {
     #[test]
     fn test_force_resolve_if_default_timeout() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         let member = Arc::new(MockMember::new());
         arena.add(pointer, member.clone());
@@ -1390,7 +1390,7 @@ mod tests {
     #[test]
     fn test_eager_winner_wins_on_close() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         let member1 = Arc::new(MockMember::new());
         let member2 = Arc::new(MockMember::new());
@@ -1414,7 +1414,7 @@ mod tests {
     #[test]
     fn test_first_eager_winner_wins() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         let member1 = Arc::new(MockMember::new());
         let member2 = Arc::new(MockMember::new());
@@ -1435,7 +1435,7 @@ mod tests {
     #[test]
     fn test_accept_after_close_resolves_immediately() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         let member1 = Arc::new(MockMember::new());
         let member2 = Arc::new(MockMember::new());
@@ -1459,7 +1459,7 @@ mod tests {
     #[test]
     fn test_reject_removes_eager_winner() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         let member1 = Arc::new(MockMember::new());
         let member2 = Arc::new(MockMember::new());
@@ -1484,7 +1484,7 @@ mod tests {
     #[test]
     fn test_is_open_false_after_close() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         let member = Arc::new(MockMember::new());
         arena.add(pointer, member);
@@ -1501,7 +1501,7 @@ mod tests {
     #[test]
     fn test_sweep_deferred_when_held() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         let member = Arc::new(MockMember::new());
         arena.add(pointer, member.clone());
@@ -1520,7 +1520,7 @@ mod tests {
     #[test]
     fn test_sweep_immediate_when_not_held() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         let member = Arc::new(MockMember::new());
         arena.add(pointer, member.clone());
@@ -1534,7 +1534,7 @@ mod tests {
     #[test]
     fn test_pending_sweep_cleared_on_release() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         let member = Arc::new(MockMember::new());
         arena.add(pointer, member);
@@ -1551,7 +1551,7 @@ mod tests {
     #[test]
     fn test_release_closes_arena_if_open() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         let member = Arc::new(MockMember::new());
         arena.add(pointer, member.clone());
@@ -1575,7 +1575,7 @@ mod tests {
     #[test]
     fn test_entry_pointer_accessor() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(42);
+        let pointer = PointerId::new(43).expect("nonzero pointer id");
         let member = Arc::new(MockMember::new());
 
         let entry = arena.add(pointer, member);
@@ -1586,7 +1586,7 @@ mod tests {
     #[test]
     fn test_entry_member_accessor() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
         let member = Arc::new(MockMember::new());
         let member_dyn: Arc<dyn GestureArenaMember> = member.clone();
 
@@ -1598,7 +1598,7 @@ mod tests {
     #[test]
     fn test_entry_debug_impl() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(123);
+        let pointer = PointerId::new(124).expect("nonzero pointer id");
         let member = Arc::new(MockMember::new());
 
         let entry = arena.add(pointer, member);
@@ -1611,7 +1611,7 @@ mod tests {
     #[test]
     fn test_entry_resolve_multiple_times_is_safe() {
         let arena = GestureArena::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         let member = Arc::new(MockMember::new());
         let entry = arena.add(pointer, member.clone());

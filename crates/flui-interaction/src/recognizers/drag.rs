@@ -599,7 +599,7 @@ mod tests {
                 *updated_clone.lock() = true;
             });
 
-        let pointer = PointerId::new(1);
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
         let start_pos = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Start tracking
