@@ -144,10 +144,16 @@ impl LayerNode {
     }
 
     /// Adds a child to this layer node.
+    ///
+    /// Dedup-checks against the existing children vector — a second call
+    /// with the same id is a no-op. Mirrors `SemanticsNode::add_child`'s
+    /// containment check.
     #[inline]
     pub fn add_child(&mut self, child: LayerId) {
         self.assert_alive("add_child");
-        self.children.push(child);
+        if !self.children.contains(&child) {
+            self.children.push(child);
+        }
     }
 
     /// Removes a child from this layer node.
@@ -452,16 +458,48 @@ impl LayerTree {
 
     // ========== Tree Operations ==========
 
-    /// Adds a child to a parent LayerNode.
+    /// Adds `child_id` as a child of `parent_id`.
     ///
-    /// Updates both parent's children list and child's parent pointer.
+    /// **Auto-detach semantics (U10)** — if `child_id` is currently attached
+    /// to a different parent, it is removed from that parent's children
+    /// vector first, then attached here. Re-attaching to the *same* parent
+    /// is a short-circuit no-op so the child appears only once in the
+    /// children vector (`LayerNode::add_child` carries the dedup check).
+    /// This mirrors Flutter `layer.dart:1098-1149` `ContainerLayer.append`
+    /// — the Dart `assert(child._parent == null)` reaches the same outcome
+    /// via a precondition; FLUI cleans up instead because Rust idiom is
+    /// "do the right thing" not "panic on misuse."
+    ///
+    /// Missing-id lookups (either `parent_id` or `child_id` not in the
+    /// tree) are silent no-ops.
     pub fn add_child(&mut self, parent_id: LayerId, child_id: LayerId) {
-        // Update parent's children
+        // Both endpoints must exist — otherwise the call is a no-op.
+        if !self.contains(parent_id) || !self.contains(child_id) {
+            return;
+        }
+
+        // 1. Detach from previous parent if one exists and differs from
+        //    `parent_id`.
+        let prev_parent = self.get(child_id).and_then(LayerNode::parent);
+        if let Some(prev) = prev_parent {
+            if prev == parent_id {
+                // Already a child of this parent — `LayerNode::add_child`
+                // dedups, but short-circuit anyway to avoid the redundant
+                // mutation + dirty-bit ripple.
+                return;
+            }
+            if let Some(prev_node) = self.get_mut(prev) {
+                prev_node.remove_child(child_id);
+            }
+        }
+
+        // 2. Attach to new parent. `LayerNode::add_child` carries dedup so
+        //    a transient race that retries the call won't double-insert.
         if let Some(parent) = self.get_mut(parent_id) {
             parent.add_child(child_id);
         }
 
-        // Update child's parent
+        // 3. Update child's parent pointer.
         if let Some(child) = self.get_mut(child_id) {
             child.set_parent(Some(parent_id));
         }
@@ -931,5 +969,83 @@ mod dirty_bit_tests {
         tree.mark_needs_add_to_scene(phantom); // no panic
         assert!(!tree.update_subtree_needs_add_to_scene(phantom));
         tree.clear_needs_add_to_scene_subtree(phantom); // no panic
+    }
+}
+
+// ============================================================================
+// SLAB-TREE HYGIENE TESTS (U10 — add_child auto-detach + dedup)
+// ============================================================================
+
+#[cfg(test)]
+mod add_child_hygiene_tests {
+    use crate::layer::{CanvasLayer, Layer};
+
+    use super::LayerTree;
+
+    #[test]
+    fn add_child_attaches_under_new_parent() {
+        let mut tree = LayerTree::new();
+        let parent = tree.insert(Layer::from(CanvasLayer::new()));
+        let child = tree.insert(Layer::from(CanvasLayer::new()));
+
+        tree.add_child(parent, child);
+
+        assert_eq!(tree.get(child).unwrap().parent(), Some(parent));
+        assert_eq!(tree.get(parent).unwrap().children(), &[child]);
+    }
+
+    #[test]
+    fn add_child_auto_detaches_from_previous_parent() {
+        let mut tree = LayerTree::new();
+        let parent_a = tree.insert(Layer::from(CanvasLayer::new()));
+        let parent_b = tree.insert(Layer::from(CanvasLayer::new()));
+        let child = tree.insert(Layer::from(CanvasLayer::new()));
+
+        tree.add_child(parent_a, child);
+        assert_eq!(tree.get(parent_a).unwrap().children(), &[child]);
+
+        // Re-parent — parent_a should lose the child, parent_b should gain it.
+        tree.add_child(parent_b, child);
+
+        assert_eq!(tree.get(child).unwrap().parent(), Some(parent_b));
+        assert!(tree.get(parent_a).unwrap().children().is_empty());
+        assert_eq!(tree.get(parent_b).unwrap().children(), &[child]);
+    }
+
+    #[test]
+    fn add_child_under_same_parent_is_idempotent() {
+        let mut tree = LayerTree::new();
+        let parent = tree.insert(Layer::from(CanvasLayer::new()));
+        let child = tree.insert(Layer::from(CanvasLayer::new()));
+
+        tree.add_child(parent, child);
+        tree.add_child(parent, child); // duplicate
+
+        assert_eq!(tree.get(parent).unwrap().children().len(), 1);
+        assert_eq!(tree.get(parent).unwrap().children()[0], child);
+    }
+
+    #[test]
+    fn add_child_with_missing_parent_is_a_no_op() {
+        use flui_foundation::LayerId;
+        let mut tree = LayerTree::new();
+        let child = tree.insert(Layer::from(CanvasLayer::new()));
+        let phantom = LayerId::new(999);
+
+        tree.add_child(phantom, child);
+        // Child's parent stays unset since the parent slot doesn't exist.
+        assert!(tree.get(child).unwrap().parent().is_none());
+    }
+
+    #[test]
+    fn add_child_with_missing_child_is_a_no_op() {
+        use flui_foundation::LayerId;
+        let mut tree = LayerTree::new();
+        let parent = tree.insert(Layer::from(CanvasLayer::new()));
+        let phantom = LayerId::new(999);
+
+        tree.add_child(parent, phantom);
+        // Parent's children stay empty since the child slot doesn't exist.
+        assert!(tree.get(parent).unwrap().children().is_empty());
     }
 }
