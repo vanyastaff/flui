@@ -24,6 +24,7 @@ use crate::view::ElementBase;
 /// Used by `insertRenderObjectChild` and `removeRenderObjectChild` to identify
 /// which child slot is being modified.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum RenderSlot {
     /// Single child slot (for SingleChildRenderObjectElement)
     #[default]
