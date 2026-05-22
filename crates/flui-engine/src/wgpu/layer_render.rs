@@ -11,7 +11,10 @@ use flui_layer::{
 };
 use flui_painting::DisplayListCore;
 
-use crate::{commands::dispatch_commands, traits::CommandRenderer};
+use crate::{
+    commands::dispatch_commands,
+    traits::{CommandRenderer, LayerStateStack},
+};
 
 // ============================================================================
 // SUPERELLIPSE PATH GENERATION
@@ -46,7 +49,7 @@ use crate::{commands::dispatch_commands, traits::CommandRenderer};
 /// let layer = Layer::Canvas(CanvasLayer::new());
 /// layer.render(&mut backend);
 /// ```
-pub trait LayerRender<R: CommandRenderer + ?Sized> {
+pub trait LayerRender<R: CommandRenderer + LayerStateStack + ?Sized> {
     /// Render this layer using the provided command renderer.
     fn render(&self, renderer: &mut R);
 
@@ -57,7 +60,7 @@ pub trait LayerRender<R: CommandRenderer + ?Sized> {
     fn cleanup(&self, renderer: &mut R);
 }
 
-impl<R: CommandRenderer + ?Sized> LayerRender<R> for Layer {
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for Layer {
     fn render(&self, renderer: &mut R) {
         match self {
             // Leaf layers
@@ -143,7 +146,7 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for Layer {
 // LEAF LAYERS
 // ============================================================================
 
-impl<R: CommandRenderer + ?Sized> LayerRender<R> for CanvasLayer {
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for CanvasLayer {
     fn render(&self, renderer: &mut R) {
         dispatch_commands(self.display_list().commands(), renderer);
     }
@@ -153,7 +156,7 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for CanvasLayer {
     }
 }
 
-impl<R: CommandRenderer + ?Sized> LayerRender<R> for PictureLayer {
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for PictureLayer {
     fn render(&self, renderer: &mut R) {
         dispatch_commands(self.picture().commands(), renderer);
     }
@@ -167,7 +170,7 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for PictureLayer {
 // CLIP LAYERS
 // ============================================================================
 
-impl<R: CommandRenderer + ?Sized> LayerRender<R> for ClipRectLayer {
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for ClipRectLayer {
     fn render(&self, renderer: &mut R) {
         if !self.clips() {
             return;
@@ -183,7 +186,7 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for ClipRectLayer {
     }
 }
 
-impl<R: CommandRenderer + ?Sized> LayerRender<R> for ClipRRectLayer {
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for ClipRRectLayer {
     fn render(&self, renderer: &mut R) {
         if !self.clips() {
             return;
@@ -199,7 +202,7 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for ClipRRectLayer {
     }
 }
 
-impl<R: CommandRenderer + ?Sized> LayerRender<R> for ClipPathLayer {
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for ClipPathLayer {
     fn render(&self, renderer: &mut R) {
         if !self.clips() {
             return;
@@ -215,7 +218,9 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for ClipPathLayer {
     }
 }
 
-impl<R: CommandRenderer + ?Sized> LayerRender<R> for flui_layer::ClipSuperellipseLayer {
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R>
+    for flui_layer::ClipSuperellipseLayer
+{
     fn render(&self, renderer: &mut R) {
         if !self.clips() {
             return;
@@ -371,7 +376,7 @@ pub(crate) fn generate_superellipse_path(
 // TRANSFORM LAYERS
 // ============================================================================
 
-impl<R: CommandRenderer + ?Sized> LayerRender<R> for OffsetLayer {
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for OffsetLayer {
     fn render(&self, renderer: &mut R) {
         if self.is_zero() {
             return;
@@ -386,7 +391,7 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for OffsetLayer {
     }
 }
 
-impl<R: CommandRenderer + ?Sized> LayerRender<R> for TransformLayer {
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for TransformLayer {
     fn render(&self, renderer: &mut R) {
         if self.is_identity() {
             return;
@@ -405,7 +410,7 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for TransformLayer {
 // EFFECT LAYERS
 // ============================================================================
 
-impl<R: CommandRenderer + ?Sized> LayerRender<R> for OpacityLayer {
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for OpacityLayer {
     fn render(&self, renderer: &mut R) {
         if self.is_invisible() {
             return;
@@ -431,7 +436,7 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for OpacityLayer {
     }
 }
 
-impl<R: CommandRenderer + ?Sized> LayerRender<R> for ColorFilterLayer {
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for ColorFilterLayer {
     fn render(&self, renderer: &mut R) {
         if self.is_identity() {
             return;
@@ -446,7 +451,7 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for ColorFilterLayer {
     }
 }
 
-impl<R: CommandRenderer + ?Sized> LayerRender<R> for ImageFilterLayer {
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for ImageFilterLayer {
     fn render(&self, renderer: &mut R) {
         if self.has_offset() {
             renderer.push_offset(self.offset());
@@ -463,7 +468,7 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for ImageFilterLayer {
     }
 }
 
-impl<R: CommandRenderer + ?Sized> LayerRender<R> for ShaderMaskLayer {
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for ShaderMaskLayer {
     fn render(&self, renderer: &mut R) {
         // Create a compositing layer bounded to the mask area.
         // Children will be rendered into this layer, then composited
@@ -485,7 +490,7 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for ShaderMaskLayer {
     }
 }
 
-impl<R: CommandRenderer + ?Sized> LayerRender<R> for BackdropFilterLayer {
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for BackdropFilterLayer {
     fn render(&self, _renderer: &mut R) {
         // Backdrop blur is handled at the Renderer level in render_layer_recursive,
         // which has access to the surface texture for mid-frame flush + copy + blur.
@@ -502,7 +507,7 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for BackdropFilterLayer {
 // EXTERNAL CONTENT LAYERS
 // ============================================================================
 
-impl<R: CommandRenderer + ?Sized> LayerRender<R> for TextureLayer {
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for TextureLayer {
     fn render(&self, renderer: &mut R) {
         if self.is_invisible() {
             return;
@@ -522,7 +527,7 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for TextureLayer {
     }
 }
 
-impl<R: CommandRenderer + ?Sized> LayerRender<R> for PlatformViewLayer {
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for PlatformViewLayer {
     fn render(&self, _renderer: &mut R) {
         // Platform views are composited by the platform embedder
     }
@@ -536,7 +541,7 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for PlatformViewLayer {
 // LINKING LAYERS
 // ============================================================================
 
-impl<R: CommandRenderer + ?Sized> LayerRender<R> for LeaderLayer {
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for LeaderLayer {
     fn render(&self, renderer: &mut R) {
         let offset = self.get_offset();
         if offset.dx.0 != 0.0 || offset.dy.0 != 0.0 {
@@ -552,7 +557,7 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for LeaderLayer {
     }
 }
 
-impl<R: CommandRenderer + ?Sized> LayerRender<R> for FollowerLayer {
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for FollowerLayer {
     fn render(&self, _renderer: &mut R) {
         // Transform is calculated by the compositor
     }
@@ -566,7 +571,7 @@ impl<R: CommandRenderer + ?Sized> LayerRender<R> for FollowerLayer {
 // PERFORMANCE OVERLAY LAYER
 // ============================================================================
 
-impl<R: CommandRenderer + ?Sized> LayerRender<R> for PerformanceOverlayLayer {
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for PerformanceOverlayLayer {
     fn render(&self, renderer: &mut R) {
         renderer.add_performance_overlay(
             self.options_mask(),
@@ -845,7 +850,25 @@ mod tests {
             self.calls.push("restore_layer".to_string());
         }
 
-        // ===== Layer Tree Operations (recorded) =====
+        // Cycle 4 E-9: push/pop methods moved to impl LayerStateStack below.
+
+        // ===== Performance Overlay (recorded) =====
+        fn add_performance_overlay(
+            &mut self,
+            _options_mask: u32,
+            _bounds: Rect<Pixels>,
+            _fps: f32,
+            _frame_time_ms: f32,
+            _total_frames: u64,
+        ) {
+            self.calls.push("add_performance_overlay".to_string());
+        }
+    }
+
+    // Cycle 4 E-9: layer-tree state-stack impl split into a dedicated
+    // trait. MockRenderer records each push/pop as a string for the
+    // ordering assertions in the test suite.
+    impl LayerStateStack for MockRenderer {
         fn push_clip_rect(&mut self, _rect: &Rect<Pixels>, _clip_behavior: Clip) {
             self.calls.push("push_clip_rect".to_string());
         }
@@ -884,18 +907,6 @@ mod tests {
         }
         fn pop_image_filter(&mut self) {
             self.calls.push("pop_image_filter".to_string());
-        }
-
-        // ===== Performance Overlay (recorded) =====
-        fn add_performance_overlay(
-            &mut self,
-            _options_mask: u32,
-            _bounds: Rect<Pixels>,
-            _fps: f32,
-            _frame_time_ms: f32,
-            _total_frames: u64,
-        ) {
-            self.calls.push("add_performance_overlay".to_string());
         }
     }
 

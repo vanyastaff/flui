@@ -337,8 +337,67 @@ pub trait CommandRenderer {
     /// Restore canvas state and composite the saved layer
     fn restore_layer(&mut self, transform: &Matrix4);
 
-    // ===== Layer Tree Operations =====
+    // ===== Performance Overlay =====
 
+    /// Add a performance overlay to the scene
+    ///
+    /// This is the equivalent of Flutter's
+    /// `SceneBuilder.addPerformanceOverlay()`. Renders FPS counter and
+    /// frame timing statistics at the specified location.
+    ///
+    /// # Arguments
+    ///
+    /// * `options_mask` - Bitmask of `PerformanceOverlayOption` flags
+    /// * `bounds` - Rectangle where the overlay should be displayed
+    /// * `fps` - Current frames per second
+    /// * `frame_time_ms` - Average frame time in milliseconds
+    /// * `total_frames` - Total frames rendered
+    fn add_performance_overlay(
+        &mut self,
+        options_mask: u32,
+        bounds: Rect<Pixels>,
+        fps: f32,
+        frame_time_ms: f32,
+        total_frames: u64,
+    );
+}
+
+// ============================================================================
+// LAYER-STATE-STACK TRAIT (cycle 4 E-9 split)
+// ============================================================================
+
+/// Compositor hand-off interface for the flui-layer clip/transform/effect
+/// stacks.
+///
+/// Pre-cycle these 13 methods lived on [`CommandRenderer`] alongside the
+/// 34 per-command visitor methods. Cycle 4 E-9 split them into this
+/// dedicated trait because:
+///
+/// - The visitor methods (render_rect / render_text / ...) are the
+///   `DrawCommand` dispatch contract every backend implements -- a
+///   software fallback, a debug recorder, a Skia backend, all
+///   conceptually answer "given this draw command, produce these
+///   pixels".
+/// - The push/pop methods are flui-layer's clip-stack hand-off
+///   mechanism. They are framework-internal: the layer tree (see
+///   `crates/flui-engine/src/wgpu/layer_render.rs`) walks layers
+///   recursively, calling `push_clip_*` / `pop_clip` / `push_opacity`
+///   / etc. to mirror the layer-tree's nesting onto the painter's
+///   internal state stack.
+///
+/// Backends that ONLY emit commands (a `DebugBackend` recorder, a
+/// command-stream test fixture, a software fallback that does its
+/// own state tracking) implement only [`CommandRenderer`]. Backends
+/// that participate in flui-layer's clip-stack handshake -- the
+/// compositor route -- implement both. The trait split lets new
+/// command-only backends materialize without the 13-method overhead.
+///
+/// # Cycle 4 audit
+///
+/// See `docs/research/2026-05-22-flui-rendering-engine-audit.md`
+/// E-9. Same trait-split intuition as cycle 2 PR #100/U21
+/// SemanticsConfiguration split.
+pub trait LayerStateStack {
     /// Push a rectangular clip onto the clip stack
     fn push_clip_rect(&mut self, rect: &Rect<Pixels>, clip_behavior: flui_types::painting::Clip);
 
@@ -377,28 +436,4 @@ pub trait CommandRenderer {
 
     /// Pop the most recent image filter from the effect stack
     fn pop_image_filter(&mut self);
-
-    // ===== Performance Overlay =====
-
-    /// Add a performance overlay to the scene
-    ///
-    /// This is the equivalent of Flutter's
-    /// `SceneBuilder.addPerformanceOverlay()`. Renders FPS counter and
-    /// frame timing statistics at the specified location.
-    ///
-    /// # Arguments
-    ///
-    /// * `options_mask` - Bitmask of `PerformanceOverlayOption` flags
-    /// * `bounds` - Rectangle where the overlay should be displayed
-    /// * `fps` - Current frames per second
-    /// * `frame_time_ms` - Average frame time in milliseconds
-    /// * `total_frames` - Total frames rendered
-    fn add_performance_overlay(
-        &mut self,
-        options_mask: u32,
-        bounds: Rect<Pixels>,
-        fps: f32,
-        frame_time_ms: f32,
-        total_frames: u64,
-    );
 }
