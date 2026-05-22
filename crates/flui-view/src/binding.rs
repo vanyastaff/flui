@@ -1230,20 +1230,6 @@ impl std::fmt::Debug for WidgetsBinding {
     }
 }
 
-/// Thread-safe wrapper for WidgetsBinding.
-///
-/// Deprecated: Use `WidgetsBinding::instance()` instead.
-#[deprecated(since = "0.2.0", note = "Use WidgetsBinding::instance() instead")]
-pub type SharedWidgetsBinding = Arc<RwLock<WidgetsBinding>>;
-
-/// Create a new shared widgets binding.
-///
-/// Deprecated: Use `WidgetsBinding::instance()` instead.
-#[deprecated(since = "0.2.0", note = "Use WidgetsBinding::instance() instead")]
-pub fn create_shared_binding() -> Arc<RwLock<WidgetsBinding>> {
-    Arc::new(RwLock::new(WidgetsBinding::new()))
-}
-
 #[cfg(test)]
 mod tests {
     use std::any::TypeId;
