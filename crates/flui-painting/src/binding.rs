@@ -259,8 +259,22 @@ impl ImageCache {
 ///
 /// System fonts can change when the OS installs or removes fonts.
 /// Text-related widgets should listen to this and redraw.
+///
+/// # Visibility
+///
+/// Crate-internal until a platform-side trigger exists. Today the only
+/// caller of [`Self::notify_listeners`] is
+/// [`PaintingBinding::handle_system_message`], and the only caller of
+/// `handle_system_message("fontsChange")` is the crate-internal test
+/// suite -- no `flui-platform` plumbing surfaces an OS font-change event.
+/// Exposing the listener-registration surface publicly today would invite
+/// consumers we cannot serve. Promote to `pub` again when the platform
+/// trigger lands.
+///
+/// Audit reference: docs/research/2026-05-22-flui-painting-view-audit.md
+/// P-10.
 #[derive(Default)]
-pub struct SystemFontsNotifier {
+pub(crate) struct SystemFontsNotifier {
     listeners: RwLock<Vec<Arc<dyn Fn() + Send + Sync>>>,
 }
 
@@ -274,17 +288,25 @@ impl std::fmt::Debug for SystemFontsNotifier {
 
 impl SystemFontsNotifier {
     /// Creates a new notifier.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
     /// Adds a listener for font changes.
-    pub fn add_listener(&self, listener: Arc<dyn Fn() + Send + Sync>) {
+    ///
+    /// Crate-internal until the platform-side font-change trigger lands;
+    /// currently exercised only by the in-crate test suite. See the
+    /// struct doc-comment (audit P-10) for the visibility rationale.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn add_listener(&self, listener: Arc<dyn Fn() + Send + Sync>) {
         self.listeners.write().push(listener);
     }
 
     /// Removes a listener.
-    pub fn remove_listener(&self, listener: &Arc<dyn Fn() + Send + Sync>) {
+    ///
+    /// See [`Self::add_listener`] for the dead-code allowance rationale.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn remove_listener(&self, listener: &Arc<dyn Fn() + Send + Sync>) {
         self.listeners.write().retain(|l| !Arc::ptr_eq(l, listener));
     }
 
@@ -296,7 +318,7 @@ impl SystemFontsNotifier {
     /// [`Self::add_listener`] or [`Self::remove_listener`] reentrantly
     /// from inside its own body would deadlock against the read guard
     /// we still held here.
-    pub fn notify_listeners(&self) {
+    pub(crate) fn notify_listeners(&self) {
         let snapshot: Vec<Arc<dyn Fn() + Send + Sync>> = {
             let listeners = self.listeners.read();
             listeners.iter().cloned().collect()
@@ -377,7 +399,13 @@ impl PaintingBinding {
     }
 
     /// Returns the system fonts notifier.
-    pub fn system_fonts(&self) -> &SystemFontsNotifier {
+    ///
+    /// Crate-internal -- see [`SystemFontsNotifier`] doc-comment (audit
+    /// P-10) for the visibility rationale. Kept on the surface so a
+    /// future platform-side trigger only needs to flip the visibility
+    /// back, not re-introduce a getter.
+    #[allow(dead_code, reason = "P-10: kept ready for the platform trigger")]
+    pub(crate) fn system_fonts(&self) -> &SystemFontsNotifier {
         &self.system_fonts
     }
 

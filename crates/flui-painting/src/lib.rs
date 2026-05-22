@@ -180,9 +180,7 @@ pub mod text_painter;
 // flui_painting::canvas::Canvas`.
 
 // Binding
-pub use binding::{
-    CachedImage, ImageCache, ImageHandle, PaintingBinding, SystemFontsNotifier, image_cache,
-};
+pub use binding::{CachedImage, ImageCache, ImageHandle, PaintingBinding, image_cache};
 // Primary API types
 pub use canvas::Canvas;
 pub use clip_context::ClipContext;
