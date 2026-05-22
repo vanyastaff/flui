@@ -5,7 +5,12 @@
 
 use flui_foundation::Identifier;
 
-use crate::{depth::Depth, iter::slot::Slot};
+use smallvec::SmallVec;
+
+use crate::{
+    depth::{Depth, INLINE_TREE_DEPTH},
+    iter::slot::Slot,
+};
 
 /// Tree navigation with RPITIT and HRTB support.
 ///
@@ -280,9 +285,11 @@ pub trait TreeNav<I: Identifier>: super::TreeRead<I> {
             return Some(a);
         }
 
-        // Collect ancestors of both nodes
-        let ancestors_a: Vec<I> = self.ancestors(a).collect();
-        let ancestors_b: Vec<I> = self.ancestors(b).collect();
+        // Collect ancestors of both nodes into stack-allocated buffers
+        // (audit T-18). Inline capacity `INLINE_TREE_DEPTH` = 32 matches
+        // typical widget-tree depth; deeper trees spill to the heap.
+        let ancestors_a: SmallVec<[I; INLINE_TREE_DEPTH]> = self.ancestors(a).collect();
+        let ancestors_b: SmallVec<[I; INLINE_TREE_DEPTH]> = self.ancestors(b).collect();
 
         // Find first common ancestor from the root
         ancestors_a

@@ -40,7 +40,12 @@ use parking_lot::Mutex;
 use crate::id::ListenerId;
 
 /// A listener callback function.
-pub type ListenerCallback = Arc<dyn Fn() + Send + Sync>;
+// Audit I-16: explicit `+ 'static` bound on the listener callback —
+// pre-cycle the implicit `'static` was confusing (callback types
+// stored long-term must be static, but the trait-object syntax
+// elided it). Explicit doc avoids ambiguity for callers
+// constructing the Arc.
+pub type ListenerCallback = Arc<dyn Fn() + Send + Sync + 'static>;
 
 /// An object that maintains a list of listeners.
 ///
@@ -349,9 +354,17 @@ impl<T: Clone> ValueNotifier<T> {
     }
 
     /// Consumes the notifier and returns the inner value.
+    ///
+    /// Audit I-20: calls `self.notifier.dispose()` before the inner
+    /// `ChangeNotifier` is dropped so the dispose hook (PR #84
+    /// template) fires once. Pre-cycle the listeners were silently
+    /// dropped without the dispose protocol — any registered
+    /// `assert_alive` guard on a sibling subscriber never saw the
+    /// disposal event.
     #[must_use]
     #[inline]
     pub fn into_value(self) -> T {
+        self.notifier.dispose();
         self.value
     }
 
