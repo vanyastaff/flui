@@ -372,8 +372,27 @@ impl RendererBinding for RenderingFlutterBinding {
         &self.root_pipeline_owner
     }
 
-    fn render_views(&self) -> &RwLock<HashMap<u64, Arc<RwLock<RenderView>>>> {
-        &self.render_views
+    // R-6 reshape (cycle 4 Wave 2 U-1): the pre-cycle `render_views()`
+    // returned `&RwLock<HashMap<u64, Arc<RwLock<RenderView>>>>` and
+    // leaked the implementer's lock topology through the trait surface.
+    // Post-cycle the trait exposes four primitives; the
+    // `self.render_views: RwLock<HashMap<u64, Arc<RwLock<RenderView>>>>`
+    // private field stays as private storage (HashMap is still the
+    // canonical container; we just don't expose the lock graph anymore).
+    fn render_view(&self, view_id: u64) -> Option<Arc<RwLock<RenderView>>> {
+        self.render_views.read().get(&view_id).cloned()
+    }
+
+    fn render_view_ids(&self) -> Vec<u64> {
+        self.render_views.read().keys().copied().collect()
+    }
+
+    fn insert_render_view(&self, view_id: u64, view: Arc<RwLock<RenderView>>) {
+        self.render_views.write().insert(view_id, view);
+    }
+
+    fn remove_render_view_by_id(&self, view_id: u64) -> Option<Arc<RwLock<RenderView>>> {
+        self.render_views.write().remove(&view_id)
     }
 
     fn mouse_tracker(&self) -> &RwLock<MouseTracker> {
@@ -521,17 +540,20 @@ mod tests {
     fn test_render_view_management() {
         let binding = RenderingFlutterBinding::instance();
 
-        // Add a render view
+        // Add a render view (R-6 reshape: use the new
+        // `add_render_view_with_config` default-impl helper which
+        // delegates to `insert_render_view` after deriving the
+        // view-configuration).
         let view = Arc::new(RwLock::new(RenderView::new()));
-        binding.add_render_view(1, view.clone());
+        binding.add_render_view_with_config(1, view.clone());
 
-        assert!(binding.get_render_view(1).is_some());
-        assert!(binding.get_render_view(2).is_none());
+        assert!(binding.render_view(1).is_some());
+        assert!(binding.render_view(2).is_none());
 
         // Remove
-        let removed = binding.remove_render_view(1);
+        let removed = binding.remove_render_view_by_id(1);
         assert!(removed.is_some());
-        assert!(binding.get_render_view(1).is_none());
+        assert!(binding.render_view(1).is_none());
     }
 
     #[test]
