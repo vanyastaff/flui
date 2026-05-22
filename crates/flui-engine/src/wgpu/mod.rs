@@ -136,8 +136,10 @@ pub use layer_render::LayerRender;
 pub use multi_draw::{
     DrawCommand, DrawIndexedIndirectArgs, MultiDrawBatcher, MultiDrawStats, PipelineId,
 };
-// Offscreen rendering
-pub use offscreen::{MaskedRenderResult, OffscreenRenderer, PipelineManager};
+// Offscreen rendering. `PipelineManager` was deleted in cycle 4 E-3 (zombie
+// wrapper carrying only an `Arc<ShaderCache>` field with 0 consumers); the
+// real pipeline ownership lives in `pipelines::PipelineCache`.
+pub use offscreen::{MaskedRenderResult, OffscreenRenderer};
 pub use painter::WgpuPainter;
 // Pipeline management
 pub use pipelines::{PipelineBuilder, PipelineCache};
