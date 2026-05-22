@@ -35,7 +35,7 @@ pub use error::{
 };
 pub use inherited::InheritedView;
 pub use into_view::{BoxedElement, BoxedView, ElementExt, IntoElement, IntoView, ViewExt};
-pub use parent_data::{ParentData, ParentDataElement, ParentDataView};
+pub use parent_data::{ParentDataConfig, ParentDataElement, ParentDataView};
 pub use proxy::ProxyView;
 pub use render::RenderView;
 pub use root::{RootRenderElement, RootRenderView};
