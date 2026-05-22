@@ -7,7 +7,13 @@ use flui_foundation::RenderId;
 use thiserror::Error;
 
 /// Errors that can occur during rendering operations.
+///
+/// Cycle 4: `#[non_exhaustive]` future-compat marker. Matches the
+/// workspace 2026 quality bar — public error enums in foundation /
+/// tree / painting / engine all carry the attribute (cycle 3 I-11
+/// added it on `DiagnosticLevel` / `DiagnosticsTreeStyle`).
 #[derive(Error, Debug, Clone)]
+#[non_exhaustive]
 pub enum RenderError {
     // ========================================================================
     // Attachment Errors

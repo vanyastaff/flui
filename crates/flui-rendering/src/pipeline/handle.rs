@@ -61,7 +61,10 @@ pub struct DirtyRequest {
 // ---------------------------------------------------------------------------
 
 /// Errors returned by [`PipelineOwnerHandle::request_mark_dirty`].
+///
+/// Cycle 4: `#[non_exhaustive]` future-compat marker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum SendError {
     /// The channel is full; the producer must back off.
     #[error("dirty channel full ({capacity} capacity); back off and retry")]

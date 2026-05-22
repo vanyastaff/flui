@@ -21,7 +21,10 @@ use thiserror::Error;
 use super::vertex::Vertex;
 
 /// Errors that can occur during tessellation
+///
+/// Cycle 4: `#[non_exhaustive]` future-compat marker.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum TessellationError {
     #[error("Fill tessellation failed: {0}")]
     FillFailed(String),
