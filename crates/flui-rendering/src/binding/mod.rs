@@ -219,8 +219,9 @@ pub trait RendererBinding: Send + Sync {
 
     /// Creates a view configuration for the given render view.
     ///
-    /// This is called during [`add_render_view`](Self::add_render_view) and
-    /// in response to metrics changes.
+    /// This is called during
+    /// [`add_render_view_with_config`](Self::add_render_view_with_config)
+    /// and in response to metrics changes.
     ///
     /// Override this to customize view configuration (e.g., for testing).
     fn create_view_configuration_for(&self, render_view: &RenderView) -> ViewConfiguration {
