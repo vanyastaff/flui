@@ -23,7 +23,17 @@ use thiserror::Error;
 /// pattern as cycle 3 PR #106 (TreeError::Internal). Constructors
 /// accept `impl Into<Box<str>>` which covers `&str`, `String`, and
 /// `Box<str>` callers unchanged.
-#[derive(Error, Debug, Clone)]
+// Cycle 4 R-25: dropped `Clone` derive. Workspace grep
+// (`rg 'RenderError.*clone\(\)'`) returned zero consumers of
+// `.clone()` on RenderError; errors are terminal values that
+// propagate through `?` or `Result::map_err`, neither of which
+// requires Clone. Removing the derive matches the canonical Rust
+// error idiom (*Programming Rust* 2nd ed §7 "Error Handling":
+// errors are throwaways, not duplicates). If a future caller needs
+// to fan out a RenderError to multiple consumers, wrap in `Arc`
+// at that callsite -- cheap, explicit, and avoids the
+// implicit-deep-copy footgun.
+#[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum RenderError {
     // ========================================================================
