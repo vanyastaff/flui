@@ -14,7 +14,10 @@ use flui_types::{
 use std::sync::Arc;
 
 use super::painter::WgpuPainter;
-use crate::{commands::dispatch_command, traits::CommandRenderer};
+use crate::{
+    commands::dispatch_command,
+    traits::{CommandRenderer, LayerStateStack},
+};
 
 /// wgpu backend implementation of CommandRenderer.
 ///
@@ -1174,231 +1177,14 @@ impl CommandRenderer for Backend<'_> {
         self.painter.restore_layer();
     }
 
-    // ===== Layer Tree Operations =====
-
-    fn push_clip_rect(&mut self, rect: &Rect<Pixels>, _clip_behavior: flui_types::painting::Clip) {
-        self.painter.save();
-        self.painter.clip_rect(*rect);
-    }
-
-    fn push_clip_rrect(&mut self, rrect: &RRect, _clip_behavior: flui_types::painting::Clip) {
-        self.painter.save();
-        self.painter.clip_rrect(*rrect);
-    }
-
-    fn push_clip_path(&mut self, path: &Path, _clip_behavior: flui_types::painting::Clip) {
-        self.painter.save();
-        self.painter.clip_path(path);
-    }
-
-    fn pop_clip(&mut self) {
-        self.painter.restore();
-    }
-
-    fn push_offset(&mut self, offset: Offset<Pixels>) {
-        self.painter.save();
-        self.painter.translate(offset);
-    }
-
-    fn push_transform(&mut self, transform: &Matrix4) {
-        self.painter.save();
-
-        // Decompose and apply transform components
-        let transform_enum = Transform::from(*transform);
-        let (tx, ty, rotation, sx, sy) = transform_enum.decompose();
-
-        if tx != 0.0 || ty != 0.0 {
-            self.painter.translate(Offset::new(px(tx), px(ty)));
-        }
-        if rotation.abs() > f32::EPSILON {
-            self.painter.rotate(rotation);
-        }
-        if (sx - 1.0).abs() > f32::EPSILON || (sy - 1.0).abs() > f32::EPSILON {
-            self.painter.scale(sx, sy);
-        }
-    }
-
-    fn pop_transform(&mut self) {
-        self.painter.restore();
-    }
-
-    fn push_opacity(&mut self, alpha: f32) {
-        // Create a layer with opacity (clamped to [0, 255])
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let alpha_u8 = (alpha.clamp(0.0, 1.0) * 255.0) as u8;
-        let paint = Paint::fill(Color::WHITE).with_alpha(alpha_u8);
-        self.painter.save_layer(None, &paint);
-    }
-
-    fn pop_opacity(&mut self) {
-        self.painter.restore_layer();
-    }
-
-    fn push_color_filter(&mut self, filter: &flui_types::painting::ColorMatrix) {
-        // Check if the matrix is identity (no transformation needed)
-        let identity = flui_types::painting::ColorMatrix::identity();
-        // Exact f32 array comparison is intentional: ColorMatrix::identity()
-        // is built from bit-exact 0.0/1.0 literals, so a transitive equality
-        // check correctly fast-paths the no-op case without ULP slop.
-        #[expect(
-            clippy::float_cmp,
-            reason = "identity matrix is bit-exact (0.0/1.0 literals); exact comparison is correct"
-        )]
-        if filter.values == identity.values {
-            // Identity matrix: use a plain save so pop_color_filter stays balanced
-            self.painter.save_layer(None, &Paint::fill(Color::WHITE));
-            tracing::trace!("push_color_filter: identity matrix, no-op layer");
-            return;
-        }
-
-        // Pragmatic approximation: extract opacity and tint from the color matrix.
-        //
-        // A full GPU color matrix filter requires render-to-texture + post-processing
-        // which needs offscreen rendering infrastructure not yet available.
-        //
-        // Instead, we approximate the color matrix effect:
-        // 1. Alpha scaling from the matrix's alpha row (a3 = alpha scale factor)
-        // 2. Color tint by applying the matrix to white [1,1,1,1] to derive
-        //    the dominant output color, then using it as a Multiply blend layer.
-
-        // Extract alpha from matrix row 4 (indices 15-19): A' = a0*R + a1*G + a2*B + a3*A + a4
-        // For typical filters, a3 is the alpha scale and a4 is the alpha offset.
-        let alpha_scale = filter.values[18].clamp(0.0, 1.0); // a3
-        let alpha_offset = filter.values[19].clamp(0.0, 1.0); // a4
-        let effective_alpha = (alpha_scale + alpha_offset).clamp(0.0, 1.0);
-
-        // Apply the matrix to white to derive the tint color
-        let tinted = filter.apply([1.0, 1.0, 1.0, 1.0]);
-
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let tint_color = Color::rgba(
-            (tinted[0] * 255.0) as u8,
-            (tinted[1] * 255.0) as u8,
-            (tinted[2] * 255.0) as u8,
-            (effective_alpha * 255.0) as u8,
-        );
-
-        let paint = Paint::fill(tint_color);
-        self.painter.save_layer(None, &paint);
-
-        tracing::debug!(
-            "push_color_filter: approximation tint=({},{},{}) alpha={:.2}",
-            tint_color.r,
-            tint_color.g,
-            tint_color.b,
-            effective_alpha
-        );
-    }
-
-    fn pop_color_filter(&mut self) {
-        self.painter.restore_layer();
-    }
-
-    fn push_image_filter(&mut self, filter: &flui_painting::display_list::ImageFilter) {
-        use flui_painting::display_list::ImageFilter;
-
-        // Pragmatic approximation: full GPU image filters (blur, dilate, erode)
-        // require render-to-texture + compute shader post-processing which needs
-        // offscreen infrastructure not yet available. Instead, we use save_layer
-        // to isolate the filtered content for future GPU pass integration.
-        match filter {
-            ImageFilter::Blur { sigma_x, sigma_y } => {
-                // Capture content in a layer; actual Gaussian blur requires
-                // a two-pass separable compute shader on the layer texture.
-                let paint = Paint::fill(Color::WHITE);
-                self.painter.save_layer(None, &paint);
-                tracing::debug!(
-                    "push_image_filter(Blur): save_layer for blur sigma_x={:.2}, sigma_y={:.2} \
-                     (GPU blur not yet implemented)",
-                    sigma_x,
-                    sigma_y,
-                );
-            }
-            ImageFilter::Dilate { radius } => {
-                let paint = Paint::fill(Color::WHITE);
-                self.painter.save_layer(None, &paint);
-                tracing::debug!(
-                    "push_image_filter(Dilate): save_layer for dilate radius={:.2} \
-                     (GPU morphology not yet implemented)",
-                    radius,
-                );
-            }
-            ImageFilter::Erode { radius } => {
-                let paint = Paint::fill(Color::WHITE);
-                self.painter.save_layer(None, &paint);
-                tracing::debug!(
-                    "push_image_filter(Erode): save_layer for erode radius={:.2} \
-                     (GPU morphology not yet implemented)",
-                    radius,
-                );
-            }
-            ImageFilter::Matrix(matrix) => {
-                // Color matrix can be approximated the same way as push_color_filter.
-                // Extract tint and alpha from the matrix applied to white.
-                let alpha_scale = matrix.values[18].clamp(0.0, 1.0);
-                let alpha_offset = matrix.values[19].clamp(0.0, 1.0);
-                let effective_alpha = (alpha_scale + alpha_offset).clamp(0.0, 1.0);
-                let tinted = matrix.apply([1.0, 1.0, 1.0, 1.0]);
-
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                let tint_color = Color::rgba(
-                    (tinted[0] * 255.0) as u8,
-                    (tinted[1] * 255.0) as u8,
-                    (tinted[2] * 255.0) as u8,
-                    (effective_alpha * 255.0) as u8,
-                );
-                let paint = Paint::fill(tint_color);
-                self.painter.save_layer(None, &paint);
-                tracing::debug!(
-                    "push_image_filter(Matrix): approximation tint=({},{},{}) alpha={:.2}",
-                    tint_color.r,
-                    tint_color.g,
-                    tint_color.b,
-                    effective_alpha,
-                );
-            }
-            ImageFilter::ColorAdjust(adjustment) => {
-                // Color adjustments are approximated via an opacity layer.
-                let paint = Paint::fill(Color::WHITE);
-                self.painter.save_layer(None, &paint);
-                tracing::debug!(
-                    "push_image_filter(ColorAdjust): save_layer for {:?} \
-                     (GPU color adjust not yet implemented)",
-                    adjustment,
-                );
-            }
-            ImageFilter::Compose(filters) => {
-                // For composed filters, we save a single layer. In the future,
-                // each sub-filter would chain as successive compute passes.
-                let paint = Paint::fill(Color::WHITE);
-                self.painter.save_layer(None, &paint);
-                tracing::debug!(
-                    "push_image_filter(Compose): save_layer for {} chained filters \
-                     (GPU compose not yet implemented)",
-                    filters.len(),
-                );
-            }
-            #[cfg(debug_assertions)]
-            ImageFilter::OverflowIndicator {
-                overflow_h,
-                overflow_v,
-                ..
-            } => {
-                // Debug-only overflow visualization; save layer for balance.
-                let paint = Paint::fill(Color::WHITE);
-                self.painter.save_layer(None, &paint);
-                tracing::debug!(
-                    "push_image_filter(OverflowIndicator): h={:.1}, v={:.1}",
-                    overflow_h,
-                    overflow_v,
-                );
-            }
-        }
-    }
-
-    fn pop_image_filter(&mut self) {
-        self.painter.restore_layer();
-    }
+    // ===== Layer Tree Operations split out =====
+    //
+    // Cycle 4 E-9: push_clip_* / push_offset / push_transform /
+    // push_opacity / push_color_filter / push_image_filter + their
+    // corresponding pop_* moved to `impl LayerStateStack for Backend`
+    // (below). The visitor methods on this trait stay; the layer-tree
+    // state-stack methods live on the dedicated `LayerStateStack`
+    // trait. See traits.rs E-9 commentary.
 
     fn add_performance_overlay(
         &mut self,
@@ -1476,5 +1262,243 @@ impl CommandRenderer for Backend<'_> {
         );
 
         let _ = total_frames;
+    }
+}
+
+// ============================================================================
+// LAYER-STATE-STACK IMPL (cycle 4 E-9 split)
+// ============================================================================
+//
+// The 13 push_/pop_ methods below moved out of the `impl CommandRenderer
+// for Backend` block in cycle 4 E-9 to live on the dedicated
+// `LayerStateStack` trait. Bodies + behavior unchanged; only the
+// receiving trait differs. See `crates/flui-engine/src/traits.rs`
+// for the trait-split rationale.
+
+// ColorMatrix row-major layout: `[r0-r4, g0-g4, b0-b4, a0-a4]`.
+// Each row holds (R-coeff, G-coeff, B-coeff, A-coeff, offset) for one
+// output channel: `out = m0*R + m1*G + m2*B + m3*A + m4`.
+// The alpha row sits at indices 15-19; the alpha-out coefficient on
+// alpha-in (`a3`, alpha scaling) is index 18, the alpha offset (`a4`)
+// is index 19. Naming these out keeps the push_color_filter +
+// ImageFilter::Matrix call sites readable (PR #115 review fix).
+const COLOR_MATRIX_ALPHA_SCALE_IDX: usize = 18;
+const COLOR_MATRIX_ALPHA_OFFSET_IDX: usize = 19;
+
+/// Extract (alpha_scale, alpha_offset, effective_alpha) from a
+/// `ColorMatrix`'s alpha row. All three values are clamped to `[0, 1]`.
+/// Helper shared by `push_color_filter` and the
+/// `ImageFilter::Matrix` branch of `push_image_filter`.
+fn color_matrix_effective_alpha(values: &[f32; 20]) -> (f32, f32, f32) {
+    let alpha_scale = values[COLOR_MATRIX_ALPHA_SCALE_IDX].clamp(0.0, 1.0);
+    let alpha_offset = values[COLOR_MATRIX_ALPHA_OFFSET_IDX].clamp(0.0, 1.0);
+    let effective = (alpha_scale + alpha_offset).clamp(0.0, 1.0);
+    (alpha_scale, alpha_offset, effective)
+}
+
+impl LayerStateStack for Backend<'_> {
+    fn push_clip_rect(&mut self, rect: &Rect<Pixels>, _clip_behavior: flui_types::painting::Clip) {
+        self.painter.save();
+        self.painter.clip_rect(*rect);
+    }
+
+    fn push_clip_rrect(&mut self, rrect: &RRect, _clip_behavior: flui_types::painting::Clip) {
+        self.painter.save();
+        self.painter.clip_rrect(*rrect);
+    }
+
+    fn push_clip_path(&mut self, path: &Path, _clip_behavior: flui_types::painting::Clip) {
+        self.painter.save();
+        self.painter.clip_path(path);
+    }
+
+    fn pop_clip(&mut self) {
+        self.painter.restore();
+    }
+
+    fn push_offset(&mut self, offset: Offset<Pixels>) {
+        self.painter.save();
+        self.painter.translate(offset);
+    }
+
+    fn push_transform(&mut self, transform: &Matrix4) {
+        self.painter.save();
+
+        // Decompose and apply transform components
+        let transform_enum = Transform::from(*transform);
+        let (tx, ty, rotation, sx, sy) = transform_enum.decompose();
+
+        if tx != 0.0 || ty != 0.0 {
+            self.painter.translate(Offset::new(px(tx), px(ty)));
+        }
+        if rotation.abs() > f32::EPSILON {
+            self.painter.rotate(rotation);
+        }
+        if (sx - 1.0).abs() > f32::EPSILON || (sy - 1.0).abs() > f32::EPSILON {
+            self.painter.scale(sx, sy);
+        }
+    }
+
+    fn pop_transform(&mut self) {
+        self.painter.restore();
+    }
+
+    fn push_opacity(&mut self, alpha: f32) {
+        // Create a layer with opacity (clamped to [0, 255])
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let alpha_u8 = (alpha.clamp(0.0, 1.0) * 255.0) as u8;
+        let paint = Paint::fill(Color::WHITE).with_alpha(alpha_u8);
+        self.painter.save_layer(None, &paint);
+    }
+
+    fn pop_opacity(&mut self) {
+        self.painter.restore_layer();
+    }
+
+    fn push_color_filter(&mut self, filter: &flui_types::painting::ColorMatrix) {
+        // Check if the matrix is identity (no transformation needed)
+        let identity = flui_types::painting::ColorMatrix::identity();
+        // Exact f32 array comparison is intentional: ColorMatrix::identity()
+        // is built from bit-exact 0.0/1.0 literals, so a transitive equality
+        // check correctly fast-paths the no-op case without ULP slop.
+        #[expect(
+            clippy::float_cmp,
+            reason = "identity matrix is bit-exact (0.0/1.0 literals); exact comparison is correct"
+        )]
+        if filter.values == identity.values {
+            // Identity matrix: use a plain save so pop_color_filter stays balanced
+            self.painter.save_layer(None, &Paint::fill(Color::WHITE));
+            tracing::trace!("push_color_filter: identity matrix, no-op layer");
+            return;
+        }
+
+        // Pragmatic approximation: extract opacity and tint from the
+        // color matrix. The alpha-row coefficient layout
+        // (`a3` = scale, `a4` = offset) lives in
+        // `color_matrix_effective_alpha`; see the helper comment
+        // above for the row-major index mapping.
+        let (_alpha_scale, _alpha_offset, effective_alpha) =
+            color_matrix_effective_alpha(&filter.values);
+        let tinted = filter.apply([1.0, 1.0, 1.0, 1.0]);
+
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let tint_color = Color::rgba(
+            (tinted[0] * 255.0) as u8,
+            (tinted[1] * 255.0) as u8,
+            (tinted[2] * 255.0) as u8,
+            (effective_alpha * 255.0) as u8,
+        );
+
+        let paint = Paint::fill(tint_color);
+        self.painter.save_layer(None, &paint);
+
+        tracing::debug!(
+            "push_color_filter: approximation tint=({},{},{}) alpha={:.2}",
+            tint_color.r,
+            tint_color.g,
+            tint_color.b,
+            effective_alpha
+        );
+    }
+
+    fn pop_color_filter(&mut self) {
+        self.painter.restore_layer();
+    }
+
+    fn push_image_filter(&mut self, filter: &flui_painting::display_list::ImageFilter) {
+        use flui_painting::display_list::ImageFilter;
+
+        // Pragmatic approximation: full GPU image filters (blur, dilate, erode)
+        // require render-to-texture + compute shader post-processing which needs
+        // offscreen infrastructure not yet available. Instead, we use save_layer
+        // to isolate the filtered content for future GPU pass integration.
+        match filter {
+            ImageFilter::Blur { sigma_x, sigma_y } => {
+                let paint = Paint::fill(Color::WHITE);
+                self.painter.save_layer(None, &paint);
+                tracing::debug!(
+                    "push_image_filter(Blur): save_layer for blur sigma_x={:.2}, sigma_y={:.2} \
+                     (GPU blur not yet implemented)",
+                    sigma_x,
+                    sigma_y,
+                );
+            }
+            ImageFilter::Dilate { radius } => {
+                let paint = Paint::fill(Color::WHITE);
+                self.painter.save_layer(None, &paint);
+                tracing::debug!(
+                    "push_image_filter(Dilate): save_layer for dilate radius={:.2} \
+                     (GPU morphology not yet implemented)",
+                    radius,
+                );
+            }
+            ImageFilter::Erode { radius } => {
+                let paint = Paint::fill(Color::WHITE);
+                self.painter.save_layer(None, &paint);
+                tracing::debug!(
+                    "push_image_filter(Erode): save_layer for erode radius={:.2} \
+                     (GPU morphology not yet implemented)",
+                    radius,
+                );
+            }
+            ImageFilter::Matrix(matrix) => {
+                let (_alpha_scale, _alpha_offset, effective_alpha) =
+                    color_matrix_effective_alpha(&matrix.values);
+                let tinted = matrix.apply([1.0, 1.0, 1.0, 1.0]);
+
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let tint_color = Color::rgba(
+                    (tinted[0] * 255.0) as u8,
+                    (tinted[1] * 255.0) as u8,
+                    (tinted[2] * 255.0) as u8,
+                    (effective_alpha * 255.0) as u8,
+                );
+                let paint = Paint::fill(tint_color);
+                self.painter.save_layer(None, &paint);
+                tracing::debug!(
+                    "push_image_filter(Matrix): approximation tint=({},{},{}) alpha={:.2}",
+                    tint_color.r,
+                    tint_color.g,
+                    tint_color.b,
+                    effective_alpha,
+                );
+            }
+            ImageFilter::ColorAdjust(adjustment) => {
+                let paint = Paint::fill(Color::WHITE);
+                self.painter.save_layer(None, &paint);
+                tracing::debug!(
+                    "push_image_filter(ColorAdjust): save_layer for {:?} \
+                     (GPU color adjust not yet implemented)",
+                    adjustment,
+                );
+            }
+            ImageFilter::Compose(filters) => {
+                let paint = Paint::fill(Color::WHITE);
+                self.painter.save_layer(None, &paint);
+                tracing::debug!(
+                    "push_image_filter(Compose): save_layer for {} chained filters \
+                     (GPU compose not yet implemented)",
+                    filters.len(),
+                );
+            }
+            #[cfg(debug_assertions)]
+            ImageFilter::OverflowIndicator {
+                overflow_h,
+                overflow_v,
+                ..
+            } => {
+                let paint = Paint::fill(Color::WHITE);
+                self.painter.save_layer(None, &paint);
+                tracing::debug!(
+                    "push_image_filter(OverflowIndicator): h={:.1}, v={:.1}",
+                    overflow_h,
+                    overflow_v,
+                );
+            }
+        }
+    }
+
+    fn pop_image_filter(&mut self) {
+        self.painter.restore_layer();
     }
 }

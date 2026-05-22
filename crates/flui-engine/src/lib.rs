@@ -104,7 +104,12 @@ pub use flui_layer::{
 };
 // Re-export Paint from flui_painting
 pub use flui_painting::Paint;
-pub use traits::CommandRenderer;
+// Cycle 4 E-9: CommandRenderer trait split into render-visitor
+// (CommandRenderer, ~34 methods) + layer-tree state-stack
+// (LayerStateStack, 13 methods). Backends that only emit
+// commands implement CommandRenderer only; compositors implement
+// both. See traits.rs E-9 commentary.
+pub use traits::{CommandRenderer, LayerStateStack};
 #[cfg(all(feature = "wgpu-backend", debug_assertions))]
 pub use wgpu::DebugBackend;
 // wgpu backend exports

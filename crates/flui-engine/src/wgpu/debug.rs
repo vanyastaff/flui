@@ -10,7 +10,7 @@ use flui_types::{
     typography::TextStyle,
 };
 
-use crate::traits::CommandRenderer;
+use crate::traits::{CommandRenderer, LayerStateStack};
 
 /// Debug backend that logs all commands to tracing.
 #[derive(Debug)]
@@ -367,8 +367,29 @@ impl CommandRenderer for DebugBackend {
         self.log_command("restore_layer", "");
     }
 
-    // ===== Layer Tree Operations =====
+    // Cycle 4 E-9: layer-tree push/pop methods moved to
+    // `impl LayerStateStack for DebugBackend` below.
 
+    fn add_performance_overlay(
+        &mut self,
+        options_mask: u32,
+        bounds: Rect<Pixels>,
+        fps: f32,
+        frame_time_ms: f32,
+        total_frames: u64,
+    ) {
+        self.log_command(
+            "add_performance_overlay",
+            &format!(
+                "options_mask={options_mask}, bounds={bounds:?}, fps={fps:.1}, frame_time={frame_time_ms:.2}ms, total_frames={total_frames}"
+            ),
+        );
+    }
+}
+
+// Cycle 4 E-9: layer-tree state-stack methods moved to dedicated
+// trait. Bodies + log-command output unchanged.
+impl LayerStateStack for DebugBackend {
     fn push_clip_rect(&mut self, rect: &Rect<Pixels>, clip_behavior: flui_types::painting::Clip) {
         self.log_command(
             "push_clip_rect",
@@ -432,21 +453,5 @@ impl CommandRenderer for DebugBackend {
 
     fn pop_image_filter(&mut self) {
         self.log_command("pop_image_filter", "");
-    }
-
-    fn add_performance_overlay(
-        &mut self,
-        options_mask: u32,
-        bounds: Rect<Pixels>,
-        fps: f32,
-        frame_time_ms: f32,
-        total_frames: u64,
-    ) {
-        self.log_command(
-            "add_performance_overlay",
-            &format!(
-                "options_mask={options_mask}, bounds={bounds:?}, fps={fps:.1}, frame_time={frame_time_ms:.2}ms, total_frames={total_frames}"
-            ),
-        );
     }
 }
