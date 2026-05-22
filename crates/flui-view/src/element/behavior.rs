@@ -150,7 +150,7 @@ where
     /// a `PipelineOwner` in scope.
     ///
     /// Default returns `None`; only `RenderBehavior<V>` overrides this
-    /// (`AnimationBehavior` composes `StatefulBehavior`, not `RenderBehavior`,
+    /// (`AnimatedBehavior` composes `StatefulBehavior`, not `RenderBehavior`,
     /// so it keeps the default). Used by
     /// [`BuildContext::find_render_object`] (plan §U12, R9) to surface
     /// the nearest ancestor's `RenderId` to the dispatch boundary.
@@ -742,17 +742,26 @@ where
 }
 
 // ============================================================================
-// AnimationBehavior (composes StatefulBehavior with automatic listener)
+// AnimatedBehavior (composes StatefulBehavior with automatic listener)
 // ============================================================================
 
 /// Behavior for AnimatedView - automatically subscribes to Listenable changes.
 ///
-/// AnimationBehavior composes StatefulBehavior and adds automatic listener
+/// AnimatedBehavior composes StatefulBehavior and adds automatic listener
 /// management. When the listenable changes, the element is marked dirty
 /// and rebuilt automatically.
 ///
 /// This eliminates the boilerplate of manually subscribing/unsubscribing
 /// to animations in every animated widget.
+///
+/// # Naming
+///
+/// Named `AnimatedBehavior` (not `AnimationBehavior`) to follow the
+/// `<ViewKind>Behavior` convention (`StatelessBehavior`, `StatefulBehavior`,
+/// `ProxyBehavior`, `InheritedBehavior`, `RenderBehavior`) and to
+/// disambiguate from the `flui_animation::AnimationBehavior` enum
+/// (which describes how an animation behaves when the framework reduces
+/// motion — a separate concern from the element-tree behavior here).
 ///
 /// # Flutter Equivalent
 ///
@@ -778,7 +787,7 @@ where
 ///   }
 /// }
 /// ```
-pub struct AnimationBehavior<V>
+pub struct AnimatedBehavior<V>
 where
     V: AnimatedView,
 {
@@ -788,11 +797,11 @@ where
     listener_id: Option<ListenerId>,
 }
 
-impl<V> AnimationBehavior<V>
+impl<V> AnimatedBehavior<V>
 where
     V: AnimatedView,
 {
-    /// Create a new AnimationBehavior for the given view.
+    /// Create a new AnimatedBehavior for the given view.
     pub fn new(view: &V) -> Self {
         Self {
             stateful: StatefulBehavior::new(view),
@@ -811,20 +820,20 @@ where
     }
 }
 
-impl<V> std::fmt::Debug for AnimationBehavior<V>
+impl<V> std::fmt::Debug for AnimatedBehavior<V>
 where
     V: AnimatedView,
     V::State: std::fmt::Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AnimationBehavior")
+        f.debug_struct("AnimatedBehavior")
             .field("state", &self.stateful.state)
             .field("has_listener", &self.listener_id.is_some())
             .finish()
     }
 }
 
-impl<V, A> ElementBehavior<V, A> for AnimationBehavior<V>
+impl<V, A> ElementBehavior<V, A> for AnimatedBehavior<V>
 where
     V: AnimatedView,
     A: ElementArity,
@@ -854,7 +863,7 @@ where
 
         self.listener_id = Some(listenable.add_listener(mark_dirty));
 
-        tracing::debug!("AnimationBehavior::on_mount subscribed to listenable");
+        tracing::debug!("AnimatedBehavior::on_mount subscribed to listenable");
     }
 
     fn on_unmount(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
@@ -862,7 +871,7 @@ where
         if let Some(listener_id) = self.listener_id.take() {
             let listenable = core.view().listenable();
             listenable.remove_listener(listener_id);
-            tracing::debug!("AnimationBehavior::on_unmount unsubscribed from listenable");
+            tracing::debug!("AnimatedBehavior::on_unmount unsubscribed from listenable");
         }
 
         // Then let StatefulBehavior do its cleanup (dispose state)
@@ -886,7 +895,7 @@ where
 
         self.stateful.on_update(core);
 
-        tracing::debug!("AnimationBehavior::on_update resubscribed to listenable");
+        tracing::debug!("AnimatedBehavior::on_update resubscribed to listenable");
     }
 
     fn on_activate(&mut self, core: &mut ElementCore<V, A>) {

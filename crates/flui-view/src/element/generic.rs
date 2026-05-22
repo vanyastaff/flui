@@ -121,7 +121,7 @@ where
     ///
     /// Uses Arc<AtomicBool> for interior mutability, allowing listener
     /// callbacks to mark the element dirty without mutable access.
-    /// This is essential for AnimationBehavior and other reactive patterns.
+    /// This is essential for AnimatedBehavior and other reactive patterns.
     dirty: Arc<AtomicBool>,
 
     /// PipelineOwner for render tree access.
@@ -526,7 +526,7 @@ where
 
     /// Create a callback that can mark this element dirty.
     ///
-    /// This is useful for AnimationBehavior and other behaviors that need to
+    /// This is useful for AnimatedBehavior and other behaviors that need to
     /// trigger rebuilds from listener callbacks without mutable access.
     ///
     /// # Returns

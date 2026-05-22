@@ -103,7 +103,7 @@ pub trait AnimatedView: StatefulView {
 /// Implement View for an AnimatedView type.
 ///
 /// This macro creates the View implementation for an AnimatedView type,
-/// using AnimationBehavior for automatic listener management.
+/// using AnimatedBehavior for automatic listener management.
 ///
 /// ```rust,ignore
 /// impl AnimatedView for MyFadeTransition {
@@ -117,10 +117,10 @@ macro_rules! impl_animated_view {
     ($ty:ty) => {
         impl $crate::View for $ty {
             fn create_element(&self) -> Box<dyn $crate::ElementBase> {
-                use $crate::element::AnimationBehavior;
+                use $crate::element::AnimatedBehavior;
                 Box::new($crate::AnimatedElement::new(
                     self,
-                    AnimationBehavior::new(self),
+                    AnimatedBehavior::new(self),
                 ))
             }
         }
@@ -139,7 +139,7 @@ mod tests {
     use super::*;
     use crate::{
         context::BuildContext,
-        element::{AnimationBehavior, Lifecycle},
+        element::{AnimatedBehavior, Lifecycle},
         view::{AnimatedElement, ElementBase, View, ViewState},
     };
 
@@ -220,7 +220,7 @@ mod tests {
     // impl now demands `V: View`, so this fixture must spell it too.
     impl View for TestAnimatedView {
         fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(AnimatedElement::new(self, AnimationBehavior::new(self)))
+            Box::new(AnimatedElement::new(self, AnimatedBehavior::new(self)))
         }
     }
 
@@ -232,7 +232,7 @@ mod tests {
             value: 42,
         };
 
-        let element = AnimatedElement::new(&view, AnimationBehavior::new(&view));
+        let element = AnimatedElement::new(&view, AnimatedBehavior::new(&view));
         assert_eq!(element.core().lifecycle(), Lifecycle::Initial);
     }
 
@@ -244,7 +244,7 @@ mod tests {
             value: 42,
         };
 
-        let mut element = AnimatedElement::new(&view, AnimationBehavior::new(&view));
+        let mut element = AnimatedElement::new(&view, AnimatedBehavior::new(&view));
 
         // Before mount, no listener
         assert_eq!(listenable.len(), 0);
@@ -271,7 +271,7 @@ mod tests {
             value: 42,
         };
 
-        let mut element = AnimatedElement::new(&view, AnimationBehavior::new(&view));
+        let mut element = AnimatedElement::new(&view, AnimatedBehavior::new(&view));
 
         // Mount the element
         let mut owner = crate::BuildOwner::new();
@@ -302,7 +302,7 @@ mod tests {
             value: 42,
         };
 
-        let element = AnimatedElement::new(&view, AnimationBehavior::new(&view));
+        let element = AnimatedElement::new(&view, AnimatedBehavior::new(&view));
 
         // Access state through behavior
         let state = element.behavior().state();
