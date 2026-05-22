@@ -10,6 +10,14 @@ debug/
 # track the pieces meant to be shared with teammates (settings, hooks).
 # Use `.claude/*` (wildcard contents) so the directory itself stays
 # traversable for the `!` re-includes below.
+#
+# Note: `.claude/settings.local.json` is **per-developer** Claude Code
+# permission overrides and intentionally NOT re-included. The
+# `.claude/*` rule already covers it; pre-2026-05 the file was tracked
+# (drifted in 6+ commits with per-developer permission noise), untracked
+# via `git rm --cached` in the PR that added this comment. Existing
+# developers keep their local copy untouched (untracked); new clones
+# won't see a stale settings file.
 .claude/*
 !.claude/settings.json
 !.claude/hooks
