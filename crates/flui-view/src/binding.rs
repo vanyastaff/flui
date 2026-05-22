@@ -446,6 +446,15 @@ impl Default for WidgetsBinding {
     }
 }
 
+/// Error returned by [`WidgetsBinding::attach_root_widget`].
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum AttachError {
+    /// A root widget is already attached; call `detach_root_widget` first.
+    #[error("Root widget already attached. Call detach_root_widget first.")]
+    AlreadyAttached,
+}
+
 impl WidgetsBinding {
     /// Create a new WidgetsBinding.
     ///
@@ -590,16 +599,16 @@ impl WidgetsBinding {
     /// to the root element during mounting, enabling RenderObjectElements
     /// to create their RenderObjects.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if a root widget is already attached.
-    pub fn attach_root_widget<V: View>(&self, view: &V) {
+    /// Returns [`AttachError::AlreadyAttached`] if a root widget is
+    /// already attached.
+    pub fn attach_root_widget<V: View>(&self, view: &V) -> Result<(), AttachError> {
         let mut inner = self.inner.write();
 
-        assert!(
-            inner.root_element.is_none(),
-            "Root widget already attached. Call detach_root_widget first."
-        );
+        if inner.root_element.is_some() {
+            return Err(AttachError::AlreadyAttached);
+        }
 
         // Mount root element with PipelineOwner
         // This ensures RenderObjectElements can create their RenderObjects.
@@ -629,6 +638,8 @@ impl WidgetsBinding {
         // Request a frame
         drop(inner); // Release lock before calling callback
         self.handle_build_scheduled();
+
+        Ok(())
     }
 
     /// Detach the root widget.
@@ -1286,7 +1297,9 @@ mod tests {
         let binding = WidgetsBinding::new();
         let view = LeafView;
 
-        binding.attach_root_widget(&view);
+        binding
+            .attach_root_widget(&view)
+            .expect("first attach succeeds");
 
         assert!(binding.root_element().is_some());
         assert!(binding.has_pending_builds());
@@ -1297,7 +1310,7 @@ mod tests {
         let binding = WidgetsBinding::new();
         let view = LeafView;
 
-        binding.attach_root_widget(&view);
+        binding.attach_root_widget(&view).expect("attach succeeds");
         assert!(binding.has_pending_builds());
 
         binding.draw_frame();
@@ -1309,7 +1322,7 @@ mod tests {
         let binding = WidgetsBinding::new();
         let view = LeafView;
 
-        binding.attach_root_widget(&view);
+        binding.attach_root_widget(&view).expect("attach succeeds");
         assert!(binding.root_element().is_some());
 
         binding.detach_root_widget();
@@ -1317,12 +1330,17 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Root widget already attached")]
-    fn test_double_attach_panics() {
+    fn test_double_attach_errors() {
         let binding = WidgetsBinding::new();
         let view = LeafView;
 
-        binding.attach_root_widget(&view);
-        binding.attach_root_widget(&view); // Should panic
+        binding
+            .attach_root_widget(&view)
+            .expect("first attach succeeds");
+
+        assert!(matches!(
+            binding.attach_root_widget(&view),
+            Err(AttachError::AlreadyAttached)
+        ));
     }
 }

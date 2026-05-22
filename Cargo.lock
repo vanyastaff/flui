@@ -1460,6 +1460,7 @@ dependencies = [
  "flui-types",
  "parking_lot",
  "slab",
+ "thiserror 2.0.17",
  "tracing",
 ]
 

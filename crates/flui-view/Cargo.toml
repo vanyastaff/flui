@@ -21,6 +21,7 @@ flui-log = { path = "../flui-log" }
 bitflags.workspace = true
 parking_lot.workspace = true
 slab = "0.4"
+thiserror.workspace = true
 tracing.workspace = true
 
 # Trait utilities

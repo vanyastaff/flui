@@ -174,12 +174,14 @@ impl AppBinding {
     ///
     /// This creates the root element and schedules the first build.
     ///
-    /// # Panics
-    ///
-    /// Panics if a root widget is already attached.
+    /// If a root widget is already attached, the failure is logged and
+    /// this call is a no-op.
     pub fn attach_root_widget<V: View>(&self, view: &V) {
         let widgets = self.widgets.write();
-        widgets.attach_root_widget(view);
+        if let Err(e) = widgets.attach_root_widget(view) {
+            tracing::error!("attach_root_widget failed: {e}");
+            return;
+        }
         self.initialized.store(true, Ordering::Relaxed);
         self.request_redraw();
         tracing::debug!("Root widget attached");
