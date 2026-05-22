@@ -274,6 +274,25 @@ impl Scene {
         &self.link_registry
     }
 
+    /// Garbage-collects follower entries whose leader has left the tree.
+    ///
+    /// Returns the number of follower entries pruned.
+    ///
+    /// **Contract**: if you remove `LeaderLayer` or `FollowerLayer`
+    /// instances via `SceneBuilder` (or via direct tree mutation),
+    /// call `gc_orphaned_followers()` afterwards to prevent registry
+    /// growth across frames. The compositor itself does NOT run this
+    /// automatically — orphaned-follower retention is a design choice
+    /// per Flutter's `LayerHandle._unref` cascade, where follower
+    /// state is intentionally preserved across single-frame layer
+    /// disappearances (the leader may reappear in the next frame).
+    /// Explicit GC is the caller's responsibility.
+    ///
+    /// Delegates to [`LinkRegistry::remove_orphaned_followers`].
+    pub fn gc_orphaned_followers(&mut self) -> usize {
+        self.link_registry.remove_orphaned_followers()
+    }
+
     /// Returns the frame number.
     #[inline]
     pub fn frame_number(&self) -> u64 {

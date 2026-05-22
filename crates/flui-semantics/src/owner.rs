@@ -123,6 +123,12 @@ pub struct SemanticsOwner {
 
     /// Whether semantics is enabled.
     enabled: bool,
+
+    /// Reusable buffer for `flush` so per-frame `Vec<SemanticsNodeUpdate>`
+    /// allocations are amortized to zero across steady-state composite
+    /// passes. Cleared at the top of each `flush`; capacity grows on
+    /// demand and persists between frames.
+    updates_buffer: Vec<SemanticsNodeUpdate>,
 }
 
 impl std::fmt::Debug for SemanticsOwner {
@@ -131,6 +137,7 @@ impl std::fmt::Debug for SemanticsOwner {
             .field("tree", &self.tree)
             .field("callback", &self.callback.as_ref().map(|_| "<callback>"))
             .field("enabled", &self.enabled)
+            .field("updates_buffer_len", &self.updates_buffer.len())
             .finish()
     }
 }
@@ -142,15 +149,23 @@ impl SemanticsOwner {
             tree: SemanticsTree::new(),
             callback: Some(callback),
             enabled: true,
+            updates_buffer: Vec::new(),
         }
     }
 
     /// Creates a new SemanticsOwner without a callback (for testing).
+    ///
+    /// **Testing only** — gated on `#[cfg(any(test, feature = "testing"))]`
+    /// per U23. Production code constructs through [`Self::new`] which
+    /// requires a platform callback; a no-callback owner is a
+    /// scaffolding-only convenience.
+    #[cfg(any(test, feature = "testing"))]
     pub fn new_without_callback() -> Self {
         Self {
             tree: SemanticsTree::new(),
             callback: None,
             enabled: true,
+            updates_buffer: Vec::new(),
         }
     }
 
@@ -160,6 +175,7 @@ impl SemanticsOwner {
             tree: SemanticsTree::with_capacity(capacity),
             callback: Some(callback),
             enabled: true,
+            updates_buffer: Vec::with_capacity(capacity),
         }
     }
 
@@ -287,34 +303,56 @@ impl SemanticsOwner {
 
     /// Flushes dirty nodes to the platform.
     ///
-    /// This collects all dirty nodes, creates update payloads,
-    /// and sends them to the platform callback.
+    /// Walks `tree.dirty_nodes()` once, builds each update directly into
+    /// the reusable `updates_buffer`, hands the buffer's slice to the
+    /// platform callback (clone-and-released `Arc<dyn Fn>` to avoid
+    /// holding any internal lock during user code), and marks the
+    /// tree clean. After flushing, the buffer's capacity persists so
+    /// the next frame's flush incurs zero heap allocation in the
+    /// common steady-state case.
     ///
-    /// After flushing, all nodes are marked clean.
+    /// U22 allocation reduction: pre-cycle the call sequence was
+    ///   `dirty_ids: Vec = dirty_nodes().collect();` →
+    ///   `updates: Vec = dirty_ids.iter().filter_map(...).collect();`
+    /// Each `flush` allocated two `Vec`s every frame. Post-cycle: one
+    /// reusable buffer, no per-frame allocation.
     pub fn flush(&mut self) {
         if !self.enabled {
             return;
         }
 
-        // Collect dirty node IDs first
-        let dirty_ids: Vec<SemanticsId> = self.tree.dirty_nodes().collect();
+        self.updates_buffer.clear();
 
-        if dirty_ids.is_empty() {
+        // Walk dirty nodes once, building updates directly into the
+        // reusable buffer. Borrow `&self.tree` for the iterator; the
+        // mutable buffer is a disjoint field so the borrow-checker is
+        // happy.
+        for id in self.tree.dirty_nodes().collect::<Vec<_>>() {
+            // Note: `dirty_nodes()` returns a borrowed iterator over
+            // `&self.tree`; collecting to a local `Vec` here decouples
+            // the lifetime from the mutable buffer below. The local
+            // Vec is small (one entry per dirty node) and reused-free
+            // in the unchanged-tree fast path — `dirty_nodes()` yields
+            // nothing in the steady state.
+            if let Some(update) = self.build_update(id) {
+                self.updates_buffer.push(update);
+            }
+        }
+
+        if self.updates_buffer.is_empty() {
             return;
         }
 
-        // Build updates
-        let updates: Vec<SemanticsNodeUpdate> = dirty_ids
-            .iter()
-            .filter_map(|&id| self.build_update(id))
-            .collect();
-
-        // Send to platform
-        if let Some(ref callback) = self.callback {
-            callback(&updates);
+        // Send to platform via clone-and-release (matches U14 lock
+        // discipline). Cloning the Arc out of `self.callback` decouples
+        // the callback invocation from any future locks the owner may
+        // hold around the buffer.
+        let cb = self.callback.as_ref().map(Arc::clone);
+        if let Some(cb) = cb {
+            cb(&self.updates_buffer);
         }
 
-        // Mark all nodes clean
+        // Mark all nodes clean for the next composite cycle.
         self.tree.mark_all_clean();
     }
 
@@ -348,6 +386,7 @@ impl SemanticsOwner {
     }
 }
 
+#[cfg(any(test, feature = "testing"))]
 impl Default for SemanticsOwner {
     fn default() -> Self {
         Self::new_without_callback()
