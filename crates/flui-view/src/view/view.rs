@@ -270,13 +270,29 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     // Dependency Notifications
     // ========================================================================
 
-    /// Called when a dependency (InheritedView) changes.
+    /// Notify this element that an inherited dependency it observes has
+    /// changed.
     ///
-    /// Override this to respond to inherited data changes.
-    /// Default implementation marks the element for rebuild.
-    fn did_change_dependencies(&mut self) {
-        self.mark_needs_build();
-    }
+    /// Called by `BuildOwner::build_scope` immediately before
+    /// `perform_build` when the element's id is present in the
+    /// owner's `pending_dependency_changes` set (populated by
+    /// `InheritedBehavior::on_view_updated` when `update_should_notify`
+    /// returns true). The unified `Element<V, A, B>` impl routes this
+    /// through the behavior so `StatefulBehavior` can fire the typed
+    /// `ViewState::did_change_dependencies` hook on the dependent's
+    /// state BEFORE its build runs — Flutter parity for
+    /// `framework.dart:6117` `StatefulElement.didChangeDependencies`
+    /// (which sets the `_didChangeDependencies` flag) plus
+    /// `framework.dart:5977-5982` `StatefulElement.performRebuild`
+    /// (which fires `state.didChangeDependencies()` when the flag is
+    /// set). Plan §U14.
+    ///
+    /// Default implementation is a no-op — non-stateful behaviors
+    /// (Stateless, Proxy, Inherited, Render) have no typed `ViewState`
+    /// to notify; the scheduled rebuild handles their reaction.
+    /// `StatefulBehavior` and `AnimatedBehavior` override the
+    /// behavior-side hook to forward to the state.
+    fn notify_dependency_change(&mut self) {}
 
     // ========================================================================
     // Slot Management

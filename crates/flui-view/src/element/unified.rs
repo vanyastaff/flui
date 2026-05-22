@@ -240,6 +240,20 @@ where
     }
 
     // ========================================================================
+    // Dependency-change typed-hook dispatch (U14 / R16, audit V-19)
+    //
+    // Routes through the behavior. Only `StatefulBehavior<V>` and
+    // `AnimatedBehavior<V>` override the default no-op — they forward
+    // to `ViewState::did_change_dependencies` on the owned state. Other
+    // behaviors (Stateless, Proxy, Inherited, Render) own no state, so
+    // the scheduled rebuild alone is the right response.
+    // ========================================================================
+
+    fn notify_dependency_change(&mut self) {
+        self.behavior.did_change_dependencies(&self.core);
+    }
+
+    // ========================================================================
     // Lifecycle Methods with Behavior Hooks
     // ========================================================================
 

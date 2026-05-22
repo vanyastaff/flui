@@ -383,7 +383,10 @@ impl ElementTree {
             return None;
         }
 
-        // Eager path for un-keyed elements.
+        // Eager path for un-keyed elements. Drop any stale
+        // `did_change_dependencies` flag (plan §U14) — the dependent
+        // leaves the active tree before its rebuild ever runs.
+        owner.clear_pending_dependency_change(id);
         self.nodes[index].element.unmount(owner);
 
         let node = self.nodes.remove(index);
@@ -422,6 +425,9 @@ impl ElementTree {
             owner.unregister_global_key(hash);
         }
 
+        // Drop any stale `did_change_dependencies` flag (plan §U14) —
+        // the dependent leaves the tree before its rebuild ever runs.
+        owner.clear_pending_dependency_change(id);
         self.nodes[index].element.unmount(owner);
 
         let node = self.nodes.remove(index);

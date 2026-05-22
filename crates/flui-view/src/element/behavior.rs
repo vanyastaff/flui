@@ -181,6 +181,26 @@ where
         let _ = (type_id, notification);
         false
     }
+
+    /// Fire the typed `did_change_dependencies` lifecycle hook for any
+    /// state this behavior owns.
+    ///
+    /// Routed from
+    /// [`ElementBase::notify_dependency_change`](crate::view::ElementBase::notify_dependency_change)
+    /// by `BuildOwner::build_scope` immediately before the dependent's
+    /// `perform_build`, when an inherited ancestor's
+    /// `update_should_notify` returned `true` since the last build —
+    /// Flutter parity for `framework.dart:5977-5982`
+    /// `StatefulElement.performRebuild` reading the
+    /// `_didChangeDependencies` flag set at `framework.dart:6117`.
+    ///
+    /// Default is a no-op — Stateless, Proxy, Inherited, and Render
+    /// behaviors own no `ViewState`, so the scheduled rebuild alone
+    /// suffices. [`StatefulBehavior`] overrides this to forward to
+    /// `ViewState::did_change_dependencies`; [`AnimatedBehavior`]
+    /// delegates to the composed `StatefulBehavior`. Plan §U14.
+    #[allow(unused_variables)]
+    fn did_change_dependencies(&mut self, core: &ElementCore<V, A>) {}
 }
 
 // ============================================================================
@@ -385,6 +405,37 @@ where
         _owner: &mut crate::ElementOwner<'_>,
     ) {
         self.state.did_update_view(old_view);
+    }
+
+    /// Fire `ViewState::did_change_dependencies` on the owned state.
+    ///
+    /// Called by `BuildOwner::build_scope` right before this
+    /// dependent's `perform_build` when an inherited ancestor's
+    /// `update_should_notify` returned true since the last build —
+    /// Flutter parity for `framework.dart:5977-5982`. Plan §U14.
+    ///
+    /// `init_state` always runs before any `did_change_dependencies`
+    /// dispatch because `state_as_any` reaches the typed
+    /// `did_change_dependencies` only via this hook, and the hook can
+    /// only fire after the element is `Active` (it's gated on
+    /// `lifecycle().can_build()` in `build_scope`). Defunct or already-
+    /// inactive lifecycles are skipped by the build-scope check itself,
+    /// so we get the defensive-shape Flutter calls for free without a
+    /// second guard here.
+    fn did_change_dependencies(&mut self, core: &ElementCore<V, A>) {
+        // The dummy `ElementBuildContext::new_minimal` is read-only:
+        // its tree is empty, so `find_ancestor_*`, `depend_on_inherited`,
+        // and friends return `None`/`false`. That matches Flutter — a
+        // user `did_change_dependencies` body that calls `depend_on`
+        // would re-walk the ancestor chain via this context. Cycle 5
+        // ships the cheap separable part of V-13 only (the cached
+        // dummy); the real ancestor-context threading is the deferred
+        // element-ownership unification (Cycle 6). For now, user code
+        // that needs the new inherited value during
+        // `did_change_dependencies` should read it from the cached
+        // state field captured by the previous build.
+        let ctx = ElementBuildContext::new_minimal(core.depth());
+        self.state.did_change_dependencies(&ctx);
     }
 }
 
@@ -722,6 +773,17 @@ where
                 self.dependents.len()
             );
             for (&dep_id, &dep_depth) in &self.dependents {
+                // Flutter parity (`framework.dart:6371-6374`):
+                // `notifyDependent` calls `dependent.didChangeDependencies`.
+                // We split this across two phases — the set-flag part
+                // (`note_dependency_change`) here, and the fire part
+                // (`ElementBase::notify_dependency_change`) inside
+                // `BuildOwner::build_scope` right before the dependent's
+                // `perform_build`. The typed
+                // `ViewState::did_change_dependencies` hook fires
+                // exactly once per dependency-change-then-rebuild
+                // cycle, strictly before the build. Plan §U14.
+                owner.note_dependency_change(dep_id);
                 owner.schedule_build_for(dep_id, dep_depth);
             }
         } else {
@@ -913,5 +975,18 @@ where
         owner: &mut crate::ElementOwner<'_>,
     ) {
         self.stateful.on_view_updated(core, old_view, owner);
+    }
+
+    /// Delegate to the composed `StatefulBehavior` so animated
+    /// dependents also fire the typed
+    /// `ViewState::did_change_dependencies` hook before rebuilding —
+    /// Flutter parity (animated widgets in Flutter inherit the
+    /// `StatefulElement._didChangeDependencies` flag-and-fire path).
+    /// Plan §U14.
+    fn did_change_dependencies(&mut self, core: &ElementCore<V, A>) {
+        <StatefulBehavior<V> as ElementBehavior<V, A>>::did_change_dependencies(
+            &mut self.stateful,
+            core,
+        );
     }
 }

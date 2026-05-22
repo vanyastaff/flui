@@ -107,6 +107,22 @@ pub struct BuildOwner {
     /// split-borrow.
     pub(crate) inactive_elements: Vec<InactiveElement>,
 
+    /// Elements that received an inherited-dependency change since their
+    /// last build. `build_scope` consults this set right before each
+    /// dirty element's `perform_build` and fires
+    /// `ElementBase::notify_dependency_change` (which routes through the
+    /// behavior to call `ViewState::did_change_dependencies`) when the
+    /// id is present, then removes the entry — Flutter parity for
+    /// `_didChangeDependencies` flag at `framework.dart:6114`.
+    ///
+    /// Populated by [`InheritedBehavior::on_view_updated`](crate::element::InheritedBehavior)
+    /// when `update_should_notify == true`. Cleared on element unmount
+    /// (the dependent leaves the tree before its rebuild ever runs).
+    ///
+    /// `pub(crate)` for the [`ElementOwner`](super::ElementOwner)
+    /// split-borrow.
+    pub(crate) pending_dependency_changes: std::collections::HashSet<ElementId>,
+
     /// Whether we're currently in a build phase.
     #[cfg(debug_assertions)]
     building: bool,
@@ -208,6 +224,7 @@ impl BuildOwner {
             dirty_set: std::collections::HashSet::new(),
             global_keys: HashMap::new(),
             inactive_elements: Vec::new(),
+            pending_dependency_changes: std::collections::HashSet::new(),
             #[cfg(debug_assertions)]
             building: false,
             #[cfg(debug_assertions)]
@@ -279,6 +296,7 @@ impl BuildOwner {
             dirty_elements: &mut self.dirty_elements,
             dirty_set: &mut self.dirty_set,
             inactive_elements: &mut self.inactive_elements,
+            pending_dependency_changes: &mut self.pending_dependency_changes,
             on_build_scheduled: self.on_build_scheduled.as_deref(),
         }
     }
@@ -325,13 +343,28 @@ impl BuildOwner {
             if let Some(node) = tree.get_mut(dirty.id()) {
                 // Only rebuild if still active
                 if node.element().lifecycle().can_build() {
+                    // Flutter parity (`framework.dart:5977-5982`): if this
+                    // dependent received an inherited-dependency change
+                    // since its last build, fire
+                    // `ViewState::did_change_dependencies` BEFORE the
+                    // actual `perform_build`. The flag is set by
+                    // `InheritedBehavior::on_view_updated` when
+                    // `update_should_notify` returns true; we consume it
+                    // here so the typed hook runs exactly once per
+                    // dependency-change-then-rebuild cycle. See plan §U14.
+                    let needs_did_change = self.pending_dependency_changes.remove(&dirty.id());
+
                     let mut element_owner = super::ElementOwner {
                         global_keys: &mut self.global_keys,
                         dirty_elements: &mut self.dirty_elements,
                         dirty_set: &mut self.dirty_set,
                         inactive_elements: &mut self.inactive_elements,
+                        pending_dependency_changes: &mut self.pending_dependency_changes,
                         on_build_scheduled: self.on_build_scheduled.as_deref(),
                     };
+                    if needs_did_change {
+                        node.element_mut().notify_dependency_change();
+                    }
                     node.element_mut().perform_build(&mut element_owner);
                 }
             }
@@ -412,6 +445,7 @@ impl BuildOwner {
             dirty_elements: &mut self.dirty_elements,
             dirty_set: &mut self.dirty_set,
             inactive_elements: &mut self.inactive_elements,
+            pending_dependency_changes: &mut self.pending_dependency_changes,
             on_build_scheduled: self.on_build_scheduled.as_deref(),
         };
 
