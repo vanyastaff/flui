@@ -859,31 +859,155 @@ impl CommandRenderer for Backend<'_> {
         });
     }
 
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "backdrop-filter region bounds are f32 in physical pixels; coercion to u32 \
+                  matches Path A's `Renderer::handle_backdrop_filter` (renderer.rs:903-906) \
+                  which is the canonical reference"
+    )]
     fn render_backdrop_filter(
         &mut self,
         child: Option<&flui_painting::DisplayList>,
-        _filter: &flui_painting::display_list::ImageFilter,
-        _bounds: Rect<Pixels>,
+        filter: &flui_painting::display_list::ImageFilter,
+        bounds: Rect<Pixels>,
         _blend_mode: BlendMode,
-        _transform: &Matrix4,
+        transform: &Matrix4,
     ) {
-        // TODO: Implement full backdrop filter rendering
-        //
-        // Current architecture limitation: WgpuRenderer wraps WgpuPainter which doesn't
-        // have access to OffscreenRenderer (lives in GpuRenderer).
-        //
-        // For full implementation, we need to either:
-        // 1. Capture backdrop into offscreen texture
-        // 2. Apply image filter (blur, color adjustment, etc.)
-        // 3. Composite filtered backdrop with optional child content
-        //
-        // For now, just render child content without filtering as fallback
-        tracing::warn!(
-            "BackdropFilter rendering not yet fully implemented - rendering child without filter"
-        );
+        use flui_painting::display_list::ImageFilter;
 
-        // Render child content without filtering (fallback behavior)
+        // Helper: dispatch the child display list (or no-op when None)
+        // without applying any backdrop filter. Used by every fall-back
+        // branch below.
+        let passthrough = |this: &mut Self| {
+            if let Some(child) = child {
+                this.with_transform(transform, |_painter| {});
+                for command in child.commands() {
+                    dispatch_command(command, this);
+                }
+            }
+        };
+
+        // Cycle 4 E-2 U-9: Path B (DisplayList-command-level) backdrop
+        // filter. Mirrors Path A (`Renderer::handle_backdrop_filter`
+        // at renderer.rs:845-960) which already works for the
+        // layer-tree-level `BackdropFilterLayer`. The two paths converge
+        // on the same offscreen pipeline:
+        //
+        //   1. Flush current painter batches to surface
+        //   2. COPY_TEXTURE_TO_TEXTURE the affected region into a
+        //      pooled blur-input texture
+        //   3. Dual Kawase blur on the offscreen renderer
+        //   4. Queue the blurred result for compositing on next flush
+        //   5. Dispatch child display list on top of the blurred backdrop
+        //
+        // Non-blur filters + missing surface/offscreen handles fall
+        // back to passthrough with a `tracing::warn!` so the gap is
+        // observable (the pre-U-9 stub was silent for non-debug builds).
+
+        let sigma = match filter {
+            ImageFilter::Blur { sigma_x, sigma_y } => f32::midpoint(*sigma_x, *sigma_y),
+            other => {
+                tracing::warn!(
+                    "Backdrop filter type {:?} not supported in DisplayList path; passthrough",
+                    other
+                );
+                passthrough(self);
+                return;
+            }
+        };
+
+        let Some(offscreen_arc) = self.offscreen.clone() else {
+            tracing::warn!(
+                "Backdrop filter: no OffscreenRenderer in DisplayList path; passthrough"
+            );
+            passthrough(self);
+            return;
+        };
+
+        let (Some(surface_view), Some(surface_texture)) = (self.surface_view, self.surface_texture)
+        else {
+            tracing::warn!(
+                "Backdrop filter: no surface bound via bind_surface(); passthrough \
+                 (the surface handles are bound in `Renderer::render` only -- \
+                 the shader-mask offscreen path does not bind them, which is expected)"
+            );
+            passthrough(self);
+            return;
+        };
+
+        // Snapshot device/queue/format under a short lock; offscreen
+        // mutation happens later through `render_blur`.
+        let (device, queue, format) = {
+            let off = offscreen_arc.lock();
+            (
+                Arc::clone(off.device()),
+                Arc::clone(off.queue()),
+                off.surface_format(),
+            )
+        };
+
+        let x = bounds.left().0.max(0.0) as u32;
+        let y = bounds.top().0.max(0.0) as u32;
+        let w = bounds.width().0.max(1.0) as u32;
+        let h = bounds.height().0.max(1.0) as u32;
+
+        // Stage 1: flush painter batches to surface so the backdrop
+        // pixels we are about to blur are present.
+        let mut flush_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("DisplayList Backdrop Flush Encoder"),
+        });
+        if let Err(e) = self.painter.render(surface_view, &mut flush_encoder) {
+            tracing::error!("DisplayList backdrop flush failed: {}", e);
+        }
+
+        // Stage 2: COPY_TEXTURE_TO_TEXTURE surface region -> pooled
+        // blur-input. Acquired from offscreen's texture pool so the
+        // allocation amortises across frames (Path A acquires the
+        // same way).
+        let blur_input = {
+            let offscreen = offscreen_arc.lock();
+            offscreen.texture_pool().acquire(w, h, format)
+        };
+
+        flush_encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: surface_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x, y, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: blur_input.texture(),
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(std::iter::once(flush_encoder.finish()));
+
+        // Stage 3: Dual Kawase blur on the offscreen renderer.
+        let blurred = {
+            let mut offscreen = offscreen_arc.lock();
+            offscreen.render_blur(&blur_input, sigma)
+        };
+
+        // Stage 4: queue blurred result for compositing on next painter
+        // flush. The painter's queue_offscreen_result keeps the
+        // blurred PooledTexture alive until the composite pass picks
+        // it up.
+        self.painter.queue_offscreen_result(blurred, bounds);
+
+        // Stage 5: dispatch the child display list on top of the blurred
+        // backdrop. The child's commands paint into the same painter
+        // (the blurred result is already queued behind them).
         if let Some(child) = child {
+            self.with_transform(transform, |_painter| {});
             for command in child.commands() {
                 dispatch_command(command, self);
             }
