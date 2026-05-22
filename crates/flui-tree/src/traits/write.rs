@@ -61,53 +61,108 @@ pub trait TreeWrite<I: Identifier>: TreeRead<I> {
     /// Should be O(1) amortized for slab-based implementations.
     fn insert(&mut self, node: Self::Node) -> I;
 
-    /// Removes a node from the tree.
+    /// Removes a node **without** cascading to descendants.
     ///
-    /// This removes only the specified node. Children handling
-    /// depends on the implementation (may be orphaned or removed).
+    /// This is the primitive that [`remove`](Self::remove) (cascade-by-
+    /// default) builds on. Children are orphaned in storage; the caller
+    /// is responsible for re-attaching or otherwise dealing with them.
+    ///
+    /// Use this directly for re-parenting workflows where the subtree
+    /// is immediately re-attached to a new parent. For one-shot removal
+    /// (the common case), call [`remove`](Self::remove) instead.
+    ///
+    /// Implementations MUST:
+    /// 1. Unlink the node from its parent's children list (if any).
+    /// 2. Update root tracking if `id` is the root.
+    /// 3. Remove the node from storage and return it.
+    /// 4. Leave descendants (and their parent pointers to `id`) intact.
     ///
     /// # Arguments
     ///
-    /// * `id` - The unique identifier of the node to remove
+    /// * `id` - The unique identifier of the node to remove.
     ///
     /// # Returns
     ///
-    /// `Some(node)` if the node existed and was removed, `None` otherwise.
-    ///
-    /// # Note
-    ///
-    /// Implementations should update parent's children list when
-    /// removing a node.
-    fn remove(&mut self, id: I) -> Option<Self::Node>;
+    /// `Some(node)` if the node existed and was removed, `None`
+    /// otherwise.
+    fn remove_shallow(&mut self, id: I) -> Option<Self::Node>;
 
-    /// Removes a node and all its descendants.
+    /// Removes a node **and all its descendants** (cascade-by-default).
+    ///
+    /// Cycle 2 PR #100 hoisted this contract to `LayerTree::remove` and
+    /// `SemanticsTree::remove` per-impl. Cycle 3 T-1 lifts it to the
+    /// trait so every adopter (current `RenderTree`, future
+    /// `ElementTree`, `ViewTree`, and the two cycle-2 adopters) inherits
+    /// the cascade as the default contract. Pre-cycle the trait
+    /// codified non-cascade as the default — i.e. orphans-in-storage —
+    /// which the audit T-1 finding flagged as a footgun.
+    ///
+    /// The default impl walks the subtree post-order:
+    /// 1. Snapshot `children(id)` so the recursive borrow doesn't
+    ///    conflict with the mutable `self`.
+    /// 2. For each child, recurse — children dispose before the
+    ///    parent.
+    /// 3. Finally, call [`remove_shallow`](Self::remove_shallow) on
+    ///    `id` itself.
+    ///
+    /// Implementations MAY override for efficiency (e.g. a `Vec`-backed
+    /// arena that wants to free a contiguous range in one go), but
+    /// MUST preserve the post-order cascade semantics — the engine
+    /// listeners and lifecycle hooks (e.g.
+    /// `LayerNode::Drop` from PR #100 U8) depend on
+    /// descendants disposing before their parents.
     ///
     /// # Arguments
     ///
-    /// * `id` - The root of the subtree to remove
+    /// * `id` - The root of the subtree to remove.
     ///
     /// # Returns
     ///
-    /// The number of nodes removed.
+    /// `Some(root_node)` if `id` existed (the removed root node) or
+    /// `None` if it did not.
+    fn remove(&mut self, id: I) -> Option<Self::Node>
+    where
+        Self: super::TreeNav<I> + Sized,
+    {
+        if !self.contains(id) {
+            return None;
+        }
+        // Snapshot children before the recursive descent so the
+        // children iterator's borrow ends before we mutate the tree.
+        let children: Vec<I> = self.children(id).collect();
+        for child_id in children {
+            // Discarding the returned root node of each child cascade is
+            // the same shape as the per-impl cascade in cycle 2
+            // (`LayerTree::remove`, `SemanticsTree::remove`).
+            let _ = self.remove(child_id);
+        }
+        self.remove_shallow(id)
+    }
+
+    /// Removes `id` and counts the resulting cascade size.
+    ///
+    /// Convenience wrapper around [`remove`](Self::remove) for callers
+    /// that want an explicit count (e.g. devtools "X nodes removed"
+    /// messaging).
     ///
     /// # Default Implementation
     ///
-    /// Collects descendants and removes them in reverse order.
-    /// Implementations may provide more efficient versions.
+    /// Walks `descendants(id)` to compute the count (the iterator yields
+    /// `id` itself plus all transitive descendants), then calls
+    /// [`remove`](Self::remove). Implementations with a denser storage
+    /// representation may override.
     fn remove_subtree(&mut self, id: I) -> usize
     where
         Self: super::TreeNav<I> + Sized,
     {
-        // Collect all descendants first (to avoid borrow issues)
-        // descendants() returns (Id, depth) tuples
-        let to_remove: Vec<_> = self.descendants(id).map(|(id, _depth)| id).collect();
-        let count = to_remove.len();
-
-        // Remove in reverse order (children before parents)
-        for node_id in to_remove.into_iter().rev() {
-            self.remove(node_id);
+        // Pre-walk to capture the count without holding the descendant
+        // iterator across the mutable cascade. `descendants(id)` is
+        // inclusive — it yields `id` itself.
+        let count = self.descendants(id).count();
+        if count == 0 {
+            return 0;
         }
-
+        let _ = self.remove(id);
         count
     }
 
@@ -261,7 +316,10 @@ pub trait TreeWriteNav<I: Identifier>: TreeWrite<I> + super::TreeNav<I> {
 
         if let Some(parent_id) = parent {
             if !self.contains(parent_id) {
-                self.remove(id);
+                // Rollback the just-inserted node. `remove_shallow` is
+                // safe here because the node is freshly inserted and
+                // has no children yet — cascade vs shallow is moot.
+                self.remove_shallow(id);
                 return Err(TreeError::not_found(parent_id.into()));
             }
             self.set_parent(id, Some(parent_id))?;
@@ -287,8 +345,8 @@ impl<I: Identifier, T: TreeWrite<I> + ?Sized> TreeWrite<I> for &mut T {
     }
 
     #[inline]
-    fn remove(&mut self, id: I) -> Option<Self::Node> {
-        (**self).remove(id)
+    fn remove_shallow(&mut self, id: I) -> Option<Self::Node> {
+        (**self).remove_shallow(id)
     }
 
     #[inline]
@@ -314,8 +372,8 @@ impl<I: Identifier, T: TreeWrite<I> + ?Sized> TreeWrite<I> for Box<T> {
     }
 
     #[inline]
-    fn remove(&mut self, id: I) -> Option<Self::Node> {
-        (**self).remove(id)
+    fn remove_shallow(&mut self, id: I) -> Option<Self::Node> {
+        (**self).remove_shallow(id)
     }
 
     #[inline]
@@ -422,7 +480,7 @@ mod tests {
             id
         }
 
-        fn remove(&mut self, id: ElementId) -> Option<TestNode> {
+        fn remove_shallow(&mut self, id: ElementId) -> Option<TestNode> {
             let index = id.get() - 1;
 
             // Remove from parent's children
@@ -596,5 +654,59 @@ mod tests {
         assert!(!tree.contains(grandchild));
         assert!(tree.contains(root));
         assert!(tree.contains(child2));
+    }
+
+    /// Cycle 3 T-1 regression: `TreeWrite::remove` cascades by default.
+    ///
+    /// Pre-cycle the trait's `remove` was non-cascade — descendants were
+    /// orphaned in storage. Cycle 2 PR #100 fixed this at the impl
+    /// level for `LayerTree` and `SemanticsTree`; cycle 3 lifts the
+    /// fix to the trait contract so every adopter inherits it.
+    #[test]
+    fn remove_cascades_by_default() {
+        let mut tree = TestTree::new();
+        let root = tree.insert(TestNode::default());
+        let child = tree.insert(TestNode::default());
+        let grandchild = tree.insert(TestNode::default());
+        tree.set_parent(child, Some(root)).unwrap();
+        tree.set_parent(grandchild, Some(child)).unwrap();
+        assert_eq!(tree.len(), 3);
+
+        // `remove(root)` MUST drop the whole subtree.
+        let removed = tree.remove(root);
+        assert!(removed.is_some(), "root must have been removed");
+        assert_eq!(tree.len(), 0, "every descendant must cascade away");
+        assert!(!tree.contains(root));
+        assert!(!tree.contains(child));
+        assert!(!tree.contains(grandchild));
+    }
+
+    /// Cycle 3 T-1 regression: `TreeWrite::remove_shallow` preserves
+    /// the pre-cycle non-cascade behaviour. Use for re-parenting
+    /// workflows that immediately re-attach the descendants.
+    #[test]
+    fn remove_shallow_does_not_cascade() {
+        let mut tree = TestTree::new();
+        let root = tree.insert(TestNode::default());
+        let child = tree.insert(TestNode::default());
+        tree.set_parent(child, Some(root)).unwrap();
+        assert_eq!(tree.len(), 2);
+
+        let removed = tree.remove_shallow(root);
+        assert!(removed.is_some());
+        // `child` stays in storage — orphaned but reachable.
+        assert!(tree.contains(child));
+        assert_eq!(tree.len(), 1);
+    }
+
+    /// `remove` of a missing id is a `None` no-op (no panic, no
+    /// half-walk).
+    #[test]
+    fn remove_of_missing_id_is_a_no_op() {
+        let mut tree = TestTree::new();
+        let _real = tree.insert(TestNode::default());
+        let phantom = ElementId::new(999);
+        assert!(tree.remove(phantom).is_none());
+        assert_eq!(tree.len(), 1);
     }
 }

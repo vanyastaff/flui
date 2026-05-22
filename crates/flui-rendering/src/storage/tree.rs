@@ -358,11 +358,15 @@ impl RenderTree {
 
     /// Removes a node from the tree.
     ///
-    /// Returns the removed node, or None if it didn't exist.
+    /// Removes a node WITHOUT cascading to descendants.
     ///
-    /// **Note:** This does NOT remove children. Use `remove_recursive` for
-    /// that.
-    pub fn remove(&mut self, id: RenderId) -> Option<RenderNode> {
+    /// Returns the removed node, or None if it didn't exist. Descendants
+    /// are orphaned in the slab; use [`Self::remove_recursive`] for full
+    /// cascade.
+    ///
+    /// Cycle 3 T-1: this is the [`TreeWrite::remove_shallow`] primitive
+    /// the trait builds the cascade-by-default `remove` on top of.
+    pub fn remove_shallow(&mut self, id: RenderId) -> Option<RenderNode> {
         // Update root if removing root
         if self.root == Some(id) {
             self.root = None;
@@ -380,7 +384,11 @@ impl RenderTree {
 
     /// Removes a node and all its descendants recursively.
     ///
-    /// Returns the number of nodes removed.
+    /// Returns the number of nodes removed. Cycle 3 T-1: equivalent to
+    /// [`TreeWrite::remove`] (which now cascades by default) with a
+    /// count instead of the returned root node. Prefer `TreeWrite::remove`
+    /// for new code; this inherent stays for in-crate callers that want
+    /// the count.
     pub fn remove_recursive(&mut self, id: RenderId) -> usize {
         let mut count = 0;
 
@@ -396,7 +404,7 @@ impl RenderTree {
         }
 
         // Remove the node itself
-        if self.remove(id).is_some() {
+        if self.remove_shallow(id).is_some() {
             count += 1;
         }
 
@@ -674,7 +682,12 @@ impl TreeWrite<RenderId> for RenderTree {
         RenderId::new(slab_index + 1)
     }
 
-    fn remove(&mut self, id: RenderId) -> Option<Self::Node> {
+    fn remove_shallow(&mut self, id: RenderId) -> Option<Self::Node> {
+        // Cycle 3 T-1: the trait's `remove` default impl now cascades
+        // post-order via this primitive. `remove_shallow` keeps the
+        // pre-cycle non-cascade behaviour for reparenting workflows
+        // (re-attach the descendants under a new parent immediately).
+
         // Update root if removing root
         if self.root == Some(id) {
             self.root = None;
