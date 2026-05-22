@@ -186,8 +186,7 @@ impl AnimationSwitch {
                 let mut inner = inner_arc.lock();
 
                 // Check if we should switch
-                let should_switch = if let (Some(mode), Some(ref next)) = (inner.mode, &inner.next)
-                {
+                let should_switch = if let (Some(mode), Some(next)) = (inner.mode, &inner.next) {
                     let current_value = inner.current.value();
                     let next_value = next.value();
 
@@ -259,7 +258,7 @@ impl AnimationSwitch {
         if let Some(id) = inner.current_status_listener_id.take() {
             inner.current.remove_status_listener(id);
         }
-        if let (Some(id), Some(ref next)) = (inner.next_listener_id.take(), &inner.next) {
+        if let (Some(id), Some(next)) = (inner.next_listener_id.take(), &inner.next) {
             next.remove_listener(id);
         }
     }

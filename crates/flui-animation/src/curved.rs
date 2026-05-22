@@ -129,8 +129,8 @@ impl<C: Curve + Clone + Send + Sync + fmt::Debug + 'static> fmt::Debug for Curve
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::curve::Curves;
     use crate::AnimationController;
+    use crate::curve::Curves;
     use flui_scheduler::Scheduler;
     use std::time::Duration;
 

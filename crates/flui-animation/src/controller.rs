@@ -5,7 +5,7 @@ use crate::error::AnimationError;
 use crate::simulation::{Simulation, SpringDescription, SpringSimulation, SpringType, Tolerance};
 use crate::status::AnimationStatus;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
-use flui_scheduler::{ScheduledTicker, Scheduler};
+use flui_scheduler::{Scheduler, Ticker};
 use parking_lot::Mutex;
 use std::fmt;
 use std::sync::Arc;
@@ -84,8 +84,12 @@ struct AnimationControllerInner {
     /// Upper bound (default 1.0)
     upper_bound: f32,
 
-    /// Ticker for frame callbacks
-    ticker: Option<ScheduledTicker>,
+    /// Ticker for frame callbacks (auto-scheduling via attached `Scheduler`).
+    ///
+    /// Post-U15: `ScheduledTicker` was absorbed into `Ticker`; the
+    /// auto-scheduling driving mode is now selected at construction via
+    /// [`Ticker::new_with_scheduler`].
+    ticker: Option<Ticker>,
 
     /// Scheduler reference for ticker coordination
     #[allow(dead_code)]
@@ -185,8 +189,9 @@ impl AnimationController {
 
         let notifier = Arc::new(ChangeNotifier::new());
 
-        // Create scheduled ticker that auto-integrates with scheduler
-        let ticker = ScheduledTicker::new(scheduler.clone());
+        // Create auto-scheduling ticker via `Ticker::new_with_scheduler`
+        // (post-U15 absorption of ScheduledTicker into Ticker).
+        let ticker = Ticker::new_with_scheduler(scheduler.clone());
 
         let inner = AnimationControllerInner {
             value: lower_bound,
