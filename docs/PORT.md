@@ -1,10 +1,17 @@
-[← Architecture](architecture.md) · [Back to README](../README.md) · [Crates Map →](crates.md)
+[← Architecture](architecture.md) · [Back to README](../README.md) · [Foundations](FOUNDATIONS.md) · [Roadmap](ROADMAP.md) · [Crates Map →](crates.md)
 
 # Port Methodology
 
 FLUI is a **port** of Flutter's three-tree architecture into Rust, not a redesign. This page is the working methodology for that port — the rules the maintainer refuses to break at write time, the per-crate documentation shape that records the port decisions, and the index that pins which crate holds which mapping.
 
-For the rule-by-rule architectural guide (workspace layers, anti-pattern code examples, dependency DAG), read [`.ai-factory/ARCHITECTURE.md`](../.ai-factory/ARCHITECTURE.md). For the strategic frame and "behavior loyal, structure Rust-native" rationale, read [`STRATEGY.md`](../STRATEGY.md). This page does not restate those; it is the operational layer that hangs off them.
+PORT.md sits inside a four-document governance set:
+
+1. [`STRATEGY.md`](../STRATEGY.md) — product strategy, the three port rules, "behavior loyal, structure Rust-native".
+2. [`FOUNDATIONS.md`](FOUNDATIONS.md) — the architecture contract (target architecture, locked contracts, target crate graph).
+3. **`PORT.md` (this page)** — the operational port methodology (refusal triggers, per-crate documentation template).
+4. [`ROADMAP.md`](ROADMAP.md) — the construction plan (dependency-ordered phases from current to target).
+
+For the rule-by-rule architectural guide (workspace layers, anti-pattern code examples, dependency DAG), read [`.ai-factory/ARCHITECTURE.md`](../.ai-factory/ARCHITECTURE.md). This page does not restate the strategy or contract layers; it is the operational layer that hangs off them.
 
 ---
 

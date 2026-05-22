@@ -1,15 +1,27 @@
 <!--
   Sync Impact Report
   ==================
-  Version change: 2.1.0 → 2.2.0 (MINOR)
-  Bump rationale: New Rendering Pipeline section added,
-    documenting flui-painting → flui-engine data flow
-    and crate boundary rules.
+  Version change: 2.2.0 → 2.3.0 (MINOR)
+  Bump rationale: Factual corrections + alignment with the new
+    architecture contract. The 2.2.0 Crate Architecture table
+    misattributed geometry/color/text-style responsibility to
+    flui-foundation (those live in flui-types). The Rust
+    Standards section declared edition 2021 / Rust 1.91, but
+    the workspace was updated to edition 2024 / Rust 1.94.
+    The Testing coverage table referenced a non-existent
+    `flui-widgets` crate. This MINOR bump corrects those
+    stale facts and adds a Governance pointer to the new
+    docs/FOUNDATIONS.md (architecture contract) and
+    docs/ROADMAP.md (construction plan).
 
-  Modified sections: None
+  Modified sections:
+    - Crate Architecture (flui-types and flui-foundation rows
+      corrected to actual responsibilities)
+    - Rust Standards (edition 2021 → 2024, Rust 1.91 → 1.94)
+    - Testing (Widget coverage row: flui-widgets → future-crate marker)
+    - Governance (added pointer to FOUNDATIONS.md / ROADMAP.md)
 
-  Added sections:
-    - Rendering Pipeline (3-step flow + 4 boundary rules)
+  Added sections: None
 
   Removed sections: None
 
@@ -21,10 +33,22 @@
     - .specify/templates/agent-file-template.md ✅ no update needed
 
   Files requiring follow-up:
-    - CLAUDE.md ⚠ update version reference 2.1.0 → 2.2.0
+    - CLAUDE.md ⚠ update version reference 2.2.0 → 2.3.0
 
   Deferred items:
+    - Target-state crate decomposition (flui-geometry split,
+      flui-log merge, flui-widgets / flui-material / flui-cupertino /
+      flui-localizations) is defined in docs/FOUNDATIONS.md Part IV
+      and sequenced in docs/ROADMAP.md; the constitution table is
+      NOT yet rewritten to that target — that is ROADMAP Phase 0
+      construction work, not doc cleanup.
     - TODO: re-evaluate wgpu 26.x pin by 2026-Q3
+
+  Sync Impact Report (prior — 2.1.0 → 2.2.0)
+  ------------------------------------------
+  Bump rationale: New Rendering Pipeline section added,
+    documenting flui-painting → flui-engine data flow
+    and crate boundary rules.
 -->
 
 # FLUI Constitution
@@ -44,8 +68,8 @@ Dependencies flow strictly downward — no circular dependencies.
 
 | Layer | Crate | Responsibility |
 |-------|-------|---------------|
-| Foundation | `flui-types` | Base types reused by all crates |
-| Foundation | `flui-foundation` | Geometry, colors, text styles |
+| Foundation | `flui-types` | Base types, units, IDs; geometry (`Point`, `Rect`, `Matrix4`, Bézier), styling (colors, paint values), typography, layout enums, gestures, physics value types, platform value types |
+| Foundation | `flui-foundation` | Framework primitives: `ChangeNotifier` / `Listenable`, `Id` system, `BindingBase`, `Key`, diagnostics, error helpers |
 | Reactivity | `flui-reactivity` | Signals, effects, state management |
 | Tree | `flui-tree` | Widget tree: build, diff, reconciliation |
 | Rendering | `flui-rendering` | Render objects, layout protocol, paint |
@@ -121,7 +145,7 @@ are imperative and optimized for minimal allocations.
 
 ## Rust Standards
 
-- **Edition**: 2021 | **Minimum Rust version**: 1.91
+- **Edition**: 2024 | **Minimum Rust version**: 1.94
 - **Strict clippy**: `clippy::all` and `clippy::pedantic` at warn
   level workspace-wide (via `[workspace.lints.clippy]`)
 - **No `unwrap()`/`expect()` in library code** — propagate errors
@@ -168,7 +192,7 @@ Minimum coverage thresholds by crate category:
 |----------|-----------------|----------|
 | Core | 80% | `flui-tree`, `flui-foundation` |
 | Platform | 70% | `flui-platform` |
-| Widget | 85% | `flui-widgets` |
+| Widget | 85% | (future crate — not yet created) |
 
 ## Performance Constraints
 
@@ -319,6 +343,9 @@ These patterns are explicitly prohibited:
 
 ## Governance
 
+- Architecture direction is set by [`docs/FOUNDATIONS.md`](../../docs/FOUNDATIONS.md)
+  (the architecture contract) and [`docs/ROADMAP.md`](../../docs/ROADMAP.md)
+  (the construction plan); this constitution ratifies the rules they depend on.
 - This constitution supersedes all other development practices.
   In case of conflict, the constitution wins.
 - Amendments require:
@@ -330,4 +357,4 @@ These patterns are explicitly prohibited:
   gate in `plan-template.md`.
 - All code reviews MUST verify adherence to these principles.
 
-**Version**: 2.2.0 | **Ratified**: 2026-02-08 | **Last Amended**: 2026-02-08
+**Version**: 2.3.0 | **Ratified**: 2026-02-08 | **Last Amended**: 2026-05-22

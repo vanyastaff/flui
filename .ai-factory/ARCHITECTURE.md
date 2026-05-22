@@ -4,7 +4,7 @@
 
 FLUI uses a **Layered Modular Workspace** pattern at the workspace level: 20+ crates are organized into a strict directed acyclic graph (DAG) of dependency layers, each crate exposing an explicit public API through its `lib.rs` (and an optional `prelude` module) while internal modules remain private. At runtime FLUI follows the **Three-Tree Pipeline** pattern adapted from Flutter: an immutable `View` tree describes intent, a mutable `Element` tree owns state and reconciliation, and a `Render` tree performs layout and paint. The two patterns are complementary — the workspace layout enforces *what code is allowed to depend on what*, and the runtime pipeline enforces *how data flows between trees per frame*.
 
-This architecture is mandated by `.specify/memory/constitution.md` (v2.2.0). Any change that weakens crate boundaries, introduces a circular dependency, or bypasses pipeline phases is a constitutional violation.
+This architecture is mandated by `.specify/memory/constitution.md` (v2.3.0). Any change that weakens crate boundaries, introduces a circular dependency, or bypasses pipeline phases is a constitutional violation. The forward architecture (target crate graph, locked contracts) is owned by [`docs/FOUNDATIONS.md`](../docs/FOUNDATIONS.md) (the architecture contract); the migration sequencing lives in [`docs/ROADMAP.md`](../docs/ROADMAP.md).
 
 ## Decision Rationale
 
@@ -25,11 +25,14 @@ flui/
 │
 ├── crates/                    # Workspace members, organized by layer
 │   │
-│   │   ── Layer 0: Foundation (no internal deps) ──
-│   ├── flui-types/            # Base value types, units, IDs (NonZeroUsize)
-│   ├── flui-foundation/       # Geometry, color, text styles, common error helpers
+│   │   ── Layer 0: Value types ──
+│   ├── flui-types/            # Base value types, units, IDs (NonZeroUsize);
+│   │                            geometry, styling, typography, layout enums,
+│   │                            gestures, physics, platform value types
 │   │
-│   │   ── Layer 1: Tree primitives ──
+│   │   ── Layer 1: Framework primitives + Tree primitives ──
+│   ├── flui-foundation/       # Framework primitives: ChangeNotifier / Listenable,
+│   │                            Id system, BindingBase, Key, diagnostics, error helpers
 │   ├── flui-tree/             # Generic tree abstractions (build / diff / reconcile)
 │   │
 │   │   ── Layer 2: Reactivity (currently disabled) ──
@@ -46,18 +49,21 @@ flui/
 │   ├── flui-rendering/        # Render objects, layout protocol, RenderBox<Arity>
 │   ├── flui-animation/        # Curves, tweens, controllers (DISABLED)
 │   │
-│   │   ── Layer 5: Engine / Platform ──
+│   │   ── Layer 5: Engine / Platform / Logging ──
 │   ├── flui-engine/           # GPU pipeline (build → layout → paint → composite)
 │   ├── flui-platform/         # Win32 / AppKit / winit / Headless backends
-│   ├── flui-hot-reload/       # dlopen-based scene plugin host
 │   ├── flui-log/              # tracing setup and helpers
 │   │
-│   │   ── Layer 6: View / Assets / Build / Logging ──
+│   │   ── Layer 6: View / Assets / Build ──
 │   ├── flui-view/             # View + Element tree, BuildContext
 │   ├── flui-assets/           # Asset loading & caching (DISABLED)
 │   ├── flui-build/            # Async PlatformBuilder (DISABLED)
 │   │
-│   │   ── Layer 7: Application & tooling ──
+│   │   ── Layer 7: Hot-Reload ──
+│   ├── flui-hot-reload/       # dlopen-based scene plugin host
+│   │                            (depends on flui-view via `app-plugin` feature)
+│   │
+│   │   ── Layer 8: Application & tooling ──
 │   ├── flui-app/              # App runner, root widget, lifecycle
 │   ├── flui-cli/              # CLI tooling (DISABLED)
 │   └── flui-devtools/         # Inspector / perf overlay (DISABLED)
@@ -65,7 +71,7 @@ flui/
 ├── examples/                  # Runnable demos (single-file *.rs and per-target dirs)
 ├── tools/web-server/          # wasm-pack-aware dev server
 ├── docs/{plans,research}/     # Dated planning and research notes
-├── .specify/memory/constitution.md  # Project constitution (v2.2.0) — MANDATORY
+├── .specify/memory/constitution.md  # Project constitution (v2.3.0) — MANDATORY
 ├── .ai-factory/               # AI Factory configuration and artifacts
 ├── .flutter/, .gpui/          # Vendored references (read-only, never copied)
 └── AGENTS.md, CLAUDE.md, README.md

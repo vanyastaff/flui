@@ -1,4 +1,4 @@
-[← Testing](testing.md) · [Back to README](../README.md)
+[← Testing](testing.md) · [Foundations](FOUNDATIONS.md) · [Roadmap](ROADMAP.md) · [Back to README](../README.md)
 
 # Contributing
 
@@ -8,11 +8,15 @@ Welcome! This page is the working agreement for changes to FLUI: how to plan, co
 
 Before opening a PR or even a planning issue, read:
 
-1. [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) — the project constitution (v2.2.0). Non-negotiable rules: layered DAG, `unsafe` boundaries, no `unwrap()` / `println!`, on-demand rendering, etc.
-2. [`.ai-factory/ARCHITECTURE.md`](../.ai-factory/ARCHITECTURE.md) — full architectural rules and anti-patterns.
-3. [`.ai-factory/rules/base.md`](../.ai-factory/rules/base.md) — project base rules (naming, modules, errors, logging, testing, unsafe).
-4. [`CLAUDE.md`](../CLAUDE.md) — Claude Code-specific guidance for this repo (build commands, troubleshooting).
-5. [Architecture overview](architecture.md) and [Crates Map](crates.md) — high-level orientation.
+1. [`docs/FOUNDATIONS.md`](FOUNDATIONS.md) — **architecture contract**: target architecture, locked contracts (C1–C9), target crate graph (Part IV).
+2. [`docs/ROADMAP.md`](ROADMAP.md) — **construction plan**: dependency-ordered phases that move the workspace from current state to the target.
+3. [`STRATEGY.md`](../STRATEGY.md) — product strategy and the three port rules ("behavior loyal, structure Rust-native").
+4. [`docs/PORT.md`](PORT.md) — port methodology, refusal triggers, per-crate `ARCHITECTURE.md` template.
+5. [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) — the project constitution (v2.3.0). Non-negotiable rules: layered DAG, `unsafe` boundaries, no `unwrap()` / `println!`, on-demand rendering, etc.
+6. [`.ai-factory/ARCHITECTURE.md`](../.ai-factory/ARCHITECTURE.md) — full architectural rules and anti-patterns.
+7. [`.ai-factory/rules/base.md`](../.ai-factory/rules/base.md) — project base rules (naming, modules, errors, logging, testing, unsafe).
+8. [`CLAUDE.md`](../CLAUDE.md) — Claude Code-specific guidance for this repo (build commands, troubleshooting).
+9. [Architecture overview](architecture.md) and [Crates Map](crates.md) — high-level orientation (current-state).
 
 ## Quality Gates
 

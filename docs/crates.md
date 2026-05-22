@@ -1,24 +1,26 @@
-[← Port](PORT.md) · [Back to README](../README.md) · [Testing →](testing.md)
+[← Port](PORT.md) · [Foundations](FOUNDATIONS.md) · [Roadmap](ROADMAP.md) · [Back to README](../README.md) · [Testing →](testing.md)
 
 # Crates Map
+
+> **Scope.** This page describes the **current** workspace as it is built today. The **target** crate decomposition (incl. `flui-geometry`, `flui-widgets`, `flui-material`, `flui-cupertino`, `flui-localizations`, the `flui-log` merge into `flui-foundation`) is defined in [`FOUNDATIONS.md` Part IV](FOUNDATIONS.md); the migration is sequenced in [`ROADMAP.md`](ROADMAP.md).
 
 The FLUI workspace contains 20+ crates organized into a strict layered DAG. This page is the canonical inventory: what each crate does, what layer it sits in, and whether it is currently active.
 
 A crate marked **DISABLED** is commented out in `Cargo.toml` `[workspace.members]` while integration is in progress; the source tree still exists but is not built by default.
 
-## Layer 0 — Foundation
-
-Zero internal dependencies. Reused by every other crate.
+## Layer 0 — Foundation (value types)
 
 | Crate | Status | Purpose |
 |-------|--------|---------|
-| `flui-types` | ✅ ACTIVE | Base value types, units (px, dp), ID newtypes built on `NonZeroUsize` |
-| `flui-foundation` | ✅ ACTIVE | Geometry (`Size`, `Rect`, `Offset`), color, text style, common error helpers |
+| `flui-types` | ✅ ACTIVE | Base value types and units (px, dp); ID newtypes built on `NonZeroUsize`; geometry (`Point`, `Rect`, `Size`, `Offset`, `Matrix4`, Bézier, superellipse); styling (colors, paint values); typography; layout enums; gestures; physics value types; platform value types |
 
-## Layer 1 — Tree Primitives
+## Layer 1 — Framework primitives + Tree primitives
+
+`flui-foundation` operates on top of `flui-types`' value types (its responsibility — framework primitives like notifiers and bindings — is above raw value types even where the current Cargo manifest does not declare the edge; see `Note on flui-foundation placement` in [Architecture](architecture.md)).
 
 | Crate | Status | Purpose |
 |-------|--------|---------|
+| `flui-foundation` | ✅ ACTIVE | Framework primitives: `ChangeNotifier` / `Listenable`, `Id` system, `BindingBase`, `Key`, diagnostics, error helpers |
 | `flui-tree` | ✅ ACTIVE | Generic tree abstractions, visitor patterns, build / diff / reconcile primitives |
 
 ## Layer 2 — Reactivity
@@ -46,13 +48,12 @@ These crates compose the rendering substrate without knowing about each other.
 | `flui-rendering` | ✅ ACTIVE | `RenderObject`, `RenderBox<Arity>`, layout protocol, paint context |
 | `flui-animation` | ⏸️ DISABLED | Curves, tweens, controllers, implicit animations |
 
-## Layer 5 — Engine / Platform / Hot-Reload / Logging
+## Layer 5 — Engine / Platform / Logging
 
 | Crate | Status | Purpose |
 |-------|--------|---------|
 | `flui-engine` | ✅ ACTIVE | GPU pipeline (build → layout → paint → composite). Owns all `wgpu` state. |
 | `flui-platform` | ✅ ACTIVE | Native Win32 / AppKit / Headless backends + `winit` fallback. Sole home of OS-specific code. |
-| `flui-hot-reload` | ✅ ACTIVE | `dlopen`-based scene plugin host for desktop iteration |
 | `flui-log` | ✅ ACTIVE | `tracing` setup helpers, Android logging layer |
 
 ## Layer 6 — View / Assets / Build
@@ -63,7 +64,13 @@ These crates compose the rendering substrate without knowing about each other.
 | `flui-assets` | ⏸️ DISABLED | Asset loading, caching, image decoding |
 | `flui-build` | ⏸️ DISABLED | Async cross-platform build pipeline (`PlatformBuilder` typestate) |
 
-## Layer 7 — Application / CLI / DevTools
+## Layer 7 — Hot-Reload
+
+| Crate | Status | Purpose |
+|-------|--------|---------|
+| `flui-hot-reload` | ✅ ACTIVE | `dlopen`-based scene plugin host for desktop iteration. Optional `app-plugin` feature depends on `flui-view`, `flui-rendering`, `flui-types` — placing this crate above `flui-view` in the DAG. |
+
+## Layer 8 — Application / CLI / DevTools
 
 | Crate | Status | Purpose |
 |-------|--------|---------|
@@ -106,7 +113,9 @@ cargo build -p flui-app
 
 ## See Also
 
-- [Architecture](architecture.md) — three-tree pipeline + layered DAG
+- [Foundations](FOUNDATIONS.md) — architecture contract, target crate graph
+- [Roadmap](ROADMAP.md) — construction phases from current to target
+- [Architecture](architecture.md) — three-tree pipeline + layered DAG (current state)
 - [Getting Started](getting-started.md) — build and run instructions
 - [`.ai-factory/ARCHITECTURE.md`](../.ai-factory/ARCHITECTURE.md) — full architectural rules
-- [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) — constitution v2.2.0
+- [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) — constitution v2.3.0

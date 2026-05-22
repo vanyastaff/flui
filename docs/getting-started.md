@@ -1,4 +1,4 @@
-[Back to README](../README.md) · [Architecture →](architecture.md)
+[Back to README](../README.md) · [Foundations](FOUNDATIONS.md) · [Roadmap](ROADMAP.md) · [Architecture →](architecture.md)
 
 # Getting Started
 
@@ -53,7 +53,7 @@ INFO   Display 1: Generic PnP Monitor (1920x1080 @ 1.0x scale)
 INFO Creating window...
 ```
 
-A window titled "Hello, FLUI!" should open. Close it to terminate the process.
+A window titled "Hello FLUI!" should open. Close it to terminate the process.
 
 ### Other bundled examples
 
