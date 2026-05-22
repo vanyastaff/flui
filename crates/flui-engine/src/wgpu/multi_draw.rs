@@ -39,20 +39,30 @@
 //! ```rust,ignore
 //! let mut batcher = MultiDrawBatcher::new();
 //!
-//! // Collect draw commands
-//! batcher.add_draw(DrawCommand {
-//!     index_count: 6,
-//!     instance_count: 100,  // 100 rectangles
-//!     pipeline_id: PipelineId::Rectangle,
-//! });
-//! batcher.add_draw(DrawCommand {
-//!     index_count: 6,
-//!     instance_count: 50,   // 50 circles
-//!     pipeline_id: PipelineId::Circle,
+//! // Convenience helper for the common quad-instance case: builds
+//! // the `DrawIndexedIndirectArgs` (6 indices per quad) and packages
+//! // it with the instance-buffer slice into a `DrawIndirect`. Zero
+//! // instance_count entries are silently dropped.
+//! batcher.add_quad_draw(
+//!     PipelineId::Rectangle,
+//!     100,    // instance_count: 100 rectangles
+//!     0,      // instance_buffer_offset
+//!     6_400,  // instance_buffer_size in bytes
+//! );
+//! batcher.add_quad_draw(PipelineId::Circle, 50, 6_400, 2_400);
+//!
+//! // Manual entry point for non-quad geometry (custom index_count,
+//! // first_index, base_vertex, etc.):
+//! batcher.add(DrawIndirect {
+//!     pipeline_id: PipelineId::Texture,
+//!     args: DrawIndexedIndirectArgs::new(/* index_count */ 6, /* instance_count */ 8),
+//!     instance_buffer_offset: 8_800,
+//!     instance_buffer_size: 512,
 //! });
 //!
-//! // Execute all draws in one call
-//! batcher.execute(&mut render_pass);
+//! // Encode the indirect buffer; submission lives in `WgpuPainter`
+//! // (this module owns batching only, not the GPU encoder).
+//! let indirect_bytes = batcher.create_indirect_buffer();
 //! ```
 
 use std::mem;
@@ -93,10 +103,21 @@ impl DrawIndexedIndirectArgs {
         }
     }
 
-    /// Create command for quad instances
+    /// Create command for quad instances.
     ///
-    /// Quad has 6 indices (2 triangles)
-    pub fn quad_instances(instance_count: u32) -> Self {
+    /// Quad has 6 indices (2 triangles).
+    ///
+    /// Cycle 4 E-16: visibility demoted from `pub` to `pub(crate)`.
+    /// Sole callsite is [`MultiDrawBatcher::add_quad_draw`] in this
+    /// same module; no workspace consumer needs the function-path
+    /// entry. Demotion trims the crate's public surface without
+    /// touching behavior.
+    ///
+    /// PR #116 review (cycle 4 wave 4 follow-up): prior comment said
+    /// `add_quad_instances` and quoted a hard-coded line number; the
+    /// method has always been `add_quad_draw`, and intra-doc links
+    /// stay accurate when the file shifts. Both issues fixed.
+    pub(crate) fn quad_instances(instance_count: u32) -> Self {
         Self::new(6, instance_count)
     }
 }
@@ -116,7 +137,7 @@ pub enum PipelineId {
 
 /// Single draw command with pipeline and instance data
 #[derive(Clone, Debug)]
-pub struct DrawCommand {
+pub struct DrawIndirect {
     /// Which pipeline to use
     pub pipeline_id: PipelineId,
     /// Indirect draw arguments
@@ -133,7 +154,7 @@ pub struct DrawCommand {
 /// indirect draw call for maximum CPU efficiency.
 pub struct MultiDrawBatcher {
     /// Collected draw commands
-    commands: Vec<DrawCommand>,
+    commands: Vec<DrawIndirect>,
     /// Statistics
     total_draws: usize,
     total_instances: usize,
@@ -153,7 +174,7 @@ impl MultiDrawBatcher {
     ///
     /// # Arguments
     /// * `command` - Draw command to add
-    pub fn add(&mut self, command: DrawCommand) {
+    pub fn add(&mut self, command: DrawIndirect) {
         self.total_instances += command.args.instance_count as usize;
         self.commands.push(command);
     }
@@ -176,7 +197,7 @@ impl MultiDrawBatcher {
             return;
         }
 
-        self.add(DrawCommand {
+        self.add(DrawIndirect {
             pipeline_id,
             args: DrawIndexedIndirectArgs::quad_instances(instance_count),
             instance_buffer_offset,
@@ -200,7 +221,7 @@ impl MultiDrawBatcher {
     }
 
     /// Get immutable reference to commands
-    pub fn commands(&self) -> &[DrawCommand] {
+    pub fn commands(&self) -> &[DrawIndirect] {
         &self.commands
     }
 

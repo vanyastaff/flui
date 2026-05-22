@@ -3005,11 +3005,27 @@ impl WgpuPainter {
         }
     }
 
+    /// Draw indexed triangle geometry with per-vertex color + uv.
+    ///
+    /// # `tex_coords` parameter
+    ///
+    /// Cycle 4 E-12: pre-cycle the parameter carried a `// TODO: Full
+    /// texture coordinate support` comment that was misleading -- the
+    /// per-vertex uv extraction IS implemented (the `tex_coords` slice
+    /// is consumed at the per-vertex loop below, copied into
+    /// `Vertex::tex_coord`, and baked into the GPU vertex buffer).
+    /// What is NOT yet wired is the **texture-binding pipeline path**:
+    /// `pipeline_key_from_paint(paint)` returns a solid-color pipeline
+    /// today, so the uv values reach the vertex shader but the fragment
+    /// shader has no texture to sample. A textured pipeline-key variant
+    /// is a follow-up audit item; until then `tex_coords` callers pre-
+    /// populate the vertex stream for forward-compat (the data path is
+    /// correct, only the pipeline binding is missing).
     pub fn draw_vertices(
         &mut self,
         vertices: &[Point<Pixels>],
         colors: Option<&[flui_types::styling::Color]>,
-        tex_coords: Option<&[Point<Pixels>]>, // TODO: Full texture coordinate support
+        tex_coords: Option<&[Point<Pixels>]>,
         indices: &[u16],
         paint: &Paint,
     ) {

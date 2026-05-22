@@ -137,7 +137,12 @@ impl TextRenderer {
         fs.db_mut().load_font_data(ROBOTO_REGULAR.to_vec());
         tracing::trace!("Loaded embedded Roboto-Regular font");
 
-        // TODO: Add more embedded fonts if needed (Bold, Italic, etc.)
+        // TODO(REMOVE_BY=2026-09-22, cycle-4 E-15): add more embedded
+        // fonts if needed (Bold, Italic, etc.) OR delete this TODO if
+        // the embedded-font set is intentionally minimal (Roboto-Regular
+        // covers default Material text rendering). The cadence comment
+        // forces a decision rather than letting the placeholder rot
+        // (same discipline as cycle 3 PR #106 REMOVE_BY pattern).
         // const ROBOTO_BOLD: &[u8] =
         // include_bytes!("../../assets/fonts/Roboto-Bold.ttf");
         // fs.db_mut().load_font_data(ROBOTO_BOLD.to_vec());
