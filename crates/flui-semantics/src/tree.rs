@@ -6,8 +6,8 @@
 
 use flui_foundation::{ElementId, SemanticsId};
 use flui_tree::{
-    iter::{Ancestors, DescendantsWithDepth},
     TreeNav, TreeRead,
+    iter::{Ancestors, DescendantsWithDepth},
 };
 use slab::Slab;
 
@@ -168,11 +168,49 @@ impl SemanticsTree {
     /// **Note:** This does NOT remove children. Caller must handle tree
     /// cleanup.
     pub fn remove(&mut self, id: SemanticsId) -> Option<SemanticsNode> {
-        // Update root if removing root
+        if !self.contains(id) {
+            return None;
+        }
+
+        // 1. Snapshot the children list so the recursive call doesn't hold
+        //    a borrow conflict with `self.remove(child_id)`.
+        let children: Vec<SemanticsId> = self
+            .get(id)
+            .map(|n| n.children().to_vec())
+            .unwrap_or_default();
+
+        // 2. Post-order cascade — descendants drop first.
+        for child_id in children {
+            let _ = self.remove(child_id);
+        }
+
+        // 3. Unlink from parent so parent.children() no longer surfaces a
+        //    stale id after the removal.
+        if let Some(parent_id) = self.get(id).and_then(SemanticsNode::parent) {
+            if let Some(parent) = self.get_mut(parent_id) {
+                parent.remove_child(id);
+            }
+        }
+
+        // 4. Update root if removing root.
         if self.root == Some(id) {
             self.root = None;
         }
 
+        self.nodes.try_remove(id.get() - 1)
+    }
+
+    /// Removes a single SemanticsNode from the tree **without** cascading
+    /// to descendants. Use this for reparenting workflows that immediately
+    /// re-attach the removed node elsewhere.
+    ///
+    /// Unlike [`Self::remove`], this does NOT touch the parent's children
+    /// vector — the caller is responsible for keeping parent/child
+    /// pointers consistent. For full cascade semantics use [`Self::remove`].
+    pub fn remove_shallow(&mut self, id: SemanticsId) -> Option<SemanticsNode> {
+        if self.root == Some(id) {
+            self.root = None;
+        }
         self.nodes.try_remove(id.get() - 1)
     }
 
@@ -184,16 +222,49 @@ impl SemanticsTree {
 
     // ========== Tree Operations ==========
 
-    /// Adds a child to a parent SemanticsNode.
+    /// Adds `child_id` as a child of `parent_id`.
     ///
-    /// Updates both parent's children list and child's parent pointer.
+    /// **Auto-detach semantics (U11)** — if `child_id` is currently
+    /// attached to a different parent, it is removed from that parent's
+    /// children vector first. Re-attaching to the same parent is a
+    /// short-circuit no-op (`SemanticsNode::add_child` carries the
+    /// containment dedup so the children vector never holds a duplicate
+    /// id). Mirrors the layer-side guarantee that [`LayerTree::add_child`]
+    /// provides and matches Flutter `semantics.dart` `_SemanticsTreeWalker`
+    /// reparent semantics.
+    ///
+    /// Missing-id lookups (either `parent_id` or `child_id` not in the
+    /// tree) are silent no-ops.
+    ///
+    /// [`LayerTree::add_child`]: ../../flui-layer/src/tree/layer_tree.rs
     pub fn add_child(&mut self, parent_id: SemanticsId, child_id: SemanticsId) {
-        // Update parent's children
+        // Both endpoints must exist — otherwise the call is a no-op.
+        if !self.contains(parent_id) || !self.contains(child_id) {
+            return;
+        }
+
+        // 1. Detach from previous parent if one exists and differs.
+        let prev_parent = self.get(child_id).and_then(SemanticsNode::parent);
+        if let Some(prev) = prev_parent {
+            if prev == parent_id {
+                // Already attached to this parent — short-circuit. The
+                // node-level dedup in SemanticsNode::add_child would
+                // catch a double-add, but bailing here avoids the
+                // redundant mutation + dirty-bit ripple.
+                return;
+            }
+            if let Some(prev_node) = self.get_mut(prev) {
+                prev_node.remove_child(child_id);
+            }
+        }
+
+        // 2. Attach to new parent. `SemanticsNode::add_child` already
+        //    has the containment dedup (node.rs).
         if let Some(parent) = self.get_mut(parent_id) {
             parent.add_child(child_id);
         }
 
-        // Update child's parent
+        // 3. Update child's parent pointer.
         if let Some(child) = self.get_mut(child_id) {
             child.set_parent(Some(parent_id));
         }
@@ -745,5 +816,145 @@ mod tests {
         assert_eq!(TreeNav::depth(&tree, root_id), 0);
         assert_eq!(TreeNav::depth(&tree, child_id), 1);
         assert_eq!(TreeNav::depth(&tree, grandchild_id), 2);
+    }
+}
+
+// ============================================================================
+// SLAB-TREE HYGIENE TESTS (U11 — add_child auto-detach + U13 — remove cascade)
+// ============================================================================
+
+#[cfg(test)]
+mod slab_hygiene_tests {
+    use crate::node::SemanticsNode;
+    use crate::tree::SemanticsTree;
+    use flui_foundation::SemanticsId;
+
+    fn empty_node() -> SemanticsNode {
+        SemanticsNode::new()
+    }
+
+    // ----- U11 add_child auto-detach -----
+
+    #[test]
+    fn add_child_attaches_under_new_parent() {
+        let mut tree = SemanticsTree::new();
+        let parent = tree.insert(empty_node());
+        let child = tree.insert(empty_node());
+
+        tree.add_child(parent, child);
+
+        assert_eq!(tree.get(child).unwrap().parent(), Some(parent));
+        assert_eq!(tree.get(parent).unwrap().children(), &[child]);
+    }
+
+    #[test]
+    fn add_child_auto_detaches_from_previous_parent() {
+        let mut tree = SemanticsTree::new();
+        let parent_a = tree.insert(empty_node());
+        let parent_b = tree.insert(empty_node());
+        let child = tree.insert(empty_node());
+
+        tree.add_child(parent_a, child);
+        tree.add_child(parent_b, child);
+
+        assert_eq!(tree.get(child).unwrap().parent(), Some(parent_b));
+        assert!(tree.get(parent_a).unwrap().children().is_empty());
+        assert_eq!(tree.get(parent_b).unwrap().children(), &[child]);
+    }
+
+    #[test]
+    fn add_child_same_parent_is_idempotent() {
+        let mut tree = SemanticsTree::new();
+        let parent = tree.insert(empty_node());
+        let child = tree.insert(empty_node());
+
+        tree.add_child(parent, child);
+        tree.add_child(parent, child);
+
+        assert_eq!(tree.get(parent).unwrap().children().len(), 1);
+    }
+
+    #[test]
+    fn add_child_missing_parent_is_a_no_op() {
+        let mut tree = SemanticsTree::new();
+        let child = tree.insert(empty_node());
+        let phantom = SemanticsId::new(999);
+        tree.add_child(phantom, child);
+        assert!(tree.get(child).unwrap().parent().is_none());
+    }
+
+    #[test]
+    fn add_child_missing_child_is_a_no_op() {
+        let mut tree = SemanticsTree::new();
+        let parent = tree.insert(empty_node());
+        let phantom = SemanticsId::new(999);
+        tree.add_child(parent, phantom);
+        assert!(tree.get(parent).unwrap().children().is_empty());
+    }
+
+    // ----- U13 remove cascade + remove_shallow -----
+
+    #[test]
+    fn remove_cascades_to_descendants() {
+        let mut tree = SemanticsTree::new();
+        let root = tree.insert(empty_node());
+        let mid = tree.insert(empty_node());
+        let leaf = tree.insert(empty_node());
+        tree.add_child(root, mid);
+        tree.add_child(mid, leaf);
+        assert_eq!(tree.len(), 3);
+
+        let removed = tree.remove(root);
+        assert!(removed.is_some());
+        assert_eq!(tree.len(), 0);
+        assert!(!tree.contains(mid));
+        assert!(!tree.contains(leaf));
+    }
+
+    #[test]
+    fn remove_unlinks_parent_children_vector() {
+        let mut tree = SemanticsTree::new();
+        let root = tree.insert(empty_node());
+        let mid = tree.insert(empty_node());
+        let sibling = tree.insert(empty_node());
+        tree.add_child(root, mid);
+        tree.add_child(root, sibling);
+
+        let _ = tree.remove(mid);
+        assert!(!tree.contains(mid));
+        assert_eq!(tree.get(root).unwrap().children(), &[sibling]);
+    }
+
+    #[test]
+    fn remove_resets_root_when_removing_root() {
+        let mut tree = SemanticsTree::new();
+        let root = tree.insert(empty_node());
+        tree.set_root(Some(root));
+        let _ = tree.remove(root);
+        assert_eq!(tree.root(), None);
+    }
+
+    #[test]
+    fn remove_of_phantom_id_is_a_no_op() {
+        let mut tree = SemanticsTree::new();
+        let _ = tree.insert(empty_node());
+        let phantom = SemanticsId::new(999);
+        assert!(tree.remove(phantom).is_none());
+        assert_eq!(tree.len(), 1);
+    }
+
+    #[test]
+    fn remove_shallow_does_not_cascade() {
+        let mut tree = SemanticsTree::new();
+        let root = tree.insert(empty_node());
+        let mid = tree.insert(empty_node());
+        let leaf = tree.insert(empty_node());
+        tree.add_child(root, mid);
+        tree.add_child(mid, leaf);
+
+        let _ = tree.remove_shallow(mid);
+        assert!(!tree.contains(mid));
+        // Leaf survives (only cascade path drops descendants).
+        assert!(tree.contains(leaf));
     }
 }
