@@ -112,8 +112,12 @@ impl BufferPool {
     // uniform buffers don't go through this pool at all (pipeline
     // construction creates them once via `device.create_buffer`).
     // `index_buffers` / `uniform_buffers` Vec fields stay because
-    // `BufferPool::shrink` (also live below) drains all three pools,
-    // and the joint accessor writes into `index_buffers` directly.
+    // `BufferPool::reset` (the per-frame "mark all buffers free"
+    // pass on line 277) drains all three pools, and the joint
+    // accessor writes into `index_buffers` directly. PR #117 review
+    // fix: prior comment said `BufferPool::shrink` was the
+    // load-bearer; that method was also deleted in this wave, so
+    // `reset` is the actual reason these fields survive.
 
     /// Internal: Get or create a buffer from specific pool
     #[allow(clippy::too_many_arguments)]
@@ -341,16 +345,17 @@ mod tests {
         assert!(std::mem::size_of::<BufferPool>() <= 128);
     }
 
+    // Cycle 4 wave 5 PR #117 review fix: prior `test_buffer_pool_stats`
+    // asserted on 5 BufferPoolStats fields (`vertex_buffers`,
+    // `index_buffers`, `uniform_buffers`, `allocations`, `reuses`)
+    // that the E-10 trim deleted. The fresh shape exposes only
+    // `reuse_rate`; an empty pool's reuse rate is 0.0 (no allocs +
+    // no reuses → `0 / 0` short-circuits to 0.0 per `reuse_rate()`'s
+    // `total == 0` branch).
     #[test]
-    fn test_buffer_pool_stats() {
+    fn test_buffer_pool_stats_empty_pool_zero_reuse_rate() {
         let pool = BufferPool::new();
         let stats = pool.stats();
-
-        assert_eq!(stats.vertex_buffers, 0);
-        assert_eq!(stats.index_buffers, 0);
-        assert_eq!(stats.uniform_buffers, 0);
-        assert_eq!(stats.allocations, 0);
-        assert_eq!(stats.reuses, 0);
         assert_eq!(stats.reuse_rate, 0.0);
     }
 }
