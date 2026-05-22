@@ -303,19 +303,29 @@ impl SemanticsOwner {
 
     /// Flushes dirty nodes to the platform.
     ///
-    /// Walks `tree.dirty_nodes()` once, builds each update directly into
-    /// the reusable `updates_buffer`, hands the buffer's slice to the
-    /// platform callback (clone-and-released `Arc<dyn Fn>` to avoid
-    /// holding any internal lock during user code), and marks the
-    /// tree clean. After flushing, the buffer's capacity persists so
-    /// the next frame's flush incurs zero heap allocation in the
-    /// common steady-state case.
+    /// Walks [`SemanticsTree::iter_dirty`] in one pass, building each
+    /// update directly into the reusable `updates_buffer`. Hands the
+    /// buffer's slice to the platform callback via the clone-and-release
+    /// lock pattern, then marks the tree clean.
     ///
-    /// U22 allocation reduction: pre-cycle the call sequence was
-    ///   `dirty_ids: Vec = dirty_nodes().collect();` →
-    ///   `updates: Vec = dirty_ids.iter().filter_map(...).collect();`
-    /// Each `flush` allocated two `Vec`s every frame. Post-cycle: one
-    /// reusable buffer, no per-frame allocation.
+    /// Allocation profile per call:
+    /// - **Tree clean** (no dirty nodes): zero heap allocation; the
+    ///   `iter_dirty` iterator runs once, finds nothing, and returns.
+    ///   The reusable `updates_buffer` stays at its previous capacity.
+    /// - **Tree dirty**: each `SemanticsNodeUpdate` carries a
+    ///   `Vec<SemanticsId>` of children (cloned from the node's
+    ///   children slice); that allocation is intrinsic to the data
+    ///   shape, not flush overhead. The `updates_buffer` capacity
+    ///   grows on demand and persists between frames, so the buffer's
+    ///   own backing allocation is amortized to zero after the first
+    ///   dirty frame.
+    ///
+    /// PR #100 followup: pre-followup the loop went through a
+    /// `dirty_nodes().collect::<Vec<_>>()` intermediate to decouple the
+    /// borrow from the mutable `updates_buffer`. The new
+    /// `SemanticsTree::iter_dirty` returns `(id, &SemanticsNode)` pairs
+    /// so the per-node `tree.get(id)?` re-lookup goes away too — both
+    /// borrows live on the same iterator step.
     pub fn flush(&mut self) {
         if !self.enabled {
             return;
@@ -323,20 +333,21 @@ impl SemanticsOwner {
 
         self.updates_buffer.clear();
 
-        // Walk dirty nodes once, building updates directly into the
-        // reusable buffer. Borrow `&self.tree` for the iterator; the
-        // mutable buffer is a disjoint field so the borrow-checker is
-        // happy.
-        for id in self.tree.dirty_nodes().collect::<Vec<_>>() {
-            // Note: `dirty_nodes()` returns a borrowed iterator over
-            // `&self.tree`; collecting to a local `Vec` here decouples
-            // the lifetime from the mutable buffer below. The local
-            // Vec is small (one entry per dirty node) and reused-free
-            // in the unchanged-tree fast path — `dirty_nodes()` yields
-            // nothing in the steady state.
-            if let Some(update) = self.build_update(id) {
-                self.updates_buffer.push(update);
-            }
+        // Walk dirty nodes in one pass; build updates inline. The
+        // `iter_dirty` iterator and `updates_buffer` borrow disjoint
+        // fields (`self.tree` and `self.updates_buffer`) — but to
+        // satisfy the borrow checker we destructure `self` once.
+        let Self {
+            ref tree,
+            ref mut updates_buffer,
+            ..
+        } = self;
+        for (id, node) in tree.iter_dirty() {
+            updates_buffer.push(
+                SemanticsNodeUpdate::new(id, node.to_node_data(id))
+                    .with_parent(node.parent())
+                    .with_children(node.children().to_vec()),
+            );
         }
 
         if self.updates_buffer.is_empty() {
@@ -354,17 +365,6 @@ impl SemanticsOwner {
 
         // Mark all nodes clean for the next composite cycle.
         self.tree.mark_all_clean();
-    }
-
-    /// Builds an update for a single node.
-    fn build_update(&self, id: SemanticsId) -> Option<SemanticsNodeUpdate> {
-        let node = self.tree.get(id)?;
-
-        Some(
-            SemanticsNodeUpdate::new(id, node.to_node_data(id))
-                .with_parent(node.parent())
-                .with_children(node.children().to_vec()),
-        )
     }
 
     /// Forces a full tree update.
