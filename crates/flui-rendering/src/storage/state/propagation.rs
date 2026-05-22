@@ -1,72 +1,18 @@
-//! Flutter-style boundary-aware dirty propagation.
+//! Doc-stub: site reserved for a future viewport-invalidation hook.
 //!
-//! This file contains the `RenderDirtyPropagation` trait — minimal tree
-//! operations needed by boundary-aware propagation. The trait shape is
-//! preserved at `pub(crate)` visibility for a possible future
-//! viewport-invalidation hook (see `PRESERVED_FOR` marker on the trait).
+//! The pre-cycle `RenderDirtyPropagation` trait that lived here was deleted in
+//! cycle 4 R-5 (audit: `docs/research/2026-05-22-flui-rendering-engine-audit.md`).
+//! The trait body was typed against `flui_foundation::ElementId`, but the
+//! flui-rendering crate operates on `RenderId`; the cross-tree translation
+//! layer is owned by `flui-view`, not this crate. Preserving the wrong-typed
+//! trait shape codified the mismatch as a "cost-cheap option" and risked
+//! the next implementer treating `ElementId` as the right key for a render-
+//! tree dirty-propagation API.
 //!
-//! The five `RenderState<P>::mark_needs_*` propagation methods that previously
-//! lived here were deleted in U3 of the flui-rendering Phase 1 zombie cleanup
-//! (plan: `docs/plans/2026-05-20-005-refactor-flui-rendering-zombie-cleanup-plan.md`)
-//! because they were unreachable in production. Production dirty marking goes
-//! through `PipelineOwner::add_node_needing_layout / add_node_needing_paint`
-//! invoked from `flui-view` and `flui-hot-reload`, not via `RenderState`.
-
-use flui_foundation::ElementId;
-
-use super::RenderState;
-use crate::protocol::Protocol;
-
-// ============================================================================
-// TREE OPERATIONS TRAIT
-// ============================================================================
-
-/// Tree operations needed by boundary-aware dirty propagation (preserved as cost-cheap option).
-// PRESERVED_FOR: future viewport-invalidation hook (audit Step 4 item 13
-// contemplates pinning down the production dirty-marking path; this trait
-// shape may or may not be adopted at that time — kept as cost-cheap option,
-// not as an endorsed design).
-#[expect(
-    dead_code,
-    reason = "preserved as a cost-cheap option for a possible viewport-invalidation hook (see PRESERVED_FOR marker above); promoting to `expect` so the lint self-expires the moment a first implementer or caller appears"
-)]
-pub(crate) trait RenderDirtyPropagation {
-    /// Gets the parent element ID, if any.
-    fn parent(&self, id: ElementId) -> Option<ElementId>;
-
-    /// Gets the render state for an element, if it exists.
-    ///
-    /// Returns None if:
-    /// - Element doesn't exist
-    /// - Element is not a render element
-    /// - Protocol doesn't match
-    fn get_render_state<P: Protocol>(&self, id: ElementId) -> Option<&RenderState<P>>;
-
-    /// Registers an element that needs layout in the next frame.
-    ///
-    /// This is called when a relayout boundary is dirty. The pipeline
-    /// owner will process all registered elements in the next frame.
-    fn register_needs_layout(&mut self, id: ElementId);
-
-    /// Registers an element that needs paint in the next frame.
-    ///
-    /// This is called when a repaint boundary is dirty. The pipeline
-    /// owner will process all registered elements in the next frame.
-    fn register_needs_paint(&mut self, id: ElementId);
-
-    /// Registers an element that needs compositing bits update.
-    ///
-    /// This is called when a node's compositing status changes. The pipeline
-    /// owner will process all registered elements during the compositing phase.
-    fn register_needs_compositing_bits_update(&mut self, id: ElementId);
-
-    /// Gets the RenderObject for an element to check `is_repaint_boundary`.
-    ///
-    /// Returns true if the element is a repaint boundary.
-    fn is_repaint_boundary(&self, id: ElementId) -> bool;
-
-    /// Gets the previous repaint boundary status (for transition detection).
-    ///
-    /// Returns the cached `_wasRepaintBoundary` value.
-    fn was_repaint_boundary(&self, id: ElementId) -> bool;
-}
+//! Production dirty marking goes through
+//! `PipelineOwner::add_node_needing_layout / add_node_needing_paint` invoked
+//! from `flui-view` and `flui-hot-reload` — not via a `RenderState` trait. A
+//! future viewport-invalidation hook, if introduced, will be designed against
+//! `RenderId` at that time; there is no benefit to a forward-declared shape
+//! ahead of a concrete first consumer (cycle-1 PR #93 `typestate.rs` deletion
+//! is the precedent).

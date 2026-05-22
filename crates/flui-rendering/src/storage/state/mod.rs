@@ -10,10 +10,12 @@
 //! `PipelineOwner::add_node_needing_layout / add_node_needing_paint` invoked
 //! from `flui-view` and `flui-hot-reload`. The boundary-aware propagation
 //! methods that previously hung off `RenderState<P>` were removed in U3 of
-//! the flui-rendering Phase 1 zombie cleanup as unreachable code; see the
-//! `propagation` submodule's `RenderDirtyPropagation` trait, which is
-//! preserved at `pub(crate)` visibility as a cost-cheap option for a possible
-//! future viewport-invalidation hook (audit Step 4 item 13).
+//! the flui-rendering Phase 1 zombie cleanup as unreachable code; the
+//! `RenderDirtyPropagation` trait that PR #81 U3 preserved as a "cost-cheap
+//! option" was deleted in cycle 4 R-5 because its `ElementId` typing did not
+//! match the crate's `RenderId` key — see the `propagation` submodule's
+//! module-level docstring for the rationale and the audit trail
+//! (`docs/research/2026-05-22-flui-rendering-engine-audit.md`).
 //!
 //! # Design Philosophy
 //!
@@ -87,17 +89,10 @@ mod propagation;
 #[cfg(test)]
 mod tests;
 
-// Re-export the dirty-propagation trait at this module's path so the
-// in-crate import path (`crate::storage::state::RenderDirtyPropagation`)
-// remains the same as before the split. Visibility is `pub(crate)` after
-// U3 deleted the impl bulk; the trait shape is preserved as a cost-cheap
-// option for a possible future viewport-invalidation hook (see the
-// `PRESERVED_FOR` marker on the trait declaration). The
-// `#[allow(unused_imports)]` is kept conservatively because no in-crate
-// consumer currently imports the trait outside the `propagation`
-// submodule.
-#[allow(unused_imports)]
-pub(crate) use propagation::RenderDirtyPropagation;
+// The `propagation` submodule is intentionally body-less after cycle 4 R-5
+// (see its module-level docstring). No re-export is needed; the file is kept
+// as a placeholder so a future viewport-invalidation hook lands in a known
+// location.
 
 use offset::AtomicOffset;
 
