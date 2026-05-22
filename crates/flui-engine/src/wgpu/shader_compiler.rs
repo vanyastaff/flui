@@ -5,11 +5,13 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-// Cycle 4 E-7 (extended): `bytemuck::{Pod, Zeroable}` + `Color`
-// imports dropped alongside the deletion of the 5 dead uniform
-// helpers (see comment block below). `Shader` is retained --
-// `ShaderType::from_shader` (live, 1 callsite in offscreen.rs) still
-// pattern-matches on the enum variants.
+// Cycle 4 E-7 (extended): `bytemuck::{Pod, Zeroable}` imports
+// dropped alongside the deletion of the 5 dead uniform helpers (see
+// comment block above the `#[cfg(test)] mod tests` declaration).
+// `Shader` is retained -- `ShaderType::from_shader` (live, 1
+// callsite in offscreen.rs) still pattern-matches on the enum
+// variants. `Color` is needed only by the test module below; it is
+// imported there under the same cfg gate so default builds skip it.
 use flui_types::painting::Shader;
 use parking_lot::RwLock;
 
@@ -258,9 +260,6 @@ impl Default for ShaderCache {
     }
 }
 
-/// Uniform data for solid mask shader
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Pod, Zeroable)]
 // Cycle 4 E-7 (extended): the 5 forward-looking uniform helpers
 // (`SolidMaskUniforms`, `LinearGradientUniforms`,
 // `RadialGradientUniforms`, `SweepGradientUniforms`, and the
@@ -273,11 +272,23 @@ impl Default for ShaderCache {
 // will define its own uniform buffer shapes inline next to the
 // concrete bind-group layout consumer, not as forward-bait helpers.
 //
-// `Shader` (from `flui_types::painting`) is no longer needed in
-// this file -- only `Color` remains for the surviving
-// `ShaderType::*` enum metadata.
+// PR #112 review fix: the previous version of this comment block
+// had three orphan attributes above it -- `/// Uniform data for
+// solid mask shader`, `#[repr(C)]`, `#[derive(Debug, Clone, Copy,
+// Pod, Zeroable)]` -- left behind when `SolidMaskUniforms` was
+// deleted. Under `--features enable-wgpu-tests` those attributes
+// attached to the `mod tests` declaration below (where `#[derive]`
+// is not valid + `Pod`/`Zeroable` are no longer in scope) and
+// blocked compilation. Removed.
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod tests {
+    // Cycle 4 PR #112 review fix: `Color` was dropped from the
+    // file-level imports in the E-7 cleanup but the tests below
+    // still reference `Color::WHITE` / `Color::RED` / etc. Bring
+    // the import back here under the same cfg gate so default
+    // builds skip it.
+    use flui_types::styling::Color;
+
     use super::*;
 
     #[test]
@@ -355,72 +366,14 @@ mod tests {
         assert_eq!(radial.shader_type, ShaderType::RadialGradientMask);
     }
 
-    #[test]
-    fn test_solid_mask_uniforms() {
-        let color = Color::rgba(255, 128, 64, 200);
-        let uniforms = SolidMaskUniforms::from_color(color);
-
-        // Test that conversion to normalized floats works
-        assert!(uniforms.mask_color[0] >= 0.0 && uniforms.mask_color[0] <= 1.0); // R
-        assert!(uniforms.mask_color[1] >= 0.0 && uniforms.mask_color[1] <= 1.0); // G
-        assert!(uniforms.mask_color[2] >= 0.0 && uniforms.mask_color[2] <= 1.0); // B
-        assert!(uniforms.mask_color[3] >= 0.0 && uniforms.mask_color[3] <= 1.0); // A
-
-        // Also test with simple white color
-        let white = Color::WHITE;
-        let white_uniforms = SolidMaskUniforms::from_color(white);
-        assert!((white_uniforms.mask_color[0] - 1.0).abs() < 0.01);
-        assert!((white_uniforms.mask_color[1] - 1.0).abs() < 0.01);
-        assert!((white_uniforms.mask_color[2] - 1.0).abs() < 0.01);
-        assert!((white_uniforms.mask_color[3] - 1.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_linear_gradient_uniforms() {
-        let start_color = Color::RED;
-        let end_color = Color::BLUE;
-        let uniforms = LinearGradientUniforms::new((0.0, 0.0), (1.0, 1.0), start_color, end_color);
-
-        assert_eq!(uniforms.start, [0.0, 0.0]);
-        assert_eq!(uniforms.end, [1.0, 1.0]);
-        assert_eq!(uniforms.start_color[0], 1.0); // Red
-        assert_eq!(uniforms.end_color[2], 1.0); // Blue
-    }
-
-    #[test]
-    fn test_radial_gradient_uniforms() {
-        let center_color = Color::WHITE;
-        let edge_color = Color::BLACK;
-        let uniforms = RadialGradientUniforms::new((0.5, 0.5), 1.0, center_color, edge_color);
-
-        assert_eq!(uniforms.center, [0.5, 0.5]);
-        assert_eq!(uniforms.radius, 1.0);
-    }
-
-    #[test]
-    fn test_create_uniforms_from_shader() {
-        use flui_types::geometry::{Offset, Rect, px};
-
-        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
-
-        let solid = Shader::solid(Color::WHITE);
-        let data = create_uniforms_from_shader(&solid, bounds);
-        assert_eq!(data.len(), std::mem::size_of::<SolidMaskUniforms>());
-
-        let linear = Shader::simple_linear(
-            Offset::ZERO,
-            Offset::new(px(100.0), px(100.0)),
-            vec![Color::RED, Color::BLUE],
-        );
-        let data = create_uniforms_from_shader(&linear, bounds);
-        assert_eq!(data.len(), std::mem::size_of::<LinearGradientUniforms>());
-
-        let radial = Shader::simple_radial(
-            Offset::new(px(50.0), px(50.0)),
-            50.0,
-            vec![Color::WHITE, Color::BLACK],
-        );
-        let data = create_uniforms_from_shader(&radial, bounds);
-        assert_eq!(data.len(), std::mem::size_of::<RadialGradientUniforms>());
-    }
+    // Cycle 4 PR #112 review fix: the 4 tests
+    // (`test_solid_mask_uniforms`, `test_linear_gradient_uniforms`,
+    // `test_radial_gradient_uniforms`, `test_create_uniforms_from_shader`)
+    // that exercised the deleted `SolidMaskUniforms` /
+    // `LinearGradientUniforms` / `RadialGradientUniforms` /
+    // `create_uniforms_from_shader` items were removed alongside the
+    // E-7 production-side deletion. The pre-fix commit landed the
+    // production deletion but left the test bodies referencing
+    // unresolved symbols -- only visible under
+    // `--features enable-wgpu-tests`.
 }
