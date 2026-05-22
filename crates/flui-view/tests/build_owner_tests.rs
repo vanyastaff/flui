@@ -3,11 +3,10 @@
 //! Tests dirty element tracking, build scheduling, and the GlobalKey
 //! registry.
 
+use std::any::TypeId;
+
 use flui_foundation::ElementId;
-use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementTree, StatelessBehavior, StatelessElement,
-    StatelessView, View,
-};
+use flui_view::{BuildOwner, ElementBase, ElementOwner, ElementTree, Lifecycle, View};
 
 // ============================================================================
 // Test View
@@ -19,16 +18,69 @@ struct TestView {
     id: u32,
 }
 
-impl StatelessView for TestView {
-    fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
-        Box::new(self.clone())
+impl View for TestView {
+    fn create_element(&self) -> Box<dyn ElementBase> {
+        Box::new(TestLeafElement::new())
     }
 }
 
-impl View for TestView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self, StatelessBehavior))
+/// A leaf element that creates no children, so `build_scope` terminates.
+///
+/// `TestView` was previously a `StatelessView` whose `build` returned
+/// `self` — an infinitely deep element tree that overflowed the stack
+/// when built. A leaf element is the correct fixture for exercising
+/// `BuildOwner` dirty-tracking and `build_scope` mechanics.
+struct TestLeafElement {
+    depth: usize,
+    lifecycle: Lifecycle,
+}
+
+impl TestLeafElement {
+    fn new() -> Self {
+        Self {
+            depth: 0,
+            lifecycle: Lifecycle::Initial,
+        }
     }
+}
+
+impl ElementBase for TestLeafElement {
+    fn view_type_id(&self) -> TypeId {
+        TypeId::of::<TestView>()
+    }
+
+    fn depth(&self) -> usize {
+        self.depth
+    }
+
+    fn lifecycle(&self) -> Lifecycle {
+        self.lifecycle
+    }
+
+    fn mount(&mut self, _parent: Option<ElementId>, slot: usize, _owner: &mut ElementOwner<'_>) {
+        self.depth = slot;
+        self.lifecycle = Lifecycle::Active;
+    }
+
+    fn unmount(&mut self, _owner: &mut ElementOwner<'_>) {
+        self.lifecycle = Lifecycle::Defunct;
+    }
+
+    fn activate(&mut self) {
+        self.lifecycle = Lifecycle::Active;
+    }
+
+    fn deactivate(&mut self) {
+        self.lifecycle = Lifecycle::Inactive;
+    }
+
+    fn update(&mut self, _new_view: &dyn View, _owner: &mut ElementOwner<'_>) {}
+
+    fn mark_needs_build(&mut self) {}
+
+    fn perform_build(&mut self, _owner: &mut ElementOwner<'_>) {}
+
+    fn visit_children(&self, _visitor: &mut dyn FnMut(ElementId)) {}
 }
 
 // ============================================================================
@@ -384,6 +436,6 @@ fn test_multiple_build_cycles() {
 #[test]
 fn test_build_owner_memory_size() {
     let size = std::mem::size_of::<BuildOwner>();
-    // Should be reasonably sized (BinaryHeap + HashSet + 2 HashMaps + debug flags)
+    // Should be reasonably sized (BinaryHeap + HashSet + HashMap + debug flags)
     assert!(size < 512, "BuildOwner is too large: {} bytes", size);
 }
