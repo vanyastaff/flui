@@ -107,7 +107,7 @@ pub fn dispatch_command<R: CommandRenderer + ?Sized>(command: &DrawCommand, rend
             paint,
             transform,
         } => {
-            renderer.render_image(image, *dst, paint.as_ref(), transform);
+            renderer.render_image(image, *dst, paint.as_deref(), transform);
         }
         DrawCommand::DrawTexture {
             texture_id,
@@ -209,7 +209,7 @@ pub fn dispatch_command<R: CommandRenderer + ?Sized>(command: &DrawCommand, rend
                 transforms,
                 colors.as_deref(),
                 *blend_mode,
-                paint.as_ref(),
+                paint.as_deref(),
                 transform,
             );
         }
@@ -298,7 +298,7 @@ pub fn dispatch_command<R: CommandRenderer + ?Sized>(command: &DrawCommand, rend
             paint,
             transform,
         } => {
-            renderer.render_image_repeat(image, *dst, *repeat, paint.as_ref(), transform);
+            renderer.render_image_repeat(image, *dst, *repeat, paint.as_deref(), transform);
         }
         DrawCommand::DrawImageNineSlice {
             image,
@@ -307,7 +307,13 @@ pub fn dispatch_command<R: CommandRenderer + ?Sized>(command: &DrawCommand, rend
             paint,
             transform,
         } => {
-            renderer.render_image_nine_slice(image, *center_slice, *dst, paint.as_ref(), transform);
+            renderer.render_image_nine_slice(
+                image,
+                *center_slice,
+                *dst,
+                paint.as_deref(),
+                transform,
+            );
         }
         DrawCommand::DrawImageFiltered {
             image,
@@ -316,7 +322,7 @@ pub fn dispatch_command<R: CommandRenderer + ?Sized>(command: &DrawCommand, rend
             paint,
             transform,
         } => {
-            renderer.render_image_filtered(image, *dst, *filter, paint.as_ref(), transform);
+            renderer.render_image_filtered(image, *dst, *filter, paint.as_deref(), transform);
         }
 
         // === Layer Commands ===
@@ -359,5 +365,48 @@ where
 {
     for command in commands {
         dispatch_command(command, renderer);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Cycle 5 U10 regression: dispatching an `Arc<Paint>`-carrying
+    //! `DrawCommand` reaches the backend identically to the pre-U10
+    //! by-value-`Paint` shape. `DebugBackend` only counts commands —
+    //! that is enough to prove the dispatch arm executed (rather
+    //! than falling through the `_` catch-all) and that no panic was
+    //! introduced by the deref shape.
+    //!
+    //! No GPU is required; this runs on every CI worker.
+    use flui_painting::{Canvas, DisplayListCore, Paint};
+    use flui_types::{
+        geometry::{Rect, px},
+        styling::Color,
+    };
+
+    use super::dispatch_commands;
+    use crate::wgpu::DebugBackend;
+
+    #[test]
+    fn dispatch_handles_interned_paint() {
+        let mut canvas = Canvas::new();
+        let paint = Paint::fill(Color::RED);
+        canvas.draw_rect(
+            Rect::from_ltrb(px(0.0), px(0.0), px(10.0), px(10.0)),
+            &paint,
+        );
+        canvas.draw_rect(
+            Rect::from_ltrb(px(20.0), px(20.0), px(30.0), px(30.0)),
+            &paint,
+        );
+        let dl = canvas.finish();
+
+        let mut backend =
+            DebugBackend::new(Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0)));
+        dispatch_commands(dl.commands(), &mut backend);
+
+        // Two `render_rect` arms must have fired — proves dispatch
+        // worked on the new `Arc<Paint>` field shape end-to-end.
+        assert_eq!(backend.command_count(), 2);
     }
 }

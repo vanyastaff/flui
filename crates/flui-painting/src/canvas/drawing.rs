@@ -9,17 +9,22 @@
 //! [`super::scoped`]. For multi-canvas composition, see
 //! [`super::composition`].
 //!
-//! # Allocation hot path (Mythos chain U9 audit)
+//! # Allocation hot path (Mythos chain U9 audit / Cycle 5 U10)
 //!
-//! Every `draw_*` call clones `Paint` (~80-200 bytes incl. optional
-//! `Box<Shader>` payload). `draw_path`/`draw_shadow` additionally
-//! clones the `Path` (`Vec<PathCommand>` heap allocation). `clip_path`
-//! additionally `Box::new`-wraps the cloned path for `ClipShape`
-//! variant uniformity (see [`super::clipping`]).
+//! `Paint` is now interned through [`super::Canvas::intern_paint`].
+//! On the second-and-later draw of an identical paint, the call
+//! returns an `Arc::clone` (single atomic refcount bump) instead of
+//! a full `Paint::clone` (~80–200 bytes incl. optional `Box<Shader>`
+//! payload). First-use still allocates one `Arc::new(paint.clone())`
+//! to seed the pool; subsequent uses are O(1) refcount bumps
+//! amortised across the recording.
 //!
-//! Paint interning + flat-bytecode + Path-Cow are tracked in
-//! `crates/flui-painting/ARCHITECTURE.md` `## Outstanding refactors`
-//! and require measured benefit before adoption.
+//! `draw_path`/`draw_shadow` still clone the `Path`
+//! (`Vec<PathCommand>` heap allocation). `clip_path` additionally
+//! `Box::new`-wraps the cloned path for `ClipShape` variant
+//! uniformity (see [`super::clipping`]). Path-Cow + flat-bytecode
+//! remain tracked in `crates/flui-painting/ARCHITECTURE.md`
+//! `## Outstanding refactors`.
 
 use flui_types::{
     geometry::{Matrix4, Offset, Pixels, Point, RRect, Rect, Size},
@@ -39,29 +44,35 @@ impl Canvas {
 
     /// Draws a line.
     pub fn draw_line(&mut self, p1: Point<Pixels>, p2: Point<Pixels>, paint: &Paint) {
+        let paint = self.intern_paint(paint);
+        let transform = self.transform;
         self.display_list.push(DrawCommand::DrawLine {
             p1,
             p2,
-            paint: paint.clone(),
-            transform: self.transform,
+            paint,
+            transform,
         });
     }
 
     /// Draws a rectangle.
     pub fn draw_rect(&mut self, rect: Rect<Pixels>, paint: &Paint) {
+        let paint = self.intern_paint(paint);
+        let transform = self.transform;
         self.display_list.push(DrawCommand::DrawRect {
             rect,
-            paint: paint.clone(),
-            transform: self.transform,
+            paint,
+            transform,
         });
     }
 
     /// Draws a rounded rectangle.
     pub fn draw_rrect(&mut self, rrect: RRect, paint: &Paint) {
+        let paint = self.intern_paint(paint);
+        let transform = self.transform;
         self.display_list.push(DrawCommand::DrawRRect {
             rrect,
-            paint: paint.clone(),
-            transform: self.transform,
+            paint,
+            transform,
         });
     }
 
@@ -77,29 +88,35 @@ impl Canvas {
             radius.0
         );
 
+        let paint = self.intern_paint(paint);
+        let transform = self.transform;
         self.display_list.push(DrawCommand::DrawCircle {
             center,
             radius,
-            paint: paint.clone(),
-            transform: self.transform,
+            paint,
+            transform,
         });
     }
 
     /// Draws an oval (ellipse) inscribed in the given rectangle.
     pub fn draw_oval(&mut self, rect: Rect<Pixels>, paint: &Paint) {
+        let paint = self.intern_paint(paint);
+        let transform = self.transform;
         self.display_list.push(DrawCommand::DrawOval {
             rect,
-            paint: paint.clone(),
-            transform: self.transform,
+            paint,
+            transform,
         });
     }
 
     /// Draws an arbitrary path.
     pub fn draw_path(&mut self, path: &Path, paint: &Paint) {
+        let paint = self.intern_paint(paint);
+        let transform = self.transform;
         self.display_list.push(DrawCommand::DrawPath {
             path: path.clone(),
-            paint: paint.clone(),
-            transform: self.transform,
+            paint,
+            transform,
         });
     }
 
@@ -112,13 +129,15 @@ impl Canvas {
         style: &TextStyle,
         paint: &Paint,
     ) {
+        let paint = self.intern_paint(paint);
+        let transform = self.transform;
         self.display_list.push(DrawCommand::DrawText {
             text: text.to_string(),
             offset,
             size,
             style: style.clone(),
-            paint: paint.clone(),
-            transform: self.transform,
+            paint,
+            transform,
         });
     }
 
@@ -139,11 +158,13 @@ impl Canvas {
 
     /// Draws an image.
     pub fn draw_image(&mut self, image: Image, dst: Rect<Pixels>, paint: Option<&Paint>) {
+        let paint = self.intern_optional_paint(paint);
+        let transform = self.transform;
         self.display_list.push(DrawCommand::DrawImage {
             image,
             dst,
-            paint: paint.cloned(),
-            transform: self.transform,
+            paint,
+            transform,
         });
     }
 
@@ -155,12 +176,14 @@ impl Canvas {
         repeat: ImageRepeat,
         paint: Option<&Paint>,
     ) {
+        let paint = self.intern_optional_paint(paint);
+        let transform = self.transform;
         self.display_list.push(DrawCommand::DrawImageRepeat {
             image,
             dst,
             repeat,
-            paint: paint.cloned(),
-            transform: self.transform,
+            paint,
+            transform,
         });
     }
 
@@ -172,12 +195,14 @@ impl Canvas {
         dst: Rect<Pixels>,
         paint: Option<&Paint>,
     ) {
+        let paint = self.intern_optional_paint(paint);
+        let transform = self.transform;
         self.display_list.push(DrawCommand::DrawImageNineSlice {
             image,
             center_slice,
             dst,
-            paint: paint.cloned(),
-            transform: self.transform,
+            paint,
+            transform,
         });
     }
 
@@ -189,12 +214,14 @@ impl Canvas {
         filter: ColorFilter,
         paint: Option<&Paint>,
     ) {
+        let paint = self.intern_optional_paint(paint);
+        let transform = self.transform;
         self.display_list.push(DrawCommand::DrawImageFiltered {
             image,
             dst,
             filter,
-            paint: paint.cloned(),
-            transform: self.transform,
+            paint,
+            transform,
         });
     }
 
@@ -264,23 +291,27 @@ impl Canvas {
         use_center: bool,
         paint: &Paint,
     ) {
+        let paint = self.intern_paint(paint);
+        let transform = self.transform;
         self.display_list.push(DrawCommand::DrawArc {
             rect,
             start_angle,
             sweep_angle,
             use_center,
-            paint: paint.clone(),
-            transform: self.transform,
+            paint,
+            transform,
         });
     }
 
     /// Draws difference between two rounded rectangles (ring/border).
     pub fn draw_drrect(&mut self, outer: RRect, inner: RRect, paint: &Paint) {
+        let paint = self.intern_paint(paint);
+        let transform = self.transform;
         self.display_list.push(DrawCommand::DrawDRRect {
             outer,
             inner,
-            paint: paint.clone(),
-            transform: self.transform,
+            paint,
+            transform,
         });
     }
 
@@ -291,11 +322,13 @@ impl Canvas {
         points: Vec<Point<Pixels>>,
         paint: &Paint,
     ) {
+        let paint = self.intern_paint(paint);
+        let transform = self.transform;
         self.display_list.push(DrawCommand::DrawPoints {
             mode,
             points,
-            paint: paint.clone(),
-            transform: self.transform,
+            paint,
+            transform,
         });
     }
 
@@ -309,13 +342,15 @@ impl Canvas {
         indices: Vec<u16>,
         paint: &Paint,
     ) {
+        let paint = self.intern_paint(paint);
+        let transform = self.transform;
         self.display_list.push(DrawCommand::DrawVertices {
             vertices,
             colors,
             tex_coords,
             indices,
-            paint: paint.clone(),
-            transform: self.transform,
+            paint,
+            transform,
         });
     }
 
@@ -330,10 +365,10 @@ impl Canvas {
 
     /// Fills entire canvas with a paint (respects clipping).
     pub fn draw_paint(&mut self, paint: &Paint) {
-        self.display_list.push(DrawCommand::DrawPaint {
-            paint: paint.clone(),
-            transform: self.transform,
-        });
+        let paint = self.intern_paint(paint);
+        let transform = self.transform;
+        self.display_list
+            .push(DrawCommand::DrawPaint { paint, transform });
     }
 
     /// Draws a previously recorded `DisplayList` into this canvas.
@@ -385,14 +420,16 @@ impl Canvas {
             );
         }
 
+        let paint = self.intern_optional_paint(paint);
+        let transform = self.transform;
         self.display_list.push(DrawCommand::DrawAtlas {
             image,
             sprites,
             transforms,
             colors,
             blend_mode,
-            paint: paint.cloned(),
-            transform: self.transform,
+            paint,
+            transform,
         });
     }
 

@@ -159,10 +159,12 @@ impl Canvas {
             is_layer: true,
         });
 
+        let interned_paint = self.intern_paint(paint);
+        let transform = self.transform;
         self.display_list.push(DrawCommand::SaveLayer {
             bounds,
-            paint: (*paint).clone(),
-            transform: self.transform,
+            paint: interned_paint,
+            transform,
         });
 
         tracing::debug!(layer_depth = self.save_stack.len(), "Layer created");
