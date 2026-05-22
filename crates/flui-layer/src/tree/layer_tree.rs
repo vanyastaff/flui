@@ -435,18 +435,75 @@ impl LayerTree {
         self.get_mut(id).map(LayerNode::layer_mut)
     }
 
-    /// Removes a LayerNode from the tree.
+    /// Removes a LayerNode from the tree **and cascades** to every
+    /// descendant.
     ///
-    /// Returns the removed node, or None if it didn't exist.
+    /// Returns the removed root node, or `None` if it did not exist.
     ///
-    /// **Note:** This does NOT remove children. Caller must handle tree
-    /// cleanup.
+    /// **Cascade semantics (U12)** — every descendant is also removed from
+    /// the slab. The walk is post-order: children are removed before the
+    /// parent, so each `LayerNode::drop` fires while the parent's
+    /// `children` vector is still intact (the engine's debug listeners can
+    /// inspect a coherent tree state during dispose). The parent's
+    /// `children` vector is also drained of `id` before the parent's own
+    /// node is removed, so a `LayerTree::get(parent_id)` lookup after the
+    /// cascade does not observe a stale id.
+    ///
+    /// For non-cascading workflows (e.g. reparenting that re-inserts
+    /// immediately at a new attachment point), use [`remove_shallow`].
+    ///
+    /// Mirrors Flutter `layer.dart:1185-1216` `ContainerLayer.remove` +
+    /// `LayerHandle._unref` cascade.
     pub fn remove(&mut self, id: LayerId) -> Option<LayerNode> {
-        // Update root if removing root
+        if !self.contains(id) {
+            return None;
+        }
+
+        // 1. Snapshot the children list (avoids holding `&self` across the
+        //    recursive `self.remove(child_id)` calls).
+        let children: Vec<LayerId> = self
+            .get(id)
+            .map(|n| n.children().to_vec())
+            .unwrap_or_default();
+
+        // 2. Post-order cascade: drop descendants first.
+        for child_id in children {
+            // Each recursive call also walks its own subtree. Bounded by
+            // tree depth (typical widget trees ≤32 levels) plus stack —
+            // `MARK_PROPAGATION_MAX_DEPTH` is the moral cap.
+            let _ = self.remove(child_id);
+        }
+
+        // 3. Unlink from parent so the parent's children vector doesn't
+        //    contain a stale id post-removal.
+        if let Some(parent_id) = self.get(id).and_then(LayerNode::parent) {
+            if let Some(parent) = self.get_mut(parent_id) {
+                parent.remove_child(id);
+            }
+        }
+
+        // 4. Update root if removing root.
         if self.root == Some(id) {
             self.root = None;
         }
 
+        // 5. Drop self — triggers `LayerNode::drop` (U8 phase 1).
+        self.nodes.try_remove(id.get() - 1)
+    }
+
+    /// Removes a single LayerNode from the tree **without** cascading to
+    /// descendants. Use this for reparenting workflows that immediately
+    /// re-attach the removed node elsewhere.
+    ///
+    /// Returns the removed node, or `None` if it did not exist.
+    ///
+    /// Unlike [`remove`], this does NOT touch the parent's children
+    /// vector — the caller is responsible for keeping parent/child
+    /// pointers consistent. For full cascade semantics use [`remove`].
+    pub fn remove_shallow(&mut self, id: LayerId) -> Option<LayerNode> {
+        if self.root == Some(id) {
+            self.root = None;
+        }
         self.nodes.try_remove(id.get() - 1)
     }
 
@@ -1047,5 +1104,93 @@ mod add_child_hygiene_tests {
         tree.add_child(parent, phantom);
         // Parent's children stay empty since the child slot doesn't exist.
         assert!(tree.get(parent).unwrap().children().is_empty());
+    }
+}
+
+// ============================================================================
+// SLAB-TREE HYGIENE TESTS (U12 — remove cascade + remove_shallow)
+// ============================================================================
+
+#[cfg(test)]
+mod remove_cascade_tests {
+    use crate::layer::{CanvasLayer, Layer};
+
+    use super::LayerTree;
+
+    #[test]
+    fn remove_cascades_to_all_descendants() {
+        let mut tree = LayerTree::new();
+        let root = tree.insert(Layer::from(CanvasLayer::new()));
+        let mid = tree.insert(Layer::from(CanvasLayer::new()));
+        let leaf = tree.insert(Layer::from(CanvasLayer::new()));
+        tree.add_child(root, mid);
+        tree.add_child(mid, leaf);
+        assert_eq!(tree.len(), 3);
+
+        let removed = tree.remove(root);
+        assert!(removed.is_some());
+        // Every descendant gone from the slab.
+        assert_eq!(tree.len(), 0);
+        assert!(!tree.contains(root));
+        assert!(!tree.contains(mid));
+        assert!(!tree.contains(leaf));
+    }
+
+    #[test]
+    fn remove_unlinks_parent_children_vector() {
+        let mut tree = LayerTree::new();
+        let root = tree.insert(Layer::from(CanvasLayer::new()));
+        let mid = tree.insert(Layer::from(CanvasLayer::new()));
+        let sibling = tree.insert(Layer::from(CanvasLayer::new()));
+        tree.add_child(root, mid);
+        tree.add_child(root, sibling);
+        assert_eq!(tree.get(root).unwrap().children().len(), 2);
+
+        // Remove mid — root's children vector loses the id, sibling stays.
+        let _ = tree.remove(mid);
+        assert!(!tree.contains(mid));
+        assert!(tree.contains(sibling));
+        assert_eq!(tree.get(root).unwrap().children(), &[sibling]);
+    }
+
+    #[test]
+    fn remove_resets_root_when_removing_root_node() {
+        let mut tree = LayerTree::new();
+        let root = tree.insert(Layer::from(CanvasLayer::new()));
+        tree.set_root(Some(root));
+        let _ = tree.remove(root);
+        assert_eq!(tree.root(), None);
+    }
+
+    #[test]
+    fn remove_of_phantom_id_is_a_no_op() {
+        use flui_foundation::LayerId;
+        let mut tree = LayerTree::new();
+        let _ = tree.insert(Layer::from(CanvasLayer::new()));
+        let phantom = LayerId::new(999);
+        assert!(tree.remove(phantom).is_none());
+        assert_eq!(tree.len(), 1);
+    }
+
+    #[test]
+    fn remove_shallow_does_not_cascade() {
+        // `remove_shallow` is the escape hatch for reparenting workflows
+        // that immediately re-attach the removed node — children must
+        // stay in the slab so they can be re-attached to a new parent.
+        let mut tree = LayerTree::new();
+        let root = tree.insert(Layer::from(CanvasLayer::new()));
+        let mid = tree.insert(Layer::from(CanvasLayer::new()));
+        let leaf = tree.insert(Layer::from(CanvasLayer::new()));
+        tree.add_child(root, mid);
+        tree.add_child(mid, leaf);
+        assert_eq!(tree.len(), 3);
+
+        let _ = tree.remove_shallow(mid);
+
+        assert!(!tree.contains(mid));
+        // Leaf survives in the slab (the cascade path is the only one
+        // that drops descendants).
+        assert!(tree.contains(leaf));
+        assert_eq!(tree.len(), 2);
     }
 }
