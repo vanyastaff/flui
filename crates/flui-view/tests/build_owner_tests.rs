@@ -1,9 +1,7 @@
 //! Integration tests for BuildOwner.
 //!
-//! Tests dirty element tracking, build scheduling, GlobalKey registry,
-//! and InheritedElement lookup.
-
-use std::any::TypeId;
+//! Tests dirty element tracking, build scheduling, and the GlobalKey
+//! registry.
 
 use flui_foundation::ElementId;
 use flui_view::{
@@ -265,76 +263,6 @@ fn test_global_key_multiple_keys() {
     assert_eq!(owner.element_for_global_key(200), Some(ElementId::new(2)));
     assert_eq!(owner.element_for_global_key(300), Some(ElementId::new(3)));
 }
-
-// ============================================================================
-// InheritedElement Registry Tests
-// ============================================================================
-
-#[test]
-fn test_inherited_register() {
-    let mut owner = BuildOwner::new();
-    let id = ElementId::new(42);
-    let type_id = TypeId::of::<String>();
-
-    owner.register_inherited(type_id, id);
-
-    assert_eq!(owner.inherited_element(type_id), Some(id));
-}
-
-#[test]
-fn test_inherited_unregister() {
-    let mut owner = BuildOwner::new();
-    let id = ElementId::new(42);
-    let type_id = TypeId::of::<String>();
-
-    owner.register_inherited(type_id, id);
-    owner.unregister_inherited(type_id);
-
-    assert_eq!(owner.inherited_element(type_id), None);
-}
-
-#[test]
-fn test_inherited_lookup_nonexistent() {
-    let owner = BuildOwner::new();
-    let type_id = TypeId::of::<String>();
-
-    assert_eq!(owner.inherited_element(type_id), None);
-}
-
-#[test]
-fn test_inherited_multiple_types() {
-    let mut owner = BuildOwner::new();
-
-    owner.register_inherited(TypeId::of::<String>(), ElementId::new(1));
-    owner.register_inherited(TypeId::of::<i32>(), ElementId::new(2));
-    owner.register_inherited(TypeId::of::<bool>(), ElementId::new(3));
-
-    assert_eq!(
-        owner.inherited_element(TypeId::of::<String>()),
-        Some(ElementId::new(1))
-    );
-    assert_eq!(
-        owner.inherited_element(TypeId::of::<i32>()),
-        Some(ElementId::new(2))
-    );
-    assert_eq!(
-        owner.inherited_element(TypeId::of::<bool>()),
-        Some(ElementId::new(3))
-    );
-}
-
-#[test]
-fn test_inherited_overwrite() {
-    let mut owner = BuildOwner::new();
-    let type_id = TypeId::of::<String>();
-
-    owner.register_inherited(type_id, ElementId::new(1));
-    owner.register_inherited(type_id, ElementId::new(2));
-
-    // Second registration should overwrite
-    assert_eq!(owner.inherited_element(type_id), Some(ElementId::new(2)));
-}
-
 // ============================================================================
 // Depth Ordering Tests
 // ============================================================================
@@ -377,14 +305,12 @@ fn test_build_owner_debug() {
     let mut owner = BuildOwner::new();
     owner.schedule_build_for(ElementId::new(1), 0);
     owner.register_global_key(123, ElementId::new(2));
-    owner.register_inherited(TypeId::of::<String>(), ElementId::new(3));
 
     let debug_str = format!("{:?}", owner);
 
     assert!(debug_str.contains("BuildOwner"));
     assert!(debug_str.contains("dirty_count"));
     assert!(debug_str.contains("global_keys"));
-    assert!(debug_str.contains("inherited_elements"));
 }
 
 // ============================================================================

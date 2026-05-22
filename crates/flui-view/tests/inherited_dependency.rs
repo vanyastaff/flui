@@ -23,7 +23,7 @@
 //! non-recording read), and `framework.dart:6414`
 //! (`InheritedElement.notifyClients`).
 
-use std::{any::TypeId, sync::Arc};
+use std::sync::Arc;
 
 use flui_view::{
     BuildContext, BuildContextExt, BuildOwner, ElementBase, ElementBuildContext, ElementTree,
@@ -113,13 +113,6 @@ fn depend_on_returns_value_and_records_dependent() {
         .write()
         .mount_root(&provider, &mut owner.write().element_owner_mut());
 
-    // Register the InheritedElement in BuildOwner's registry so the
-    // O(1) lookup in depend_on_inherited finds it. This is normally
-    // done in InheritedBehavior::on_mount but is wired in U9.
-    owner
-        .write()
-        .register_inherited(TypeId::of::<ThemeProvider>(), provider_id);
-
     let child_id = tree.write().insert(
         &DummyChild,
         provider_id,
@@ -173,10 +166,6 @@ fn inherited_update_notifies_dependents() {
     let provider_id = tree
         .write()
         .mount_root(&provider_v1, &mut owner.write().element_owner_mut());
-
-    owner
-        .write()
-        .register_inherited(TypeId::of::<ThemeProvider>(), provider_id);
 
     let child_id = tree.write().insert(
         &DummyChild,
@@ -234,15 +223,6 @@ fn depend_on_returns_none_when_no_ancestor() {
     let ctx = ElementBuildContext::for_element(root_id, tree.clone(), owner.clone()).unwrap();
     let result = ctx.depend_on::<ThemeProvider, u32>(|view| view.theme.color);
     assert_eq!(result, None, "no ThemeProvider ancestor -> None");
-
-    // No InheritedElement<ThemeProvider> exists so there is nothing to
-    // check beyond None — the BuildOwner registry remains empty.
-    assert_eq!(
-        owner
-            .read()
-            .inherited_element(TypeId::of::<ThemeProvider>()),
-        None,
-    );
 }
 
 // ============================================================================
@@ -261,10 +241,6 @@ fn depend_on_deduplicates_per_dependent() {
     let provider_id = tree
         .write()
         .mount_root(&provider, &mut owner.write().element_owner_mut());
-
-    owner
-        .write()
-        .register_inherited(TypeId::of::<ThemeProvider>(), provider_id);
 
     let child_id = tree.write().insert(
         &DummyChild,
@@ -310,10 +286,6 @@ fn unmounted_dependent_no_op_on_schedule() {
     let provider_id = tree
         .write()
         .mount_root(&provider_v1, &mut owner.write().element_owner_mut());
-
-    owner
-        .write()
-        .register_inherited(TypeId::of::<ThemeProvider>(), provider_id);
 
     let child_id = tree.write().insert(
         &DummyChild,
@@ -372,14 +344,6 @@ fn get_inherited_returns_value_without_recording_dependent() {
     let provider_id = tree
         .write()
         .mount_root(&provider, &mut owner.write().element_owner_mut());
-
-    // Note: the BuildOwner inherited-element registry is irrelevant for
-    // `get_inherited` because the lookup walks ancestors directly via
-    // `walk_ancestors_for_inherited` (the shared helper U9 extracted).
-    // We register it anyway to mirror AE1's scaffolding.
-    owner
-        .write()
-        .register_inherited(TypeId::of::<ThemeProvider>(), provider_id);
 
     let child_id = tree.write().insert(
         &DummyChild,
@@ -440,13 +404,4 @@ fn get_inherited_returns_none_when_no_ancestor() {
     let ctx = ElementBuildContext::for_element(root_id, tree.clone(), owner.clone()).unwrap();
     let result = ctx.get::<ThemeProvider, u32>(|view| view.theme.color);
     assert_eq!(result, None, "no ThemeProvider ancestor -> None");
-
-    // BuildOwner inherited-element registry remains empty: no provider
-    // was ever mounted, no dependent-set write could have occurred.
-    assert_eq!(
-        owner
-            .read()
-            .inherited_element(TypeId::of::<ThemeProvider>()),
-        None,
-    );
 }

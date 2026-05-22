@@ -7,7 +7,6 @@
 //! - Coordinating InheritedElement lookups
 
 use std::{
-    any::TypeId,
     cmp::Reverse,
     collections::{BinaryHeap, HashMap},
 };
@@ -99,10 +98,6 @@ pub struct BuildOwner {
     /// split-borrow.
     pub(crate) global_keys: HashMap<u64, ElementId>,
 
-    /// InheritedElement registry: TypeId -> element ID.
-    /// Used for O(1) InheritedView lookup.
-    inherited_elements: HashMap<TypeId, ElementId>,
-
     /// Elements that have been deactivated and are pending unmount.
     /// These are unmounted in `finalize_tree()`.
     ///
@@ -170,7 +165,6 @@ impl BuildOwner {
             dirty_elements: BinaryHeap::new(),
             dirty_set: std::collections::HashSet::new(),
             global_keys: HashMap::new(),
-            inherited_elements: HashMap::new(),
             inactive_elements: Vec::new(),
             #[cfg(debug_assertions)]
             building: false,
@@ -432,27 +426,6 @@ impl BuildOwner {
         self.global_keys.len()
     }
 
-    // ========================================================================
-    // InheritedElement Registry
-    // ========================================================================
-
-    /// Register an InheritedElement for O(1) lookup.
-    ///
-    /// This allows `depend_on<T>()` to be O(1) instead of O(depth).
-    pub fn register_inherited(&mut self, type_id: TypeId, element: ElementId) {
-        self.inherited_elements.insert(type_id, element);
-    }
-
-    /// Unregister an InheritedElement.
-    pub fn unregister_inherited(&mut self, type_id: TypeId) {
-        self.inherited_elements.remove(&type_id);
-    }
-
-    /// Look up an InheritedElement by type.
-    pub fn inherited_element(&self, type_id: TypeId) -> Option<ElementId> {
-        self.inherited_elements.get(&type_id).copied()
-    }
-
     /// Check if we're currently building.
     #[cfg(debug_assertions)]
     pub fn is_building(&self) -> bool {
@@ -471,7 +444,6 @@ impl std::fmt::Debug for BuildOwner {
         f.debug_struct("BuildOwner")
             .field("dirty_count", &self.dirty_elements.len())
             .field("global_keys", &self.global_keys.len())
-            .field("inherited_elements", &self.inherited_elements.len())
             .finish()
     }
 }
@@ -492,6 +464,8 @@ impl Drop for BuildScopeGuard<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::any::TypeId;
+
     use super::*;
     use crate::{Lifecycle, View, tree::ElementTree};
 
@@ -640,18 +614,5 @@ mod tests {
 
         owner.unregister_global_key(key_hash);
         assert_eq!(owner.element_for_global_key(key_hash), None);
-    }
-
-    #[test]
-    fn test_inherited_registry() {
-        let mut owner = BuildOwner::new();
-        let id = ElementId::new(42);
-        let type_id = TypeId::of::<String>();
-
-        owner.register_inherited(type_id, id);
-        assert_eq!(owner.inherited_element(type_id), Some(id));
-
-        owner.unregister_inherited(type_id);
-        assert_eq!(owner.inherited_element(type_id), None);
     }
 }
