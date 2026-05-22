@@ -1007,61 +1007,109 @@ impl PipelineOwner<PaintPhase> {
     pub fn run_paint(&mut self) -> crate::error::RenderResult<()> {
         tracing::debug!("run_paint: {} nodes", self.dirty.needs_paint.len());
 
-        // Process own dirty nodes if any
-        if !self.dirty.needs_paint.is_empty() {
-            self.debug_doing_paint = true;
-
-            // Take dirty nodes and replace with empty vec
-            let dirty_nodes = std::mem::take(&mut self.dirty.needs_paint);
-
-            // Sort by depth (deep first) - children before parents
-            // Flutter: dirtyNodes.sort((a, b) => b.depth - a.depth)
-            // Note: We don't need to sort for now since we paint from root
-
-            // Clear needs_paint flags for all dirty nodes
-            for dirty_node in &dirty_nodes {
-                if let Some(render_node) = self.render_tree.get(dirty_node.id) {
-                    render_node.clear_needs_paint();
-                }
-            }
-
-            // Paint render tree recursively starting from root.
-            // Each parent paints itself, then paints children with accumulated offset.
-            //
-            // Mythos Step 12: paint_node_recursive returns RenderResult<()>;
-            // a panicking render object surfaces as Err(Poisoned). We must
-            // restore debug_doing_paint before `?`-propagating so the
-            // owner's debug invariants stay consistent on the error path.
-            if let Some(root_id) = self.root_id
-                && let Some(root_node) = self.render_tree.get(root_id)
-            {
-                let paint_bounds = root_node.paint_bounds();
-                tracing::debug!("run_paint: painting root with bounds {:?}", paint_bounds);
-
-                // Create CanvasContext
-                let mut context = CanvasContext::new(paint_bounds);
-
-                // Paint recursively from root with offset accumulation
-                let paint_result = self.paint_node_recursive(&mut context, root_id, Offset::ZERO);
-
-                match paint_result {
-                    Ok(()) => {
-                        // Store the resulting layer tree
-                        self.last_layer_tree = Some(context.into_layer_tree());
-                        tracing::debug!(
-                            "run_paint: layer tree has {} layers",
-                            self.last_layer_tree.as_ref().map(|t| t.len()).unwrap_or(0)
-                        );
-                    }
-                    Err(e) => {
-                        self.debug_doing_paint = false;
-                        return Err(e);
-                    }
-                }
-            }
-
-            self.debug_doing_paint = false;
+        if self.dirty.needs_paint.is_empty() {
+            return Ok(());
         }
+
+        self.debug_doing_paint = true;
+
+        // Cycle 4 R-15: pre-fix this method
+        //   1. drained `dirty.needs_paint` via `std::mem::take` (capacity-
+        //      dropping),
+        //   2. did NOT sort the dirty list by depth (comment said
+        //      "we don't need to sort since we paint from root"),
+        //   3. cleared every dirty node's `needs_paint` flag in a
+        //      separate loop BEFORE the paint walk,
+        //   4. painted via root descent (`paint_node_recursive`),
+        //   5. silently dropped any dirty node not reached by the
+        //      descent (its flag was already cleared, its paint command
+        //      never recorded).
+        //
+        // Audit R-15 flagged steps 2/3/5 as a half-impl: Flutter's
+        // `flushPaint` sorts dirty deep-first AND paints each node
+        // (paint clears the flag, no separate pass). Dropping paints
+        // for unreached nodes is silent bug-bait for any future
+        // multi-root or detached-subtree design.
+        //
+        // Post-fix:
+        //   1. Sort dirty deep-first (Reverse depth) so repaint-
+        //      boundary subtrees process before their ancestors when
+        //      the per-node dirty-driven paint path lands.
+        //   2. Walk via root descent (unchanged).
+        //   3. `paint_node_recursive` clears `needs_paint` per node it
+        //      visits (folded into the recursion).
+        //   4. After the walk, scan the dirty list for nodes whose
+        //      flag is still set -- those are the unreached cases.
+        //   5. Emit `tracing::warn!` for each unreached dirty node,
+        //      then clear (so the dirty list doesn't accumulate
+        //      across frames).
+
+        self.dirty
+            .needs_paint
+            .sort_unstable_by_key(|n| std::cmp::Reverse(n.depth));
+
+        // Paint render tree recursively starting from root.
+        // Each parent paints itself, then paints children with
+        // accumulated offset.
+        //
+        // Mythos Step 12: paint_node_recursive returns RenderResult<()>;
+        // a panicking render object surfaces as Err(Poisoned). We must
+        // restore debug_doing_paint before `?`-propagating so the
+        // owner's debug invariants stay consistent on the error path.
+        if let Some(root_id) = self.root_id
+            && let Some(root_node) = self.render_tree.get(root_id)
+        {
+            let paint_bounds = root_node.paint_bounds();
+            tracing::debug!("run_paint: painting root with bounds {:?}", paint_bounds);
+
+            // Create CanvasContext
+            let mut context = CanvasContext::new(paint_bounds);
+
+            // Paint recursively from root with offset accumulation.
+            // `paint_node_recursive` clears `needs_paint` on every
+            // node it visits (R-15 fold), so the dirty-list scan
+            // below only fires for the unreached cases.
+            let paint_result = self.paint_node_recursive(&mut context, root_id, Offset::ZERO);
+
+            match paint_result {
+                Ok(()) => {
+                    // Store the resulting layer tree
+                    self.last_layer_tree = Some(context.into_layer_tree());
+                    tracing::debug!(
+                        "run_paint: layer tree has {} layers",
+                        self.last_layer_tree.as_ref().map(|t| t.len()).unwrap_or(0)
+                    );
+                }
+                Err(e) => {
+                    self.debug_doing_paint = false;
+                    return Err(e);
+                }
+            }
+        }
+
+        // R-15: dirty-list residue scan. Any node still flagged
+        // needs_paint AFTER the root descent is the unreached case
+        // the pre-fix loop silently swallowed. Warn + clear so the
+        // bug is visible AND the dirty list doesn't accumulate
+        // across frames.
+        for dirty_node in &self.dirty.needs_paint {
+            if let Some(render_node) = self.render_tree.get(dirty_node.id)
+                && render_node.needs_paint()
+            {
+                tracing::warn!(
+                    id = ?dirty_node.id,
+                    depth = dirty_node.depth,
+                    "run_paint: dirty node not reached by root descent (multi-root \
+                     or detached subtree?); paint dropped, flag cleared"
+                );
+                render_node.clear_needs_paint();
+            }
+        }
+        // `clear()` retains capacity per cycle 4 R-1/R-4 PR #109
+        // review feedback (preserve Vec backing across frames).
+        self.dirty.needs_paint.clear();
+
+        self.debug_doing_paint = false;
         Ok(())
     }
 
@@ -1132,6 +1180,15 @@ impl PipelineOwner<PaintPhase> {
                     render_object.paint(context, offset);
                 }))
                 .map_err(|_| crate::error::RenderError::poisoned(debug_name, "paint"))?;
+
+                // Cycle 4 R-15: clear the needs_paint flag now that
+                // this node has been painted. Pre-fix the flag was
+                // cleared in a separate up-front loop on `dirty.needs_paint`,
+                // which silently dropped paints for nodes not reachable
+                // from `root_id`. Folding the clear into the recursive
+                // visit ensures the flag-clear and the paint walk stay
+                // in lockstep -- Flutter's `flushPaint` model.
+                render_node.clear_needs_paint();
 
                 // For each child in the tree, get its offset from the render object
                 // The render object stores offsets via position_child during layout
