@@ -18,24 +18,59 @@ use crate::{commands::dispatch_command, traits::CommandRenderer};
 
 /// wgpu backend implementation of CommandRenderer.
 ///
+/// # Lifetime parameter
+///
+/// `Backend<'frame>` borrows the current frame's `wgpu::TextureView` +
+/// `wgpu::Texture` when [`bind_surface`](Self::bind_surface) is
+/// called. The lifetime is internal to one render pass: `Renderer::render`
+/// creates the Backend, binds the frame surface, dispatches the
+/// `LayerTree`, then drops the Backend before the surface is
+/// presented. Sites that don't need to flush mid-frame (shader-mask
+/// offscreen rendering, tests) call [`Backend::new`] which leaves
+/// the surface handles unbound; the
+/// [`render_backdrop_filter`](CommandRenderer::render_backdrop_filter)
+/// command-path falls back to passthrough when the handles are
+/// `None` (cycle 4 U-8, U-9).
+///
+/// Per *Rust for Rustaceans* ch.2 "Variance and Lifetimes": the
+/// `'frame` parameter encodes the borrow's scope so the compiler
+/// enforces that no Backend outlives its bound surface.
+///
 /// Note: Debug is not derived because `WgpuPainter` contains wgpu types that
 /// don't implement Debug.
 #[allow(missing_debug_implementations)]
-pub struct Backend {
+pub struct Backend<'frame> {
     painter: WgpuPainter,
     offscreen: Option<Arc<parking_lot::Mutex<super::offscreen::OffscreenRenderer>>>,
     /// Cached offscreen painter reused across shader mask invocations.
     /// Lazily created on first use, resized when dimensions change.
     offscreen_painter: Option<WgpuPainter>,
+    /// Bound surface view for the current frame. `None` outside a
+    /// frame, or when the construction site cannot supply it
+    /// (e.g. shader-mask offscreen render). Backdrop-filter
+    /// dispatch falls back to passthrough when `None`.
+    surface_view: Option<&'frame wgpu::TextureView>,
+    /// Bound surface texture for the current frame -- companion of
+    /// [`surface_view`](Self::surface_view) for
+    /// `COPY_TEXTURE_TO_TEXTURE` operations during backdrop-filter
+    /// dispatch.
+    surface_texture: Option<&'frame wgpu::Texture>,
 }
 
-impl Backend {
+impl<'frame> Backend<'frame> {
     /// Create a new Backend with the given painter.
+    ///
+    /// `surface_view` / `surface_texture` start unbound. Call
+    /// [`bind_surface`](Self::bind_surface) when the frame surface
+    /// is available to enable the DisplayList-backdrop-filter
+    /// command path.
     pub fn new(painter: WgpuPainter) -> Self {
         Self {
             painter,
             offscreen: None,
             offscreen_painter: None,
+            surface_view: None,
+            surface_texture: None,
         }
     }
 
@@ -48,7 +83,29 @@ impl Backend {
             painter,
             offscreen: Some(offscreen),
             offscreen_painter: None,
+            surface_view: None,
+            surface_texture: None,
         }
+    }
+
+    /// Bind the frame's surface handles.
+    ///
+    /// Must be called by [`Renderer::render`](super::renderer::Renderer::render)
+    /// after constructing the Backend and before dispatching any
+    /// `LayerTree` commands. Required for
+    /// [`CommandRenderer::render_backdrop_filter`] to actually
+    /// flush + blur the surface contents; without it the backdrop-
+    /// filter path falls back to dispatching the child display list
+    /// without applying the filter (visible regression vs Flutter).
+    ///
+    /// Cycle 4 E-2 / U-8.
+    pub fn bind_surface(
+        &mut self,
+        view: &'frame wgpu::TextureView,
+        texture: &'frame wgpu::Texture,
+    ) {
+        self.surface_view = Some(view);
+        self.surface_texture = Some(texture);
     }
 
     /// Access the offscreen renderer (for shader mask, backdrop filter).
@@ -156,7 +213,7 @@ impl Backend {
     }
 }
 
-impl CommandRenderer for Backend {
+impl CommandRenderer for Backend<'_> {
     fn render_rect(&mut self, rect: Rect<Pixels>, paint: &Paint, transform: &Matrix4) {
         self.with_transform(transform, |painter| {
             painter.rect(rect, paint);
