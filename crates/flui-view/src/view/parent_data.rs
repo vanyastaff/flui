@@ -61,14 +61,36 @@ use flui_foundation::ElementId;
 use super::view::{ElementBase, View};
 use crate::element::Lifecycle;
 
-/// Marker trait for types that can be used as ParentData.
+/// Marker trait for types that can be used as parent-data configuration.
 ///
-/// ParentData is attached to a child RenderObject and used by
-/// the parent during layout to position/configure the child.
-pub trait ParentData: Clone + Default + Send + Sync + 'static {}
+/// Implementing types describe the per-child configuration that a
+/// `ParentDataView` widget supplies to its parent RenderObject (e.g.
+/// `Flex`'s `flex` factor, `Stack`'s `top` / `left`). The parent reads
+/// the configuration during layout to position / size the child.
+///
+/// # Why the name
+///
+/// Cycle 4 R-11 renamed this trait from `ParentData` to
+/// `ParentDataConfig` so it no longer collides with
+/// `flui_rendering::ParentData` (the actual render-object storage
+/// trait carrying `Any` + downcasting). The two traits serve
+/// different concerns:
+///
+/// - `flui_view::ParentDataConfig` (this trait): marker for the
+///   widget-side **configuration value**, what a `ParentDataView`
+///   supplies (Flutter's `ParentDataWidget.applyParentData` payload).
+/// - `flui_rendering::ParentData`: the render-side **storage trait**
+///   that a `RenderObject` carries.
+///
+/// Same-name trait collision pre-cycle forced every workspace
+/// consumer importing both crates to fully-qualify or alias one of
+/// them. The rename matches Flutter's `ParentDataWidget` naming:
+/// the widget **configures** the parent-data; it is not itself the
+/// parent-data.
+pub trait ParentDataConfig: Clone + Default + Send + Sync + 'static {}
 
 // Implement for common types
-impl ParentData for () {}
+impl ParentDataConfig for () {}
 
 /// A View that provides parent data to its child RenderObject.
 ///
@@ -96,7 +118,12 @@ impl ParentData for () {}
 /// | TableCell | Table | row, column span |
 pub trait ParentDataView: Send + Sync + 'static + Sized {
     /// The type of parent data this View provides.
-    type ParentData: ParentData;
+    ///
+    /// Cycle 4 R-11: bound is `ParentDataConfig` (was `ParentData`,
+    /// renamed to disambiguate from `flui_rendering::ParentData`).
+    /// The associated-type name `ParentData` is kept because no
+    /// cross-crate collision can occur on associated-type names.
+    type ParentData: ParentDataConfig;
 
     /// Get the child View.
     fn child(&self) -> &dyn View;
@@ -306,7 +333,7 @@ mod tests {
         fit: bool,
     }
 
-    impl ParentData for TestParentData {}
+    impl ParentDataConfig for TestParentData {}
 
     // A dummy child view
     #[derive(Clone)]
