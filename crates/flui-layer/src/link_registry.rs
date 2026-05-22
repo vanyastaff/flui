@@ -247,23 +247,6 @@ impl LinkRegistry {
         self.leaders.get(link).map(|info| info.layer_id)
     }
 
-    /// Returns the leader info for a follower.
-    pub fn leader_for_follower(&self, follower_id: LayerId) -> Option<&LeaderInfo> {
-        self.followers
-            .get(&follower_id)
-            .and_then(|link| self.leaders.get(link))
-    }
-
-    /// Returns all registered links.
-    pub fn links(&self) -> impl Iterator<Item = &LayerLink> {
-        self.leaders.keys()
-    }
-
-    /// Returns all registered leader infos.
-    pub fn leaders(&self) -> impl Iterator<Item = (&LayerLink, &LeaderInfo)> {
-        self.leaders.iter()
-    }
-
     /// Returns the number of registered leaders.
     pub fn leader_count(&self) -> usize {
         self.leaders.len()
@@ -305,24 +288,6 @@ impl LinkRegistry {
             self.followers.remove(&id);
         }
         count
-    }
-
-    /// Rebuilds follower lists in all leaders based on current follower
-    /// registrations.
-    ///
-    /// Call this after bulk modifications to ensure consistency.
-    pub fn rebuild_follower_lists(&mut self) {
-        // Clear all follower lists
-        for leader in self.leaders.values_mut() {
-            leader.followers.clear();
-        }
-
-        // Rebuild from follower map
-        for (&follower_id, &link) in &self.followers {
-            if let Some(leader) = self.leaders.get_mut(&link) {
-                leader.followers.push(follower_id);
-            }
-        }
     }
 }
 
@@ -463,28 +428,6 @@ mod tests {
     }
 
     #[test]
-    fn test_leader_for_follower() {
-        let mut registry = LinkRegistry::new();
-        let link = make_link();
-        let leader_id = make_layer_id(1);
-        let follower_id = make_layer_id(2);
-
-        registry.register_leader(
-            link,
-            leader_id,
-            Offset::new(px(50.0), px(100.0)),
-            Size::new(px(100.0), px(50.0)),
-        );
-        registry.register_follower(follower_id, link);
-
-        let leader_info = registry.leader_for_follower(follower_id);
-        assert!(leader_info.is_some());
-        let info = leader_info.unwrap();
-        assert_eq!(info.layer_id, leader_id);
-        assert_eq!(info.offset, Offset::new(px(50.0), px(100.0)));
-    }
-
-    #[test]
     fn test_update_leader() {
         let mut registry = LinkRegistry::new();
         let link = make_link();
@@ -555,39 +498,6 @@ mod tests {
         assert_eq!(registry.follower_count(), 1);
         assert!(registry.has_follower(follower1));
         assert!(!registry.has_follower(follower2));
-    }
-
-    #[test]
-    fn test_rebuild_follower_lists() {
-        let mut registry = LinkRegistry::new();
-        let link = make_link();
-        let leader_id = make_layer_id(1);
-        let follower1 = make_layer_id(2);
-        let follower2 = make_layer_id(3);
-
-        // Register leader
-        registry.register_leader(
-            link,
-            leader_id,
-            Offset::ZERO,
-            Size::new(px(100.0), px(50.0)),
-        );
-
-        // Manually add followers to map (simulating deserialization or corruption)
-        registry.followers.insert(follower1, link);
-        registry.followers.insert(follower2, link);
-
-        // Leader doesn't know about followers yet
-        assert!(registry.get_leader(&link).unwrap().followers.is_empty());
-
-        // Rebuild
-        registry.rebuild_follower_lists();
-
-        // Now leader knows about followers
-        let info = registry.get_leader(&link).unwrap();
-        assert_eq!(info.followers.len(), 2);
-        assert!(info.followers.contains(&follower1));
-        assert!(info.followers.contains(&follower2));
     }
 
     #[test]

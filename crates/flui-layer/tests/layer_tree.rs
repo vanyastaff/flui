@@ -158,13 +158,11 @@ fn test_layer_node_with_offset() {
 }
 
 #[test]
-fn test_layer_node_needs_compositing() {
-    let mut node = LayerNode::new(Layer::Canvas(CanvasLayer::new()));
-
-    assert!(node.needs_compositing()); // Default is true
-
-    node.set_needs_compositing(false);
-    assert!(!node.needs_compositing());
+fn test_layer_node_needs_compositing_delegates_to_enum() {
+    // After U1: needs_compositing() delegates to the Layer enum method.
+    // Canvas layers always need compositing (per Layer::needs_compositing).
+    let node = LayerNode::new(Layer::Canvas(CanvasLayer::new()));
+    assert!(node.needs_compositing());
 }
 
 // ========== Layer Composition Tests ==========

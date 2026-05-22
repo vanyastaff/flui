@@ -76,19 +76,8 @@ impl SceneCompositor {
         self.retained.contains(&layer_id)
     }
 
-    /// Clears all retained layers.
-    pub fn clear_retained(&mut self) {
-        self.retained.clear();
-    }
-
-    /// Removes a layer from retention.
-    pub fn release(&mut self, layer_id: LayerId) {
-        self.retained.retain(|&id| id != layer_id);
-    }
-
     /// Updates statistics after frame composition.
     pub fn update_stats(&mut self, tree: &LayerTree) {
         self.stats.total_layers = tree.len();
     }
 }
-

@@ -32,9 +32,6 @@ pub struct LayerNode {
     layer: Layer,
 
     // ========== Metadata ==========
-    /// Whether this layer needs compositing
-    needs_compositing: bool,
-
     /// Offset from parent (parent data)
     offset: Option<Offset<Pixels>>,
 
@@ -49,7 +46,6 @@ impl LayerNode {
             parent: None,
             children: Vec::new(),
             layer,
-            needs_compositing: true, // Default: layers need compositing
             offset: None,
             element_id: None,
         }
@@ -121,16 +117,16 @@ impl LayerNode {
 
     // ========== Metadata ==========
 
-    /// Gets whether this layer needs compositing.
+    /// Returns whether this layer needs compositing.
+    ///
+    /// Delegates to [`Layer::needs_compositing`] — the canonical answer is the
+    /// enum-method computed from the variant. The previously cached field was
+    /// removed in the layer-lifecycle repair cycle: it had no invalidation
+    /// path and its default value diverged from the enum-method's answer for
+    /// the Canvas/Picture/Offset variants.
     #[inline]
     pub fn needs_compositing(&self) -> bool {
-        self.needs_compositing
-    }
-
-    /// Sets whether this layer needs compositing.
-    #[inline]
-    pub fn set_needs_compositing(&mut self, needs: bool) {
-        self.needs_compositing = needs;
+        self.layer.needs_compositing()
     }
 
     /// Gets the offset from parent (parent data).
@@ -139,22 +135,10 @@ impl LayerNode {
         self.offset
     }
 
-    /// Sets the offset from parent.
-    #[inline]
-    pub fn set_offset(&mut self, offset: Option<Offset<Pixels>>) {
-        self.offset = offset;
-    }
-
     /// Gets the associated ElementId (for cross-tree references).
     #[inline]
     pub fn element_id(&self) -> Option<ElementId> {
         self.element_id
-    }
-
-    /// Sets the associated ElementId.
-    #[inline]
-    pub fn set_element_id(&mut self, element_id: Option<ElementId>) {
-        self.element_id = element_id;
     }
 }
 

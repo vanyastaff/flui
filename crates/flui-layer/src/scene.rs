@@ -256,12 +256,6 @@ impl Scene {
         &self.layer_tree
     }
 
-    /// Returns mutable layer tree (for rendering traversal).
-    #[inline]
-    pub fn layer_tree_mut(&mut self) -> &mut LayerTree {
-        &mut self.layer_tree
-    }
-
     /// Returns the root layer ID of the scene.
     #[inline]
     pub fn root(&self) -> Option<LayerId> {
