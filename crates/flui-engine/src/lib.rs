@@ -91,6 +91,11 @@ pub mod wgpu;
 
 // Abstract traits and errors
 pub use commands::{dispatch_command, dispatch_commands};
+pub use error::{EngineError, EngineResult};
+// Cycle 4 R-10: deprecated aliases re-exported for one-cycle
+// migration. Downstream consumers (flui-app) switch on their next
+// touch.
+#[allow(deprecated)]
 pub use error::{RenderError, RenderResult};
 // Re-export layer types from flui-layer
 pub use flui_layer::{

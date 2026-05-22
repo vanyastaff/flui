@@ -1340,76 +1340,19 @@ struct MorphPipelines {
     erode: Arc<wgpu::RenderPipeline>,
 }
 
-/// GPU pipeline manager for shader masks
-///
-/// Manages wgpu::RenderPipeline instances for different shader types.
-///
-/// # Implementation Note
-///
-/// This is a placeholder. Full implementation will create and cache
-/// wgpu::RenderPipeline objects for each shader type.
-#[derive(Debug)]
-pub struct PipelineManager {
-    shader_cache: Arc<ShaderCache>,
-    // TODO: Add actual pipelines when integrating with wgpu
-    // device: Arc<wgpu::Device>,
-    // pipelines: HashMap<ShaderType, wgpu::RenderPipeline>,
-}
-
-impl PipelineManager {
-    /// Create new pipeline manager
-    pub fn new(shader_cache: Arc<ShaderCache>) -> Self {
-        Self { shader_cache }
-    }
-
-    /// Get or create render pipeline for shader type
-    ///
-    /// # TODO: Full wgpu implementation
-    ///
-    /// ```rust,ignore
-    /// let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-    ///     label: Some(shader_type.label()),
-    ///     layout: Some(&pipeline_layout),
-    ///     vertex: wgpu::VertexState {
-    ///         module: &shader_module,
-    ///         entry_point: "vs_main",
-    ///         buffers: &[vertex_buffer_layout],
-    ///     },
-    ///     fragment: Some(wgpu::FragmentState {
-    ///         module: &shader_module,
-    ///         entry_point: "fs_main",
-    ///         targets: &[wgpu::ColorTargetState {
-    ///             format: wgpu::TextureFormat::Rgba8UnormSrgb,
-    ///             blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-    ///             write_mask: wgpu::ColorWrites::ALL,
-    ///         }],
-    ///     }),
-    ///     primitive: wgpu::PrimitiveState::default(),
-    ///     depth_stencil: None,
-    ///     multisample: wgpu::MultisampleState::default(),
-    ///     multiview: None,
-    /// });
-    /// ```
-    pub fn get_or_create_pipeline(&self, shader_type: ShaderType) -> PipelineHandle {
-        // Ensure shader is compiled
-        let _shader = self.shader_cache.get_or_compile(shader_type);
-
-        tracing::trace!("Getting pipeline for shader: {:?}", shader_type);
-
-        // TODO: Create actual wgpu::RenderPipeline
-
-        PipelineHandle { shader_type }
-    }
-}
-
-/// Handle to a GPU render pipeline
-///
-/// Placeholder for wgpu::RenderPipeline reference.
-#[derive(Debug, Clone, Copy)]
-pub struct PipelineHandle {
-    pub shader_type: ShaderType,
-    // TODO: Add Arc<wgpu::RenderPipeline> when integrated
-}
+// Pre-cycle this module exposed `PipelineManager` + `PipelineHandle` as a
+// forward-looking wrapper around `ShaderCache` and `wgpu::RenderPipeline`.
+// Both types were deleted in cycle 4 E-3:
+//   - `PipelineManager` carried only a `shader_cache: Arc<ShaderCache>` field;
+//     the `device` / `pipelines` fields were commented-out TODOs.
+//   - `PipelineHandle` carried only `shader_type: ShaderType`, semantically
+//     equivalent to a `(ShaderType,)` newtype.
+// The real pipeline ownership lives in `wgpu/pipelines.rs::PipelineCache`,
+// which `Backend` actually uses. Forward-looking shapes that have been TODO
+// for >18 months and have zero workspace consumers are codified design drift,
+// not "cost-cheap options" — see audit
+// `docs/research/2026-05-22-flui-rendering-engine-audit.md` E-3 and the
+// cycle-1 PR #93 `typestate.rs` deletion precedent.
 
 /// Vertex for fullscreen quad rendering
 ///

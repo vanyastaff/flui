@@ -292,50 +292,14 @@ impl ShadowParams {
         }
     }
 
-    /// Material Design Elevation 1 (subtle depth)
-    pub fn elevation_1() -> Self {
-        Self {
-            offset: Vec2::new(0.0, 1.0),
-            blur_sigma: 2.0,
-            color: Color::rgba(0, 0, 0, 31), // ~0.12 alpha
-        }
-    }
-
-    /// Material Design Elevation 2 (raised surface)
-    pub fn elevation_2() -> Self {
-        Self {
-            offset: Vec2::new(0.0, 2.0),
-            blur_sigma: 4.0,
-            color: Color::rgba(0, 0, 0, 41), // ~0.16 alpha
-        }
-    }
-
-    /// Material Design Elevation 3 (floating surface)
-    pub fn elevation_3() -> Self {
-        Self {
-            offset: Vec2::new(0.0, 4.0),
-            blur_sigma: 8.0,
-            color: Color::rgba(0, 0, 0, 51), // ~0.20 alpha
-        }
-    }
-
-    /// Material Design Elevation 4 (dialog)
-    pub fn elevation_4() -> Self {
-        Self {
-            offset: Vec2::new(0.0, 8.0),
-            blur_sigma: 12.0,
-            color: Color::rgba(0, 0, 0, 61), // ~0.24 alpha
-        }
-    }
-
-    /// Material Design Elevation 5 (modal)
-    pub fn elevation_5() -> Self {
-        Self {
-            offset: Vec2::new(0.0, 16.0),
-            blur_sigma: 16.0,
-            color: Color::rgba(0, 0, 0, 71), // ~0.28 alpha
-        }
-    }
+    // `elevation_1` ... `elevation_5` constructor shortcuts were deleted in
+    // cycle 4 E-4 — they had zero non-test consumers across the workspace
+    // (the only docstring reference at `painter.rs:3938` was migrated to
+    // `ShadowParams::new(...)` literal-construction in the same commit).
+    // The Material Design elevation curves they encoded were a higher-level
+    // theming concern that does not belong inside the GPU instancing crate;
+    // when a widget-level theming layer materializes, the elevation→sigma
+    // mapping lands there with the rest of the design tokens.
 }
 
 /// Shadow instance data for GPU instancing
@@ -395,112 +359,15 @@ impl ShadowInstance {
     }
 }
 
-// =============================================================================
-// Blur Types
-// =============================================================================
-
-/// Blur parameters for Dual Kawase algorithm
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Pod, Zeroable)]
-pub struct BlurParams {
-    /// Input texture size
-    pub texture_size: [f32; 2],
-    /// Sample offset multiplier
-    pub offset: f32,
-    /// Padding for GPU alignment
-    pub padding: f32,
-}
-
-impl BlurParams {
-    /// Create new blur parameters
-    pub fn new(texture_size: [f32; 2], offset: f32) -> Self {
-        Self {
-            texture_size,
-            offset,
-            padding: 0.0,
-        }
-    }
-}
-
-/// Blur intensity levels
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum BlurIntensity {
-    /// Light blur (~4px radius) - glass effect
-    Light,
-    /// Medium blur (~8px radius) - backdrop
-    Medium,
-    /// Heavy blur (~16px radius) - strong glass
-    Heavy,
-    /// Extreme blur (~32px radius) - background defocus
-    Extreme,
-}
-
-impl BlurIntensity {
-    /// Get the number of iterations for this intensity
-    pub fn iterations(self) -> u32 {
-        match self {
-            BlurIntensity::Light => 1,
-            BlurIntensity::Medium => 2,
-            BlurIntensity::Heavy => 3,
-            BlurIntensity::Extreme => 4,
-        }
-    }
-
-    /// Get approximate blur radius in pixels
-    pub fn radius(self) -> f32 {
-        match self {
-            BlurIntensity::Light => 4.0,
-            BlurIntensity::Medium => 8.0,
-            BlurIntensity::Heavy => 16.0,
-            BlurIntensity::Extreme => 32.0,
-        }
-    }
-}
-
-// =============================================================================
-// Builder Patterns
-// =============================================================================
-
-/// Builder for linear gradients with fluent API
-pub struct LinearGradientBuilder {
-    stops: Vec<GradientStop>,
-}
-
-impl LinearGradientBuilder {
-    /// Create a new gradient builder
-    pub fn new() -> Self {
-        Self { stops: Vec::new() }
-    }
-
-    /// Add a color stop
-    pub fn add_stop(mut self, color: Color, position: f32) -> Self {
-        self.stops.push(GradientStop::new(color, position));
-        self
-    }
-
-    /// Add a stop at the start (position = 0.0)
-    pub fn start(mut self, color: Color) -> Self {
-        self.stops.push(GradientStop::start(color));
-        self
-    }
-
-    /// Add a stop at the end (position = 1.0)
-    pub fn end(mut self, color: Color) -> Self {
-        self.stops.push(GradientStop::end(color));
-        self
-    }
-
-    /// Build the gradient stops (max 8)
-    pub fn build(self) -> Vec<GradientStop> {
-        self.stops.into_iter().take(8).collect()
-    }
-}
-
-impl Default for LinearGradientBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+// Blur uniform-parameter buffer (`BlurParams`) + `BlurIntensity` shorthand
+// enum + `LinearGradientBuilder` fluent-API helper were deleted in cycle 4
+// E-4: zero non-test consumers across the workspace, and the live blur
+// uniform struct (`offscreen::BlurParams`) has a different field shape that
+// the parallel `effects::BlurParams` never adopted. When a public blur API
+// lands on `WgpuPainter`, it will reach for the offscreen-side struct
+// directly. `LinearGradientBuilder` returned a `Vec<GradientStop>` capped
+// at 8 elements; consumers can build the same vector inline without the
+// builder ceremony.
 
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod tests {
@@ -513,31 +380,10 @@ mod tests {
         assert_eq!(stop.color, [1.0, 0.0, 0.0, 1.0]);
     }
 
-    #[test]
-    fn test_gradient_builder() {
-        let stops = LinearGradientBuilder::new()
-            .start(Color::RED)
-            .end(Color::BLUE)
-            .build();
-
-        assert_eq!(stops.len(), 2);
-        assert_eq!(stops[0].position, 0.0);
-        assert_eq!(stops[1].position, 1.0);
-    }
-
-    #[test]
-    fn test_shadow_elevation_levels() {
-        let shadow1 = ShadowParams::elevation_1();
-        let shadow3 = ShadowParams::elevation_3();
-
-        assert!(shadow3.blur_sigma > shadow1.blur_sigma);
-        assert!(shadow3.offset.y > shadow1.offset.y);
-    }
-
-    #[test]
-    fn test_blur_intensity() {
-        assert_eq!(BlurIntensity::Light.iterations(), 1);
-        assert_eq!(BlurIntensity::Extreme.iterations(), 4);
-        assert!(BlurIntensity::Heavy.radius() > BlurIntensity::Light.radius());
-    }
+    // `test_gradient_builder`, `test_shadow_elevation_levels`, and
+    // `test_blur_intensity` were removed in cycle 4 E-4 alongside the
+    // `LinearGradientBuilder`, `ShadowParams::elevation_*`, and
+    // `BlurIntensity` items they exercised. The remaining `GradientStop`
+    // smoke test covers the only public API in this module that has live
+    // consumers (`painter.rs`'s instanced-gradient pipeline).
 }

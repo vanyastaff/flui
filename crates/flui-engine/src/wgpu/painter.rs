@@ -1024,7 +1024,7 @@ impl WgpuPainter {
         &mut self,
         view: &wgpu::TextureView,
         encoder: &mut wgpu::CommandEncoder,
-    ) -> crate::error::RenderResult<()> {
+    ) -> crate::error::EngineResult<()> {
         // Advance path cache frame counters and evict stale entries
         self.path_cache.advance_frame();
         self.superellipse_cache.advance_frame();
@@ -3605,9 +3605,16 @@ impl WgpuPainter {
         // for hardware-accelerated clipping. Path clipping will be implemented
         // in a future version with proper stencil buffer support.
 
-        #[cfg(debug_assertions)]
-        tracing::trace!(
-            "WgpuPainter::clip_path: not implemented, use ClipRect or ClipRRect instead"
+        // Cycle 4 E-1: pre-cycle this path emitted a debug-only
+        // `tracing::trace!` and returned silently. Production scrapes
+        // never saw the missing clip — content rendered without the
+        // intended clip. Upgrade to release-build `tracing::warn!` so
+        // any consumer that hits the path gets a visible signal.
+        tracing::warn!(
+            "WgpuPainter::clip_path: path clipping not implemented; \
+             content will render without the intended clip. \
+             Use ClipRect or ClipRRect for hardware-accelerated clipping. \
+             Path clipping requires stencil-buffer support (cycle 4 E-1)"
         );
     }
 
@@ -3922,13 +3929,15 @@ impl WgpuPainter {
     /// # Example
     /// ```ignore
     /// use flui_engine::painter::effects::ShadowParams;
+    /// use flui_types::styling::Color;
+    /// use glam::Vec2;
     ///
-    /// // Material Design elevation 2 shadow
+    /// // Material Design elevation 2 shadow (offset.y=2, sigma=4, ~0.16 alpha)
     /// painter.shadow_rect(
     ///     [10.0, 10.0],
     ///     [200.0, 100.0],
     ///     12.0,
-    ///     &ShadowParams::elevation_2(),
+    ///     &ShadowParams::new(Vec2::new(0.0, 2.0), 4.0, Color::rgba(0, 0, 0, 41)),
     /// );
     /// ```
     pub fn shadow_rect(

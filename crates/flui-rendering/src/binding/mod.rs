@@ -319,15 +319,26 @@ pub trait RendererBinding: Send + Sync {
         action: flui_semantics::SemanticsAction,
         _args: Option<flui_semantics::ActionArgs>,
     ) {
-        // Look up the render view and delegate to its semantics owner
-        if let Some(view) = self.get_render_view(view_id) {
-            let _view_guard = view.read();
-            unimplemented!(
-                "Semantics actions not yet implemented - requires SemanticsOwner integration. \
-                 Attempted action: {:?} on node {} in view {}",
-                action,
+        // Cycle 4 R-2: pre-cycle the body panicked via `unimplemented!()`
+        // — a Constitution Principle 6 violation reachable from every
+        // assistive-tech action dispatch. Post-cycle: emit a
+        // `tracing::warn!` with the action context and return without
+        // panicking. When `SemanticsOwner` integration lands the warn
+        // is swapped for the real dispatch.
+        if self.get_render_view(view_id).is_some() {
+            tracing::warn!(
+                view_id,
                 node_id,
-                view_id
+                action = ?action,
+                "perform_semantics_action: SemanticsOwner integration pending; \
+                 action is a no-op until RenderView ↔ SemanticsOwner plumbing lands"
+            );
+        } else {
+            tracing::debug!(
+                view_id,
+                node_id,
+                action = ?action,
+                "perform_semantics_action: view not found"
             );
         }
     }

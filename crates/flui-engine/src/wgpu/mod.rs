@@ -52,12 +52,11 @@ mod buffers;
 #[cfg(debug_assertions)]
 mod debug;
 /// Gradient + shadow + blur instance descriptors consumed by `painter.rs`'s
-/// instanced-batch pipelines. `#[allow(dead_code)]` retained at the module
-/// level because several builder/constant items (`ShadowParams::elevation_*`,
-/// `BlurIntensity`, `LinearGradientBuilder`) are forward-looking helpers that
-/// painter.rs has not yet wired into a public API; deletion would be premature
-/// before painter.rs's internal cleanup.
-#[allow(dead_code)]
+/// instanced-batch pipelines. The previous module-level `#[allow(dead_code)]`
+/// reflex was removed in cycle 4 E-4 alongside the forward-looking helpers
+/// (`ShadowParams::elevation_*`, `BlurIntensity`, `LinearGradientBuilder`,
+/// the parallel `effects::BlurParams`); any zombie that returns lands as an
+/// item-level lint, not a broad module suppression.
 pub mod effects;
 mod effects_pipeline;
 mod external_texture_registry;
@@ -136,8 +135,10 @@ pub use layer_render::LayerRender;
 pub use multi_draw::{
     DrawCommand, DrawIndexedIndirectArgs, MultiDrawBatcher, MultiDrawStats, PipelineId,
 };
-// Offscreen rendering
-pub use offscreen::{MaskedRenderResult, OffscreenRenderer, PipelineManager};
+// Offscreen rendering. `PipelineManager` was deleted in cycle 4 E-3 (zombie
+// wrapper carrying only an `Arc<ShaderCache>` field with 0 consumers); the
+// real pipeline ownership lives in `pipelines::PipelineCache`.
+pub use offscreen::{MaskedRenderResult, OffscreenRenderer};
 pub use painter::WgpuPainter;
 // Pipeline management
 pub use pipelines::{PipelineBuilder, PipelineCache};

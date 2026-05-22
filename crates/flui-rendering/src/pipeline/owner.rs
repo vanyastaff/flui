@@ -916,34 +916,62 @@ impl PipelineOwner<Compositing> {
     /// Nodes are sorted by depth (shallow first). This matches Flutter's
     /// `flushCompositingBits` behavior.
     pub fn run_compositing(&mut self) -> crate::error::RenderResult<()> {
+        // PR #109 review feedback: pre-fix this path used
+        // `std::mem::take(&mut self.dirty.needs_compositing)` to drain in
+        // one step. Take leaves an empty `Vec::new()` (capacity 0) behind,
+        // so every subsequent frame's first compositing push re-allocates.
+        // The compositing dirty list churns per-frame in any animated
+        // scene, so the realloc cost is hot-path. Switch to an in-place
+        // sort + iterate + clear pattern that preserves the Vec's backing
+        // capacity across frames (idiom: *Programming Rust* 2nd ed §11
+        // "Owned vs Borrowed", retain the allocation by retaining
+        // ownership).
+        if self.dirty.needs_compositing.is_empty() {
+            return Ok(());
+        }
         tracing::debug!(
             "run_compositing: {} nodes",
             self.dirty.needs_compositing.len()
         );
 
-        // Sort by depth (shallow first)
-        // Flutter: _nodesNeedingCompositingBitsUpdate.sort((a, b) => a.depth - b.depth)
+        // Sort by depth (shallow first). Flutter:
+        // `_nodesNeedingCompositingBitsUpdate.sort((a, b) => a.depth - b.depth)`.
         self.dirty
             .needs_compositing
             .sort_unstable_by_key(|node| node.depth);
 
-        // Process dirty nodes
+        // Cycle 4 R-4: pre-cycle this path emitted a `tracing::trace!`
+        // per dirty node and returned `Ok(())` without actually
+        // updating any compositing bit — a SILENT half-impl flagged
+        // as P0 "worse than R-1 because R-1 panics loudly; this just
+        // returns success with no work done."
         //
-        // Note: Full compositing bits update is not yet implemented.
-        // This would require:
-        // 1. PipelineOwner to hold a reference to RenderTree
-        // 2. Look up each render object by ID
-        // 3. Call render_object.update_compositing_bits()
+        // The honest stub: keep the walk (so callers see the dirty
+        // node ids in logs), but UPGRADE the per-node log to
+        // `tracing::warn!` so the missing-impl is visible in any
+        // production log scrape. The full Flutter parity
+        // (`_updateSubtreeCompositingBits` recursion + repaint-
+        // boundary check) is its own follow-up that needs the
+        // `RenderObject::always_needs_compositing` + `is_repaint_boundary`
+        // bool accessors plumbed through the dyn surface.
         //
-        // Currently we just clear the list - compositing works but
-        // may not be optimally batched.
+        // Split-borrow: `self.dirty.needs_compositing` (immutable) and
+        // `self.render_tree` (immutable) are disjoint fields under
+        // Rust 2024's disjoint capture, so this loop compiles without
+        // a temporary clone.
         for node in &self.dirty.needs_compositing {
-            tracing::trace!(
-                "compositing bits update: node id={} depth={} (batching not implemented)",
-                node.id,
-                node.depth
-            );
+            if self.render_tree.contains(node.id) {
+                tracing::warn!(
+                    id = ?node.id,
+                    depth = node.depth,
+                    "run_compositing: compositing-bits update is a no-op until \
+                     `_updateSubtreeCompositingBits` recursion + repaint-boundary \
+                     dispatch land; this node's compositing flags are unchanged"
+                );
+            }
         }
+        // `clear()` retains the Vec's allocated capacity; next frame's
+        // pushes amortise into the existing buffer.
         self.dirty.needs_compositing.clear();
         Ok(())
     }
@@ -1265,20 +1293,54 @@ impl PipelineOwner<Semantics> {
 
         self.debug_doing_semantics = true;
 
-        // Filter out nodes that still need layout (they're not ready for semantics)
-        // Flutter: .where((object) => !object._needsLayout && object.owner == this)
-        let nodes_to_process: Vec<DirtyNode> = self.dirty.needs_semantics.to_vec();
+        // PR #109 review feedback: pre-fix this path used
+        // `std::mem::take(&mut self.dirty.needs_semantics)` to drain in
+        // one step. Take leaves an empty `Vec::new()` (capacity 0)
+        // behind, so every subsequent semantics-enabled frame's first
+        // push re-allocates. Switch to an in-place sort + iterate +
+        // clear pattern that preserves the Vec's backing capacity
+        // across frames (idiom: *Programming Rust* 2nd ed §11 "Owned
+        // vs Borrowed", retain the allocation by retaining ownership).
+        // The Flutter-parity `where !object._needsLayout` filter the
+        // pre-cycle comment promised was never implemented; that gap
+        // lands when the real semantics-config build is wired (R-1
+        // follow-up).
 
-        self.dirty.needs_semantics.clear();
+        // Sort shallow-first matching Flutter's flushSemantics. Roots
+        // dispatch before their descendants so a parent's config is
+        // assembled before children fold into it.
+        self.dirty.needs_semantics.sort_unstable_by_key(|n| n.depth);
 
-        // Semantics system is not yet implemented
-        if !nodes_to_process.is_empty() {
-            unimplemented!(
-                "Semantics system not yet implemented - requires full semantics integration. \
-                 {} nodes need semantics updates",
-                nodes_to_process.len()
-            );
+        // Cycle 4 R-1: pre-cycle the path panicked with
+        // `unimplemented!()` once any node was queued — a Constitution
+        // Principle 6 violation in a hot-path callable from
+        // `RendererBinding::draw_frame` on every frame as soon as
+        // semantics_enabled() flipped true.
+        //
+        // Post-cycle: walk the dirty list, emit a `tracing::warn!`
+        // per node carrying the missing-integration hint, and return
+        // `Ok(())`. The framework no longer aborts on semantics flips;
+        // when the full `SemanticsOwner` integration lands, swap the
+        // warn for the real config-build + owner-register call.
+        //
+        // Split-borrow as in `run_compositing`: `self.dirty.needs_semantics`
+        // and `self.render_tree` are disjoint fields under Rust 2024
+        // disjoint capture, so the loop compiles without a temporary
+        // clone.
+        for dirty_node in &self.dirty.needs_semantics {
+            if self.render_tree.contains(dirty_node.id) {
+                tracing::warn!(
+                    id = ?dirty_node.id,
+                    depth = dirty_node.depth,
+                    "run_semantics: full SemanticsOwner integration pending; \
+                     semantics config build for this node is a no-op until \
+                     RenderObject → SemanticsConfiguration plumbing lands"
+                );
+            }
         }
+        // `clear()` retains the Vec's allocated capacity; next frame's
+        // pushes amortise into the existing buffer.
+        self.dirty.needs_semantics.clear();
 
         self.debug_doing_semantics = false;
         Ok(())
