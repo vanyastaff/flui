@@ -220,7 +220,17 @@ where
             return;
         }
         let ctx = ElementBuildContext::new_minimal(core.depth());
-        let child_view = core.view().build(&ctx);
+        // The user `build()` is wrapped in `catch_unwind`: a panicking
+        // build is caught and substituted with the registered
+        // `ErrorView`. The catch covers ONLY the build expression — the
+        // `view` borrow is moved into the closure so nothing of `core`
+        // is mutated under the catch (Flutter parity:
+        // `ComponentElement.performRebuild`, `framework.dart:5810`).
+        let view = core.view().clone();
+        let child_view =
+            super::behavior_commons::build_or_recover(core, owner, "StatelessElement", move || {
+                view.build(&ctx)
+            });
         super::behavior_commons::finish_single_child_build(
             core,
             child_view,
@@ -335,7 +345,19 @@ where
         if !super::behavior_commons::should_build_with_trace(core, "StatefulBehavior") {
             return;
         }
-        let child_view = self.state.build(core.view(), &ctx);
+        // The user `ViewState::build` is wrapped in `catch_unwind`: a
+        // panicking build is caught and substituted with the registered
+        // `ErrorView`. The catch covers ONLY the build expression — the
+        // `view` borrow is moved into the closure (cloned, so `core`
+        // stays free for the teardown branch) and `state` is captured by
+        // reference, independent of `core` (Flutter parity:
+        // `ComponentElement.performRebuild`, `framework.dart:5810`).
+        let view = core.view().clone();
+        let state = &self.state;
+        let child_view =
+            super::behavior_commons::build_or_recover(core, owner, "StatefulElement", move || {
+                state.build(&view, &ctx)
+            });
         super::behavior_commons::finish_single_child_build(
             core,
             child_view,
