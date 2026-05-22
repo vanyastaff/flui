@@ -46,7 +46,7 @@
 //! registry.register_follower(follower_id, link);
 //!
 //! // Query followers for a leader
-//! let followers = registry.followers_for_link(&link);
+//! let followers = registry.followers_for_link(link);
 //! ```
 
 use std::collections::HashMap;
@@ -177,18 +177,24 @@ impl LinkRegistry {
     }
 
     /// Returns leader info for a link.
-    pub fn get_leader(&self, link: &LayerLink) -> Option<&LeaderInfo> {
-        self.leaders.get(link)
+    ///
+    /// Takes `link` by value because [`LayerLink`] is `Copy` and 8 bytes
+    /// — passing by reference would force an extra indirection at the
+    /// call site for no semantic benefit. The other LinkRegistry
+    /// accessors (`register_leader`, `unregister_leader`) already
+    /// took `LayerLink` by value; U18 unifies the signature shape.
+    pub fn get_leader(&self, link: LayerLink) -> Option<&LeaderInfo> {
+        self.leaders.get(&link)
     }
 
     /// Returns mutable leader info for a link.
-    pub fn get_leader_mut(&mut self, link: &LayerLink) -> Option<&mut LeaderInfo> {
-        self.leaders.get_mut(link)
+    pub fn get_leader_mut(&mut self, link: LayerLink) -> Option<&mut LeaderInfo> {
+        self.leaders.get_mut(&link)
     }
 
     /// Returns true if a leader with this link exists.
-    pub fn has_leader(&self, link: &LayerLink) -> bool {
-        self.leaders.contains_key(link)
+    pub fn has_leader(&self, link: LayerLink) -> bool {
+        self.leaders.contains_key(&link)
     }
 
     // ========================================================================
@@ -236,15 +242,15 @@ impl LinkRegistry {
     // ========================================================================
 
     /// Returns all follower LayerIds for a given link.
-    pub fn followers_for_link(&self, link: &LayerLink) -> &[LayerId] {
+    pub fn followers_for_link(&self, link: LayerLink) -> &[LayerId] {
         self.leaders
-            .get(link)
+            .get(&link)
             .map_or(&[], |info| info.followers.as_slice())
     }
 
     /// Returns the leader LayerId for a given link.
-    pub fn leader_for_link(&self, link: &LayerLink) -> Option<LayerId> {
-        self.leaders.get(link).map(|info| info.layer_id)
+    pub fn leader_for_link(&self, link: LayerLink) -> Option<LayerId> {
+        self.leaders.get(&link).map(|info| info.layer_id)
     }
 
     /// Returns the number of registered leaders.
@@ -330,10 +336,10 @@ mod tests {
             Size::new(px(100.0), px(50.0)),
         );
 
-        assert!(registry.has_leader(&link));
+        assert!(registry.has_leader(link));
         assert_eq!(registry.leader_count(), 1);
 
-        let info = registry.get_leader(&link).unwrap();
+        let info = registry.get_leader(link).unwrap();
         assert_eq!(info.layer_id, layer_id);
         assert_eq!(info.offset, Offset::new(px(10.0), px(20.0)));
         assert_eq!(info.size, Size::new(px(100.0), px(50.0)));
@@ -362,7 +368,7 @@ mod tests {
         assert_eq!(registry.get_follower_link(follower_id), Some(link));
 
         // Follower should be in leader's list
-        let info = registry.get_leader(&link).unwrap();
+        let info = registry.get_leader(link).unwrap();
         assert!(info.followers.contains(&follower_id));
     }
 
@@ -373,11 +379,11 @@ mod tests {
         let layer_id = make_layer_id(1);
 
         registry.register_leader(link, layer_id, Offset::ZERO, Size::new(px(100.0), px(50.0)));
-        assert!(registry.has_leader(&link));
+        assert!(registry.has_leader(link));
 
         let info = registry.unregister_leader(link);
         assert!(info.is_some());
-        assert!(!registry.has_leader(&link));
+        assert!(!registry.has_leader(link));
     }
 
     #[test]
@@ -400,7 +406,7 @@ mod tests {
         assert!(!registry.has_follower(follower_id));
 
         // Follower should be removed from leader's list
-        let info = registry.get_leader(&link).unwrap();
+        let info = registry.get_leader(link).unwrap();
         assert!(!info.followers.contains(&follower_id));
     }
 
@@ -421,7 +427,7 @@ mod tests {
         registry.register_follower(follower1, link);
         registry.register_follower(follower2, link);
 
-        let registered = registry.followers_for_link(&link);
+        let registered = registry.followers_for_link(link);
         assert_eq!(registered.len(), 2);
         assert!(registered.contains(&follower1));
         assert!(registered.contains(&follower2));
@@ -440,7 +446,7 @@ mod tests {
             Size::new(px(150.0), px(75.0)),
         );
 
-        let info = registry.get_leader(&link).unwrap();
+        let info = registry.get_leader(link).unwrap();
         assert_eq!(info.offset, Offset::new(px(200.0), px(300.0)));
         assert_eq!(info.size, Size::new(px(150.0), px(75.0)));
     }
@@ -525,7 +531,7 @@ mod tests {
 
         assert_eq!(registry.leader_count(), 2);
         assert_eq!(registry.follower_count(), 3);
-        assert_eq!(registry.followers_for_link(&link1).len(), 2);
-        assert_eq!(registry.followers_for_link(&link2).len(), 1);
+        assert_eq!(registry.followers_for_link(link1).len(), 2);
+        assert_eq!(registry.followers_for_link(link2).len(), 1);
     }
 }
