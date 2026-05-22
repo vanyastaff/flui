@@ -55,6 +55,11 @@ use crate::traits::TreeNav;
 pub struct Ancestors<'a, I: Identifier, T: TreeNav<I>> {
     tree: &'a T,
     current: Option<I>,
+    /// Step counter for cycle detection (audit T-12). Bounded by the
+    /// tree's storage size: an acyclic parent chain of N nodes has at
+    /// most N steps. A malformed cycle would loop indefinitely
+    /// without this guard.
+    steps: usize,
 }
 
 impl<'a, I: Identifier, T: TreeNav<I>> Ancestors<'a, I, T> {
@@ -64,6 +69,7 @@ impl<'a, I: Identifier, T: TreeNav<I>> Ancestors<'a, I, T> {
         Self {
             tree,
             current: Some(start),
+            steps: 0,
         }
     }
 
@@ -83,6 +89,26 @@ impl<I: Identifier, T: TreeNav<I>> Iterator for Ancestors<'_, I, T> {
 
         // Check if current exists in tree
         if !self.tree.contains(current) {
+            self.current = None;
+            return None;
+        }
+
+        // Cycle detection (audit T-12): an acyclic parent chain has at
+        // most `tree.len()` distinct nodes. Past that, a parent
+        // pointer must be cycling. Cap the walk at `tree.len() + 1`
+        // and bail with a `tracing::warn!`. Cycles cannot be
+        // constructed through the public API (cycle 2 PR #100/#101
+        // added cycle-rejection to LayerTree / SemanticsTree
+        // `add_child`, and cycle 3 TreeWrite lifts that contract to
+        // the trait) — this is defence in depth against slabs
+        // corrupted by `unsafe` paths or de-serialization.
+        self.steps += 1;
+        if self.steps > self.tree.len().saturating_add(1) {
+            tracing::warn!(
+                "Ancestors::next: parent chain longer than tree size — \
+                 malformed parent pointers? Terminating walk to avoid \
+                 infinite loop"
+            );
             self.current = None;
             return None;
         }
