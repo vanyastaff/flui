@@ -31,9 +31,13 @@ pub enum TessellationError {
 
     #[error("Stroke tessellation failed: {0}")]
     StrokeFailed(String),
-
-    #[error("Invalid path data")]
-    InvalidPath,
+    // Cycle 4 wave 5 E-10: `InvalidPath` variant dropped. Workspace
+    // grep returned zero constructors -- the tessellator's surface
+    // builders (`Path::builder().begin(...).line_to(...).build()`)
+    // can't produce invalid lyon `Path`s through the live entry
+    // points, and the analogous `TessellationError::InvalidPath` in
+    // `flui-painting` is a separate type (different message body)
+    // wired only on the painting-side path builder.
 }
 
 pub type Result<T> = std::result::Result<T, TessellationError>;
@@ -176,85 +180,13 @@ impl Tessellator {
         ))
     }
 
-    /// Tessellate a rectangle (optimized path)
-    pub fn tessellate_rect(
-        &mut self,
-        rect: Rect<Pixels>,
-        paint: &Paint,
-    ) -> Result<(Vec<Vertex>, Vec<u32>)> {
-        let mut path_builder = Path::builder();
-
-        path_builder.begin(lyon::geom::point(rect.left().0, rect.top().0));
-        path_builder.line_to(lyon::geom::point(rect.right().0, rect.top().0));
-        path_builder.line_to(lyon::geom::point(rect.right().0, rect.bottom().0));
-        path_builder.line_to(lyon::geom::point(rect.left().0, rect.bottom().0));
-        path_builder.close();
-
-        let path = path_builder.build();
-        self.tessellate_fill(&path, paint)
-    }
-
-    /// Tessellate a rounded rectangle
-    pub fn tessellate_rounded_rect(
-        &mut self,
-        rect: Rect<Pixels>,
-        corner_radius: f32,
-        paint: &Paint,
-    ) -> Result<(Vec<Vertex>, Vec<u32>)> {
-        let mut path_builder = Path::builder();
-
-        let left = rect.left().0;
-        let top = rect.top().0;
-        let right = rect.right().0;
-        let bottom = rect.bottom().0;
-        let radius = corner_radius
-            .min(rect.width().0 / 2.0)
-            .min(rect.height().0 / 2.0);
-
-        // Start at top-left, after the corner
-        path_builder.begin(lyon::geom::point(left + radius, top));
-
-        // Top edge
-        path_builder.line_to(lyon::geom::point(right - radius, top));
-
-        // Top-right corner
-        path_builder.quadratic_bezier_to(
-            lyon::geom::point(right, top),
-            lyon::geom::point(right, top + radius),
-        );
-
-        // Right edge
-        path_builder.line_to(lyon::geom::point(right, bottom - radius));
-
-        // Bottom-right corner
-        path_builder.quadratic_bezier_to(
-            lyon::geom::point(right, bottom),
-            lyon::geom::point(right - radius, bottom),
-        );
-
-        // Bottom edge
-        path_builder.line_to(lyon::geom::point(left + radius, bottom));
-
-        // Bottom-left corner
-        path_builder.quadratic_bezier_to(
-            lyon::geom::point(left, bottom),
-            lyon::geom::point(left, bottom - radius),
-        );
-
-        // Left edge
-        path_builder.line_to(lyon::geom::point(left, top + radius));
-
-        // Top-left corner
-        path_builder.quadratic_bezier_to(
-            lyon::geom::point(left, top),
-            lyon::geom::point(left + radius, top),
-        );
-
-        path_builder.close();
-
-        let path = path_builder.build();
-        self.tessellate_fill(&path, paint)
-    }
+    // Cycle 4 wave 5 E-10: `tessellate_rect` and
+    // `tessellate_rounded_rect` deleted. Both were forward-looking
+    // convenience wrappers that built a tiny `lyon::Path` then
+    // forwarded to `tessellate_fill`; zero production callsites in
+    // the workspace (painter.rs drives rects through the instancing
+    // path, not lyon tessellation). The two unit tests that
+    // exercised them were deleted alongside the methods.
 
     /// Tessellate a circle
     pub fn tessellate_circle(
@@ -886,19 +818,15 @@ impl Tessellator {
         Ok((all_vertices, all_indices))
     }
 
-    /// Tessellate a stroked FLUI path with dash pattern.
-    ///
-    /// Converts the FLUI path to a lyon path, then delegates to
-    /// `tessellate_dashed_stroke`.
-    pub fn tessellate_flui_path_dashed_stroke(
-        &mut self,
-        flui_path: &flui_types::painting::path::Path,
-        paint: &Paint,
-        dash_pattern: &flui_types::painting::DashPattern,
-    ) -> Result<(Vec<Vertex>, Vec<u32>)> {
-        let lyon_path = flui_path.to_lyon_path();
-        self.tessellate_dashed_stroke(&lyon_path, paint, dash_pattern)
-    }
+    // Cycle 4 wave 5 E-10: `tessellate_flui_path_dashed_stroke`
+    // deleted. Workspace grep returned zero callers; the live
+    // dashed-stroke entry point is `tessellate_dashed_stroke` on
+    // a lyon `Path` (used by painter.rs's outline pipeline). The
+    // FLUI-to-lyon conversion lives in the `IntoLyonPath` trait
+    // below -- a caller can do
+    // `tessellate_dashed_stroke(&flui_path.to_lyon_path(), paint, dp)`
+    // in one line if the helper is needed again, but no one needs
+    // it today.
 }
 
 /// Helper trait for creating lyon paths from FLUI types
@@ -1079,20 +1007,12 @@ mod tests {
         Pixels(v)
     }
 
-    #[test]
-    fn test_tessellate_rect() {
-        let mut tessellator = Tessellator::new();
-        let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
-        let paint = Paint::fill(Color::RED);
-
-        let result = tessellator.tessellate_rect(rect, &paint);
-        assert!(result.is_ok());
-
-        let (vertices, indices) = result.expect("rect tessellation should succeed");
-        assert!(!vertices.is_empty());
-        assert!(!indices.is_empty());
-        assert_eq!(indices.len() % 3, 0); // Should be triangles
-    }
+    // Cycle 4 wave 5 E-10: `test_tessellate_rect` and
+    // `test_tessellate_rounded_rect` deleted alongside the methods
+    // they exercised. No production callsite drove them; their
+    // assertions (`!vertices.is_empty()` etc.) were trivially true
+    // for any non-degenerate input -- they documented the shape of
+    // the wrapper, not behavior worth pinning.
 
     #[test]
     fn test_tessellate_circle() {
@@ -1104,20 +1024,6 @@ mod tests {
         assert!(result.is_ok());
 
         let (vertices, indices) = result.expect("circle tessellation should succeed");
-        assert!(!vertices.is_empty());
-        assert!(!indices.is_empty());
-    }
-
-    #[test]
-    fn test_tessellate_rounded_rect() {
-        let mut tessellator = Tessellator::new();
-        let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
-        let paint = Paint::fill(Color::GREEN);
-
-        let result = tessellator.tessellate_rounded_rect(rect, 10.0, &paint);
-        assert!(result.is_ok());
-
-        let (vertices, indices) = result.expect("rounded rect tessellation should succeed");
         assert!(!vertices.is_empty());
         assert!(!indices.is_empty());
     }

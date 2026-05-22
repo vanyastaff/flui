@@ -42,7 +42,7 @@ pub enum ShaderType {
 
 impl ShaderType {
     /// Get the WGSL source code for this shader type
-    pub fn source_code(&self) -> &'static str {
+    pub fn source_code(self) -> &'static str {
         match self {
             ShaderType::SolidMask => include_str!("shaders/masks/solid.wgsl"),
             ShaderType::LinearGradientMask => include_str!("shaders/masks/linear_gradient.wgsl"),
@@ -66,7 +66,7 @@ impl ShaderType {
     }
 
     /// Get the shader label (for debugging)
-    pub fn label(&self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             ShaderType::SolidMask => "Solid Mask Shader",
             ShaderType::LinearGradientMask => "Linear Gradient Mask Shader",

@@ -335,28 +335,18 @@ pub trait RenderObject<P: Protocol>:
     // trait object. Removing the method also removes the only paint-phase
     // `&mut` access to the trait surface.
 
-    /// Inserts this render object into the pipeline owner and returns its ID.
-    ///
-    /// This is the idiomatic way to insert render objects into the render tree.
-    /// The method uses the `From` trait to convert the boxed render object
-    /// into a `RenderNode`, ensuring compile-time protocol dispatch.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let render_object = RenderPadding::new(padding);
-    /// let render_id = Box::new(render_object).insert_into_pipeline(&mut owner);
-    /// ```
-    fn insert_into_pipeline(
-        self: Box<Self>,
-        owner: &mut crate::pipeline::PipelineOwner,
-    ) -> flui_foundation::RenderId
-    where
-        Self: Sized,
-        crate::storage::RenderNode: From<Box<dyn RenderObject<P>>>,
-    {
-        owner.insert(self)
-    }
+    // Cycle 4 wave 5 R-21: `insert_into_pipeline` convenience method
+    // removed. It was a default trait method gated by `Self: Sized`
+    // (so unusable through `dyn RenderObject<P>`) that wrapped a
+    // single line: `owner.insert(self)`. Workspace grep showed zero
+    // production callsites -- the trait was paying compile-time and
+    // API-stability cost for a convenience that earned nothing.
+    //
+    // Direct equivalent: `owner.insert(Box::new(render_object))`,
+    // see [`crate::pipeline::PipelineOwner::insert`]. The real
+    // load-bearing piece is the `From<Box<dyn RenderObject<P>>> for
+    // RenderNode` impl in `storage/node.rs`, which the `insert`
+    // method exercises via `.into()`.
 }
 
 impl_downcast!(sync RenderObject<P> where P: Protocol);

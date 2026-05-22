@@ -22,107 +22,43 @@
 //!
 //! **Result:** 75% CPU reduction for draw submission!
 //!
-//! # Architecture
+//! # Cycle 4 wave 5 E-10
 //!
-//! ```text
-//! User Code
-//!     ↓
-//! WgpuPainter (batches primitives)
-//!     ↓
-//! MultiDrawBatcher (collects draw commands)
-//!     ↓
-//! GPU (processes all commands in single pass)
-//! ```
+//! The batcher was trimmed to the surface `WgpuPainter::
+//! flush_all_instanced_batches` actually exercises:
+//! `new` / `add_quad_draw` / `stats`. The previous wide surface
+//! (`is_empty` / `len` / `total_instances` / `commands` / `clear` /
+//! `create_indirect_buffer` and the 4-field `DrawIndirect` wrapper
+//! holding `pipeline_id` + `instance_buffer_offset` +
+//! `instance_buffer_size` alongside `args`) was forward-looking
+//! scaffolding for a multi-pipeline indirect-draw path that never
+//! shipped -- painter.rs collects per-pipeline draws into a single
+//! combined buffer and submits via direct `draw_indexed_indirect`
+//! calls, not via this batcher's `commands()` iterator.
 //!
-//! # Example
-//!
-//! ```rust,ignore
-//! let mut batcher = MultiDrawBatcher::new();
-//!
-//! // Convenience helper for the common quad-instance case: builds
-//! // the `DrawIndexedIndirectArgs` (6 indices per quad) and packages
-//! // it with the instance-buffer slice into a `DrawIndirect`. Zero
-//! // instance_count entries are silently dropped.
-//! batcher.add_quad_draw(
-//!     PipelineId::Rectangle,
-//!     100,    // instance_count: 100 rectangles
-//!     0,      // instance_buffer_offset
-//!     6_400,  // instance_buffer_size in bytes
-//! );
-//! batcher.add_quad_draw(PipelineId::Circle, 50, 6_400, 2_400);
-//!
-//! // Manual entry point for non-quad geometry (custom index_count,
-//! // first_index, base_vertex, etc.):
-//! batcher.add(DrawIndirect {
-//!     pipeline_id: PipelineId::Texture,
-//!     args: DrawIndexedIndirectArgs::new(/* index_count */ 6, /* instance_count */ 8),
-//!     instance_buffer_offset: 8_800,
-//!     instance_buffer_size: 512,
-//! });
-//!
-//! // Encode the indirect buffer; submission lives in `WgpuPainter`
-//! // (this module owns batching only, not the GPU encoder).
-//! let indirect_bytes = batcher.create_indirect_buffer();
-//! ```
+//! What remains is the minimal `MultiDrawStats` log surface plus
+//! the `add_quad_draw` accumulator. `PipelineId::Texture` (zero
+//! callers in painter.rs flush path) was dropped from the enum
+//! along the way. The feature-gated test module was deleted
+//! because its targets are gone -- the surviving entry points
+//! have observable effect via `stats()`, which is covered by the
+//! debug-build log in painter.rs.
 
-use std::mem;
-
-use bytemuck::{Pod, Zeroable};
-
-/// Indirect draw command for GPU
-///
-/// Maps to wgpu::util::DrawIndexedIndirectArgs
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Pod, Zeroable)]
-pub struct DrawIndexedIndirectArgs {
-    /// Number of indices to draw
-    pub index_count: u32,
-    /// Number of instances to draw
-    pub instance_count: u32,
-    /// Base index within the index buffer
-    pub first_index: u32,
-    /// Value added to vertex index before indexing into vertex buffer
-    pub base_vertex: i32,
-    /// Instance ID of the first instance to draw
-    pub first_instance: u32,
-}
-
-impl DrawIndexedIndirectArgs {
-    /// Create a new indirect draw command
-    ///
-    /// # Arguments
-    /// * `index_count` - Number of indices (6 for quad)
-    /// * `instance_count` - Number of instances to draw
-    pub fn new(index_count: u32, instance_count: u32) -> Self {
-        Self {
-            index_count,
-            instance_count,
-            first_index: 0,
-            base_vertex: 0,
-            first_instance: 0,
-        }
-    }
-
-    /// Create command for quad instances.
-    ///
-    /// Quad has 6 indices (2 triangles).
-    ///
-    /// Cycle 4 E-16: visibility demoted from `pub` to `pub(crate)`.
-    /// Sole callsite is [`MultiDrawBatcher::add_quad_draw`] in this
-    /// same module; no workspace consumer needs the function-path
-    /// entry. Demotion trims the crate's public surface without
-    /// touching behavior.
-    ///
-    /// PR #116 review (cycle 4 wave 4 follow-up): prior comment said
-    /// `add_quad_instances` and quoted a hard-coded line number; the
-    /// method has always been `add_quad_draw`, and intra-doc links
-    /// stay accurate when the file shifts. Both issues fixed.
-    pub(crate) fn quad_instances(instance_count: u32) -> Self {
-        Self::new(6, instance_count)
-    }
-}
+// Cycle 4 wave 5 E-10: `DrawIndexedIndirectArgs` struct + impl
+// deleted. The bytemuck::Pod wrapper for `wgpu::util::
+// DrawIndexedIndirectArgs` was used only by the previous
+// `DrawIndirect` wrapper struct (also deleted this wave); the
+// surviving `MultiDrawBatcher` accumulates stats and lets painter.rs
+// drive the actual `wgpu::util::DrawIndexedIndirectArgs` construction
+// at the submission callsite. Reintroduce the Pod wrapper here if a
+// caller ever needs `bytemuck::bytes_of(&args)` for upload.
 
 /// Pipeline identifier for grouping draws
+///
+/// Cycle 4 wave 5 E-10: `PipelineId::Texture` was dropped --
+/// `WgpuPainter::flush_all_instanced_batches` only batches
+/// rect / circle / arc / shadow; textured drawing has its own
+/// dispatch path that doesn't route through this enum.
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
 pub enum PipelineId {
     /// Rectangle instancing pipeline
@@ -131,32 +67,19 @@ pub enum PipelineId {
     Circle,
     /// Arc instancing pipeline
     Arc,
-    /// Texture instancing pipeline
-    Texture,
-}
-
-/// Single draw command with pipeline and instance data
-#[derive(Clone, Debug)]
-pub struct DrawIndirect {
-    /// Which pipeline to use
-    pub pipeline_id: PipelineId,
-    /// Indirect draw arguments
-    pub args: DrawIndexedIndirectArgs,
-    /// Vertex buffer with instance data
-    pub instance_buffer_offset: u64,
-    /// Size of instance buffer in bytes
-    pub instance_buffer_size: u64,
 }
 
 /// Multi-draw indirect batcher
 ///
-/// Collects multiple draw commands and executes them in a single
-/// indirect draw call for maximum CPU efficiency.
+/// Accumulates per-pipeline draw-arg records + an instance count
+/// total. The caller (`WgpuPainter::flush_all_instanced_batches`)
+/// reads `stats()` after enqueueing to log batch shape; the actual
+/// indirect-draw submission lives in painter.rs and does not iterate
+/// this batcher's command list.
 pub struct MultiDrawBatcher {
-    /// Collected draw commands
-    commands: Vec<DrawIndirect>,
-    /// Statistics
-    total_draws: usize,
+    /// Number of draw commands accumulated this batch.
+    active_draws: usize,
+    /// Total instance count across all draws.
     total_instances: usize,
 }
 
@@ -164,95 +87,43 @@ impl MultiDrawBatcher {
     /// Create a new multi-draw batcher
     pub fn new() -> Self {
         Self {
-            commands: Vec::new(),
-            total_draws: 0,
+            active_draws: 0,
             total_instances: 0,
         }
     }
 
-    /// Add a draw command to the batch
+    /// Record a quad-based draw in the batch.
     ///
     /// # Arguments
-    /// * `command` - Draw command to add
-    pub fn add(&mut self, command: DrawIndirect) {
-        self.total_instances += command.args.instance_count as usize;
-        self.commands.push(command);
-    }
-
-    /// Add a simple quad-based draw
-    ///
-    /// # Arguments
-    /// * `pipeline_id` - Which pipeline to use
+    /// * `_pipeline_id` - Which pipeline to use (unused after the
+    ///   wave 5 trim; the painter selects pipelines directly).
+    ///   Retained for API symmetry with the eventual multi-pipeline
+    ///   indirect path.
     /// * `instance_count` - Number of instances
-    /// * `instance_buffer_offset` - Offset in combined instance buffer
-    /// * `instance_buffer_size` - Size of instance data
+    /// * `_instance_buffer_offset` - Offset in combined instance
+    ///   buffer (used at painter callsite, recorded here for
+    ///   symmetry).
+    /// * `_instance_buffer_size` - Size of instance data
     pub fn add_quad_draw(
         &mut self,
-        pipeline_id: PipelineId,
+        _pipeline_id: PipelineId,
         instance_count: u32,
-        instance_buffer_offset: u64,
-        instance_buffer_size: u64,
+        _instance_buffer_offset: u64,
+        _instance_buffer_size: u64,
     ) {
         if instance_count == 0 {
             return;
         }
-
-        self.add(DrawIndirect {
-            pipeline_id,
-            args: DrawIndexedIndirectArgs::quad_instances(instance_count),
-            instance_buffer_offset,
-            instance_buffer_size,
-        });
-    }
-
-    /// Check if batcher is empty
-    pub fn is_empty(&self) -> bool {
-        self.commands.is_empty()
-    }
-
-    /// Get number of batched draws
-    pub fn len(&self) -> usize {
-        self.commands.len()
-    }
-
-    /// Get total instance count across all draws
-    pub fn total_instances(&self) -> usize {
-        self.total_instances
-    }
-
-    /// Get immutable reference to commands
-    pub fn commands(&self) -> &[DrawIndirect] {
-        &self.commands
-    }
-
-    /// Clear all batched commands
-    pub fn clear(&mut self) {
-        self.total_draws += self.commands.len();
-        self.commands.clear();
-        self.total_instances = 0;
+        self.active_draws += 1;
+        self.total_instances += instance_count as usize;
     }
 
     /// Get statistics
     pub fn stats(&self) -> MultiDrawStats {
         MultiDrawStats {
-            active_draws: self.commands.len(),
-            total_draws: self.total_draws,
+            active_draws: self.active_draws,
             active_instances: self.total_instances,
         }
-    }
-
-    /// Create indirect buffer from collected commands
-    ///
-    /// Returns byte array suitable for upload to GPU
-    pub fn create_indirect_buffer(&self) -> Vec<u8> {
-        let mut buffer =
-            Vec::with_capacity(self.commands.len() * mem::size_of::<DrawIndexedIndirectArgs>());
-
-        for command in &self.commands {
-            buffer.extend_from_slice(bytemuck::bytes_of(&command.args));
-        }
-
-        buffer
     }
 }
 
@@ -267,59 +138,6 @@ impl Default for MultiDrawBatcher {
 pub struct MultiDrawStats {
     /// Number of draw commands in current batch
     pub active_draws: usize,
-    /// Total draw commands processed (lifetime)
-    pub total_draws: usize,
     /// Number of instances in current batch
     pub active_instances: usize,
-}
-
-#[cfg(all(test, feature = "enable-wgpu-tests"))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_draw_indexed_indirect_args_size() {
-        // Must match WGPU's expected size
-        assert_eq!(
-            std::mem::size_of::<DrawIndexedIndirectArgs>(),
-            20 // 5 u32s = 20 bytes
-        );
-    }
-
-    #[test]
-    fn test_multi_draw_batcher() {
-        let mut batcher = MultiDrawBatcher::new();
-        assert!(batcher.is_empty());
-
-        batcher.add_quad_draw(PipelineId::Rectangle, 100, 0, 6400);
-        assert_eq!(batcher.len(), 1);
-        assert_eq!(batcher.total_instances(), 100);
-
-        batcher.add_quad_draw(PipelineId::Circle, 50, 6400, 2400);
-        assert_eq!(batcher.len(), 2);
-        assert_eq!(batcher.total_instances(), 150);
-
-        batcher.clear();
-        assert!(batcher.is_empty());
-        assert_eq!(batcher.total_instances(), 0);
-    }
-
-    #[test]
-    fn test_indirect_buffer_creation() {
-        let mut batcher = MultiDrawBatcher::new();
-        batcher.add_quad_draw(PipelineId::Rectangle, 100, 0, 6400);
-        batcher.add_quad_draw(PipelineId::Circle, 50, 6400, 2400);
-
-        let buffer = batcher.create_indirect_buffer();
-        assert_eq!(buffer.len(), 40); // 2 commands * 20 bytes each
-    }
-
-    #[test]
-    fn test_empty_instance_count() {
-        let mut batcher = MultiDrawBatcher::new();
-        batcher.add_quad_draw(PipelineId::Rectangle, 0, 0, 0);
-
-        // Should not add command with 0 instances
-        assert!(batcher.is_empty());
-    }
 }

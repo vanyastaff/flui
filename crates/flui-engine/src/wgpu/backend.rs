@@ -58,6 +58,41 @@ pub struct Backend<'frame> {
     /// `COPY_TEXTURE_TO_TEXTURE` operations during backdrop-filter
     /// dispatch.
     surface_texture: Option<&'frame wgpu::Texture>,
+    /// Cycle 4 wave 5 E-13: matrix that is currently applied to
+    /// [`painter`](Self::painter) via a `save() + apply` pair that
+    /// has not yet been balanced with `restore()`. `with_transform`
+    /// uses this to coalesce consecutive same-matrix calls into a
+    /// single push/pop: when the incoming transform equals
+    /// `active_transform`, the draw closure runs directly on the
+    /// already-applied state rather than paying another stack push.
+    ///
+    /// [`flush_active_transform`](Self::flush_active_transform)
+    /// balances the deferred `restore()`. It is called at every
+    /// point where the painter save stack could be mutated outside
+    /// `with_transform`'s coalescing path -- the identity /
+    /// transform-mismatch arms inside `with_transform` itself, every
+    /// `LayerStateStack` method on `Backend` (`push_clip_*`,
+    /// `pop_clip`, `push_offset`, `push_transform`, `pop_transform`,
+    /// `push_opacity`, `pop_opacity`, `push_color_filter`,
+    /// `pop_color_filter`, `push_image_filter`, `pop_image_filter`),
+    /// the explicit [`Backend::restore`](Self::restore) escape
+    /// hatch, and [`into_painter`](Self::into_painter) (so the
+    /// returned painter is balanced for re-use). PR #117 review
+    /// (Codex P1) added the LayerStateStack flush points after the
+    /// initial wave-5 ship; without them, a `push_clip → with_transform
+    /// → pop_clip` sequence would pop the lazy save instead of the
+    /// clip, corrupting state across sibling layers.
+    ///
+    /// `None` means the painter is at the default state and no
+    /// balance is owed.
+    ///
+    /// Why no `Drop` impl: `into_painter(self) -> WgpuPainter`
+    /// requires moving a field out of `Backend`, which Rust forbids
+    /// on a `Drop` type. The full set of flush points above covers
+    /// every balanced exit; an implicit drop without
+    /// `into_painter` leaves one unbalanced `save()` in a painter
+    /// that's immediately dropped (unobservable).
+    active_transform: Option<Matrix4>,
 }
 
 impl<'frame> Backend<'frame> {
@@ -74,6 +109,7 @@ impl<'frame> Backend<'frame> {
             offscreen_painter: None,
             surface_view: None,
             surface_texture: None,
+            active_transform: None,
         }
     }
 
@@ -88,6 +124,7 @@ impl<'frame> Backend<'frame> {
             offscreen_painter: None,
             surface_view: None,
             surface_texture: None,
+            active_transform: None,
         }
     }
 
@@ -131,7 +168,14 @@ impl<'frame> Backend<'frame> {
     /// Consume the renderer and return the underlying painter.
     ///
     /// The offscreen `Arc` is dropped here; ref-counting keeps it alive in Renderer.
-    pub fn into_painter(self) -> WgpuPainter {
+    ///
+    /// Cycle 4 wave 5 E-13: flushes any active lazy-pop transform
+    /// first so the returned painter is balanced -- callers reuse
+    /// the painter (Renderer feeds it into the next frame, the
+    /// shader-mask offscreen path stashes it into a cache) and must
+    /// not inherit a leftover `save()`.
+    pub fn into_painter(mut self) -> WgpuPainter {
+        self.flush_active_transform();
         self.painter
     }
 
@@ -148,7 +192,13 @@ impl<'frame> Backend<'frame> {
     ///
     /// This pops the transform and clip state from the save stack.
     /// Used to restore state after rendering layer children.
+    ///
+    /// Cycle 4 wave 5 E-13 PR #117 review (Codex P1): flushes any
+    /// lazy `with_transform` save first so the explicit `restore()`
+    /// pops the caller's matched `save()`, not the lazy transform
+    /// that happens to be the top of the painter stack.
     pub fn restore(&mut self) {
+        self.flush_active_transform();
         self.painter.restore();
     }
 
@@ -186,15 +236,61 @@ impl<'frame> Backend<'frame> {
         })
     }
 
+    /// Cycle 4 wave 5 E-13: dispatch a draw closure under the given
+    /// transform, coalescing consecutive same-matrix calls so that
+    /// the `painter.save()` + matrix-decompose + apply + restore
+    /// pipeline runs once per RUN of identical transforms rather
+    /// than once per shape.
+    ///
+    /// Three fast paths plus the cold path:
+    /// 1. `transform.is_identity()` -- if a non-identity transform
+    ///    is still active from a prior run, balance the deferred
+    ///    `restore()` first; then dispatch on a clean painter.
+    /// 2. `Some(transform) == active_transform` -- the painter is
+    ///    already in the right state; just run the closure (one
+    ///    bit-exact `Matrix4` compare = 16 floats, well under the
+    ///    cost of a stack push).
+    /// 3. Transform changed -- balance the prior active (if any),
+    ///    save, decompose + apply, mark active. The next call with
+    ///    the same matrix will hit path 2.
+    ///
+    /// The lazy save is balanced at every site that mutates the
+    /// painter save stack outside this method: each `LayerStateStack`
+    /// trait method (push_clip_* / pop_clip / push_offset /
+    /// push_transform / pop_transform / push_opacity / pop_opacity
+    /// / push_color_filter / pop_color_filter / push_image_filter
+    /// / pop_image_filter), the public `Backend::restore` escape
+    /// hatch, and `into_painter` (so the moved-out painter is
+    /// balanced for re-use). See [`Self::active_transform`] for
+    /// the full list and the PR #117 review (Codex P1) context.
+    ///
+    /// Audit context: a render pass batching 1000 same-transform
+    /// shapes used to pay 2000 stack ops + 1000 mat-decomposes
+    /// (each pair `save + apply + restore`). After this change the
+    /// run pays one `save + apply` plus one `restore` at the next
+    /// transform change -- (N-1) push/pops eliminated per run.
     fn with_transform<F>(&mut self, transform: &Matrix4, draw_fn: F)
     where
         F: FnOnce(&mut WgpuPainter),
     {
         if transform.is_identity() {
+            self.flush_active_transform();
             draw_fn(&mut self.painter);
             return;
         }
 
+        if self.active_transform.as_ref() == Some(transform) {
+            // Path 2: same matrix as the currently-applied one --
+            // skip the push entirely; the painter is already in the
+            // right state.
+            draw_fn(&mut self.painter);
+            return;
+        }
+
+        // Path 3: incoming transform differs from active (or no
+        // active). Balance the prior `save()` if any, then push
+        // the new transform.
+        self.flush_active_transform();
         self.painter.save();
 
         // Use centralized Transform::decompose() method (Phase 6 cleanup)
@@ -211,10 +307,40 @@ impl<'frame> Backend<'frame> {
             self.painter.scale(sx, sy);
         }
 
+        self.active_transform = Some(*transform);
         draw_fn(&mut self.painter);
-        self.painter.restore();
+    }
+
+    /// Cycle 4 wave 5 E-13: balance the deferred `save()` left by a
+    /// prior `with_transform` run with a `restore()`, clearing
+    /// `active_transform`. No-op if no transform is active.
+    ///
+    /// Called from every site that mutates the painter save stack
+    /// outside the coalescing path: `with_transform`'s identity /
+    /// mismatch arms, every `LayerStateStack` method on `Backend`,
+    /// the public `Backend::restore`, and `into_painter`. See the
+    /// [`active_transform`](Self::active_transform) field doc for
+    /// the full list and the PR #117 review (Codex P1) context.
+    fn flush_active_transform(&mut self) {
+        if self.active_transform.is_some() {
+            self.painter.restore();
+            self.active_transform = None;
+        }
     }
 }
+
+// Cycle 4 wave 5 E-13: a `Drop` impl that calls `flush_active_transform()`
+// would be the natural place to balance the lazy-pop save, but it
+// conflicts with `into_painter(self) -> WgpuPainter` -- Rust forbids
+// moving a field out of a `Drop` type. The chosen shape instead:
+// `into_painter` explicitly calls `flush_active_transform()` before
+// the move, and `with_transform`'s identity / mismatch paths also
+// flush. The only remaining failure mode is a `Backend` dropped via
+// implicit drop without going through `into_painter` -- which would
+// leak one `save()` worth of transform-stack depth in the painter
+// being dropped. That painter is itself going out of scope (no
+// other reference can leak the state), so the unbalanced save is
+// dropped with the painter and never observed.
 
 impl CommandRenderer for Backend<'_> {
     fn render_rect(&mut self, rect: Rect<Pixels>, paint: &Paint, transform: &Matrix4) {
@@ -1297,31 +1423,54 @@ fn color_matrix_effective_alpha(values: &[f32; 20]) -> (f32, f32, f32) {
 }
 
 impl LayerStateStack for Backend<'_> {
+    // Cycle 4 wave 5 PR #117 review (Codex P1): every method on
+    // this trait must call `self.flush_active_transform()` BEFORE
+    // any `painter.save` / `painter.restore` / `painter.save_layer`
+    // / `painter.restore_layer` op. E-13's `with_transform` leaves
+    // a deferred `save()` active across consecutive same-matrix
+    // calls; if a layer-tree boundary (push_clip etc.) intervened
+    // without flushing first, the layer's matched
+    // `pop_clip`/`pop_layer` would pop the lazy save instead of
+    // its own, leaking state across sibling layers. Flushing here
+    // re-establishes the invariant that `active_transform == Some`
+    // implies the painter has that transform at the TOP of its
+    // save stack.
+    //
+    // The flush is a no-op when no lazy transform is active, so
+    // the cost is one branch per layer-stack call -- negligible
+    // versus the save_layer/clip_path GPU work that follows.
+
     fn push_clip_rect(&mut self, rect: &Rect<Pixels>, _clip_behavior: flui_types::painting::Clip) {
+        self.flush_active_transform();
         self.painter.save();
         self.painter.clip_rect(*rect);
     }
 
     fn push_clip_rrect(&mut self, rrect: &RRect, _clip_behavior: flui_types::painting::Clip) {
+        self.flush_active_transform();
         self.painter.save();
         self.painter.clip_rrect(*rrect);
     }
 
     fn push_clip_path(&mut self, path: &Path, _clip_behavior: flui_types::painting::Clip) {
+        self.flush_active_transform();
         self.painter.save();
         self.painter.clip_path(path);
     }
 
     fn pop_clip(&mut self) {
+        self.flush_active_transform();
         self.painter.restore();
     }
 
     fn push_offset(&mut self, offset: Offset<Pixels>) {
+        self.flush_active_transform();
         self.painter.save();
         self.painter.translate(offset);
     }
 
     fn push_transform(&mut self, transform: &Matrix4) {
+        self.flush_active_transform();
         self.painter.save();
 
         // Decompose and apply transform components
@@ -1340,10 +1489,12 @@ impl LayerStateStack for Backend<'_> {
     }
 
     fn pop_transform(&mut self) {
+        self.flush_active_transform();
         self.painter.restore();
     }
 
     fn push_opacity(&mut self, alpha: f32) {
+        self.flush_active_transform();
         // Create a layer with opacity (clamped to [0, 255])
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let alpha_u8 = (alpha.clamp(0.0, 1.0) * 255.0) as u8;
@@ -1352,10 +1503,12 @@ impl LayerStateStack for Backend<'_> {
     }
 
     fn pop_opacity(&mut self) {
+        self.flush_active_transform();
         self.painter.restore_layer();
     }
 
     fn push_color_filter(&mut self, filter: &flui_types::painting::ColorMatrix) {
+        self.flush_active_transform();
         // Check if the matrix is identity (no transformation needed)
         let identity = flui_types::painting::ColorMatrix::identity();
         // Exact f32 array comparison is intentional: ColorMatrix::identity()
@@ -1402,11 +1555,14 @@ impl LayerStateStack for Backend<'_> {
     }
 
     fn pop_color_filter(&mut self) {
+        self.flush_active_transform();
         self.painter.restore_layer();
     }
 
     fn push_image_filter(&mut self, filter: &flui_painting::display_list::ImageFilter) {
         use flui_painting::display_list::ImageFilter;
+
+        self.flush_active_transform();
 
         // Pragmatic approximation: full GPU image filters (blur, dilate, erode)
         // require render-to-texture + compute shader post-processing which needs
@@ -1499,6 +1655,7 @@ impl LayerStateStack for Backend<'_> {
     }
 
     fn pop_image_filter(&mut self) {
+        self.flush_active_transform();
         self.painter.restore_layer();
     }
 }
