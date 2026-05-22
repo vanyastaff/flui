@@ -1,8 +1,6 @@
 //! TextLayout unit tests extracted from
 //! `crates/flui-painting/src/text_layout/mod.rs` during Mythos chain U8.
 
-#![cfg(feature = "text")]
-
 use flui_painting::{
     LineInfo, TextLayout, detect_text_direction, measure_inline_span, measure_text,
 };
@@ -251,8 +249,7 @@ fn get_word_boundary_handles_non_ascii() {
     use flui_types::typography::{TextAffinity, TextDirection, TextPosition};
 
     // "café" — 'é' is 2 bytes (0xC3 0xA9). Total len = 5 bytes.
-    let layout =
-        TextLayout::new("café world", None, 14.0, None, None, TextDirection::Ltr);
+    let layout = TextLayout::new("café world", None, 14.0, None, None, TextDirection::Ltr);
     let _ = layout.metrics();
 
     // Cursor right after "café" (byte 5).

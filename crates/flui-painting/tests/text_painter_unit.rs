@@ -1,8 +1,6 @@
 //! TextPainter unit tests extracted from
 //! `crates/flui-painting/src/text_painter/mod.rs` during Mythos chain U8.
 
-#![cfg(feature = "text")]
-
 use flui_painting::{DEFAULT_FONT_SIZE, TextBaseline, TextPainter};
 use flui_types::{
     geometry::{Offset, px},

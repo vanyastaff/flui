@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **`text_layout::fallback` parallel `TextLayout`** (plan U8 / audit P-3) —
+  the stub `TextLayout` and the `text` Cargo feature were both deleted;
+  cosmic-text-backed layout is now the only path. The `--no-default-features`
+  build shape changes because the optional `text` feature no longer exists,
+  but no workspace consumer relied on disabling it. Drops the corresponding
+  `tests/text_layout_fallback.rs` integration test.
+- **`canvas::sugar` invented ergonomics** (plan U8 / audit P-4/P-14/P-15) —
+  removed the entire `canvas/sugar/` directory plus the `Canvas::record` /
+  `Canvas::build` static constructors. No Flutter analogue; sugar wrappers
+  over the primary `draw_*` / `with_*` / composition surface.
+
 ### Added
 
 - **Tracing Instrumentation**
