@@ -317,10 +317,10 @@ loop {
 **Example:**
 
 ```rust
-// Cache static content
-let background = Canvas::record(|c| {
-    c.draw_rect(viewport, &Paint::fill(Color::WHITE));
-});
+// Cache static content on a Canvas, then finish to a DisplayList
+let mut recorder = Canvas::new();
+recorder.draw_rect(viewport, &Paint::fill(Color::WHITE));
+let background = recorder.finish();
 
 // Reuse every frame
 loop {
@@ -527,8 +527,10 @@ Direct mapping to GPU command buffers for minimal CPU overhead.
 
 2. **Cache static content:**
    ```rust
-   let icon = Canvas::record(|c| { /* ... */ });
-   // Reuse icon across frames
+   let mut recorder = Canvas::new();
+   /* draw_* into recorder */
+   let icon = recorder.finish();
+   // Reuse icon across frames via canvas.append_display_list(icon.clone());
    ```
 
 3. **Use scoped operations:**
@@ -536,11 +538,6 @@ Direct mapping to GPU command buffers for minimal CPU overhead.
    canvas.with_save(|c| {
        // Auto cleanup
    });
-   ```
-
-4. **Batch similar operations:**
-   ```rust
-   canvas.draw_rects(&[rect1, rect2, rect3], &paint);
    ```
 
 ### For Contributors

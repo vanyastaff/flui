@@ -99,31 +99,4 @@ impl Canvas {
     pub fn append_display_list(&mut self, display_list: DisplayList) {
         self.display_list.append(display_list);
     }
-
-    // ===== Static Constructors =====
-
-    /// Creates a new Canvas, executes a closure on it, and returns the
-    /// finished `DisplayList`.
-    ///
-    /// Useful for creating isolated drawing contexts.
-    #[inline]
-    pub fn record<F>(f: F) -> DisplayList
-    where
-        F: FnOnce(&mut Canvas),
-    {
-        let mut canvas = Canvas::new();
-        f(&mut canvas);
-        canvas.finish()
-    }
-
-    /// Builds a Canvas using a closure and returns it (not consumed).
-    #[inline]
-    pub fn build<F>(f: F) -> Self
-    where
-        F: FnOnce(&mut Canvas),
-    {
-        let mut canvas = Canvas::new();
-        f(&mut canvas);
-        canvas
-    }
 }

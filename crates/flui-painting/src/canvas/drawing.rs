@@ -5,13 +5,9 @@
 //! module. Every method here pushes one `DrawCommand` onto the inner
 //! `DisplayList` with the current transform baked in.
 //!
-//! For batch operations (`draw_rects`, `draw_circles`), conditional
-//! draws (`draw_if`, `draw_rect_if`), grid/repeat patterns, debug
-//! visualization, and convenience shapes (pill, ring), see
-//! [`super::sugar`]. For closure-based scoped operations (`with_*`),
-//! see [`super::scoped`]. For multi-canvas composition, see
-//! [`super::composition`]. For the fluent chaining API, see
-//! [`super::sugar`].
+//! For closure-based scoped operations (`with_*`), see
+//! [`super::scoped`]. For multi-canvas composition, see
+//! [`super::composition`].
 //!
 //! # Allocation hot path (Mythos chain U9 audit)
 //!

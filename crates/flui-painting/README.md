@@ -182,38 +182,6 @@ canvas.draw_drrect(outer, inner, &paint);  // Ring/border
 canvas.draw_points_with_mode(PointMode::Polygon, points, &paint);
 ```
 
-### Convenience Shapes
-
-```rust
-// Rounded rectangle with uniform radius
-canvas.draw_rounded_rect(rect, 10.0, &paint);
-
-// Rounded rectangle with per-corner radii
-canvas.draw_rounded_rect_corners(rect, 5.0, 10.0, 15.0, 20.0, &paint);
-
-// Pill shape (fully rounded ends)
-canvas.draw_pill(rect, &paint);
-
-// Ring (circle with hole)
-canvas.draw_ring(center, outer_radius, inner_radius, &paint);
-```
-
-### Batch Drawing
-
-```rust
-// Draw multiple rectangles
-let rects = [rect1, rect2, rect3];
-canvas.draw_rects(&rects, &paint);
-
-// Draw multiple circles
-let circles = [(center1, radius1), (center2, radius2)];
-canvas.draw_circles(&circles, &paint);
-
-// Draw multiple lines
-let lines = [(p1, p2), (p3, p4)];
-canvas.draw_lines(&lines, &paint);
-```
-
 ### Fill Entire Canvas
 
 ```rust
@@ -333,18 +301,15 @@ canvas.draw_texture(texture_id, dst, src, FilterQuality::Medium, 1.0);
 ### Replay DisplayList
 
 ```rust
-// Record once, replay many times
-let icon = Canvas::record(|c| {
-    c.draw_circle(Point::new(16.0, 16.0), 14.0, &outline);
-    c.draw_path(&checkmark, &fill);
-});
+// Record once on a Canvas, replay many times via append_display_list
+let mut recorder = Canvas::new();
+recorder.draw_circle(Point::new(16.0, 16.0), 14.0, &outline);
+recorder.draw_path(&checkmark, &fill);
+let icon = recorder.finish();
 
-// Replay the recorded picture
-canvas.draw_picture(&icon);
-
-// Or replay with offset
+// Replay with offset using the canonical composition surface
 canvas.with_translate(50.0, 0.0, |c| {
-    c.draw_picture(&icon);
+    c.append_display_list(icon.clone());
 });
 ```
 
@@ -440,164 +405,6 @@ let bounds = canvas.with_save(|c| {
     c.draw_rect(rect, &paint);
     c.bounds()
 });
-```
-
-## Chaining API
-
-Fluent builder-style methods that return `&mut Self`:
-
-```rust
-canvas
-    .translated(100.0, 50.0)
-    .rotated(PI / 4.0)
-    .scaled(2.0)
-    .rect(rect, &paint)
-    .circle(center, radius, &paint)
-    .restored();
-
-// With transforms
-canvas
-    .saved()
-    .translated(50.0, 50.0)
-    .rotated_around(PI / 2.0, 25.0, 25.0)
-    .scaled_xy(2.0, 0.5)
-    .transformed(Transform::skew(0.1, 0.0))
-    .rect(rect, &paint)
-    .restored();
-
-// With clipping
-canvas
-    .saved()
-    .clipped_rect(viewport)
-    .clipped_rrect(inner_rounded)
-    .clipped_path(&custom_path)
-    .rect(rect, &paint)
-    .restored();
-
-// Drawing shapes
-canvas
-    .rect(rect1, &paint1)
-    .rrect(rrect, &paint2)
-    .rounded_rect(rect, 10.0, &paint)  // uniform corner radius
-    .circle(center, radius, &paint3)
-    .oval(oval_rect, &paint4)
-    .line(p1, p2, &stroke)
-    .path(&custom_path, &fill)
-    .arc(rect, start_angle, sweep_angle, use_center, &paint)
-    .drrect(outer_rrect, inner_rrect, &paint)  // ring/border
-    .text("Hello", offset, &style, &paint);
-
-// Images and textures
-canvas
-    .image(img, dst_rect, Some(&paint))
-    .image_repeat(img, dst, ImageRepeat::Repeat, None)
-    .image_nine_slice(img, center_slice, dst, None)
-    .image_filtered(img, dst, ColorFilter::grayscale(), None)
-    .texture(texture_id, dst, None, FilterQuality::Medium, 1.0);
-
-// Effects
-canvas
-    .shadow(&path, shadow_color, elevation)
-    .gradient(rect, linear_gradient)
-    .gradient_rrect(rrect, radial_gradient);
-
-// Points and vertices
-canvas
-    .points(PointMode::Polygon, points, &paint)
-    .vertices(verts, Some(colors), None, indices, &paint);
-
-// Conditional drawing
-canvas
-    .also(|c| {
-        // Execute arbitrary code
-        c.draw_rect(rect, &paint);
-    })
-    .when(show_border, |c| {
-        c.draw_rect(border_rect, &border_paint);
-    })
-    .when_else(is_selected,
-        |c| c.draw_rect(rect, &selected_paint),
-        |c| c.draw_rect(rect, &normal_paint),
-    );
-```
-
-## Conditional and Grid Drawing
-
-### Conditional Drawing
-
-```rust
-// Draw only if condition is true
-canvas.draw_if(is_visible, |c| {
-    c.draw_rect(rect, &paint);
-});
-
-// Draw only if option is Some
-canvas.draw_if_some(maybe_image, |c, image| {
-    c.draw_image(image, rect, None);
-});
-
-// Draw only if rect is not clipped
-canvas.draw_rect_if(rect, &paint, |r| !r.is_empty());
-```
-
-### Grid and Repeat Patterns
-
-```rust
-// Draw grid of items
-canvas.draw_grid(4, 3, 50.0, 50.0, |c, row, col| {
-    let color = if (row + col) % 2 == 0 { Color::WHITE } else { Color::BLACK };
-    c.draw_rect(Rect::from_xywh(0.0, 0.0, 45.0, 45.0), &Paint::fill(color));
-});
-
-// Repeat horizontally
-canvas.repeat_x(5, 60.0, |c, i| {
-    c.draw_circle(Point::new(25.0, 25.0), 20.0, &paint);
-});
-
-// Repeat vertically
-canvas.repeat_y(5, 60.0, |c, i| {
-    c.draw_circle(Point::new(25.0, 25.0), 20.0, &paint);
-});
-
-// Repeat radially (around a circle)
-canvas.repeat_radial(8, 100.0, |c, i| {
-    c.draw_circle(Point::ZERO, 15.0, &paint);
-});
-```
-
-## Debug Helpers
-
-Visual debugging tools for development:
-
-```rust
-// Debug rectangle with 1px stroke
-canvas.debug_rect(rect, Color::RED);
-
-// Debug point marker
-canvas.debug_point(point, 5.0, Color::GREEN);
-
-// Debug coordinate axes
-canvas.debug_axes(100.0);  // Draws X (red) and Y (green) axes
-
-// Debug grid overlay
-canvas.debug_grid(bounds, 50.0, Color::from_rgba(128, 128, 128, 128));
-```
-
-## Factory Methods
-
-```rust
-// Create and record in one call
-let icon = Canvas::record(|c| {
-    c.draw_circle(Point::new(16.0, 16.0), 14.0, &outline);
-    c.draw_path(&checkmark, &fill);
-});
-
-// Build canvas with initial setup
-let mut canvas = Canvas::build(|c| {
-    c.translate(100.0, 100.0);
-    c.clip_rect(viewport);
-});
-canvas.draw_rect(rect, &paint);
 ```
 
 ## Canvas Composition
@@ -785,14 +592,11 @@ std::thread::spawn(move || {
 
 ## Performance Tips
 
-1. **Use `append_canvas`** for parent-child composition - it's zero-copy
+1. **Use `extend_from` / `append_display_list`** for parent-child composition - it's zero-copy on the first append
 2. **Query `would_be_clipped`** before expensive drawing operations
 3. **Use `reset()`** to reuse canvas allocations across frames
-4. **Batch similar operations** - use `draw_rects`, `draw_circles`, `draw_lines`
-5. **Cache DisplayLists** for static content (use `draw_picture` to replay)
-6. **Use chaining API** - reduces method call overhead
-7. **Use `draw_if`** - skip drawing logic when condition is false
-8. **Query `stats()`** - profile command distribution
+4. **Cache DisplayLists** for static content (use `append_display_list` to replay)
+5. **Query `stats()`** - profile command distribution
 
 ## API Reference
 

@@ -129,36 +129,7 @@ for i in 0..1000 {
 
 ## Optimization Techniques
 
-### 1. Batch Operations
-
-#### Individual Calls
-
-```rust
-// ❌ Slow - many function calls
-for rect in rects {
-    canvas.draw_rect(rect, &paint);
-}
-```
-
-**Cost:** Function call overhead × N.
-
-#### Batch Calls
-
-```rust
-// ✅ Fast - single call
-canvas.draw_rects(&rects, &paint);
-```
-
-**Benefit:** Single function call, better cache locality.
-
-**Benchmark:**
-
-```
-draw_rect × 1000:     15µs
-draw_rects(1000):      8µs  (1.9× faster)
-```
-
-### 2. Culling
+### 1. Culling
 
 #### Skip Invisible Objects
 
@@ -176,7 +147,7 @@ canvas.draw_complex_shape(&shape, &paint);
 
 **Typical Savings:** 30-50% of commands in complex UIs.
 
-### 3. Static Content Caching
+### 2. Static Content Caching
 
 #### Problem: Redrawing Static Content
 
@@ -200,12 +171,12 @@ for _ in 0..60 {
 #### Solution: Cache DisplayList
 
 ```rust
-// ✅ Good - cache static content
-let background = Canvas::record(|c| {
-    c.draw_gradient(rect, complex_gradient);
-    c.draw_image(logo, rect, None);
-    // ... more static content
-});
+// ✅ Good - cache static content on a Canvas, then finish it
+let mut recorder = Canvas::new();
+recorder.draw_gradient(rect, complex_gradient);
+recorder.draw_image(logo, rect, None);
+// ... more static content
+let background = recorder.finish();
 
 // Reuse every frame
 for _ in 0..60 {
@@ -488,7 +459,6 @@ Use this checklist when optimizing rendering code:
 
 - [ ] Reuse Canvas allocations with `reset()`
 - [ ] Cache static content in DisplayLists
-- [ ] Use batch operations (`draw_rects`, `draw_circles`)
 - [ ] Cull invisible objects with `would_be_clipped()`
 - [ ] Append children before parent's own drawing
 - [ ] Reuse Paint and Path objects

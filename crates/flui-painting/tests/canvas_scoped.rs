@@ -203,39 +203,6 @@ fn test_nested_with_operations() {
 }
 
 #[test]
-fn test_canvas_record() {
-    let display_list = Canvas::record(|c| {
-        let paint = Paint::fill(Color::RED);
-        c.draw_rect(
-            Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
-            &paint,
-        );
-        c.draw_circle(Point::new(px(50.0), px(50.0)), px(25.0), &paint);
-    });
-
-    assert_eq!(display_list.len(), 2);
-}
-
-#[test]
-fn test_canvas_build() {
-    let mut canvas = Canvas::build(|c| {
-        c.translate(100.0, 100.0);
-        let paint = Paint::fill(Color::RED);
-        c.draw_rect(
-            Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0)),
-            &paint,
-        );
-    });
-
-    // Canvas still usable
-    let paint = Paint::fill(Color::BLUE);
-    canvas.draw_circle(Point::new(px(200.0), px(200.0)), px(25.0), &paint);
-
-    let display_list = canvas.finish();
-    assert_eq!(display_list.len(), 2);
-}
-
-#[test]
 fn test_with_opacity() {
     let mut canvas = Canvas::new();
     let paint = Paint::fill(Color::RED);
@@ -273,34 +240,4 @@ fn test_chained_operations() {
 
     assert_eq!(canvas.len(), 5);
     assert_eq!(canvas.transform_matrix(), Matrix4::identity());
-}
-
-#[test]
-fn test_record_reusable_icon() {
-    // Create reusable icon
-    let icon = Canvas::record(|c| {
-        let outline = Paint::stroke(Color::BLACK, 2.0);
-        let fill = Paint::fill(Color::WHITE);
-
-        c.draw_circle(Point::new(px(16.0), px(16.0)), px(14.0), &fill);
-        c.draw_circle(Point::new(px(16.0), px(16.0)), px(14.0), &outline);
-    });
-
-    // Use icon multiple times
-    let mut canvas = Canvas::new();
-
-    canvas.with_translate(0.0, 0.0, |c| {
-        c.append_display_list(icon.clone());
-    });
-
-    canvas.with_translate(50.0, 0.0, |c| {
-        c.append_display_list(icon.clone());
-    });
-
-    canvas.with_translate(100.0, 0.0, |c| {
-        c.append_display_list(icon);
-    });
-
-    // 3 icons * 2 commands each = 6 commands
-    assert_eq!(canvas.len(), 6);
 }

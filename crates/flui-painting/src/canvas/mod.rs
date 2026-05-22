@@ -26,20 +26,18 @@
 //!
 //! # Concern split (Mythos chain U4)
 //!
-//! The 3,305-LOC `canvas.rs` god module was split into eight
-//! concern-based files: this `mod.rs` plus seven submodules.
+//! The 3,305-LOC `canvas.rs` god module was split into seven
+//! concern-based files: this `mod.rs` plus six submodules.
 //!
 //! - `mod.rs` (this file) -- the `Canvas` struct, lifecycle (`new`,
 //!   `finish`, `reset`, `clear_commands`), queries (`is_empty`,
-//!   `len`, `bounds`, `display_list`), `AsRef<DisplayList>`, and
-//!   the hit-region recording surface.
+//!   `len`, `bounds`, `display_list`), and `AsRef<DisplayList>`.
 //! - [`state`]       -- `CanvasState`, `ClipShape`, save/restore/save_layer.
 //! - [`transform`]   -- translate/scale/rotate/skew/transform.
 //! - [`clipping`]    -- clip_rect/clip_rrect/clip_path + bounds queries.
 //! - [`drawing`]     -- 29 primary `draw_*` methods (one per DrawCommand variant).
 //! - [`scoped`]      -- 12 `with_*` closure-based scoped helpers.
-//! - [`composition`] -- extend_from/extend/merge/append_* multi-canvas ops + static constructors.
-//! - [`sugar`]       -- chaining API + batch ops + conditional draws + grid/repeat patterns + debug viz + convenience shapes (further split into `sugar/{batch,conditional,grid,debug,shapes,chain}.rs` in the code-review fixup pass).
+//! - [`composition`] -- extend_from/extend/merge/append_* multi-canvas ops.
 
 use flui_types::geometry::{Matrix4, Pixels, Rect};
 
@@ -50,7 +48,6 @@ pub mod composition;
 pub mod drawing;
 pub mod scoped;
 pub mod state;
-pub mod sugar;
 pub mod transform;
 
 pub use state::{CanvasState, ClipShape};
