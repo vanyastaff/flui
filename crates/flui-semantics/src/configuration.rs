@@ -14,8 +14,10 @@ use crate::{
     flags::{SemanticsFlag, SemanticsFlags},
     properties::{
         AttributedString, CustomSemanticsAction, SemanticsHintOverrides, SemanticsProperties,
-        SemanticsSortKey, SemanticsTag, TextDirection,
+        SemanticsSortKey, SemanticsTag, TextDirection, UNBLOCKED_USER_ACTIONS_MASK,
+        concat_attributed_string,
     },
+    role::SemanticsRole,
 };
 
 // ============================================================================
@@ -126,6 +128,15 @@ pub struct SemanticsConfiguration {
 
     /// Thickness for this node.
     thickness: f64,
+
+    /// Semantic role for this node (U15).
+    ///
+    /// Defaults to [`SemanticsRole::None`]. Consumed by the platform
+    /// adapter to produce the correct accessibility role (Button,
+    /// TextField, Header, etc.). The 28-variant [`SemanticsRole`] enum
+    /// gets a runtime storage site here — pre-cycle it lived in the
+    /// codebase but had no per-node configuration slot.
+    role: SemanticsRole,
 }
 
 impl SemanticsConfiguration {
@@ -801,6 +812,35 @@ impl SemanticsConfiguration {
     }
 
     // ========================================================================
+    // Role (U15)
+    // ========================================================================
+
+    /// Sets the [`SemanticsRole`] for this node.
+    ///
+    /// `SemanticsRole::None` is the default; pass any other variant when
+    /// the node is a structural element (Button, TextField, Table, etc.)
+    /// the platform adapter should expose with a specific accessibility
+    /// role.
+    #[inline]
+    pub fn set_role(&mut self, role: SemanticsRole) {
+        self.role = role;
+    }
+
+    /// Returns the [`SemanticsRole`] for this node. Defaults to
+    /// `SemanticsRole::None`.
+    #[inline]
+    pub fn role(&self) -> SemanticsRole {
+        self.role
+    }
+
+    /// Builder-style role setter for chained construction.
+    #[must_use]
+    pub fn with_role(mut self, role: SemanticsRole) -> Self {
+        self.role = role;
+        self
+    }
+
+    // ========================================================================
     // Merging and Copying
     // ========================================================================
 
@@ -814,42 +854,109 @@ impl SemanticsConfiguration {
             || !self.custom_actions.is_empty()
     }
 
-    /// Absorbs the semantic information from another configuration.
+    /// Absorbs the semantic information from another configuration,
+    /// Flutter-faithfully (U16).
     ///
-    /// This is used when merging child semantics into parent nodes.
+    /// Merges follow Flutter
+    /// [`semantics.dart:6790-6862`](../../../../.flutter/flutter-master/packages/flutter/lib/src/semantics/semantics.dart)
+    /// `absorb`:
+    ///
+    /// - **Flags** — union via [`SemanticsFlags::merge`].
+    /// - **Actions** — absorb every action whose handler the child
+    ///   defined. If `other.blocks_user_actions == true`, only actions in
+    ///   [`UNBLOCKED_USER_ACTIONS_MASK`] cross the boundary; the rest are
+    ///   filtered out. Mirrors `_kUnblockedUserActions`.
+    /// - **Custom actions** — concatenate child's after parent's.
+    /// - **Tags** — merge as a set (deduplication handled by
+    ///   `add_tag`).
+    /// - **Label / hint** — *concatenate* via [`concat_attributed_string`]
+    ///   using the operands' text directions; pre-U16 first-wins
+    ///   semantics produced "Submit" + "loading state" → "Submit",
+    ///   losing the child's hint. Flutter joins them into "Submit
+    ///   loading state."
+    /// - **Value / increased_value / decreased_value / tooltip /
+    ///   sort_key / text_direction** — first-wins (parent keeps its
+    ///   value if set).
+    /// - **Role** — merge: parent keeps its role if not `None`;
+    ///   otherwise inherits the child's role.
+    ///
+    /// `blocks_user_actions` on the *parent* is unchanged by absorb —
+    /// only the child's flag controls the action-mask filter applied
+    /// to the child's actions during the merge.
     pub fn absorb(&mut self, other: &SemanticsConfiguration) {
-        // Merge flags
+        // ----- flags -----
         self.flags.merge(other.flags());
 
-        // Merge actions (other's actions take precedence)
-        for (action, handler) in &other.actions {
-            self.actions.insert(*action, Arc::clone(handler));
+        // ----- actions (blocked / unblocked filter) -----
+        if other.blocks_user_actions {
+            for (action, handler) in &other.actions {
+                if (action.value() & UNBLOCKED_USER_ACTIONS_MASK) != 0 {
+                    self.actions.insert(*action, Arc::clone(handler));
+                }
+            }
+        } else {
+            for (action, handler) in &other.actions {
+                self.actions.insert(*action, Arc::clone(handler));
+            }
         }
 
-        // Merge custom actions
+        // ----- custom actions -----
         self.custom_actions
             .extend(other.custom_actions.iter().cloned());
 
-        // Merge tags
+        // ----- tags -----
         for tag in &other.tags {
             self.add_tag(tag.clone());
         }
 
-        // Use other's values if self doesn't have them
-        if self.label.is_none() {
-            self.label.clone_from(&other.label);
+        // ----- label (concatenate, text-direction aware) -----
+        let self_dir = self.text_direction.unwrap_or(TextDirection::Ltr);
+        let other_dir = other.text_direction.unwrap_or(TextDirection::Ltr);
+        match (&self.label, &other.label) {
+            // Nothing to do if the child has no label (self-only stays).
+            (_, None) => {}
+            // Self empty → adopt child's.
+            (None, Some(other_label)) => self.label = Some(other_label.clone()),
+            // Both present → concatenate.
+            (Some(self_label), Some(other_label)) => {
+                let merged = concat_attributed_string(self_label, self_dir, other_label, other_dir);
+                self.label = Some(merged);
+            }
         }
+
+        // ----- hint (concatenate, same shape as label) -----
+        match (&self.hint, &other.hint) {
+            (_, None) => {}
+            (None, Some(other_hint)) => self.hint = Some(other_hint.clone()),
+            (Some(self_hint), Some(other_hint)) => {
+                let merged = concat_attributed_string(self_hint, self_dir, other_hint, other_dir);
+                self.hint = Some(merged);
+            }
+        }
+
+        // ----- first-wins fields -----
         if self.value.is_none() {
             self.value.clone_from(&other.value);
         }
-        if self.hint.is_none() {
-            self.hint.clone_from(&other.hint);
+        if self.increased_value.is_none() {
+            self.increased_value.clone_from(&other.increased_value);
+        }
+        if self.decreased_value.is_none() {
+            self.decreased_value.clone_from(&other.decreased_value);
+        }
+        if self.tooltip.is_none() {
+            self.tooltip.clone_from(&other.tooltip);
         }
         if self.sort_key.is_none() {
             self.sort_key.clone_from(&other.sort_key);
         }
         if self.text_direction.is_none() {
             self.text_direction = other.text_direction;
+        }
+
+        // ----- role (parent keeps if non-None, else inherit) -----
+        if self.role == SemanticsRole::None {
+            self.role = other.role;
         }
     }
 
@@ -967,7 +1074,12 @@ mod tests {
 
         assert!(config.is_button());
         assert_eq!(config.is_enabled(), Some(true));
-        assert_eq!(config.label().map(super::super::properties::AttributedString::as_str), Some("Submit"));
+        assert_eq!(
+            config
+                .label()
+                .map(super::super::properties::AttributedString::as_str),
+            Some("Submit")
+        );
         assert!(config.has_content());
     }
 
@@ -993,9 +1105,24 @@ mod tests {
         config.set_decreased_value("45%");
 
         assert!(config.is_slider());
-        assert_eq!(config.value().map(super::super::properties::AttributedString::as_str), Some("50%"));
-        assert_eq!(config.increased_value().map(super::super::properties::AttributedString::as_str), Some("55%"));
-        assert_eq!(config.decreased_value().map(super::super::properties::AttributedString::as_str), Some("45%"));
+        assert_eq!(
+            config
+                .value()
+                .map(super::super::properties::AttributedString::as_str),
+            Some("50%")
+        );
+        assert_eq!(
+            config
+                .increased_value()
+                .map(super::super::properties::AttributedString::as_str),
+            Some("55%")
+        );
+        assert_eq!(
+            config
+                .decreased_value()
+                .map(super::super::properties::AttributedString::as_str),
+            Some("45%")
+        );
     }
 
     #[test]
@@ -1022,7 +1149,12 @@ mod tests {
         parent.absorb(&child);
 
         assert!(parent.is_button());
-        assert_eq!(parent.label().map(super::super::properties::AttributedString::as_str), Some("Child label"));
+        assert_eq!(
+            parent
+                .label()
+                .map(super::super::properties::AttributedString::as_str),
+            Some("Child label")
+        );
         assert_eq!(parent.is_enabled(), Some(true));
     }
 
@@ -1053,7 +1185,12 @@ mod tests {
 
         assert!(config.is_button());
         assert_eq!(config.is_enabled(), Some(true));
-        assert_eq!(config.label().map(super::super::properties::AttributedString::as_str), Some("Test"));
+        assert_eq!(
+            config
+                .label()
+                .map(super::super::properties::AttributedString::as_str),
+            Some("Test")
+        );
     }
 
     #[test]
@@ -1065,5 +1202,125 @@ mod tests {
         config.add_tag(SemanticsTag::new("tag2"));
 
         assert_eq!(config.tags().len(), 2);
+    }
+
+    // ========================================================================
+    // U15 + U16 tests (role + Flutter-faithful absorb)
+    // ========================================================================
+
+    #[test]
+    fn role_accessors() {
+        let mut config = SemanticsConfiguration::new();
+        assert_eq!(config.role(), SemanticsRole::None); // default
+
+        config.set_role(SemanticsRole::Dialog);
+        assert_eq!(config.role(), SemanticsRole::Dialog);
+
+        let builder = SemanticsConfiguration::new().with_role(SemanticsRole::Tab);
+        assert_eq!(builder.role(), SemanticsRole::Tab);
+    }
+
+    #[test]
+    fn absorb_concatenates_label_left_to_right() {
+        let mut parent = SemanticsConfiguration::new();
+        parent.set_label(AttributedString::new("Submit"));
+
+        let mut child = SemanticsConfiguration::new();
+        child.set_label(AttributedString::new("loading state"));
+
+        parent.absorb(&child);
+        assert_eq!(
+            parent.label().map(AttributedString::as_str),
+            Some("Submit loading state")
+        );
+    }
+
+    #[test]
+    fn absorb_concatenates_hint_same_shape_as_label() {
+        let mut parent = SemanticsConfiguration::new();
+        parent.set_hint(AttributedString::new("Double tap"));
+
+        let mut child = SemanticsConfiguration::new();
+        child.set_hint(AttributedString::new("to activate"));
+
+        parent.absorb(&child);
+        assert_eq!(
+            parent.hint().map(AttributedString::as_str),
+            Some("Double tap to activate")
+        );
+    }
+
+    #[test]
+    fn absorb_keeps_self_label_when_other_is_none() {
+        let mut parent = SemanticsConfiguration::new();
+        parent.set_label(AttributedString::new("Parent"));
+        let child = SemanticsConfiguration::new();
+        parent.absorb(&child);
+        assert_eq!(parent.label().map(AttributedString::as_str), Some("Parent"));
+    }
+
+    #[test]
+    fn absorb_inherits_label_when_self_has_none() {
+        let mut parent = SemanticsConfiguration::new();
+        let mut child = SemanticsConfiguration::new();
+        child.set_label(AttributedString::new("From child"));
+        parent.absorb(&child);
+        assert_eq!(
+            parent.label().map(AttributedString::as_str),
+            Some("From child")
+        );
+    }
+
+    #[test]
+    fn absorb_filters_blocked_actions_to_unblocked_mask() {
+        // Child sets blocks_user_actions = true and registers a Tap (in
+        // the unblocked mask) + a Cut (NOT in the mask). Tap should
+        // cross into parent; Cut should be filtered out.
+        let mut parent = SemanticsConfiguration::new();
+        let mut child = SemanticsConfiguration::new();
+        child.set_blocks_user_actions(true);
+        child.add_action(SemanticsAction::Tap, Arc::new(|_, _| {}));
+        child.add_action(SemanticsAction::Cut, Arc::new(|_, _| {}));
+
+        parent.absorb(&child);
+
+        assert!(parent.action_handler(SemanticsAction::Tap).is_some());
+        assert!(parent.action_handler(SemanticsAction::Cut).is_none());
+    }
+
+    #[test]
+    fn absorb_does_not_filter_when_blocks_user_actions_is_false() {
+        // Without blocks_user_actions, every child action crosses.
+        let mut parent = SemanticsConfiguration::new();
+        let mut child = SemanticsConfiguration::new();
+        child.add_action(SemanticsAction::Tap, Arc::new(|_, _| {}));
+        child.add_action(SemanticsAction::Cut, Arc::new(|_, _| {}));
+
+        parent.absorb(&child);
+
+        assert!(parent.action_handler(SemanticsAction::Tap).is_some());
+        assert!(parent.action_handler(SemanticsAction::Cut).is_some());
+    }
+
+    #[test]
+    fn absorb_role_parent_wins_unless_none() {
+        let mut parent = SemanticsConfiguration::new();
+        parent.set_role(SemanticsRole::Tab);
+        let mut child = SemanticsConfiguration::new();
+        child.set_role(SemanticsRole::Dialog);
+
+        parent.absorb(&child);
+        assert_eq!(parent.role(), SemanticsRole::Tab); // parent keeps
+    }
+
+    #[test]
+    fn absorb_role_inherits_when_parent_is_none() {
+        let mut parent = SemanticsConfiguration::new();
+        // parent.role defaults to None
+        let mut child = SemanticsConfiguration::new();
+        child.set_role(SemanticsRole::Dialog);
+
+        parent.absorb(&child);
+        assert_eq!(parent.role(), SemanticsRole::Dialog);
     }
 }
