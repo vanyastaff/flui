@@ -6,7 +6,7 @@
 
 use flui_foundation::{ElementId, SemanticsId};
 use flui_tree::{
-    TreeNav, TreeRead,
+    TreeNav, TreeRead, TreeWrite,
     iter::{Ancestors, DescendantsWithDepth},
 };
 use slab::Slab;
@@ -161,53 +161,45 @@ impl SemanticsTree {
         self.nodes.get_mut(id.get() - 1)
     }
 
-    /// Removes a SemanticsNode from the tree.
+    // NOTE (cycle 3 T-2): the cycle 2 inherent `pub fn remove` was
+    // deleted in favour of [`flui_tree::TreeWrite::remove`] (the trait's
+    // default cascade impl). The behaviour is identical — post-order
+    // cascade via `children()` walks, parent unlink via
+    // `remove_shallow`, root reset.
+    //
+    // Callers go through the trait method now:
+    //
+    // ```rust
+    // use flui_tree::TreeWrite;
+    // let _ = tree.remove(id);   // cascade
+    // ```
+    //
+    // The inherent `remove_shallow` is the trait primitive and covers
+    // the reparenting opt-out.
+
+    /// Removes a single SemanticsNode from the tree **without**
+    /// cascading to descendants. Descendants are orphaned in storage
+    /// (their `parent` pointers still reference the now-deleted slot —
+    /// use only when the caller will re-attach or drop them
+    /// immediately).
     ///
-    /// Returns the removed node, or None if it didn't exist.
-    ///
-    /// **Note:** This does NOT remove children. Caller must handle tree
-    /// cleanup.
-    pub fn remove(&mut self, id: SemanticsId) -> Option<SemanticsNode> {
+    /// **Cycle 3 T-1 contract change**: the parent's children vector
+    /// IS now drained of `id` before the node is dropped. Pre-cycle
+    /// this method intentionally left the parent's children vec
+    /// pointing at a stale id, expecting the caller to handle
+    /// parent-cleanup; the audit found zero production callers actually
+    /// exercising that escape-hatch.
+    pub fn remove_shallow(&mut self, id: SemanticsId) -> Option<SemanticsNode> {
         if !self.contains(id) {
             return None;
         }
-
-        // 1. Snapshot the children list so the recursive call doesn't hold
-        //    a borrow conflict with `self.remove(child_id)`.
-        let children: Vec<SemanticsId> = self
-            .get(id)
-            .map(|n| n.children().to_vec())
-            .unwrap_or_default();
-
-        // 2. Post-order cascade — descendants drop first.
-        for child_id in children {
-            let _ = self.remove(child_id);
-        }
-
-        // 3. Unlink from parent so parent.children() no longer surfaces a
-        //    stale id after the removal.
+        // Unlink from parent's children vec — matches the trait
+        // contract.
         if let Some(parent_id) = self.get(id).and_then(SemanticsNode::parent) {
             if let Some(parent) = self.get_mut(parent_id) {
                 parent.remove_child(id);
             }
         }
-
-        // 4. Update root if removing root.
-        if self.root == Some(id) {
-            self.root = None;
-        }
-
-        self.nodes.try_remove(id.get() - 1)
-    }
-
-    /// Removes a single SemanticsNode from the tree **without** cascading
-    /// to descendants. Use this for reparenting workflows that immediately
-    /// re-attach the removed node elsewhere.
-    ///
-    /// Unlike [`Self::remove`], this does NOT touch the parent's children
-    /// vector — the caller is responsible for keeping parent/child
-    /// pointers consistent. For full cascade semantics use [`Self::remove`].
-    pub fn remove_shallow(&mut self, id: SemanticsId) -> Option<SemanticsNode> {
         if self.root == Some(id) {
             self.root = None;
         }
@@ -505,12 +497,48 @@ impl TreeNav<SemanticsId> for SemanticsTree {
 }
 
 // ============================================================================
+// TREE WRITE IMPLEMENTATION (cycle 3 T-2)
+// ============================================================================
+//
+// Hoists the cycle 2 cascade-by-default `remove` from the inherent API
+// up to the unified [`TreeWrite`] trait per memory
+// `flui-tree-unified-interface-intent`. Callers now write
+// `use flui_tree::TreeWrite; tree.remove(id);` and get cascade
+// automatically. The inherent `SemanticsTree::remove_shallow` is the
+// trait primitive; the trait default `remove` walks descendants and
+// calls `remove_shallow`.
+
+impl TreeWrite<SemanticsId> for SemanticsTree {
+    #[inline]
+    fn get_mut(&mut self, id: SemanticsId) -> Option<&mut Self::Node> {
+        SemanticsTree::get_mut(self, id)
+    }
+
+    #[inline]
+    fn insert(&mut self, node: Self::Node) -> SemanticsId {
+        SemanticsTree::insert(self, node)
+    }
+
+    #[inline]
+    fn remove_shallow(&mut self, id: SemanticsId) -> Option<Self::Node> {
+        SemanticsTree::remove_shallow(self, id)
+    }
+
+    #[inline]
+    fn clear(&mut self) {
+        SemanticsTree::clear(self);
+    }
+}
+
+// ============================================================================
 // TESTS
 // ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Cycle 3 T-2: `tree.remove(id)` resolves through the trait now.
+    use flui_tree::TreeWrite;
 
     #[test]
     fn test_semantics_tree_new() {
@@ -891,6 +919,8 @@ mod slab_hygiene_tests {
     use crate::node::SemanticsNode;
     use crate::tree::SemanticsTree;
     use flui_foundation::SemanticsId;
+    // Cycle 3 T-2: `tree.remove(id)` now resolves through the trait.
+    use flui_tree::TreeWrite;
 
     fn empty_node() -> SemanticsNode {
         SemanticsNode::new()

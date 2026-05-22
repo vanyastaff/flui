@@ -774,9 +774,10 @@ mod tests {
         fn add_node(&mut self, id: ElementId, parent: Option<ElementId>) {
             self.nodes.insert(id, (parent, Vec::new()));
             if let Some(p) = parent
-                && let Some((_, children)) = self.nodes.get_mut(&p) {
-                    children.push(id);
-                }
+                && let Some((_, children)) = self.nodes.get_mut(&p)
+            {
+                children.push(id);
+            }
         }
     }
 

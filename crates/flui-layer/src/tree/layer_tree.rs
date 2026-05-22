@@ -415,7 +415,17 @@ impl LayerTree {
     /// let id = tree.insert(layer);
     /// ```
     pub fn insert(&mut self, layer: Layer) -> LayerId {
-        let node = LayerNode::new(layer);
+        self.insert_node(LayerNode::new(layer))
+    }
+
+    /// Inserts a pre-built [`LayerNode`] into the tree (cycle 3 T-2).
+    ///
+    /// This is the primitive that [`Self::insert`] (which takes a
+    /// [`Layer`] and wraps it) and the [`TreeWrite::insert`] trait
+    /// method both call. Exposed for callers that need to insert a
+    /// node assembled elsewhere (e.g. element-cloning workflows in
+    /// flui-view).
+    pub fn insert_node(&mut self, node: LayerNode) -> LayerId {
         let slab_index = self.nodes.insert(node);
         LayerId::new(slab_index + 1) // +1 offset
     }
@@ -455,72 +465,50 @@ impl LayerTree {
         self.get_mut(id).map(LayerNode::layer_mut)
     }
 
-    /// Removes a LayerNode from the tree **and cascades** to every
-    /// descendant.
+    // NOTE (cycle 3 T-2): the cycle 2 inherent `pub fn remove` was
+    // deleted in favour of [`flui_tree::TreeWrite::remove`] (the trait's
+    // default cascade impl). The behaviour is identical — post-order
+    // cascade via `children()` walks, parent unlink via `remove_shallow`,
+    // root reset, `LayerNode::drop` fires per node.
+    //
+    // Callers go through the trait method now:
+    //
+    // ```rust
+    // use flui_tree::TreeWrite;
+    // let _ = tree.remove(id);   // cascade
+    // ```
+    //
+    // The inherent `remove_shallow` is also the trait primitive and
+    // covers the reparenting opt-out.
+
+    /// Removes a single LayerNode from the tree **without** cascading to
+    /// descendants. Descendants are orphaned in storage (their `parent`
+    /// pointers still reference the now-deleted slot — use only when the
+    /// caller will re-attach or drop them immediately).
     ///
-    /// Returns the removed root node, or `None` if it did not exist.
+    /// Returns the removed node, or `None` if it did not exist.
     ///
-    /// **Cascade semantics (U12)** — every descendant is also removed from
-    /// the slab. The walk is post-order: children are removed before the
-    /// parent, so each `LayerNode::drop` fires while the parent's
-    /// `children` vector is still intact (the engine's debug listeners can
-    /// inspect a coherent tree state during dispose). The parent's
-    /// `children` vector is also drained of `id` before the parent's own
-    /// node is removed, so a `LayerTree::get(parent_id)` lookup after the
-    /// cascade does not observe a stale id.
-    ///
-    /// For non-cascading workflows (e.g. reparenting that re-inserts
-    /// immediately at a new attachment point), use [`remove_shallow`].
-    ///
-    /// Mirrors Flutter `layer.dart:1185-1216` `ContainerLayer.remove` +
-    /// `LayerHandle._unref` cascade.
-    pub fn remove(&mut self, id: LayerId) -> Option<LayerNode> {
+    /// **Cycle 3 T-1 contract change**: the parent's children vector
+    /// IS now drained of `id` before the node is dropped. Pre-cycle this
+    /// method intentionally left the parent's children vec pointing at a
+    /// stale id, expecting the caller to handle parent-cleanup; the
+    /// audit found zero production callers actually exercising that
+    /// escape-hatch, and several test sites that would have surfaced
+    /// the stale-id bug had they been hit. The new contract aligns
+    /// with the trait-level [`TreeWrite::remove_shallow`] — parent
+    /// unlink is part of the primitive; only descendant cascade is the
+    /// distinguishing feature versus [`TreeWrite::remove`].
+    pub fn remove_shallow(&mut self, id: LayerId) -> Option<LayerNode> {
         if !self.contains(id) {
             return None;
         }
-
-        // 1. Snapshot the children list (avoids holding `&self` across the
-        //    recursive `self.remove(child_id)` calls).
-        let children: Vec<LayerId> = self
-            .get(id)
-            .map(|n| n.children().to_vec())
-            .unwrap_or_default();
-
-        // 2. Post-order cascade: drop descendants first.
-        for child_id in children {
-            // Each recursive call also walks its own subtree. Bounded by
-            // tree depth (typical widget trees ≤32 levels) plus stack —
-            // `MARK_PROPAGATION_MAX_DEPTH` is the moral cap.
-            let _ = self.remove(child_id);
-        }
-
-        // 3. Unlink from parent so the parent's children vector doesn't
-        //    contain a stale id post-removal.
+        // Unlink from parent's children vec — matches the trait
+        // contract.
         if let Some(parent_id) = self.get(id).and_then(LayerNode::parent) {
             if let Some(parent) = self.get_mut(parent_id) {
                 parent.remove_child(id);
             }
         }
-
-        // 4. Update root if removing root.
-        if self.root == Some(id) {
-            self.root = None;
-        }
-
-        // 5. Drop self — triggers `LayerNode::drop` (U8 phase 1).
-        self.nodes.try_remove(id.get() - 1)
-    }
-
-    /// Removes a single LayerNode from the tree **without** cascading to
-    /// descendants. Use this for reparenting workflows that immediately
-    /// re-attach the removed node elsewhere.
-    ///
-    /// Returns the removed node, or `None` if it did not exist.
-    ///
-    /// Unlike [`remove`], this does NOT touch the parent's children
-    /// vector — the caller is responsible for keeping parent/child
-    /// pointers consistent. For full cascade semantics use [`remove`].
-    pub fn remove_shallow(&mut self, id: LayerId) -> Option<LayerNode> {
         if self.root == Some(id) {
             self.root = None;
         }
@@ -1219,6 +1207,8 @@ mod add_child_hygiene_tests {
     use crate::layer::{CanvasLayer, Layer};
 
     use super::LayerTree;
+    // Cycle 3 T-2: `tree.remove(id)` resolves through the trait.
+    use flui_tree::TreeWrite;
 
     #[test]
     fn add_child_attaches_under_new_parent() {
@@ -1337,6 +1327,8 @@ mod remove_cascade_tests {
     use crate::layer::{CanvasLayer, Layer};
 
     use super::LayerTree;
+    // Cycle 3 T-2: `tree.remove(id)` resolves through the trait.
+    use flui_tree::TreeWrite;
 
     #[test]
     fn remove_cascades_to_all_descendants() {

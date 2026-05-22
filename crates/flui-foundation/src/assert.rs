@@ -125,50 +125,15 @@ macro_rules! debug_assert_not_nan {
     };
 }
 
-/// Report a non-fatal error during development.
-///
-/// In debug mode, this logs the error. In release mode, it's a no-op.
-/// Use this for recoverable errors that indicate bugs but shouldn't crash.
-///
-/// # Example
-///
-/// ```rust
-/// use flui_foundation::report_error;
-///
-/// fn try_load_config() -> Option<String> {
-///     let result: Result<String, &str> = Err("file not found");
-///     match result {
-///         Ok(config) => Some(config),
-///         Err(e) => {
-///             report_error!("Failed to load config: {}", e);
-///             None // Return default
-///         }
-///     }
-/// }
-/// ```
-#[macro_export]
-macro_rules! report_error {
-    ($($arg:tt)+) => {
-        if cfg!(debug_assertions) {
-            tracing::error!($($arg)+);
-        }
-    };
-}
-
-/// Report a non-fatal warning during development.
-#[macro_export]
-macro_rules! report_warning {
-    ($($arg:tt)+) => {
-        if cfg!(debug_assertions) {
-            tracing::warn!($($arg)+);
-        }
-    };
-}
+// NOTE (audit I-14): `report_error!` and `report_warning!` macros were
+// removed — zero in-workspace consumers. Callers now go through
+// `tracing::error!` / `tracing::warn!` directly, which is one fewer
+// indirection and stays consistent with the rest of the workspace's
+// logging discipline.
 
 // Re-export macros at module level
 pub use crate::{
     debug_assert_finite, debug_assert_not_nan, debug_assert_range, debug_assert_valid,
-    report_error, report_warning,
 };
 
 #[cfg(test)]

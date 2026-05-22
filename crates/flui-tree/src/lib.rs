@@ -2,99 +2,28 @@
 //!
 //! Generic tree abstraction traits for the FLUI UI framework.
 //!
-//! ## Architecture
-//!
-//! ```text
-//! ┌─────────────────────────────────────────────────────────────┐
-//! │                     Typestate Pattern                       │
-//! ├─────────────────────────────────────────────────────────────┤
-//! │  NodeState trait with two implementations:                  │
-//! │  • Unmounted - Node not in tree, can be mounted             │
-//! │  • Mounted   - Node in tree, has position info              │
-//! ├─────────────────────────────────────────────────────────────┤
-//! │  Each tree type (Element, RenderObject) implements          │
-//! │  depth, parent, owner fields directly - no shared base.     │
-//! └─────────────────────────────────────────────────────────────┘
-//!
-//! Typestate transitions:
-//!   Unmounted ──mount()──► Mounted ──unmount()──► Unmounted
-//! ```
-//!
 //! ## Core Traits
 //!
-//! - `TreeRead<I>` - Read-only access to nodes
-//! - `TreeNav<I>` - Navigation (parent, children, ancestors)
-//! - `TreeWrite<I>` - Mutations (insert, remove)
-//! - `NodeState` - Typestate marker trait (Mounted/Unmounted)
+//! - `TreeRead<I>` - Read-only access to nodes (`get`, `contains`, `len`)
+//! - `TreeNav<I>` - Navigation (parent, children, ancestors, descendants)
+//! - `TreeWrite<I>` - Mutations (`insert`, `remove` cascade-by-default,
+//!   `remove_shallow` opt-out, `add_child` / `remove_child`)
+//!
+//! Each concrete tree type (`LayerTree`, `SemanticsTree`, `RenderTree`,
+//! `ElementTree`, `ViewTree`) implements the trio. Per memory
+//! `flui-tree-unified-interface-intent`, this trio is the canonical
+//! API for cross-tree algorithms.
 //!
 //! ## Example
 //!
-//! ```
-//! use std::marker::PhantomData;
-//!
-//! use flui_tree::{
-//!     Depth, ElementId, Identifier, Mountable, Mounted, NodeState, Unmountable, Unmounted,
-//! };
-//!
-//! struct MyNode<S: NodeState> {
-//!     depth: Depth,
-//!     parent: Option<ElementId>,
-//!     _state: PhantomData<S>,
-//! }
-//!
-//! impl MyNode<Unmounted> {
-//!     fn new() -> Self {
-//!         MyNode {
-//!             depth: Depth::root(),
-//!             parent: None,
-//!             _state: PhantomData,
-//!         }
-//!     }
-//! }
-//!
-//! impl Mountable for MyNode<Unmounted> {
-//!     type Id = ElementId;
-//!     type Mounted = MyNode<Mounted>;
-//!
-//!     fn mount(self, parent: Option<ElementId>, parent_depth: Depth) -> MyNode<Mounted> {
-//!         MyNode {
-//!             depth: if parent.is_some() {
-//!                 parent_depth.child_depth()
-//!             } else {
-//!                 Depth::root()
-//!             },
-//!             parent,
-//!             _state: PhantomData,
-//!         }
-//!     }
-//! }
-//!
-//! impl Unmountable for MyNode<Mounted> {
-//!     type Id = ElementId;
-//!     type Unmounted = MyNode<Unmounted>;
-//!
-//!     fn parent(&self) -> Option<ElementId> {
-//!         self.parent
-//!     }
-//!     fn depth(&self) -> Depth {
-//!         self.depth
-//!     }
-//!     fn unmount(self) -> MyNode<Unmounted> {
-//!         MyNode {
-//!             depth: Depth::root(),
-//!             parent: None,
-//!             _state: PhantomData,
-//!         }
-//!     }
-//! }
-//!
-//! fn main() {
-//!     let node = MyNode::<Unmounted>::new();
-//!     let mounted = node.mount(Some(ElementId::new(1)), Depth::root());
-//!     assert_eq!(mounted.depth(), Depth::new(1));
-//!     let _unmounted = mounted.unmount();
-//! }
-//! ```
+//! See the concrete tree implementations (`flui-layer::LayerTree`,
+//! `flui-semantics::SemanticsTree`, etc.) for `TreeRead` + `TreeNav` +
+//! `TreeWrite` adopters with end-to-end test coverage. The audit cycle 3
+//! removed the standalone `Mountable` / `Unmountable` typestate
+//! machinery (`state.rs`, 616 LOC) — zero in-workspace consumers, and
+//! the cycle 2 PR #100 work on `LayerNode::disposed: AtomicBool` +
+//! `Drop` proved the lifecycle contract belongs on the concrete node
+//! type, not behind a generic typestate.
 
 #![warn(rust_2018_idioms, clippy::all, clippy::pedantic)]
 #![allow(clippy::module_name_repetitions, clippy::too_many_lines)]
@@ -108,7 +37,6 @@ pub mod depth;
 pub mod diff;
 pub mod error;
 pub mod iter;
-pub mod state;
 pub mod traits;
 pub mod visitor;
 
@@ -173,10 +101,6 @@ pub use iter::{IndexPath, TreeNavPathExt, TreePath};
 // ============================================================================
 pub use iter::{IndexedSlot, Slot, SlotBuilder, SlotIter};
 // ============================================================================
-// RE-EXPORTS - Node State & Lifecycle (Typestate)
-// ============================================================================
-pub use state::{Mountable, MountableExt, Mounted, NodeState, Unmountable, Unmounted};
-// ============================================================================
 // RE-EXPORTS - Node System
 // ============================================================================
 pub use traits::{
@@ -234,14 +158,9 @@ pub mod prelude {
         IndexedSlot,
         Leaf,
         LeafStorage,
-        // State types & lifecycle (typestate)
-        Mountable,
-        MountableExt,
-        Mounted,
         // Node system
         Node,
         NodeExt,
-        NodeState,
         NodeTypeInfo,
         Optional,
         OptionalChildStorage,
@@ -265,8 +184,6 @@ pub mod prelude {
         TreeVisitorMut,
         TreeWrite,
         TreeWriteNav,
-        Unmountable,
-        Unmounted,
         Variable,
         VariableChildrenStorage,
         VisitorResult,
@@ -289,7 +206,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Returns a summary of what this crate provides.
 #[must_use]
 pub fn crate_summary() -> &'static str {
-    "Tree abstractions with typestate: NodeState (Mounted/Unmounted), TreeRead, TreeNav, TreeWrite"
+    "Tree abstractions: TreeRead, TreeNav, TreeWrite (cascade-by-default)"
 }
 
 // ============================================================================

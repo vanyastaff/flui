@@ -246,8 +246,14 @@ impl SemanticsOwner {
         self.tree.get_mut(id)
     }
 
-    /// Removes a SemanticsNode from the tree.
+    /// Removes a SemanticsNode from the tree (cascades to all descendants).
+    ///
+    /// Cycle 3 T-2: routes through the unified [`TreeWrite::remove`]
+    /// contract (cascade by default). For non-cascading removal,
+    /// reach into [`SemanticsTree::remove_shallow`] via
+    /// [`Self::tree`] / [`Self::tree_mut`].
     pub fn remove(&mut self, id: SemanticsId) -> Option<SemanticsNode> {
+        use flui_tree::TreeWrite;
         self.tree.remove(id)
     }
 
