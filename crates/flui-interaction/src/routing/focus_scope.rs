@@ -288,7 +288,14 @@ impl FocusNode {
     /// This is `true` if any node in this subtree has primary focus.
     /// Reaches the [`crate::FocusManager`] singleton directly (no Weak
     /// upgrade dance) — singleton always live.
+    ///
+    /// PR #97 review fix: gated on `is_attached()` so detached nodes
+    /// (still holding a stale FocusManager.primary_focus ID после
+    /// `detach_child`) don't lie about having focus.
     pub fn has_focus(&self) -> bool {
+        if !self.is_attached() {
+            return false;
+        }
         let Some(focused_id) = crate::FocusManager::global().primary_focus() else {
             return false;
         };
@@ -296,7 +303,13 @@ impl FocusNode {
     }
 
     /// Returns whether this specific node has primary focus.
+    ///
+    /// PR #97 review fix: same is_attached() gate as `has_focus` to
+    /// avoid stale-focus reports for detached nodes.
     pub fn has_primary_focus(&self) -> bool {
+        if !self.is_attached() {
+            return false;
+        }
         crate::FocusManager::global().primary_focus() == Some(self.id)
     }
 
@@ -432,8 +445,35 @@ impl FocusNode {
             // Clear parent
             *child.parent.write() = None;
 
-            // Mark as detached
-            child.attached.store(false, AtomicOrdering::Release);
+            // PR #97 review fix: detach recursively so the entire removed
+            // subtree is marked detached, not just the direct child.
+            // Without this, descendants kept `attached == true` despite
+            // being unreachable from the root scope — making
+            // `request_focus` on those descendants succeed AND
+            // `has_focus`/`has_primary_focus` (with the new is_attached
+            // gate) return inconsistent results across the subtree.
+            Self::detach_subtree(&child);
+
+            // Clear FocusManager.primary_focus if the detached subtree
+            // owned the current focus — prevents stale focus state from
+            // outliving the tree node.
+            let focus_mgr = crate::FocusManager::global();
+            if let Some(focused_id) = focus_mgr.primary_focus()
+                && (child.id == focused_id || child.has_descendant(focused_id))
+            {
+                focus_mgr.unfocus();
+            }
+        }
+    }
+
+    /// Recursively mark a FocusNode and all its descendants as detached.
+    ///
+    /// Used by [`detach_child`] to ensure the entire removed subtree's
+    /// attached state matches reality после parent-link clearing.
+    fn detach_subtree(node: &Arc<FocusNode>) {
+        node.attached.store(false, AtomicOrdering::Release);
+        for grandchild in node.children.read().iter() {
+            Self::detach_subtree(grandchild);
         }
     }
 }
