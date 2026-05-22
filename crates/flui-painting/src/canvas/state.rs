@@ -97,6 +97,13 @@ impl Canvas {
 
     /// Returns the number of saved states (plus 1 for the initial
     /// state). The initial save count is 1.
+    ///
+    /// Flutter-parity (`Canvas.getSaveCount()` returns 1 for an
+    /// unmodified canvas — the initial save scope counts). Audit P-16
+    /// flagged a possible `save_depth` rename for clarity and the audit
+    /// itself recommended defer; the rename is a public-API cosmetic
+    /// change that does not pay for itself. The 1-indexed semantics are
+    /// fixed by Flutter parity, not by this name.
     pub fn save_count(&self) -> usize {
         self.save_stack.len() + 1
     }

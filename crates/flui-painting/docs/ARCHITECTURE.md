@@ -470,6 +470,25 @@ impl WgpuPainter {
 
 ## Future Enhancements
 
+<!-- REVIEW_BY: 2026-09-22 — audit P-18 cadence marker.
+
+Each numbered item below is tracked-but-unscheduled. By the review date,
+each item must either (a) ship, (b) be re-justified with an explicit
+deferral date, or (c) be deleted from this list. "Tracked" is not the
+same as "scheduled" — the cadence marker exists so this list cannot
+silently drift past the review date as eternal aspiration.
+
+Cross-references for the audit-tracked items:
+- §1 (Arc-based DisplayList) — audit P-7 / cycle 5 U10 landed paint
+  interning behind `Arc<Paint>`; the per-`DrawCommand` `Arc` for the
+  whole `DisplayList` is the remaining work in this item.
+- §2 (Command Culling) — no audit ID; capture as a perf-track item if
+  driven by a measured frame budget overrun.
+- §3 (Command Merging) — no audit ID; same gating as §2.
+- §4 (GPU Command Buffers) — cross-crate (flui-engine); out of scope
+  for flui-painting alone.
+-->
+
 ### 1. Arc-based DisplayList
 
 ```rust

@@ -274,6 +274,14 @@ pub trait WidgetsBindingObserver: Send + Sync {
 
     // ========================================================================
     // Predictive Back Gesture (Android 13+)
+    //
+    // REMOVE_BY: 2026-09-22 — audit V-24 cadence marker. These four trait
+    // methods + the matching `WidgetsBinding::handle_*_back_gesture`
+    // impls + the `back_gesture_observers` storage are Android-13+
+    // infrastructure waiting on the `flui-platform` Android wire-up. No
+    // in-workspace `impl WidgetsBindingObserver` overrides them today.
+    // By the cadence date either delete the whole surface (no consumer
+    // materialized) OR wire the platform side and drop this marker.
     // ========================================================================
 
     /// Called at the start of a predictive back gesture.
@@ -435,6 +443,14 @@ struct WidgetsBindingInner {
     observers: Vec<Arc<dyn WidgetsBindingObserver>>,
 
     /// Observers currently handling a predictive back gesture (Android).
+    ///
+    // REMOVE_BY: 2026-09-22 — audit V-24 cadence marker. The predictive-
+    // back-gesture surface (`handle_*_back_gesture` trait methods +
+    // `back_gesture_observers` storage + `WidgetsBinding::handle_*_
+    // back_gesture` impls) is Android-13+ infrastructure waiting on the
+    // `flui-platform` Android side. By the cadence date either delete
+    // this surface (no consumer materialized) OR wire the platform side
+    // and drop this marker.
     back_gesture_observers: Vec<Arc<dyn WidgetsBindingObserver>>,
 
     /// Whether a build has been scheduled.
@@ -1175,6 +1191,10 @@ impl WidgetsBinding {
 
     // ========================================================================
     // Predictive Back Gesture (Android)
+    //
+    // REMOVE_BY: 2026-09-22 — audit V-24 cadence marker. See the matching
+    // marker on the `WidgetsBindingObserver::handle_*_back_gesture` trait
+    // surface for the rationale and dispose-or-wire decision rule.
     // ========================================================================
 
     /// Handle the start of a predictive back gesture.

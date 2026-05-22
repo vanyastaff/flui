@@ -194,9 +194,22 @@ pub use text_layout::{
 };
 pub use text_painter::{DEFAULT_FONT_SIZE, TextBaseline, TextPainter};
 
-// Re-export essential painting types from flui_types for user convenience
+// Re-export essential painting types from flui_types for user convenience.
 // This creates a cohesive API where users don't need to import from multiple
-// crates
+// crates.
+//
+// REVIEW_BY: 2026-09-22 — audit P-12 cadence marker.
+//
+// **Canonical home: `flui_types::painting`.** The types below are
+// *defined* in `flui-types` and *re-exported* here. `flui_painting::
+// Paint` and `flui_types::painting::Paint` are the same type; the
+// re-export is a convenience facade. Diagnostic messages (`error[E0308]
+// mismatched types`) print the canonical `flui_types::painting::*`
+// path, which can confuse downstream consumers who imported via this
+// facade — the canonical-home note is the single-source clarification
+// the audit recommended (over an explicit `as Paint` alias, which adds
+// no information at the use site). Drop the marker or replace it with a
+// CONTRIBUTING.md cross-reference once that doc lands.
 pub use flui_types::painting::{
     BlendMode, Paint, PaintBuilder, PaintStyle, PointMode, Shader, StrokeCap, StrokeJoin,
 };

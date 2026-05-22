@@ -48,6 +48,11 @@ pub use stats::DisplayListStats;
 
 // Re-exports from flui_types::painting that are part of the
 // `display_list` public API surface.
+//
+// REVIEW_BY: 2026-09-22 — audit P-12 cadence marker; mirrors the marker
+// on `crates/flui-painting/src/lib.rs`. The canonical home of these
+// types is `flui_types::painting`; this re-export is a convenience
+// facade.
 pub use flui_types::painting::{
     BlendMode, Clip, ClipOp, FilterQuality, Paint, PointMode, Shader, TextureId,
     effects::ImageFilter,
