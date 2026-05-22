@@ -67,10 +67,16 @@ pub trait View: Downcast + DynClone + Send + Sync + 'static {
     /// Check if this View can update an existing Element.
     ///
     /// Returns `true` if the Element created by `old` can be updated with
-    /// `self`. By default, Views of the same concrete type can update each
-    /// other.
+    /// `self`. Two Views can update each other only when they share the
+    /// same concrete type **and** the same `Key` — where "same `Key`"
+    /// means both Views are keyless, or both carry keys that compare
+    /// equal via [`ViewKey::key_eq`](flui_foundation::ViewKey::key_eq).
     ///
-    /// Override this to add additional constraints (e.g., key matching).
+    /// The key check is what makes keyed child reconciliation work: a
+    /// keyed widget moved to a new slot must NOT be absorbed by whatever
+    /// same-type sibling happens to land in its old position. It also
+    /// means a `UniqueKey` never matches (each instance is distinct), so
+    /// it always forces a fresh element — Flutter parity.
     ///
     /// # Arguments
     ///
@@ -79,8 +85,24 @@ pub trait View: Downcast + DynClone + Send + Sync + 'static {
     /// # Returns
     ///
     /// `true` if the Element can be updated, `false` if it must be replaced.
+    ///
+    /// # Flutter Equivalent
+    ///
+    /// `Widget.canUpdate` (`framework.dart:4123`):
+    /// `oldWidget.runtimeType == newWidget.runtimeType
+    ///  && oldWidget.key == newWidget.key`.
     fn can_update(&self, old: &dyn View) -> bool {
-        self.view_type_id() == old.view_type_id()
+        if self.view_type_id() != old.view_type_id() {
+            return false;
+        }
+        match (self.key(), old.key()) {
+            // Both keyless — same-type is enough.
+            (None, None) => true,
+            // Both keyed — must compare equal.
+            (Some(new_key), Some(old_key)) => new_key.key_eq(old_key),
+            // One keyed, one keyless — never updatable.
+            _ => false,
+        }
     }
 
     /// Get the Key associated with this View, if any.
@@ -118,6 +140,26 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
 
     /// Get the TypeId of the View that created this Element.
     fn view_type_id(&self) -> TypeId;
+
+    /// Hash of the `Key` carried by the View this element currently
+    /// holds, or `None` if that View is keyless.
+    ///
+    /// Keyed child reconciliation
+    /// ([`reconcile_children`](crate::reconcile_children)) operates on
+    /// the live `Vec<Box<dyn ElementBase>>` and must answer "what key
+    /// does this old child element match on?" without naming the
+    /// concrete `View` type — `ElementBase` is object-safe and erases
+    /// `V`. The unified `Element<V, A, B>` overrides this to forward to
+    /// `View::key().map(ViewKey::key_hash)`; every other implementor
+    /// keeps the keyless default.
+    ///
+    /// Flutter parity: `framework.dart:4125` `Element.updateChildren`
+    /// reads `oldChild.widget.key` directly because Dart elements carry
+    /// a typed `widget` field. FLUI's object-safe element surface
+    /// exposes the same fact through this type-erased accessor instead.
+    fn current_key_hash(&self) -> Option<u64> {
+        None
+    }
 
     /// Get the depth in the element tree (root = 0).
     fn depth(&self) -> usize;

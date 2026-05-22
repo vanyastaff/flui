@@ -173,6 +173,11 @@ mod tests {
                     Box::new(DummyView)
                 }
             }
+            impl View for MinimalView {
+                fn create_element(&self) -> Box<dyn super::super::view::ElementBase> {
+                    Box::new(StatelessElement::new(self, StatelessBehavior::new()))
+                }
+            }
 
             Box::new(StatelessElement::new(
                 &MinimalView,
@@ -206,6 +211,16 @@ mod tests {
     impl AnimatedView for TestAnimatedView {
         fn listenable(&self) -> Arc<dyn Listenable> {
             self.listenable.clone() as Arc<dyn Listenable>
+        }
+    }
+
+    // Every view-trait type also implements `View` in real code (the
+    // `<Kind>View` traits do not require it structurally, but every
+    // concrete view supplies it). The unified `Element`'s `ElementBase`
+    // impl now demands `V: View`, so this fixture must spell it too.
+    impl View for TestAnimatedView {
+        fn create_element(&self) -> Box<dyn ElementBase> {
+            Box::new(AnimatedElement::new(self, AnimationBehavior::new(self)))
         }
     }
 
