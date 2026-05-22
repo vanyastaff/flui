@@ -52,12 +52,11 @@ mod buffers;
 #[cfg(debug_assertions)]
 mod debug;
 /// Gradient + shadow + blur instance descriptors consumed by `painter.rs`'s
-/// instanced-batch pipelines. `#[allow(dead_code)]` retained at the module
-/// level because several builder/constant items (`ShadowParams::elevation_*`,
-/// `BlurIntensity`, `LinearGradientBuilder`) are forward-looking helpers that
-/// painter.rs has not yet wired into a public API; deletion would be premature
-/// before painter.rs's internal cleanup.
-#[allow(dead_code)]
+/// instanced-batch pipelines. The previous module-level `#[allow(dead_code)]`
+/// reflex was removed in cycle 4 E-4 alongside the forward-looking helpers
+/// (`ShadowParams::elevation_*`, `BlurIntensity`, `LinearGradientBuilder`,
+/// the parallel `effects::BlurParams`); any zombie that returns lands as an
+/// item-level lint, not a broad module suppression.
 pub mod effects;
 mod effects_pipeline;
 mod external_texture_registry;

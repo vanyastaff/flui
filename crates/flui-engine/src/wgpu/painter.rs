@@ -3929,13 +3929,15 @@ impl WgpuPainter {
     /// # Example
     /// ```ignore
     /// use flui_engine::painter::effects::ShadowParams;
+    /// use flui_types::styling::Color;
+    /// use glam::Vec2;
     ///
-    /// // Material Design elevation 2 shadow
+    /// // Material Design elevation 2 shadow (offset.y=2, sigma=4, ~0.16 alpha)
     /// painter.shadow_rect(
     ///     [10.0, 10.0],
     ///     [200.0, 100.0],
     ///     12.0,
-    ///     &ShadowParams::elevation_2(),
+    ///     &ShadowParams::new(Vec2::new(0.0, 2.0), 4.0, Color::rgba(0, 0, 0, 41)),
     /// );
     /// ```
     pub fn shadow_rect(
