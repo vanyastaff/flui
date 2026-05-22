@@ -61,14 +61,15 @@ pub mod effects;
 mod effects_pipeline;
 mod external_texture_registry;
 pub mod font_loader;
-/// GPU instance-buffer types: `RectInstance`, `CircleInstance`, `ArcInstance`,
-/// `TextureInstance`, gradient instances. Most variants are consumed by
-/// `painter.rs`. `#[allow(dead_code)]` retained because several constructor
-/// shortcuts (`rounded_rect`, `with_transform`, `ellipse`, `with_rotation`)
-/// are forward-looking helpers not yet wired into painter.rs's public surface;
-/// the per-item audit + deletion is tracked in
-/// `crates/flui-engine/ARCHITECTURE.md` `## Outstanding refactors`.
-#[allow(dead_code)]
+/// GPU instance-buffer types: `RectInstance`, `CircleInstance`,
+/// `ArcInstance`, `TextureInstance`, gradient instances. All
+/// surviving items are consumed by `painter.rs`. Cycle 4 E-5
+/// deleted the 6 forward-looking shortcuts the previous
+/// module-level `#[allow(dead_code)]` was masking (`RectInstance::rounded_rect`,
+/// `RectInstance::with_clip_rsuperellipse`, `RectInstance::with_transform`,
+/// `CircleInstance::ellipse`, `ArcInstance::ellipse`,
+/// `TextureInstance::with_rotation`); any zombie that returns now
+/// surfaces as an item-level lint, not a broad module suppression.
 mod instancing;
 // NOTE: integration_tests.rs removed - needs rewrite for new
 // Pixels/DevicePixels API
