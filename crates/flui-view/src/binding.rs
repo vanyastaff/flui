@@ -613,6 +613,7 @@ impl WidgetsBinding {
     // Root Widget Attachment
     // ========================================================================
 
+    // PORT-TARGET: flui-app runner root-bootstrap consolidation, pending Cycle 6 element-ownership unification (V-7 deferral)
     /// Attach a root widget to the binding.
     ///
     /// This creates the root element and schedules the first build.

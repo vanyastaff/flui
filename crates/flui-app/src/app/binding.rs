@@ -170,6 +170,7 @@ impl AppBinding {
     // Widgets Binding Access
     // ========================================================================
 
+    // PORT-TARGET: flui-app runner root-bootstrap consolidation, pending Cycle 6 element-ownership unification (V-7 deferral)
     /// Attach a root widget.
     ///
     /// This creates the root element and schedules the first build.

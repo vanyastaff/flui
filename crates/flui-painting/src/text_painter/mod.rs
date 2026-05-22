@@ -1,3 +1,4 @@
+// PORT-TARGET: flui-widgets::RichText, flui-widgets::TextField
 //! Text measurement and painting.
 //!
 //! Provides [`TextPainter`], which measures and paints styled text.

@@ -1,3 +1,4 @@
+// PORT-TARGET: flui-widgets::RichText, flui-widgets::TextField
 //! `TextLayout` -- cosmic-text-backed shaped text buffer.
 //!
 //! Mythos chain U6 extracted these from the 1,243-LOC

@@ -1,3 +1,4 @@
+// PORT-TARGET: flui-widgets animated widgets, flui-animation
 //! AnimatedView - Views that automatically rebuild when animations change.
 //!
 //! AnimatedViews provide automatic subscription to Animation/Listenable
