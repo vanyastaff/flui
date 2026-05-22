@@ -30,7 +30,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
-use flui_engine::{RenderError, wgpu::Renderer};
+use flui_engine::{EngineError, wgpu::Renderer};
 use flui_foundation::HasInstance;
 use flui_interaction::{binding::GestureBinding, routing::FocusManager};
 use flui_layer::Scene;
@@ -456,7 +456,7 @@ impl AppBinding {
                         "Frame rendered successfully"
                     );
                 }
-                Err(RenderError::SurfaceLost) | Err(RenderError::SurfaceOutdated) => {
+                Err(EngineError::SurfaceLost) | Err(EngineError::SurfaceOutdated) => {
                     self.frames_dropped.fetch_add(1, Ordering::Relaxed);
                     tracing::debug!("Surface lost/outdated, will retry next frame");
                 }

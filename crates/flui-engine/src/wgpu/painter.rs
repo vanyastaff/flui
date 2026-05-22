@@ -1024,7 +1024,7 @@ impl WgpuPainter {
         &mut self,
         view: &wgpu::TextureView,
         encoder: &mut wgpu::CommandEncoder,
-    ) -> crate::error::RenderResult<()> {
+    ) -> crate::error::EngineResult<()> {
         // Advance path cache frame counters and evict stale entries
         self.path_cache.advance_frame();
         self.superellipse_cache.advance_frame();

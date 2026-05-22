@@ -37,7 +37,7 @@ use std::sync::Arc;
 use wgpu;
 
 use super::occlusion::OcclusionTracker;
-use crate::error::{RenderError, RenderResult};
+use crate::error::{EngineError, EngineResult};
 
 /// GPU backend capabilities
 #[derive(Debug, Clone)]
@@ -173,7 +173,7 @@ impl Renderer {
     /// let renderer = Renderer::new(&window).await?;
     /// println!("Using backend: {:?}", renderer.capabilities().backend);
     /// ```
-    pub async fn new<W>(window: &W) -> RenderResult<Self>
+    pub async fn new<W>(window: &W) -> EngineResult<Self>
     where
         W: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle,
     {
@@ -201,10 +201,10 @@ impl Renderer {
         #[allow(unsafe_code)]
         let surface = unsafe {
             let surface_target = wgpu::SurfaceTargetUnsafe::from_window(window)
-                .map_err(RenderError::surface_creation)?;
+                .map_err(EngineError::surface_creation)?;
             instance
                 .create_surface_unsafe(surface_target)
-                .map_err(RenderError::surface_creation)?
+                .map_err(EngineError::surface_creation)?
         };
 
         // Request adapter
@@ -215,7 +215,7 @@ impl Renderer {
                 force_fallback_adapter: false,
             })
             .await
-            .map_err(RenderError::adapter_request)?;
+            .map_err(EngineError::adapter_request)?;
 
         // Detect capabilities
         let capabilities = GpuCapabilities::detect(&adapter);
@@ -237,7 +237,7 @@ impl Renderer {
                 trace: wgpu::Trace::default(),
             })
             .await
-            .map_err(RenderError::device_creation)?;
+            .map_err(EngineError::device_creation)?;
 
         let device = Arc::new(device);
         let queue = Arc::new(queue);
@@ -308,7 +308,7 @@ impl Renderer {
     /// Create an offscreen renderer (no window surface)
     ///
     /// Useful for headless rendering, tests, and compute-only tasks.
-    pub async fn new_offscreen() -> RenderResult<Self> {
+    pub async fn new_offscreen() -> EngineResult<Self> {
         let backends = Self::select_backend();
 
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
@@ -323,7 +323,7 @@ impl Renderer {
                 force_fallback_adapter: false,
             })
             .await
-            .map_err(RenderError::adapter_request)?;
+            .map_err(EngineError::adapter_request)?;
 
         let capabilities = GpuCapabilities::detect(&adapter);
 
@@ -336,7 +336,7 @@ impl Renderer {
                 trace: wgpu::Trace::default(),
             })
             .await
-            .map_err(RenderError::device_creation)?;
+            .map_err(EngineError::device_creation)?;
 
         Ok(Self {
             instance,
@@ -554,14 +554,14 @@ impl Renderer {
     /// This is called automatically by `render_scene()` when a
     /// `SurfaceError::Lost` or `SurfaceError::Outdated` is encountered,
     /// but can also be called manually if needed.
-    pub fn reconfigure_surface(&mut self) -> Result<(), RenderError> {
+    pub fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
         if let (Some(config), Some(surface)) = (&self.config, &self.surface) {
             surface.configure(&self.device, config);
             self.damage_tracker.mark_full_repaint();
             tracing::info!("Surface reconfigured ({}x{})", config.width, config.height);
             Ok(())
         } else {
-            Err(RenderError::NotInitialized)
+            Err(EngineError::NotInitialized)
         }
     }
 
@@ -573,7 +573,7 @@ impl Renderer {
     /// For scenes containing `BackdropFilterLayer`, the render flow supports
     /// mid-frame flush: painter batches are submitted early so the surface
     /// texture can be copied, blurred, and composited before continuing.
-    pub fn render_scene(&mut self, scene: &flui_layer::Scene) -> Result<(), RenderError> {
+    pub fn render_scene(&mut self, scene: &flui_layer::Scene) -> Result<(), EngineError> {
         use super::backend::Backend;
 
         // TODO: Fine-grained damage tracking from widget state changes.
@@ -589,28 +589,28 @@ impl Renderer {
             return Ok(());
         }
 
-        let surface = self.surface.as_ref().ok_or(RenderError::SurfaceLost)?;
+        let surface = self.surface.as_ref().ok_or(EngineError::SurfaceLost)?;
 
         let output = match surface.get_current_texture() {
             Ok(output) => output,
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
                 // Auto-reconfigure and retry once
                 self.reconfigure_surface()?;
-                let surface = self.surface.as_ref().ok_or(RenderError::SurfaceLost)?;
+                let surface = self.surface.as_ref().ok_or(EngineError::SurfaceLost)?;
                 surface.get_current_texture().map_err(|e| match e {
                     wgpu::SurfaceError::Lost | wgpu::SurfaceError::Other => {
-                        RenderError::SurfaceLost
+                        EngineError::SurfaceLost
                     }
-                    wgpu::SurfaceError::OutOfMemory => RenderError::OutOfMemory,
-                    wgpu::SurfaceError::Outdated => RenderError::SurfaceOutdated,
-                    wgpu::SurfaceError::Timeout => RenderError::Timeout,
+                    wgpu::SurfaceError::OutOfMemory => EngineError::OutOfMemory,
+                    wgpu::SurfaceError::Outdated => EngineError::SurfaceOutdated,
+                    wgpu::SurfaceError::Timeout => EngineError::Timeout,
                 })?
             }
             Err(e) => {
                 return Err(match e {
-                    wgpu::SurfaceError::OutOfMemory => RenderError::OutOfMemory,
-                    wgpu::SurfaceError::Timeout => RenderError::Timeout,
-                    _ => RenderError::SurfaceLost,
+                    wgpu::SurfaceError::OutOfMemory => EngineError::OutOfMemory,
+                    wgpu::SurfaceError::Timeout => EngineError::Timeout,
+                    _ => EngineError::SurfaceLost,
                 });
             }
         };

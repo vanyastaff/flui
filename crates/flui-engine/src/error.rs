@@ -3,6 +3,16 @@
 //! This module provides backend-agnostic error types that can be used
 //! by any rendering backend (wgpu, skia, vello, software, etc.)
 //!
+//! # Naming (cycle 4 R-10)
+//!
+//! The canonical type is [`EngineError`]; `RenderError` is a deprecated
+//! alias kept for one cycle to ease the migration. Pre-cycle the type
+//! was named `RenderError`, which collided with
+//! `flui_rendering::RenderError` at every call site importing both
+//! crates. The engine-side error is about GPU / surface / pipeline /
+//! shader / wgpu — "engine" is the right namespace; "rendering" stays
+//! the pipeline-phase error in the sister crate.
+//!
 //! # Design Principles
 //!
 //! 1. **Backend-agnostic**: Core error variants don't depend on specific
@@ -28,14 +38,14 @@ use thiserror::Error;
 /// ```rust,ignore
 /// use flui_engine::RenderError;
 ///
-/// fn render_frame() -> Result<(), RenderError> {
+/// fn render_frame() -> Result<(), EngineError> {
 ///     // ... rendering code ...
-///     Err(RenderError::SurfaceLost)
+///     Err(EngineError::SurfaceLost)
 /// }
 ///
 /// match render_frame() {
 ///     Ok(()) => println!("Frame rendered"),
-///     Err(RenderError::SurfaceLost) => {
+///     Err(EngineError::SurfaceLost) => {
 ///         println!("Surface lost, will recover on next frame");
 ///     }
 ///     Err(e) => eprintln!("Render error: {}", e),
@@ -43,7 +53,7 @@ use thiserror::Error;
 /// ```
 #[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum RenderError {
+pub enum EngineError {
     // ========================================================================
     // Surface/Window errors
     // ========================================================================
@@ -114,7 +124,7 @@ pub enum RenderError {
     /// Use this variant when `request_adapter` returns no underlying error
     /// (e.g. the future resolved to `None` semantically). For wgpu 25.x+
     /// `Result<Adapter, RequestAdapterError>` returns prefer
-    /// [`RenderError::AdapterRequest`] which preserves the wgpu diagnostic
+    /// [`EngineError::AdapterRequest`] which preserves the wgpu diagnostic
     /// (`NotFound { active_backends, requested_backends, supported_backends,
     /// no_fallback_backends, no_adapter_backends, incompatible_surface_backends }`)
     /// via `#[source]`.
@@ -126,7 +136,7 @@ pub enum RenderError {
     /// Wraps wgpu's `RequestAdapterError` (or any other backend-specific
     /// adapter-acquisition error) via `#[source]` so operators get the full
     /// diagnostic context (`NotFound { active_backends, ... }`,
-    /// `EnvNotSet`, ...). Use this in preference to [`RenderError::NoAdapter`]
+    /// `EnvNotSet`, ...). Use this in preference to [`EngineError::NoAdapter`]
     /// when the underlying API exposes structured diagnostics.
     #[error("GPU adapter request failed: {0}")]
     AdapterRequest(#[source] Box<dyn Error + Send + Sync>),
@@ -183,14 +193,14 @@ pub enum RenderError {
 // Convenience constructors
 // ============================================================================
 
-impl RenderError {
+impl EngineError {
     /// Create a surface creation error from any error type
     #[must_use]
     pub fn surface_creation<E>(error: E) -> Self
     where
         E: Error + Send + Sync + 'static,
     {
-        RenderError::SurfaceCreation(Box::new(error))
+        EngineError::SurfaceCreation(Box::new(error))
     }
 
     /// Create a device creation error from any error type
@@ -199,7 +209,7 @@ impl RenderError {
     where
         E: Error + Send + Sync + 'static,
     {
-        RenderError::DeviceCreation(Box::new(error))
+        EngineError::DeviceCreation(Box::new(error))
     }
 
     /// Create an adapter-request error from any error type.
@@ -211,7 +221,7 @@ impl RenderError {
     where
         E: Error + Send + Sync + 'static,
     {
-        RenderError::AdapterRequest(Box::new(error))
+        EngineError::AdapterRequest(Box::new(error))
     }
 
     /// Create a filesystem-resource-load error from an [`std::io::Error`].
@@ -222,7 +232,7 @@ impl RenderError {
     /// [`std::io::ErrorKind`].
     #[must_use]
     pub fn resource_io<S: Into<String>>(context: S, source: std::io::Error) -> Self {
-        RenderError::ResourceIo {
+        EngineError::ResourceIo {
             context: context.into(),
             source,
         }
@@ -231,31 +241,31 @@ impl RenderError {
     /// Create a shader error from a string
     #[must_use]
     pub fn shader<S: Into<String>>(msg: S) -> Self {
-        RenderError::ShaderError(msg.into())
+        EngineError::ShaderError(msg.into())
     }
 
     /// Create a pipeline error from a string
     #[must_use]
     pub fn pipeline<S: Into<String>>(msg: S) -> Self {
-        RenderError::PipelineError(msg.into())
+        EngineError::PipelineError(msg.into())
     }
 
     /// Create a text-render error from a string.
     #[must_use]
     pub fn text_render<S: Into<String>>(msg: S) -> Self {
-        RenderError::TextRender(msg.into())
+        EngineError::TextRender(msg.into())
     }
 
     /// Create a resource creation error from a string
     #[must_use]
     pub fn resource<S: Into<String>>(msg: S) -> Self {
-        RenderError::ResourceCreation(msg.into())
+        EngineError::ResourceCreation(msg.into())
     }
 
     /// Create an invalid state error from a string
     #[must_use]
     pub fn invalid_state<S: Into<String>>(msg: S) -> Self {
-        RenderError::InvalidState(msg.into())
+        EngineError::InvalidState(msg.into())
     }
 
     /// Check if this error is recoverable (will likely succeed on retry)
@@ -263,7 +273,7 @@ impl RenderError {
     pub fn is_recoverable(&self) -> bool {
         matches!(
             self,
-            RenderError::SurfaceLost | RenderError::SurfaceOutdated | RenderError::Timeout
+            EngineError::SurfaceLost | EngineError::SurfaceOutdated | EngineError::Timeout
         )
     }
 
@@ -272,12 +282,12 @@ impl RenderError {
     pub fn is_fatal(&self) -> bool {
         matches!(
             self,
-            RenderError::OutOfMemory
-                | RenderError::NoAdapter
-                | RenderError::AdapterRequest(_)
-                | RenderError::DeviceCreation(_)
-                | RenderError::SurfaceCreation(_)
-                | RenderError::NotInitialized
+            EngineError::OutOfMemory
+                | EngineError::NoAdapter
+                | EngineError::AdapterRequest(_)
+                | EngineError::DeviceCreation(_)
+                | EngineError::SurfaceCreation(_)
+                | EngineError::NotInitialized
         )
     }
 }
@@ -286,8 +296,30 @@ impl RenderError {
 // Result type alias
 // ============================================================================
 
-/// A Result type alias for rendering operations
-pub type RenderResult<T> = Result<T, RenderError>;
+/// A Result type alias for engine operations.
+pub type EngineResult<T> = Result<T, EngineError>;
+
+// Cycle 4 R-10: deprecated aliases for one-cycle migration. The
+// pre-cycle names (`RenderError`, `RenderResult`) collided with
+// `flui_rendering::RenderError` / `RenderResult` at every call site
+// importing both crates. New code should use `EngineError` /
+// `EngineResult` directly.
+
+/// Deprecated alias for [`EngineError`] (renamed in cycle 4 R-10).
+#[deprecated(
+    since = "0.1.0",
+    note = "Renamed to `EngineError` to disambiguate from \
+            `flui_rendering::RenderError`. See cycle 4 audit R-10."
+)]
+pub type RenderError = EngineError;
+
+/// Deprecated alias for [`EngineResult`] (renamed in cycle 4 R-10).
+#[deprecated(
+    since = "0.1.0",
+    note = "Renamed to `EngineResult` to disambiguate from \
+            `flui_rendering::RenderResult`. See cycle 4 audit R-10."
+)]
+pub type RenderResult<T> = EngineResult<T>;
 
 #[cfg(test)]
 mod tests {
@@ -295,29 +327,29 @@ mod tests {
 
     #[test]
     fn test_display() {
-        assert_eq!(RenderError::SurfaceLost.to_string(), "Surface was lost");
+        assert_eq!(EngineError::SurfaceLost.to_string(), "Surface was lost");
         assert_eq!(
-            RenderError::NoAdapter.to_string(),
+            EngineError::NoAdapter.to_string(),
             "No suitable GPU adapter found"
         );
     }
 
     #[test]
     fn test_is_recoverable() {
-        assert!(RenderError::SurfaceLost.is_recoverable());
-        assert!(RenderError::SurfaceOutdated.is_recoverable());
-        assert!(RenderError::Timeout.is_recoverable());
-        assert!(!RenderError::OutOfMemory.is_recoverable());
-        assert!(!RenderError::NoAdapter.is_recoverable());
+        assert!(EngineError::SurfaceLost.is_recoverable());
+        assert!(EngineError::SurfaceOutdated.is_recoverable());
+        assert!(EngineError::Timeout.is_recoverable());
+        assert!(!EngineError::OutOfMemory.is_recoverable());
+        assert!(!EngineError::NoAdapter.is_recoverable());
     }
 
     #[test]
     fn test_is_fatal() {
-        assert!(RenderError::OutOfMemory.is_fatal());
-        assert!(RenderError::NoAdapter.is_fatal());
-        assert!(RenderError::NotInitialized.is_fatal());
-        assert!(RenderError::surface_creation(std::io::Error::other("test")).is_fatal());
-        assert!(!RenderError::SurfaceLost.is_fatal());
-        assert!(!RenderError::Timeout.is_fatal());
+        assert!(EngineError::OutOfMemory.is_fatal());
+        assert!(EngineError::NoAdapter.is_fatal());
+        assert!(EngineError::NotInitialized.is_fatal());
+        assert!(EngineError::surface_creation(std::io::Error::other("test")).is_fatal());
+        assert!(!EngineError::SurfaceLost.is_fatal());
+        assert!(!EngineError::Timeout.is_fatal());
     }
 }
