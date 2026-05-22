@@ -42,10 +42,16 @@ mod result;
 mod target;
 mod transform;
 
-// Re-export HitTestBehavior from flui_interaction (base type)
-// Protocol-specific types defined in this crate
-pub use entry::{BoxHitTestEntry, HitTestEntry, SliverHitTestEntry};
+// Re-export HitTestBehavior from flui_interaction (base type).
+// Cycle 4 U-3: parallel `BoxHitTestEntry`/`SliverHitTestEntry` (from
+// `entry.rs`) and `BoxHitTestResult`/`SliverHitTestResult` (from
+// `result.rs`) were deleted; the protocol-canonical versions live in
+// `crates/flui-rendering/src/protocol/box_protocol.rs` and
+// `crates/flui-rendering/src/protocol/sliver_protocol.rs`. The
+// trait-dispatch `HitTestEntry` + `HitTestResult` types remain here
+// and are U-4's migration target.
+pub use entry::HitTestEntry;
 pub use flui_interaction::routing::HitTestBehavior;
-pub use result::{BoxHitTestResult, HitTestResult, SliverHitTestResult};
+pub use result::HitTestResult;
 pub use target::{HitTestTarget, PointerDeviceKind, PointerEvent, PointerEventKind};
 pub use transform::MatrixTransformPart;

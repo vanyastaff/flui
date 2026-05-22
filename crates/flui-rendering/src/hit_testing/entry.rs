@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Weak};
 
-use flui_types::{Offset, geometry::px};
+use flui_types::Offset;
 
 use super::{HitTestTarget, MatrixTransformPart};
 
@@ -104,173 +104,40 @@ impl std::fmt::Debug for HitTestEntry {
 }
 
 // ============================================================================
-// BoxHitTestEntry
+// CYCLE 4 U-3: dead parallel BoxHitTestEntry / SliverHitTestEntry deletion
 // ============================================================================
-
-/// An entry in a box hit test result.
-///
-/// This is a simpler entry type used directly with RenderBox hit testing
-/// when we don't need the full target tracking.
-#[derive(Debug, Clone)]
-pub struct BoxHitTestEntry {
-    /// The local position of the hit.
-    pub local_position: Offset,
-
-    /// Optional transform for coordinate conversion.
-    transform: Option<MatrixTransformPart>,
-}
-
-impl BoxHitTestEntry {
-    /// Creates a new box hit test entry.
-    pub fn new(local_position: Offset) -> Self {
-        Self {
-            local_position,
-            transform: None,
-        }
-    }
-
-    /// Creates an entry with a transform.
-    pub fn with_transform(local_position: Offset, transform: MatrixTransformPart) -> Self {
-        Self {
-            local_position,
-            transform: Some(transform),
-        }
-    }
-
-    /// Returns the transform, if any.
-    pub fn transform(&self) -> Option<&MatrixTransformPart> {
-        self.transform.as_ref()
-    }
-
-    /// Transforms a position from global to local coordinates.
-    pub fn global_to_local(&self, global: Offset) -> Offset {
-        self.transform
-            .as_ref()
-            .and_then(|t| t.global_to_local(global))
-            .unwrap_or(global)
-    }
-}
-
-impl Default for BoxHitTestEntry {
-    fn default() -> Self {
-        Self::new(Offset::ZERO)
-    }
-}
-
-// ============================================================================
-// SliverHitTestEntry
-// ============================================================================
-
-/// An entry in a sliver hit test result.
-///
-/// Sliver hit testing uses main/cross axis coordinates instead of x/y.
-#[derive(Debug, Clone)]
-pub struct SliverHitTestEntry {
-    /// Position along the main (scrolling) axis.
-    pub main_axis_position: f32,
-
-    /// Position along the cross axis.
-    pub cross_axis_position: f32,
-
-    /// Optional transform for coordinate conversion.
-    transform: Option<MatrixTransformPart>,
-}
-
-impl SliverHitTestEntry {
-    /// Creates a new sliver hit test entry.
-    pub fn new(main_axis_position: f32, cross_axis_position: f32) -> Self {
-        Self {
-            main_axis_position,
-            cross_axis_position,
-            transform: None,
-        }
-    }
-
-    /// Creates an entry with a transform.
-    pub fn with_transform(
-        main_axis_position: f32,
-        cross_axis_position: f32,
-        transform: MatrixTransformPart,
-    ) -> Self {
-        Self {
-            main_axis_position,
-            cross_axis_position,
-            transform: Some(transform),
-        }
-    }
-
-    /// Returns the transform, if any.
-    pub fn transform(&self) -> Option<&MatrixTransformPart> {
-        self.transform.as_ref()
-    }
-
-    /// Converts main/cross axis position to an offset based on axis direction.
-    ///
-    /// For horizontal scrolling: main = x, cross = y
-    /// For vertical scrolling: main = y, cross = x
-    pub fn to_offset(&self, is_horizontal: bool) -> Offset {
-        if is_horizontal {
-            Offset::new(px(self.main_axis_position), px(self.cross_axis_position))
-        } else {
-            Offset::new(px(self.cross_axis_position), px(self.main_axis_position))
-        }
-    }
-}
-
-impl Default for SliverHitTestEntry {
-    fn default() -> Self {
-        Self::new(0.0, 0.0)
-    }
-}
+//
+// Pre-cycle this file carried duplicate `BoxHitTestEntry` and
+// `SliverHitTestEntry` structs that competed with the live versions in
+// `crates/flui-rendering/src/protocol/box_protocol.rs` and
+// `crates/flui-rendering/src/protocol/sliver_protocol.rs`:
+//
+//   - This file's `BoxHitTestEntry::new(local_position: Offset)` took
+//     ONE arg; the protocol version `BoxHitTestEntry::new(target_id:
+//     u64, transform: Matrix4)` takes TWO. Production hit-test ctx
+//     code uses the protocol version exclusively.
+//
+//   - This file's `SliverHitTestEntry::new(main, cross)` took TWO
+//     `f32` args without a target id; the protocol version takes
+//     `(target_id: u64, main_axis: f32)`. Production sliver ctx code
+//     uses the protocol version exclusively.
+//
+// The two pairs were a `parallel-type` smell (cycle 2 PR #100 / cycle
+// 4 R-7 family). Workspace grep confirmed zero external consumers of
+// the `hit_testing` variants outside this module's own tests. Deletion
+// is therefore strictly subtractive; the protocol-side versions remain
+// canonical, and the `hit_testing` module continues to own the
+// trait-dispatch entry type (`HitTestEntry`) and the `RenderId`-shaped
+// types coming in U-4.
+//
+// See cycle 4 Wave 2 design doc (`docs/research/2026-05-22-cycle4-wave2-design.md`)
+// for the trio's full migration order.
 
 #[cfg(test)]
 mod tests {
     use flui_types::geometry::px;
 
     use super::*;
-
-    #[test]
-    fn test_box_hit_test_entry() {
-        let entry = BoxHitTestEntry::new(Offset::new(px(10.0), px(20.0)));
-        assert_eq!(entry.local_position.dx, 10.0);
-        assert_eq!(entry.local_position.dy, 20.0);
-        assert!(entry.transform().is_none());
-    }
-
-    #[test]
-    fn test_box_hit_test_entry_with_transform() {
-        let transform = MatrixTransformPart::offset(5.0, 10.0);
-        let entry = BoxHitTestEntry::with_transform(Offset::new(px(10.0), px(20.0)), transform);
-
-        assert!(entry.transform().is_some());
-
-        let local = entry.global_to_local(Offset::new(px(15.0), px(30.0)));
-        assert_eq!(local.dx, 10.0);
-        assert_eq!(local.dy, 20.0);
-    }
-
-    #[test]
-    fn test_sliver_hit_test_entry() {
-        let entry = SliverHitTestEntry::new(100.0, 50.0);
-        assert_eq!(entry.main_axis_position, 100.0);
-        assert_eq!(entry.cross_axis_position, 50.0);
-    }
-
-    #[test]
-    fn test_sliver_to_offset_vertical() {
-        let entry = SliverHitTestEntry::new(100.0, 50.0);
-        let offset = entry.to_offset(false); // vertical
-        assert_eq!(offset.dx, 50.0); // cross = x
-        assert_eq!(offset.dy, 100.0); // main = y
-    }
-
-    #[test]
-    fn test_sliver_to_offset_horizontal() {
-        let entry = SliverHitTestEntry::new(100.0, 50.0);
-        let offset = entry.to_offset(true); // horizontal
-        assert_eq!(offset.dx, 100.0); // main = x
-        assert_eq!(offset.dy, 50.0); // cross = y
-    }
 
     #[test]
     fn test_hit_test_entry_debug() {
