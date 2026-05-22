@@ -1,100 +1,70 @@
-//! Type-safe identifiers using newtype pattern
+//! Type-safe identifiers used by the gesture/interaction subsystem.
 //!
-//! This module provides strongly-typed identifiers that prevent mixing up
-//! different ID types at compile time.
+//! # `PointerId` re-export
 //!
-//! # Features
+//! The canonical [`PointerId`] is **re-exported** from the `ui-events` crate
+//! (W3C-compliant pointer event types). Pre-U9 this crate carried a local
+//! `PointerId(i32)` newtype which:
 //!
-//! - **Type safety**: Cannot mix `PointerId` with `FocusNodeId`
-//! - **Zero-cost**: No runtime overhead (same size as underlying type)
-//! - **Niche optimization**: `Option<NonZeroId>` is same size as `Id`
-//! - **Debug/Display**: Nice formatting for debugging
+//! - Used `0` as the "mouse / primary pointer" sentinel.
+//! - Duplicated a per-event `DefaultHasher` allocation on every event in
+//!   `extract_pointer_id` to fit `ui_events::pointer::PointerId(NonZeroU64)`
+//!   back into a 32-bit `i32`.
+//! - Caused HashMap key collisions between two pointers that hashed to the
+//!   same 31-bit truncated value.
+//!
+//! Widening the local type to [`ui_events::pointer::PointerId`] (i.e.
+//! `NonZeroU64`) removes the lossy hash and aligns the gesture layer with
+//! the platform layer ([`flui-platform`](crate)) which already speaks
+//! `ui_events` directly.
+//!
+//! ## Constructor migration
+//!
+//! `ui_events::pointer::PointerId::new` is **fallible** — it returns
+//! `Option<PointerId>` because `0` is not a valid id (the inner type is
+//! `NonZeroU64`). Callers that previously wrote `PointerId::new(0)` must use
+//! [`PointerId::PRIMARY`] instead (the canonical primary pointer id, value
+//! `1`). Callers that previously wrote `PointerId::new(N)` for `N >= 1`
+//! should use `PointerId::new((N as u64) + 1).expect("nonzero pointer id")`
+//! — adding `1` keeps test pointers distinct from `PRIMARY`.
+//!
+//! Flutter parity: `gestures/events.dart::PointerEvent.pointer` is an
+//! unbounded `int`; `PointerId::PRIMARY` corresponds to Flutter's
+//! mouse/primary pointer convention.
+//!
+//! # Local IDs
+//!
+//! [`FocusNodeId`] and [`HandlerId`] remain local — they back their own
+//! crate-private slab/registry indexing and do not touch platform layers.
 //!
 //! # Example
 //!
 //! ```rust,ignore
 //! use flui_interaction::ids::{PointerId, FocusNodeId};
 //!
-//! let pointer = PointerId::new(1);
-//! let focus = FocusNodeId::new(42);
+//! // Primary pointer (was: `PointerId::new(0)` pre-U9).
+//! let mouse = PointerId::PRIMARY;
+//! // Second pointer in a multi-touch gesture.
+//! let touch1 = PointerId::new(2).expect("nonzero pointer id");
 //!
-//! // These are different types - cannot mix!
-//! // fn process(id: PointerId) { ... }
-//! // process(focus); // Compile error!
+//! assert_ne!(mouse, touch1);
+//!
+//! let focus = FocusNodeId::new(42);
+//! // PointerId and FocusNodeId are distinct types — cannot be mixed.
 //! ```
 
 use std::{fmt, num::NonZeroU64};
 
 // ============================================================================
-// PointerId - Identifier for pointer devices
+// PointerId — re-exported from ui-events (canonical W3C-compliant type)
 // ============================================================================
 
 /// Unique identifier for a pointer device (mouse, touch, stylus).
 ///
-/// Uses `i32` to match platform APIs (winit, etc.).
-///
-/// # Example
-///
-/// ```rust
-/// use flui_interaction::ids::PointerId;
-///
-/// let mouse = PointerId::new(0);
-/// let touch1 = PointerId::new(1);
-///
-/// assert_ne!(mouse, touch1);
-/// ```
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
-#[repr(transparent)]
-pub struct PointerId(i32);
-
-impl PointerId {
-    /// Creates a new pointer ID.
-    #[inline]
-    pub const fn new(id: i32) -> Self {
-        Self(id)
-    }
-
-    /// Returns the raw ID value.
-    #[inline]
-    pub const fn get(self) -> i32 {
-        self.0
-    }
-
-    /// Returns the raw ID value (alias for compatibility).
-    #[inline]
-    pub const fn raw(self) -> i32 {
-        self.0
-    }
-
-    /// Mouse pointer ID (typically 0).
-    pub const MOUSE: Self = Self(0);
-}
-
-impl fmt::Debug for PointerId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "PointerId({})", self.0)
-    }
-}
-
-impl fmt::Display for PointerId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "pointer:{}", self.0)
-    }
-}
-
-impl From<i32> for PointerId {
-    #[inline]
-    fn from(id: i32) -> Self {
-        Self::new(id)
-    }
-}
-
-impl From<PointerId> for i32 {
-    #[inline]
-    fn from(id: PointerId) -> Self {
-        id.0
-    }
-}
+/// Re-exported from [`ui_events::pointer::PointerId`]. See [the module
+/// documentation](self) for migration notes (the local pre-U9 `i32` newtype
+/// was widened to this `NonZeroU64`-backed type).
+pub use ui_events::pointer::PointerId;
 
 // ============================================================================
 // FocusNodeId - Identifier for focusable UI elements
@@ -261,12 +231,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_pointer_id() {
-        let id = PointerId::new(42);
-        assert_eq!(id.get(), 42);
-        assert_eq!(id.raw(), 42);
-        assert_eq!(format!("{:?}", id), "PointerId(42)");
-        assert_eq!(format!("{}", id), "pointer:42");
+    fn pointer_id_primary_matches_ui_events_primary() {
+        // The widened PointerId (re-exported from ui-events) carries
+        // PointerId::PRIMARY as its canonical "mouse / primary pointer"
+        // sentinel — replacing the pre-U9 `PointerId(0)` convention.
+        assert!(PointerId::PRIMARY.is_primary_pointer());
+        // PRIMARY is NonZeroU64::MIN (= 1).
+        assert_eq!(PointerId::PRIMARY.get_inner().get(), 1);
+    }
+
+    #[test]
+    fn pointer_id_new_distinct_from_primary() {
+        // New(2) — first non-primary pointer in the U9 mapping
+        // (old `PointerId::new(1)` → new `PointerId::new(2)`).
+        let p2 = PointerId::new(2).expect("nonzero pointer id");
+        assert_ne!(p2, PointerId::PRIMARY);
+        assert!(!p2.is_primary_pointer());
+    }
+
+    #[test]
+    fn pointer_id_new_zero_returns_none() {
+        // Sanity: u64=0 violates NonZeroU64, returns None.
+        assert!(PointerId::new(0).is_none());
     }
 
     #[test]
@@ -308,9 +294,9 @@ mod tests {
 
     #[test]
     fn test_pointer_id_equality() {
-        let a = PointerId::new(1);
-        let b = PointerId::new(1);
-        let c = PointerId::new(2);
+        let a = PointerId::new(1).expect("nonzero");
+        let b = PointerId::new(1).expect("nonzero");
+        let c = PointerId::new(2).expect("nonzero");
 
         assert_eq!(a, b);
         assert_ne!(a, c);
@@ -321,9 +307,9 @@ mod tests {
         use std::collections::HashSet;
 
         let mut set = HashSet::new();
-        set.insert(PointerId::new(1));
-        set.insert(PointerId::new(2));
-        set.insert(PointerId::new(1)); // duplicate
+        set.insert(PointerId::new(1).expect("nonzero"));
+        set.insert(PointerId::new(2).expect("nonzero"));
+        set.insert(PointerId::new(1).expect("nonzero")); // duplicate
 
         assert_eq!(set.len(), 2);
     }

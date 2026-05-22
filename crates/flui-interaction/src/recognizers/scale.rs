@@ -696,8 +696,14 @@ mod tests {
         let recognizer = ScaleGestureRecognizer::new(arena);
 
         let mut pointers = HashMap::new();
-        pointers.insert(PointerId::new(1), Offset::new(Pixels(0.0), Pixels(0.0)));
-        pointers.insert(PointerId::new(2), Offset::new(Pixels(100.0), Pixels(100.0)));
+        pointers.insert(
+            PointerId::new(2).expect("nonzero pointer id"),
+            Offset::new(Pixels(0.0), Pixels(0.0)),
+        );
+        pointers.insert(
+            PointerId::new(3).expect("nonzero pointer id"),
+            Offset::new(Pixels(100.0), Pixels(100.0)),
+        );
 
         let focal_point = recognizer.calculate_focal_point(&pointers);
 
@@ -712,8 +718,14 @@ mod tests {
         let recognizer = ScaleGestureRecognizer::new(arena);
 
         let mut pointers = HashMap::new();
-        pointers.insert(PointerId::new(1), Offset::new(Pixels(0.0), Pixels(0.0)));
-        pointers.insert(PointerId::new(2), Offset::new(Pixels(100.0), Pixels(0.0)));
+        pointers.insert(
+            PointerId::new(2).expect("nonzero pointer id"),
+            Offset::new(Pixels(0.0), Pixels(0.0)),
+        );
+        pointers.insert(
+            PointerId::new(3).expect("nonzero pointer id"),
+            Offset::new(Pixels(100.0), Pixels(0.0)),
+        );
 
         let (span, h_span, v_span) = recognizer.calculate_spans(&pointers);
 
@@ -729,8 +741,8 @@ mod tests {
         let arena = GestureArena::new();
         let recognizer = ScaleGestureRecognizer::new(arena);
 
-        let pointer1 = PointerId::new(1);
-        let pointer2 = PointerId::new(2);
+        let pointer1 = PointerId::new(2).expect("nonzero pointer id");
+        let pointer2 = PointerId::new(3).expect("nonzero pointer id");
 
         // Add two pointers 100px apart
         recognizer.add_pointer(pointer1, Offset::new(Pixels(0.0), Pixels(0.0)));

@@ -260,16 +260,16 @@ mod tests {
     #[test]
     fn test_resolver_creation() {
         let resolver = PointerSignalResolver::new();
-        assert_eq!(resolver.handler_count(PointerId::new(0)), 0);
+        assert_eq!(resolver.handler_count(PointerId::PRIMARY), 0);
     }
 
     #[test]
     fn test_register_handler() {
         let resolver = PointerSignalResolver::new();
 
-        let handler_id = resolver.register(PointerId::new(0), SignalPriority::Normal, |_| {});
+        let handler_id = resolver.register(PointerId::PRIMARY, SignalPriority::Normal, |_| {});
 
-        assert_eq!(resolver.handler_count(PointerId::new(0)), 1);
+        assert_eq!(resolver.handler_count(PointerId::PRIMARY), 1);
         assert!(handler_id.get() > 0);
     }
 
@@ -277,11 +277,11 @@ mod tests {
     fn test_unregister_handler() {
         let resolver = PointerSignalResolver::new();
 
-        let handler_id = resolver.register(PointerId::new(0), SignalPriority::Normal, |_| {});
-        assert_eq!(resolver.handler_count(PointerId::new(0)), 1);
+        let handler_id = resolver.register(PointerId::PRIMARY, SignalPriority::Normal, |_| {});
+        assert_eq!(resolver.handler_count(PointerId::PRIMARY), 1);
 
-        resolver.unregister(PointerId::new(0), handler_id);
-        assert_eq!(resolver.handler_count(PointerId::new(0)), 0);
+        resolver.unregister(PointerId::PRIMARY, handler_id);
+        assert_eq!(resolver.handler_count(PointerId::PRIMARY), 0);
     }
 
     #[test]
@@ -290,13 +290,13 @@ mod tests {
         let called = Arc::new(AtomicBool::new(false));
         let called_clone = called.clone();
 
-        resolver.register(PointerId::new(0), SignalPriority::Normal, move |_| {
+        resolver.register(PointerId::PRIMARY, SignalPriority::Normal, move |_| {
             called_clone.store(true, Ordering::Relaxed);
         });
 
         let event = crate::events::make_scroll_event(Offset::ZERO, Offset::new(px(0.0), px(10.0)));
 
-        resolver.resolve(PointerId::new(0), event);
+        resolver.resolve(PointerId::PRIMARY, event);
 
         assert!(called.load(Ordering::Relaxed));
     }
@@ -310,17 +310,17 @@ mod tests {
         let low_clone = low_called.clone();
         let high_clone = high_called.clone();
 
-        resolver.register(PointerId::new(0), SignalPriority::Low, move |_| {
+        resolver.register(PointerId::PRIMARY, SignalPriority::Low, move |_| {
             low_clone.store(true, Ordering::Relaxed);
         });
 
-        resolver.register(PointerId::new(0), SignalPriority::High, move |_| {
+        resolver.register(PointerId::PRIMARY, SignalPriority::High, move |_| {
             high_clone.store(true, Ordering::Relaxed);
         });
 
         let event = crate::events::make_scroll_event(Offset::ZERO, Offset::new(px(0.0), px(10.0)));
 
-        resolver.resolve(PointerId::new(0), event);
+        resolver.resolve(PointerId::PRIMARY, event);
 
         assert!(!low_called.load(Ordering::Relaxed));
         assert!(high_called.load(Ordering::Relaxed));
@@ -335,17 +335,17 @@ mod tests {
         let first_clone = first_called.clone();
         let second_clone = second_called.clone();
 
-        resolver.register(PointerId::new(0), SignalPriority::Normal, move |_| {
+        resolver.register(PointerId::PRIMARY, SignalPriority::Normal, move |_| {
             first_clone.fetch_add(1, Ordering::Relaxed);
         });
 
-        resolver.register(PointerId::new(0), SignalPriority::Normal, move |_| {
+        resolver.register(PointerId::PRIMARY, SignalPriority::Normal, move |_| {
             second_clone.fetch_add(1, Ordering::Relaxed);
         });
 
         let event = crate::events::make_scroll_event(Offset::ZERO, Offset::new(px(0.0), px(10.0)));
 
-        resolver.resolve(PointerId::new(0), event);
+        resolver.resolve(PointerId::PRIMARY, event);
 
         // Last registered (second) should win
         assert_eq!(first_called.load(Ordering::Relaxed), 0);
@@ -356,27 +356,34 @@ mod tests {
     fn test_clear() {
         let resolver = PointerSignalResolver::new();
 
-        resolver.register(PointerId::new(0), SignalPriority::Normal, |_| {});
-        resolver.register(PointerId::new(0), SignalPriority::Normal, |_| {});
+        resolver.register(PointerId::PRIMARY, SignalPriority::Normal, |_| {});
+        resolver.register(PointerId::PRIMARY, SignalPriority::Normal, |_| {});
 
-        assert_eq!(resolver.handler_count(PointerId::new(0)), 2);
+        assert_eq!(resolver.handler_count(PointerId::PRIMARY), 2);
 
-        resolver.clear(PointerId::new(0));
+        resolver.clear(PointerId::PRIMARY);
 
-        assert_eq!(resolver.handler_count(PointerId::new(0)), 0);
+        assert_eq!(resolver.handler_count(PointerId::PRIMARY), 0);
     }
 
     #[test]
     fn test_clear_all() {
         let resolver = PointerSignalResolver::new();
 
-        resolver.register(PointerId::new(0), SignalPriority::Normal, |_| {});
-        resolver.register(PointerId::new(1), SignalPriority::Normal, |_| {});
+        resolver.register(PointerId::PRIMARY, SignalPriority::Normal, |_| {});
+        resolver.register(
+            PointerId::new(2).expect("nonzero pointer id"),
+            SignalPriority::Normal,
+            |_| {},
+        );
 
         resolver.clear_all();
 
-        assert_eq!(resolver.handler_count(PointerId::new(0)), 0);
-        assert_eq!(resolver.handler_count(PointerId::new(1)), 0);
+        assert_eq!(resolver.handler_count(PointerId::PRIMARY), 0);
+        assert_eq!(
+            resolver.handler_count(PointerId::new(2).expect("nonzero pointer id")),
+            0
+        );
     }
 
     #[test]
@@ -385,13 +392,13 @@ mod tests {
         let called = Arc::new(AtomicBool::new(false));
         let called_clone = called.clone();
 
-        resolver.register(PointerId::new(0), SignalPriority::Normal, move |_| {
+        resolver.register(PointerId::PRIMARY, SignalPriority::Normal, move |_| {
             called_clone.store(true, Ordering::Relaxed);
         });
 
         let event = crate::events::make_scroll_event(Offset::ZERO, Offset::new(px(0.0), px(10.0)));
 
-        let accepted = resolver.resolve_and_accept(PointerId::new(0), event);
+        let accepted = resolver.resolve_and_accept(PointerId::PRIMARY, event);
 
         assert!(accepted);
         assert!(called.load(Ordering::Relaxed));

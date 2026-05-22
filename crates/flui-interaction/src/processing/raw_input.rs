@@ -648,7 +648,7 @@ mod tests {
     fn test_pointer_position_query() {
         let handler = RawInputHandler::new();
 
-        assert!(handler.pointer_position(PointerId::new(0)).is_none());
+        assert!(handler.pointer_position(PointerId::PRIMARY).is_none());
 
         let down = make_down_event(
             Offset::new(Pixels(100.0), Pixels(200.0)),
@@ -656,7 +656,7 @@ mod tests {
         );
         handler.handle_event(&down);
 
-        let pos = handler.pointer_position(PointerId::new(0)).unwrap();
+        let pos = handler.pointer_position(PointerId::PRIMARY).unwrap();
         assert_eq!(pos, Offset::new(Pixels(100.0), Pixels(200.0)));
     }
 

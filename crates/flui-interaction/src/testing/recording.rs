@@ -11,9 +11,9 @@
 //!
 //! // Record a gesture
 //! let mut recorder = GestureRecorder::new();
-//! recorder.record_down(PointerId::new(0), Offset::new(Pixels(100.0), Pixels(100.0)));
-//! recorder.record_move(PointerId::new(0), Offset::new(Pixels(150.0), Pixels(100.0)));
-//! recorder.record_up(PointerId::new(0), Offset::new(Pixels(200.0), Pixels(100.0)));
+//! recorder.record_down(PointerId::PRIMARY, Offset::new(Pixels(100.0), Pixels(100.0)));
+//! recorder.record_move(PointerId::PRIMARY, Offset::new(Pixels(150.0), Pixels(100.0)));
+//! recorder.record_up(PointerId::PRIMARY, Offset::new(Pixels(200.0), Pixels(100.0)));
 //!
 //! // Save/export the recording
 //! let recording = recorder.finish();
@@ -125,7 +125,11 @@ impl RecordedEvent {
             position: self.position,
             local_position: self.position,
             device_kind: self.device_kind,
-            device: self.pointer.get(),
+            // U9: PointerEventData carries the legacy `device: i32` field;
+            // map PointerId (NonZeroU64) into the low 31 bits — primary
+            // pointer (PointerId(1)) lands on `1`, matching the test
+            // expectation that distinct pointer ids stay distinct devices.
+            device: (self.pointer.get_inner().get() & 0x7FFF_FFFF) as i32,
             buttons: if matches!(
                 self.event_type,
                 RecordedEventType::Down | RecordedEventType::Move
@@ -330,7 +334,7 @@ impl GestureRecorder {
 
         let mut recorded = RecordedEvent::new(
             time_offset,
-            PointerId::new(0), // Default to primary pointer
+            PointerId::PRIMARY, // Default to primary pointer
             event_type,
             position,
         )
@@ -459,7 +463,7 @@ impl GestureBuilder {
     /// Create a simple tap gesture
     pub fn tap(position: Offset<Pixels>) -> GestureRecording {
         let mut recording = GestureRecording::with_name("tap");
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         recording.push(RecordedEvent::new(
             Duration::ZERO,
@@ -480,7 +484,7 @@ impl GestureBuilder {
     /// Create a double tap gesture
     pub fn double_tap(position: Offset<Pixels>) -> GestureRecording {
         let mut recording = GestureRecording::with_name("double_tap");
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         // First tap
         recording.push(RecordedEvent::new(
@@ -516,7 +520,7 @@ impl GestureBuilder {
     /// Create a long press gesture
     pub fn long_press(position: Offset<Pixels>, duration_ms: u64) -> GestureRecording {
         let mut recording = GestureRecording::with_name("long_press");
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         recording.push(RecordedEvent::new(
             Duration::ZERO,
@@ -560,7 +564,7 @@ impl GestureBuilder {
         name: &str,
     ) -> GestureRecording {
         let mut recording = GestureRecording::with_name(name);
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
 
         // Down
         recording.push(RecordedEvent::new(
@@ -605,8 +609,8 @@ impl GestureBuilder {
         steps: usize,
     ) -> GestureRecording {
         let mut recording = GestureRecording::with_name("pinch");
-        let pointer1 = PointerId::new(0);
-        let pointer2 = PointerId::new(1);
+        let pointer1 = PointerId::PRIMARY;
+        let pointer2 = PointerId::new(2).expect("nonzero pointer id");
 
         let steps = steps.max(1);
 
@@ -688,7 +692,7 @@ mod tests {
     #[test]
     fn test_recorder_basic() {
         let mut recorder = GestureRecorder::new();
-        let pointer = PointerId::new(0);
+        let pointer = PointerId::PRIMARY;
         let pos = Offset::new(Pixels(100.0), Pixels(100.0));
 
         recorder.record_down(pointer, pos);
@@ -772,15 +776,18 @@ mod tests {
         assert_eq!(recording.len(), 14);
 
         // First two should be downs for different pointers
-        assert_eq!(recording.events[0].pointer, PointerId::new(0));
-        assert_eq!(recording.events[1].pointer, PointerId::new(1));
+        assert_eq!(recording.events[0].pointer, PointerId::PRIMARY);
+        assert_eq!(
+            recording.events[1].pointer,
+            PointerId::new(2).expect("nonzero pointer id")
+        );
     }
 
     #[test]
     fn test_recorded_event_with_pressure() {
         let event = RecordedEvent::new(
             Duration::ZERO,
-            PointerId::new(0),
+            PointerId::PRIMARY,
             RecordedEventType::Down,
             Offset::new(Pixels(0.0), Pixels(0.0)),
         )

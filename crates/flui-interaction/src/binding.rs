@@ -553,7 +553,7 @@ mod tests {
     #[test]
     fn test_hit_test_cache() {
         let binding = GestureBinding::new();
-        let pointer = PointerId::new(1);
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
         let result = HitTestResult::new();
 
         binding.hit_tests.insert(pointer, result.clone());
@@ -570,15 +570,18 @@ mod tests {
     fn test_clear_all_hit_tests() {
         let binding = GestureBinding::new();
 
-        binding
-            .hit_tests
-            .insert(PointerId::new(1), HitTestResult::new());
-        binding
-            .hit_tests
-            .insert(PointerId::new(2), HitTestResult::new());
-        binding
-            .hit_tests
-            .insert(PointerId::new(3), HitTestResult::new());
+        binding.hit_tests.insert(
+            PointerId::new(2).expect("nonzero pointer id"),
+            HitTestResult::new(),
+        );
+        binding.hit_tests.insert(
+            PointerId::new(3).expect("nonzero pointer id"),
+            HitTestResult::new(),
+        );
+        binding.hit_tests.insert(
+            PointerId::new(4).expect("nonzero pointer id"),
+            HitTestResult::new(),
+        );
 
         assert_eq!(binding.active_pointer_count(), 3);
 

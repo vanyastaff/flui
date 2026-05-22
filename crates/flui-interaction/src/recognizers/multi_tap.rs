@@ -527,8 +527,8 @@ mod tests {
                 *count_clone.lock() = details.pointer_count;
             });
 
-        let pointer1 = PointerId::new(1);
-        let pointer2 = PointerId::new(2);
+        let pointer1 = PointerId::new(2).expect("nonzero pointer id");
+        let pointer2 = PointerId::new(3).expect("nonzero pointer id");
 
         // Add two pointers
         recognizer.add_pointer(pointer1, Offset::new(Pixels(100.0), Pixels(100.0)));
@@ -565,9 +565,18 @@ mod tests {
             });
 
         // Add three pointers
-        recognizer.add_pointer(PointerId::new(1), Offset::new(Pixels(100.0), Pixels(100.0)));
-        recognizer.add_pointer(PointerId::new(2), Offset::new(Pixels(200.0), Pixels(100.0)));
-        recognizer.add_pointer(PointerId::new(3), Offset::new(Pixels(150.0), Pixels(200.0)));
+        recognizer.add_pointer(
+            PointerId::new(2).expect("nonzero pointer id"),
+            Offset::new(Pixels(100.0), Pixels(100.0)),
+        );
+        recognizer.add_pointer(
+            PointerId::new(3).expect("nonzero pointer id"),
+            Offset::new(Pixels(200.0), Pixels(100.0)),
+        );
+        recognizer.add_pointer(
+            PointerId::new(4).expect("nonzero pointer id"),
+            Offset::new(Pixels(150.0), Pixels(200.0)),
+        );
 
         // Verify waiting for up phase
         let state = recognizer.gesture_state.lock();
@@ -576,9 +585,18 @@ mod tests {
         drop(state);
 
         // Release all pointers
-        recognizer.handle_pointer_up(PointerId::new(1), PointerType::Touch);
-        recognizer.handle_pointer_up(PointerId::new(2), PointerType::Touch);
-        recognizer.handle_pointer_up(PointerId::new(3), PointerType::Touch);
+        recognizer.handle_pointer_up(
+            PointerId::new(2).expect("nonzero pointer id"),
+            PointerType::Touch,
+        );
+        recognizer.handle_pointer_up(
+            PointerId::new(3).expect("nonzero pointer id"),
+            PointerType::Touch,
+        );
+        recognizer.handle_pointer_up(
+            PointerId::new(4).expect("nonzero pointer id"),
+            PointerType::Touch,
+        );
 
         // Should have called callback
         assert!(*tapped.lock());
@@ -597,12 +615,24 @@ mod tests {
             });
 
         // Add two pointers at (0, 0) and (100, 0)
-        recognizer.add_pointer(PointerId::new(1), Offset::new(Pixels(0.0), Pixels(0.0)));
-        recognizer.add_pointer(PointerId::new(2), Offset::new(Pixels(100.0), Pixels(0.0)));
+        recognizer.add_pointer(
+            PointerId::new(2).expect("nonzero pointer id"),
+            Offset::new(Pixels(0.0), Pixels(0.0)),
+        );
+        recognizer.add_pointer(
+            PointerId::new(3).expect("nonzero pointer id"),
+            Offset::new(Pixels(100.0), Pixels(0.0)),
+        );
 
         // Release both
-        recognizer.handle_pointer_up(PointerId::new(1), PointerType::Touch);
-        recognizer.handle_pointer_up(PointerId::new(2), PointerType::Touch);
+        recognizer.handle_pointer_up(
+            PointerId::new(2).expect("nonzero pointer id"),
+            PointerType::Touch,
+        );
+        recognizer.handle_pointer_up(
+            PointerId::new(3).expect("nonzero pointer id"),
+            PointerType::Touch,
+        );
 
         // Center should be at (50, 0)
         let center = *center_pos.lock();
@@ -622,9 +652,18 @@ mod tests {
             });
 
         // Add three pointers (one too many)
-        recognizer.add_pointer(PointerId::new(1), Offset::new(Pixels(100.0), Pixels(100.0)));
-        recognizer.add_pointer(PointerId::new(2), Offset::new(Pixels(200.0), Pixels(100.0)));
-        recognizer.add_pointer(PointerId::new(3), Offset::new(Pixels(150.0), Pixels(200.0)));
+        recognizer.add_pointer(
+            PointerId::new(2).expect("nonzero pointer id"),
+            Offset::new(Pixels(100.0), Pixels(100.0)),
+        );
+        recognizer.add_pointer(
+            PointerId::new(3).expect("nonzero pointer id"),
+            Offset::new(Pixels(200.0), Pixels(100.0)),
+        );
+        recognizer.add_pointer(
+            PointerId::new(4).expect("nonzero pointer id"),
+            Offset::new(Pixels(150.0), Pixels(200.0)),
+        );
 
         // Should have cancelled
         assert!(*cancelled.lock());

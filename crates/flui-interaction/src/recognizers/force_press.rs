@@ -615,7 +615,7 @@ mod tests {
             *started_clone.lock() = true;
         });
 
-        let pointer = PointerId::new(1);
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
         let position = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Start tracking
@@ -637,7 +637,7 @@ mod tests {
             *started_clone.lock() = true;
         });
 
-        let pointer = PointerId::new(1);
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
         let position = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Start tracking
@@ -660,7 +660,7 @@ mod tests {
             *peaked_clone.lock() = true;
         });
 
-        let pointer = PointerId::new(1);
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
         let position = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Start tracking
@@ -689,7 +689,7 @@ mod tests {
             *update_clone.lock() += 1;
         });
 
-        let pointer = PointerId::new(1);
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
         let position = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Start tracking
@@ -715,7 +715,7 @@ mod tests {
             *ended_clone.lock() = true;
         });
 
-        let pointer = PointerId::new(1);
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
         let position = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Start tracking

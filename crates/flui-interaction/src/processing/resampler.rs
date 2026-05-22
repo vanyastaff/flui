@@ -32,7 +32,7 @@
 //! use flui_interaction::ids::PointerId;
 //! use std::time::Duration;
 //!
-//! let mut resampler = PointerEventResampler::new(PointerId::new(0));
+//! let mut resampler = PointerEventResampler::new(PointerId::PRIMARY);
 //!
 //! // Add incoming events
 //! resampler.add_event(pointer_event);
@@ -150,7 +150,7 @@ impl PointerEventResampler {
             });
         } else {
             tracing::warn!(
-                pointer_id = inner.pointer_id.get(),
+                pointer_id = ?inner.pointer_id,
                 "Event queue full, dropping event"
             );
         }
@@ -299,17 +299,17 @@ mod tests {
 
     #[test]
     fn test_resampler_basic() {
-        let resampler = PointerEventResampler::new(PointerId::new(0));
+        let resampler = PointerEventResampler::new(PointerId::PRIMARY);
 
         assert!(!resampler.is_tracked());
         assert!(!resampler.is_down());
         assert!(!resampler.has_pending_events());
-        assert_eq!(resampler.pointer_id(), PointerId::new(0));
+        assert_eq!(resampler.pointer_id(), PointerId::PRIMARY);
     }
 
     #[test]
     fn test_add_event() {
-        let resampler = PointerEventResampler::new(PointerId::new(0));
+        let resampler = PointerEventResampler::new(PointerId::PRIMARY);
 
         let event = make_down_event(Offset::new(Pixels(10.0), Pixels(20.0)), PointerType::Mouse);
         resampler.add_event(event);
@@ -321,7 +321,7 @@ mod tests {
 
     #[test]
     fn test_sample_events() {
-        let resampler = PointerEventResampler::new(PointerId::new(0));
+        let resampler = PointerEventResampler::new(PointerId::PRIMARY);
 
         // Add down event
         let event = make_down_event(Offset::new(Pixels(10.0), Pixels(20.0)), PointerType::Mouse);
@@ -340,7 +340,7 @@ mod tests {
 
     #[test]
     fn test_stop_flushes_events() {
-        let resampler = PointerEventResampler::new(PointerId::new(0));
+        let resampler = PointerEventResampler::new(PointerId::PRIMARY);
 
         let down = make_down_event(Offset::new(Pixels(10.0), Pixels(20.0)), PointerType::Mouse);
         resampler.add_event(down);
@@ -360,7 +360,7 @@ mod tests {
 
     #[test]
     fn test_clear() {
-        let resampler = PointerEventResampler::new(PointerId::new(0));
+        let resampler = PointerEventResampler::new(PointerId::PRIMARY);
 
         let event = make_down_event(Offset::new(Pixels(10.0), Pixels(20.0)), PointerType::Mouse);
         resampler.add_event(event);

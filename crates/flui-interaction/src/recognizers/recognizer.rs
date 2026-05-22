@@ -280,7 +280,7 @@ mod tests {
         let arena = GestureArena::new();
         let base = RecognizerBase::new(arena);
 
-        let pointer = PointerId::new(1);
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
         let position = Offset::new(Pixels(100.0), Pixels(200.0));
 
         base.set_primary_pointer(Some(pointer));

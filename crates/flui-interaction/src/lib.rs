@@ -19,8 +19,10 @@
 //! - **Sealed traits**: `HitTestable` and `GestureArenaMember` cannot be
 //!   implemented outside this crate, allowing API evolution without breaking
 //!   changes
-//! - **Newtype pattern**: Type-safe IDs (`PointerId`, `FocusNodeId`,
-//!   `HandlerId`) prevent mixing up different ID types at compile time
+//! - **Canonical pointer id**: [`PointerId`] is re-exported from the
+//!   `ui-events` crate (`NonZeroU64`-backed). [`FocusNodeId`] and
+//!   [`HandlerId`] are crate-local `NonZeroU64` newtypes that prevent
+//!   mixing up different ID types at compile time
 //! - **Niche optimization**: `Option<FocusNodeId>` is the same size as
 //!   `FocusNodeId`
 //! - **Extension traits**: Add methods to `PointerEvent` without modifying the
@@ -84,7 +86,7 @@
 //! ```rust,ignore
 //! use flui_interaction::ids::{PointerId, FocusNodeId};
 //!
-//! let pointer = PointerId::new(0);
+//! let pointer = PointerId::PRIMARY;
 //! let focus = FocusNodeId::new(42);
 //!
 //! // These are different types - cannot mix!
