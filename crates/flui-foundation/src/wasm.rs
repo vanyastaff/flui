@@ -52,16 +52,9 @@ pub trait WasmNotSendSync {}
 #[cfg(target_arch = "wasm32")]
 impl<T> WasmNotSendSync for T {}
 
-/// Trait for types that are `Send` on native but not necessarily on WASM.
-#[cfg(not(target_arch = "wasm32"))]
-pub trait WasmNotSend: Send {}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl<T: Send> WasmNotSend for T {}
-
-/// Trait for types that are `Send` on native but not necessarily on WASM.
-#[cfg(target_arch = "wasm32")]
-pub trait WasmNotSend {}
-
-#[cfg(target_arch = "wasm32")]
-impl<T> WasmNotSend for T {}
+// NOTE (audit I-22): `WasmNotSend` was removed — zero in-workspace
+// consumers. The `WasmNotSendSync` sibling above carries the relaxed
+// concurrency contract for the workspace; a Send-only variant has no
+// consumer that the Sync-relaxed form does not already cover. If a
+// future consumer needs Send-only WASM-adapted behaviour, re-introduce
+// alongside that consumer to keep the surface tight.

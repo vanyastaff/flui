@@ -13,8 +13,7 @@ use std::{
 
 use flui_foundation::{
     ChangeNotifier, DiagnosticLevel, Diagnosticable, DiagnosticsBuilder, DiagnosticsNode,
-    ElementId, FoundationError, Key, LayerId, Listenable, ListenerId, ObserverList, RenderId,
-    Result, SemanticsId, ValueNotifier, ViewId, error::ErrorContext,
+    ElementId, Key, LayerId, Listenable, ListenerId, RenderId, SemanticsId, ValueNotifier, ViewId,
 };
 use flui_types::platform::TargetPlatform;
 
@@ -200,51 +199,13 @@ fn test_value_notifier_complex_state() {
 }
 
 // ============================================================================
-// Observer System Integration Tests
+// Observer System Integration Tests — removed in audit I-1
 // ============================================================================
-
-/// Test observer pattern for event handling
-#[test]
-fn test_observer_event_handling() {
-    let mut observers: ObserverList<Box<dyn Fn(i32) + Send + Sync>> = ObserverList::new();
-
-    let sum = Arc::new(AtomicUsize::new(0));
-
-    // Add observers
-    let sum1 = Arc::clone(&sum);
-    let id1 = observers.add(Box::new(move |value| {
-        // Test passes only positive i32 values; cast to usize is safe here.
-        #[allow(clippy::cast_sign_loss)]
-        sum1.fetch_add(value as usize, Ordering::SeqCst);
-    }));
-
-    let sum2 = Arc::clone(&sum);
-    let _id2 = observers.add(Box::new(move |value| {
-        // Test passes only positive i32 values; cast to usize is safe here.
-        #[allow(clippy::cast_sign_loss)]
-        sum2.fetch_add((value * 2) as usize, Ordering::SeqCst);
-    }));
-
-    // Dispatch event
-    for observer in observers.iter() {
-        observer(10);
-    }
-
-    // 10 + 20 = 30
-    assert_eq!(sum.load(Ordering::SeqCst), 30);
-
-    // Remove first observer
-    observers.remove(id1);
-
-    // Reset and dispatch again
-    sum.store(0, Ordering::SeqCst);
-    for observer in observers.iter() {
-        observer(10);
-    }
-
-    // Only second observer: 20
-    assert_eq!(sum.load(Ordering::SeqCst), 20);
-}
+//
+// `ObserverList` was deleted (zero in-workspace consumers; `ChangeNotifier`
+// from `notifier.rs` is the canonical Listenable-pattern primitive). The
+// pre-cycle `test_observer_event_handling` exercised the deleted type and
+// was removed alongside the source.
 
 // ============================================================================
 // Diagnostics Integration Tests
@@ -339,55 +300,14 @@ fn test_diagnostics_builder_usage() {
 }
 
 // ============================================================================
-// Error Handling Integration Tests
+// Error Handling Integration Tests — removed in audit I-2
 // ============================================================================
-
-/// Test error context chaining
-#[test]
-fn test_error_context_chaining() {
-    fn inner_operation() -> Result<i32> {
-        Err(FoundationError::invalid_id(0, "ID cannot be zero"))
-    }
-
-    fn middle_operation() -> Result<i32> {
-        inner_operation().with_context("in middle_operation")
-    }
-
-    fn outer_operation() -> Result<i32> {
-        middle_operation().with_context("in outer_operation")
-    }
-
-    let result = outer_operation();
-    assert!(result.is_err());
-
-    let error_msg = result.unwrap_err().to_string();
-    assert!(error_msg.contains("in outer_operation"));
-}
-
-/// Test error recovery patterns
-#[test]
-fn test_error_recovery() {
-    fn fallible_operation(succeed: bool) -> Result<i32> {
-        if succeed {
-            Ok(42)
-        } else {
-            Err(FoundationError::listener_error(
-                "add",
-                "listener limit reached",
-            ))
-        }
-    }
-
-    // Test recoverable error
-    let err = fallible_operation(false).unwrap_err();
-    assert!(err.is_recoverable());
-
-    // Retry pattern
-    let result = fallible_operation(false)
-        .or_else(|_| fallible_operation(true))
-        .unwrap();
-    assert_eq!(result, 42);
-}
+//
+// `FoundationError` + `ErrorContext` were deleted (zero in-workspace
+// consumers; `anyhow::Context` covers the chaining pattern and the rest of
+// the workspace already uses `anyhow` / `thiserror` directly). The
+// pre-cycle `test_error_context_chaining` and `test_error_recovery` tests
+// exercised the deleted types and were removed alongside the source.
 
 // ============================================================================
 // Platform Integration Tests
@@ -413,11 +333,13 @@ fn test_platform_detection() {
 /// Test a realistic widget state management scenario
 #[test]
 fn test_widget_state_management() {
-    // Simulate widget with state and observers
+    // Simulate widget with state + a `ListenerId` tracked alongside (audit
+    // I-1: `ObserverList` was deleted as a zero-consumer parallel API;
+    // `ValueNotifier` + `Vec<ListenerId>` covers the same shape).
     struct Widget {
         id: ElementId,
         state: ValueNotifier<i32>,
-        observers: ObserverList<ListenerId>,
+        listener_ids: Vec<ListenerId>,
     }
 
     impl Widget {
@@ -425,7 +347,7 @@ fn test_widget_state_management() {
             Self {
                 id,
                 state: ValueNotifier::new(0),
-                observers: ObserverList::new(),
+                listener_ids: Vec::new(),
             }
         }
 
@@ -443,7 +365,7 @@ fn test_widget_state_management() {
         rebuild_clone.fetch_add(1, Ordering::SeqCst);
     }));
 
-    let _observer_id = widget.observers.add(listener_id);
+    widget.listener_ids.push(listener_id);
 
     // Trigger state changes
     widget.increment();
@@ -453,6 +375,7 @@ fn test_widget_state_management() {
     assert_eq!(*widget.state.value(), 3);
     assert_eq!(rebuild_count.load(Ordering::SeqCst), 3);
     assert_eq!(widget.id.get(), 1);
+    assert_eq!(widget.listener_ids.len(), 1);
 }
 
 /// Test tree structure with IDs

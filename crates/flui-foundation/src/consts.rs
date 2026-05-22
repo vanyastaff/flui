@@ -82,50 +82,11 @@ pub const EPSILON: f64 = 1e-10;
 /// Single-precision tolerance for f32 comparisons.
 pub const EPSILON_F32: f32 = 1e-6;
 
-/// Check if two f64 values are approximately equal within [`EPSILON`].
-///
-/// # Example
-///
-/// ```rust
-/// use flui_foundation::consts::approx_equal;
-///
-/// let a = 0.1 + 0.2;
-/// let b = 0.3;
-/// assert!(approx_equal(a, b)); // true despite floating-point errors
-/// ```
-#[inline]
-#[must_use]
-pub const fn approx_equal(a: f64, b: f64) -> bool {
-    let diff = a - b;
-    // Manual abs since f64::abs is not const
-    let abs_diff = if diff < 0.0 { -diff } else { diff };
-    abs_diff < EPSILON
-}
-
-/// Check if two f32 values are approximately equal within [`EPSILON_F32`].
-#[inline]
-#[must_use]
-pub const fn approx_equal_f32(a: f32, b: f32) -> bool {
-    let diff = a - b;
-    let abs_diff = if diff < 0.0 { -diff } else { diff };
-    abs_diff < EPSILON_F32
-}
-
-/// Check if a f64 value is approximately zero.
-#[inline]
-#[must_use]
-pub const fn is_near_zero(value: f64) -> bool {
-    let abs_value = if value < 0.0 { -value } else { value };
-    abs_value < EPSILON
-}
-
-/// Check if a f32 value is approximately zero.
-#[inline]
-#[must_use]
-pub const fn is_near_zero_f32(value: f32) -> bool {
-    let abs_value = if value < 0.0 { -value } else { value };
-    abs_value < EPSILON_F32
-}
+// NOTE (audit I-13): `approx_equal`, `approx_equal_f32`, `is_near_zero`,
+// `is_near_zero_f32` were removed from this module — they had zero
+// in-workspace consumers. The geometry/float-comparison primitive belongs
+// in `flui-types`, not in the foundation crate. If a need surfaces, port
+// the helpers there alongside `Pixels` / `Offset` rather than here.
 
 #[cfg(test)]
 mod tests {
@@ -150,36 +111,5 @@ mod tests {
             platform_count <= 1,
             "Only one platform category should be true"
         );
-    }
-
-    #[test]
-    fn test_approx_equal() {
-        assert!(approx_equal(0.1 + 0.2, 0.3));
-        assert!(approx_equal(1.0, 1.0));
-        assert!(!approx_equal(1.0, 2.0));
-        assert!(approx_equal(0.0, 0.0));
-    }
-
-    #[test]
-    fn test_approx_equal_f32() {
-        assert!(approx_equal_f32(0.1_f32 + 0.2_f32, 0.3_f32));
-        assert!(approx_equal_f32(1.0_f32, 1.0_f32));
-        assert!(!approx_equal_f32(1.0_f32, 2.0_f32));
-    }
-
-    #[test]
-    fn test_is_near_zero() {
-        assert!(is_near_zero(0.0));
-        assert!(is_near_zero(1e-11));
-        assert!(is_near_zero(-1e-11));
-        assert!(!is_near_zero(1.0));
-        assert!(!is_near_zero(-1.0));
-    }
-
-    #[test]
-    fn test_is_near_zero_f32() {
-        assert!(is_near_zero_f32(0.0_f32));
-        assert!(is_near_zero_f32(1e-7_f32));
-        assert!(!is_near_zero_f32(1.0_f32));
     }
 }

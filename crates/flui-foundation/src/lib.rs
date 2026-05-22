@@ -14,7 +14,7 @@
 //! - **Change Notification**: Observable patterns for reactive UI updates
 //! - **Callbacks**: `VoidCallback`, `ValueChanged`, and other callback type
 //!   aliases
-//! - **Observer Lists**: Efficient observer/listener collections
+//! - **Listener IDs**: Stable identifiers for change-notification listeners
 //! - **Diagnostics**: Debugging and introspection utilities
 //! - **Error Handling**: Standardized error types and utilities
 //! - **Notification System**: Base abstractions for event bubbling
@@ -141,7 +141,6 @@ pub mod callbacks;
 pub mod consts;
 pub mod id;
 pub mod key;
-pub mod observer;
 pub mod wasm;
 
 // Reactive programming - change notification and observables
@@ -149,7 +148,6 @@ pub mod notifier;
 
 // Diagnostics and debugging
 pub mod debug;
-pub mod error;
 
 // ============================================================================
 // RE-EXPORTS
@@ -164,17 +162,12 @@ pub use callbacks::{
     VoidCallback,
 };
 // Constants
-pub use consts::{
-    DEBUG_MODE, EPSILON, EPSILON_F32, IS_DESKTOP, IS_MOBILE, IS_WEB, RELEASE_MODE, approx_equal,
-    approx_equal_f32, is_near_zero, is_near_zero_f32,
-};
+pub use consts::{DEBUG_MODE, EPSILON, EPSILON_F32, IS_DESKTOP, IS_MOBILE, IS_WEB, RELEASE_MODE};
 // Diagnostics
 pub use debug::{
     DiagnosticLevel, Diagnosticable, DiagnosticsBuilder, DiagnosticsNode, DiagnosticsProperty,
     DiagnosticsTreeStyle,
 };
-// Error handling
-pub use error::{FoundationError, Result};
 pub use id::{
     // Core tree IDs (5-tree architecture)
     ElementId,
@@ -202,10 +195,8 @@ pub use id::{
 pub use key::{Key, KeyRef, Keyed, UniqueKey, ValueKey, ViewKey, WithKey};
 // Change notification (Listenable pattern)
 pub use notifier::{ChangeNotifier, Listenable, ListenerCallback, ValueListenable, ValueNotifier};
-// Observer lists
-pub use observer::ObserverList;
 // WASM compatibility
-pub use wasm::{WasmNotSend, WasmNotSendSync};
+pub use wasm::WasmNotSendSync;
 
 // ============================================================================
 // PRELUDE
@@ -251,9 +242,8 @@ pub mod prelude {
         Listenable,
         ListenerCallback,
         ListenerId,
-        // Observer lists
+        // Observer IDs
         ObserverId,
-        ObserverList,
         Predicate,
         RELEASE_MODE,
         RenderId,
@@ -274,7 +264,6 @@ pub mod prelude {
     // Re-export assertion macros
     pub use crate::{
         debug_assert_finite, debug_assert_not_nan, debug_assert_range, debug_assert_valid,
-        report_error, report_warning,
     };
 }
 
