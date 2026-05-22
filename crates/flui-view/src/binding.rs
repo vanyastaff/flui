@@ -973,57 +973,81 @@ impl WidgetsBinding {
     }
 
     /// Notify all observers of locale change.
+    ///
+    /// Snapshots the observer list under the read lock and releases the
+    /// lock before invoking callbacks (audit V-21). An observer callback
+    /// that re-enters the binding (e.g., adds or removes an observer,
+    /// reads `observer_count`, or schedules a build) would deadlock if
+    /// the iteration held the lock across the dispatch.
     pub fn handle_locale_changed(&self) {
-        let inner = self.inner.read();
-        for observer in &inner.observers {
+        let observers: Vec<Arc<dyn WidgetsBindingObserver>> = self.inner.read().observers.clone();
+        for observer in &observers {
             observer.did_change_locales();
         }
     }
 
     /// Notify all observers of metrics change.
+    ///
+    /// See [`Self::handle_locale_changed`] for the snapshot-then-fire
+    /// rationale (audit V-21).
     pub fn handle_metrics_changed(&self) {
-        let inner = self.inner.read();
-        for observer in &inner.observers {
+        let observers: Vec<Arc<dyn WidgetsBindingObserver>> = self.inner.read().observers.clone();
+        for observer in &observers {
             observer.did_change_metrics();
         }
     }
 
     /// Notify all observers of text scale factor change.
+    ///
+    /// See [`Self::handle_locale_changed`] for the snapshot-then-fire
+    /// rationale (audit V-21).
     pub fn handle_text_scale_factor_changed(&self) {
-        let inner = self.inner.read();
-        for observer in &inner.observers {
+        let observers: Vec<Arc<dyn WidgetsBindingObserver>> = self.inner.read().observers.clone();
+        for observer in &observers {
             observer.did_change_text_scale_factor();
         }
     }
 
     /// Notify all observers of platform brightness change.
+    ///
+    /// See [`Self::handle_locale_changed`] for the snapshot-then-fire
+    /// rationale (audit V-21).
     pub fn handle_platform_brightness_changed(&self) {
-        let inner = self.inner.read();
-        for observer in &inner.observers {
+        let observers: Vec<Arc<dyn WidgetsBindingObserver>> = self.inner.read().observers.clone();
+        for observer in &observers {
             observer.did_change_platform_brightness();
         }
     }
 
     /// Notify all observers of app lifecycle change.
+    ///
+    /// See [`Self::handle_locale_changed`] for the snapshot-then-fire
+    /// rationale (audit V-21).
     pub fn handle_app_lifecycle_state_changed(&self, state: AppLifecycleState) {
-        let inner = self.inner.read();
-        for observer in &inner.observers {
+        let observers: Vec<Arc<dyn WidgetsBindingObserver>> = self.inner.read().observers.clone();
+        for observer in &observers {
             observer.did_change_app_lifecycle_state(state);
         }
     }
 
     /// Notify all observers of memory pressure.
+    ///
+    /// See [`Self::handle_locale_changed`] for the snapshot-then-fire
+    /// rationale (audit V-21).
     pub fn handle_memory_pressure(&self) {
-        let inner = self.inner.read();
-        for observer in &inner.observers {
+        let observers: Vec<Arc<dyn WidgetsBindingObserver>> = self.inner.read().observers.clone();
+        for observer in &observers {
             observer.did_have_memory_pressure();
         }
     }
 
     /// Notify all observers of accessibility features change.
+    ///
+    /// See [`Self::handle_locale_changed`] for the snapshot-then-fire
+    /// rationale (audit V-21).
     pub fn handle_accessibility_features_changed(&self) {
-        let inner = self.inner.read();
-        for observer in &inner.observers {
+        let observers: Vec<Arc<dyn WidgetsBindingObserver>> = self.inner.read().observers.clone();
+        for observer in &observers {
             observer.did_change_accessibility_features();
         }
     }
@@ -1217,12 +1241,16 @@ impl WidgetsBinding {
 
     /// Handle view focus change.
     ///
+    /// Snapshots the observer list under the read lock and releases the
+    /// lock before invoking callbacks (audit V-21). See
+    /// [`Self::handle_locale_changed`] for the deadlock-safety rationale.
+    ///
     /// # Flutter Equivalent
     ///
     /// Corresponds to `WidgetsBinding.handleViewFocusChanged()`.
     pub fn handle_view_focus_changed(&self, event: ViewFocusEvent) {
-        let inner = self.inner.read();
-        for observer in &inner.observers {
+        let observers: Vec<Arc<dyn WidgetsBindingObserver>> = self.inner.read().observers.clone();
+        for observer in &observers {
             observer.did_change_view_focus(event);
         }
     }
@@ -1835,5 +1863,80 @@ mod tests {
 
         let walk = WidgetsBinding::collect_all_elements(&tree, root_id, 5);
         assert_eq!(walk, vec![(root_id, 5), (child_id, 6)]);
+    }
+
+    // ========================================================================
+    // V-21 — snapshot-then-fire on sync handle_* event handlers
+    // ========================================================================
+
+    /// Observer whose callback re-enters the binding by taking a
+    /// `write()` lock (via `add_observer`). Before the V-21 fix the
+    /// `handle_*` dispatch held a `read()` lock on `self.inner` across
+    /// the iteration, so this re-entrant `write()` would deadlock the
+    /// thread under `parking_lot`'s non-reentrant `RwLock`. After the
+    /// snapshot-then-fire fix the callbacks run with no lock held, so
+    /// re-entering the binding is safe.
+    struct ReentrantObserver {
+        binding: &'static WidgetsBinding,
+        fired: std::sync::atomic::AtomicUsize,
+    }
+
+    /// Inert observer added from inside `ReentrantObserver`'s callback to
+    /// force a `write()` lock acquisition on `self.inner`. The struct is
+    /// intentionally trivial; only the act of `add_observer`-ing matters.
+    struct InertObserver;
+    impl WidgetsBindingObserver for InertObserver {}
+
+    impl WidgetsBindingObserver for ReentrantObserver {
+        fn did_change_metrics(&self) {
+            self.fired
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // Re-enter the binding from inside the observer callback.
+            // `add_observer` takes a `write()` lock on `self.inner` ---
+            // pre-V-21 this deadlocks; post-V-21 it is safe because the
+            // dispatch released the `read()` lock before iterating.
+            self.binding.add_observer(Arc::new(InertObserver));
+        }
+    }
+
+    /// Pre-V-21: this test would deadlock `cargo test -p flui-view --lib`.
+    /// Post-V-21: `handle_metrics_changed` snapshots the observer Vec
+    /// before iterating, so the re-entrant `add_observer` write lock can
+    /// be acquired without blocking. The test asserts (a) the observer
+    /// callback fired and (b) the re-entrant `add_observer` completed
+    /// (observer_count went from 1 to 2).
+    ///
+    /// We intentionally `Box::leak` the binding so the `'static` lifetime
+    /// on `ReentrantObserver::binding` is sound for the duration of the
+    /// test. The leaked binding is small and bounded by the test run.
+    #[test]
+    fn handle_metrics_changed_does_not_deadlock_on_reentrant_observer() {
+        // `Box::leak` gives us `&'static WidgetsBinding`, which lets
+        // `ReentrantObserver` close over a borrow with a sound lifetime
+        // for the duration of the test. The leaked binding is small and
+        // bounded by the test run.
+        let binding: &'static WidgetsBinding = Box::leak(Box::new(WidgetsBinding::new()));
+
+        let observer = Arc::new(ReentrantObserver {
+            binding,
+            fired: std::sync::atomic::AtomicUsize::new(0),
+        });
+        binding.add_observer(observer.clone() as Arc<dyn WidgetsBindingObserver>);
+        assert_eq!(binding.observer_count(), 1);
+
+        // Pre-V-21: this call deadlocks (read lock held + observer wants
+        // write lock). Post-V-21: returns normally.
+        binding.handle_metrics_changed();
+
+        assert_eq!(
+            observer.fired.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "observer's did_change_metrics must fire exactly once"
+        );
+        assert_eq!(
+            binding.observer_count(),
+            2,
+            "re-entrant add_observer inside the callback must complete"
+        );
     }
 }
