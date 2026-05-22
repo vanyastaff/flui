@@ -62,7 +62,29 @@ use flui_foundation::{BindingBase, ElementId, impl_binding_singleton};
 use flui_rendering::pipeline::PipelineOwner;
 use parking_lot::RwLock;
 
-use crate::{owner::BuildOwner, tree::ElementTree, view::View};
+use crate::{
+    owner::BuildOwner,
+    tree::ElementTree,
+    view::{BoxedView, RootRenderView, View},
+};
+
+/// Default physical size, in pixels, for the root [`RenderView`] created
+/// when [`WidgetsBinding::attach_root_widget`] bootstraps the render tree.
+///
+/// `flui-view`'s binding is intra-crate — it has no window object to
+/// query, so the root [`RootRenderView`] is seeded with a default size
+/// rather than a real window size. `800x600` is deliberately the same
+/// value `flui_app::AppConfig::default()` uses for the initial window
+/// size, keeping one consistent default across the workspace.
+///
+/// This is only a *seed*: the size is not permanent. `RootRenderView`
+/// is itself a [`View`], so a later rebuild with a differently-sized
+/// `RootRenderView` flows the real window dimensions in through
+/// `RootRenderElement::update`, which re-applies the
+/// [`ViewConfiguration`](flui_rendering::view::ViewConfiguration).
+///
+/// [`RenderView`]: flui_rendering::view::RenderView
+const DEFAULT_ROOT_VIEW_SIZE: (f32, f32) = (800.0, 600.0);
 
 // ============================================================================
 // Route Information
@@ -599,6 +621,24 @@ impl WidgetsBinding {
     /// to the root element during mounting, enabling RenderObjectElements
     /// to create their RenderObjects.
     ///
+    /// # Root bootstrap
+    ///
+    /// The user `view` is not mounted directly. It is wrapped in a
+    /// [`RootRenderView`], and *that* is mounted as the element-tree
+    /// root. [`RootRenderView`] / `RootRenderElement` own the root
+    /// [`RenderView`](flui_rendering::view::RenderView) and bootstrap
+    /// the render tree (creating the `RenderView`, setting it as the
+    /// `PipelineOwner`'s root node). This is the single root-bootstrap
+    /// path — there is no parallel direct-mount of the user view.
+    ///
+    /// # Flutter Equivalent
+    ///
+    /// Mirrors `WidgetsBinding.attachRootWidget` →
+    /// `RootWidget.attach` → `RenderObjectToWidgetAdapter`
+    /// (`packages/flutter/lib/src/widgets/binding.dart`), where the
+    /// user widget is likewise wrapped in a root widget that owns the
+    /// `RenderView` before being attached to the build owner.
+    ///
     /// # Errors
     ///
     /// Returns [`AttachError::AlreadyAttached`] if a root widget is
@@ -610,10 +650,29 @@ impl WidgetsBinding {
             return Err(AttachError::AlreadyAttached);
         }
 
-        // Mount root element with PipelineOwner
-        // This ensures RenderObjectElements can create their RenderObjects.
-        // Split the borrow so the BuildOwner-derived ElementOwner handle and
-        // the ElementTree borrow don't overlap.
+        // Wrap the user view in `RootRenderView` so the render tree is
+        // bootstrapped through `RootRenderElement` (Flutter's
+        // `RenderObjectToWidgetAdapter` shape) instead of mounting the
+        // user view directly.
+        //
+        // `RootRenderView<V>` requires `V: View + Clone`, but
+        // `attach_root_widget` only has `V: View`. `BoxedView` bridges
+        // the gap: it is a `View` whose `Clone` impl is implemented via
+        // `dyn_clone::clone_box`, so `RootRenderView<BoxedView>`
+        // satisfies every bound. The user view's identity (type id,
+        // key, element) is preserved — `BoxedView` forwards all four
+        // `View` methods to the inner view.
+        let root_render_view = RootRenderView::new(
+            BoxedView(dyn_clone::clone_box(view)),
+            DEFAULT_ROOT_VIEW_SIZE.0,
+            DEFAULT_ROOT_VIEW_SIZE.1,
+        );
+
+        // Mount the `RootRenderView` as the element-tree root with the
+        // PipelineOwner. This ensures `RootRenderElement` (and the
+        // RenderObjectElements below it) can create their RenderObjects.
+        // Split the borrow so the BuildOwner-derived ElementOwner handle
+        // and the ElementTree borrow don't overlap.
         let pipeline_owner = inner.pipeline_owner.clone();
         let root_id = {
             let WidgetsBindingInner {
@@ -622,7 +681,7 @@ impl WidgetsBinding {
                 ..
             } = *inner;
             element_tree.mount_root_with_pipeline_owner(
-                view,
+                &root_render_view,
                 pipeline_owner,
                 &mut build_owner.element_owner_mut(),
             )
@@ -1192,6 +1251,7 @@ mod tests {
     use flui_foundation::HasInstance;
 
     use super::*;
+    use crate::RootRenderElement;
 
     /// A leaf element that doesn't create children (prevents infinite
     /// recursion)
@@ -1267,6 +1327,25 @@ mod tests {
         }
     }
 
+    /// A stateless view that builds a non-trivial child subtree: it
+    /// produces a `LeafView` child each build. `build` returns a leaf
+    /// (not `self`) so the element tree terminates — a self-returning
+    /// view describes an infinitely deep tree and overflows the stack.
+    #[derive(Clone)]
+    struct ParentView;
+
+    impl crate::StatelessView for ParentView {
+        fn build(&self, _ctx: &dyn crate::BuildContext) -> Box<dyn View> {
+            Box::new(LeafView)
+        }
+    }
+
+    impl View for ParentView {
+        fn create_element(&self) -> Box<dyn crate::ElementBase> {
+            Box::new(crate::StatelessElement::new(self, crate::StatelessBehavior))
+        }
+    }
+
     #[test]
     fn test_binding_singleton() {
         let binding1 = WidgetsBinding::instance();
@@ -1303,6 +1382,127 @@ mod tests {
 
         assert!(binding.root_element().is_some());
         assert!(binding.has_pending_builds());
+    }
+
+    /// U6 / AE3: `attach_root_widget` bootstraps the root through
+    /// `RootRenderView` — the element-tree root is a
+    /// `RootRenderElement<BoxedView>`, NOT the user view's element
+    /// mounted directly.
+    #[test]
+    fn test_attach_root_widget_routes_through_root_render_view() {
+        let binding = WidgetsBinding::new();
+        let view = LeafView;
+
+        binding
+            .attach_root_widget(&view)
+            .expect("first attach succeeds");
+
+        let root_id = binding.root_element().expect("root element is set");
+
+        binding.with_element_tree(|tree| {
+            let node = tree.get(root_id).expect("root node exists");
+            let element = node.element();
+
+            // The mounted root is the `RootRenderElement`, identified by
+            // the `RootRenderView<BoxedView>` view type it reports.
+            assert_eq!(
+                element.view_type_id(),
+                TypeId::of::<RootRenderView<BoxedView>>(),
+                "root element must be RootRenderElement<BoxedView>, \
+                 proving the bootstrap routes through RootRenderView"
+            );
+
+            // It is concretely a `RootRenderElement<BoxedView>` — the
+            // direct-mount path would have produced a `LeafElement`.
+            assert!(
+                element
+                    .as_any()
+                    .downcast_ref::<RootRenderElement<BoxedView>>()
+                    .is_some(),
+                "root element downcasts to RootRenderElement<BoxedView>"
+            );
+            assert!(
+                element.as_any().downcast_ref::<LeafElement>().is_none(),
+                "root element is NOT the user view's element mounted directly"
+            );
+        });
+    }
+
+    /// U6: the mounted root element produces a working render-tree root
+    /// when a `PipelineOwner` is wired — `RootRenderElement` inserts the
+    /// `RenderView` and sets it as the pipeline owner's root node.
+    #[test]
+    fn test_attach_root_widget_bootstraps_render_tree() {
+        let binding = WidgetsBinding::new();
+        let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
+        binding.set_pipeline_owner(Arc::clone(&pipeline_owner));
+
+        binding
+            .attach_root_widget(&LeafView)
+            .expect("attach succeeds");
+
+        let root_id = binding.root_element().expect("root element is set");
+
+        // The RootRenderElement created a RenderView and registered it
+        // as the PipelineOwner's root node.
+        binding.with_element_tree(|tree| {
+            let element = tree.get(root_id).expect("root node").element();
+            let root_render_element = element
+                .as_any()
+                .downcast_ref::<RootRenderElement<BoxedView>>()
+                .expect("root is RootRenderElement");
+            assert!(
+                root_render_element.render_id().is_some(),
+                "RootRenderElement bootstrapped a RenderView (render_id set)"
+            );
+        });
+        assert!(
+            pipeline_owner.read().root_id().is_some(),
+            "PipelineOwner's root node is wired to the RenderView"
+        );
+    }
+
+    /// U6 edge case: a root view with zero children bootstraps
+    /// correctly through `RootRenderView`.
+    #[test]
+    fn test_attach_root_widget_zero_child_subtree() {
+        let binding = WidgetsBinding::new();
+
+        // `LeafView` creates a `LeafElement` with no children.
+        binding
+            .attach_root_widget(&LeafView)
+            .expect("attach succeeds");
+        binding.draw_frame();
+
+        let root_id = binding.root_element().expect("root element is set");
+        binding.with_element_tree(|tree| {
+            let element = tree.get(root_id).expect("root node").element();
+            assert_eq!(element.lifecycle(), crate::Lifecycle::Active);
+        });
+    }
+
+    /// U6 edge case: a root view that builds a non-trivial child
+    /// subtree bootstraps correctly through `RootRenderView`.
+    #[test]
+    fn test_attach_root_widget_with_child_subtree() {
+        let binding = WidgetsBinding::new();
+
+        // `ParentView` builds a `LeafView` child each build.
+        binding
+            .attach_root_widget(&ParentView)
+            .expect("attach succeeds");
+        binding.draw_frame();
+
+        let root_id = binding.root_element().expect("root element is set");
+        binding.with_element_tree(|tree| {
+            let element = tree.get(root_id).expect("root node").element();
+            assert_eq!(
+                element.view_type_id(),
+                TypeId::of::<RootRenderView<BoxedView>>(),
+                "root with a child subtree still routes through RootRenderView"
+            );
+            assert_eq!(element.lifecycle(), crate::Lifecycle::Active);
+        });
     }
 
     #[test]
