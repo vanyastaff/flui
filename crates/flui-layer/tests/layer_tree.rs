@@ -7,6 +7,8 @@
 
 use flui_foundation::ElementId;
 use flui_layer::{CanvasLayer, Layer, LayerNode, LayerTree};
+// Cycle 3 T-2: `tree.remove(id)` resolves through the unified trait.
+use flui_tree::TreeWrite;
 use flui_types::{Offset, geometry::px};
 
 #[test]
