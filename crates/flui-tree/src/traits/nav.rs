@@ -5,10 +5,7 @@
 
 use flui_foundation::Identifier;
 
-use crate::{
-    depth::Depth,
-    iter::{cursor::TreeCursor, path::TreePath, slot::Slot},
-};
+use crate::{depth::Depth, iter::slot::Slot};
 
 /// Tree navigation with RPITIT and HRTB support.
 ///
@@ -372,25 +369,10 @@ pub trait TreeNavExt<I: Identifier>: TreeNav<I> {
             .count()
     }
 
-    /// Collect path from root to target node.
-    ///
-    /// Returns a [`TreePath`] containing the complete path from root to target.
-    /// Use `TreePath` for rich path operations like comparison, truncation,
-    /// and validation.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use flui_tree::{TreeNavExt, ElementId};
-    /// # fn example(tree: &impl flui_tree::TreeNav<ElementId>) {
-    /// let grandchild = ElementId::new(3);
-    /// let path = tree.path_to_node(grandchild);
-    /// assert!(!path.is_empty());
-    /// # }
-    /// ```
-    fn path_to_node(&self, target: I) -> TreePath<I> {
-        TreePath::from_node(self, target)
-    }
+    // Cycle 3 T-6: `path_to_node` returning `TreePath<I>` deleted —
+    // `TreePath` lived in `iter::path` which was removed as zombie
+    // surface. Callers that need a path collect via
+    // `tree.ancestors(target).collect::<Vec<_>>().iter().rev()`.
 
     /// Get the nth child of a node.
     ///
@@ -418,67 +400,11 @@ pub trait TreeNavExt<I: Identifier>: TreeNav<I> {
         Some((first, last))
     }
 
-    // === CURSOR-BASED NAVIGATION ===
-
-    /// Creates a cursor at the given node for interactive navigation.
-    ///
-    /// Cursors provide stateful navigation with optional history support.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use flui_tree::{TreeNavExt, ElementId};
-    /// # fn example(tree: &impl flui_tree::TreeNav<ElementId>) {
-    /// let some_node = ElementId::new(1);
-    /// let mut cursor = tree.cursor_at(some_node);
-    /// while cursor.go_first_child() {
-    ///     // descended further into the tree
-    /// }
-    /// # }
-    /// ```
-    fn cursor_at(&self, position: I) -> TreeCursor<'_, Self, I>
-    where
-        Self: Sized,
-    {
-        TreeCursor::new(self, position)
-    }
-
-    /// Creates a cursor with history at the given node.
-    ///
-    /// History allows backtracking to previous positions.
-    ///
-    /// # Arguments
-    ///
-    /// * `position` - Starting node ID
-    /// * `max_history` - Maximum history stack size
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use flui_tree::{TreeNavExt, ElementId};
-    /// # fn example(tree: &impl flui_tree::TreeNav<ElementId>) {
-    /// let root = ElementId::new(1);
-    /// let mut cursor = tree.cursor_with_history(root, 10);
-    /// cursor.go_child(0);
-    /// cursor.go_child(1);
-    /// cursor.go_back(); // Returns to previous position
-    /// //
-    /// # }
-    /// ```
-    fn cursor_with_history(&self, position: I, max_history: usize) -> TreeCursor<'_, Self, I>
-    where
-        Self: Sized,
-    {
-        TreeCursor::with_history(self, position, max_history)
-    }
-
-    /// Creates a cursor at the root of the subtree containing `node`.
-    fn cursor_at_root(&self, node: I) -> TreeCursor<'_, Self, I>
-    where
-        Self: Sized,
-    {
-        TreeCursor::at_root(self, node)
-    }
+    // Cycle 3 T-6: `cursor_at`, `cursor_with_history`, `cursor_at_root`
+    // deleted — `TreeCursor` lived in `iter::cursor` which was
+    // removed as zombie surface (1,057 LOC, zero in-workspace
+    // consumers). Callers that need stateful navigation can compose
+    // `tree.children(id)` + `tree.parent(id)` directly.
 }
 
 // Blanket implementation for all TreeNav types
@@ -750,8 +676,11 @@ mod tests {
         let found = tree.find_child_where(root, |_node| true);
         assert!(found.is_some());
 
-        let path = tree.path_to_node(child1);
-        assert_eq!(path.as_slice(), &[root, child1]);
+        // Cycle 3 T-6: `path_to_node` deleted; root-to-target path
+        // composes from `ancestors().collect::<Vec<_>>().iter().rev()`.
+        let mut path: Vec<_> = tree.ancestors(child1).collect();
+        path.reverse();
+        assert_eq!(path, vec![root, child1]);
 
         let (first, last) = tree.first_and_last_child(root).unwrap();
         assert_eq!(first, child1);
