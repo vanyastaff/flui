@@ -18,7 +18,7 @@ use flui_scheduler::{
     frame::{AppLifecycleState, SchedulerPhase},
     scheduler::{FrameSkipPolicy, Scheduler, SchedulerBuilder},
     task::{Priority, TaskQueue},
-    ticker::{ScheduledTicker, Ticker, TickerCanceled, TickerFuture, TickerState},
+    ticker::{Ticker, TickerCanceled, TickerFuture, TickerState},
     vsync::{VsyncMode, VsyncScheduler},
 };
 
@@ -179,7 +179,7 @@ fn test_app_lifecycle_state_changes() {
 #[test]
 fn test_ticker_with_scheduler() {
     let scheduler = Arc::new(Scheduler::new());
-    let mut ticker = ScheduledTicker::new(scheduler.clone());
+    let mut ticker = Ticker::new_with_scheduler(scheduler.clone());
 
     let tick_count = Arc::new(AtomicU32::new(0));
 
@@ -200,7 +200,7 @@ fn test_ticker_with_scheduler() {
 #[test]
 fn test_ticker_mute_unmute() {
     let scheduler = Arc::new(Scheduler::new());
-    let mut ticker = ScheduledTicker::new(scheduler.clone());
+    let mut ticker = Ticker::new_with_scheduler(scheduler.clone());
 
     let tick_count = Arc::new(AtomicU32::new(0));
 
@@ -1960,12 +1960,12 @@ fn test_ticker_group_extend() {
 }
 
 #[test]
-fn test_scheduled_ticker_debug() {
+fn test_auto_scheduling_ticker_debug() {
     let scheduler = Arc::new(Scheduler::new());
-    let ticker = ScheduledTicker::new(scheduler);
+    let ticker = Ticker::new_with_scheduler(scheduler);
 
     let debug = format!("{:?}", ticker);
-    assert!(debug.contains("ScheduledTicker"));
+    assert!(debug.contains("Ticker"));
 }
 
 #[test]
@@ -2625,49 +2625,17 @@ fn test_scheduler_adjust_for_epoch() {
     set_time_dilation(1.0).expect("positive finite time dilation");
 }
 
-// =============================================================================
-// Additional Traits Coverage Tests
-// =============================================================================
-
-#[test]
-fn test_ticker_provider_schedule_tick_typed() {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    };
-
-    use flui_scheduler::{duration::Seconds, ticker::TickerProvider};
-
-    struct MockProvider {
-        called: Arc<AtomicBool>,
-    }
-
-    impl TickerProvider for MockProvider {
-        fn schedule_tick(&self, callback: Box<dyn FnOnce(f64) + Send>) {
-            self.called.store(true, Ordering::SeqCst);
-            callback(1.5);
-        }
-    }
-
-    let called = Arc::new(AtomicBool::new(false));
-    let provider = MockProvider {
-        called: called.clone(),
-    };
-
-    let received = Arc::new(std::sync::Mutex::new(None));
-    let received_clone = received.clone();
-
-    provider.schedule_tick_typed(Box::new(move |secs: Seconds| {
-        *received_clone.lock().unwrap() = Some(secs.value());
-    }));
-
-    assert!(called.load(Ordering::SeqCst));
-    assert_eq!(*received.lock().unwrap(), Some(1.5));
-}
-
 // ============================================================================
 // Extended Ticker Coverage Tests
 // ============================================================================
+//
+// The old `test_ticker_provider_schedule_tick_typed` exercised
+// `TickerProvider::schedule_tick_typed`, deleted in U15 alongside the
+// `schedule_tick` API removal (Flutter `TickerProvider.createTicker(callback)
+// -> Ticker` is now the only factory shape). The auto-scheduling integration
+// is covered by `crates/flui-scheduler/src/ticker.rs` unit tests
+// (`test_auto_scheduling_ticker_fires_each_frame`,
+// `test_create_ticker_via_provider_auto_schedules`).
 
 #[test]
 fn test_ticker_toggle_mute_transitions() {
@@ -2712,12 +2680,11 @@ fn test_ticker_tick_skipped_when_muted() {
 
     use flui_scheduler::ticker::TickerProvider;
 
+    // Marker provider used only as a witness type for `Ticker::tick(&provider)`.
+    // After U15 the trait has no required methods (default `create_ticker` is
+    // sufficient), so this is a one-liner.
     struct MockProvider;
-    impl TickerProvider for MockProvider {
-        fn schedule_tick(&self, callback: Box<dyn FnOnce(f64) + Send>) {
-            callback(0.0);
-        }
-    }
+    impl TickerProvider for MockProvider {}
 
     let mut ticker = Ticker::new();
     let counter = Arc::new(AtomicU32::new(0));
@@ -2832,13 +2799,13 @@ fn test_ticker_group_default_empty() {
 }
 
 #[test]
-fn test_scheduled_ticker_start_typed_works() {
+fn test_auto_scheduling_ticker_start_typed_works() {
     use std::sync::atomic::AtomicBool;
 
     use flui_scheduler::duration::Seconds;
 
     let scheduler = Arc::new(Scheduler::new());
-    let mut ticker = ScheduledTicker::new(scheduler.clone());
+    let mut ticker = Ticker::new_with_scheduler(scheduler.clone());
 
     let called = Arc::new(AtomicBool::new(false));
     let called_clone = called.clone();

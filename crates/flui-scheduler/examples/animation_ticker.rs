@@ -1,7 +1,9 @@
 //! Animation Ticker Example
 //!
 //! This example demonstrates how to use Tickers for smooth animations,
-//! including manual and scheduled tickers, muting, and elapsed time tracking.
+//! including manual and auto-scheduling tickers, muting, and elapsed time
+//! tracking. Post-U15, both modes share a single [`Ticker`] type — the
+//! constructor selects the driving mode.
 //!
 //! Run with: `cargo run --example animation_ticker -p flui-scheduler`
 
@@ -15,7 +17,7 @@ use std::{
 
 use flui_scheduler::{
     scheduler::Scheduler,
-    ticker::{ScheduledTicker, Ticker, TickerFuture},
+    ticker::{Ticker, TickerFuture},
 };
 
 fn main() {
@@ -25,9 +27,9 @@ fn main() {
     println!("--- Manual Ticker ---\n");
     demo_manual_ticker();
 
-    // 2. Scheduled Ticker Demo
-    println!("\n--- Scheduled Ticker ---\n");
-    demo_scheduled_ticker();
+    // 2. Auto-scheduling Ticker Demo
+    println!("\n--- Auto-scheduling Ticker ---\n");
+    demo_auto_scheduling_ticker();
 
     // 3. Ticker Future Demo
     println!("\n--- Ticker Future ---\n");
@@ -80,11 +82,11 @@ fn demo_manual_ticker() {
     println!("Total ticks: {}", frame_count.load(Ordering::SeqCst));
 }
 
-fn demo_scheduled_ticker() {
+fn demo_auto_scheduling_ticker() {
     let scheduler = Arc::new(Scheduler::new());
-    let mut ticker = ScheduledTicker::new(scheduler.clone());
+    let mut ticker = Ticker::new_with_scheduler(scheduler.clone());
 
-    println!("Created ScheduledTicker with ID: {:?}", ticker.id());
+    println!("Created auto-scheduling Ticker with ID: {:?}", ticker.id());
 
     let animation_progress = Arc::new(parking_lot::Mutex::new(0.0f64));
 

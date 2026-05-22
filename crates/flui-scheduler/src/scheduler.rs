@@ -1517,15 +1517,25 @@ impl BindingBase for Scheduler {
 impl_binding_singleton!(Scheduler);
 
 impl TickerProvider for Scheduler {
-    fn schedule_tick(&self, callback: Box<dyn FnOnce(f64) + Send>) {
-        // Schedule as transient callback for next frame
-        self.schedule_frame_callback(Box::new(move |_vsync_time| {
-            // Pass 0.0 as elapsed time since the callback was just scheduled.
-            // Individual Tickers (like ScheduledTicker) track their own start times
-            // and compute elapsed time internally. This matches Flutter's behavior
-            // where TickerProvider just schedules the tick, not computes elapsed.
-            callback(0.0);
-        }));
+    /// Vend an auto-scheduling [`Ticker`](crate::ticker::Ticker) attached to
+    /// this scheduler.
+    ///
+    /// Flutter parity: [`ticker.dart:248`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart)
+    /// `Ticker createTicker(TickerCallback)`. The vended ticker self-registers
+    /// a transient frame callback on `start`/`unmute` and cancels it on
+    /// `stop`/`mute`/`dispose`.
+    ///
+    /// Allocates one `Arc<Scheduler>` per call. `Scheduler::clone` is cheap
+    /// (4 Arc bumps over the same shared `FrameState`/`CallbackState`/
+    /// `BindingState`/`TaskQueue`), so cancelling a callback through the
+    /// vended Arc operates on the same registry as any other Scheduler
+    /// handle. Consumers that already own an `Arc<Scheduler>` can skip this
+    /// allocation by calling [`Ticker::new_with_scheduler`] directly with
+    /// the existing Arc.
+    fn create_ticker(&self, on_tick: crate::ticker::TickerCallback) -> crate::ticker::Ticker {
+        let mut ticker = crate::ticker::Ticker::new_with_scheduler(Arc::new(self.clone()));
+        ticker.set_pending_callback(on_tick);
+        ticker
     }
 }
 
