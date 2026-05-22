@@ -187,8 +187,7 @@ pub use binding::{
 pub use canvas::Canvas;
 pub use clip_context::ClipContext;
 pub use display_list::{
-    DisplayList, DisplayListCore, DisplayListExt, DisplayListStats, DrawCommand, HitRegion,
-    HitRegionHandler,
+    DisplayList, DisplayListCore, DisplayListExt, DisplayListStats, DrawCommand,
 };
 pub use error::{PaintingError, Result};
 pub use text_layout::{

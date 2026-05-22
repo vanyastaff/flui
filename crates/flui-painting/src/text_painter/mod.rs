@@ -363,4 +363,3 @@ impl TextPainter {
         self.layout_cache.is_some()
     }
 }
-

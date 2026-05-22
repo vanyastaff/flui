@@ -84,7 +84,6 @@ pub struct Canvas {
 pub struct DisplayList {
     commands: Vec<DrawCommand>,        // Recorded operations
     bounds: Rect,                      // Bounding box
-    hit_regions: Vec<HitRegion>,       // Event handling
 }
 ```
 

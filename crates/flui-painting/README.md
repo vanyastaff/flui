@@ -716,12 +716,11 @@ let (draw, clip, effect, layer) = display_list.count_by_kind();
 // Detailed statistics
 let stats = display_list.stats();
 println!("{}", stats);
-// Output: DisplayList: 15 commands (draw: 10, clip: 2, effect: 1, layer: 2) | shapes: 8, images: 1, text: 1, hits: 0
+// Output: DisplayList: 15 commands (draw: 10, clip: 2, effect: 1, layer: 2) | shapes: 8, images: 1, text: 1
 
 // Access individual stats
 println!("Total: {}", stats.total);
 println!("Shapes: {}", stats.shapes);
-println!("Hit regions: {}", stats.hit_regions);
 ```
 
 ### Transform Operations
@@ -767,18 +766,6 @@ let translated = display_list.map(|mut cmd| {
 // Apply opacity to all commands
 let faded = display_list.to_opacity(0.5);
 ```
-
-### Hit Regions
-
-```rust
-// Hit regions for event handling
-for region in display_list.hit_regions() {
-    if region.contains(pointer_pos) {
-        (region.handler)(&event);
-    }
-}
-```
-
 ## Thread Safety
 
 ```rust

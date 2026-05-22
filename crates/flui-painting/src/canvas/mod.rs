@@ -225,17 +225,6 @@ impl Canvas {
     pub fn bounds(&self) -> Rect<Pixels> {
         self.display_list.bounds()
     }
-
-    // ===== Hit Testing =====
-
-    /// Add a hit-testable region with an event handler.
-    ///
-    /// This registers an area that will respond to pointer events.
-    /// Used by `RenderPointerListener` to connect gestures to UI
-    /// elements.
-    pub fn add_hit_region(&mut self, region: crate::display_list::HitRegion) {
-        self.display_list.add_hit_region(region);
-    }
 }
 
 impl Default for Canvas {

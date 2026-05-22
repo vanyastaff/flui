@@ -155,7 +155,6 @@ pub trait DisplayListExt: DisplayListCore {
             shapes,
             images,
             text,
-            hit_regions: 0, // Will be overridden in DisplayList impl
         }
     }
 }
