@@ -34,36 +34,24 @@
 
 pub mod arity;
 pub mod depth;
-pub mod diff;
 pub mod error;
 pub mod iter;
 pub mod traits;
-pub mod visitor;
+
+// Cycle 3 T-4..T-8: `visitor` + `diff` modules deleted (10k LOC
+// zombie surface, zero in-workspace consumers per audit
+// Appendix A.2). Same disposition for `iter::cursor`, `iter::path`,
+// `iter::breadth_first`, `iter::depth_first`, `traits::node`,
+// `arity::accessors`, `arity::arity_storage`, `arity::storage`,
+// `arity::runtime`, `arity::aliases`. Future devtools / advanced
+// visitor needs port from git history rather than carry maintenance
+// burden of speculative scaffolding.
 
 // ============================================================================
-// RE-EXPORTS - Core Traits
-// ============================================================================
-
-// ============================================================================
-// RE-EXPORTS - Arity System
+// RE-EXPORTS - Arity System (markers only — storage machinery deleted)
 // ============================================================================
 pub use arity::{
-    Arity, ArityError, AtLeast, ChildrenAccess, Exact, FixedChildren, Leaf, NoChildren, Optional,
-    OptionalChild, Range, RuntimeArity, Single, SliceChildren, Variable,
-};
-// ============================================================================
-// RE-EXPORTS - Children System
-// ============================================================================
-pub use arity::{
-    ArityStorage,
-    ArityStorageView,
-    ChildrenStorage,
-    ChildrenStorageExt,
-    // Type aliases for common cases
-    LeafStorage,
-    OptionalChildStorage,
-    SingleChildStorage,
-    VariableChildrenStorage,
+    Arity, ArityError, AtLeast, Exact, Leaf, Never, Optional, Range, Single, Variable,
 };
 // ============================================================================
 // RE-EXPORTS - Depth System
@@ -71,10 +59,6 @@ pub use arity::{
 pub use depth::{
     AtomicDepth, Depth, DepthAware, DepthError, INLINE_TREE_DEPTH, MAX_TREE_DEPTH, ROOT_DEPTH,
 };
-// ============================================================================
-// RE-EXPORTS - Diff System
-// ============================================================================
-pub use diff::{ChildDiff, ChildOp, DiffOp, DiffStats, TreeDiff};
 // ============================================================================
 // RE-EXPORTS - Errors
 // ============================================================================
@@ -84,39 +68,22 @@ pub use error::{TreeError, TreeResult};
 // ============================================================================
 pub use flui_foundation::{ElementId, Identifier};
 // ============================================================================
-// RE-EXPORTS - Cursor System
-// ============================================================================
-pub use iter::TreeCursor;
-// ============================================================================
-// RE-EXPORTS - Iterators
+// RE-EXPORTS - Iterators (ancestor / descendant / sibling only)
 // ============================================================================
 pub use iter::{
-    AllSiblings, Ancestors, AncestorsWithDepth, BreadthFirstIter, DepthFirstIter, DepthFirstOrder,
-    Descendants, DescendantsWithDepth, Siblings, SiblingsDirection,
+    AllSiblings, Ancestors, AncestorsWithDepth, Descendants, DescendantsWithDepth, Siblings,
+    SiblingsDirection,
 };
-// ============================================================================
-// RE-EXPORTS - Path System
-// ============================================================================
-pub use iter::{IndexPath, TreeNavPathExt, TreePath};
 // ============================================================================
 // RE-EXPORTS - Slot System
 // ============================================================================
 pub use iter::{IndexedSlot, Slot, SlotBuilder, SlotIter};
 // ============================================================================
-// RE-EXPORTS - Node System
+// RE-EXPORTS - Tree Traits
 // ============================================================================
 pub use traits::{
-    Node, NodeExt, NodePredicate, NodeTypeInfo, NodeVisitor, collect_matching_nodes,
-    count_matching_nodes,
-};
-pub use traits::{TreeNav, TreeNavExt, TreeRead, TreeReadExt, TreeWrite, TreeWriteNav};
-// ============================================================================
-// RE-EXPORTS - Visitor Pattern
-// ============================================================================
-pub use visitor::{
-    CollectVisitor, CountVisitor, FindVisitor, ForEachVisitor, MaxDepthVisitor, TreeVisitor,
-    TreeVisitorMut, VisitorResult, collect_all, count_all, find_first, for_each, max_depth,
-    visit_breadth_first, visit_depth_first,
+    NodePredicate, NodeVisitor, TreeNav, TreeNavExt, TreeRead, TreeReadExt, TreeWrite,
+    TreeWriteNav, collect_matching_nodes, count_matching_nodes,
 };
 
 // ============================================================================
@@ -134,67 +101,33 @@ pub mod prelude {
     pub use crate::{
         // Iterators
         Ancestors,
-        // Arity types
+        // Arity markers
         Arity,
-        ArityStorage,
-        ArityStorageView,
         // Depth system
         AtomicDepth,
-        // Diff system
-        ChildDiff,
-        ChildOp,
-        // Children storage
-        ChildrenAccess,
-        ChildrenStorage,
-        ChildrenStorageExt,
         Depth,
         DepthAware,
         Descendants,
-        DiffOp,
-        DiffStats,
         // Core traits
         Identifier,
-        // Path system
-        IndexPath,
         // Slot system
         IndexedSlot,
         Leaf,
-        LeafStorage,
-        // Node system
-        Node,
-        NodeExt,
-        NodeTypeInfo,
         Optional,
-        OptionalChildStorage,
         Single,
-        SingleChildStorage,
         Slot,
         SlotBuilder,
         // Tree traits
-        TreeCursor,
-        TreeDiff,
         TreeError,
         TreeNav,
         // Extension traits
         TreeNavExt,
-        TreeNavPathExt,
-        TreePath,
         TreeRead,
         TreeReadExt,
         TreeResult,
-        TreeVisitor,
-        TreeVisitorMut,
         TreeWrite,
         TreeWriteNav,
         Variable,
-        VariableChildrenStorage,
-        VisitorResult,
-        // Convenience functions
-        collect_all,
-        count_all,
-        find_first,
-        for_each,
-        max_depth,
     };
 }
 

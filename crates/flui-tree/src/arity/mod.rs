@@ -1,108 +1,49 @@
-//! Advanced compile-time arity system for tree nodes.
+//! Compile-time arity markers for tree nodes.
 //!
-//! This module provides a production-grade, zero-cost abstraction for
-//! expressing and validating child counts using advanced Rust type system
-//! features:
+//! The arity system expresses per-node child-count constraints as
+//! zero-sized type markers. Implementations attach the marker to
+//! their child storage to enforce the constraint at compile time:
 //!
-//! - **Const Generics** for compile-time size validation
-//! - **GAT (Generic Associated Types)** for flexible accessors
-//! - **Associated Constants** for performance tuning
-//! - **Sealed traits** for safety
+//! ```ignore
+//! use flui_tree::{Leaf, Single, Variable};
 //!
-//! # Arity Types
+//! struct RenderText { /* … */ }   // marker: Leaf
+//! struct RenderPadding<C> { child: C }   // marker: Single
+//! struct RenderFlex<C> { children: Vec<C> }   // marker: Variable
+//! ```
 //!
-//! | Type | Description | Use Case |
-//! |------|-------------|----------|
-//! | [`Leaf`] | 0 children | Text, Image, Spacer |
-//! | [`Optional`] | 0 or 1 child | `SizedBox`, Container |
-//! | [`Single`] | exactly 1 child | Padding, Align, Transform |
+//! # Arity Markers
+//!
+//! | Marker | Description | Use Case |
+//! |--------|-------------|----------|
+//! | [`Leaf`] | 0 children | `RenderText`, `RenderColoredBox` |
+//! | [`Optional`] | 0 or 1 child | `RenderSizedBox` |
+//! | [`Single`] | exactly 1 child | `RenderPadding`, `RenderTransform` |
 //! | [`Exact<N>`] | exactly N children | Custom layouts |
 //! | [`AtLeast<N>`] | N or more children | Min-child layouts |
-//! | [`Variable`] | any number | Flex, Stack, Column |
+//! | [`Variable`] | any number | `RenderFlex`, `RenderStack` |
 //! | [`Range<MIN, MAX>`] | bounded range | Constrained layouts |
+//! | [`Never`] | uninhabited | Type-system bottom |
 //!
-//! # Storage Types
-//!
-//! | Type | Description |
-//! |------|-------------|
-//! | [`ArityStorage<T, A>`] | Generic storage with arity constraint |
-//! | [`SingleChildStorage<T>`] | Alias for `ArityStorage<T, Exact<1>>` |
-//! | [`OptionalChildStorage<T>`] | Alias for `ArityStorage<T, Optional>` |
-//! | [`VariableChildrenStorage<T>`] | Alias for `ArityStorage<T, Variable>` |
-//! | [`LeafStorage<T>`] | Alias for `ArityStorage<T, Leaf>` |
-//!
-//! # Example
-//!
-//! ```
-//! use flui_tree::arity::{Arity, ArityStorage, Single, Variable};
-//!
-//! // Single child container
-//! struct RenderPadding {
-//!     child: ArityStorage<u32, Single>,
-//! }
-//!
-//! // Variable children container
-//! struct RenderFlex {
-//!     children: ArityStorage<u32, Variable>,
-//! }
-//! ```
+//! Cycle 3 T-7: the storage machinery (`ArityStorage`,
+//! `ChildrenStorage`, `ChildrenAccess`, `accessors` module,
+//! `runtime` module, `aliases` module) was deleted as zombie
+//! surface — ~3,000 LOC with zero in-workspace consumers. Concrete
+//! render objects use plain `Option<C>` / `Vec<C>` storage attached
+//! to the marker; the marker stays for compile-time documentation +
+//! future arity-aware algorithms.
 
 // ============================================================================
 // MODULES
 // ============================================================================
 
-mod accessors;
-mod aliases;
-mod arity_storage;
 mod error;
-mod runtime;
-pub mod storage;
 mod traits;
 mod types;
 
 // ============================================================================
-// RE-EXPORTS - Accessors
-// ============================================================================
-
-pub use accessors::{
-    // Performance enums
-    AccessFrequency,
-    AccessPattern,
-    // Accessors
-    BoundedChildren,
-    ChildrenAccess,
-    Copied,
-    FixedChildren,
-    NeverAccessor,
-    NoChildren,
-    OptionalChild,
-    SliceChildren,
-    SmartChildren,
-    TypeInfo,
-    TypedChildren,
-};
-// ============================================================================
-// RE-EXPORTS - Aliases
-// ============================================================================
-pub use aliases::{LeafStorage, OptionalChildStorage, SingleChildStorage, VariableChildrenStorage};
-// ============================================================================
-// RE-EXPORTS - Storage
-// ============================================================================
-pub use arity_storage::{ArityStorage, ArityStorageView};
-// ============================================================================
-// RE-EXPORTS - Error
+// RE-EXPORTS
 // ============================================================================
 pub use error::ArityError;
-// ============================================================================
-// RE-EXPORTS - Runtime
-// ============================================================================
-pub use runtime::{PerformanceHint, RuntimeArity};
-pub use storage::{ChildrenStorage, ChildrenStorageExt};
-// ============================================================================
-// RE-EXPORTS - Trait
-// ============================================================================
 pub use traits::Arity;
-// ============================================================================
-// RE-EXPORTS - Types
-// ============================================================================
 pub use types::{AtLeast, Exact, Leaf, Never, Optional, Range, Single, Variable};

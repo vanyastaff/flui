@@ -2176,22 +2176,24 @@ Cycle 3 (this audit): flui-foundation × flui-tree
 
 ---
 
-## Status (partial — Wave 1+2+3 landed)
+## Status (closed — all waves landed)
 
 **Wave 1+2 PR**: [#103](https://github.com/vanyastaff/flui/pull/103) MERGED.
-**Wave 3 PR**: pending (this PR).
+**Wave 3 PR**: [#104](https://github.com/vanyastaff/flui/pull/104) MERGED.
+**Wave 4+5 PR (this PR)**: pending.
 
-Cycle 3 Wave 1+2+3 lands **9 atomic commits** total. Wave 3 covers
-the P1 hot-path / iter-safety / API-correctness items (T-10, T-11,
-T-12, I-4, I-5) plus the PR #103 Codex P2 review followup
-(iterative cascade). The rest of the P1/P2/P3 items (T-4..T-8
-feature-gates of the visitor/diff/iter/arity-storage zombie surface,
-T-9 alloc reductions, T-13/T-14
-error/Identifier polish, I-6..I-8 Key
-system polish, P2/P3 hygiene) are intentionally **deferred to
-follow-up cycle 3 PRs**. The cascade-contract work (T-1, T-2) is the
-architectural keystone — once merged, the deferred items can land as
-smaller mechanical batches without conflicts on the trait surface.
+Cycle 3 closed across **4 PRs / 11 commits**. The architectural
+keystone (T-1+T-2 cascade contract) shipped in Wave 1+2. Wave 3
+landed P1 hot-path/safety polish + the PR #103 Codex P2 followup.
+Wave 4+5 lands the remaining P1 hygiene items (T-9 streaming slot,
+T-13 error unification, T-14 Identifier asymmetry, I-11
+non_exhaustive) AND the mega-delete of T-4..T-8 (~10,000 LOC zombie
+visitor/diff/iter/arity-storage surface).
+
+Per memory `no-quick-wins-vanyastaff`, the audit's "feature-gate"
+prescription for T-4..T-8 was replaced with outright deletion: feature-
+gated dead code is still maintenance burden + still CI-compile
+overhead. Future devtools needs port from git history.
 
 ### Finding disposition (Wave 1+2)
 
@@ -2212,59 +2214,60 @@ smaller mechanical batches without conflicts on the trait surface.
 | I-4 | `ChangeNotifier::notify_listeners` per-frame alloc | P1 | **Closed Wave 3 (SmallVec inline cap 4)** |
 | I-5 | `Default for Key` + `UniqueKey` surprising semantics | P1 | **Closed Wave 3 (impls deleted)** |
 | PR #103 Codex P2 | `TreeWrite::remove` unbounded recursion | review | **Closed Wave 3 (iterative cascade + 2k-deep regression test)** |
+| T-4 | Visitor surface zombie cleanup | P0 | **Closed Wave 4+5 (deleted ~2,560 LOC)** |
+| T-5 | `diff.rs` zombie | P0 | **Closed Wave 4+5 (deleted 1,234 LOC)** |
+| T-6 | `iter/cursor` + `path` + `breadth_first` + `depth_first` | P0 | **Closed Wave 4+5 (deleted ~3,800 LOC)** |
+| T-7 | `arity/{storage,arity_storage,accessors,runtime,aliases}` | P0 | **Closed Wave 4+5 (deleted ~3,000 LOC; markers + simplified Arity trait kept)** |
+| T-8 | `traits/node.rs::Node` trait | P1 | **Closed Wave 4+5 (deleted 305 LOC)** |
+| T-9 | `TreeNav::slot` per-call alloc | P1 | **Closed Wave 4+5 (streaming pass, no `Vec` allocation)** |
+| T-13 | `TreeError::ArityViolation` unification | P1 | **Closed Wave 4+5 (`#[from] ArityError` variant)** |
+| T-14 | `Identifier::From<Index>` `#[cfg(test)]` asymmetry | P1 | **Closed Wave 4+5 (always available)** |
+| I-11 | `#[non_exhaustive]` on `DiagnosticLevel` + `DiagnosticsTreeStyle` | P2 | **Closed Wave 4+5** |
 
-### Findings deferred to follow-up cycle 3 PRs
+### Findings deferred to future cycles
 
 | Audit § | Finding | Severity | Reason for deferral |
 |---------|---------|----------|---------------------|
-| T-4 | Visitor surface zombie cleanup | P0 | ~2,550 LOC mechanical cfg-gating — dedicated PR |
-| T-5 | Feature-gate `diff.rs` | P0 | Same theme as T-4 |
-| T-6 | Feature-gate `iter/cursor.rs`+`path.rs`+`breadth_first.rs`+`depth_first.rs` | P0 | Same |
-| T-7 | Feature-gate `arity/{storage,arity_storage,accessors}.rs` | P0 | Same |
-| T-8 | Delete/cfg-gate `Node` trait | P1 | Bundle with T-4..T-7 |
-| T-9 | `TreeNav::slot` alloc | P1 | Hot-path tuning |
-| T-13 | `TreeError::ArityViolation` | P1 | Error unification |
-| T-14 | `Identifier` `From<Index>` `#[cfg(test)]` | P1 | Polish |
-| I-6 | `Key::from_str` collision-with-zero fallback | P1 | Cosmetic; fundamental to hash-based keying |
-| I-7 | `Key::try_new` Result constructor | P1 | API extension |
-| I-8 | `ViewKey::is_global_key()` abstract | P1 | Cost > benefit for marginal correctness |
-| T-15..T-25, I-9..I-22 | P2/P3 hygiene | P2/P3 | Bulk follow-up |
+| I-6 | `Key::from_str` collision-with-zero fallback | P1 | Cosmetic; fundamental to hash-based keying — proper fix is `try_from_str` returning `Option` |
+| I-7 | `Key::try_new` Result constructor | P1 | API extension — design left for follow-up |
+| I-8 | `ViewKey::is_global_key()` abstract | P1 | Cost > benefit (forces 3+ types to write explicit `false`) |
+| T-15..T-25 | P2/P3 polish (Slot builder, lowest_common_ancestor SmallVec, Siblings SmallVec, etc.) | P2/P3 | Aesthetic |
+| I-9..I-22 (the unclosed subset) | P2/P3 hygiene (unsafe `pub(crate)`, RawId/Index visibility, etc.) | P2/P3 | Aesthetic |
 
-### Aggregate cycle 3 impact (Wave 1+2+3)
+### Aggregate cycle 3 impact (final)
 
-- **9 commits** across two PRs (Wave 1+2 in #103 + Wave 3 in
-  current PR).
-- **~−1,600 LOC** net surface reduction across foundation +
-  flui-tree.
+- **11 commits** across **4 PRs** (#102 audit doc, #103 Wave 1+2,
+  #104 Wave 3, plus this Wave 4+5 PR).
+- **~−11,600 LOC** net surface reduction across foundation +
+  flui-tree (~−1,600 from Wave 1+2+3 + ~−10,000 from the Wave 4+5
+  mega-delete of T-4..T-8).
 - **+7 regression tests**:
-  `init_panic_does_not_flip_initialized_flag` (Wave 2 I-3),
-  `remove_cascades_by_default` (Wave 2 T-1),
-  `remove_shallow_does_not_cascade` (Wave 2 T-1),
-  `remove_of_missing_id_is_a_no_op` (Wave 2 T-1),
-  `remove_cascade_is_stack_safe_on_deep_chain` (Wave 3 PR #103
-  followup — 2,000-deep chain regression),
+  `init_panic_does_not_flip_initialized_flag` (I-3),
+  `remove_cascades_by_default` (T-1),
+  `remove_shallow_does_not_cascade` (T-1),
+  `remove_of_missing_id_is_a_no_op` (T-1),
+  `remove_cascade_is_stack_safe_on_deep_chain` (PR #103 followup),
   plus inherited cycle-2 coverage.
+- **Findings closed**: 19 of 47 cataloged + 1 PR #103 review
+  (Codex P2). 28 P2/P3 polish findings deferred as aesthetic.
 - **The cascade-contract** (T-1+T-2) is the architectural keystone
   cycle 2 anticipated and cycle 3 delivered. Memory
   `flui-tree-unified-interface-intent` closed for the mutation
   surface.
-- **Wave 3 hot-path / safety**: iterator stack/cycle safety (T-11,
-  T-12), depth-constant unification (T-10), `ChangeNotifier`
-  per-frame allocation eliminated (I-4), surprising `Default`
-  removed (I-5).
 
-### Aggregate cycle comparison
+### Aggregate cycle comparison (all three closed)
 
 | Cycle | Scope (LOC) | Findings | Commits | Net LOC delta |
 |-------|-------------|----------|---------|---------------|
 | 1 (PR #85-#98) | 12,360 | 16 + drift | ~30 across 14 PRs | −2,400 |
 | 2 (PR #100-#101) | 15,571 | 25 | 16 + 1 followup | +1,690 (new lifecycle infra) |
-| 3 (this PR + future) | 23,448 | 47 | 5 + deferred follow-ups | −1,500 (Wave 1+2 only) |
+| 3 (PR #102-#105) | 23,448 | 47 | 11 across 4 PRs | **−11,600** (largest reduction) |
 
-Cycle 3 had the largest scope and the longest tail of deferrals; the
-"Wave 1+2 first, follow-ups separately" framing follows cycle 1's
-pattern of letting the architectural keystone land before mechanical
-cleanup.
+Cycle 3 reduced flui-tree's public surface by ~58% (the audit's
+zombie-surface estimate) while making the cascade-contract,
+iterator safety, and `BindingBase` init the keystones of the
+foundation layer. Future devtools requirements can re-introduce
+deleted abstractions alongside their first real consumers.
 
 ---
 

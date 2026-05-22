@@ -37,12 +37,14 @@
 //! - Different ID types for different tree implementations
 
 mod nav;
-pub mod node;
 mod read;
 mod write;
 
+// Cycle 3 T-8: `pub mod node` deleted (305 LOC, zero external impls).
+// The `Node`/`NodeExt`/`NodeTypeInfo` triad was a speculative
+// abstraction without consumers.
+
 pub use nav::{TreeNav, TreeNavExt};
-pub use node::{Node, NodeExt, NodeTypeInfo};
 pub use read::{
     NodePredicate, NodeVisitor, TreeRead, TreeReadExt, collect_matching_nodes, count_matching_nodes,
 };
