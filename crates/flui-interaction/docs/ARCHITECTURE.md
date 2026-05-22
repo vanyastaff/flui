@@ -163,25 +163,32 @@ pub fn dispatch(&self, event: &PointerEvent) -> EventPropagation {
 
 ### FocusManager
 
-Global singleton for keyboard focus:
+Global singleton for keyboard focus. Owns the focus-tree root and all
+focus invariants (primary focus, listeners, key handlers, active
+scope). U23 collapsed the prior dual-state design (singleton + private
+`FocusManagerInner`) into this single source of truth:
 
 ```rust
 pub struct FocusManager {
-    focused: RwLock<Option<FocusNodeId>>,
-    nodes: RwLock<HashMap<FocusNodeId, FocusNode>>,
-    scopes: RwLock<Vec<FocusScopeNode>>,
-    traversal_policy: RwLock<Box<dyn FocusTraversalPolicy>>,
+    root_scope: Arc<FocusScopeNode>,                  // Flutter parity
+    primary_focus: RwLock<Option<FocusNodeId>>,
+    listeners: RwLock<Vec<FocusChangeCallback>>,
+    key_handlers: RwLock<HashMap<FocusNodeId, KeyEventCallback>>,
+    global_key_handlers: RwLock<Vec<KeyEventCallback>>,
+    active_scope: RwLock<Option<Arc<FocusScopeNode>>>, // override; defaults to root
 }
 
 impl FocusManager {
     pub fn global() -> &'static FocusManager;
-    
+    pub fn root_scope(&self) -> &Arc<FocusScopeNode>;
+    pub fn active_scope(&self) -> Arc<FocusScopeNode>;
+
     pub fn request_focus(&self, node: FocusNodeId);
     pub fn unfocus(&self);
     pub fn has_focus(&self, node: FocusNodeId) -> bool;
-    
-    pub fn next_focus(&self);      // Tab
-    pub fn previous_focus(&self);  // Shift+Tab
+
+    pub fn focus_next(&self) -> bool;      // Tab
+    pub fn focus_previous(&self) -> bool;  // Shift+Tab
 }
 ```
 
@@ -200,16 +207,17 @@ pub struct FocusScopeNode {
 ### Traversal Policies
 
 ```rust
-pub trait FocusTraversalPolicy: Send + Sync {
-    fn find_first_focus(&self, scope: &FocusScopeNode) -> Option<FocusNodeId>;
-    fn find_next_focus(&self, current: FocusNodeId, direction: TraversalDirection) 
+pub trait FocusTraversalPolicy: Send + Sync + std::fmt::Debug {
+    fn find_first(&self, nodes: &[Arc<FocusNode>]) -> Option<FocusNodeId>;
+    fn find_last(&self, nodes: &[Arc<FocusNode>]) -> Option<FocusNodeId>;
+    fn find_next(&self, current: FocusNodeId, nodes: &[Arc<FocusNode>])
+        -> Option<FocusNodeId>;
+    fn find_previous(&self, current: FocusNodeId, nodes: &[Arc<FocusNode>])
         -> Option<FocusNodeId>;
 }
 
 // Built-in policies
-pub struct OrderedTraversalPolicy;   // Explicit order
-pub struct ReadingOrderPolicy;       // Top-left to bottom-right
-pub struct DirectionalFocusPolicy;   // Arrow key navigation
+pub struct ReadingOrderPolicy;       // Top-left to bottom-right (default)
 ```
 
 ## Gesture Arena
