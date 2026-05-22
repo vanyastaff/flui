@@ -208,10 +208,34 @@ impl ElementBuildContext {
     /// This is useful for StatelessElement::perform_build where we just need
     /// a context to pass to view.build() but don't have full tree
     /// infrastructure.
+    ///
+    /// The dummy `tree` / `owner` Arcs are pulled from a process-shared
+    /// cache initialized lazily on first call — see
+    /// [`BuildOwner::shared_dummy_tree`] /
+    /// [`BuildOwner::shared_dummy_owner`]. Plan §U12 / R15, audit V-13
+    /// (cheap separable part). Eliminates the
+    /// `Arc::new(RwLock::new(ElementTree::new()))` /
+    /// `Arc::new(RwLock::new(BuildOwner::new()))` allocations from the
+    /// per-build hot path — each call now does two `Arc::clone`s
+    /// (atomic refcount bumps) instead of two heap-arena allocations
+    /// plus two `RwLock` payload allocations plus two empty inner
+    /// structures.
+    ///
+    /// **Why this is sound.** The dummy tree is empty, so every
+    /// production `BuildContext` accessor that walks the tree
+    /// (`walk_ancestors_for_inherited`, `find_ancestor_element`, …)
+    /// returns `None` / `false` after the first `tree.get(id)` lookup —
+    /// the same return shape as the previous per-build dummy. The dummy
+    /// is never written to during build because the early-`None` exit
+    /// happens before any `write()` site. A user `build()` that calls
+    /// `ctx.mark_needs_build()` (Flutter-forbidden, flui matches that
+    /// policy) does write into the shared dummy's `BuildOwner`, but
+    /// that owner's `dirty_elements` is never drained — the write is as
+    /// lossy as the per-build dummy was, just to a different heap
+    /// location.
     pub fn new_minimal(depth: usize) -> Self {
-        // Create dummy tree and owner for minimal context
-        let tree = Arc::new(RwLock::new(ElementTree::new()));
-        let owner = Arc::new(RwLock::new(BuildOwner::new()));
+        let tree = BuildOwner::shared_dummy_tree();
+        let owner = BuildOwner::shared_dummy_owner();
         // ElementId::new(1) is safe - 1 is non-zero
         let element_id = ElementId::new(1);
 
