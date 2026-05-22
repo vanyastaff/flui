@@ -1821,4 +1821,89 @@ $ grep -n "impl TreeRead\|impl TreeNav" crates/flui-semantics/src/tree.rs
 
 ---
 
-*End of audit.*
+## Status (closed)
+
+**Closed in branch** `feat/layer-semantics-repair-u1-u24` (PR pending).
+
+Cycle 2 of the audit-execute pattern landed **17 commits** across the 24
+plan units (several units bundled per the plan-annotation parallelism
+notes). Net delta across `flui-layer`, `flui-semantics`, and the new
+`flui-types::painting::Alignment` newtype: **~+1,500 LOC** including
+~50 new tests.
+
+### Finding disposition
+
+| Audit § | Finding | Disposition (Unit) | Commit shape |
+|---------|---------|--------------------|--------------|
+| I-1 | LayerNode dispose protocol absent | **Closed** U8 | `feat(layer): adopt PR #84 dispose pattern on LayerNode (U8)` |
+| I-2 | LayerNode needs_add_to_scene absent | **Closed** U9 | `feat(layer): add needs_add_to_scene dirty-bit propagation (U9)` |
+| I-3 | Layer enum ~496 B worst-case | **Closed (partial)** U2-U5 — 120 B post-cycle, 4× shrink. The aspirational ≤32 B requires boxing 9 medium-heavy variants → tracked as `U2-extension` follow-up | `refactor(layer)!: box four heavy Layer variants + size-budget gate (U2+U3+U4+U5)` |
+| I-4 | Follower anchor type drift | **Closed** U6 + U7 | `feat(types): introduce Alignment newtype …` + `refactor(layer)!: migrate FollowerLayer anchors to Alignment (U7)` |
+| I-5 | LayerNode zero-consumer scaffolding | **Closed** U1 | `refactor(layer): delete zero-consumer scaffolding (U1)` |
+| I-6 | LayerTree::add_child re-parent footgun | **Closed** U10 | `feat(layer): auto-detach + dedup in LayerTree::add_child (U10)` |
+| I-7 | LayerTree::remove non-cascade footgun | **Closed** U12 | `feat(layer)!: cascade-by-default in LayerTree::remove + new remove_shallow (U12)` |
+| I-8 | LinkRegistry signature inconsistency | **Closed** U18 | `refactor(layer): LinkRegistry by-value signature uniformity (U18)` |
+| I-9 | Scene::gc_orphaned_followers wrapper missing | **Closed** U21 | `feat: Scene gc_orphaned_followers + flush alloc reuse + testing feature gate (U21+U22+U23)` |
+| I-10..I-13 | Misc layer-side observations | Folded into above units |
+| S-1 | SemanticsService::send_event stub | **Closed** U14 | `feat(semantics): wire SemanticsService::send_event through new event_callback (U14)` |
+| S-2 | SemanticsConfiguration::role missing | **Closed** U15 | `feat(semantics)!: role field + Flutter-faithful absorb (U15 + U16)` |
+| S-3 | SemanticsConfiguration::absorb drift | **Closed (phase-1)** U16 — bidi-override on mixed-direction strings deferred (plan §I1; no P0 case) | same commit as S-2 |
+| S-4 | SemanticsAction wire-format drift | **Closed** U17 — engine-numeric verification deferred (plan §I2; `engine/lib/ui/semantics.dart` not in worktree) | `feat(semantics)!: SemanticsAction wire-format alignment with Flutter (U17)` |
+| S-5 | SemanticsNode.transform type drift | **Closed** U19 | `refactor(semantics)!: SemanticsNode transform Matrix4 + merge→absorb rename (U19 + U20)` |
+| S-6 | SemanticsNode.merge naming | **Closed** U20 | same commit as S-5 |
+| S-7 | SemanticsTree::add_child re-parent footgun | **Closed** U11 | `feat(semantics)!: SemanticsTree slab-hygiene pair (U11 add_child auto-detach + U13 remove cascade)` |
+| S-8 | SemanticsTree::remove non-cascade footgun | **Closed** U13 | same commit as S-7 |
+| S-9 | SemanticsBinding lock contention | **Closed (partial)** — clone-and-release lock discipline landed on announce/action/event/flush in U14 + U22; `AccessibilityFeatures` AtomicU8 pack deferred (plan §I5; `bitflags` crate not in tree) |
+| S-10 | SemanticsOwner::flush per-frame alloc | **Closed** U22 | same commit as U21 |
+| S-11 | SemanticsOwner::new_without_callback production exposure | **Closed** U23 | same commit as U21 |
+| S-12 | Audit closure annotation | **Closed** U24 — this section | (U24, this commit) |
+
+### Honest deferrals (recap)
+
+- `Layer` enum ≤32-byte goal — current 128 B is a 4× improvement on
+  pre-cycle 496 B. Reaching ≤32 B needs 9 additional medium-heavy
+  variants boxed (`Transform`, `ColorFilter`, `ImageFilter`,
+  `ShaderMask`, `BackdropFilter`, `ClipRRect`, `ClipSuperellipse`,
+  `Follower`, `AnnotatedRegion`). Tracked as `U2-extension`.
+- `concat_attributed_string` Unicode bidi-override sequences for
+  mixed-direction strings — phase-1 ASCII-space join covers the P0
+  set; full bidi port a future `U16-extension`.
+- `SemanticsFlag::HasExpandedState` numeric bit position — picked
+  `1 << 27` (next free slot). Engine-numeric verification deferred to
+  flui-engine materialization when `engine/lib/ui/semantics.dart`
+  becomes accessible.
+- `AccessibilityFeatures` `AtomicU8` pack — needs `bitflags` crate
+  which is not in flui-semantics dependency tree. The U14 clone-and-
+  release pattern already covers the "don't hold the lock during the
+  callback" concern that motivated the pack; deferred separately.
+- `LayerHandle<T>` ref-counted wrapper (phase 3 lifecycle) — out of
+  scope per plan §7.
+- `TreeWrite<Id>` trait consolidation across all five trees — next
+  cycle, per memory `flui-tree-unified-interface-intent`.
+
+### What landed (high-level)
+
+- **Lifecycle phase 1**: PR #84 dispose template on `LayerNode`.
+- **Compositor dirty-bit**: Flutter `_needsAddToScene` ported.
+- **Type compression**: `Layer` enum 4× smaller via Box of heavy
+  variants.
+- **Workspace-canonical newtype**: `flui_types::painting::Alignment`.
+- **Slab-tree hygiene**: auto-detach + cascade on `LayerTree` *and*
+  `SemanticsTree`.
+- **Platform routing**: `SemanticsService::send_event` wired through a
+  binding callback for the first time.
+- **A11y correctness**: `SemanticsConfiguration::absorb` Flutter-
+  faithful (label/hint concat, blocks_user_actions filter, role
+  merge).
+- **Type uniformity**: `LinkRegistry` by-value signatures,
+  `SemanticsNode.transform: Matrix4`.
+- **Naming**: `SemanticsNode::merge` → `absorb`.
+- **Wire format**: `SemanticsAction` Flutter-aligned (Expand/Collapse
+  moved to flags, Unfocus dropped, `HasExpandedState` added).
+- **Production hygiene**: testing feature gate on `SemanticsOwner::
+  new_without_callback`; allocation-reuse buffer on
+  `SemanticsOwner::flush`; Scene-level `gc_orphaned_followers`.
+
+---
+
+*End of audit. Closed by U24.*
