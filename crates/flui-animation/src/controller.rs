@@ -266,6 +266,12 @@ impl AnimationController {
 
         if let Some(ticker) = &mut inner.ticker {
             let controller = self.clone();
+            // Restart-safe: stop if already Active (PR #95 review fix — Ticker::start
+            // debug-asserts on Active state; AnimationController methods can be called
+            // repeatedly, so we must stop the previous run before starting a new one).
+            if ticker.state().can_tick() {
+                ticker.stop();
+            }
             ticker.start(move |_elapsed| {
                 controller.tick();
             });
@@ -314,6 +320,12 @@ impl AnimationController {
 
         if let Some(ticker) = &mut inner.ticker {
             let controller = self.clone();
+            // Restart-safe: stop if already Active (PR #95 review fix — Ticker::start
+            // debug-asserts on Active state; AnimationController methods can be called
+            // repeatedly, so we must stop the previous run before starting a new one).
+            if ticker.state().can_tick() {
+                ticker.stop();
+            }
             ticker.start(move |_elapsed| {
                 controller.tick();
             });
@@ -429,6 +441,12 @@ impl AnimationController {
 
         if let Some(ticker) = &mut inner.ticker {
             let notifier = Arc::clone(&self.notifier);
+            // Restart-safe: stop if already Active (PR #95 review fix — Ticker::start
+            // debug-asserts on Active state; AnimationController methods can be called
+            // repeatedly, so we must stop the previous run before starting a new one).
+            if ticker.state().can_tick() {
+                ticker.stop();
+            }
             ticker.start(move |_elapsed| {
                 notifier.notify_listeners();
             });
@@ -465,6 +483,12 @@ impl AnimationController {
         if let Some(ticker) = &mut inner.ticker {
             eprintln!("[DEBUG] AnimationController::repeat starting ticker");
             let controller = self.clone();
+            // Restart-safe: stop if already Active (PR #95 review fix — Ticker::start
+            // debug-asserts on Active state; AnimationController methods can be called
+            // repeatedly, so we must stop the previous run before starting a new one).
+            if ticker.state().can_tick() {
+                ticker.stop();
+            }
             ticker.start(move |_elapsed| {
                 controller.tick();
             });
@@ -567,6 +591,12 @@ impl AnimationController {
 
         if let Some(ticker) = &mut inner.ticker {
             let controller = self.clone();
+            // Restart-safe: stop if already Active (PR #95 review fix — Ticker::start
+            // debug-asserts on Active state; AnimationController methods can be called
+            // repeatedly, so we must stop the previous run before starting a new one).
+            if ticker.state().can_tick() {
+                ticker.stop();
+            }
             ticker.start(move |_elapsed| {
                 controller.tick();
             });
@@ -629,6 +659,12 @@ impl AnimationController {
 
         if let Some(ticker) = &mut inner.ticker {
             let controller = self.clone();
+            // Restart-safe: stop if already Active (PR #95 review fix — Ticker::start
+            // debug-asserts on Active state; AnimationController methods can be called
+            // repeatedly, so we must stop the previous run before starting a new one).
+            if ticker.state().can_tick() {
+                ticker.stop();
+            }
             ticker.start(move |_elapsed| {
                 controller.tick();
             });
@@ -671,6 +707,12 @@ impl AnimationController {
 
         if let Some(ticker) = &mut inner.ticker {
             let controller = self.clone();
+            // Restart-safe: stop if already Active (PR #95 review fix — Ticker::start
+            // debug-asserts on Active state; AnimationController methods can be called
+            // repeatedly, so we must stop the previous run before starting a new one).
+            if ticker.state().can_tick() {
+                ticker.stop();
+            }
             ticker.start(move |_elapsed| {
                 controller.tick();
             });
