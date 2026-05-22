@@ -28,5 +28,5 @@
 mod colors;
 mod data;
 
-pub use colors::{Color, ColorScheme};
+pub use colors::ColorScheme;
 pub use data::{Theme, ThemeBuilder, ThemeMode};
