@@ -4,15 +4,20 @@
 //! animations. They coordinate with the scheduler to ensure animations stay
 //! synchronized with the display refresh rate.
 //!
-//! ## Ticker Types
+//! ## Single Canonical Ticker
 //!
-//! This module provides multiple ticker implementations:
+//! Per U15 (ScheduledTicker absorption), there is one canonical [`Ticker`]
+//! type. It supports two driving modes selected at construction:
 //!
-//! - **`Ticker`**: Manual ticking, you call `tick()` each frame
-//! - **`ScheduledTicker`**: Auto-schedules with scheduler, Flutter-like
-//!   behavior
-//! - **`TypestateTicker`**: Compile-time state checking (see `typestate`
-//!   module)
+//! - **Manual tick** ([`Ticker::new`]): caller drives ticks via
+//!   [`Ticker::tick`] each frame. Used by tests, custom render loops, and
+//!   embedders that own their own frame scheduler.
+//! - **Auto-schedule** ([`Ticker::new_with_scheduler`] / vended via
+//!   [`TickerProvider::create_ticker`] on a [`Scheduler`]): the ticker
+//!   self-registers a transient frame callback on every start/unmute,
+//!   matching Flutter [`ticker.dart:283`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart)
+//!   `scheduleTick(rescheduling: true)`. `stop`/`mute`/`dispose` cancel the
+//!   pending callback via [`Scheduler::cancel_frame_callback`].
 //!
 //! ## Manual Ticker Example
 //!
@@ -30,23 +35,23 @@
 //! ticker.tick(&scheduler);
 //! ```
 //!
-//! ## Scheduled Ticker Example (Flutter-like)
+//! ## Auto-scheduling Ticker Example (Flutter-like)
 //!
 //! ```rust
 //! use std::sync::Arc;
 //!
-//! use flui_scheduler::{ScheduledTicker, Scheduler};
+//! use flui_scheduler::{Scheduler, Ticker};
 //!
 //! let scheduler = Arc::new(Scheduler::new());
-//! let mut ticker = ScheduledTicker::new(scheduler.clone());
+//! let mut ticker = Ticker::new_with_scheduler(Arc::clone(&scheduler));
 //!
-//! // Start auto-schedules callbacks with the scheduler
+//! // Start auto-registers a transient frame callback that fires every frame
 //! ticker.start(|elapsed| {
 //!     println!("Auto-ticked at {:.3}s", elapsed);
 //! });
 //!
-//! // Ticker automatically registers for next frame
-//! // No need to manually call tick()
+//! // Each frame, the ticker fires its callback and re-schedules itself —
+//! // no need to manually call tick().
 //! ```
 
 use std::sync::Arc;
@@ -59,6 +64,7 @@ use web_time::Instant;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::duration::Seconds;
+use crate::id::CallbackId;
 
 /// Unique ticker identifier from `flui_foundation`.
 pub use flui_foundation::TickerId;
@@ -82,36 +88,23 @@ pub type TickerCallback = Box<dyn FnMut(f64) + Send>;
 ///
 /// This trait allows different parts of the framework to provide ticker
 /// functionality without tight coupling to the scheduler.
+///
+/// The default impl produces a manually-driven [`Ticker`] (no auto-schedule).
+/// Implementors that own a [`Scheduler`] (e.g. `impl TickerProvider for
+/// Scheduler`) override [`create_ticker`](Self::create_ticker) to vend an
+/// auto-scheduling ticker via [`Ticker::new_with_scheduler`].
 pub trait TickerProvider: Send + Sync {
     /// Create a fresh ticker preloaded with the given callback.
     ///
     /// Returns a ticker in [`TickerState::Idle`]. The caller must call
-    /// `start()` to begin ticking. Auto-scheduling integration with the
-    /// provider's frame loop lands in U15 (ScheduledTicker absorption).
+    /// [`Ticker::start_default`] (or [`Ticker::start`] with an explicit
+    /// override) to begin ticking.
     ///
     /// Flutter parity: `ticker.dart:248 Ticker createTicker(TickerCallback)`.
     fn create_ticker(&self, on_tick: TickerCallback) -> Ticker {
         let mut ticker = Ticker::new();
         ticker.set_pending_callback(on_tick);
         ticker
-    }
-
-    /// Schedule a tick callback for the next frame.
-    ///
-    /// **Deprecated:** prefer [`create_ticker`](Self::create_ticker) (Flutter
-    /// factory shape). Retained for ScheduledTicker compatibility until U15
-    /// absorbs it.
-    ///
-    /// The `f64` parameter is reserved for frame timing information but is
-    /// typically `0.0` since individual ticker instances track their own
-    /// start times.
-    fn schedule_tick(&self, callback: Box<dyn FnOnce(f64) + Send>);
-
-    /// Schedule a tick with type-safe elapsed time
-    fn schedule_tick_typed(&self, callback: Box<dyn FnOnce(Seconds) + Send>) {
-        self.schedule_tick(Box::new(move |elapsed| {
-            callback(Seconds::new(elapsed));
-        }));
     }
 }
 
@@ -160,6 +153,16 @@ struct TickerInner {
     start_time: Option<Instant>,
     callback: Option<TickerCallback>,
     muted_elapsed: Seconds,
+    /// Pending transient frame callback ID — set when an auto-scheduling
+    /// ticker has registered itself with the scheduler for the next frame,
+    /// cleared on `stop`/`mute`/`dispose` or when the callback fires.
+    ///
+    /// `None` for manually-driven tickers (no [`Scheduler`] attached) and
+    /// auto-scheduling tickers that are not currently registered.
+    ///
+    /// Flutter parity: `ticker.dart:254 _animationId` (sentinel for
+    /// "already-scheduled").
+    scheduled_callback_id: Option<CallbackId>,
 }
 
 /// Animation ticker with runtime state management
@@ -198,6 +201,22 @@ pub struct Ticker {
     /// All mutable state behind a single lock
     inner: Arc<Mutex<TickerInner>>,
 
+    /// Optional scheduler attached at construction for auto-rescheduling.
+    ///
+    /// - `None`: manually-driven ticker — caller invokes [`Ticker::tick`]
+    ///   per frame.
+    /// - `Some`: auto-scheduling ticker — [`start`](Self::start) /
+    ///   [`unmute`](Self::unmute) register a transient frame callback that
+    ///   fires the user callback and re-schedules itself; [`stop`](Self::stop)
+    ///   / [`mute`](Self::mute) / [`dispose`](Self::dispose) cancel the
+    ///   pending callback via [`Scheduler::cancel_frame_callback`].
+    ///
+    /// Flutter parity: `Ticker(this._onTick, ...)` ([`ticker.dart:80`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart))
+    /// implicitly carries `SchedulerBinding.instance` (singleton); FLUI
+    /// stores the scheduler explicitly to keep the dependency typed and
+    /// avoid the singleton-acquisition cost on the hot path.
+    scheduler: Option<Arc<crate::scheduler::Scheduler>>,
+
     /// Disposed-state flag (lock-free).
     ///
     /// Set once on `dispose()`. After that, all public methods are no-ops in
@@ -209,7 +228,12 @@ pub struct Ticker {
 }
 
 impl Ticker {
-    /// Create a new ticker
+    /// Create a new manually-driven ticker.
+    ///
+    /// The caller must invoke [`Ticker::tick`] each frame to fire the
+    /// callback. For an auto-scheduling ticker, use
+    /// [`Ticker::new_with_scheduler`] or call
+    /// [`TickerProvider::create_ticker`] on a [`Scheduler`].
     pub fn new() -> Self {
         Self {
             id: next_ticker_id(),
@@ -218,7 +242,35 @@ impl Ticker {
                 start_time: None,
                 callback: None,
                 muted_elapsed: Seconds::ZERO,
+                scheduled_callback_id: None,
             })),
+            scheduler: None,
+            disposed: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Create a new auto-scheduling ticker attached to `scheduler`.
+    ///
+    /// After [`start`](Self::start) or [`unmute`](Self::unmute) is called, the
+    /// ticker self-registers a transient frame callback that fires the user
+    /// callback and re-schedules itself on each frame, matching Flutter
+    /// [`ticker.dart:283`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart)
+    /// `scheduleTick(rescheduling: true)`.
+    ///
+    /// [`stop`](Self::stop) / [`mute`](Self::mute) / [`dispose`](Self::dispose)
+    /// cancel the pending callback via
+    /// [`Scheduler::cancel_frame_callback`].
+    pub fn new_with_scheduler(scheduler: Arc<crate::scheduler::Scheduler>) -> Self {
+        Self {
+            id: next_ticker_id(),
+            inner: Arc::new(Mutex::new(TickerInner {
+                state: TickerState::Idle,
+                start_time: None,
+                callback: None,
+                muted_elapsed: Seconds::ZERO,
+                scheduled_callback_id: None,
+            })),
+            scheduler: Some(scheduler),
             disposed: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -249,9 +301,10 @@ impl Ticker {
 
     /// Dispose of the ticker — idempotent.
     ///
-    /// Clears the callback, sets state to Stopped, and marks disposed.
-    /// Subsequent calls to `start`/`stop`/`mute`/`unmute`/`reset`/`tick`
-    /// panic in debug builds via [`debug_assert!`] and emit a
+    /// Clears the callback, sets state to Stopped, cancels any pending
+    /// transient frame callback (auto-scheduling tickers), and marks
+    /// disposed. Subsequent calls to `start`/`stop`/`mute`/`unmute`/`reset`/
+    /// `tick` panic in debug builds via [`debug_assert!`] and emit a
     /// `tracing::warn!` + no-op in release.
     ///
     /// Mirrors Flutter [`ticker.dart:362-379`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart)
@@ -261,10 +314,18 @@ impl Ticker {
         if self.disposed.swap(true, Ordering::Release) {
             return; // already disposed — idempotent
         }
-        let mut inner = self.inner.lock();
-        inner.state = TickerState::Stopped;
-        inner.callback = None;
-        inner.start_time = None;
+        let pending_id = {
+            let mut inner = self.inner.lock();
+            inner.state = TickerState::Stopped;
+            inner.callback = None;
+            inner.start_time = None;
+            inner.scheduled_callback_id.take()
+        };
+        // Cancel pending transient callback outside the inner lock to avoid
+        // lock-during-callback hazard (scheduler may also take its own locks).
+        if let (Some(id), Some(scheduler)) = (pending_id, self.scheduler.as_ref()) {
+            scheduler.cancel_frame_callback(id);
+        }
     }
 
     /// Debug-assert that this ticker hasn't been disposed. Release builds
@@ -312,30 +373,39 @@ impl Ticker {
         if !self.assert_not_disposed("start") {
             return;
         }
-        let mut inner = self.inner.lock();
-        debug_assert!(
-            inner.state != TickerState::Active,
-            "A ticker was started twice (id={:?})",
-            self.id
-        );
-        if inner.state == TickerState::Active {
-            tracing::error!(ticker_id = ?self.id, "Ticker::start called while already Active");
-        }
-        if let Some(cb) = callback {
-            // Explicit callback overrides any pre-loaded one from create_ticker.
-            inner.callback = Some(cb);
-        } else if inner.callback.is_none() {
-            // No explicit callback, no pre-loaded callback — start is a no-op
-            // (tick has nothing to dispatch). Logged for diagnostic.
-            tracing::warn!(
-                ticker_id = ?self.id,
-                "Ticker::start_default called without a pre-loaded callback (no-op)"
+        {
+            let mut inner = self.inner.lock();
+            debug_assert!(
+                inner.state != TickerState::Active,
+                "A ticker was started twice (id={:?})",
+                self.id
             );
-            return;
+            if inner.state == TickerState::Active {
+                tracing::error!(
+                    ticker_id = ?self.id,
+                    "Ticker::start called while already Active"
+                );
+            }
+            if let Some(cb) = callback {
+                // Explicit callback overrides any pre-loaded one from create_ticker.
+                inner.callback = Some(cb);
+            } else if inner.callback.is_none() {
+                // No explicit callback, no pre-loaded callback — start is a no-op
+                // (tick has nothing to dispatch). Logged for diagnostic.
+                tracing::warn!(
+                    ticker_id = ?self.id,
+                    "Ticker::start_default called without a pre-loaded callback (no-op)"
+                );
+                return;
+            }
+            inner.state = TickerState::Active;
+            inner.start_time = Some(Instant::now());
+            inner.muted_elapsed = Seconds::ZERO;
         }
-        inner.state = TickerState::Active;
-        inner.start_time = Some(Instant::now());
-        inner.muted_elapsed = Seconds::ZERO;
+        // Auto-scheduling tickers register a transient frame callback now.
+        // Flutter parity: `ticker.dart:200-202 if (shouldScheduleTick)
+        // scheduleTick()`.
+        self.schedule_tick_if_active();
     }
 
     /// Start the ticker with a type-safe callback
@@ -346,50 +416,77 @@ impl Ticker {
         self.start(move |elapsed| callback(Seconds::new(elapsed)));
     }
 
-    /// Stop the ticker
+    /// Stop the ticker.
     ///
-    /// This permanently stops the ticker. Call `start()` to restart.
+    /// This permanently stops the ticker. Cancels any pending transient
+    /// frame callback (auto-scheduling tickers). Call [`start`](Self::start)
+    /// to restart.
     pub fn stop(&mut self) {
         if !self.assert_not_disposed("stop") {
             return;
         }
-        let mut inner = self.inner.lock();
-        inner.state = TickerState::Stopped;
-        inner.callback = None;
+        let pending_id = {
+            let mut inner = self.inner.lock();
+            inner.state = TickerState::Stopped;
+            inner.callback = None;
+            inner.scheduled_callback_id.take()
+        };
+        if let (Some(id), Some(scheduler)) = (pending_id, self.scheduler.as_ref()) {
+            scheduler.cancel_frame_callback(id);
+        }
     }
 
-    /// Mute the ticker
+    /// Mute the ticker.
     ///
     /// This temporarily pauses the ticker without clearing the callback.
-    /// Time does not advance while muted.
+    /// Time does not advance while muted. Cancels any pending transient
+    /// frame callback (auto-scheduling tickers) — matches Flutter
+    /// [`ticker.dart:124-128`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart)
+    /// where `muted = true` calls `unscheduleTick()`.
     pub fn mute(&mut self) {
         if !self.assert_not_disposed("mute") {
             return;
         }
-        let mut inner = self.inner.lock();
-        if inner.state == TickerState::Active {
-            if let Some(start) = inner.start_time {
-                inner.muted_elapsed = Seconds::new(start.elapsed().as_secs_f64());
+        let pending_id = {
+            let mut inner = self.inner.lock();
+            if inner.state == TickerState::Active {
+                if let Some(start) = inner.start_time {
+                    inner.muted_elapsed = Seconds::new(start.elapsed().as_secs_f64());
+                }
+                inner.state = TickerState::Muted;
+                inner.scheduled_callback_id.take()
+            } else {
+                None
             }
-            inner.state = TickerState::Muted;
+        };
+        if let (Some(id), Some(scheduler)) = (pending_id, self.scheduler.as_ref()) {
+            scheduler.cancel_frame_callback(id);
         }
     }
 
-    /// Unmute the ticker
+    /// Unmute the ticker.
     ///
     /// Resumes a muted ticker. Time continues from where it was paused.
+    /// Re-registers the auto-scheduling transient callback if attached to
+    /// a scheduler — matches Flutter
+    /// [`ticker.dart:126-128`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart)
+    /// where setting `muted = false` calls `scheduleTick()` when
+    /// `shouldScheduleTick`.
     pub fn unmute(&mut self) {
         if !self.assert_not_disposed("unmute") {
             return;
         }
-        let mut inner = self.inner.lock();
-        if inner.state == TickerState::Muted {
-            let now = Instant::now();
-            let adjusted_start =
-                now - std::time::Duration::from_secs_f64(inner.muted_elapsed.value());
-            inner.start_time = Some(adjusted_start);
-            inner.state = TickerState::Active;
+        {
+            let mut inner = self.inner.lock();
+            if inner.state == TickerState::Muted {
+                let now = Instant::now();
+                let adjusted_start =
+                    now - std::time::Duration::from_secs_f64(inner.muted_elapsed.value());
+                inner.start_time = Some(adjusted_start);
+                inner.state = TickerState::Active;
+            }
         }
+        self.schedule_tick_if_active();
     }
 
     /// Toggle mute state
@@ -476,16 +573,137 @@ impl Ticker {
         self.elapsed().value()
     }
 
-    /// Reset the ticker to initial state
+    /// Reset the ticker to initial state.
+    ///
+    /// Cancels any pending transient frame callback (auto-scheduling
+    /// tickers) and clears all state. The ticker can be re-armed via
+    /// [`start`](Self::start) afterwards.
     pub fn reset(&mut self) {
         if !self.assert_not_disposed("reset") {
             return;
         }
-        let mut inner = self.inner.lock();
-        inner.state = TickerState::Idle;
-        inner.start_time = None;
-        inner.callback = None;
-        inner.muted_elapsed = Seconds::ZERO;
+        let pending_id = {
+            let mut inner = self.inner.lock();
+            inner.state = TickerState::Idle;
+            inner.start_time = None;
+            inner.callback = None;
+            inner.muted_elapsed = Seconds::ZERO;
+            inner.scheduled_callback_id.take()
+        };
+        if let (Some(id), Some(scheduler)) = (pending_id, self.scheduler.as_ref()) {
+            scheduler.cancel_frame_callback(id);
+        }
+    }
+
+    /// Register a transient frame callback if this ticker is auto-scheduling,
+    /// active, and not already scheduled. No-op for manual tickers, inactive
+    /// tickers, or tickers that already have a pending callback.
+    ///
+    /// Flutter parity: [`ticker.dart:270`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart)
+    /// `shouldScheduleTick = !muted && isActive && !scheduled`.
+    fn schedule_tick_if_active(&self) {
+        let Some(scheduler) = self.scheduler.as_ref() else {
+            return; // Manual ticker — no auto-schedule.
+        };
+        // Check `shouldScheduleTick` and reserve the slot under the inner
+        // lock so two concurrent schedulers can't both register.
+        {
+            let inner = self.inner.lock();
+            if inner.state != TickerState::Active || inner.scheduled_callback_id.is_some() {
+                return;
+            }
+        }
+        // Capture only Arc clones in the closure — total capture size is
+        // 3 × 8 bytes (Arc<Mutex<TickerInner>> + Arc<Scheduler> + Arc<AtomicBool>),
+        // matching the audit-recommended hot-path shape. The Box<dyn FnOnce>
+        // wrapping is unavoidable with the current `OneShotFrameCallback`
+        // signature; full elimination of per-frame Box requires AtomicU8
+        // state (U26) + persistent-callback model and is deferred.
+        let inner_arc = Arc::clone(&self.inner);
+        let scheduler_arc = Arc::clone(scheduler);
+        let disposed_arc = Arc::clone(&self.disposed);
+        let cb_id = scheduler.schedule_frame_callback(Box::new(move |_vsync_time| {
+            Self::tick_and_reschedule_static(inner_arc, scheduler_arc, disposed_arc);
+        }));
+        // Record the ID so stop/mute/dispose can cancel.
+        self.inner.lock().scheduled_callback_id = Some(cb_id);
+    }
+
+    /// Tick + auto-reschedule entry point invoked by the scheduler's
+    /// transient-callback drain.
+    ///
+    /// Flutter parity: [`ticker.dart:272-285`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart)
+    /// `_tick(timeStamp)` — clear `_animationId`, fire `_onTick`, then
+    /// `scheduleTick(rescheduling: true)` if still `shouldScheduleTick`.
+    ///
+    /// This is a free associated function rather than a method so it can
+    /// be invoked from inside the captured closure without retaining a
+    /// `&self` borrow across the callback registration boundary.
+    fn tick_and_reschedule_static(
+        inner: Arc<Mutex<TickerInner>>,
+        scheduler: Arc<crate::scheduler::Scheduler>,
+        disposed: Arc<AtomicBool>,
+    ) {
+        // Disposed ticker — short-circuit. The closure may have been queued
+        // before `dispose()` cancelled it; the cancel path uses
+        // `cancel_frame_callback` which marks the ID cancelled, but the
+        // closure body still runs through scheduler's drain in rare races.
+        if disposed.load(Ordering::Acquire) {
+            return;
+        }
+
+        let (elapsed, mut callback) = {
+            let mut guard = inner.lock();
+            // Clear scheduled_callback_id — this callback just fired.
+            guard.scheduled_callback_id = None;
+
+            if guard.state != TickerState::Active {
+                return;
+            }
+            let Some(start) = guard.start_time else {
+                return;
+            };
+            let elapsed = start.elapsed().as_secs_f64();
+            // Take callback to release the lock before invoking. Restore
+            // afterwards if still active.
+            (elapsed, guard.callback.take())
+        };
+
+        let Some(ref mut cb) = callback else {
+            return;
+        };
+        cb(elapsed);
+
+        // Restore callback + reschedule if still active and not disposed.
+        // The user callback may have called `stop`/`dispose` — re-read
+        // state under the lock to honor that.
+        if disposed.load(Ordering::Acquire) {
+            return;
+        }
+        let should_reschedule = {
+            let mut guard = inner.lock();
+            if guard.state == TickerState::Active {
+                guard.callback = callback;
+                true
+            } else {
+                false
+            }
+        };
+        if !should_reschedule {
+            return;
+        }
+        // Register the next frame's callback. Mirrors Flutter
+        // `scheduleTick(rescheduling: true)`.
+        let inner_next = Arc::clone(&inner);
+        let scheduler_next = Arc::clone(&scheduler);
+        let disposed_next = Arc::clone(&disposed);
+        let cb_id = scheduler.schedule_frame_callback(Box::new(move |_vsync_time| {
+            Self::tick_and_reschedule_static(inner_next, scheduler_next, disposed_next);
+        }));
+        // Record the new ID — race-safe because we just cleared the slot at
+        // the top of this function and the stop/mute path takes the lock
+        // before clearing.
+        inner.lock().scheduled_callback_id = Some(cb_id);
     }
 }
 
@@ -682,300 +900,6 @@ impl Extend<Ticker> for TickerGroup {
     }
 }
 
-// =============================================================================
-// ScheduledTicker - Flutter-like auto-scheduling ticker
-// =============================================================================
-
-/// Callback for ScheduledTicker that receives elapsed time in seconds
-pub type ScheduledTickerCallback = Box<dyn FnMut(f64) + Send>;
-
-/// Shared inner state for a ScheduledTicker (single allocation, single lock)
-struct ScheduledTickerInner {
-    state: TickerState,
-    start_time: Option<Instant>,
-    callback: Option<ScheduledTickerCallback>,
-    muted_elapsed: Seconds,
-    scheduled: bool,
-}
-
-/// A Flutter-like ticker that automatically schedules with the scheduler
-///
-/// Unlike `Ticker` which requires manual `tick()` calls, `ScheduledTicker`
-/// automatically registers transient callbacks with the scheduler on each
-/// frame. This is the recommended approach for animations.
-///
-/// # Flutter Comparison
-///
-/// In Flutter, a `Ticker` is provided by a `TickerProvider` (usually a `State`
-/// mixin) and automatically receives vsync callbacks. `ScheduledTicker`
-/// provides the same behavior in Rust.
-///
-/// # Examples
-///
-/// ```rust
-/// use std::sync::Arc;
-///
-/// use flui_scheduler::{ScheduledTicker, Scheduler};
-///
-/// let scheduler = Arc::new(Scheduler::new());
-/// let mut ticker = ScheduledTicker::new(scheduler.clone());
-///
-/// ticker.start(|elapsed| {
-///     println!("Animation at {:.3}s", elapsed);
-/// });
-///
-/// // Ticker auto-schedules - just run frames
-/// scheduler.execute_frame();
-/// scheduler.execute_frame();
-///
-/// ticker.stop();
-/// ```
-///
-/// # Why ScheduledTicker doesn't implement Clone
-///
-/// `ScheduledTicker` intentionally does not implement `Clone` because:
-///
-/// 1. **Unique Identity**: Each ticker has a unique `TickerId`. Cloning would
-///    create ambiguity about which ticker is "the real one".
-///
-/// 2. **Shared Mutable Callback**: The callback is `FnMut`, which mutates state
-///    on each invocation. Sharing it between clones would cause race
-///    conditions.
-///
-/// 3. **Scheduling Conflicts**: Multiple tickers sharing the same `scheduled`
-///    flag would interfere with each other's frame scheduling.
-///
-/// 4. **Flutter Semantics**: In Flutter, `Ticker` objects are not cloneable
-///    either. Each animation controller owns exactly one ticker.
-///
-/// If you need multiple tickers, create them individually with
-/// `ScheduledTicker::new()`.
-pub struct ScheduledTicker {
-    /// Unique identifier
-    id: TickerId,
-
-    /// Reference to the scheduler
-    scheduler: Arc<crate::scheduler::Scheduler>,
-
-    /// All mutable state behind a single lock
-    inner: Arc<Mutex<ScheduledTickerInner>>,
-}
-
-impl ScheduledTicker {
-    /// Create a new scheduled ticker
-    pub fn new(scheduler: Arc<crate::scheduler::Scheduler>) -> Self {
-        Self {
-            id: next_ticker_id(),
-            scheduler,
-            inner: Arc::new(Mutex::new(ScheduledTickerInner {
-                state: TickerState::Idle,
-                start_time: None,
-                callback: None,
-                muted_elapsed: Seconds::ZERO,
-                scheduled: false,
-            })),
-        }
-    }
-
-    /// Get the ticker ID
-    #[inline]
-    pub fn id(&self) -> TickerId {
-        self.id
-    }
-
-    /// Start the ticker with a callback
-    ///
-    /// The callback receives elapsed time in seconds since start.
-    /// Automatically schedules for the next frame.
-    pub fn start<F>(&mut self, callback: F)
-    where
-        F: FnMut(f64) + Send + 'static,
-    {
-        tracing::debug!("ScheduledTicker::start called");
-        {
-            let mut inner = self.inner.lock();
-            inner.state = TickerState::Active;
-            inner.start_time = Some(Instant::now());
-            inner.callback = Some(Box::new(callback));
-            inner.muted_elapsed = Seconds::ZERO;
-        }
-
-        // Schedule for next frame
-        self.schedule_next_frame();
-        tracing::debug!("ScheduledTicker start completed, scheduled next frame");
-    }
-
-    /// Start with a type-safe callback
-    pub fn start_typed<F>(&mut self, mut callback: F)
-    where
-        F: FnMut(Seconds) + Send + 'static,
-    {
-        self.start(move |elapsed| callback(Seconds::new(elapsed)));
-    }
-
-    /// Stop the ticker
-    pub fn stop(&mut self) {
-        let mut inner = self.inner.lock();
-        inner.state = TickerState::Stopped;
-        inner.callback = None;
-        inner.scheduled = false;
-    }
-
-    /// Mute the ticker (pause without stopping)
-    pub fn mute(&mut self) {
-        let mut inner = self.inner.lock();
-        if inner.state == TickerState::Active {
-            if let Some(start) = inner.start_time {
-                inner.muted_elapsed = Seconds::new(start.elapsed().as_secs_f64());
-            }
-            inner.state = TickerState::Muted;
-        }
-    }
-
-    /// Unmute the ticker (resume)
-    pub fn unmute(&mut self) {
-        {
-            let mut inner = self.inner.lock();
-            if inner.state != TickerState::Muted {
-                return;
-            }
-            let now = Instant::now();
-            let adjusted_start =
-                now - std::time::Duration::from_secs_f64(inner.muted_elapsed.value());
-            inner.start_time = Some(adjusted_start);
-            inner.state = TickerState::Active;
-        }
-
-        // Re-schedule
-        self.schedule_next_frame();
-    }
-
-    /// Get current state
-    #[inline]
-    pub fn state(&self) -> TickerState {
-        self.inner.lock().state
-    }
-
-    /// Check if active
-    #[inline]
-    pub fn is_active(&self) -> bool {
-        self.state().can_tick()
-    }
-
-    /// Check if muted
-    #[inline]
-    pub fn is_muted(&self) -> bool {
-        self.inner.lock().state == TickerState::Muted
-    }
-
-    /// Check if running (active or muted)
-    #[inline]
-    pub fn is_running(&self) -> bool {
-        self.state().is_running()
-    }
-
-    /// Get elapsed time
-    pub fn elapsed(&self) -> Seconds {
-        let inner = self.inner.lock();
-        match inner.state {
-            TickerState::Idle | TickerState::Stopped => Seconds::ZERO,
-            TickerState::Muted => inner.muted_elapsed,
-            TickerState::Active => inner
-                .start_time
-                .map(|s| Seconds::new(s.elapsed().as_secs_f64()))
-                .unwrap_or(Seconds::ZERO),
-        }
-    }
-
-    /// Schedule callback for next frame
-    fn schedule_next_frame(&self) {
-        {
-            let mut inner = self.inner.lock();
-            if inner.state != TickerState::Active || inner.scheduled {
-                return;
-            }
-            inner.scheduled = true;
-        }
-
-        let inner = Arc::clone(&self.inner);
-        let scheduler = Arc::clone(&self.scheduler);
-
-        self.scheduler
-            .schedule_frame_callback(Box::new(move |_vsync| {
-                Self::tick_and_reschedule(inner, scheduler);
-            }));
-    }
-
-    /// Tick callback and reschedule for next frame if still active.
-    ///
-    /// This is the single code path for all scheduled ticker frame callbacks.
-    /// Uses take-invoke-restore to avoid holding the lock during callback
-    /// invocation and avoids the extra Arc<Mutex> wrapper that was
-    /// previously on the callback.
-    fn tick_and_reschedule(
-        inner: Arc<Mutex<ScheduledTickerInner>>,
-        scheduler: Arc<crate::scheduler::Scheduler>,
-    ) {
-        // Take elapsed and callback under lock, then release before invoking
-        let (elapsed, mut callback) = {
-            let mut guard = inner.lock();
-            guard.scheduled = false;
-
-            tracing::trace!(state = ?guard.state, "ScheduledTicker tick");
-            if guard.state != TickerState::Active {
-                return;
-            }
-
-            let Some(start) = guard.start_time else {
-                tracing::trace!("ScheduledTicker no start_time, skipping");
-                return;
-            };
-
-            // Take callback out to invoke without holding the lock
-            (start.elapsed().as_secs_f64(), guard.callback.take())
-        };
-
-        if let Some(ref mut cb) = callback {
-            tracing::trace!(elapsed, "ScheduledTicker invoking callback");
-            cb(elapsed);
-        }
-
-        // Restore callback and re-schedule if still active
-        let should_reschedule = {
-            let mut guard = inner.lock();
-            // Only restore if still active (stop() may have been called during callback)
-            if guard.state == TickerState::Active {
-                guard.callback = callback;
-                tracing::trace!("ScheduledTicker scheduling next frame");
-                guard.scheduled = true;
-                true
-            } else {
-                false
-            }
-        };
-
-        if should_reschedule {
-            let inner = Arc::clone(&inner);
-            let scheduler_inner = Arc::clone(&scheduler);
-
-            scheduler.schedule_frame_callback(Box::new(move |_vsync| {
-                Self::tick_and_reschedule(inner, scheduler_inner);
-            }));
-        }
-    }
-}
-
-impl std::fmt::Debug for ScheduledTicker {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let inner = self.inner.lock();
-        f.debug_struct("ScheduledTicker")
-            .field("id", &self.id)
-            .field("state", &inner.state)
-            .field("scheduled", &inner.scheduled)
-            .finish()
-    }
-}
-
 // ============================================================================
 // TickerFuture and TickerCanceled - Flutter-compatible async ticker support
 // ============================================================================
@@ -1065,8 +989,8 @@ impl TickerFuture {
 
     /// Mark the future as complete (ticker stopped normally)
     ///
-    /// Reserved for future use when ScheduledTicker integrates with
-    /// TickerFuture.
+    /// Reserved for the future Ticker-to-TickerFuture integration tracked in
+    /// the input/scheduler audit Part III.
     #[allow(dead_code)]
     pub(crate) fn set_complete(&self) {
         let mut state = self.inner.state.lock();
@@ -1080,8 +1004,8 @@ impl TickerFuture {
 
     /// Mark the future as canceled
     ///
-    /// Reserved for future use when ScheduledTicker integrates with
-    /// TickerFuture.
+    /// Reserved for the future Ticker-to-TickerFuture integration tracked in
+    /// the input/scheduler audit Part III.
     #[allow(dead_code)]
     pub(crate) fn set_canceled(&self) {
         let mut state = self.inner.state.lock();
@@ -1319,11 +1243,11 @@ mod tests {
 
     struct MockProvider;
 
-    impl TickerProvider for MockProvider {
-        fn schedule_tick(&self, callback: Box<dyn FnOnce(f64) + Send>) {
-            callback(0.0);
-        }
-    }
+    // Uses the default `create_ticker` impl from `TickerProvider`. Sufficient
+    // for the manual-tick `Ticker::tick(&provider)` callsites below — the
+    // provider is just a marker type since `tick` doesn't actually call into
+    // it (the unused parameter exists for future hooks).
+    impl TickerProvider for MockProvider {}
 
     #[test]
     fn test_ticker_dispose_is_idempotent() {
@@ -1491,12 +1415,12 @@ mod tests {
         assert_eq!(ticker.elapsed(), Seconds::ZERO);
     }
 
-    // ScheduledTicker tests
+    // Auto-scheduling Ticker tests (post-U15 ScheduledTicker absorption)
 
     #[test]
-    fn test_scheduled_ticker_lifecycle() {
+    fn test_auto_scheduling_ticker_lifecycle() {
         let scheduler = Arc::new(crate::scheduler::Scheduler::new());
-        let mut ticker = ScheduledTicker::new(scheduler.clone());
+        let mut ticker = Ticker::new_with_scheduler(scheduler.clone());
 
         assert_eq!(ticker.state(), TickerState::Idle);
         assert!(!ticker.is_active());
@@ -1510,37 +1434,36 @@ mod tests {
     }
 
     #[test]
-    fn test_scheduled_ticker_auto_scheduling() {
+    fn test_auto_scheduling_ticker_fires_each_frame() {
         let scheduler = Arc::new(crate::scheduler::Scheduler::new());
         let counter = Arc::new(AtomicU32::new(0));
 
-        let mut ticker = ScheduledTicker::new(scheduler.clone());
+        let mut ticker = Ticker::new_with_scheduler(scheduler.clone());
         let c = Arc::clone(&counter);
         ticker.start(move |_elapsed| {
             c.fetch_add(1, Ordering::Relaxed);
         });
 
-        // Execute frames - ticker should auto-tick
+        // Execute frames — ticker should auto-tick and re-register each frame.
         scheduler.execute_frame();
         scheduler.execute_frame();
         scheduler.execute_frame();
 
-        // Callback should have been invoked each frame
         assert_eq!(counter.load(Ordering::Relaxed), 3);
 
         ticker.stop();
 
-        // After stop, no more callbacks
+        // After stop, no more callbacks fire.
         scheduler.execute_frame();
         assert_eq!(counter.load(Ordering::Relaxed), 3);
     }
 
     #[test]
-    fn test_scheduled_ticker_mute() {
+    fn test_auto_scheduling_ticker_mute_unmute() {
         let scheduler = Arc::new(crate::scheduler::Scheduler::new());
         let counter = Arc::new(AtomicU32::new(0));
 
-        let mut ticker = ScheduledTicker::new(scheduler.clone());
+        let mut ticker = Ticker::new_with_scheduler(scheduler.clone());
         let c = Arc::clone(&counter);
         ticker.start(move |_elapsed| {
             c.fetch_add(1, Ordering::Relaxed);
@@ -1551,19 +1474,57 @@ mod tests {
 
         ticker.mute();
         scheduler.execute_frame();
-        // Still 1 - muted ticker doesn't fire
+        // Still 1 — muted ticker cancels its pending callback.
         assert_eq!(counter.load(Ordering::Relaxed), 1);
 
         ticker.unmute();
         scheduler.execute_frame();
-        // Now 2 - unmuted
+        // Now 2 — unmute re-registers the auto-schedule.
         assert_eq!(counter.load(Ordering::Relaxed), 2);
     }
 
     #[test]
-    fn test_scheduled_ticker_elapsed() {
+    fn test_auto_scheduling_ticker_dispose_cancels_pending() {
         let scheduler = Arc::new(crate::scheduler::Scheduler::new());
-        let mut ticker = ScheduledTicker::new(scheduler);
+        let counter = Arc::new(AtomicU32::new(0));
+
+        let mut ticker = Ticker::new_with_scheduler(scheduler.clone());
+        let c = Arc::clone(&counter);
+        ticker.start(move |_elapsed| {
+            c.fetch_add(1, Ordering::Relaxed);
+        });
+
+        // Dispose before any frame fires — pending transient callback is cancelled.
+        ticker.dispose();
+        scheduler.execute_frame();
+        assert_eq!(counter.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn test_create_ticker_via_provider_auto_schedules() {
+        let scheduler = Arc::new(crate::scheduler::Scheduler::new());
+        let counter = Arc::new(AtomicU32::new(0));
+
+        // Provider factory path: create_ticker preloads callback; start_default
+        // arms the ticker.
+        let c = Arc::clone(&counter);
+        let on_tick: TickerCallback = Box::new(move |_elapsed| {
+            c.fetch_add(1, Ordering::Relaxed);
+        });
+        let mut ticker = scheduler.create_ticker(on_tick);
+        ticker.start_default();
+
+        scheduler.execute_frame();
+        scheduler.execute_frame();
+        assert_eq!(counter.load(Ordering::Relaxed), 2);
+
+        ticker.stop();
+    }
+
+    #[test]
+    fn test_auto_scheduling_ticker_elapsed() {
+        let scheduler = Arc::new(crate::scheduler::Scheduler::new());
+        let mut ticker = Ticker::new_with_scheduler(scheduler);
 
         assert_eq!(ticker.elapsed(), Seconds::ZERO);
 

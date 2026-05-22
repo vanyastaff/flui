@@ -162,8 +162,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tween_types::FloatTween;
     use crate::AnimationController;
+    use crate::tween_types::FloatTween;
     use flui_scheduler::Scheduler;
     use std::time::Duration;
 

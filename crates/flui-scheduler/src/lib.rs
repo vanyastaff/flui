@@ -162,8 +162,8 @@ pub use id::{CallbackId, Id, IdGenerator, Marker, markers};
 pub use scheduler::{FrameCompletionFuture, FrameSkipPolicy, Scheduler, SchedulerBuilder};
 pub use task::{Priority, PriorityCount, Task, TaskId, TaskQueue};
 pub use ticker::{
-    ScheduledTicker, ScheduledTickerCallback, Ticker, TickerCallback, TickerCanceled, TickerFuture,
-    TickerFutureOrCancel, TickerGroup, TickerId, TickerProvider, TickerState,
+    Ticker, TickerCallback, TickerCanceled, TickerFuture, TickerFutureOrCancel, TickerGroup,
+    TickerId, TickerProvider, TickerState,
 };
 pub use vsync::{VsyncCallback, VsyncMode, VsyncScheduler, VsyncStats};
 
@@ -171,8 +171,8 @@ pub use vsync::{VsyncCallback, VsyncMode, VsyncScheduler, VsyncStats};
 pub mod prelude {
     pub use crate::{
         BudgetPolicy, FrameBudget, FrameId, FramePhase, FrameTiming, OneShotFrameCallback,
-        Priority, ScheduledTicker, Scheduler, SchedulerPhase, Task, TaskId, TaskQueue, Ticker,
-        TickerProvider, TickerState,
+        Priority, Scheduler, SchedulerPhase, Task, TaskId, TaskQueue, Ticker, TickerProvider,
+        TickerState,
         duration::{FrameDuration, Milliseconds, Percentage, Seconds},
     };
 }

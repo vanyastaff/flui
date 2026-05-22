@@ -102,7 +102,7 @@ pub mod tween_types;
 pub use animation::{Animation, AnimationDirection, DynAnimation, StatusCallback};
 pub use builder::AnimationControllerBuilder;
 pub use compound::{AnimationOperator, CompoundAnimation};
-pub use constant::{ConstantAnimation, ALWAYS_COMPLETE, ALWAYS_DISMISSED};
+pub use constant::{ALWAYS_COMPLETE, ALWAYS_DISMISSED, ConstantAnimation};
 pub use controller::AnimationController;
 pub use curved::CurvedAnimation;
 pub use error::AnimationError;
@@ -114,7 +114,7 @@ pub use simulation::{
     SpringType, Tolerance,
 };
 pub use switch::AnimationSwitch;
-pub use tween::{animate, TweenAnimation};
+pub use tween::{TweenAnimation, animate};
 
 // Re-exports from data type modules
 pub use curve::{
@@ -131,11 +131,16 @@ pub use tween_types::{
     TweenSequenceItem,
 };
 
-// Re-export scheduler types for convenience
+// Re-export scheduler types for convenience.
+//
+// `SchedulerBinding` was deleted upstream when scheduler binding methods were
+// inlined onto `Scheduler` (see scheduler.rs section "Binding Methods
+// (formerly on SchedulerBinding trait)"). The animation crate now uses
+// `Scheduler` directly.
 pub use flui_scheduler::ticker::TickerState;
 pub use flui_scheduler::{
-    BudgetPolicy, FrameBudget, FramePhase, FrameTiming, Priority, Scheduler, SchedulerBinding,
-    TaskQueue, Ticker, TickerCallback, TickerProvider, VsyncCallback, VsyncScheduler,
+    BudgetPolicy, FrameBudget, FramePhase, FrameTiming, Priority, Scheduler, TaskQueue, Ticker,
+    TickerCallback, TickerProvider, VsyncCallback, VsyncScheduler,
 };
 
 /// Prelude module for convenient imports
@@ -143,7 +148,7 @@ pub mod prelude {
     pub use crate::animation::{Animation, AnimationDirection};
     pub use crate::builder::AnimationControllerBuilder;
     pub use crate::compound::{AnimationOperator, CompoundAnimation};
-    pub use crate::constant::{ConstantAnimation, ALWAYS_COMPLETE, ALWAYS_DISMISSED};
+    pub use crate::constant::{ALWAYS_COMPLETE, ALWAYS_DISMISSED, ConstantAnimation};
     pub use crate::controller::AnimationController;
     pub use crate::curve::{Curve, Curves};
     pub use crate::curved::CurvedAnimation;
@@ -162,7 +167,6 @@ pub mod prelude {
 
     // Re-export scheduler types
     pub use crate::{
-        FrameBudget, FramePhase, Priority, Scheduler, SchedulerBinding, TaskQueue, Ticker,
-        TickerProvider,
+        FrameBudget, FramePhase, Priority, Scheduler, TaskQueue, Ticker, TickerProvider,
     };
 }

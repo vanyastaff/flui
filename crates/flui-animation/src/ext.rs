@@ -353,9 +353,9 @@ impl<A: Animation<f32> + 'static> AnimationExt for A {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::AnimationController;
     use crate::curve::Curves;
     use crate::tween_types::FloatTween;
-    use crate::AnimationController;
     use flui_scheduler::Scheduler;
     use std::time::Duration;
 
