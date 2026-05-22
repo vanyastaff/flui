@@ -306,42 +306,64 @@ impl HitTestResult {
         }
     }
 
-    /// Pushes a paint-offset onto the transform stack and returns a
-    /// guard that pops the offset when dropped.
+    /// Runs `f` with `offset` pushed onto the transform stack and
+    /// pops the transform before returning, regardless of `f`'s
+    /// return value.
     ///
-    /// This is the RAII counterpart to
-    /// [`push_offset`](Self::push_offset) +
-    /// [`pop_transform`](Self::pop_transform) and is the preferred
-    /// shape for protocol-side adapters (e.g.
-    /// `BoxHitTestResult::add_with_paint_offset`) that scope a
-    /// transform to a single hit-test step. The guard's `Drop` impl
-    /// guarantees the stack is balanced even if the inner closure
-    /// panics or returns early -- *Programming Rust* 2nd ed §22.2
-    /// "RAII Guards".
-    ///
-    /// # Flutter parity
-    ///
-    /// Mirrors `BoxHitTestResult::addWithPaintOffset` in
+    /// Mirrors `BoxHitTestResult::addWithPaintOffset` in Flutter's
     /// `rendering/box.dart`: the Flutter code uses a try/finally
-    /// pair around the pushOffset/popTransform sequence; Rust uses
-    /// `Drop` to express the same lifetime-scoped invariant.
-    #[must_use = "guard must be held for the scope where the transform applies"]
-    pub fn paint_offset_scope(&mut self, offset: Offset<Pixels>) -> TransformGuard<'_> {
+    /// pair around the pushOffset/popTransform sequence; Rust
+    /// expresses the same scope via a closure.
+    ///
+    /// # Why a closure and not a guard
+    ///
+    /// PR #110 review feedback (Codex P2): the pre-fix
+    /// `paint_offset_scope -> TransformGuard<'_>` API held an
+    /// exclusive `&'a mut HitTestResult` borrow for the guard's
+    /// lifetime. Calls like
+    /// `let _g = result.paint_offset_scope(off); result.add(entry);`
+    /// did **not** compile -- the second mutating call was rejected
+    /// because the guard still held the borrow. The closure-based
+    /// shape sidesteps the borrow conflict: `f` receives
+    /// `&mut Self` and can call any mutating method
+    /// (`add`, `push_transform`, nested `with_paint_*`) freely
+    /// inside the scope.
+    ///
+    /// # Panic semantics
+    ///
+    /// If `f` panics, the transform is **not** popped (no `Drop`-
+    /// based guard). The hit-test framework runs inside the
+    /// pipeline owner's `catch_unwind` boundary, so a panicked
+    /// `HitTestResult` is dropped wholesale on the next frame;
+    /// per-call transform balance is therefore not load-bearing.
+    /// Callers wanting strict panic-safe transform balance should
+    /// pop manually with `push_offset` + `pop_transform`.
+    pub fn with_paint_offset<F, R>(&mut self, offset: Offset<Pixels>, f: F) -> R
+    where
+        F: FnOnce(&mut Self) -> R,
+    {
         self.push_offset(offset);
-        TransformGuard::new(self)
+        let result = f(self);
+        self.pop_transform();
+        result
     }
 
-    /// Pushes a paint-transform matrix onto the transform stack and
-    /// returns a guard that pops the matrix when dropped.
+    /// Runs `f` with `transform` pushed onto the transform stack and
+    /// pops the transform before returning.
     ///
-    /// See [`paint_offset_scope`](Self::paint_offset_scope) for
-    /// the rationale and Flutter-parity reference; this is the
-    /// matrix-typed sibling for callers that need a full 4x4
-    /// transform rather than a paint-offset.
-    #[must_use = "guard must be held for the scope where the transform applies"]
-    pub fn paint_transform_scope(&mut self, transform: Matrix4) -> TransformGuard<'_> {
+    /// See [`with_paint_offset`](Self::with_paint_offset) for the
+    /// Flutter-parity rationale and the closure-vs-guard discussion
+    /// (PR #110 review feedback); this is the matrix-typed sibling
+    /// for callers that need a full 4x4 transform rather than a
+    /// paint-offset.
+    pub fn with_paint_transform<F, R>(&mut self, transform: Matrix4, f: F) -> R
+    where
+        F: FnOnce(&mut Self) -> R,
+    {
         self.push_transform(transform);
-        TransformGuard::new(self)
+        let result = f(self);
+        self.pop_transform();
+        result
     }
 
     /// Returns the number of entries.
