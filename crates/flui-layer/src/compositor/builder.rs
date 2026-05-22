@@ -251,7 +251,7 @@ impl<'a> SceneBuilder<'a> {
     /// * `path` - The path for clipping
     /// * `clip` - Clip behavior
     pub fn push_clip_path(&mut self, path: Path, clip: Clip) -> LayerId {
-        self.push_layer(Layer::ClipPath(ClipPathLayer::new(path, clip)))
+        self.push_layer(Layer::from(ClipPathLayer::new(path, clip)))
     }
 
     /// Pushes a color filter layer.
@@ -353,7 +353,7 @@ impl<'a> SceneBuilder<'a> {
     /// let root = builder.build();
     /// ```
     pub fn add_canvas(&mut self, canvas: CanvasLayer) -> LayerId {
-        self.add_leaf(Layer::Canvas(canvas))
+        self.add_leaf(Layer::from(canvas))
     }
 
     /// Adds a picture layer with recorded drawing commands.
@@ -409,7 +409,7 @@ impl<'a> SceneBuilder<'a> {
     /// - [`PictureLayer`](crate::PictureLayer) - The layer type created
     pub fn add_picture(&mut self, picture: flui_painting::Picture) -> LayerId {
         use crate::layer::PictureLayer;
-        self.add_leaf(Layer::Picture(PictureLayer::new(picture)))
+        self.add_leaf(Layer::from(PictureLayer::new(picture)))
     }
 
     /// Adds a texture layer for GPU texture rendering.

@@ -28,7 +28,7 @@
 //! // Create scene from a single layer
 //! let scene = Scene::from_layer(
 //!     Size::new(800.0, 600.0),
-//!     Layer::Canvas(CanvasLayer::new()),
+//!     Layer::from(CanvasLayer::new()),
 //!     0,
 //! );
 //!
@@ -385,7 +385,7 @@ mod tests {
     fn test_scene_from_layer() {
         let scene = Scene::from_layer(
             Size::new(px(1920.0), px(1080.0)),
-            Layer::Canvas(CanvasLayer::new()),
+            Layer::from(CanvasLayer::new()),
             42,
         );
 
@@ -401,7 +401,7 @@ mod tests {
     #[test]
     fn test_scene_new_with_tree() {
         let mut tree = LayerTree::new();
-        let root_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let root_id = tree.insert(Layer::from(CanvasLayer::new()));
 
         let scene = Scene::new(Size::new(px(800.0), px(600.0)), tree, Some(root_id), 1);
 
@@ -413,7 +413,7 @@ mod tests {
     #[test]
     fn test_scene_with_links() {
         let mut tree = LayerTree::new();
-        let root_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let root_id = tree.insert(Layer::from(CanvasLayer::new()));
 
         let mut registry = LinkRegistry::new();
         let link = crate::LayerLink::new();
@@ -451,7 +451,7 @@ mod tests {
         // replacement.
         let scene = Scene::from_layer(
             Size::new(px(800.0), px(600.0)),
-            Layer::Canvas(CanvasLayer::new()),
+            Layer::from(CanvasLayer::new()),
             0,
         );
         drop(scene);

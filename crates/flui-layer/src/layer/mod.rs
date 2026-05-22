@@ -180,15 +180,20 @@ pub use transform::TransformLayer;
 /// let opacity_layer = Layer::Opacity(OpacityLayer::new(0.5));
 /// ```
 #[derive(Debug)]
-#[allow(clippy::large_enum_variant)]
 pub enum Layer {
     // ========== Leaf Layers ==========
-    /// Canvas layer - standard drawing commands (mutable)
-    Canvas(CanvasLayer),
+    /// Canvas layer — standard drawing commands (mutable).
+    ///
+    /// Boxed because the inner `CanvasLayer` carries an unbounded
+    /// `Vec<CanvasCommand>` that dominates the variant footprint.
+    Canvas(Box<CanvasLayer>),
 
-    /// Picture layer - recorded drawing commands (immutable, for repaint
-    /// boundaries)
-    Picture(PictureLayer),
+    /// Picture layer — recorded drawing commands (immutable, for repaint
+    /// boundaries).
+    ///
+    /// Boxed because the inner `PictureLayer` carries an unbounded
+    /// display-list `Vec` that dominates the variant footprint.
+    Picture(Box<PictureLayer>),
 
     /// Texture layer - external GPU texture
     Texture(TextureLayer),
@@ -196,8 +201,11 @@ pub enum Layer {
     /// Platform view layer - native platform view embedding
     PlatformView(PlatformViewLayer),
 
-    /// Performance overlay layer - displays performance statistics
-    PerformanceOverlay(PerformanceOverlayLayer),
+    /// Performance overlay layer — displays performance statistics.
+    ///
+    /// Boxed because the inner type stores frame-history rings and
+    /// renderer state that exceed the per-variant inline budget.
+    PerformanceOverlay(Box<PerformanceOverlayLayer>),
 
     // ========== Clip Layers ==========
     /// Clip to rectangle
@@ -206,8 +214,11 @@ pub enum Layer {
     /// Clip to rounded rectangle
     ClipRRect(ClipRRectLayer),
 
-    /// Clip to arbitrary path
-    ClipPath(ClipPathLayer),
+    /// Clip to arbitrary path.
+    ///
+    /// Boxed because the inner `Path` owns a command `Vec` whose
+    /// worst-case footprint dwarfs the lightweight variants.
+    ClipPath(Box<ClipPathLayer>),
 
     /// Clip to superellipse (iOS-style squircle)
     ClipSuperellipse(ClipSuperellipseLayer),
@@ -387,13 +398,13 @@ dispatch::gen_layer_accessors! {
 
 impl From<CanvasLayer> for Layer {
     fn from(layer: CanvasLayer) -> Self {
-        Layer::Canvas(layer)
+        Layer::Canvas(Box::new(layer))
     }
 }
 
 impl From<PictureLayer> for Layer {
     fn from(layer: PictureLayer) -> Self {
-        Layer::Picture(layer)
+        Layer::Picture(Box::new(layer))
     }
 }
 
@@ -411,7 +422,7 @@ impl From<ClipRRectLayer> for Layer {
 
 impl From<ClipPathLayer> for Layer {
     fn from(layer: ClipPathLayer) -> Self {
-        Layer::ClipPath(layer)
+        Layer::ClipPath(Box::new(layer))
     }
 }
 
@@ -531,7 +542,7 @@ mod tests {
     #[test]
     fn test_layer_needs_compositing() {
         // Canvas doesn't need compositing
-        let canvas = Layer::Canvas(CanvasLayer::new());
+        let canvas = Layer::from(CanvasLayer::new());
         assert!(!canvas.needs_compositing());
 
         // Hard edge clip doesn't need compositing
@@ -580,5 +591,43 @@ mod tests {
         assert!(layer.as_opacity().is_some());
         assert!(layer.as_canvas().is_none());
         assert!(layer.as_clip_rect().is_none());
+    }
+}
+
+#[cfg(test)]
+mod size_tests {
+    use super::Layer;
+
+    /// Locks the `Layer` enum footprint after U2 boxing of the four heavy
+    /// variants (`Canvas`, `Picture`, `ClipPath`, `PerformanceOverlay`).
+    ///
+    /// Pre-boxing, the enum sat at ~496 bytes because `ClipPathLayer` (488 B)
+    /// pulled its command `Vec` into every variant slot. After boxing the
+    /// four documented heavies, the discriminant plus the largest *inline*
+    /// variant (`ShaderMaskLayer` / `BackdropFilterLayer` at 112 B) drives
+    /// the footprint to ~120 B — a 4× compression.
+    ///
+    /// The 128-byte ceiling here is the *post-U2* receipt — it locks the
+    /// outcome of this commit and surfaces unintended footprint growth (e.g.
+    /// a future variant addition that exceeds the current widest inline
+    /// type) in CI rather than silently.
+    ///
+    /// A follow-up unit (audit ref: U2-extension) can drop this budget to
+    /// ≤40 B by boxing the medium-heavy variants (`Transform`,
+    /// `ColorFilter`, `ImageFilter`, `ShaderMask`, `BackdropFilter`,
+    /// `ClipRRect`, `ClipSuperellipse`, `Follower`, `AnnotatedRegion`) and
+    /// to ≤32 B by also evicting `TextureLayer` / `PlatformViewLayer`.
+    /// That work is intentionally scoped out of U2 — boxing 13 variants in
+    /// one commit obscures review of the macro/`From`-impl rewiring U3/U4
+    /// just landed.
+    #[test]
+    fn layer_enum_size_compressed_via_boxing() {
+        let size = std::mem::size_of::<Layer>();
+        assert!(
+            size <= 128,
+            "Layer enum exceeds 128-byte budget; got {size} bytes. \
+             Heavy variants should be `Box<T>` — see U2 of \
+             docs/plans/2026-05-22-004-feat-layer-semantics-repair-plan.md",
+        );
     }
 }

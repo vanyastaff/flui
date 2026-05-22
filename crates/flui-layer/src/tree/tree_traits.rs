@@ -112,7 +112,7 @@ mod tests {
     #[test]
     fn test_tree_read_get() {
         let mut tree = LayerTree::new();
-        let id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let id = tree.insert(Layer::from(CanvasLayer::new()));
 
         // Use TreeRead trait method
         let node: Option<&LayerNode> = TreeRead::get(&tree, id);
@@ -122,7 +122,7 @@ mod tests {
     #[test]
     fn test_tree_read_contains() {
         let mut tree = LayerTree::new();
-        let id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let id = tree.insert(Layer::from(CanvasLayer::new()));
 
         assert!(TreeRead::contains(&tree, id));
         assert!(!TreeRead::contains(&tree, LayerId::new(999)));
@@ -133,18 +133,18 @@ mod tests {
         let mut tree = LayerTree::new();
         assert_eq!(TreeRead::<LayerId>::len(&tree), 0);
 
-        let _ = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let _ = tree.insert(Layer::from(CanvasLayer::new()));
         assert_eq!(TreeRead::<LayerId>::len(&tree), 1);
 
-        let _ = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let _ = tree.insert(Layer::from(CanvasLayer::new()));
         assert_eq!(TreeRead::<LayerId>::len(&tree), 2);
     }
 
     #[test]
     fn test_tree_nav_parent() {
         let mut tree = LayerTree::new();
-        let parent_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-        let child_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let parent_id = tree.insert(Layer::from(CanvasLayer::new()));
+        let child_id = tree.insert(Layer::from(CanvasLayer::new()));
 
         tree.add_child(parent_id, child_id);
 
@@ -155,9 +155,9 @@ mod tests {
     #[test]
     fn test_tree_nav_children() {
         let mut tree = LayerTree::new();
-        let parent_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-        let child1_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-        let child2_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let parent_id = tree.insert(Layer::from(CanvasLayer::new()));
+        let child1_id = tree.insert(Layer::from(CanvasLayer::new()));
+        let child2_id = tree.insert(Layer::from(CanvasLayer::new()));
 
         tree.add_child(parent_id, child1_id);
         tree.add_child(parent_id, child2_id);
@@ -171,9 +171,9 @@ mod tests {
     #[test]
     fn test_tree_nav_ancestors() {
         let mut tree = LayerTree::new();
-        let root_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-        let child_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-        let grandchild_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let root_id = tree.insert(Layer::from(CanvasLayer::new()));
+        let child_id = tree.insert(Layer::from(CanvasLayer::new()));
+        let grandchild_id = tree.insert(Layer::from(CanvasLayer::new()));
 
         tree.add_child(root_id, child_id);
         tree.add_child(child_id, grandchild_id);
@@ -185,9 +185,9 @@ mod tests {
     #[test]
     fn test_tree_nav_descendants() {
         let mut tree = LayerTree::new();
-        let root_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-        let child_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-        let grandchild_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let root_id = tree.insert(Layer::from(CanvasLayer::new()));
+        let child_id = tree.insert(Layer::from(CanvasLayer::new()));
+        let grandchild_id = tree.insert(Layer::from(CanvasLayer::new()));
 
         tree.add_child(root_id, child_id);
         tree.add_child(child_id, grandchild_id);
@@ -202,10 +202,10 @@ mod tests {
     #[test]
     fn test_tree_nav_siblings() {
         let mut tree = LayerTree::new();
-        let parent_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-        let child1_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-        let child2_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-        let child3_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let parent_id = tree.insert(Layer::from(CanvasLayer::new()));
+        let child1_id = tree.insert(Layer::from(CanvasLayer::new()));
+        let child2_id = tree.insert(Layer::from(CanvasLayer::new()));
+        let child3_id = tree.insert(Layer::from(CanvasLayer::new()));
 
         tree.add_child(parent_id, child1_id);
         tree.add_child(parent_id, child2_id);
@@ -221,9 +221,9 @@ mod tests {
     #[test]
     fn test_tree_nav_child_count() {
         let mut tree = LayerTree::new();
-        let parent_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-        let child1_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-        let child2_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let parent_id = tree.insert(Layer::from(CanvasLayer::new()));
+        let child1_id = tree.insert(Layer::from(CanvasLayer::new()));
+        let child2_id = tree.insert(Layer::from(CanvasLayer::new()));
 
         assert_eq!(TreeNav::child_count(&tree, parent_id), 0);
 
@@ -237,8 +237,8 @@ mod tests {
     #[test]
     fn test_tree_nav_has_children() {
         let mut tree = LayerTree::new();
-        let parent_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-        let child_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let parent_id = tree.insert(Layer::from(CanvasLayer::new()));
+        let child_id = tree.insert(Layer::from(CanvasLayer::new()));
 
         assert!(!TreeNav::has_children(&tree, parent_id));
 
@@ -249,8 +249,8 @@ mod tests {
     #[test]
     fn test_tree_nav_is_leaf() {
         let mut tree = LayerTree::new();
-        let parent_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-        let child_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let parent_id = tree.insert(Layer::from(CanvasLayer::new()));
+        let child_id = tree.insert(Layer::from(CanvasLayer::new()));
 
         assert!(TreeNav::is_leaf(&tree, parent_id));
 
@@ -262,8 +262,8 @@ mod tests {
     #[test]
     fn test_tree_nav_is_root() {
         let mut tree = LayerTree::new();
-        let parent_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-        let child_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let parent_id = tree.insert(Layer::from(CanvasLayer::new()));
+        let child_id = tree.insert(Layer::from(CanvasLayer::new()));
 
         tree.add_child(parent_id, child_id);
 
@@ -274,9 +274,9 @@ mod tests {
     #[test]
     fn test_tree_nav_find_root() {
         let mut tree = LayerTree::new();
-        let root_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-        let child_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-        let grandchild_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let root_id = tree.insert(Layer::from(CanvasLayer::new()));
+        let child_id = tree.insert(Layer::from(CanvasLayer::new()));
+        let grandchild_id = tree.insert(Layer::from(CanvasLayer::new()));
 
         tree.add_child(root_id, child_id);
         tree.add_child(child_id, grandchild_id);
@@ -289,9 +289,9 @@ mod tests {
     #[test]
     fn test_tree_nav_depth() {
         let mut tree = LayerTree::new();
-        let root_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-        let child_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-        let grandchild_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
+        let root_id = tree.insert(Layer::from(CanvasLayer::new()));
+        let child_id = tree.insert(Layer::from(CanvasLayer::new()));
+        let grandchild_id = tree.insert(Layer::from(CanvasLayer::new()));
 
         tree.add_child(root_id, child_id);
         tree.add_child(child_id, grandchild_id);

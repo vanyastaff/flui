@@ -262,8 +262,8 @@ fn test_scene_compositor_stats() {
     let mut compositor = SceneCompositor::new();
     let mut tree = LayerTree::new();
 
-    let _ = tree.insert(Layer::Canvas(CanvasLayer::new()));
-    let _ = tree.insert(Layer::Canvas(CanvasLayer::new()));
+    let _ = tree.insert(Layer::from(CanvasLayer::new()));
+    let _ = tree.insert(Layer::from(CanvasLayer::new()));
 
     compositor.update_stats(&tree);
     assert_eq!(compositor.stats().total_layers, 2);
