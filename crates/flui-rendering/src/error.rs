@@ -199,39 +199,46 @@ impl RenderError {
     ///
     /// Cycle 4 R-17: message stored as `Box<str>` (heap allocation
     /// shrinks from 24 bytes of `String` header to 16 bytes of fat
-    /// pointer). `impl Into<Box<str>>` accepts `&str`, `String`, and
-    /// `Box<str>`.
-    pub fn invalid_constraints(message: impl Into<Box<str>>) -> Self {
+    /// pointer).
+    ///
+    /// PR #112 review fix: constructor bound is `impl AsRef<str>`
+    /// rather than `impl Into<Box<str>>`. `AsRef<str>` is strictly
+    /// more permissive -- it accepts `&str`, `String`, `Box<str>`,
+    /// `&String`, `Cow<str>`, etc. The allocation happens once via
+    /// `message.as_ref().into()` (str -> Box<str>). Pre-fix
+    /// `Into<Box<str>>` rejected `&String` callers (no impl from
+    /// `&String` to `Box<str>` without deref coercion).
+    pub fn invalid_constraints(message: impl AsRef<str>) -> Self {
         Self::InvalidConstraints {
-            message: message.into(),
+            message: message.as_ref().into(),
         }
     }
 
     /// Creates a relayout boundary violation error.
-    pub fn relayout_boundary(message: impl Into<Box<str>>) -> Self {
+    pub fn relayout_boundary(message: impl AsRef<str>) -> Self {
         Self::RelayoutBoundaryViolation {
-            message: message.into(),
+            message: message.as_ref().into(),
         }
     }
 
     /// Creates a layer error.
-    pub fn layer(message: impl Into<Box<str>>) -> Self {
+    pub fn layer(message: impl AsRef<str>) -> Self {
         Self::LayerError {
-            message: message.into(),
+            message: message.as_ref().into(),
         }
     }
 
     /// Creates a compositing error.
-    pub fn compositing(message: impl Into<Box<str>>) -> Self {
+    pub fn compositing(message: impl AsRef<str>) -> Self {
         Self::CompositingError {
-            message: message.into(),
+            message: message.as_ref().into(),
         }
     }
 
     /// Creates a semantics error.
-    pub fn semantics(message: impl Into<Box<str>>) -> Self {
+    pub fn semantics(message: impl AsRef<str>) -> Self {
         Self::SemanticsError {
-            message: message.into(),
+            message: message.as_ref().into(),
         }
     }
 
