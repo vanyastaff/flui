@@ -35,3 +35,20 @@ mockall = "0.13"
 [features]
 default = []
 serde = ["dep:serde", "flui-types/serde"]
+
+# Cycle 4 R-18: gate `ScrollMetrics` trait + `FixedScrollMetrics` +
+# `FixedExtentMetrics` (~452 LOC at `src/constraints/scroll_metrics.rs`)
+# behind an off-by-default feature. The types had zero workspace
+# consumers; gating prevents the dead surface from being compiled into
+# every dependent build while keeping the code available for the
+# scrolling integration that will eventually land. Opt in via
+# `--features scrolling`.
+scrolling = []
+
+# Cycle 4 R-16: gate the delegate trait modules (~1,800 LOC across
+# `delegates/custom_painter.rs`, `flow.rs`, `multi_child_layout.rs`,
+# `single_child_layout.rs`, `sliver_grid.rs`, `custom_clipper.rs`)
+# behind an off-by-default feature. Each delegate trait has zero
+# production impls; gating removes the surface from default builds
+# without deleting it. Opt in via `--features experimental-delegates`.
+experimental-delegates = []
