@@ -3,7 +3,7 @@
 use std::fmt::Debug;
 use std::sync::{Arc, Weak};
 
-use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
+use flui_foundation::{Diagnosticable, DiagnosticsBuilder, RenderId};
 use flui_layer::TransformLayer;
 use flui_types::{Matrix4, Offset, Pixels, Rect, Size};
 use parking_lot::RwLock;
@@ -12,7 +12,13 @@ use super::ViewConfiguration;
 use crate::{
     constraints::BoxConstraints,
     context::CanvasContext,
-    hit_testing::{HitTestEntry, HitTestResult, HitTestTarget, PointerEvent},
+    // Cycle 4 U-4: `HitTestEntry` + `HitTestResult` are re-exported
+    // from `flui_interaction::routing` via `hit_testing::mod`; the
+    // import path stays the same but the underlying types are now
+    // the interaction-side canonical ones. The previous
+    // `HitTestTarget` + `PointerEvent` imports were dropped here
+    // alongside the deletion of `impl HitTestTarget for RenderView`.
+    hit_testing::{HitTestEntry, HitTestResult},
     parent_data::ParentData,
     pipeline::PipelineOwner,
 };
@@ -339,8 +345,19 @@ impl RenderView {
     // ========================================================================
 
     /// Determines the set of render objects located at the given position.
+    ///
+    /// Mirrors Flutter's `RenderView.hitTest`: the view always adds
+    /// itself as the root entry of the result, guaranteeing the
+    /// gesture dispatcher has at least one target to walk. After
+    /// cycle 4 U-4 the entry is constructed against
+    /// `flui_interaction::routing::HitTestEntry` with `RenderId::new(1)`
+    /// as the root sentinel (the rendering crate's pre-U-4
+    /// `HitTestEntry::new_render_view()` constructor used a
+    /// `Weak<DummyTarget>` for the same purpose; the sentinel is the
+    /// data-typed replacement). The constant `1` matches the Slab
+    /// 0-based + IDs 1-based convention used throughout flui-foundation.
     pub fn hit_test(&self, result: &mut HitTestResult, _position: Offset) -> bool {
-        result.add(HitTestEntry::new_render_view());
+        result.add(HitTestEntry::new(RenderId::new(1)));
         true
     }
 
@@ -549,12 +566,14 @@ impl Diagnosticable for RenderView {
     }
 }
 
-impl HitTestTarget for RenderView {
-    fn handle_event(&self, event: &PointerEvent, entry: &HitTestEntry) {
-        // RenderView doesn't handle events, just implements the trait
-        let _ = (event, entry);
-    }
-}
+// Cycle 4 U-4: `impl HitTestTarget for RenderView` was deleted. The
+// pre-cycle body was a no-op (`let _ = (event, entry);`) -- the view
+// implemented the trait only to satisfy the trait-dispatch shape
+// `flui_rendering::hit_testing::HitTestResult` required. Post-U-4 the
+// result type is the data-typed `flui_interaction::routing::HitTestResult`
+// where entries carry handler closures directly; no trait impl is
+// needed on RenderView. The `HitTestTarget` trait itself is U-5's
+// deletion target.
 
 #[cfg(test)]
 mod tests {

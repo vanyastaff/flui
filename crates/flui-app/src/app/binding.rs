@@ -497,19 +497,27 @@ impl AppBinding {
             PlatformInput::Pointer(pointer_event) => {
                 self.gestures
                     .handle_pointer_event(&pointer_event, |position| {
-                        // Perform rendering-layer hit test through the RenderView
+                        // Cycle 4 U-4: single canonical `HitTestResult`
+                        // flows through both rendering traversal and
+                        // gesture dispatch. The pre-cycle bridge code
+                        // here built a `flui_rendering::hit_testing::HitTestResult`
+                        // and then -- under the literal
+                        // `// TODO: Convert rendering HitTestEntry
+                        // targets to interaction targets` -- returned an
+                        // empty `flui_interaction` result instead. The
+                        // bridge dropped every hit silently.
+                        // Post-U-4 there is a single result type; the
+                        // rendering crate's re-export points at
+                        // `flui_interaction::routing::HitTestResult`,
+                        // so the same instance flows through both
+                        // layers without conversion.
                         use flui_rendering::binding::RendererBinding;
                         let renderer = self.renderer.read();
-                        let mut render_result = flui_rendering::hit_testing::HitTestResult::new();
+                        let mut result = flui_interaction::routing::HitTestResult::new();
                         let offset = flui_types::Offset::new(position.dx, position.dy);
-                        renderer.hit_test_in_view(&mut render_result, offset, 0);
-
-                        // Bridge to interaction-layer result
-                        // TODO: Convert rendering HitTestEntry targets to interaction targets
-                        // once render objects implement gesture handling
-                        let result = flui_interaction::routing::HitTestResult::new();
-                        if !render_result.is_empty() {
-                            tracing::debug!(hits = render_result.len(), "Hit test found targets");
+                        renderer.hit_test_in_view(&mut result, offset, 0);
+                        if !result.is_empty() {
+                            tracing::debug!(hits = result.len(), "Hit test found targets");
                         }
                         result
                     });
