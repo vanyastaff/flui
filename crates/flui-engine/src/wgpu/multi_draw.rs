@@ -40,12 +40,12 @@
 //! let mut batcher = MultiDrawBatcher::new();
 //!
 //! // Collect draw commands
-//! batcher.add_draw(DrawCommand {
+//! batcher.add_draw(DrawIndirect {
 //!     index_count: 6,
 //!     instance_count: 100,  // 100 rectangles
 //!     pipeline_id: PipelineId::Rectangle,
 //! });
-//! batcher.add_draw(DrawCommand {
+//! batcher.add_draw(DrawIndirect {
 //!     index_count: 6,
 //!     instance_count: 50,   // 50 circles
 //!     pipeline_id: PipelineId::Circle,
@@ -122,7 +122,7 @@ pub enum PipelineId {
 
 /// Single draw command with pipeline and instance data
 #[derive(Clone, Debug)]
-pub struct DrawCommand {
+pub struct DrawIndirect {
     /// Which pipeline to use
     pub pipeline_id: PipelineId,
     /// Indirect draw arguments
@@ -139,7 +139,7 @@ pub struct DrawCommand {
 /// indirect draw call for maximum CPU efficiency.
 pub struct MultiDrawBatcher {
     /// Collected draw commands
-    commands: Vec<DrawCommand>,
+    commands: Vec<DrawIndirect>,
     /// Statistics
     total_draws: usize,
     total_instances: usize,
@@ -159,7 +159,7 @@ impl MultiDrawBatcher {
     ///
     /// # Arguments
     /// * `command` - Draw command to add
-    pub fn add(&mut self, command: DrawCommand) {
+    pub fn add(&mut self, command: DrawIndirect) {
         self.total_instances += command.args.instance_count as usize;
         self.commands.push(command);
     }
@@ -182,7 +182,7 @@ impl MultiDrawBatcher {
             return;
         }
 
-        self.add(DrawCommand {
+        self.add(DrawIndirect {
             pipeline_id,
             args: DrawIndexedIndirectArgs::quad_instances(instance_count),
             instance_buffer_offset,
@@ -206,7 +206,7 @@ impl MultiDrawBatcher {
     }
 
     /// Get immutable reference to commands
-    pub fn commands(&self) -> &[DrawCommand] {
+    pub fn commands(&self) -> &[DrawIndirect] {
         &self.commands
     }
 

@@ -147,7 +147,14 @@ pub use layer_render::LayerRender;
 // Workspace grep showed zero external consumers; the type stays
 // `pub` at its definition site for in-crate use but no longer
 // escapes the wgpu module's public surface.
-pub use multi_draw::{DrawCommand, DrawIndexedIndirectArgs, MultiDrawBatcher, PipelineId};
+//
+// Cycle 4 E-11: `DrawCommand` renamed to `DrawIndirect` to resolve
+// the workspace-wide collision with `flui_painting::DrawCommand`
+// (a `DisplayList` op variant). The wgpu version is an indirect-
+// draw instance descriptor; `DrawIndirect` matches the
+// wgpu::util::DrawIndexedIndirectArgs lineage and disambiguates
+// at every import site.
+pub use multi_draw::{DrawIndexedIndirectArgs, DrawIndirect, MultiDrawBatcher, PipelineId};
 // Offscreen rendering. `PipelineManager` was deleted in cycle 4 E-3
 // (zombie wrapper carrying only an `Arc<ShaderCache>` field with 0
 // consumers); the real pipeline ownership lives in
