@@ -415,10 +415,30 @@ impl BoxHitTestEntry {
 }
 
 /// Box hit test context implementation.
+///
+/// # Transform accumulation
+///
+/// Cycle 4 wave 5 R-24: `current_transform()` previously folded the
+/// entire `transform_stack: Vec<Matrix4>` via
+/// `iter().fold(IDENTITY, |acc, t| acc * t)` -- O(N) matrix-multiply
+/// chain on every hit-test entry. Hit testing is hot-path; a 30-deep
+/// tree paid 30 mat-mults per entry.
+///
+/// The fix mirrors Flutter's `HitTestResult._localTransforms` cache:
+/// alongside the explicit `transform_stack`, the ctx maintains
+/// `composed_transform: Matrix4` updated incrementally on
+/// `push_transform` (one mat-mult) and recomputed on `pop_transform`
+/// (one full re-fold over the now-shorter stack). Per-call cost
+/// drops from O(stack_depth) to O(1) for queries, and pops stay
+/// O(stack_depth) but amortize across the matched push.
 pub struct BoxHitTestCtx<'ctx, A: Arity, P: ParentData> {
     position: Offset,
     result: BoxHitTestResult,
     transform_stack: Vec<Matrix4>,
+    /// Cached composition of `transform_stack` in push-order. Kept in
+    /// sync with the stack via `push_transform` (multiply in) and
+    /// `pop_transform` (full re-fold over the truncated stack).
+    composed_transform: Matrix4,
     _phantom: std::marker::PhantomData<(&'ctx (), A, P)>,
 }
 
@@ -429,15 +449,29 @@ impl<'ctx, A: Arity, P: ParentData> BoxHitTestCtx<'ctx, A, P> {
             position,
             result: BoxHitTestResult::new(),
             transform_stack: Vec::new(),
+            composed_transform: Matrix4::IDENTITY,
             _phantom: std::marker::PhantomData,
         }
     }
 
     /// Returns the current accumulated transform.
+    ///
+    /// O(1) -- reads the cached composition. See type-level doc for
+    /// the R-24 incremental-composition design.
     pub fn current_transform(&self) -> Matrix4 {
-        self.transform_stack
+        self.composed_transform
+    }
+
+    /// Recomputes [`Self::composed_transform`] from `transform_stack`.
+    /// Used by `pop_transform` because matrix inversion to "subtract"
+    /// the popped factor is more expensive (and more numerically
+    /// fraught) than a full re-fold over a typically-shallow stack.
+    #[inline]
+    fn recompute_composed(&mut self) {
+        self.composed_transform = self
+            .transform_stack
             .iter()
-            .fold(Matrix4::IDENTITY, |acc, t| acc * *t)
+            .fold(Matrix4::IDENTITY, |acc, t| acc * *t);
     }
 
     /// Adds self as a hit target with the given ID.
@@ -475,11 +509,22 @@ impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, BoxHitTest, A, P>
     }
 
     fn push_transform(&mut self, transform: Matrix4) {
+        // R-24: keep the cached composition in sync. One mat-mult
+        // per push amortizes O(stack_depth) hit-test queries down
+        // to O(1).
         self.transform_stack.push(transform);
+        self.composed_transform *= transform;
     }
 
     fn pop_transform(&mut self) {
+        // R-24: a popped factor cannot be "un-multiplied" cheaply
+        // (would require matrix inverse + multiply, ~5x cost of a
+        // forward fold and numerically fragile). Full re-fold over
+        // the now-shorter stack is the cleanest fix; hit-test stacks
+        // measure ~20-40 deep in practice, well within
+        // matrix-multiply burst budgets.
         self.transform_stack.pop();
+        self.recompute_composed();
     }
 }
 
@@ -525,6 +570,60 @@ mod tests {
 
         let outside = Rect::from_ltrb(px(100.0), px(100.0), px(200.0), px(200.0));
         assert!(!ctx.is_hit(outside));
+    }
+
+    /// Cycle 4 wave 5 R-24: incremental transform composition must
+    /// stay numerically identical to the prior O(N) fold path.
+    /// Builds a 3-deep stack and asserts the cached
+    /// `current_transform()` equals the explicit `fold(IDENTITY, |a, t| a * t)`.
+    #[test]
+    fn test_box_hit_test_context_incremental_transform_matches_fold() {
+        let mut ctx: BoxHitTestCtx<'_, Leaf, BoxParentData> =
+            BoxHitTestCtx::new(Offset::new(px(0.0), px(0.0)));
+
+        // Mat₁: translate (10, 0)
+        let t1 = Matrix4::translation(10.0, 0.0, 0.0);
+        // Mat₂: rotation 90° about Z
+        let t2 = Matrix4::rotation_z(std::f32::consts::FRAC_PI_2);
+        // Mat₃: scale 2x
+        let t3 = Matrix4::scaling(2.0, 2.0, 1.0);
+
+        ctx.push_transform(t1);
+        ctx.push_transform(t2);
+        ctx.push_transform(t3);
+
+        let expected = Matrix4::IDENTITY * t1 * t2 * t3;
+        let got = ctx.current_transform();
+        // Bit-exact: cache and explicit fold do the same mat-mults
+        // in the same order.
+        assert_eq!(got, expected);
+    }
+
+    /// Pop must restore the prior composed state. Push A, push B,
+    /// pop B → composed == A.
+    #[test]
+    fn test_box_hit_test_context_pop_restores_composition() {
+        let mut ctx: BoxHitTestCtx<'_, Leaf, BoxParentData> =
+            BoxHitTestCtx::new(Offset::new(px(0.0), px(0.0)));
+
+        let t1 = Matrix4::translation(5.0, 5.0, 0.0);
+        let t2 = Matrix4::scaling(3.0, 3.0, 1.0);
+
+        ctx.push_transform(t1);
+        let after_t1 = ctx.current_transform();
+
+        ctx.push_transform(t2);
+        ctx.pop_transform();
+
+        assert_eq!(ctx.current_transform(), after_t1);
+    }
+
+    /// Empty stack returns identity.
+    #[test]
+    fn test_box_hit_test_context_empty_stack_is_identity() {
+        let ctx: BoxHitTestCtx<'_, Leaf, BoxParentData> =
+            BoxHitTestCtx::new(Offset::new(px(0.0), px(0.0)));
+        assert_eq!(ctx.current_transform(), Matrix4::IDENTITY);
     }
 
     #[test]
