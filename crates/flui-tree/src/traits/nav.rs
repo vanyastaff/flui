@@ -38,8 +38,12 @@ pub trait TreeNav<I: Identifier>: super::TreeRead<I> {
     /// Maximum expected tree depth for stack allocation optimization.
     ///
     /// Iterators can use this to size internal buffers appropriately.
-    /// Should be conservative but realistic for the use case.
-    const MAX_DEPTH: usize = 32;
+    /// Defaults to the canonical [`crate::depth::INLINE_TREE_DEPTH`]
+    /// (= 32) per audit T-10's single-source-of-truth refactor.
+    /// Implementations override when their tree shape has different
+    /// depth characteristics (e.g. `RenderTree` keeps 64 for
+    /// scroll-heavy hierarchies).
+    const MAX_DEPTH: usize = crate::depth::INLINE_TREE_DEPTH;
 
     /// Average number of children per node.
     ///
