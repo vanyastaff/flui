@@ -86,18 +86,9 @@ impl RectInstance {
         }
     }
 
-    /// Create a rounded rectangular instance
-    #[must_use]
-    pub fn rounded_rect(rect: Rect<Pixels>, color: Color, radius: f32) -> Self {
-        Self {
-            bounds: [rect.left().0, rect.top().0, rect.width().0, rect.height().0],
-            color: color.to_f32_array(),
-            corner_radii: [radius; 4],
-            transform: [1.0, 1.0, 0.0, 0.0],
-            clip_rrect: [0.0; 8],
-            clip_kind: [0; 4],
-        }
-    }
+    // Cycle 4 E-5: deleted `RectInstance::rounded_rect(rect, color,
+    // single_radius)` (uniform-corner shortcut). Zero callsites --
+    // production paths use `rounded_rect_corners` (per-corner).
 
     /// Create an instance with per-corner radii
     #[must_use]
@@ -184,18 +175,15 @@ impl RectInstance {
         self
     }
 
-    /// Create an instance with transform
-    #[must_use]
-    pub fn with_transform(
-        mut self,
-        scale_x: f32,
-        scale_y: f32,
-        translate_x: f32,
-        translate_y: f32,
-    ) -> Self {
-        self.transform = [scale_x, scale_y, translate_x, translate_y];
-        self
-    }
+    // Cycle 4 E-5: deleted `RectInstance::with_transform(scale_x,
+    // scale_y, translate_x, translate_y)` (per-instance transform
+    // setter; zero callsites -- transform comes from the painter's
+    // matrix stack, not from per-instance helpers).
+    // `with_clip_rsuperellipse` was retained against the audit's
+    // recommendation: 1 live callsite at `painter.rs:3519`
+    // (`instance.with_clip_rsuperellipse(self.current_rsuperellipse_clip)`)
+    // -- audit text claimed zero callsites but missed the method-style
+    // dispatch on `instance` (vs type-path `RectInstance::`).
 
     /// Get wgpu vertex buffer layout for instance data
     #[must_use]
@@ -250,20 +238,10 @@ impl CircleInstance {
         }
     }
 
-    /// Create an ellipse instance (stretched circle)
-    #[must_use]
-    pub fn ellipse(center: Point<Pixels>, radius_x: f32, radius_y: f32, color: Color) -> Self {
-        Self {
-            center_radius: [center.x.0, center.y.0, radius_x.max(radius_y), 0.0],
-            color: color.to_f32_array(),
-            transform: [
-                radius_x / radius_x.max(radius_y),
-                radius_y / radius_x.max(radius_y),
-                0.0,
-                0.0,
-            ],
-        }
-    }
+    // Cycle 4 E-5: deleted `CircleInstance::ellipse(center, radius_x,
+    // radius_y, color)`. Zero callsites -- production paths use
+    // `CircleInstance::new` (uniform-radius). When per-axis radii are
+    // needed it relands with a concrete first consumer.
 
     /// Get wgpu vertex buffer layout for instance data
     #[must_use]
@@ -333,24 +311,10 @@ impl ArcInstance {
         }
     }
 
-    /// Create an elliptical arc instance
-    #[must_use]
-    pub fn ellipse(
-        center: Point<Pixels>,
-        radius_x: f32,
-        radius_y: f32,
-        start_angle: f32,
-        sweep_angle: f32,
-        color: Color,
-    ) -> Self {
-        let max_radius = radius_x.max(radius_y);
-        Self {
-            center_radius: [center.x.0, center.y.0, max_radius, 0.0],
-            angles: [start_angle, sweep_angle, 0.0, 0.0],
-            color: color.to_f32_array(),
-            transform: [radius_x / max_radius, radius_y / max_radius, 0.0, 0.0],
-        }
-    }
+    // Cycle 4 E-5: deleted `ArcInstance::ellipse(center, radius_x,
+    // radius_y, start_angle, sweep_angle, color)`. Zero callsites --
+    // production paths use `ArcInstance::new` (uniform-radius arc).
+    // Re-lands with a concrete consumer when needed.
 
     /// Get wgpu vertex buffer layout for instance data
     #[must_use]
@@ -445,30 +409,13 @@ impl TextureInstance {
         }
     }
 
-    /// Create a textured quad with rotation
-    ///
-    /// # Arguments
-    /// * `dst_rect` - Destination rectangle in screen coordinates
-    /// * `angle` - Rotation angle in radians
-    /// * `tint` - Color tint
-    #[must_use]
-    pub fn with_rotation(
-        dst_rect: flui_types::Rect<flui_types::geometry::Pixels>,
-        angle: f32,
-        tint: Color,
-    ) -> Self {
-        Self {
-            dst_rect: [
-                dst_rect.left().0,
-                dst_rect.top().0,
-                dst_rect.width().0,
-                dst_rect.height().0,
-            ],
-            src_uv: [0.0, 0.0, 1.0, 1.0],
-            tint: tint.to_f32_array(),
-            transform: [angle.cos(), angle.sin(), 0.0, 0.0],
-        }
-    }
+    // Cycle 4 E-5: deleted `TextureInstance::with_rotation(dst_rect,
+    // angle, tint)`. Zero callsites -- production paths use
+    // `TextureInstance::with_uv` (canonical, 5 callsites in
+    // painter.rs) and the painter's matrix stack handles rotation
+    // composition. `TextureInstance::with_uv` was retained against
+    // the audit's recommendation because it IS live (audit text
+    // claimed otherwise; grep proved 5 painter callsites).
 
     /// Get wgpu vertex buffer layout for instance data
     #[must_use]

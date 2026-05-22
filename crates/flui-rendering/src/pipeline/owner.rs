@@ -847,7 +847,33 @@ impl PipelineOwner<Layout> {
         };
 
         // STEP 2: Layout children FIRST (depth-first)
-        // This ensures child sizes are available when parent's perform_layout runs
+        // This ensures child sizes are available when parent's perform_layout runs.
+        //
+        // Cycle 4 R-13: the previous `propagate_constraints_to_child` and
+        // `sync_child_size_to_parent` calls bracketed each recursive child
+        // walk. Both were empty-body stubs (`fn ..(_) {}`) -- no constraints
+        // propagated, no sizes synced. Workspace audit:
+        //
+        //   - `RenderEntry::layout(constraints)` is the canonical per-node
+        //     layout entry point at `storage/entry.rs:252`. It accepts the
+        //     constraints as a parameter and is the only path that runs
+        //     `RenderObject::perform_layout_raw`.
+        //   - `layout_node_with_children` itself never calls
+        //     `entry.layout(...)` -- it only walks the tree marking
+        //     `needs_layout` checks and recursing. The actual per-node layout
+        //     happens nowhere in production today; the only `entry.layout()`
+        //     callsite in the file is inside a `#[test]` block at line ~1729.
+        //
+        // So both stubs were dead code embedded in a larger half-implemented
+        // walk. They were called every layout pass at zero cost (empty body)
+        // but produced no behavior; deletion is strictly subtractive.
+        //
+        // The remaining `needs_layout()` walk preserves the depth-first
+        // recursion shape so that when the per-node layout call lands, the
+        // post-order traversal is already in place. The post-order ordering
+        // is what Flutter's `performLayout` relies on so child sizes are
+        // available when the parent's `performLayout` runs -- structurally
+        // correct even though no node-level layout call exists yet.
         for child_id in &children {
             let child_needs_layout = {
                 if let Some(child_node) = self.render_tree.get(*child_id) {
@@ -858,38 +884,16 @@ impl PipelineOwner<Layout> {
             };
 
             if child_needs_layout {
-                // Propagate constraints from parent to child
-                self.propagate_constraints_to_child(render_id, *child_id);
-
                 // Recursively layout the child (depth-first), incrementing
                 // the recursion-depth counter so LAYOUT_DEPTH_LIMIT can
                 // catch infinite cycles. Errors propagate up the
                 // recursion via `?`.
                 self.layout_node_with_children(*child_id, depth + 1)?;
             }
-
-            // STEP 3: Sync child size to parent's ChildState BEFORE parent layout
-            self.sync_child_size_to_parent(*child_id);
         }
 
         Ok(())
     }
-
-    /// Propagates constraints from parent to child.
-    ///
-    /// This is called before laying out a child to ensure it has proper
-    /// constraints. We pass loose constraints (same max, zero min) so
-    /// children can size themselves within the parent's bounds. This
-    /// matches Flutter's typical behavior where parents like Center/Align
-    /// give children loose constraints.
-    fn propagate_constraints_to_child(&self, _parent_id: RenderId, _child_id: RenderId) {}
-
-    /// Syncs a child's size to its parent's ChildState.
-    ///
-    /// After a child is laid out, this method updates the parent's internal
-    /// ChildState with the child's resulting size. This allows the parent's
-    /// `layout_child()` to return the correct size.
-    fn sync_child_size_to_parent(&mut self, _child_id: RenderId) {}
 }
 
 // ============================================================================

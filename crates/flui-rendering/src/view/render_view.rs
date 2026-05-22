@@ -21,7 +21,6 @@ use crate::{
     // dropped `HitTestEntry` here too once the root-sentinel add went
     // away.
     hit_testing::HitTestResult,
-    parent_data::ParentData,
     pipeline::PipelineOwner,
 };
 
@@ -66,33 +65,31 @@ pub struct RenderView {
     /// allows the render view to reference the owner without preventing cleanup
     /// when the owner is dropped.
     owner: Option<Weak<RwLock<PipelineOwner>>>,
-
-    // ========================================================================
-    // Render Object State
-    // ========================================================================
-    #[allow(dead_code)] // Placeholder for full RenderView implementation
-    depth: usize,
-    #[allow(dead_code)]
-    needs_layout: bool,
-    #[allow(dead_code)]
-    needs_paint: bool,
-    #[allow(dead_code)]
-    needs_compositing_bits_update: bool,
-    #[allow(dead_code)]
-    needs_semantics_update: bool,
-    #[allow(dead_code)]
-    is_repaint_boundary: bool,
-    // U2 exemplar refactor: was_repaint_boundary previously lived here as a
-    // mirror of the (removed) RenderObject::set_was_repaint_boundary trait
-    // method. The bit now lives on `RenderState<P>::flags` as
-    // `WAS_REPAINT_BOUNDARY` (see `crates/flui-rendering/src/storage/flags.rs`
-    // and `crates/flui-rendering/ARCHITECTURE.md`).
-    #[allow(dead_code)]
-    needs_compositing: bool,
-    #[allow(dead_code)]
-    cached_constraints: Option<BoxConstraints>,
-    #[allow(dead_code)]
-    parent_data: Option<Box<dyn ParentData>>,
+    // Cycle 4 R-14: the 9-field `#[allow(dead_code)]` placeholder
+    // block (depth / needs_layout / needs_paint /
+    // needs_compositing_bits_update / needs_semantics_update /
+    // is_repaint_boundary / needs_compositing / cached_constraints /
+    // parent_data) was deleted. Workspace audit:
+    //   - 5 fields (needs_compositing_bits_update, needs_semantics_update,
+    //     needs_compositing, cached_constraints, parent_data) had zero
+    //     writes AND zero reads -- pure placeholders.
+    //   - 2 fields (needs_layout, needs_paint) had writes
+    //     (set_configuration / schedule_initial_*_internal /
+    //     perform_layout) but ZERO reads -- the framework never
+    //     consulted them when scheduling frames.
+    //   - 2 fields (depth, is_repaint_boundary) were constants set at
+    //     construction and read only by tests asserting the field
+    //     value (test-the-field-not-the-behavior).
+    // Re-introduce concrete fields with concrete consumers when the
+    // full RenderView lifecycle plumbing materializes (RenderState<P>
+    // already carries the equivalent atomic flags via
+    // `crates/flui-rendering/src/storage/flags.rs`).
+    //
+    // U2 exemplar refactor note (preserved): the previous
+    // `was_repaint_boundary` field lived here as a mirror of the
+    // (removed) `RenderObject::set_was_repaint_boundary` trait method.
+    // The bit now lives on `RenderState<P>::flags` as
+    // `WAS_REPAINT_BOUNDARY` (see flags.rs + ARCHITECTURE.md).
 }
 
 impl Debug for RenderView {
@@ -124,16 +121,6 @@ impl RenderView {
             layer: None,
             automatic_system_ui_adjustment: true,
             owner: None,
-            // RenderView is always a repaint boundary and needs compositing
-            depth: 0,
-            needs_layout: true,
-            needs_paint: true,
-            needs_compositing_bits_update: false,
-            needs_semantics_update: false,
-            is_repaint_boundary: true,
-            needs_compositing: true,
-            cached_constraints: None,
-            parent_data: None,
         }
     }
 
@@ -183,10 +170,11 @@ impl RenderView {
         }
 
         self.configuration = Some(configuration);
-
-        if self.root_transform.is_some() {
-            self.needs_layout = true;
-        }
+        // Cycle 4 R-14: the previous `self.needs_layout = true` write
+        // here had zero readers. When RenderView's full lifecycle
+        // plumbing lands, the equivalent invalidation flips on
+        // `RenderState<P>::flags::NEEDS_LAYOUT` (the atomic version
+        // in `crates/flui-rendering/src/storage/flags.rs`).
     }
 
     // ========================================================================
@@ -300,12 +288,17 @@ impl RenderView {
     }
 
     fn schedule_initial_layout_internal(&mut self) {
-        self.needs_layout = true;
+        // Cycle 4 R-14: the previous `self.needs_layout = true` write
+        // had zero readers. RenderState<P>::flags::NEEDS_LAYOUT is
+        // the load-bearing equivalent; the full plumbing lands when
+        // RenderView grows its own RenderState (or attaches to one).
     }
 
     fn schedule_initial_paint_internal(&mut self) {
         self.layer = Some(self.update_matrices_and_create_new_root_layer());
-        self.needs_paint = true;
+        // Cycle 4 R-14: the previous `self.needs_paint = true` write
+        // had zero readers. RenderState<P>::flags::NEEDS_PAINT carries
+        // the live signal post-plumbing.
     }
 
     /// Prepare the initial frame without requiring a PipelineOwner.
@@ -338,8 +331,11 @@ impl RenderView {
             "RenderView size must be finite: {:?}",
             self.size
         );
-
-        self.needs_layout = false;
+        // Cycle 4 R-14: the previous `self.needs_layout = false`
+        // clear had zero readers. The atomic flag lives on
+        // `RenderState<P>::flags::NEEDS_LAYOUT`; clearing it will
+        // happen at the state-flip site when RenderView's lifecycle
+        // plumbing wires up.
     }
 
     // ========================================================================
@@ -620,17 +616,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_render_view_is_repaint_boundary() {
-        let view = RenderView::new();
-        assert!(view.is_repaint_boundary);
-    }
-
-    #[test]
-    fn test_render_view_depth() {
-        let view = RenderView::new();
-        assert_eq!(view.depth, 0);
-    }
+    // Cycle 4 R-14: tests for `is_repaint_boundary` and `depth`
+    // fields were removed alongside the field deletions -- the tests
+    // asserted the field VALUE (a literal `0` / `true`), not any
+    // behavior driven by the field. Both fields had zero production
+    // readers, so the assertions tested the test itself.
 
     #[test]
     fn test_render_view_owner_is_none() {

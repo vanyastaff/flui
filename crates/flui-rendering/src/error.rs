@@ -12,6 +12,17 @@ use thiserror::Error;
 /// workspace 2026 quality bar — public error enums in foundation /
 /// tree / painting / engine all carry the attribute (cycle 3 I-11
 /// added it on `DiagnosticLevel` / `DiagnosticsTreeStyle`).
+///
+/// Cycle 4 R-17: the 5 message-carrying variants
+/// (`InvalidConstraints`, `RelayoutBoundaryViolation`, `LayerError`,
+/// `CompositingError`, `SemanticsError`) store `Box<str>` rather
+/// than `String`. `Box<str>` is a 16-byte fat pointer (vs `String`'s
+/// 24-byte `Vec<u8>` header) and never wastes capacity on the heap
+/// — error messages are written-once / read-rarely, so the `Vec`
+/// growth amortisation `String` provides has no value here. Same
+/// pattern as cycle 3 PR #106 (TreeError::Internal). Constructors
+/// accept `impl Into<Box<str>>` which covers `&str`, `String`, and
+/// `Box<str>` callers unchanged.
 #[derive(Error, Debug, Clone)]
 #[non_exhaustive]
 pub enum RenderError {
@@ -52,7 +63,7 @@ pub enum RenderError {
     #[error("invalid constraints: {message}")]
     InvalidConstraints {
         /// Description of the constraint violation.
-        message: String,
+        message: Box<str>,
     },
 
     /// Layout performed during paint phase.
@@ -67,7 +78,7 @@ pub enum RenderError {
     #[error("relayout boundary violated: {message}")]
     RelayoutBoundaryViolation {
         /// Description of the violation.
-        message: String,
+        message: Box<str>,
     },
 
     // ========================================================================
@@ -85,7 +96,7 @@ pub enum RenderError {
     #[error("layer operation failed: {message}")]
     LayerError {
         /// Description of the layer error.
-        message: String,
+        message: Box<str>,
     },
 
     // ========================================================================
@@ -109,7 +120,7 @@ pub enum RenderError {
     #[error("compositing bits update failed: {message}")]
     CompositingError {
         /// Description of the compositing error.
-        message: String,
+        message: Box<str>,
     },
 
     // ========================================================================
@@ -119,7 +130,7 @@ pub enum RenderError {
     #[error("semantics operation failed: {message}")]
     SemanticsError {
         /// Description of the semantics error.
-        message: String,
+        message: Box<str>,
     },
 
     /// Semantics not enabled.
@@ -185,37 +196,49 @@ pub type RenderResult<T> = Result<T, RenderError>;
 
 impl RenderError {
     /// Creates an invalid constraints error with a message.
-    pub fn invalid_constraints(message: impl Into<String>) -> Self {
+    ///
+    /// Cycle 4 R-17: message stored as `Box<str>` (heap allocation
+    /// shrinks from 24 bytes of `String` header to 16 bytes of fat
+    /// pointer).
+    ///
+    /// PR #112 review fix: constructor bound is `impl AsRef<str>`
+    /// rather than `impl Into<Box<str>>`. `AsRef<str>` is strictly
+    /// more permissive -- it accepts `&str`, `String`, `Box<str>`,
+    /// `&String`, `Cow<str>`, etc. The allocation happens once via
+    /// `message.as_ref().into()` (str -> Box<str>). Pre-fix
+    /// `Into<Box<str>>` rejected `&String` callers (no impl from
+    /// `&String` to `Box<str>` without deref coercion).
+    pub fn invalid_constraints(message: impl AsRef<str>) -> Self {
         Self::InvalidConstraints {
-            message: message.into(),
+            message: message.as_ref().into(),
         }
     }
 
     /// Creates a relayout boundary violation error.
-    pub fn relayout_boundary(message: impl Into<String>) -> Self {
+    pub fn relayout_boundary(message: impl AsRef<str>) -> Self {
         Self::RelayoutBoundaryViolation {
-            message: message.into(),
+            message: message.as_ref().into(),
         }
     }
 
     /// Creates a layer error.
-    pub fn layer(message: impl Into<String>) -> Self {
+    pub fn layer(message: impl AsRef<str>) -> Self {
         Self::LayerError {
-            message: message.into(),
+            message: message.as_ref().into(),
         }
     }
 
     /// Creates a compositing error.
-    pub fn compositing(message: impl Into<String>) -> Self {
+    pub fn compositing(message: impl AsRef<str>) -> Self {
         Self::CompositingError {
-            message: message.into(),
+            message: message.as_ref().into(),
         }
     }
 
     /// Creates a semantics error.
-    pub fn semantics(message: impl Into<String>) -> Self {
+    pub fn semantics(message: impl AsRef<str>) -> Self {
         Self::SemanticsError {
-            message: message.into(),
+            message: message.as_ref().into(),
         }
     }
 

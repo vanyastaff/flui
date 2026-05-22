@@ -135,14 +135,12 @@ pub trait ViewportOffset: Debug + Send + Sync {
 /// Corresponds to Flutter's `_FixedViewportOffset` class.
 pub struct FixedViewportOffset {
     pixels: f32,
-    listeners: RwLock<Vec<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 impl Debug for FixedViewportOffset {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FixedViewportOffset")
             .field("pixels", &self.pixels)
-            .field("listeners_count", &self.listeners.read().len())
             .finish()
     }
 }
@@ -150,25 +148,25 @@ impl Debug for FixedViewportOffset {
 impl FixedViewportOffset {
     /// Creates a fixed viewport offset with the given pixels value.
     pub fn new(pixels: f32) -> Self {
-        Self {
-            pixels,
-            listeners: RwLock::new(Vec::new()),
-        }
+        Self { pixels }
     }
 
     /// Creates a fixed viewport offset at zero.
     pub fn zero() -> Self {
         Self::new(0.0)
     }
-
-    #[allow(dead_code)] // Reserved for future ViewportOffset listener API
-    fn notify_listeners(&self) {
-        let listeners = self.listeners.read();
-        for listener in listeners.iter() {
-            listener();
-        }
-    }
 }
+
+// Cycle 4 R-19: pre-cycle `FixedViewportOffset` carried
+// `listeners: RwLock<Vec<Arc<dyn Fn() + Send + Sync>>>` + a private
+// `notify_listeners()` marked `#[allow(dead_code)] // Reserved for
+// future ViewportOffset listener API`. The notify path was never
+// called because a fixed viewport offset never changes its `pixels`
+// (`jump_to` / `animate_to` are no-ops by design). Storing listeners
+// that can never fire was speculative API; both field and method
+// were deleted alongside the `add_listener`/`remove_listener` trait
+// impl below being downgraded to no-ops (the trait still requires
+// them, but with no storage they cost nothing). See audit R-19.
 
 impl Default for FixedViewportOffset {
     fn default() -> Self {
@@ -217,15 +215,15 @@ impl ViewportOffset for FixedViewportOffset {
         false
     }
 
-    fn add_listener(&self, listener: Arc<dyn Fn() + Send + Sync>) {
-        self.listeners.write().push(listener);
+    fn add_listener(&self, _listener: Arc<dyn Fn() + Send + Sync>) {
+        // No-op: FixedViewportOffset's `pixels` value never changes
+        // (`jump_to` / `animate_to` are no-ops by design), so no
+        // listener could ever fire. The trait requires the method;
+        // dropping the unreachable storage is cycle 4 R-19.
     }
 
-    fn remove_listener(&self, listener: &Arc<dyn Fn() + Send + Sync>) {
-        let mut listeners = self.listeners.write();
-        if let Some(pos) = listeners.iter().position(|l| Arc::ptr_eq(l, listener)) {
-            listeners.remove(pos);
-        }
+    fn remove_listener(&self, _listener: &Arc<dyn Fn() + Send + Sync>) {
+        // No-op for the same reason as `add_listener`.
     }
 }
 
