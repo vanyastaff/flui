@@ -196,43 +196,6 @@ pub use text_layout::{
 };
 pub use text_painter::{DEFAULT_FONT_SIZE, TextBaseline, TextPainter};
 
-// Flutter compatibility: Picture is our DisplayList
-/// A Picture is an immutable recording of drawing commands.
-///
-/// In FLUI, `Picture` is a type alias for [`DisplayList`]. This provides
-/// compatibility with Flutter's Picture API while maintaining our internal
-/// naming convention.
-///
-/// # Flutter Equivalence
-///
-/// ```dart
-/// // Flutter
-/// final recorder = PictureRecorder();
-/// final canvas = Canvas(recorder);
-/// canvas.drawRect(rect, paint);
-/// final picture = recorder.endRecording();
-/// ```
-///
-/// ```rust,ignore
-/// // FLUI
-/// let mut canvas = Canvas::new();
-/// canvas.draw_rect(rect, &paint);
-/// let picture: Picture = canvas.finish();
-/// ```
-///
-/// # Usage
-///
-/// ```rust,ignore
-/// use flui_painting::{Canvas, Picture};
-///
-/// fn record_drawing() -> Picture {
-///     let mut canvas = Canvas::new();
-///     canvas.draw_circle(Point::ZERO, 50.0, &Paint::fill(Color::BLUE));
-///     canvas.finish() // Returns Picture (DisplayList)
-/// }
-/// ```
-pub type Picture = DisplayList;
-
 // Re-export essential painting types from flui_types for user convenience
 // This creates a cohesive API where users don't need to import from multiple
 // crates
@@ -277,7 +240,6 @@ pub mod prelude {
         BlendMode, Paint, PaintStyle, PointMode, Shader, StrokeCap, StrokeJoin,
     };
 
-    pub use crate::Picture; // Flutter compatibility
     pub use crate::{
         canvas::Canvas,
         display_list::{DisplayList, DisplayListCore, DisplayListExt, DrawCommand},

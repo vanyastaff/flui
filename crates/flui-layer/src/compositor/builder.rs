@@ -365,12 +365,12 @@ impl<'a> SceneBuilder<'a> {
     /// # Architecture
     ///
     /// ```text
-    /// Canvas → finish() → Picture → SceneBuilder::add_picture() → PictureLayer
+    /// Canvas → finish() → DisplayList → SceneBuilder::add_picture() → PictureLayer
     /// ```
     ///
     /// # Arguments
     ///
-    /// * `picture` - The recorded Picture (DisplayList) from Canvas::finish()
+    /// * `picture` - The recorded `DisplayList` from `Canvas::finish()`
     ///
     /// # Examples
     ///
@@ -407,7 +407,7 @@ impl<'a> SceneBuilder<'a> {
     ///
     /// - [`add_canvas`](Self::add_canvas) - For mutable canvas recording
     /// - [`PictureLayer`](crate::PictureLayer) - The layer type created
-    pub fn add_picture(&mut self, picture: flui_painting::Picture) -> LayerId {
+    pub fn add_picture(&mut self, picture: flui_painting::DisplayList) -> LayerId {
         use crate::layer::PictureLayer;
         self.add_leaf(Layer::from(PictureLayer::new(picture)))
     }
