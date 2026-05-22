@@ -583,14 +583,24 @@ impl RenderTree {
     ///   widget tree depth (Flutter's `RenderObject` paint trees
     ///   measure ~20-40 deep in practice) without heap allocation.
     ///   Deeper trees spill to heap automatically.
-    /// - **Single `Vec<RenderId>::to_vec()` clone per node** was the
-    ///   per-call alloc the recursive path paid; the iterative
-    ///   version uses `extend_from_slice` into the work stack,
-    ///   amortising across the whole walk.
+    /// - **No per-node child clone.** The recursive path called
+    ///   `node.children().to_vec()` on every visit to dodge a borrow
+    ///   conflict; the iterative path borrows the slice in-place and
+    ///   pushes child ids onto the work-stack directly. The
+    ///   `RenderId` push is a `Copy` of two `usize`s -- no heap
+    ///   traffic -- and the `SmallVec` doubles its inline buffer to
+    ///   absorb the children without reallocating until depth 32+.
     ///
     /// Pre-order semantics preserved: children are pushed in
     /// **reverse** order so the work-stack pops them in original
     /// child-order (mirrors Flutter's `visitChildren` shape).
+    ///
+    /// PR #116 review (cycle 4 wave 4 follow-up): the prior comment
+    /// claimed `extend_from_slice`. That was a copy-paste error from
+    /// an earlier draft; reversing in-place via `iter().rev()` is
+    /// required for pre-order pop-order and `extend_from_slice` would
+    /// need a temporary reversed allocation, defeating the no-alloc
+    /// goal. The body matches the doc now.
     pub fn visit_depth_first<F>(&self, mut f: F)
     where
         F: FnMut(RenderId, &RenderNode),
@@ -884,5 +894,52 @@ mod tests {
             tree.get_parent_and_children_mut(parent, &[c1, parent])
                 .is_none()
         );
+    }
+
+    /// Cycle 4 PR #116 review fix: pre-order traversal of the
+    /// iterative `visit_depth_first` must yield root, then each
+    /// subtree in child-insertion order. The reverse-push trick is
+    /// the load-bearing detail; this test would catch any future
+    /// "simpler" rewrite that pushes children forward and prints
+    /// siblings in reverse.
+    ///
+    /// Tree shape (insertion order matches child order):
+    /// ```text
+    /// root
+    /// ├── a
+    /// │   └── a1
+    /// ├── b
+    /// └── c
+    /// ```
+    /// Expected pre-order: [root, a, a1, b, c]
+    #[test]
+    fn visit_depth_first_yields_preorder_with_sibling_order() {
+        let mut tree = RenderTree::new();
+        let root = tree.insert_box(make_leaf());
+        tree.set_root(Some(root));
+
+        let a = tree.insert_box_child(root, make_leaf()).expect("insert a");
+        let a1 = tree.insert_box_child(a, make_leaf()).expect("insert a1");
+        let b = tree.insert_box_child(root, make_leaf()).expect("insert b");
+        let c = tree.insert_box_child(root, make_leaf()).expect("insert c");
+
+        let mut visited = Vec::new();
+        tree.visit_depth_first(|id, _| visited.push(id));
+
+        assert_eq!(
+            visited,
+            vec![root, a, a1, b, c],
+            "pre-order must be root, then each subtree in child-insertion order"
+        );
+    }
+
+    /// Empty-root guard: when no root is set, the visitor is never
+    /// invoked. Tests the `Some(root_id) else return` early exit.
+    #[test]
+    fn visit_depth_first_with_no_root_is_noop() {
+        let tree = RenderTree::new();
+        let mut visited = 0_usize;
+        tree.visit_depth_first(|_, _| visited += 1);
+        assert_eq!(visited, 0);
     }
 }
