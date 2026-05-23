@@ -1,7 +1,39 @@
 <!--
   Sync Impact Report
   ==================
-  Version change: 2.2.0 → 2.3.0 (MINOR)
+  Version change: 2.3.0 → 2.4.0 (MINOR)
+  Bump rationale: D-block PR-C-2 executed two of the deferred
+    target-state crate decompositions named in the 2.3.0 deferred-items
+    list: (1) flui-geometry was split out of flui-types as a Layer-0
+    Foundation crate housing the 25 geometry source files (Point, Rect,
+    Matrix4, Bézier, Units, Transform, etc.); (2) flui-log was merged
+    into flui-foundation as a `log` submodule (D-block PR-C-1, already
+    merged at squash e3a3c4ff). The Crate Architecture table is now
+    rewritten to reflect both changes.
+
+  Modified sections:
+    - Crate Architecture (added flui-geometry Foundation row; updated
+      flui-types row to drop geometry responsibility; removed flui-log
+      row; updated flui-foundation row to mention the new log module)
+    - Strict Crate Dependency DAG principle (leaf-crate statement now
+      names flui-geometry alongside flui-types and flui-foundation)
+
+  Added sections: None
+  Removed sections: None (flui-log row removed from table only)
+
+  Templates requiring updates:
+    - .specify/templates/* ✅ no update needed
+    - CLAUDE.md ✅ updated alongside this commit (version 2.3.0 → 2.4.0)
+
+  Files requiring follow-up: none.
+
+  Deferred items (carried forward from 2.3.0):
+    - flui-widgets / flui-material / flui-cupertino / flui-localizations
+      decomposition per docs/FOUNDATIONS.md Part IV — Core.1/Catalog.1 work
+    - TODO: re-evaluate wgpu 26.x pin by 2026-Q3
+
+  Sync Impact Report (prior — 2.2.0 → 2.3.0)
+  ------------------------------------------
   Bump rationale: Factual corrections + alignment with the new
     architecture contract. The 2.2.0 Crate Architecture table
     misattributed geometry/color/text-style responsibility to
@@ -68,8 +100,9 @@ Dependencies flow strictly downward — no circular dependencies.
 
 | Layer | Crate | Responsibility |
 |-------|-------|---------------|
-| Foundation | `flui-types` | Base types, units, IDs; geometry (`Point`, `Rect`, `Matrix4`, Bézier), styling (colors, paint values), typography, layout enums, gestures, physics value types, platform value types |
-| Foundation | `flui-foundation` | Framework primitives: `ChangeNotifier` / `Listenable`, `Id` system, `BindingBase`, `Key`, diagnostics, error helpers |
+| Foundation | `flui-geometry` | 2D geometry primitives: `Point`, `Vec2`, `Size`, `Offset`, `Rect`, `RRect`, `Circle`, `Line`, `Matrix4`, `Transform`, `Transform2D`, Bézier curves, `Bounds`, `Edges`/`Corners`, type-safe units (`Pixels`/`DevicePixels`/`ScaledPixels`/`Rems`), text path helpers. Split out of `flui-types` in D-block PR-C-2 (2.4.0) |
+| Foundation | `flui-types` | Base types: styling (colors, paint values), typography, layout enums, gestures, physics value types, platform value types. Re-exports `flui-geometry` under the `flui_types::geometry` namespace for backward compat |
+| Foundation | `flui-foundation` | Framework primitives: `ChangeNotifier` / `Listenable`, `Id` system, `BindingBase`, `Key`, diagnostics, error helpers, `log` submodule (cross-platform tracing backend; merged from former `flui-log` crate in D-block PR-C-1 / 2.4.0) |
 | Reactivity | `flui-reactivity` | Signals, effects, state management |
 | Tree | `flui-tree` | Tree primitives: `TreeRead` / `TreeNav` / `TreeWrite` trait trio, iterators (DFS/BFS/parents/ancestors), arity (`Leaf`/`Single`/`Optional`/`Variable`), depth tracking. Reconciliation lives in `flui-view`, not `flui-tree` (the speculative `diff` module was deleted in Cycle 3 per `crates/flui-tree/src/lib.rs`). |
 | Rendering | `flui-rendering` | Render objects, layout protocol, paint |
@@ -86,7 +119,6 @@ Dependencies flow strictly downward — no circular dependencies.
 | App | `flui-app` | App runner, root widget, app lifecycle |
 | CLI | `flui-cli` | CLI tooling (create, build, run, dev) |
 | DevTools | `flui-devtools` | Inspector, element tree viewer, perf overlay |
-| Logging | `flui-log` | Structured logging for framework internals |
 
 ## Core Architectural Principles
 
@@ -105,8 +137,10 @@ idiomatically to Rust's ownership model. No GC, no runtime reflection.
 
 Dependencies flow downward only. No circular dependencies permitted.
 
-- `flui-types` and `flui-foundation` are leaf crates with zero
-  intra-project dependencies.
+- `flui-geometry`, `flui-types`, and `flui-foundation` are
+  Foundation-layer crates with zero intra-project dependencies (except
+  `flui-types` which depends on `flui-geometry` as of the 2.4.0
+  decomposition).
 - Higher-level crates (`flui-app`, `flui-engine`) compose
   lower-level ones.
 - Adding a new dependency edge MUST be reviewed against the
@@ -357,4 +391,4 @@ These patterns are explicitly prohibited:
   gate in `plan-template.md`.
 - All code reviews MUST verify adherence to these principles.
 
-**Version**: 2.3.0 | **Ratified**: 2026-02-08 | **Last Amended**: 2026-05-22
+**Version**: 2.4.0 | **Ratified**: 2026-02-08 | **Last Amended**: 2026-05-23
