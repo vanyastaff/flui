@@ -54,6 +54,12 @@ serial_test = "3"
 # workspace already pins `bon = "3.8"`; we pull it in only at the
 # `flui-view` dev boundary so non-test builds do not link it.
 bon = { workspace = true }
+# Phase 3 §U34 (SC-014 column! 17-children compile-fail): trybuild
+# drives the `tests/ui/` compile-fail corpus. Declared directly
+# rather than via workspace deps — the workspace's `Cargo.toml`
+# does not pin trybuild yet, and this is currently the only
+# consumer. Pattern mirrors `crates/flui-types/Cargo.toml:35`.
+trybuild = "1.0"
 
 [features]
 default = []
