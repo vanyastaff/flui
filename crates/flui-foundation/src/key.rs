@@ -540,6 +540,62 @@ impl ViewKey for UniqueKey {
 }
 
 // ============================================================================
+// VIEW KEY IMPLEMENTATION FOR `Key`
+// ============================================================================
+//
+// Plan §U10 / KTD-3 N2: the spec's "five concrete `ViewKey` impls"
+// assumption expected `Key` (NonZeroU64 newtype) to be storable as a
+// reconciliation key alongside `ValueKey<T>`, `UniqueKey`, `ObjectKey`,
+// `GlobalKey<T>`. Without this impl the assumption was off by one — only
+// four impls existed. Adding it lets any caller treat a `Key` (compile-
+// time FNV-1a hash via `Key::from_str` or runtime atomic counter via
+// `Key::new`) as a `Box<dyn ViewKey>` for storage on `ElementNode` and
+// for participation in `View::can_update`'s key-match branch.
+//
+// `Key` is `Copy + Clone + PartialEq + Eq + Hash`, so the impl is
+// trivial: `clone_key` boxes a copy, `key_eq` downcasts and compares
+// inner `NonZeroU64`, `key_hash` returns the inner `u64` directly
+// (already-hashed: `Key::from_str` is a const FNV-1a, `Key::new` is an
+// atomic counter — both are well-distributed identifiers). `Key` is
+// not a global-handoff key; `is_global_key` keeps the default `false`.
+
+impl ViewKey for Key {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn key_eq(&self, other: &dyn ViewKey) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<Self>()
+            .is_some_and(|other| self.0 == other.0)
+    }
+
+    fn key_hash(&self) -> u64 {
+        // `Key` already holds an identifier-shaped `NonZeroU64`; expose
+        // it directly. No need to re-hash through `DefaultHasher` like
+        // `ValueKey<T>` does (which hashes both the inner `T` AND its
+        // `TypeId` to keep `ValueKey<u32>(42)` distinct from
+        // `ValueKey<i32>(42)`). `Key` has no inner type parameter, so
+        // collision with other `Key` instances would require the same
+        // raw `u64` — which is what `key_eq` then compares anyway.
+        self.0.get()
+    }
+
+    fn clone_key(&self) -> Box<dyn ViewKey> {
+        // `Key` is `Copy`, so `Box::new(*self)` is the canonical
+        // clone-into-trait-object pattern.
+        Box::new(*self)
+    }
+
+    fn debug_fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Delegate to `Key`'s own `Debug` impl, which renders as
+        // `Key(<inner-u64>)`. Avoids drift between the two formatters.
+        fmt::Debug::fmt(self, f)
+    }
+}
+
+// ============================================================================
 // KEYED WRAPPER
 // ============================================================================
 
@@ -787,6 +843,79 @@ mod tests {
         let key_ref = KeyRef::from(key);
         assert_eq!(format!("{key_ref:?}"), "KeyRef(42)");
         assert_eq!(format!("{key_ref}"), "42");
+    }
+
+    // ========================================================================
+    // ViewKey impl for Key (plan §U10 / KTD-3 N2)
+    // ========================================================================
+
+    /// `Key::key_hash` returns the inner `u64` directly and is
+    /// deterministic across calls. Re-hashing the same `Key` must yield
+    /// the same value or the reconciler's `HashMap<u64, ElementId>`
+    /// lookup would miss on reorder.
+    #[test]
+    fn test_key_view_key_hash_determinism() {
+        let key = Key::from_str("k1");
+        let h1 = key.key_hash();
+        let h2 = key.key_hash();
+        assert_eq!(h1, h2);
+        // Hash equals the inner u64.
+        assert_eq!(h1, key.as_u64());
+    }
+
+    /// `key_eq` is reflexive (same `Key` matches itself) and rejects
+    /// distinct `Key`s. Same-string `Key::from_str` instances are equal
+    /// because the FNV-1a hash is deterministic.
+    #[test]
+    fn test_key_view_key_eq() {
+        let k1: &dyn ViewKey = &Key::from_str("k1");
+        let k1_dup: &dyn ViewKey = &Key::from_str("k1");
+        let k2: &dyn ViewKey = &Key::from_str("k2");
+
+        assert!(k1.key_eq(k1));
+        assert!(k1.key_eq(k1_dup));
+        assert!(!k1.key_eq(k2));
+    }
+
+    /// `key_eq` rejects cross-type compares: `Key` vs `ValueKey<u32>`
+    /// is never a match, even if the underlying numeric values
+    /// coincide. The downcast inside the impl is what enforces this.
+    #[test]
+    fn test_key_view_key_eq_rejects_cross_type() {
+        let key: &dyn ViewKey = &Key::from_u64(42).unwrap();
+        let value_key = ValueKey::<u64>::new(42);
+        let value: &dyn ViewKey = &value_key;
+        assert!(!key.key_eq(value));
+        assert!(!value.key_eq(key));
+    }
+
+    /// `Key` is not a global-handoff key. Only `flui-view`'s
+    /// `GlobalKey<T>` overrides `is_global_key` to `true`.
+    #[test]
+    fn test_key_view_key_is_not_global() {
+        let key = Key::from_str("not-global");
+        assert!(!(&key as &dyn ViewKey).is_global_key());
+    }
+
+    /// `clone_key` produces a `Box<dyn ViewKey>` that compares equal
+    /// to the source via `key_eq` and hashes to the same `u64`.
+    #[test]
+    fn test_key_view_key_clone_roundtrip() {
+        let original = Key::from_u64(0x00AB_CDEF).unwrap();
+        let cloned: Box<dyn ViewKey> = (&original as &dyn ViewKey).clone_key();
+        assert_eq!(cloned.key_hash(), original.key_hash());
+        assert!(cloned.key_eq(&original));
+        assert!((&original as &dyn ViewKey).key_eq(&*cloned));
+    }
+
+    /// `debug_fmt` matches `Key`'s own `Debug` impl so trace output
+    /// from `&dyn ViewKey` formatting reads identically to a direct
+    /// `{:?}` on the concrete value.
+    #[test]
+    fn test_key_view_key_debug_fmt() {
+        let key = Key::from_u64(42).unwrap();
+        let as_dyn: &dyn ViewKey = &key;
+        assert_eq!(format!("{as_dyn:?}"), format!("{key:?}"));
     }
 
     #[test]
