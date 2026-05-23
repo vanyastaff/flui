@@ -19,6 +19,7 @@ pub mod behavior;
 pub(crate) mod behavior_commons;
 pub mod child_storage;
 pub mod generic;
+pub mod kind;
 pub mod unified;
 
 use flui_foundation::ElementId;
@@ -39,6 +40,10 @@ pub use child_storage::{
 };
 pub use generic::ElementCore;
 pub use inherited_access::InheritedElementAccess;
+pub use kind::{
+    AnimationListener, ElementKind, InheritedElementBase, ProxyElementBase, RenderElementBase,
+    StatefulElementBase, StatelessElementBase,
+};
 pub use lifecycle::Lifecycle;
 pub use notification::{
     DragEndNotification, DragStartNotification, FocusNotification, KeepAliveNotification,
