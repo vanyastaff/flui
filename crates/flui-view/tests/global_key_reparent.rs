@@ -139,6 +139,7 @@ fn capture<F: FnOnce()>(body: F) -> Vec<CollectedEvent> {
 /// Some(key_hash)`). No spurious `Mount` / `Unmount` for the
 /// migrated subtree.
 #[test]
+#[serial_test::serial(global_key_registry)]
 fn covers_sc003_reparent_emits_single_reparent_event() {
     let (tree, owner) = fresh_tree();
 
@@ -274,6 +275,7 @@ fn covers_sc003_reparent_emits_single_reparent_event() {
 /// assertions above — together they prove the wiring is functional
 /// AND observable.
 #[test]
+#[serial_test::serial(global_key_registry)]
 fn covers_sc003_state_preserved_across_reparent() {
     let (tree, owner) = fresh_tree();
 

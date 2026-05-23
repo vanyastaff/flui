@@ -42,6 +42,12 @@ criterion = { workspace = true }
 # enabled at the integration boundary) still see it. Cargo merges
 # both declarations; no duplication in the lockfile.
 tracing-subscriber = { workspace = true }
+# Plan §U17/§U19 follow-up: serialize tests that touch the process-
+# wide GlobalKey REGISTRY singleton installed via
+# `test_only_set_global_key_registry`. Without `#[serial]` gating,
+# parallel cargo test runs race the install → tests resolve through
+# each other's trees and fail non-deterministically.
+serial_test = "3"
 
 [features]
 default = []
