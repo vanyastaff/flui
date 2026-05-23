@@ -8,11 +8,11 @@ extend-exclude = [
     ".gpui/**",
     ".claude/**",
     "Cargo.lock",
-    "docs/research/**/*.md",         # audits quote external code; preserve verbatim
+    "docs/research/**/*.md",     # audits quote external code; preserve verbatim
     "docs/brainstorms/**/*.md",
-    "docs/plans/**/*.md",            # plans are reviewed artifacts; preserve verbatim
-    "specs/**/*.md",                 # speckit artifacts: reviewed, preserved verbatim
-    "platforms/**/*.storyboard",     # auto-generated Apple XIB
+    "docs/plans/**/*.md",        # plans are reviewed artifacts; preserve verbatim
+    "specs/**/*.md",             # speckit artifacts: reviewed, preserved verbatim
+    "platforms/**/*.storyboard", # auto-generated Apple XIB
     "platforms/**/*.xib",
     "platforms/**/*.pbxproj",
 ]
