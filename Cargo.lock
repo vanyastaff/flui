@@ -1288,6 +1288,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "flui-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.111",
+]
+
+[[package]]
 name = "flui-painting"
 version = "0.1.0"
 dependencies = [
@@ -1450,11 +1459,13 @@ name = "flui-view"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.10.0",
+ "criterion",
  "downcast-rs 2.0.2",
  "dyn-clone",
  "flui-foundation",
  "flui-interaction",
  "flui-log",
+ "flui-macros",
  "flui-rendering",
  "flui-tree",
  "flui-types",

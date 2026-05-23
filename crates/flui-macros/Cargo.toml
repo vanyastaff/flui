@@ -1,0 +1,29 @@
+[package]
+name = "flui-macros"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Procedural macros for the FLUI framework (View derives, builder helpers)"
+repository.workspace = true
+keywords = ["flui", "proc-macro", "view", "derive"]
+categories = ["gui"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+# proc-macro2 / quote / syn 2.x is the standard derive-macro stack. These
+# crates are already pulled into the workspace `Cargo.lock` transitively
+# (`syn 2.0` via `bytemuck_derive`, `cosmic-text`, the wgpu chain), so
+# promoting them to direct deps of a workspace-owned crate adds zero new
+# lockfile entries.
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }
+
+[features]
+default = []
+
+[lints]
+workspace = true
