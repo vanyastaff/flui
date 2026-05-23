@@ -3,7 +3,7 @@
 //! StatefulViews maintain state that persists across rebuilds.
 //! The state is held by the Element, not the View itself.
 
-use super::view::View;
+use super::into_view::IntoView;
 use crate::context::BuildContext;
 
 /// A View that has persistent mutable state.
@@ -63,8 +63,8 @@ use crate::context::BuildContext;
 /// }
 ///
 /// impl ViewState<Counter> for CounterState {
-///     fn build(&self, view: &Counter, ctx: &dyn BuildContext) -> Box<dyn View> {
-///         Text::new(format!("Count: {}", self.count)).boxed()
+///     fn build(&self, view: &Counter, ctx: &dyn BuildContext) -> impl IntoView {
+///         Text::new(format!("Count: {}", self.count))
 ///     }
 /// }
 /// ```
@@ -113,7 +113,20 @@ pub trait ViewState<V: StatefulView>: Send + Sync + 'static {
     ///
     /// * `view` - The current View configuration
     /// * `ctx` - The build context
-    fn build(&self, view: &V, ctx: &dyn BuildContext) -> Box<dyn View>;
+    ///
+    /// # Object safety
+    ///
+    /// `ViewState::build` returns `impl IntoView` (return-position
+    /// `impl Trait` in trait, stabilized in Rust 1.75). This makes
+    /// `ViewState` **non-object-safe** — no `dyn ViewState` use exists
+    /// or is needed (Phase 3 §U22, FR-008).
+    ///
+    /// The framework normalizes the opaque return via
+    /// [`IntoView::into_view`] inside the build call site (see
+    /// `element/behavior.rs`), boxing the concrete `'static` value
+    /// into `Box<dyn View>` before the closure / catch-unwind
+    /// boundary. See `StatelessView::build` for the rationale.
+    fn build(&self, view: &V, ctx: &dyn BuildContext) -> impl IntoView;
 
     /// Called when the View configuration changes.
     ///
@@ -135,33 +148,14 @@ pub trait ViewState<V: StatefulView>: Send + Sync + 'static {
     fn dispose(&mut self) {}
 }
 
-/// Implement View for a StatefulView type.
-///
-/// This macro creates the View implementation for a StatefulView type.
-/// Use it after implementing StatefulView:
-///
-/// ```rust,ignore
-/// impl StatefulView for MyCounter {
-///     type State = MyCounterState;
-///     fn create_state(&self) -> Self::State { ... }
-/// }
-/// impl_stateful_view!(MyCounter);
-/// ```
-#[macro_export]
-macro_rules! impl_stateful_view {
-    ($ty:ty) => {
-        impl $crate::View for $ty {
-            fn create_element(&self) -> Box<dyn $crate::ElementBase> {
-                use $crate::element::StatefulBehavior;
-                Box::new($crate::StatefulElement::new(
-                    self,
-                    StatefulBehavior::new(self),
-                ))
-            }
-        }
-    };
-}
-
+// The legacy `impl_stateful_view!` declarative macro was deleted in
+// Phase 3 §U24 (FR-010 "MUST NOT be two parallel authoring paths").
+// Widget authors now write `#[derive(StatefulView)]` from
+// `flui-macros` instead; the derive is re-exported from
+// `flui_view::prelude` for ergonomic single-import access. See
+// `crates/flui-macros/src/derive_stateful.rs` for the generated
+// `impl View` block this used to emit by hand-rolled `macro_rules!`.
+//
 // NOTE: StatefulElement implementation has been moved to unified Element
 // architecture. See crates/flui-view/src/element/unified.rs and
 // element/behavior.rs The type alias is exported from element/mod.rs:
@@ -198,11 +192,11 @@ mod tests {
     }
 
     impl ViewState<TestCounter> for TestCounterState {
-        fn build(&self, _view: &TestCounter, _ctx: &dyn BuildContext) -> Box<dyn View> {
+        fn build(&self, _view: &TestCounter, _ctx: &dyn BuildContext) -> impl IntoView {
             // In real code, return actual child views
-            Box::new(TestCounter {
+            TestCounter {
                 initial: self.count,
-            })
+            }
         }
 
         fn dispose(&mut self) {

@@ -141,7 +141,7 @@ mod tests {
     use crate::{
         context::BuildContext,
         element::{AnimatedBehavior, Lifecycle},
-        view::{AnimatedElement, ElementBase, View, ViewState},
+        view::{AnimatedElement, ElementBase, IntoView, View, ViewExt, ViewState},
     };
 
     // Test animated view
@@ -170,8 +170,8 @@ mod tests {
             #[derive(Clone)]
             struct MinimalView;
             impl StatelessView for MinimalView {
-                fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
-                    Box::new(DummyView)
+                fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+                    DummyView.boxed()
                 }
             }
             impl View for MinimalView {
@@ -188,10 +188,10 @@ mod tests {
     }
 
     impl ViewState<TestAnimatedView> for TestAnimatedState {
-        fn build(&self, _view: &TestAnimatedView, _ctx: &dyn BuildContext) -> Box<dyn View> {
+        fn build(&self, _view: &TestAnimatedView, _ctx: &dyn BuildContext) -> impl IntoView {
             self.build_count.fetch_add(1, Ordering::SeqCst);
             // Return a dummy view for testing
-            Box::new(DummyView)
+            DummyView.boxed()
         }
 
         fn dispose(&mut self) {

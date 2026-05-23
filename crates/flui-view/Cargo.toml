@@ -48,6 +48,18 @@ tracing-subscriber = { workspace = true }
 # parallel cargo test runs race the install → tests resolve through
 # each other's trees and fail non-deterministically.
 serial_test = "3"
+# Phase 3 §U23 (`derive_bon_stack` US4 AS2): exercises the
+# `#[derive(StatelessView, ::bon::Builder)]` attribute stack
+# (the catalog's most-common future authoring pattern). The
+# workspace already pins `bon = "3.8"`; we pull it in only at the
+# `flui-view` dev boundary so non-test builds do not link it.
+bon = { workspace = true }
+# Phase 3 §U34 (SC-014 column! 17-children compile-fail): trybuild
+# drives the `tests/ui/` compile-fail corpus. Declared directly
+# rather than via workspace deps — the workspace's `Cargo.toml`
+# does not pin trybuild yet, and this is currently the only
+# consumer. Pattern mirrors `crates/flui-types/Cargo.toml:35`.
+trybuild = "1.0"
 
 [features]
 default = []
@@ -57,14 +69,10 @@ default = []
 # optional `tracing-subscriber` dep at build time.
 test-utils = ["dep:tracing-subscriber"]
 
-# `legacy-downcast` is workspace-internal ONLY — see Phase 1 §U8 and
-# docs/PORT.md. It gates the pre-FR-021 `downcast_ref::<V>()` body
-# inside `ElementCore::update_view` so the Phase 0 §U2 S1 bench can
-# A/B against the legacy storage shape. Default builds use the new
-# identity-shim dispatch path; enabling this feature WITHOUT the
-# internal cfg `__flui_legacy_downcast_internal` emits a
-# `compile_error!`. Phase 3 §U27 removes both gates entirely.
-legacy-downcast = []
+# The `legacy-downcast` feature flag was retired in Phase 3 §U27
+# (FR-021): the pre-FR-021 inline `downcast_ref::<V>()` body inside
+# `ElementCore::update_view` is gone — `dispatch_view_update`
+# (TypeId-keyed `Box::downcast::<V>`) is the only path now.
 
 [[bench]]
 name = "reconcile_baseline"

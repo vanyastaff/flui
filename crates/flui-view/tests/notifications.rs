@@ -28,8 +28,9 @@ use std::{
 
 use flui_foundation::{ElementId, RenderId};
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementBuildContext, ElementTree, Notification,
-    StatelessBehavior, StatelessElement, StatelessView, View, element::Lifecycle,
+    BuildContext, BuildOwner, ElementBase, ElementBuildContext, ElementTree, IntoView,
+    Notification, StatelessBehavior, StatelessElement, StatelessView, View, ViewExt,
+    element::Lifecycle,
 };
 use parking_lot::RwLock;
 
@@ -58,8 +59,8 @@ impl Notification for FooNotification {}
 struct DummyChild;
 
 impl StatelessView for DummyChild {
-    fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
-        Box::new(self.clone())
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        self.clone().boxed()
     }
 }
 

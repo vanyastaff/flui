@@ -46,6 +46,39 @@ impl<V: View> IntoView for V {
     }
 }
 
+/// `IntoView` bridge for already-erased `Box<dyn View>` values.
+///
+/// `Box<dyn View>` does *not* implement [`View`] directly (only
+/// [`BoxedView`] does), so the blanket `impl<V: View> IntoView for V`
+/// above does not cover it. This impl is the explicit bridge that wraps
+/// a `Box<dyn View>` into a [`BoxedView`] so any code path that already
+/// produces an erased pointer (`ErrorView::build_error_view`,
+/// `dyn_clone::clone_box`, legacy `Box<dyn View>`-returning
+/// `StatelessView::build` impls) can flow into an `impl IntoView`
+/// position without an explicit `.boxed()` wrap.
+///
+/// The recommended authoring shape is still to return a concrete
+/// `impl IntoView` (or `BoxedView` via `.boxed()` at the recursion edge);
+/// this impl exists for *interop* with already-erased values, not as a
+/// second authoring path. We do NOT generalize this to
+/// `impl<V: View + ?Sized> IntoView for Box<V>` because it would
+/// conflict (E0119) with the blanket
+/// `impl<V: View> IntoView for V` whenever some future downstream
+/// crate adds `impl View for Box<…>`. Concrete `Box<SomeView>` returns
+/// (`Box::new(SomeView { … })`) are migrated to either bare
+/// `SomeView { … }` (concrete `impl IntoView` via the blanket) or
+/// `SomeView { … }.boxed()` (`BoxedView`, also `impl IntoView` via
+/// the blanket) at the §U28 sweep boundary — not via an interop shim
+/// on `Box<concrete>`.
+impl IntoView for Box<dyn View> {
+    type View = BoxedView;
+
+    #[inline]
+    fn into_view(self) -> Self::View {
+        BoxedView(self)
+    }
+}
+
 // ============================================================================
 // IntoElement
 // ============================================================================

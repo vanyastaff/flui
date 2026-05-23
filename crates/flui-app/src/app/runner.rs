@@ -615,7 +615,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use flui_view::{BuildContext, View};
+    use flui_view::{BuildContext, IntoView, View, ViewExt};
 
     use super::*;
 
@@ -625,8 +625,8 @@ mod tests {
     struct TestView;
 
     impl StatelessView for TestView {
-        fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
-            Box::new(TestView)
+        fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+            TestView.boxed()
         }
     }
 

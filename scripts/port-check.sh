@@ -268,6 +268,43 @@ check "7" \
   crates/flui-engine/src/wgpu
 
 # -----------------------------------------------------------------------------
+# FR-033 (Phase 3 §U29): downcast_ref::<…> in the View-type update dispatch
+# path. Scoped to `crates/flui-view/src/element/{generic.rs, dispatch.rs}` —
+# the body of `ElementCore::update_view` and its dispatch helper. The grep
+# matches **any** `downcast_ref::<` inside the scoped files, not just the
+# `<…View…>` shape: the historical regression form is `downcast_ref::<V>()`
+# where `V` is a generic parameter, and a regex that requires the literal
+# substring `View` inside the type argument is a no-op for the exact defect
+# FR-033 closes. Legitimate non-View-type `downcast_ref` uses (slot
+# attachment in `unified.rs`) live OUTSIDE this scope and are not flagged
+# here; per-line whitelist via `// PORT-CHECK-OK-DOWNCAST: <reason>` markers
+# is reserved for sites that enter the scope but should be sanctioned
+# individually.
+#
+# This is a SPEC requirement (FR-033, SC-004) but NOT a numbered refusal
+# trigger — refusal trigger #9 (FR-036, plan §U30) is the broader
+# sanctioned-`dyn` enforcement; this grep targets a single defect class on
+# a tighter scope.
+# -----------------------------------------------------------------------------
+fr033_hits=$(rg --line-number --column 'downcast_ref::<' \
+  crates/flui-view/src/element/generic.rs \
+  crates/flui-view/src/element/dispatch.rs 2>/dev/null \
+  | grep -Ev '//\s*PORT-CHECK-OK-DOWNCAST:' \
+  | grep -Ev ':\s*(//!|///|//)' \
+  || true)
+if [[ -n "${fr033_hits}" ]]; then
+  echo "VIOLATION FR-033: downcast_ref::<…> in update-dispatch path"
+  echo "see docs/PORT.md (FR-033 enforcement, spec § specs/004-view-element-core/spec.md FR-033)"
+  echo "${fr033_hits}"
+  echo ""
+  violations=$((violations + 1))
+else
+  if [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    FR-033: downcast_ref::<…> in update-dispatch path"
+  fi
+fi
+
+# -----------------------------------------------------------------------------
 # Summary
 # -----------------------------------------------------------------------------
 if [[ "${violations}" -gt 0 ]]; then
@@ -276,5 +313,5 @@ if [[ "${violations}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "port-check: all seven refusal triggers clean"
+echo "port-check: all seven refusal triggers + FR-033 grep clean"
 exit 0

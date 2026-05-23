@@ -15,7 +15,8 @@ use std::sync::Arc;
 
 use flui_foundation::{UniqueKey, ValueKey, ViewKey};
 use flui_view::{
-    BuildContext, ElementBase, GlobalKey, ObjectKey, StatelessElement, StatelessView, View,
+    BuildContext, ElementBase, GlobalKey, IntoView, ObjectKey, StatelessElement, StatelessView,
+    View, ViewExt,
 };
 
 // ----------------------------------------------------------------------------
@@ -47,8 +48,8 @@ impl Clone for Alpha {
 }
 
 impl StatelessView for Alpha {
-    fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
-        Box::new(self.clone())
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        self.clone().boxed()
     }
 }
 
@@ -88,8 +89,8 @@ impl Clone for Beta {
 }
 
 impl StatelessView for Beta {
-    fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
-        Box::new(self.clone())
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        self.clone().boxed()
     }
 }
 

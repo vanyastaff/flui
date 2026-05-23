@@ -20,8 +20,8 @@ use std::sync::Arc;
 
 use flui_foundation::{Key, ObserverId, UniqueKey, ValueKey, ViewKey};
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementTree, GlobalKey, ObjectKey, StatelessElement,
-    StatelessView, View,
+    BuildContext, BuildOwner, ElementBase, ElementTree, GlobalKey, IntoView, ObjectKey,
+    StatelessElement, StatelessView, View, ViewExt,
 };
 
 // ----------------------------------------------------------------------------
@@ -63,11 +63,11 @@ impl Clone for TestView {
 }
 
 impl StatelessView for TestView {
-    fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         // A real view returns child views; tests only exercise the
         // tree-level mount/update path, so the `build` body just
         // re-emits self.
-        Box::new(self.clone())
+        self.clone().boxed()
     }
 }
 

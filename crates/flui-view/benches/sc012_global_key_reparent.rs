@@ -17,7 +17,8 @@ use std::sync::Arc;
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use flui_foundation::ViewKey;
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementTree, GlobalKey, StatefulView, View, ViewState,
+    BuildContext, BuildOwner, ElementBase, ElementTree, GlobalKey, IntoView, StatefulView, View,
+    ViewExt, ViewState,
 };
 use parking_lot::RwLock;
 
@@ -33,8 +34,8 @@ impl StatefulView for Spacer {
     }
 }
 impl ViewState<Spacer> for SpacerState {
-    fn build(&self, _v: &Spacer, _ctx: &dyn BuildContext) -> Box<dyn View> {
-        Box::new(Spacer)
+    fn build(&self, _v: &Spacer, _ctx: &dyn BuildContext) -> impl IntoView {
+        Spacer.boxed()
     }
 }
 impl View for Spacer {
@@ -60,8 +61,8 @@ impl StatefulView for KeyedLeaf {
     }
 }
 impl ViewState<KeyedLeaf> for KeyedLeafState {
-    fn build(&self, _v: &KeyedLeaf, _ctx: &dyn BuildContext) -> Box<dyn View> {
-        Box::new(Spacer)
+    fn build(&self, _v: &KeyedLeaf, _ctx: &dyn BuildContext) -> impl IntoView {
+        Spacer.boxed()
     }
 }
 impl View for KeyedLeaf {

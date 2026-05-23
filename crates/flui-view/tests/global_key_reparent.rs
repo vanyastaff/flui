@@ -19,7 +19,8 @@ use std::sync::Arc;
 
 use flui_foundation::ViewKey;
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementTree, GlobalKey, StatefulView, View, ViewState,
+    BuildContext, BuildOwner, ElementBase, ElementTree, GlobalKey, IntoView, StatefulView, View,
+    ViewExt, ViewState,
     tree::{
         ReconcileEventKind,
         test_utils::{CollectedEvent, ReconcileEventCollector},
@@ -50,8 +51,8 @@ impl StatefulView for Spacer {
 
 struct SpacerState;
 impl ViewState<Spacer> for SpacerState {
-    fn build(&self, _view: &Spacer, _ctx: &dyn BuildContext) -> Box<dyn View> {
-        Box::new(Spacer)
+    fn build(&self, _view: &Spacer, _ctx: &dyn BuildContext) -> impl IntoView {
+        Spacer.boxed()
     }
 }
 
@@ -94,8 +95,8 @@ impl StatefulView for KeyedCounter {
 }
 
 impl ViewState<KeyedCounter> for CounterState {
-    fn build(&self, _v: &KeyedCounter, _ctx: &dyn BuildContext) -> Box<dyn View> {
-        Box::new(Spacer)
+    fn build(&self, _v: &KeyedCounter, _ctx: &dyn BuildContext) -> impl IntoView {
+        Spacer.boxed()
     }
 }
 

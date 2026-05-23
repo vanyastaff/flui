@@ -27,8 +27,8 @@ use std::sync::Arc;
 
 use flui_view::{
     BuildContext, BuildContextExt, BuildOwner, ElementBase, ElementBuildContext, ElementTree,
-    InheritedElement, Lifecycle, StatelessBehavior, StatelessElement, StatelessView, View,
-    element::InheritedBehavior, view::InheritedView,
+    InheritedElement, IntoView, Lifecycle, StatelessBehavior, StatelessElement, StatelessView,
+    View, ViewExt, element::InheritedBehavior, view::InheritedView,
 };
 use parking_lot::RwLock;
 
@@ -45,8 +45,8 @@ struct MyTheme {
 struct DummyChild;
 
 impl StatelessView for DummyChild {
-    fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
-        Box::new(self.clone())
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        self.clone().boxed()
     }
 }
 
@@ -425,8 +425,8 @@ mod did_change_dependencies_on_inherited_update {
 
     use flui_foundation::ElementId;
     use flui_view::{
-        BuildContext, BuildOwner, ElementBase, ElementOwner, ElementTree, Lifecycle,
-        StatefulBehavior, StatefulElement, StatefulView, View, ViewState,
+        BuildContext, BuildOwner, ElementBase, ElementOwner, ElementTree, IntoView, Lifecycle,
+        StatefulBehavior, StatefulElement, StatefulView, View, ViewExt, ViewState,
     };
 
     use super::{DummyChild, MyTheme};
@@ -544,9 +544,9 @@ mod did_change_dependencies_on_inherited_update {
                 .push(format!("dcd:{}", self.dcd_calls));
         }
 
-        fn build(&self, _view: &ProbeDependent, _ctx: &dyn BuildContext) -> Box<dyn View> {
+        fn build(&self, _view: &ProbeDependent, _ctx: &dyn BuildContext) -> impl IntoView {
             self.probe.lock().unwrap().push("build".to_string());
-            Box::new(LeafView)
+            LeafView.boxed()
         }
     }
 
@@ -566,8 +566,8 @@ mod did_change_dependencies_on_inherited_update {
     struct StatelessProbeDependent;
 
     impl flui_view::StatelessView for StatelessProbeDependent {
-        fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
-            Box::new(LeafView)
+        fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+            LeafView.boxed()
         }
     }
 

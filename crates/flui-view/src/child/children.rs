@@ -151,14 +151,16 @@ impl<V: View> Extend<V> for Children {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::view::IntoView;
+    use crate::view::ViewExt;
     use crate::{ElementBase, StatelessElement, StatelessView};
 
     #[derive(Clone)]
     struct TestView(u32);
 
     impl StatelessView for TestView {
-        fn build(&self, _ctx: &dyn crate::BuildContext) -> Box<dyn View> {
-            Box::new(TestView(self.0))
+        fn build(&self, _ctx: &dyn crate::BuildContext) -> impl IntoView {
+            TestView(self.0).boxed()
         }
     }
 

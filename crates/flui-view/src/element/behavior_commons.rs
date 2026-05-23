@@ -34,7 +34,7 @@ use std::panic::AssertUnwindSafe;
 use flui_foundation::RenderId;
 
 use super::{arity::ElementArity, child_storage::ElementChildStorage, generic::ElementCore};
-use crate::view::{FlutterError, View};
+use crate::view::{FlutterError, IntoView, View};
 
 // ============================================================================
 // perform_build helpers
@@ -116,6 +116,18 @@ where
     F: FnOnce() -> Box<dyn View>,
 {
     // Only `build()` is inside the catch — see the panic-safety note.
+    // Phase 3 §U22 keeps the closure return as `Box<dyn View>` rather
+    // than `impl IntoView`: the typed `impl IntoView` from
+    // `StatelessView::build` / `ViewState::build` captures the
+    // closure-local `&view`/`&ctx` borrows by Rust 2024 RPITIT
+    // default, so returning the opaque value across the closure
+    // boundary trips E0515 ("returns a value referencing data owned
+    // by the current function"). The fix lives at the call site (see
+    // `behavior.rs`): the closure body itself consumes the opaque
+    // value via `IntoView::into_view()` + `Box::new`, producing an
+    // owned `Box<dyn View>` with no escaping borrows. The trait stays
+    // capture-default, authors do not need `+ use<…>` annotations on
+    // their `build()` impls.
     match std::panic::catch_unwind(AssertUnwindSafe(build)) {
         Ok(child_view) => child_view,
         Err(payload) => {
@@ -146,20 +158,30 @@ where
 /// `InheritedBehavior`. `RenderBehavior` keeps its `perform_build` body
 /// inline so the tracing strings can interpolate the active `RenderId`.
 //
-// `Box<dyn View>` ownership transfer is intentional. Single-line signature
-// avoids `port-check.sh` trigger 6's struct-field pattern matching a
-// `child_view: Box<dyn View>,` parameter on its own line (the trigger
-// comment notes the trailing-comma anchor was meant to exclude function
-// parameters but in practice does not). Mirrors the workaround in
-// `ElementCore::update_or_create_child`.
-#[rustfmt::skip]
-#[allow(clippy::needless_pass_by_value)]
-pub(crate) fn finish_single_child_build<V, A>(core: &mut ElementCore<V, A>, child_view: Box<dyn View>, behavior_name: &'static str, owner: &mut crate::ElementOwner<'_>)
-where
+// Phase 3 §U22 (FR-007): accepts `impl IntoView` from authoring-side
+// callers and normalizes via `IntoView::into_view` inside the helper.
+// `BoxedView` (the canonical erased path) and concrete `View`-impl
+// types both satisfy the bound; the temporary `IntoView for Box<dyn View>`
+// shim (`view/into_view.rs`) keeps legacy `Box<dyn View>` call sites
+// compiling during the §U22→§U28 sweep. The `Box<dyn View>` ownership
+// transfer to `update_or_create_child` is still intentional — the
+// helper boxes the normalized value at the boundary so the inner
+// pipeline keeps its existing contract. The generic `R` parameter (no
+// longer `Box<dyn View>` on its own line) sidesteps `port-check.sh`
+// trigger 6's struct-field pattern, so the previous `#[rustfmt::skip]`
+// workaround that kept the signature on one line is no longer needed.
+pub(crate) fn finish_single_child_build<V, A, R>(
+    core: &mut ElementCore<V, A>,
+    child_view: R,
+    behavior_name: &'static str,
+    owner: &mut crate::ElementOwner<'_>,
+) where
     V: Clone + Send + Sync + 'static,
     A: ElementArity,
+    R: IntoView,
 {
-    core.update_or_create_child(child_view, owner);
+    let boxed: Box<dyn View> = Box::new(child_view.into_view());
+    core.update_or_create_child(boxed, owner);
     core.clear_dirty();
     tracing::debug!("{}::perform_build completed", behavior_name);
 }
@@ -277,6 +299,7 @@ mod tests {
     use flui_foundation::ElementId;
 
     use super::*;
+    use crate::view::ViewExt;
     use crate::{
         BuildOwner,
         element::{
@@ -411,8 +434,8 @@ mod tests {
     struct CountingView;
 
     impl StatelessView for CountingView {
-        fn build(&self, _ctx: &dyn crate::context::BuildContext) -> Box<dyn View> {
-            Box::new(TestView)
+        fn build(&self, _ctx: &dyn crate::context::BuildContext) -> impl IntoView {
+            TestView.boxed()
         }
     }
 

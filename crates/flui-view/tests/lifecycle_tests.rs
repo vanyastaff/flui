@@ -9,9 +9,9 @@ use std::sync::{
 };
 
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementTree, Lifecycle, StatefulBehavior,
+    BuildContext, BuildOwner, ElementBase, ElementTree, IntoView, Lifecycle, StatefulBehavior,
     StatefulElement, StatefulView, StatelessBehavior, StatelessElement, StatelessView, View,
-    ViewState,
+    ViewExt, ViewState,
 };
 
 // ============================================================================
@@ -25,8 +25,8 @@ struct TrackingView {
 }
 
 impl StatelessView for TrackingView {
-    fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
-        Box::new(self.clone())
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        self.clone().boxed()
     }
 }
 
@@ -62,8 +62,8 @@ impl StatefulView for LifecycleTrackingView {
 }
 
 impl ViewState<LifecycleTrackingView> for LifecycleTrackingState {
-    fn build(&self, _view: &LifecycleTrackingView, _ctx: &dyn BuildContext) -> Box<dyn View> {
-        Box::new(TrackingView { id: 0 })
+    fn build(&self, _view: &LifecycleTrackingView, _ctx: &dyn BuildContext) -> impl IntoView {
+        TrackingView { id: 0 }.boxed()
     }
 
     fn activate(&mut self) {

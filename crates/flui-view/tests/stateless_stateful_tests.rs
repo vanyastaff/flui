@@ -13,9 +13,9 @@ use std::{
 
 use flui_foundation::ElementId;
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementOwner, Lifecycle, StatefulBehavior,
+    BuildContext, BuildOwner, ElementBase, ElementOwner, IntoView, Lifecycle, StatefulBehavior,
     StatefulElement, StatefulView, StatelessBehavior, StatelessElement, StatelessView, View,
-    ViewState,
+    ViewExt, ViewState,
 };
 
 // ============================================================================
@@ -29,11 +29,11 @@ struct SimpleStatelessView {
 }
 
 impl StatelessView for SimpleStatelessView {
-    fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         // Return a leaf view, not `self`: a self-returning build
         // describes an infinitely deep element tree and overflows the
         // stack when built.
-        Box::new(LeafView)
+        LeafView.boxed()
     }
 }
 
@@ -113,15 +113,21 @@ struct NestedView {
 }
 
 impl StatelessView for NestedView {
-    fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        // Conditional return: each arm has a different concrete type,
+        // so each is wrapped with `.boxed()` to land on `BoxedView`.
+        // This is the canonical authoring shape for divergent-arm
+        // builds documented on `StatelessView::build`.
         if self.depth > 0 {
-            Box::new(NestedView {
+            NestedView {
                 depth: self.depth - 1,
-            })
+            }
+            .boxed()
         } else {
-            Box::new(SimpleStatelessView {
+            SimpleStatelessView {
                 label: "Leaf".to_string(),
-            })
+            }
+            .boxed()
         }
     }
 }
@@ -230,10 +236,10 @@ impl StatefulView for CounterView {
 }
 
 impl ViewState<CounterView> for CounterState {
-    fn build(&self, _view: &CounterView, _ctx: &dyn BuildContext) -> Box<dyn View> {
-        Box::new(SimpleStatelessView {
+    fn build(&self, _view: &CounterView, _ctx: &dyn BuildContext) -> impl IntoView {
+        SimpleStatelessView {
             label: format!("Count: {}", self.count.load(Ordering::SeqCst)),
-        })
+        }
     }
 
     fn did_update_view(&mut self, _old_view: &CounterView) {
@@ -352,10 +358,10 @@ impl ViewState<LifecycleCallbackView> for LifecycleCallbackState {
         self.init_called.fetch_add(1, Ordering::SeqCst);
     }
 
-    fn build(&self, _view: &LifecycleCallbackView, _ctx: &dyn BuildContext) -> Box<dyn View> {
-        Box::new(SimpleStatelessView {
+    fn build(&self, _view: &LifecycleCallbackView, _ctx: &dyn BuildContext) -> impl IntoView {
+        SimpleStatelessView {
             label: "Lifecycle".to_string(),
-        })
+        }
     }
 
     fn dispose(&mut self) {

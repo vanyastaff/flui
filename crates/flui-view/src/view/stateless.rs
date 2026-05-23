@@ -3,7 +3,7 @@
 //! StatelessViews are the simplest type of View. They describe UI purely
 //! as a function of their configuration (fields) and inherited data.
 
-use super::view::View;
+use super::into_view::IntoView;
 use crate::context::BuildContext;
 
 /// A View that has no mutable state.
@@ -23,7 +23,7 @@ use crate::context::BuildContext;
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_view::{StatelessView, BuildContext};
+/// use flui_view::{StatelessView, BuildContext, IntoView};
 ///
 /// #[derive(Clone)]
 /// struct Greeting {
@@ -31,11 +31,20 @@ use crate::context::BuildContext;
 /// }
 ///
 /// impl StatelessView for Greeting {
-///     fn build(&self, ctx: &dyn BuildContext) -> Box<dyn View> {
-///         Text::new(format!("Hello, {}!", self.name)).boxed()
+///     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+///         Text::new(format!("Hello, {}!", self.name))
 ///     }
 /// }
 /// ```
+///
+/// # Object safety
+///
+/// `StatelessView::build` returns `impl IntoView` (return-position
+/// `impl Trait` in trait, stabilized in Rust 1.75). This makes
+/// `StatelessView` **non-object-safe** — no `dyn StatelessView` use
+/// exists or is needed. The `View` trait
+/// (super::view::View) is the object-safe boundary;
+/// `StatelessView` is implementation-side (Phase 3 §U22, FR-007).
 ///
 /// # Note
 ///
@@ -44,36 +53,34 @@ use crate::context::BuildContext;
 pub trait StatelessView: Clone + Send + Sync + 'static {
     /// Build the child View tree.
     ///
-    /// Called whenever this View needs to be rendered. The returned View
-    /// describes what should be displayed.
-    fn build(&self, ctx: &dyn BuildContext) -> Box<dyn View>;
+    /// Called whenever this View needs to be rendered. The returned
+    /// value is normalized into a concrete `View`
+    /// ([`super::view::View`]) by the framework via
+    /// [`IntoView::into_view`]; widget authors return the typed View
+    /// directly (`Text::new(…)`) — no `Box::new` and no `.boxed()` at
+    /// the call site. For conditional builds whose arms have different
+    /// types, the author wraps each arm with `.boxed()` to land on
+    /// `BoxedView` (which itself implements [`IntoView`]).
+    ///
+    /// The framework normalizes the opaque return via
+    /// [`IntoView::into_view`] *inside* the build call site (see
+    /// `element/behavior.rs`), boxing the concrete `'static` value
+    /// into `Box<dyn View>` before crossing closure / catch-unwind
+    /// boundaries. The default Rust 2024 RPITIT capture (Self +
+    /// elided lifetimes of `&self` / `&dyn BuildContext`) is fine
+    /// because the opaque value is consumed inside the closure body
+    /// — its captured borrows never escape.
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView;
 }
 
-/// Implement View for all StatelessViews.
-///
-/// This macro creates the View implementation for a StatelessView type.
-/// Use it after implementing StatelessView:
-///
-/// ```rust,ignore
-/// impl StatelessView for MyView {
-///     fn build(&self, ctx: &dyn BuildContext) -> Box<dyn View> {
-///         // ...
-///     }
-/// }
-/// impl_stateless_view!(MyView);
-/// ```
-#[macro_export]
-macro_rules! impl_stateless_view {
-    ($ty:ty) => {
-        impl $crate::View for $ty {
-            fn create_element(&self) -> Box<dyn $crate::ElementBase> {
-                use $crate::element::StatelessBehavior;
-                Box::new($crate::StatelessElement::new(self, StatelessBehavior))
-            }
-        }
-    };
-}
-
+// The legacy `impl_stateless_view!` declarative macro was deleted in
+// Phase 3 §U24 (FR-010 "MUST NOT be two parallel authoring paths").
+// Widget authors now write `#[derive(StatelessView)]` from
+// `flui-macros` instead; the derive is re-exported from
+// `flui_view::prelude` for ergonomic single-import access. See
+// `crates/flui-macros/src/derive_stateless.rs` for the generated
+// `impl View` block this used to emit by hand-rolled `macro_rules!`.
+//
 // NOTE: StatelessElement implementation has been moved to unified Element
 // architecture. See crates/flui-view/src/element/unified.rs and
 // element/behavior.rs The type alias is exported from element/mod.rs:
@@ -85,7 +92,7 @@ mod tests {
     use crate::{
         StatelessElement,
         element::{Lifecycle, StatelessBehavior},
-        view::{ElementBase, View},
+        view::{ElementBase, View, ViewExt},
     };
 
     #[derive(Clone)]
@@ -95,9 +102,9 @@ mod tests {
     }
 
     impl StatelessView for TestView {
-        fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
+        fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
             // Return self for testing - in real code this would return child views
-            Box::new(self.clone())
+            self.clone().boxed()
         }
     }
 

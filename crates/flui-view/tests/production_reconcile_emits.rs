@@ -44,7 +44,8 @@
 
 use flui_foundation::{ElementId, ValueKey, ViewKey};
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementTree, StatelessElement, StatelessView, View,
+    BuildContext, BuildOwner, ElementBase, ElementTree, IntoView, StatelessElement, StatelessView,
+    View, ViewExt,
 };
 
 #[derive(Clone)]
@@ -61,8 +62,8 @@ impl LeafView {
 }
 
 impl StatelessView for LeafView {
-    fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
-        Box::new(self.clone())
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        self.clone().boxed()
     }
 }
 

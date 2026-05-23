@@ -19,8 +19,8 @@ use std::{
 };
 
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementOwner, Lifecycle, StatefulBehavior,
-    StatefulElement, StatefulView, ValueKey, View, ViewState, reconcile_children,
+    BuildContext, BuildOwner, ElementBase, ElementOwner, IntoView, Lifecycle, StatefulBehavior,
+    StatefulElement, StatefulView, ValueKey, View, ViewExt, ViewState, reconcile_children,
 };
 
 // ============================================================================
@@ -87,9 +87,9 @@ impl StatefulView for KeyedView {
 }
 
 impl ViewState<KeyedView> for KeyedState {
-    fn build(&self, _view: &KeyedView, _ctx: &dyn BuildContext) -> Box<dyn View> {
+    fn build(&self, _view: &KeyedView, _ctx: &dyn BuildContext) -> impl IntoView {
         // A genuine leaf — terminates the recursive build chain.
-        Box::new(InertView)
+        InertView.boxed()
     }
 }
 
