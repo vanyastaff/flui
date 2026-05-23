@@ -43,7 +43,12 @@ fn bench_empty_to_empty(c: &mut Criterion) {
             |mut owner| {
                 let mut old_children: Vec<Box<dyn ElementBase>> = Vec::new();
                 let new_views: &[&dyn View] = &[];
-                reconcile_children(&mut old_children, new_views, &mut owner.element_owner_mut());
+                reconcile_children(
+                    flui_foundation::ElementId::new(1),
+                    &mut old_children,
+                    new_views,
+                    &mut owner.element_owner_mut(),
+                );
                 std::hint::black_box(old_children);
             },
             BatchSize::SmallInput,
@@ -67,6 +72,7 @@ fn bench_10_same_type(c: &mut Criterion) {
             |(mut owner, mut old_children, new_views)| {
                 let view_refs: Vec<&dyn View> = new_views.iter().map(|v| v as &dyn View).collect();
                 reconcile_children(
+                    flui_foundation::ElementId::new(1),
                     &mut old_children,
                     &view_refs,
                     &mut owner.element_owner_mut(),

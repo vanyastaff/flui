@@ -67,6 +67,9 @@
 
 use std::collections::HashMap;
 
+use flui_foundation::ElementId;
+
+use super::reconcile_event::{ReconcileEvent, emit as emit_event};
 use crate::view::{ElementBase, View};
 
 /// Reconcile a parent's old child elements against its new child Views,
@@ -90,6 +93,10 @@ use crate::view::{ElementBase, View};
 ///
 /// # Arguments
 ///
+/// * `parent` - Owning parent's [`ElementId`]. Stamped onto every
+///   emitted [`ReconcileEvent`](crate::tree::ReconcileEvent) so
+///   subscribers can correlate the trace back to the build path that
+///   produced it (plan §U13 / FR-035).
 /// * `old_children` - The parent's current child elements, owned. Drained
 ///   and replaced with the reconciled list.
 /// * `new_views` - The new child Views to reconcile against.
@@ -105,25 +112,52 @@ use crate::view::{ElementBase, View};
 /// defined, non-panicking resolution. (Flutter asserts against
 /// duplicate keys in debug builds; FLUI degrades gracefully instead of
 /// aborting — Constitution Principle 6: no panics on recoverable input.)
+// Five Flutter-parity phases + three fast paths + per-disposition
+// ReconcileEvent emission push this body past 100 lines. Splitting
+// risks scrambling the 1:1 mapping to `framework.dart:4125`
+// `Element.updateChildren`; keep inline so the algorithm stays
+// auditable against the Flutter source. SC-007 / FR-024.
+#[allow(clippy::too_many_lines)]
 pub fn reconcile_children(
+    parent: ElementId,
     old_children: &mut Vec<Box<dyn ElementBase>>,
     new_views: &[&dyn View],
     owner: &mut crate::ElementOwner<'_>,
 ) {
-    // Fast path: nothing on either side.
+    // Fast path: nothing on either side. Nothing to emit either —
+    // a no-op frame is genuinely silent.
     if old_children.is_empty() && new_views.is_empty() {
         return;
     }
 
-    // Fast path: all new — create every element, no matching needed.
+    // Fast path: all new — create every element + emit Mount per slot.
     if old_children.is_empty() {
-        *old_children = new_views.iter().map(|v| v.create_element()).collect();
+        let created: Vec<Box<dyn ElementBase>> = new_views
+            .iter()
+            .enumerate()
+            .map(|(slot, view)| {
+                emit_event(&ReconcileEvent::mount(
+                    parent,
+                    slot,
+                    view.view_type_id(),
+                    view.key().map(flui_foundation::ViewKey::key_hash),
+                ));
+                view.create_element()
+            })
+            .collect();
+        *old_children = created;
         return;
     }
 
-    // Fast path: all removed — unmount every old child.
+    // Fast path: all removed — unmount every old child + emit Unmount.
     if new_views.is_empty() {
-        for mut child in old_children.drain(..) {
+        for (slot, mut child) in old_children.drain(..).enumerate() {
+            emit_event(&ReconcileEvent::unmount(
+                parent,
+                slot,
+                child.view_type_id(),
+                child.current_key_hash(),
+            ));
             child.unmount(owner);
         }
         return;
@@ -143,6 +177,9 @@ pub fn reconcile_children(
 
     // ------------------------------------------------------------------
     // Phase 1 — sync the top of both lists while nodes match.
+    //
+    // Top scan matches are SAME-SLOT (old_top == new_top throughout the
+    // loop body), so emit `Reuse`, not `Reorder`.
     // ------------------------------------------------------------------
     let mut old_top = 0;
     let mut new_top = 0;
@@ -157,6 +194,14 @@ pub fn reconcile_children(
             .take()
             .expect("phase-1 match guaranteed Some");
         element.update(new_views[new_top], owner);
+        emit_event(&ReconcileEvent::reuse(
+            parent,
+            new_top,
+            new_views[new_top].view_type_id(),
+            new_views[new_top]
+                .key()
+                .map(flui_foundation::ViewKey::key_hash),
+        ));
         result.push(element);
         old_top += 1;
         new_top += 1;
@@ -166,7 +211,8 @@ pub fn reconcile_children(
     // Phase 2 — scan the bottom of both lists while nodes match.
     //
     // Matches are *recorded*, not synced — Flutter syncs them in phase 5
-    // so every `update` runs strictly front-to-back.
+    // so every `update` runs strictly front-to-back. Emission is
+    // deferred to phase 5a alongside the actual `update` call.
     // ------------------------------------------------------------------
     let mut old_bottom = old_len;
     let mut new_bottom = new_len;
@@ -185,9 +231,10 @@ pub fn reconcile_children(
     // Phase 3 — index the remaining old middle by key hash.
     //
     // Un-keyed old middle children cannot be matched out of order, so
-    // they are unmounted here. Keyed ones go into `old_keyed` for
-    // phase 4 to claim. First-wins on duplicate old keys (an old
-    // duplicate is itself a prior-frame bug; we keep the first).
+    // they are unmounted here (emit `Unmount`). Keyed ones go into
+    // `old_keyed` for phase 4 to claim. First-wins on duplicate old
+    // keys (an old duplicate is itself a prior-frame bug; we keep the
+    // first).
     // ------------------------------------------------------------------
     let mut old_keyed: HashMap<u64, usize> = HashMap::new();
     for (idx, slot) in old_slots
@@ -205,8 +252,11 @@ pub fn reconcile_children(
             old_keyed.entry(key).or_insert(idx);
         } else {
             // Un-keyed middle child with no positional match — drop it.
+            let type_id = child.view_type_id();
+            let key_hash = child.current_key_hash();
             let mut child = slot.take().expect("iter yielded Some");
             child.unmount(owner);
+            emit_event(&ReconcileEvent::unmount(parent, idx, type_id, key_hash));
         }
     }
 
@@ -215,24 +265,54 @@ pub fn reconcile_children(
     //
     // A keyed new View claims its old match from `old_keyed` (removing
     // the entry so a later duplicate key cannot reuse it — first-wins).
-    // Everything else gets a fresh element.
+    // Everything else gets a fresh element. Claim emits `Reorder`
+    // when the slot actually moves and `Reuse` when it coincidentally
+    // matches; fresh creation emits `Mount`.
     // ------------------------------------------------------------------
-    for &new_view in &new_views[new_top..new_bottom] {
+    for (new_offset, &new_view) in new_views[new_top..new_bottom].iter().enumerate() {
+        let new_slot = new_top + new_offset;
         if let Some(old_idx) = match_old_for_new(new_view, &mut old_keyed, &old_slots) {
             let mut element = old_slots[old_idx]
                 .take()
                 .expect("old_keyed only indexes Some entries");
             element.update(new_view, owner);
+            let key_hash = new_view.key().map(flui_foundation::ViewKey::key_hash);
+            if old_idx == new_slot {
+                emit_event(&ReconcileEvent::reuse(
+                    parent,
+                    new_slot,
+                    new_view.view_type_id(),
+                    key_hash,
+                ));
+            } else {
+                emit_event(&ReconcileEvent::reorder(
+                    parent,
+                    new_slot,
+                    new_view.view_type_id(),
+                    key_hash,
+                ));
+            }
             result.push(element);
         } else {
             // No keyed match — fresh element, left unmounted for the
             // caller to mount (see module "Lifecycle boundary").
+            emit_event(&ReconcileEvent::mount(
+                parent,
+                new_slot,
+                new_view.view_type_id(),
+                new_view.key().map(flui_foundation::ViewKey::key_hash),
+            ));
             result.push(new_view.create_element());
         }
     }
 
     // ------------------------------------------------------------------
     // Phase 5a — sync the bottom matches recorded in phase 2.
+    //
+    // The bottom scan is positional: `old_bottom + offset == new_bottom + offset`
+    // shifted by the same delta, so emit `Reuse` (slot does not change
+    // for the matched pair within the bottom scan, even if the global
+    // numbering shifted).
     // ------------------------------------------------------------------
     for offset in 0..(old_len - old_bottom) {
         let old_idx = old_bottom + offset;
@@ -241,15 +321,26 @@ pub fn reconcile_children(
             .take()
             .expect("phase-2 bottom match guaranteed Some");
         element.update(new_views[new_idx], owner);
+        emit_event(&ReconcileEvent::reuse(
+            parent,
+            new_idx,
+            new_views[new_idx].view_type_id(),
+            new_views[new_idx]
+                .key()
+                .map(flui_foundation::ViewKey::key_hash),
+        ));
         result.push(element);
     }
 
     // ------------------------------------------------------------------
     // Phase 5b — unmount any keyed old children never claimed.
     // ------------------------------------------------------------------
-    for slot in &mut old_slots {
+    for (idx, slot) in old_slots.iter_mut().enumerate() {
         if let Some(mut child) = slot.take() {
+            let type_id = child.view_type_id();
+            let key_hash = child.current_key_hash();
             child.unmount(owner);
+            emit_event(&ReconcileEvent::unmount(parent, idx, type_id, key_hash));
         }
     }
 
@@ -449,7 +540,12 @@ mod tests {
     fn empty_to_empty() {
         let mut owner = BuildOwner::new();
         let mut children: Vec<Box<dyn ElementBase>> = Vec::new();
-        reconcile_children(&mut children, &[], &mut owner.element_owner_mut());
+        reconcile_children(
+            flui_foundation::ElementId::new(1),
+            &mut children,
+            &[],
+            &mut owner.element_owner_mut(),
+        );
         assert!(children.is_empty());
     }
 
@@ -460,7 +556,12 @@ mod tests {
         let v0 = PlainView { tag: 0 };
         let v1 = PlainView { tag: 1 };
         let views: Vec<&dyn View> = vec![&v0, &v1];
-        reconcile_children(&mut children, &views, &mut owner.element_owner_mut());
+        reconcile_children(
+            flui_foundation::ElementId::new(1),
+            &mut children,
+            &views,
+            &mut owner.element_owner_mut(),
+        );
         assert_eq!(children.len(), 2);
     }
 
@@ -469,7 +570,12 @@ mod tests {
         let mut owner = BuildOwner::new();
         let v0 = PlainView { tag: 0 };
         let mut children = vec![mount_one(&v0, 0, &mut owner)];
-        reconcile_children(&mut children, &[], &mut owner.element_owner_mut());
+        reconcile_children(
+            flui_foundation::ElementId::new(1),
+            &mut children,
+            &[],
+            &mut owner.element_owner_mut(),
+        );
         assert!(children.is_empty());
     }
 
@@ -483,7 +589,12 @@ mod tests {
         let n0 = PlainView { tag: 10 };
         let n1 = PlainView { tag: 11 };
         let views: Vec<&dyn View> = vec![&n0, &n1];
-        reconcile_children(&mut children, &views, &mut owner.element_owner_mut());
+        reconcile_children(
+            flui_foundation::ElementId::new(1),
+            &mut children,
+            &views,
+            &mut owner.element_owner_mut(),
+        );
         assert_eq!(children.len(), 2);
         // Both are still PlainView elements (reused, not replaced).
         for child in &children {
@@ -498,7 +609,12 @@ mod tests {
         let mut children = vec![mount_one(&v0, 0, &mut owner)];
         let other = OtherView;
         let views: Vec<&dyn View> = vec![&other];
-        reconcile_children(&mut children, &views, &mut owner.element_owner_mut());
+        reconcile_children(
+            flui_foundation::ElementId::new(1),
+            &mut children,
+            &views,
+            &mut owner.element_owner_mut(),
+        );
         assert_eq!(children.len(), 1);
         assert_eq!(
             children[0].view_type_id(),
@@ -519,13 +635,23 @@ mod tests {
             PlainView { tag: 2 },
         ];
         let grow: Vec<&dyn View> = g.iter().map(|v| v as &dyn View).collect();
-        reconcile_children(&mut children, &grow, &mut owner.element_owner_mut());
+        reconcile_children(
+            flui_foundation::ElementId::new(1),
+            &mut children,
+            &grow,
+            &mut owner.element_owner_mut(),
+        );
         assert_eq!(children.len(), 3);
 
         // Shrink back to 1.
         let s = [PlainView { tag: 0 }];
         let shrink: Vec<&dyn View> = s.iter().map(|v| v as &dyn View).collect();
-        reconcile_children(&mut children, &shrink, &mut owner.element_owner_mut());
+        reconcile_children(
+            flui_foundation::ElementId::new(1),
+            &mut children,
+            &shrink,
+            &mut owner.element_owner_mut(),
+        );
         assert_eq!(children.len(), 1);
     }
 
@@ -695,7 +821,12 @@ mod tests {
         let new_b = KeyedView::with(ValueKey::new("b"));
         let new_a = KeyedView::with(ValueKey::new("a"));
         let views: Vec<&dyn View> = vec![&new_b, &new_a];
-        reconcile_children(&mut children, &views, &mut owner.element_owner_mut());
+        reconcile_children(
+            flui_foundation::ElementId::new(1),
+            &mut children,
+            &views,
+            &mut owner.element_owner_mut(),
+        );
 
         assert_eq!(children.len(), 2);
         assert_eq!(
@@ -756,7 +887,12 @@ mod tests {
         // Same hash (0xDEAD), different `tag` — `key_eq` rejects.
         let v_new = KeyedView::with(ColliderKey { tag: 2 });
         let views: Vec<&dyn View> = vec![&v_new];
-        reconcile_children(&mut children, &views, &mut owner.element_owner_mut());
+        reconcile_children(
+            flui_foundation::ElementId::new(1),
+            &mut children,
+            &views,
+            &mut owner.element_owner_mut(),
+        );
 
         assert_eq!(children.len(), 1);
         assert_ne!(
@@ -779,7 +915,12 @@ mod tests {
 
         let v_new = KeyedView::with(ColliderKey { tag: 7 });
         let views: Vec<&dyn View> = vec![&v_new];
-        reconcile_children(&mut children, &views, &mut owner.element_owner_mut());
+        reconcile_children(
+            flui_foundation::ElementId::new(1),
+            &mut children,
+            &views,
+            &mut owner.element_owner_mut(),
+        );
 
         assert_eq!(children.len(), 1);
         assert_eq!(
@@ -815,7 +956,12 @@ mod tests {
         let n_c = KeyedView::keyless();
         let n_b = KeyedView::with(ValueKey::new("moves"));
         let views: Vec<&dyn View> = vec![&n_a, &n_c, &n_b];
-        reconcile_children(&mut children, &views, &mut owner.element_owner_mut());
+        reconcile_children(
+            flui_foundation::ElementId::new(1),
+            &mut children,
+            &views,
+            &mut owner.element_owner_mut(),
+        );
 
         assert_eq!(children.len(), 3);
         // Slot 0 — keyless positional match keeps old element A.

@@ -502,7 +502,23 @@ impl ElementChildStorage for VariableChildStorage {
         // `PipelineOwner`); `ElementCore::update_or_create_children`
         // finishes their lifecycle (propagate owner → mount → build).
         let view_refs: Vec<&dyn View> = views.iter().map(std::convert::AsRef::as_ref).collect();
-        crate::reconcile_children(&mut self.children, &view_refs, owner);
+        // PLACEHOLDER parent id — plan §U13 added `parent: ElementId`
+        // to `reconcile_children` so the new `ReconcileEvent` stream
+        // can correlate events to the owning subtree, but the
+        // `ElementChildStorage` trait does not yet thread the real
+        // parent id through (that's plan §U15 / KTD-9, where the
+        // `Variable` arity split moves to ID-based storage and the
+        // call site lives at `ElementCore::update_or_create_children`
+        // where the real parent id is in scope). Until U15 lands, the
+        // placeholder `ElementId::new(1)` is emitted on every event
+        // from this legacy code path; subscribers that depend on the
+        // parent id should treat it as opaque until U15 ships.
+        crate::reconcile_children(
+            flui_foundation::ElementId::new(1),
+            &mut self.children,
+            &view_refs,
+            owner,
+        );
     }
 
     fn mount_children(
