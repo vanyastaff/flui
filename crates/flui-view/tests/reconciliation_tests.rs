@@ -265,7 +265,7 @@ fn keyed_children_reordered_preserve_state() {
     ]);
 
     let view_refs: Vec<&dyn View> = new_views.iter().map(AsRef::as_ref).collect();
-    reconcile_children(&mut children, &view_refs, &mut owner.element_owner_mut());
+    reconcile_children(flui_foundation::ElementId::new(1), &mut children, &view_refs, &mut owner.element_owner_mut());
 
     assert_eq!(children.len(), 3);
 
@@ -320,7 +320,7 @@ fn unkeyed_children_match_positionally() {
         KeyedView::unkeyed(33),
     ]);
     let view_refs: Vec<&dyn View> = new_views.iter().map(AsRef::as_ref).collect();
-    reconcile_children(&mut children, &view_refs, &mut owner.element_owner_mut());
+    reconcile_children(flui_foundation::ElementId::new(1), &mut children, &view_refs, &mut owner.element_owner_mut());
 
     assert_eq!(children.len(), 3);
     // Positional matching: each slot keeps the element that was there.
@@ -341,7 +341,7 @@ fn unkeyed_children_match_positionally() {
 fn empty_to_empty_is_noop() {
     let mut owner = BuildOwner::new();
     let mut children: Vec<Box<dyn ElementBase>> = Vec::new();
-    reconcile_children(&mut children, &[], &mut owner.element_owner_mut());
+    reconcile_children(flui_foundation::ElementId::new(1), &mut children, &[], &mut owner.element_owner_mut());
     assert!(children.is_empty());
 }
 
@@ -356,7 +356,7 @@ fn empty_old_creates_all() {
         KeyedView::unkeyed(3),
     ]);
     let view_refs: Vec<&dyn View> = new_views.iter().map(AsRef::as_ref).collect();
-    reconcile_children(&mut children, &view_refs, &mut owner.element_owner_mut());
+    reconcile_children(flui_foundation::ElementId::new(1), &mut children, &view_refs, &mut owner.element_owner_mut());
 
     assert_eq!(children.len(), 3);
     assert_eq!(payload_of(children[0].as_ref()), Some(1));
@@ -370,7 +370,7 @@ fn empty_new_removes_all() {
     let old_views = [KeyedView::keyed(1, 1), KeyedView::keyed(2, 2)];
     let mut children = mount_children(&old_views, &mut owner);
 
-    reconcile_children(&mut children, &[], &mut owner.element_owner_mut());
+    reconcile_children(flui_foundation::ElementId::new(1), &mut children, &[], &mut owner.element_owner_mut());
     assert!(children.is_empty());
 }
 
@@ -383,7 +383,7 @@ fn single_to_single_keyed_match_reuses() {
 
     let new_views = boxed_views(&[KeyedView::keyed(7, 77)]);
     let view_refs: Vec<&dyn View> = new_views.iter().map(AsRef::as_ref).collect();
-    reconcile_children(&mut children, &view_refs, &mut owner.element_owner_mut());
+    reconcile_children(flui_foundation::ElementId::new(1), &mut children, &view_refs, &mut owner.element_owner_mut());
 
     assert_eq!(children.len(), 1);
     assert_eq!(generation_of(children[0].as_ref()).unwrap(), original_gen);
@@ -400,7 +400,7 @@ fn single_to_single_key_mismatch_replaces() {
     // Different key => not updatable => element replaced.
     let new_views = boxed_views(&[KeyedView::keyed(8, 80)]);
     let view_refs: Vec<&dyn View> = new_views.iter().map(AsRef::as_ref).collect();
-    reconcile_children(&mut children, &view_refs, &mut owner.element_owner_mut());
+    reconcile_children(flui_foundation::ElementId::new(1), &mut children, &view_refs, &mut owner.element_owner_mut());
 
     assert_eq!(children.len(), 1);
     assert_ne!(
@@ -430,7 +430,7 @@ fn keyed_prepend_preserves_existing() {
         KeyedView::keyed(2, 2),
     ]);
     let view_refs: Vec<&dyn View> = new_views.iter().map(AsRef::as_ref).collect();
-    reconcile_children(&mut children, &view_refs, &mut owner.element_owner_mut());
+    reconcile_children(flui_foundation::ElementId::new(1), &mut children, &view_refs, &mut owner.element_owner_mut());
 
     assert_eq!(children.len(), 3);
     // slot 0 is brand new; slots 1,2 are the moved originals.
@@ -454,7 +454,7 @@ fn keyed_append_preserves_existing() {
         KeyedView::keyed(3, 3),
     ]);
     let view_refs: Vec<&dyn View> = new_views.iter().map(AsRef::as_ref).collect();
-    reconcile_children(&mut children, &view_refs, &mut owner.element_owner_mut());
+    reconcile_children(flui_foundation::ElementId::new(1), &mut children, &view_refs, &mut owner.element_owner_mut());
 
     assert_eq!(children.len(), 3);
     assert_eq!(generation_of(children[0].as_ref()).unwrap(), gen_1);
@@ -487,7 +487,7 @@ fn keyed_middle_insert_and_remove_combined() {
         KeyedView::keyed(4, 4),
     ]);
     let view_refs: Vec<&dyn View> = new_views.iter().map(AsRef::as_ref).collect();
-    reconcile_children(&mut children, &view_refs, &mut owner.element_owner_mut());
+    reconcile_children(flui_foundation::ElementId::new(1), &mut children, &view_refs, &mut owner.element_owner_mut());
 
     assert_eq!(children.len(), 4);
     assert_eq!(generation_of(children[0].as_ref()).unwrap(), gen_1);
@@ -522,7 +522,7 @@ fn type_change_at_position_replaces_element() {
 
     let inert: Box<dyn View> = Box::new(InertView);
     let view_refs: Vec<&dyn View> = vec![inert.as_ref()];
-    reconcile_children(&mut children, &view_refs, &mut owner.element_owner_mut());
+    reconcile_children(flui_foundation::ElementId::new(1), &mut children, &view_refs, &mut owner.element_owner_mut());
 
     assert_eq!(children.len(), 1);
     // The new element is an InertView element — no KeyedState.
@@ -549,7 +549,7 @@ fn duplicate_keys_in_new_list_first_wins_no_panic() {
         KeyedView::keyed(2, 2),
     ]);
     let view_refs: Vec<&dyn View> = new_views.iter().map(AsRef::as_ref).collect();
-    reconcile_children(&mut children, &view_refs, &mut owner.element_owner_mut());
+    reconcile_children(flui_foundation::ElementId::new(1), &mut children, &view_refs, &mut owner.element_owner_mut());
 
     assert_eq!(children.len(), 3);
     // First key=1 reused the original element.
@@ -581,7 +581,7 @@ fn large_keyed_list_full_reuse() {
             .collect::<Vec<_>>(),
     );
     let view_refs: Vec<&dyn View> = new_views.iter().map(AsRef::as_ref).collect();
-    reconcile_children(&mut children, &view_refs, &mut owner.element_owner_mut());
+    reconcile_children(flui_foundation::ElementId::new(1), &mut children, &view_refs, &mut owner.element_owner_mut());
 
     assert_eq!(children.len(), 200);
     for (i, child) in children.iter().enumerate() {
@@ -611,7 +611,7 @@ fn large_keyed_list_full_reverse_preserves_all() {
             .collect::<Vec<_>>(),
     );
     let view_refs: Vec<&dyn View> = new_views.iter().map(AsRef::as_ref).collect();
-    reconcile_children(&mut children, &view_refs, &mut owner.element_owner_mut());
+    reconcile_children(flui_foundation::ElementId::new(1), &mut children, &view_refs, &mut owner.element_owner_mut());
 
     assert_eq!(children.len(), 100);
     // Every element should still be present, matched by key, none rebuilt.
