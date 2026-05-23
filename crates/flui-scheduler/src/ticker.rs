@@ -233,7 +233,8 @@ impl Ticker {
     /// The caller must invoke [`Ticker::tick`] each frame to fire the
     /// callback. For an auto-scheduling ticker, use
     /// [`Ticker::new_with_scheduler`] or call
-    /// [`TickerProvider::create_ticker`] on a [`Scheduler`].
+    /// [`TickerProvider::create_ticker`] on a
+    /// [`Scheduler`](crate::scheduler::Scheduler).
     pub fn new() -> Self {
         Self {
             id: next_ticker_id(),
@@ -259,7 +260,7 @@ impl Ticker {
     ///
     /// [`stop`](Self::stop) / [`mute`](Self::mute) / [`dispose`](Self::dispose)
     /// cancel the pending callback via
-    /// [`Scheduler::cancel_frame_callback`].
+    /// [`Scheduler::cancel_frame_callback`](crate::scheduler::Scheduler::cancel_frame_callback).
     pub fn new_with_scheduler(scheduler: Arc<crate::scheduler::Scheduler>) -> Self {
         Self {
             id: next_ticker_id(),
