@@ -13,11 +13,11 @@
 //!   [`Ticker::tick`] each frame. Used by tests, custom render loops, and
 //!   embedders that own their own frame scheduler.
 //! - **Auto-schedule** ([`Ticker::new_with_scheduler`] / vended via
-//!   [`TickerProvider::create_ticker`] on a [`Scheduler`]): the ticker
+//!   [`TickerProvider::create_ticker`] on a [`Scheduler`](crate::scheduler::Scheduler)): the ticker
 //!   self-registers a transient frame callback on every start/unmute,
 //!   matching Flutter [`ticker.dart:283`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart)
 //!   `scheduleTick(rescheduling: true)`. `stop`/`mute`/`dispose` cancel the
-//!   pending callback via [`Scheduler::cancel_frame_callback`].
+//!   pending callback via [`Scheduler::cancel_frame_callback`](crate::scheduler::Scheduler::cancel_frame_callback).
 //!
 //! ## Manual Ticker Example
 //!
@@ -90,7 +90,7 @@ pub type TickerCallback = Box<dyn FnMut(f64) + Send>;
 /// functionality without tight coupling to the scheduler.
 ///
 /// The default impl produces a manually-driven [`Ticker`] (no auto-schedule).
-/// Implementors that own a [`Scheduler`] (e.g. `impl TickerProvider for
+/// Implementors that own a [`Scheduler`](crate::scheduler::Scheduler) (e.g. `impl TickerProvider for
 /// Scheduler`) override [`create_ticker`](Self::create_ticker) to vend an
 /// auto-scheduling ticker via [`Ticker::new_with_scheduler`].
 pub trait TickerProvider: Send + Sync {
@@ -157,7 +157,7 @@ struct TickerInner {
     /// ticker has registered itself with the scheduler for the next frame,
     /// cleared on `stop`/`mute`/`dispose` or when the callback fires.
     ///
-    /// `None` for manually-driven tickers (no [`Scheduler`] attached) and
+    /// `None` for manually-driven tickers (no [`Scheduler`](crate::scheduler::Scheduler) attached) and
     /// auto-scheduling tickers that are not currently registered.
     ///
     /// Flutter parity: `ticker.dart:254 _animationId` (sentinel for
@@ -209,7 +209,7 @@ pub struct Ticker {
     ///   [`unmute`](Self::unmute) register a transient frame callback that
     ///   fires the user callback and re-schedules itself; [`stop`](Self::stop)
     ///   / [`mute`](Self::mute) / [`dispose`](Self::dispose) cancel the
-    ///   pending callback via [`Scheduler::cancel_frame_callback`].
+    ///   pending callback via [`Scheduler::cancel_frame_callback`](crate::scheduler::Scheduler::cancel_frame_callback).
     ///
     /// Flutter parity: `Ticker(this._onTick, ...)` ([`ticker.dart:80`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart))
     /// implicitly carries `SchedulerBinding.instance` (singleton); FLUI
