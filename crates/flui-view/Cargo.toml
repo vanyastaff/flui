@@ -43,3 +43,7 @@ harness = false
 [[bench]]
 name = "s1_key_storage"
 harness = false
+
+[[bench]]
+name = "s2_static_path"
+harness = false
