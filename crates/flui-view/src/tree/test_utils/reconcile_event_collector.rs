@@ -135,7 +135,7 @@ impl ReconcileEventCollector {
 
 /// The `Layer` impl returned by [`ReconcileEventCollector::layer`].
 ///
-/// Lives as a distinct type so the collector handle stays clonable
+/// Lives as a distinct type so the collector handle stays cloneable
 /// without dragging trait-object impl complexity onto its public
 /// API.
 #[derive(Debug, Clone)]
