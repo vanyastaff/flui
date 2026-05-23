@@ -90,7 +90,7 @@ mod tests {
     use crate::{
         StatelessElement,
         element::{Lifecycle, StatelessBehavior},
-        view::{ElementBase, View},
+        view::{ElementBase, View, ViewExt},
     };
 
     #[derive(Clone)]
@@ -100,9 +100,9 @@ mod tests {
     }
 
     impl StatelessView for TestView {
-        fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
+        fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
             // Return self for testing - in real code this would return child views
-            Box::new(self.clone())
+            self.clone().boxed()
         }
     }
 

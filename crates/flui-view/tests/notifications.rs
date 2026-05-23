@@ -28,6 +28,8 @@ use std::{
 
 use flui_foundation::{ElementId, RenderId};
 use flui_view::{
+    ViewExt,
+    IntoView,
     BuildContext, BuildOwner, ElementBase, ElementBuildContext, ElementTree, Notification,
     StatelessBehavior, StatelessElement, StatelessView, View, element::Lifecycle,
 };
@@ -58,8 +60,8 @@ impl Notification for FooNotification {}
 struct DummyChild;
 
 impl StatelessView for DummyChild {
-    fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
-        Box::new(self.clone())
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        self.clone().boxed()
     }
 }
 

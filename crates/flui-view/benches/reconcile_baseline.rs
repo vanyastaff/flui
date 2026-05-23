@@ -13,6 +13,8 @@
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use flui_view::{
+    ViewExt,
+    IntoView,
     BuildContext, BuildOwner, ElementBase, StatelessBehavior, StatelessElement, StatelessView,
     View, reconcile_children,
 };
@@ -24,8 +26,8 @@ struct SmokeView {
 }
 
 impl StatelessView for SmokeView {
-    fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
-        Box::new(self.clone())
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        self.clone().boxed()
     }
 }
 

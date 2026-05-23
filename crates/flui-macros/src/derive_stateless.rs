@@ -39,7 +39,16 @@ use quote::quote;
 use syn::{DeriveInput, parse_quote};
 
 /// Expand `#[derive(StatelessView)]` into the canonical `impl View` block.
-pub(crate) fn expand(input: DeriveInput) -> syn::Result<TokenStream> {
+///
+/// Returns a `syn::Result` even though the current body never produces
+/// an error — the wrap reserves headroom for future attribute parsing
+/// (`#[view(key = …)]`, recursive-widget hints) that does need to
+/// surface fallible diagnostics through `into_compile_error`.
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "future-proof against attribute parsing"
+)]
+pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     let ident = &input.ident;
 
     // Honor the user's generic parameters: a stateless widget MAY be

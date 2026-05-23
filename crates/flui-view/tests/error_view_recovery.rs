@@ -20,9 +20,9 @@ use std::{
 };
 
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ErrorView, FlutterError, Lifecycle, StatefulBehavior,
-    StatefulElement, StatefulView, StatelessBehavior, StatelessElement, StatelessView, View,
-    ViewState, clear_error_view_builder, set_error_view_builder,
+    BuildContext, BuildOwner, ElementBase, ErrorView, FlutterError, IntoView, Lifecycle,
+    StatefulBehavior, StatefulElement, StatefulView, StatelessBehavior, StatelessElement,
+    StatelessView, View, ViewExt, ViewState, clear_error_view_builder, set_error_view_builder,
 };
 
 /// Serializes the tests in this file.
@@ -58,8 +58,20 @@ struct PanickingView {
 }
 
 impl StatelessView for PanickingView {
-    fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
-        panic!("{}", self.message);
+    // `!` does not implement `IntoView` — bind the panic through an
+    // explicit `Box<dyn View>` so the inference uses the
+    // `IntoView for Box<dyn View>` shim. The line still panics (the
+    // assignment never completes); the bind exists purely to anchor
+    // a concrete `impl IntoView`-satisfying type.
+    #[allow(
+        unreachable_code,
+        unused_variables,
+        clippy::diverging_sub_expression,
+        reason = "panic body — see comment above"
+    )]
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        let v: Box<dyn View> = panic!("{}", self.message);
+        v
     }
 }
 
@@ -78,8 +90,8 @@ struct WrapperView<C: View + Clone> {
 }
 
 impl<C: View + Clone + 'static> StatelessView for WrapperView<C> {
-    fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
-        Box::new(self.child.clone())
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        self.child.clone().boxed()
     }
 }
 
@@ -104,8 +116,17 @@ impl StatefulView for PanickingStatefulView {
 }
 
 impl ViewState<PanickingStatefulView> for PanickingStatefulState {
-    fn build(&self, _view: &PanickingStatefulView, _ctx: &dyn BuildContext) -> Box<dyn View> {
-        panic!("stateful build exploded");
+    // See `PanickingView::build` — anchor `!` through `Box<dyn View>` so
+    // the `impl IntoView`-satisfying type is fixed.
+    #[allow(
+        unreachable_code,
+        unused_variables,
+        clippy::diverging_sub_expression,
+        reason = "panic body — see comment above"
+    )]
+    fn build(&self, _view: &PanickingStatefulView, _ctx: &dyn BuildContext) -> impl IntoView {
+        let v: Box<dyn View> = panic!("stateful build exploded");
+        v
     }
 }
 

@@ -60,7 +60,16 @@ impl<V: View> IntoView for V {
 /// The recommended authoring shape is still to return a concrete
 /// `impl IntoView` (or `BoxedView` via `.boxed()` at the recursion edge);
 /// this impl exists for *interop* with already-erased values, not as a
-/// second authoring path.
+/// second authoring path. We do NOT generalize this to
+/// `impl<V: View + ?Sized> IntoView for Box<V>` because it would
+/// conflict (E0119) with the blanket
+/// `impl<V: View> IntoView for V` whenever some future downstream
+/// crate adds `impl View for Box<…>`. Concrete `Box<SomeView>` returns
+/// (`Box::new(SomeView { … })`) are migrated to either bare
+/// `SomeView { … }` (concrete `impl IntoView` via the blanket) or
+/// `SomeView { … }.boxed()` (`BoxedView`, also `impl IntoView` via
+/// the blanket) at the §U28 sweep boundary — not via an interop shim
+/// on `Box<concrete>`.
 impl IntoView for Box<dyn View> {
     type View = BoxedView;
 

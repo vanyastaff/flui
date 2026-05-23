@@ -21,6 +21,8 @@ use std::sync::Arc;
 use flui_rendering::{objects::RenderSizedBox, pipeline::PipelineOwner};
 use flui_types::geometry::px;
 use flui_view::{
+    ViewExt,
+    IntoView,
     BuildContext, BuildContextExt, BuildOwner, ElementBase, ElementBuildContext, ElementTree,
     RenderElement, RenderView, StatefulBehavior, StatefulElement, StatefulView, StatelessBehavior,
     StatelessElement, StatelessView, View, ViewState, element::RenderBehavior,
@@ -36,8 +38,8 @@ use parking_lot::RwLock;
 struct DummyChild;
 
 impl StatelessView for DummyChild {
-    fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
-        Box::new(self.clone())
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        self.clone().boxed()
     }
 }
 
@@ -53,8 +55,8 @@ impl View for DummyChild {
 struct Spacer;
 
 impl StatelessView for Spacer {
-    fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
-        Box::new(self.clone())
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        self.clone().boxed()
     }
 }
 
@@ -78,8 +80,8 @@ impl LabeledView {
 }
 
 impl StatelessView for LabeledView {
-    fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
-        Box::new(DummyChild)
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        DummyChild.boxed()
     }
 }
 
@@ -147,8 +149,8 @@ impl StatefulView for CounterView {
 }
 
 impl ViewState<CounterView> for CounterState {
-    fn build(&self, _view: &CounterView, _ctx: &dyn BuildContext) -> Box<dyn View> {
-        Box::new(DummyChild)
+    fn build(&self, _view: &CounterView, _ctx: &dyn BuildContext) -> impl IntoView {
+        DummyChild.boxed()
     }
 }
 

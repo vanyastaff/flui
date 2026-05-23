@@ -5,6 +5,8 @@
 
 use flui_foundation::ElementId;
 use flui_view::{
+    ViewExt,
+    IntoView,
     BuildContext, BuildOwner, ElementBase, ElementTree, Lifecycle, StatelessBehavior,
     StatelessElement, StatelessView, View,
 };
@@ -20,8 +22,8 @@ struct TestView {
 }
 
 impl StatelessView for TestView {
-    fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
-        Box::new(self.clone())
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        self.clone().boxed()
     }
 }
 

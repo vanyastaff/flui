@@ -1339,6 +1339,8 @@ impl std::fmt::Debug for WidgetsBinding {
 
 #[cfg(test)]
 mod tests {
+    use crate::view::IntoView;
+    use crate::view::ViewExt;
     use std::any::TypeId;
 
     use flui_foundation::HasInstance;
@@ -1428,8 +1430,8 @@ mod tests {
     struct ParentView;
 
     impl crate::StatelessView for ParentView {
-        fn build(&self, _ctx: &dyn crate::BuildContext) -> Box<dyn View> {
-            Box::new(LeafView)
+        fn build(&self, _ctx: &dyn crate::BuildContext) -> impl IntoView {
+            LeafView.boxed()
         }
     }
 

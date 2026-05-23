@@ -57,7 +57,7 @@
 //! }
 //!
 //! impl ViewState<Counter> for CounterState {
-//!     fn build(&self, view: &Counter, ctx: &dyn BuildContext) -> Box<dyn View> {
+//!     fn build(&self, view: &Counter, ctx: &dyn BuildContext) -> impl IntoView {
 //!         Text::new(format!("Count: {}", self.count)).boxed()
 //!     }
 //! }

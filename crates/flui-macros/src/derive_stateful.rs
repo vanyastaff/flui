@@ -39,7 +39,14 @@ use quote::quote;
 use syn::{DeriveInput, parse_quote};
 
 /// Expand `#[derive(StatefulView)]` into the canonical `impl View` block.
-pub(crate) fn expand(input: DeriveInput) -> syn::Result<TokenStream> {
+///
+/// See [`crate::derive_stateless::expand`] for the rationale behind the
+/// `&DeriveInput` shape and the `syn::Result` future-proofing wrap.
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "future-proof against attribute parsing"
+)]
+pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     let ident = &input.ident;
 
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();

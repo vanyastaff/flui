@@ -706,6 +706,7 @@ impl std::fmt::Debug for ElementTree {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::view::{IntoView, ViewExt};
     use crate::{BuildContext, BuildOwner, StatelessElement, StatelessView, View};
 
     #[derive(Clone)]
@@ -715,8 +716,8 @@ mod tests {
     }
 
     impl StatelessView for TestView {
-        fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
-            Box::new(self.clone())
+        fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+            self.clone().boxed()
         }
     }
 

@@ -299,6 +299,7 @@ mod tests {
     use flui_foundation::ElementId;
 
     use super::*;
+    use crate::view::ViewExt;
     use crate::{
         BuildOwner,
         element::{
@@ -433,8 +434,8 @@ mod tests {
     struct CountingView;
 
     impl StatelessView for CountingView {
-        fn build(&self, _ctx: &dyn crate::context::BuildContext) -> Box<dyn View> {
-            Box::new(TestView)
+        fn build(&self, _ctx: &dyn crate::context::BuildContext) -> impl IntoView {
+            TestView.boxed()
         }
     }
 

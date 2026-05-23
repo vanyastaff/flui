@@ -16,6 +16,8 @@
 
 use flui_foundation::{ValueKey, ViewKey};
 use flui_view::{
+    ViewExt,
+    IntoView,
     BuildContext, BuildOwner, ElementBase, ElementTree, StatelessElement, StatelessView, View,
 };
 
@@ -34,8 +36,8 @@ impl Clone for ShimView {
 }
 
 impl StatelessView for ShimView {
-    fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
-        Box::new(self.clone())
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        self.clone().boxed()
     }
 }
 

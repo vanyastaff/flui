@@ -192,11 +192,11 @@ mod tests {
     }
 
     impl ViewState<TestCounter> for TestCounterState {
-        fn build(&self, _view: &TestCounter, _ctx: &dyn BuildContext) -> Box<dyn View> {
+        fn build(&self, _view: &TestCounter, _ctx: &dyn BuildContext) -> impl IntoView {
             // In real code, return actual child views
-            Box::new(TestCounter {
+            TestCounter {
                 initial: self.count,
-            })
+            }
         }
 
         fn dispose(&mut self) {

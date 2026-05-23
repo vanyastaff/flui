@@ -99,7 +99,7 @@ use syn::{DeriveInput, parse_macro_input};
 #[proc_macro_derive(StatelessView)]
 pub fn derive_stateless_view(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    derive_stateless::expand(input)
+    derive_stateless::expand(&input)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
@@ -142,7 +142,7 @@ pub fn derive_stateless_view(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(StatefulView)]
 pub fn derive_stateful_view(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    derive_stateful::expand(input)
+    derive_stateful::expand(&input)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }

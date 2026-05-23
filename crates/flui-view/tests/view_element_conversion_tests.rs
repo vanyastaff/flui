@@ -21,8 +21,8 @@ struct SimpleView {
 }
 
 impl StatelessView for SimpleView {
-    fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
-        Box::new(self.clone())
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        self.clone().boxed()
     }
 }
 
@@ -52,10 +52,10 @@ impl StatefulView for CounterView {
 }
 
 impl ViewState<CounterView> for CounterState {
-    fn build(&self, _view: &CounterView, _ctx: &dyn BuildContext) -> Box<dyn View> {
-        Box::new(SimpleView {
+    fn build(&self, _view: &CounterView, _ctx: &dyn BuildContext) -> impl IntoView {
+        SimpleView {
             text: format!("Count: {}", self.count),
-        })
+        }
     }
 }
 

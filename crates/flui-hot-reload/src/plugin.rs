@@ -118,7 +118,7 @@ macro_rules! scene_plugin {
 /// struct MyApp;
 ///
 /// impl StatelessView for MyApp {
-///     fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
+///     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
 ///         Box::new(Center::new(
 ///             Text::new("Hello from hot-reload!")
 ///         ))
