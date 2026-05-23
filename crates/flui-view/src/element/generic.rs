@@ -282,9 +282,9 @@ where
     /// Update this element with a new View of the same type.
     ///
     /// FR-021 (Phase 3 §U27): dispatch routes through
-    /// [`crate::element::dispatch::dispatch_view_update`] which
-    /// discriminates on `TypeId` and extracts the typed inner via
-    /// `Downcast::into_any` + `Box::downcast::<V>` — the literal
+    /// `crate::element::dispatch::dispatch_view_update` (`pub(crate)`)
+    /// which discriminates on `TypeId` and extracts the typed inner
+    /// via `Downcast::into_any` + `Box::downcast::<V>` — the literal
     /// `downcast_ref::<V>()` pattern FR-033's port-check grep
     /// forbids is gone from this path entirely. On type mismatch
     /// the dispatch returns `false` without `tracing::warn!`; the

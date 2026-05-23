@@ -2,7 +2,7 @@
 //! generated tuple impls + `Vec`-of-View / `Vec<BoxedView>` impls
 //! that drive the two C2 authoring paths.
 //!
-//! See [`docs/FOUNDATIONS.md`] §C2 ("heterogeneous children") and
+//! See `docs/FOUNDATIONS.md` §C2 ("heterogeneous children") and
 //! `specs/004-view-element-core/spec.md` FR-012–FR-018. The two
 //! load-bearing paths are:
 //!
@@ -41,10 +41,13 @@ use crate::view::{BoxedView, View};
 /// Implemented for:
 ///
 /// - Tuples of arities `0..=16` whose elements all implement
-///   [`View`] — see [`tuple_impls`]. The tuple path keeps each
-///   position's concrete type to the element boundary.
-/// - `Vec<V: View>` (homogeneous dynamic case) — see [`vec_impls`].
-/// - `Vec<BoxedView>` (heterogeneous dynamic case) — same module.
+///   [`View`] — see the crate's `seq::tuple_impls` module. The
+///   tuple path keeps each position's concrete type to the
+///   element boundary.
+/// - `Vec<V: View>` (homogeneous dynamic case) — see the crate's
+///   `seq::vec_impls` module.
+/// - `Vec<BoxedView>` (heterogeneous dynamic case) — covered by
+///   the same `Vec<V: View>` blanket since `BoxedView: View`.
 ///
 /// Multi-child widgets bind `C: ViewSeq` (`struct Column<C: ViewSeq>
 /// { children: C }`) rather than specialize over `Vec<BoxedView>`

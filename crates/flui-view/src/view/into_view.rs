@@ -54,7 +54,7 @@ impl<V: View> IntoView for V {
 /// a `Box<dyn View>` into a [`BoxedView`] so any code path that already
 /// produces an erased pointer (`ErrorView::build_error_view`,
 /// `dyn_clone::clone_box`, legacy `Box<dyn View>`-returning
-/// [`StatelessView::build`] impls) can flow into an `impl IntoView`
+/// `StatelessView::build` impls) can flow into an `impl IntoView`
 /// position without an explicit `.boxed()` wrap.
 ///
 /// The recommended authoring shape is still to return a concrete

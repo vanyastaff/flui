@@ -125,7 +125,7 @@ pub trait ViewState<V: StatefulView>: Send + Sync + 'static {
     /// [`IntoView::into_view`] inside the build call site (see
     /// `element/behavior.rs`), boxing the concrete `'static` value
     /// into `Box<dyn View>` before the closure / catch-unwind
-    /// boundary. See [`StatelessView::build`] for the rationale.
+    /// boundary. See `StatelessView::build` for the rationale.
     fn build(&self, view: &V, ctx: &dyn BuildContext) -> impl IntoView;
 
     /// Called when the View configuration changes.

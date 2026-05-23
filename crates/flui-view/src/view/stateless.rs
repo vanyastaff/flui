@@ -42,7 +42,8 @@ use crate::context::BuildContext;
 /// `StatelessView::build` returns `impl IntoView` (return-position
 /// `impl Trait` in trait, stabilized in Rust 1.75). This makes
 /// `StatelessView` **non-object-safe** — no `dyn StatelessView` use
-/// exists or is needed. [`View`] is the object-safe boundary;
+/// exists or is needed. The `View` trait
+/// (super::view::View) is the object-safe boundary;
 /// `StatelessView` is implementation-side (Phase 3 §U22, FR-007).
 ///
 /// # Note
@@ -53,7 +54,8 @@ pub trait StatelessView: Clone + Send + Sync + 'static {
     /// Build the child View tree.
     ///
     /// Called whenever this View needs to be rendered. The returned
-    /// value is normalized into a concrete [`View`] by the framework via
+    /// value is normalized into a concrete `View`
+    /// ([`super::view::View`]) by the framework via
     /// [`IntoView::into_view`]; widget authors return the typed View
     /// directly (`Text::new(…)`) — no `Box::new` and no `.boxed()` at
     /// the call site. For conditional builds whose arms have different

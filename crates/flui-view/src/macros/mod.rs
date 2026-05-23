@@ -1,13 +1,14 @@
 //! Declarative macros for the C2 static-tuple authoring path.
 //!
-//! The [`column!`] and [`row!`] macros expand to the tuple form
+//! The [`column!`](crate::column) and [`row!`](crate::row) macros
+//! expand to the tuple form
 //! `($($e),+,)` that [`ViewSeq`](crate::seq::ViewSeq) is implemented
 //! for at arities `0..=16`. They are the ergonomic surface that lets
 //! widget authors write
 //!
-//! ```ignore
+//! ```text
 //! Column {
-//!     children: column![Greeting { name: "a".into() }, Padding { … }, Text::new("c")],
+//!     children: column![Greeting { name: "a".into() }, Padding { ... }, Text::new("c")],
 //! }
 //! ```
 //!
