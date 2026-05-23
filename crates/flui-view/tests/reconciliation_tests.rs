@@ -19,10 +19,8 @@ use std::{
 };
 
 use flui_view::{
-    ViewExt,
-    IntoView,
-    BuildContext, BuildOwner, ElementBase, ElementOwner, Lifecycle, StatefulBehavior,
-    StatefulElement, StatefulView, ValueKey, View, ViewState, reconcile_children,
+    BuildContext, BuildOwner, ElementBase, ElementOwner, IntoView, Lifecycle, StatefulBehavior,
+    StatefulElement, StatefulView, ValueKey, View, ViewExt, ViewState, reconcile_children,
 };
 
 // ============================================================================

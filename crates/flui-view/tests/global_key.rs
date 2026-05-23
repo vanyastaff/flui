@@ -22,11 +22,9 @@ use std::sync::Arc;
 
 use flui_foundation::ViewKey;
 use flui_view::{
-    ViewExt,
-    IntoView,
-    BuildContext, BuildOwner, ElementBase, ElementTree, GlobalKey, StatefulBehavior,
+    BuildContext, BuildOwner, ElementBase, ElementTree, GlobalKey, IntoView, StatefulBehavior,
     StatefulElement, StatefulView, StatelessBehavior, StatelessElement, StatelessView, View,
-    ViewState,
+    ViewExt, ViewState,
 };
 use parking_lot::RwLock;
 

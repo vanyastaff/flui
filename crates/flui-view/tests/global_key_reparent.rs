@@ -19,9 +19,8 @@ use std::sync::Arc;
 
 use flui_foundation::ViewKey;
 use flui_view::{
-    ViewExt,
     BuildContext, BuildOwner, ElementBase, ElementTree, GlobalKey, IntoView, StatefulView, View,
-    ViewState,
+    ViewExt, ViewState,
     tree::{
         ReconcileEventKind,
         test_utils::{CollectedEvent, ReconcileEventCollector},

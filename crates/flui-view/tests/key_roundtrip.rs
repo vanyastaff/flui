@@ -20,10 +20,8 @@ use std::sync::Arc;
 
 use flui_foundation::{Key, ObserverId, UniqueKey, ValueKey, ViewKey};
 use flui_view::{
-    ViewExt,
-    IntoView,
-    BuildContext, BuildOwner, ElementBase, ElementTree, GlobalKey, ObjectKey, StatelessElement,
-    StatelessView, View,
+    BuildContext, BuildOwner, ElementBase, ElementTree, GlobalKey, IntoView, ObjectKey,
+    StatelessElement, StatelessView, View, ViewExt,
 };
 
 // ----------------------------------------------------------------------------

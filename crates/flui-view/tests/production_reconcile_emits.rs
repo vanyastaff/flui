@@ -44,9 +44,8 @@
 
 use flui_foundation::{ElementId, ValueKey, ViewKey};
 use flui_view::{
-    ViewExt,
-    IntoView,
-    BuildContext, BuildOwner, ElementBase, ElementTree, StatelessElement, StatelessView, View,
+    BuildContext, BuildOwner, ElementBase, ElementTree, IntoView, StatelessElement, StatelessView,
+    View, ViewExt,
 };
 
 #[derive(Clone)]

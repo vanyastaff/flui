@@ -6,11 +6,9 @@
 use std::{any::TypeId, sync::Arc};
 
 use flui_view::{
-    ViewExt,
-    IntoView,
     BuildContext, BuildContextExt, BuildOwner, ElementBase, ElementBuildContext,
-    ElementBuildContextBuilder, ElementTree, Lifecycle, StatelessBehavior, StatelessElement,
-    StatelessView, View,
+    ElementBuildContextBuilder, ElementTree, IntoView, Lifecycle, StatelessBehavior,
+    StatelessElement, StatelessView, View, ViewExt,
 };
 use parking_lot::RwLock;
 

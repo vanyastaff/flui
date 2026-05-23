@@ -17,9 +17,8 @@ use std::sync::Arc;
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use flui_foundation::ViewKey;
 use flui_view::{
-    ViewExt,
-    IntoView,
-    BuildContext, BuildOwner, ElementBase, ElementTree, GlobalKey, StatefulView, View, ViewState,
+    BuildContext, BuildOwner, ElementBase, ElementTree, GlobalKey, IntoView, StatefulView, View,
+    ViewExt, ViewState,
 };
 use parking_lot::RwLock;
 

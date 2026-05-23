@@ -15,9 +15,8 @@ use std::sync::Arc;
 
 use flui_foundation::{UniqueKey, ValueKey, ViewKey};
 use flui_view::{
-    ViewExt,
-    IntoView,
-    BuildContext, ElementBase, GlobalKey, ObjectKey, StatelessElement, StatelessView, View,
+    BuildContext, ElementBase, GlobalKey, IntoView, ObjectKey, StatelessElement, StatelessView,
+    View, ViewExt,
 };
 
 // ----------------------------------------------------------------------------

@@ -21,11 +21,10 @@ use std::sync::Arc;
 use flui_rendering::{objects::RenderSizedBox, pipeline::PipelineOwner};
 use flui_types::geometry::px;
 use flui_view::{
-    ViewExt,
-    IntoView,
     BuildContext, BuildContextExt, BuildOwner, ElementBase, ElementBuildContext, ElementTree,
-    RenderElement, RenderView, StatefulBehavior, StatefulElement, StatefulView, StatelessBehavior,
-    StatelessElement, StatelessView, View, ViewState, element::RenderBehavior,
+    IntoView, RenderElement, RenderView, StatefulBehavior, StatefulElement, StatefulView,
+    StatelessBehavior, StatelessElement, StatelessView, View, ViewExt, ViewState,
+    element::RenderBehavior,
 };
 use parking_lot::RwLock;
 

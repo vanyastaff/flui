@@ -13,10 +13,8 @@
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use flui_view::{
-    ViewExt,
-    IntoView,
-    BuildContext, BuildOwner, ElementBase, StatelessBehavior, StatelessElement, StatelessView,
-    View, reconcile_children,
+    BuildContext, BuildOwner, ElementBase, IntoView, StatelessBehavior, StatelessElement,
+    StatelessView, View, ViewExt, reconcile_children,
 };
 
 #[derive(Clone)]

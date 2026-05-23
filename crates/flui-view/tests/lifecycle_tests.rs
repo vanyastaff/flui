@@ -9,11 +9,9 @@ use std::sync::{
 };
 
 use flui_view::{
-    ViewExt,
-    IntoView,
-    BuildContext, BuildOwner, ElementBase, ElementTree, Lifecycle, StatefulBehavior,
+    BuildContext, BuildOwner, ElementBase, ElementTree, IntoView, Lifecycle, StatefulBehavior,
     StatefulElement, StatefulView, StatelessBehavior, StatelessElement, StatelessView, View,
-    ViewState,
+    ViewExt, ViewState,
 };
 
 // ============================================================================
