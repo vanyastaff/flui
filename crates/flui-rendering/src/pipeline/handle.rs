@@ -8,7 +8,7 @@
 //! goes through `PipelineOwnerHandle::request_mark_dirty`, which sends a
 //! [`DirtyRequest`] over a bounded [`crossbeam_channel`] to the owner.
 //!
-//! The owner drains the channel into its [`DirtySets`] at a defined point
+//! The owner drains the channel into its [`DirtySets`](super::DirtySets) at a defined point
 //! in each frame -- typically at the start of `run_layout` (and any other
 //! `run_*` phase) where the producer-side mark-dirty signals must be
 //! observed before that phase's work begins.
@@ -16,7 +16,7 @@
 //! ## Backpressure
 //!
 //! The channel is bounded. Default capacity 256 (tunable at construction).
-//! When the channel is full, [`request_mark_dirty`] returns
+//! When the channel is full, [`PipelineOwnerHandle::request_mark_dirty`] returns
 //! `Err(SendError::ChannelFull)` -- the producer has surfaced
 //! backpressure and decides what to do (wait, drop the request, log,
 //! escalate). Unbounded channels would hide this in heap growth; we

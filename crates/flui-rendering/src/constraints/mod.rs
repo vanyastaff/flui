@@ -19,8 +19,8 @@
 //!
 //! ## Scroll State
 //!
-//! - [`FixedScrollMetrics`] - Scroll position and bounds tracking
-//! - [`FixedExtentMetrics`] - Scroll metrics with uniform item sizing
+//! - `FixedScrollMetrics` - Scroll position and bounds tracking (requires `scrolling` feature)
+//! - `FixedExtentMetrics` - Scroll metrics with uniform item sizing (requires `scrolling` feature)
 //!
 //! # Performance Features
 //!

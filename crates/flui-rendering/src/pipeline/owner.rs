@@ -35,7 +35,7 @@ const DEFAULT_DIRTY_CHANNEL_CAPACITY: usize = 256;
 /// Maximum render-tree recursion depth during layout. Going deeper means
 /// the parent-child layout has cycled or the tree is pathologically
 /// deep. The pipeline aborts the offending subtree, surfaces
-/// [`RenderError::LayoutDepthExceeded`] via tracing, and continues with
+/// [`RenderError::LayoutDepthExceeded`](crate::RenderError::LayoutDepthExceeded) via tracing, and continues with
 /// the next dirty root. Mythos Step 12 (2026-05-20).
 pub const LAYOUT_DEPTH_LIMIT: usize = 1024;
 
@@ -103,11 +103,11 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
 
     /// Consolidated visual-update + semantics-owner-lifecycle callback
     /// notifier. Replaces three previously-separate `Box<dyn Fn() + Send +
-    /// Sync>` fields. See [`VisualUpdateNotifier`](super::notifier::VisualUpdateNotifier).
+    /// Sync>` fields. See [`VisualUpdateNotifier`].
     notifier: VisualUpdateNotifier,
 
     /// Co-located dirty sets for the four pipeline phases. See
-    /// [`DirtySets`](super::dirty::DirtySets). Replaces what used to be four
+    /// [`DirtySets`]. Replaces what used to be four
     /// parallel `Vec<DirtyNode>` fields scattered across the struct.
     dirty: DirtySets,
 
@@ -128,7 +128,7 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
 
     /// Prototype handle held by the owner so `handle()` can clone it for
     /// each caller without re-allocating the channel. See
-    /// [`PipelineOwnerHandle`](super::handle::PipelineOwnerHandle).
+    /// [`PipelineOwnerHandle`].
     handle: PipelineOwnerHandle,
 
     /// Receiver end of the bounded dirty-request channel. Drained into
@@ -169,7 +169,7 @@ impl Default for PipelineOwner<Idle> {
 
 impl PipelineOwner<Idle> {
     /// Creates a new pipeline owner in the [`Idle`] phase with the
-    /// default dirty-channel capacity ([`DEFAULT_DIRTY_CHANNEL_CAPACITY`],
+    /// default dirty-channel capacity (`DEFAULT_DIRTY_CHANNEL_CAPACITY`,
     /// 256).
     pub fn new() -> Self {
         Self::new_with_capacity(DEFAULT_DIRTY_CHANNEL_CAPACITY)
@@ -251,7 +251,7 @@ impl PipelineOwner<Idle> {
 
     /// Runs a full frame: layout -> compositing-bits -> paint -> semantics.
     /// Consumes `self`, returns the owner back at [`Idle`] plus a
-    /// [`RenderResult`] indicating whether the frame produced a layer
+    /// [`RenderResult`](crate::RenderResult) indicating whether the frame produced a layer
     /// tree or failed mid-phase.
     ///
     /// The phase transitions are the load-bearing mechanism here -- each

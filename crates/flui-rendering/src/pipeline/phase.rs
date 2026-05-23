@@ -105,7 +105,7 @@ mod sealed {
 /// Phase marker trait, sealed so only this crate can name phases.
 ///
 /// Implementors are zero-sized marker structs ([`Idle`], [`Layout`],
-/// [`Compositing`], [`Paint`], [`Semantics`]). They never appear in
+/// [`Compositing`], [`PaintPhase`], [`Semantics`]). They never appear in
 /// runtime values -- they live only as `PhantomData<Phase>` on
 /// `PipelineOwner<Phase>`.
 pub trait PipelinePhase: sealed::Sealed + 'static {

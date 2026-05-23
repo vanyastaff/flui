@@ -215,7 +215,7 @@ impl RenderError {
     /// rather than `impl Into<Box<str>>`. `AsRef<str>` is strictly
     /// more permissive -- it accepts `&str`, `String`, `Box<str>`,
     /// `&String`, `Cow<str>`, etc. The allocation happens once via
-    /// `message.as_ref().into()` (str -> Box<str>). Pre-fix
+    /// `message.as_ref().into()` (`str` -> `Box<str>`). Pre-fix
     /// `Into<Box<str>>` rejected `&String` callers (no impl from
     /// `&String` to `Box<str>` without deref coercion).
     pub fn invalid_constraints(message: impl AsRef<str>) -> Self {
