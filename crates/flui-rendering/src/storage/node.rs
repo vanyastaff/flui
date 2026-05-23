@@ -306,6 +306,47 @@ impl RenderNode {
         }
     }
 
+    /// Protocol-erased layout dispatch: matches the inner `RenderEntry<P>`
+    /// against the supplied [`ErasedConstraints`](crate::storage::ErasedConstraints)
+    /// variant and forwards to `RenderEntry::<P>::layout(constraints)`,
+    /// returning the result as
+    /// [`ErasedGeometry`](crate::storage::ErasedGeometry).
+    ///
+    /// **D-block PR-A1b U18 (companion memo D4):** the pipeline operates on
+    /// protocol-erased `RenderNode`s, but `RenderEntry::layout` is generic
+    /// over `P: Protocol`. This method bridges the seam — variant mismatch
+    /// (e.g., `Box` constraints handed to a `Sliver` entry) returns
+    /// [`RenderError::ProtocolMismatch`](crate::error::RenderError::ProtocolMismatch).
+    ///
+    /// Pipeline-side callers (`PipelineOwner::layout_dirty_root`, U20) lift
+    /// the protocol-typed root constraints to `ErasedConstraints` via the
+    /// `From<BoxConstraints>` / `From<SliverConstraints>` impls before
+    /// invoking. Per-protocol-typed callers (the `RenderBox` bridge and
+    /// `RenderSliver` bridge in U19) downcast the returned geometry via
+    /// `TryFrom<ErasedGeometry>`.
+    pub fn layout_erased(
+        &mut self,
+        constraints: crate::storage::ErasedConstraints,
+    ) -> crate::error::RenderResult<crate::storage::ErasedGeometry> {
+        use crate::storage::ErasedConstraints;
+        match (self, constraints) {
+            (Self::Box(entry), ErasedConstraints::Box(c)) => entry.layout(c).map(Into::into),
+            (Self::Sliver(entry), ErasedConstraints::Sliver(c)) => entry.layout(c).map(Into::into),
+            (Self::Box(_), ErasedConstraints::Sliver(_)) => {
+                Err(crate::error::RenderError::ProtocolMismatch {
+                    node_protocol: "Box",
+                    constraints_protocol: "Sliver",
+                })
+            }
+            (Self::Sliver(_), ErasedConstraints::Box(_)) => {
+                Err(crate::error::RenderError::ProtocolMismatch {
+                    node_protocol: "Sliver",
+                    constraints_protocol: "Box",
+                })
+            }
+        }
+    }
+
     /// Returns true if this is a repaint boundary.
     pub fn is_repaint_boundary(&self) -> bool {
         match self {

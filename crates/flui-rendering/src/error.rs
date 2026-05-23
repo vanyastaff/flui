@@ -199,6 +199,31 @@ pub enum RenderError {
         /// Phase during which the panic occurred (e.g. `"layout"`).
         phase: &'static str,
     },
+
+    // ========================================================================
+    // D-block PR-A1b — protocol-erased dispatch
+    // ========================================================================
+    /// The protocol-erased constraints or geometry variant did not match
+    /// the node's protocol. Returned from
+    /// [`RenderNode::layout_erased`](crate::storage::RenderNode::layout_erased)
+    /// when a `Box(_)` constraint is handed to a `Sliver` node (or vice
+    /// versa). Indicates a bug in the pipeline-dispatch caller.
+    #[error(
+        "protocol mismatch in layout_erased: node is {node_protocol}, constraints are {constraints_protocol}"
+    )]
+    ProtocolMismatch {
+        /// Protocol of the node that received the call.
+        node_protocol: &'static str,
+        /// Protocol of the constraints actually passed.
+        constraints_protocol: &'static str,
+    },
+
+    /// Detected a layout cycle: a `RenderEntry::layout` call recursed
+    /// (via `LayoutContext::layout_child`) back into a node whose layout
+    /// was still in flight on the same frame. Surfaces via the
+    /// `currently_laying_out` guard on `PipelineOwner<Layout>`.
+    #[error("layout cycle detected: node {0:?} re-entered while its own layout was in flight")]
+    LayoutCycle(RenderId),
 }
 
 /// Result type alias for render operations.

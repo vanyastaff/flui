@@ -60,6 +60,7 @@
 //! ```
 
 mod entry;
+mod erased;
 mod flags;
 mod links;
 mod node;
@@ -68,6 +69,9 @@ mod tree;
 
 // Public exports
 pub use entry::RenderEntry;
+pub use erased::{
+    ErasedConstraints, ErasedConstraintsMismatch, ErasedGeometry, ErasedGeometryMismatch,
+};
 pub use flags::{AtomicRenderFlags, RenderFlags};
 pub use links::NodeLinks;
 pub use node::RenderNode;
