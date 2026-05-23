@@ -15,10 +15,19 @@ View Tree (immutable) → Element Tree (mutable) → Render Tree (layout/paint)
 - **Foundation:** `flui-types`, `flui-foundation`, `flui-tree`, `flui-platform`
 - **Framework:** `flui-view`, `flui-reactivity`, `flui-scheduler`, `flui_core`
 - **Rendering:** `flui-painting`, `flui-engine`, `flui-rendering`
-- **Widget:** `flui-widgets`, `flui-animation`, `flui-interaction`
+- **Widget:** `flui-animation`, `flui-interaction` (plus `flui-widgets` (planned))
 - **Application:** `flui-app`, `flui-assets`, `flui-log`
 - **Tools:** `flui-devtools`, `flui-cli`, `flui-build`
 - **Layer System:** `flui-layer` (compositing), `flui-semantics` (accessibility)
+
+### Architecture direction
+
+The forward architecture is owned by two master docs in `docs/`:
+
+- [`docs/FOUNDATIONS.md`](docs/FOUNDATIONS.md) — **architecture contract**: target architecture, locked contracts (C1–C9), and the target crate graph (Part IV).
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) — **construction plan**: dependency-ordered phases to migrate the workspace from current state to the target.
+
+The "Current Development Focus" section below is the *present* snapshot of which crates are active; `docs/ROADMAP.md` is the forward plan.
 
 ### Current Development Focus
 
@@ -31,13 +40,13 @@ View Tree (immutable) → Element Tree (mutable) → Render Tree (layout/paint)
 - Framework: `flui-scheduler`, `flui-engine`, `flui-log`, `flui-rendering`, `flui-view`, `flui-app`
 
 **Temporarily disabled until integration complete:**
-- `flui-animation`, `flui-reactivity`, `flui-devtools`, `flui-cli`, `flui-build`
+- `flui-animation`, `flui-reactivity`, `flui-devtools`, `flui-cli`, `flui-build`, `flui-assets`
 
-**Current Priority**: Complete flui-platform MVP
+**Critical-path priority**: ROADMAP Phase 0 (spine to target spec — see [`docs/ROADMAP.md`](docs/ROADMAP.md)). Platform breadth (`flui-platform`) runs as parallel Track P.
 
 ## Constitution Compliance
 
-**CRITICAL:** All work must align with `.specify/memory/constitution.md` (v2.2.0). Key principles:
+**CRITICAL:** All work must align with `.specify/memory/constitution.md` (v2.3.0). Key principles:
 
 1. **Flutter as Reference, Not Copy** - Adapt Flutter patterns to Rust idioms, no Dart translation
 2. **Strict Crate Dependency DAG** - Dependencies flow downward only, no circular deps
@@ -274,11 +283,11 @@ These are Rust-focused audit and optimization skills (user-invocable via `/skill
 
 **Core:** wgpu 25.x (stay on 25.x, 26.0+ broken), parking_lot 0.12, tokio 1.43, tracing, ambassador 0.4.2, slab, bon 3.8
 
-**Platform:** winit 0.30.12, arboard 3.4, windows 0.52 (Win32), cocoa 0.26.0 (AppKit), ui-events (W3C events), keyboard-types
+**Platform:** winit 0.30.12, arboard 3.4, windows 0.59 (Win32), cocoa 0.26.0 (AppKit), ui-events (W3C events), keyboard-types
 
 **Engine-only:** glam 0.30, lyon, glyphon, cosmic-text, guillotiere
 
-**Minimum Rust version:** 1.91 (set in workspace `rust-version`)
+**Minimum Rust version:** 1.94 (set in workspace `rust-version`)
 
 ## Git Workflow
 

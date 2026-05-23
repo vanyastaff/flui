@@ -1,4 +1,4 @@
-[← Getting Started](getting-started.md) · [Back to README](../README.md) · [Port →](PORT.md)
+[← Getting Started](getting-started.md) · [Back to README](../README.md) · [Foundations](FOUNDATIONS.md) · [Roadmap](ROADMAP.md) · [Port →](PORT.md)
 
 # Architecture
 
@@ -11,11 +11,13 @@ For the deep, rule-by-rule guide (anti-patterns, code examples, dependency rules
 20+ crates are organized into a strict directed acyclic graph (DAG). Dependencies flow downward only; circular dependencies are forbidden. Each crate exposes its public API exclusively through `lib.rs` (and an optional `prelude` module). Internal modules default to `pub(crate)`.
 
 ```
-Layer 7  ── flui-app, flui-cli*, flui-devtools*
+Layer 8  ── flui-app, flui-cli*, flui-devtools*
                 │  (* currently disabled)
+Layer 7  ── flui-hot-reload   (depends on flui-view via `app-plugin` feature)
+                │
 Layer 6  ── flui-view, flui-assets*, flui-build*
                 │
-Layer 5  ── flui-engine, flui-platform, flui-hot-reload, flui-log
+Layer 5  ── flui-engine, flui-platform, flui-log
                 │
 Layer 4  ── flui-scheduler, flui-rendering, flui-animation*
                 │
@@ -23,10 +25,15 @@ Layer 3  ── flui-painting, flui-layer, flui-semantics, flui-interaction
                 │
 Layer 2  ── flui-reactivity*
                 │
-Layer 1  ── flui-tree
-                │
-Layer 0  ── flui-types, flui-foundation
+Layer 1  ── flui-tree, flui-foundation
+                │   (flui-foundation = framework primitives:
+                │    ChangeNotifier, Id system, BindingBase, Key, diagnostics)
+Layer 0  ── flui-types
+                (geometry, styling, typography, layout, gestures, physics,
+                 platform value types; base units and IDs)
 ```
+
+Note on `flui-foundation` placement: in the current workspace its Cargo deps are leaf (no internal-crate runtime deps), but its *responsibility* is framework primitives that operate on top of `flui-types`' value types — so it is placed above `flui-types` in the layered table. The target crate graph in [`FOUNDATIONS.md`](FOUNDATIONS.md) Part IV makes that placement an enforced edge.
 
 See [`crates.md`](crates.md) for the full inventory and current status of each crate.
 
@@ -93,18 +100,37 @@ Applies to: `ViewId`, `ElementId`, `RenderId`, `LayerId`, `SemanticsId`.
 `flui-platform` exposes a unified `Platform` trait with native and headless backends:
 
 ```rust
-pub trait Platform {
-    fn run(&self, ready: Box<dyn FnOnce()>);
-    fn open_window(&self, options: WindowOptions) -> Result<Box<dyn PlatformWindow>>;
-    fn text_system(&self) -> Arc<dyn PlatformTextSystem>;
+pub trait Platform: Send + Sync + 'static {
+    // Core
     fn background_executor(&self) -> Arc<dyn PlatformExecutor>;
-    fn clipboard(&self) -> Arc<dyn PlatformClipboard>;
+    fn foreground_executor(&self) -> Arc<dyn PlatformExecutor>;
+
+    // Lifecycle
+    fn run(self: Box<Self>, on_ready: Box<dyn FnOnce()>);
+    fn quit(&self);
+
+    // Windows + displays
+    fn open_window(&self, options: WindowOptions) -> Result<Box<dyn PlatformWindow>>;
+    fn active_window(&self) -> Option<WindowId>;
+    fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>>;
+
+    // Input
+    fn clipboard(&self) -> Arc<dyn Clipboard>;
+
+    // Callbacks + metadata
+    fn on_quit(&self, callback: Box<dyn FnMut() + Send>);
+    fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>);
+    fn capabilities(&self) -> &dyn PlatformCapabilities;
+    fn name(&self) -> &'static str;
+    // ... plus optional methods for cursor, file pickers, app activation, etc.
 }
 
-let platform = current_platform()?;
+let platform = current_platform().expect("failed to initialize platform");
 ```
 
 Backends: `WindowsPlatform` (Win32), `MacOSPlatform` (AppKit), `HeadlessPlatform` (CI / tests), and a `winit` fallback. All platform-specific imports (`windows::*`, `cocoa::*`, `winit::*`) are confined to this crate.
+
+Text shaping is **not** a `Platform` method — that Flutter binding (`PlatformTextSystem`) was deleted under the [binding-deletion carve-out in `PORT.md`](PORT.md#flutter-behaviour-primacy-with-binding-deletion-carve-out); `cosmic-text` + `glyphon` (+ future `flui-assets`) cover the responsibility end-to-end.
 
 ## Confinement of `unsafe`
 
@@ -127,6 +153,8 @@ Both are studied, never copied. Patterns are translated to FLUI idioms (Arity, A
 ## See Also
 
 - [`.ai-factory/ARCHITECTURE.md`](../.ai-factory/ARCHITECTURE.md) — full architectural rules and anti-patterns
-- [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) — constitution v2.2.0
+- [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) — constitution v2.3.0
+- [Foundations](FOUNDATIONS.md) — architecture contract, target crate graph
+- [Roadmap](ROADMAP.md) — construction phases from current to target
 - [Crates Map](crates.md) — per-layer crate inventory
 - [Contributing](contributing.md) — workflow and conventions

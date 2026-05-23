@@ -1,4 +1,4 @@
-[← Crates Map](crates.md) · [Back to README](../README.md) · [Contributing →](contributing.md)
+[← Crates Map](crates.md) · [Foundations](FOUNDATIONS.md) · [Roadmap](ROADMAP.md) · [Back to README](../README.md) · [Contributing →](contributing.md)
 
 # Testing
 

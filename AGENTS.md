@@ -4,7 +4,7 @@
 
 ## Project Overview
 
-FLUI is a modular, Flutter-inspired declarative UI framework for Rust with a three-tree architecture (View → Element → Render) and a `wgpu`-backed GPU rendering engine. The workspace is currently in the platform-integration phase: foundation layers are stable while higher layers are being landed incrementally.
+FLUI is a modular, Flutter-inspired declarative UI framework for Rust with a three-tree architecture (View → Element → Render) and a `wgpu`-backed GPU rendering engine. Forward architecture and phase status are owned by [`docs/FOUNDATIONS.md`](docs/FOUNDATIONS.md) (architecture contract) and [`docs/ROADMAP.md`](docs/ROADMAP.md) (construction plan); refer to ROADMAP for the current phase. Foundation layers are stable while higher layers are being landed incrementally.
 
 ## Tech Stack
 
@@ -58,7 +58,7 @@ flui/
 │   ├── plans/                # Dated planning notes per major workstream
 │   └── research/             # Dated research notes
 ├── .specify/                 # Speckit workflow (constitution + templates)
-│   ├── memory/constitution.md  # Project constitution (v2.2.0) — REQUIRED reading
+│   ├── memory/constitution.md  # Project constitution (v2.3.0) — REQUIRED reading
 │   └── templates/            # Spec / plan / tasks / checklist templates
 ├── .ai-factory/              # AI Factory configuration and artifacts
 │   ├── config.yaml           # Canonical YAML config (language, paths, git, rules)
@@ -101,13 +101,17 @@ flui/
 
 | Document | Path | Description |
 |----------|------|-------------|
+| **Foundations** | `docs/FOUNDATIONS.md` | **Architecture contract** — target architecture, locked contracts (C1–C9), target crate graph (Part IV) |
+| **Roadmap** | `docs/ROADMAP.md` | **Construction plan** — dependency-ordered phases from current state to target |
+| Strategy | `STRATEGY.md` | Product strategy and the three port rules ("behavior loyal, structure Rust-native") |
+| Port methodology | `docs/PORT.md` | Port methodology, refusal triggers, per-crate ARCHITECTURE.md template |
 | README | `README.md` | Project landing page |
 | Getting Started | `docs/getting-started.md` | Prerequisites, build, run examples |
-| Architecture | `docs/architecture.md` | Three-tree pipeline + layered DAG overview |
+| Architecture | `docs/architecture.md` | Three-tree pipeline + layered DAG overview (current state) |
 | Crates Map | `docs/crates.md` | Per-layer crate inventory and status |
 | Testing | `docs/testing.md` | Build / test / clippy / fmt commands and coverage targets |
 | Contributing | `docs/contributing.md` | Workflow, commits, speckit, AI Factory skills |
-| Constitution | `.specify/memory/constitution.md` | Mandatory project principles (v2.2.0) |
+| Constitution | `.specify/memory/constitution.md` | Mandatory project principles (v2.3.0) |
 | Crate architecture notes | `crates/<crate>/ARCHITECTURE.md` | Per-crate architecture (e.g. `flui-foundation/ARCHITECTURE.md`) |
 | Plans | `docs/plans/` | Dated planning notes per workstream |
 | Research | `docs/research/` | Dated investigations (e.g. GPU tessellation, Skia techniques) |
@@ -151,7 +155,7 @@ Run `just` (no argument) for the full grouped recipe list. Raw `cargo` commands 
   - Incorrect: `git checkout main && git pull`
   - Correct: first `git checkout main`, then `git pull origin main`
 - **Never run destructive git operations** (`git checkout`, `git reset`, `git stash`, `git push --force`, `git branch -D`, etc.) without explicit user permission. Prefer non-destructive alternatives (new branches, new commits, tagging) and ask before discarding work.
-- **Honor the constitution.** Cross-check any non-trivial change against `.specify/memory/constitution.md` (v2.2.0) — especially the dependency DAG, `unsafe` boundaries, and the no-`unwrap`/`println!` rules.
+- **Honor the constitution.** Cross-check any non-trivial change against `.specify/memory/constitution.md` (v2.3.0) — especially the dependency DAG, `unsafe` boundaries, and the no-`unwrap`/`println!` rules.
 - **Pin `wgpu` at 25.x.** 26.0+ is broken upstream (`https://github.com/gfx-rs/wgpu/issues/7915`).
 - **Reference, don't copy.** `.flutter/` and `.gpui/` exist as architectural references only; adapt their patterns to FLUI idioms (Arity system, Ambassador delegation, no nullability).
 - **Use the ID offset pattern.** Slab indices are 0-based; public IDs (`ViewId`, `ElementId`, `RenderId`, `LayerId`, `SemanticsId`) are 1-based `NonZeroUsize`. Insert: `slab_index + 1`; lookup: `id.get() - 1`.

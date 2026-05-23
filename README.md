@@ -75,8 +75,10 @@ Run with `cargo run --example hello_world`. More examples live under `examples/`
 
 | Guide | Description |
 |-------|-------------|
+| **[Foundations](docs/FOUNDATIONS.md)** | **Architecture contract** — target architecture, locked contracts, target crate graph |
+| **[Roadmap](docs/ROADMAP.md)** | **Port roadmap / construction plan** — dependency-ordered phases from current state to target |
 | [Getting Started](docs/getting-started.md) | Prerequisites, build, run examples, platform-specific setup |
-| [Architecture](docs/architecture.md) | Three-tree pipeline + layered crate DAG overview |
+| [Architecture](docs/architecture.md) | Three-tree pipeline + layered crate DAG overview (current state) |
 | [Crates Map](docs/crates.md) | Per-layer crate inventory with status and purpose |
 | [Testing](docs/testing.md) | Build / test / clippy / fmt commands, coverage targets, benchmarks |
 | [Contributing](docs/contributing.md) | Constitution, commits, speckit workflow, AI Factory skills |
