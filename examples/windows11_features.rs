@@ -24,16 +24,24 @@
 //! - Press 'D' to toggle dark mode
 //! - Press 'R' to toggle rounded corners
 //! - Press 'ESC' to exit
+//!
+//! **Windows-only.** A stub `main` keeps the workspace `--all-targets`
+//! build green on non-Windows hosts; the real body is gated on
+//! `target_os = "windows"`.
 
-#![cfg(target_os = "windows")]
+#[cfg(not(target_os = "windows"))]
+fn main() {
+    eprintln!("windows11_features is Windows-only; nothing to do on this platform.");
+}
 
-use flui_platform::{
-    WindowOptions, WindowsPlatform,
-    platforms::windows::{WindowCornerPreference, WindowsBackdrop, WindowsTheme},
-};
-use flui_types::geometry::{Size, px};
-
+#[cfg(target_os = "windows")]
 fn main() -> anyhow::Result<()> {
+    use flui_platform::{
+        WindowOptions, WindowsPlatform,
+        platforms::windows::{WindowCornerPreference, WindowsBackdrop, WindowsTheme},
+    };
+    use flui_types::geometry::{Size, px};
+
     // Initialize logging
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
