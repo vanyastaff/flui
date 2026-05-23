@@ -1274,6 +1274,7 @@ dependencies = [
 name = "flui-foundation"
 version = "0.1.0"
 dependencies = [
+ "android_log-sys",
  "bitflags 2.10.0",
  "flui-types",
  "parking_lot",
@@ -1282,6 +1283,10 @@ dependencies = [
  "smallvec",
  "thiserror 2.0.17",
  "tracing",
+ "tracing-forest",
+ "tracing-oslog",
+ "tracing-subscriber",
+ "tracing-wasm",
 ]
 
 [[package]]
