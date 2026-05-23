@@ -49,12 +49,14 @@ jobs:
           # with merge-commit artifacts (per xilem/tokio precedent).
           save-if: ${{ github.event_name != 'merge_group' }}
 
-      - name: Install CI tools (typos, taplo)
+      - name: Install CI tools (typos, taplo, ripgrep)
         uses: taiki-e/install-action@v2
         with:
           # Pin versions — unpinned tools surface unrelated breakage on
-          # release day. Bump deliberately.
-          tool: typos-cli@1.28,taplo-cli@0.10
+          # release day. Bump deliberately. `ripgrep` is required by
+          # scripts/port-check.sh (the 7 institutional refusal triggers
+          # all run through `rg`).
+          tool: typos-cli@1.28,taplo-cli@0.10,ripgrep@14
 
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
