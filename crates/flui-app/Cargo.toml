@@ -37,7 +37,6 @@ flui-painting = { path = "../flui-painting" }
 flui-layer = { path = "../flui-layer" }
 flui-semantics = { path = "../flui-semantics" }
 flui-engine = { path = "../flui-engine" }
-flui-log = { path = "../flui-log" }
 flui-platform = { path = "../flui-platform" }
 flui-hot-reload = { path = "../flui-hot-reload" }
 

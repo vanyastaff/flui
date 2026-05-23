@@ -8,7 +8,7 @@ use crate::config::FluiConfig;
 use crate::error::{CliError, CliResult};
 use console::style;
 use flui_build::scaffold::{
-    is_valid_platform, scaffold_platform, valid_platform_names, ScaffoldParams,
+    ScaffoldParams, is_valid_platform, scaffold_platform, valid_platform_names,
 };
 
 /// Add platform support to the project.

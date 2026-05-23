@@ -6,7 +6,7 @@ use std::process::Command;
 // Used by platform add/remove commands (Phase 4).
 #[expect(unused_imports, reason = "re-exports for Phase 4 platform commands")]
 pub use flui_build::scaffold::{
-    is_valid_platform, scaffold_platform, valid_platform_names, ScaffoldParams,
+    ScaffoldParams, is_valid_platform, scaffold_platform, valid_platform_names,
 };
 
 /// Check if a command exists in PATH.

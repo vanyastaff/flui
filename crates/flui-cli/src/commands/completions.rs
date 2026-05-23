@@ -4,7 +4,7 @@
 
 use crate::error::CliResult;
 use clap::CommandFactory;
-use clap_complete::{generate, Shell};
+use clap_complete::{Shell, generate};
 use console::style;
 use std::io;
 

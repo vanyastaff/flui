@@ -1,7 +1,7 @@
 //! Build command for cross-platform compilation.
 
-use crate::error::{CliResult, ResultExt};
 use crate::BuildTarget;
+use crate::error::{CliResult, ResultExt};
 use console::style;
 use flui_build::{
     AndroidBuilder, BuildPhase, BuilderContextBuilder, DesktopBuilder, Platform, PlatformBuilder,

@@ -55,8 +55,9 @@ pub use bindings::{
     GestureBinding, PaintingBinding, PipelineOwner, RenderingFlutterBinding, Scheduler,
     SemanticsBinding, WidgetsBinding,
 };
-// Convenience re-exports from flui_log
-pub use flui_log::{Level, Logger, debug, error, info, trace, warn};
+// Convenience re-exports from flui_foundation::log (merged from flui-log in
+// D-block PR-C-1 U2).
+pub use flui_foundation::log::{Level, Logger, debug, error, info, trace, warn};
 // Convenience re-exports from flui-view
 pub use flui_view::{
     BuildContext, BuildContextExt, BuildOwner, ElementBase, ElementTree, StatefulView,
@@ -77,7 +78,7 @@ pub use flui_view::{
 pub mod prelude {
     // Application types
     // Logging
-    pub use flui_log::{debug, error, info, trace, warn};
+    pub use flui_foundation::log::{debug, error, info, trace, warn};
 
     pub use crate::{
         AppConfig, LifecycleState, WidgetsFlutterBinding, run_app, run_app_with_config, run_direct,

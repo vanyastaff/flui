@@ -71,9 +71,9 @@ pub fn run_direct(
     let filter = std::env::var("RUST_LOG")
         .unwrap_or_else(|_| "info,flui_app=debug,flui_engine=debug,wgpu=warn".to_string());
 
-    flui_log::Logger::new()
+    flui_foundation::log::Logger::new()
         .with_filter(&filter)
-        .with_level(flui_log::Level::DEBUG)
+        .with_level(flui_foundation::log::Level::DEBUG)
         .init();
 
     tracing::info!(

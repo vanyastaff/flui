@@ -22,9 +22,9 @@
 mod basic;
 mod counter;
 
+use crate::Template;
 use crate::error::CliResult;
 use crate::types::{OrganizationId, ProjectName};
-use crate::Template;
 use std::path::Path;
 
 /// Builder for generating FLUI project templates.
