@@ -138,7 +138,7 @@ fn build_wasm(web_dir: &Path, release: bool) {
     println!("  \x1b[32m✓\x1b[0m WASM build complete");
 }
 
-/// Find the workspace root by walking up to find the root Cargo.toml with [workspace].
+/// Find the workspace root by walking up to find the root Cargo.toml with `[workspace]`.
 fn find_workspace_root() -> Option<PathBuf> {
     let mut dir = std::env::current_dir().ok()?;
     loop {
