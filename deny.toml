@@ -38,7 +38,7 @@ allow = [
     "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-3-Clause",
-    "BSL-1.0",          # Boost
+    "BSL-1.0",                        # Boost
     "ISC",
     "Zlib",
     "0BSD",
@@ -56,13 +56,7 @@ allow = [
     "OFL-1.1",          # Open Font License
 ]
 # Deny copyleft licenses that would require source disclosure
-deny = [
-    "GPL-2.0",
-    "GPL-3.0",
-    "AGPL-3.0",
-    "LGPL-2.0",
-    "LGPL-3.0",
-]
+deny = ["GPL-2.0", "GPL-3.0", "AGPL-3.0", "LGPL-2.0", "LGPL-3.0"]
 
 # Clarifications for crates with non-standard license files
 [[licenses.clarify]]
@@ -97,12 +91,12 @@ external-default-features = "allow"
 # Deny specific crates (unmaintained, insecure, or problematic)
 deny = [
     # Unmaintained crates with better alternatives
-    { name = "atty", wrappers = ["is-terminal"] },           # Use is-terminal
-    { name = "instant", wrappers = ["web-time"] },           # Use web-time
+    { name = "atty", wrappers = ["is-terminal"] }, # Use is-terminal
+    { name = "instant", wrappers = ["web-time"] }, # Use web-time
 
     # Security concerns
-    { name = "openssl" },                   # Prefer rustls
-    { name = "native-tls" },                # Prefer rustls
+    { name = "openssl" },    # Prefer rustls
+    { name = "native-tls" }, # Prefer rustls
 ]
 
 # Skip duplicate checks for specific crates (if unavoidable)

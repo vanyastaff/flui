@@ -6,9 +6,15 @@ extend-exclude = [
     "target/**",
     ".flutter/**",
     ".gpui/**",
+    ".claude/**",
     "Cargo.lock",
-    "docs/research/**/*.md",     # audits quote external code; preserve verbatim
+    "docs/research/**/*.md",         # audits quote external code; preserve verbatim
     "docs/brainstorms/**/*.md",
+    "docs/plans/**/*.md",            # plans are reviewed artifacts; preserve verbatim
+    "specs/**/*.md",                 # speckit artifacts: reviewed, preserved verbatim
+    "platforms/**/*.storyboard",     # auto-generated Apple XIB
+    "platforms/**/*.xib",
+    "platforms/**/*.pbxproj",
 ]
 
 [default]
@@ -21,8 +27,22 @@ extend-ignore-identifiers-re = [
 ]
 
 [default.extend-words]
-# Project-specific spelling overrides.
+# Project-specific spelling overrides + third-party identifiers typos
+# would otherwise flag.
 flui = "flui"
 arity = "arity"
 arities = "arities"
 ser = "ser"
+# wgpu API: `lod_max_clamp`, `lod_min_clamp` -- LOD = level-of-detail.
+lod = "lod"
+# Win32 API: `TrackMouseEvent` / `TRACKMOUSEEVENT` / `TME_LEAVE`.
+tme = "tme"
+# Plug-and-Play (PnP) — Windows monitor / device class abbreviation.
+# `pn` covers tokenization of `PnP` -> `Pn` + `P`.
+pnp = "pnp"
+pn = "pn"
+# Variable-name pair convention: `int_ab` and `int_ba` for a-vs-b /
+# b-vs-a intersections in property-tests.
+ba = "ba"
+# Apple UDID — "Unique Device IDentifier" — standard iOS terminology.
+udid = "udid"

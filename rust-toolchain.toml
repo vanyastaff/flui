@@ -7,10 +7,10 @@ profile = "default"
 
 # Components to install
 components = [
-    "rustfmt",      # Code formatting
-    "clippy",       # Linting
-    "rust-src",     # Source for rust-analyzer
-    "rust-analyzer" # LSP server
+    "rustfmt",       # Code formatting
+    "clippy",        # Linting
+    "rust-src",      # Source for rust-analyzer
+    "rust-analyzer", # LSP server
 ]
 
 # Build targets

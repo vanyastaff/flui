@@ -2,27 +2,27 @@
 resolver = "2"
 members = [
     # === Phase 1: Foundation Layer ===
-    "crates/flui-types",          # Base types with Unit system (ACTIVE)
-    "crates/flui-foundation",     # Foundation types and utilities (ACTIVE)
-    "crates/flui-tree",           # Tree abstractions (ACTIVE)
-    "crates/flui-platform",       # Platform abstraction (ACTIVE)
+    "crates/flui-types",      # Base types with Unit system (ACTIVE)
+    "crates/flui-foundation", # Foundation types and utilities (ACTIVE)
+    "crates/flui-tree",       # Tree abstractions (ACTIVE)
+    "crates/flui-platform",   # Platform abstraction (ACTIVE)
 
     # === Phase 2: Core Framework ===
-    "crates/flui-painting",       # Painting primitives (ACTIVE)
-    "crates/flui-semantics",      # Accessibility (ACTIVE)
-    "crates/flui-scheduler",      # Frame scheduling (ACTIVE)
-    "crates/flui-layer",          # Layer composition (ACTIVE)
-    "crates/flui-interaction",    # Gesture recognition (ACTIVE)
-    "crates/flui-engine",         # GPU rendering engine (ACTIVE)
-    "crates/flui-log",            # Logging utilities (ACTIVE)
-    "crates/flui-hot-reload",     # Hot-reload scene plugins via dlopen (ACTIVE)
+    "crates/flui-painting",    # Painting primitives (ACTIVE)
+    "crates/flui-semantics",   # Accessibility (ACTIVE)
+    "crates/flui-scheduler",   # Frame scheduling (ACTIVE)
+    "crates/flui-layer",       # Layer composition (ACTIVE)
+    "crates/flui-interaction", # Gesture recognition (ACTIVE)
+    "crates/flui-engine",      # GPU rendering engine (ACTIVE)
+    "crates/flui-log",         # Logging utilities (ACTIVE)
+    "crates/flui-hot-reload",  # Hot-reload scene plugins via dlopen (ACTIVE)
 
     # === Phase 3: Framework Layer ===
-    "crates/flui-rendering",      # Render tree (ACTIVE)
-    "crates/flui-view",           # View/Element tree (ACTIVE)
+    "crates/flui-rendering", # Render tree (ACTIVE)
+    "crates/flui-view",      # View/Element tree (ACTIVE)
 
     # === Phase 4: Application Layer ===
-    "crates/flui-app",            # Application framework (ACTIVE - Migration)
+    "crates/flui-app", # Application framework (ACTIVE - Migration)
 
     # === Examples (platform-specific) ===
     # NOTE: Android examples are excluded from workspace.members because they
@@ -31,16 +31,16 @@ members = [
     # "examples/android_demo",      # Android GPU demo (cdylib)
     # "examples/android_scene",     # Hot-reloadable scene plugin (cdylib)
     # "examples/android_app",       # Widget-based hot-reloadable plugin (cdylib)
-    "examples/desktop_scene",     # Hot-reloadable scene plugin for desktop — loaded via HotReloadDriver
+    "examples/desktop_scene", # Hot-reloadable scene plugin for desktop — loaded via HotReloadDriver
 
     # NOTE: Web examples are excluded from default workspace members because they
     # require wasm32 target. Build with:
     #   cd examples/web_demo && wasm-pack build --target web --out-dir pkg
-    "examples/web_demo",          # Web/WASM platform demo (cdylib)
-    "examples/painting_demo",     # Web/WASM painting + engine demo (cdylib)
+    "examples/web_demo",      # Web/WASM platform demo (cdylib)
+    "examples/painting_demo", # Web/WASM painting + engine demo (cdylib)
 
     # === Tools ===
-    "tools/web-server",           # Built-in web dev server (wasm-pack + HTTP serve)
+    "tools/web-server", # Built-in web dev server (wasm-pack + HTTP serve)
 
     # === Temporarily disabled ===
     # "crates/flui-animation",
@@ -158,8 +158,8 @@ ahash = "0.8"
 bitflags = "2.10"
 dyn-clone = "1.0"
 downcast-rs = "2.0.2"
-which = "5.0" # Command discovery - Used by flui-build
-indicatif = "0.17" # Progress bars - Used by flui-build
+which = "5.0"         # Command discovery - Used by flui-build
+indicatif = "0.17"    # Progress bars - Used by flui-build
 
 # STRING INTERNING - Used by flui-assets
 lasso = { version = "0.7", features = ["multi-threaded"] }
@@ -292,14 +292,14 @@ serde = [
 # ═══════════════════════════════════════════════════════════════════════════════
 
 [profile.dev]
-opt-level = 1           # Some optimization for faster runtime
-incremental = true      # Faster rebuilds
+opt-level = 1      # Some optimization for faster runtime
+incremental = true # Faster rebuilds
 
 [profile.dev.package."*"]
-opt-level = 2           # Optimize dependencies (they don't change often)
+opt-level = 2 # Optimize dependencies (they don't change often)
 
 [profile.release]
 opt-level = 3
-lto = "thin"            # Link-time optimization (good balance)
-codegen-units = 1       # Better optimization, slower compile
-strip = "symbols"       # Smaller binary
+lto = "thin"      # Link-time optimization (good balance)
+codegen-units = 1 # Better optimization, slower compile
+strip = "symbols" # Smaller binary

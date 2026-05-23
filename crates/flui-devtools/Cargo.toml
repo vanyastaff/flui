@@ -25,7 +25,10 @@ parking_lot = { workspace = true }
 
 # Platform-specific (Windows memory info)
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_System_ProcessStatus", "Win32_System_Threading"] }
+windows-sys = { version = "0.59", features = [
+    "Win32_System_ProcessStatus",
+    "Win32_System_Threading",
+] }
 
 [features]
 default = []

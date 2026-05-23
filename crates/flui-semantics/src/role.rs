@@ -286,7 +286,7 @@ impl std::fmt::Display for SemanticsRole {
 ///
 /// # Flutter Equivalence
 ///
-/// Corresponds to Flutter's `AccessiblityFocusBlockType` enum.
+/// Corresponds to Flutter's `AccessibilityFocusBlockType` enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum AccessibilityFocusBlockType {
     /// Accessibility focus is **not blocked**.

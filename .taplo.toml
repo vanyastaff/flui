@@ -2,7 +2,7 @@
 # Run locally: `taplo fmt`, `taplo fmt --check`. CI gates on `taplo fmt --check`.
 
 include = ["**/Cargo.toml", "**/*.toml"]
-exclude = ["**/target/**", ".flutter/**", ".gpui/**"]
+exclude = ["**/target/**", ".flutter/**", ".gpui/**", ".claude/**"]
 
 [formatting]
 align_entries = false
