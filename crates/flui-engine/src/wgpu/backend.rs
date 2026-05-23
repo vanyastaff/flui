@@ -130,7 +130,7 @@ impl<'frame> Backend<'frame> {
 
     /// Bind the frame's surface handles.
     ///
-    /// Must be called by [`Renderer::render`](super::renderer::Renderer::render)
+    /// Must be called by [`Renderer::render_scene`](super::renderer::Renderer::render_scene)
     /// after constructing the Backend and before dispatching any
     /// `LayerTree` commands. Required for
     /// [`CommandRenderer::render_backdrop_filter`] to actually

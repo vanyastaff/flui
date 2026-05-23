@@ -183,7 +183,7 @@ impl SuperellipsePathCache {
 
     /// Advance the frame counter and evict stale entries.
     ///
-    /// Entries not accessed within the last [`EVICTION_THRESHOLD`] frames
+    /// Entries not accessed within the last `EVICTION_THRESHOLD` frames
     /// are removed. Call this once per frame (typically at the start of
     /// the painter's `render` method, next to `PathCache::advance_frame`).
     pub fn advance_frame(&mut self) {
