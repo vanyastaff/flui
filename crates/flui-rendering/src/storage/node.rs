@@ -287,10 +287,24 @@ impl RenderNode {
         }
     }
 
-    // NOTE: mark_needs_layout() and mark_needs_paint() removed from RenderNode
-    // These methods require element_id and tree access for dirty propagation.
-    // They should be called through RenderTree or PipelineOwner instead.
-    // See similar note in entry.rs for details.
+    /// Sets the `NEEDS_LAYOUT` flag on this node's state — **flag-only**, no
+    /// propagation. Added in D-block PR-A1 U15 to support the
+    /// [`PipelineOwner::mark_needs_layout`](crate::pipeline::owner::PipelineOwner::mark_needs_layout)
+    /// ancestor-walk: each step of the walk flips one node's flag, and the
+    /// owner is responsible for the ancestor traversal and dirty-queue push
+    /// at the boundary.
+    ///
+    /// The previously-removed `RenderNode::mark_needs_layout()` did
+    /// propagation; the new owner-side walk supersedes it. Direct callers
+    /// should still use `PipelineOwner::mark_needs_layout` for correct
+    /// Flutter-parity boundary semantics.
+    #[inline]
+    pub fn mark_layout_flag(&self) {
+        match self {
+            Self::Box(entry) => entry.state().mark_needs_layout(),
+            Self::Sliver(entry) => entry.state().mark_needs_layout(),
+        }
+    }
 
     /// Returns true if this is a repaint boundary.
     pub fn is_repaint_boundary(&self) -> bool {
@@ -300,11 +314,26 @@ impl RenderNode {
         }
     }
 
-    /// Returns true if this is a relayout boundary.
+    /// Returns true if this node is a relayout boundary.
+    ///
+    /// **D-block PR-A1 U15**: reads the per-instance `IS_RELAYOUT_BOUNDARY`
+    /// storage flag (set by [`RenderState::compute_relayout_boundary`] during
+    /// layout per Flutter `!parentUsesSize || sizedByParent || constraints.isTight() || !hasParent`).
+    /// Prior behaviour returned the hardcoded `RenderObject::is_relayout_boundary()`
+    /// trait answer; that value was never consulted in production (zero
+    /// callers via grep) and reflected the type-level default rather than
+    /// runtime layout context.
+    ///
+    /// The trait-level static answer is still available via
+    /// `entry.render_object().is_relayout_boundary()` for the rare callers
+    /// that genuinely want the type-default.
+    ///
+    /// [`RenderState::compute_relayout_boundary`]: crate::storage::state::RenderState::compute_relayout_boundary
+    #[inline]
     pub fn is_relayout_boundary(&self) -> bool {
         match self {
-            Self::Box(entry) => entry.render_object().is_relayout_boundary(),
-            Self::Sliver(entry) => entry.render_object().is_relayout_boundary(),
+            Self::Box(entry) => entry.state().is_relayout_boundary(),
+            Self::Sliver(entry) => entry.state().is_relayout_boundary(),
         }
     }
 

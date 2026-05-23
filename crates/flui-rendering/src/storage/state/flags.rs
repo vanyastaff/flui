@@ -57,6 +57,30 @@ impl<P: Protocol> RenderState<P> {
         self.flags.contains(RenderFlags::NEEDS_COMPOSITING)
     }
 
+    /// Marks the layout dirty flag.
+    ///
+    /// Sets `NEEDS_LAYOUT` on the underlying atomic flags. Idempotent —
+    /// re-marking an already-dirty node is a no-op at the atomic level.
+    ///
+    /// Lock-free, `O(1)`. Used by [`PipelineOwner::mark_needs_layout`]
+    /// (added in D-block PR-A1 U15) to walk the ancestor chain marking
+    /// each node up to the nearest relayout boundary.
+    ///
+    /// [`PipelineOwner::mark_needs_layout`]: crate::pipeline::owner::PipelineOwner::mark_needs_layout
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let state = BoxRenderState::new();
+    /// state.clear_needs_layout();
+    /// state.mark_needs_layout();
+    /// assert!(state.needs_layout());
+    /// ```
+    #[inline]
+    pub fn mark_needs_layout(&self) {
+        self.flags.mark_needs_layout();
+    }
+
     /// Clears the layout dirty flag.
     ///
     /// Call this after successfully completing layout.
