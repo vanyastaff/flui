@@ -498,9 +498,27 @@ where
             // Plan §U15: thread this element's own ElementId as the
             // reconciler's `parent_id`, replacing the §U13 placeholder.
             // `self_id` is `None` only when this element has never been
-            // mounted (perform_build before mount is a logic error; fall
-            // back to the §U13 placeholder defensively rather than
-            // panic in that corner case).
+            // mounted (perform_build before mount is a framework-invariant
+            // violation: `ElementTree::insert` / `mount_root_*` always
+            // call `set_self_id` BEFORE `mount`, and `mount` precedes
+            // `perform_build` in the lifecycle FSM).
+            //
+            // Debug-build trip-wire: if the invariant ever breaks (a
+            // hand-rolled element bypassing `ElementTree::insert`, a
+            // future framework refactor that decouples mount from
+            // self-id stamping), this assertion fires during testing.
+            // Production retains the defensive fallback to the §U13
+            // placeholder so the frame still completes — but the
+            // emitted ReconcileEvents will silently correlate to the
+            // root, masking the real culprit. The debug_assert makes
+            // the violation loud where it matters.
+            debug_assert!(
+                self.self_id.is_some(),
+                "§U15 invariant violated: ElementCore::update_or_create_children \
+                 called before set_self_id. `ElementTree::insert` / \
+                 `mount_root_with_pipeline_owner` must stamp self_id \
+                 before any reconciliation runs."
+            );
             let parent_id = self
                 .self_id
                 .unwrap_or_else(|| flui_foundation::ElementId::new(1));

@@ -446,6 +446,20 @@ fn can_update_element(old: &dyn ElementBase, new: &dyn View) -> bool {
     // old side (i.e. an element type that hashes a key but does not
     // expose its `&dyn ViewKey`) falls through to "no match", which is
     // strictly safer than trusting a bare hash.
+    //
+    // Debug-build trip-wire: if the old element overrides
+    // `current_key_hash` to return `Some` but `current_key` falls back
+    // to the trait default `None`, the stage-2 check returns `false`
+    // for EVERY new view whose hash matches — silently breaking ALL
+    // keyed reuse for that element type forever. Production gets the
+    // strictly-safer no-match, but debug builds panic so the
+    // asymmetric override surfaces during testing.
+    debug_assert!(
+        old.current_key().is_some(),
+        "ElementBase impl overrode current_key_hash to return Some(_) but \
+         left current_key returning None — keyed reconciliation will silently \
+         lose state on every reorder. Override BOTH or NEITHER.",
+    );
     old.current_key()
         .is_some_and(|old_key| new_key.key_eq(old_key))
 }
