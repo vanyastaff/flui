@@ -29,10 +29,12 @@
 //! themselves so a future regression in extraction quality is caught
 //! before the integration suite.
 
+use std::panic::AssertUnwindSafe;
+
 use flui_foundation::RenderId;
 
-use super::{arity::ElementArity, generic::ElementCore};
-use crate::view::View;
+use super::{arity::ElementArity, child_storage::ElementChildStorage, generic::ElementCore};
+use crate::view::{FlutterError, View};
 
 // ============================================================================
 // perform_build helpers
@@ -60,6 +62,79 @@ where
     } else {
         tracing::trace!("{}::perform_build skipped", behavior_name);
         false
+    }
+}
+
+/// Run a user `build()` closure under [`std::panic::catch_unwind`] and,
+/// on a caught panic, substitute the registered `ErrorView`.
+///
+/// This is the producer half of the `ErrorView` recovery path (plan
+/// §U7, origin R9) — the receiver (`ErrorView` + `FlutterError` +
+/// `set_error_view_builder`) already exists; this wires the catch that
+/// feeds it. Mirrors Flutter's `ComponentElement.performRebuild`
+/// (`framework.dart:5810-5859`), whose first `try/catch` wraps `build()`
+/// and replaces the built widget with `ErrorWidget.builder`.
+///
+/// # Panic-safety boundary
+///
+/// `build` is the *only* code under the `catch_unwind`. The closure
+/// captures just the immutable build inputs (`&V` / `&V::State` /
+/// `&BuildContext`) — wrapped in [`AssertUnwindSafe`] because a user
+/// `build()` is logically pure and a half-finished one leaks no shared
+/// state into `core`. The child-update helper
+/// [`finish_single_child_build`] runs strictly *after* this function
+/// returns, so a panic can never be observed mid-`update_or_create_child`
+/// (which would leave `core` half-mutated).
+///
+/// `AssertUnwindSafe` is safe code — this crate is
+/// `#![forbid(unsafe_code)]` and the assertion does not change that.
+///
+/// # Teardown on a caught panic
+///
+/// The element under construction is in an indeterminate state after a
+/// panic, so the whole child subtree is torn down
+/// ([`ElementChildStorage::unmount_children`] — unmounts every descendant
+/// and clears the storage) *before* the error view is returned. The
+/// caller then hands the returned `ErrorView` box to
+/// [`finish_single_child_build`], which sees an empty storage and
+/// creates a fresh `ErrorElement` — leaving no dangling render-tree node
+/// and no stale child. This is the Rust-native shape of Flutter's
+/// `_child?.deactivate()` + `updateChild(null, errorWidget, slot)`
+/// force-from-null rebuild (`framework.dart:5854-5858`).
+///
+/// `context` names what was building (e.g. `"building StatelessElement"`)
+/// for the `FlutterError` breadcrumb.
+pub(crate) fn build_or_recover<V, A, F>(
+    core: &mut ElementCore<V, A>,
+    owner: &mut crate::ElementOwner<'_>,
+    behavior_name: &'static str,
+    build: F,
+) -> Box<dyn View>
+where
+    V: Clone + Send + Sync + 'static,
+    A: ElementArity,
+    F: FnOnce() -> Box<dyn View>,
+{
+    // Only `build()` is inside the catch — see the panic-safety note.
+    match std::panic::catch_unwind(AssertUnwindSafe(build)) {
+        Ok(child_view) => child_view,
+        Err(payload) => {
+            // Indeterminate state: tear the whole child subtree down so
+            // the substituted error view is mounted fresh, not merged
+            // onto a half-built descendant. `unmount_children` clears
+            // the storage, so `finish_single_child_build` will go down
+            // the create-from-empty branch.
+            core.children_mut().unmount_children(owner);
+
+            let error =
+                FlutterError::from_panic(payload.as_ref(), format!("building {behavior_name}"));
+            tracing::error!(
+                "{}::perform_build caught a panic, substituting ErrorView: {}",
+                behavior_name,
+                error.message
+            );
+            crate::view::ErrorView::build_error_view(&error)
+        }
     }
 }
 

@@ -12,6 +12,8 @@
 //! is identical: arbitrary trait-object commands would force a
 //! `Box<dyn Drawable>` boundary the wgpu backend cannot translate.
 
+use std::sync::Arc;
+
 use flui_types::{
     geometry::{Matrix4, Offset, Pixels, Point, RRect, RSuperellipse, Rect, Size},
     painting::{Image, Path},
@@ -110,7 +112,7 @@ pub enum DrawCommand {
         /// End point.
         p2: Point<Pixels>,
         /// Paint style (color, stroke width, etc.).
-        paint: Paint,
+        paint: Arc<Paint>,
         /// Transform at recording time.
         transform: Matrix4,
     },
@@ -120,7 +122,7 @@ pub enum DrawCommand {
         /// Rectangle to draw.
         rect: Rect<Pixels>,
         /// Paint style.
-        paint: Paint,
+        paint: Arc<Paint>,
         /// Transform at recording time.
         transform: Matrix4,
     },
@@ -130,7 +132,7 @@ pub enum DrawCommand {
         /// Rounded rectangle to draw.
         rrect: RRect,
         /// Paint style.
-        paint: Paint,
+        paint: Arc<Paint>,
         /// Transform at recording time.
         transform: Matrix4,
     },
@@ -142,7 +144,7 @@ pub enum DrawCommand {
         /// Radius.
         radius: Pixels,
         /// Paint style.
-        paint: Paint,
+        paint: Arc<Paint>,
         /// Transform at recording time.
         transform: Matrix4,
     },
@@ -152,7 +154,7 @@ pub enum DrawCommand {
         /// Bounding rectangle.
         rect: Rect<Pixels>,
         /// Paint style.
-        paint: Paint,
+        paint: Arc<Paint>,
         /// Transform at recording time.
         transform: Matrix4,
     },
@@ -162,7 +164,7 @@ pub enum DrawCommand {
         /// Path to draw.
         path: Path,
         /// Paint style.
-        paint: Paint,
+        paint: Arc<Paint>,
         /// Transform at recording time.
         transform: Matrix4,
     },
@@ -179,7 +181,7 @@ pub enum DrawCommand {
         /// Text style (font, size, etc.).
         style: TextStyle,
         /// Paint style (color, etc.).
-        paint: Paint,
+        paint: Arc<Paint>,
         /// Transform at recording time.
         transform: Matrix4,
     },
@@ -204,7 +206,7 @@ pub enum DrawCommand {
         /// Destination rectangle.
         dst: Rect<Pixels>,
         /// Optional paint (for tinting, etc.).
-        paint: Option<Paint>,
+        paint: Option<Arc<Paint>>,
         /// Transform at recording time.
         transform: Matrix4,
     },
@@ -218,7 +220,7 @@ pub enum DrawCommand {
         /// How to repeat the image.
         repeat: ImageRepeat,
         /// Optional paint (for tinting, opacity, etc.).
-        paint: Option<Paint>,
+        paint: Option<Arc<Paint>>,
         /// Transform at recording time.
         transform: Matrix4,
     },
@@ -232,7 +234,7 @@ pub enum DrawCommand {
         /// Destination rectangle.
         dst: Rect<Pixels>,
         /// Optional paint (for tinting, opacity, etc.).
-        paint: Option<Paint>,
+        paint: Option<Arc<Paint>>,
         /// Transform at recording time.
         transform: Matrix4,
     },
@@ -246,7 +248,7 @@ pub enum DrawCommand {
         /// Color filter to apply.
         filter: ColorFilter,
         /// Optional paint (for additional effects).
-        paint: Option<Paint>,
+        paint: Option<Arc<Paint>>,
         /// Transform at recording time.
         transform: Matrix4,
     },
@@ -342,7 +344,7 @@ pub enum DrawCommand {
         /// Whether to draw from center (pie slice) or just the arc.
         use_center: bool,
         /// Paint style.
-        paint: Paint,
+        paint: Arc<Paint>,
         /// Transform at recording time.
         transform: Matrix4,
     },
@@ -354,7 +356,7 @@ pub enum DrawCommand {
         /// Inner rounded rectangle.
         inner: RRect,
         /// Paint style.
-        paint: Paint,
+        paint: Arc<Paint>,
         /// Transform at recording time.
         transform: Matrix4,
     },
@@ -366,7 +368,7 @@ pub enum DrawCommand {
         /// Points to draw.
         points: Vec<Point<Pixels>>,
         /// Paint style.
-        paint: Paint,
+        paint: Arc<Paint>,
         /// Transform at recording time.
         transform: Matrix4,
     },
@@ -383,7 +385,7 @@ pub enum DrawCommand {
         /// Triangle indices (groups of 3).
         indices: Vec<u16>,
         /// Paint style.
-        paint: Paint,
+        paint: Arc<Paint>,
         /// Transform at recording time.
         transform: Matrix4,
     },
@@ -401,7 +403,7 @@ pub enum DrawCommand {
     /// Fill entire canvas with a Paint (color, shader, blend mode).
     DrawPaint {
         /// Paint to fill with (color, shader, blend mode, etc.).
-        paint: Paint,
+        paint: Arc<Paint>,
         /// Transform at recording time.
         transform: Matrix4,
     },
@@ -419,7 +421,7 @@ pub enum DrawCommand {
         /// Blend mode.
         blend_mode: BlendMode,
         /// Optional paint for additional effects.
-        paint: Option<Paint>,
+        paint: Option<Arc<Paint>>,
         /// Transform at recording time.
         transform: Matrix4,
     },
@@ -431,7 +433,7 @@ pub enum DrawCommand {
         /// Bounds of the layer (None = unbounded).
         bounds: Option<Rect<Pixels>>,
         /// Paint to apply when compositing the layer.
-        paint: Paint,
+        paint: Arc<Paint>,
         /// Transform at recording time.
         transform: Matrix4,
     },

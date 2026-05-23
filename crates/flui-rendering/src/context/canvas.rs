@@ -709,7 +709,7 @@ impl flui_painting::ClipContext for CanvasContext {
 // ============================================================================
 
 // Re-export from flui_painting
-pub use flui_painting::{Canvas, Picture};
+pub use flui_painting::{Canvas, DisplayList};
 // Re-export from flui_types::painting
 pub use flui_types::painting::{Paint, PaintStyle};
 

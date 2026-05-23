@@ -7,12 +7,13 @@
 //! - Coordinating InheritedElement lookups
 
 use std::{
-    any::TypeId,
     cmp::Reverse,
     collections::{BinaryHeap, HashMap},
+    sync::{Arc, OnceLock},
 };
 
 use flui_foundation::ElementId;
+use parking_lot::RwLock;
 
 use crate::tree::ElementTree;
 
@@ -99,16 +100,28 @@ pub struct BuildOwner {
     /// split-borrow.
     pub(crate) global_keys: HashMap<u64, ElementId>,
 
-    /// InheritedElement registry: TypeId -> element ID.
-    /// Used for O(1) InheritedView lookup.
-    inherited_elements: HashMap<TypeId, ElementId>,
-
     /// Elements that have been deactivated and are pending unmount.
     /// These are unmounted in `finalize_tree()`.
     ///
     /// `pub(crate)` for the [`ElementOwner`](super::ElementOwner)
     /// split-borrow.
     pub(crate) inactive_elements: Vec<InactiveElement>,
+
+    /// Elements that received an inherited-dependency change since their
+    /// last build. `build_scope` consults this set right before each
+    /// dirty element's `perform_build` and fires
+    /// `ElementBase::notify_dependency_change` (which routes through the
+    /// behavior to call `ViewState::did_change_dependencies`) when the
+    /// id is present, then removes the entry — Flutter parity for
+    /// `_didChangeDependencies` flag at `framework.dart:6114`.
+    ///
+    /// Populated by [`InheritedBehavior::on_view_updated`](crate::element::InheritedBehavior)
+    /// when `update_should_notify == true`. Cleared on element unmount
+    /// (the dependent leaves the tree before its rebuild ever runs).
+    ///
+    /// `pub(crate)` for the [`ElementOwner`](super::ElementOwner)
+    /// split-borrow.
+    pub(crate) pending_dependency_changes: std::collections::HashSet<ElementId>,
 
     /// Whether we're currently in a build phase.
     #[cfg(debug_assertions)]
@@ -163,6 +176,46 @@ impl Default for BuildOwner {
     }
 }
 
+/// Process-global cache of the dummy `ElementTree` handed out by
+/// [`ElementBuildContext::new_minimal`](crate::ElementBuildContext::new_minimal).
+///
+/// Plan §U12 / R15 — audit V-13 (cheap separable part). Each
+/// `StatelessView::build` / `StatefulView::build` allocates a fresh
+/// `ElementBuildContext` to satisfy the `&dyn BuildContext` parameter
+/// shape. Before V-13 each one called
+/// `Arc::new(RwLock::new(ElementTree::new()))` — heap-allocating an Arc
+/// inner, a `RwLock` payload, and an empty `Slab`-backed `ElementTree`
+/// per build. For animation-driven full-tree rebuilds, that is N heap
+/// allocations per frame.
+///
+/// The dummy is functionally read-only on the production path:
+/// `BuildContext::find_ancestor_*`, `depend_on_inherited`, and
+/// `find_render_object` all return `None`/`false` immediately because
+/// the dummy tree is empty. Every build can safely share one
+/// `Arc<RwLock<ElementTree>>` — clones of the shared Arc bump the
+/// atomic refcount only.
+///
+/// The cache is initialized lazily via `OnceLock` and lives for the
+/// lifetime of the process. A test or future code path that wants
+/// strictly per-binding isolation can still construct an
+/// `ElementBuildContext` manually via
+/// [`ElementBuildContext::new`](crate::ElementBuildContext::new).
+static SHARED_DUMMY_TREE: OnceLock<Arc<RwLock<ElementTree>>> = OnceLock::new();
+
+/// Process-global cache of the dummy `BuildOwner` handed out by
+/// [`ElementBuildContext::new_minimal`](crate::ElementBuildContext::new_minimal). Companion to
+/// [`SHARED_DUMMY_TREE`] — see that doc for the rationale.
+///
+/// The inner `BuildOwner` is itself constructed via [`BuildOwner::new`],
+/// which sets `on_build_scheduled = None`, so calls to
+/// `BuildContext::mark_needs_build` from inside a stateless `build()`
+/// (a Flutter-forbidden anti-pattern; flui matches Flutter's policy by
+/// design) silently accumulate entries in this shared dummy's
+/// `dirty_elements` heap. The accumulation is bounded by however many
+/// times misuse occurs and never read because nothing ever calls
+/// `build_scope` on the shared dummy.
+static SHARED_DUMMY_OWNER: OnceLock<Arc<RwLock<BuildOwner>>> = OnceLock::new();
+
 impl BuildOwner {
     /// Create a new BuildOwner.
     pub fn new() -> Self {
@@ -170,14 +223,34 @@ impl BuildOwner {
             dirty_elements: BinaryHeap::new(),
             dirty_set: std::collections::HashSet::new(),
             global_keys: HashMap::new(),
-            inherited_elements: HashMap::new(),
             inactive_elements: Vec::new(),
+            pending_dependency_changes: std::collections::HashSet::new(),
             #[cfg(debug_assertions)]
             building: false,
             #[cfg(debug_assertions)]
             scope_depth: 0,
             on_build_scheduled: None,
         }
+    }
+
+    /// Acquire a clone of the process-shared dummy `ElementTree` handle
+    /// used to back [`ElementBuildContext::new_minimal`](crate::ElementBuildContext::new_minimal).
+    ///
+    /// First call lazily allocates the empty tree behind a `OnceLock`;
+    /// every subsequent call returns an `Arc::clone` of the same inner
+    /// pointer — observable via `Arc::ptr_eq`. Audit V-13 (cheap part)
+    /// — eliminates the per-build `Arc::new(RwLock::new(_))` allocation
+    /// in the stateless/stateful build paths.
+    pub fn shared_dummy_tree() -> Arc<RwLock<ElementTree>> {
+        Arc::clone(SHARED_DUMMY_TREE.get_or_init(|| Arc::new(RwLock::new(ElementTree::new()))))
+    }
+
+    /// Acquire a clone of the process-shared dummy `BuildOwner` handle
+    /// used to back [`ElementBuildContext::new_minimal`](crate::ElementBuildContext::new_minimal). See
+    /// [`shared_dummy_tree`](Self::shared_dummy_tree) for the
+    /// allocation-elimination rationale.
+    pub fn shared_dummy_owner() -> Arc<RwLock<BuildOwner>> {
+        Arc::clone(SHARED_DUMMY_OWNER.get_or_init(|| Arc::new(RwLock::new(BuildOwner::new()))))
     }
 
     /// Set the callback for when a build is scheduled.
@@ -223,6 +296,7 @@ impl BuildOwner {
             dirty_elements: &mut self.dirty_elements,
             dirty_set: &mut self.dirty_set,
             inactive_elements: &mut self.inactive_elements,
+            pending_dependency_changes: &mut self.pending_dependency_changes,
             on_build_scheduled: self.on_build_scheduled.as_deref(),
         }
     }
@@ -269,13 +343,28 @@ impl BuildOwner {
             if let Some(node) = tree.get_mut(dirty.id()) {
                 // Only rebuild if still active
                 if node.element().lifecycle().can_build() {
+                    // Flutter parity (`framework.dart:5977-5982`): if this
+                    // dependent received an inherited-dependency change
+                    // since its last build, fire
+                    // `ViewState::did_change_dependencies` BEFORE the
+                    // actual `perform_build`. The flag is set by
+                    // `InheritedBehavior::on_view_updated` when
+                    // `update_should_notify` returns true; we consume it
+                    // here so the typed hook runs exactly once per
+                    // dependency-change-then-rebuild cycle. See plan §U14.
+                    let needs_did_change = self.pending_dependency_changes.remove(&dirty.id());
+
                     let mut element_owner = super::ElementOwner {
                         global_keys: &mut self.global_keys,
                         dirty_elements: &mut self.dirty_elements,
                         dirty_set: &mut self.dirty_set,
                         inactive_elements: &mut self.inactive_elements,
+                        pending_dependency_changes: &mut self.pending_dependency_changes,
                         on_build_scheduled: self.on_build_scheduled.as_deref(),
                     };
+                    if needs_did_change {
+                        node.element_mut().notify_dependency_change();
+                    }
                     node.element_mut().perform_build(&mut element_owner);
                 }
             }
@@ -356,6 +445,7 @@ impl BuildOwner {
             dirty_elements: &mut self.dirty_elements,
             dirty_set: &mut self.dirty_set,
             inactive_elements: &mut self.inactive_elements,
+            pending_dependency_changes: &mut self.pending_dependency_changes,
             on_build_scheduled: self.on_build_scheduled.as_deref(),
         };
 
@@ -432,27 +522,6 @@ impl BuildOwner {
         self.global_keys.len()
     }
 
-    // ========================================================================
-    // InheritedElement Registry
-    // ========================================================================
-
-    /// Register an InheritedElement for O(1) lookup.
-    ///
-    /// This allows `depend_on<T>()` to be O(1) instead of O(depth).
-    pub fn register_inherited(&mut self, type_id: TypeId, element: ElementId) {
-        self.inherited_elements.insert(type_id, element);
-    }
-
-    /// Unregister an InheritedElement.
-    pub fn unregister_inherited(&mut self, type_id: TypeId) {
-        self.inherited_elements.remove(&type_id);
-    }
-
-    /// Look up an InheritedElement by type.
-    pub fn inherited_element(&self, type_id: TypeId) -> Option<ElementId> {
-        self.inherited_elements.get(&type_id).copied()
-    }
-
     /// Check if we're currently building.
     #[cfg(debug_assertions)]
     pub fn is_building(&self) -> bool {
@@ -471,7 +540,6 @@ impl std::fmt::Debug for BuildOwner {
         f.debug_struct("BuildOwner")
             .field("dirty_count", &self.dirty_elements.len())
             .field("global_keys", &self.global_keys.len())
-            .field("inherited_elements", &self.inherited_elements.len())
             .finish()
     }
 }
@@ -492,6 +560,8 @@ impl Drop for BuildScopeGuard<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::any::TypeId;
+
     use super::*;
     use crate::{Lifecycle, View, tree::ElementTree};
 
@@ -642,16 +712,73 @@ mod tests {
         assert_eq!(owner.element_for_global_key(key_hash), None);
     }
 
+    // ========================================================================
+    // V-13 (cheap part) — process-shared dummy tree / owner reuse
+    // ========================================================================
+
+    /// `BuildOwner::shared_dummy_tree` returns `Arc::clone`s of the same
+    /// inner pointer on every call — proven via `Arc::ptr_eq`. This is
+    /// the cache-reuse contract underpinning
+    /// `ElementBuildContext::new_minimal`.
     #[test]
-    fn test_inherited_registry() {
-        let mut owner = BuildOwner::new();
-        let id = ElementId::new(42);
-        let type_id = TypeId::of::<String>();
+    fn test_shared_dummy_tree_returns_ptr_equal_handles() {
+        let first = BuildOwner::shared_dummy_tree();
+        let second = BuildOwner::shared_dummy_tree();
+        let third = BuildOwner::shared_dummy_tree();
 
-        owner.register_inherited(type_id, id);
-        assert_eq!(owner.inherited_element(type_id), Some(id));
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "two shared_dummy_tree calls must alias the same Arc inner"
+        );
+        assert!(
+            Arc::ptr_eq(&second, &third),
+            "every shared_dummy_tree call must alias the same Arc inner"
+        );
+    }
 
-        owner.unregister_inherited(type_id);
-        assert_eq!(owner.inherited_element(type_id), None);
+    /// Companion test for `shared_dummy_owner` — same Arc-aliasing
+    /// guarantee.
+    #[test]
+    fn test_shared_dummy_owner_returns_ptr_equal_handles() {
+        let first = BuildOwner::shared_dummy_owner();
+        let second = BuildOwner::shared_dummy_owner();
+
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "two shared_dummy_owner calls must alias the same Arc inner"
+        );
+    }
+
+    /// End-to-end: two `ElementBuildContext::new_minimal` calls reuse
+    /// the same dummy `tree` and `owner` Arc handles. Proves the
+    /// per-build allocation is eliminated on the production stateless /
+    /// stateful build path.
+    #[test]
+    fn test_new_minimal_reuses_shared_dummy_handles() {
+        let ctx_a = crate::ElementBuildContext::new_minimal(0);
+        let ctx_b = crate::ElementBuildContext::new_minimal(3);
+
+        assert!(
+            Arc::ptr_eq(ctx_a.tree(), ctx_b.tree()),
+            "two new_minimal contexts must share the dummy ElementTree Arc"
+        );
+        assert!(
+            Arc::ptr_eq(ctx_a.build_owner(), ctx_b.build_owner()),
+            "two new_minimal contexts must share the dummy BuildOwner Arc"
+        );
+    }
+
+    /// The per-call `depth` argument is recorded on the context even
+    /// though the underlying Arc handles are shared. Pins the
+    /// "depth varies, infrastructure shared" contract.
+    #[test]
+    fn test_new_minimal_records_per_call_depth() {
+        use crate::BuildContext as _;
+
+        let shallow = crate::ElementBuildContext::new_minimal(0);
+        let deeper = crate::ElementBuildContext::new_minimal(7);
+
+        assert_eq!(shallow.depth(), 0);
+        assert_eq!(deeper.depth(), 7);
     }
 }

@@ -84,7 +84,6 @@ pub struct Canvas {
 pub struct DisplayList {
     commands: Vec<DrawCommand>,        // Recorded operations
     bounds: Rect,                      // Bounding box
-    hit_regions: Vec<HitRegion>,       // Event handling
 }
 ```
 
@@ -318,10 +317,10 @@ loop {
 **Example:**
 
 ```rust
-// Cache static content
-let background = Canvas::record(|c| {
-    c.draw_rect(viewport, &Paint::fill(Color::WHITE));
-});
+// Cache static content on a Canvas, then finish to a DisplayList
+let mut recorder = Canvas::new();
+recorder.draw_rect(viewport, &Paint::fill(Color::WHITE));
+let background = recorder.finish();
 
 // Reuse every frame
 loop {
@@ -471,6 +470,25 @@ impl WgpuPainter {
 
 ## Future Enhancements
 
+<!-- REVIEW_BY: 2026-09-22 — audit P-18 cadence marker.
+
+Each numbered item below is tracked-but-unscheduled. By the review date,
+each item must either (a) ship, (b) be re-justified with an explicit
+deferral date, or (c) be deleted from this list. "Tracked" is not the
+same as "scheduled" — the cadence marker exists so this list cannot
+silently drift past the review date as eternal aspiration.
+
+Cross-references for the audit-tracked items:
+- §1 (Arc-based DisplayList) — audit P-7 / cycle 5 U10 landed paint
+  interning behind `Arc<Paint>`; the per-`DrawCommand` `Arc` for the
+  whole `DisplayList` is the remaining work in this item.
+- §2 (Command Culling) — no audit ID; capture as a perf-track item if
+  driven by a measured frame budget overrun.
+- §3 (Command Merging) — no audit ID; same gating as §2.
+- §4 (GPU Command Buffers) — cross-crate (flui-engine); out of scope
+  for flui-painting alone.
+-->
+
 ### 1. Arc-based DisplayList
 
 ```rust
@@ -528,8 +546,10 @@ Direct mapping to GPU command buffers for minimal CPU overhead.
 
 2. **Cache static content:**
    ```rust
-   let icon = Canvas::record(|c| { /* ... */ });
-   // Reuse icon across frames
+   let mut recorder = Canvas::new();
+   /* draw_* into recorder */
+   let icon = recorder.finish();
+   // Reuse icon across frames via canvas.append_display_list(icon.clone());
    ```
 
 3. **Use scoped operations:**
@@ -537,11 +557,6 @@ Direct mapping to GPU command buffers for minimal CPU overhead.
    canvas.with_save(|c| {
        // Auto cleanup
    });
-   ```
-
-4. **Batch similar operations:**
-   ```rust
-   canvas.draw_rects(&[rect1, rect2, rect3], &paint);
    ```
 
 ### For Contributors

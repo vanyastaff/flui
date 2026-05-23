@@ -13,7 +13,7 @@ The Flutter compositor `Layer` hierarchy lives in [`.flutter/flutter-master/pack
 | Flutter source (`layer.dart`) | FLUI module | Notes |
 |---|---|---|
 | `abstract class Layer` (line 144) + `abstract class ContainerLayer` (line 1077) | [`src/layer/mod.rs`](src/layer/mod.rs) | Closed `enum Layer { Canvas(CanvasLayer), Picture(PictureLayer), … }` with 19 variants. No `Box<dyn Layer>` plugin trait; see Mapping decisions #1. |
-| `class PictureLayer extends Layer` (line 824) | [`src/layer/picture.rs`](src/layer/picture.rs) | Wraps `flui_painting::Picture` (a recorded `DisplayList`). |
+| `class PictureLayer extends Layer` (line 824) | [`src/layer/picture.rs`](src/layer/picture.rs) | Wraps `flui_painting::DisplayList` (Flutter's `Picture` equivalent). |
 | `class TextureLayer extends Layer` (line 952) | [`src/layer/texture.rs`](src/layer/texture.rs) | External GPU texture. `is_opaque()` controls compositing fast-path. |
 | `class PlatformViewLayer extends Layer` (line 1005) | [`src/layer/platform_view.rs`](src/layer/platform_view.rs) | Native view embedding (Android View, iOS UIView, etc.). |
 | `class PerformanceOverlayLayer extends Layer` (line 1032) | [`src/layer/performance_overlay.rs`](src/layer/performance_overlay.rs) | FLUI implementation is larger (530 LOC) than Flutter's; provides graph rendering directly rather than delegating to a SkPerformanceOverlay primitive. |

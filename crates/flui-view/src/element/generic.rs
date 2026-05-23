@@ -121,7 +121,7 @@ where
     ///
     /// Uses Arc<AtomicBool> for interior mutability, allowing listener
     /// callbacks to mark the element dirty without mutable access.
-    /// This is essential for AnimationBehavior and other reactive patterns.
+    /// This is essential for AnimatedBehavior and other reactive patterns.
     dirty: Arc<AtomicBool>,
 
     /// PipelineOwner for render tree access.
@@ -382,21 +382,31 @@ where
                 child_views.len()
             );
         } else {
-            // Update existing children
-            let old_count = self.children.len();
+            // Update existing children via keyed reconciliation (plan
+            // §U5). `update_with_views` matches old child elements to
+            // new Views by `Key`, updating reused ones and unmounting
+            // dropped ones — but leaves any *freshly created* children
+            // in `Lifecycle::Initial`, unmounted (it cannot reach the
+            // `PipelineOwner` from the bare box-vec).
             self.children.update_with_views(&child_views, owner);
 
-            // If new children were added, mount them
-            if child_views.len() > old_count {
-                // Mount only the newly added children
-                self.children.mount_children(None, self.depth + 1, owner);
-
-                // Propagate owner to new children if we have one
-                if let Some(ref pipeline_owner) = self.pipeline_owner {
-                    self.children
-                        .propagate_owner(Arc::clone(pipeline_owner), self.parent_render_id);
-                }
+            // Finish the lifecycle of those new children. The count
+            // alone is no longer a reliable "did anything get created?"
+            // signal — a keyed swap (one removed, one added) leaves the
+            // count unchanged — so always run the propagate→mount sweep.
+            // Both steps are idempotent for the reused children:
+            // `propagate_owner` just re-sets the owner, and
+            // `mount_children` skips elements that are already `Active`.
+            //
+            // Order matters: the owner must be propagated *before*
+            // `mount_children`, because `RenderBehavior::on_mount`
+            // creates its `RenderObject` only when a `PipelineOwner` is
+            // already in scope.
+            if let Some(ref pipeline_owner) = self.pipeline_owner {
+                self.children
+                    .propagate_owner(Arc::clone(pipeline_owner), self.parent_render_id);
             }
+            self.children.mount_children(None, self.depth + 1, owner);
 
             self.children.perform_build_children(owner);
 
@@ -516,7 +526,7 @@ where
 
     /// Create a callback that can mark this element dirty.
     ///
-    /// This is useful for AnimationBehavior and other behaviors that need to
+    /// This is useful for AnimatedBehavior and other behaviors that need to
     /// trigger rebuilds from listener callbacks without mutable access.
     ///
     /// # Returns

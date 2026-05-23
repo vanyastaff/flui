@@ -5,43 +5,29 @@
 //! # Concern split (Mythos chain U6)
 //!
 //! The 1,243-LOC `text_layout.rs` god module was split into a
-//! `text_layout/` directory. The unnecessary
-//! `#[cfg(feature = "text")] mod inner` indirection was flattened:
-//! the `pub mod text_layout;` declaration in `lib.rs` is now
-//! unconditional, and the cfg attributes sit per-submodule below
-//! (`detect`/`layout`/`measure` gated `feature = "text"`,
-//! `fallback` gated `not(feature = "text")`). The shared
-//! `TextLayoutResult` and `LineInfo` types live at the module root
-//! with no cfg gate so they are visible under both feature flavors.
+//! `text_layout/` directory. Following plan U8 / audit P-3, the
+//! parallel stub `TextLayout` (used when the optional text feature
+//! was disabled) was deleted along with the feature flag itself.
+//! cosmic-text-backed layout is now the only path; the shared
+//! `TextLayoutResult` and `LineInfo` types live at the module root.
 //!
 //! Files:
 //!
-//! - [`detect`]   -- `#[cfg(feature = "text")]` RTL/LTR detection helpers.
-//! - [`layout`]   -- `#[cfg(feature = "text")]` `FONT_SYSTEM` static + `TextLayout` struct + cursor/hit-test methods.
-//! - [`measure`]  -- `#[cfg(feature = "text")]` `measure_text` + `measure_inline_span` + `style_to_attrs` helpers.
-//! - [`fallback`] -- `#[cfg(not(feature = "text"))]` stub `TextLayout` + stub `detect_text_direction` + stub `measure_*`.
+//! - [`detect`]   -- RTL/LTR detection helpers.
+//! - [`layout`]   -- `FONT_SYSTEM` static + `TextLayout` struct + cursor/hit-test methods.
+//! - [`measure`]  -- `measure_text` + `measure_inline_span` + `style_to_attrs` helpers.
 
 use flui_types::{
     geometry::{Pixels, Size, px},
     typography::TextDirection,
 };
 
-#[cfg(feature = "text")]
 pub(crate) mod detect;
-#[cfg(not(feature = "text"))]
-pub(crate) mod fallback;
-#[cfg(feature = "text")]
 pub(crate) mod layout;
-#[cfg(feature = "text")]
 pub(crate) mod measure;
 
-#[cfg(feature = "text")]
 pub use detect::detect_text_direction;
-#[cfg(not(feature = "text"))]
-pub use fallback::{TextLayout, detect_text_direction, measure_inline_span, measure_text};
-#[cfg(feature = "text")]
 pub use layout::TextLayout;
-#[cfg(feature = "text")]
 pub use measure::{measure_inline_span, measure_text};
 
 // ===== Shared types (identical between cosmic-text impl and fallback) =====

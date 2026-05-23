@@ -11,9 +11,11 @@ use std::{
     },
 };
 
+use flui_foundation::ElementId;
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, Lifecycle, StatefulBehavior, StatefulElement,
-    StatefulView, StatelessBehavior, StatelessElement, StatelessView, View, ViewState,
+    BuildContext, BuildOwner, ElementBase, ElementOwner, Lifecycle, StatefulBehavior,
+    StatefulElement, StatefulView, StatelessBehavior, StatelessElement, StatelessView, View,
+    ViewState,
 };
 
 // ============================================================================
@@ -28,7 +30,10 @@ struct SimpleStatelessView {
 
 impl StatelessView for SimpleStatelessView {
     fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
-        Box::new(self.clone())
+        // Return a leaf view, not `self`: a self-returning build
+        // describes an infinitely deep element tree and overflows the
+        // stack when built.
+        Box::new(LeafView)
     }
 }
 
@@ -36,6 +41,70 @@ impl View for SimpleStatelessView {
     fn create_element(&self) -> Box<dyn ElementBase> {
         Box::new(StatelessElement::new(self, StatelessBehavior))
     }
+}
+
+/// A leaf view whose element creates no children — the terminal of a
+/// stateless build chain.
+#[derive(Clone)]
+struct LeafView;
+
+impl View for LeafView {
+    fn create_element(&self) -> Box<dyn ElementBase> {
+        Box::new(LeafElement::new())
+    }
+}
+
+struct LeafElement {
+    depth: usize,
+    lifecycle: Lifecycle,
+}
+
+impl LeafElement {
+    fn new() -> Self {
+        Self {
+            depth: 0,
+            lifecycle: Lifecycle::Initial,
+        }
+    }
+}
+
+impl ElementBase for LeafElement {
+    fn view_type_id(&self) -> TypeId {
+        TypeId::of::<LeafView>()
+    }
+
+    fn depth(&self) -> usize {
+        self.depth
+    }
+
+    fn lifecycle(&self) -> Lifecycle {
+        self.lifecycle
+    }
+
+    fn mount(&mut self, _parent: Option<ElementId>, slot: usize, _owner: &mut ElementOwner<'_>) {
+        self.depth = slot;
+        self.lifecycle = Lifecycle::Active;
+    }
+
+    fn unmount(&mut self, _owner: &mut ElementOwner<'_>) {
+        self.lifecycle = Lifecycle::Defunct;
+    }
+
+    fn activate(&mut self) {
+        self.lifecycle = Lifecycle::Active;
+    }
+
+    fn deactivate(&mut self) {
+        self.lifecycle = Lifecycle::Inactive;
+    }
+
+    fn update(&mut self, _new_view: &dyn View, _owner: &mut ElementOwner<'_>) {}
+
+    fn mark_needs_build(&mut self) {}
+
+    fn perform_build(&mut self, _owner: &mut ElementOwner<'_>) {}
+
+    fn visit_children(&self, _visitor: &mut dyn FnMut(ElementId)) {}
 }
 
 #[derive(Clone)]

@@ -1,15 +1,12 @@
 //! Integration tests for BuildOwner.
 //!
-//! Tests dirty element tracking, build scheduling, GlobalKey registry,
-//! and InheritedElement lookup.
+//! Tests dirty element tracking, build scheduling, and the GlobalKey
+//! registry.
 
 use std::any::TypeId;
 
 use flui_foundation::ElementId;
-use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementTree, StatelessBehavior, StatelessElement,
-    StatelessView, View,
-};
+use flui_view::{BuildOwner, ElementBase, ElementOwner, ElementTree, Lifecycle, View};
 
 // ============================================================================
 // Test View
@@ -21,16 +18,69 @@ struct TestView {
     id: u32,
 }
 
-impl StatelessView for TestView {
-    fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
-        Box::new(self.clone())
+impl View for TestView {
+    fn create_element(&self) -> Box<dyn ElementBase> {
+        Box::new(TestLeafElement::new())
     }
 }
 
-impl View for TestView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self, StatelessBehavior))
+/// A leaf element that creates no children, so `build_scope` terminates.
+///
+/// `TestView` was previously a `StatelessView` whose `build` returned
+/// `self` — an infinitely deep element tree that overflowed the stack
+/// when built. A leaf element is the correct fixture for exercising
+/// `BuildOwner` dirty-tracking and `build_scope` mechanics.
+struct TestLeafElement {
+    depth: usize,
+    lifecycle: Lifecycle,
+}
+
+impl TestLeafElement {
+    fn new() -> Self {
+        Self {
+            depth: 0,
+            lifecycle: Lifecycle::Initial,
+        }
     }
+}
+
+impl ElementBase for TestLeafElement {
+    fn view_type_id(&self) -> TypeId {
+        TypeId::of::<TestView>()
+    }
+
+    fn depth(&self) -> usize {
+        self.depth
+    }
+
+    fn lifecycle(&self) -> Lifecycle {
+        self.lifecycle
+    }
+
+    fn mount(&mut self, _parent: Option<ElementId>, slot: usize, _owner: &mut ElementOwner<'_>) {
+        self.depth = slot;
+        self.lifecycle = Lifecycle::Active;
+    }
+
+    fn unmount(&mut self, _owner: &mut ElementOwner<'_>) {
+        self.lifecycle = Lifecycle::Defunct;
+    }
+
+    fn activate(&mut self) {
+        self.lifecycle = Lifecycle::Active;
+    }
+
+    fn deactivate(&mut self) {
+        self.lifecycle = Lifecycle::Inactive;
+    }
+
+    fn update(&mut self, _new_view: &dyn View, _owner: &mut ElementOwner<'_>) {}
+
+    fn mark_needs_build(&mut self) {}
+
+    fn perform_build(&mut self, _owner: &mut ElementOwner<'_>) {}
+
+    fn visit_children(&self, _visitor: &mut dyn FnMut(ElementId)) {}
 }
 
 // ============================================================================
@@ -265,76 +315,6 @@ fn test_global_key_multiple_keys() {
     assert_eq!(owner.element_for_global_key(200), Some(ElementId::new(2)));
     assert_eq!(owner.element_for_global_key(300), Some(ElementId::new(3)));
 }
-
-// ============================================================================
-// InheritedElement Registry Tests
-// ============================================================================
-
-#[test]
-fn test_inherited_register() {
-    let mut owner = BuildOwner::new();
-    let id = ElementId::new(42);
-    let type_id = TypeId::of::<String>();
-
-    owner.register_inherited(type_id, id);
-
-    assert_eq!(owner.inherited_element(type_id), Some(id));
-}
-
-#[test]
-fn test_inherited_unregister() {
-    let mut owner = BuildOwner::new();
-    let id = ElementId::new(42);
-    let type_id = TypeId::of::<String>();
-
-    owner.register_inherited(type_id, id);
-    owner.unregister_inherited(type_id);
-
-    assert_eq!(owner.inherited_element(type_id), None);
-}
-
-#[test]
-fn test_inherited_lookup_nonexistent() {
-    let owner = BuildOwner::new();
-    let type_id = TypeId::of::<String>();
-
-    assert_eq!(owner.inherited_element(type_id), None);
-}
-
-#[test]
-fn test_inherited_multiple_types() {
-    let mut owner = BuildOwner::new();
-
-    owner.register_inherited(TypeId::of::<String>(), ElementId::new(1));
-    owner.register_inherited(TypeId::of::<i32>(), ElementId::new(2));
-    owner.register_inherited(TypeId::of::<bool>(), ElementId::new(3));
-
-    assert_eq!(
-        owner.inherited_element(TypeId::of::<String>()),
-        Some(ElementId::new(1))
-    );
-    assert_eq!(
-        owner.inherited_element(TypeId::of::<i32>()),
-        Some(ElementId::new(2))
-    );
-    assert_eq!(
-        owner.inherited_element(TypeId::of::<bool>()),
-        Some(ElementId::new(3))
-    );
-}
-
-#[test]
-fn test_inherited_overwrite() {
-    let mut owner = BuildOwner::new();
-    let type_id = TypeId::of::<String>();
-
-    owner.register_inherited(type_id, ElementId::new(1));
-    owner.register_inherited(type_id, ElementId::new(2));
-
-    // Second registration should overwrite
-    assert_eq!(owner.inherited_element(type_id), Some(ElementId::new(2)));
-}
-
 // ============================================================================
 // Depth Ordering Tests
 // ============================================================================
@@ -377,14 +357,12 @@ fn test_build_owner_debug() {
     let mut owner = BuildOwner::new();
     owner.schedule_build_for(ElementId::new(1), 0);
     owner.register_global_key(123, ElementId::new(2));
-    owner.register_inherited(TypeId::of::<String>(), ElementId::new(3));
 
     let debug_str = format!("{:?}", owner);
 
     assert!(debug_str.contains("BuildOwner"));
     assert!(debug_str.contains("dirty_count"));
     assert!(debug_str.contains("global_keys"));
-    assert!(debug_str.contains("inherited_elements"));
 }
 
 // ============================================================================
@@ -458,6 +436,6 @@ fn test_multiple_build_cycles() {
 #[test]
 fn test_build_owner_memory_size() {
     let size = std::mem::size_of::<BuildOwner>();
-    // Should be reasonably sized (BinaryHeap + HashSet + 2 HashMaps + debug flags)
+    // Should be reasonably sized (BinaryHeap + HashSet + HashMap + debug flags)
     assert!(size < 512, "BuildOwner is too large: {} bytes", size);
 }

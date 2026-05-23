@@ -1,10 +1,10 @@
 //! Picture layer - leaf layer with recorded drawing commands
 //!
 //! PictureLayer is Flutter's standard layer for caching drawing commands.
-//! It stores an immutable Picture (DisplayList) that can be replayed
-//! efficiently.
+//! It stores an immutable `DisplayList` (Flutter's `Picture` equivalent)
+//! that can be replayed efficiently.
 
-use flui_painting::{DisplayListCore, Picture};
+use flui_painting::{DisplayList, DisplayListCore};
 use flui_types::geometry::{Pixels, Rect};
 
 /// Picture layer - a leaf layer that contains an immutable recorded picture
@@ -12,12 +12,12 @@ use flui_types::geometry::{Pixels, Rect};
 /// # Architecture
 ///
 /// ```text
-/// Canvas → finish() → Picture (DisplayList) → PictureLayer → GPU
+/// Canvas → finish() → DisplayList → PictureLayer → GPU
 /// ```
 ///
 /// PictureLayer is used by Flutter's PaintingContext to cache drawing commands
 /// for efficient repainting. Unlike CanvasLayer (mutable), PictureLayer stores
-/// an immutable Picture that was already recorded.
+/// an immutable `DisplayList` (Flutter's `Picture`) that was already recorded.
 ///
 /// # Flutter Equivalence
 ///
@@ -59,8 +59,8 @@ use flui_types::geometry::{Pixels, Rect};
 /// - Enables partial screen updates
 #[derive(Clone)]
 pub struct PictureLayer {
-    /// The recorded picture (immutable DisplayList)
-    picture: Picture,
+    /// The recorded drawing commands (immutable `DisplayList`).
+    picture: DisplayList,
 
     /// Estimated bounds for culling
     bounds: Rect<Pixels>,
@@ -80,7 +80,7 @@ impl PictureLayer {
     ///
     /// # Arguments
     ///
-    /// * `picture` - The recorded Picture (DisplayList) to store
+    /// * `picture` - The recorded `DisplayList` to store
     ///
     /// # Examples
     ///
@@ -94,7 +94,7 @@ impl PictureLayer {
     ///
     /// let layer = PictureLayer::new(picture);
     /// ```
-    pub fn new(picture: Picture) -> Self {
+    pub fn new(picture: DisplayList) -> Self {
         let bounds = picture.bounds();
         Self { picture, bounds }
     }
@@ -106,17 +106,17 @@ impl PictureLayer {
     ///
     /// # Arguments
     ///
-    /// * `picture` - The recorded Picture (DisplayList)
+    /// * `picture` - The recorded `DisplayList`
     /// * `bounds` - Explicit bounds for this layer
-    pub fn with_bounds(picture: Picture, bounds: Rect<Pixels>) -> Self {
+    pub fn with_bounds(picture: DisplayList, bounds: Rect<Pixels>) -> Self {
         Self { picture, bounds }
     }
 
     /// Returns a reference to the stored picture.
     ///
-    /// The picture contains the recorded drawing commands and can be
+    /// The `DisplayList` contains the recorded drawing commands and can be
     /// replayed by the rendering backend.
-    pub fn picture(&self) -> &Picture {
+    pub fn picture(&self) -> &DisplayList {
         &self.picture
     }
 
@@ -143,8 +143,8 @@ impl PictureLayer {
     ///
     /// # Arguments
     ///
-    /// * `picture` - New recorded picture to store
-    pub fn set_picture(&mut self, picture: Picture) {
+    /// * `picture` - New recorded `DisplayList` to store
+    pub fn set_picture(&mut self, picture: DisplayList) {
         self.bounds = picture.bounds();
         self.picture = picture;
     }

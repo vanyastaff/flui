@@ -152,8 +152,8 @@ mod test_only_global_key_registry {
 // View traits
 // Binding
 pub use binding::{
-    AppExitResponse, AppLifecycleState, PredictiveBackEvent, RouteInformation, ViewFocusDirection,
-    ViewFocusEvent, ViewFocusState, WidgetsBinding, WidgetsBindingObserver,
+    AppExitResponse, AppLifecycleState, AttachError, PredictiveBackEvent, RouteInformation,
+    ViewFocusDirection, ViewFocusEvent, ViewFocusState, WidgetsBinding, WidgetsBindingObserver,
 };
 // Child helpers
 pub use child::{Child, Children};
@@ -163,9 +163,8 @@ pub use context::{BuildContext, BuildContextExt, ElementBuildContext, ElementBui
 pub use element::Lifecycle;
 // Notification system
 pub use element::{
-    BoxedNotification, DragEndNotification, DragStartNotification, FocusNotification,
-    KeepAliveNotification, LayoutChangedNotification, NotifiableElement, Notification,
-    NotificationCallback, NotificationHandler, NotificationNode, ScrollNotification,
+    DragEndNotification, DragStartNotification, FocusNotification, KeepAliveNotification,
+    LayoutChangedNotification, NotifiableElement, Notification, ScrollNotification,
     SizeChangedNotification,
 };
 // Slot types for multi-child elements (re-exported from flui-tree, canonical home)
@@ -222,7 +221,7 @@ pub mod prelude {
         child::{Child, Children},
         element::{
             ElementSlot, IndexedSlot, LayoutChangedNotification, Lifecycle, NotifiableElement,
-            Notification, NotificationNode, RootElement,
+            Notification, RootElement,
         },
         key::{GlobalKey, GlobalKeyId, ObjectKey, ValueKey},
         owner::{BuildOwner, ElementOwner},

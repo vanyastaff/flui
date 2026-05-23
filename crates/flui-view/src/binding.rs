@@ -62,7 +62,29 @@ use flui_foundation::{BindingBase, ElementId, impl_binding_singleton};
 use flui_rendering::pipeline::PipelineOwner;
 use parking_lot::RwLock;
 
-use crate::{owner::BuildOwner, tree::ElementTree, view::View};
+use crate::{
+    owner::BuildOwner,
+    tree::ElementTree,
+    view::{RootRenderView, View},
+};
+
+/// Default physical size, in pixels, for the root [`RenderView`] created
+/// when [`WidgetsBinding::attach_root_widget`] bootstraps the render tree.
+///
+/// `flui-view`'s binding is intra-crate — it has no window object to
+/// query, so the root [`RootRenderView`] is seeded with a default size
+/// rather than a real window size. `800x600` is deliberately the same
+/// value `flui_app::AppConfig::default()` uses for the initial window
+/// size, keeping one consistent default across the workspace.
+///
+/// This is only a *seed*: the size is not permanent. `RootRenderView`
+/// is itself a [`View`], so a later rebuild with a differently-sized
+/// `RootRenderView` flows the real window dimensions in through
+/// `RootRenderElement::update`, which re-applies the
+/// [`ViewConfiguration`](flui_rendering::view::ViewConfiguration).
+///
+/// [`RenderView`]: flui_rendering::view::RenderView
+const DEFAULT_ROOT_VIEW_SIZE: (f32, f32) = (800.0, 600.0);
 
 // ============================================================================
 // Route Information
@@ -252,6 +274,14 @@ pub trait WidgetsBindingObserver: Send + Sync {
 
     // ========================================================================
     // Predictive Back Gesture (Android 13+)
+    //
+    // REMOVE_BY: 2026-09-22 — audit V-24 cadence marker. These four trait
+    // methods + the matching `WidgetsBinding::handle_*_back_gesture`
+    // impls + the `back_gesture_observers` storage are Android-13+
+    // infrastructure waiting on the `flui-platform` Android wire-up. No
+    // in-workspace `impl WidgetsBindingObserver` overrides them today.
+    // By the cadence date either delete the whole surface (no consumer
+    // materialized) OR wire the platform side and drop this marker.
     // ========================================================================
 
     /// Called at the start of a predictive back gesture.
@@ -413,6 +443,14 @@ struct WidgetsBindingInner {
     observers: Vec<Arc<dyn WidgetsBindingObserver>>,
 
     /// Observers currently handling a predictive back gesture (Android).
+    ///
+    // REMOVE_BY: 2026-09-22 — audit V-24 cadence marker. The predictive-
+    // back-gesture surface (`handle_*_back_gesture` trait methods +
+    // `back_gesture_observers` storage + `WidgetsBinding::handle_*_
+    // back_gesture` impls) is Android-13+ infrastructure waiting on the
+    // `flui-platform` Android side. By the cadence date either delete
+    // this surface (no consumer materialized) OR wire the platform side
+    // and drop this marker.
     back_gesture_observers: Vec<Arc<dyn WidgetsBindingObserver>>,
 
     /// Whether a build has been scheduled.
@@ -444,6 +482,15 @@ impl Default for WidgetsBinding {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Error returned by [`WidgetsBinding::attach_root_widget`].
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum AttachError {
+    /// A root widget is already attached; call `detach_root_widget` first.
+    #[error("Root widget already attached. Call detach_root_widget first.")]
+    AlreadyAttached,
 }
 
 impl WidgetsBinding {
@@ -582,6 +629,7 @@ impl WidgetsBinding {
     // Root Widget Attachment
     // ========================================================================
 
+    // PORT-TARGET: flui-app runner root-bootstrap consolidation, pending Cycle 6 element-ownership unification (V-7 deferral)
     /// Attach a root widget to the binding.
     ///
     /// This creates the root element and schedules the first build.
@@ -590,21 +638,69 @@ impl WidgetsBinding {
     /// to the root element during mounting, enabling RenderObjectElements
     /// to create their RenderObjects.
     ///
-    /// # Panics
+    /// # Root bootstrap
     ///
-    /// Panics if a root widget is already attached.
-    pub fn attach_root_widget<V: View>(&self, view: &V) {
+    /// The user `view` is not mounted directly. It is wrapped in a
+    /// [`RootRenderView`], and *that* is mounted as the element-tree
+    /// root. [`RootRenderView`] / `RootRenderElement` own the root
+    /// [`RenderView`](flui_rendering::view::RenderView) and bootstrap
+    /// the render tree (creating the `RenderView`, setting it as the
+    /// `PipelineOwner`'s root node). This is the single root-bootstrap
+    /// path — there is no parallel direct-mount of the user view.
+    ///
+    /// # Flutter Equivalent
+    ///
+    /// Mirrors `WidgetsBinding.attachRootWidget` →
+    /// `RootWidget.attach` → `RenderObjectToWidgetAdapter`
+    /// (`packages/flutter/lib/src/widgets/binding.dart`), where the
+    /// user widget is likewise wrapped in a root widget that owns the
+    /// `RenderView` before being attached to the build owner.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AttachError::AlreadyAttached`] if a root widget is
+    /// already attached.
+    pub fn attach_root_widget<V>(&self, view: &V) -> Result<(), AttachError>
+    where
+        V: View + Clone + Send + Sync + 'static,
+    {
         let mut inner = self.inner.write();
 
-        assert!(
-            inner.root_element.is_none(),
-            "Root widget already attached. Call detach_root_widget first."
+        if inner.root_element.is_some() {
+            return Err(AttachError::AlreadyAttached);
+        }
+
+        // Wrap the user view in `RootRenderView` so the render tree is
+        // bootstrapped through `RootRenderElement` (Flutter's
+        // `RenderObjectToWidgetAdapter` shape) instead of mounting the
+        // user view directly.
+        //
+        // The user view is cloned (not `BoxedView`-wrapped) so the
+        // concrete `V` is preserved as the `RootRenderView<V>` /
+        // `RootRenderElement<V>` type parameter. On subsequent root
+        // rebuilds `RootRenderElement::perform_build` hands the stored
+        // child to `Element<V>::update_view` via `&dyn View`; that
+        // method downcasts the trait object back to `V`. A `BoxedView`
+        // wrap would make the runtime type `BoxedView` (not `V`), the
+        // downcast in `ElementCore::update_view` would fail, and the
+        // root update would be silently skipped (PR #119 review —
+        // codex P1).
+        //
+        // The `Clone + Send + Sync + 'static` bound is no real
+        // restriction in practice — every concrete `View` in this
+        // codebase already satisfies it (see `Element<V, A, B>`'s
+        // own bound).
+        let root_render_view = RootRenderView::new(
+            view.clone(),
+            DEFAULT_ROOT_VIEW_SIZE.0,
+            DEFAULT_ROOT_VIEW_SIZE.1,
         );
 
-        // Mount root element with PipelineOwner
-        // This ensures RenderObjectElements can create their RenderObjects.
-        // Split the borrow so the BuildOwner-derived ElementOwner handle and
-        // the ElementTree borrow don't overlap.
+        // Mount the `RootRenderView` as the element-tree root with the
+        // PipelineOwner. This ensures `RootRenderElement` (and the
+        // RenderObjectElements below it) can create their RenderObjects.
+        // Split the borrow so the BuildOwner-derived ElementOwner handle
+        // and the ElementTree borrow don't overlap.
         let pipeline_owner = inner.pipeline_owner.clone();
         let root_id = {
             let WidgetsBindingInner {
@@ -613,7 +709,7 @@ impl WidgetsBinding {
                 ..
             } = *inner;
             element_tree.mount_root_with_pipeline_owner(
-                view,
+                &root_render_view,
                 pipeline_owner,
                 &mut build_owner.element_owner_mut(),
             )
@@ -629,6 +725,8 @@ impl WidgetsBinding {
         // Request a frame
         drop(inner); // Release lock before calling callback
         self.handle_build_scheduled();
+
+        Ok(())
     }
 
     /// Detach the root widget.
@@ -687,19 +785,66 @@ impl WidgetsBinding {
         }
     }
 
-    /// Collect all element IDs in the tree recursively.
+    /// Iteratively collect every `(ElementId, depth)` pair reachable from
+    /// `id`, in pre-order DFS order (parent before its children, children
+    /// in `visit_children` order).
+    ///
+    /// Plan §U12 / R15 — audit V-16. The earlier recursive shape did
+    /// `result.extend(recursive_call(child))` once per child, so each
+    /// `extend` re-copied its child's entire subtree into the parent's
+    /// vec. For a balanced tree of N elements that totals `O(N log N)`
+    /// allocation+copy; for a degenerate chain (the FLUI worst case where
+    /// many `StatelessView`s nest linearly) it is `O(N²)`. The recursion
+    /// also burned stack proportional to tree depth.
+    ///
+    /// This implementation pre-sizes a single `Vec<(ElementId, usize)>`
+    /// to `tree.len()` (every node in the slab is at most one entry) and
+    /// drives the walk with an explicit `Vec` work-stack. Total work is
+    /// `O(N)` with one heap allocation amortised across the whole walk;
+    /// stack depth is the constant size of two `Vec`s.
+    ///
+    /// **Ordering contract.** The previous recursive shape pushed the
+    /// current node first, then for each child appended that child's
+    /// entire pre-order subtree before moving to the next child — i.e.
+    /// classic pre-order DFS in `visit_children` order. To preserve that
+    /// ordering on a LIFO work-stack we visit each node when popped and
+    /// then push its children **in reverse `visit_children` order**, so
+    /// the leftmost child is on top of the stack and popped next. The
+    /// per-element pop / visit / push-children sequence is identical to
+    /// the recursive function call sequence.
     fn collect_all_elements(
         tree: &ElementTree,
-        id: ElementId,
-        depth: usize,
+        root_id: ElementId,
+        root_depth: usize,
     ) -> Vec<(ElementId, usize)> {
-        let mut result = vec![(id, depth)];
+        // Tree-len upper-bounds the number of reachable nodes. We may
+        // visit strictly fewer (the walk is rooted at `root_id`, not the
+        // full slab), but over-reserving by a few entries is cheaper than
+        // reallocating during the walk.
+        let mut result: Vec<(ElementId, usize)> = Vec::with_capacity(tree.len());
+        let mut stack: Vec<(ElementId, usize)> = Vec::with_capacity(16);
+        let mut child_buf: Vec<ElementId> = Vec::with_capacity(8);
 
-        // Collect children
-        if let Some(node) = tree.get(id) {
+        stack.push((root_id, root_depth));
+
+        while let Some((id, depth)) = stack.pop() {
+            result.push((id, depth));
+
+            let Some(node) = tree.get(id) else {
+                continue;
+            };
+
+            // `visit_children` walks forward; we collect into a scratch
+            // buffer so we can push the children back onto the LIFO stack
+            // in reverse, preserving the recursive shape's pre-order
+            // visit order.
+            child_buf.clear();
             node.element().visit_children(&mut |child_id| {
-                result.extend(Self::collect_all_elements(tree, child_id, depth + 1));
+                child_buf.push(child_id);
             });
+            for child_id in child_buf.iter().rev() {
+                stack.push((*child_id, depth + 1));
+            }
         }
 
         result
@@ -855,57 +1000,81 @@ impl WidgetsBinding {
     }
 
     /// Notify all observers of locale change.
+    ///
+    /// Snapshots the observer list under the read lock and releases the
+    /// lock before invoking callbacks (audit V-21). An observer callback
+    /// that re-enters the binding (e.g., adds or removes an observer,
+    /// reads `observer_count`, or schedules a build) would deadlock if
+    /// the iteration held the lock across the dispatch.
     pub fn handle_locale_changed(&self) {
-        let inner = self.inner.read();
-        for observer in &inner.observers {
+        let observers: Vec<Arc<dyn WidgetsBindingObserver>> = self.inner.read().observers.clone();
+        for observer in &observers {
             observer.did_change_locales();
         }
     }
 
     /// Notify all observers of metrics change.
+    ///
+    /// See [`Self::handle_locale_changed`] for the snapshot-then-fire
+    /// rationale (audit V-21).
     pub fn handle_metrics_changed(&self) {
-        let inner = self.inner.read();
-        for observer in &inner.observers {
+        let observers: Vec<Arc<dyn WidgetsBindingObserver>> = self.inner.read().observers.clone();
+        for observer in &observers {
             observer.did_change_metrics();
         }
     }
 
     /// Notify all observers of text scale factor change.
+    ///
+    /// See [`Self::handle_locale_changed`] for the snapshot-then-fire
+    /// rationale (audit V-21).
     pub fn handle_text_scale_factor_changed(&self) {
-        let inner = self.inner.read();
-        for observer in &inner.observers {
+        let observers: Vec<Arc<dyn WidgetsBindingObserver>> = self.inner.read().observers.clone();
+        for observer in &observers {
             observer.did_change_text_scale_factor();
         }
     }
 
     /// Notify all observers of platform brightness change.
+    ///
+    /// See [`Self::handle_locale_changed`] for the snapshot-then-fire
+    /// rationale (audit V-21).
     pub fn handle_platform_brightness_changed(&self) {
-        let inner = self.inner.read();
-        for observer in &inner.observers {
+        let observers: Vec<Arc<dyn WidgetsBindingObserver>> = self.inner.read().observers.clone();
+        for observer in &observers {
             observer.did_change_platform_brightness();
         }
     }
 
     /// Notify all observers of app lifecycle change.
+    ///
+    /// See [`Self::handle_locale_changed`] for the snapshot-then-fire
+    /// rationale (audit V-21).
     pub fn handle_app_lifecycle_state_changed(&self, state: AppLifecycleState) {
-        let inner = self.inner.read();
-        for observer in &inner.observers {
+        let observers: Vec<Arc<dyn WidgetsBindingObserver>> = self.inner.read().observers.clone();
+        for observer in &observers {
             observer.did_change_app_lifecycle_state(state);
         }
     }
 
     /// Notify all observers of memory pressure.
+    ///
+    /// See [`Self::handle_locale_changed`] for the snapshot-then-fire
+    /// rationale (audit V-21).
     pub fn handle_memory_pressure(&self) {
-        let inner = self.inner.read();
-        for observer in &inner.observers {
+        let observers: Vec<Arc<dyn WidgetsBindingObserver>> = self.inner.read().observers.clone();
+        for observer in &observers {
             observer.did_have_memory_pressure();
         }
     }
 
     /// Notify all observers of accessibility features change.
+    ///
+    /// See [`Self::handle_locale_changed`] for the snapshot-then-fire
+    /// rationale (audit V-21).
     pub fn handle_accessibility_features_changed(&self) {
-        let inner = self.inner.read();
-        for observer in &inner.observers {
+        let observers: Vec<Arc<dyn WidgetsBindingObserver>> = self.inner.read().observers.clone();
+        for observer in &observers {
             observer.did_change_accessibility_features();
         }
     }
@@ -1033,6 +1202,10 @@ impl WidgetsBinding {
 
     // ========================================================================
     // Predictive Back Gesture (Android)
+    //
+    // REMOVE_BY: 2026-09-22 — audit V-24 cadence marker. See the matching
+    // marker on the `WidgetsBindingObserver::handle_*_back_gesture` trait
+    // surface for the rationale and dispose-or-wire decision rule.
     // ========================================================================
 
     /// Handle the start of a predictive back gesture.
@@ -1099,12 +1272,16 @@ impl WidgetsBinding {
 
     /// Handle view focus change.
     ///
+    /// Snapshots the observer list under the read lock and releases the
+    /// lock before invoking callbacks (audit V-21). See
+    /// [`Self::handle_locale_changed`] for the deadlock-safety rationale.
+    ///
     /// # Flutter Equivalent
     ///
     /// Corresponds to `WidgetsBinding.handleViewFocusChanged()`.
     pub fn handle_view_focus_changed(&self, event: ViewFocusEvent) {
-        let inner = self.inner.read();
-        for observer in &inner.observers {
+        let observers: Vec<Arc<dyn WidgetsBindingObserver>> = self.inner.read().observers.clone();
+        for observer in &observers {
             observer.did_change_view_focus(event);
         }
     }
@@ -1160,20 +1337,6 @@ impl std::fmt::Debug for WidgetsBinding {
     }
 }
 
-/// Thread-safe wrapper for WidgetsBinding.
-///
-/// Deprecated: Use `WidgetsBinding::instance()` instead.
-#[deprecated(since = "0.2.0", note = "Use WidgetsBinding::instance() instead")]
-pub type SharedWidgetsBinding = Arc<RwLock<WidgetsBinding>>;
-
-/// Create a new shared widgets binding.
-///
-/// Deprecated: Use `WidgetsBinding::instance()` instead.
-#[deprecated(since = "0.2.0", note = "Use WidgetsBinding::instance() instead")]
-pub fn create_shared_binding() -> Arc<RwLock<WidgetsBinding>> {
-    Arc::new(RwLock::new(WidgetsBinding::new()))
-}
-
 #[cfg(test)]
 mod tests {
     use std::any::TypeId;
@@ -1181,6 +1344,7 @@ mod tests {
     use flui_foundation::HasInstance;
 
     use super::*;
+    use crate::RootRenderElement;
 
     /// A leaf element that doesn't create children (prevents infinite
     /// recursion)
@@ -1256,6 +1420,25 @@ mod tests {
         }
     }
 
+    /// A stateless view that builds a non-trivial child subtree: it
+    /// produces a `LeafView` child each build. `build` returns a leaf
+    /// (not `self`) so the element tree terminates — a self-returning
+    /// view describes an infinitely deep tree and overflows the stack.
+    #[derive(Clone)]
+    struct ParentView;
+
+    impl crate::StatelessView for ParentView {
+        fn build(&self, _ctx: &dyn crate::BuildContext) -> Box<dyn View> {
+            Box::new(LeafView)
+        }
+    }
+
+    impl View for ParentView {
+        fn create_element(&self) -> Box<dyn crate::ElementBase> {
+            Box::new(crate::StatelessElement::new(self, crate::StatelessBehavior))
+        }
+    }
+
     #[test]
     fn test_binding_singleton() {
         let binding1 = WidgetsBinding::instance();
@@ -1286,10 +1469,135 @@ mod tests {
         let binding = WidgetsBinding::new();
         let view = LeafView;
 
-        binding.attach_root_widget(&view);
+        binding
+            .attach_root_widget(&view)
+            .expect("first attach succeeds");
 
         assert!(binding.root_element().is_some());
         assert!(binding.has_pending_builds());
+    }
+
+    /// U6 / AE3: `attach_root_widget` bootstraps the root through
+    /// `RootRenderView` — the element-tree root is a
+    /// `RootRenderElement<LeafView>`, NOT the user view's element
+    /// mounted directly.
+    #[test]
+    fn test_attach_root_widget_routes_through_root_render_view() {
+        let binding = WidgetsBinding::new();
+        let view = LeafView;
+
+        binding
+            .attach_root_widget(&view)
+            .expect("first attach succeeds");
+
+        let root_id = binding.root_element().expect("root element is set");
+
+        binding.with_element_tree(|tree| {
+            let node = tree.get(root_id).expect("root node exists");
+            let element = node.element();
+
+            // The mounted root is the `RootRenderElement`, identified by
+            // the `RootRenderView<LeafView>` view type it reports — the
+            // user view's concrete type is preserved as the type
+            // parameter (no `BoxedView` wrap; see PR #119 review fix).
+            assert_eq!(
+                element.view_type_id(),
+                TypeId::of::<RootRenderView<LeafView>>(),
+                "root element must be RootRenderElement<LeafView>, \
+                 proving the bootstrap routes through RootRenderView"
+            );
+
+            // It is concretely a `RootRenderElement<LeafView>` — the
+            // direct-mount path would have produced a `LeafElement`.
+            assert!(
+                element
+                    .as_any()
+                    .downcast_ref::<RootRenderElement<LeafView>>()
+                    .is_some(),
+                "root element downcasts to RootRenderElement<LeafView>"
+            );
+            assert!(
+                element.as_any().downcast_ref::<LeafElement>().is_none(),
+                "root element is NOT the user view's element mounted directly"
+            );
+        });
+    }
+
+    /// U6: the mounted root element produces a working render-tree root
+    /// when a `PipelineOwner` is wired — `RootRenderElement` inserts the
+    /// `RenderView` and sets it as the pipeline owner's root node.
+    #[test]
+    fn test_attach_root_widget_bootstraps_render_tree() {
+        let binding = WidgetsBinding::new();
+        let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
+        binding.set_pipeline_owner(Arc::clone(&pipeline_owner));
+
+        binding
+            .attach_root_widget(&LeafView)
+            .expect("attach succeeds");
+
+        let root_id = binding.root_element().expect("root element is set");
+
+        // The RootRenderElement created a RenderView and registered it
+        // as the PipelineOwner's root node.
+        binding.with_element_tree(|tree| {
+            let element = tree.get(root_id).expect("root node").element();
+            let root_render_element = element
+                .as_any()
+                .downcast_ref::<RootRenderElement<LeafView>>()
+                .expect("root is RootRenderElement");
+            assert!(
+                root_render_element.render_id().is_some(),
+                "RootRenderElement bootstrapped a RenderView (render_id set)"
+            );
+        });
+        assert!(
+            pipeline_owner.read().root_id().is_some(),
+            "PipelineOwner's root node is wired to the RenderView"
+        );
+    }
+
+    /// U6 edge case: a root view with zero children bootstraps
+    /// correctly through `RootRenderView`.
+    #[test]
+    fn test_attach_root_widget_zero_child_subtree() {
+        let binding = WidgetsBinding::new();
+
+        // `LeafView` creates a `LeafElement` with no children.
+        binding
+            .attach_root_widget(&LeafView)
+            .expect("attach succeeds");
+        binding.draw_frame();
+
+        let root_id = binding.root_element().expect("root element is set");
+        binding.with_element_tree(|tree| {
+            let element = tree.get(root_id).expect("root node").element();
+            assert_eq!(element.lifecycle(), crate::Lifecycle::Active);
+        });
+    }
+
+    /// U6 edge case: a root view that builds a non-trivial child
+    /// subtree bootstraps correctly through `RootRenderView`.
+    #[test]
+    fn test_attach_root_widget_with_child_subtree() {
+        let binding = WidgetsBinding::new();
+
+        // `ParentView` builds a `LeafView` child each build.
+        binding
+            .attach_root_widget(&ParentView)
+            .expect("attach succeeds");
+        binding.draw_frame();
+
+        let root_id = binding.root_element().expect("root element is set");
+        binding.with_element_tree(|tree| {
+            let element = tree.get(root_id).expect("root node").element();
+            assert_eq!(
+                element.view_type_id(),
+                TypeId::of::<RootRenderView<ParentView>>(),
+                "root with a child subtree still routes through RootRenderView"
+            );
+            assert_eq!(element.lifecycle(), crate::Lifecycle::Active);
+        });
     }
 
     #[test]
@@ -1297,7 +1605,7 @@ mod tests {
         let binding = WidgetsBinding::new();
         let view = LeafView;
 
-        binding.attach_root_widget(&view);
+        binding.attach_root_widget(&view).expect("attach succeeds");
         assert!(binding.has_pending_builds());
 
         binding.draw_frame();
@@ -1309,7 +1617,7 @@ mod tests {
         let binding = WidgetsBinding::new();
         let view = LeafView;
 
-        binding.attach_root_widget(&view);
+        binding.attach_root_widget(&view).expect("attach succeeds");
         assert!(binding.root_element().is_some());
 
         binding.detach_root_widget();
@@ -1317,12 +1625,351 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Root widget already attached")]
-    fn test_double_attach_panics() {
+    fn test_double_attach_errors() {
         let binding = WidgetsBinding::new();
         let view = LeafView;
 
-        binding.attach_root_widget(&view);
-        binding.attach_root_widget(&view); // Should panic
+        binding
+            .attach_root_widget(&view)
+            .expect("first attach succeeds");
+
+        assert!(matches!(
+            binding.attach_root_widget(&view),
+            Err(AttachError::AlreadyAttached)
+        ));
+    }
+
+    // ========================================================================
+    // V-16 collect_all_elements — iterative O(N) walk
+    // ========================================================================
+    //
+    // These tests pin the contract of
+    // `WidgetsBinding::collect_all_elements`:
+    //
+    // 1. It returns every `(ElementId, depth)` pair reachable from the
+    //    starting `root_id`, with depths offset by the supplied
+    //    `root_depth` (i.e. the root's recorded depth equals
+    //    `root_depth`, each child recorded depth equals `root_depth + 1`,
+    //    and so on).
+    // 2. The traversal is pre-order DFS in the order yielded by each
+    //    element's `visit_children` — parent first, then each child's
+    //    entire subtree before moving on to the next sibling.
+    // 3. Order is deterministic across runs.
+    // 4. Deep linear chains do not exhaust the stack (the walk is
+    //    iterative).
+
+    /// Test fixture element whose `visit_children` returns the IDs in
+    /// `children`. The element is configured manually after insertion via
+    /// `set_children` so the test can wire up arbitrary tree shapes
+    /// without relying on a full `View::build` round-trip.
+    #[derive(Default)]
+    struct MultiNodeElement {
+        depth: usize,
+        lifecycle: crate::Lifecycle,
+        children: Vec<flui_foundation::ElementId>,
+    }
+
+    impl MultiNodeElement {
+        fn new() -> Self {
+            Self {
+                depth: 0,
+                lifecycle: crate::Lifecycle::Initial,
+                children: Vec::new(),
+            }
+        }
+    }
+
+    impl crate::ElementBase for MultiNodeElement {
+        fn view_type_id(&self) -> TypeId {
+            TypeId::of::<MultiNodeView>()
+        }
+
+        fn depth(&self) -> usize {
+            self.depth
+        }
+
+        fn lifecycle(&self) -> crate::Lifecycle {
+            self.lifecycle
+        }
+
+        fn mount(
+            &mut self,
+            _parent: Option<flui_foundation::ElementId>,
+            slot: usize,
+            _owner: &mut crate::ElementOwner<'_>,
+        ) {
+            self.depth = slot;
+            self.lifecycle = crate::Lifecycle::Active;
+        }
+
+        fn unmount(&mut self, _owner: &mut crate::ElementOwner<'_>) {
+            self.lifecycle = crate::Lifecycle::Defunct;
+        }
+
+        fn activate(&mut self) {
+            self.lifecycle = crate::Lifecycle::Active;
+        }
+
+        fn deactivate(&mut self) {
+            self.lifecycle = crate::Lifecycle::Inactive;
+        }
+
+        fn update(&mut self, _new_view: &dyn View, _owner: &mut crate::ElementOwner<'_>) {}
+
+        fn mark_needs_build(&mut self) {}
+
+        fn perform_build(&mut self, _owner: &mut crate::ElementOwner<'_>) {}
+
+        fn visit_children(&self, visitor: &mut dyn FnMut(flui_foundation::ElementId)) {
+            for &child_id in &self.children {
+                visitor(child_id);
+            }
+        }
+    }
+
+    #[derive(Clone)]
+    struct MultiNodeView;
+
+    impl View for MultiNodeView {
+        fn create_element(&self) -> Box<dyn crate::ElementBase> {
+            Box::new(MultiNodeElement::new())
+        }
+    }
+
+    /// Helper: insert a `MultiNodeView` as a child of `parent`, returning
+    /// its new `ElementId`.
+    fn insert_multi_child(
+        tree: &mut crate::tree::ElementTree,
+        build_owner: &mut crate::BuildOwner,
+        parent: flui_foundation::ElementId,
+        slot: usize,
+    ) -> flui_foundation::ElementId {
+        let view = MultiNodeView;
+        tree.insert(&view, parent, slot, &mut build_owner.element_owner_mut())
+    }
+
+    /// Helper: configure the children list on the element backing `id`.
+    fn set_children_for(
+        tree: &mut crate::tree::ElementTree,
+        id: flui_foundation::ElementId,
+        children: Vec<flui_foundation::ElementId>,
+    ) {
+        let node = tree.get_mut(id).expect("node exists");
+        let element = node
+            .element_mut()
+            .as_any_mut()
+            .downcast_mut::<MultiNodeElement>()
+            .expect("element is MultiNodeElement");
+        element.children = children;
+    }
+
+    /// Happy path: a tree of `root → [a, b], a → [a1]`. The walk visits
+    /// every node with the correct depths, in pre-order DFS.
+    #[test]
+    fn test_collect_all_elements_happy_path() {
+        let mut tree = crate::tree::ElementTree::new();
+        let mut build_owner = crate::BuildOwner::new();
+
+        let root_id = tree.mount_root(&MultiNodeView, &mut build_owner.element_owner_mut());
+        let alpha = insert_multi_child(&mut tree, &mut build_owner, root_id, 0);
+        let bravo = insert_multi_child(&mut tree, &mut build_owner, root_id, 1);
+        let alpha_child = insert_multi_child(&mut tree, &mut build_owner, alpha, 0);
+
+        set_children_for(&mut tree, root_id, vec![alpha, bravo]);
+        set_children_for(&mut tree, alpha, vec![alpha_child]);
+
+        let walk = WidgetsBinding::collect_all_elements(&tree, root_id, 0);
+
+        assert_eq!(
+            walk,
+            vec![(root_id, 0), (alpha, 1), (alpha_child, 2), (bravo, 1)],
+            "pre-order DFS: parent before children, children in visit_children order"
+        );
+    }
+
+    /// Edge case: a deeply unbalanced chain. The iterative walk must
+    /// terminate without overflowing the stack. 1024 is well past the
+    /// 50-deep threshold the plan calls out and far past what naive
+    /// recursion would tolerate on Windows's smaller default thread
+    /// stack.
+    #[test]
+    fn test_collect_all_elements_deep_chain() {
+        let mut tree = crate::tree::ElementTree::new();
+        let mut build_owner = crate::BuildOwner::new();
+
+        let root_id = tree.mount_root(&MultiNodeView, &mut build_owner.element_owner_mut());
+
+        let mut ids = vec![root_id];
+        let mut current = root_id;
+        for _ in 0..1024 {
+            let next = insert_multi_child(&mut tree, &mut build_owner, current, 0);
+            set_children_for(&mut tree, current, vec![next]);
+            ids.push(next);
+            current = next;
+        }
+
+        let walk = WidgetsBinding::collect_all_elements(&tree, root_id, 0);
+
+        assert_eq!(walk.len(), ids.len(), "every chain node is visited");
+        for (i, &(id, depth)) in walk.iter().enumerate() {
+            assert_eq!(id, ids[i], "chain visit order is parent-first");
+            assert_eq!(depth, i, "depth grows with chain index");
+        }
+    }
+
+    /// Edge case: a wide shallow tree (root → 64 leaf children). The
+    /// walk must visit the root then every child in `visit_children`
+    /// order.
+    #[test]
+    fn test_collect_all_elements_wide_tree() {
+        let mut tree = crate::tree::ElementTree::new();
+        let mut build_owner = crate::BuildOwner::new();
+
+        let root_id = tree.mount_root(&MultiNodeView, &mut build_owner.element_owner_mut());
+
+        let mut children = Vec::with_capacity(64);
+        for slot in 0..64 {
+            children.push(insert_multi_child(
+                &mut tree,
+                &mut build_owner,
+                root_id,
+                slot,
+            ));
+        }
+        set_children_for(&mut tree, root_id, children.clone());
+
+        let walk = WidgetsBinding::collect_all_elements(&tree, root_id, 0);
+
+        assert_eq!(walk.len(), 1 + children.len());
+        assert_eq!(walk[0], (root_id, 0));
+        for (i, &child_id) in children.iter().enumerate() {
+            assert_eq!(walk[1 + i], (child_id, 1));
+        }
+    }
+
+    /// Stability: running the walk twice on the same tree returns the
+    /// exact same sequence — the iterative shape must not introduce
+    /// any ordering nondeterminism.
+    #[test]
+    fn test_collect_all_elements_is_deterministic() {
+        let mut tree = crate::tree::ElementTree::new();
+        let mut build_owner = crate::BuildOwner::new();
+
+        let root_id = tree.mount_root(&MultiNodeView, &mut build_owner.element_owner_mut());
+        let alpha = insert_multi_child(&mut tree, &mut build_owner, root_id, 0);
+        let bravo = insert_multi_child(&mut tree, &mut build_owner, root_id, 1);
+        let charlie = insert_multi_child(&mut tree, &mut build_owner, root_id, 2);
+        let bravo_first = insert_multi_child(&mut tree, &mut build_owner, bravo, 0);
+        let bravo_second = insert_multi_child(&mut tree, &mut build_owner, bravo, 1);
+
+        set_children_for(&mut tree, root_id, vec![alpha, bravo, charlie]);
+        set_children_for(&mut tree, bravo, vec![bravo_first, bravo_second]);
+
+        let first = WidgetsBinding::collect_all_elements(&tree, root_id, 0);
+        let second = WidgetsBinding::collect_all_elements(&tree, root_id, 0);
+
+        assert_eq!(first, second, "walk output is deterministic");
+        assert_eq!(
+            first,
+            vec![
+                (root_id, 0),
+                (alpha, 1),
+                (bravo, 1),
+                (bravo_first, 2),
+                (bravo_second, 2),
+                (charlie, 1),
+            ],
+        );
+    }
+
+    /// The `root_depth` argument is offset onto every recorded depth —
+    /// pin this so callers that recurse into a subtree at a non-zero
+    /// depth still get useful values.
+    #[test]
+    fn test_collect_all_elements_root_depth_offset() {
+        let mut tree = crate::tree::ElementTree::new();
+        let mut build_owner = crate::BuildOwner::new();
+
+        let root_id = tree.mount_root(&MultiNodeView, &mut build_owner.element_owner_mut());
+        let child_id = insert_multi_child(&mut tree, &mut build_owner, root_id, 0);
+        set_children_for(&mut tree, root_id, vec![child_id]);
+
+        let walk = WidgetsBinding::collect_all_elements(&tree, root_id, 5);
+        assert_eq!(walk, vec![(root_id, 5), (child_id, 6)]);
+    }
+
+    // ========================================================================
+    // V-21 — snapshot-then-fire on sync handle_* event handlers
+    // ========================================================================
+
+    /// Observer whose callback re-enters the binding by taking a
+    /// `write()` lock (via `add_observer`). Before the V-21 fix the
+    /// `handle_*` dispatch held a `read()` lock on `self.inner` across
+    /// the iteration, so this re-entrant `write()` would deadlock the
+    /// thread under `parking_lot`'s non-reentrant `RwLock`. After the
+    /// snapshot-then-fire fix the callbacks run with no lock held, so
+    /// re-entering the binding is safe.
+    struct ReentrantObserver {
+        binding: &'static WidgetsBinding,
+        fired: std::sync::atomic::AtomicUsize,
+    }
+
+    /// Inert observer added from inside `ReentrantObserver`'s callback to
+    /// force a `write()` lock acquisition on `self.inner`. The struct is
+    /// intentionally trivial; only the act of `add_observer`-ing matters.
+    struct InertObserver;
+    impl WidgetsBindingObserver for InertObserver {}
+
+    impl WidgetsBindingObserver for ReentrantObserver {
+        fn did_change_metrics(&self) {
+            self.fired
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // Re-enter the binding from inside the observer callback.
+            // `add_observer` takes a `write()` lock on `self.inner` ---
+            // pre-V-21 this deadlocks; post-V-21 it is safe because the
+            // dispatch released the `read()` lock before iterating.
+            self.binding.add_observer(Arc::new(InertObserver));
+        }
+    }
+
+    /// Pre-V-21: this test would deadlock `cargo test -p flui-view --lib`.
+    /// Post-V-21: `handle_metrics_changed` snapshots the observer Vec
+    /// before iterating, so the re-entrant `add_observer` write lock can
+    /// be acquired without blocking. The test asserts (a) the observer
+    /// callback fired and (b) the re-entrant `add_observer` completed
+    /// (observer_count went from 1 to 2).
+    ///
+    /// We intentionally `Box::leak` the binding so the `'static` lifetime
+    /// on `ReentrantObserver::binding` is sound for the duration of the
+    /// test. The leaked binding is small and bounded by the test run.
+    #[test]
+    fn handle_metrics_changed_does_not_deadlock_on_reentrant_observer() {
+        // `Box::leak` gives us `&'static WidgetsBinding`, which lets
+        // `ReentrantObserver` close over a borrow with a sound lifetime
+        // for the duration of the test. The leaked binding is small and
+        // bounded by the test run.
+        let binding: &'static WidgetsBinding = Box::leak(Box::new(WidgetsBinding::new()));
+
+        let observer = Arc::new(ReentrantObserver {
+            binding,
+            fired: std::sync::atomic::AtomicUsize::new(0),
+        });
+        binding.add_observer(observer.clone() as Arc<dyn WidgetsBindingObserver>);
+        assert_eq!(binding.observer_count(), 1);
+
+        // Pre-V-21: this call deadlocks (read lock held + observer wants
+        // write lock). Post-V-21: returns normally.
+        binding.handle_metrics_changed();
+
+        assert_eq!(
+            observer.fired.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "observer's did_change_metrics must fire exactly once"
+        );
+        assert_eq!(
+            binding.observer_count(),
+            2,
+            "re-entrant add_observer inside the callback must complete"
+        );
     }
 }

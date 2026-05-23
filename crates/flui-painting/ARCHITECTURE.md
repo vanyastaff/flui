@@ -15,7 +15,7 @@ Companion deep-dive docs live in [`docs/`](docs/) and are kept alongside this te
 
 ## Flutter source mapping
 
-The Flutter `Canvas` API is split between `dart:ui` (the engine binding) and `package:flutter/src/painting/` (decoration/text/clip helpers). The `Skia SkCanvas` is the semantic reference for the recording API; cosmic-text + lyon are the Rust crates used in place of Skia's text shaping + path tessellation.
+The Flutter `Canvas` API is split between `dart:ui` (the engine binding) and `package:flutter/src/painting/` (decoration/text/clip helpers). The `Skia SkCanvas` is the semantic reference for the recording API; cosmic-text is the Rust crate used in place of Skia's text shaping; path tessellation lives in `flui-engine`, not in this crate.
 
 | Flutter / Skia source | FLUI module | Notes |
 |---|---|---|
@@ -26,14 +26,12 @@ The Flutter `Canvas` API is split between `dart:ui` (the engine binding) and `pa
 | `dart:ui` `Canvas.draw*` (lines, rects, paths, text, image, atlas, ...) | [`src/canvas/drawing.rs`](src/canvas/drawing.rs) | 29 primary `draw_*` methods, each emitting one `DrawCommand` variant. |
 | Skia `SkCanvas` `save_layer` / `saveLayerAlpha` / `saveLayerOpacity` (extension) | [`src/canvas/state.rs`](src/canvas/state.rs) -- `save_layer_alpha`, `save_layer_opacity`, `save_layer_blend` | FLUI convenience overloads matching Flutter's `Canvas.saveLayer` shorthand variants. |
 | `dart:ui` scoped wrappers (Flutter-side ergonomic patterns; no engine analog) | [`src/canvas/scoped.rs`](src/canvas/scoped.rs) -- 12 `with_*` helpers | Closure-based save/restore wrappers; zero-cost. |
-| Multi-canvas composition (Flutter `PaintingContext.canvas` flow) | [`src/canvas/composition.rs`](src/canvas/composition.rs) -- `extend_from`/`merge`/`append_*` + `record`/`build` | First-child append uses `Vec::mem::swap` for O(1). |
-| Caller-side ergonomic sugar (chaining, batch, conditional, grid, debug viz) | [`src/canvas/sugar.rs`](src/canvas/sugar.rs) | All caller-side wrappers; no `DrawCommand` emission directly. |
-| `dart:ui` `Picture` (immutable recording) | [`src/lib.rs`](src/lib.rs) `pub type Picture = DisplayList` | Flutter-parity alias. |
+| Multi-canvas composition (Flutter `PaintingContext.canvas` flow) | [`src/canvas/composition.rs`](src/canvas/composition.rs) -- `extend_from`/`merge`/`append_*` | First-child append uses `Vec::mem::swap` for O(1). |
+| `dart:ui` `Picture` (immutable recording) | [`src/lib.rs`](src/lib.rs) -- exported as `DisplayList` | The Flutter `Picture` name was an alias for `DisplayList`; the alias was deleted in plan U8 / audit P-9. Use `DisplayList` directly. |
 | `dart:ui` `Canvas.drawX` underlying engine command vocabulary | [`src/display_list/command.rs`](src/display_list/command.rs) -- `DrawCommand` enum (29 variants) | Closed enum (no `Box<dyn Drawable>` plugin trait). Same shape as `flui-layer::Layer` enum. |
 | `dart:ui` engine command dispatch | [`src/display_list/command_ops.rs`](src/display_list/command_ops.rs) -- `with_opacity`, `bounds`, `transform`, `paint`, `kind`, `is_*`, `apply_transform` | ~1,200 LOC of per-variant pattern matches. |
-| Sealed-extension-trait pattern (FLUI-side; no Flutter analog) | [`src/display_list/sealed.rs`](src/display_list/sealed.rs) -- `DisplayListCore` + `DisplayListExt` + 4 blanket impls | Cross-crate seam consumed by `flui-layer::Layer::Picture` (stores `Picture = DisplayList` by value today; the `Arc<DisplayList>` blanket impl is a forward-compatible shape for future retained-layer sharing) and `flui-engine`'s wgpu backend. |
+| Sealed-extension-trait pattern (FLUI-side; no Flutter analog) | [`src/display_list/sealed.rs`](src/display_list/sealed.rs) -- `DisplayListCore` + `DisplayListExt` + 4 blanket impls | Cross-crate seam consumed by `flui-layer::Layer::Picture` (stores `DisplayList` by value today; the `Arc<DisplayList>` blanket impl is a forward-compatible shape for future retained-layer sharing) and `flui-engine`'s wgpu backend. |
 | `DisplayListStats` (FLUI invention for command-count stats) | [`src/display_list/stats.rs`](src/display_list/stats.rs) | |
-| Flutter `dart:ui` `PointerEvent` -- minimal subset | [`src/display_list/hit_region.rs`](src/display_list/hit_region.rs) | Hit-region recording; full event system in `flui-interaction`. |
 | `painting/clip.dart` `ClipContext` abstract class | [`src/clip_context.rs`](src/clip_context.rs) | Cross-crate seam (1 prod impl: `CanvasContext` in `flui-rendering`). 4 default `clip_*_and_paint` methods including `clip_rsuperellipse_and_paint` for Flutter parity. |
 | `painting/binding.dart` `PaintingBinding` mixin | [`src/binding.rs`](src/binding.rs) -- `PaintingBinding` singleton | Trimmed surface; `ShaderWarmUp` subsystem deleted in U2. |
 | `painting/image_cache.dart` `ImageCache` | [`src/binding.rs`](src/binding.rs) -- `ImageCache` struct | `RwLock<HashMap>` for cache + live_images; off the per-command hot path. |
@@ -42,7 +40,6 @@ The Flutter `Canvas` API is split between `dart:ui` (the engine binding) and `pa
 | `painting/text_painter.dart` `TextBaseline` enum | [`src/text_painter/baseline.rs`](src/text_painter/baseline.rs) | |
 | cosmic-text 0.12 `Buffer` + `FontSystem` shaping API | [`src/text_layout/*`](src/text_layout/) -- 5 files | cosmic-text-backed text shaping. Split in Mythos chain Step 6; `mod inner` cfg indirection flattened. |
 | Flutter `TextDirection` detection (Unicode bidi) | [`src/text_layout/detect.rs`](src/text_layout/detect.rs) | Strong-LTR / strong-RTL / neutral Unicode codepoint ranges. |
-| lyon 1.0 `FillTessellator` + `StrokeTessellator` | [`src/tessellation.rs`](src/tessellation.rs) | Path → GPU triangle conversion. Untouched in this chain (already clean). |
 | `painting/shader_warm_up.dart` `ShaderWarmUp` abstract class | -- | **Deleted in Mythos chain Step 2.** Decorative subsystem; `execute()` was a stub. Real offscreen-canvas-backed warm-up tracked in Outstanding refactors. |
 
 ---
@@ -137,8 +134,7 @@ The crate is `#[forbid(unsafe_code)]` at [`src/lib.rs:151`](src/lib.rs) before a
 |---|---|---|---|
 | `Canvas` ([`src/canvas/mod.rs`](src/canvas/mod.rs)) | Owned struct | Auto-`Send` + auto-`!Sync` | No interior mutability on Canvas itself. Recording is single-threaded by design. |
 | `DisplayList` ([`src/display_list/mod.rs`](src/display_list/mod.rs)) | Owned struct | Auto-`Send + Sync` | Consumed-once value; immutable from public API after `Canvas::finish()`. |
-| `Arc<DisplayList>` blanket impl ([`src/display_list/sealed.rs`](src/display_list/sealed.rs)) | `Arc<>` wrap | Send + Sync via `Arc` | Forward-compatible blanket impl for future retained-layer caching across frames. `flui-layer::Layer::Picture` stores `Picture = DisplayList` by value today. Read-only via `DisplayListCore`. |
-| `HitRegionHandler` = `Arc<dyn Fn(&PointerEvent) + Send + Sync>` ([`src/display_list/hit_region.rs`](src/display_list/hit_region.rs)) | `Arc<dyn Fn>` | Per-hit-region heap allocation | Recording-time only; off per-command hot path. |
+| `Arc<DisplayList>` blanket impl ([`src/display_list/sealed.rs`](src/display_list/sealed.rs)) | `Arc<>` wrap | Send + Sync via `Arc` | Forward-compatible blanket impl for future retained-layer caching across frames. `flui-layer::Layer::Picture` stores `DisplayList` by value today. Read-only via `DisplayListCore`. |
 | `Paint`, `Path`, `Shader`, `Image` etc. (re-exported from `flui_types::painting`) | Owned values | Auto-`Send + Sync` | Validated at construction in `flui-types`. |
 | `binding::ImageCache::cache` ([`src/binding.rs`](src/binding.rs)) | `RwLock<HashMap<String, CachedImage>>` | Shared infrastructure | Off per-command hot path per [`docs/PORT.md`](../../docs/PORT.md) lock-decision table. |
 | `binding::ImageCache::live_images` ([`src/binding.rs`](src/binding.rs)) | `RwLock<HashMap<String, CachedImage>>` | Shared infrastructure | Same; off per-command hot path. |
@@ -147,8 +143,6 @@ The crate is `#[forbid(unsafe_code)]` at [`src/lib.rs:151`](src/lib.rs) before a
 | `binding::PaintingBinding` singleton | Process-wide via `impl_binding_singleton!` macro | `Send + Sync` | Single static instance; access serialised by the binding's own RwLock. |
 | `text_layout::layout::FONT_SYSTEM` ([`src/text_layout/layout.rs`](src/text_layout/layout.rs)) | `static OnceLock<Mutex<FontSystem>>` (feature-gated) | Lazy init + per-shape lock | cosmic-text font system; held during `Buffer::set_text` + `Buffer::shape_until_scroll`. Off per-command hot path; per-text-layout-creation. Lock contention on multi-text-widget workloads -- filed in Outstanding refactors as cosmic-text 0.13+ upgrade blocker. |
 | `SceneBuilder::stack` (per-Canvas owned) | Owned `Vec<...>` | Single-mutator | Borrow checker enforces single-writer-during-build at compile time. |
-| `tessellation` module ([`src/tessellation.rs`](src/tessellation.rs), feature-gated) | Stateless functions | -- | `lyon::FillTessellator`/`StrokeTessellator` instances are created per call; no shared state. |
-
 **Zero `unsafe impl Send/Sync` blocks anywhere in the crate.** `#[forbid(unsafe_code)]` at [`src/lib.rs:151`](src/lib.rs). Net unsafe delta for this chain: **0**.
 
 ---

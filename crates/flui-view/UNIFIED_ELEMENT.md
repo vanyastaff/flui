@@ -62,7 +62,7 @@ Successfully unified all 6 element types (StatelessElement, ProxyElement, Statef
 - **Arity**: Variable (N children)
 - **Lifecycle**: Creates RenderObject on mount, removes from RenderTree on unmount
 
-#### AnimationBehavior<V>
+#### AnimatedBehavior<V>
 - **Type**: Composes StatefulBehavior<V>
   - `stateful: StatefulBehavior<V>` - Embedded state management
   - `listener_id: Option<ListenerId>` - Listenable subscription tracking
@@ -83,7 +83,7 @@ pub type StatelessElement<V> = Element<V, Single, StatelessBehavior>;
 pub type ProxyElement<V> = Element<V, Single, ProxyBehavior>;
 pub type StatefulElement<V> = Element<V, Single, StatefulBehavior<V>>;
 pub type InheritedElement<V> = Element<V, Single, InheritedBehavior<V>>;
-pub type AnimatedElement<V> = Element<V, Single, AnimationBehavior<V>>;
+pub type AnimatedElement<V> = Element<V, Single, AnimatedBehavior<V>>;
 pub type RenderElement<V> = Element<V, Variable, RenderBehavior<V>>;
 ```
 

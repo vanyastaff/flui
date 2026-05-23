@@ -63,23 +63,44 @@ impl Canvas {
     /// Appends a cached `DisplayList` at a given offset.
     ///
     /// Used by layer caching (RepaintBoundary) to replay cached
-    /// drawing commands at a specified offset.
+    /// drawing commands at a specified offset. The appended commands
+    /// carry the offset baked into their per-command transforms, so
+    /// the replayed picture renders at the new position.
     ///
-    /// The implementation clones the source list and rewrites every
-    /// command's baked-in transform via
-    /// [`DisplayList::apply_transform`] with a translation matching
-    /// `offset` before appending. Without this rewrite the appended
-    /// commands keep their original transforms (recorded against the
-    /// child canvas's origin) and the `offset` argument silently
-    /// drops on the floor; `Canvas::translate` only mutates the
-    /// canvas's *current* transform for *future* recorded commands,
-    /// not for ones that came in through `append`.
+    /// # Why offset must be baked into per-command transforms
     ///
-    /// # Performance
+    /// `Canvas::translate` only mutates the canvas's *current*
+    /// transform for *future* recorded commands; commands that come
+    /// in through `append` keep the transform they were recorded
+    /// with. Without baking the offset into each appended command's
+    /// transform, the `offset` argument would silently drop on the
+    /// floor.
     ///
-    /// O(N) clone + O(N) transform-rewrite, where N = `display_list.len()`.
-    /// For the zero-offset shortcut we still pay one clone (necessary
-    /// because the input is `&DisplayList`).
+    /// # Performance (Cycle 5 U11 / audit P-11)
+    ///
+    /// The previous shape was `let mut shifted = dl.clone();
+    /// shifted.apply_transform(...); self.display_list.append(shifted)` —
+    /// three O(N) passes (deep-clone the inner `Vec<DrawCommand>`,
+    /// rewrite every command's transform AND recompute bounds of
+    /// the throw-away intermediate, then move the vec into self).
+    /// The current shape walks the source once, clones each command
+    /// while applying the translation, and pushes directly into self;
+    /// `DisplayList::push` maintains the running bounds union
+    /// incrementally, so the throw-away `recalculate_bounds` pass is
+    /// gone and the temporary `DisplayList` allocation is gone.
+    /// Net: O(N) with one clone per command (down from clone, rewrite,
+    /// move, bounds-recompute on the intermediate) and one fewer heap
+    /// allocation (the intermediate `DisplayList`).
+    ///
+    /// No new `DrawCommand` opcode is introduced — `DrawCommand` has
+    /// no pure `Save`/`Concat`/`Restore` triple (only `SaveLayer` /
+    /// `RestoreLayer`, which allocate a real offscreen buffer and
+    /// would be far heavier than per-command transform baking).
+    ///
+    /// For the zero-offset shortcut we fall through to the
+    /// `DisplayList::append` move path (no per-command rewrite
+    /// needed); `DisplayList::clone` is still required because the
+    /// input is `&DisplayList`.
     pub fn append_display_list_at_offset(
         &mut self,
         display_list: &DisplayList,
@@ -90,40 +111,16 @@ impl Canvas {
             return;
         }
 
-        let mut shifted = display_list.clone();
-        shifted.apply_transform(Matrix4::translation(offset.dx.0, offset.dy.0, 0.0));
-        self.display_list.append(shifted);
+        let translation = Matrix4::translation(offset.dx.0, offset.dy.0, 0.0);
+        for cmd in display_list {
+            let mut shifted = cmd.clone();
+            shifted.apply_transform(translation);
+            self.display_list.push(shifted);
+        }
     }
 
     /// Appends a cached `DisplayList` directly (no offset).
     pub fn append_display_list(&mut self, display_list: DisplayList) {
         self.display_list.append(display_list);
-    }
-
-    // ===== Static Constructors =====
-
-    /// Creates a new Canvas, executes a closure on it, and returns the
-    /// finished `DisplayList`.
-    ///
-    /// Useful for creating isolated drawing contexts.
-    #[inline]
-    pub fn record<F>(f: F) -> DisplayList
-    where
-        F: FnOnce(&mut Canvas),
-    {
-        let mut canvas = Canvas::new();
-        f(&mut canvas);
-        canvas.finish()
-    }
-
-    /// Builds a Canvas using a closure and returns it (not consumed).
-    #[inline]
-    pub fn build<F>(f: F) -> Self
-    where
-        F: FnOnce(&mut Canvas),
-    {
-        let mut canvas = Canvas::new();
-        f(&mut canvas);
-        canvas
     }
 }

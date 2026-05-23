@@ -21,17 +21,11 @@ serde = { workspace = true, optional = true }
 parking_lot = { workspace = true }
 
 # Text shaping and layout
-cosmic-text = { version = "0.12", optional = true }
-
-# Path tessellation
-lyon = { version = "1.0", optional = true }
+cosmic-text = { version = "0.12" }
 
 [dev-dependencies]
 
 [features]
-default = ["text", "tessellation"]
-text = ["dep:cosmic-text"]
-tessellation = ["dep:lyon"]
 serde = ["dep:serde", "flui-types/serde"]
 
 [lints]

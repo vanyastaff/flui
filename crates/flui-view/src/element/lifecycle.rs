@@ -15,6 +15,7 @@
 /// - `Inactive`: Temporarily removed, may be reactivated
 /// - `Defunct`: Permanently removed, will be dropped
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum Lifecycle {
     /// Element has been created but not yet mounted.
     #[default]

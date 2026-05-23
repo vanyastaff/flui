@@ -150,7 +150,7 @@ where
     /// a `PipelineOwner` in scope.
     ///
     /// Default returns `None`; only `RenderBehavior<V>` overrides this
-    /// (`AnimationBehavior` composes `StatefulBehavior`, not `RenderBehavior`,
+    /// (`AnimatedBehavior` composes `StatefulBehavior`, not `RenderBehavior`,
     /// so it keeps the default). Used by
     /// [`BuildContext::find_render_object`] (plan §U12, R9) to surface
     /// the nearest ancestor's `RenderId` to the dispatch boundary.
@@ -181,6 +181,26 @@ where
         let _ = (type_id, notification);
         false
     }
+
+    /// Fire the typed `did_change_dependencies` lifecycle hook for any
+    /// state this behavior owns.
+    ///
+    /// Routed from
+    /// [`ElementBase::notify_dependency_change`](crate::view::ElementBase::notify_dependency_change)
+    /// by `BuildOwner::build_scope` immediately before the dependent's
+    /// `perform_build`, when an inherited ancestor's
+    /// `update_should_notify` returned `true` since the last build —
+    /// Flutter parity for `framework.dart:5977-5982`
+    /// `StatefulElement.performRebuild` reading the
+    /// `_didChangeDependencies` flag set at `framework.dart:6117`.
+    ///
+    /// Default is a no-op — Stateless, Proxy, Inherited, and Render
+    /// behaviors own no `ViewState`, so the scheduled rebuild alone
+    /// suffices. [`StatefulBehavior`] overrides this to forward to
+    /// `ViewState::did_change_dependencies`; [`AnimatedBehavior`]
+    /// delegates to the composed `StatefulBehavior`. Plan §U14.
+    #[allow(unused_variables)]
+    fn did_change_dependencies(&mut self, core: &ElementCore<V, A>) {}
 }
 
 // ============================================================================
@@ -220,7 +240,17 @@ where
             return;
         }
         let ctx = ElementBuildContext::new_minimal(core.depth());
-        let child_view = core.view().build(&ctx);
+        // The user `build()` is wrapped in `catch_unwind`: a panicking
+        // build is caught and substituted with the registered
+        // `ErrorView`. The catch covers ONLY the build expression — the
+        // `view` borrow is moved into the closure so nothing of `core`
+        // is mutated under the catch (Flutter parity:
+        // `ComponentElement.performRebuild`, `framework.dart:5810`).
+        let view = core.view().clone();
+        let child_view =
+            super::behavior_commons::build_or_recover(core, owner, "StatelessElement", move || {
+                view.build(&ctx)
+            });
         super::behavior_commons::finish_single_child_build(
             core,
             child_view,
@@ -335,7 +365,19 @@ where
         if !super::behavior_commons::should_build_with_trace(core, "StatefulBehavior") {
             return;
         }
-        let child_view = self.state.build(core.view(), &ctx);
+        // The user `ViewState::build` is wrapped in `catch_unwind`: a
+        // panicking build is caught and substituted with the registered
+        // `ErrorView`. The catch covers ONLY the build expression — the
+        // `view` borrow is moved into the closure (cloned, so `core`
+        // stays free for the teardown branch) and `state` is captured by
+        // reference, independent of `core` (Flutter parity:
+        // `ComponentElement.performRebuild`, `framework.dart:5810`).
+        let view = core.view().clone();
+        let state = &self.state;
+        let child_view =
+            super::behavior_commons::build_or_recover(core, owner, "StatefulElement", move || {
+                state.build(&view, &ctx)
+            });
         super::behavior_commons::finish_single_child_build(
             core,
             child_view,
@@ -363,6 +405,37 @@ where
         _owner: &mut crate::ElementOwner<'_>,
     ) {
         self.state.did_update_view(old_view);
+    }
+
+    /// Fire `ViewState::did_change_dependencies` on the owned state.
+    ///
+    /// Called by `BuildOwner::build_scope` right before this
+    /// dependent's `perform_build` when an inherited ancestor's
+    /// `update_should_notify` returned true since the last build —
+    /// Flutter parity for `framework.dart:5977-5982`. Plan §U14.
+    ///
+    /// `init_state` always runs before any `did_change_dependencies`
+    /// dispatch because `state_as_any` reaches the typed
+    /// `did_change_dependencies` only via this hook, and the hook can
+    /// only fire after the element is `Active` (it's gated on
+    /// `lifecycle().can_build()` in `build_scope`). Defunct or already-
+    /// inactive lifecycles are skipped by the build-scope check itself,
+    /// so we get the defensive-shape Flutter calls for free without a
+    /// second guard here.
+    fn did_change_dependencies(&mut self, core: &ElementCore<V, A>) {
+        // The dummy `ElementBuildContext::new_minimal` is read-only:
+        // its tree is empty, so `find_ancestor_*`, `depend_on_inherited`,
+        // and friends return `None`/`false`. That matches Flutter — a
+        // user `did_change_dependencies` body that calls `depend_on`
+        // would re-walk the ancestor chain via this context. Cycle 5
+        // ships the cheap separable part of V-13 only (the cached
+        // dummy); the real ancestor-context threading is the deferred
+        // element-ownership unification (Cycle 6). For now, user code
+        // that needs the new inherited value during
+        // `did_change_dependencies` should read it from the cached
+        // state field captured by the previous build.
+        let ctx = ElementBuildContext::new_minimal(core.depth());
+        self.state.did_change_dependencies(&ctx);
     }
 }
 
@@ -700,6 +773,17 @@ where
                 self.dependents.len()
             );
             for (&dep_id, &dep_depth) in &self.dependents {
+                // Flutter parity (`framework.dart:6371-6374`):
+                // `notifyDependent` calls `dependent.didChangeDependencies`.
+                // We split this across two phases — the set-flag part
+                // (`note_dependency_change`) here, and the fire part
+                // (`ElementBase::notify_dependency_change`) inside
+                // `BuildOwner::build_scope` right before the dependent's
+                // `perform_build`. The typed
+                // `ViewState::did_change_dependencies` hook fires
+                // exactly once per dependency-change-then-rebuild
+                // cycle, strictly before the build. Plan §U14.
+                owner.note_dependency_change(dep_id);
                 owner.schedule_build_for(dep_id, dep_depth);
             }
         } else {
@@ -720,17 +804,26 @@ where
 }
 
 // ============================================================================
-// AnimationBehavior (composes StatefulBehavior with automatic listener)
+// AnimatedBehavior (composes StatefulBehavior with automatic listener)
 // ============================================================================
 
 /// Behavior for AnimatedView - automatically subscribes to Listenable changes.
 ///
-/// AnimationBehavior composes StatefulBehavior and adds automatic listener
+/// AnimatedBehavior composes StatefulBehavior and adds automatic listener
 /// management. When the listenable changes, the element is marked dirty
 /// and rebuilt automatically.
 ///
 /// This eliminates the boilerplate of manually subscribing/unsubscribing
 /// to animations in every animated widget.
+///
+/// # Naming
+///
+/// Named `AnimatedBehavior` (not `AnimationBehavior`) to follow the
+/// `<ViewKind>Behavior` convention (`StatelessBehavior`, `StatefulBehavior`,
+/// `ProxyBehavior`, `InheritedBehavior`, `RenderBehavior`) and to
+/// disambiguate from the `flui_animation::AnimationBehavior` enum
+/// (which describes how an animation behaves when the framework reduces
+/// motion — a separate concern from the element-tree behavior here).
 ///
 /// # Flutter Equivalent
 ///
@@ -756,7 +849,7 @@ where
 ///   }
 /// }
 /// ```
-pub struct AnimationBehavior<V>
+pub struct AnimatedBehavior<V>
 where
     V: AnimatedView,
 {
@@ -766,11 +859,11 @@ where
     listener_id: Option<ListenerId>,
 }
 
-impl<V> AnimationBehavior<V>
+impl<V> AnimatedBehavior<V>
 where
     V: AnimatedView,
 {
-    /// Create a new AnimationBehavior for the given view.
+    /// Create a new AnimatedBehavior for the given view.
     pub fn new(view: &V) -> Self {
         Self {
             stateful: StatefulBehavior::new(view),
@@ -789,20 +882,20 @@ where
     }
 }
 
-impl<V> std::fmt::Debug for AnimationBehavior<V>
+impl<V> std::fmt::Debug for AnimatedBehavior<V>
 where
     V: AnimatedView,
     V::State: std::fmt::Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AnimationBehavior")
+        f.debug_struct("AnimatedBehavior")
             .field("state", &self.stateful.state)
             .field("has_listener", &self.listener_id.is_some())
             .finish()
     }
 }
 
-impl<V, A> ElementBehavior<V, A> for AnimationBehavior<V>
+impl<V, A> ElementBehavior<V, A> for AnimatedBehavior<V>
 where
     V: AnimatedView,
     A: ElementArity,
@@ -832,7 +925,7 @@ where
 
         self.listener_id = Some(listenable.add_listener(mark_dirty));
 
-        tracing::debug!("AnimationBehavior::on_mount subscribed to listenable");
+        tracing::debug!("AnimatedBehavior::on_mount subscribed to listenable");
     }
 
     fn on_unmount(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
@@ -840,7 +933,7 @@ where
         if let Some(listener_id) = self.listener_id.take() {
             let listenable = core.view().listenable();
             listenable.remove_listener(listener_id);
-            tracing::debug!("AnimationBehavior::on_unmount unsubscribed from listenable");
+            tracing::debug!("AnimatedBehavior::on_unmount unsubscribed from listenable");
         }
 
         // Then let StatefulBehavior do its cleanup (dispose state)
@@ -864,7 +957,7 @@ where
 
         self.stateful.on_update(core);
 
-        tracing::debug!("AnimationBehavior::on_update resubscribed to listenable");
+        tracing::debug!("AnimatedBehavior::on_update resubscribed to listenable");
     }
 
     fn on_activate(&mut self, core: &mut ElementCore<V, A>) {
@@ -882,5 +975,18 @@ where
         owner: &mut crate::ElementOwner<'_>,
     ) {
         self.stateful.on_view_updated(core, old_view, owner);
+    }
+
+    /// Delegate to the composed `StatefulBehavior` so animated
+    /// dependents also fire the typed
+    /// `ViewState::did_change_dependencies` hook before rebuilding —
+    /// Flutter parity (animated widgets in Flutter inherit the
+    /// `StatefulElement._didChangeDependencies` flag-and-fire path).
+    /// Plan §U14.
+    fn did_change_dependencies(&mut self, core: &ElementCore<V, A>) {
+        <StatefulBehavior<V> as ElementBehavior<V, A>>::did_change_dependencies(
+            &mut self.stateful,
+            core,
+        );
     }
 }

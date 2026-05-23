@@ -17,7 +17,6 @@
 /// - **By Category**: `draw`, `clip`, `effect`, `layer`.
 /// - **By Content Type**: `shapes`, `images`, `text` (subsets of
 ///   `draw`).
-/// - **Other**: `hit_regions`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DisplayListStats {
@@ -37,8 +36,6 @@ pub struct DisplayListStats {
     pub images: usize,
     /// Number of text commands (subset of draw).
     pub text: usize,
-    /// Number of hit regions.
-    pub hit_regions: usize,
 }
 
 impl DisplayListStats {
@@ -53,7 +50,6 @@ impl DisplayListStats {
             shapes: 0,
             images: 0,
             text: 0,
-            hit_regions: 0,
         }
     }
 
@@ -68,7 +64,6 @@ impl DisplayListStats {
         shapes: usize,
         images: usize,
         text: usize,
-        hit_regions: usize,
     ) -> Self {
         Self {
             total,
@@ -79,7 +74,6 @@ impl DisplayListStats {
             shapes,
             images,
             text,
-            hit_regions,
         }
     }
 }
@@ -88,15 +82,8 @@ impl std::fmt::Display for DisplayListStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "DisplayList: {} commands ({} shapes, {} images, {} text, {} clips, {} effects, {} layers), {} hit regions",
-            self.total,
-            self.shapes,
-            self.images,
-            self.text,
-            self.clip,
-            self.effect,
-            self.layer,
-            self.hit_regions
+            "DisplayList: {} commands ({} shapes, {} images, {} text, {} clips, {} effects, {} layers)",
+            self.total, self.shapes, self.images, self.text, self.clip, self.effect, self.layer
         )
     }
 }

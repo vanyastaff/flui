@@ -24,7 +24,6 @@
 //! - [`command_ops`]  -- `DrawCommand` impl block (with_opacity, bounds, transform, paint, kind, is_*, apply_transform).
 //! - [`sealed`]       -- sealed extension-trait pair (`DisplayListCore` + `DisplayListExt`) + 4 blanket impls.
 //! - [`stats`]        -- `DisplayListStats` struct + Display impl.
-//! - [`hit_region`]   -- `PointerEvent` + `PointerEventKind` + `HitRegion` + `HitRegionHandler`.
 //!
 //! This module (`mod.rs`) carries the `DisplayList` struct itself,
 //! mutation methods (`apply_transform`/`filter`/`map`/`to_opacity`/
@@ -39,18 +38,21 @@ use flui_types::geometry::{Matrix4, Pixels, Rect};
 
 pub mod command;
 pub mod command_ops;
-pub mod hit_region;
 pub mod sealed;
 pub mod stats;
 
 // Re-export the public surface.
 pub use command::{CommandKind, DrawCommand};
-pub use hit_region::{HitRegion, HitRegionHandler, PointerEvent, PointerEventKind};
 pub use sealed::{DisplayListCore, DisplayListExt};
 pub use stats::DisplayListStats;
 
 // Re-exports from flui_types::painting that are part of the
 // `display_list` public API surface.
+//
+// REVIEW_BY: 2026-09-22 — audit P-12 cadence marker; mirrors the marker
+// on `crates/flui-painting/src/lib.rs`. The canonical home of these
+// types is `flui_types::painting`; this re-export is a convenience
+// facade.
 pub use flui_types::painting::{
     BlendMode, Clip, ClipOp, FilterQuality, Paint, PointMode, Shader, TextureId,
     effects::ImageFilter,
@@ -70,10 +72,6 @@ pub struct DisplayList {
 
     /// Cached bounds of all drawing.
     pub(crate) bounds: Rect<Pixels>,
-
-    /// Hit-testable regions with event handlers.
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub(crate) hit_regions: Vec<HitRegion>,
 }
 
 impl DisplayList {
@@ -82,7 +80,6 @@ impl DisplayList {
         Self {
             commands: Vec::new(),
             bounds: Rect::ZERO,
-            hit_regions: Vec::new(),
         }
     }
 
@@ -94,18 +91,6 @@ impl DisplayList {
     /// Returns an iterator over mutable command references.
     pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, DrawCommand> {
         self.commands.iter_mut()
-    }
-
-    /// Add a hit-testable region with an event handler.
-    ///
-    /// Regions are tested in reverse order (last added = topmost).
-    pub fn add_hit_region(&mut self, region: HitRegion) {
-        self.hit_regions.push(region);
-    }
-
-    /// Get all hit regions.
-    pub fn hit_regions(&self) -> &[HitRegion] {
-        &self.hit_regions
     }
 
     /// Adds a command to the display list (internal).
@@ -120,11 +105,7 @@ impl DisplayList {
         self.commands.push(command);
     }
 
-    /// Returns statistics about this display list (overrides
-    /// extension trait).
-    ///
-    /// This implementation includes hit_regions count, which the
-    /// default extension trait implementation cannot access.
+    /// Returns statistics about this display list.
     pub fn stats(&self) -> DisplayListStats {
         let total = self.commands.len();
         let mut draw = 0;
@@ -154,7 +135,6 @@ impl DisplayList {
             shapes,
             images,
             text,
-            hit_regions: self.hit_regions.len(),
         }
     }
 
@@ -196,17 +176,6 @@ impl DisplayList {
 
     /// Filters commands, keeping only those that satisfy the
     /// predicate.
-    ///
-    /// # Limitation
-    ///
-    /// `hit_regions` are cloned wholesale onto the result, but the
-    /// commands they were registered against may have been filtered
-    /// out. Regions are tied to their original drawing commands by
-    /// bounds (not by a 1:1 index into `commands`), so we cannot
-    /// safely drop "orphaned" regions without re-running the predicate
-    /// against region bounds — and the predicate operates on
-    /// `DrawCommand`, not `HitRegion`. Callers that need region
-    /// consistency should rebuild hit regions after filtering.
     #[must_use = "filter returns a new DisplayList and does not modify the original"]
     pub fn filter<F>(&self, predicate: F) -> Self
     where
@@ -222,22 +191,12 @@ impl DisplayList {
         let mut result = Self {
             commands,
             bounds: Rect::ZERO,
-            hit_regions: self.hit_regions.clone(),
         };
         result.recalculate_bounds();
         result
     }
 
     /// Maps each command through a function.
-    ///
-    /// # Limitation
-    ///
-    /// `hit_regions` are cloned through unchanged, even though `f`
-    /// may rewrite the underlying command bounds. Regions are tied to
-    /// commands by bounds (not by a 1:1 index), so a mapping that
-    /// translates commands won't translate their associated hit
-    /// regions. Callers that mutate command geometry should rebuild
-    /// the regions after mapping.
     #[must_use = "map returns a new DisplayList and does not modify the original"]
     pub fn map<F>(&self, f: F) -> Self
     where
@@ -248,17 +207,15 @@ impl DisplayList {
         let mut result = Self {
             commands,
             bounds: Rect::ZERO,
-            hit_regions: self.hit_regions.clone(),
         };
         result.recalculate_bounds();
         result
     }
 
-    /// Clears all commands and hit regions (for pooling/reuse).
+    /// Clears all commands (for pooling/reuse).
     pub fn clear(&mut self) {
         self.commands.clear();
         self.bounds = Rect::ZERO;
-        self.hit_regions.clear();
     }
 
     /// Appends all commands from another DisplayList (zero-copy
@@ -288,10 +245,6 @@ impl DisplayList {
             if !other.bounds.is_empty() {
                 self.bounds = self.bounds.union(&other.bounds);
             }
-        }
-
-        if !other.hit_regions.is_empty() {
-            self.hit_regions.append(&mut other.hit_regions);
         }
 
         tracing::debug!(
@@ -340,7 +293,6 @@ impl DisplayList {
         Self {
             commands,
             bounds: self.bounds,
-            hit_regions: self.hit_regions.clone(),
         }
     }
 }

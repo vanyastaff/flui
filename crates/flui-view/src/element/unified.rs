@@ -122,9 +122,14 @@ where
 // ElementBase Implementation
 // ============================================================================
 
+// `V: View` is required so `current_key_hash` can forward to
+// `View::key()`. Every `Element<V, A, B>` ever boxed as `dyn ElementBase`
+// originates from `View::create_element()`, so its `V` is always a
+// `View` — the bound exiles no real instantiation, it just makes the
+// already-true invariant visible to the type system.
 impl<V, A, B> ElementBase for Element<V, A, B>
 where
-    V: Clone + Send + Sync + 'static,
+    V: View + Clone + Send + Sync + 'static,
     A: ElementArity,
     B: ElementBehavior<V, A>,
 {
@@ -134,6 +139,17 @@ where
 
     fn view_type_id(&self) -> TypeId {
         TypeId::of::<V>()
+    }
+
+    fn current_key_hash(&self) -> Option<u64> {
+        // The View configuration always lives in `ElementCore`; read its
+        // key and hash it. `View::key()` returns `None` for keyless
+        // views — keyed reconciliation then falls back to positional
+        // matching for this child.
+        self.core
+            .view()
+            .key()
+            .map(flui_foundation::ViewKey::key_hash)
     }
 
     fn lifecycle(&self) -> Lifecycle {
@@ -224,6 +240,20 @@ where
     }
 
     // ========================================================================
+    // Dependency-change typed-hook dispatch (U14 / R16, audit V-19)
+    //
+    // Routes through the behavior. Only `StatefulBehavior<V>` and
+    // `AnimatedBehavior<V>` override the default no-op — they forward
+    // to `ViewState::did_change_dependencies` on the owned state. Other
+    // behaviors (Stateless, Proxy, Inherited, Render) own no state, so
+    // the scheduled rebuild alone is the right response.
+    // ========================================================================
+
+    fn notify_dependency_change(&mut self) {
+        self.behavior.did_change_dependencies(&self.core);
+    }
+
+    // ========================================================================
     // Lifecycle Methods with Behavior Hooks
     // ========================================================================
 
@@ -276,7 +306,11 @@ where
 
 impl<V> RenderObjectElement for Element<V, Variable, RenderBehavior<V>>
 where
-    V: RenderView,
+    // `View` is required transitively: the `ElementBase` super-trait
+    // bound now demands `V: View` (see the `impl ElementBase` block).
+    // Every `RenderView` also implements `View` (via `impl_render_view!`
+    // or a hand-written impl), so this exiles no real type.
+    V: RenderView + View,
     flui_rendering::storage::RenderNode:
         From<Box<dyn flui_rendering::traits::RenderObject<V::Protocol>>>,
 {

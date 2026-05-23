@@ -1,554 +1,625 @@
-//! Integration tests for O(N) linear reconciliation algorithm.
+//! Integration tests for the O(N) keyed child reconciliation algorithm.
 //!
-//! Tests the child reconciliation logic that matches old and new views
-//! efficiently using keys and position matching.
+//! These tests exercise [`reconcile_children`] on the live box-vec model
+//! (`Vec<Box<dyn ElementBase>>`) — the structure `VariableChildStorage`
+//! actually owns. The algorithm matches old child elements to new views
+//! by `View::key()` (keyed children) or by position (un-keyed children),
+//! preserving element state across reorders.
+//!
+//! State preservation is proven via a `StatefulView` whose `ViewState`
+//! captures a process-unique `generation` id at `create_state()` time.
+//! A *reused* element keeps its original state (and thus its generation);
+//! a *recreated* element gets a fresh `create_state()` call and a new
+//! generation. Comparing generations before/after a rebuild proves
+//! whether an element was moved or rebuilt-by-index.
+
+use std::{
+    any::TypeId,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementTree, Lifecycle, StatelessBehavior,
-    StatelessElement, StatelessView, View, reconcile_children,
+    BuildContext, BuildOwner, ElementBase, ElementOwner, Lifecycle, StatefulBehavior,
+    StatefulElement, StatefulView, ValueKey, View, ViewState, reconcile_children,
 };
 
 // ============================================================================
-// Test Views
+// Test infrastructure
 // ============================================================================
 
+/// Process-wide counter handing out a fresh `generation` to every
+/// `KeyedState` created. Lets a test tell "moved element" (same
+/// generation) from "recreated element" (new generation) apart.
+static GENERATION: AtomicU64 = AtomicU64::new(1);
+
+/// A stateful test view carrying an optional `ValueKey<u32>`.
+///
+/// Its state captures a generation id at creation; that id survives an
+/// `update` (element reuse) but is replaced on `create_element` (a fresh
+/// element). The view's `payload` is configuration that *does* change
+/// between builds — used to confirm `update` actually re-threaded the
+/// new config into a reused element.
+///
+/// The `ValueKey<u32>` is stored inline (`ValueKey` is `Clone`), so
+/// `View::key()` can hand back a borrow that lives as long as `self`.
 #[derive(Clone)]
-struct SimpleView {
-    #[allow(dead_code)]
-    id: u32,
+struct KeyedView {
+    /// Reconciliation key. `None` => positional matching.
+    key: Option<ValueKey<u32>>,
+    /// Per-build configuration payload (changes across rebuilds).
+    payload: u32,
 }
 
-impl StatelessView for SimpleView {
-    fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
-        Box::new(self.clone())
-    }
-}
-
-impl View for SimpleView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self, StatelessBehavior))
-    }
-}
-
-#[derive(Clone)]
-struct DifferentView {
-    #[allow(dead_code)]
-    value: String,
-}
-
-impl StatelessView for DifferentView {
-    fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
-        Box::new(self.clone())
-    }
-}
-
-impl View for DifferentView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self, StatelessBehavior))
-    }
-}
-
-// ============================================================================
-// Empty List Tests
-// ============================================================================
-
-#[test]
-fn test_reconcile_empty_to_empty() {
-    let mut tree = ElementTree::new();
-    let mut owner = BuildOwner::new();
-    let root = SimpleView { id: 0 };
-    let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
-
-    let result = reconcile_children(&mut tree, parent, &[], &[], &mut owner.element_owner_mut());
-
-    assert!(result.is_empty());
-}
-
-#[test]
-fn test_reconcile_empty_to_some() {
-    let mut tree = ElementTree::new();
-    let mut owner = BuildOwner::new();
-    let root = SimpleView { id: 0 };
-    let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
-
-    let v1 = SimpleView { id: 1 };
-    let v2 = SimpleView { id: 2 };
-    let v3 = SimpleView { id: 3 };
-    let new_views: Vec<&dyn View> = vec![&v1, &v2, &v3];
-
-    let result = reconcile_children(
-        &mut tree,
-        parent,
-        &[],
-        &new_views,
-        &mut owner.element_owner_mut(),
-    );
-
-    assert_eq!(result.len(), 3);
-    assert_eq!(tree.len(), 4); // root + 3 children
-
-    // All new elements should be active
-    for id in &result {
-        let node = tree.get(*id).unwrap();
-        assert_eq!(node.element().lifecycle(), Lifecycle::Active);
-    }
-}
-
-#[test]
-fn test_reconcile_some_to_empty() {
-    let mut tree = ElementTree::new();
-    let mut owner = BuildOwner::new();
-    let root = SimpleView { id: 0 };
-    let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
-
-    // Create children
-    let v1 = SimpleView { id: 1 };
-    let v2 = SimpleView { id: 2 };
-    let child1 = tree.insert(&v1, parent, 0, &mut owner.element_owner_mut());
-    let child2 = tree.insert(&v2, parent, 1, &mut owner.element_owner_mut());
-
-    let result = reconcile_children(
-        &mut tree,
-        parent,
-        &[child1, child2],
-        &[],
-        &mut owner.element_owner_mut(),
-    );
-
-    assert!(result.is_empty());
-    assert!(!tree.contains(child1));
-    assert!(!tree.contains(child2));
-    assert_eq!(tree.len(), 1); // Only root remains
-}
-
-// ============================================================================
-// Same Length Tests
-// ============================================================================
-
-#[test]
-fn test_reconcile_same_type_same_length() {
-    let mut tree = ElementTree::new();
-    let mut owner = BuildOwner::new();
-    let root = SimpleView { id: 0 };
-    let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
-
-    // Old children
-    let v1_old = SimpleView { id: 1 };
-    let v2_old = SimpleView { id: 2 };
-    let child1 = tree.insert(&v1_old, parent, 0, &mut owner.element_owner_mut());
-    let child2 = tree.insert(&v2_old, parent, 1, &mut owner.element_owner_mut());
-
-    // New views (same type, different id)
-    let v1_new = SimpleView { id: 10 };
-    let v2_new = SimpleView { id: 20 };
-    let new_views: Vec<&dyn View> = vec![&v1_new, &v2_new];
-
-    let result = reconcile_children(
-        &mut tree,
-        parent,
-        &[child1, child2],
-        &new_views,
-        &mut owner.element_owner_mut(),
-    );
-
-    // Should reuse existing elements
-    assert_eq!(result.len(), 2);
-    assert_eq!(result[0], child1);
-    assert_eq!(result[1], child2);
-}
-
-#[test]
-fn test_reconcile_different_type_replaces() {
-    let mut tree = ElementTree::new();
-    let mut owner = BuildOwner::new();
-    let root = SimpleView { id: 0 };
-    let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
-
-    // Old child (SimpleView)
-    let v_old = SimpleView { id: 1 };
-    let old_child = tree.insert(&v_old, parent, 0, &mut owner.element_owner_mut());
-
-    // New view (DifferentView - different type)
-    let v_new = DifferentView {
-        value: "new".to_string(),
-    };
-    let new_views: Vec<&dyn View> = vec![&v_new];
-
-    let result = reconcile_children(
-        &mut tree,
-        parent,
-        &[old_child],
-        &new_views,
-        &mut owner.element_owner_mut(),
-    );
-
-    // Should create new element
-    assert_eq!(result.len(), 1);
-    assert_ne!(result[0], old_child);
-    assert!(!tree.contains(old_child));
-}
-
-// ============================================================================
-// Growing/Shrinking Tests
-// ============================================================================
-
-#[test]
-fn test_reconcile_grow_list() {
-    let mut tree = ElementTree::new();
-    let mut owner = BuildOwner::new();
-    let root = SimpleView { id: 0 };
-    let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
-
-    // Start with 2 children
-    let v1 = SimpleView { id: 1 };
-    let v2 = SimpleView { id: 2 };
-    let child1 = tree.insert(&v1, parent, 0, &mut owner.element_owner_mut());
-    let child2 = tree.insert(&v2, parent, 1, &mut owner.element_owner_mut());
-
-    // Grow to 4
-    let v1_new = SimpleView { id: 1 };
-    let v2_new = SimpleView { id: 2 };
-    let v3_new = SimpleView { id: 3 };
-    let v4_new = SimpleView { id: 4 };
-    let new_views: Vec<&dyn View> = vec![&v1_new, &v2_new, &v3_new, &v4_new];
-
-    let result = reconcile_children(
-        &mut tree,
-        parent,
-        &[child1, child2],
-        &new_views,
-        &mut owner.element_owner_mut(),
-    );
-
-    assert_eq!(result.len(), 4);
-    // First two should be reused
-    assert_eq!(result[0], child1);
-    assert_eq!(result[1], child2);
-    // Last two are new
-    assert!(tree.contains(result[2]));
-    assert!(tree.contains(result[3]));
-}
-
-#[test]
-fn test_reconcile_shrink_list() {
-    let mut tree = ElementTree::new();
-    let mut owner = BuildOwner::new();
-    let root = SimpleView { id: 0 };
-    let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
-
-    // Start with 4 children
-    let v1 = SimpleView { id: 1 };
-    let v2 = SimpleView { id: 2 };
-    let v3 = SimpleView { id: 3 };
-    let v4 = SimpleView { id: 4 };
-    let child1 = tree.insert(&v1, parent, 0, &mut owner.element_owner_mut());
-    let child2 = tree.insert(&v2, parent, 1, &mut owner.element_owner_mut());
-    let child3 = tree.insert(&v3, parent, 2, &mut owner.element_owner_mut());
-    let child4 = tree.insert(&v4, parent, 3, &mut owner.element_owner_mut());
-
-    // Shrink to 2
-    let v1_new = SimpleView { id: 1 };
-    let v2_new = SimpleView { id: 2 };
-    let new_views: Vec<&dyn View> = vec![&v1_new, &v2_new];
-
-    let result = reconcile_children(
-        &mut tree,
-        parent,
-        &[child1, child2, child3, child4],
-        &new_views,
-        &mut owner.element_owner_mut(),
-    );
-
-    assert_eq!(result.len(), 2);
-    // First two should be reused
-    assert_eq!(result[0], child1);
-    assert_eq!(result[1], child2);
-    // Last two should be removed
-    assert!(!tree.contains(child3));
-    assert!(!tree.contains(child4));
-}
-
-// ============================================================================
-// Order Changes Tests
-// ============================================================================
-
-#[test]
-fn test_reconcile_type_mismatch_mid_list() {
-    let mut tree = ElementTree::new();
-    let mut owner = BuildOwner::new();
-    let root = SimpleView { id: 0 };
-    let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
-
-    // Old: [SimpleView, SimpleView, SimpleView]
-    let v1 = SimpleView { id: 1 };
-    let v2 = SimpleView { id: 2 };
-    let v3 = SimpleView { id: 3 };
-    let child1 = tree.insert(&v1, parent, 0, &mut owner.element_owner_mut());
-    let child2 = tree.insert(&v2, parent, 1, &mut owner.element_owner_mut());
-    let child3 = tree.insert(&v3, parent, 2, &mut owner.element_owner_mut());
-
-    // New: [SimpleView, DifferentView, SimpleView]
-    let v1_new = SimpleView { id: 1 };
-    let v2_new = DifferentView {
-        value: "different".to_string(),
-    };
-    let v3_new = SimpleView { id: 3 };
-    let new_views: Vec<&dyn View> = vec![&v1_new, &v2_new, &v3_new];
-
-    let result = reconcile_children(
-        &mut tree,
-        parent,
-        &[child1, child2, child3],
-        &new_views,
-        &mut owner.element_owner_mut(),
-    );
-
-    assert_eq!(result.len(), 3);
-    // First should be reused (same type at same position)
-    assert_eq!(result[0], child1);
-    // Second is new (different type)
-    assert_ne!(result[1], child2);
-    assert!(!tree.contains(child2));
-}
-
-// ============================================================================
-// End Matching Tests
-// ============================================================================
-
-#[test]
-fn test_reconcile_matches_from_end() {
-    let mut tree = ElementTree::new();
-    let mut owner = BuildOwner::new();
-    let root = SimpleView { id: 0 };
-    let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
-
-    // Old: [SimpleView, SimpleView, SimpleView]
-    let v1 = SimpleView { id: 1 };
-    let v2 = SimpleView { id: 2 };
-    let v3 = SimpleView { id: 3 };
-    let child1 = tree.insert(&v1, parent, 0, &mut owner.element_owner_mut());
-    let child2 = tree.insert(&v2, parent, 1, &mut owner.element_owner_mut());
-    let child3 = tree.insert(&v3, parent, 2, &mut owner.element_owner_mut());
-
-    // New: [DifferentView, SimpleView, SimpleView]
-    // The algorithm should:
-    // 1. Fail to match start (different types)
-    // 2. Match from end (last two are same type)
-    let v1_new = DifferentView {
-        value: "new".to_string(),
-    };
-    let v2_new = SimpleView { id: 2 };
-    let v3_new = SimpleView { id: 3 };
-    let new_views: Vec<&dyn View> = vec![&v1_new, &v2_new, &v3_new];
-
-    let result = reconcile_children(
-        &mut tree,
-        parent,
-        &[child1, child2, child3],
-        &new_views,
-        &mut owner.element_owner_mut(),
-    );
-
-    assert_eq!(result.len(), 3);
-    // First is new (different type)
-    assert!(!tree.contains(child1));
-    // Last two could be reused (matched from end)
-    // The exact behavior depends on implementation
-}
-
-// ============================================================================
-// Large List Tests
-// ============================================================================
-
-#[test]
-fn test_reconcile_large_list_same_type() {
-    let mut tree = ElementTree::new();
-    let mut owner = BuildOwner::new();
-    let root = SimpleView { id: 0 };
-    let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
-
-    // Create 100 old children
-    let old_views: Vec<SimpleView> = (1..=100).map(|i| SimpleView { id: i }).collect();
-    let mut old_children = Vec::new();
-    for (i, view) in old_views.iter().enumerate() {
-        let child = tree.insert(view, parent, i, &mut owner.element_owner_mut());
-        old_children.push(child);
-    }
-
-    // Create 100 new views
-    let new_views: Vec<SimpleView> = (101..=200).map(|i| SimpleView { id: i }).collect();
-    let new_view_refs: Vec<&dyn View> = new_views.iter().map(|v| v as &dyn View).collect();
-
-    let result = reconcile_children(
-        &mut tree,
-        parent,
-        &old_children,
-        &new_view_refs,
-        &mut owner.element_owner_mut(),
-    );
-
-    assert_eq!(result.len(), 100);
-    // All should be reused (same type)
-    for (old, new) in old_children.iter().zip(result.iter()) {
-        assert_eq!(old, new);
-    }
-}
-
-#[test]
-fn test_reconcile_large_growth() {
-    let mut tree = ElementTree::new();
-    let mut owner = BuildOwner::new();
-    let root = SimpleView { id: 0 };
-    let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
-
-    // Start with 10 children
-    let old_views: Vec<SimpleView> = (1..=10).map(|i| SimpleView { id: i }).collect();
-    let mut old_children = Vec::new();
-    for (i, view) in old_views.iter().enumerate() {
-        let child = tree.insert(view, parent, i, &mut owner.element_owner_mut());
-        old_children.push(child);
-    }
-
-    // Grow to 100
-    let new_views: Vec<SimpleView> = (1..=100).map(|i| SimpleView { id: i }).collect();
-    let new_view_refs: Vec<&dyn View> = new_views.iter().map(|v| v as &dyn View).collect();
-
-    let result = reconcile_children(
-        &mut tree,
-        parent,
-        &old_children,
-        &new_view_refs,
-        &mut owner.element_owner_mut(),
-    );
-
-    assert_eq!(result.len(), 100);
-    // First 10 should be reused
-    for i in 0..10 {
-        assert_eq!(result[i], old_children[i]);
-    }
-}
-
-// ============================================================================
-// Edge Cases
-// ============================================================================
-
-#[test]
-fn test_reconcile_single_to_single() {
-    let mut tree = ElementTree::new();
-    let mut owner = BuildOwner::new();
-    let root = SimpleView { id: 0 };
-    let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
-
-    let v_old = SimpleView { id: 1 };
-    let child = tree.insert(&v_old, parent, 0, &mut owner.element_owner_mut());
-
-    let v_new = SimpleView { id: 2 };
-    let new_views: Vec<&dyn View> = vec![&v_new];
-
-    let result = reconcile_children(
-        &mut tree,
-        parent,
-        &[child],
-        &new_views,
-        &mut owner.element_owner_mut(),
-    );
-
-    assert_eq!(result.len(), 1);
-    assert_eq!(result[0], child); // Reused
-}
-
-#[test]
-fn test_reconcile_single_to_many() {
-    let mut tree = ElementTree::new();
-    let mut owner = BuildOwner::new();
-    let root = SimpleView { id: 0 };
-    let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
-
-    let v_old = SimpleView { id: 1 };
-    let child = tree.insert(&v_old, parent, 0, &mut owner.element_owner_mut());
-
-    let v1 = SimpleView { id: 1 };
-    let v2 = SimpleView { id: 2 };
-    let v3 = SimpleView { id: 3 };
-    let new_views: Vec<&dyn View> = vec![&v1, &v2, &v3];
-
-    let result = reconcile_children(
-        &mut tree,
-        parent,
-        &[child],
-        &new_views,
-        &mut owner.element_owner_mut(),
-    );
-
-    assert_eq!(result.len(), 3);
-    assert_eq!(result[0], child); // First reused
-}
-
-#[test]
-fn test_reconcile_many_to_single() {
-    let mut tree = ElementTree::new();
-    let mut owner = BuildOwner::new();
-    let root = SimpleView { id: 0 };
-    let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
-
-    let v1 = SimpleView { id: 1 };
-    let v2 = SimpleView { id: 2 };
-    let v3 = SimpleView { id: 3 };
-    let child1 = tree.insert(&v1, parent, 0, &mut owner.element_owner_mut());
-    let child2 = tree.insert(&v2, parent, 1, &mut owner.element_owner_mut());
-    let child3 = tree.insert(&v3, parent, 2, &mut owner.element_owner_mut());
-
-    let v_new = SimpleView { id: 1 };
-    let new_views: Vec<&dyn View> = vec![&v_new];
-
-    let result = reconcile_children(
-        &mut tree,
-        parent,
-        &[child1, child2, child3],
-        &new_views,
-        &mut owner.element_owner_mut(),
-    );
-
-    assert_eq!(result.len(), 1);
-    assert_eq!(result[0], child1); // First reused
-    assert!(!tree.contains(child2));
-    assert!(!tree.contains(child3));
-}
-
-// ============================================================================
-// Performance Characteristics Tests
-// ============================================================================
-
-#[test]
-fn test_reconcile_is_linear_time() {
-    // This test verifies that reconciliation doesn't have quadratic behavior
-    // by running with increasingly large lists
-    let sizes = [10, 100, 1000];
-
-    for size in sizes {
-        let mut tree = ElementTree::new();
-        let mut owner = BuildOwner::new();
-        let root = SimpleView { id: 0 };
-        let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
-
-        let old_views: Vec<SimpleView> = (1..=size).map(|i| SimpleView { id: i }).collect();
-        let mut old_children = Vec::new();
-        for (i, view) in old_views.iter().enumerate() {
-            let child = tree.insert(view, parent, i, &mut owner.element_owner_mut());
-            old_children.push(child);
+impl KeyedView {
+    fn keyed(key: u32, payload: u32) -> Self {
+        Self {
+            key: Some(ValueKey::new(key)),
+            payload,
         }
+    }
 
-        let new_views: Vec<SimpleView> = (1..=size).map(|i| SimpleView { id: i + size }).collect();
-        let new_view_refs: Vec<&dyn View> = new_views.iter().map(|v| v as &dyn View).collect();
+    fn unkeyed(payload: u32) -> Self {
+        Self { key: None, payload }
+    }
+}
 
-        let result = reconcile_children(
-            &mut tree,
-            parent,
-            &old_children,
-            &new_view_refs,
-            &mut owner.element_owner_mut(),
+/// Persistent state for [`KeyedView`].
+///
+/// Carries only the `generation` id — element identity is proven by
+/// generation equality. The view's per-build `payload` config is read
+/// straight off the live view via `view_as_any`, so the state does not
+/// need to mirror it.
+struct KeyedState {
+    /// Process-unique id stamped at `create_state()` time. Survives an
+    /// `update` (element reuse); a fresh `create_state()` mints a new
+    /// one (element recreation).
+    generation: u64,
+}
+
+impl StatefulView for KeyedView {
+    type State = KeyedState;
+
+    fn create_state(&self) -> Self::State {
+        KeyedState {
+            generation: GENERATION.fetch_add(1, Ordering::Relaxed),
+        }
+    }
+}
+
+impl ViewState<KeyedView> for KeyedState {
+    fn build(&self, _view: &KeyedView, _ctx: &dyn BuildContext) -> Box<dyn View> {
+        // A genuine leaf — terminates the recursive build chain.
+        Box::new(InertView)
+    }
+}
+
+impl View for KeyedView {
+    fn create_element(&self) -> Box<dyn ElementBase> {
+        Box::new(StatefulElement::new(self, StatefulBehavior::new(self)))
+    }
+
+    fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
+        // `ValueKey<u32>` is stored inline; hand back a borrow that
+        // lives as long as `self` — exactly what `View::key()` wants.
+        self.key
+            .as_ref()
+            .map(|k| k as &dyn flui_foundation::ViewKey)
+    }
+}
+
+/// A genuine leaf view used as `KeyedView`'s built child.
+///
+/// Its element ([`LeafElement`]) creates no children, so the recursive
+/// `perform_build` chain terminates. A `StatelessView` whose `build`
+/// returned `self` would describe an infinitely deep tree and overflow
+/// the stack — see commit `8a627786`.
+#[derive(Clone)]
+struct InertView;
+
+impl View for InertView {
+    fn create_element(&self) -> Box<dyn ElementBase> {
+        Box::new(LeafElement::new())
+    }
+}
+
+/// A minimal hand-rolled leaf element: no children, no render object.
+/// Just enough `ElementBase` surface to mount/build/unmount as the
+/// terminal node of a build chain.
+struct LeafElement {
+    depth: usize,
+    lifecycle: Lifecycle,
+}
+
+impl LeafElement {
+    fn new() -> Self {
+        Self {
+            depth: 0,
+            lifecycle: Lifecycle::Initial,
+        }
+    }
+}
+
+impl ElementBase for LeafElement {
+    fn view_type_id(&self) -> TypeId {
+        TypeId::of::<InertView>()
+    }
+
+    fn depth(&self) -> usize {
+        self.depth
+    }
+
+    fn lifecycle(&self) -> Lifecycle {
+        self.lifecycle
+    }
+
+    fn mount(
+        &mut self,
+        _parent: Option<flui_foundation::ElementId>,
+        slot: usize,
+        _: &mut ElementOwner<'_>,
+    ) {
+        self.depth = slot;
+        self.lifecycle = Lifecycle::Active;
+    }
+
+    fn unmount(&mut self, _: &mut ElementOwner<'_>) {
+        self.lifecycle = Lifecycle::Defunct;
+    }
+
+    fn activate(&mut self) {
+        self.lifecycle = Lifecycle::Active;
+    }
+
+    fn deactivate(&mut self) {
+        self.lifecycle = Lifecycle::Inactive;
+    }
+
+    fn update(&mut self, _new_view: &dyn View, _: &mut ElementOwner<'_>) {
+        // Leaf — nothing to re-thread.
+    }
+
+    fn mark_needs_build(&mut self) {}
+
+    fn perform_build(&mut self, _: &mut ElementOwner<'_>) {
+        // Leaf — no children to build. This is what terminates the
+        // recursive build chain.
+    }
+
+    fn visit_children(&self, _visitor: &mut dyn FnMut(flui_foundation::ElementId)) {}
+}
+
+// ----------------------------------------------------------------------------
+// Helpers
+// ----------------------------------------------------------------------------
+
+/// Build the initial old-children box-vec from a list of views,
+/// mounting each so it reaches the `Active` lifecycle (reconciliation
+/// asserts/relies on children being mounted).
+fn mount_children(views: &[KeyedView], owner: &mut BuildOwner) -> Vec<Box<dyn ElementBase>> {
+    views
+        .iter()
+        .enumerate()
+        .map(|(slot, v)| {
+            let mut element = v.create_element();
+            element.mount(None, slot, &mut owner.element_owner_mut());
+            element.perform_build(&mut owner.element_owner_mut());
+            element
+        })
+        .collect()
+}
+
+/// Box up a slice of `KeyedView` as `Vec<Box<dyn View>>` — the shape
+/// `VariableChildStorage::update_with_views` receives.
+fn boxed_views(views: &[KeyedView]) -> Vec<Box<dyn View>> {
+    views
+        .iter()
+        .map(|v| Box::new(v.clone()) as Box<dyn View>)
+        .collect()
+}
+
+/// Read the `generation` of the `KeyedState` held by a child element.
+///
+/// Returns `None` if the element is not a `KeyedView` element (should
+/// not happen in these tests).
+fn generation_of(element: &dyn ElementBase) -> Option<u64> {
+    element
+        .state_as_any()
+        .and_then(|s| s.downcast_ref::<KeyedState>())
+        .map(|s| s.generation)
+}
+
+/// Read the live `payload` config off a child element's current view.
+fn payload_of(element: &dyn ElementBase) -> Option<u32> {
+    element
+        .view_as_any()
+        .and_then(|v| v.downcast_ref::<KeyedView>())
+        .map(|v| v.payload)
+}
+
+// ============================================================================
+// Happy path — keyed reorder preserves element state (covers AE4)
+// ============================================================================
+
+#[test]
+fn keyed_children_reordered_preserve_state() {
+    let mut owner = BuildOwner::new();
+
+    // Old: [key=1, key=2, key=3]
+    let old_views = [
+        KeyedView::keyed(1, 100),
+        KeyedView::keyed(2, 200),
+        KeyedView::keyed(3, 300),
+    ];
+    let mut children = mount_children(&old_views, &mut owner);
+
+    // Capture generations keyed by their reconciliation key.
+    let gen_for_key_1 = generation_of(children[0].as_ref()).unwrap();
+    let gen_for_key_2 = generation_of(children[1].as_ref()).unwrap();
+    let gen_for_key_3 = generation_of(children[2].as_ref()).unwrap();
+
+    // New: [key=3, key=1, key=2] — a strict reorder, new payloads.
+    let new_views = boxed_views(&[
+        KeyedView::keyed(3, 333),
+        KeyedView::keyed(1, 111),
+        KeyedView::keyed(2, 222),
+    ]);
+
+    let view_refs: Vec<&dyn View> = new_views.iter().map(AsRef::as_ref).collect();
+    reconcile_children(&mut children, &view_refs, &mut owner.element_owner_mut());
+
+    assert_eq!(children.len(), 3);
+
+    // Each slot now holds the element whose key matches — and crucially
+    // the SAME element (same generation), proving state was preserved
+    // and the element was moved, not rebuilt by index.
+    assert_eq!(
+        generation_of(children[0].as_ref()).unwrap(),
+        gen_for_key_3,
+        "slot 0 should hold the moved key=3 element"
+    );
+    assert_eq!(
+        generation_of(children[1].as_ref()).unwrap(),
+        gen_for_key_1,
+        "slot 1 should hold the moved key=1 element"
+    );
+    assert_eq!(
+        generation_of(children[2].as_ref()).unwrap(),
+        gen_for_key_2,
+        "slot 2 should hold the moved key=2 element"
+    );
+
+    // The reused elements received the new config payloads via `update`.
+    assert_eq!(payload_of(children[0].as_ref()), Some(333));
+    assert_eq!(payload_of(children[1].as_ref()), Some(111));
+    assert_eq!(payload_of(children[2].as_ref()), Some(222));
+}
+
+// ============================================================================
+// Happy path — un-keyed children fall back to positional matching
+// ============================================================================
+
+#[test]
+fn unkeyed_children_match_positionally() {
+    let mut owner = BuildOwner::new();
+
+    let old_views = [
+        KeyedView::unkeyed(10),
+        KeyedView::unkeyed(20),
+        KeyedView::unkeyed(30),
+    ];
+    let mut children = mount_children(&old_views, &mut owner);
+
+    let gen_slot_0 = generation_of(children[0].as_ref()).unwrap();
+    let gen_slot_1 = generation_of(children[1].as_ref()).unwrap();
+    let gen_slot_2 = generation_of(children[2].as_ref()).unwrap();
+
+    // Same length, all un-keyed, different payloads → positional reuse.
+    let new_views = boxed_views(&[
+        KeyedView::unkeyed(11),
+        KeyedView::unkeyed(22),
+        KeyedView::unkeyed(33),
+    ]);
+    let view_refs: Vec<&dyn View> = new_views.iter().map(AsRef::as_ref).collect();
+    reconcile_children(&mut children, &view_refs, &mut owner.element_owner_mut());
+
+    assert_eq!(children.len(), 3);
+    // Positional matching: each slot keeps the element that was there.
+    assert_eq!(generation_of(children[0].as_ref()).unwrap(), gen_slot_0);
+    assert_eq!(generation_of(children[1].as_ref()).unwrap(), gen_slot_1);
+    assert_eq!(generation_of(children[2].as_ref()).unwrap(), gen_slot_2);
+    // Config payloads updated in place.
+    assert_eq!(payload_of(children[0].as_ref()), Some(11));
+    assert_eq!(payload_of(children[1].as_ref()), Some(22));
+    assert_eq!(payload_of(children[2].as_ref()), Some(33));
+}
+
+// ============================================================================
+// Edge cases — empty / single-element lists
+// ============================================================================
+
+#[test]
+fn empty_to_empty_is_noop() {
+    let mut owner = BuildOwner::new();
+    let mut children: Vec<Box<dyn ElementBase>> = Vec::new();
+    reconcile_children(&mut children, &[], &mut owner.element_owner_mut());
+    assert!(children.is_empty());
+}
+
+#[test]
+fn empty_old_creates_all() {
+    let mut owner = BuildOwner::new();
+    let mut children: Vec<Box<dyn ElementBase>> = Vec::new();
+
+    let new_views = boxed_views(&[
+        KeyedView::keyed(1, 1),
+        KeyedView::keyed(2, 2),
+        KeyedView::unkeyed(3),
+    ]);
+    let view_refs: Vec<&dyn View> = new_views.iter().map(AsRef::as_ref).collect();
+    reconcile_children(&mut children, &view_refs, &mut owner.element_owner_mut());
+
+    assert_eq!(children.len(), 3);
+    assert_eq!(payload_of(children[0].as_ref()), Some(1));
+    assert_eq!(payload_of(children[1].as_ref()), Some(2));
+    assert_eq!(payload_of(children[2].as_ref()), Some(3));
+}
+
+#[test]
+fn empty_new_removes_all() {
+    let mut owner = BuildOwner::new();
+    let old_views = [KeyedView::keyed(1, 1), KeyedView::keyed(2, 2)];
+    let mut children = mount_children(&old_views, &mut owner);
+
+    reconcile_children(&mut children, &[], &mut owner.element_owner_mut());
+    assert!(children.is_empty());
+}
+
+#[test]
+fn single_to_single_keyed_match_reuses() {
+    let mut owner = BuildOwner::new();
+    let old_views = [KeyedView::keyed(7, 70)];
+    let mut children = mount_children(&old_views, &mut owner);
+    let original_gen = generation_of(children[0].as_ref()).unwrap();
+
+    let new_views = boxed_views(&[KeyedView::keyed(7, 77)]);
+    let view_refs: Vec<&dyn View> = new_views.iter().map(AsRef::as_ref).collect();
+    reconcile_children(&mut children, &view_refs, &mut owner.element_owner_mut());
+
+    assert_eq!(children.len(), 1);
+    assert_eq!(generation_of(children[0].as_ref()).unwrap(), original_gen);
+    assert_eq!(payload_of(children[0].as_ref()), Some(77));
+}
+
+#[test]
+fn single_to_single_key_mismatch_replaces() {
+    let mut owner = BuildOwner::new();
+    let old_views = [KeyedView::keyed(7, 70)];
+    let mut children = mount_children(&old_views, &mut owner);
+    let original_gen = generation_of(children[0].as_ref()).unwrap();
+
+    // Different key => not updatable => element replaced.
+    let new_views = boxed_views(&[KeyedView::keyed(8, 80)]);
+    let view_refs: Vec<&dyn View> = new_views.iter().map(AsRef::as_ref).collect();
+    reconcile_children(&mut children, &view_refs, &mut owner.element_owner_mut());
+
+    assert_eq!(children.len(), 1);
+    assert_ne!(
+        generation_of(children[0].as_ref()).unwrap(),
+        original_gen,
+        "key mismatch must force a fresh element"
+    );
+    assert_eq!(payload_of(children[0].as_ref()), Some(80));
+}
+
+// ============================================================================
+// Edge cases — prepend / append / middle insert+remove
+// ============================================================================
+
+#[test]
+fn keyed_prepend_preserves_existing() {
+    let mut owner = BuildOwner::new();
+    let old_views = [KeyedView::keyed(1, 1), KeyedView::keyed(2, 2)];
+    let mut children = mount_children(&old_views, &mut owner);
+    let gen_1 = generation_of(children[0].as_ref()).unwrap();
+    let gen_2 = generation_of(children[1].as_ref()).unwrap();
+
+    // Prepend key=0.
+    let new_views = boxed_views(&[
+        KeyedView::keyed(0, 0),
+        KeyedView::keyed(1, 1),
+        KeyedView::keyed(2, 2),
+    ]);
+    let view_refs: Vec<&dyn View> = new_views.iter().map(AsRef::as_ref).collect();
+    reconcile_children(&mut children, &view_refs, &mut owner.element_owner_mut());
+
+    assert_eq!(children.len(), 3);
+    // slot 0 is brand new; slots 1,2 are the moved originals.
+    assert_ne!(generation_of(children[0].as_ref()).unwrap(), gen_1);
+    assert_ne!(generation_of(children[0].as_ref()).unwrap(), gen_2);
+    assert_eq!(generation_of(children[1].as_ref()).unwrap(), gen_1);
+    assert_eq!(generation_of(children[2].as_ref()).unwrap(), gen_2);
+}
+
+#[test]
+fn keyed_append_preserves_existing() {
+    let mut owner = BuildOwner::new();
+    let old_views = [KeyedView::keyed(1, 1), KeyedView::keyed(2, 2)];
+    let mut children = mount_children(&old_views, &mut owner);
+    let gen_1 = generation_of(children[0].as_ref()).unwrap();
+    let gen_2 = generation_of(children[1].as_ref()).unwrap();
+
+    let new_views = boxed_views(&[
+        KeyedView::keyed(1, 1),
+        KeyedView::keyed(2, 2),
+        KeyedView::keyed(3, 3),
+    ]);
+    let view_refs: Vec<&dyn View> = new_views.iter().map(AsRef::as_ref).collect();
+    reconcile_children(&mut children, &view_refs, &mut owner.element_owner_mut());
+
+    assert_eq!(children.len(), 3);
+    assert_eq!(generation_of(children[0].as_ref()).unwrap(), gen_1);
+    assert_eq!(generation_of(children[1].as_ref()).unwrap(), gen_2);
+    // slot 2 is fresh.
+    assert_ne!(generation_of(children[2].as_ref()).unwrap(), gen_1);
+    assert_ne!(generation_of(children[2].as_ref()).unwrap(), gen_2);
+}
+
+#[test]
+fn keyed_middle_insert_and_remove_combined() {
+    let mut owner = BuildOwner::new();
+    // Old: [1, 2, 3, 4]
+    let old_views = [
+        KeyedView::keyed(1, 1),
+        KeyedView::keyed(2, 2),
+        KeyedView::keyed(3, 3),
+        KeyedView::keyed(4, 4),
+    ];
+    let mut children = mount_children(&old_views, &mut owner);
+    let gen_1 = generation_of(children[0].as_ref()).unwrap();
+    let gen_2 = generation_of(children[1].as_ref()).unwrap();
+    let gen_4 = generation_of(children[3].as_ref()).unwrap();
+
+    // New: [1, 9, 2, 4] — key=3 removed, key=9 inserted in the middle.
+    let new_views = boxed_views(&[
+        KeyedView::keyed(1, 1),
+        KeyedView::keyed(9, 9),
+        KeyedView::keyed(2, 2),
+        KeyedView::keyed(4, 4),
+    ]);
+    let view_refs: Vec<&dyn View> = new_views.iter().map(AsRef::as_ref).collect();
+    reconcile_children(&mut children, &view_refs, &mut owner.element_owner_mut());
+
+    assert_eq!(children.len(), 4);
+    assert_eq!(generation_of(children[0].as_ref()).unwrap(), gen_1);
+    // slot 1 (key=9) is fresh.
+    assert_ne!(generation_of(children[1].as_ref()).unwrap(), gen_1);
+    assert_ne!(generation_of(children[1].as_ref()).unwrap(), gen_2);
+    assert_ne!(generation_of(children[1].as_ref()).unwrap(), gen_4);
+    assert_eq!(generation_of(children[2].as_ref()).unwrap(), gen_2);
+    assert_eq!(generation_of(children[3].as_ref()).unwrap(), gen_4);
+}
+
+// ============================================================================
+// Type-mismatch handling
+// ============================================================================
+
+#[test]
+fn type_change_at_position_replaces_element() {
+    let mut owner = BuildOwner::new();
+    // Old child is a KeyedView; new view at slot 0 is an InertView
+    // (a different concrete type) — must replace.
+    let mut children: Vec<Box<dyn ElementBase>> = {
+        let view = KeyedView::unkeyed(1);
+        let mut el = view.create_element();
+        el.mount(None, 0, &mut owner.element_owner_mut());
+        el.perform_build(&mut owner.element_owner_mut());
+        vec![el]
+    };
+    assert!(
+        generation_of(children[0].as_ref()).is_some(),
+        "the old child should be a KeyedView element"
+    );
+
+    let inert: Box<dyn View> = Box::new(InertView);
+    let view_refs: Vec<&dyn View> = vec![inert.as_ref()];
+    reconcile_children(&mut children, &view_refs, &mut owner.element_owner_mut());
+
+    assert_eq!(children.len(), 1);
+    // The new element is an InertView element — no KeyedState.
+    assert!(generation_of(children[0].as_ref()).is_none());
+}
+
+// ============================================================================
+// Error path — duplicate keys (first-wins, non-panicking)
+// ============================================================================
+
+#[test]
+fn duplicate_keys_in_new_list_first_wins_no_panic() {
+    let mut owner = BuildOwner::new();
+    let old_views = [KeyedView::keyed(1, 1), KeyedView::keyed(2, 2)];
+    let mut children = mount_children(&old_views, &mut owner);
+    let gen_1 = generation_of(children[0].as_ref()).unwrap();
+
+    // New list has key=1 TWICE. Defined behavior: the first occurrence
+    // claims the matching old element; the second gets a fresh element.
+    // Must not panic.
+    let new_views = boxed_views(&[
+        KeyedView::keyed(1, 100),
+        KeyedView::keyed(1, 999),
+        KeyedView::keyed(2, 2),
+    ]);
+    let view_refs: Vec<&dyn View> = new_views.iter().map(AsRef::as_ref).collect();
+    reconcile_children(&mut children, &view_refs, &mut owner.element_owner_mut());
+
+    assert_eq!(children.len(), 3);
+    // First key=1 reused the original element.
+    assert_eq!(generation_of(children[0].as_ref()).unwrap(), gen_1);
+    assert_eq!(payload_of(children[0].as_ref()), Some(100));
+    // Second key=1 is a fresh element (first-wins).
+    assert_ne!(generation_of(children[1].as_ref()).unwrap(), gen_1);
+    assert_eq!(payload_of(children[1].as_ref()), Some(999));
+}
+
+// ============================================================================
+// Large lists — linear-time sanity
+// ============================================================================
+
+#[test]
+fn large_keyed_list_full_reuse() {
+    let mut owner = BuildOwner::new();
+    let old_views: Vec<KeyedView> = (0..200).map(|i| KeyedView::keyed(i, i)).collect();
+    let mut children = mount_children(&old_views, &mut owner);
+    let generations: Vec<u64> = children
+        .iter()
+        .map(|c| generation_of(c.as_ref()).unwrap())
+        .collect();
+
+    // Same keys, new payloads — every element should be reused in place.
+    let new_views = boxed_views(
+        &(0..200)
+            .map(|i| KeyedView::keyed(i, i + 1000))
+            .collect::<Vec<_>>(),
+    );
+    let view_refs: Vec<&dyn View> = new_views.iter().map(AsRef::as_ref).collect();
+    reconcile_children(&mut children, &view_refs, &mut owner.element_owner_mut());
+
+    assert_eq!(children.len(), 200);
+    for (i, child) in children.iter().enumerate() {
+        assert_eq!(
+            generation_of(child.as_ref()).unwrap(),
+            generations[i],
+            "element {i} should have been reused"
         );
+    }
+}
 
-        assert_eq!(result.len(), size as usize);
+#[test]
+fn large_keyed_list_full_reverse_preserves_all() {
+    let mut owner = BuildOwner::new();
+    let old_views: Vec<KeyedView> = (0..100).map(|i| KeyedView::keyed(i, i)).collect();
+    let mut children = mount_children(&old_views, &mut owner);
+    // Map key -> generation.
+    let gen_by_key: std::collections::HashMap<u32, u64> = (0..100)
+        .map(|i| (i, generation_of(children[i as usize].as_ref()).unwrap()))
+        .collect();
+
+    // Reverse the order.
+    let new_views = boxed_views(
+        &(0..100)
+            .rev()
+            .map(|i| KeyedView::keyed(i, i))
+            .collect::<Vec<_>>(),
+    );
+    let view_refs: Vec<&dyn View> = new_views.iter().map(AsRef::as_ref).collect();
+    reconcile_children(&mut children, &view_refs, &mut owner.element_owner_mut());
+
+    assert_eq!(children.len(), 100);
+    // Every element should still be present, matched by key, none rebuilt.
+    for (slot, key) in (0..100).rev().enumerate() {
+        assert_eq!(
+            generation_of(children[slot].as_ref()).unwrap(),
+            gen_by_key[&key],
+            "key {key} element should have moved, not rebuilt"
+        );
     }
 }

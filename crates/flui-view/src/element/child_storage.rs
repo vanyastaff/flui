@@ -492,26 +492,17 @@ impl ElementChildStorage for VariableChildStorage {
     }
 
     fn update_with_views(&mut self, views: &[Box<dyn View>], owner: &mut crate::ElementOwner<'_>) {
-        // Simple reconciliation: match by index
-        // TODO: In a full implementation, this would use keys for reordering
-        for (i, view) in views.iter().enumerate() {
-            if let Some(child) = self.children.get_mut(i) {
-                // Update existing child
-                child.update(view.as_ref(), &mut *owner);
-            } else {
-                // Create new child
-                self.children.push(view.create_element());
-            }
-        }
-
-        // Remove extra children
-        if views.len() < self.children.len() {
-            for mut child in self.children.drain(views.len()..) {
-                // Unmount removed children before dropping
-                child.unmount(&mut *owner);
-                drop(child);
-            }
-        }
+        // Keyed 5-phase reconciliation (plan §U5 / origin R12). Matches
+        // old child elements to new Views by `Key`, falling back to
+        // positional matching for keyless children — so a keyed widget
+        // moved to a new slot keeps its element (and thus its state).
+        //
+        // `reconcile_children` leaves newly created elements unmounted
+        // (it operates on the bare box-vec and cannot reach the
+        // `PipelineOwner`); `ElementCore::update_or_create_children`
+        // finishes their lifecycle (propagate owner → mount → build).
+        let view_refs: Vec<&dyn View> = views.iter().map(std::convert::AsRef::as_ref).collect();
+        crate::reconcile_children(&mut self.children, &view_refs, owner);
     }
 
     fn mount_children(
@@ -520,8 +511,17 @@ impl ElementChildStorage for VariableChildStorage {
         depth: usize,
         owner: &mut crate::ElementOwner<'_>,
     ) {
+        // Idempotent: only `Initial` children are mounted. After keyed
+        // reconciliation the box-vec holds a mix of *reused* children
+        // (already `Active` — re-mounting them would reset their depth
+        // and, for `RenderObjectElement`s, create a duplicate
+        // `RenderObject`) and *freshly created* children still in
+        // `Initial`. Skipping the active ones makes a post-reconcile
+        // `mount_children` sweep mount exactly the new elements.
         for (i, child) in self.children.iter_mut().enumerate() {
-            child.mount(parent, depth + i, &mut *owner);
+            if child.lifecycle() == crate::element::Lifecycle::Initial {
+                child.mount(parent, depth + i, &mut *owner);
+            }
         }
     }
 

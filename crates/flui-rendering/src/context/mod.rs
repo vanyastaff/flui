@@ -63,7 +63,7 @@ mod hit_test;
 mod layout;
 mod paint;
 
-pub use canvas::{Canvas, CanvasContext, Paint, PaintStyle, Picture};
+pub use canvas::{Canvas, CanvasContext, DisplayList, Paint, PaintStyle};
 pub use hit_test::HitTestContext;
 pub use layout::LayoutContext;
 pub use paint::{ChildPaintInfo, PaintChildCallback, PaintContext};

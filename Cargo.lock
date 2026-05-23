@@ -1294,7 +1294,6 @@ dependencies = [
  "cosmic-text 0.12.1",
  "flui-foundation",
  "flui-types",
- "lyon",
  "parking_lot",
  "serde",
  "thiserror 2.0.17",
@@ -1461,6 +1460,7 @@ dependencies = [
  "flui-types",
  "parking_lot",
  "slab",
+ "thiserror 2.0.17",
  "tracing",
 ]
 

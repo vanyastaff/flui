@@ -30,7 +30,7 @@ pub use flui_tree::IndexedSlot;
 // Re-export commonly used arity and generic types
 pub use arity::{ElementArity, Leaf, Optional, Single, Variable};
 pub use behavior::{
-    AnimationBehavior, ElementBehavior, InheritedBehavior, ProxyBehavior, RenderBehavior,
+    AnimatedBehavior, ElementBehavior, InheritedBehavior, ProxyBehavior, RenderBehavior,
     StatefulBehavior, StatelessBehavior,
 };
 pub use child_storage::{
@@ -41,9 +41,8 @@ pub use generic::ElementCore;
 pub use inherited_access::InheritedElementAccess;
 pub use lifecycle::Lifecycle;
 pub use notification::{
-    BoxedNotification, DragEndNotification, DragStartNotification, FocusNotification,
-    KeepAliveNotification, LayoutChangedNotification, NotifiableElement, Notification,
-    NotificationCallback, NotificationHandler, NotificationNode, ScrollNotification,
+    DragEndNotification, DragStartNotification, FocusNotification, KeepAliveNotification,
+    LayoutChangedNotification, NotifiableElement, Notification, ScrollNotification,
     SizeChangedNotification,
 };
 pub use render_object_element::{RenderObjectElement, RenderSlot, RenderTreeRootElement};
@@ -113,4 +112,4 @@ pub type InheritedElement<V> = Element<V, Single, InheritedBehavior<V>>;
 /// This is the element type created for views implementing `AnimatedView`.
 /// Automatically subscribes to listenable changes and marks element dirty
 /// when the animation value changes.
-pub type AnimatedElement<V> = Element<V, Single, AnimationBehavior<V>>;
+pub type AnimatedElement<V> = Element<V, Single, AnimatedBehavior<V>>;

@@ -96,6 +96,17 @@ pub struct ElementOwner<'a> {
     /// — parents must wait for children to detach.
     pub(crate) inactive_elements: &'a mut Vec<InactiveElement>,
 
+    /// Pending `did_change_dependencies` dispatch set. Populated by
+    /// [`InheritedBehavior::on_view_updated`](crate::element::InheritedBehavior)
+    /// when `update_should_notify == true`; drained by
+    /// `BuildOwner::build_scope` immediately before each dependent's
+    /// `perform_build` so the typed
+    /// [`ViewState::did_change_dependencies`](crate::view::ViewState::did_change_dependencies)
+    /// hook fires exactly once per dependency-change-then-rebuild
+    /// cycle. Flutter parity: `framework.dart:6114`
+    /// `_didChangeDependencies` flag on `StatefulElement`. Plan §U14.
+    pub(crate) pending_dependency_changes: &'a mut HashSet<ElementId>,
+
     /// Snapshot of `BuildOwner::on_build_scheduled` so
     /// `schedule_build_for` can fire the visual-update callback
     /// without re-borrowing the owner.
@@ -153,6 +164,43 @@ impl ElementOwner<'_> {
                 callback();
             }
         }
+    }
+
+    /// Mark a dependent as having received an inherited-dependency
+    /// change.
+    ///
+    /// Called by `InheritedBehavior::on_view_updated` when
+    /// `update_should_notify == true` for each dependent in addition to
+    /// `schedule_build_for`. `BuildOwner::build_scope` consults this
+    /// set immediately before each dependent's `perform_build` and, if
+    /// the id is present, fires the typed
+    /// [`ViewState::did_change_dependencies`](crate::view::ViewState::did_change_dependencies)
+    /// hook (via `ElementBase::notify_dependency_change`) BEFORE the
+    /// actual rebuild — Flutter parity for the `_didChangeDependencies`
+    /// flag at `framework.dart:6114`. Plan §U14.
+    ///
+    /// Idempotent: re-marking the same id is a no-op (HashSet dedup) —
+    /// `did_change_dependencies` fires at most once per
+    /// dependency-change-then-rebuild cycle even if multiple inherited
+    /// ancestors fire in the same update phase.
+    pub fn note_dependency_change(&mut self, id: ElementId) {
+        self.pending_dependency_changes.insert(id);
+    }
+
+    /// Discard any pending `did_change_dependencies` for this id.
+    ///
+    /// Called from `ElementBase::unmount` paths so a dependent that
+    /// leaves the tree before its rebuild ever runs does not leave a
+    /// stale entry behind. No-op if the id is not present.
+    pub fn clear_pending_dependency_change(&mut self, id: ElementId) {
+        self.pending_dependency_changes.remove(&id);
+    }
+
+    /// Whether the given id has a pending `did_change_dependencies`
+    /// dispatch queued. Used by tests; `BuildOwner::build_scope` reads
+    /// (and removes) the entry directly via field access.
+    pub fn has_pending_dependency_change(&self, id: ElementId) -> bool {
+        self.pending_dependency_changes.contains(&id)
     }
 
     /// Push an element onto the inactive-elements queue.

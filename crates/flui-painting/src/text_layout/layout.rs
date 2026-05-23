@@ -1,3 +1,4 @@
+// PORT-TARGET: flui-widgets::RichText, flui-widgets::TextField
 //! `TextLayout` -- cosmic-text-backed shaped text buffer.
 //!
 //! Mythos chain U6 extracted these from the 1,243-LOC
@@ -37,7 +38,13 @@ use super::{LineInfo, TextLayoutResult, measure::style_to_attrs};
 /// force every call site to `match` the lock result. A `catch_unwind`
 /// wrapper around `set_text` / `shape_until_scroll` is the
 /// principled fix and is tracked in
-/// `crates/flui-painting/ARCHITECTURE.md ## Outstanding refactors`.
+/// `crates/flui-painting/ARCHITECTURE.md ## Future Enhancements`.
+//
+// REMOVE_BY: 2026-09-22 — audit P-17 cadence marker. By this date the
+// `catch_unwind` wrapper around cosmic-text's `set_text` /
+// `shape_until_scroll` is the principled fix; if `cosmic-text` panics
+// are still not a today-problem, push the date out, but do not let the
+// "accept the corruption" footnote drift unverified.
 static FONT_SYSTEM: OnceLock<Mutex<FontSystem>> = OnceLock::new();
 
 /// Gets or initializes the global font system.

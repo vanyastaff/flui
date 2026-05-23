@@ -94,6 +94,36 @@ impl FlutterError {
             exception: Some(format!("{exception:?}")),
         }
     }
+
+    /// Create a `FlutterError` from a panic payload caught by
+    /// [`std::panic::catch_unwind`].
+    ///
+    /// A panic payload is a `Box<dyn Any + Send>`. The common shapes are
+    /// `&'static str` (from `panic!("literal")`) and `String` (from
+    /// `panic!("{}", formatted)`); anything else (a custom panic value)
+    /// cannot be rendered and falls back to a generic message.
+    ///
+    /// `context` describes *what* was building when the panic happened
+    /// (e.g. `"building StatelessElement"`) and is stored as the error
+    /// `details` so the rendered [`ErrorView`] carries a breadcrumb.
+    ///
+    /// Flutter parity: `ComponentElement.performRebuild`
+    /// (`framework.dart:5823-5834`) funnels the caught exception through
+    /// `_reportException` into `ErrorWidget.builder`.
+    pub fn from_panic(payload: &(dyn std::any::Any + Send), context: impl Into<String>) -> Self {
+        let message = if let Some(s) = payload.downcast_ref::<&'static str>() {
+            (*s).to_string()
+        } else if let Some(s) = payload.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "panic during build (non-string payload)".to_string()
+        };
+        Self {
+            message,
+            details: Some(context.into()),
+            exception: None,
+        }
+    }
 }
 
 impl std::fmt::Display for FlutterError {

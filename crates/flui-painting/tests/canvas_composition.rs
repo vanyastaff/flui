@@ -335,3 +335,80 @@ fn append_display_list_at_offset_zero_is_passthrough() {
     assert_eq!(dl.len(), 1);
     assert_eq!(dl.bounds(), child_bounds);
 }
+
+/// Cycle 5 U11 / audit P-11 regression: the per-command-walk
+/// implementation must produce per-command transforms identical to
+/// the pre-change `DisplayList::clone() + apply_transform()` shape.
+///
+/// We construct a multi-command child (heterogeneous variants — line,
+/// rect, circle), append it twice into separate parents at the same
+/// non-zero offset, and assert each command's transform on the new
+/// path matches the transform produced by manually translating the
+/// original. Manual translation is `translation * original_transform`,
+/// matching `DrawCommand::apply_transform`'s `*transform_mut() =
+/// additional * self.transform()`.
+#[test]
+fn append_display_list_at_offset_matches_apply_transform_per_command() {
+    use flui_types::geometry::{Matrix4, Offset, Point};
+
+    // Build a 3-command child with distinct primitives so the test
+    // exercises multiple `DrawCommand` arms of `apply_transform_mut`.
+    let mut child = Canvas::new();
+    let red = Paint::fill(Color::RED);
+    let blue = Paint::stroke(Color::BLUE, 2.0);
+    child.draw_line(
+        Point::new(px(0.0), px(0.0)),
+        Point::new(px(10.0), px(10.0)),
+        &blue,
+    );
+    child.draw_rect(Rect::from_ltrb(px(1.0), px(2.0), px(11.0), px(12.0)), &red);
+    child.draw_circle(Point::new(px(5.0), px(5.0)), px(3.0), &red);
+    let child_list = child.finish();
+
+    // Snapshot the pre-shift per-command transforms for the
+    // manual-translate oracle.
+    let pre_xforms: Vec<Matrix4> = child_list
+        .iter()
+        .map(flui_painting::DrawCommand::transform)
+        .collect();
+
+    // Apply the new shape.
+    let offset = Offset::new(px(17.0), px(31.0));
+    let mut parent = Canvas::new();
+    parent.append_display_list_at_offset(&child_list, offset);
+    let dl = parent.finish();
+
+    let translation = Matrix4::translation(offset.dx.0, offset.dy.0, 0.0);
+
+    assert_eq!(dl.len(), child_list.len());
+    for (i, cmd) in dl.iter().enumerate() {
+        let expected = translation * pre_xforms[i];
+        assert_eq!(
+            cmd.transform(),
+            expected,
+            "command #{i} transform after offset shift must equal \
+             translation * original; got {:?}, expected {:?}",
+            cmd.transform(),
+            expected,
+        );
+    }
+
+    // Bounds should be the original-bounds translated by the offset
+    // (the line carries a stroke outset, so we compare to the pre-shift
+    // bounds shifted by the offset rather than to a raw geometric
+    // edge).
+    let pre_bounds = child_list.bounds();
+    let bounds = dl.bounds();
+    assert!(
+        (bounds.left().0 - (pre_bounds.left().0 + offset.dx.0)).abs() <= 0.01,
+        "bounds.left after offset should equal pre.left + dx; got {} vs {}",
+        bounds.left().0,
+        pre_bounds.left().0 + offset.dx.0,
+    );
+    assert!(
+        (bounds.top().0 - (pre_bounds.top().0 + offset.dy.0)).abs() <= 0.01,
+        "bounds.top after offset should equal pre.top + dy; got {} vs {}",
+        bounds.top().0,
+        pre_bounds.top().0 + offset.dy.0,
+    );
+}

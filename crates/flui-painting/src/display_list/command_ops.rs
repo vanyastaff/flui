@@ -43,6 +43,8 @@
 //! `nested_shader_mask_opacity_depth` test below and bench the
 //! resulting frame budget.
 
+use std::sync::Arc;
+
 use flui_types::geometry::{Matrix4, Pixels, Rect, Size};
 
 use super::command::{CommandKind, DrawCommand};
@@ -92,13 +94,21 @@ impl DrawCommand {
             | Self::RestoreLayer { .. } => self.clone(),
 
             // Paint commands: Apply opacity to paint field
+            //
+            // The interned `Arc<Paint>` is unwrapped to a fresh `Paint`
+            // value via `Paint::with_opacity_arc` (a tiny helper that
+            // hides the `(**arc).clone().with_opacity(o)` dance), then
+            // re-wrapped in a new `Arc`. The opacity-mutated result is
+            // a brand-new paint identity by construction — distinct
+            // from the recording-time interning pool — so we cannot
+            // reuse the source `Arc` even on a refcount-bump fast path.
             Self::DrawRect {
                 rect,
                 paint,
                 transform,
             } => Self::DrawRect {
                 rect: *rect,
-                paint: paint.clone().with_opacity(opacity),
+                paint: with_opacity_arc(paint, opacity),
                 transform: *transform,
             },
             Self::DrawRRect {
@@ -107,7 +117,7 @@ impl DrawCommand {
                 transform,
             } => Self::DrawRRect {
                 rrect: *rrect,
-                paint: paint.clone().with_opacity(opacity),
+                paint: with_opacity_arc(paint, opacity),
                 transform: *transform,
             },
             Self::DrawCircle {
@@ -118,7 +128,7 @@ impl DrawCommand {
             } => Self::DrawCircle {
                 center: *center,
                 radius: *radius,
-                paint: paint.clone().with_opacity(opacity),
+                paint: with_opacity_arc(paint, opacity),
                 transform: *transform,
             },
             Self::DrawOval {
@@ -127,7 +137,7 @@ impl DrawCommand {
                 transform,
             } => Self::DrawOval {
                 rect: *rect,
-                paint: paint.clone().with_opacity(opacity),
+                paint: with_opacity_arc(paint, opacity),
                 transform: *transform,
             },
             Self::DrawLine {
@@ -138,7 +148,7 @@ impl DrawCommand {
             } => Self::DrawLine {
                 p1: *p1,
                 p2: *p2,
-                paint: paint.clone().with_opacity(opacity),
+                paint: with_opacity_arc(paint, opacity),
                 transform: *transform,
             },
             Self::DrawPath {
@@ -147,7 +157,7 @@ impl DrawCommand {
                 transform,
             } => Self::DrawPath {
                 path: path.clone(),
-                paint: paint.clone().with_opacity(opacity),
+                paint: with_opacity_arc(paint, opacity),
                 transform: *transform,
             },
             Self::DrawArc {
@@ -162,7 +172,7 @@ impl DrawCommand {
                 start_angle: *start_angle,
                 sweep_angle: *sweep_angle,
                 use_center: *use_center,
-                paint: paint.clone().with_opacity(opacity),
+                paint: with_opacity_arc(paint, opacity),
                 transform: *transform,
             },
             Self::DrawDRRect {
@@ -173,7 +183,7 @@ impl DrawCommand {
             } => Self::DrawDRRect {
                 outer: *outer,
                 inner: *inner,
-                paint: paint.clone().with_opacity(opacity),
+                paint: with_opacity_arc(paint, opacity),
                 transform: *transform,
             },
             Self::DrawPoints {
@@ -184,7 +194,7 @@ impl DrawCommand {
             } => Self::DrawPoints {
                 mode: *mode,
                 points: points.clone(),
-                paint: paint.clone().with_opacity(opacity),
+                paint: with_opacity_arc(paint, opacity),
                 transform: *transform,
             },
             Self::DrawVertices {
@@ -199,7 +209,7 @@ impl DrawCommand {
                 colors: colors.clone(),
                 tex_coords: tex_coords.clone(),
                 indices: indices.clone(),
-                paint: paint.clone().with_opacity(opacity),
+                paint: with_opacity_arc(paint, opacity),
                 transform: *transform,
             },
             Self::DrawText {
@@ -214,7 +224,7 @@ impl DrawCommand {
                 offset: *offset,
                 size: *size,
                 style: style.clone(),
-                paint: paint.clone().with_opacity(opacity),
+                paint: with_opacity_arc(paint, opacity),
                 transform: *transform,
             },
             Self::SaveLayer {
@@ -223,11 +233,11 @@ impl DrawCommand {
                 transform,
             } => Self::SaveLayer {
                 bounds: *bounds,
-                paint: paint.clone().with_opacity(opacity),
+                paint: with_opacity_arc(paint, opacity),
                 transform: *transform,
             },
 
-            // Optional paint commands: Map over Option<Paint>
+            // Optional paint commands: Map over Option<Arc<Paint>>
             Self::DrawImage {
                 image,
                 dst,
@@ -236,7 +246,7 @@ impl DrawCommand {
             } => Self::DrawImage {
                 image: image.clone(),
                 dst: *dst,
-                paint: paint.as_ref().map(|p| p.clone().with_opacity(opacity)),
+                paint: paint.as_ref().map(|p| with_opacity_arc(p, opacity)),
                 transform: *transform,
             },
             Self::DrawImageRepeat {
@@ -249,7 +259,7 @@ impl DrawCommand {
                 image: image.clone(),
                 dst: *dst,
                 repeat: *repeat,
-                paint: paint.as_ref().map(|p| p.clone().with_opacity(opacity)),
+                paint: paint.as_ref().map(|p| with_opacity_arc(p, opacity)),
                 transform: *transform,
             },
             Self::DrawImageNineSlice {
@@ -262,7 +272,7 @@ impl DrawCommand {
                 image: image.clone(),
                 center_slice: *center_slice,
                 dst: *dst,
-                paint: paint.as_ref().map(|p| p.clone().with_opacity(opacity)),
+                paint: paint.as_ref().map(|p| with_opacity_arc(p, opacity)),
                 transform: *transform,
             },
             Self::DrawImageFiltered {
@@ -275,7 +285,7 @@ impl DrawCommand {
                 image: image.clone(),
                 dst: *dst,
                 filter: *filter,
-                paint: paint.as_ref().map(|p| p.clone().with_opacity(opacity)),
+                paint: paint.as_ref().map(|p| with_opacity_arc(p, opacity)),
                 transform: *transform,
             },
             Self::DrawAtlas {
@@ -292,7 +302,7 @@ impl DrawCommand {
                 transforms: transforms.clone(),
                 colors: colors.clone(),
                 blend_mode: *blend_mode,
-                paint: paint.as_ref().map(|p| p.clone().with_opacity(opacity)),
+                paint: paint.as_ref().map(|p| with_opacity_arc(p, opacity)),
                 transform: *transform,
             },
 
@@ -318,7 +328,7 @@ impl DrawCommand {
                 transform: *transform,
             },
             Self::DrawPaint { paint, transform } => Self::DrawPaint {
-                paint: paint.clone().with_opacity(opacity),
+                paint: with_opacity_arc(paint, opacity),
                 transform: *transform,
             },
 
@@ -739,6 +749,10 @@ impl DrawCommand {
 
     /// Returns a reference to the Paint for this command, if it has
     /// one.
+    ///
+    /// Variants carry `Arc<Paint>` internally for recording-time
+    /// interning (Cycle 5 U10 / origin R15 / audit P-7); the accessor
+    /// returns a plain `&Paint` borrow so consumers stay refcount-agnostic.
     #[inline]
     pub fn paint(&self) -> Option<&Paint> {
         match self {
@@ -754,13 +768,13 @@ impl DrawCommand {
             | DrawCommand::DrawPoints { paint, .. }
             | DrawCommand::DrawVertices { paint, .. }
             | DrawCommand::DrawPaint { paint, .. }
-            | DrawCommand::SaveLayer { paint, .. } => Some(paint),
+            | DrawCommand::SaveLayer { paint, .. } => Some(paint.as_ref()),
 
             DrawCommand::DrawImage { paint, .. }
             | DrawCommand::DrawImageRepeat { paint, .. }
             | DrawCommand::DrawImageNineSlice { paint, .. }
             | DrawCommand::DrawImageFiltered { paint, .. }
-            | DrawCommand::DrawAtlas { paint, .. } => paint.as_ref(),
+            | DrawCommand::DrawAtlas { paint, .. } => paint.as_deref(),
 
             _ => None,
         }
@@ -851,6 +865,20 @@ impl DrawCommand {
             _ => {}
         }
     }
+}
+
+/// Produce a fresh `Arc<Paint>` from an interned source carrying the
+/// requested opacity.
+///
+/// `DrawCommand::with_opacity_depth` rewrites every paint-carrying
+/// variant; the per-arm boilerplate around `Arc::new((**arc).clone()
+/// .with_opacity(opacity))` is centralised here so the match stays
+/// readable. The function always allocates a new `Arc` — the opacity
+/// mutation produces a distinct paint identity that the recording-time
+/// interning pool never sees, so we cannot reuse the input refcount.
+#[inline]
+fn with_opacity_arc(paint: &Arc<Paint>, opacity: f32) -> Arc<Paint> {
+    Arc::new((**paint).clone().with_opacity(opacity))
 }
 
 /// Emit a saturation warning when an effect-nesting recursion

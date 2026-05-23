@@ -26,31 +26,30 @@
 //!
 //! # Concern split (Mythos chain U4)
 //!
-//! The 3,305-LOC `canvas.rs` god module was split into eight
-//! concern-based files: this `mod.rs` plus seven submodules.
+//! The 3,305-LOC `canvas.rs` god module was split into seven
+//! concern-based files: this `mod.rs` plus six submodules.
 //!
 //! - `mod.rs` (this file) -- the `Canvas` struct, lifecycle (`new`,
 //!   `finish`, `reset`, `clear_commands`), queries (`is_empty`,
-//!   `len`, `bounds`, `display_list`), `AsRef<DisplayList>`, and
-//!   the hit-region recording surface.
+//!   `len`, `bounds`, `display_list`), and `AsRef<DisplayList>`.
 //! - [`state`]       -- `CanvasState`, `ClipShape`, save/restore/save_layer.
 //! - [`transform`]   -- translate/scale/rotate/skew/transform.
 //! - [`clipping`]    -- clip_rect/clip_rrect/clip_path + bounds queries.
 //! - [`drawing`]     -- 29 primary `draw_*` methods (one per DrawCommand variant).
 //! - [`scoped`]      -- 12 `with_*` closure-based scoped helpers.
-//! - [`composition`] -- extend_from/extend/merge/append_* multi-canvas ops + static constructors.
-//! - [`sugar`]       -- chaining API + batch ops + conditional draws + grid/repeat patterns + debug viz + convenience shapes (further split into `sugar/{batch,conditional,grid,debug,shapes,chain}.rs` in the code-review fixup pass).
+//! - [`composition`] -- extend_from/extend/merge/append_* multi-canvas ops.
+
+use std::sync::Arc;
 
 use flui_types::geometry::{Matrix4, Pixels, Rect};
 
-use crate::display_list::{DisplayList, DisplayListCore};
+use crate::display_list::{DisplayList, DisplayListCore, Paint};
 
 pub mod clipping;
 pub mod composition;
 pub mod drawing;
 pub mod scoped;
 pub mod state;
-pub mod sugar;
 pub mod transform;
 
 pub use state::{CanvasState, ClipShape};
@@ -100,6 +99,34 @@ pub struct Canvas {
 
     /// Save/restore stack (stores previous states).
     pub(crate) save_stack: Vec<CanvasState>,
+
+    /// Per-recording paint interning pool.
+    ///
+    /// Each `draw_*` call goes through [`Self::intern_paint`], which
+    /// linearly scans this pool for an existing `Arc<Paint>` whose
+    /// inner `Paint` is structurally equal (full equality including
+    /// shader — see [`paints_equal`]). On hit, the call returns an
+    /// `Arc::clone` of the existing entry (refcount bump). On miss,
+    /// it inserts a freshly-allocated `Arc::new(paint.clone())` and
+    /// returns its clone.
+    ///
+    /// # Why a linear `Vec` instead of a `HashMap`
+    ///
+    /// `Paint` carries `f32` fields and a non-`Hash` `Shader` payload;
+    /// a `HashMap` would need a bespoke `PaintKey` wrapper that hashes
+    /// f32 bit patterns and walks the shader enum. Most realistic
+    /// canvases use a handful of distinct paints (1–8 typical, 32
+    /// worst case) — linear search across that small window is
+    /// faster than a hash + miss-rate-dependent collision chase and
+    /// keeps the code free of `unsafe` and bit-pattern foot-guns.
+    ///
+    /// # Lifetime
+    ///
+    /// The pool lives for the duration of one `Canvas` instance.
+    /// `reset()` clears it; `clear_commands()` deliberately does
+    /// *not* — pre-reset paints stay live as long as the consumer
+    /// keeps the canvas around for re-recording.
+    pub(crate) paint_pool: Vec<Arc<Paint>>,
 }
 
 impl Canvas {
@@ -118,7 +145,32 @@ impl Canvas {
             transform: Matrix4::identity(),
             clip_stack: Vec::new(),
             save_stack: Vec::new(),
+            paint_pool: Vec::new(),
         }
+    }
+
+    /// Returns an `Arc<Paint>` from the per-canvas interning pool,
+    /// inserting a fresh allocation only on a cache miss.
+    ///
+    /// See [`Self::paint_pool`] for the rationale behind the
+    /// linear-scan strategy.
+    pub(crate) fn intern_paint(&mut self, paint: &Paint) -> Arc<Paint> {
+        for existing in &self.paint_pool {
+            if paints_equal(existing, paint) {
+                return Arc::clone(existing);
+            }
+        }
+        let arc = Arc::new(paint.clone());
+        self.paint_pool.push(Arc::clone(&arc));
+        arc
+    }
+
+    /// Returns an `Option<Arc<Paint>>` interned through the canvas
+    /// pool, mirroring the `Option<&Paint>` shape used by the
+    /// image-family `draw_*` APIs.
+    #[inline]
+    pub(crate) fn intern_optional_paint(&mut self, paint: Option<&Paint>) -> Option<Arc<Paint>> {
+        paint.map(|p| self.intern_paint(p))
     }
 
     // ===== Finalization =====
@@ -192,6 +244,7 @@ impl Canvas {
         self.transform = Matrix4::identity();
         self.clip_stack.clear();
         self.save_stack.clear();
+        self.paint_pool.clear();
     }
 
     /// Clears all recorded drawing commands but preserves transform and
@@ -225,17 +278,6 @@ impl Canvas {
     pub fn bounds(&self) -> Rect<Pixels> {
         self.display_list.bounds()
     }
-
-    // ===== Hit Testing =====
-
-    /// Add a hit-testable region with an event handler.
-    ///
-    /// This registers an area that will respond to pointer events.
-    /// Used by `RenderPointerListener` to connect gestures to UI
-    /// elements.
-    pub fn add_hit_region(&mut self, region: crate::display_list::HitRegion) {
-        self.display_list.add_hit_region(region);
-    }
 }
 
 impl Default for Canvas {
@@ -252,4 +294,26 @@ impl AsRef<DisplayList> for Canvas {
     fn as_ref(&self) -> &DisplayList {
         &self.display_list
     }
+}
+
+/// Structural equality for two paints, including the optional
+/// [`Shader`] (which the public [`Paint::eq`] deliberately skips for
+/// internal-state-comparison reasons — see the note on the impl in
+/// `flui_types::painting::paint`).
+///
+/// The interning pool needs shader-sensitive equality because two
+/// paints that differ *only* in shader must produce two distinct
+/// `Arc<Paint>` entries. Without this stricter check, a freshly
+/// drawn gradient-shaded rectangle would silently share an `Arc`
+/// with an earlier solid-coloured rectangle and render with the
+/// wrong fill.
+///
+/// [`Shader`]: crate::display_list::Shader
+#[inline]
+fn paints_equal(a: &Paint, b: &Paint) -> bool {
+    // `Paint::eq` already compares every non-shader field. Layer the
+    // shader equality on top — `Shader: PartialEq` is derived
+    // structurally over its variants and their f32 payloads, which
+    // is the correct identity here.
+    a == b && a.shader == b.shader
 }
