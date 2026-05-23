@@ -94,9 +94,9 @@ use crate::view::{ElementBase, View};
 /// # Arguments
 ///
 /// * `parent` - Owning parent's [`ElementId`]. Stamped onto every
-///   emitted [`ReconcileEvent`](crate::tree::ReconcileEvent) so
-///   subscribers can correlate the trace back to the build path that
-///   produced it (plan §U13 / FR-035).
+///   emitted [`crate::tree::ReconcileEvent`] so subscribers can
+///   correlate the trace back to the build path that produced it
+///   (plan §U13 / FR-035).
 /// * `old_children` - The parent's current child elements, owned. Drained
 ///   and replaced with the reconciled list.
 /// * `new_views` - The new child Views to reconcile against.
@@ -414,7 +414,7 @@ pub fn reconcile_children(
 /// 2. **Semantic equality on a hash hit** — distinct keys can collide
 ///    on `u64`, so a hash match alone is not proof that the two keys
 ///    are equal. When both sides carry a key whose hashes agree, this
-///    function then calls [`ViewKey::key_eq`] via
+///    function then calls [`flui_foundation::ViewKey::key_eq`] via
 ///    [`ElementBase::current_key`] to reject silent collisions
 ///    (FR-024 work item (c)).
 ///
