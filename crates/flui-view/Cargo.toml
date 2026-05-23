@@ -71,3 +71,11 @@ harness = false
 [[bench]]
 name = "s2_static_path"
 harness = false
+
+[[bench]]
+name = "sc006_keyed_reorder_linearity"
+harness = false
+
+[[bench]]
+name = "sc012_global_key_reparent"
+harness = false
