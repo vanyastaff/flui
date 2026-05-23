@@ -217,7 +217,7 @@ graph TD
     facade --> widgets
 ```
 
-The DAG is acyclic and downward-correct. The Constitution v2.2.0 layer table is **stale** — it attributes geometry to `flui-foundation` (it is in `flui-types`), states edition 2021 / Rust 1.91 (actual: 2024 / 1.94), and lists `flui-widgets` as if it exists. It must be amended to the table above. Full reasoning and the ordered migration delta: [`research/2026-05-22-crate-decomposition-redesign.md`](research/2026-05-22-crate-decomposition-redesign.md).
+The DAG is acyclic and downward-correct. The Constitution **v2.3.0** layer table reflects current-state layering (geometry in `flui-types`, edition 2024 / Rust 1.94, accurate workspace member list); the **target graph above** is the forward-looking Part IV decomposition that Part V's roadmap migrates the workspace toward. The constitution remains "current state, locked"; this document is "target state, in progress." Full reasoning and the ordered migration delta: [`research/2026-05-22-crate-decomposition-redesign.md`](research/2026-05-22-crate-decomposition-redesign.md).
 
 ---
 
