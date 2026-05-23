@@ -44,8 +44,8 @@ impl QuarterTurns {
     }
 
     #[must_use]
-    pub fn to_radians(self) -> crate::geometry::Radians {
-        crate::geometry::radians(self.radians())
+    pub fn to_radians(self) -> crate::Radians {
+        crate::radians(self.radians())
     }
 }
 
@@ -57,7 +57,7 @@ impl From<QuarterTurns> for f32 {
     }
 }
 
-impl From<QuarterTurns> for crate::geometry::Radians {
+impl From<QuarterTurns> for crate::Radians {
     #[inline]
     fn from(turns: QuarterTurns) -> Self {
         turns.to_radians()

@@ -1289,6 +1289,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "flui-geometry"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "mint",
+ "num-traits",
+ "proptest",
+ "serde",
+ "thiserror 2.0.17",
+]
+
+[[package]]
 name = "flui-hot-reload"
 version = "0.1.0"
 dependencies = [
@@ -1492,8 +1504,7 @@ name = "flui-types"
 version = "0.1.0"
 dependencies = [
  "criterion",
- "glam",
- "mint",
+ "flui-geometry",
  "num-traits",
  "proptest",
  "serde",

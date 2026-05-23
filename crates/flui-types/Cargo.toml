@@ -10,6 +10,11 @@ repository.workspace = true
 [dependencies]
 tracing = { workspace = true }
 
+# Geometry primitives — split out into its own Layer-0 crate in D-block
+# PR-C-2 (U7 bridge). flui-types re-exports `pub use flui_geometry as geometry`
+# so existing `flui_types::geometry::*` consumers continue to compile.
+flui-geometry = { path = "../flui-geometry" }
+
 # Numeric traits for generic math (Float, Num, etc.)
 num-traits = "0.2"
 
@@ -22,11 +27,11 @@ serde = { workspace = true, optional = true }
 # Stack-allocated Vec for small collections (animation curves, color stops)
 smallvec = { workspace = true }
 
-# Interoperability with other math libraries (optional)
-mint = { version = "0.5", optional = true }
-
-# Direct glam integration (optional)
-glam = { version = "0.30", optional = true }
+# Note: mint and glam optional deps were dropped in D-block PR-C-2 (U6+U7);
+# the mint/glam interop now lives in flui-geometry. flui-types still exposes
+# `mint` and `glam` feature flags but they FORWARD to flui-geometry/{mint,glam}
+# (see [features] below) — no direct flui-types code uses those crates after
+# the geometry split.
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -39,23 +44,31 @@ default = []
 
 # === Serialization ===
 # Serde support for all types (Color, Size, Rect, etc.)
-serde = ["dep:serde"]
+# Forwards to flui-geometry/serde so flui_types::geometry::* (re-exported
+# from flui-geometry) gets Serialize/Deserialize impls. Without the forward,
+# enabling flui-types/serde would silently leave geometry types non-serde-able
+# post-split — a compat regression (Codex P1, PR #138).
+serde = ["dep:serde", "flui-geometry/serde"]
 
 # === Performance ===
 # SIMD acceleration for math operations
-# Auto-detects SSE/AVX (x86_64) or NEON (ARM)
-simd = []
+# Auto-detects SSE/AVX (x86_64) or NEON (ARM). Locally gates flui-types own
+# color.rs SIMD code paths AND forwards to flui-geometry/simd for the
+# Matrix4 SSE/NEON multiplication fast paths.
+simd = ["flui-geometry/simd"]
 
 # === Interoperability ===
-# mint: Zero-cost conversions with glam, nalgebra, cgmath, kurbo
-mint = ["dep:mint"]
+# mint: Zero-cost conversions with glam, nalgebra, cgmath, kurbo.
+# Forwarded to flui-geometry/mint (impls live in flui-geometry post-split).
+mint = ["flui-geometry/mint"]
 
-# glam: Direct integration with glam math library
-glam = ["dep:glam"]
+# glam: Direct integration with glam math library.
+# Forwarded to flui-geometry/glam (impls live in flui-geometry post-split).
+glam = ["flui-geometry/glam"]
 
 # === Convenience ===
 # Enable all features
-full = ["serde", "simd", "mint"]
+full = ["serde", "simd", "mint", "glam"]
 
 # NOTE: Image and font loading moved to flui-assets crate.
 # flui_types only provides type definitions!

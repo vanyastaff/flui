@@ -360,7 +360,7 @@ impl<T: Unit> Default for Transform2D<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::{Pixels, px};
+    use crate::{Pixels, px};
 
     #[test]
     fn test_identity() {

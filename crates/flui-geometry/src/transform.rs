@@ -303,7 +303,7 @@ impl Transform {
     /// let t = Transform::rotate_radians(Radians::from_degrees(45.0));
     /// ```
     #[inline]
-    pub fn rotate_radians(angle: crate::geometry::Radians) -> Self {
+    pub fn rotate_radians(angle: crate::Radians) -> Self {
         Self::Rotate { angle: angle.0 }
     }
 
@@ -355,11 +355,7 @@ impl Transform {
     /// let t = Transform::rotate_around_radians(Radians::from_degrees(45.0), 100.0, 100.0);
     /// ```
     #[inline]
-    pub fn rotate_around_radians(
-        angle: crate::geometry::Radians,
-        pivot_x: f32,
-        pivot_y: f32,
-    ) -> Self {
+    pub fn rotate_around_radians(angle: crate::Radians, pivot_x: f32, pivot_y: f32) -> Self {
         Self::RotateAround {
             angle: angle.0,
             pivot_x,
@@ -725,7 +721,7 @@ impl From<&Transform> for Matrix4 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::units::px;
+    use crate::units::px;
 
     #[test]
     fn test_identity() {

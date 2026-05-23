@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     # === Phase 1: Foundation Layer ===
+    "crates/flui-geometry",   # Geometry primitives (split from flui-types in D-block PR-C-2)
     "crates/flui-types",      # Base types with Unit system (ACTIVE)
     "crates/flui-foundation", # Foundation types and utilities (ACTIVE)
     "crates/flui-macros",     # Proc-macros (skeleton — derives land in Phase 3 §U23)
@@ -52,6 +53,7 @@ members = [
 
 # Default members exclude Android-only crates (ndk-sys won't compile on host)
 default-members = [
+    "crates/flui-geometry",
     "crates/flui-types",
     "crates/flui-foundation",
     "crates/flui-macros",

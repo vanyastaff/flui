@@ -12,13 +12,15 @@ View Tree (immutable) → Element Tree (mutable) → Render Tree (layout/paint)
 ```
 
 **Modular Design:** 20+ specialized crates organized in layers:
-- **Foundation:** `flui-types`, `flui-foundation`, `flui-tree`, `flui-platform`
+- **Foundation:** `flui-geometry`, `flui-types`, `flui-foundation`, `flui-tree`, `flui-platform`
 - **Framework:** `flui-view`, `flui-reactivity`, `flui-scheduler`, `flui_core`
 - **Rendering:** `flui-painting`, `flui-engine`, `flui-rendering`
 - **Widget:** `flui-animation`, `flui-interaction` (plus `flui-widgets` (planned))
-- **Application:** `flui-app`, `flui-assets`, `flui-log`
+- **Application:** `flui-app`, `flui-assets`
 - **Tools:** `flui-devtools`, `flui-cli`, `flui-build`
 - **Layer System:** `flui-layer` (compositing), `flui-semantics` (accessibility)
+
+Logging lives in `flui_foundation::log` (was standalone `flui-log` crate, merged in D-block PR-C-1 / 2026-05-23). Geometry primitives live in `flui-geometry` (split from `flui-types` in D-block PR-C-2 / 2026-05-23); `flui-types` re-exports them under `flui_types::geometry::*` for backward compat.
 
 ### Architecture direction
 
@@ -34,10 +36,10 @@ The "Current Development Focus" section below is the *present* snapshot of which
 **IMPORTANT:** Workspace in platform integration phase. Many high-level crates temporarily disabled in `Cargo.toml`.
 
 **Active crates:**
-- Foundation: `flui-types`, `flui-foundation`, `flui-tree`
+- Foundation: `flui-geometry`, `flui-types`, `flui-foundation`, `flui-tree`
 - Platform: `flui-platform` (MVP development - cross-platform support)
 - Core: `flui-layer`, `flui-semantics`, `flui-interaction`, `flui-painting`, `flui-hot-reload`
-- Framework: `flui-scheduler`, `flui-engine`, `flui-log`, `flui-rendering`, `flui-view`, `flui-app`
+- Framework: `flui-scheduler`, `flui-engine`, `flui-rendering`, `flui-view`, `flui-app`
 
 **Temporarily disabled until integration complete:**
 - `flui-animation`, `flui-reactivity`, `flui-devtools`, `flui-cli`, `flui-build`, `flui-assets`
@@ -46,7 +48,7 @@ The "Current Development Focus" section below is the *present* snapshot of which
 
 ## Constitution Compliance
 
-**CRITICAL:** All work must align with `.specify/memory/constitution.md` (v2.3.0). Key principles:
+**CRITICAL:** All work must align with `.specify/memory/constitution.md` (v2.4.0). Key principles:
 
 1. **Flutter as Reference, Not Copy** - Adapt Flutter patterns to Rust idioms, no Dart translation
 2. **Strict Crate Dependency DAG** - Dependencies flow downward only, no circular deps

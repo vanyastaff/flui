@@ -831,7 +831,7 @@ impl FromStr for Length {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::px;
+    use crate::px;
 
     // ---- Rems ----
 
@@ -947,7 +947,7 @@ mod tests {
 
     #[test]
     fn rems_is_zero_via_trait() {
-        use crate::geometry::traits::IsZero;
+        use crate::traits::IsZero;
         assert!(Rems::ZERO.is_zero());
         assert!(!rems(1.0).is_zero());
     }

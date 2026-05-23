@@ -40,7 +40,7 @@ use std::f64::consts::{PI, TAU};
 use super::{Pixels, px};
 use crate::{
     Point,
-    geometry::traits::{NumericUnit, Unit},
+    traits::{NumericUnit, Unit},
 };
 
 #[derive(Debug, Clone, Copy)]
