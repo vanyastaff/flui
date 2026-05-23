@@ -144,33 +144,46 @@ impl KeyInterner {
     /// practice (the production `ViewKey` hashers are well-distributed), so
     /// buckets are typically size-1; the additional cost is negligible vs
     /// the fidelity gain over the bench-only naive hash-only dedup.
+    ///
+    /// Uses `HashMap::entry` so the miss path is a single hash lookup
+    /// (*Programming Rust* 2nd ed, HashMap entry API).
     pub fn intern(&mut self, key: Box<dyn ViewKey>) -> KeyId {
         let hash = key.key_hash();
-        if let Some(bucket) = self.forward.get(&hash) {
-            for &candidate in bucket {
-                // SAFETY of indexing: `KeyId` values are 1..=`next_id-1`
-                // mapping to `reverse[id-1]`; `mint()` enforces this invariant.
-                let existing = &*self.reverse[candidate.0.get() as usize - 1];
-                if existing.key_eq(&*key) {
-                    return candidate;
-                }
+        let bucket = self.forward.entry(hash).or_default();
+        for &candidate in bucket.iter() {
+            // SAFETY of indexing: `KeyId` values are 1..=`next_id-1`
+            // mapping to `reverse[id-1]`; `mint()` enforces this invariant.
+            let existing = &*self.reverse[candidate.0.get() as usize - 1];
+            if existing.key_eq(&*key) {
+                return candidate;
             }
         }
-        let id = self.mint();
-        self.forward.entry(hash).or_default().push(id);
+        let id = Self::mint_impl(&mut self.next_id);
+        bucket.push(id);
         self.reverse.push(key);
         id
     }
 
     /// Mint the next `KeyId`. Bench-only — the production interner would
     /// either reuse `Key::new()`'s atomic counter or carry its own.
+    #[allow(dead_code)] // kept on the impl surface; intern() now uses mint_impl
     fn mint(&mut self) -> KeyId {
-        let n = self.next_id;
-        self.next_id += 1;
-        // SAFETY: next_id starts at 1 and only increments. The bench creates
-        // at most NODE_COUNT/5 = 2000 ids per iteration; saturating below
-        // u64::MAX is the trivially provable invariant.
-        let nz = NonZeroU64::new(n).expect("KeyInterner next_id must be non-zero");
+        Self::mint_impl(&mut self.next_id)
+    }
+
+    /// Split-borrow form of [`Self::mint`] that takes the counter directly so
+    /// callers holding a `&mut Vec<KeyId>` borrow (e.g., `entry().or_default()`
+    /// chain in [`Self::intern`]) can still mint without re-borrowing `self`.
+    fn mint_impl(next_id: &mut u64) -> KeyId {
+        let n = *next_id;
+        *next_id += 1;
+        // next_id starts at 1 and only increments; the bench creates at most
+        // NODE_COUNT/5 = 2000 ids per iteration, far below u64::MAX. The
+        // expect() guards an arithmetic invariant a future caller could break
+        // (e.g., by seeding next_id at 0); a tripped message names the field
+        // so the maintainer knows which invariant was violated.
+        let nz = NonZeroU64::new(n)
+            .expect("KeyInterner::next_id seeded at 0 — must start at 1 per ID-offset invariant");
         KeyId(nz)
     }
 
@@ -322,10 +335,8 @@ impl Permutation {
             Self::FullReverse => indices.reverse(),
             Self::SingleRotate => indices.rotate_left(1),
             Self::SwapFirstLast => {
-                if let (Some(&first), Some(&last)) = (indices.first(), indices.last()) {
-                    let last_idx = indices.len() - 1;
-                    indices[0] = last;
-                    indices[last_idx] = first;
+                if !indices.is_empty() {
+                    indices.swap(0, indices.len() - 1);
                 }
             }
         }
@@ -380,18 +391,22 @@ impl MemoryAccounting {
     /// Account for the interned `MockNodeInterned` distribution.
     ///
     /// Interner overhead = HashMap entry per distinct hash + per-id bucket
-    /// slot + reverse-vec slot. Per-entry estimate (assuming no hash
-    /// collisions — typical for the bench's well-distributed `ValueKey<u64>`
-    /// hash):
+    /// slot + reverse-vec slot + heap-allocated `ValueKey<u64>` payload.
+    /// Per-entry estimate (assuming no hash collisions — typical for the
+    /// bench's well-distributed `ValueKey<u64>` hash):
     ///   - `HashMap<u64, Vec<KeyId>>` entry: 8 (u64 key) + 24 (Vec header:
     ///     ptr + len + cap) + 8 (bucket bookkeeping) = **40 bytes**
     ///   - Vec bucket inline storage: 1 KeyId per bucket × 8 bytes = **8 bytes**
     ///   - `Vec<Box<dyn ViewKey>>` reverse slot: 16 (fat ptr) +
-    ///     size_of::<ValueKey<u64>> heap allocation
+    ///     `size_of::<ValueKey<u64>>() = 8 bytes` heap allocation = **24 bytes**
+    ///
+    /// Total per entry: 40 + 8 + 24 = **72 bytes**.
     ///
     /// The bucket Vec's inline allocation is amortised — most buckets are
-    /// size 1, no separate heap alloc beyond the Vec header. The values are
-    /// conservative upper bounds; actual cost depends on hasher load factor.
+    /// size 1, no separate heap alloc beyond the Vec header. The hashbrown
+    /// per-entry overhead estimate (~40 bytes) is a hand-rolled approximation
+    /// that may drift against stdlib internal layout changes; conservative
+    /// upper bound suitable for the gate-report-level comparison.
     #[must_use]
     pub fn for_interned(node_count: usize) -> Self {
         let node_struct_bytes = core::mem::size_of::<MockNodeInterned>() * node_count;
@@ -399,7 +414,7 @@ impl MemoryAccounting {
         // Per-entry estimate with the `Vec<KeyId>` bucket-per-hash fix:
         //   - HashMap<u64, Vec<KeyId>> entry: 8 (key) + 24 (Vec header) + 8 (bookkeeping) = 40
         //   - bucket inline KeyId: 8 (size 1 in collision-free common case)
-        //   - reverse Vec<Box<dyn ViewKey>> slot: 16 (fat ptr) + size_of ValueKey<u64>
+        //   - reverse Vec<Box<dyn ViewKey>> slot: 16 (fat ptr) + size_of::<ValueKey<u64>>() = 8
         let per_entry = 40 + 8 + 16 + core::mem::size_of::<ValueKey<u64>>();
         let interner_bytes = per_entry * keyed_count;
         Self {

@@ -43,6 +43,7 @@ Six permutation patterns: full-reverse, single-rotate, swap-first-last (three pr
 | `s1_reconcile/<storage>/swap_first_last` | 94.00 µs | 82.27 µs | **1.14×** |
 | `s1_hash_lookup/<storage>` (isolated)¹ | 30.48 µs | 15.60 µs | **1.95×** |
 | `s1_memory/<storage>` (accounting probe) | 2.39 µs | 2.40 µs | ~1.0× |
+| **Computed totals** (size-of accounting) | **~563 KB** | **~610 KB** | **0.92× — baseline wins by ~8.4%** |
 
 ¹ Lookup is now isolated (Codex review #5 fix) — the previous probe contaminated the lookup column with per-iteration HashMap construction cost. The post-fix probe pre-builds the map outside `b.iter` and times only the inner walk. Both columns drop ~2.3× (lookup went from 71/38 → 30/16 µs) — what looks like a regression is actually the contamination falling out.
 
@@ -54,21 +55,23 @@ The bench's `MemoryAccounting::for_{baseline,interned}` computes resident bytes 
 
 | Shape | `node_struct_bytes` | `heap_key_bytes` / `interner_bytes` | Total |
 |---|---:|---:|---:|
-| Baseline `Option<Box<dyn ViewKey>>` | 10000 × ~56 = **~547 KB** | 2000 × ~16 = **~31 KB** (per-keyed-node `ValueKey<u64>` heap) | **~578 KB** |
-| Interned `Option<KeyId>` | 10000 × ~48 = **~469 KB** | 2000 × ~80 = **~156 KB** (per-entry HashMap + Vec bucket + reverse slot + heap) | **~625 KB** |
-| **Memory ratio (interned / baseline)** | 0.86× | 5.0× | **1.08× — interned uses ~8% MORE** |
+| Baseline `Option<Box<dyn ViewKey>>` | 10000 × ~56 = **~547 KB** | 2000 × 8 = **~16 KB** (per-keyed-node `ValueKey<u64>` heap, `size_of::<ValueKey<u64>>() = 8`) | **~563 KB** |
+| Interned `Option<KeyId>` | 10000 × ~48 = **~469 KB** | 2000 × 72 = **~141 KB** (per-entry HashMap + Vec bucket + reverse slot + heap) | **~610 KB** |
+| **Memory ratio (interned / baseline)** | 0.86× | 8.8× | **1.084× — interned uses ~8.4% MORE** |
 
 Per-entry interner breakdown (post-`key_eq`-fix per Copilot review #3):
 - `HashMap<u64, Vec<KeyId>>` entry: 8 (key) + 24 (Vec header) + 8 (bookkeeping) = **40 bytes**
 - bucket inline `KeyId`: 8 bytes (size-1 in collision-free common case)
-- reverse `Vec<Box<dyn ViewKey>>` slot: 16 (fat ptr) + ~16 (heap `ValueKey<u64>`) = **32 bytes**
-- **Total per entry: ~80 bytes**
+- reverse `Vec<Box<dyn ViewKey>>` slot: 16 (fat ptr) + 8 (heap `ValueKey<u64>`, since `ValueKey<T> = struct { value: T }` and T=u64) = **24 bytes**
+- **Total per entry: 40 + 8 + 24 = 72 bytes**
 
 **Why the verdict flipped.** The original report's 112 KB interned estimate assumed:
 1. Hash-only dedup (no `key_eq` bucket scan) → ignored the `Vec<KeyId>` bucket overhead.
 2. Free heap payload (no `ValueKey<u64>` stored in the interner's reverse vec) → unrealistic; the interner must hold the actual `ViewKey` for the `key_eq` check.
 
-Both were optimistic shortcuts the bench fixture did not model production-faithfully. Copilot's review (`mock_node.rs:152`) flagged the missing `key_eq` discipline; the fix raised per-entry from ~24 bytes to ~80 bytes, which inverts the memory ratio.
+Both were optimistic shortcuts the bench fixture did not model production-faithfully. Copilot's review (`mock_node.rs:152`) flagged the missing `key_eq` discipline; the fix raised per-entry from ~24 bytes to **72 bytes** (HashMap entry 40 + bucket KeyId 8 + reverse slot 16 + ValueKey<u64> heap 8), which inverts the memory ratio.
+
+**Note on a prior round's published numbers** (revised in this commit): an earlier revision of this report cited ~80 bytes per entry and ~31 KB baseline heap based on an incorrect `size_of::<ValueKey<u64>>() = 16` assumption. The actual struct `pub struct ValueKey<T> { value: T }` is one field of size T, so the u64 case is 8 bytes — verified at `crates/flui-foundation/src/key.rs:406-408`. Recomputed numbers above match what `cargo bench` actually produces via `MemoryAccounting`.
 
 ### S1 verdict (revised — FR-022 stays locked)
 

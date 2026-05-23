@@ -357,13 +357,20 @@ pub fn reconcile_reorder_specialised(
     for (i, slot) in old.iter().enumerate() {
         // Direct-hash bucketing — `key_hash` is already a u64; modulo
         // collapses it into the 16-slot index. Linear probe on collision.
+        // Bounded by TUPLE_ARITY (matches NEW-side bound at line 401) so a
+        // future change that depopulates `index` between iterations cannot
+        // produce an unterminated probe. Sound by pigeonhole at TUPLE_ARITY
+        // slots / TUPLE_ARITY inserts, but the explicit bound matches the
+        // NEW-side symmetry and survives signature refactors.
         let mut bucket = (slot.key_hash as usize) % TUPLE_ARITY;
-        loop {
+        let mut probes = 0;
+        while probes < TUPLE_ARITY {
             if index[bucket].is_none() {
                 index[bucket] = Some(i as u8);
                 break;
             }
             bucket = (bucket + 1) % TUPLE_ARITY;
+            probes += 1;
         }
     }
 

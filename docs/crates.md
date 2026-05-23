@@ -76,7 +76,7 @@ These crates compose the rendering substrate without knowing about each other.
 |-------|--------|---------|
 | `flui-app` | ✅ ACTIVE (migration) | App runner, root widget, application lifecycle |
 | `flui-cli` | ⏸️ DISABLED | CLI tooling (`flui new`, `flui build`, `flui run`) |
-| `flui-devtools` | ⏸️ DISABLED | Inspector, widget tree viewer, perf overlay |
+| `flui-devtools` | ⏸️ DISABLED | Inspector, element tree viewer, perf overlay |
 
 ## Examples and Tools
 

@@ -85,7 +85,7 @@ Dependencies flow strictly downward — no circular dependencies.
 | Assets | `flui-assets` | Asset loading, caching, image decoding |
 | App | `flui-app` | App runner, root widget, app lifecycle |
 | CLI | `flui-cli` | CLI tooling (create, build, run, dev) |
-| DevTools | `flui-devtools` | Inspector, widget tree viewer, perf overlay |
+| DevTools | `flui-devtools` | Inspector, element tree viewer, perf overlay |
 | Logging | `flui-log` | Structured logging for framework internals |
 
 ## Core Architectural Principles
