@@ -94,8 +94,8 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
     /// least once. Pre-bootstrap, all nodes report `false` and propagation
     /// runs to root — the correct fallback (root is the implicit boundary).
     ///
-    /// [`RenderState::<BoxProtocol>::compute_relayout_boundary`]: crate::storage::state::RenderState::compute_relayout_boundary
-    /// [`PipelineOwner::mark_needs_layout`]: crate::pipeline::owner::PipelineOwner::mark_needs_layout
+    /// [`RenderState::<BoxProtocol>::compute_relayout_boundary`]: crate::storage::RenderState::compute_relayout_boundary
+    /// [`PipelineOwner::mark_needs_layout`]: crate::pipeline::PipelineOwner::mark_needs_layout
     fn bootstrap_relayout_boundary(state: &crate::storage::RenderState<Self>, has_parent: bool)
     where
         Self: Sized,

@@ -66,7 +66,7 @@ impl<P: Protocol> RenderState<P> {
     /// (added in D-block PR-A1 U15) to walk the ancestor chain marking
     /// each node up to the nearest relayout boundary.
     ///
-    /// [`PipelineOwner::mark_needs_layout`]: crate::pipeline::owner::PipelineOwner::mark_needs_layout
+    /// [`PipelineOwner::mark_needs_layout`]: crate::pipeline::PipelineOwner::mark_needs_layout
     ///
     /// # Example
     ///

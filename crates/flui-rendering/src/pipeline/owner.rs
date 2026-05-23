@@ -612,7 +612,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     ///
     /// **D-block PR-A1 U15** (memo D3) — greenfield authoring of Flutter's
     /// `markNeedsLayout` walk (`.flutter/.../object.dart:2658-2700`). Walks
-    /// the parent chain via [`RenderNode::parent`] and at each step:
+    /// the parent chain via [`NodeLinks::parent`] and at each step:
     ///
     /// 1. If the node is already marked `NEEDS_LAYOUT`, stop — earlier
     ///    propagation already reached the boundary; no need to re-walk.
@@ -620,10 +620,14 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// 3. If the node is a relayout boundary
     ///    ([`RenderNode::is_relayout_boundary`] — reads the per-instance
     ///    `IS_RELAYOUT_BOUNDARY` storage flag set by
-    ///    [`compute_relayout_boundary`](crate::storage::state::RenderState::compute_relayout_boundary))
+    ///    [`compute_relayout_boundary`](crate::storage::RenderState::compute_relayout_boundary))
     ///    OR has no parent (tree root), push this id onto
     ///    `dirty.needs_layout` and return.
     /// 4. Otherwise, recurse to the parent.
+    ///
+    /// [`NodeLinks::parent`]: crate::storage::NodeLinks::parent
+    /// [`RenderNode::mark_layout_flag`]: crate::storage::RenderNode::mark_layout_flag
+    /// [`RenderNode::is_relayout_boundary`]: crate::storage::RenderNode::is_relayout_boundary
     ///
     /// The walk is idempotent — a stale call on an already-marked subtree
     /// short-circuits at step 1 without re-pushing the boundary. Missing

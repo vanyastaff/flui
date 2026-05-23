@@ -289,7 +289,7 @@ impl RenderNode {
 
     /// Sets the `NEEDS_LAYOUT` flag on this node's state — **flag-only**, no
     /// propagation. Added in D-block PR-A1 U15 to support the
-    /// [`PipelineOwner::mark_needs_layout`](crate::pipeline::owner::PipelineOwner::mark_needs_layout)
+    /// [`PipelineOwner::mark_needs_layout`](crate::pipeline::PipelineOwner::mark_needs_layout)
     /// ancestor-walk: each step of the walk flips one node's flag, and the
     /// owner is responsible for the ancestor traversal and dirty-queue push
     /// at the boundary.
@@ -328,7 +328,7 @@ impl RenderNode {
     /// `entry.render_object().is_relayout_boundary()` for the rare callers
     /// that genuinely want the type-default.
     ///
-    /// [`RenderState::compute_relayout_boundary`]: crate::storage::state::RenderState::compute_relayout_boundary
+    /// [`RenderState::compute_relayout_boundary`]: crate::storage::RenderState::compute_relayout_boundary
     #[inline]
     pub fn is_relayout_boundary(&self) -> bool {
         match self {
