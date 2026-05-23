@@ -2,24 +2,35 @@
 //!
 //! This module provides lock-free state storage for render objects:
 //! - Atomic flags for lock-free dirty tracking
-//! - Write-once geometry and constraints using `OnceCell`
+//! - Mutable geometry and constraints (`Option<T>`, mutated each layout
+//!   pass via `&mut self` accessors)
 //! - Atomic offset updates for paint positioning
 //! - Boundary accessors (relayout/repaint) for pipeline-owner registration
 //!
+//! **D-block PR-A1 U14 migration (2026-05-23):** geometry and constraints
+//! previously used `OnceCell` for write-once semantics; the resulting
+//! panic-on-second-set crashed any re-layout. Migrated to `Option<T>` so
+//! re-layout overwrites unconditionally, mirroring Flutter
+//! `.flutter/.../object.dart:2865` `_size = size` straight assignment.
+//! `set_constraints`/`set_geometry`/`set_size`/`set_sliver_geometry` now
+//! take `&mut self`; production callers (`RenderEntry::layout` and the
+//! RenderBox/RenderSliver helpers) already hold a mut state borrow.
+//!
 //! Production dirty marking does **not** live here. It is driven by
-//! `PipelineOwner::add_node_needing_layout / add_node_needing_paint` invoked
-//! from `flui-view` and `flui-hot-reload`. The boundary-aware propagation
-//! methods that previously hung off `RenderState<P>` were removed in U3 of
-//! the flui-rendering Phase 1 zombie cleanup as unreachable code; the
-//! `RenderDirtyPropagation` trait that PR #81 U3 preserved as a "cost-cheap
-//! option" was deleted in cycle 4 R-5 because its `ElementId` typing did not
-//! match the crate's `RenderId` key — see the `propagation` submodule's
-//! module-level docstring for the rationale and the audit trail
-//! (`docs/research/2026-05-22-flui-rendering-engine-audit.md`).
+//! [`PipelineOwner::mark_needs_layout`](crate::pipeline::PipelineOwner::mark_needs_layout)
+//! (D-block PR-A1 U15 — Flutter `markNeedsLayout` walk) invoked from
+//! `flui-view::element::behavior_commons::mark_render_needs_layout_and_paint`.
+//! The boundary-aware propagation methods that previously hung off
+//! `RenderState<P>` were removed in U3 of the flui-rendering Phase 1 zombie
+//! cleanup as unreachable code; the `RenderDirtyPropagation` trait that
+//! PR #81 U3 preserved as a "cost-cheap option" was deleted in cycle 4 R-5
+//! because its `ElementId` typing did not match the crate's `RenderId` key —
+//! see the `propagation` submodule's module-level docstring for the audit
+//! trail (`docs/research/2026-05-22-flui-rendering-engine-audit.md`).
 //!
 //! # Design Philosophy
 //!
-//! - **Lock-free when possible**: Atomic operations for hot paths
+//! - **Lock-free when possible**: Atomic operations for hot paths (flags + offset)
 //! - **Cache-friendly**: Optimized memory layout for performance
 //! - **Zero-cost abstractions**: No overhead for unused features
 //!
@@ -27,9 +38,9 @@
 //!
 //! ```text
 //! RenderState<P>
-//!  ├── flags: AtomicRenderFlags (lock-free, always accessible)
-//!  ├── geometry: OnceCell<ProtocolGeometry<P>> (write-once, read-many)
-//!  ├── constraints: OnceCell<ProtocolConstraints<P>> (write-once, read-many)
+//!  ├── flags: AtomicRenderFlags (lock-free, &self mutation)
+//!  ├── geometry: Option<ProtocolGeometry<P>> (&mut self set/clear; Flutter parity)
+//!  ├── constraints: Option<ProtocolConstraints<P>> (&mut self set/clear)
 //!  └── offset: AtomicOffset (lock-free atomic updates)
 //! ```
 //!
@@ -42,12 +53,17 @@
 //! - Write: Single atomic fetch_or/fetch_and (≈1-5ns)
 //! - No blocking, no context switches
 //!
-//! ## Write-Once Geometry/Constraints
+//! ## Mutable Geometry/Constraints
 //!
-//! Uses `OnceCell` for write-once, read-many pattern:
-//! - First layout: One atomic CAS to initialize
-//! - Subsequent reads: Zero-cost (just a pointer load)
-//! - Relayout: Clear and reinitialize (rare operation)
+//! Plain `Option<T>` fields mutated via `&mut self`:
+//! - Set: Direct field assignment (≈1ns)
+//! - Read: Direct field load (zero-cost via `Copy` types)
+//! - Re-layout: Idempotent overwrite — no clear-before-set required
+//!
+//! Thread-safety on these fields is enforced by Rust's borrow checker:
+//! pipeline layout is single-threaded by contract (the contract a render
+//! pass holds `&mut RenderEntry<P>` exclusively for its node, so the inner
+//! `&mut RenderState<P>` access is statically race-free).
 //!
 //! # Examples
 //!
@@ -56,7 +72,7 @@
 //! ```rust,ignore
 //! use flui_rendering::core::{BoxRenderState, RenderFlags};
 //!
-//! let state = BoxRenderState::new();
+//! let mut state = BoxRenderState::new();
 //!
 //! // Lock-free flag checks (hot path)
 //! if state.needs_layout() {
@@ -64,10 +80,10 @@
 //!     state.clear_needs_layout();
 //! }
 //!
-//! // Write geometry once after layout
+//! // Write geometry idempotently after layout
 //! state.set_geometry(computed_size);
 //!
-//! // Read geometry many times during paint (zero-cost)
+//! // Read geometry many times during paint (Copy, zero-cost)
 //! let size = state.geometry();
 //! ```
 

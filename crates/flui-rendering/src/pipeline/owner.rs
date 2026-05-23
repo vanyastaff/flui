@@ -656,10 +656,16 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                     // Stale reference (e.g. node removed mid-frame). Stop.
                     return;
                 };
-                if node.needs_layout() {
-                    // Earlier propagation already reached the boundary.
-                    return;
-                }
+                // Idempotent flag set — the AtomicRenderFlags fetch-or is a
+                // no-op when the bit is already set. The walk does NOT
+                // short-circuit on "already marked"; the prior mark's
+                // dirty-queue entry may have been drained by `run_layout`
+                // without clearing the flag (the current run_layout still
+                // contains the `layout_node_with_children` no-op walk that
+                // doesn't invoke `RenderEntry::layout` — once PR-A1b lands
+                // the walk rewrite, layout clears `NEEDS_LAYOUT` and the
+                // walk could short-circuit, but the always-walk shape
+                // remains correct).
                 node.mark_layout_flag();
                 let parent = node.links().parent();
                 let boundary = node.is_relayout_boundary() || parent.is_none();
@@ -668,7 +674,16 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             };
             let (is_boundary, depth, parent) = step;
             if is_boundary {
-                self.dirty.needs_layout.push(DirtyNode::new(current, depth));
+                // Codex P1 (PR #139 review): always enqueue the boundary
+                // for this invalidation, with a dedup check against the
+                // dirty queue so multiple marks-in-same-frame don't push
+                // duplicate entries. Pre-fix, the algorithm returned early
+                // on already-marked nodes WITHOUT pushing — which silently
+                // dropped subsequent invalidations once the broken pipeline
+                // had drained the dirty queue but not cleared the flag.
+                if !self.dirty.needs_layout.iter().any(|d| d.id == current) {
+                    self.dirty.needs_layout.push(DirtyNode::new(current, depth));
+                }
                 return;
             }
             // SAFETY: `parent.is_none()` is folded into `is_boundary` above,
