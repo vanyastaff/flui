@@ -80,5 +80,5 @@ network = ["dep:reqwest"]
 full = ["serde", "images", "network"]
 
 [[example]]
-name = "basic_usage"
+name = "assets_basic_usage"
 required-features = []
