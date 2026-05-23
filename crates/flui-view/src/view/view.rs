@@ -190,6 +190,26 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     /// Get the depth in the element tree (root = 0).
     fn depth(&self) -> usize;
 
+    /// Inform this element of its own `ElementId` in the surrounding
+    /// `ElementTree`.
+    ///
+    /// Default impl is a no-op. The unified `Element<V, A, B>`
+    /// overrides this to forward to `ElementCore::set_self_id`, so
+    /// `ElementCore<V, Variable>::update_or_create_children` can
+    /// stamp the real parent id onto every emitted
+    /// [`ReconcileEvent`](crate::tree::ReconcileEvent) instead of
+    /// the §U13 placeholder.
+    ///
+    /// Called by [`crate::tree::ElementTree::insert`] +
+    /// [`crate::tree::ElementTree::mount_root_with_pipeline_owner`]
+    /// immediately after slab insertion, BEFORE the element's
+    /// `mount` call. Plan §U15.
+    fn set_self_id(&mut self, _id: flui_foundation::ElementId) {
+        // Default: ignore. Only the unified `Element<V, A, B>`
+        // overrides this; hand-rolled element impls (test fixtures,
+        // future custom elements) opt in by overriding.
+    }
+
     /// Get the slot position in parent's child list.
     fn slot(&self) -> usize {
         0

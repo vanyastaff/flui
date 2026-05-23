@@ -279,6 +279,11 @@ impl ElementTree {
         let slab_index = self.nodes.insert(node);
         let id = ElementId::new(slab_index + 1);
 
+        // Plan §U15: stamp the element with its own ElementId BEFORE
+        // `mount` so the Variable-arity reconciler can read it back
+        // when emitting ReconcileEvent's `parent` field.
+        self.nodes[slab_index].element.set_self_id(id);
+
         // Mount the element (now it has PipelineOwner set)
         self.nodes[slab_index].element.mount(None, 0, owner);
 
@@ -345,6 +350,9 @@ impl ElementTree {
 
         let slab_index = self.nodes.insert(node);
         let id = ElementId::new(slab_index + 1);
+
+        // Plan §U15: same self-id stamping as mount_root.
+        self.nodes[slab_index].element.set_self_id(id);
 
         // Mount the element
         self.nodes[slab_index]
