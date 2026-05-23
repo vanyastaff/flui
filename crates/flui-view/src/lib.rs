@@ -152,8 +152,8 @@ mod test_only_global_key_registry {
 // View traits
 // Binding
 pub use binding::{
-    AppExitResponse, AppLifecycleState, PredictiveBackEvent, RouteInformation, ViewFocusDirection,
-    ViewFocusEvent, ViewFocusState, WidgetsBinding, WidgetsBindingObserver,
+    AppExitResponse, AppLifecycleState, AttachError, PredictiveBackEvent, RouteInformation,
+    ViewFocusDirection, ViewFocusEvent, ViewFocusState, WidgetsBinding, WidgetsBindingObserver,
 };
 // Child helpers
 pub use child::{Child, Children};

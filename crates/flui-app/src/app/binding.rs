@@ -175,17 +175,26 @@ impl AppBinding {
     ///
     /// This creates the root element and schedules the first build.
     ///
-    /// If a root widget is already attached, the failure is logged and
-    /// this call is a no-op.
-    pub fn attach_root_widget<V: View>(&self, view: &V) {
+    /// # Errors
+    ///
+    /// Forwards every [`AttachError`](flui_view::AttachError) the
+    /// underlying [`WidgetsBinding::attach_root_widget`] returns —
+    /// notably [`AttachError::AlreadyAttached`](flui_view::AttachError::AlreadyAttached)
+    /// when a root widget is already mounted. Callers MUST handle the
+    /// `Result` (PR #119 review — copilot); the previous log-and-
+    /// swallow shape hid `AlreadyAttached` (and any future variant
+    /// added under the enum's `#[non_exhaustive]` cover) from the
+    /// caller.
+    pub fn attach_root_widget<V>(&self, view: &V) -> Result<(), flui_view::AttachError>
+    where
+        V: View + Clone + Send + Sync + 'static,
+    {
         let widgets = self.widgets.write();
-        if let Err(e) = widgets.attach_root_widget(view) {
-            tracing::error!("attach_root_widget failed: {e}");
-            return;
-        }
+        widgets.attach_root_widget(view)?;
         self.initialized.store(true, Ordering::Relaxed);
         self.request_redraw();
         tracing::debug!("Root widget attached");
+        Ok(())
     }
 
     /// Get read access to WidgetsBinding.
