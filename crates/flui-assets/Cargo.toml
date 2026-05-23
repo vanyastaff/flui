@@ -78,7 +78,3 @@ network = ["dep:reqwest"]
 
 # Enable all stable features (recommended for applications)
 full = ["serde", "images", "network"]
-
-[[example]]
-name = "assets_basic_usage"
-required-features = []
