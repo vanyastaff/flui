@@ -49,6 +49,17 @@ pub struct ElementBuildContext {
     /// Reference to the build owner.
     owner: Arc<RwLock<BuildOwner>>,
 
+    /// Whether this context is the minimal/dummy variant created by
+    /// [`Self::new_minimal`]. The `tree` and `owner` Arcs of a minimal
+    /// context point at the process-shared dummy cache (plan §U12 /
+    /// audit V-13 — cheap part); mutating that shared state from a
+    /// user `build()` accumulates writes into a long-lived global heap.
+    /// [`BuildContext::mark_needs_build`] checks this flag and degrades
+    /// to a `tracing::warn!`-and-no-op on minimal contexts to prevent
+    /// unbounded growth of the shared dummy's `dirty_elements` heap
+    /// (PR #119 review — copilot).
+    is_minimal: bool,
+
     /// Whether we're currently in a build phase (debug only).
     #[cfg(debug_assertions)]
     is_building: bool,
@@ -87,6 +98,7 @@ impl ElementBuildContext {
             mounted,
             tree,
             owner,
+            is_minimal: false,
             #[cfg(debug_assertions)]
             is_building: false,
         }
@@ -110,6 +122,7 @@ impl ElementBuildContext {
             mounted: node.element().mounted(),
             tree: tree.clone(),
             owner,
+            is_minimal: false,
             #[cfg(debug_assertions)]
             is_building: false,
         })
@@ -245,6 +258,7 @@ impl ElementBuildContext {
             mounted: true,
             tree,
             owner,
+            is_minimal: true,
             #[cfg(debug_assertions)]
             is_building: true,
         }
@@ -567,6 +581,20 @@ impl BuildContext for ElementBuildContext {
     }
 
     fn mark_needs_build(&self) {
+        if self.is_minimal {
+            // The minimal/dummy context backs `new_minimal` builds and
+            // shares a single process-global `BuildOwner` (plan §U12 /
+            // audit V-13 — cheap part). Scheduling a build on it would
+            // accumulate a sentinel `ElementId(1)` into the shared
+            // dummy's long-lived `dirty_elements` heap with no drain
+            // path — unbounded growth on a Flutter-forbidden misuse
+            // path. Degrade to a warning instead (PR #119 review —
+            // copilot).
+            tracing::warn!(
+                "mark_needs_build called on minimal ElementBuildContext — no-op (Flutter-forbidden during build; ctx.mark_needs_build would corrupt the process-shared dummy BuildOwner's dirty_elements heap)"
+            );
+            return;
+        }
         let mut owner = self.owner.write();
         owner.schedule_build_for(self.element_id, self.depth);
     }
