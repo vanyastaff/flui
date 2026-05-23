@@ -355,11 +355,7 @@ impl Transform {
     /// let t = Transform::rotate_around_radians(Radians::from_degrees(45.0), 100.0, 100.0);
     /// ```
     #[inline]
-    pub fn rotate_around_radians(
-        angle: crate::Radians,
-        pivot_x: f32,
-        pivot_y: f32,
-    ) -> Self {
+    pub fn rotate_around_radians(angle: crate::Radians, pivot_x: f32, pivot_y: f32) -> Self {
         Self::RotateAround {
             angle: angle.0,
             pivot_x,
