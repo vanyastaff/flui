@@ -54,7 +54,7 @@ jobs:
         with:
           # Pin versions — unpinned tools surface unrelated breakage on
           # release day. Bump deliberately.
-          tool: typos-cli@1.28,taplo-cli@0.9
+          tool: typos-cli@1.28,taplo-cli@0.10
 
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
