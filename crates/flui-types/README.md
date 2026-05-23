@@ -97,7 +97,7 @@ Run the included examples:
 
 ```bash
 # Basic usage demonstration
-cargo run --example basic_usage
+cargo run --example types_basic_usage
 
 # Unit conversion pipeline
 cargo run --example unit_conversions

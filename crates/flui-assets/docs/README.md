@@ -222,12 +222,12 @@ Full API documentation available at:
 
 Located in `crates/flui_assets/examples/`:
 
-- `basic_usage.rs` - Simple font loading
+- `assets_basic_usage.rs` - Simple font loading
 - (More examples coming soon)
 
 Run with:
 ```bash
-cargo run -p flui_assets --example basic_usage
+cargo run -p flui_assets --example assets_basic_usage
 ```
 
 ## Best Practices
