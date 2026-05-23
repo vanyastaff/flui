@@ -305,6 +305,135 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# Trigger 9 (FR-036, Phase 3.1 §U30) — sanctioned `dyn`-boundary registry.
+#
+# Greps every `Box<dyn …>`, `&dyn …`, `Arc<dyn …>`, `Rc<dyn …>` introduction
+# across the framework crates (`flui-view`, `flui-foundation`, `flui-tree`,
+# `flui-engine`, `flui-rendering`, `flui-interaction`) AND every type alias
+# of the same shape (`type X = Box<dyn …>` etc., the "type-alias laundering
+# closure" per FR-036).
+#
+# Two filter layers gate what reaches the marker check:
+#
+# 1. **Language-runtime exempts** (FR-029 categorical exempt list —
+#    universal patterns, not framework `dyn` introductions):
+#    - `Pin<Box<dyn Future<…>>>` and `Box<dyn Future<…>>` (async runtime).
+#    - `Box<dyn Iterator<…>>` (lazy enumeration).
+#    - `&dyn Fn*` callback-parameter binds (`&dyn Fn(…)`, `&dyn FnMut(…)`,
+#      `&dyn FnOnce(…)`) — distinct from OWNED callback storage
+#      (`Box<dyn Fn(…) + Send + Sync>`), which is FR-029 #5 sanctioned but
+#      still requires a marker.
+#
+# 2. **Sanctioned trait allowlist** (FR-029 1–5 + the pre-existing
+#    `View` / `ViewKey` / `BuildContext` surfaces). These are widely-used
+#    sanctioned trait surfaces in the framework; per-site marker discipline
+#    would explode to ~500+ markers (mostly `&dyn View` function parameters).
+#    The allowlist captures the categories sanctioned by FR-029 by name; any
+#    NEW `dyn Trait` outside the list either gets a marker or refactors.
+#    The allowlist is intentionally narrow — `Trait` matches must be EXACT
+#    names from this list, not regex prefixes.
+#
+# Hits that survive both filters must carry `// PORT-CHECK-OK-DYN: <reason>`
+# on the SAME line. Multi-line declarations (`Box<dyn\n  Trait>`) are
+# matched via `rg -U` multiline mode; the marker can sit on the line
+# carrying `Box<dyn` OR the line carrying the trait name.
+#
+# Marker grammar:
+#   <something with Box<dyn Foo>>  // PORT-CHECK-OK-DYN: <one-line justification>
+#
+# Type aliases use the same marker convention; alias declarations carry
+# their own marker, and downstream uses inherit the sanctioning (the alias
+# name does not contain `dyn`, so the trigger does not see it again).
+# -----------------------------------------------------------------------------
+
+# Sanctioned trait allowlist — `|`-joined alternation read inline by the
+# subsequent `grep -E`. The expression allows an optional path prefix
+# (`crate::`, `std::`, `flui_foundation::`, etc.) between `dyn` and the
+# trait name so `dyn crate::ElementBase` and `dyn ElementBase` both match.
+# Add a trait here when its `dyn` usage is widespread enough that
+# per-site markers become noise; remove only after auditing that the
+# trait's `dyn` surface is genuinely gone.
+#
+# Categories (FR-029 sanctioning):
+#   #1 element-storage sub-traits: ElementBase, ElementBehavior,
+#      StatelessElementBase, StatefulElementBase, ProxyElementBase,
+#      InheritedElementBase, RenderElementBase
+#   #2 BoxedView dynamic-children: View, BoxedView, ViewObject
+#   #4 pipeline-owner type-erasure: Any
+#   #5 error chains + observer/animation: Error, std::error::Error,
+#      core::error::Error, Listenable, Animation, WidgetsBindingObserver
+#   Pre-existing surfaces: ViewKey, BuildContext, Notification,
+#                          NotifiableElement, RenderObject, RenderObjectTrait
+#   Framework trait surfaces (gesture / focus / delegate patterns —
+#   widely-used reference shapes; their owned-storage uses sit on
+#   sanctioned FR-029 categories): GestureArenaMember,
+#   FocusTraversalPolicy, SliverGridDelegate, SingleChildLayoutDelegate,
+#   MultiChildLayoutDelegate, FlowDelegate, CustomPainter
+fr036_allowed='dyn\s+(\$crate::|[a-zA-Z_][a-zA-Z0-9_]*::)*(View|ViewKey|BuildContext|ElementBase|ElementBehavior|StatelessElementBase|StatefulElementBase|ProxyElementBase|InheritedElementBase|RenderElementBase|InheritedElementAccess|RenderObjectTrait|RenderObject|Listenable|Notification|NotifiableElement|WidgetsBindingObserver|Animation|BoxedView|ViewObject|Any|Error|GestureArenaMember|FocusTraversalPolicy|SliverGridDelegate|SingleChildLayoutDelegate|MultiChildLayoutDelegate|FlowDelegate|CustomPainter|ParentData|CustomClipper|RendererBinding|Debug|Fn|FnMut|FnOnce)\b'
+
+# Framework crates under enforcement.
+fr036_scope=(
+  crates/flui-view/src
+  crates/flui-foundation/src
+  crates/flui-tree/src
+  crates/flui-engine/src
+  crates/flui-rendering/src
+  crates/flui-interaction/src
+)
+
+# Pre-filter language-runtime exempts before the marker / allowlist check.
+# `rg -U` enables multiline matches so `Box<dyn\n  Trait>` declarations
+# (split across newlines by rustfmt) are captured intact.
+fr036_hits=$(rg -U --line-number --column \
+    -e 'Box<\s*dyn\s+' \
+    -e '&\s*dyn\s+' \
+    -e 'Arc<\s*dyn\s+' \
+    -e 'Rc<\s*dyn\s+' \
+    "${fr036_scope[@]}" 2>/dev/null \
+  | grep -Ev ':\s*(//!|///|//)' \
+  | grep -Ev '//\s*PORT-CHECK-OK-DYN:' \
+  | grep -Ev 'Pin<\s*Box<\s*dyn\s+([a-zA-Z_][a-zA-Z0-9_]*::)*Future|Box<\s*dyn\s+([a-zA-Z_][a-zA-Z0-9_]*::)*Future|Box<\s*dyn\s+([a-zA-Z_][a-zA-Z0-9_]*::)*Iterator' \
+  | grep -Ev '&\s*dyn\s+Fn[A-Za-z]*\s*[(<]|&\s*dyn\s+FnMut|&\s*dyn\s+FnOnce' \
+  | grep -Ev "${fr036_allowed}" \
+  || true)
+
+# Type-alias closure: catch `type X = Box<dyn Y>` / `type X = Arc<dyn Y>` etc.
+# Alias declarations get their own marker; downstream uses of the alias
+# name don't trip the trigger.
+fr036_alias_hits=$(rg --line-number --column \
+    'type\s+\w+\s*=\s*(Box|&|Arc|Rc)<\s*dyn\s+' \
+    "${fr036_scope[@]}" 2>/dev/null \
+  | grep -Ev ':\s*(//!|///|//)' \
+  | grep -Ev '//\s*PORT-CHECK-OK-DYN:' \
+  | grep -Ev "${fr036_allowed}" \
+  || true)
+
+fr036_combined=""
+if [[ -n "${fr036_hits}" ]]; then
+  fr036_combined="${fr036_hits}"
+fi
+if [[ -n "${fr036_alias_hits}" ]]; then
+  if [[ -n "${fr036_combined}" ]]; then
+    fr036_combined="${fr036_combined}
+${fr036_alias_hits}"
+  else
+    fr036_combined="${fr036_alias_hits}"
+  fi
+fi
+
+if [[ -n "${fr036_combined}" ]]; then
+  echo 'VIOLATION 9: sanctioned dyn-boundary registry (FR-036)'
+  echo "see ${trigger_doc} (trigger 9) and specs/004-view-element-core/spec.md FR-036"
+  echo "${fr036_combined}"
+  echo ""
+  violations=$((violations + 1))
+else
+  if [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    9: sanctioned dyn-boundary registry (FR-036)"
+  fi
+fi
+
+# -----------------------------------------------------------------------------
 # Summary
 # -----------------------------------------------------------------------------
 if [[ "${violations}" -gt 0 ]]; then
@@ -313,5 +442,5 @@ if [[ "${violations}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "port-check: all seven refusal triggers + FR-033 grep clean"
+echo "port-check: all seven refusal triggers + FR-033 grep + trigger 9 (FR-036) clean"
 exit 0
