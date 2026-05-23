@@ -11,7 +11,7 @@ revised: 2026-05-23
 
 ## Summary
 
-Close Core.0's D-block by wiring the layout, compositing, and paint phase orchestration to Flutter-shape parity. Ships as **seven PRs** in dependency order: PR-C-1 (`flui-log` merge) → PR-C-2 (`flui-geometry` split + Constitution amendment) → PR-B-gate (layer/semantics Wave 3+4 lifecycle + dirty-bit propagation) → PR-B-followup (layer/semantics Waves 1+2+5+6+7) → PR-A1 (D-1 layout pipeline) → PR-A2 (D-3+D-4 compositing+paint pipeline) → PR-C-3 (refusal triggers #8/#10/#11/#12/#13 — install LAST per close-first PR #134 precedent).
+Close Core.0's D-block by wiring the layout, compositing, and paint phase orchestration to Flutter-shape parity. Ships as **seven PRs**. Six on the serial critical path: PR-C-1 (`flui-log` merge) → PR-C-2 (`flui-geometry` split + Constitution amendment) → PR-B-gate (layer/semantics Wave 3+4 lifecycle + dirty-bit propagation) → PR-A1 (D-1 layout pipeline) → PR-A2 (D-3+D-4 compositing+paint pipeline) → PR-C-3 (refusal triggers #8/#10/#11/#12/#13 — install LAST per close-first PR #134 precedent). PR-B-followup (layer/semantics Waves 1+2+5+6+7) ships parallel, can land any time post-PR-B-gate, does NOT gate D-block critical path.
 
 ---
 
@@ -75,7 +75,7 @@ All PRs follow CLAUDE.md §Engineering Standards & Subagent Dispatch: atomic-com
 
 **PR-B-gate — layer/semantics lifecycle + dirty-bit propagation (memo D11)**
 
-- R12a. Execute **Wave 3 + Wave 4 only** of [`plans/2026-05-22-004-feat-layer-semantics-repair-plan.md`](../../plans/2026-05-22-004-feat-layer-semantics-repair-plan.md) (U8–U13, ~8–10 atomic commits). Wave 3 lands `disposed: AtomicBool` + Drop guards mirroring PR #84's `ChangeNotifier::dispose`; `needs_add_to_scene` dirty-bit propagation matching Flutter `updateSubtreeNeedsAddToScene`. Wave 4 lands slab-tree hygiene pair (auto-detach on `add_child` + cascade-by-default `remove`) mirrored across `flui-layer` and `flui-semantics`. **Gates PR-A2 only** — D-3 reads layer state via `_updateSubtreeCompositingBits`; clean lifecycle prevents stale-layer panics mid-batch.
+- R12a. Execute **Wave 3 + Wave 4 only** of [`plans/2026-05-22-004-feat-layer-semantics-repair-plan.md`](../plans/2026-05-22-004-feat-layer-semantics-repair-plan.md) (U8–U13, ~8–10 atomic commits). Wave 3 lands `disposed: AtomicBool` + Drop guards mirroring PR #84's `ChangeNotifier::dispose`; `needs_add_to_scene` dirty-bit propagation matching Flutter `updateSubtreeNeedsAddToScene`. Wave 4 lands slab-tree hygiene pair (auto-detach on `add_child` + cascade-by-default `remove`) mirrored across `flui-layer` and `flui-semantics`. **Gates PR-A2 only** — D-3 reads layer state via `_updateSubtreeCompositingBits`; clean lifecycle prevents stale-layer panics mid-batch.
 
 **PR-B-followup — layer/semantics rest (memo D11)**
 
@@ -193,7 +193,7 @@ PR-C-1 lands first because its touchpoints (Cargo.toml workspace edits, lib.rs r
 - **Verified 2026-05-23 (this brainstorm)**: `dirty.needs_compositing`, `dirty.needs_paint`, `dirty.needs_semantics` queues exist symmetric with `dirty.needs_layout`. All four already sort-by-depth correctly (`owner.rs:763/945/1049/1373`). R11 is verification, not new sort code.
 - **Verified 2026-05-23 (this brainstorm)**: `mark_needs_layout` callers — 2 production sites (`crates/flui-view/src/element/behavior_commons.rs:244`, `crates/flui-hot-reload/src/pipeline.rs:156`) both currently use direct `add_node_needing_layout` (no propagation). R21 migration scope confirmed.
 - **Verified 2026-05-23 (this brainstorm)**: `scripts/port-check.sh:308` confirms trigger #9 already installed as FR-036 (sanctioned-dyn-boundary registry, 32-trait allowlist) from PR #134. R13 numbering corrected to #8/#10/#11/#12/#13.
-- **Plan exists**: [`plans/2026-05-22-004-feat-layer-semantics-repair-plan.md`](../../plans/2026-05-22-004-feat-layer-semantics-repair-plan.md) — 24 commits / 7 waves / +550 LOC. R12a executes Wave 3+4 only (gates D-3+D-4). R12b executes rest (parallel, independent).
+- **Plan exists**: [`plans/2026-05-22-004-feat-layer-semantics-repair-plan.md`](../plans/2026-05-22-004-feat-layer-semantics-repair-plan.md) — 24 commits / 7 waves / +550 LOC. R12a executes Wave 3+4 only (gates D-3+D-4). R12b executes rest (parallel, independent).
 - **Companion decision memo**: [`docs/research/2026-05-23-d-block-architecture-decision-memo.md`](../research/2026-05-23-d-block-architecture-decision-memo.md) carries D1–D12 binding architecture decisions with concrete API signatures and code sketches. Plan-write inherits memo decisions; deviations require explicit Key Decision entries.
 
 ---

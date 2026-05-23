@@ -274,7 +274,7 @@ R8 wording in revised brainstorm: "`run_paint` walks the paint set from `root_id
 
 **Rationale.** Adversarial Task 9 showed `flui-view` `behavior_commons.rs` migration AND `flui-types` re-exports could collide. The fences enforce non-overlap. PR-C splits resolve Cargo.toml conflict between flui-log merge and flui-geometry split (scope Task 4).
 
-**Merge ordering**: PR-C-1, PR-C-2, PR-B-gate, PR-B-followup, PR-A1, PR-A2, PR-C-3 (trigger #8 install last, after D-block closes SP-1 violations per D10).
+**Merge ordering (serial critical path)**: PR-C-1 → PR-C-2 → PR-B-gate → PR-A1 → PR-A2 → PR-C-3 (trigger #8 install last, after D-block closes SP-1 violations per D10). **PR-B-followup** lands parallel any time post-PR-B-gate; per D11 it does NOT gate D-block critical path, so it is intentionally excluded from the serial chain above.
 
 ---
 
