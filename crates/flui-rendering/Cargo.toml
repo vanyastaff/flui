@@ -30,7 +30,7 @@ crossbeam-channel = "0.5"                     # PipelineOwnerHandle bounded mark
 
 [dev-dependencies]
 criterion.workspace = true
-mockall = "0.13"
+mockall = "0.14"
 
 [features]
 default = []
