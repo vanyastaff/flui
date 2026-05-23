@@ -131,34 +131,49 @@ pub fn reconcile_children(
     }
 
     // Fast path: all new — create every element + emit Mount per slot.
+    //
+    // Emission AFTER `create_element` so a panic in a view's
+    // `create_element` body does not leave the observer with a Mount
+    // event for an element that was never created. Per-slot iteration
+    // (not `.map().collect()`) keeps the order of side effects
+    // observable and gives a panic-cleanup hook a place to land
+    // without unwinding partial work — today the iteration is
+    // monotonic and bails on first panic via the iterator's natural
+    // unwind, dropping the partially-built children + leaving
+    // `*old_children` untouched (it was already empty).
     if old_children.is_empty() {
-        let created: Vec<Box<dyn ElementBase>> = new_views
-            .iter()
-            .enumerate()
-            .map(|(slot, view)| {
-                emit_event(&ReconcileEvent::mount(
-                    parent,
-                    slot,
-                    view.view_type_id(),
-                    view.key().map(flui_foundation::ViewKey::key_hash),
-                ));
-                view.create_element()
-            })
-            .collect();
+        let mut created: Vec<Box<dyn ElementBase>> = Vec::with_capacity(new_views.len());
+        for (slot, view) in new_views.iter().enumerate() {
+            let element = view.create_element();
+            // Emit only after the lifecycle call returned. A panic
+            // inside `create_element` aborts the loop; observers
+            // see Mount events ONLY for elements that exist.
+            emit_event(&ReconcileEvent::mount(
+                parent,
+                slot,
+                view.view_type_id(),
+                view.key().map(flui_foundation::ViewKey::key_hash),
+            ));
+            created.push(element);
+        }
         *old_children = created;
         return;
     }
 
     // Fast path: all removed — unmount every old child + emit Unmount.
+    //
+    // Symmetric to the Mount fast path: emission AFTER `child.unmount`
+    // returns so a panic in the unmount body does not leak an
+    // Unmount event for an element whose cleanup is incomplete.
     if new_views.is_empty() {
         for (slot, mut child) in old_children.drain(..).enumerate() {
-            emit_event(&ReconcileEvent::unmount(
-                parent,
-                slot,
-                child.view_type_id(),
-                child.current_key_hash(),
-            ));
+            // Capture identity before unmount; the child is consumed
+            // by the unmount call and the event needs the view_type
+            // it had.
+            let type_id = child.view_type_id();
+            let key_hash = child.current_key_hash();
             child.unmount(owner);
+            emit_event(&ReconcileEvent::unmount(parent, slot, type_id, key_hash));
         }
         return;
     }
