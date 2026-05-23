@@ -64,9 +64,7 @@ fn demonstrate_conversion(scale_factor: f32, display_name: &str) {
     let back_to_logical_width = device_width.to_pixels(scale_factor);
     let back_to_logical_height = device_height.to_pixels(scale_factor);
 
-    println!(
-        "   Round-trip check: {back_to_logical_width:?} x {back_to_logical_height:?}"
-    );
+    println!("   Round-trip check: {back_to_logical_width:?} x {back_to_logical_height:?}");
 }
 
 fn responsive_button_example() {
@@ -141,9 +139,7 @@ fn gpu_pipeline_example() {
     // Step 4: Texture atlas coordinates (device pixels)
     let sprite_pos = Point::new(device_px(256), device_px(128));
     let sprite_size = Size::new(device_px(64), device_px(64));
-    println!(
-        "   4. Texture: Atlas sprite at {sprite_pos:?}, size {sprite_size:?}"
-    );
+    println!("   4. Texture: Atlas sprite at {sprite_pos:?}, size {sprite_size:?}");
 }
 
 fn pixel_perfect_example() {

@@ -207,7 +207,12 @@ mod tests {
         config.set_button(true);
 
         assert!(config.is_button());
-        assert_eq!(config.label().map(super::properties::AttributedString::as_str), Some("Test Button"));
+        assert_eq!(
+            config
+                .label()
+                .map(super::properties::AttributedString::as_str),
+            Some("Test Button")
+        );
     }
 
     #[test]

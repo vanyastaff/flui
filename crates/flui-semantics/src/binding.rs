@@ -5,11 +5,11 @@
 //! accessibility features.
 
 use std::sync::{
-    Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},
+    Arc,
 };
 
-use flui_foundation::{BindingBase, impl_binding_singleton};
+use flui_foundation::{impl_binding_singleton, BindingBase};
 use parking_lot::RwLock;
 
 use crate::{event::SemanticsEvent, role::Assertiveness};

@@ -5,8 +5,8 @@
 //! for repaint boundary layers.
 
 use flui_types::{
-    Offset,
     geometry::{Pixels, Rect, Vec2},
+    Offset,
 };
 
 /// Layer that applies a simple offset to its children.

@@ -172,7 +172,7 @@ impl Default for PictureLayer {
 #[cfg(test)]
 mod tests {
     use flui_painting::Canvas;
-    use flui_types::{Color, Point, Rect, geometry::px, painting::Paint};
+    use flui_types::{geometry::px, painting::Paint, Color, Point, Rect};
 
     use super::*;
 

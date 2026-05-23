@@ -227,7 +227,7 @@ impl Scene {
     /// [`LayerError::CallbackPoisoned`]: crate::LayerError::CallbackPoisoned
     #[tracing::instrument(skip_all, name = "fire_composition_callbacks", fields(n = self.composition_callbacks.len()))]
     pub fn fire_composition_callbacks(&mut self) -> Vec<crate::LayerError> {
-        use std::panic::{AssertUnwindSafe, catch_unwind};
+        use std::panic::{catch_unwind, AssertUnwindSafe};
 
         let mut errors = Vec::new();
         for callback in self.composition_callbacks.drain(..) {
@@ -384,7 +384,7 @@ impl crate::compositor::SceneBuilder<'_> {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::{Offset, geometry::px};
+    use flui_types::{geometry::px, Offset};
 
     use super::*;
     use crate::CanvasLayer;
@@ -511,8 +511,8 @@ mod tests {
     #[test]
     fn test_composition_callback_register_and_fire() {
         use std::sync::{
-            Arc,
             atomic::{AtomicUsize, Ordering},
+            Arc,
         };
 
         let mut scene = Scene::empty(Size::new(px(100.0), px(100.0)));
@@ -546,8 +546,8 @@ mod tests {
         // callbacks from firing. This mirrors the rendering crate's
         // `Poisoned` shape (commit dc0fa1ad).
         use std::sync::{
-            Arc,
             atomic::{AtomicUsize, Ordering},
+            Arc,
         };
 
         let mut scene = Scene::empty(Size::ZERO);

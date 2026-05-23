@@ -3,7 +3,7 @@
 //! This layer applies an opacity (alpha) value to its children.
 //! Corresponds to Flutter's `OpacityLayer`.
 
-use flui_types::{Offset, geometry::Pixels};
+use flui_types::{geometry::Pixels, Offset};
 
 /// Layer that applies opacity (alpha blending) to its children.
 ///

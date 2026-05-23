@@ -232,9 +232,10 @@ impl AssetRegistry {
         {
             let caches = self.caches.read();
             if let Some(any) = caches.get(&type_id)
-                && let Some(cache) = any.downcast_ref::<AssetCache<T>>() {
-                    return cache.clone();
-                }
+                && let Some(cache) = any.downcast_ref::<AssetCache<T>>()
+            {
+                return cache.clone();
+            }
         }
 
         // Slow path: create new cache
@@ -242,9 +243,10 @@ impl AssetRegistry {
 
         // Double-check in case another thread created it
         if let Some(any) = caches.get(&type_id)
-            && let Some(cache) = any.downcast_ref::<AssetCache<T>>() {
-                return cache.clone();
-            }
+            && let Some(cache) = any.downcast_ref::<AssetCache<T>>()
+        {
+            return cache.clone();
+        }
 
         // Create new cache
         let cache = AssetCache::<T>::new(self.default_capacity);

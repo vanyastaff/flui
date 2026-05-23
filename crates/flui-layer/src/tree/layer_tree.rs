@@ -6,7 +6,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use flui_foundation::{ElementId, LayerId};
-use flui_types::{Offset, geometry::Pixels};
+use flui_types::{geometry::Pixels, Offset};
 use slab::Slab;
 
 use crate::layer::Layer;

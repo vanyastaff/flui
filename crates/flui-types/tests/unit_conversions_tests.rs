@@ -6,9 +6,7 @@
 //! - Pixels ↔ Rems
 //! - Round-trip conversions
 
-use flui_types::geometry::{
-    Pixels, device_px, px, rems, scaled_px,
-};
+use flui_types::geometry::{Pixels, device_px, px, rems, scaled_px};
 
 // ============================================================================
 // T063: Pixels::to_device_pixels(scale)
