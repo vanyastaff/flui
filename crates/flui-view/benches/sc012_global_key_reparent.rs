@@ -75,19 +75,37 @@ impl View for KeyedLeaf {
     }
 }
 
-/// Build a tree of `outer_size` spacer elements with a keyed leaf
-/// mounted under spacer index 0. Returns the tree handles +
-/// the keyed-leaf's id + a fresh GlobalKey clone.
-fn setup_tree(
-    outer_size: usize,
-) -> (
+/// Bench fixture tuple: tree handle, build-owner handle, GlobalKey,
+/// and the keyed leaf's mounted ElementId. Extracted to silence
+/// `clippy::type_complexity` on the setup-fn signature.
+type SetupOutputs = (
     Arc<RwLock<ElementTree>>,
     Arc<RwLock<BuildOwner>>,
     GlobalKey<KeyedLeafState>,
-) {
+    flui_foundation::ElementId,
+);
+
+/// Build a tree of `outer_size` spacer elements with a keyed leaf
+/// mounted under spacer index 0. Returns the tree handles, the
+/// keyed-leaf's id, and a fresh GlobalKey clone.
+///
+/// Reviewer fix (adversarial finding #2): the GlobalKey REGISTRY is
+/// a process-wide singleton, and `test_only_set_global_key_registry`
+/// REPLACES the prior handle on every call. With criterion's
+/// `BatchSize::LargeInput`, setups are run in a batch BEFORE the
+/// measurement loop — only the LAST setup's handle survives in
+/// REGISTRY, so an earlier iter's `key.current_element()` resolves
+/// against a later iter's tree (returns None → `.expect()` panics).
+/// Two fixes layered: (1) return the leaf's `ElementId` directly
+/// so the measurement doesn't depend on the REGISTRY at all; (2)
+/// switch to `BatchSize::PerIteration` so setup + measurement
+/// interleave, AND install the registry inside the measurement
+/// closure (each iter installs against its own tree). Either fix
+/// alone would prevent the panic; both layers belt-and-braces
+/// because the registry singleton is fundamentally fragile.
+fn setup_tree(outer_size: usize) -> SetupOutputs {
     let tree = Arc::new(RwLock::new(ElementTree::new()));
     let owner = Arc::new(RwLock::new(BuildOwner::new()));
-    flui_view::test_only_set_global_key_registry(&tree, &owner);
 
     let root = tree
         .write()
@@ -103,11 +121,11 @@ fn setup_tree(
 
     let key = GlobalKey::<KeyedLeafState>::new();
     let leaf = KeyedLeaf { key: key.clone() };
-    let _ = tree
+    let leaf_id = tree
         .write()
         .insert(&leaf, root, 0, &mut owner.write().element_owner_mut());
 
-    (tree, owner, key)
+    (tree, owner, key, leaf_id)
 }
 
 fn bench_reparent(c: &mut Criterion) {
@@ -120,18 +138,26 @@ fn bench_reparent(c: &mut Criterion) {
             BenchmarkId::from_parameter(outer_size),
             &outer_size,
             |b, &outer_size| {
+                // `PerIteration` interleaves setup with measurement.
+                // The batched alternative (`LargeInput`) batched all
+                // setups first, then measured — and the GlobalKey
+                // REGISTRY singleton meant only the last setup's
+                // handle survived, panicking earlier-iter measurements.
                 b.iter_batched(
                     || setup_tree(outer_size),
-                    |(tree, owner, key)| {
+                    |(tree, owner, key, leaf_id)| {
+                        // Install the GlobalKey registry handle
+                        // INSIDE the measurement closure so each iter
+                        // gets the handle pointing at its own tree.
+                        flui_view::test_only_set_global_key_registry(&tree, &owner);
                         let leaf = KeyedLeaf { key: key.clone() };
-                        let original_id = key
-                            .current_element()
-                            .expect("leaf is mounted before reparent");
-                        // Soft-remove (push to inactive queue).
+                        // Soft-remove (push to inactive queue). Use
+                        // the captured leaf_id directly — no REGISTRY
+                        // lookup that could race.
                         tree.write()
-                            .remove(original_id, &mut owner.write().element_owner_mut());
-                        // Re-insert under a different parent (root +
-                        // slot 1 to vary from the original mount slot).
+                            .remove(leaf_id, &mut owner.write().element_owner_mut());
+                        // Re-insert under a different slot to vary
+                        // from the original mount slot (1 instead of 0).
                         let root = tree.read().root().expect("tree has root");
                         let migrated = tree.write().insert(
                             &leaf,
@@ -140,8 +166,12 @@ fn bench_reparent(c: &mut Criterion) {
                             &mut owner.write().element_owner_mut(),
                         );
                         std::hint::black_box(migrated);
+                        // Clear the registry before the next iter's
+                        // setup runs — keeps the singleton in a known
+                        // state and avoids the cross-iter handle leak.
+                        flui_view::test_only_clear_global_key_registry();
                     },
-                    BatchSize::LargeInput,
+                    BatchSize::PerIteration,
                 );
             },
         );
@@ -149,11 +179,9 @@ fn bench_reparent(c: &mut Criterion) {
 
     group.finish();
 
-    // Defensive cleanup of the global-key registry handle the
-    // setup installs. The bench iter_batched closure clones the
-    // tree/owner per iter, but the test_only_set_global_key_registry
-    // installs a process-wide handle on every setup. The last
-    // iteration's handle outlives the bench unless cleared.
+    // Final defensive cleanup. The measurement loop clears per-iter,
+    // but if the bench is interrupted mid-iter the last setup's handle
+    // could otherwise leak across to a follow-up bench.
     flui_view::test_only_clear_global_key_registry();
 }
 
