@@ -81,7 +81,7 @@ repository = "https://github.com/vanyastaff/flui"
 
 [workspace.dependencies]
 # ASYNC RUNTIME (Stable: 1.43 LTS - March 2026)
-tokio = { version = "1.43" }
+tokio = { version = "1.50" }
 futures = "0.3"
 pin-project-lite = "0.2"
 any_spawner = "0.1"
@@ -89,8 +89,8 @@ send_wrapper = "0.6"
 
 # SYNCHRONIZATION - Used by multiple crates
 parking_lot = "0.12"
-once_cell = "1.20"
-dashmap = "6.1"
+once_cell = "1.21"
+dashmap = "6.2"
 crossbeam = "0.8"
 
 # COLLECTIONS - Used by multiple crates
@@ -124,7 +124,7 @@ tracing-forest = { version = "0.3", features = ["smallvec"] }
 # See: https://github.com/gfx-rs/wgpu/issues/7915
 # Staying on wgpu 25.x until upstream fix
 wgpu = { version = "25.0", default-features = false, features = ["wgsl"] }
-winit = "0.30.12"
+winit = "0.30.13"
 raw-window-handle = "0.6"
 pollster = "0.4"
 
@@ -160,7 +160,7 @@ cursor-icon = "1.2"
 
 # UTILITIES - Used by multiple crates
 ahash = "0.8"
-bitflags = "2.10"
+bitflags = "2.11"
 dyn-clone = "1.0"
 downcast-rs = "2.0.2"
 which = "5.0"         # Command discovery - Used by flui-build
