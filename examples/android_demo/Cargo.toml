@@ -16,7 +16,6 @@ flui-platform = { path = "../../crates/flui-platform", default-features = false 
 flui-engine = { path = "../../crates/flui-engine", features = ["vulkan"] }
 flui-layer = { path = "../../crates/flui-layer" }
 flui-types = { path = "../../crates/flui-types" }
-flui-log = { path = "../../crates/flui-log" }
 flui-foundation = { path = "../../crates/flui-foundation" }
 flui-hot-reload = { path = "../../crates/flui-hot-reload" }
 

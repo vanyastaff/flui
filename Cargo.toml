@@ -15,7 +15,6 @@ members = [
     "crates/flui-layer",       # Layer composition (ACTIVE)
     "crates/flui-interaction", # Gesture recognition (ACTIVE)
     "crates/flui-engine",      # GPU rendering engine (ACTIVE)
-    "crates/flui-log",         # Logging utilities (ACTIVE)
     "crates/flui-hot-reload",  # Hot-reload scene plugins via dlopen (ACTIVE)
 
     # === Phase 3: Framework Layer ===
@@ -64,7 +63,6 @@ default-members = [
     "crates/flui-layer",
     "crates/flui-interaction",
     "crates/flui-engine",
-    "crates/flui-log",
     "crates/flui-hot-reload",
     "crates/flui-rendering",
     "crates/flui-view",

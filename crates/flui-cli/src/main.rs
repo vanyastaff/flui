@@ -517,14 +517,17 @@ impl BuildTarget {
 fn main() {
     let cli = Cli::parse();
 
-    // Initialize logging
+    // Initialize logging (merged from flui-log into flui_foundation::log in
+    // D-block PR-C-1 U2).
     let log_level = if cli.verbose {
-        flui_log::Level::DEBUG
+        flui_foundation::log::Level::DEBUG
     } else {
-        flui_log::Level::INFO
+        flui_foundation::log::Level::INFO
     };
 
-    flui_log::Logger::new().with_level(log_level).init();
+    flui_foundation::log::Logger::new()
+        .with_level(log_level)
+        .init();
 
     // Dispatch command
     let result: crate::error::CliResult<()> = match cli.command {

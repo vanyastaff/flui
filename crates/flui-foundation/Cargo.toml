@@ -25,10 +25,28 @@ parking_lot = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+# Logging (merged from flui-log in PR-C-1 D-block plan U1-U3).
+# `tracing-subscriber` powers `flui_foundation::log::Logger::try_init`;
+# `tracing-forest` is gated behind the optional `pretty` feature for the
+# hierarchical desktop development backend.
+tracing-subscriber = { workspace = true }
+tracing-forest = { workspace = true, optional = true }
 
 # Optional dependencies
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
+
+# Android: logcat integration for `flui_foundation::log::android_layer`.
+[target.'cfg(target_os = "android")'.dependencies]
+android_log-sys = "0.3"
+
+# iOS: os_log integration for `flui_foundation::log` Logger::try_init.
+[target.'cfg(target_os = "ios")'.dependencies]
+tracing-oslog = "0.3"
+
+# WASM: browser console integration for `flui_foundation::log` Logger::try_init.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+tracing-wasm = "0.2"
 
 [dev-dependencies]
 flui-types = { path = "../flui-types" }
@@ -37,6 +55,9 @@ serde_json = { workspace = true }
 [features]
 default = []
 serde = ["dep:serde", "dep:serde_json"]
+# Enable pretty hierarchical desktop logging via `tracing-forest`.
+# Mobile/WASM backends ignore this flag.
+pretty = ["tracing-forest"]
 
 [package.metadata.docs.rs]
 all-features = true

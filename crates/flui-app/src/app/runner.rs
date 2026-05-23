@@ -66,14 +66,15 @@ where
 
 /// Initialize logging based on environment.
 fn init_logging() {
-    // Use flui_log for cross-platform logging (desktop, Android, iOS, WASM)
+    // Use flui_foundation::log for cross-platform logging (desktop, Android, iOS, WASM).
+    // Module was merged from the standalone flui-log crate in D-block PR-C-1 U2.
     let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| {
         "info,flui_app=debug,flui_view=debug,flui_rendering=debug,wgpu=warn".to_string()
     });
 
-    flui_log::Logger::new()
+    flui_foundation::log::Logger::new()
         .with_filter(&filter)
-        .with_level(flui_log::Level::DEBUG)
+        .with_level(flui_foundation::log::Level::DEBUG)
         .init();
 }
 

@@ -26,11 +26,11 @@
 //!
 //! # Usage
 //!
-//! This layer is automatically configured by [`Logger`](crate::Logger) when
-//! running on Android. You typically don't need to use it directly:
+//! This layer is automatically configured by [`Logger`](crate::log::Logger)
+//! when running on Android. You typically don't need to use it directly:
 //!
 //! ```rust,no_run
-//! use flui_log::Logger;
+//! use flui_foundation::log::Logger;
 //!
 //! // On Android, this automatically uses AndroidLayer
 //! Logger::default().init();
@@ -43,7 +43,7 @@
 //! For advanced use cases, you can create the layer manually:
 //!
 //! ```rust,no_run
-//! use flui_log::android_layer::AndroidLayer;
+//! use flui_foundation::log::android_layer::AndroidLayer;
 //! use tracing_subscriber::{Registry, layer::SubscriberExt};
 //!
 //! let subscriber = Registry::default().with(AndroidLayer::default());
@@ -111,7 +111,7 @@ use tracing_subscriber::{Layer, field::Visit, layer::Context, registry::LookupSp
 /// # Examples
 ///
 /// ```rust,no_run
-/// use flui_log::android_layer::AndroidLayer;
+/// use flui_foundation::log::android_layer::AndroidLayer;
 /// use tracing_subscriber::{Registry, layer::SubscriberExt};
 ///
 /// // Create the layer
@@ -155,7 +155,7 @@ impl AndroidLayer {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_log::android_layer::AndroidLayer;
+    /// use flui_foundation::log::android_layer::AndroidLayer;
     ///
     /// let layer = AndroidLayer::new("my_game");
     /// ```

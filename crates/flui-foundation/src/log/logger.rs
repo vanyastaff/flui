@@ -68,13 +68,13 @@ impl std::error::Error for InitError {
 /// # Examples
 ///
 /// ```rust,no_run
-/// use flui_log::Logger;
+/// use flui_foundation::log::Logger;
 ///
 /// // Use defaults (info level, wgpu=warn filter, app_name="flui")
 /// Logger::default().init();
 ///
 /// // Custom configuration with app name
-/// use flui_log::Level;
+/// use flui_foundation::log::Level;
 /// Logger::new()
 ///     .with_app_name("my_game")
 ///     .with_filter("debug,wgpu=error,flui_core=trace")
@@ -87,7 +87,7 @@ impl std::error::Error for InitError {
 /// The `app_name` field is used differently on each platform:
 ///
 /// ```rust,no_run
-/// use flui_log::Logger;
+/// use flui_foundation::log::Logger;
 ///
 /// // For a game called "space_shooter"
 /// Logger::new().with_app_name("space_shooter").init();
@@ -105,12 +105,12 @@ impl std::error::Error for InitError {
 ///
 /// ```toml
 /// [dependencies]
-/// flui_log = { path = "../flui_log", features = ["pretty"] }
+/// flui-foundation = { path = "../flui-foundation", features = ["pretty"] }
 /// ```
 ///
 /// ```rust,no_run
 /// # #[cfg(feature = "pretty")]
-/// use flui_log::Logger;
+/// use flui_foundation::log::Logger;
 ///
 /// # #[cfg(feature = "pretty")]
 /// Logger::new()
@@ -174,7 +174,7 @@ impl Logger {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_log::Logger;
+    /// use flui_foundation::log::Logger;
     ///
     /// let logger = Logger::new();
     /// assert_eq!(logger.app_name(), "flui");
@@ -190,7 +190,7 @@ impl Logger {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_log::Logger;
+    /// use flui_foundation::log::Logger;
     ///
     /// let logger = Logger::new();
     /// assert_eq!(logger.filter(), "info,wgpu=warn");
@@ -206,7 +206,7 @@ impl Logger {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_log::{Level, Logger};
+    /// use flui_foundation::log::{Level, Logger};
     ///
     /// let logger = Logger::new();
     /// assert_eq!(logger.level(), &Level::INFO);
@@ -224,7 +224,7 @@ impl Logger {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_log::Logger;
+    /// use flui_foundation::log::Logger;
     ///
     /// let logger = Logger::new();
     /// #[cfg(feature = "pretty")]
@@ -247,7 +247,7 @@ impl Logger {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_log::Logger;
+    /// use flui_foundation::log::Logger;
     ///
     /// let logger = Logger::new().with_app_name("my_game");
     /// ```
@@ -263,7 +263,7 @@ impl Logger {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_log::Logger;
+    /// use flui_foundation::log::Logger;
     ///
     /// let logger = Logger::new().with_filter("debug,wgpu=warn,flui_core=trace");
     /// ```
@@ -279,7 +279,7 @@ impl Logger {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_log::{Level, Logger};
+    /// use flui_foundation::log::{Level, Logger};
     ///
     /// let logger = Logger::new().with_level(Level::DEBUG);
     /// ```
@@ -298,7 +298,7 @@ impl Logger {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_log::Logger;
+    /// use flui_foundation::log::Logger;
     ///
     /// let logger = Logger::new().with_pretty(true); // Requires "pretty" feature
     /// ```
@@ -332,7 +332,7 @@ impl Logger {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use flui_log::Logger;
+    /// use flui_foundation::log::Logger;
     ///
     /// // Simple initialization
     /// Logger::default().init();
@@ -353,7 +353,7 @@ impl Logger {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use flui_log::Logger;
+    /// use flui_foundation::log::Logger;
     ///
     /// // In tests — ignore double-init
     /// let _ = Logger::default().try_init();
@@ -407,7 +407,7 @@ impl Logger {
         // === ANDROID ===
         #[cfg(target_os = "android")]
         {
-            let android_layer = crate::android_layer::AndroidLayer::new(&self.app_name);
+            let android_layer = crate::log::android_layer::AndroidLayer::new(&self.app_name);
 
             let subscriber = Registry::default().with(filter_layer).with(android_layer);
 
@@ -462,7 +462,7 @@ impl Logger {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use flui_log::Logger;
+    /// use flui_foundation::log::Logger;
     ///
     /// Logger::init_default();
     /// ```
@@ -475,7 +475,7 @@ impl Logger {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use flui_log::Logger;
+    /// use flui_foundation::log::Logger;
     ///
     /// Logger::init_with_filter("debug,wgpu=warn");
     /// ```

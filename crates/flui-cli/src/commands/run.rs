@@ -71,7 +71,7 @@ fn run_once(release: bool, profile: Option<String>, verbose: bool) -> CliResult<
 /// 2. Run `cargo build`
 /// 3. Spawn new `cargo run` child
 fn watch_and_rebuild(profile: Option<&str>, verbose: bool) -> CliResult<()> {
-    use notify_debouncer_mini::{new_debouncer, DebouncedEventKind};
+    use notify_debouncer_mini::{DebouncedEventKind, new_debouncer};
 
     // Initial build.
     cliclack::log::step("Building project...")?;
@@ -343,7 +343,7 @@ pub fn execute_scene(
     verbose: bool,
 ) -> CliResult<()> {
     use flui_build::android::AndroidBuilder;
-    use notify_debouncer_mini::{new_debouncer, DebouncedEventKind};
+    use notify_debouncer_mini::{DebouncedEventKind, new_debouncer};
 
     let mode = if release { "release" } else { "debug" };
     cliclack::intro(style(" flui run --scene ").on_magenta().black())?;

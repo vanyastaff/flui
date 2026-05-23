@@ -1,5 +1,5 @@
 use crate::error::{CliResult, ResultExt};
-use flui_build::scaffold::{scaffold_platform, ScaffoldParams};
+use flui_build::scaffold::{ScaffoldParams, scaffold_platform};
 use std::fs;
 use std::path::Path;
 

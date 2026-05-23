@@ -10,7 +10,7 @@
 //! # Quick Start
 //!
 //! ```rust,no_run
-//! use flui_log::Logger;
+//! use flui_foundation::log::Logger;
 //!
 //! // Initialize with defaults
 //! Logger::default().init();
@@ -23,7 +23,7 @@
 //! # Custom Configuration
 //!
 //! ```rust,no_run
-//! use flui_log::{Level, Logger};
+//! use flui_foundation::log::{Level, Logger};
 //!
 //! Logger::new()
 //!     .with_filter("debug,wgpu=error,flui_core=trace")
@@ -37,12 +37,12 @@
 //!
 //! ```toml
 //! [dependencies]
-//! flui_log = { path = "../flui_log", features = ["pretty"] }
+//! flui-foundation = { path = "../flui-foundation", features = ["pretty"] }
 //! ```
 //!
 //! ```rust,no_run
 //! # #[cfg(feature = "pretty")]
-//! use flui_log::Logger;
+//! use flui_foundation::log::Logger;
 //!
 //! # #[cfg(feature = "pretty")]
 //! Logger::new()

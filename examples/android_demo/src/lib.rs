@@ -23,7 +23,7 @@ use android_activity::{AndroidApp, InputStatus, MainEvent, PollEvent};
 use flui_engine::wgpu::Renderer;
 use flui_hot_reload::HotReloadDriver;
 use flui_layer::{CanvasLayer, Layer, LayerTree, Scene};
-use flui_types::geometry::{px, Rect, Size};
+use flui_types::geometry::{Rect, Size, px};
 use flui_types::painting::Paint;
 use flui_types::styling::Color;
 use std::path::PathBuf;
@@ -146,10 +146,11 @@ fn build_test_scene(width: f32, height: f32) -> Scene {
 /// Android entry point — called by NativeActivity when the library is loaded.
 #[no_mangle]
 fn android_main(app: AndroidApp) {
-    // Initialize logging to Android logcat
-    flui_log::Logger::new()
+    // Initialize logging to Android logcat (via flui_foundation::log, merged
+    // from flui-log in D-block PR-C-1 U2).
+    flui_foundation::log::Logger::new()
         .with_filter("info,flui_engine=debug,wgpu=warn")
-        .with_level(flui_log::Level::DEBUG)
+        .with_level(flui_foundation::log::Level::DEBUG)
         .init();
 
     tracing::info!("FLUI Android Demo starting — Scene Render (hot-reload enabled)");

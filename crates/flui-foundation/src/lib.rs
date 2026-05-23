@@ -143,6 +143,10 @@ pub mod id;
 pub mod key;
 pub mod wasm;
 
+// Logging - cross-platform tracing backend (merged from flui-log in
+// D-block PR-C-1 per docs/plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md U1).
+pub mod log;
+
 // Reactive programming - change notification and observables
 pub mod notifier;
 
