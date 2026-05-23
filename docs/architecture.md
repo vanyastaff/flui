@@ -125,7 +125,7 @@ pub trait Platform: Send + Sync + 'static {
     // ... plus optional methods for cursor, file pickers, app activation, etc.
 }
 
-let platform = current_platform();
+let platform = current_platform().expect("failed to initialize platform");
 ```
 
 Backends: `WindowsPlatform` (Win32), `MacOSPlatform` (AppKit), `HeadlessPlatform` (CI / tests), and a `winit` fallback. All platform-specific imports (`windows::*`, `cocoa::*`, `winit::*`) are confined to this crate.

@@ -31,9 +31,9 @@
     - .specify/templates/tasks-template.md ✅ no update needed
     - .specify/templates/checklist-template.md ✅ no update needed
     - .specify/templates/agent-file-template.md ✅ no update needed
+    - CLAUDE.md ✅ updated (version reference 2.2.0 → 2.3.0; see line 49 of CLAUDE.md)
 
-  Files requiring follow-up:
-    - CLAUDE.md ⚠ update version reference 2.2.0 → 2.3.0
+  Files requiring follow-up: none.
 
   Deferred items:
     - Target-state crate decomposition (flui-geometry split,

@@ -16,12 +16,12 @@ A crate marked **DISABLED** is commented out in `Cargo.toml` `[workspace.members
 
 ## Layer 1 — Framework primitives + Tree primitives
 
-`flui-foundation` operates on top of `flui-types`' value types (its responsibility — framework primitives like notifiers and bindings — is above raw value types even where the current Cargo manifest does not declare the edge; see `Note on flui-foundation placement` in [Architecture](architecture.md)).
+`flui-foundation` operates on top of `flui-types`' value types — its responsibility (framework primitives like notifiers and bindings) is above raw value types, and `crates/flui-foundation/Cargo.toml` declares the `flui-types` dependency edge accordingly. See `Note on flui-foundation placement` in [Architecture](architecture.md).
 
 | Crate | Status | Purpose |
 |-------|--------|---------|
 | `flui-foundation` | ✅ ACTIVE | Framework primitives: `ChangeNotifier` / `Listenable`, `Id` system, `BindingBase`, `Key`, diagnostics, error helpers |
-| `flui-tree` | ✅ ACTIVE | Generic tree abstractions, visitor patterns, build / diff / reconcile primitives |
+| `flui-tree` | ✅ ACTIVE | Generic tree abstractions: `TreeRead` / `TreeNav` / `TreeWrite` trio, iterators / slots, arity markers (`Leaf` / `Single` / `Optional` / `Variable`), depth markers. The Cycle-3 audit deleted speculative `visitor` / `diff` modules (~10k LOC zombie surface) — concrete trees adopt the trio directly |
 
 ## Layer 2 — Reactivity
 

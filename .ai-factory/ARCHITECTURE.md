@@ -33,7 +33,10 @@ flui/
 │   │   ── Layer 1: Framework primitives + Tree primitives ──
 │   ├── flui-foundation/       # Framework primitives: ChangeNotifier / Listenable,
 │   │                            Id system, BindingBase, Key, diagnostics, error helpers
-│   ├── flui-tree/             # Generic tree abstractions (build / diff / reconcile)
+│   ├── flui-tree/             # Generic tree abstractions: TreeRead / TreeNav / TreeWrite
+│   │                            trio, iterators / slots, arity markers (Leaf / Single /
+│   │                            Optional / Variable), depth markers. Cycle 3 audit deleted
+│   │                            speculative visitor / diff modules (zero in-workspace use)
 │   │
 │   │   ── Layer 2: Reactivity (currently disabled) ──
 │   ├── flui-reactivity/       # Signals / effects (DISABLED until integration)
