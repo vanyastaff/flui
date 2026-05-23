@@ -21,8 +21,8 @@
 //!
 //! ## Configurable Traversal
 //!
-//! - [`DepthFirstIter`] - Pre-order or post-order DFS
-//! - [`BreadthFirstIter`] - Level-order traversal
+//! - `DepthFirstIter` - Pre-order or post-order DFS (planned)
+//! - `BreadthFirstIter` - Level-order traversal (planned)
 //!
 //! ## Sibling Traversal
 //!
