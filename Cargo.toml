@@ -4,6 +4,7 @@ members = [
     # === Phase 1: Foundation Layer ===
     "crates/flui-types",      # Base types with Unit system (ACTIVE)
     "crates/flui-foundation", # Foundation types and utilities (ACTIVE)
+    "crates/flui-macros",     # Proc-macros (skeleton — derives land in Phase 3 §U23)
     "crates/flui-tree",       # Tree abstractions (ACTIVE)
     "crates/flui-platform",   # Platform abstraction (ACTIVE)
 
@@ -54,6 +55,7 @@ members = [
 default-members = [
     "crates/flui-types",
     "crates/flui-foundation",
+    "crates/flui-macros",
     "crates/flui-tree",
     "crates/flui-platform",
     "crates/flui-painting",
@@ -103,6 +105,9 @@ bon = "3.8"
 
 # DELEGATION - Used by flui-tree and flui-rendering
 ambassador = "0.4.2"
+
+# WORKSPACE PROC-MACROS
+flui-macros = { path = "crates/flui-macros" }
 
 # ERROR HANDLING & LOGGING - Used everywhere
 thiserror = "2.0"
