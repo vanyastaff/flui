@@ -13,8 +13,8 @@
 //! [`Layer`]: crate::layer::Layer
 
 /// Generates `is_<snake>`, `as_<snake>`, and `as_<snake>_mut` accessor
-/// methods on the [`Layer`] enum for each `(Variant, Type, snake_name)`
-/// triple.
+/// methods on the [`Layer`](crate::layer::Layer) enum for each
+/// `(Variant, Type, snake_name)` triple.
 ///
 /// The macro emits one `impl Layer` block containing the 3N methods so the
 /// rustdoc renders alongside the enum definition.
