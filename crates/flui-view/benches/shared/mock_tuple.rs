@@ -329,7 +329,13 @@ pub fn reconcile_positional_specialised(
 /// `[Option<u8>; TUPLE_ARITY]` index over `(key_hash mod TUPLE_ARITY)`-bucketed
 /// old positions, then walks new positions looking up by `key_hash mod
 /// TUPLE_ARITY`. On collision (two old positions hash to the same bucket),
-/// the second falls into a linear probe over the array — O(N) worst case.
+/// the second falls into a linear probe over the array.
+///
+/// **Complexity:** O(N) average (size-1 buckets, immediate match), O(N²)
+/// worst case under adversarial bucket collisions across all N positions.
+/// Bounded to N = `TUPLE_ARITY` = 16 by FR-013, so the worst-case absolute
+/// cost is capped at 256 probes per reconcile call — see the worst-case
+/// timing table in `docs/research/2026-05-22-s2-static-path-sketch.md`.
 ///
 /// The stack-allocated index is the structural win over the linear keyed
 /// algorithm: no `HashMap::with_capacity(TUPLE_ARITY)` heap allocation per

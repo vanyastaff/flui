@@ -73,6 +73,16 @@ Both were optimistic shortcuts the bench fixture did not model production-faithf
 
 **Note on a prior round's published numbers** (revised in this commit): an earlier revision of this report cited ~80 bytes per entry and ~31 KB baseline heap based on an incorrect `size_of::<ValueKey<u64>>() = 16` assumption. The actual struct `pub struct ValueKey<T> { value: T }` is one field of size T, so the u64 case is 8 bytes — verified at `crates/flui-foundation/src/key.rs:406-408`. Recomputed numbers above match what `cargo bench` actually produces via `MemoryAccounting`.
 
+### Methodology caveats (Area 4 — bench is lower-bound for the stored-KeyId path)
+
+The S1 reconcile benchmark measures **stored-KeyId lookup cost only**. Both old and new sides use `KeyId` values produced by permuting the old node array — neither side exercises the interner. A production keyed reconciler receives new views as `Box<dyn ViewKey>` (from `View::key()` calls during `build()`) and must resolve those through `KeyInterner::intern` before the HashMap lookup. That resolution cost — `key_hash` dispatch + bucket walk + `key_eq` comparison on collision + potential `mint()` + reverse-vec push for new keys — is **entirely absent from the bench**.
+
+**Interpretation:** the bench's 1.17× reconcile speedup is a **lower bound for the stored-KeyId path under the unique-key worst case**. Production numbers depend on:
+- New-key resolution amortization (high for shared-key workloads where lists rebuild with same key set — fewer mints, more bucket-hit returns from the interner)
+- Hash-table cache pressure (interner's HashMap doubles per-iteration working-set size — may evict the per-parent HashMap from L2/L3 cache)
+
+A future benchmark with a `Vec<Box<dyn ViewKey>>` new side that resolves through the interner per frame would close this gap. Catalog.1 rebench against real Catalog widgets is the canonical place to land that. Phase 0's S1 verdict (FR-022 stays locked) holds *regardless of which side of the new-key-resolution cost a production benchmark lands on*, because the memory ratio is already against interning on the bench's modeled distribution.
+
 ### S1 verdict (revised — FR-022 stays locked)
 
 **The spec's 2× material-margin threshold is NOT crossed.** With the production-faithful `key_eq`-resolution interner (Copilot review #3 fix), interned uses ~8% MORE memory than baseline on the bench's unique-key distribution. The bench's runtime-perf advantage (1.17× reconcile, 1.95× isolated lookup) is uncontested but does not constitute "material margin" by the spec's stated memory threshold.
@@ -93,21 +103,23 @@ The S1 verdict is **highly sensitive to key-sharing patterns** — the bench mea
 
 **Per-byte aggregate cost across distributions** (with unique keys per keyed node — the bench's modeled case):
 
+Sensitivity tables use the same constants as `MemoryAccounting::for_{baseline,interned}`: baseline heap = `size_of::<ValueKey<u64>>() = 8 bytes` per keyed node; interner per-entry = 72 bytes (40 HashMap entry + 8 bucket + 16 reverse slot + 8 ValueKey heap). **Caveat:** Rust stdlib `Vec<KeyId>` allocates on `push` even at size-1; if Vec's first-alloc strategy preallocates capacity ≥ 4, per-entry rises to ~96 bytes and the interner column grows ~33% — verdict direction unchanged but absolute ratios shift further toward baseline.
+
 | Distribution | Baseline (key-field only) | Interned (incl. interner) | Memory ratio |
 |---|---:|---:|---:|
-| 60/40 keyed | 10K×16 inline + 4K×16 heap = 224 KB | 10K×8 + 4K×80 = 400 KB | **0.56× (interned 78% WORSE)** |
-| 80/20 keyed (bench) | 10K×16 + 2K×16 = 192 KB | 10K×8 + 2K×80 = 240 KB | **0.80× (interned 25% WORSE)** |
-| 95/5 keyed | 10K×16 + 500×16 = 168 KB | 10K×8 + 500×80 = 120 KB | **1.40× (interned 29% better)** |
+| 60/40 keyed | 10K×16 inline + 4K×8 heap = 192 KB | 10K×8 + 4K×72 = 368 KB | **0.52× (interned ~92% WORSE)** |
+| 80/20 keyed (bench) | 10K×16 + 2K×8 = 176 KB | 10K×8 + 2K×72 = 224 KB | **0.79× (interned ~27% WORSE)** |
+| 95/5 keyed | 10K×16 + 500×8 = 164 KB | 10K×8 + 500×72 = 116 KB | **1.41× (interned ~29% better)** |
 
-The 95/5 distribution (deep-tree majority-leaf — the most common shape for real frameworks per Flutter's catalog distribution) is the only one where interning wins under the unique-key assumption, and even then only by 1.40× — well below the 2× threshold.
+The 95/5 distribution (deep-tree majority-leaf — the most common shape for real frameworks per Flutter's catalog distribution) is the only one where interning wins under the unique-key assumption, and even then only by 1.41× — well below the 2× threshold.
 
 **Key-sharing inverts this fundamentally.** When K distinct keys are reused across N keyed nodes (K << N), interner overhead scales with K, not N:
 
 | Distribution + sharing | Interner cost | Memory ratio |
 |---|---:|---:|
-| 80/20 keyed, K=100 shared | 80 KB inline + 8 KB interner = 88 KB | **2.18× (interned wins)** |
-| 80/20 keyed, K=10 shared | 80 KB inline + 0.8 KB interner = ~81 KB | **2.37× (interned wins)** |
-| 80/20 keyed, K=2000 unique | 80 KB inline + 160 KB interner = 240 KB | **0.80× (baseline wins — bench case)** |
+| 80/20 keyed, K=100 shared | 80 KB inline + 7.2 KB interner = 87.2 KB | **2.02× (interned wins)** |
+| 80/20 keyed, K=10 shared | 80 KB inline + 0.72 KB interner = ~80.7 KB | **2.18× (interned wins)** |
+| 80/20 keyed, K=2000 unique | 80 KB inline + 144 KB interner = 224 KB | **0.79× (baseline wins — bench case)** |
 
 The bench measures the worst case (unique keys). Real catalogs sit closer to the K=100 shared case for list-heavy shapes. The verdict is therefore CONDITIONAL on the real distribution, and the bench alone cannot resolve it.
 
