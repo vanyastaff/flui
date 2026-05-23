@@ -65,7 +65,7 @@ use parking_lot::RwLock;
 use crate::{
     owner::BuildOwner,
     tree::ElementTree,
-    view::{BoxedView, RootRenderView, View},
+    view::{RootRenderView, View},
 };
 
 /// Default physical size, in pixels, for the root [`RenderView`] created
@@ -660,7 +660,10 @@ impl WidgetsBinding {
     ///
     /// Returns [`AttachError::AlreadyAttached`] if a root widget is
     /// already attached.
-    pub fn attach_root_widget<V: View>(&self, view: &V) -> Result<(), AttachError> {
+    pub fn attach_root_widget<V>(&self, view: &V) -> Result<(), AttachError>
+    where
+        V: View + Clone + Send + Sync + 'static,
+    {
         let mut inner = self.inner.write();
 
         if inner.root_element.is_some() {
@@ -672,15 +675,23 @@ impl WidgetsBinding {
         // `RenderObjectToWidgetAdapter` shape) instead of mounting the
         // user view directly.
         //
-        // `RootRenderView<V>` requires `V: View + Clone`, but
-        // `attach_root_widget` only has `V: View`. `BoxedView` bridges
-        // the gap: it is a `View` whose `Clone` impl is implemented via
-        // `dyn_clone::clone_box`, so `RootRenderView<BoxedView>`
-        // satisfies every bound. The user view's identity (type id,
-        // key, element) is preserved — `BoxedView` forwards all four
-        // `View` methods to the inner view.
+        // The user view is cloned (not `BoxedView`-wrapped) so the
+        // concrete `V` is preserved as the `RootRenderView<V>` /
+        // `RootRenderElement<V>` type parameter. On subsequent root
+        // rebuilds `RootRenderElement::perform_build` hands the stored
+        // child to `Element<V>::update_view` via `&dyn View`; that
+        // method downcasts the trait object back to `V`. A `BoxedView`
+        // wrap would make the runtime type `BoxedView` (not `V`), the
+        // downcast in `ElementCore::update_view` would fail, and the
+        // root update would be silently skipped (PR #119 review —
+        // codex P1).
+        //
+        // The `Clone + Send + Sync + 'static` bound is no real
+        // restriction in practice — every concrete `View` in this
+        // codebase already satisfies it (see `Element<V, A, B>`'s
+        // own bound).
         let root_render_view = RootRenderView::new(
-            BoxedView(dyn_clone::clone_box(view)),
+            view.clone(),
             DEFAULT_ROOT_VIEW_SIZE.0,
             DEFAULT_ROOT_VIEW_SIZE.1,
         );
@@ -1468,7 +1479,7 @@ mod tests {
 
     /// U6 / AE3: `attach_root_widget` bootstraps the root through
     /// `RootRenderView` — the element-tree root is a
-    /// `RootRenderElement<BoxedView>`, NOT the user view's element
+    /// `RootRenderElement<LeafView>`, NOT the user view's element
     /// mounted directly.
     #[test]
     fn test_attach_root_widget_routes_through_root_render_view() {
@@ -1486,22 +1497,24 @@ mod tests {
             let element = node.element();
 
             // The mounted root is the `RootRenderElement`, identified by
-            // the `RootRenderView<BoxedView>` view type it reports.
+            // the `RootRenderView<LeafView>` view type it reports — the
+            // user view's concrete type is preserved as the type
+            // parameter (no `BoxedView` wrap; see PR #119 review fix).
             assert_eq!(
                 element.view_type_id(),
-                TypeId::of::<RootRenderView<BoxedView>>(),
-                "root element must be RootRenderElement<BoxedView>, \
+                TypeId::of::<RootRenderView<LeafView>>(),
+                "root element must be RootRenderElement<LeafView>, \
                  proving the bootstrap routes through RootRenderView"
             );
 
-            // It is concretely a `RootRenderElement<BoxedView>` — the
+            // It is concretely a `RootRenderElement<LeafView>` — the
             // direct-mount path would have produced a `LeafElement`.
             assert!(
                 element
                     .as_any()
-                    .downcast_ref::<RootRenderElement<BoxedView>>()
+                    .downcast_ref::<RootRenderElement<LeafView>>()
                     .is_some(),
-                "root element downcasts to RootRenderElement<BoxedView>"
+                "root element downcasts to RootRenderElement<LeafView>"
             );
             assert!(
                 element.as_any().downcast_ref::<LeafElement>().is_none(),
@@ -1531,7 +1544,7 @@ mod tests {
             let element = tree.get(root_id).expect("root node").element();
             let root_render_element = element
                 .as_any()
-                .downcast_ref::<RootRenderElement<BoxedView>>()
+                .downcast_ref::<RootRenderElement<LeafView>>()
                 .expect("root is RootRenderElement");
             assert!(
                 root_render_element.render_id().is_some(),
@@ -1580,7 +1593,7 @@ mod tests {
             let element = tree.get(root_id).expect("root node").element();
             assert_eq!(
                 element.view_type_id(),
-                TypeId::of::<RootRenderView<BoxedView>>(),
+                TypeId::of::<RootRenderView<ParentView>>(),
                 "root with a child subtree still routes through RootRenderView"
             );
             assert_eq!(element.lifecycle(), crate::Lifecycle::Active);
