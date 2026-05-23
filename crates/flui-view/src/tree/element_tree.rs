@@ -59,12 +59,12 @@ impl ElementNode {
     /// Create a new ElementNode.
     ///
     /// The `key` slot is initialised to `None`; callers that have the
-    /// originating `View::key()` in scope set it via [`Self::set_key`]
-    /// after construction. The two production call sites
-    /// (`ElementTree::mount_root_with_pipeline_owner` and
-    /// `ElementTree::insert`) thread the key in immediately after
-    /// `ElementNode::new` so the field is populated before the
-    /// element is returned.
+    /// originating `View::key()` in scope set it via the in-crate
+    /// `set_key` accessor immediately after construction. The two
+    /// production call sites (`ElementTree::mount_root_with_pipeline_owner`
+    /// and `ElementTree::insert`) thread the key in immediately
+    /// after `ElementNode::new` so the field is populated before
+    /// the element is returned.
     pub fn new(element: Box<dyn ElementBase>, parent: Option<ElementId>, slot: usize) -> Self {
         let depth = if parent.is_some() { 1 } else { 0 }; // Will be updated by tree
         Self {
@@ -279,6 +279,11 @@ impl ElementTree {
         let slab_index = self.nodes.insert(node);
         let id = ElementId::new(slab_index + 1);
 
+        // Plan §U15: stamp the element with its own ElementId BEFORE
+        // `mount` so the Variable-arity reconciler can read it back
+        // when emitting ReconcileEvent's `parent` field.
+        self.nodes[slab_index].element.set_self_id(id);
+
         // Mount the element (now it has PipelineOwner set)
         self.nodes[slab_index].element.mount(None, 0, owner);
 
@@ -345,6 +350,9 @@ impl ElementTree {
 
         let slab_index = self.nodes.insert(node);
         let id = ElementId::new(slab_index + 1);
+
+        // Plan §U15: same self-id stamping as mount_root.
+        self.nodes[slab_index].element.set_self_id(id);
 
         // Mount the element
         self.nodes[slab_index]
@@ -664,6 +672,24 @@ fn try_retake_inactive(
         new_slot,
         "ElementTree::insert retook inactive element for GlobalKey state migration"
     );
+
+    // Plan §U17 / SC-003: emit ReconcileEvent::Reparent. The element
+    // came from the inactive queue (Lifecycle::Inactive → Active), so
+    // `from_parent: None` per ADV-1 branch case 1 — there is no prior
+    // *active* parent at the moment of reparent; the donor parent
+    // already cleared its slot when it pushed the element into the
+    // inactive queue. The cross-parent same-frame Active-to-Active
+    // reparent path (ADV-1 branch case 2) requires KTD-9's ID-based
+    // Variable storage shape and is deferred — when it lands, that
+    // path emits with `from_parent: Some(prior_parent)`.
+    super::reconcile_event::emit(&super::reconcile_event::ReconcileEvent {
+        kind: super::reconcile_event::ReconcileEventKind::Reparent,
+        parent: new_parent,
+        child_key: Some(hash),
+        slot: new_slot,
+        view_type_id: view.view_type_id(),
+        from_parent: None,
+    });
 
     Some(candidate_id)
 }

@@ -136,6 +136,18 @@ where
     /// as a child of the parent's RenderObject.
     parent_render_id: Option<RenderId>,
 
+    /// This element's own `ElementId` in the surrounding `ElementTree`.
+    ///
+    /// Plan §U15: populated by `ElementTree::insert` /
+    /// `mount_root_with_pipeline_owner` immediately after slab
+    /// insertion (via [`ElementBase::set_self_id`] → forwarded to
+    /// [`Self::set_self_id`]) so that
+    /// [`Self::update_or_create_children`] (Variable arity) can stamp
+    /// the real parent `ElementId` onto every emitted
+    /// [`ReconcileEvent`](crate::tree::ReconcileEvent) — replacing
+    /// the §U13 placeholder.
+    self_id: Option<ElementId>,
+
     /// Phantom data for generic parameter A.
     _phantom: PhantomData<A>,
 }
@@ -163,9 +175,21 @@ where
             dirty: Arc::new(AtomicBool::new(true)),
             pipeline_owner: None,
             parent_render_id: None,
+            self_id: None,
             _phantom: PhantomData,
         }
     }
+
+    /// Set this element's own `ElementId`. Called by
+    /// [`crate::tree::ElementTree`] immediately after slab insertion
+    /// via [`crate::view::ElementBase::set_self_id`]. Plan §U15.
+    pub(crate) fn set_self_id(&mut self, id: ElementId) {
+        self.self_id = Some(id);
+    }
+
+    // NOTE: `self_id` is read directly via `self.self_id` inside
+    // `update_or_create_children` rather than through a getter; the
+    // single in-crate consumer doesn't justify the boilerplate.
 
     // ========================================================================
     // Lifecycle Methods (eliminates ~40 lines of boilerplate per element)
@@ -258,9 +282,9 @@ where
     /// Update this element with a new View of the same type.
     ///
     /// Phase 1 §U8 / KTD-4: under default features, dispatch routes
-    /// through [`crate::element::dispatch::dispatch_view_update`] —
-    /// the future home of typed `ElementKind`-discriminated dispatch
-    /// (Phase 3 §U27 replaces the body there with the real typed
+    /// through the in-crate `dispatch::dispatch_view_update` helper
+    /// (the future home of typed `ElementKind`-discriminated dispatch
+    /// — Phase 3 §U27 replaces the body there with the real typed
     /// match, eliminating the runtime `downcast_ref::<V>()` call
     /// entirely per FR-021).
     ///
@@ -471,7 +495,35 @@ where
             // dropped ones — but leaves any *freshly created* children
             // in `Lifecycle::Initial`, unmounted (it cannot reach the
             // `PipelineOwner` from the bare box-vec).
-            self.children.update_with_views(&child_views, owner);
+            // Plan §U15: thread this element's own ElementId as the
+            // reconciler's `parent_id`, replacing the §U13 placeholder.
+            // `self_id` is `None` only when this element has never been
+            // mounted (perform_build before mount is a framework-invariant
+            // violation: `ElementTree::insert` / `mount_root_*` always
+            // call `set_self_id` BEFORE `mount`, and `mount` precedes
+            // `perform_build` in the lifecycle FSM).
+            //
+            // Debug-build trip-wire: if the invariant ever breaks (a
+            // hand-rolled element bypassing `ElementTree::insert`, a
+            // future framework refactor that decouples mount from
+            // self-id stamping), this assertion fires during testing.
+            // Production retains the defensive fallback to the §U13
+            // placeholder so the frame still completes — but the
+            // emitted ReconcileEvents will silently correlate to the
+            // root, masking the real culprit. The debug_assert makes
+            // the violation loud where it matters.
+            debug_assert!(
+                self.self_id.is_some(),
+                "§U15 invariant violated: ElementCore::update_or_create_children \
+                 called before set_self_id. `ElementTree::insert` / \
+                 `mount_root_with_pipeline_owner` must stamp self_id \
+                 before any reconciliation runs."
+            );
+            let parent_id = self
+                .self_id
+                .unwrap_or_else(|| flui_foundation::ElementId::new(1));
+            self.children
+                .update_with_views(parent_id, &child_views, owner);
 
             // Finish the lifecycle of those new children. The count
             // alone is no longer a reliable "did anything get created?"

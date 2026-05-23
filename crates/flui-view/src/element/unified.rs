@@ -152,6 +152,21 @@ where
             .map(flui_foundation::ViewKey::key_hash)
     }
 
+    fn current_key(&self) -> Option<&dyn flui_foundation::ViewKey> {
+        // Plan §U12 / FR-024 (c): expose the underlying `&dyn ViewKey`
+        // so the reconciler can do semantic `key_eq` on a hash hit and
+        // reject silent collisions across distinct keys with the same
+        // `u64`. `core.view().key()` already returns
+        // `Option<&dyn ViewKey>` — forward directly.
+        self.core.view().key()
+    }
+
+    fn set_self_id(&mut self, id: ElementId) {
+        // Plan §U15: forward to `ElementCore::set_self_id` so the
+        // Variable-arity reconciler stamp can use the real parent id.
+        self.core.set_self_id(id);
+    }
+
     fn lifecycle(&self) -> Lifecycle {
         self.core.lifecycle()
     }

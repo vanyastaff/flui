@@ -29,13 +29,33 @@ tracing.workspace = true
 downcast-rs = "2.0"
 dyn-clone = "1.0"
 
+# Plan §U14: `ReconcileEventCollector` (gated to `test-utils` feature
+# or `cfg(test)`) needs `tracing_subscriber::Layer` and the `registry`
+# extension trait. Optional + gated so production builds don't pull
+# it in.
+tracing-subscriber = { workspace = true, optional = true }
+
 [dev-dependencies]
 criterion = { workspace = true }
+# Same crate; dev-deps must redeclare so unit tests + integration
+# tests under `#[cfg(test)]` (without the `test-utils` feature flag
+# enabled at the integration boundary) still see it. Cargo merges
+# both declarations; no duplication in the lockfile.
+tracing-subscriber = { workspace = true }
+# Plan §U17/§U19 follow-up: serialize tests that touch the process-
+# wide GlobalKey REGISTRY singleton installed via
+# `test_only_set_global_key_registry`. Without `#[serial]` gating,
+# parallel cargo test runs race the install → tests resolve through
+# each other's trees and fail non-deterministically.
+serial_test = "3"
 
 [features]
 default = []
-# Enable test utilities like MockBuildContext
-test-utils = []
+# Enable test utilities like MockBuildContext + the
+# `ReconcileEventCollector` Layer fixture (plan §U14). Downstream
+# test crates flip this to install the collector. Pulls in the
+# optional `tracing-subscriber` dep at build time.
+test-utils = ["dep:tracing-subscriber"]
 
 # `legacy-downcast` is workspace-internal ONLY — see Phase 1 §U8 and
 # docs/PORT.md. It gates the pre-FR-021 `downcast_ref::<V>()` body
@@ -56,4 +76,12 @@ harness = false
 
 [[bench]]
 name = "s2_static_path"
+harness = false
+
+[[bench]]
+name = "sc006_keyed_reorder_linearity"
+harness = false
+
+[[bench]]
+name = "sc012_global_key_reparent"
 harness = false

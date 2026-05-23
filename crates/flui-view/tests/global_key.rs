@@ -149,6 +149,7 @@ fn set_sentinel(
 /// surfaces the same `&KeyedCounterState` the framework stored on the
 /// element.
 #[test]
+#[serial_test::serial(global_key_registry)]
 fn global_key_current_state_after_mount() {
     let (tree, owner) = fresh_tree();
 
@@ -196,6 +197,7 @@ fn global_key_current_state_after_mount() {
 /// the previously-keyed element out of `_inactiveElements` and re-mounts
 /// it under the new parent.
 #[test]
+#[serial_test::serial(global_key_registry)]
 fn global_key_state_migrates_to_new_parent_slot() {
     let (tree, owner) = fresh_tree();
 
@@ -271,6 +273,7 @@ fn global_key_state_migrates_to_new_parent_slot() {
 /// `current_state` must return `None`. The registry entry is cleared
 /// once the element is truly gone.
 #[test]
+#[serial_test::serial(global_key_registry)]
 fn global_key_returns_none_after_full_unmount() {
     let (tree, owner) = fresh_tree();
 
@@ -396,6 +399,7 @@ fn global_key_construction_accepts_any_type() {
 /// explicit. … Write a stress test that mounts→unmounts→re-mounts at
 /// different slot 100x and asserts state identity."
 #[test]
+#[serial_test::serial(global_key_registry)]
 fn global_key_state_preserved_across_100_reparents() {
     let (tree, owner) = fresh_tree();
     flui_view::test_only_set_global_key_registry(&tree, &owner);

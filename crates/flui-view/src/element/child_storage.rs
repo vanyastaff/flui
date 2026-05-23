@@ -64,7 +64,23 @@ pub trait ElementChildStorage: Default + Send + Sync + std::fmt::Debug + 'static
     ///
     /// Used by Variable arity for updating multiple children. Threads
     /// the owner handle into each child's `update` call.
-    fn update_with_views(&mut self, views: &[Box<dyn View>], owner: &mut crate::ElementOwner<'_>);
+    ///
+    /// `parent_id` is THIS element's own `ElementId` — the parent
+    /// from the perspective of the children being reconciled. The
+    /// Variable impl stamps it onto every emitted
+    /// [`ReconcileEvent`](crate::tree::ReconcileEvent) so
+    /// subscribers can correlate the trace back to the build path.
+    /// Non-Variable impls ignore the parameter. Plan §U15 retires
+    /// the §U13 placeholder by threading the real id through
+    /// `ElementCore`'s self-id slot (see
+    /// [`ElementBase::set_self_id`](crate::view::ElementBase) for
+    /// the public hook that populates it).
+    fn update_with_views(
+        &mut self,
+        parent_id: ElementId,
+        views: &[Box<dyn View>],
+        owner: &mut crate::ElementOwner<'_>,
+    );
 
     /// Mount all children.
     ///
@@ -152,6 +168,7 @@ impl ElementChildStorage for NoChildStorage {
 
     fn update_with_views(
         &mut self,
+        _parent_id: ElementId,
         _views: &[Box<dyn View>],
         _owner: &mut crate::ElementOwner<'_>,
     ) {
@@ -256,8 +273,14 @@ impl ElementChildStorage for SingleChildStorage {
         }
     }
 
-    fn update_with_views(&mut self, views: &[Box<dyn View>], owner: &mut crate::ElementOwner<'_>) {
-        // Single arity - use only the first view
+    fn update_with_views(
+        &mut self,
+        _parent_id: ElementId,
+        views: &[Box<dyn View>],
+        owner: &mut crate::ElementOwner<'_>,
+    ) {
+        // Single arity - use only the first view. `parent_id` is
+        // unused: single-child storage does not emit ReconcileEvents.
         if let Some(view) = views.first() {
             self.update_with_view(view.as_ref(), owner);
         }
@@ -373,7 +396,14 @@ impl ElementChildStorage for OptionalChildStorage {
         }
     }
 
-    fn update_with_views(&mut self, views: &[Box<dyn View>], owner: &mut crate::ElementOwner<'_>) {
+    fn update_with_views(
+        &mut self,
+        _parent_id: ElementId,
+        views: &[Box<dyn View>],
+        owner: &mut crate::ElementOwner<'_>,
+    ) {
+        // Optional arity: zero-or-one child. `parent_id` is unused —
+        // single/optional storage does not emit ReconcileEvents.
         if let Some(view) = views.first() {
             self.update_with_view(view.as_ref(), owner);
         } else {
@@ -491,7 +521,12 @@ impl ElementChildStorage for VariableChildStorage {
         );
     }
 
-    fn update_with_views(&mut self, views: &[Box<dyn View>], owner: &mut crate::ElementOwner<'_>) {
+    fn update_with_views(
+        &mut self,
+        parent_id: ElementId,
+        views: &[Box<dyn View>],
+        owner: &mut crate::ElementOwner<'_>,
+    ) {
         // Keyed 5-phase reconciliation (plan §U5 / origin R12). Matches
         // old child elements to new Views by `Key`, falling back to
         // positional matching for keyless children — so a keyed widget
@@ -501,8 +536,14 @@ impl ElementChildStorage for VariableChildStorage {
         // (it operates on the bare box-vec and cannot reach the
         // `PipelineOwner`); `ElementCore::update_or_create_children`
         // finishes their lifecycle (propagate owner → mount → build).
+        //
+        // Plan §U15: `parent_id` is THIS element's own `ElementId`,
+        // threaded down from `ElementCore::self_id` via the trait
+        // method's new parameter. Stamped onto every emitted
+        // `ReconcileEvent` so subscribers correlate the trace back
+        // to the owning build path.
         let view_refs: Vec<&dyn View> = views.iter().map(std::convert::AsRef::as_ref).collect();
-        crate::reconcile_children(&mut self.children, &view_refs, owner);
+        crate::reconcile_children(parent_id, &mut self.children, &view_refs, owner);
     }
 
     fn mount_children(

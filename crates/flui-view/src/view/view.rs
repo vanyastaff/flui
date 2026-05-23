@@ -161,8 +161,55 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
         None
     }
 
+    /// The `ViewKey` carried by the View this element currently holds,
+    /// or `None` if that View is keyless.
+    ///
+    /// Hash-based lookup ([`Self::current_key_hash`]) is the entry point
+    /// for keyed reconciliation: it indexes old children by `u64` for
+    /// O(1) HashMap claims. The hash alone is not enough to decide that
+    /// two keys are equal, though — distinct keys can hash to the same
+    /// `u64`. This accessor surfaces the underlying
+    /// [`flui_foundation::ViewKey`] so the reconciler can call
+    /// [`flui_foundation::ViewKey::key_eq`] on a hash hit and reject
+    /// silent collisions. Plan §U12 / FR-024 work item (c).
+    ///
+    /// The default impl returns `None`; the unified `Element<V, A, B>`
+    /// overrides it to forward to `core.view().key()`. The borrow is
+    /// alive for as long as the immutable borrow on the element holds —
+    /// callers use it synchronously inside the reconciler dispatch and
+    /// must not extend it across mutating calls on the element.
+    ///
+    /// Flutter parity: `framework.dart:4123` `Widget.canUpdate` uses
+    /// `oldWidget.key == newWidget.key` directly. FLUI exposes the
+    /// same fact through this typed accessor at the dispatch
+    /// boundary; `View::can_update` calls the parallel typed surface
+    /// on `&dyn View`.
+    fn current_key(&self) -> Option<&dyn flui_foundation::ViewKey> {
+        None
+    }
+
     /// Get the depth in the element tree (root = 0).
     fn depth(&self) -> usize;
+
+    /// Inform this element of its own `ElementId` in the surrounding
+    /// `ElementTree`.
+    ///
+    /// Default impl is a no-op. The unified `Element<V, A, B>`
+    /// overrides this to forward to `ElementCore::set_self_id`, so
+    /// `ElementCore<V, Variable>::update_or_create_children` can
+    /// stamp the real parent id onto every emitted
+    /// [`ReconcileEvent`](crate::tree::ReconcileEvent) instead of
+    /// the §U13 placeholder.
+    ///
+    /// Called by [`crate::tree::ElementTree::insert`] +
+    /// [`crate::tree::ElementTree::mount_root_with_pipeline_owner`]
+    /// immediately after slab insertion, BEFORE the element's
+    /// `mount` call. Plan §U15.
+    fn set_self_id(&mut self, _id: flui_foundation::ElementId) {
+        // Default: ignore. Only the unified `Element<V, A, B>`
+        // overrides this; hand-rolled element impls (test fixtures,
+        // future custom elements) opt in by overriding.
+    }
 
     /// Get the slot position in parent's child list.
     fn slot(&self) -> usize {
