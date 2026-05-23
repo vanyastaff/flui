@@ -3,7 +3,7 @@
 //! StatefulViews maintain state that persists across rebuilds.
 //! The state is held by the Element, not the View itself.
 
-use super::view::View;
+use super::into_view::IntoView;
 use crate::context::BuildContext;
 
 /// A View that has persistent mutable state.
@@ -63,8 +63,8 @@ use crate::context::BuildContext;
 /// }
 ///
 /// impl ViewState<Counter> for CounterState {
-///     fn build(&self, view: &Counter, ctx: &dyn BuildContext) -> Box<dyn View> {
-///         Text::new(format!("Count: {}", self.count)).boxed()
+///     fn build(&self, view: &Counter, ctx: &dyn BuildContext) -> impl IntoView {
+///         Text::new(format!("Count: {}", self.count))
 ///     }
 /// }
 /// ```
@@ -113,7 +113,20 @@ pub trait ViewState<V: StatefulView>: Send + Sync + 'static {
     ///
     /// * `view` - The current View configuration
     /// * `ctx` - The build context
-    fn build(&self, view: &V, ctx: &dyn BuildContext) -> Box<dyn View>;
+    ///
+    /// # Object safety
+    ///
+    /// `ViewState::build` returns `impl IntoView` (return-position
+    /// `impl Trait` in trait, stabilized in Rust 1.75). This makes
+    /// `ViewState` **non-object-safe** — no `dyn ViewState` use exists
+    /// or is needed (Phase 3 §U22, FR-008).
+    ///
+    /// The `+ use<Self, V>` precise-capture clause (Rust 1.82+) declares
+    /// that the opaque return depends only on `Self` and `V`, not on
+    /// the elided lifetimes of `&self` / `&V` / `&dyn BuildContext`.
+    /// See [`StatelessView::build`] for the rationale (E0515 when a
+    /// `move || state.build(&view, &ctx)` closure owns the args).
+    fn build(&self, view: &V, ctx: &dyn BuildContext) -> impl IntoView + use<Self, V>;
 
     /// Called when the View configuration changes.
     ///
@@ -147,6 +160,12 @@ pub trait ViewState<V: StatefulView>: Send + Sync + 'static {
 /// }
 /// impl_stateful_view!(MyCounter);
 /// ```
+///
+/// # Deprecation
+///
+/// Phase 3 §U24 deletes this macro in favor of `#[derive(StatefulView)]`
+/// from `flui-macros`. The macro stays during the §U22→§U24 transition
+/// so existing call sites continue to compile (FR-009 / FR-010).
 #[macro_export]
 macro_rules! impl_stateful_view {
     ($ty:ty) => {

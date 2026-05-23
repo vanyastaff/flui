@@ -3,7 +3,7 @@
 //! StatelessViews are the simplest type of View. They describe UI purely
 //! as a function of their configuration (fields) and inherited data.
 
-use super::view::View;
+use super::into_view::IntoView;
 use crate::context::BuildContext;
 
 /// A View that has no mutable state.
@@ -23,7 +23,7 @@ use crate::context::BuildContext;
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_view::{StatelessView, BuildContext};
+/// use flui_view::{StatelessView, BuildContext, IntoView};
 ///
 /// #[derive(Clone)]
 /// struct Greeting {
@@ -31,11 +31,19 @@ use crate::context::BuildContext;
 /// }
 ///
 /// impl StatelessView for Greeting {
-///     fn build(&self, ctx: &dyn BuildContext) -> Box<dyn View> {
-///         Text::new(format!("Hello, {}!", self.name)).boxed()
+///     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+///         Text::new(format!("Hello, {}!", self.name))
 ///     }
 /// }
 /// ```
+///
+/// # Object safety
+///
+/// `StatelessView::build` returns `impl IntoView` (return-position
+/// `impl Trait` in trait, stabilized in Rust 1.75). This makes
+/// `StatelessView` **non-object-safe** — no `dyn StatelessView` use
+/// exists or is needed. [`View`] is the object-safe boundary;
+/// `StatelessView` is implementation-side (Phase 3 §U22, FR-007).
 ///
 /// # Note
 ///
@@ -44,9 +52,24 @@ use crate::context::BuildContext;
 pub trait StatelessView: Clone + Send + Sync + 'static {
     /// Build the child View tree.
     ///
-    /// Called whenever this View needs to be rendered. The returned View
-    /// describes what should be displayed.
-    fn build(&self, ctx: &dyn BuildContext) -> Box<dyn View>;
+    /// Called whenever this View needs to be rendered. The returned
+    /// value is normalized into a concrete [`View`] by the framework via
+    /// [`IntoView::into_view`]; widget authors return the typed View
+    /// directly (`Text::new(…)`) — no `Box::new` and no `.boxed()` at
+    /// the call site. For conditional builds whose arms have different
+    /// types, the author wraps each arm with `.boxed()` to land on
+    /// `BoxedView` (which itself implements [`IntoView`]).
+    ///
+    /// The `+ use<Self>` precise-capture clause (Rust 1.82+) tells the
+    /// compiler that the opaque return type depends on `Self` only —
+    /// NOT on the elided lifetimes of `&self` or `&dyn BuildContext`.
+    /// Without it, the Rust 2024 RPITIT default captures those input
+    /// lifetimes and a `move || view.build(&ctx)` closure that owns
+    /// `view`/`ctx` cannot return the result (E0515: returning data
+    /// referencing local borrows). [`View`] is `'static`, so authoring
+    /// returns never carry borrows of build inputs; the precise-capture
+    /// surfaces that to the type system.
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView + use<Self>;
 }
 
 /// Implement View for all StatelessViews.
@@ -56,12 +79,19 @@ pub trait StatelessView: Clone + Send + Sync + 'static {
 ///
 /// ```rust,ignore
 /// impl StatelessView for MyView {
-///     fn build(&self, ctx: &dyn BuildContext) -> Box<dyn View> {
+///     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
 ///         // ...
 ///     }
 /// }
 /// impl_stateless_view!(MyView);
 /// ```
+///
+/// # Deprecation
+///
+/// Phase 3 §U24 deletes this macro in favor of `#[derive(StatelessView)]`
+/// from `flui-macros`. The macro stays during the §U22→§U24 transition
+/// so existing call sites continue to compile; remove invocations and
+/// switch to the derive once §U24 lands (FR-009 / FR-010).
 #[macro_export]
 macro_rules! impl_stateless_view {
     ($ty:ty) => {

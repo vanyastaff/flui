@@ -34,7 +34,7 @@ use std::panic::AssertUnwindSafe;
 use flui_foundation::RenderId;
 
 use super::{arity::ElementArity, child_storage::ElementChildStorage, generic::ElementCore};
-use crate::view::{FlutterError, View};
+use crate::view::{FlutterError, IntoView, View};
 
 // ============================================================================
 // perform_build helpers
@@ -104,7 +104,7 @@ where
 ///
 /// `context` names what was building (e.g. `"building StatelessElement"`)
 /// for the `FlutterError` breadcrumb.
-pub(crate) fn build_or_recover<V, A, F>(
+pub(crate) fn build_or_recover<V, A, F, R>(
     core: &mut ElementCore<V, A>,
     owner: &mut crate::ElementOwner<'_>,
     behavior_name: &'static str,
@@ -113,11 +113,17 @@ pub(crate) fn build_or_recover<V, A, F>(
 where
     V: Clone + Send + Sync + 'static,
     A: ElementArity,
-    F: FnOnce() -> Box<dyn View>,
+    F: FnOnce() -> R,
+    R: IntoView,
 {
     // Only `build()` is inside the catch — see the panic-safety note.
+    // The closure returns an opaque `impl IntoView` (Phase 3 §U22,
+    // FR-007); we normalize via [`IntoView::into_view`] inside the
+    // success arm and then box for the downstream `Box<dyn View>`
+    // contract (which the error arm already satisfies via
+    // `ErrorView::build_error_view`).
     match std::panic::catch_unwind(AssertUnwindSafe(build)) {
-        Ok(child_view) => child_view,
+        Ok(child_view) => Box::new(child_view.into_view()),
         Err(payload) => {
             // Indeterminate state: tear the whole child subtree down so
             // the substituted error view is mounted fresh, not merged
@@ -146,20 +152,30 @@ where
 /// `InheritedBehavior`. `RenderBehavior` keeps its `perform_build` body
 /// inline so the tracing strings can interpolate the active `RenderId`.
 //
-// `Box<dyn View>` ownership transfer is intentional. Single-line signature
-// avoids `port-check.sh` trigger 6's struct-field pattern matching a
-// `child_view: Box<dyn View>,` parameter on its own line (the trigger
-// comment notes the trailing-comma anchor was meant to exclude function
-// parameters but in practice does not). Mirrors the workaround in
-// `ElementCore::update_or_create_child`.
-#[rustfmt::skip]
-#[allow(clippy::needless_pass_by_value)]
-pub(crate) fn finish_single_child_build<V, A>(core: &mut ElementCore<V, A>, child_view: Box<dyn View>, behavior_name: &'static str, owner: &mut crate::ElementOwner<'_>)
-where
+// Phase 3 §U22 (FR-007): accepts `impl IntoView` from authoring-side
+// callers and normalizes via `IntoView::into_view` inside the helper.
+// `BoxedView` (the canonical erased path) and concrete `View`-impl
+// types both satisfy the bound; the temporary `IntoView for Box<dyn View>`
+// shim (`view/into_view.rs`) keeps legacy `Box<dyn View>` call sites
+// compiling during the §U22→§U28 sweep. The `Box<dyn View>` ownership
+// transfer to `update_or_create_child` is still intentional — the
+// helper boxes the normalized value at the boundary so the inner
+// pipeline keeps its existing contract. The generic `R` parameter (no
+// longer `Box<dyn View>` on its own line) sidesteps `port-check.sh`
+// trigger 6's struct-field pattern, so the previous `#[rustfmt::skip]`
+// workaround that kept the signature on one line is no longer needed.
+pub(crate) fn finish_single_child_build<V, A, R>(
+    core: &mut ElementCore<V, A>,
+    child_view: R,
+    behavior_name: &'static str,
+    owner: &mut crate::ElementOwner<'_>,
+) where
     V: Clone + Send + Sync + 'static,
     A: ElementArity,
+    R: IntoView,
 {
-    core.update_or_create_child(child_view, owner);
+    let boxed: Box<dyn View> = Box::new(child_view.into_view());
+    core.update_or_create_child(boxed, owner);
     core.clear_dirty();
     tracing::debug!("{}::perform_build completed", behavior_name);
 }
