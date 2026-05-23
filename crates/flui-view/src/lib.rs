@@ -91,6 +91,7 @@ pub mod context;
 pub mod element;
 pub mod key;
 pub mod owner;
+pub mod seq;
 pub mod tree;
 pub mod view;
 
