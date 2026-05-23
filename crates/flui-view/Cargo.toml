@@ -29,18 +29,27 @@ tracing.workspace = true
 downcast-rs = "2.0"
 dyn-clone = "1.0"
 
+# Plan §U14: `ReconcileEventCollector` (gated to `test-utils` feature
+# or `cfg(test)`) needs `tracing_subscriber::Layer` and the `registry`
+# extension trait. Optional + gated so production builds don't pull
+# it in.
+tracing-subscriber = { workspace = true, optional = true }
+
 [dev-dependencies]
 criterion = { workspace = true }
-# Plan §U14: `ReconcileEventCollector` is a `tracing_subscriber::Layer`
-# that reads typed primitives off the `flui::reconcile` target into a
-# snapshot vector tests can assert against. Layer trait + `registry`
-# feature live in `tracing-subscriber`.
+# Same crate; dev-deps must redeclare so unit tests + integration
+# tests under `#[cfg(test)]` (without the `test-utils` feature flag
+# enabled at the integration boundary) still see it. Cargo merges
+# both declarations; no duplication in the lockfile.
 tracing-subscriber = { workspace = true }
 
 [features]
 default = []
-# Enable test utilities like MockBuildContext
-test-utils = []
+# Enable test utilities like MockBuildContext + the
+# `ReconcileEventCollector` Layer fixture (plan §U14). Downstream
+# test crates flip this to install the collector. Pulls in the
+# optional `tracing-subscriber` dep at build time.
+test-utils = ["dep:tracing-subscriber"]
 
 # `legacy-downcast` is workspace-internal ONLY — see Phase 1 §U8 and
 # docs/PORT.md. It gates the pre-FR-021 `downcast_ref::<V>()` body
