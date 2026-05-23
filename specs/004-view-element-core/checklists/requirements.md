@@ -2,7 +2,7 @@
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
 **Created**: 2026-05-22
-**Last revised**: 2026-05-22 (round-2, post doc-review revision)
+**Last revised**: 2026-05-22 (round-5, post-doc-review verification on round-4 — clusters C1-C5 applied, S6 mechanism redesigned from derive-attribute to rustc diagnostic, Phase 0 prerequisite added)
 **Feature**: [spec.md](../spec.md)
 
 ## Content Quality
@@ -132,3 +132,59 @@ The spec is NOT yet ready for `/speckit.tasks` — that step requires the plan.
 ### Items marked incomplete
 
 None.
+
+---
+
+## Round-4 Ideation Enrichments (2026-05-22)
+
+Sourced from `docs/ideation/2026-05-22-001-core-contracts-stress-test.md`. Only additive enrichments folded; re-open candidates (S1 / S2) and deferred investigations (S4 / S5 / S9 / S10) recorded in spec Deferred / Open Questions.
+
+| Survivor | Origin frame agreement | Folded into | Resolution |
+|---|---|---|---|
+| **S3** — `column!` >16 friendly compile_error | 4-way (pain / assumption / cross-domain / constraint) | FR-034, SC-014, Edge Cases (Static N > 16) | Applied — macro emits `compile_error!` directing author to `Vec<BoxedView>` fallback; verified via `trybuild`-style compile-fail test |
+| **S6** — Recursive widgets need derive-hint | 1-frame (pain) — single but high-incidence | FR-009 (rustc `#[diagnostic::on_unimplemented]` hint), Edge Cases (Recursive widgets) | **Round-5 revision**: derive-attribute mechanism (`#[view(recursive)]`) dropped per doc-review (proc-macro infeasibility + FR-010 two-paths violation). Replaced with rustc diagnostic hint pointing to canonical `.boxed()`-at-recursion-edge pattern. See Deferred / Open Questions S6 |
+| **S7** — `ReconcileEvent` declarative trace | 1-frame (leverage) — compounds across SC-002/003/008 + devtools + selection | FR-035, SC-002, SC-003, SC-008, Implementation Sequence Phase 2 | Applied — `tracing::event!(target: "flui::reconcile", TRACE, …)` stream lands with the reconciler; tests assert event sequence declaratively |
+| **S8** — port-check trigger #9 sanctioned dyn registry | 1-frame (leverage) — self-enforces Constitution Principle IV | FR-036, SC-013, US5 AS2, Out of Scope, Implementation Sequence Phase 3 | Applied — `// PORT-CHECK-OK-DYN: <reason>` marker discipline mirrors FR-033's `// PORT-CHECK-OK:` for `downcast_ref` |
+
+### Recorded as Deferred / Open Questions (not applied)
+
+| Survivor | Reason for deferral | Plan-phase action |
+|---|---|---|
+| **S1** — `KeyId` interning | Re-open candidate for FR-022; needs prototype + benchmark before locking storage shape | Prototype `Option<KeyId>` vs `Option<Box<dyn ViewKey>>` on 10K-element scrollable; re-open FR-022 if interning wins |
+| **S2** — Static-path skips reconciler | Re-open candidate for FR-016; trades Flutter loyalty for Rust-native optimization | Judge parity-vs-optimization tradeoff; re-open FR-016 only if static-path-specialized algorithm clears the bar |
+| **S4** — `AnimationListener` closure cost | Benchmark-gated; folds into Catalog.1 readiness | Benchmark 100 simultaneous `AnimatedContainer` instances; fold via `TypeId` dispatch table if per-frame budget exceeded |
+| **S5** — `flui-macros` vs blanket-impl | Architectural investigation; folds into Phase 3 readiness | Prototype `impl<T: StatelessView + 'static + Clone> View for T` against `Greeting` + `Container` shapes; defer crate creation if ≤ 7 LOC bar holds without derive |
+| **S9** — Phase 1 dead-code window | Time-box vs document discipline; plan-phase decision | Time-box Phases 2-3 to ≤ 2 working weeks each OR document acceptable window in Implementation Sequence |
+| **S10** — Content-addressed `ElementId` | FLUI 0.2+ inspiration; reframes Constitution Principle 9 | Out of scope for this contract; record as future-architecture signal |
+
+---
+
+## Round-5 Doc-Review Verification (2026-05-22)
+
+Round-4 ideation enrichments verified through `/ce-doc-review` (5 personas: coherence, feasibility, product-lens, scope-guardian, adversarial). 36 raw findings → 34 actionable after dedup → 2 silently-applied safe-autos + 34 routed via best-judgment auto-resolve.
+
+### Cross-persona finding clusters applied
+
+| Cluster | Persona agreement | Spec changes |
+|---|---|---|
+| **C1** — FR-009 `#[view(recursive)]` mechanism infeasible + violates FR-010 single-path | 5-way (feasibility P1/anchor 100, product-lens P1, scope-guardian P2, adversarial P2, coherence P1) | FR-009 attribute dropped; replaced with `#[diagnostic::on_unimplemented]` rustc hint. Edge Cases (Recursive widgets) simplified to canonical `.boxed()` path only. Implementation Sequence FR-009 Phase 1/3 split removed — lands fully in Phase 3 |
+| **C2** — FR-029 sanctioned set incomplete + FR-036 trigger #9 grep brittle | 4-way (feasibility P1, adversarial P2 × 2, product-lens P1, coherence P1, scope-guardian P2) | FR-029 expanded from 3 → 5 sanctioned points (added `Arc<dyn Any+Send+Sync>` pipeline-owner pattern, `Box<dyn Error+Send+Sync>` thiserror, callback-storage types) + categorically exempt `dyn Future / dyn Fn* / dyn Iterator / dyn Error+Send+Sync` runtime patterns. FR-036 hardened with multiline ripgrep `-U`, marker placement rule (same-line OR immediately-prev-line), type-alias laundering closure, bootstrap whitelist estimate ~50-100 sites. FR-033 marker renamed `// PORT-CHECK-OK:` → `// PORT-CHECK-OK-DOWNCAST:` to disambiguate from FR-036's `// PORT-CHECK-OK-DYN:` |
+| **C3** — `ReconcileEvent` stability + test infrastructure underspecified | 5-way (coherence P1, scope-guardian P2, product-lens P1, feasibility P2, adversarial P1 × 3) | FR-035 formalized as Rust struct definition (BOTH struct AND enum `#[non_exhaustive]`); `TypeMismatch` variant removed (no current SC observes it); `flui::reconcile` target name committed as stability boundary. Test discipline added: `ReconcileEventCollector` Layer fixture mandate, `with_default` thread-local discipline, reconciler MUST NOT spawn worker threads, positive-count guard before absence assertions. SC-002/003/008 updated with ordering oracle (Flutter `updateChildren` traversal) + positive-count guard + multiset-equality fallback |
+| **C4** — S1/S2 "may re-open before Phase 1 locks" had no schedule slot | 3-way (scope-guardian P1, adversarial P1, product-lens P2) | Phase 0 prerequisite added to Implementation Sequence (time-boxed 3 working days, produces S1 KeyId interning prototype + S2 static-path algorithm sketch). Phase 0 outputs gate Phase 1 — re-open FR-022/FR-016 if benchmarks invert |
+| **C5** — Phase 1 `#[deprecated]` incompatible with SC-005 `clippy -D warnings` | 1-persona (adversarial P1/anchor 100) | Phase 1 mechanism replaced: `#[cfg(feature = "legacy-downcast")]` gating instead of `#[deprecated]`; new `ElementKind` match arms route active path; SC-005 stays green. Phase 1 self-validation added: per-`ViewKey`-variant round-trip test in `tests/key_roundtrip.rs` validates FR-022 storage shape independently of Phase 2's reconciler |
+
+### Singleton findings applied
+
+- **FR-009 lockfile justification** (feasibility P2): corrected — `ambassador 0.4.2` pulls `syn 1.x`; `bon` not in lockfile; `syn 2.x` already pulled transitively via `bytemuck_derive` / `cosmic-text` / wgpu chain
+- **FR-034 macro shape** (feasibility P3 + adversarial P3): committed to per-arity arms + catch-all with literal-message `compile_error!`; SC-014 substring updated to `"column!: more than 16 children exceeds the tuple ViewSeq cap of 16"`; SC-014 trybuild concern resolved (already in workspace dev-deps)
+- **FR-024 grounding** (coherence P2): scaffold framing moved from Assumptions into FR-024 body
+- **S10 Constitution amendment cost** (product-lens P2): note added to S10 entry — adoption requires Constitution Principle 9 amendment + 5-ID-type consumer migration, not a Phase-level change
+- **Deferred selection criterion** (scope-guardian P2): bold preamble added stating the four-category criterion
+
+### Suppressed (FP)
+
+- **scope-guardian SC-014 `trybuild` concern**: false alarm — `trybuild = "1.0"` already in `crates/flui-types/Cargo.toml:35` and `Cargo.lock`. SC-014 text updated to cite existing workspace dep.
+
+### Findings recorded in spec Deferred (NOT applied as FR changes)
+
+- All round-5 follow-up actions for S4 / S5 / S9 are plan-phase actions to be picked up by `/ce-plan`
