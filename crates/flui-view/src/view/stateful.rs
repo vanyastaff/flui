@@ -148,39 +148,14 @@ pub trait ViewState<V: StatefulView>: Send + Sync + 'static {
     fn dispose(&mut self) {}
 }
 
-/// Implement View for a StatefulView type.
-///
-/// This macro creates the View implementation for a StatefulView type.
-/// Use it after implementing StatefulView:
-///
-/// ```rust,ignore
-/// impl StatefulView for MyCounter {
-///     type State = MyCounterState;
-///     fn create_state(&self) -> Self::State { ... }
-/// }
-/// impl_stateful_view!(MyCounter);
-/// ```
-///
-/// # Deprecation
-///
-/// Phase 3 §U24 deletes this macro in favor of `#[derive(StatefulView)]`
-/// from `flui-macros`. The macro stays during the §U22→§U24 transition
-/// so existing call sites continue to compile (FR-009 / FR-010).
-#[macro_export]
-macro_rules! impl_stateful_view {
-    ($ty:ty) => {
-        impl $crate::View for $ty {
-            fn create_element(&self) -> Box<dyn $crate::ElementBase> {
-                use $crate::element::StatefulBehavior;
-                Box::new($crate::StatefulElement::new(
-                    self,
-                    StatefulBehavior::new(self),
-                ))
-            }
-        }
-    };
-}
-
+// The legacy `impl_stateful_view!` declarative macro was deleted in
+// Phase 3 §U24 (FR-010 "MUST NOT be two parallel authoring paths").
+// Widget authors now write `#[derive(StatefulView)]` from
+// `flui-macros` instead; the derive is re-exported from
+// `flui_view::prelude` for ergonomic single-import access. See
+// `crates/flui-macros/src/derive_stateful.rs` for the generated
+// `impl View` block this used to emit by hand-rolled `macro_rules!`.
+//
 // NOTE: StatefulElement implementation has been moved to unified Element
 // architecture. See crates/flui-view/src/element/unified.rs and
 // element/behavior.rs The type alias is exported from element/mod.rs:

@@ -71,38 +71,14 @@ pub trait StatelessView: Clone + Send + Sync + 'static {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView;
 }
 
-/// Implement View for all StatelessViews.
-///
-/// This macro creates the View implementation for a StatelessView type.
-/// Use it after implementing StatelessView:
-///
-/// ```rust,ignore
-/// impl StatelessView for MyView {
-///     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-///         // ...
-///     }
-/// }
-/// impl_stateless_view!(MyView);
-/// ```
-///
-/// # Deprecation
-///
-/// Phase 3 §U24 deletes this macro in favor of `#[derive(StatelessView)]`
-/// from `flui-macros`. The macro stays during the §U22→§U24 transition
-/// so existing call sites continue to compile; remove invocations and
-/// switch to the derive once §U24 lands (FR-009 / FR-010).
-#[macro_export]
-macro_rules! impl_stateless_view {
-    ($ty:ty) => {
-        impl $crate::View for $ty {
-            fn create_element(&self) -> Box<dyn $crate::ElementBase> {
-                use $crate::element::StatelessBehavior;
-                Box::new($crate::StatelessElement::new(self, StatelessBehavior))
-            }
-        }
-    };
-}
-
+// The legacy `impl_stateless_view!` declarative macro was deleted in
+// Phase 3 §U24 (FR-010 "MUST NOT be two parallel authoring paths").
+// Widget authors now write `#[derive(StatelessView)]` from
+// `flui-macros` instead; the derive is re-exported from
+// `flui_view::prelude` for ergonomic single-import access. See
+// `crates/flui-macros/src/derive_stateless.rs` for the generated
+// `impl View` block this used to emit by hand-rolled `macro_rules!`.
+//
 // NOTE: StatelessElement implementation has been moved to unified Element
 // architecture. See crates/flui-view/src/element/unified.rs and
 // element/behavior.rs The type alias is exported from element/mod.rs:

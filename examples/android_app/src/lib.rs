@@ -12,10 +12,10 @@
 use flui_hot_reload::app_plugin;
 use flui_rendering::objects::RenderColoredBox;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::geometry::px;
 use flui_types::Size;
+use flui_types::geometry::px;
+use flui_view::impl_render_view;
 use flui_view::prelude::*;
-use flui_view::{impl_render_view, impl_stateless_view};
 
 // ---------------------------------------------------------------------------
 // ColoredBoxView — a simple View wrapper around RenderColoredBox
@@ -64,21 +64,19 @@ impl_render_view!(ColoredBoxView);
 /// The root application widget.
 ///
 /// Change the color values here and rebuild to see hot-reload in action.
-#[derive(Clone)]
+#[derive(Clone, StatelessView)]
 struct MyApp;
 
 impl StatelessView for MyApp {
-    fn build(&self, _ctx: &dyn BuildContext) -> Box<dyn View> {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         // Purple background — edit this color and hot-reload!
-        Box::new(ColoredBoxView::new(
+        ColoredBoxView::new(
             [0.5, 0.0, 0.5, 1.0], // RGBA: purple
             4096.0,               // large enough to fill any screen
             4096.0,
-        ))
+        )
     }
 }
-
-impl_stateless_view!(MyApp);
 
 // ---------------------------------------------------------------------------
 // FFI entry point — generates flui_app_build / flui_app_version / flui_app_drop
