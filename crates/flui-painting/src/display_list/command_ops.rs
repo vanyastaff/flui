@@ -22,7 +22,7 @@
 //! Why 64:
 //!
 //! - Each recursive frame holds a [`DrawCommand`] value (~200 B for
-//!   the largest variant) plus the [`DisplayList`] iterator state and
+//!   the largest variant) plus the [`DisplayList`](super::DisplayList) iterator state and
 //!   `Box` drop ladder; empirically ~2–4 KB / frame on a release build.
 //! - 64 × 4 KB ≈ 256 KB — well under the default 8 MB thread stack on
 //!   Windows / macOS / Linux.
@@ -51,7 +51,7 @@ use super::command::{CommandKind, DrawCommand};
 use crate::display_list::Paint;
 
 /// Maximum recursion depth for [`DrawCommand::with_opacity`] and
-/// [`DrawCommand::apply_transform`] into the inner [`DisplayList`] of
+/// [`DrawCommand::apply_transform`] into the inner [`DisplayList`](super::DisplayList) of
 /// [`DrawCommand::ShaderMask`] / [`DrawCommand::BackdropFilter`].
 ///
 /// See the module-level docs for the rationale behind this value.
@@ -65,7 +65,7 @@ impl DrawCommand {
     /// implement opacity effects.
     ///
     /// For [`Self::ShaderMask`] / [`Self::BackdropFilter`], opacity
-    /// recurses into the child [`DisplayList`]. The recursion is
+    /// recurses into the child [`DisplayList`](super::DisplayList). The recursion is
     /// bounded by [`MAX_EFFECT_DEPTH`]; deeper nesting is clamped to
     /// avoid stack overflow on adversarial input. See the module
     /// docs for the rationale.
@@ -77,7 +77,7 @@ impl DrawCommand {
     /// Depth-counted recursion target for [`Self::with_opacity`].
     ///
     /// `depth` is incremented each time we descend into a child
-    /// [`DisplayList`]. When `depth >= MAX_EFFECT_DEPTH` we clone
+    /// [`DisplayList`](super::DisplayList). When `depth >= MAX_EFFECT_DEPTH` we clone
     /// `self` unchanged (the child keeps its existing paint) and emit
     /// a `tracing::warn!` so observability tooling can surface the
     /// truncation.
