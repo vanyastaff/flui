@@ -1,17 +1,27 @@
 //! trybuild driver for the `tests/ui/` compile-fail corpus.
 //!
 //! Phase 3 §U34 (SC-014): locks the FR-034 friendly diagnostic at
-//! `column!` arity > 16. trybuild matches the captured `.stderr`
-//! against the rustc output for each `compile_fail` entry — the
-//! match is substring-based, so surrounding framing drift (line
-//! numbers, file paths) does not regress the test as long as the
-//! FR-034 friendly-error substring stays intact.
+//! `column!` arity > 16. trybuild compares each `compile_fail`
+//! entry's captured rustc output against the sibling `.stderr`
+//! file. The comparison is **whole-output**, not a `contains`
+//! substring search; trybuild normalizes a handful of fields
+//! (line numbers, file paths, hashes) and supports `...` wildcards
+//! inside the `.stderr` snapshot for variance-tolerant matches.
+//! The SC-014 contract is therefore: rustc emits an error block
+//! whose first line carries the FR-034 message verbatim, and the
+//! `.stderr` snapshot captures the surrounding framing post-§U26.
 //!
 //! Adding a new ui-test: drop a `.rs` + matching `.stderr` under
-//! `tests/ui/` and add the path here. Regenerating `.stderr` after
-//! an intentional diagnostic change: set the `TRYBUILD=overwrite`
-//! environment variable before running this test (`TRYBUILD=overwrite
-//! cargo test -p flui-view --test trybuild_ui`).
+//! `tests/ui/` and add a `t.compile_fail(…)` call below. If the
+//! captured rustc framing is brittle across rustc versions or
+//! local file paths, replace the variant lines in `.stderr` with
+//! the trybuild `...` wildcard so the assertion stays focused on
+//! the FR-034 substring.
+//!
+//! Regenerating `.stderr` after an intentional diagnostic change:
+//! set the `TRYBUILD=overwrite` environment variable before running
+//! this test (`TRYBUILD=overwrite cargo test -p flui-view --test
+//! trybuild_ui`).
 
 #[test]
 fn ui_tests() {
