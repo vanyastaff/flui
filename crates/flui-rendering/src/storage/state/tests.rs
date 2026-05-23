@@ -48,20 +48,25 @@ fn render_state_sliver_fits_budget() {
 }
 
 #[test]
-fn test_geometry_write_once() {
-    let state = BoxRenderState::new();
+fn test_geometry_set_is_idempotent() {
+    // D-block PR-A1 U14: previously `set_geometry` panicked on second
+    // invocation (OnceCell-backed). Re-layout now overwrites cleanly
+    // mirroring Flutter `_size = size` straight assignment.
+    let mut state = BoxRenderState::new();
     let size1 = flui_types::Size::new(px(100.0), px(50.0));
     let size2 = flui_types::Size::new(px(200.0), px(100.0));
 
-    // First set succeeds
+    // First set establishes geometry.
     state.set_geometry(size1);
     assert_eq!(state.geometry(), Some(size1));
 
-    // Second set panics
-    let result = std::panic::catch_unwind(|| {
-        state.set_geometry(size2);
-    });
-    assert!(result.is_err());
+    // Second set overwrites with no panic — re-layout safe.
+    state.set_geometry(size2);
+    assert_eq!(state.geometry(), Some(size2));
+
+    // Clear resets to None.
+    state.clear_geometry();
+    assert_eq!(state.geometry(), None);
 }
 
 #[test]

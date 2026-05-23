@@ -73,7 +73,9 @@
 
 use std::marker::PhantomData;
 
-use once_cell::sync::OnceCell;
+// NOTE: `OnceCell` was previously imported here for `geometry`/`constraints`
+// write-once semantics; D-block PR-A1 U14 migrated both fields to `Option<T>`
+// so the import is no longer needed.
 
 use crate::protocol::{
     BoxProtocol, Protocol, ProtocolConstraints, ProtocolGeometry, SliverProtocol,
@@ -162,16 +164,21 @@ pub struct RenderState<P: Protocol> {
     /// For BoxProtocol: Size
     /// For SliverProtocol: SliverGeometry
     ///
-    /// Write-once per layout pass, read many times during paint.
-    geometry: OnceCell<ProtocolGeometry<P>>,
+    /// Mutated each layout pass via [`set_geometry`](Self::set_geometry).
+    /// Migrated from `OnceCell` to `Option` in D-block PR-A1 U14 — re-layout
+    /// must be idempotent (frame-2 panic fix per memo D2; Flutter `_size`
+    /// is straight-assigned each layout at `.flutter/.../object.dart:2865`).
+    geometry: Option<ProtocolGeometry<P>>,
 
     /// Last constraints used for layout.
     ///
     /// For BoxProtocol: BoxConstraints
     /// For SliverProtocol: SliverConstraints
     ///
-    /// Used for cache validation and optimization.
-    constraints: OnceCell<ProtocolConstraints<P>>,
+    /// Used for cache validation and the relayout-boundary short-circuit.
+    /// Migrated from `OnceCell` to `Option` in D-block PR-A1 U14 alongside
+    /// `geometry`; see field doc above for rationale.
+    constraints: Option<ProtocolConstraints<P>>,
 
     /// Offset relative to parent (atomic for lock-free updates).
     ///
@@ -205,8 +212,8 @@ impl<P: Protocol> RenderState<P> {
     pub fn new() -> Self {
         Self {
             flags: AtomicRenderFlags::new(RenderFlags::NEEDS_LAYOUT | RenderFlags::NEEDS_PAINT),
-            geometry: OnceCell::new(),
-            constraints: OnceCell::new(),
+            geometry: None,
+            constraints: None,
             offset: AtomicOffset::new(flui_types::Offset::ZERO),
             _phantom: PhantomData,
         }
@@ -227,8 +234,8 @@ impl<P: Protocol> RenderState<P> {
     pub fn with_flags(flags: RenderFlags) -> Self {
         Self {
             flags: AtomicRenderFlags::new(flags),
-            geometry: OnceCell::new(),
-            constraints: OnceCell::new(),
+            geometry: None,
+            constraints: None,
             offset: AtomicOffset::new(flui_types::Offset::ZERO),
             _phantom: PhantomData,
         }
@@ -249,24 +256,8 @@ where
     fn clone(&self) -> Self {
         Self {
             flags: AtomicRenderFlags::new(self.flags.load()),
-            geometry: self
-                .geometry
-                .get()
-                .cloned()
-                .map_or_else(OnceCell::new, |g| {
-                    let cell = OnceCell::new();
-                    let _ = cell.set(g);
-                    cell
-                }),
-            constraints: self
-                .constraints
-                .get()
-                .cloned()
-                .map_or_else(OnceCell::new, |c| {
-                    let cell = OnceCell::new();
-                    let _ = cell.set(c);
-                    cell
-                }),
+            geometry: self.geometry.clone(),
+            constraints: self.constraints.clone(),
             offset: AtomicOffset::new(self.offset.load()),
             _phantom: PhantomData,
         }
