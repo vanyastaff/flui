@@ -168,8 +168,9 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     /// for keyed reconciliation: it indexes old children by `u64` for
     /// O(1) HashMap claims. The hash alone is not enough to decide that
     /// two keys are equal, though — distinct keys can hash to the same
-    /// `u64`. This accessor surfaces the underlying [`ViewKey`] so the
-    /// reconciler can call [`ViewKey::key_eq`] on a hash hit and reject
+    /// `u64`. This accessor surfaces the underlying
+    /// [`flui_foundation::ViewKey`] so the reconciler can call
+    /// [`flui_foundation::ViewKey::key_eq`] on a hash hit and reject
     /// silent collisions. Plan §U12 / FR-024 work item (c).
     ///
     /// The default impl returns `None`; the unified `Element<V, A, B>`

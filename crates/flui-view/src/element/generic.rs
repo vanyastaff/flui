@@ -282,9 +282,9 @@ where
     /// Update this element with a new View of the same type.
     ///
     /// Phase 1 §U8 / KTD-4: under default features, dispatch routes
-    /// through [`crate::element::dispatch::dispatch_view_update`] —
-    /// the future home of typed `ElementKind`-discriminated dispatch
-    /// (Phase 3 §U27 replaces the body there with the real typed
+    /// through the in-crate `dispatch::dispatch_view_update` helper
+    /// (the future home of typed `ElementKind`-discriminated dispatch
+    /// — Phase 3 §U27 replaces the body there with the real typed
     /// match, eliminating the runtime `downcast_ref::<V>()` call
     /// entirely per FR-021).
     ///

@@ -3,8 +3,9 @@
 //!
 //! Plan §U13 / FR-035. Emitted at every disposition site inside
 //! [`reconcile_children`](super::reconcile_children) so observers
-//! (the [`ReconcileEventCollector`](super::tests::reconcile_event_collector::ReconcileEventCollector)
-//! test fixture, the future devtools panel) can reconstruct the
+//! (the `ReconcileEventCollector` test fixture in the in-crate
+//! `tree::test_utils` module, gated behind the `test-utils`
+//! feature; the future devtools panel) can reconstruct the
 //! per-frame reconciliation outcome WITHOUT a tree-diff comparison.
 //!
 //! # Stability boundary
@@ -213,8 +214,9 @@ pub const RECONCILE_TARGET: &str = "flui::reconcile";
 /// Field names match the table in the module docs. Each primitive is
 /// recorded via the typed `Visit` methods (`record_u64`,
 /// `record_bool`, `record_debug` for the type-id) so the
-/// [`ReconcileEventCollector`](super::tests::reconcile_event_collector)
-/// reads structured values without parsing Debug-format strings.
+/// `ReconcileEventCollector` (in the in-crate `tree::test_utils`
+/// module, behind the `test-utils` feature) reads structured values
+/// without parsing Debug-format strings.
 ///
 /// Cost is zero when no subscriber is installed (tracing's per-target
 /// short-circuit fires before the field values are computed).

@@ -71,8 +71,10 @@ pub trait ElementChildStorage: Default + Send + Sync + std::fmt::Debug + 'static
     /// [`ReconcileEvent`](crate::tree::ReconcileEvent) so
     /// subscribers can correlate the trace back to the build path.
     /// Non-Variable impls ignore the parameter. Plan §U15 retires
-    /// the §U13 placeholder by threading the real id from
-    /// [`ElementCore::self_id`].
+    /// the §U13 placeholder by threading the real id through
+    /// `ElementCore`'s self-id slot (see
+    /// [`ElementBase::set_self_id`](crate::view::ElementBase) for
+    /// the public hook that populates it).
     fn update_with_views(
         &mut self,
         parent_id: ElementId,

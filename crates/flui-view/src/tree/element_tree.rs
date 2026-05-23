@@ -59,12 +59,12 @@ impl ElementNode {
     /// Create a new ElementNode.
     ///
     /// The `key` slot is initialised to `None`; callers that have the
-    /// originating `View::key()` in scope set it via [`Self::set_key`]
-    /// after construction. The two production call sites
-    /// (`ElementTree::mount_root_with_pipeline_owner` and
-    /// `ElementTree::insert`) thread the key in immediately after
-    /// `ElementNode::new` so the field is populated before the
-    /// element is returned.
+    /// originating `View::key()` in scope set it via the in-crate
+    /// `set_key` accessor immediately after construction. The two
+    /// production call sites (`ElementTree::mount_root_with_pipeline_owner`
+    /// and `ElementTree::insert`) thread the key in immediately
+    /// after `ElementNode::new` so the field is populated before
+    /// the element is returned.
     pub fn new(element: Box<dyn ElementBase>, parent: Option<ElementId>, slot: usize) -> Self {
         let depth = if parent.is_some() { 1 } else { 0 }; // Will be updated by tree
         Self {
