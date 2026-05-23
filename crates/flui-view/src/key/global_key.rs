@@ -126,7 +126,7 @@ impl<T: 'static> GlobalKey<T> {
     /// The callback shape (`R` returned, state borrowed for the duration
     /// of the call) lets callers extract a snapshot without leaking the
     /// borrow into the rest of `build()`. Same pattern as
-    /// [`crate::BuildContext::find_state`] (plan §U11).
+    /// [`BuildContextExt::find_state`](crate::BuildContextExt::find_state) (plan §U11).
     ///
     /// Flutter parity: `framework.dart:3170`
     /// `GlobalKey<T extends State>.currentState` — returns `T?` after

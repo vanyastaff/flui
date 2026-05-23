@@ -328,8 +328,8 @@ impl ElementTree {
     ///   `BuildOwner::inactive_elements` — the slab entry stays alive.
     ///   This enables same-frame state migration: a subsequent
     ///   `insert` with the same GlobalKey pulls the element back via
-    ///   [`try_retake_inactive`]. End-of-frame
-    ///   [`BuildOwner::finalize_tree`] drains any stragglers via
+    ///   `try_retake_inactive` (private). End-of-frame
+    ///   [`BuildOwner::finalize_tree`](crate::BuildOwner::finalize_tree) drains any stragglers via
     ///   [`Self::remove_finalized`] (full slab-remove + unregister).
     ///   Flutter parity: `framework.dart:4636` `deactivateChild` +
     ///   `framework.dart:2099` `_InactiveElements`.
