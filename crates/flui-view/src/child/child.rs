@@ -107,9 +107,9 @@ impl<V: View> From<Option<V>> for Child {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::view::IntoView;
     use crate::view::ViewExt;
-    use super::*;
     use crate::{ElementBase, StatelessElement, StatelessView};
 
     #[derive(Clone)]

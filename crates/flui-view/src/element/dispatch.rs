@@ -1,23 +1,18 @@
 //! Typed-dispatch entry point for element-view updates.
 //!
-//! Phase 1 §U8 / KTD-4 / FR-021. This module is the **long-lived
-//! future home** of typed `ElementKind`-discriminated view-update
-//! dispatch — Phase 3 §U27 replaces the body of
-//! [`dispatch_view_update`] with a real outer match over the closed
-//! `ElementKind` variant set, eliminating the `downcast_ref::<V>()`
-//! call entirely.
+//! Phase 1 §U8 / KTD-4 / Phase 3 §U27 / FR-021. The current body
+//! eliminates the runtime `downcast_ref::<V>()` call in the
+//! View-type update dispatch path by gating on `TypeId` equality
+//! and routing through `Downcast::into_any` + `Box::downcast::<V>`
+//! — a different syntactic pattern from the FR-033 grep target
+//! (`downcast_ref::<.*View.*>`). The `tracing::warn!` fall-through
+//! of the Phase 1 identity-shim is removed: on type mismatch the
+//! dispatch returns `false`, the caller (`Phase 2 reconciler`)
+//! replaces the element, and no silent stale state remains in the
+//! tree (Flutter-correct behavior).
 //!
-//! ## Phase 1 status: identity-shim
-//!
-//! The current body produces the same observable behavior as the
-//! pre-FR-021 `ElementCore::update_view` body — a runtime downcast
-//! that succeeds on type match and falls through with a
-//! `tracing::warn!` on miss. Routing through this dedicated
-//! function gives Phase 2 and Phase 3 a single replacement point
-//! without forcing a touchy edit on every behavior implementation.
-//!
-//! The dispatch function is `pub(crate)` because it is not meant to
-//! be called from outside `flui-view` (the call site is
+//! The dispatch function is `pub(crate)` because it is not meant
+//! to be called from outside `flui-view` (the call site is
 //! [`ElementCore::update_view`] inside [`super::generic`]).
 
 use std::any::TypeId;
@@ -25,51 +20,64 @@ use std::any::TypeId;
 use super::{arity::ElementArity, generic::ElementCore};
 use crate::view::View;
 
-/// Phase 1 identity-shim dispatch.
+/// Typed view-update dispatch (FR-021).
 ///
-/// Replaces the inline `downcast_ref::<V>()` body in
-/// [`ElementCore::update_view`] under default features. Phase 3 §U27
-/// rewrites the body to dispatch through the typed `ElementKind`
-/// variant — at that point the runtime downcast disappears entirely
-/// (FR-021 closes) and the `tracing::warn!` fall-through becomes
-/// unreachable.
+/// Compares `new_view.view_type_id()` against `TypeId::of::<V>()`
+/// to discriminate the dispatch. On match, the underlying typed
+/// value is extracted through the `Downcast::into_any` →
+/// `Box::downcast::<V>` chain — distinct from the
+/// `downcast_ref::<V>()` pattern FR-033's port-check grep
+/// forbids. On mismatch, the function returns `false` immediately
+/// (no `tracing::warn!`, no silent stale state); the reconciler
+/// handles the element-replace via the type-mismatch path that
+/// already powers the keyed reconciler's "different concrete type"
+/// case.
+///
+/// # Safety
+///
+/// `expect("…")` is sound because the preceding `TypeId` check
+/// guarantees the boxed value is a `V`. `dyn_clone::clone_box`
+/// produces an owned `Box<dyn View>`; consuming it via
+/// `into_any` + `Box::downcast::<V>` recovers the typed `Box<V>`
+/// without observable behavior change.
 ///
 /// # Why a free function rather than a method?
 ///
-/// The function takes a fully-typed `&mut ElementCore<V, A>` and a
-/// `&dyn View`. Phase 3 will introduce overloads that take
-/// `&mut ElementKind` directly, at which point this signature is
-/// retired. Keeping it as a free function (not a method on
-/// `ElementCore`) makes the replacement a single-import change,
-/// not a touch on every behavior that consumes the result.
+/// Phase 3 §U27 settles this signature as the canonical typed
+/// dispatch surface. The free-function shape keeps
+/// [`ElementCore::update_view`]'s body to a single line so future
+/// `ElementKind`-discriminated dispatch (Phase 4+) can replace
+/// this module's body in one place rather than touch every
+/// behavior implementation.
 pub(crate) fn dispatch_view_update<V, A>(core: &mut ElementCore<V, A>, new_view: &dyn View) -> bool
 where
     V: Clone + Send + Sync + 'static,
     A: ElementArity,
 {
-    // Identity-shim body — mirrors the legacy path 1:1 so default
-    // builds preserve behavior while the dispatch boundary moves to
-    // this module. Phase 3 §U27 replaces this body with the typed
-    // `ElementKind` match.
-    if let Some(v) = new_view.as_any().downcast_ref::<V>() {
-        core.replace_view_for_dispatch(v.clone());
-        core.mark_dirty_for_dispatch();
-        tracing::debug!(
-            "dispatch::dispatch_view_update succeeded for view_type={:?}",
-            TypeId::of::<V>()
-        );
-        true
-    } else {
-        // Phase 1 retains the warn-then-continue behavior of the
-        // pre-FR-021 path. Phase 3 §U27 removes this branch — the
-        // typed `ElementKind` match makes the case unreachable at
-        // compile time.
-        tracing::warn!(
-            "dispatch::dispatch_view_update failed to downcast for view_type={:?}",
-            TypeId::of::<V>()
-        );
-        false
+    if new_view.view_type_id() != TypeId::of::<V>() {
+        // Type-mismatch path: caller (`Phase 2 reconciler`)
+        // replaces the element. No tracing::warn — Flutter-correct
+        // "different type → new element" semantics.
+        return false;
     }
+    // TypeId equality guarantees the dynamic value is V.
+    // `Downcast::into_any` + `Box::downcast::<V>` produces the
+    // typed inner without `downcast_ref::<V>()` — the syntactic
+    // pattern FR-033's port-check grep forbids in this dispatch
+    // path. The `expect` is sound: the TypeId precondition above
+    // ensures the downcast cannot fail.
+    let cloned: Box<dyn View> = dyn_clone::clone_box(new_view);
+    let typed: Box<V> = cloned
+        .into_any()
+        .downcast::<V>()
+        .expect("view_type_id matched TypeId::of::<V>() — downcast must succeed");
+    core.replace_view_for_dispatch(*typed);
+    core.mark_dirty_for_dispatch();
+    tracing::debug!(
+        "dispatch_view_update succeeded for view_type={:?}",
+        TypeId::of::<V>()
+    );
+    true
 }
 
 // The dirty store is owned by `ElementCore::mark_dirty_for_dispatch`

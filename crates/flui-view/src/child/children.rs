@@ -150,9 +150,9 @@ impl<V: View> Extend<V> for Children {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::view::IntoView;
     use crate::view::ViewExt;
-    use super::*;
     use crate::{ElementBase, StatelessElement, StatelessView};
 
     #[derive(Clone)]

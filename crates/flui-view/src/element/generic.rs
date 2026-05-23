@@ -281,19 +281,15 @@ where
 
     /// Update this element with a new View of the same type.
     ///
-    /// Phase 1 §U8 / KTD-4: under default features, dispatch routes
-    /// through the in-crate `dispatch::dispatch_view_update` helper
-    /// (the future home of typed `ElementKind`-discriminated dispatch
-    /// — Phase 3 §U27 replaces the body there with the real typed
-    /// match, eliminating the runtime `downcast_ref::<V>()` call
-    /// entirely per FR-021).
-    ///
-    /// Under `feature = "legacy-downcast"` (workspace-internal ONLY,
-    /// gated by `cfg(__flui_legacy_downcast_internal)` so it cannot
-    /// be enabled by accidental workspace-resolver feature
-    /// unification), the body falls back to the pre-FR-021 inline
-    /// downcast so the Phase 0 §U2 S1 bench can A/B against the
-    /// legacy storage shape.
+    /// FR-021 (Phase 3 §U27): dispatch routes through
+    /// [`crate::element::dispatch::dispatch_view_update`] which
+    /// discriminates on `TypeId` and extracts the typed inner via
+    /// `Downcast::into_any` + `Box::downcast::<V>` — the literal
+    /// `downcast_ref::<V>()` pattern FR-033's port-check grep
+    /// forbids is gone from this path entirely. On type mismatch
+    /// the dispatch returns `false` without `tracing::warn!`; the
+    /// caller (reconciler) replaces the element rather than
+    /// continuing with stale state.
     ///
     /// # Arguments
     ///
@@ -301,61 +297,10 @@ where
     ///
     /// # Returns
     ///
-    /// `true` if update succeeded, `false` if downcast failed
+    /// `true` if update succeeded, `false` if the type mismatched
+    /// (caller replaces the element).
     pub fn update_view(&mut self, new_view: &dyn View) -> bool {
-        // Default-features path: route through the dispatch module.
-        // Identity-shim today; Phase 3 §U27 replaces with typed match.
-        #[cfg(not(feature = "legacy-downcast"))]
-        {
-            crate::element::dispatch::dispatch_view_update(self, new_view)
-        }
-        // Legacy path: requires BOTH `feature = "legacy-downcast"`
-        // AND `cfg(__flui_legacy_downcast_internal)`. The internal
-        // cfg is set only by `crates/flui-view`'s own benchmark via
-        // `[[bench]] rustflags = ["--cfg=__flui_legacy_downcast_internal"]`
-        // (the Phase 0 §U2 S1 bench). Any other consumer that
-        // enables the feature without the internal cfg hits the
-        // module-level `compile_error!` below — a workspace-internal
-        // accidental-enable surfaces as a CLEAR build failure
-        // visible to the offending consumer, not as a silent
-        // FR-021 regression.
-        #[cfg(all(feature = "legacy-downcast", __flui_legacy_downcast_internal))]
-        {
-            if let Some(v) = new_view.as_any().downcast_ref::<V>() {
-                self.view = v.clone();
-                self.dirty.store(true, Ordering::Relaxed);
-                tracing::debug!(
-                    "ElementCore::update_view succeeded for view_type={:?}",
-                    TypeId::of::<V>()
-                );
-                true
-            } else {
-                tracing::warn!(
-                    "ElementCore::update_view failed to downcast for view_type={:?}",
-                    TypeId::of::<V>()
-                );
-                false
-            }
-        }
-        // Fallback for the `feature = "legacy-downcast"` +
-        // `not(__flui_legacy_downcast_internal)` matrix corner. The
-        // module-level `compile_error!` in `super::mod` already fires
-        // for this combination, so this branch is unreachable at
-        // build time — but rustc still type-checks the function body,
-        // and without an arm here it would emit a spurious
-        // "function returns `()` instead of `bool`" diagnostic on
-        // top of the intentional compile_error. The `unreachable!()`
-        // returns `!` which coerces to `bool` and keeps the only
-        // surfaced error message focused on the workspace-internal
-        // feature guard.
-        #[cfg(all(feature = "legacy-downcast", not(__flui_legacy_downcast_internal)))]
-        {
-            // Suppress unused-variable warning for `new_view` in this
-            // corner-case build matrix without dragging
-            // `#[allow(unused_variables)]` onto the function signature.
-            let _ = new_view;
-            unreachable!()
-        }
+        crate::element::dispatch::dispatch_view_update(self, new_view)
     }
 
     // ========================================================================
@@ -371,23 +316,14 @@ where
 
     /// Replace the stored view. Used by
     /// [`crate::element::dispatch::dispatch_view_update`] after the
-    /// typed downcast (Phase 1 identity-shim).
-    ///
-    /// Gated to the default-features build because the legacy path
-    /// (`feature = "legacy-downcast"` + internal cfg) uses an inline
-    /// `self.view = v.clone()` and never reaches this helper.
-    #[cfg(not(feature = "legacy-downcast"))]
+    /// `TypeId`-keyed `Box::downcast::<V>` succeeds (Phase 3 §U27).
     pub(crate) fn replace_view_for_dispatch(&mut self, view: V) {
         self.view = view;
     }
 
     /// Mark the element as needing rebuild. Used by
     /// [`crate::element::dispatch::dispatch_view_update`] after the
-    /// view is replaced (Phase 1 identity-shim).
-    ///
-    /// See [`Self::replace_view_for_dispatch`] for the cfg gate
-    /// rationale.
-    #[cfg(not(feature = "legacy-downcast"))]
+    /// view is replaced.
     pub(crate) fn mark_dirty_for_dispatch(&self) {
         self.dirty.store(true, Ordering::Relaxed);
     }

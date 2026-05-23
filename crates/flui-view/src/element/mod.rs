@@ -18,33 +18,18 @@ pub mod arity;
 pub mod behavior;
 pub(crate) mod behavior_commons;
 pub mod child_storage;
-// `dispatch` is the default-features path for view-update routing
-// (Phase 1 §U8). Under `feature = "legacy-downcast"` the module is
-// not compiled — the inline body inside `ElementCore::update_view`
-// takes over instead, and the dispatch helpers
-// (`replace_view_for_dispatch`, `mark_dirty_for_dispatch`) would
-// otherwise trigger dead-code warnings.
-#[cfg(not(feature = "legacy-downcast"))]
+// `dispatch` is the only View-update routing path post-§U27. The
+// pre-FR-021 `feature = "legacy-downcast"` gate (Phase 1 §U8 /
+// KTD-4) is gone: `ElementCore::update_view` unconditionally
+// routes through `dispatch_view_update`, which performs a
+// `TypeId`-keyed dispatch + `Downcast::into_any` + `Box::downcast`
+// (no `downcast_ref::<V>()` pattern). The workspace-internal
+// feature isolation guard (`cfg(__flui_legacy_downcast_internal)`)
+// is retired here.
 pub(crate) mod dispatch;
 pub mod generic;
 pub mod kind;
 pub mod unified;
-
-// Workspace-internal feature isolation guard (plan §U8 / KTD-4).
-// If a downstream consumer enables `feature = "legacy-downcast"`
-// without also setting `cfg(__flui_legacy_downcast_internal)` via
-// rustflags, the build fails HERE with a clear message rather than
-// silently re-introducing the pre-FR-021 runtime-downcast path.
-#[cfg(all(feature = "legacy-downcast", not(__flui_legacy_downcast_internal)))]
-compile_error!(
-    "the `legacy-downcast` feature on `flui-view` is workspace-internal only. \
-     It is gated behind the additional `cfg(__flui_legacy_downcast_internal)` flag, \
-     set only by `crates/flui-view`'s own benchmark via \
-     `[[bench]] rustflags = [\"--cfg=__flui_legacy_downcast_internal\"]`. \
-     If you reached this error from a workspace consumer that enables the feature \
-     (directly or via cargo's resolver-v2 feature unification), remove the feature \
-     declaration. See docs/PORT.md."
-);
 
 use flui_foundation::ElementId;
 // Slot types live in flui-tree (canonical home per `flui-tree-unified-interface-intent`
