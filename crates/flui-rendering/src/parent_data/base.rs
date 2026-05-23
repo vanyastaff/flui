@@ -11,8 +11,8 @@ use downcast_rs::{DowncastSync, impl_downcast};
 /// Metadata stored on children by parent render objects.
 ///
 /// Different layout protocols require different parent data types.
-/// For example, box layout uses [`BoxParentData`] to store child offsets,
-/// while sliver layout uses [`SliverParentData`] for logical positioning.
+/// For example, box layout uses [`BoxParentData`](super::BoxParentData) to store child offsets,
+/// while sliver layout uses [`SliverParentData`](super::SliverParentData) for logical positioning.
 ///
 /// # Downcasting
 ///

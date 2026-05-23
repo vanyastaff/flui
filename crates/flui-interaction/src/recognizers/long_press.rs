@@ -9,7 +9,7 @@
 //! - Optional move updates while pressed
 //! - Pointer up
 //!
-//! Flutter reference: https://api.flutter.dev/flutter/gestures/LongPressGestureRecognizer-class.html
+//! Flutter reference: <https://api.flutter.dev/flutter/gestures/LongPressGestureRecognizer-class.html>
 
 use std::{
     sync::Arc,

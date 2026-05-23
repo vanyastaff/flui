@@ -902,8 +902,8 @@ impl WidgetsBinding {
     ///
     /// # Frame phases
     ///
-    /// 1. **Build phase**: All dirty [Element]s in the widget tree are rebuilt.
-    ///    See [State.setState] for details on marking a widget dirty.
+    /// 1. **Build phase**: All dirty `Element`s in the widget tree are rebuilt.
+    ///    See `State.setState` for details on marking a widget dirty.
     ///
     /// 2. **Layout phase**: (handled by RendererBinding.drawFrame)
     ///

@@ -2,11 +2,11 @@
 //!
 //! Provides two macros:
 //!
-//! - [`scene_plugin!`] — wraps a raw `fn(f32, f32) -> Scene` function
+//! - `scene_plugin!` — wraps a raw `fn(f32, f32) -> Scene` function
 //!   (low-level)
-//! - [`app_plugin!`] — wraps a `View + StatelessView` widget in a
+//! - `app_plugin!` — wraps a `View + StatelessView` widget in a
 //!   self-contained pipeline that runs Build → Layout → Paint → Scene
-//!   internally (high-level)
+//!   internally (high-level; requires `app-plugin` feature)
 
 /// Generates the `extern "C"` FFI wrappers for a scene-building function.
 ///
@@ -89,7 +89,7 @@ macro_rules! scene_plugin {
 
 /// Generates `extern "C"` FFI wrappers for a widget-based hot-reload plugin.
 ///
-/// Unlike [`scene_plugin!`] which wraps a raw scene-building function, this
+/// Unlike `scene_plugin!` which wraps a raw scene-building function, this
 /// macro wraps a `View + StatelessView` widget in a self-contained rendering
 /// pipeline ([`PluginPipeline`]) that runs the full Build → Layout → Paint →
 /// Scene cycle.

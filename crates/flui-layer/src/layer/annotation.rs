@@ -8,9 +8,9 @@
 //!
 //! The annotation system mirrors Flutter's `findAnnotations` pattern:
 //!
-//! 1. **AnnotationEntry<T>** - A single annotation with its local position
-//! 2. **AnnotationResult<T>** - A collection of found annotations
-//! 3. **FindAnnotations trait** - Implemented by layers to participate in
+//! 1. **`AnnotationEntry<T>`** - A single annotation with its local position
+//! 2. **`AnnotationResult<T>`** - A collection of found annotations
+//! 3. **`FindAnnotations` trait** - Implemented by layers to participate in
 //!    search
 //!
 //! # Example

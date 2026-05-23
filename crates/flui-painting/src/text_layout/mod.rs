@@ -13,9 +13,9 @@
 //!
 //! Files:
 //!
-//! - [`detect`]   -- RTL/LTR detection helpers.
-//! - [`layout`]   -- `FONT_SYSTEM` static + `TextLayout` struct + cursor/hit-test methods.
-//! - [`measure`]  -- `measure_text` + `measure_inline_span` + `style_to_attrs` helpers.
+//! - `detect`   -- RTL/LTR detection helpers.
+//! - `layout`   -- `FONT_SYSTEM` static + `TextLayout` struct + cursor/hit-test methods.
+//! - `measure`  -- `measure_text` + `measure_inline_span` + `style_to_attrs` helpers.
 
 use flui_types::{
     geometry::{Pixels, Size, px},

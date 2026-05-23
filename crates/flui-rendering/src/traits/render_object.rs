@@ -1,4 +1,4 @@
-//! RenderObject<P> trait - Protocol-aware base trait for render objects.
+//! `RenderObject<P>` trait - Protocol-aware base trait for render objects.
 //!
 //! This module defines the core `RenderObject<P>` trait that all concrete
 //! render objects implement through their protocol-specific traits (RenderBox,

@@ -6,7 +6,7 @@
 //! key events through the registered handlers.
 //!
 //! Audit Finding I-4 closure (U23): prior dual structure (`FocusManager`
-//! singleton + private `FocusManagerInner` Arc<inner> co-existing with
+//! singleton + private `FocusManagerInner` `Arc<inner>` co-existing with
 //! independent `primary_focus` + listener state) collapsed into a single
 //! singleton owning every focus invariant. [`FocusNode`] / [`FocusScopeNode`]
 //! reach the manager via [`FocusManager::global`] instead of holding a
@@ -89,7 +89,7 @@ pub type KeyEventCallback = Arc<dyn Fn(&KeyEvent) -> bool + Send + Sync>;
 /// # Singleton ownership
 ///
 /// `FocusManager::global()` returns a `&'static FocusManager` initialized
-/// once via [`OnceLock`]. On first access, [`Default`] eagerly creates the
+/// once via [`OnceLock`](std::sync::OnceLock). On first access, [`Default`] eagerly creates the
 /// root [`FocusScopeNode`] so consumers can always reach
 /// [`FocusManager::root_scope`] without re-initialization.
 ///
@@ -145,8 +145,8 @@ pub struct FocusManager {
     global_key_handlers: RwLock<Vec<KeyEventCallback>>,
 
     /// Override scope used for Tab navigation traversal. When `None`
-    /// (the default), [`focus_next`] / [`focus_previous`] use
-    /// [`root_scope`]. App code can set this to a sub-scope to scope
+    /// (the default), [`FocusManager::focus_next`] / [`FocusManager::focus_previous`] use
+    /// [`FocusManager::root_scope`]. App code can set this to a sub-scope to scope
     /// traversal (matches Flutter modal-route scope semantics).
     active_scope: RwLock<Option<Arc<FocusScopeNode>>>,
 }
@@ -201,7 +201,7 @@ impl FocusManager {
     }
 
     /// Override the active scope for Tab navigation. Pass `None` to
-    /// fall back to the [`root_scope`].
+    /// fall back to the [`Self::root_scope`].
     ///
     /// Useful for modal dialogs that need traversal scoped to dialog
     /// descendants. Flutter equivalent: pushing a scope onto the
@@ -211,7 +211,7 @@ impl FocusManager {
     }
 
     /// Returns the active focus scope used for traversal. Defaults to
-    /// [`root_scope`] when no override is set.
+    /// [`Self::root_scope`] when no override is set.
     pub fn active_scope(&self) -> Arc<FocusScopeNode> {
         self.active_scope
             .read()
@@ -289,7 +289,7 @@ impl FocusManager {
         *self.primary_focus.read()
     }
 
-    /// Alias for [`focused`] — matches Flutter's `primaryFocus` getter.
+    /// Alias for [`Self::focused`] — matches Flutter's `primaryFocus` getter.
     #[inline]
     pub fn primary_focus(&self) -> Option<FocusNodeId> {
         *self.primary_focus.read()
@@ -365,8 +365,8 @@ impl FocusManager {
 
     /// Transfer focus to the next focusable element via the active
     /// scope's traversal policy (Tab key). The active scope defaults
-    /// to [`root_scope`] when no override is set via
-    /// [`set_active_scope`].
+    /// to [`Self::root_scope`] when no override is set via
+    /// [`Self::set_active_scope`].
     ///
     /// Returns `true` if focus advanced, `false` if no element is
     /// currently focused or the traversal policy returned `None`.
@@ -386,7 +386,7 @@ impl FocusManager {
     /// Transfer focus to the previous focusable element via the
     /// active scope's traversal policy (Shift+Tab).
     ///
-    /// See [`focus_next`] for behavior contract.
+    /// See [`Self::focus_next`] for behavior contract.
     pub fn focus_previous(&self) -> bool {
         let Some(current) = *self.primary_focus.read() else {
             tracing::trace!("focus_previous: no element currently focused");

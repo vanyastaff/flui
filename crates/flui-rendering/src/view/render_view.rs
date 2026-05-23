@@ -34,7 +34,7 @@ use crate::{
 /// This object must be bootstrapped in a specific order:
 ///
 /// 1. First, set the [`configuration`](Self::set_configuration)
-/// 2. Second, [`attach`](RenderObject::attach) the object to a
+/// 2. Second, [`attach`](Self::attach) the object to a
 ///    [`PipelineOwner`]
 /// 3. Third, use [`prepare_initial_frame`](Self::prepare_initial_frame) to
 ///    bootstrap

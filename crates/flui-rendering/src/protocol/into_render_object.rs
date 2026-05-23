@@ -4,7 +4,7 @@
 //! This module provides the `IntoRenderObject` trait that replaces the old
 //! wrapper approach. Instead of wrapping concrete types in
 //! BoxWrapper/SliverWrapper, we directly convert them
-//! into RenderEntry<Protocol> for storage in RenderTree.
+//! into `RenderEntry<Protocol>` for storage in RenderTree.
 //!
 //! # Architecture
 //!

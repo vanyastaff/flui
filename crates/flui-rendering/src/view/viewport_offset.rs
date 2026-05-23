@@ -54,7 +54,7 @@ impl ScrollDirection {
 /// select which part of its content to display. As the user scrolls the
 /// viewport, this value changes, which changes the content that is displayed.
 ///
-/// This trait is a [`ChangeNotifier`]-like that notifies its listeners when
+/// This trait is a `ChangeNotifier`-like that notifies its listeners when
 /// `pixels` changes.
 ///
 /// # Flutter Equivalence

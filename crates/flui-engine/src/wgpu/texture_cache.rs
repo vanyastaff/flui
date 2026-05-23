@@ -112,8 +112,8 @@ pub struct CachedTexture {
     /// (UVs are implicitly `[0, 0, 1, 1]`).
     ///
     /// `Some([u_min, v_min, u_max, v_max])` means this entry lives inside
-    /// the shared [`super::atlas::TextureAtlas`] and should use these UVs
-    /// when constructing a [`super::instancing::TextureInstance`].
+    /// the shared `TextureAtlas` (`super::atlas::TextureAtlas`) and should use these UVs
+    /// when constructing a `TextureInstance` (`super::instancing::TextureInstance`).
     pub uv_rect: Option<[f32; 4]>,
 }
 
@@ -189,8 +189,8 @@ pub struct TextureCacheStats {
 ///
 /// Manages texture loading, caching, and reuse for optimal performance.
 ///
-/// Small images (both dimensions <= [`super::atlas::ATLAS_MAX_DIMENSION`])
-/// are automatically packed into a shared [`super::atlas::TextureAtlas`],
+/// Small images (both dimensions <= `ATLAS_MAX_DIMENSION` private constant)
+/// are automatically packed into a shared `TextureAtlas`,
 /// reducing draw calls for icon-heavy UIs. Larger images get standalone
 /// GPU textures as before.
 ///

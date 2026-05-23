@@ -91,7 +91,7 @@ use super::stateful::StatefulView;
 pub trait AnimatedView: StatefulView {
     /// Get the Listenable to subscribe to.
     ///
-    /// Typically this is an Animation<T>, which implements Listenable.
+    /// Typically this is an `Animation<T>`, which implements Listenable.
     /// When the listenable changes, the element is automatically marked
     /// dirty and rebuilt.
     ///

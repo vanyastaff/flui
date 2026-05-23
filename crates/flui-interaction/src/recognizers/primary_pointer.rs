@@ -40,7 +40,7 @@ pub trait PrimaryPointerGestureRecognizer:
 
     /// Called when the pre-acceptance deadline elapses without resolution.
     ///
-    /// Default: resolve with [`GestureDisposition::Rejected`]. Concrete
+    /// Default: resolve with [`GestureDisposition::Rejected`](crate::arena::GestureDisposition::Rejected). Concrete
     /// recognizers may override (e.g. LongPress accepts on deadline). Flutter
     /// parity: `recognizer.dart:646+ didExceedDeadline(position)`.
     fn did_exceed_deadline(&self) {

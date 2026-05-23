@@ -9,7 +9,7 @@
 //! - Drag gestures that continue even when pointer leaves the original target
 //! - Modal dialogs that capture all pointer events
 //!
-//! Flutter reference: https://api.flutter.dev/flutter/gestures/PointerRouter-class.html
+//! Flutter reference: <https://api.flutter.dev/flutter/gestures/PointerRouter-class.html>
 //!
 //! # Example
 //!

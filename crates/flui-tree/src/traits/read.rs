@@ -343,7 +343,7 @@ impl<I: Identifier, T: TreeRead<I> + ?Sized> TreeRead<I> for &mut T {
     }
 }
 
-/// Blanket implementation for Box<dyn TreeRead>.
+/// Blanket implementation for `Box<dyn TreeRead>`.
 impl<I: Identifier, T: TreeRead<I> + ?Sized> TreeRead<I> for Box<T> {
     type Node = T::Node;
 

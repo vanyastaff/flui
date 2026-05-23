@@ -100,9 +100,9 @@ impl PathCache {
 
     /// Advance the frame counter and evict stale entries.
     ///
-    /// Entries not accessed within the last [`EVICTION_THRESHOLD`] frames are
+    /// Entries not accessed within the last `EVICTION_THRESHOLD` (120) frames are
     /// removed.  Call this once per frame (typically at the start of
-    /// [`WgpuPainter::render`]).
+    /// [`WgpuPainter::render`](super::painter::WgpuPainter::render)).
     pub fn advance_frame(&mut self) {
         self.current_frame += 1;
 

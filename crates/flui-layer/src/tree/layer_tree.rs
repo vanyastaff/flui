@@ -56,7 +56,7 @@ pub struct LayerNode {
 
     // ========== Lifecycle (phase 1, U8) ==========
     /// Whether the node has been dropped. Set by [`Drop`]; once `true` the
-    /// node MUST NOT be mutated again. Guarded by [`assert_alive`].
+    /// node MUST NOT be mutated again. Guarded by [`LayerNode::assert_alive`].
     disposed: AtomicBool,
 
     // ========== Compositor dirty-bit (phase 2, U9) ==========
@@ -421,7 +421,7 @@ impl LayerTree {
     /// Inserts a pre-built [`LayerNode`] into the tree (cycle 3 T-2).
     ///
     /// This is the primitive that [`Self::insert`] (which takes a
-    /// [`Layer`] and wraps it) and the [`TreeWrite::insert`] trait
+    /// [`Layer`] and wraps it) and the [`TreeWrite::insert`](flui_tree::TreeWrite::insert) trait
     /// method both call. Exposed for callers that need to insert a
     /// node assembled elsewhere (e.g. element-cloning workflows in
     /// flui-view).
@@ -495,9 +495,9 @@ impl LayerTree {
     /// audit found zero production callers actually exercising that
     /// escape-hatch, and several test sites that would have surfaced
     /// the stale-id bug had they been hit. The new contract aligns
-    /// with the trait-level [`TreeWrite::remove_shallow`] — parent
+    /// with the trait-level [`TreeWrite::remove_shallow`](flui_tree::TreeWrite::remove_shallow) — parent
     /// unlink is part of the primitive; only descendant cascade is the
-    /// distinguishing feature versus [`TreeWrite::remove`].
+    /// distinguishing feature versus [`TreeWrite::remove`](flui_tree::TreeWrite::remove).
     pub fn remove_shallow(&mut self, id: LayerId) -> Option<LayerNode> {
         if !self.contains(id) {
             return None;

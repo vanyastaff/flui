@@ -427,7 +427,7 @@ impl GestureBinding {
     /// or `Detached` — pointer-down events landed before the lifecycle
     /// change may never receive a corresponding Up/Cancel (the platform
     /// may suspend us before the user lifts the finger). The Up/Cancel
-    /// branch in [`handle_pointer_event`] already drains entries on
+    /// branch in [`Self::handle_pointer_event`] already drains entries on
     /// normal completion; this method covers the abnormal-disconnect
     /// case audit Finding I-8 raised.
     ///

@@ -134,7 +134,7 @@ pub enum KeyEventResult {
 ///
 /// Focus nodes no longer hold a `Weak<FocusManagerInner>` — they reach
 /// the [`crate::FocusManager`] singleton via [`crate::FocusManager::global`]
-/// directly. The [`is_attached`] flag still gates focus operations so
+/// directly. The [`Self::is_attached`] flag still gates focus operations so
 /// nodes that haven't been mounted into the tree behave as no-ops.
 pub struct FocusNode {
     /// Unique identifier for this node.
@@ -468,7 +468,7 @@ impl FocusNode {
 
     /// Recursively mark a FocusNode and all its descendants as detached.
     ///
-    /// Used by [`detach_child`] to ensure the entire removed subtree's
+    /// Used by [`Self::detach_child`] to ensure the entire removed subtree's
     /// attached state matches reality после parent-link clearing.
     fn detach_subtree(node: &Arc<FocusNode>) {
         node.attached.store(false, AtomicOrdering::Release);
@@ -835,7 +835,7 @@ impl FocusTraversalPolicy for ReadingOrderPolicy {
 
 impl ReadingOrderPolicy {
     /// Returns indices into `nodes` sorted by reading order (top-to-bottom,
-    /// left-to-right). Avoids cloning Arc<FocusNode> — only sorts
+    /// left-to-right). Avoids cloning `Arc<FocusNode>` — only sorts
     /// lightweight indices.
     fn sorted_indices(&self, nodes: &[Arc<FocusNode>]) -> Vec<usize> {
         let mut indices: Vec<usize> = (0..nodes.len()).collect();

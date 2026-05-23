@@ -7,7 +7,7 @@
 //! - All pointers stay within slop tolerance
 //! - All pointers released (tap completed)
 //!
-//! Flutter reference: https://api.flutter.dev/flutter/gestures/MultiTapGestureRecognizer-class.html
+//! Flutter reference: <https://api.flutter.dev/flutter/gestures/MultiTapGestureRecognizer-class.html>
 
 use std::{
     collections::HashMap,

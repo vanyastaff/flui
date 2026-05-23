@@ -426,8 +426,8 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     /// this.
     ///
     /// # Arguments
-    /// * `owner` - Arc<dyn Any> that should be downcast to the concrete
-    ///   PipelineOwner type
+    /// * `owner` - `Arc<dyn Any>` that should be downcast to the concrete
+    ///   `PipelineOwner` type
     fn set_pipeline_owner_any(&mut self, _owner: std::sync::Arc<dyn std::any::Any + Send + Sync>) {
         // Default: no-op
     }
@@ -449,7 +449,7 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     /// `InheritedElement<V>` (a `Element<V, Single, InheritedBehavior<V>>`).
     ///
     /// Returns `None` for every other behavior. Used by
-    /// [`BuildContext::depend_on_inherited`] (plan §U9) to read the
+    /// [`BuildContext::depend_on_inherited`](crate::BuildContext::depend_on_inherited) (plan §U9) to read the
     /// view as `&dyn Any` and to record this caller as a dependent.
     ///
     /// The default impl returns `None`. Only the unified `Element`
@@ -459,7 +459,7 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
         None
     }
 
-    /// Mutable variant of [`as_inherited`].
+    /// Mutable variant of [`Self::as_inherited`].
     fn as_inherited_mut(&mut self) -> Option<&mut dyn crate::element::InheritedElementAccess> {
         None
     }
@@ -472,7 +472,7 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     ///
     /// Returns `None` by the default impl; the unified `Element<V, A, B>`
     /// overrides it to hand out `&ElementCore::view` as `&dyn Any` so
-    /// [`BuildContext::find_ancestor_view`] can downcast at the dispatch
+    /// [`BuildContext::find_ancestor_view`](crate::BuildContext::find_ancestor_view) can downcast at the dispatch
     /// boundary without naming `V` at the trait surface.
     ///
     /// The reference is borrowed for the lifetime of the immutable
@@ -492,8 +492,8 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     ///
     /// Returns `None` for every behavior other than `StatefulBehavior<V>`
     /// (which yields `Some(&self.behavior.state)`). Used by
-    /// [`BuildContext::find_ancestor_state`] and
-    /// [`BuildContext::find_root_ancestor_state`] (plan §U11) to surface
+    /// [`BuildContext::find_ancestor_state`](crate::BuildContext::find_ancestor_state) and
+    /// [`BuildContext::find_root_ancestor_state`](crate::BuildContext::find_root_ancestor_state) (plan §U11) to surface
     /// the typed `ViewState` without leaking `V` into the object-safe
     /// trait surface.
     ///
@@ -518,7 +518,7 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     /// Returns `None` for every behavior other than `RenderBehavior<V>`
     /// AND for `RenderElement`s that have not yet been mounted with a
     /// `PipelineOwner` (in which case `RenderBehavior::render_id` is
-    /// still `None`). Used by [`BuildContext::find_render_object`]
+    /// still `None`). Used by [`BuildContext::find_render_object`](crate::BuildContext::find_render_object)
     /// (plan §U12) to surface the nearest ancestor's `RenderId` without
     /// extending a `&self` borrow — `RenderId` is `Copy`, so the
     /// non-callback signature is sound (plan §D2).
@@ -538,7 +538,7 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     // ========================================================================
 
     /// Object-safe notification handler invoked by
-    /// [`BuildContext::dispatch_notification`] during ancestor bubble walks.
+    /// [`BuildContext::dispatch_notification`](crate::BuildContext::dispatch_notification) during ancestor bubble walks.
     ///
     /// `type_id` is `TypeId::of::<N>()` for the static notification type
     /// `N` captured at the dispatch call-site. `notification` is the

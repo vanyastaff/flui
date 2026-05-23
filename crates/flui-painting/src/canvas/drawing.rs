@@ -11,7 +11,7 @@
 //!
 //! # Allocation hot path (Mythos chain U9 audit / Cycle 5 U10)
 //!
-//! `Paint` is now interned through [`super::Canvas::intern_paint`].
+//! `Paint` is now interned through `Canvas::intern_paint` (crate-private).
 //! On the second-and-later draw of an identical paint, the call
 //! returns an `Arc::clone` (single atomic refcount bump) instead of
 //! a full `Paint::clone` (~80–200 bytes incl. optional `Box<Shader>`

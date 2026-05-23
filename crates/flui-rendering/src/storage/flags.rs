@@ -365,7 +365,7 @@ impl fmt::Display for RenderFlags {
 ///
 /// # Performance
 ///
-/// | Operation | AtomicRenderFlags | RwLock<RenderFlags> | Speedup |
+/// | Operation | AtomicRenderFlags | `RwLock<RenderFlags>` | Speedup |
 /// |-----------|-------------------|---------------------|---------|
 /// | Check flag | ~1ns | ~50ns | 50x |
 /// | Set flag | ~5ns | ~100ns | 20x |

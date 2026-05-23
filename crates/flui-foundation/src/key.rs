@@ -299,9 +299,9 @@ impl fmt::Display for KeyRef {
 /// # Implementations
 ///
 /// - [`ValueKey<T>`] - Match by value
-/// - [`ObjectKey`] - Match by object identity
+/// - `ObjectKey` - Match by object identity (defined in `flui-view`)
 /// - [`UniqueKey`] - Never matches (forces new element)
-/// - [`GlobalKey<T>`] - Global access + matching
+/// - `GlobalKey<T>` - Global access + matching (defined in `flui-view`)
 ///
 /// # Example
 ///

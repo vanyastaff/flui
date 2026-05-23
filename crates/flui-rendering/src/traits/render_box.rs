@@ -343,7 +343,7 @@ pub enum TextBaseline {
 // Blanket Implementation of RenderObject<BoxProtocol> for RenderBox
 // ============================================================================
 
-/// Automatic implementation of RenderObject<BoxProtocol> for all RenderBox
+/// Automatic implementation of `RenderObject<BoxProtocol>` for all RenderBox
 /// types.
 ///
 /// This blanket impl bridges the typed RenderBox API (with Arity/ParentData)

@@ -144,7 +144,7 @@ impl DisplayList {
     /// display lists. Recursion into nested
     /// [`DrawCommand::ShaderMask`] / [`DrawCommand::BackdropFilter`]
     /// children is bounded by
-    /// [`command_ops::MAX_EFFECT_DEPTH`](crate::display_list::command_ops::MAX_EFFECT_DEPTH).
+    /// [`command_ops::MAX_EFFECT_DEPTH`].
     pub fn apply_transform(&mut self, transform: Matrix4) {
         self.apply_transform_depth(transform, 0);
     }
@@ -260,7 +260,7 @@ impl DisplayList {
     /// O(N) where N is the number of commands. Recursion into nested
     /// [`DrawCommand::ShaderMask`] / [`DrawCommand::BackdropFilter`]
     /// children is bounded by
-    /// [`command_ops::MAX_EFFECT_DEPTH`](crate::display_list::command_ops::MAX_EFFECT_DEPTH).
+    /// [`command_ops::MAX_EFFECT_DEPTH`].
     #[must_use = "to_opacity returns a new DisplayList and does not modify the original"]
     #[tracing::instrument(skip(self), fields(
         commands = self.commands.len(),

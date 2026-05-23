@@ -119,7 +119,7 @@ where
 
     /// Whether this element needs to rebuild.
     ///
-    /// Uses Arc<AtomicBool> for interior mutability, allowing listener
+    /// Uses `Arc<AtomicBool>` for interior mutability, allowing listener
     /// callbacks to mark the element dirty without mutable access.
     /// This is essential for AnimatedBehavior and other reactive patterns.
     dirty: Arc<AtomicBool>,
@@ -430,13 +430,13 @@ where
 
     /// Set the PipelineOwner for this element.
     ///
-    /// Downcasts from Arc<dyn Any> to Arc<RwLock<PipelineOwner>>.
+    /// Downcasts from `Arc<dyn Any>` to `Arc<RwLock<PipelineOwner>>`.
     /// This pattern is required for object safety of ElementBase.
     ///
     /// # Arguments
     ///
-    /// * `owner` - Arc<dyn Any> that should downcast to
-    ///   Arc<RwLock<PipelineOwner>>
+    /// * `owner` - `Arc<dyn Any>` that should downcast to
+    ///   `Arc<RwLock<PipelineOwner>>`
     pub fn set_pipeline_owner_any(&mut self, owner: Arc<dyn Any + Send + Sync>) {
         if let Ok(pipeline_owner) = owner.downcast::<RwLock<PipelineOwner>>() {
             self.pipeline_owner = Some(pipeline_owner);

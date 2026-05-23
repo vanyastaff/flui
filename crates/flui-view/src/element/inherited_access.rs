@@ -1,6 +1,6 @@
 //! Object-safe accessor protocol for InheritedElement.
 //!
-//! [`BuildContext::depend_on_inherited`] walks the element tree, finds
+//! [`BuildContext::depend_on_inherited`](crate::BuildContext::depend_on_inherited) walks the element tree, finds
 //! the nearest matching `InheritedElement<V>`, and needs to (a) read the
 //! view as `&dyn Any` so the caller's downcast can succeed, and
 //! (b) record the caller in the inherited element's dependent map.
@@ -24,14 +24,14 @@ use flui_foundation::ElementId;
 /// dependents and read the inherited view as `&dyn Any` without
 /// naming the concrete `V`.
 ///
-/// Implemented by [`Element<V, Single, InheritedBehavior<V>>`] in
+/// Implemented by `Element<V, Single, InheritedBehavior<V>>` (see
+/// [`Element`](crate::element::Element)) in
 /// `crates/flui-view/src/element/unified.rs`. The default `ElementBase`
 /// hooks ([`ElementBase::as_inherited`] / [`as_inherited_mut`]) return
 /// `None` for every other element type.
 ///
 /// [`ElementBase::as_inherited`]: crate::view::ElementBase::as_inherited
 /// [`as_inherited_mut`]: crate::view::ElementBase::as_inherited_mut
-/// [`Element<V, Single, InheritedBehavior<V>>`]: crate::Element
 pub trait InheritedElementAccess: Send + Sync {
     /// Borrow the inherited view as `&dyn Any` so the caller can
     /// downcast to the concrete `V` (the `InheritedView` type).

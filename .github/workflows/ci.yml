@@ -125,17 +125,17 @@ jobs:
   # doc — RUSTDOCFLAGS=-D warnings enforces zero new doc warnings. Gated on
   # `checks`. Ubuntu only — docs are platform-agnostic.
   #
-  # `continue-on-error: true` is a v1 soft-gate: the workspace has accumulated
-  # rustdoc-link and HTML-tag-bracketing debt that pre-dates this workflow.
-  # The job runs and surfaces the report in the PR UI, but does NOT block
-  # merge. A follow-up cleanup pass will tighten this to a hard gate.
+  # Hard-gate as of the workspace rustdoc cleanup sweep (feat/rustdoc-cleanup):
+  # all 108 pre-existing rustdoc errors across 11 crates were resolved
+  # (intra-doc-link qualifications, HTML-tag escaping of bare generics,
+  # private-leak rewrites, bare-URL autolink conversions). A regression
+  # here MUST block merge — the cleanup is the bar to keep.
   # ─────────────────────────────────────────────────────────────────────────
   doc:
-    name: doc (soft-gate)
+    name: doc
     needs: checks
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 

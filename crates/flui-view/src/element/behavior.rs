@@ -134,7 +134,7 @@ where
     ///
     /// Default returns `None`; only `StatefulBehavior<V>` overrides this
     /// to hand out `&self.state as &dyn Any`. Used by
-    /// [`BuildContext::find_ancestor_state`] (plan §U11, R7) to surface
+    /// [`BuildContext::find_ancestor_state`](crate::BuildContext::find_ancestor_state) (plan §U11, R7) to surface
     /// the typed `ViewState` to the dispatch boundary without naming
     /// `V` at the object-safe trait surface.
     ///
@@ -152,7 +152,7 @@ where
     /// Default returns `None`; only `RenderBehavior<V>` overrides this
     /// (`AnimatedBehavior` composes `StatefulBehavior`, not `RenderBehavior`,
     /// so it keeps the default). Used by
-    /// [`BuildContext::find_render_object`] (plan §U12, R9) to surface
+    /// [`BuildContext::find_render_object`](crate::BuildContext::find_render_object) (plan §U12, R9) to surface
     /// the nearest ancestor's `RenderId` to the dispatch boundary.
     ///
     /// Flutter parity: `framework.dart:5160`
@@ -341,7 +341,7 @@ where
     }
 
     /// Expose the owned `ViewState` (`V::State`) as `&dyn Any` so
-    /// [`BuildContext::find_ancestor_state`] / `find_root_ancestor_state`
+    /// [`BuildContext::find_ancestor_state`](crate::BuildContext::find_ancestor_state) / `find_root_ancestor_state`
     /// (plan §U11, R7/R8) can downcast at the dispatch boundary.
     ///
     /// `V::State: 'static` is guaranteed by the [`ViewState`] trait
@@ -518,7 +518,7 @@ where
     }
 
     /// Expose the behavior's `RenderId` (set by `on_mount` once a
-    /// `PipelineOwner` is in scope) so [`BuildContext::find_render_object`]
+    /// `PipelineOwner` is in scope) so [`BuildContext::find_render_object`](crate::BuildContext::find_render_object)
     /// (plan §U12, R9) can surface it to the dispatch boundary.
     ///
     /// Returns `None` until `on_mount` has run with a PipelineOwner —
