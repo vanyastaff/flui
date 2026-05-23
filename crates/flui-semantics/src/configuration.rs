@@ -13,9 +13,9 @@ use crate::{
     action::{SemanticsAction, SemanticsActionHandler},
     flags::{SemanticsFlag, SemanticsFlags},
     properties::{
-        concat_attributed_string, AttributedString, CustomSemanticsAction, SemanticsHintOverrides,
-        SemanticsProperties, SemanticsSortKey, SemanticsTag, TextDirection,
-        UNBLOCKED_USER_ACTIONS_MASK,
+        AttributedString, CustomSemanticsAction, SemanticsHintOverrides, SemanticsProperties,
+        SemanticsSortKey, SemanticsTag, TextDirection, UNBLOCKED_USER_ACTIONS_MASK,
+        concat_attributed_string,
     },
     role::SemanticsRole,
 };
@@ -864,7 +864,7 @@ impl SemanticsConfiguration {
     /// - **Flags** — union via [`SemanticsFlags::merge`].
     /// - **Actions** — absorb every action whose handler the child
     ///   defined. If `other.blocks_user_actions == true`, only actions in
-    ///   [`UNBLOCKED_USER_ACTIONS_MASK`] cross the boundary; the rest are
+    ///   the `UNBLOCKED_USER_ACTIONS_MASK` mask cross the boundary; the rest are
     ///   filtered out. Mirrors `_kUnblockedUserActions`.
     /// - **Custom actions** — concatenate child's after parent's.
     /// - **Tags** — merge as a set (deduplication handled by

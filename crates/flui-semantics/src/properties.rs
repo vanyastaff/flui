@@ -177,7 +177,7 @@ impl From<SmolStr> for AttributedString {
 /// Mirrors Flutter
 /// [`packages/flutter/lib/src/semantics/semantics.dart:937`](../../../../.flutter/flutter-master/packages/flutter/lib/src/semantics/semantics.dart)
 /// `_concatAttributedString` helper. Used during
-/// [`SemanticsConfiguration::absorb`] when the parent and child each carry
+/// [`SemanticsConfiguration::absorb`](crate::configuration::SemanticsConfiguration::absorb) when the parent and child each carry
 /// a label or hint that must be joined into a single string for the
 /// platform accessibility surface.
 ///
