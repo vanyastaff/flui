@@ -13,8 +13,8 @@
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementTree, StatelessBehavior, StatelessElement,
-    StatelessView, View, reconcile_children,
+    BuildContext, BuildOwner, ElementBase, StatelessBehavior, StatelessElement, StatelessView,
+    View, reconcile_children,
 };
 
 #[derive(Clone)]
@@ -39,17 +39,12 @@ impl View for SmokeView {
 fn bench_empty_to_empty(c: &mut Criterion) {
     c.bench_function("reconcile_baseline/empty_to_empty", |b| {
         b.iter_batched(
-            || {
-                let mut tree = ElementTree::new();
-                let mut owner = BuildOwner::new();
-                let root = SmokeView { id: 0 };
-                let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
-                (tree, owner, parent)
-            },
-            |(mut tree, mut owner, parent)| {
-                let result =
-                    reconcile_children(&mut tree, parent, &[], &[], &mut owner.element_owner_mut());
-                std::hint::black_box(result);
+            BuildOwner::new,
+            |mut owner| {
+                let mut old_children: Vec<Box<dyn ElementBase>> = Vec::new();
+                let new_views: &[&dyn View] = &[];
+                reconcile_children(&mut old_children, new_views, &mut owner.element_owner_mut());
+                std::hint::black_box(old_children);
             },
             BatchSize::SmallInput,
         );
@@ -61,31 +56,22 @@ fn bench_10_same_type(c: &mut Criterion) {
     c.bench_function("reconcile_baseline/10_same_type", |b| {
         b.iter_batched(
             || {
-                let mut tree = ElementTree::new();
-                let mut owner = BuildOwner::new();
-                let root = SmokeView { id: 0 };
-                let parent = tree.mount_root(&root, &mut owner.element_owner_mut());
-                let mut child_ids = Vec::with_capacity(10);
-                for i in 1..=10 {
-                    let v = SmokeView { id: i };
-                    let id =
-                        tree.insert(&v, parent, (i - 1) as usize, &mut owner.element_owner_mut());
-                    child_ids.push(id);
-                }
+                let owner = BuildOwner::new();
+                let old_views: Vec<SmokeView> = (1..=10).map(|i| SmokeView { id: i }).collect();
+                let old_children: Vec<Box<dyn ElementBase>> =
+                    old_views.iter().map(|v| v.create_element()).collect();
                 let new_views: Vec<SmokeView> =
                     (1..=10).map(|i| SmokeView { id: i + 100 }).collect();
-                (tree, owner, parent, child_ids, new_views)
+                (owner, old_children, new_views)
             },
-            |(mut tree, mut owner, parent, child_ids, new_views)| {
+            |(mut owner, mut old_children, new_views)| {
                 let view_refs: Vec<&dyn View> = new_views.iter().map(|v| v as &dyn View).collect();
-                let result = reconcile_children(
-                    &mut tree,
-                    parent,
-                    &child_ids,
+                reconcile_children(
+                    &mut old_children,
                     &view_refs,
                     &mut owner.element_owner_mut(),
                 );
-                std::hint::black_box(result);
+                std::hint::black_box(old_children);
             },
             BatchSize::SmallInput,
         );
