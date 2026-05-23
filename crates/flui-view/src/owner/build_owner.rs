@@ -512,6 +512,31 @@ impl BuildOwner {
         self.global_keys.get(&key_hash).copied()
     }
 
+    /// Atomically remove and return the element registered under
+    /// `key_hash` for a reparent operation.
+    ///
+    /// Plan §U17 / KTD-3 N1. Closes the race window that a
+    /// two-call sequence (`element_for_global_key` followed by
+    /// `unregister_global_key`) would leave open if any other code
+    /// path mutates the registry between the two calls — a real
+    /// risk in Phase 2 testing infrastructure where multiple
+    /// parents may rebuild concurrently in test fixtures.
+    ///
+    /// The caller (the keyed reconciler's middle-walk) consults
+    /// this method on an unmatched-by-position keyed view whose
+    /// `is_global_key()` is true; on `Some`, it claims the element
+    /// for the new parent. Returning `Some` AND removing the entry
+    /// in one operation guarantees a second concurrent claim of
+    /// the same key sees `None`, not a stale id.
+    ///
+    /// Re-registering at the new parent is the caller's
+    /// responsibility — typically through the standard
+    /// [`Self::register_global_key`] path after the element is
+    /// re-attached to its new slot.
+    pub fn take_global_key_for_reparent(&mut self, key_hash: u64) -> Option<ElementId> {
+        self.global_keys.remove(&key_hash)
+    }
+
     /// Number of `GlobalKey`s currently registered.
     ///
     /// Test surface — production code reads
@@ -710,6 +735,43 @@ mod tests {
 
         owner.unregister_global_key(key_hash);
         assert_eq!(owner.element_for_global_key(key_hash), None);
+    }
+
+    /// Plan §U17 / KTD-3 N1: `take_global_key_for_reparent` returns
+    /// the registered id AND removes it atomically. A second call for
+    /// the same hash returns `None` — proving the second of two
+    /// concurrent reparent claims (the rare same-frame collision)
+    /// cannot stale-read.
+    #[test]
+    fn test_take_global_key_for_reparent_is_atomic() {
+        let mut owner = BuildOwner::new();
+        let id = ElementId::new(7);
+        let hash = 0x00C0_FFEE_u64;
+
+        owner.register_global_key(hash, id);
+
+        // First caller wins.
+        assert_eq!(owner.take_global_key_for_reparent(hash), Some(id));
+
+        // Second caller sees None — the entry was removed atomically.
+        assert_eq!(owner.take_global_key_for_reparent(hash), None);
+        assert_eq!(owner.element_for_global_key(hash), None);
+    }
+
+    /// `take_global_key_for_reparent` on an unknown hash returns
+    /// `None` without side effects.
+    #[test]
+    fn test_take_global_key_for_reparent_unknown_hash() {
+        let mut owner = BuildOwner::new();
+        let id = ElementId::new(7);
+        let known = 1_u64;
+        let unknown = 99_u64;
+
+        owner.register_global_key(known, id);
+        assert_eq!(owner.take_global_key_for_reparent(unknown), None);
+        // Known mapping unaffected by the failed claim on a different
+        // hash.
+        assert_eq!(owner.element_for_global_key(known), Some(id));
     }
 
     // ========================================================================

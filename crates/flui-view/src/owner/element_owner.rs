@@ -149,6 +149,15 @@ impl ElementOwner<'_> {
         self.global_keys.get(&key_hash).copied()
     }
 
+    /// Atomically remove and return the element registered under
+    /// `key_hash` for a reparent operation. Wrapper around
+    /// [`BuildOwner::take_global_key_for_reparent`](crate::BuildOwner::take_global_key_for_reparent)
+    /// for the split-borrow `ElementOwner` handle that the
+    /// reconciler holds. Plan §U17 / KTD-3 N1.
+    pub fn take_global_key_for_reparent(&mut self, key_hash: u64) -> Option<ElementId> {
+        self.global_keys.remove(&key_hash)
+    }
+
     /// Schedule an element for rebuild at the next frame.
     ///
     /// Pushed onto the depth-sorted heap so parents rebuild before

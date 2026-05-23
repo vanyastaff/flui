@@ -673,6 +673,24 @@ fn try_retake_inactive(
         "ElementTree::insert retook inactive element for GlobalKey state migration"
     );
 
+    // Plan §U17 / SC-003: emit ReconcileEvent::Reparent. The element
+    // came from the inactive queue (Lifecycle::Inactive → Active), so
+    // `from_parent: None` per ADV-1 branch case 1 — there is no prior
+    // *active* parent at the moment of reparent; the donor parent
+    // already cleared its slot when it pushed the element into the
+    // inactive queue. The cross-parent same-frame Active-to-Active
+    // reparent path (ADV-1 branch case 2) requires KTD-9's ID-based
+    // Variable storage shape and is deferred — when it lands, that
+    // path emits with `from_parent: Some(prior_parent)`.
+    super::reconcile_event::emit(&super::reconcile_event::ReconcileEvent {
+        kind: super::reconcile_event::ReconcileEventKind::Reparent,
+        parent: new_parent,
+        child_key: Some(hash),
+        slot: new_slot,
+        view_type_id: view.view_type_id(),
+        from_parent: None,
+    });
+
     Some(candidate_id)
 }
 
