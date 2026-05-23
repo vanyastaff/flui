@@ -76,8 +76,8 @@ log = "0.4"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
 num_cpus = "1.16"
-flume = "0.11"              # Better MPSC channels for UI thread communication
-waker-fn = "1.2"            # Simplified async waker creation
+flume = "0.11"                                                               # Better MPSC channels for UI thread communication
+waker-fn = "1.2"                                                             # Simplified async waker creation
 
 # Web/WASM platform
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -86,21 +86,37 @@ wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 web-sys = { version = "0.3", features = [
     # Core DOM
-    "Window", "Document", "Element", "HtmlCanvasElement", "HtmlElement",
+    "Window",
+    "Document",
+    "Element",
+    "HtmlCanvasElement",
+    "HtmlElement",
     # Events
-    "Event", "EventTarget", "AddEventListenerOptions",
-    "PointerEvent", "KeyboardEvent", "WheelEvent", "MouseEvent",
-    "FocusEvent", "UiEvent",
+    "Event",
+    "EventTarget",
+    "AddEventListenerOptions",
+    "PointerEvent",
+    "KeyboardEvent",
+    "WheelEvent",
+    "MouseEvent",
+    "FocusEvent",
+    "UiEvent",
     # Rendering
-    "CanvasRenderingContext2d", "DomRect",
+    "CanvasRenderingContext2d",
+    "DomRect",
     # Display
-    "Screen", "MediaQueryList", "MediaQueryListEvent",
+    "Screen",
+    "MediaQueryList",
+    "MediaQueryListEvent",
     # Observers
-    "ResizeObserver", "ResizeObserverEntry", "ResizeObserverSize",
+    "ResizeObserver",
+    "ResizeObserverEntry",
+    "ResizeObserverSize",
     # Animation
     "Performance",
     # Clipboard
-    "Clipboard", "Navigator",
+    "Clipboard",
+    "Navigator",
     # Visibility
     "VisibilityState",
     # Location

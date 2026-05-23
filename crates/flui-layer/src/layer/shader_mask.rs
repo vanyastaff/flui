@@ -102,7 +102,7 @@ impl ShaderMaskLayer {
 )]
 mod tests {
     use flui_types::{
-        geometry::{Offset, px},
+        geometry::{px, Offset},
         styling::Color,
     };
 

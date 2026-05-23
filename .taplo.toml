@@ -1,0 +1,19 @@
+# Taplo formatter / linter configuration for the FLUI workspace's TOML files.
+# Run locally: `taplo fmt`, `taplo fmt --check`. CI gates on `taplo fmt --check`.
+
+include = ["**/Cargo.toml", "**/*.toml"]
+exclude = ["**/target/**", ".flutter/**", ".gpui/**", ".claude/**"]
+
+[formatting]
+align_entries = false
+align_comments = true
+array_trailing_comma = true
+array_auto_expand = true
+array_auto_collapse = true
+column_width = 100
+compact_arrays = true
+compact_inline_tables = false
+indent_string = "    "
+reorder_keys = false
+reorder_arrays = false
+trailing_newline = true

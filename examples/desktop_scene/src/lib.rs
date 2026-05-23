@@ -25,7 +25,7 @@
 use flui_hot_reload::scene_plugin;
 use flui_layer::{CanvasLayer, Layer, LayerTree, Scene};
 use flui_types::{
-    geometry::{Rect, Size, px},
+    geometry::{px, Rect, Size},
     painting::Paint,
     styling::Color,
 };

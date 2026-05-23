@@ -101,9 +101,7 @@ fn main() {
     // Hit testing
     let click_point = Point::new(px(60.0), px(40.0));
     let is_clicked = button_rect.contains(click_point);
-    println!(
-        "   Click at {click_point:?} hits button: {is_clicked}\n"
-    );
+    println!("   Click at {click_point:?} hits button: {is_clicked}\n");
 
     // 7. Type Safety Example
     println!("7. Type Safety:");

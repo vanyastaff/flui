@@ -10,14 +10,21 @@
 //! - Snap Layouts support
 //!
 //! Requirements: Windows 11 Build 22000+
+//!
+//! **Windows-only.** A stub `main` keeps the workspace `--all-targets`
+//! build green on non-Windows hosts; the real body is gated on
+//! `target_os = "windows"`.
 
-#![cfg(target_os = "windows")]
-#![allow(unused)]
+#[cfg(not(target_os = "windows"))]
+fn main() {
+    eprintln!("windows11_demo is Windows-only; nothing to do on this platform.");
+}
 
-use flui_platform::{WindowOptions, WindowsPlatform, traits::Platform};
-use flui_types::geometry::{Size, px};
-
+#[cfg(target_os = "windows")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    use flui_platform::{WindowOptions, WindowsPlatform, traits::Platform};
+    use flui_types::geometry::{Size, px};
+
     // Initialize logging
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)

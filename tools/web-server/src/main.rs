@@ -81,9 +81,10 @@ async fn main() {
 
     // Step 3: Open browser (like flutter opens Chrome)
     if !args.no_open
-        && let Err(e) = open::that(&url) {
-            tracing::warn!("Could not open browser: {e}");
-        }
+        && let Err(e) = open::that(&url)
+    {
+        tracing::warn!("Could not open browser: {e}");
+    }
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
@@ -144,9 +145,10 @@ fn find_workspace_root() -> Option<PathBuf> {
         let cargo_toml = dir.join("Cargo.toml");
         if cargo_toml.exists()
             && let Ok(content) = std::fs::read_to_string(&cargo_toml)
-                && content.contains("[workspace]") {
-                    return Some(dir);
-                }
+            && content.contains("[workspace]")
+        {
+            return Some(dir);
+        }
         if !dir.pop() {
             return None;
         }

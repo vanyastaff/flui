@@ -347,7 +347,7 @@ pub enum TextBaseline {
 /// types.
 ///
 /// This blanket impl bridges the typed RenderBox API (with Arity/ParentData)
-/// and the protocol-specific RenderObject<P> trait needed for storage.
+/// and the protocol-specific `RenderObject<P>` trait needed for storage.
 ///
 /// # Architecture Note
 ///
@@ -367,7 +367,7 @@ pub enum TextBaseline {
 ///   children access)
 /// - `hit_test_raw` can't create BoxHitTestContext (needs external state)
 ///
-/// Note: This requires T to also implement Diagnosticable since RenderObject<P>
+/// Note: This requires T to also implement Diagnosticable since `RenderObject<P>`
 /// requires it.
 impl<T> RenderObject<BoxProtocol> for T
 where

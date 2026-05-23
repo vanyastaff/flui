@@ -324,11 +324,11 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static 
 // Blanket Implementation of RenderObject<SliverProtocol> for RenderSliver
 // ============================================================================
 
-/// Automatic implementation of RenderObject<SliverProtocol> for all
+/// Automatic implementation of `RenderObject<SliverProtocol>` for all
 /// RenderSliver types.
 ///
 /// This blanket impl bridges the typed RenderSliver API (with Arity/ParentData)
-/// and the protocol-specific RenderObject<P> trait needed for storage.
+/// and the protocol-specific `RenderObject<P>` trait needed for storage.
 ///
 /// # Architecture Note
 ///

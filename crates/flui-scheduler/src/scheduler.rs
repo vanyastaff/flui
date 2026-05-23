@@ -1530,8 +1530,9 @@ impl TickerProvider for Scheduler {
     /// `BindingState`/`TaskQueue`), so cancelling a callback through the
     /// vended Arc operates on the same registry as any other Scheduler
     /// handle. Consumers that already own an `Arc<Scheduler>` can skip this
-    /// allocation by calling [`Ticker::new_with_scheduler`] directly with
-    /// the existing Arc.
+    /// allocation by calling
+    /// [`Ticker::new_with_scheduler`](crate::ticker::Ticker::new_with_scheduler)
+    /// directly with the existing Arc.
     fn create_ticker(&self, on_tick: crate::ticker::TickerCallback) -> crate::ticker::Ticker {
         let mut ticker = crate::ticker::Ticker::new_with_scheduler(Arc::new(self.clone()));
         ticker.set_pending_callback(on_tick);

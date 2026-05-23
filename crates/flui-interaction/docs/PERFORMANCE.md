@@ -264,7 +264,7 @@ tracker.add_position(now, pos);
 // Arena handles internal synchronization
 let arena = GestureArena::new();
 
-// Recognizers are Arc'd and clonable
+// Recognizers are Arc'd and cloneable
 let recognizer = TapGestureRecognizer::new(arena.clone());
 let recognizer_clone = recognizer.clone();
 ```

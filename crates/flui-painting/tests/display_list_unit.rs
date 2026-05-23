@@ -145,8 +145,8 @@ fn nested_shader_mask_opacity_depth_saturates_without_overflow() {
 
 /// Helper: pull the `Arc<Paint>` out of a `DrawRect` command for
 /// identity comparisons in the tests below. Panics on the wrong
-/// variant so a mis-recorded command fails the test loudly instead
-/// of silently passing.
+/// variant so an incorrectly-recorded command fails the test loudly
+/// instead of silently passing.
 fn rect_paint(cmd: &DrawCommand) -> &Arc<Paint> {
     match cmd {
         DrawCommand::DrawRect { paint, .. } => paint,

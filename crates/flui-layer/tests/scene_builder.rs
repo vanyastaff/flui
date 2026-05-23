@@ -5,9 +5,9 @@
 use flui_foundation::LayerId;
 use flui_layer::{CanvasLayer, Layer, LayerTree, SceneBuilder, SceneCompositor};
 use flui_types::{
-    Matrix4, Offset, Rect,
     geometry::px,
     painting::{Clip, TextureId},
+    Matrix4, Offset, Rect,
 };
 
 #[test]
@@ -82,7 +82,7 @@ fn test_scene_builder_add_canvas() {
 #[test]
 fn test_scene_builder_add_picture() {
     use flui_painting::Canvas;
-    use flui_types::{Color, Rect, painting::Paint};
+    use flui_types::{painting::Paint, Color, Rect};
 
     let mut tree = LayerTree::new();
     let mut builder = SceneBuilder::new(&mut tree);

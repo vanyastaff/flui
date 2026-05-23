@@ -209,7 +209,7 @@ impl Default for ClipSuperellipseLayer {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::{Radius, px};
+    use flui_types::geometry::{px, Radius};
 
     use super::*;
 

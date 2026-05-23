@@ -137,8 +137,17 @@ mod sys {
     /// # Safety
     ///
     /// `handle` must be a valid library handle returned by `load_library`.
+    #[allow(unsafe_code)]
     pub(super) unsafe fn close_library(handle: *mut c_void) {
-        libc::dlclose(handle);
+        // Edition 2024: unsafe-fn bodies are safe by default; unsafe
+        // calls still require an explicit unsafe block. The caller-side
+        // SAFETY contract is the `# Safety` doc above; this block
+        // documents the call-site obligation: `handle` is the value
+        // returned by `dlopen` in `load_library`, never null, never
+        // double-closed (Library::Drop holds the only handle).
+        unsafe {
+            libc::dlclose(handle);
+        }
     }
 }
 

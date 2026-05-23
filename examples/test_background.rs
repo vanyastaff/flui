@@ -2,13 +2,21 @@
 //!
 //! This example creates a window with NO background to test if
 //! our WM_ERASEBKGND handler works correctly.
+//!
+//! **Windows-only.** A stub `main` keeps the workspace `--all-targets`
+//! build green on non-Windows hosts (the example uses Win32-specific
+//! `WindowsPlatform`); the real body is gated on `target_os = "windows"`.
 
-#![cfg(target_os = "windows")]
+#[cfg(not(target_os = "windows"))]
+fn main() {
+    eprintln!("test_background is Windows-only; nothing to do on this platform.");
+}
 
-use flui_platform::{WindowOptions, WindowsPlatform};
-use flui_types::geometry::{Size, px};
-
+#[cfg(target_os = "windows")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    use flui_platform::{WindowOptions, WindowsPlatform};
+    use flui_types::geometry::{Size, px};
+
     println!("Testing Background Handling");
     println!();
 
