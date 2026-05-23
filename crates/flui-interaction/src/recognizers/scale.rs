@@ -7,7 +7,7 @@
 //! - Distance between pointers changes
 //! - Calculates scale factor, rotation angle, and focal point (center)
 //!
-//! Flutter reference: https://api.flutter.dev/flutter/gestures/ScaleGestureRecognizer-class.html
+//! Flutter reference: <https://api.flutter.dev/flutter/gestures/ScaleGestureRecognizer-class.html>
 
 use std::{collections::HashMap, sync::Arc, time::Instant};
 

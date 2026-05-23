@@ -7,7 +7,7 @@
 //! - **Horizontal**: Movement constrained to horizontal axis
 //! - **Pan**: Free movement in any direction
 //!
-//! Flutter reference: https://api.flutter.dev/flutter/gestures/DragGestureRecognizer-class.html
+//! Flutter reference: <https://api.flutter.dev/flutter/gestures/DragGestureRecognizer-class.html>
 
 use std::{sync::Arc, time::Instant};
 

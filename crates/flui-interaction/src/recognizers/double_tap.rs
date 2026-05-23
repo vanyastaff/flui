@@ -8,7 +8,7 @@
 //! - Second tap within DOUBLE_TAP_SLOP (100px) of first tap
 //! - Second tap completes successfully
 //!
-//! Flutter reference: https://api.flutter.dev/flutter/gestures/DoubleTapGestureRecognizer-class.html
+//! Flutter reference: <https://api.flutter.dev/flutter/gestures/DoubleTapGestureRecognizer-class.html>
 
 use std::{
     sync::Arc,

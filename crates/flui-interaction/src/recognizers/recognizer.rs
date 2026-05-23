@@ -225,7 +225,7 @@ pub enum GestureRecognizerState {
     Possible,
 
     /// Further pointer events cannot cause this recognizer to recognize the
-    /// gesture until the recognizer returns to [`Ready`] (typically when all
+    /// gesture until the recognizer returns to [`Self::Ready`] (typically when all
     /// tracked pointers are removed).
     Defunct,
 }

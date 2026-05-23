@@ -112,7 +112,7 @@
 //! - [`processing`] - Velocity tracking, prediction, resampling
 //!
 //! ## Testing Utilities
-//! - [`testing`] - Gesture recording/replay, event builders
+//! - `testing` - Gesture recording/replay, event builders (requires `testing` feature)
 //!
 //! ## Other
 //! - [`mouse_tracker`] - Mouse enter/exit/hover tracking

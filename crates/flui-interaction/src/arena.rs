@@ -40,7 +40,7 @@
 //! - **SmallVec**: Inline storage avoids heap allocation for typical cases
 //! - **Lock-free**: DashMap for concurrent access
 //!
-//! Flutter reference: https://api.flutter.dev/flutter/gestures/GestureArenaManager-class.html
+//! Flutter reference: <https://api.flutter.dev/flutter/gestures/GestureArenaManager-class.html>
 
 use std::{
     sync::Arc,

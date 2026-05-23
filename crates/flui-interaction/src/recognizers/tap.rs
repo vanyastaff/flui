@@ -7,7 +7,7 @@
 //! - Pointer stays within touch_slop of initial position
 //! - Pointer up within timeout
 //!
-//! Flutter reference: https://api.flutter.dev/flutter/gestures/TapGestureRecognizer-class.html
+//! Flutter reference: <https://api.flutter.dev/flutter/gestures/TapGestureRecognizer-class.html>
 
 use std::sync::Arc;
 
@@ -212,7 +212,7 @@ impl TapGestureRecognizer {
     /// Handle tap down event — records pending down details + transitions
     /// state. The `on_tap_down` callback is NOT fired here; per Flutter
     /// parity at `tap.dart::_BaseTapGestureRecognizer::_checkDown`, the
-    /// callback fires only after arena accept (see [`accept_gesture`]).
+    /// callback fires only after arena accept (see [`Self::accept_gesture`]).
     fn handle_tap_down(&self, position: Offset<Pixels>, kind: PointerType) {
         *self.gesture_state.lock() = TapState::Down;
         *self.pending_down.lock() = Some(TapDetails {

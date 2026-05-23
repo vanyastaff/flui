@@ -8,7 +8,7 @@
 //! - Optional pressure updates as finger presses harder/softer
 //! - Pressure decreases below end threshold or pointer up/cancel
 //!
-//! Flutter reference: https://api.flutter.dev/flutter/gestures/ForcePressGestureRecognizer-class.html
+//! Flutter reference: <https://api.flutter.dev/flutter/gestures/ForcePressGestureRecognizer-class.html>
 
 use std::sync::Arc;
 

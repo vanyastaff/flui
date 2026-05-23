@@ -5,7 +5,7 @@
 //! - [`EventRouter`] - Main event dispatcher
 //! - [`HitTestResult`] - Spatial hit testing
 //! - [`FocusManager`] - Keyboard focus management
-//! - [`FocusScope`] - Groups focusable elements for keyboard navigation
+//! - [`FocusScopeNode`] - Groups focusable elements for keyboard navigation
 //! - [`FocusTraversalPolicy`] - Determines Tab/Shift+Tab navigation order
 //! - [`PointerRouter`] - Centralized pointer event routing
 //!
