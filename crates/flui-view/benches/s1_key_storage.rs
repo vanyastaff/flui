@@ -45,7 +45,8 @@ use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 
 use crate::mock_node::{
     MemoryAccounting, NODE_COUNT, Permutation, build_baseline_nodes, build_interned_nodes,
-    identity_order, reconcile_baseline_keyed, reconcile_interned_keyed,
+    build_keyed_map_baseline, build_keyed_map_interned, identity_order, lookup_only_baseline,
+    lookup_only_interned, reconcile_baseline_keyed, reconcile_interned_keyed,
 };
 
 // ----------------------------------------------------------------------------
@@ -122,9 +123,15 @@ fn bench_reconcile_interned_key_id(c: &mut Criterion) {
 fn bench_hash_lookup_baseline_box_dyn(c: &mut Criterion) {
     let nodes = build_baseline_nodes();
     let order = identity_order();
+    // Pre-build the keyed map OUTSIDE `b.iter` per Codex review #5 — the
+    // hash-lookup probe must measure lookup latency in isolation, not lookup
+    // + per-iteration map construction. The map build cost was previously
+    // contaminating the lookup column of the S1 verdict.
+    let map = build_keyed_map_baseline(&nodes);
     c.bench_function("s1_hash_lookup/baseline_box_dyn", |b| {
         b.iter(|| {
-            let matches = reconcile_baseline_keyed(black_box(&nodes), black_box(&order));
+            let matches =
+                lookup_only_baseline(black_box(&nodes), black_box(&map), black_box(&order));
             black_box(matches);
         });
     });
@@ -133,9 +140,12 @@ fn bench_hash_lookup_baseline_box_dyn(c: &mut Criterion) {
 fn bench_hash_lookup_interned_key_id(c: &mut Criterion) {
     let (nodes, _interner) = build_interned_nodes();
     let order = identity_order();
+    // Same pre-built-map discipline as the baseline probe — see Codex #5.
+    let map = build_keyed_map_interned(&nodes);
     c.bench_function("s1_hash_lookup/interned_key_id", |b| {
         b.iter(|| {
-            let matches = reconcile_interned_keyed(black_box(&nodes), black_box(&order));
+            let matches =
+                lookup_only_interned(black_box(&nodes), black_box(&map), black_box(&order));
             black_box(matches);
         });
     });

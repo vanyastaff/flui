@@ -12,7 +12,7 @@ A crate marked **DISABLED** is commented out in `Cargo.toml` `[workspace.members
 
 | Crate | Status | Purpose |
 |-------|--------|---------|
-| `flui-types` | ✅ ACTIVE | Base value types and units (px, dp); ID newtypes built on `NonZeroUsize`; geometry (`Point`, `Rect`, `Size`, `Offset`, `Matrix4`, Bézier, superellipse); styling (colors, paint values); typography; layout enums; gestures; physics value types; platform value types |
+| `flui-types` | ✅ ACTIVE | Base value types and units (px, dp); geometry (`Point`, `Rect`, `Size`, `Offset`, `Matrix4`, Bézier, superellipse); styling (colors, paint values); typography; layout enums; gestures; physics value types; platform value types. **ID newtypes** (`ElementId`, `RenderId`, `LayerId`, etc. — all `NonZeroUsize`-backed) live in `flui-foundation`, not here. |
 
 ## Layer 1 — Framework primitives + Tree primitives
 

@@ -112,10 +112,12 @@ impl KeyId {
 ///     needed to evict — out of scope for the Phase 0 spec-validation question.
 #[derive(Debug, Default)]
 pub struct KeyInterner {
-    /// Hash-to-id index. Keyed on `ViewKey::key_hash` so distinct concrete
-    /// `ViewKey` types collide if and only if their hashes collide — the same
-    /// invariant the production reconciler relies on.
-    forward: HashMap<u64, KeyId>,
+    /// Hash-to-bucket index. Bucket-per-hash with `key_eq` resolution on hit —
+    /// mirrors the production FR-024 hash+eq discipline so the bench faithfully
+    /// models the same contract. Hash-only dedup would silently merge distinct
+    /// keys whose hashes collide, skewing the bench's S1 memory accounting
+    /// downward; bucket-per-hash with `key_eq` keeps the accounting honest.
+    forward: HashMap<u64, Vec<KeyId>>,
     /// Reverse store: `KeyId.as_u64() - 1` indexes into this vec.
     reverse: Vec<Box<dyn ViewKey>>,
     /// Next id to mint. Starts at 1 so `NonZeroU64::new` always succeeds.
@@ -133,21 +135,29 @@ impl KeyInterner {
         }
     }
 
-    /// Intern a boxed `ViewKey`. Returns the existing `KeyId` if the key's
-    /// hash already maps; otherwise mints a fresh one.
+    /// Intern a boxed `ViewKey`. Returns the existing `KeyId` if a key
+    /// matching `key_eq` already exists in the hash bucket; otherwise mints
+    /// a fresh one and appends to the bucket.
     ///
-    /// Lookup-then-insert pattern (per *Programming Rust* 2nd ed,
-    /// "HashMap entry API"). We use the explicit two-step path instead of
-    /// `entry()` because the reverse-vec push needs to be conditional on the
-    /// insert path, and the `entry().or_insert_with` shape would re-clone the
-    /// box even when the entry already exists.
+    /// Bucket-with-`key_eq` resolution (per spec FR-024 — distinct keys with
+    /// the same hash must NOT silently merge). Hash collisions are rare in
+    /// practice (the production `ViewKey` hashers are well-distributed), so
+    /// buckets are typically size-1; the additional cost is negligible vs
+    /// the fidelity gain over the bench-only naive hash-only dedup.
     pub fn intern(&mut self, key: Box<dyn ViewKey>) -> KeyId {
         let hash = key.key_hash();
-        if let Some(&id) = self.forward.get(&hash) {
-            return id;
+        if let Some(bucket) = self.forward.get(&hash) {
+            for &candidate in bucket {
+                // SAFETY of indexing: `KeyId` values are 1..=`next_id-1`
+                // mapping to `reverse[id-1]`; `mint()` enforces this invariant.
+                let existing = &*self.reverse[candidate.0.get() as usize - 1];
+                if existing.key_eq(&*key) {
+                    return candidate;
+                }
+            }
         }
         let id = self.mint();
-        self.forward.insert(hash, id);
+        self.forward.entry(hash).or_default().push(id);
         self.reverse.push(key);
         id
     }
@@ -369,19 +379,28 @@ impl MemoryAccounting {
 
     /// Account for the interned `MockNodeInterned` distribution.
     ///
-    /// Interner overhead = HashMap entry per distinct key + reverse-vec slot
-    /// per distinct key. `HashMap<u64, KeyId>` entry ~= 24 bytes
-    /// (8 + 8 + bookkeeping); `Vec<Box<dyn ViewKey>>` slot = 16 bytes plus the
-    /// inner `ValueKey<u64>` heap allocation. The values are conservative
-    /// upper bounds — the actual cost depends on hasher load factor.
+    /// Interner overhead = HashMap entry per distinct hash + per-id bucket
+    /// slot + reverse-vec slot. Per-entry estimate (assuming no hash
+    /// collisions — typical for the bench's well-distributed `ValueKey<u64>`
+    /// hash):
+    ///   - `HashMap<u64, Vec<KeyId>>` entry: 8 (u64 key) + 24 (Vec header:
+    ///     ptr + len + cap) + 8 (bucket bookkeeping) = **40 bytes**
+    ///   - Vec bucket inline storage: 1 KeyId per bucket × 8 bytes = **8 bytes**
+    ///   - `Vec<Box<dyn ViewKey>>` reverse slot: 16 (fat ptr) +
+    ///     size_of::<ValueKey<u64>> heap allocation
+    ///
+    /// The bucket Vec's inline allocation is amortised — most buckets are
+    /// size 1, no separate heap alloc beyond the Vec header. The values are
+    /// conservative upper bounds; actual cost depends on hasher load factor.
     #[must_use]
     pub fn for_interned(node_count: usize) -> Self {
         let node_struct_bytes = core::mem::size_of::<MockNodeInterned>() * node_count;
         let keyed_count = (0..node_count).filter(|&i| is_keyed_index(i)).count();
-        // Interner overhead. Per-entry estimate:
-        //   - HashMap<u64, KeyId>: 8 (key) + 8 (value) + 8 (bucket bookkeeping) = 24
-        //   - Vec<Box<dyn ViewKey>> slot: 16 (fat ptr) + size_of ValueKey<u64>
-        let per_entry = 24 + 16 + core::mem::size_of::<ValueKey<u64>>();
+        // Per-entry estimate with the `Vec<KeyId>` bucket-per-hash fix:
+        //   - HashMap<u64, Vec<KeyId>> entry: 8 (key) + 24 (Vec header) + 8 (bookkeeping) = 40
+        //   - bucket inline KeyId: 8 (size 1 in collision-free common case)
+        //   - reverse Vec<Box<dyn ViewKey>> slot: 16 (fat ptr) + size_of ValueKey<u64>
+        let per_entry = 40 + 8 + 16 + core::mem::size_of::<ValueKey<u64>>();
         let interner_bytes = per_entry * keyed_count;
         Self {
             node_struct_bytes,
@@ -473,4 +492,76 @@ pub fn build_interned_nodes() -> (Vec<MockNodeInterned>, KeyInterner) {
 #[must_use]
 pub fn identity_order() -> Vec<usize> {
     (0..NODE_COUNT).collect()
+}
+
+// ----------------------------------------------------------------------------
+// Hash-lookup-only kernels (Codex review #5 fix)
+// ----------------------------------------------------------------------------
+
+/// Pre-build the keyed `HashMap<u64, usize>` from old baseline nodes. Called
+/// once outside `b.iter` so the hash-lookup probe measures lookup latency in
+/// isolation, NOT lookup + map-construction (which was the Codex review #5
+/// finding on the original `s1_hash_lookup/*` probes).
+#[must_use]
+pub fn build_keyed_map_baseline(old: &[MockNode]) -> HashMap<u64, usize> {
+    let mut m = HashMap::with_capacity(old.len() / 5);
+    for (idx, node) in old.iter().enumerate() {
+        if let Some(k) = node.key.as_deref() {
+            m.insert(k.key_hash(), idx);
+        }
+    }
+    m
+}
+
+/// Pre-build the keyed `HashMap<u64, usize>` from old interned nodes.
+/// Symmetric to [`build_keyed_map_baseline`] for the `KeyId` shape.
+#[must_use]
+pub fn build_keyed_map_interned(old: &[MockNodeInterned]) -> HashMap<u64, usize> {
+    let mut m = HashMap::with_capacity(old.len() / 5);
+    for (idx, node) in old.iter().enumerate() {
+        if let Some(k) = node.key {
+            m.insert(k.as_u64(), idx);
+        }
+    }
+    m
+}
+
+/// Lookup-only baseline kernel — assumes `map` was pre-built by
+/// [`build_keyed_map_baseline`]. The `b.iter` body should call this so the
+/// timed work is exactly: per-position `key_hash()` dispatch + `contains_key`,
+/// without any per-iteration map construction.
+#[must_use]
+pub fn lookup_only_baseline(
+    old: &[MockNode],
+    map: &HashMap<u64, usize>,
+    new_order: &[usize],
+) -> usize {
+    let mut matches = 0usize;
+    for &new_idx in new_order {
+        if let Some(k) = old.get(new_idx).and_then(|n| n.key.as_deref())
+            && map.contains_key(&k.key_hash())
+        {
+            matches += 1;
+        }
+    }
+    matches
+}
+
+/// Lookup-only interned kernel — symmetric to [`lookup_only_baseline`] for
+/// the `KeyId` shape.
+#[must_use]
+pub fn lookup_only_interned(
+    old: &[MockNodeInterned],
+    map: &HashMap<u64, usize>,
+    new_order: &[usize],
+) -> usize {
+    let mut matches = 0usize;
+    for &new_idx in new_order {
+        if let Some(k) = old.get(new_idx).and_then(|n| n.key)
+            && map.contains_key(&k.as_u64())
+        {
+            matches += 1;
+        }
+    }
+    matches
 }

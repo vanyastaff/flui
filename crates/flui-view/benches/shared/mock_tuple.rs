@@ -370,13 +370,23 @@ pub fn reconcile_reorder_specialised(
     let mut out = [ReconcileAction::Replace; TUPLE_ARITY];
     for (i, slot) in new.iter().enumerate() {
         let mut bucket = (slot.key_hash as usize) % TUPLE_ARITY;
-        loop {
+        // Bound the probe loop to TUPLE_ARITY iterations per Codex review #6.
+        // If `index` is fully populated (16 `Some` entries with no matching
+        // key — possible when new keys are absent from old, e.g., any replace
+        // scenario), the original loop's `Some(_) => keep probing` arm had no
+        // termination. Bounded probe count guarantees worst-case full scan
+        // before falling through to the default `Replace` action.
+        let mut probes = 0;
+        while probes < TUPLE_ARITY {
             match index[bucket] {
                 Some(old_idx) if old[old_idx as usize].key_hash == slot.key_hash => {
                     out[i] = ReconcileAction::Reuse(old_idx);
                     break;
                 }
-                Some(_) => bucket = (bucket + 1) % TUPLE_ARITY,
+                Some(_) => {
+                    bucket = (bucket + 1) % TUPLE_ARITY;
+                    probes += 1;
+                }
                 None => break,
             }
         }

@@ -71,7 +71,7 @@ Dependencies flow strictly downward — no circular dependencies.
 | Foundation | `flui-types` | Base types, units, IDs; geometry (`Point`, `Rect`, `Matrix4`, Bézier), styling (colors, paint values), typography, layout enums, gestures, physics value types, platform value types |
 | Foundation | `flui-foundation` | Framework primitives: `ChangeNotifier` / `Listenable`, `Id` system, `BindingBase`, `Key`, diagnostics, error helpers |
 | Reactivity | `flui-reactivity` | Signals, effects, state management |
-| Tree | `flui-tree` | Widget tree: build, diff, reconciliation |
+| Tree | `flui-tree` | Tree primitives: `TreeRead` / `TreeNav` / `TreeWrite` trait trio, iterators (DFS/BFS/parents/ancestors), arity (`Leaf`/`Single`/`Optional`/`Variable`), depth tracking. Reconciliation lives in `flui-view`, not `flui-tree` (the speculative `diff` module was deleted in Cycle 3 per `crates/flui-tree/src/lib.rs`). |
 | Rendering | `flui-rendering` | Render objects, layout protocol, paint |
 | Painting | `flui-painting` | Low-level draw primitives (canvas, paths) |
 | Compositing | `flui-layer` | Compositing layer tree |
