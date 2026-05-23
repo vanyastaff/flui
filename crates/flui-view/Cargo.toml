@@ -37,6 +37,15 @@ default = []
 # Enable test utilities like MockBuildContext
 test-utils = []
 
+# `legacy-downcast` is workspace-internal ONLY — see Phase 1 §U8 and
+# docs/PORT.md. It gates the pre-FR-021 `downcast_ref::<V>()` body
+# inside `ElementCore::update_view` so the Phase 0 §U2 S1 bench can
+# A/B against the legacy storage shape. Default builds use the new
+# identity-shim dispatch path; enabling this feature WITHOUT the
+# internal cfg `__flui_legacy_downcast_internal` emits a
+# `compile_error!`. Phase 3 §U27 removes both gates entirely.
+legacy-downcast = []
+
 [[bench]]
 name = "reconcile_baseline"
 harness = false
