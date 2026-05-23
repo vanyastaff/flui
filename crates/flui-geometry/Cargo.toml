@@ -1,0 +1,52 @@
+[package]
+name = "flui-geometry"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Type-safe 2D geometry primitives for FLUI (split from flui-types in D-block PR-C-2)"
+repository.workspace = true
+keywords = ["geometry", "graphics", "ui", "flui", "math"]
+categories = ["graphics", "mathematics"]
+
+[lints]
+workspace = true
+
+[dependencies]
+# Numeric traits for generic math (Float, Num, etc.)
+num-traits = "0.2"
+
+# Error handling
+thiserror = { workspace = true }
+
+# Optional dependencies
+serde = { workspace = true, optional = true }
+
+# Direct glam integration (optional, for nalgebra/cgmath/kurbo interop downstream)
+glam = { version = "0.30", optional = true }
+
+# mint: Zero-cost conversions with glam, nalgebra, cgmath, kurbo
+mint = { version = "0.5", optional = true }
+
+[dev-dependencies]
+proptest = "1.5"
+
+[features]
+default = []
+
+# Serde support for all geometry types
+serde = ["dep:serde"]
+
+# Direct glam integration
+glam = ["dep:glam"]
+
+# mint interoperability
+mint = ["dep:mint"]
+
+# Enable all features
+full = ["serde", "glam", "mint"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
