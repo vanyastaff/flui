@@ -1,15 +1,21 @@
 //! Geometry storage and protocol-specific convenience methods.
 //!
 //! This file contains:
-//! - Generic write-once `OnceCell<ProtocolGeometry<P>>` accessors
-//!   (`geometry`, `set_geometry`, `clear_geometry`) on `RenderState<P>`
+//! - Generic `Option<ProtocolGeometry<P>>`-backed accessors (`geometry`,
+//!   `set_geometry`, `clear_geometry`) on `RenderState<P>`
 //! - Box protocol convenience methods (`compute_relayout_boundary`, `size`,
 //!   `set_size`, `has_size`) on `RenderState<BoxProtocol>`
 //! - Sliver protocol convenience methods (`scroll_extent`, `paint_extent`,
 //!   `layout_extent`, `max_paint_extent`, `set_sliver_geometry`) on
 //!   `RenderState<SliverProtocol>`
-
-use once_cell::sync::OnceCell;
+//!
+//! **D-block PR-A1 U14 migration (2026-05-23):** the prior `OnceCell`-backed
+//! `set_geometry` panicked on second invocation, which made frame-2 re-layout
+//! a crash. Flutter `.flutter/.../object.dart` straight-assigns `_size` each
+//! layout pass; we mirror that semantics via `Option<T>`. `set_geometry`,
+//! `set_size`, `set_sliver_geometry` now take `&mut self`; production callers
+//! (`RenderEntry::layout`, RenderBox/RenderSliver impls) already hold a mut
+//! state borrow.
 
 use super::RenderState;
 use crate::constraints::{Constraints, SliverGeometry};
@@ -40,60 +46,50 @@ impl<P: Protocol> RenderState<P> {
     ///     // Need to perform layout first
     /// }
     /// ```
+    #[inline]
     pub fn geometry(&self) -> Option<ProtocolGeometry<P>>
     where
         ProtocolGeometry<P>: Copy,
     {
-        self.geometry.get().copied()
+        self.geometry
     }
 
-    /// Sets the computed geometry after layout.
+    /// Sets (or replaces) the computed geometry after layout.
     ///
-    /// This should be called exactly once per layout pass. If geometry
-    /// already exists, this will panic (use `clear_geometry()` first if
-    /// you need to relayout).
+    /// Idempotent — overwrites any prior value. Flutter `_size = size`
+    /// straight-assignment semantics.
     ///
-    /// # Performance
-    ///
-    /// - First call: One atomic CAS operation
-    /// - Subsequent calls: Panic (by design, to catch bugs)
+    /// **D-block PR-A1 U14**: prior `OnceCell`-backed implementation panicked
+    /// on second invocation, which made re-layout a crash. See module-level
+    /// doc for rationale.
     ///
     /// # Example
     ///
     /// ```rust,ignore
     /// let size = compute_size(constraints);
-    /// state.set_geometry(size); // Write once
-    ///
-    /// // Later reads are zero-cost
-    /// let cached = state.geometry().unwrap();
+    /// state.set_geometry(size); // first layout pass
+    /// state.set_geometry(new_size); // re-layout (no panic)
     /// ```
-    pub fn set_geometry(&self, geometry: ProtocolGeometry<P>) {
-        if self.geometry.set(geometry).is_err() {
-            // Geometry already set - this is a bug!
-            // You must call clear_geometry() before relayout
-            panic!(
-                "Geometry already set! Call clear_geometry() before relayout. \
-                 This indicates a logic error in the layout code."
-            );
-        }
+    #[inline]
+    pub fn set_geometry(&mut self, geometry: ProtocolGeometry<P>) {
+        self.geometry = Some(geometry);
     }
 
-    /// Clears the geometry to allow relayout.
+    /// Clears the geometry, signalling no prior layout has run.
     ///
-    /// Must be called before `set_geometry()` if geometry already exists.
-    /// Production callers typically invoke this immediately before
-    /// registering the element with `PipelineOwner::add_node_needing_layout`.
+    /// Equivalent to `set_geometry` with no value; production re-layout no
+    /// longer requires an explicit clear (the `OnceCell`-era invariant is
+    /// gone). Useful in tests and eviction paths.
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// // Force relayout — pair with PipelineOwner registration.
+    /// // Reset state — useful in tests
     /// state.clear_geometry();
-    /// pipeline_owner.add_node_needing_layout(element_id);
     /// ```
     #[inline]
     pub fn clear_geometry(&mut self) {
-        self.geometry = OnceCell::new();
+        self.geometry = None;
     }
 }
 
@@ -212,13 +208,16 @@ impl RenderState<BoxProtocol> {
 
     /// Convenience method for setting size (box protocol).
     ///
+    /// **D-block PR-A1 U14**: signature changed to `&mut self` alongside
+    /// `set_geometry` migration.
+    ///
     /// # Example
     ///
     /// ```rust,ignore
     /// state.set_size(Size::new(100.0, 50.0));
     /// ```
     #[inline]
-    pub fn set_size(&self, size: flui_types::Size) {
+    pub fn set_size(&mut self, size: flui_types::Size) {
         self.set_geometry(size);
     }
 
@@ -286,6 +285,9 @@ impl RenderState<SliverProtocol> {
 
     /// Sets sliver geometry (convenience wrapper for `set_geometry()`).
     ///
+    /// **D-block PR-A1 U14**: signature changed to `&mut self` alongside
+    /// `set_geometry` migration.
+    ///
     /// # Example
     ///
     /// ```rust,ignore
@@ -297,7 +299,7 @@ impl RenderState<SliverProtocol> {
     /// state.set_sliver_geometry(geom);
     /// ```
     #[inline]
-    pub fn set_sliver_geometry(&self, geometry: SliverGeometry) {
+    pub fn set_sliver_geometry(&mut self, geometry: SliverGeometry) {
         self.set_geometry(geometry);
     }
 }

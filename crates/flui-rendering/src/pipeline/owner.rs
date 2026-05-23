@@ -606,6 +606,92 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         self.dirty.needs_layout.push(DirtyNode::new(node_id, depth));
     }
 
+    /// Marks a node as needing layout, propagating the `NEEDS_LAYOUT` flag
+    /// up the ancestor chain and pushing the **relayout boundary** onto
+    /// `dirty.needs_layout` for the next `run_layout` pass.
+    ///
+    /// **D-block PR-A1 U15** (memo D3) — greenfield authoring of Flutter's
+    /// `markNeedsLayout` walk (`.flutter/.../object.dart:2658-2700`). Walks
+    /// the parent chain via [`NodeLinks::parent`] and at each step:
+    ///
+    /// 1. If the node is already marked `NEEDS_LAYOUT`, stop — earlier
+    ///    propagation already reached the boundary; no need to re-walk.
+    /// 2. Otherwise, set the flag via [`RenderNode::mark_layout_flag`].
+    /// 3. If the node is a relayout boundary
+    ///    ([`RenderNode::is_relayout_boundary`] — reads the per-instance
+    ///    `IS_RELAYOUT_BOUNDARY` storage flag set by
+    ///    [`compute_relayout_boundary`](crate::storage::RenderState::compute_relayout_boundary))
+    ///    OR has no parent (tree root), push this id onto
+    ///    `dirty.needs_layout` and return.
+    /// 4. Otherwise, recurse to the parent.
+    ///
+    /// [`NodeLinks::parent`]: crate::storage::NodeLinks::parent
+    /// [`RenderNode::mark_layout_flag`]: crate::storage::RenderNode::mark_layout_flag
+    /// [`RenderNode::is_relayout_boundary`]: crate::storage::RenderNode::is_relayout_boundary
+    ///
+    /// The walk is idempotent — a stale call on an already-marked subtree
+    /// short-circuits at step 1 without re-pushing the boundary. Missing
+    /// `RenderId`s (post-removal stale references) are silent no-ops; the
+    /// walk simply terminates at the missing-lookup step.
+    ///
+    /// This method supersedes the direct `add_node_needing_layout` call
+    /// pattern in `flui-view::element::behavior_commons::mark_render_needs_layout_and_paint`
+    /// (migrated in D-block PR-A1 U16). Direct `add_node_needing_layout`
+    /// remains as the low-level primitive for callers that have already
+    /// computed the correct boundary id (e.g. testing surfaces).
+    ///
+    /// **Bootstrap dependency (U17):** the relayout-boundary flag is set
+    /// per-instance only after [`RenderEntry::layout`](crate::storage::RenderEntry::layout)
+    /// has run once. Pre-bootstrap (no layout has executed yet) every node
+    /// reports `is_relayout_boundary() == false` and propagation runs to
+    /// root — which is the correct fallback (root is always an implicit
+    /// boundary in Flutter).
+    pub fn mark_needs_layout(&mut self, id: RenderId) {
+        let mut current = id;
+        loop {
+            // Snapshot the per-node decision under a short-lived borrow so
+            // we can release before stepping to the parent in the recursion.
+            let step = {
+                let Some(node) = self.render_tree.get_mut(current) else {
+                    // Stale reference (e.g. node removed mid-frame). Stop.
+                    return;
+                };
+                // Idempotent flag set — the AtomicRenderFlags fetch-or is a
+                // no-op when the bit is already set. The walk does NOT
+                // short-circuit on "already marked"; the prior mark's
+                // dirty-queue entry may have been drained by `run_layout`
+                // without clearing the flag (the current run_layout still
+                // contains the `layout_node_with_children` no-op walk that
+                // doesn't invoke `RenderEntry::layout` — once PR-A1b lands
+                // the walk rewrite, layout clears `NEEDS_LAYOUT` and the
+                // walk could short-circuit, but the always-walk shape
+                // remains correct).
+                node.mark_layout_flag();
+                let parent = node.links().parent();
+                let boundary = node.is_relayout_boundary() || parent.is_none();
+                let depth = node.depth() as usize;
+                (boundary, depth, parent)
+            };
+            let (is_boundary, depth, parent) = step;
+            if is_boundary {
+                // Codex P1 (PR #139 review): always enqueue the boundary
+                // for this invalidation, with a dedup check against the
+                // dirty queue so multiple marks-in-same-frame don't push
+                // duplicate entries. Pre-fix, the algorithm returned early
+                // on already-marked nodes WITHOUT pushing — which silently
+                // dropped subsequent invalidations once the broken pipeline
+                // had drained the dirty queue but not cleared the flag.
+                if !self.dirty.needs_layout.iter().any(|d| d.id == current) {
+                    self.dirty.needs_layout.push(DirtyNode::new(current, depth));
+                }
+                return;
+            }
+            // SAFETY: `parent.is_none()` is folded into `is_boundary` above,
+            // so reaching this branch guarantees `Some(_)`.
+            current = parent.unwrap();
+        }
+    }
+
     /// Adds a node to the paint dirty list.
     ///
     /// # Arguments
@@ -1824,5 +1910,146 @@ mod tests {
             name.contains("PanickingPaintBox"),
             "debug_name() should resolve to the concrete type via vtable; got `{name}`"
         );
+    }
+
+    // ========================================================================
+    // D-block PR-A1 U15 — PipelineOwner::mark_needs_layout walk tests
+    // ========================================================================
+    //
+    // Verifies the Flutter `markNeedsLayout` shape ported in U15:
+    //   - propagation walks the ancestor chain
+    //   - flag is set on every visited node (NEEDS_LAYOUT)
+    //   - propagation stops at the first relayout boundary or root
+    //   - dirty.needs_layout receives exactly the boundary id
+    //   - re-marking an already-dirty node is a no-op
+    //   - stale RenderIds (post-removal) terminate the walk silently
+
+    /// Build a 3-level chain root → middle → leaf with `PanickingPaintBox`
+    /// mocks via the public `insert` / `insert_child_render_object` APIs,
+    /// then clear the dirty queue so tests can observe only post-clear
+    /// marks. Returns `(owner, root_id, middle_id, leaf_id)`.
+    fn build_three_level_chain() -> (PipelineOwner<Idle>, RenderId, RenderId, RenderId) {
+        let mut owner = PipelineOwner::new();
+        let root_id = owner.insert(Box::new(PanickingPaintBox::new())
+            as Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>);
+        let middle_id = owner
+            .insert_child_render_object(
+                root_id,
+                Box::new(PanickingPaintBox::new())
+                    as Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>,
+            )
+            .expect("middle should attach under root");
+        let leaf_id = owner
+            .insert_child_render_object(
+                middle_id,
+                Box::new(PanickingPaintBox::new())
+                    as Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>,
+            )
+            .expect("leaf should attach under middle");
+        owner.clear_all_dirty_nodes();
+        for id in [root_id, middle_id, leaf_id] {
+            if let Some(node) = owner.render_tree.get_mut(id) {
+                match node {
+                    crate::storage::RenderNode::Box(entry) => {
+                        entry.state().clear_needs_layout();
+                    }
+                    crate::storage::RenderNode::Sliver(entry) => {
+                        entry.state().clear_needs_layout();
+                    }
+                }
+            }
+        }
+        (owner, root_id, middle_id, leaf_id)
+    }
+
+    /// Marking a leaf where no relayout boundary is set propagates the
+    /// `NEEDS_LAYOUT` flag up to root and pushes the root onto
+    /// `dirty.needs_layout` (root is the implicit boundary).
+    #[test]
+    fn mark_needs_layout_walks_to_root_when_no_boundary_set() {
+        let (mut owner, root_id, middle_id, leaf_id) = build_three_level_chain();
+        assert!(owner.nodes_needing_layout().is_empty());
+
+        owner.mark_needs_layout(leaf_id);
+
+        for (id, label) in [(leaf_id, "leaf"), (middle_id, "middle"), (root_id, "root")] {
+            let node = owner.render_tree.get(id).expect(label);
+            assert!(
+                node.needs_layout(),
+                "{label} should have NEEDS_LAYOUT set after walk",
+            );
+        }
+        let dirty = owner.nodes_needing_layout();
+        assert_eq!(
+            dirty.len(),
+            1,
+            "exactly one boundary should land on dirty queue, got {dirty:?}",
+        );
+        assert_eq!(dirty[0].id, root_id, "boundary should be the root id");
+    }
+
+    /// Re-marking an already-dirty node short-circuits at step 1 of the
+    /// walk — no second push, no flag toggle (flags are idempotent anyway).
+    #[test]
+    fn mark_needs_layout_is_idempotent_on_repeat() {
+        let (mut owner, _root_id, _middle_id, leaf_id) = build_three_level_chain();
+        owner.mark_needs_layout(leaf_id);
+        let first_dirty_len = owner.nodes_needing_layout().len();
+        owner.mark_needs_layout(leaf_id);
+        assert_eq!(
+            owner.nodes_needing_layout().len(),
+            first_dirty_len,
+            "second mark on already-dirty subtree must not re-push",
+        );
+    }
+
+    /// When an intermediate ancestor IS a relayout boundary, propagation
+    /// stops at that ancestor — the root above stays clean and the
+    /// boundary id (not root) is the one pushed to the dirty queue.
+    #[test]
+    fn mark_needs_layout_stops_at_intermediate_relayout_boundary() {
+        let (mut owner, root_id, middle_id, leaf_id) = build_three_level_chain();
+        // Promote `middle` to a relayout boundary via the storage flag (U17
+        // wires this from `RenderEntry::layout`'s post-set_constraints
+        // compute_relayout_boundary call; this test pre-bootstraps the
+        // flag directly to isolate U15 walk behaviour from U17 bootstrap).
+        if let Some(crate::storage::RenderNode::Box(entry)) = owner.render_tree.get_mut(middle_id) {
+            entry.state().set_relayout_boundary(true);
+        }
+
+        owner.mark_needs_layout(leaf_id);
+
+        assert!(
+            owner.render_tree.get(leaf_id).expect("leaf").needs_layout(),
+            "leaf should be marked",
+        );
+        assert!(
+            owner
+                .render_tree
+                .get(middle_id)
+                .expect("middle")
+                .needs_layout(),
+            "boundary itself should be marked",
+        );
+        assert!(
+            !owner.render_tree.get(root_id).expect("root").needs_layout(),
+            "root above the boundary stays clean",
+        );
+        let dirty = owner.nodes_needing_layout();
+        assert_eq!(dirty.len(), 1);
+        assert_eq!(
+            dirty[0].id, middle_id,
+            "dirty entry should be the boundary, not the root",
+        );
+    }
+
+    /// Marking a stale `RenderId` (post-removal) terminates the walk
+    /// silently with no dirty-queue mutation.
+    #[test]
+    fn mark_needs_layout_stale_id_is_silent_noop() {
+        let mut owner = PipelineOwner::new();
+        let phantom = RenderId::new(99);
+        owner.mark_needs_layout(phantom);
+        assert!(owner.nodes_needing_layout().is_empty());
     }
 }

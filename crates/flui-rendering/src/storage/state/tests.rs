@@ -48,20 +48,25 @@ fn render_state_sliver_fits_budget() {
 }
 
 #[test]
-fn test_geometry_write_once() {
-    let state = BoxRenderState::new();
+fn test_geometry_set_is_idempotent() {
+    // D-block PR-A1 U14: previously `set_geometry` panicked on second
+    // invocation (OnceCell-backed). Re-layout now overwrites cleanly
+    // mirroring Flutter `_size = size` straight assignment.
+    let mut state = BoxRenderState::new();
     let size1 = flui_types::Size::new(px(100.0), px(50.0));
     let size2 = flui_types::Size::new(px(200.0), px(100.0));
 
-    // First set succeeds
+    // First set establishes geometry.
     state.set_geometry(size1);
     assert_eq!(state.geometry(), Some(size1));
 
-    // Second set panics
-    let result = std::panic::catch_unwind(|| {
-        state.set_geometry(size2);
-    });
-    assert!(result.is_err());
+    // Second set overwrites with no panic — re-layout safe.
+    state.set_geometry(size2);
+    assert_eq!(state.geometry(), Some(size2));
+
+    // Clear resets to None.
+    state.clear_geometry();
+    assert_eq!(state.geometry(), None);
 }
 
 #[test]
@@ -94,4 +99,63 @@ fn test_boundary_flags() {
     state.set_relayout_boundary(false);
     assert!(!state.is_relayout_boundary());
     assert!(state.is_repaint_boundary());
+}
+
+/// Copilot P1 regression test (PR #139): a non-root node with loose
+/// (non-tight) constraints and `sized_by_parent = false` must NOT default
+/// to a relayout boundary. Pre-fix the U17 bootstrap passed
+/// `parent_uses_size = false` which made `!parent_uses_size = true`,
+/// flipping every Box node into a boundary and silently blocking
+/// `PipelineOwner::mark_needs_layout` propagation at the leaf.
+#[test]
+fn compute_relayout_boundary_non_tight_non_root_is_not_boundary_by_default() {
+    use crate::constraints::BoxConstraints;
+    use flui_types::Size;
+
+    let mut state = BoxRenderState::new();
+    // Loose constraints (not tight) — typical layout-from-parent case.
+    let loose = BoxConstraints::loose(Size::new(px(200.0), px(100.0)));
+    state.set_constraints(loose);
+
+    // Bootstrap as if running under the U17 wiring with the BoxProtocol
+    // override: parent_uses_size=true (conservative), sized_by_parent=false,
+    // has_parent=true (non-root).
+    state.compute_relayout_boundary(true, false, true);
+
+    assert!(
+        !state.is_relayout_boundary(),
+        "non-tight, non-root, non-sized-by-parent node MUST default to non-boundary so mark_needs_layout propagates up to a real boundary",
+    );
+}
+
+/// Companion test: tight constraints still mark as boundary (Flutter parity:
+/// when parent forces a single valid size, the node can re-layout in
+/// isolation).
+#[test]
+fn compute_relayout_boundary_tight_constraints_is_boundary() {
+    use crate::constraints::BoxConstraints;
+    use flui_types::Size;
+
+    let mut state = BoxRenderState::new();
+    let tight = BoxConstraints::tight(Size::new(px(50.0), px(50.0)));
+    state.set_constraints(tight);
+
+    state.compute_relayout_boundary(true, false, true);
+
+    assert!(
+        state.is_relayout_boundary(),
+        "tight constraints mean parent forces a single valid size — node is a boundary",
+    );
+}
+
+/// Companion test: root (no parent) is always a boundary regardless of
+/// other signals — propagation cannot escape the root.
+#[test]
+fn compute_relayout_boundary_root_is_always_boundary() {
+    let state = BoxRenderState::new();
+    state.compute_relayout_boundary(true, false, /* has_parent = */ false);
+    assert!(
+        state.is_relayout_boundary(),
+        "root must always be a boundary"
+    );
 }

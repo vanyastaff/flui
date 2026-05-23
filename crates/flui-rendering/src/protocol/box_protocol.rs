@@ -94,6 +94,31 @@ impl Protocol for BoxProtocol {
     fn name() -> &'static str {
         "box"
     }
+
+    /// D-block PR-A1 U17 — override the default no-op with the actual
+    /// Flutter-parity `compute_relayout_boundary` call.
+    ///
+    /// `parent_uses_size = true` (conservative default per Copilot P1 review
+    /// on PR #139): with the Flutter formula
+    /// `is_boundary = !parent_uses_size || sized_by_parent || constraints.is_tight() || !has_parent`,
+    /// passing `parent_uses_size = false` would make `!false = true` ⇒ EVERY
+    /// non-root node defaults to a relayout boundary, immediately blocking
+    /// [`PipelineOwner::mark_needs_layout`](crate::pipeline::PipelineOwner::mark_needs_layout)
+    /// propagation at the leaf and breaking parents-depend-on-child-size
+    /// flows. The conservative `true` default makes boundary-ness depend on
+    /// the remaining three signals: tight constraints (always a boundary in
+    /// Flutter — parent is forcing a single valid size), root (no parent),
+    /// or `sized_by_parent` (constraints alone determine size). Non-tight
+    /// non-root non-sized-by-parent nodes correctly default to non-boundary,
+    /// preserving propagation.
+    ///
+    /// `sized_by_parent = false`: full Flutter parity for both parameters
+    /// requires per-render-object trait methods that report their layout
+    /// dependency shape; deferred to Core.2 alongside the intrinsic-
+    /// dimension protocol.
+    fn bootstrap_relayout_boundary(state: &crate::storage::RenderState<Self>, has_parent: bool) {
+        state.compute_relayout_boundary(true, false, has_parent);
+    }
 }
 
 impl BidirectionalProtocol for BoxProtocol {}

@@ -239,13 +239,20 @@ pub(crate) fn mark_render_needs_layout_and_paint<V, A>(
         && let Some(pipeline_owner) = core.pipeline_owner()
     {
         let mut owner = pipeline_owner.write();
-        let tree_depth = owner.render_tree().depth(render_id).unwrap_or(0);
 
-        owner.add_node_needing_layout(render_id, tree_depth as usize);
+        // D-block PR-A1 U16: migrate from direct add_node_needing_layout to
+        // PipelineOwner::mark_needs_layout (new in U15) so the layout-side
+        // mark propagates up to the nearest relayout boundary per Flutter
+        // markNeedsLayout semantics. Paint side stays on the direct primitive
+        // — Flutter's markNeedsPaint is its own walk with different boundary
+        // semantics (repaint vs relayout boundary) and is out of D-block
+        // scope (Core.2 paint catalog work).
+        let tree_depth = owner.render_tree().depth(render_id).unwrap_or(0);
+        owner.mark_needs_layout(render_id);
         owner.add_node_needing_paint(render_id, tree_depth as usize);
 
         tracing::debug!(
-            "{}::on_update marked render_id={:?} dirty",
+            "{}::on_update marked render_id={:?} dirty (layout via mark_needs_layout walk, paint direct)",
             behavior_name,
             render_id
         );

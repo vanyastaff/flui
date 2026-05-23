@@ -1,9 +1,17 @@
 //! Constraint cache validation methods for `RenderState<P>`.
 //!
-//! This file contains the write-once `OnceCell` constraint methods
-//! (`constraints`, `set_constraints`, `clear_constraints`, `has_constraints`).
-
-use once_cell::sync::OnceCell;
+//! This file contains the `Option<ProtocolConstraints<P>>`-backed constraint
+//! methods (`constraints`, `set_constraints`, `clear_constraints`,
+//! `has_constraints`).
+//!
+//! **D-block PR-A1 U14 migration (2026-05-23):** the prior `OnceCell`-backed
+//! `set_constraints` panicked on second invocation, which made any re-layout
+//! of the same node a crash. Flutter `.flutter/.../object.dart:2865`
+//! straight-assigns `_constraints = constraints` each layout pass; we mirror
+//! that semantics by holding constraints in `Option<T>` and replacing
+//! unconditionally inside `set_constraints`. Method now takes `&mut self`;
+//! the production caller (`RenderEntry::layout`) already holds `&mut self`
+//! on the entry so the borrow chain reaches the state mutably.
 
 use super::RenderState;
 use crate::protocol::{Protocol, ProtocolConstraints};
@@ -27,28 +35,34 @@ impl<P: Protocol> RenderState<P> {
     ///     }
     /// }
     /// ```
+    #[inline]
     pub fn constraints(&self) -> Option<&ProtocolConstraints<P>> {
-        self.constraints.get()
+        self.constraints.as_ref()
     }
 
-    /// Sets the constraints used for layout.
+    /// Sets (or replaces) the constraints used for layout.
     ///
-    /// Used for cache validation - if constraints haven't changed,
-    /// layout can be skipped (for sized-by-parent render objects).
-    pub fn set_constraints(&self, constraints: ProtocolConstraints<P>) {
-        if self.constraints.set(constraints).is_err() {
-            // Constraints already set - clear first!
-            panic!(
-                "Constraints already set! Call clear_constraints() before relayout. \
-                 This indicates a logic error in the layout code."
-            );
-        }
+    /// Idempotent — overwrites any prior value. Used for cache validation
+    /// against the next layout pass: if `constraints()` matches the incoming
+    /// constraints and the node is clean, the layout can be skipped.
+    ///
+    /// **D-block PR-A1 U14**: prior `OnceCell`-backed implementation panicked
+    /// on second invocation. Re-layout of the same node now mirrors Flutter's
+    /// straight-assignment semantics. See module-level doc for rationale.
+    #[inline]
+    pub fn set_constraints(&mut self, constraints: ProtocolConstraints<P>) {
+        self.constraints = Some(constraints);
     }
 
-    /// Clears the constraints to allow relayout.
+    /// Clears the constraints, signalling no prior layout has run.
+    ///
+    /// Equivalent to `set_constraints` with no value; useful as an explicit
+    /// reset before a forced re-layout in tests or eviction paths. Production
+    /// re-layout simply calls `set_constraints` with the new value — clearing
+    /// first is no longer required (the `OnceCell`-era invariant is gone).
     #[inline]
     pub fn clear_constraints(&mut self) {
-        self.constraints = OnceCell::new();
+        self.constraints = None;
     }
 
     /// Checks if constraints match the given value.
@@ -59,7 +73,7 @@ impl<P: Protocol> RenderState<P> {
         ProtocolConstraints<P>: PartialEq,
     {
         self.constraints
-            .get()
+            .as_ref()
             .map(|c| c == constraints)
             .unwrap_or(false)
     }
