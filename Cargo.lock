@@ -1338,19 +1338,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "flui-log"
-version = "0.1.0"
-dependencies = [
- "android_log-sys",
- "tokio",
- "tracing",
- "tracing-forest",
- "tracing-oslog",
- "tracing-subscriber",
- "tracing-wasm",
-]
-
-[[package]]
 name = "flui-macros"
 version = "0.1.0"
 dependencies = [
