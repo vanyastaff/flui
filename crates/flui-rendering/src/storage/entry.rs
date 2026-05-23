@@ -280,6 +280,17 @@ impl<P: Protocol> RenderEntry<P> {
         // untouched and NEEDS_LAYOUT stays set so a retry is possible.
         self.state.set_geometry(geometry.clone());
         self.state.set_constraints(constraints);
+
+        // D-block PR-A1 U17 — bootstrap the per-instance
+        // `IS_RELAYOUT_BOUNDARY` flag now that constraints are populated.
+        // For `BoxProtocol`, dispatches to `compute_relayout_boundary`
+        // (Flutter `!parent_uses_size || sized_by_parent || constraints.is_tight() || !has_parent`);
+        // for `SliverProtocol`, no-op (relayout-boundary semantics not used).
+        // Pre-bootstrap, `PipelineOwner::mark_needs_layout` (U15) treats
+        // every node as non-boundary and walks to root.
+        let has_parent = self.links.parent().is_some();
+        <P as crate::protocol::Protocol>::bootstrap_relayout_boundary(&self.state, has_parent);
+
         self.state.clear_needs_layout();
 
         Ok(geometry)

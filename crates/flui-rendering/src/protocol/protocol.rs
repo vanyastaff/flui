@@ -77,6 +77,31 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
     fn validate_constraints(constraints: &<Self::Layout as LayoutCapability>::Constraints) -> bool {
         <Self::Layout as LayoutCapability>::validate_constraints(constraints)
     }
+
+    /// Bootstrap the per-instance `IS_RELAYOUT_BOUNDARY` storage flag after
+    /// a successful layout pass.
+    ///
+    /// Default implementation is a no-op (slivers don't use relayout-boundary
+    /// semantics today; that's deferred to Core.2). The `BoxProtocol`
+    /// override calls [`RenderState::<BoxProtocol>::compute_relayout_boundary`]
+    /// with `parent_uses_size = false` and `sized_by_parent = false` —
+    /// Flutter parity for those parameters lands later in Core.2 alongside
+    /// the intrinsic-dimension protocol.
+    ///
+    /// Added in D-block PR-A1 U17 (companion memo D3) so that
+    /// [`PipelineOwner::mark_needs_layout`] (U15) has a meaningful
+    /// `is_relayout_boundary` answer to read once nodes have laid out at
+    /// least once. Pre-bootstrap, all nodes report `false` and propagation
+    /// runs to root — the correct fallback (root is the implicit boundary).
+    ///
+    /// [`RenderState::<BoxProtocol>::compute_relayout_boundary`]: crate::storage::state::RenderState::compute_relayout_boundary
+    /// [`PipelineOwner::mark_needs_layout`]: crate::pipeline::owner::PipelineOwner::mark_needs_layout
+    fn bootstrap_relayout_boundary(state: &crate::storage::RenderState<Self>, has_parent: bool)
+    where
+        Self: Sized,
+    {
+        let _ = (state, has_parent);
+    }
 }
 
 // ============================================================================

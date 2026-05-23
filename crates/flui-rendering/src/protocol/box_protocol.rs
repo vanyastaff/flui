@@ -94,6 +94,15 @@ impl Protocol for BoxProtocol {
     fn name() -> &'static str {
         "box"
     }
+
+    /// D-block PR-A1 U17 — override the default no-op with the actual
+    /// Flutter-parity `compute_relayout_boundary` call. `parent_uses_size`
+    /// and `sized_by_parent` are wired as `false` for now; full Flutter
+    /// parity for those parameters lands later in Core.2 alongside the
+    /// intrinsic-dimension protocol.
+    fn bootstrap_relayout_boundary(state: &crate::storage::RenderState<Self>, has_parent: bool) {
+        state.compute_relayout_boundary(false, false, has_parent);
+    }
 }
 
 impl BidirectionalProtocol for BoxProtocol {}
