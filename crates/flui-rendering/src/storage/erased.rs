@@ -17,9 +17,18 @@
 //!
 //! Conversions are provided via `From`/`TryFrom` so callers that already
 //! hold a protocol-typed value can lift it into the erased enum cheaply
-//! (`ErasedConstraints::from(c)` for `c: BoxConstraints`), and
-//! pipeline-side recipients can downcast on the happy path with the
-//! `TryFrom` path returning the `ProtocolMismatch` error on mismatch.
+//! (`ErasedConstraints::from(c)` for `c: BoxConstraints`), and pipeline-side
+//! recipients can downcast on the happy path. The `TryFrom` impls return
+//! the local [`ErasedConstraintsMismatch`] / [`ErasedGeometryMismatch`]
+//! error types — narrow value-level signals tied to a specific conversion
+//! call site. `RenderNode::layout_erased` (which dispatches the erased
+//! constraints to the protocol-typed entry) uses the broader
+//! [`RenderError::ProtocolMismatch`](crate::error::RenderError::ProtocolMismatch)
+//! variant for its own return type instead — the two error surfaces are
+//! intentionally distinct because their callers have different recovery
+//! paths (a value-conversion mismatch is typically a caller bug worth
+//! `unwrap`-ing in tests, while a pipeline-dispatch mismatch flows through
+//! `RenderResult` alongside other render errors).
 
 use crate::constraints::{BoxConstraints, SliverConstraints, SliverGeometry};
 use flui_types::Size;

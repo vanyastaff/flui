@@ -220,8 +220,14 @@ pub enum RenderError {
 
     /// Detected a layout cycle: a `RenderEntry::layout` call recursed
     /// (via `LayoutContext::layout_child`) back into a node whose layout
-    /// was still in flight on the same frame. Surfaces via the
-    /// `currently_laying_out` guard on `PipelineOwner<Layout>`.
+    /// was still in flight on the same frame.
+    ///
+    /// **Variant pre-added in D-block PR-A1b U18; cycle-detection wiring
+    /// lands in U21** (companion memo D6) as a `currently_laying_out`
+    /// `FxHashSet<RenderId>` guard on `PipelineOwner<Layout>` with a
+    /// RAII drop-guard for unwind safety. Currently no production code
+    /// constructs this variant — it is reserved so the error surface is
+    /// already stable when U21 wires the guard.
     #[error("layout cycle detected: node {0:?} re-entered while its own layout was in flight")]
     LayoutCycle(RenderId),
 }
