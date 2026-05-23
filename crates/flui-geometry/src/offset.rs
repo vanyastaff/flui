@@ -466,7 +466,7 @@ impl Offset<Pixels> {
 
     #[inline]
     #[must_use]
-    pub fn rotate_radians(self, angle: crate::geometry::Radians) -> Offset<Pixels> {
+    pub fn rotate_radians(self, angle: crate::Radians) -> Offset<Pixels> {
         self.rotate(angle.0)
     }
 
@@ -607,8 +607,8 @@ impl Offset<Pixels> {
 
     #[inline]
     #[must_use]
-    pub fn angle_to_radians(self, other: impl Into<Offset<Pixels>>) -> crate::geometry::Radians {
-        crate::geometry::radians(self.angle_to(other))
+    pub fn angle_to_radians(self, other: impl Into<Offset<Pixels>>) -> crate::Radians {
+        crate::radians(self.angle_to(other))
     }
 
     /// Convert this offset to a delta offset.
@@ -1013,7 +1013,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::px;
+    use crate::px;
 
     #[test]
     fn test_offset_creation() {
@@ -1155,7 +1155,7 @@ mod tests {
 #[cfg(test)]
 mod typed_tests {
     use super::*;
-    use crate::geometry::{Pixels, px};
+    use crate::{Pixels, px};
 
     #[test]
     fn test_offset_new() {
@@ -1250,7 +1250,7 @@ mod typed_tests {
 
     #[test]
     fn test_offset_utility_traits() {
-        use crate::geometry::{Along, Axis, Half};
+        use crate::{Along, Axis, Half};
 
         // Test Along trait
         let o = Offset::<Pixels>::new(px(10.0), px(20.0));

@@ -180,7 +180,7 @@ impl Vec2<Pixels> {
     /// assert!((v.y - 1.0).abs() < 0.001);
     #[inline]
     #[must_use]
-    pub fn from_radians(angle: crate::geometry::Radians) -> Self {
+    pub fn from_radians(angle: crate::Radians) -> Self {
         Self::from_angle(angle.0)
     }
 }
@@ -475,8 +475,8 @@ where
     /// assert!((angle.0 - PI / 2.0).abs() < 0.001);
     #[inline]
     #[must_use]
-    pub fn angle_radians(self) -> crate::geometry::Radians {
-        crate::geometry::radians(self.angle())
+    pub fn angle_radians(self) -> crate::Radians {
+        crate::radians(self.angle())
     }
 }
 
@@ -513,8 +513,8 @@ where
     /// assert!((angle.0 - PI / 2.0).abs() < 0.001);
     #[inline]
     #[must_use]
-    pub fn angle_between_radians(self, other: Self) -> crate::geometry::Radians {
-        crate::geometry::radians(self.angle_between(other))
+    pub fn angle_between_radians(self, other: Self) -> crate::Radians {
+        crate::radians(self.angle_between(other))
     }
     /// Rotates the vector by an angle in radians (counter-clockwise).
     #[inline]
@@ -540,7 +540,7 @@ where
     /// assert!((rotated.y - 1.0).abs() < 0.001);
     #[inline]
     #[must_use]
-    pub fn rotate_radians(self, angle: crate::geometry::Radians) -> Self {
+    pub fn rotate_radians(self, angle: crate::Radians) -> Self {
         self.rotate(angle.0)
     }
 }
@@ -1327,7 +1327,7 @@ mod tests {
 #[cfg(test)]
 mod typed_tests {
     use super::*;
-    use crate::geometry::{Pixels, px};
+    use crate::{Pixels, px};
 
     #[test]
     fn test_vec2_new() {
@@ -1388,7 +1388,7 @@ mod typed_tests {
 
     #[test]
     fn test_vec2_utility_traits() {
-        use crate::geometry::{Along, ApproxEq, Axis, Double, Half, Sign};
+        use crate::{Along, ApproxEq, Axis, Double, Half, Sign};
 
         // Test Along trait
         let v = Vec2::<Pixels>::new(px(10.0), px(20.0));

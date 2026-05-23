@@ -84,7 +84,12 @@
 //! the rendering protocol rather than basic types.
 
 #![allow(missing_docs)] // TODO: Add comprehensive docs (486 items remaining - ongoing improvement)
-pub mod geometry;
+// Geometry primitives split out into flui-geometry crate in D-block PR-C-2 (U6+U7).
+// Re-exported here under the original `geometry` namespace so existing consumers
+// of `flui_types::geometry::*` continue to compile unchanged during the transition.
+// Direct callers may also import `flui_geometry::*` for the same surface.
+pub use flui_geometry as geometry;
+
 pub mod gestures;
 pub mod layout;
 pub mod painting;

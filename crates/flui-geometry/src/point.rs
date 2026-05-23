@@ -1250,7 +1250,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::px;
+    use crate::px;
 
     #[test]
     fn test_construction() {
@@ -1409,7 +1409,7 @@ mod tests {
 #[cfg(test)]
 mod typed_tests {
     use super::*;
-    use crate::geometry::{Pixels, px};
+    use crate::{Pixels, px};
 
     #[test]
     fn test_point_new() {
@@ -1495,7 +1495,7 @@ mod typed_tests {
 #[cfg(test)]
 mod arithmetic_tests {
     use super::*;
-    use crate::geometry::{Pixels, px, vec2};
+    use crate::{Pixels, px, vec2};
 
     #[test]
     fn test_point_add_vec2() {
@@ -1678,7 +1678,7 @@ mod arithmetic_tests {
 
     #[test]
     fn test_point_utility_traits() {
-        use crate::geometry::{Along, Axis, Half, IsZero};
+        use crate::{Along, Axis, Half, IsZero};
 
         // Test Along trait
         let p = Point::<Pixels>::new(px(10.0), px(20.0));

@@ -1878,9 +1878,9 @@ impl From<Radians> for f32 {
 }
 
 // Convert from Percentage (0.0 = 0°, 1.0 = 360°)
-impl From<crate::geometry::Percentage> for Radians {
+impl From<crate::Percentage> for Radians {
     #[inline]
-    fn from(percentage: crate::geometry::Percentage) -> Self {
+    fn from(percentage: crate::Percentage) -> Self {
         radians(percentage.0 * std::f32::consts::TAU)
     }
 }

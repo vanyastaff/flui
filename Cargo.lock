@@ -1504,6 +1504,7 @@ name = "flui-types"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "flui-geometry",
  "glam",
  "mint",
  "num-traits",

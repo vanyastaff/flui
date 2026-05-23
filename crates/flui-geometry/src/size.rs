@@ -1049,7 +1049,7 @@ impl Size<super::units::ScaledPixels> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::px;
+    use crate::px;
 
     #[test]
     fn test_construction() {
@@ -1218,7 +1218,7 @@ mod tests {
 #[cfg(test)]
 mod typed_tests {
     use super::*;
-    use crate::geometry::{Pixels, px};
+    use crate::{Pixels, px};
 
     #[test]
     fn test_size_new() {
@@ -1320,7 +1320,7 @@ mod typed_tests {
 
     #[test]
     fn test_size_utility_traits() {
-        use crate::geometry::{Along, ApproxEq, Axis, Double, Half};
+        use crate::{Along, ApproxEq, Axis, Double, Half};
 
         // Test Along trait
         let s = Size::<Pixels>::new(px(100.0), px(200.0));

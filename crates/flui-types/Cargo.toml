@@ -10,6 +10,11 @@ repository.workspace = true
 [dependencies]
 tracing = { workspace = true }
 
+# Geometry primitives — split out into its own Layer-0 crate in D-block
+# PR-C-2 (U7 bridge). flui-types re-exports `pub use flui_geometry as geometry`
+# so existing `flui_types::geometry::*` consumers continue to compile.
+flui-geometry = { path = "../flui-geometry" }
+
 # Numeric traits for generic math (Float, Num, etc.)
 num-traits = "0.2"
 

@@ -102,7 +102,7 @@ use std::{
 };
 
 use super::Pixels;
-use crate::geometry::{Point, Rect};
+use crate::{Point, Rect};
 
 /// A 4x4 transformation matrix stored in column-major order.
 ///
@@ -232,7 +232,7 @@ impl Matrix4 {
 
     /// Creates a rotation matrix around the Z axis (type-safe version).
     #[inline]
-    pub fn rotation_z_radians(angle: crate::geometry::Radians) -> Self {
+    pub fn rotation_z_radians(angle: crate::Radians) -> Self {
         Self::rotation_z(angle.0)
     }
 
@@ -250,7 +250,7 @@ impl Matrix4 {
 
     /// Creates a rotation matrix around the X axis (type-safe version).
     #[inline]
-    pub fn rotation_x_radians(angle: crate::geometry::Radians) -> Self {
+    pub fn rotation_x_radians(angle: crate::Radians) -> Self {
         Self::rotation_x(angle.0)
     }
 
@@ -268,7 +268,7 @@ impl Matrix4 {
 
     /// Creates a rotation matrix around the Y axis (type-safe version).
     #[inline]
-    pub fn rotation_y_radians(angle: crate::geometry::Radians) -> Self {
+    pub fn rotation_y_radians(angle: crate::Radians) -> Self {
         Self::rotation_y(angle.0)
     }
 
@@ -377,7 +377,7 @@ impl Matrix4 {
     /// Applies a Z-axis rotation to this matrix (type-safe version, modifies in
     /// place).
     #[inline]
-    pub fn rotate_z_radians(&mut self, angle: crate::geometry::Radians) {
+    pub fn rotate_z_radians(&mut self, angle: crate::Radians) {
         self.rotate_z(angle.0);
     }
 

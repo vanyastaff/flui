@@ -935,7 +935,7 @@ pub fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect<Pixels> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::{Pixels, point, px, size};
+    use crate::{Pixels, point, px, size};
 
     #[test]
     fn test_construction() {
