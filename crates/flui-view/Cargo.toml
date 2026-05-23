@@ -39,3 +39,7 @@ test-utils = []
 [[bench]]
 name = "reconcile_baseline"
 harness = false
+
+[[bench]]
+name = "s1_key_storage"
+harness = false

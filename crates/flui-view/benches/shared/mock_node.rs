@@ -1,0 +1,476 @@
+//! Synthetic `ElementNode` storage mocks for the U2 S1 prototype bench.
+//!
+//! This module is **bench-only**. It must not be referenced from production code,
+//! from `flui-view`'s `tests/` tree, or from other crates. Inclusion is via the
+//! `#[path = "shared/mock_node.rs"] mod mock_node;` attribute on the bench file
+//! ([`s1_key_storage.rs`]).
+//!
+//! # What this models
+//!
+//! Phase 0 must not modify production storage (per
+//! [`docs/plans/2026-05-22-005-feat-view-element-core-contracts-plan.md`] U2).
+//! We are measuring two candidate storage *shapes* for the `key` field on
+//! `ElementNode` independently of the rest of the production lifecycle:
+//!
+//! - **Baseline** — `key: Option<Box<dyn ViewKey>>`. The shape spec FR-022
+//!   commits to. `Option<Box<dyn ViewKey>>` is a fat-pointer 16 bytes
+//!   (data pointer + vtable pointer) per `ElementNode`, with a heap allocation
+//!   for every keyed node.
+//! - **Interned** — `key: Option<KeyId>` where `KeyId = NonZeroU64`. Niche
+//!   optimisation gives `Option<KeyId> = 8 bytes` per node. The heap cost
+//!   relocates to a single shared interning table (`HashMap<u64, KeyId>`
+//!   forward + `Vec<Box<dyn ViewKey>>` reverse) amortised across all nodes
+//!   instead of paid per node.
+//!
+//! Both shapes carry the identical `id + kind + child_indices` payload so the
+//! per-node `mem::size_of` delta is purely the `key` field swap.
+//!
+//! # Workload
+//!
+//! Synthetic 10K-element distribution at 80% unkeyed leaf / 20% keyed branch
+//! (per plan U2). The "reconcile" workload is a simplified placeholder
+//! (HashMap key-build + lookup + match count) — NOT the production reconciler,
+//! which lands in Phase 2 U12. We are measuring the relative cost of
+//! `Box<dyn ViewKey>::key_hash()` dispatch vs `KeyId` direct u64 access at the
+//! HashMap key-build site, on three canonical permutations (full-reverse,
+//! single-rotate, swap-first-last).
+//!
+//! # Memory accounting
+//!
+//! Deterministic — the production allocator is not instrumented. For each
+//! shape, the resident-bytes calculation sums:
+//!   1. `mem::size_of::<MockNode<_>>() * N`
+//!   2. heap-allocated `Box<dyn ViewKey>` cost per keyed node (baseline only)
+//!   3. interning-table overhead (interned only, one-time)
+//!
+//! See [`MemoryAccounting`] for the public surface.
+
+use std::collections::HashMap;
+use std::num::NonZeroU64;
+
+use flui_foundation::{ValueKey, ViewKey};
+
+// ----------------------------------------------------------------------------
+// Workload distribution
+// ----------------------------------------------------------------------------
+
+/// 10K nodes per the plan U2 spec. The bench scales workload size only via
+/// permutation pattern — node count stays fixed so the memory column in the
+/// gate report is comparable shape-to-shape.
+pub const NODE_COUNT: usize = 10_000;
+
+/// 80% unkeyed leaf, 20% keyed branch (per plan U2). A node is "keyed" iff its
+/// index is a multiple of 5 — gives a deterministic 20/80 split without
+/// random-number plumbing across iterations.
+#[inline]
+#[must_use]
+pub fn is_keyed_index(idx: usize) -> bool {
+    idx.is_multiple_of(5)
+}
+
+// ----------------------------------------------------------------------------
+// KeyId — interned-shape primitive
+// ----------------------------------------------------------------------------
+
+/// Interned key identifier. `NonZeroU64` so `Option<KeyId>` is 8 bytes via
+/// niche optimisation (per *The Rust Performance Book*, Memory chapter,
+/// "niche optimization" idiom).
+///
+/// `KeyId` values are minted by [`KeyInterner`] from concrete `Box<dyn ViewKey>`
+/// values at mock-construction time; the bench's per-frame hot path never
+/// touches the underlying `Box<dyn ViewKey>` once the `KeyId` is assigned. That
+/// is the measurement we want: how much faster does the reconciler's keyed-map
+/// build run when each `key_hash()` is a free `NonZeroU64::get()` instead of a
+/// vtable dispatch into the boxed `ViewKey` impl.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct KeyId(NonZeroU64);
+
+impl KeyId {
+    /// The raw u64 backing this `KeyId`. Used as the HashMap hash in the
+    /// interned-shape reconcile workload.
+    #[inline]
+    #[must_use]
+    pub const fn as_u64(self) -> u64 {
+        self.0.get()
+    }
+}
+
+// ----------------------------------------------------------------------------
+// KeyInterner — Box<dyn ViewKey> -> KeyId interning table
+// ----------------------------------------------------------------------------
+
+/// Forward `key_hash -> KeyId` + reverse `KeyId -> Box<dyn ViewKey>` interning
+/// table. One instance per bench iteration; the table is fully populated at
+/// node-construction time and the reconcile workload reads `KeyId`s directly
+/// without consulting it.
+///
+/// The reverse store is `Vec<Box<dyn ViewKey>>` (not `Slab`) because:
+///   - `KeyId` is monotonically assigned (`next_id`) — no gaps.
+///   - `Vec` is one fewer dependency for a bench-only fixture.
+///   - The `Slab` shape would be the choice if the production interner ever
+///     needed to evict — out of scope for the Phase 0 spec-validation question.
+#[derive(Debug, Default)]
+pub struct KeyInterner {
+    /// Hash-to-id index. Keyed on `ViewKey::key_hash` so distinct concrete
+    /// `ViewKey` types collide if and only if their hashes collide — the same
+    /// invariant the production reconciler relies on.
+    forward: HashMap<u64, KeyId>,
+    /// Reverse store: `KeyId.as_u64() - 1` indexes into this vec.
+    reverse: Vec<Box<dyn ViewKey>>,
+    /// Next id to mint. Starts at 1 so `NonZeroU64::new` always succeeds.
+    next_id: u64,
+}
+
+impl KeyInterner {
+    /// Construct an empty interner with `next_id` seeded to 1.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            forward: HashMap::with_capacity(NODE_COUNT / 5),
+            reverse: Vec::with_capacity(NODE_COUNT / 5),
+            next_id: 1,
+        }
+    }
+
+    /// Intern a boxed `ViewKey`. Returns the existing `KeyId` if the key's
+    /// hash already maps; otherwise mints a fresh one.
+    ///
+    /// Lookup-then-insert pattern (per *Programming Rust* 2nd ed,
+    /// "HashMap entry API"). We use the explicit two-step path instead of
+    /// `entry()` because the reverse-vec push needs to be conditional on the
+    /// insert path, and the `entry().or_insert_with` shape would re-clone the
+    /// box even when the entry already exists.
+    pub fn intern(&mut self, key: Box<dyn ViewKey>) -> KeyId {
+        let hash = key.key_hash();
+        if let Some(&id) = self.forward.get(&hash) {
+            return id;
+        }
+        let id = self.mint();
+        self.forward.insert(hash, id);
+        self.reverse.push(key);
+        id
+    }
+
+    /// Mint the next `KeyId`. Bench-only — the production interner would
+    /// either reuse `Key::new()`'s atomic counter or carry its own.
+    fn mint(&mut self) -> KeyId {
+        let n = self.next_id;
+        self.next_id += 1;
+        // SAFETY: next_id starts at 1 and only increments. The bench creates
+        // at most NODE_COUNT/5 = 2000 ids per iteration; saturating below
+        // u64::MAX is the trivially provable invariant.
+        let nz = NonZeroU64::new(n).expect("KeyInterner next_id must be non-zero");
+        KeyId(nz)
+    }
+
+    /// Number of distinct interned keys. Documented part of the fixture's
+    /// public surface — `MemoryAccounting::for_interned` recomputes the
+    /// distinct-key count from the index distribution rather than reading
+    /// this field so accounting stays a pure function of `NODE_COUNT`.
+    #[inline]
+    #[must_use]
+    #[allow(dead_code)]
+    pub fn len(&self) -> usize {
+        self.reverse.len()
+    }
+}
+
+// ----------------------------------------------------------------------------
+// MockNode — baseline shape
+// ----------------------------------------------------------------------------
+
+/// `Box<dyn ViewKey>` baseline shape. `key` is a fat 16-byte
+/// `Option<Box<dyn ViewKey>>` per node; keyed nodes additionally pay a heap
+/// allocation for the boxed `ValueKey<u64>` payload.
+///
+/// `kind` carries the same 1-byte `ElementKind` discriminant the spec FR-020
+/// closed enum will host (per plan KTD-1), padded out by the alignment of the
+/// following fields. We model it as a `u8` so the shape comparison is honest:
+/// both `MockNode` and `MockNodeInterned` carry the same `kind` representation,
+/// and the only field that differs is `key`.
+#[derive(Debug)]
+pub struct MockNode {
+    /// Per-node id. `usize` not `ElementId` — the mock skips the production
+    /// `NonZeroUsize` discipline because the bench never threads ids back
+    /// through a real lifecycle.
+    #[allow(dead_code)]
+    pub id: usize,
+    /// 0..=7 in the production enum (per plan KTD-1).
+    #[allow(dead_code)]
+    pub kind: u8,
+    /// `Option<Box<dyn ViewKey>>` — 16 bytes, fat pointer, heap-backed when
+    /// `Some`. This is the baseline shape spec FR-022 commits to absent the
+    /// Phase 0 gate report's S1 verdict.
+    pub key: Option<Box<dyn ViewKey>>,
+    /// Position-based child slots. Empty for leaves; populated for branches.
+    /// `Vec` so the mock matches the production `Variable`-arity shape — the
+    /// keyed reconciler's hot path walks a `&[ElementId]` slice over this
+    /// vector's contents (per plan U15).
+    #[allow(dead_code)]
+    pub child_indices: Vec<usize>,
+}
+
+impl MockNode {
+    /// Construct a node for index `idx` per the 80%/20% distribution.
+    /// Keyed nodes (idx % 5 == 0) carry a `ValueKey<u64>` whose value is `idx`
+    /// so each keyed node hashes to a deterministic distinct bucket.
+    pub fn make(idx: usize) -> Self {
+        let key: Option<Box<dyn ViewKey>> = if is_keyed_index(idx) {
+            Some(Box::new(ValueKey::<u64>::new(idx as u64)))
+        } else {
+            None
+        };
+        Self {
+            id: idx,
+            kind: 0,
+            key,
+            child_indices: Vec::new(),
+        }
+    }
+}
+
+// ----------------------------------------------------------------------------
+// MockNodeInterned — interned shape
+// ----------------------------------------------------------------------------
+
+/// `Option<KeyId>` interned shape. `key` is 8 bytes via niche optimisation;
+/// keyed nodes no longer carry a per-node heap allocation — the boxed payload
+/// has been hoisted into the [`KeyInterner`].
+#[derive(Debug)]
+pub struct MockNodeInterned {
+    #[allow(dead_code)]
+    pub id: usize,
+    #[allow(dead_code)]
+    pub kind: u8,
+    /// `Option<KeyId>` — 8 bytes via `NonZeroU64` niche.
+    pub key: Option<KeyId>,
+    #[allow(dead_code)]
+    pub child_indices: Vec<usize>,
+}
+
+impl MockNodeInterned {
+    /// Construct a node for index `idx` against the shared `interner`.
+    pub fn make(idx: usize, interner: &mut KeyInterner) -> Self {
+        let key: Option<KeyId> = if is_keyed_index(idx) {
+            let boxed: Box<dyn ViewKey> = Box::new(ValueKey::<u64>::new(idx as u64));
+            Some(interner.intern(boxed))
+        } else {
+            None
+        };
+        Self {
+            id: idx,
+            kind: 0,
+            key,
+            child_indices: Vec::new(),
+        }
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Permutation patterns
+// ----------------------------------------------------------------------------
+
+/// Three canonical permutations exercised by the reconcile workload.
+///
+/// The plan's U2 spec calls for at minimum full-reverse + single-rotate +
+/// swap-first-last. We ship all three so each Criterion group emits three
+/// scenarios and the per-permutation memory cost is held constant across
+/// shapes.
+#[derive(Clone, Copy, Debug)]
+pub enum Permutation {
+    /// `[A, B, C, ..., Z]` -> `[Z, ..., C, B, A]`. Worst case for the
+    /// prefix-scan/suffix-scan fast paths — every position needs a keyed lookup.
+    FullReverse,
+    /// `[A, B, C, ..., Y, Z]` -> `[B, C, ..., Y, Z, A]`. Linear shift by one;
+    /// the keyed middle absorbs the entire shift.
+    SingleRotate,
+    /// `[A, B, ..., Y, Z]` -> `[Z, B, ..., Y, A]`. Only the two endpoints
+    /// shuffle; the keyed middle sees a two-position match.
+    SwapFirstLast,
+}
+
+impl Permutation {
+    /// All three permutations in stable order. `criterion_group!` iterates
+    /// over this slice so adding a fourth permutation does not require
+    /// touching the bench file.
+    pub const ALL: &'static [Self] = &[Self::FullReverse, Self::SingleRotate, Self::SwapFirstLast];
+
+    /// Human-readable id for the Criterion bench function name.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::FullReverse => "full_reverse",
+            Self::SingleRotate => "single_rotate",
+            Self::SwapFirstLast => "swap_first_last",
+        }
+    }
+
+    /// Apply this permutation to a `0..n` index sequence in place.
+    pub fn apply(self, indices: &mut [usize]) {
+        match self {
+            Self::FullReverse => indices.reverse(),
+            Self::SingleRotate => indices.rotate_left(1),
+            Self::SwapFirstLast => {
+                if let (Some(&first), Some(&last)) = (indices.first(), indices.last()) {
+                    let last_idx = indices.len() - 1;
+                    indices[0] = last;
+                    indices[last_idx] = first;
+                }
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Memory accounting
+// ----------------------------------------------------------------------------
+
+/// Deterministic memory accounting for the two storage shapes. The bench prints
+/// the accounting at run time via the `bench_memory_summary` Criterion group
+/// (formally not a bench — a single-iteration measurement printed via
+/// `c.bench_function` so the value lands in the Criterion report).
+#[derive(Debug, Clone, Copy)]
+pub struct MemoryAccounting {
+    /// Sum of `mem::size_of::<MockNode>() * NODE_COUNT`.
+    pub node_struct_bytes: usize,
+    /// Heap cost: per-node `Box<dyn ViewKey>` allocation, charged only to
+    /// keyed nodes. Baseline pays this per-node; interned pays zero here.
+    pub heap_key_bytes: usize,
+    /// Interning-table overhead. Interned shape only; baseline is zero.
+    pub interner_bytes: usize,
+}
+
+impl MemoryAccounting {
+    /// Total resident bytes — the column the gate report compares shape-to-shape.
+    #[inline]
+    #[must_use]
+    pub const fn total(&self) -> usize {
+        self.node_struct_bytes + self.heap_key_bytes + self.interner_bytes
+    }
+
+    /// Account for the baseline `MockNode` distribution.
+    ///
+    /// Heap cost per keyed node = `size_of::<ValueKey<u64>>()` + the dyn-vtable
+    /// dispatch table is shared across all `ValueKey<u64>` instances and not
+    /// counted per-node. Allocator round-up to alignment is the only delta to
+    /// real-world bytes; we report the un-rounded sum for shape comparability.
+    #[must_use]
+    pub fn for_baseline(node_count: usize) -> Self {
+        let node_struct_bytes = core::mem::size_of::<MockNode>() * node_count;
+        let keyed_count = (0..node_count).filter(|&i| is_keyed_index(i)).count();
+        let heap_key_bytes = core::mem::size_of::<ValueKey<u64>>() * keyed_count;
+        Self {
+            node_struct_bytes,
+            heap_key_bytes,
+            interner_bytes: 0,
+        }
+    }
+
+    /// Account for the interned `MockNodeInterned` distribution.
+    ///
+    /// Interner overhead = HashMap entry per distinct key + reverse-vec slot
+    /// per distinct key. `HashMap<u64, KeyId>` entry ~= 24 bytes
+    /// (8 + 8 + bookkeeping); `Vec<Box<dyn ViewKey>>` slot = 16 bytes plus the
+    /// inner `ValueKey<u64>` heap allocation. The values are conservative
+    /// upper bounds — the actual cost depends on hasher load factor.
+    #[must_use]
+    pub fn for_interned(node_count: usize) -> Self {
+        let node_struct_bytes = core::mem::size_of::<MockNodeInterned>() * node_count;
+        let keyed_count = (0..node_count).filter(|&i| is_keyed_index(i)).count();
+        // Interner overhead. Per-entry estimate:
+        //   - HashMap<u64, KeyId>: 8 (key) + 8 (value) + 8 (bucket bookkeeping) = 24
+        //   - Vec<Box<dyn ViewKey>> slot: 16 (fat ptr) + size_of ValueKey<u64>
+        let per_entry = 24 + 16 + core::mem::size_of::<ValueKey<u64>>();
+        let interner_bytes = per_entry * keyed_count;
+        Self {
+            node_struct_bytes,
+            heap_key_bytes: 0,
+            interner_bytes,
+        }
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Reconcile workload (placeholder algorithm)
+// ----------------------------------------------------------------------------
+
+/// Build a `HashMap<key_hash, old_index>` over keyed old nodes and count
+/// how many new nodes match by key hash. This is **not** the production
+/// reconciler (that ships in Phase 2 U12) — it is the minimal kernel that
+/// isolates the cost of `Box<dyn ViewKey>::key_hash()` dispatch vs `KeyId`
+/// direct u64 read at the HashMap key-build site.
+///
+/// Returns the number of matched keyed positions. Black-boxed by the caller.
+#[must_use]
+pub fn reconcile_baseline_keyed(old: &[MockNode], new_order: &[usize]) -> usize {
+    let mut keyed_map: HashMap<u64, usize> = HashMap::with_capacity(old.len() / 5);
+    for (idx, node) in old.iter().enumerate() {
+        if let Some(k) = node.key.as_deref() {
+            keyed_map.insert(k.key_hash(), idx);
+        }
+    }
+    let mut matches = 0usize;
+    for &new_idx in new_order {
+        if let Some(k) = old.get(new_idx).and_then(|n| n.key.as_deref())
+            && keyed_map.contains_key(&k.key_hash())
+        {
+            matches += 1;
+        }
+    }
+    matches
+}
+
+/// Interned counterpart of [`reconcile_baseline_keyed`]. Same kernel, same
+/// HashMap shape, but the key is `KeyId::as_u64()` — a direct
+/// `NonZeroU64::get()`, no vtable dispatch, no boxed payload touched.
+#[must_use]
+pub fn reconcile_interned_keyed(old: &[MockNodeInterned], new_order: &[usize]) -> usize {
+    let mut keyed_map: HashMap<u64, usize> = HashMap::with_capacity(old.len() / 5);
+    for (idx, node) in old.iter().enumerate() {
+        if let Some(k) = node.key {
+            keyed_map.insert(k.as_u64(), idx);
+        }
+    }
+    let mut matches = 0usize;
+    for &new_idx in new_order {
+        if let Some(k) = old.get(new_idx).and_then(|n| n.key)
+            && keyed_map.contains_key(&k.as_u64())
+        {
+            matches += 1;
+        }
+    }
+    matches
+}
+
+// ----------------------------------------------------------------------------
+// Construction helpers
+// ----------------------------------------------------------------------------
+
+/// Build a 10K-node baseline distribution. Returns the vec alone; the bench's
+/// `iter_batched` shape consumes this per-iteration to avoid amortising
+/// construction cost into the measurement.
+#[must_use]
+pub fn build_baseline_nodes() -> Vec<MockNode> {
+    (0..NODE_COUNT).map(MockNode::make).collect()
+}
+
+/// Build a 10K-node interned distribution. Returns the vec + interner so the
+/// bench can hold both alive across the iteration scope. The interner is
+/// constructed inside this function so each iteration starts from a fresh
+/// table — the bench measures construction-included cost of the interned
+/// shape, not just the lookup path.
+#[must_use]
+pub fn build_interned_nodes() -> (Vec<MockNodeInterned>, KeyInterner) {
+    let mut interner = KeyInterner::new();
+    let nodes = (0..NODE_COUNT)
+        .map(|i| MockNodeInterned::make(i, &mut interner))
+        .collect();
+    (nodes, interner)
+}
+
+/// Default new-order index buffer (identity permutation).
+#[must_use]
+pub fn identity_order() -> Vec<usize> {
+    (0..NODE_COUNT).collect()
+}
