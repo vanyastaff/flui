@@ -252,10 +252,10 @@ cargo doc -p flui_assets --open
 
 ```bash
 # Basic usage
-cargo run -p flui_assets --example basic_usage
+cargo run -p flui_assets --example assets_basic_usage
 
 # With images (requires 'images' feature)
-cargo run -p flui_assets --example basic_usage --features images
+cargo run -p flui_assets --example assets_basic_usage --features images
 ```
 
 ## API Compliance

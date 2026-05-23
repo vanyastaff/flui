@@ -188,7 +188,7 @@ Run the provided examples to see the logger in action:
 
 ```bash
 # Basic usage example
-cargo run --example basic_usage -p flui_log
+cargo run --example log_basic_usage -p flui_log
 
 # Pretty logging example (requires feature)
 cargo run --example pretty_logging -p flui_log --features pretty
