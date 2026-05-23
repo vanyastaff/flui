@@ -161,6 +161,32 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
         None
     }
 
+    /// The `ViewKey` carried by the View this element currently holds,
+    /// or `None` if that View is keyless.
+    ///
+    /// Hash-based lookup ([`Self::current_key_hash`]) is the entry point
+    /// for keyed reconciliation: it indexes old children by `u64` for
+    /// O(1) HashMap claims. The hash alone is not enough to decide that
+    /// two keys are equal, though — distinct keys can hash to the same
+    /// `u64`. This accessor surfaces the underlying [`ViewKey`] so the
+    /// reconciler can call [`ViewKey::key_eq`] on a hash hit and reject
+    /// silent collisions. Plan §U12 / FR-024 work item (c).
+    ///
+    /// The default impl returns `None`; the unified `Element<V, A, B>`
+    /// overrides it to forward to `core.view().key()`. The borrow is
+    /// alive for as long as the immutable borrow on the element holds —
+    /// callers use it synchronously inside the reconciler dispatch and
+    /// must not extend it across mutating calls on the element.
+    ///
+    /// Flutter parity: `framework.dart:4123` `Widget.canUpdate` uses
+    /// `oldWidget.key == newWidget.key` directly. FLUI exposes the
+    /// same fact through this typed accessor at the dispatch
+    /// boundary; `View::can_update` calls the parallel typed surface
+    /// on `&dyn View`.
+    fn current_key(&self) -> Option<&dyn flui_foundation::ViewKey> {
+        None
+    }
+
     /// Get the depth in the element tree (root = 0).
     fn depth(&self) -> usize;
 

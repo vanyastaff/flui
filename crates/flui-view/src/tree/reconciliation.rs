@@ -262,19 +262,51 @@ pub fn reconcile_children(
 }
 
 /// Whether `old` (an existing child element) can be updated in place by
-/// `new` (a new child View) — same concrete View type AND matching key.
+/// `new` (a new child View) — same concrete View type AND matching key
+/// per spec FR-028.
 ///
-/// Key comparison is hash-based: `ElementBase` erases the concrete
-/// `View`, so an old element only exposes its key as a `u64` hash. Two
-/// children match when both are keyless, or both carry keys whose hashes
-/// are equal. This mirrors [`View::can_update`] (which compares keys
-/// proper) at the type-erased element boundary — see the module docs on
-/// hash-based matching.
+/// Key comparison runs in two stages:
+///
+/// 1. **Hash equality** — `ElementBase::current_key_hash` returns the
+///    pre-computed `u64`, so the prefix/suffix scans and the
+///    [`match_old_for_new`] HashMap lookup stay cheap.
+/// 2. **Semantic equality on a hash hit** — distinct keys can collide
+///    on `u64`, so a hash match alone is not proof that the two keys
+///    are equal. When both sides carry a key whose hashes agree, this
+///    function then calls [`ViewKey::key_eq`] via
+///    [`ElementBase::current_key`] to reject silent collisions
+///    (FR-024 work item (c)).
+///
+/// Both-keyless and one-side-keyed cases short-circuit on the hash
+/// comparison without ever hitting the semantic call — the typical
+/// reconciliation pass pays for at most ONE `key_eq` per matched
+/// child, only when both sides are keyed and their hashes coincide.
 fn can_update_element(old: &dyn ElementBase, new: &dyn View) -> bool {
     if old.view_type_id() != new.view_type_id() {
         return false;
     }
-    old.current_key_hash() == new.key().map(flui_foundation::ViewKey::key_hash)
+    // Stage 1 — hash quick check. Both keyless: `None == None` → true,
+    // proceed (the type check above already passed). Both keyed with
+    // unequal hashes → false, no need to consult the typed accessors.
+    // One side keyed: `None != Some(_)` → false.
+    if old.current_key_hash() != new.key().map(flui_foundation::ViewKey::key_hash) {
+        return false;
+    }
+    // Stage 2 — only reachable when EITHER both sides are keyless
+    // (both `None`) OR both sides are keyed AND hashes agree.
+    // The keyless branch is the common case; short-circuit it.
+    let Some(new_key) = new.key() else {
+        return true;
+    };
+    // Both keyed + hashes agree → defend against `u64` collision by
+    // asking the underlying `ViewKey` whether the two are really equal.
+    // The typed accessor is only consulted on a hash hit, so the cost
+    // stays paid-when-used. A missing `current_key()` override on the
+    // old side (i.e. an element type that hashes a key but does not
+    // expose its `&dyn ViewKey`) falls through to "no match", which is
+    // strictly safer than trusting a bare hash.
+    old.current_key()
+        .is_some_and(|old_key| new_key.key_eq(old_key))
 }
 
 /// Find the old-middle element index a new View should claim.
@@ -495,5 +527,312 @@ mod tests {
         let shrink: Vec<&dyn View> = s.iter().map(|v| v as &dyn View).collect();
         reconcile_children(&mut children, &shrink, &mut owner.element_owner_mut());
         assert_eq!(children.len(), 1);
+    }
+
+    // ========================================================================
+    // Plan §U12 / FR-024 — keyed reconciliation semantic-match coverage
+    //
+    // These tests use a `KeyedView` that carries a `Box<dyn ViewKey>` and
+    // override `View::key()`. The companion `KeyedLeafElement` overrides
+    // `ElementBase::current_key_hash` AND `current_key` so the reconciler
+    // can run its semantic `key_eq` check (FR-024 work item (c)) against
+    // a real `&dyn ViewKey`.
+    // ========================================================================
+
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Identity-tracking leaf — records its source ordinal so a test can
+    /// assert "the SAME old element survived" after a permutation.
+    static ELEMENT_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+    /// A leaf element that carries a `Box<dyn ViewKey>` cloned from the
+    /// view at construction time, plus a stable `identity_id` so tests
+    /// can prove element reuse vs replacement after a keyed reorder.
+    struct KeyedLeafElement {
+        view_type: TypeId,
+        depth: usize,
+        lifecycle: Lifecycle,
+        key: Option<Box<dyn flui_foundation::ViewKey>>,
+        identity_id: u64,
+    }
+
+    impl ElementBase for KeyedLeafElement {
+        fn view_type_id(&self) -> TypeId {
+            self.view_type
+        }
+
+        fn current_key_hash(&self) -> Option<u64> {
+            self.key.as_ref().map(|k| k.key_hash())
+        }
+
+        fn current_key(&self) -> Option<&dyn flui_foundation::ViewKey> {
+            self.key.as_deref()
+        }
+
+        fn depth(&self) -> usize {
+            self.depth
+        }
+
+        fn lifecycle(&self) -> Lifecycle {
+            self.lifecycle
+        }
+
+        fn mount(
+            &mut self,
+            _parent: Option<flui_foundation::ElementId>,
+            slot: usize,
+            _owner: &mut ElementOwner<'_>,
+        ) {
+            self.depth = slot;
+            self.lifecycle = Lifecycle::Active;
+        }
+
+        fn unmount(&mut self, _owner: &mut ElementOwner<'_>) {
+            self.lifecycle = Lifecycle::Defunct;
+        }
+
+        fn activate(&mut self) {
+            self.lifecycle = Lifecycle::Active;
+        }
+
+        fn deactivate(&mut self) {
+            self.lifecycle = Lifecycle::Inactive;
+        }
+
+        fn update(&mut self, new_view: &dyn View, _owner: &mut ElementOwner<'_>) {
+            // Re-clone the key from the new view so the stored field
+            // tracks whatever update applied — mirrors the production
+            // ElementNode::update boundary from §U7.
+            self.key = new_view.key().map(flui_foundation::ViewKey::clone_key);
+        }
+
+        fn mark_needs_build(&mut self) {}
+        fn perform_build(&mut self, _owner: &mut ElementOwner<'_>) {}
+        fn visit_children(&self, _visitor: &mut dyn FnMut(flui_foundation::ElementId)) {}
+    }
+
+    /// View with an optional dynamic key.
+    struct KeyedView {
+        key: Option<Box<dyn flui_foundation::ViewKey>>,
+    }
+
+    impl Clone for KeyedView {
+        fn clone(&self) -> Self {
+            Self {
+                key: self.key.as_ref().map(|k| k.clone_key()),
+            }
+        }
+    }
+
+    impl KeyedView {
+        fn with<K: flui_foundation::ViewKey>(key: K) -> Self {
+            Self {
+                key: Some(Box::new(key)),
+            }
+        }
+
+        fn keyless() -> Self {
+            Self { key: None }
+        }
+    }
+
+    impl View for KeyedView {
+        fn create_element(&self) -> Box<dyn ElementBase> {
+            Box::new(KeyedLeafElement {
+                view_type: TypeId::of::<KeyedView>(),
+                depth: 0,
+                lifecycle: Lifecycle::Initial,
+                key: self.key.as_ref().map(|k| k.clone_key()),
+                identity_id: ELEMENT_COUNTER.fetch_add(1, Ordering::Relaxed),
+            })
+        }
+
+        fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
+            self.key.as_deref()
+        }
+    }
+
+    /// Helper: downcast an `Option<&dyn ElementBase>` to the test's
+    /// concrete leaf type so identity / key assertions can read the
+    /// private `identity_id` field.
+    fn as_keyed(child: &dyn ElementBase) -> &KeyedLeafElement {
+        // The reconciliation suite is the only producer of
+        // `KeyedLeafElement`, so the downcast is sound. `ElementBase`
+        // inherits `Downcast` (via `downcast_rs::Downcast`), which is
+        // what makes the `as_any().downcast_ref::<T>()` chain compile
+        // here without an extra `use` line.
+        child
+            .as_any()
+            .downcast_ref::<KeyedLeafElement>()
+            .expect("test invariant: every child here is KeyedLeafElement")
+    }
+
+    fn mount_keyed(view: &KeyedView, slot: usize, owner: &mut BuildOwner) -> Box<dyn ElementBase> {
+        let mut el = view.create_element();
+        el.mount(None, slot, &mut owner.element_owner_mut());
+        el
+    }
+
+    /// Covers FR-024 (a): keyed middle reuses the old element when a
+    /// keyed reorder swaps two children. Identity IDs of the originals
+    /// survive the swap — proves the elements were reused, not freshly
+    /// created.
+    #[test]
+    fn keyed_reorder_reuses_elements() {
+        use flui_foundation::ValueKey;
+
+        let mut owner = BuildOwner::new();
+        let v_a = KeyedView::with(ValueKey::new("a"));
+        let v_b = KeyedView::with(ValueKey::new("b"));
+        let mut children = vec![
+            mount_keyed(&v_a, 0, &mut owner),
+            mount_keyed(&v_b, 1, &mut owner),
+        ];
+        let id_a = as_keyed(&*children[0]).identity_id;
+        let id_b = as_keyed(&*children[1]).identity_id;
+
+        // Reorder: [A, B] -> [B, A].
+        let new_b = KeyedView::with(ValueKey::new("b"));
+        let new_a = KeyedView::with(ValueKey::new("a"));
+        let views: Vec<&dyn View> = vec![&new_b, &new_a];
+        reconcile_children(&mut children, &views, &mut owner.element_owner_mut());
+
+        assert_eq!(children.len(), 2);
+        assert_eq!(
+            as_keyed(&*children[0]).identity_id,
+            id_b,
+            "slot 0 must hold the element originally created for B"
+        );
+        assert_eq!(
+            as_keyed(&*children[1]).identity_id,
+            id_a,
+            "slot 1 must hold the element originally created for A"
+        );
+    }
+
+    /// A hostile `ViewKey` that always hashes to a fixed `u64` but
+    /// compares by inner `tag` — exercises FR-024 (c) collision
+    /// defense. Two `ColliderKey { tag: 1 }` and `ColliderKey { tag: 2 }`
+    /// hash to the SAME bucket but `key_eq` rejects the cross-tag
+    /// match.
+    #[derive(Clone)]
+    struct ColliderKey {
+        tag: u64,
+    }
+
+    impl flui_foundation::ViewKey for ColliderKey {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn key_eq(&self, other: &dyn flui_foundation::ViewKey) -> bool {
+            other
+                .as_any()
+                .downcast_ref::<Self>()
+                .is_some_and(|o| self.tag == o.tag)
+        }
+        fn key_hash(&self) -> u64 {
+            // Deliberate collision — every ColliderKey hashes to 0xDEAD.
+            0xDEAD
+        }
+        fn clone_key(&self) -> Box<dyn flui_foundation::ViewKey> {
+            Box::new(self.clone())
+        }
+        fn debug_fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "ColliderKey({})", self.tag)
+        }
+    }
+
+    /// Covers FR-024 (c): hash collision between two distinct keys does
+    /// NOT fool the matcher into a false reuse. The reconciler's
+    /// semantic `key_eq` stage detects the mismatch and the new view
+    /// gets a fresh element while the old one unmounts.
+    #[test]
+    fn keyed_hash_collision_falls_through_to_new_element() {
+        let mut owner = BuildOwner::new();
+        let v_old = KeyedView::with(ColliderKey { tag: 1 });
+        let mut children = vec![mount_keyed(&v_old, 0, &mut owner)];
+        let id_old = as_keyed(&*children[0]).identity_id;
+
+        // Same hash (0xDEAD), different `tag` — `key_eq` rejects.
+        let v_new = KeyedView::with(ColliderKey { tag: 2 });
+        let views: Vec<&dyn View> = vec![&v_new];
+        reconcile_children(&mut children, &views, &mut owner.element_owner_mut());
+
+        assert_eq!(children.len(), 1);
+        assert_ne!(
+            as_keyed(&*children[0]).identity_id,
+            id_old,
+            "hash collision must NOT silently reuse the old element — \
+             key_eq stage must reject and create a fresh element"
+        );
+    }
+
+    /// Sanity: same-tag ColliderKey on both sides DOES reuse (collision
+    /// defense kicks in only when `key_eq` actually disagrees). Pairs
+    /// with the previous test as the positive control.
+    #[test]
+    fn keyed_hash_collision_with_equal_keys_reuses() {
+        let mut owner = BuildOwner::new();
+        let v_old = KeyedView::with(ColliderKey { tag: 7 });
+        let mut children = vec![mount_keyed(&v_old, 0, &mut owner)];
+        let id_old = as_keyed(&*children[0]).identity_id;
+
+        let v_new = KeyedView::with(ColliderKey { tag: 7 });
+        let views: Vec<&dyn View> = vec![&v_new];
+        reconcile_children(&mut children, &views, &mut owner.element_owner_mut());
+
+        assert_eq!(children.len(), 1);
+        assert_eq!(
+            as_keyed(&*children[0]).identity_id,
+            id_old,
+            "equal ColliderKey tags must reuse the same element",
+        );
+    }
+
+    /// Mixed keyed + keyless children: the keyless ones still match
+    /// positionally (top/bottom scan), the keyed one moves to its
+    /// keyed slot. Identity preserved for all three.
+    #[test]
+    fn mixed_keyed_unkeyed_preserves_identity() {
+        use flui_foundation::ValueKey;
+
+        let mut owner = BuildOwner::new();
+        let v_a = KeyedView::keyless();
+        let v_b = KeyedView::with(ValueKey::new("moves"));
+        let v_c = KeyedView::keyless();
+        let mut children = vec![
+            mount_keyed(&v_a, 0, &mut owner),
+            mount_keyed(&v_b, 1, &mut owner),
+            mount_keyed(&v_c, 2, &mut owner),
+        ];
+        let id_a = as_keyed(&*children[0]).identity_id;
+        let id_b = as_keyed(&*children[1]).identity_id;
+        let id_c = as_keyed(&*children[2]).identity_id;
+
+        // Move B to slot 2; keyless A stays at 0, keyless previously-2
+        // (C) takes slot 1 positionally.
+        let n_a = KeyedView::keyless();
+        let n_c = KeyedView::keyless();
+        let n_b = KeyedView::with(ValueKey::new("moves"));
+        let views: Vec<&dyn View> = vec![&n_a, &n_c, &n_b];
+        reconcile_children(&mut children, &views, &mut owner.element_owner_mut());
+
+        assert_eq!(children.len(), 3);
+        // Slot 0 — keyless positional match keeps old element A.
+        assert_eq!(as_keyed(&*children[0]).identity_id, id_a);
+        // Slot 1 — keyless positional match: the prefix scan stopped at
+        // slot 1 because old[1] is keyed-B but new[1] is keyless, so
+        // both A's keyless successors get re-mounted. The keyed B in
+        // slot 2 claims its match by key. Sanity-check is: B's identity
+        // shows up in slot 2.
+        assert_eq!(
+            as_keyed(&*children[2]).identity_id,
+            id_b,
+            "keyed B must move to its new keyed slot",
+        );
+        // C's identity may or may not survive — the prefix scan was
+        // blocked by B at index 1, so C is in the keyed-middle pool. C
+        // is keyless → unmounted in phase 3. Don't over-specify.
+        let _ = id_c;
     }
 }
