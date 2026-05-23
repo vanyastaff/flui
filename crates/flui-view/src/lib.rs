@@ -90,6 +90,7 @@ pub mod child;
 pub mod context;
 pub mod element;
 pub mod key;
+pub mod macros;
 pub mod owner;
 pub mod seq;
 pub mod tree;
