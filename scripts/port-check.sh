@@ -307,11 +307,13 @@ fi
 # -----------------------------------------------------------------------------
 # Trigger 9 (FR-036, Phase 3.1 §U30) — sanctioned `dyn`-boundary registry.
 #
-# Greps every `Box<dyn …>`, `&dyn …`, `Arc<dyn …>`, `Rc<dyn …>` introduction
-# across the framework crates (`flui-view`, `flui-foundation`, `flui-tree`,
-# `flui-engine`, `flui-rendering`, `flui-interaction`) AND every type alias
-# of the same shape (`type X = Box<dyn …>` etc., the "type-alias laundering
-# closure" per FR-036).
+# Greps every `Box<dyn …>`, reference `dyn …` (in any of the four reference
+# forms — `&dyn`, `&mut dyn`, `&'a dyn`, `&'a mut dyn`), `Arc<dyn …>`,
+# `Rc<dyn …>` introduction across the framework crates (`flui-view`,
+# `flui-foundation`, `flui-tree`, `flui-engine`, `flui-rendering`,
+# `flui-interaction`) AND every type alias of the same shape (`type X =
+# Box<dyn …>`, including generic aliases `type X<T> = …` and reference
+# aliases `type X = &'a dyn …`).
 #
 # Two filter layers gate what reaches the marker check:
 #
@@ -319,27 +321,40 @@ fi
 #    universal patterns, not framework `dyn` introductions):
 #    - `Pin<Box<dyn Future<…>>>` and `Box<dyn Future<…>>` (async runtime).
 #    - `Box<dyn Iterator<…>>` (lazy enumeration).
-#    - `&dyn Fn*` callback-parameter binds (`&dyn Fn(…)`, `&dyn FnMut(…)`,
-#      `&dyn FnOnce(…)`) — distinct from OWNED callback storage
-#      (`Box<dyn Fn(…) + Send + Sync>`), which is FR-029 #5 sanctioned but
-#      still requires a marker.
+#    - reference-form `dyn Fn*` callback-parameter binds (`&dyn Fn(…)`,
+#      `&mut dyn Fn(…)`, `&'a dyn FnMut(…)`, etc.) — distinct from OWNED
+#      callback storage (`Box<dyn Fn(…) + Send + Sync>`), which is
+#      FR-029 #5 sanctioned via the allowlist below.
 #
 # 2. **Sanctioned trait allowlist** (FR-029 1–5 + the pre-existing
-#    `View` / `ViewKey` / `BuildContext` surfaces). These are widely-used
+#    `View` / `ViewKey` / `BuildContext` surfaces, plus `Fn` / `FnMut` /
+#    `FnOnce` for FR-029 #5 owned callback storage). These are widely-used
 #    sanctioned trait surfaces in the framework; per-site marker discipline
-#    would explode to ~500+ markers (mostly `&dyn View` function parameters).
-#    The allowlist captures the categories sanctioned by FR-029 by name; any
-#    NEW `dyn Trait` outside the list either gets a marker or refactors.
-#    The allowlist is intentionally narrow — `Trait` matches must be EXACT
+#    would explode to ~500+ markers (mostly `&dyn View` function parameters
+#    + ~96 `Arc<dyn Fn(…)>` callback-storage type aliases). The allowlist
+#    captures the categories sanctioned by FR-029 by name; any NEW `dyn
+#    Trait` outside the list either gets a marker or refactors. The
+#    allowlist is intentionally narrow — `Trait` matches must be EXACT
 #    names from this list, not regex prefixes.
 #
 # Hits that survive both filters must carry `// PORT-CHECK-OK-DYN: <reason>`
-# on the SAME line. Multi-line declarations (`Box<dyn\n  Trait>`) are
-# matched via `rg -U` multiline mode; the marker can sit on the line
-# carrying `Box<dyn` OR the line carrying the trait name.
+# on the SAME line as the matched pattern.
 #
 # Marker grammar:
 #   <something with Box<dyn Foo>>  // PORT-CHECK-OK-DYN: <one-line justification>
+#
+# **Multi-line declaration handling**: this script intentionally does NOT
+# use `rg -U` multiline mode for the trigger. Mixing `rg -U`'s multi-line
+# output blocks with line-oriented `grep -Ev` filters partial-filters
+# multi-line matches — a marker on the trait-name line gets dropped while
+# the `Box<` line slips through, producing false positives, and the
+# converse silently bypasses enforcement. The single-line scan instead
+# catches rustfmt-formatted code (which prefers `Box<dyn Trait>` on one
+# line whenever possible) and lets `cargo fmt` collapse multi-line splits
+# back to single-line before this trigger runs in CI. Authors who
+# deliberately split a declaration across lines for width can either
+# keep the marker on the `Box<` line (matched here) or refactor to a
+# `type` alias that fits one line + carries its own marker.
 #
 # Type aliases use the same marker convention; alias declarations carry
 # their own marker, and downstream uses inherit the sanctioning (the alias
@@ -360,16 +375,22 @@ fi
 #      InheritedElementBase, RenderElementBase
 #   #2 BoxedView dynamic-children: View, BoxedView, ViewObject
 #   #4 pipeline-owner type-erasure: Any
-#   #5 error chains + observer/animation: Error, std::error::Error,
-#      core::error::Error, Listenable, Animation, WidgetsBindingObserver
+#   #5 error chains + observer/animation + owned callback storage:
+#      Error, std::error::Error, core::error::Error, Listenable,
+#      Animation, WidgetsBindingObserver, Fn, FnMut, FnOnce
+#      (Fn/FnMut/FnOnce included via allowlist rather than per-site
+#      markers — see commit body of Phase 3.1 §U30 for the plan-time-
+#      vs-reality rationale; 96 owned-callback storage sites would have
+#      required per-site markers under the original plan §U30.4 sweep.)
 #   Pre-existing surfaces: ViewKey, BuildContext, Notification,
 #                          NotifiableElement, RenderObject, RenderObjectTrait
-#   Framework trait surfaces (gesture / focus / delegate patterns —
-#   widely-used reference shapes; their owned-storage uses sit on
-#   sanctioned FR-029 categories): GestureArenaMember,
-#   FocusTraversalPolicy, SliverGridDelegate, SingleChildLayoutDelegate,
-#   MultiChildLayoutDelegate, FlowDelegate, CustomPainter
-fr036_allowed='dyn\s+(\$crate::|[a-zA-Z_][a-zA-Z0-9_]*::)*(View|ViewKey|BuildContext|ElementBase|ElementBehavior|StatelessElementBase|StatefulElementBase|ProxyElementBase|InheritedElementBase|RenderElementBase|InheritedElementAccess|RenderObjectTrait|RenderObject|Listenable|Notification|NotifiableElement|WidgetsBindingObserver|Animation|BoxedView|ViewObject|Any|Error|GestureArenaMember|FocusTraversalPolicy|SliverGridDelegate|SingleChildLayoutDelegate|MultiChildLayoutDelegate|FlowDelegate|CustomPainter|ParentData|CustomClipper|RendererBinding|Debug|Fn|FnMut|FnOnce)\b'
+#   Framework trait surfaces (gesture / focus / delegate / parent-data /
+#   clipper / binding patterns — widely-used reference shapes; their
+#   owned-storage uses sit on sanctioned FR-029 categories):
+#   GestureArenaMember, FocusTraversalPolicy, SliverGridDelegate,
+#   SingleChildLayoutDelegate, MultiChildLayoutDelegate, FlowDelegate,
+#   CustomPainter, ParentData, CustomClipper, RendererBinding, Debug
+fr036_allowed='dyn\s+(\$crate::|[a-zA-Z_][a-zA-Z0-9_]*::)*(View|ViewKey|BuildContext|ElementBase|ElementBehavior|StatelessElementBase|StatefulElementBase|ProxyElementBase|InheritedElementBase|RenderElementBase|InheritedElementAccess|RenderObjectTrait|RenderObject|Listenable|Notification|NotifiableElement|WidgetsBindingObserver|Animation|BoxedView|ViewObject|Any|Error|GestureArenaMember|FocusTraversalPolicy|SliverGridDelegate|SingleChildLayoutDelegate|MultiChildLayoutDelegate|MultiChildLayoutContext|FlowDelegate|CustomPainter|ParentData|CustomClipper|RendererBinding|HitTestable|Debug|Fn|FnMut|FnOnce)\b'
 
 # Framework crates under enforcement.
 fr036_scope=(
@@ -381,27 +402,34 @@ fr036_scope=(
   crates/flui-interaction/src
 )
 
+# Reference-form prefix covering all four `&`/`&mut`/`&'a`/`&'a mut` shapes
+# the borrow-checker recognizes. Embedded inside the `-e` patterns below.
+fr036_ref_prefix="&\\s*('[a-zA-Z_][a-zA-Z0-9_]*\\s+)?(mut\\s+)?dyn\\s+"
+
 # Pre-filter language-runtime exempts before the marker / allowlist check.
-# `rg -U` enables multiline matches so `Box<dyn\n  Trait>` declarations
-# (split across newlines by rustfmt) are captured intact.
-fr036_hits=$(rg -U --line-number --column \
+# Single-line `rg` (no -U) so the line-oriented `grep -Ev` filters below
+# act on each matched line in isolation — multi-line declarations are
+# explicitly out of scope per the header comment (rustfmt collapses them).
+fr036_hits=$(rg --line-number --column \
     -e 'Box<\s*dyn\s+' \
-    -e '&\s*dyn\s+' \
+    -e "${fr036_ref_prefix}" \
     -e 'Arc<\s*dyn\s+' \
     -e 'Rc<\s*dyn\s+' \
     "${fr036_scope[@]}" 2>/dev/null \
   | grep -Ev ':\s*(//!|///|//)' \
   | grep -Ev '//\s*PORT-CHECK-OK-DYN:' \
   | grep -Ev 'Pin<\s*Box<\s*dyn\s+([a-zA-Z_][a-zA-Z0-9_]*::)*Future|Box<\s*dyn\s+([a-zA-Z_][a-zA-Z0-9_]*::)*Future|Box<\s*dyn\s+([a-zA-Z_][a-zA-Z0-9_]*::)*Iterator' \
-  | grep -Ev '&\s*dyn\s+Fn[A-Za-z]*\s*[(<]|&\s*dyn\s+FnMut|&\s*dyn\s+FnOnce' \
+  | grep -Ev "${fr036_ref_prefix}Fn[A-Za-z]*\\s*[(<]|${fr036_ref_prefix}FnMut|${fr036_ref_prefix}FnOnce" \
   | grep -Ev "${fr036_allowed}" \
   || true)
 
-# Type-alias closure: catch `type X = Box<dyn Y>` / `type X = Arc<dyn Y>` etc.
-# Alias declarations get their own marker; downstream uses of the alias
-# name don't trip the trigger.
+# Type-alias closure: catch `type X = Box<dyn Y>` / `type X<T> = Arc<dyn Y>`
+# / `type X = &'a dyn Y` etc. The LHS accepts an optional generic-parameter
+# list (`<T>`, `<'a, T>`); the RHS accepts all four reference-form prefixes
+# alongside `Box`, `Arc`, `Rc`. Alias declarations get their own marker;
+# downstream uses of the alias name don't trip the trigger.
 fr036_alias_hits=$(rg --line-number --column \
-    'type\s+\w+\s*=\s*(Box|&|Arc|Rc)<\s*dyn\s+' \
+    "type\\s+\\w+(\\s*<[^>]*>)?\\s*=\\s*(Box|${fr036_ref_prefix%dyn\\\\s+}|Arc|Rc)<?\\s*dyn\\s+" \
     "${fr036_scope[@]}" 2>/dev/null \
   | grep -Ev ':\s*(//!|///|//)' \
   | grep -Ev '//\s*PORT-CHECK-OK-DYN:' \
