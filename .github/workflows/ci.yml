@@ -1,0 +1,143 @@
+name: CI
+
+# Mirrors the Cycle 5 per-wave verification gate (build, clippy `-D warnings`,
+# per-crate lib tests, port-check.sh) on every PR + push to main. Patterns
+# borrowed from linebender/xilem (gated `checks` job, Taplo + Typos + Swatinem
+# cache + taiki-e/install-action for pinned tool versions) and tokio (gated
+# basics → matrix tests; nextest as primary runner).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  merge_group:
+
+# Cancel in-flight runs when a new commit lands on the same branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # Strict workspace-wide; matches the per-wave gate.
+  RUSTFLAGS: -D warnings
+  RUSTDOCFLAGS: -D warnings
+  # CI builds are clean every run; no incremental artifacts to preserve.
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────
+  # checks — fast gate. fmt + clippy + port-check + typos + Taplo.
+  # Every downstream job depends on this. Ubuntu only — pure source analysis.
+  # ─────────────────────────────────────────────────────────────────────────
+  checks:
+    name: checks (fmt, clippy, port-check, typos, taplo)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable + components
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Skip cache writes on merge-queue runs to avoid poisoning the cache
+          # with merge-commit artifacts (per xilem/tokio precedent).
+          save-if: ${{ github.event_name != 'merge_group' }}
+
+      - name: Install CI tools (typos, taplo)
+        uses: taiki-e/install-action@v2
+        with:
+          # Pin versions — unpinned tools surface unrelated breakage on
+          # release day. Bump deliberately.
+          tool: typos-cli@1.28,taplo-cli@0.9
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: taplo fmt --check
+        run: taplo fmt --check
+
+      - name: typos
+        run: typos
+
+      - name: scripts/port-check.sh (7 institutional refusal triggers)
+        run: bash scripts/port-check.sh -v
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # test — workspace build + nextest. Matrix: Linux + Windows.
+  # Gated on `checks`. macOS deferred until the workspace AppKit code is
+  # re-enabled (see CLAUDE.md: many high-level crates disabled in workspace).
+  # ─────────────────────────────────────────────────────────────────────────
+  test:
+    name: test (${{ matrix.os }})
+    needs: checks
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name != 'merge_group' }}
+          # Per tokio: binary caching breaks on macOS — guard for when macOS
+          # joins the matrix.
+          cache-bin: ${{ matrix.os != 'macos-latest' }}
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9
+
+      - name: cargo build --workspace
+        run: cargo build --workspace --all-targets
+
+      # `--test-threads=1` guards the documented pre-existing flui-app
+      # singleton-state flake (CLAUDE.md). flui-platform tests are excluded
+      # until the spawned STATUS_HEAP_CORRUPTION investigation lands a fix.
+      - name: cargo nextest run (--lib, --test-threads 1)
+        run: >
+          cargo nextest run
+          --workspace
+          --exclude flui-platform
+          --lib
+          --no-fail-fast
+          --test-threads 1
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # doc — RUSTDOCFLAGS=-D warnings enforces zero new doc warnings. Gated on
+  # `checks`. Ubuntu only — docs are platform-agnostic.
+  # ─────────────────────────────────────────────────────────────────────────
+  doc:
+    name: doc
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name != 'merge_group' }}
+
+      - name: cargo doc --no-deps
+        run: cargo doc --workspace --no-deps --document-private-items

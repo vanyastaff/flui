@@ -1,0 +1,28 @@
+# typos configuration for the FLUI workspace.
+# Run locally: `typos`. CI gates on `typos` (no flags = fail on any finding).
+
+[files]
+extend-exclude = [
+    "target/**",
+    ".flutter/**",
+    ".gpui/**",
+    "Cargo.lock",
+    "docs/research/**/*.md",     # audits quote external code; preserve verbatim
+    "docs/brainstorms/**/*.md",
+]
+
+[default]
+# Allow common Rust/Flutter identifier conventions that look like typos.
+extend-ignore-identifiers-re = [
+    # Type names from Flutter that look like typos to typos
+    "RSuperellipse",
+    # Hex color literals + similar
+    "0x[0-9a-fA-F]+",
+]
+
+[default.extend-words]
+# Project-specific spelling overrides.
+flui = "flui"
+arity = "arity"
+arities = "arities"
+ser = "ser"
