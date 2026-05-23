@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use flui_foundation::ElementId;
+use flui_foundation::{ElementId, ViewKey};
 use flui_rendering::pipeline::PipelineOwner;
 use parking_lot::RwLock;
 use slab::Slab;
@@ -24,6 +24,21 @@ pub struct ElementNode {
     pub(crate) depth: usize,
     /// Slot index within parent's children.
     pub(crate) slot: usize,
+    /// Cloned `View::key()` for the view this element currently holds,
+    /// or `None` when the view is keyless.
+    ///
+    /// Plan §U7 / FR-022. Populated at every `insert`/`mount_root_*`
+    /// call site (cloned via `ViewKey::clone_key`) and re-cloned at
+    /// every `update` boundary so the field stays in lock-step with
+    /// the view value the element actually holds. Phase 2's keyed
+    /// reconciler reads this field directly via `key()` / `key_hash()`
+    /// — no `downcast::<V>()` needed.
+    ///
+    /// Coexists with `registered_global_key_hash` in Phase 1 for
+    /// backward compatibility; the side-index field is reduced to a
+    /// derived value in Phase 2 §U17 and removed when the GlobalKey
+    /// registry consolidation lands.
+    pub(crate) key: Option<Box<dyn ViewKey>>,
     /// Hash of the `GlobalKey` registered for this element, if any.
     ///
     /// Set at mount time by `ElementTree::insert` /
@@ -42,6 +57,14 @@ pub struct ElementNode {
 
 impl ElementNode {
     /// Create a new ElementNode.
+    ///
+    /// The `key` slot is initialised to `None`; callers that have the
+    /// originating `View::key()` in scope set it via [`Self::set_key`]
+    /// after construction. The two production call sites
+    /// (`ElementTree::mount_root_with_pipeline_owner` and
+    /// `ElementTree::insert`) thread the key in immediately after
+    /// `ElementNode::new` so the field is populated before the
+    /// element is returned.
     pub fn new(element: Box<dyn ElementBase>, parent: Option<ElementId>, slot: usize) -> Self {
         let depth = if parent.is_some() { 1 } else { 0 }; // Will be updated by tree
         Self {
@@ -49,6 +72,7 @@ impl ElementNode {
             parent,
             depth,
             slot,
+            key: None,
             registered_global_key_hash: None,
         }
     }
@@ -76,6 +100,36 @@ impl ElementNode {
     /// Get the slot index.
     pub fn slot(&self) -> usize {
         self.slot
+    }
+
+    /// Borrow the cloned `View::key()` this element was mounted with,
+    /// or `None` for a keyless element.
+    ///
+    /// Phase 2's keyed reconciler reads this directly to build its
+    /// `old_keyed: HashMap<u64, ElementId>` index — no view-typed
+    /// `downcast::<V>()` needed. Plan §U7 / FR-022.
+    pub fn key(&self) -> Option<&dyn ViewKey> {
+        self.key.as_deref()
+    }
+
+    /// `View::key().map(ViewKey::key_hash)` for this element.
+    ///
+    /// Convenience over the two-step `key().map(ViewKey::key_hash)`.
+    /// Returns `None` for keyless elements (matches Flutter's
+    /// "no key, fall back to positional" semantics).
+    pub fn key_hash(&self) -> Option<u64> {
+        self.key.as_ref().map(|k| k.key_hash())
+    }
+
+    /// Replace the stored key.
+    ///
+    /// Called by `ElementTree` immediately after `ElementNode::new`
+    /// (mount path) and at every `update` boundary so the field tracks
+    /// the view value the element currently holds. The clone goes
+    /// through `ViewKey::clone_key` because `Box<dyn ViewKey>` is not
+    /// `Clone` directly.
+    pub(crate) fn set_key(&mut self, key: Option<Box<dyn ViewKey>>) {
+        self.key = key;
     }
 
     /// Hash of the `GlobalKey` registered for this element (if any).
@@ -215,7 +269,11 @@ impl ElementTree {
             );
         }
 
-        let node = ElementNode::new(element, None, 0);
+        let mut node = ElementNode::new(element, None, 0);
+        // Plan §U7 / FR-022: store the cloned `View::key()` on the
+        // node so Phase 2's keyed reconciler can index by it without
+        // crossing the typed-`V` boundary.
+        node.set_key(view.key().map(ViewKey::clone_key));
 
         // Slab is 0-indexed, ElementId is 1-indexed
         let slab_index = self.nodes.insert(node);
@@ -282,6 +340,8 @@ impl ElementTree {
 
         let mut node = ElementNode::new(element, Some(parent), slot);
         node.depth = parent_depth + 1;
+        // Plan §U7 / FR-022.
+        node.set_key(view.key().map(ViewKey::clone_key));
 
         let slab_index = self.nodes.insert(node);
         let id = ElementId::new(slab_index + 1);
@@ -444,9 +504,16 @@ impl ElementTree {
     /// The view must be compatible (same type) with the existing
     /// element. Threads the split-borrow owner handle into the
     /// update call.
+    ///
+    /// Plan §U7 / FR-022: re-clones `View::key()` into the node so the
+    /// stored key tracks whatever the new view carries. `View::can_update`
+    /// (FR-028 / U11) already ensures the keys match on a successful
+    /// update — the re-clone preserves that invariant explicitly rather
+    /// than relying on the caller having already filtered by it.
     pub fn update(&mut self, id: ElementId, view: &dyn View, owner: &mut crate::ElementOwner<'_>) {
         if let Some(node) = self.get_mut(id) {
             node.element.update(view, owner);
+            node.set_key(view.key().map(ViewKey::clone_key));
         }
     }
 
@@ -584,6 +651,12 @@ fn try_retake_inactive(
     // `framework.dart:4581` (`element.update(newWidget)`) right after
     // activating.
     node.element.update(view, owner);
+    // Plan §U7 / FR-022: re-clone the key from the new view value so
+    // the stored key tracks the re-taken element's current
+    // configuration — the deactivated element's old key may match
+    // structurally (`is_global_key` is true on both sides) but the
+    // concrete `Box<dyn ViewKey>` is the new view's key now.
+    node.set_key(view.key().map(ViewKey::clone_key));
 
     tracing::debug!(
         candidate = ?candidate_id,
