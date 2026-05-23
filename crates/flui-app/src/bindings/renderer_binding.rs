@@ -225,8 +225,8 @@ impl RenderingFlutterBinding {
 
     /// Call this to pretend that no frames have been sent to the engine yet.
     ///
-    /// This is useful for tests that want to call [`defer_first_frame`] and
-    /// [`allow_first_frame`] since those methods only have an effect if no
+    /// This is useful for tests that want to call [`Self::defer_first_frame`] and
+    /// [`Self::allow_first_frame`] since those methods only have an effect if no
     /// frames have been sent to the engine yet.
     pub fn reset_first_frame_sent(&self) {
         self.first_frame_sent.store(false, Ordering::Relaxed);

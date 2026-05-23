@@ -50,7 +50,7 @@ use crate::{
 ///
 /// AppBinding is the central coordinator for the FLUI framework.
 /// It composes all the specialized bindings:
-/// - [`RendererBinding`] - Manages render tree and pipeline
+/// - [`RendererBinding`](crate::bindings::RendererBinding) - Manages render tree and pipeline
 /// - [`WidgetsBinding`] - Manages element tree and build phase
 /// - [`GestureBinding`] - Manages hit testing, pointer coalescing, and gestures
 /// - [`Scheduler`] - Manages frame scheduling
