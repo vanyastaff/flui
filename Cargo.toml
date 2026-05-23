@@ -176,7 +176,7 @@ triomphe = "0.1"
 tempfile = "3.15"
 
 # PERFORMANCE & PROFILING
-criterion = "0.7"
+criterion = "0.8"
 tracing-tracy = "0.11"
 puffin_http = "0.16"
 
