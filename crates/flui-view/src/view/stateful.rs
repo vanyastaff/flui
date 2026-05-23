@@ -121,12 +121,12 @@ pub trait ViewState<V: StatefulView>: Send + Sync + 'static {
     /// `ViewState` **non-object-safe** — no `dyn ViewState` use exists
     /// or is needed (Phase 3 §U22, FR-008).
     ///
-    /// The `+ use<Self, V>` precise-capture clause (Rust 1.82+) declares
-    /// that the opaque return depends only on `Self` and `V`, not on
-    /// the elided lifetimes of `&self` / `&V` / `&dyn BuildContext`.
-    /// See [`StatelessView::build`] for the rationale (E0515 when a
-    /// `move || state.build(&view, &ctx)` closure owns the args).
-    fn build(&self, view: &V, ctx: &dyn BuildContext) -> impl IntoView + use<Self, V>;
+    /// The framework normalizes the opaque return via
+    /// [`IntoView::into_view`] inside the build call site (see
+    /// `element/behavior.rs`), boxing the concrete `'static` value
+    /// into `Box<dyn View>` before the closure / catch-unwind
+    /// boundary. See [`StatelessView::build`] for the rationale.
+    fn build(&self, view: &V, ctx: &dyn BuildContext) -> impl IntoView;
 
     /// Called when the View configuration changes.
     ///

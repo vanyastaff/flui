@@ -209,6 +209,18 @@ pub use view::{
 pub mod prelude {
     pub use flui_foundation::{ElementId, RenderId};
     pub use flui_log::{debug, error, info, trace, warn};
+    // The proc-macro derives ship from `flui-macros` but are surfaced
+    // here so a single `use flui_view::prelude::*;` picks them up
+    // alongside the supporting trait — Phase 3 §U23.
+    //
+    // The re-export deliberately preserves the macro names
+    // (`StatelessView`, `StatefulView`) so they sit alongside the
+    // traits with the same names — this is the standard Rust
+    // `#[derive(Trait)] + trait Trait` pattern (e.g. `Clone`,
+    // `Serialize`). Rust's namespace separation (macros vs types vs
+    // traits) makes the collision well-defined: `#[derive(StatelessView)]`
+    // picks the macro, `impl StatelessView for X { … }` picks the trait.
+    pub use flui_macros::{StatefulView, StatelessView};
 
     // Logging
     pub use crate::context::{BuildContext, BuildContextExt};

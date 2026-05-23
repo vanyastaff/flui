@@ -48,6 +48,12 @@ tracing-subscriber = { workspace = true }
 # parallel cargo test runs race the install → tests resolve through
 # each other's trees and fail non-deterministically.
 serial_test = "3"
+# Phase 3 §U23 (`derive_bon_stack` US4 AS2): exercises the
+# `#[derive(StatelessView, ::bon::Builder)]` attribute stack
+# (the catalog's most-common future authoring pattern). The
+# workspace already pins `bon = "3.8"`; we pull it in only at the
+# `flui-view` dev boundary so non-test builds do not link it.
+bon = { workspace = true }
 
 [features]
 default = []

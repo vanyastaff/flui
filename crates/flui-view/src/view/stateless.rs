@@ -60,16 +60,15 @@ pub trait StatelessView: Clone + Send + Sync + 'static {
     /// types, the author wraps each arm with `.boxed()` to land on
     /// `BoxedView` (which itself implements [`IntoView`]).
     ///
-    /// The `+ use<Self>` precise-capture clause (Rust 1.82+) tells the
-    /// compiler that the opaque return type depends on `Self` only —
-    /// NOT on the elided lifetimes of `&self` or `&dyn BuildContext`.
-    /// Without it, the Rust 2024 RPITIT default captures those input
-    /// lifetimes and a `move || view.build(&ctx)` closure that owns
-    /// `view`/`ctx` cannot return the result (E0515: returning data
-    /// referencing local borrows). [`View`] is `'static`, so authoring
-    /// returns never carry borrows of build inputs; the precise-capture
-    /// surfaces that to the type system.
-    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView + use<Self>;
+    /// The framework normalizes the opaque return via
+    /// [`IntoView::into_view`] *inside* the build call site (see
+    /// `element/behavior.rs`), boxing the concrete `'static` value
+    /// into `Box<dyn View>` before crossing closure / catch-unwind
+    /// boundaries. The default Rust 2024 RPITIT capture (Self +
+    /// elided lifetimes of `&self` / `&dyn BuildContext`) is fine
+    /// because the opaque value is consumed inside the closure body
+    /// — its captured borrows never escape.
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView;
 }
 
 /// Implement View for all StatelessViews.

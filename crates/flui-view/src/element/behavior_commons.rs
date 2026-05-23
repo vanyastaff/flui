@@ -104,7 +104,7 @@ where
 ///
 /// `context` names what was building (e.g. `"building StatelessElement"`)
 /// for the `FlutterError` breadcrumb.
-pub(crate) fn build_or_recover<V, A, F, R>(
+pub(crate) fn build_or_recover<V, A, F>(
     core: &mut ElementCore<V, A>,
     owner: &mut crate::ElementOwner<'_>,
     behavior_name: &'static str,
@@ -113,17 +113,23 @@ pub(crate) fn build_or_recover<V, A, F, R>(
 where
     V: Clone + Send + Sync + 'static,
     A: ElementArity,
-    F: FnOnce() -> R,
-    R: IntoView,
+    F: FnOnce() -> Box<dyn View>,
 {
     // Only `build()` is inside the catch — see the panic-safety note.
-    // The closure returns an opaque `impl IntoView` (Phase 3 §U22,
-    // FR-007); we normalize via [`IntoView::into_view`] inside the
-    // success arm and then box for the downstream `Box<dyn View>`
-    // contract (which the error arm already satisfies via
-    // `ErrorView::build_error_view`).
+    // Phase 3 §U22 keeps the closure return as `Box<dyn View>` rather
+    // than `impl IntoView`: the typed `impl IntoView` from
+    // `StatelessView::build` / `ViewState::build` captures the
+    // closure-local `&view`/`&ctx` borrows by Rust 2024 RPITIT
+    // default, so returning the opaque value across the closure
+    // boundary trips E0515 ("returns a value referencing data owned
+    // by the current function"). The fix lives at the call site (see
+    // `behavior.rs`): the closure body itself consumes the opaque
+    // value via `IntoView::into_view()` + `Box::new`, producing an
+    // owned `Box<dyn View>` with no escaping borrows. The trait stays
+    // capture-default, authors do not need `+ use<…>` annotations on
+    // their `build()` impls.
     match std::panic::catch_unwind(AssertUnwindSafe(build)) {
-        Ok(child_view) => Box::new(child_view.into_view()),
+        Ok(child_view) => child_view,
         Err(payload) => {
             // Indeterminate state: tear the whole child subtree down so
             // the substituted error view is mounted fresh, not merged

@@ -16,8 +16,8 @@ use crate::{
     context::ElementBuildContext,
     element::RenderSlot,
     view::{
-        AnimatedView, InheritedView, ProxyView, RenderView, StatefulView, StatelessView, View,
-        ViewState,
+        AnimatedView, InheritedView, IntoView, ProxyView, RenderView, StatefulView, StatelessView,
+        View, ViewState,
     },
 };
 
@@ -249,7 +249,17 @@ where
         let view = core.view().clone();
         let child_view =
             super::behavior_commons::build_or_recover(core, owner, "StatelessElement", move || {
-                view.build(&ctx)
+                // Phase 3 §U22 boundary: `view.build(&ctx)` returns
+                // `impl IntoView` that may capture closure-local
+                // borrows of `view`/`ctx` (Rust 2024 RPITIT default).
+                // We consume the opaque value through
+                // `IntoView::into_view()` inside the closure body —
+                // the resulting `<R as IntoView>::View` is `'static`
+                // (View: 'static), and boxing it produces an owned
+                // `Box<dyn View>` with no escaping borrows for
+                // `catch_unwind` to return.
+                let opaque = view.build(&ctx);
+                Box::new(IntoView::into_view(opaque)) as Box<dyn View>
             });
         super::behavior_commons::finish_single_child_build(
             core,
@@ -376,7 +386,12 @@ where
         let state = &self.state;
         let child_view =
             super::behavior_commons::build_or_recover(core, owner, "StatefulElement", move || {
-                state.build(&view, &ctx)
+                // See `StatelessBehavior::perform_build` for the
+                // RPITIT-capture rationale — we consume the opaque
+                // `impl IntoView` inside the closure body to box an
+                // owned `Box<dyn View>` for the `catch_unwind` return.
+                let opaque = state.build(&view, &ctx);
+                Box::new(IntoView::into_view(opaque)) as Box<dyn View>
             });
         super::behavior_commons::finish_single_child_build(
             core,
