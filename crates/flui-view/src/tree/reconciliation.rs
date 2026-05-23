@@ -232,11 +232,26 @@ pub fn reconcile_children(
     //
     // Un-keyed old middle children cannot be matched out of order, so
     // they are unmounted here (emit `Unmount`). Keyed ones go into
-    // `old_keyed` for phase 4 to claim. First-wins on duplicate old
-    // keys (an old duplicate is itself a prior-frame bug; we keep the
-    // first).
+    // `old_keyed` for phase 4 to claim.
+    //
+    // The index is `HashMap<u64, Vec<usize>>` rather than `HashMap<u64,
+    // usize>` so two old children with DISTINCT keys that happen to
+    // collide on `u64` hash can both be candidate matches in Phase 4 —
+    // the symmetric defense to FR-024 (c)'s `key_eq`-on-hash-hit check.
+    // Without the Vec, the first-wins on duplicate-hash silently drops
+    // every later old whose hash collides; if a new view's key
+    // `key_eq`s only the dropped one, the matcher returns no candidate
+    // and the new view mounts fresh while the right old element unmounts
+    // — silent state loss.
+    //
+    // True duplicate OLD keys (two old elements that genuinely
+    // `key_eq` each other — a prior-frame bug) end up in the same
+    // bucket, and Phase 4's `match_old_for_new` claims them
+    // first-in-first-out by `pop`ping the front. Behavior matches the
+    // documented first-wins convention while the algorithm gains
+    // collision-resistance.
     // ------------------------------------------------------------------
-    let mut old_keyed: HashMap<u64, usize> = HashMap::new();
+    let mut old_keyed: HashMap<u64, Vec<usize>> = HashMap::new();
     for (idx, slot) in old_slots
         .iter_mut()
         .enumerate()
@@ -247,9 +262,11 @@ pub fn reconcile_children(
             continue;
         };
         if let Some(key) = child.current_key_hash() {
-            // Keyed — phase 4 may claim it. First-wins on a duplicate
-            // old key (a duplicate is itself a prior-frame bug).
-            old_keyed.entry(key).or_insert(idx);
+            // Append to the candidate bucket; FIFO claim order in
+            // Phase 4 preserves first-wins semantics across true
+            // duplicates AND lets hash-colliding distinct keys both be
+            // claim candidates.
+            old_keyed.entry(key).or_default().push(idx);
         } else {
             // Un-keyed middle child with no positional match — drop it.
             let type_id = child.view_type_id();
@@ -309,10 +326,25 @@ pub fn reconcile_children(
     // ------------------------------------------------------------------
     // Phase 5a — sync the bottom matches recorded in phase 2.
     //
-    // The bottom scan is positional: `old_bottom + offset == new_bottom + offset`
-    // shifted by the same delta, so emit `Reuse` (slot does not change
-    // for the matched pair within the bottom scan, even if the global
-    // numbering shifted).
+    // The bottom scan recorded `(old_idx, new_idx)` pairs by walking
+    // both lists from the end while elements matched. After the
+    // middle phases run, each pair's slot relationship is:
+    //
+    //   old_idx == new_idx  → the symmetric-delta case: middle had
+    //                         the same number of insertions and
+    //                         removals, so bottom-matched elements
+    //                         stay at the same slot. Emit `Reuse`.
+    //   old_idx != new_idx  → the asymmetric-delta case: middle had
+    //                         more insertions than removals (or vice
+    //                         versa), so the bottom-matched element
+    //                         shifted slot. Emit `Reorder`.
+    //
+    // Earlier versions of this loop always emitted `Reuse` on the
+    // (incorrect) assumption that `old_bottom + offset` and
+    // `new_bottom + offset` were always equal. They are equal only
+    // when `old_bottom == new_bottom`. Subscribers reading the trace
+    // (devtools, selection-persistence per FR-035) need the
+    // disposition to reflect actual movement.
     // ------------------------------------------------------------------
     for offset in 0..(old_len - old_bottom) {
         let old_idx = old_bottom + offset;
@@ -321,14 +353,17 @@ pub fn reconcile_children(
             .take()
             .expect("phase-2 bottom match guaranteed Some");
         element.update(new_views[new_idx], owner);
-        emit_event(&ReconcileEvent::reuse(
-            parent,
-            new_idx,
-            new_views[new_idx].view_type_id(),
-            new_views[new_idx]
-                .key()
-                .map(flui_foundation::ViewKey::key_hash),
-        ));
+        let key_hash = new_views[new_idx]
+            .key()
+            .map(flui_foundation::ViewKey::key_hash);
+        let view_type = new_views[new_idx].view_type_id();
+        if old_idx == new_idx {
+            emit_event(&ReconcileEvent::reuse(parent, new_idx, view_type, key_hash));
+        } else {
+            emit_event(&ReconcileEvent::reorder(
+                parent, new_idx, view_type, key_hash,
+            ));
+        }
         result.push(element);
     }
 
@@ -404,29 +439,41 @@ fn can_update_element(old: &dyn ElementBase, new: &dyn View) -> bool {
 ///
 /// Returns `Some(idx)` only for a *keyed* new View whose key hash is
 /// present in `old_keyed` AND whose claimed old element is genuinely
-/// updatable (type + key). The entry is removed from `old_keyed` on a
-/// successful claim so a later duplicate-key View cannot reuse the same
-/// old element (first-wins duplicate-key resolution). Un-keyed new Views
-/// always return `None` — they only ever match positionally, which the
+/// updatable (type + key per [`can_update_element`]). On a successful
+/// claim, the chosen candidate index is removed from the bucket so a
+/// later duplicate-key View cannot reuse the same old element
+/// (first-wins duplicate-key resolution). Un-keyed new Views always
+/// return `None` — they only ever match positionally, which the
 /// top/bottom scans already handled.
+///
+/// Walks the entire `Vec<usize>` candidate list for the hash bucket
+/// (not just the first entry) to handle the symmetric case where two
+/// old children with distinct keys collide on `u64`. The right
+/// candidate is identified via `can_update_element`'s stage-2
+/// semantic `key_eq` check; non-matching candidates stay in the
+/// bucket so a LATER new view whose key matches one of them can
+/// still claim it.
 fn match_old_for_new(
     new_view: &dyn View,
-    old_keyed: &mut HashMap<u64, usize>,
+    old_keyed: &mut HashMap<u64, Vec<usize>>,
     old_slots: &[Option<Box<dyn ElementBase>>],
 ) -> Option<usize> {
     let key_hash = new_view.key()?.key_hash();
-    let &old_idx = old_keyed.get(&key_hash)?;
-    // Defensive: the hash matched, but confirm the old element is really
-    // updatable (guards against a hash collision across View types).
-    let updatable = old_slots[old_idx]
-        .as_deref()
-        .is_some_and(|old| can_update_element(old, new_view));
-    if updatable {
+    let bucket = old_keyed.get_mut(&key_hash)?;
+    // Walk the candidates; on the first one `can_update_element`
+    // accepts (matching type + matching key via `key_eq`), remove it
+    // from the bucket and return its index. Leaves non-matching
+    // candidates in place for a future new view to claim.
+    let position = bucket.iter().position(|&old_idx| {
+        old_slots[old_idx]
+            .as_deref()
+            .is_some_and(|old| can_update_element(old, new_view))
+    })?;
+    let old_idx = bucket.remove(position);
+    if bucket.is_empty() {
         old_keyed.remove(&key_hash);
-        Some(old_idx)
-    } else {
-        None
     }
+    Some(old_idx)
 }
 
 #[cfg(test)]
@@ -980,5 +1027,99 @@ mod tests {
         // blocked by B at index 1, so C is in the keyed-middle pool. C
         // is keyless → unmounted in phase 3. Don't over-specify.
         let _ = id_c;
+    }
+
+    // ========================================================================
+    // Plan §U18 follow-up / FR-024 (c) symmetric defense — multi-old
+    // hash-collision regression test.
+    //
+    // The earlier `keyed_hash_collision_falls_through_to_new_element`
+    // test covers the false-POSITIVE defense (one old + one new,
+    // colliding hashes but `key_eq` rejects). This case covers the
+    // symmetric false-NEGATIVE: TWO old children with distinct keys
+    // colliding on `u64` AND a new view whose key `key_eq`s the
+    // SECOND old. Before the fix, Phase 3's `HashMap<u64, usize>`
+    // index dropped the second old (first-wins on hash), so
+    // `match_old_for_new` could not find the right candidate and the
+    // new view mounted fresh while the matching old unmounted —
+    // silent state loss. Post-fix, the index is `HashMap<u64,
+    // Vec<usize>>` and `match_old_for_new` walks candidates, picks
+    // the one `can_update_element` accepts.
+    // ========================================================================
+
+    /// Covers the symmetric defense: two old children with distinct
+    /// keys colliding on hash + one new view matching the second old
+    /// MUST reuse the matching old (no silent state loss).
+    #[test]
+    fn keyed_hash_collision_two_olds_matches_second_old() {
+        let mut owner = BuildOwner::new();
+        // Two olds, distinct ColliderKey tags 1 and 2 → SAME hash
+        // 0xDEAD on both, but `key_eq` distinguishes by tag.
+        let v_o1 = KeyedView::with(ColliderKey { tag: 1 });
+        let v_o2 = KeyedView::with(ColliderKey { tag: 2 });
+        let mut children = vec![
+            mount_keyed(&v_o1, 0, &mut owner),
+            mount_keyed(&v_o2, 1, &mut owner),
+        ];
+        let id_o1 = as_keyed(&*children[0]).identity_id;
+        let id_o2 = as_keyed(&*children[1]).identity_id;
+
+        // New view: keyed with tag 2 — must `key_eq` the SECOND old
+        // even though both olds hash to 0xDEAD.
+        let v_new = KeyedView::with(ColliderKey { tag: 2 });
+        let views: Vec<&dyn View> = vec![&v_new];
+        reconcile_children(
+            flui_foundation::ElementId::new(1),
+            &mut children,
+            &views,
+            &mut owner.element_owner_mut(),
+        );
+
+        assert_eq!(children.len(), 1);
+        assert_eq!(
+            as_keyed(&*children[0]).identity_id,
+            id_o2,
+            "matching new view MUST reuse the second old (tag=2), \
+             not create a fresh element — proves Phase 3 indexes BOTH \
+             colliding olds as candidates and Phase 4 walks them with \
+             key_eq, finding the right one",
+        );
+        // Sanity: o1's identity is gone (unmounted in Phase 5b
+        // because no new view matched it).
+        let _ = id_o1;
+    }
+
+    /// Mirror case: two olds, new matches the FIRST. Same defense
+    /// against the symmetric false-negative on the opposite end of
+    /// the bucket. Together with the above, locks the bucket walks
+    /// in BOTH directions.
+    #[test]
+    fn keyed_hash_collision_two_olds_matches_first_old() {
+        let mut owner = BuildOwner::new();
+        let v_o1 = KeyedView::with(ColliderKey { tag: 1 });
+        let v_o2 = KeyedView::with(ColliderKey { tag: 2 });
+        let mut children = vec![
+            mount_keyed(&v_o1, 0, &mut owner),
+            mount_keyed(&v_o2, 1, &mut owner),
+        ];
+        let id_o1 = as_keyed(&*children[0]).identity_id;
+        let id_o2 = as_keyed(&*children[1]).identity_id;
+
+        let v_new = KeyedView::with(ColliderKey { tag: 1 });
+        let views: Vec<&dyn View> = vec![&v_new];
+        reconcile_children(
+            flui_foundation::ElementId::new(1),
+            &mut children,
+            &views,
+            &mut owner.element_owner_mut(),
+        );
+
+        assert_eq!(children.len(), 1);
+        assert_eq!(
+            as_keyed(&*children[0]).identity_id,
+            id_o1,
+            "matching new view MUST reuse the first old (tag=1)",
+        );
+        let _ = id_o2;
     }
 }
