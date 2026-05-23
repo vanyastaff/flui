@@ -169,10 +169,29 @@ fn covers_sc003_reparent_emits_single_reparent_event() {
     // Capture this step too — it MUST NOT emit a Reparent event
     // (soft-remove is not the disposition that fires the new
     // emission).
+    //
+    // Positive-presence guard FIRST: prove the tree state actually
+    // changed (the element moved to the inactive queue) so the
+    // count-zero assertion below is genuinely meaningful, not
+    // silently passing because the collector or the soft-remove
+    // path itself did nothing.
     let soft_remove_events = capture(|| {
         tree.write()
             .remove(original_id, &mut owner.write().element_owner_mut());
     });
+    {
+        // `is_inactive` lives on the split-borrow `ElementOwner`
+        // handle, not on `BuildOwner` directly. Borrow scoped to the
+        // assertion so the subsequent re-insert can take its own
+        // write lock without contention.
+        let mut owner_guard = owner.write();
+        let element_owner = owner_guard.element_owner_mut();
+        assert!(
+            element_owner.is_inactive(original_id),
+            "soft-remove must push the keyed element into the inactive queue \
+             — otherwise the count-zero assertion below is vacuous",
+        );
+    }
     assert_eq!(
         soft_remove_events
             .iter()

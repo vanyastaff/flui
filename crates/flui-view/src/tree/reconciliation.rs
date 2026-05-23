@@ -1042,20 +1042,38 @@ mod tests {
         assert_eq!(children.len(), 3);
         // Slot 0 — keyless positional match keeps old element A.
         assert_eq!(as_keyed(&*children[0]).identity_id, id_a);
-        // Slot 1 — keyless positional match: the prefix scan stopped at
-        // slot 1 because old[1] is keyed-B but new[1] is keyless, so
-        // both A's keyless successors get re-mounted. The keyed B in
-        // slot 2 claims its match by key. Sanity-check is: B's identity
-        // shows up in slot 2.
+        // Slot 2 — keyed B moves to its keyed slot.
         assert_eq!(
             as_keyed(&*children[2]).identity_id,
             id_b,
             "keyed B must move to its new keyed slot",
         );
-        // C's identity may or may not survive — the prefix scan was
-        // blocked by B at index 1, so C is in the keyed-middle pool. C
-        // is keyless → unmounted in phase 3. Don't over-specify.
-        let _ = id_c;
+        // Slot 1 — keyless new element. Old C was keyless and in the
+        // middle pool (the prefix scan stopped at slot 1 because
+        // old[1] is keyed-B but new[1] is keyless), so Phase 3
+        // unmounted it. The new keyless slot 1 fills with a freshly
+        // created element whose identity_id MUST differ from any of
+        // the originals (id_a/id_b/id_c) — proves Phase 4 created a
+        // fresh element rather than silently reusing an old one off-
+        // position. The slot must also hold an Active KeyedView
+        // element (not Defunct, not unmapped), proving the fresh
+        // mount completed correctly.
+        let slot1 = as_keyed(&*children[1]);
+        assert_ne!(slot1.identity_id, id_a);
+        assert_ne!(slot1.identity_id, id_b);
+        assert_ne!(slot1.identity_id, id_c);
+        assert_eq!(slot1.lifecycle, Lifecycle::Initial);
+        // Old C was keyless and middle-positioned, so Phase 3
+        // unmounted it. Confirm id_c is gone from the surviving
+        // children list.
+        for child in &children {
+            assert_ne!(
+                as_keyed(&**child).identity_id,
+                id_c,
+                "keyless C in the middle pool must NOT survive — \
+                 Phase 3 unmounts unkeyed middle children",
+            );
+        }
     }
 
     // ========================================================================
