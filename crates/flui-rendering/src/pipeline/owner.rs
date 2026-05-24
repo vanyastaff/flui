@@ -477,9 +477,27 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// Pass `None` to clear (e.g., when the binding wants to defer to
     /// a yet-unmounted root render object that supplies its own
     /// constraints via `RootRenderElement::mount`).
-    #[inline]
+    ///
+    /// # Auto-schedules root relayout (PR #148 review fix)
+    ///
+    /// When `Some(_)` is passed AND `root_id` is set AND the new
+    /// constraints differ from the prior value, this method also
+    /// calls [`Self::mark_needs_layout`] on the root id so the
+    /// next `run_layout` invocation picks up the change. This
+    /// avoids the silent-no-relayout footgun the prior shape had —
+    /// the binding no longer needs to call `mark_needs_layout`
+    /// separately after `set_root_constraints`.
+    ///
+    /// Setting to the SAME constraints value (or to `None`) does
+    /// NOT mark dirty — those cases either don't change the layout
+    /// result or are explicit clears that the caller manages
+    /// independently.
     pub fn set_root_constraints(&mut self, constraints: Option<BoxConstraints>) {
+        let changed = constraints.is_some() && constraints != self.root_constraints;
         self.root_constraints = constraints;
+        if changed && let Some(root_id) = self.root_id {
+            self.mark_needs_layout(root_id);
+        }
     }
 
     /// Returns a reference to the render tree.
@@ -1043,13 +1061,57 @@ impl PipelineOwner<Layout> {
             // Constraints come from cached state (post-frame-1) OR
             // the binding-set root_constraints (frame-1 root).
             for dirty_node in dirty_nodes {
+                // PR-A1 U23 P2 review fix (Copilot 3294417924): skip
+                // entries whose NEEDS_LAYOUT flag was already cleared
+                // earlier in this iteration. Common case: a parent's
+                // layout_child callback recursively lays out a child
+                // whose dirty-queue entry was queued separately
+                // (e.g., insert_child_render_object enqueues both).
+                // Re-laying out the child would be redundant +
+                // potentially side-effectful.
+                let already_clean = self
+                    .render_tree
+                    .get(dirty_node.id)
+                    .is_some_and(|n| !n.needs_layout());
+                if already_clean {
+                    tracing::trace!(
+                        id = ?dirty_node.id,
+                        "run_layout: skipping dirty-queue entry whose NEEDS_LAYOUT \
+                         was already cleared this iteration",
+                    );
+                    continue;
+                }
+
                 let Some(constraints) = self.cached_or_root_constraints(dirty_node.id) else {
+                    // PR-A1 U23 P2 review fix (Copilot 3294417942):
+                    // dropping the dirty entry here without recovery
+                    // strands the work. The two real cases this hits:
+                    //   1. Root id with root_constraints unset — the
+                    //      binding should have called
+                    //      set_root_constraints BEFORE run_frame.
+                    //      U23's set_root_constraints fix auto-marks
+                    //      root dirty when constraints land, so the
+                    //      next run_layout picks up the deferred
+                    //      work automatically.
+                    //   2. Non-root id with no cached constraints
+                    //      AND no parent-driven layout yet — the
+                    //      shallow-first dirty queue sort means the
+                    //      parent should have processed first; if
+                    //      it didn't (parent's perform_layout didn't
+                    //      call layout_child for this id), the entry
+                    //      is correctly dropped because the parent
+                    //      is the authority on child constraints.
+                    // Logged at warn so the diagnostic surfaces but
+                    // doesn't halt the pipeline.
                     tracing::warn!(
                         id = ?dirty_node.id,
-                        "run_layout: no cached state.constraints() AND id != root_id (or \
-                         root_constraints unset); skipping layout for this dirty entry. \
-                         Caller must either set_root_constraints OR mark the node's parent \
-                         dirty so the parent's layout propagates constraints."
+                        is_root = ?(self.root_id == Some(dirty_node.id)),
+                        "run_layout: no cached state.constraints() AND no \
+                         root_constraints (or id != root_id); skipping dirty entry. \
+                         Recovery: for root → call set_root_constraints (which \
+                         auto-marks the root dirty); for non-root → parent's \
+                         perform_layout must call ctx.layout_child(idx, c) for \
+                         this id first."
                     );
                     continue;
                 };

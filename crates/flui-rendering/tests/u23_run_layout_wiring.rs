@@ -187,3 +187,98 @@ fn u23_root_constraints_setter_round_trip() {
     owner.set_root_constraints(None);
     assert_eq!(owner.root_constraints(), None);
 }
+
+// ============================================================================
+// PR-A1 U23 P2 review fixes — Copilot 3294417924/3294417942/3294417957
+// ============================================================================
+
+/// PR #148 Copilot review (comment_id=3294417957): setting
+/// `root_constraints` should auto-mark the root dirty so the next
+/// `run_layout` invocation picks up the change. Pre-fix the binding
+/// had to call `mark_needs_layout(root_id)` separately — silent
+/// no-relayout footgun.
+#[test]
+fn u23_set_root_constraints_auto_marks_root_dirty() {
+    let mut owner = PipelineOwner::new();
+    let padding_id = owner.insert(Box::new(RenderPadding::all(5.0))
+        as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
+    owner.set_root_id(Some(padding_id));
+    owner.clear_all_dirty_nodes();
+
+    assert!(!owner.has_dirty_nodes());
+
+    // Setting root_constraints to Some(_) auto-marks root dirty.
+    let c = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
+    owner.set_root_constraints(Some(c));
+    assert!(
+        owner.has_dirty_nodes(),
+        "set_root_constraints(Some(_)) must auto-mark root dirty for next run_layout",
+    );
+
+    // Idempotent: setting to the SAME value does not re-mark dirty.
+    owner.clear_all_dirty_nodes();
+    owner.set_root_constraints(Some(c));
+    assert!(
+        !owner.has_dirty_nodes(),
+        "set_root_constraints with same value must NOT re-mark dirty (idempotent)",
+    );
+
+    // Setting to None does NOT mark dirty (explicit clear).
+    owner.set_root_constraints(None);
+    assert!(
+        !owner.has_dirty_nodes(),
+        "set_root_constraints(None) must NOT mark dirty (explicit clear)",
+    );
+}
+
+/// PR #148 Copilot review (comment_id=3294417924): `run_layout` must
+/// skip dirty-queue entries whose `NEEDS_LAYOUT` flag was already
+/// cleared earlier in the iteration (e.g., parent's layout_child
+/// callback already laid out the child).
+///
+/// Verifies via insert_child_render_object which enqueues both parent
+/// and child. After run_layout:
+/// 1. Parent processed first (shallow-first sort) → layout_dirty_root
+///    invokes Padding's perform_layout → calls ctx.layout_child(0, c)
+///    for the child → child's needs_layout is cleared via
+///    layout_subtree_borrowed's success path.
+/// 2. Child's dirty entry was queued separately by insert_child;
+///    run_layout's iteration encounters it next; needs_layout()
+///    returns false → skipped.
+#[test]
+fn u23_run_layout_skips_already_cleaned_dirty_entries() {
+    let mut owner = PipelineOwner::new();
+    let padding_id = owner.insert(Box::new(RenderPadding::all(5.0))
+        as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
+    let _child_id = owner
+        .insert_child_render_object(padding_id, Box::new(RenderColoredBox::red(40.0, 40.0)))
+        .expect("child insert");
+
+    owner.set_root_id(Some(padding_id));
+    owner.set_root_constraints(Some(BoxConstraints::new(
+        px(0.0),
+        px(200.0),
+        px(0.0),
+        px(200.0),
+    )));
+
+    let mut owner = owner.into_layout();
+    // Pre-fix: both parent + child entries get layout_dirty_root invoked.
+    //   Parent's layout calls layout_child → recurses into child →
+    //   child laid out. Then run_layout dequeues child's separate
+    //   entry → layout_dirty_root invoked AGAIN on child → redundant
+    //   perform_layout invocation (potentially side-effectful).
+    // Post-fix: child's separate entry's needs_layout() = false →
+    //   skipped via trace log; no redundant invocation.
+    owner.run_layout().expect("run_layout must succeed");
+
+    // Both nodes laid out (geometry set).
+    let padding_geom = owner
+        .render_tree()
+        .get(padding_id)
+        .and_then(|n| n.geometry_box());
+    assert_eq!(padding_geom, Some(Size::new(px(50.0), px(50.0))));
+    // No way to count perform_layout invocations from integration test,
+    // but the skip path is exercised (covered by lib-scoped test if
+    // we wanted to assert the trace! event explicitly).
+}
