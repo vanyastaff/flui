@@ -44,6 +44,7 @@ fn next_task_id() -> TaskId {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[repr(u8)]
 pub enum Priority {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Background/idle work (GC, telemetry). Flutter `priority.dart::idle` = 0.
     Idle = 0,
     /// Normal UI updates (widget rebuilds). FLUI-only — inserted between
@@ -162,6 +163,7 @@ pub use flui_foundation::TaskId;
 
 /// A scheduled task with priority
 pub struct Task {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     id: TaskId,
     priority: Priority,
     callback: Box<dyn FnOnce() + Send>,

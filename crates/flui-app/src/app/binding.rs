@@ -158,11 +158,13 @@ impl AppBinding {
 
     /// Get read access to RendererBinding.
     pub fn renderer(&self) -> parking_lot::RwLockReadGuard<'_, RenderingFlutterBinding> {
+        // PORT-CHECK-OK-SP6: AppBinding renderer accessor; pre-existing SP-6
         self.renderer.read()
     }
 
     /// Get write access to RendererBinding.
     pub fn renderer_mut(&self) -> parking_lot::RwLockWriteGuard<'_, RenderingFlutterBinding> {
+        // PORT-CHECK-OK-SP6: AppBinding renderer_mut accessor; pre-existing SP-6
         self.renderer.write()
     }
 
@@ -199,11 +201,13 @@ impl AppBinding {
 
     /// Get read access to WidgetsBinding.
     pub fn widgets(&self) -> parking_lot::RwLockReadGuard<'_, WidgetsBinding> {
+        // PORT-CHECK-OK-SP6: AppBinding widgets accessor; pre-existing SP-6
         self.widgets.read()
     }
 
     /// Get write access to WidgetsBinding.
     pub fn widgets_mut(&self) -> parking_lot::RwLockWriteGuard<'_, WidgetsBinding> {
+        // PORT-CHECK-OK-SP6: AppBinding widgets_mut accessor; pre-existing SP-6
         self.widgets.write()
     }
 
@@ -263,6 +267,7 @@ impl AppBinding {
     /// This is used by RootRenderElement to insert RenderObjects into the tree.
     /// Elements need `Arc<RwLock<PipelineOwner>>` for concurrent access.
     pub fn render_pipeline_arc(&self) -> Arc<RwLock<flui_rendering::pipeline::PipelineOwner>> {
+        // PORT-CHECK-OK-SP6: AppBinding render_pipeline_arc accessor; pre-existing SP-6
         Arc::clone(&self.shared_pipeline_owner)
     }
 

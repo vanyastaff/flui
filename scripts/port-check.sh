@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # scripts/port-check.sh
 #
-# Verifies the seven refusal triggers documented in docs/PORT.md against
-# the workspace, plus the FR-033 / FR-036 sanctioned-dyn-boundary checks.
-# Exits non-zero on the first violation outside the whitelist; prints the
-# offending file:line and the trigger ID.
+# Verifies the 13 refusal triggers (1-13, with #9 numbered for FR-036)
+# documented in docs/PORT.md against the workspace, plus the FR-033
+# sanctioned-dyn-boundary check. Exits non-zero on the first violation
+# outside the whitelist; prints the offending file:line and the trigger
+# ID. Triggers #8/#10/#11/#12/#13 added in D-block PR-C-3 §U41-U45
+# (architecture-correction-plan SP-1/SP-3/SP-4/SP-6/SP-8).
 #
 # Additionally reports the inline port-marker budget (TODO(port),
 # PERF(port), PORT NOTE) — markers are deliberate Phase B deferrals, NOT
@@ -15,7 +17,7 @@
 # docs/PORT.md "## Verification" for usage and rationale.
 #
 # Usage:
-#   bash scripts/port-check.sh             # check all triggers; silent on pass
+#   bash scripts/port-check.sh             # check all 13 triggers; silent on pass
 #   bash scripts/port-check.sh -v          # verbose: per-trigger pass + marker totals
 #   bash scripts/port-check.sh -b          # marker-budget mode (per-file breakdown)
 #   bash scripts/port-check.sh --verbose   # alias for -v
@@ -414,6 +416,415 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# Trigger 8 (D-block PR-C-3 §U41, architecture-correction-plan SP-1) —
+# stubbed-but-called functions.
+#
+# Greps for `unimplemented!(` / `todo!(` in production code (non-test).
+# These are SP-1 violations: a `fn` body that panics on entry is a
+# "stubbed-but-called" surface — it appears in the API but has no
+# implementation. Common shapes:
+#   - `fn foo() { unimplemented!() }`
+#   - `fn foo() -> T { todo!() }`
+#
+# Exclusions:
+#   - doc comments (`///`, `//!`, `//`)
+#   - `// PORT-CHECK-OK-STUB: <reason>` markers on the same line
+#   - `crates/flui-platform/src/platforms/{linux,ios,android}/`
+#     (platform-init stubs deferred to native-platform implementation
+#     work; tracked outside SP-1 — see `crates/flui-platform/ARCHITECTURE.md`
+#     and `docs/ROADMAP.md` Core.0 → Core.1 platform-impl track)
+#   - `#[cfg(test)]` / `tests/` files
+#   - example crates (each example exists to demonstrate, not ship as
+#     framework code; an example's `todo!()` is an EXAMPLE concern,
+#     not an SP-1 violation)
+#
+# Allowlist marker grammar (same convention as triggers 7 / 9):
+#   <something>  // PORT-CHECK-OK-STUB: <one-line justification + tracking issue>
+#
+# Tracking-issue requirement: every marker should reference a tracking
+# issue or follow-up doc so the stub doesn't become permanent. Per-site
+# audit during PR review enforces this.
+# -----------------------------------------------------------------------------
+trigger8_raw=$(rg --line-number --column \
+    -e 'unimplemented!\s*\(' \
+    -e 'todo!\s*\(' \
+    --type rust \
+    --glob '!**/tests/**' \
+    --glob '!**/test*.rs' \
+    --glob '!crates/flui-platform/src/platforms/linux/**' \
+    --glob '!crates/flui-platform/src/platforms/ios/**' \
+    --glob '!crates/flui-platform/src/platforms/android/**' \
+    crates/ 2>/dev/null \
+  | grep -Ev ':\s*(//!|///|//)' \
+  | grep -Ev '//\s*PORT-CHECK-OK-STUB:' \
+  || true)
+
+# **PR #151 Codex review #3295220689:** post-filter out matches inside
+# in-file `#[cfg(test)]` blocks (Rust convention: `#[cfg(test)] mod
+# tests { ... }` at end of source file). The path-glob exclusions
+# above only drop dedicated test files; in-file test modules slip
+# through and false-positive on test-only `todo!()` / `unimplemented!()`
+# scaffolding.
+#
+# Heuristic: scan the file from the top to the matched line for a
+# `#[cfg(test)]` attribute on its own line. If found, assume the match
+# is inside a test mod and drop. This accepts the false-negative of
+# a `cfg(test)` ancestor that doesn't actually enclose the match
+# (rare in practice; tests/ + test*.rs path-exclusion handles the
+# dedicated-test-file case).
+trigger8_hits=""
+while IFS= read -r match_line; do
+  [[ -z "${match_line}" ]] && continue
+  match_file=$(echo "${match_line}" | awk -F':' '{print $1}' | tr '\\' '/')
+  match_lineno=$(echo "${match_line}" | awk -F':' '{print $2}')
+  [[ -z "${match_file}" || -z "${match_lineno}" ]] && continue
+  if head -n "${match_lineno}" "${match_file}" 2>/dev/null \
+      | grep -qE '^[[:space:]]*#\[cfg\(test\)\][[:space:]]*$'; then
+    continue
+  fi
+  trigger8_hits="${trigger8_hits}${match_line}
+"
+done <<< "${trigger8_raw}"
+
+if [[ -n "${trigger8_hits// }" ]]; then
+  echo 'VIOLATION 8: SP-1 stubbed-but-called (unimplemented!()/todo!() in production fn body)'
+  echo "see ${trigger_doc} (trigger 8)"
+  echo "${trigger8_hits}"
+  echo ""
+  violations=$((violations + 1))
+else
+  if [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    8: SP-1 stubbed-but-called (unimplemented!()/todo!() in production)"
+  fi
+fi
+
+# -----------------------------------------------------------------------------
+# Trigger 10 (D-block PR-C-3 §U42, architecture-correction-plan SP-3) —
+# parallel cross-crate type definitions.
+#
+# Collects every `pub struct` / `pub enum` / `pub trait` identifier
+# across the `crates/flui-*/src/` tree and flags any identifier defined
+# (not re-exported) in 2+ DISTINCT crates. Parallel definitions are an
+# SP-3 smell: either the same concept is implemented twice (consolidate)
+# or two unrelated concepts collide on a single name (rename one).
+#
+# Re-exports (`pub use foo::Bar`) do not match because the pattern
+# requires the `struct`/`enum`/`trait` keyword.
+#
+# Exclusions:
+#   - doc comments (`///`, `//!`, `//`)
+#   - tests (`tests/`, `test*.rs`, `#[cfg(test)]` files)
+#   - example crates (`examples/`)
+#   - `// PORT-CHECK-OK-SP3: <reason>` markers on the same line as
+#     the `pub <kind> Name` declaration sanction the duplicate.
+#
+# Allowlist marker grammar:
+#   pub struct Foo { ... }  // PORT-CHECK-OK-SP3: <reason + tracking-issue>
+#
+# Pre-existing parallel definitions in the current codebase are marked
+# individually so future ADDITIONS are caught; the marker reason should
+# point to a consolidation tracking issue so the duplicate doesn't
+# become permanent.
+# -----------------------------------------------------------------------------
+trigger10_defs_raw=$(rg --line-number --no-heading \
+    'pub +(struct|enum|trait) +[A-Z][a-zA-Z0-9_]*' \
+    --type rust \
+    --glob '!**/tests/**' \
+    --glob '!**/test*.rs' \
+    --glob '!examples/**' \
+    crates/ 2>/dev/null \
+  | grep -Ev ':\s*(//!|///|//)' \
+  || true)
+
+# Marker scan: a PORT-CHECK-OK-SP3 marker is sanctioning if it appears
+# on the same line OR on the preceding line OR on either of the next
+# 2 lines (rustfmt moves trailing same-line markers on block-opening
+# decls like `pub enum Foo {` into the block body as the first
+# non-blank line). For each candidate line, fetch the surrounding
+# ±2-line window and check if any line carries the marker.
+trigger10_defs=""
+while IFS= read -r raw_line; do
+  [[ -z "${raw_line}" ]] && continue
+  file_part=$(echo "${raw_line}" | awk -F':' '{print $1}')
+  line_part=$(echo "${raw_line}" | awk -F':' '{print $2}')
+  # Normalize backslash → forward slash for sed path arg.
+  file_norm=$(echo "${file_part}" | tr '\\' '/')
+  [[ -z "${file_norm}" || -z "${line_part}" ]] && continue
+  start=$(( line_part - 1 ))
+  [[ "${start}" -lt 1 ]] && start=1
+  end=$(( line_part + 2 ))
+  window=$(sed -n "${start},${end}p" "${file_norm}" 2>/dev/null || true)
+  if ! echo "${window}" | grep -q 'PORT-CHECK-OK-SP3:'; then
+    trigger10_defs="${trigger10_defs}${raw_line}
+"
+  fi
+done <<< "${trigger10_defs_raw}"
+
+# Build a tab-separated index: crate \t kind \t name \t full-line.
+# **PR #151 Copilot review #3295220014:** Windows rg output uses `\`
+# in paths; the awk `split($1, parts, "/")` then yields `n < 2` and
+# silently drops every entry, suppressing all SP-3 duplicate detection.
+# Normalize backslash → forward slash before splitting.
+trigger10_index=$(echo "${trigger10_defs}" | awk -F':' '
+BEGIN { OFS = "\t" }
+{
+  fp = $1
+  gsub(/\\/, "/", fp)
+  n = split(fp, parts, "/")
+  if (n < 2) next
+  crate = parts[2]
+  line = $0
+  pos = match(line, /pub +(struct|enum|trait) +[A-Z][a-zA-Z0-9_]*/)
+  if (pos == 0) next
+  matched = substr(line, pos, RLENGTH)
+  split(matched, w, /[ \t]+/)
+  print crate, w[2], w[3], line
+}')
+
+# Find (kind, name) pairs defined in 2+ distinct crates.
+trigger10_dupes=$(echo "${trigger10_index}" \
+  | awk -F'\t' 'NF>=3 {print $2 "\t" $3 "\t" $1}' \
+  | sort -u \
+  | awk -F'\t' '{print $1 "\t" $2}' \
+  | sort \
+  | uniq -d)
+
+if [[ -n "${trigger10_dupes}" ]]; then
+  trigger10_report=""
+  while IFS=$'\t' read -r kind name; do
+    [[ -z "${kind}" ]] && continue
+    trigger10_report="${trigger10_report}  ${kind} ${name}:
+$(echo "${trigger10_index}" | awk -F'\t' -v k="${kind}" -v n="${name}" '$2==k && $3==n {print "    " $4}')
+"
+  done <<< "${trigger10_dupes}"
+  echo 'VIOLATION 10: SP-3 parallel cross-crate type definitions'
+  echo "see ${trigger_doc} (trigger 10)"
+  echo "${trigger10_report}"
+  violations=$((violations + 1))
+else
+  if [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    10: SP-3 parallel cross-crate type definitions"
+  fi
+fi
+
+# -----------------------------------------------------------------------------
+# Trigger 11 (D-block PR-C-3 §U43, architecture-correction-plan SP-4) —
+# speculative scaffolding: `pub mod` family with zero production
+# consumers and not behind `cfg(feature = "unstable-*")`.
+#
+# Scans each crate's `lib.rs` for `pub mod <name>;` declarations.
+# For each declaration the trigger:
+#   1. Skips if the preceding non-blank line is `#[cfg(feature =
+#      "unstable-...")]` (intentional speculation behind a feature
+#      gate — sanctioned by SP-4 verdict).
+#   2. Skips if the same `lib.rs` has `pub use <name>::` re-exporting
+#      the module's items (explicit external API surface).
+#   3. Otherwise searches the rest of the workspace for `<crate>::<name>`
+#      or `use <crate>::<name>` references. If zero references outside
+#      the defining crate exist, flags the declaration.
+#
+# Allowlist marker grammar:
+#   pub mod foo;  // PORT-CHECK-OK-SP4: <reason + tracking-issue>
+#
+# Limitations: this is a mechanical scan and trades precision for
+# implementability. It catches the common "lib.rs declares pub mod with
+# no use sites" shape; it does NOT catch sub-module speculation
+# (`mod foo { pub mod bar; }`). For deeper SP-4 audits, see the manual
+# verdicts in architecture-correction-plan §SP-4 (table at line 451).
+# -----------------------------------------------------------------------------
+trigger11_lib_files=$(rg --files --type rust --glob '**/lib.rs' --glob '!**/tests/**' --glob '!examples/**' crates/ 2>/dev/null || true)
+trigger11_violations=""
+for libfile in ${trigger11_lib_files}; do
+  # Extract crate name from path: crates/flui-X/src/lib.rs → flui-X → flui_X
+  # Normalize backslash → forward slash for Windows portability so awk
+  # field splitting on `/` always returns `flui-X` in field 2.
+  libfile_norm=$(echo "${libfile}" | tr '\\' '/')
+  crate_dir=$(echo "${libfile_norm}" | awk -F'/' '{print $2}')
+  crate_underscore=$(echo "${crate_dir}" | tr '-' '_')
+
+  # Find every `pub mod NAME;` line in lib.rs (declaration form, not block form).
+  mod_lines=$(grep -nE '^[[:space:]]*pub[[:space:]]+mod[[:space:]]+[a-z_][a-z0-9_]*[[:space:]]*;' "${libfile}" 2>/dev/null || true)
+  while IFS= read -r mod_line; do
+    [[ -z "${mod_line}" ]] && continue
+    lineno=$(echo "${mod_line}" | awk -F':' '{print $1}')
+    content=$(echo "${mod_line}" | cut -d':' -f2-)
+
+    # Skip if marker present on the same line.
+    if echo "${content}" | grep -q 'PORT-CHECK-OK-SP4:'; then
+      continue
+    fi
+
+    # Extract mod name.
+    modname=$(echo "${content}" | sed -E 's/^[[:space:]]*pub[[:space:]]+mod[[:space:]]+([a-z_][a-z0-9_]*).*/\1/')
+    [[ -z "${modname}" ]] && continue
+
+    # Skip if previous non-blank line is `#[cfg(feature = "unstable-...")]`.
+    # **PR #151 Copilot review #3295220020 + Codex #3295220690:** the
+    # comment promises "previous non-blank line" but pre-fix only
+    # checked `lineno - 1`, so a blank separator between the cfg
+    # attribute and `pub mod` would false-positive. Scan backward
+    # until a non-blank line is found.
+    prev_lineno=$((lineno - 1))
+    prev_content=""
+    while [[ "${prev_lineno}" -gt 0 ]]; do
+      prev_content=$(sed -n "${prev_lineno}p" "${libfile}")
+      # Strip whitespace; if non-empty, this is our target line.
+      if [[ -n "${prev_content// }" ]]; then
+        break
+      fi
+      prev_lineno=$((prev_lineno - 1))
+    done
+    if echo "${prev_content}" | grep -qE '#\[cfg\(feature[[:space:]]*=[[:space:]]*"unstable-'; then
+      continue
+    fi
+
+    # Skip if the same lib.rs re-exports items from the module
+    # (`pub use <modname>::...` or `pub use crate::<modname>::...` —
+    # explicit external API surface).
+    if grep -qE "^[[:space:]]*pub[[:space:]]+use[[:space:]]+(crate::)?${modname}::" "${libfile}"; then
+      continue
+    fi
+
+    # Workspace consumer search: look for `<crate>::<modname>` (qualified
+    # path) or `use <crate>::<modname>` (import) anywhere in the
+    # workspace OUTSIDE the defining crate. If zero matches → flag.
+    consumer_matches=$(rg --type rust --no-heading -l \
+        -e "${crate_underscore}::${modname}\\b" \
+        --glob "!crates/${crate_dir}/**" \
+        --glob '!**/tests/**' \
+        crates/ examples/ 2>/dev/null | head -1 || true)
+    if [[ -z "${consumer_matches}" ]]; then
+      trigger11_violations="${trigger11_violations}${libfile}:${lineno}:${content}
+"
+    fi
+  done <<< "${mod_lines}"
+done
+
+if [[ -n "${trigger11_violations}" ]]; then
+  echo 'VIOLATION 11: SP-4 speculative scaffolding (pub mod with zero workspace consumers, not feature-gated)'
+  echo "see ${trigger_doc} (trigger 11)"
+  echo "${trigger11_violations}"
+  echo ""
+  violations=$((violations + 1))
+else
+  if [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    11: SP-4 speculative scaffolding (pub mod surfaces)"
+  fi
+fi
+
+# -----------------------------------------------------------------------------
+# Trigger 12 (D-block PR-C-3 §U44, architecture-correction-plan SP-6) —
+# lock placement in public API.
+#
+# Lock types leak the framework's concurrency model across module
+# boundaries. A `pub fn -> RwLockReadGuard<...>` or `pub field:
+# Mutex<...>` forces every caller to reason about lock ordering /
+# poisoning / re-entrancy. SP-6's verdict is that locks should live
+# behind private fields; public APIs should expose immutable
+# snapshots or scoped callbacks.
+#
+# Patterns flagged:
+#   pub fn foo() -> RwLockReadGuard<...> | RwLockWriteGuard<...> |
+#                   MutexGuard<...> | RwLock<...> | Mutex<...>
+#   pub field: (Arc<)?(parking_lot::)?(RwLock|Mutex)<...>
+#
+# Allowlist marker grammar:
+#   <decl>  // PORT-CHECK-OK-SP6: <reason + tracking-issue>
+# -----------------------------------------------------------------------------
+trigger12_raw=$(rg --line-number --no-heading \
+    -e '^\s*pub fn .*-> .*(RwLock|Mutex|RwLockReadGuard|RwLockWriteGuard|MutexGuard)\b' \
+    -e '^\s*pub \w+ *: *(Arc<\s*)?(parking_lot::)?(RwLock|Mutex)<' \
+    --type rust \
+    --glob '!**/tests/**' \
+    --glob '!**/test*.rs' \
+    --glob '!examples/**' \
+    crates/ 2>/dev/null \
+  | grep -Ev ':\s*(//!|///|//)' \
+  || true)
+
+# Same ±2 line marker-scan window as trigger #10 — rustfmt may move
+# trailing same-line markers on `pub fn ... -> ... {` block-openings
+# into the function body.
+trigger12_hits=""
+while IFS= read -r raw_line; do
+  [[ -z "${raw_line}" ]] && continue
+  file_part=$(echo "${raw_line}" | awk -F':' '{print $1}')
+  line_part=$(echo "${raw_line}" | awk -F':' '{print $2}')
+  file_norm=$(echo "${file_part}" | tr '\\' '/')
+  [[ -z "${file_norm}" || -z "${line_part}" ]] && continue
+  start=$(( line_part - 1 ))
+  [[ "${start}" -lt 1 ]] && start=1
+  end=$(( line_part + 2 ))
+  window=$(sed -n "${start},${end}p" "${file_norm}" 2>/dev/null || true)
+  if ! echo "${window}" | grep -q 'PORT-CHECK-OK-SP6:'; then
+    trigger12_hits="${trigger12_hits}${raw_line}
+"
+  fi
+done <<< "${trigger12_raw}"
+
+if [[ -n "${trigger12_hits}" ]]; then
+  echo 'VIOLATION 12: SP-6 lock placement in public API'
+  echo "see ${trigger_doc} (trigger 12)"
+  echo "${trigger12_hits}"
+  echo ""
+  violations=$((violations + 1))
+else
+  if [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    12: SP-6 lock placement in public API"
+  fi
+fi
+
+# -----------------------------------------------------------------------------
+# Trigger 13 (D-block PR-C-3 §U45, architecture-correction-plan SP-8) —
+# constructor-time panics.
+#
+# `unwrap()` / `expect()` / `panic!(...)` / `assert!(...)` inside a
+# public CONSTRUCTOR (`pub fn new` / `pub fn from_*` / `pub fn try_*`)
+# turns argument-validation bugs into process aborts at the public
+# API surface. The SP-8 verdict is that public constructors should
+# return `Result` or take pre-validated types; `debug_assert!` is
+# allowed (compiled out in release).
+#
+# Mechanical scope (heuristic, deliberately narrow — catches the
+# clearest shapes, accepts false-negatives over false-positives):
+#   - single-line constructor bodies: `pub fn new(...) -> Self { ...
+#     .unwrap()/.expect()/panic!/assert! ... }`
+#   - inline body with one of the panic forms on the SAME line as the
+#     `pub fn (new|from_*|try_*)` signature.
+#
+# Multi-line constructor bodies are NOT inspected — that requires
+# real-AST traversal; rustc + clippy lints (`clippy::expect_used`,
+# `clippy::unwrap_used`) cover that surface where opted in.
+#
+# Allowlist marker grammar:
+#   pub fn new() -> Self { foo.unwrap() }  // PORT-CHECK-OK-SP8: <reason>
+# -----------------------------------------------------------------------------
+trigger13_hits=$(rg --line-number --no-heading \
+    'pub fn (new|from_[a-z_]+|try_[a-z_]+)\b[^{]*\{[^}]*(\.unwrap\(\)|\.expect\(|panic!\s*\(|assert!\s*\()' \
+    --type rust \
+    --glob '!**/tests/**' \
+    --glob '!**/test*.rs' \
+    --glob '!examples/**' \
+    --glob '!crates/flui-platform/src/platforms/**' \
+    crates/ 2>/dev/null \
+  | grep -Ev ':\s*(//!|///|//)' \
+  | grep -Ev 'debug_assert' \
+  | grep -Ev '//\s*PORT-CHECK-OK-SP8:' \
+  || true)
+
+if [[ -n "${trigger13_hits}" ]]; then
+  echo 'VIOLATION 13: SP-8 constructor-time panics (unwrap/expect/panic!/assert! in pub constructor body)'
+  echo "see ${trigger_doc} (trigger 13)"
+  echo "${trigger13_hits}"
+  echo ""
+  violations=$((violations + 1))
+else
+  if [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    13: SP-8 constructor-time panics"
+  fi
+fi
+
+# -----------------------------------------------------------------------------
 # Trigger 9 (FR-036, Phase 3.1 §U30) — sanctioned `dyn`-boundary registry.
 #
 # Greps every `Box<dyn …>`, reference `dyn …` (in any of the four reference
@@ -591,7 +1002,7 @@ if [[ "${violations}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "port-check: all seven refusal triggers + FR-033 grep + trigger 9 (FR-036) clean"
+echo "port-check: all 13 refusal triggers + FR-033 grep clean"
 
 # -----------------------------------------------------------------------------
 # Marker summary (verbose mode only). Non-blocking — markers are Phase B

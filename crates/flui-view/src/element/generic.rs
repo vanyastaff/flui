@@ -629,6 +629,7 @@ where
 
     /// Get the PipelineOwner, if set.
     pub fn pipeline_owner(&self) -> Option<&Arc<RwLock<PipelineOwner>>> {
+        // PORT-CHECK-OK-SP6: ElementCore pipeline_owner accessor; pre-existing SP-6
         self.pipeline_owner.as_ref()
     }
 

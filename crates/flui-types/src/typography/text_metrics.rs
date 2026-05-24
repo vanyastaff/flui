@@ -67,6 +67,7 @@ impl Default for TextPosition {
 /// exclusive.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextRange {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Start offset (inclusive).
     pub start: usize,
     /// End offset (exclusive).

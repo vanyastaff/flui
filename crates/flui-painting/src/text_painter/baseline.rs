@@ -24,6 +24,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TextBaseline {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The alphabetic baseline (bottom of letters like 'x').
     #[default]
     Alphabetic,

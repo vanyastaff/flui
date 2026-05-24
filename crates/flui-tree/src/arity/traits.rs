@@ -55,7 +55,7 @@ pub trait Arity: sealed::Sealed + Send + Sync + Debug + Copy + Default + 'static
 pub(crate) mod sealed {
     use super::super::types::{AtLeast, Exact, Leaf, Never, Optional, Range, Variable};
 
-    pub trait Sealed {}
+    pub trait Sealed {} // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
 
     impl Sealed for Leaf {}
     impl Sealed for Optional {}

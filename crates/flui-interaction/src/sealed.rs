@@ -163,7 +163,7 @@ pub trait CustomHitTestable: Send + Sync {
 ///
 /// **Do not implement directly.** Instead, implement [`CustomHitTestable`].
 pub mod hit_testable {
-    pub trait Sealed {}
+    pub trait Sealed {} // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
 
     // Blanket impl: any CustomHitTestable automatically gets Sealed
     impl<T: super::CustomHitTestable> Sealed for T {}
@@ -178,7 +178,7 @@ pub mod hit_testable {
 /// **Do not implement directly.** Instead, implement
 /// [`CustomGestureRecognizer`].
 pub mod gesture_recognizer {
-    pub trait Sealed {}
+    pub trait Sealed {} // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
 
     // Blanket impl: any CustomGestureRecognizer automatically gets Sealed
     impl<T: super::CustomGestureRecognizer> Sealed for T {}
@@ -200,7 +200,7 @@ pub mod gesture_recognizer {
 /// **Do not implement directly.** Instead, implement
 /// [`CustomGestureRecognizer`].
 pub mod arena_member {
-    pub trait Sealed {}
+    pub trait Sealed {} // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
 
     // Blanket impl: any CustomGestureRecognizer automatically gets Sealed
     impl<T: super::CustomGestureRecognizer> Sealed for T {}
@@ -219,5 +219,5 @@ pub mod arena_member {
 ///
 /// This restricts which types can receive keyboard focus.
 pub mod focus_node {
-    pub trait Sealed {}
+    pub trait Sealed {} // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
 }

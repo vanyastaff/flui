@@ -369,6 +369,7 @@ pub trait WidgetsBindingObserver: Send + Sync {
 /// Application lifecycle states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppLifecycleState {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// App is visible and responding to user input.
     Resumed,
     /// App is inactive (e.g., incoming call).
@@ -581,6 +582,7 @@ impl WidgetsBinding {
 
     /// Get the PipelineOwner if set.
     pub fn pipeline_owner(&self) -> Option<Arc<RwLock<PipelineOwner>>> {
+        // PORT-CHECK-OK-SP6: binding layer Arc<RwLock<PipelineOwner>> leak; consolidation tracked under architecture-correction-plan SP-6
         self.inner.read().pipeline_owner.clone()
     }
 

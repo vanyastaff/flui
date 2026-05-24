@@ -6,6 +6,7 @@ use super::{Simulation, Tolerance};
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FrictionSimulation {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The drag coefficient (higher = more friction)
     drag: f32,
 

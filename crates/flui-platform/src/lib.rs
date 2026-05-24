@@ -156,7 +156,7 @@ pub mod platforms;
 pub mod shared;
 pub mod task;
 pub mod traits;
-pub mod window;
+pub mod window; // PORT-CHECK-OK-SP4: window API surface; binding entry for platform integrators
 
 // Re-export configuration types
 // ==================== Platform Detection ====================

@@ -346,7 +346,7 @@ impl CliError {
 ///         .context("Failed to read configuration file")
 /// }
 /// ```
-pub trait ResultExt<T> {
+pub trait ResultExt<T> { // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Add context to an error result.
     ///
     /// Converts any error into a `CliError::WithContext` with the given message.

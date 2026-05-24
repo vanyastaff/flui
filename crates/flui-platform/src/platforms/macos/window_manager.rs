@@ -245,7 +245,7 @@ impl Default for WindowManager {
 
 /// Unique identifier for a window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct WindowId(pub u64);
+pub struct WindowId(pub u64); // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
 
 impl WindowId {
     /// Create a new window ID (for testing).
@@ -324,6 +324,7 @@ pub struct WindowInfo {
 /// Options for creating a new window.
 #[derive(Debug, Clone)]
 pub struct WindowOptions {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Window title.
     pub title: String,
 

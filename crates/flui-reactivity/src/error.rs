@@ -150,7 +150,7 @@ pub enum RuntimeError {
 }
 
 /// Extension trait for Result types to provide additional context.
-pub trait ResultExt<T> {
+pub trait ResultExt<T> { // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Add context to an error.
     fn context(self, msg: impl Into<String>) -> Result<T>;
 

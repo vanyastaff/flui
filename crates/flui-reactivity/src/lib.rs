@@ -79,7 +79,7 @@ pub mod owner;
 pub mod runtime;
 pub mod scheduler;
 pub mod signal;
-pub mod test_harness;
+pub mod test_harness; // PORT-CHECK-OK-SP4: test_harness API surface; testing-only consumer (still pub for downstream test suites)
 pub mod traits;
 
 // Async support (optional, enabled via "async" feature)

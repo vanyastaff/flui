@@ -80,7 +80,7 @@ impl std::fmt::Debug for SignalDataErased {
 /// Typed signal data (stored inside SignalDataErased).
 pub struct SignalData<T> {
     /// The actual value (thread-safe)
-    pub value: Arc<Mutex<T>>,
+    pub value: Arc<Mutex<T>>, // PORT-CHECK-OK-SP6: Signal value Mutex<T>; required by reactive RuntimeContext; pre-existing SP-6
 
     /// Subscribers that get notified on changes
     #[allow(dead_code)]

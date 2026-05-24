@@ -103,6 +103,7 @@ pub struct FlexParentData {
 /// How flexible child should fit in allocated space.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FlexFit {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Child can be smaller than allocated space.
     Loose,
 

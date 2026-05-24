@@ -8,7 +8,7 @@ use crate::error::{BuildError, BuildResult};
 /// allowing us to add methods to the trait in the future without
 /// breaking changes.
 pub(crate) mod private {
-    pub trait Sealed {}
+    pub trait Sealed {} // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
 }
 
 /// Build context containing configuration and paths.
@@ -31,7 +31,7 @@ pub struct BuilderContext {
 
 /// Platform to build for
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Platform {
+pub enum Platform { // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Android platform with target architectures
     Android {
         /// Target architectures (e.g., "aarch64-linux-android")

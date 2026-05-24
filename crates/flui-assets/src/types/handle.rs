@@ -282,7 +282,7 @@ pub mod sealed {
     ///
     /// This ensures only types in this crate can implement AssetHandleCore,
     /// allowing us to add methods to AssetHandleExt without breaking changes.
-    pub trait Sealed {}
+    pub trait Sealed {} // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
 
     impl<T, K> Sealed for AssetHandle<T, K> {}
     impl<T, K> Sealed for &AssetHandle<T, K> {}

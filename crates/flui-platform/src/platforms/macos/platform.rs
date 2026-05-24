@@ -162,7 +162,7 @@ impl Platform for MacOSPlatform {
 
     fn capabilities(&self) -> &dyn PlatformCapabilities {
         // TODO: Return macOS capabilities
-        unimplemented!("macOS capabilities not yet implemented")
+        unimplemented!("macOS capabilities not yet implemented") // PORT-CHECK-OK-STUB: macOS platform-init deferred to Core.0 → Core.1 native-platform track (ROADMAP.md)
     }
 
     fn name(&self) -> &'static str {

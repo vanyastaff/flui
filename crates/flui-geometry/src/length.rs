@@ -422,7 +422,7 @@ impl<'a> std::iter::Sum<&'a Rems> for Rems {
 /// Percentage value (0.0 = 0%, 1.0 = 100%).
 #[derive(Copy, Clone, Default, PartialEq)]
 #[repr(transparent)]
-pub struct Percentage(pub f32);
+pub struct Percentage(pub f32); // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
 
 impl Percentage {
     /// Zero percent.

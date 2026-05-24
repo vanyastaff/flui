@@ -34,6 +34,7 @@ pub type ScaleCancelCallback = Arc<dyn Fn() + Send + Sync>;
 /// Details about scale gesture start
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScaleStartDetails {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Focal point (center between pointers) in global coordinates
     pub focal_point: Offset<Pixels>,
     /// Focal point in local coordinates
@@ -45,6 +46,7 @@ pub struct ScaleStartDetails {
 /// Details about scale gesture update
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScaleUpdateDetails {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Focal point (center between pointers) in global coordinates
     pub focal_point: Offset<Pixels>,
     /// Focal point in local coordinates
@@ -64,6 +66,7 @@ pub struct ScaleUpdateDetails {
 /// Details about scale gesture end
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScaleEndDetails {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Final focal point
     pub focal_point: Offset<Pixels>,
     /// Final scale factor

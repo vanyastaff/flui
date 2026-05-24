@@ -135,7 +135,7 @@ pub mod size;
 pub mod text_path;
 pub mod traits;
 pub mod transform;
-pub mod transform2d;
+pub mod transform2d; // PORT-CHECK-OK-SP4: transform2d API surface; consumed via flui_types::geometry re-export chain
 pub mod units;
 pub mod vector;
 

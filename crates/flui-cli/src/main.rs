@@ -380,7 +380,7 @@ impl Template {
 
 /// Target platforms for FLUI applications.
 #[derive(Clone, Copy, ValueEnum, Debug, PartialEq, Eq, Hash)]
-pub enum Platform {
+pub enum Platform { // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Microsoft Windows
     Windows,
     /// Linux distributions

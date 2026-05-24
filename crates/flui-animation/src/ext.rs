@@ -40,7 +40,7 @@ use std::sync::Arc;
 ///
 /// assert_eq!(animation.value(), 0.0);
 /// ```
-pub trait AnimatableExt<T>: Animatable<T> + Clone + Send + Sync + 'static
+pub trait AnimatableExt<T>: Animatable<T> + Clone + Send + Sync + 'static // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
 where
     T: Clone + Send + Sync + fmt::Debug + 'static,
 {

@@ -333,6 +333,7 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
 /// Text baseline types for baseline alignment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextBaseline {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The alphabetic baseline.
     Alphabetic,
     /// The ideographic baseline.

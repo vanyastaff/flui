@@ -941,6 +941,7 @@ impl Scheduler {
 
     /// Get frame budget reference
     pub fn budget(&self) -> parking_lot::MutexGuard<'_, FrameBudget> {
+        // PORT-CHECK-OK-SP6: FrameBudget guard accessor; required for atomic snapshot semantics; pre-existing SP-6
         self.frame.budget.lock()
     }
 

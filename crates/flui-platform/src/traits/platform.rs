@@ -18,6 +18,7 @@ use crate::{cursor::CursorStyle, task::Task};
 /// Window creation options
 #[derive(Debug, Clone)]
 pub struct WindowOptions {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Window title
     pub title: String,
     /// Initial window size (logical pixels)
@@ -133,7 +134,7 @@ impl WindowMode {
 
 /// Window identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct WindowId(pub u64);
+pub struct WindowId(pub u64); // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
 
 /// Core platform abstraction trait
 ///

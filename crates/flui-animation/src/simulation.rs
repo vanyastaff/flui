@@ -28,7 +28,7 @@ use std::f32::consts::PI;
 /// Specifies maximum allowable magnitudes for distances and velocities
 /// to be considered at rest.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Tolerance {
+pub struct Tolerance { // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Maximum distance from target to be considered "at rest".
     pub distance: f32,
     /// Maximum velocity to be considered "at rest".
@@ -69,7 +69,7 @@ impl Default for Tolerance {
 /// - Position via [`x()`](Simulation::x)
 /// - Velocity via [`dx()`](Simulation::dx)
 /// - Completion state via [`is_done()`](Simulation::is_done)
-pub trait Simulation: Send + Sync {
+pub trait Simulation: Send + Sync { // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The position of the object at the given time.
     fn x(&self, time: f32) -> f32;
 
@@ -90,7 +90,7 @@ pub trait Simulation: Send + Sync {
 ///
 /// Used to configure [`SpringSimulation`].
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SpringDescription {
+pub struct SpringDescription { // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The mass of the spring (m).
     pub mass: f32,
     /// The spring constant / stiffness (k).
@@ -201,7 +201,7 @@ impl SpringDescription {
 
 /// The type of spring behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum SpringType {
+pub enum SpringType { // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// A spring that does not bounce and returns to rest in the shortest time.
     CriticallyDamped,
     /// A spring that bounces (oscillates) before settling.
@@ -214,7 +214,7 @@ pub enum SpringType {
 ///
 /// Models a particle attached to a spring following Hooke's law.
 #[derive(Debug, Clone)]
-pub struct SpringSimulation {
+pub struct SpringSimulation { // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     end_position: f32,
     solution: SpringSolution,
     tolerance: Tolerance,
@@ -458,7 +458,7 @@ fn near_zero(value: f32, threshold: f32) -> bool {
 
 /// A friction simulation that slows an object by a constant deceleration.
 #[derive(Debug, Clone)]
-pub struct FrictionSimulation {
+pub struct FrictionSimulation { // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     drag: f32,
     drag_log: f32,
     initial_position: f32,
@@ -551,7 +551,7 @@ impl Simulation for FrictionSimulation {
 
 /// A gravity simulation with constant acceleration.
 #[derive(Debug, Clone)]
-pub struct GravitySimulation {
+pub struct GravitySimulation { // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     acceleration: f32,
     initial_position: f32,
     initial_velocity: f32,

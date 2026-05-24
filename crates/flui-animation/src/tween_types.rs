@@ -846,7 +846,7 @@ where
 /// let curved = tween.with_curve(Curves::EaseIn);
 /// assert!(curved.transform(0.5) < 50.0);
 /// ```
-pub trait AnimatableExt<T>: Animatable<T> + Sized {
+pub trait AnimatableExt<T>: Animatable<T> + Sized { // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Returns a reversed version of this animatable.
     ///
     /// The reversed animatable transforms `t` to `1.0 - t` before passing

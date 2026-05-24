@@ -28,6 +28,7 @@ use std::{
 /// dispatching (e.g., Windows ThreadPool, macOS GCD) is planned for post-MVP.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Priority {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// High priority — UI-blocking operations, user input handling
     High,
     /// Medium priority — default for most operations
@@ -70,7 +71,7 @@ impl std::fmt::Display for TaskLabel {
 /// executor.spawn(async { log_analytics() }).detach();
 /// ```
 #[must_use = "tasks are cancelled when dropped; use `.detach()` to run in background"]
-pub struct Task<T>(TaskState<T>);
+pub struct Task<T>(TaskState<T>); // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
 
 enum TaskState<T> {
     /// Task completed synchronously — value available immediately

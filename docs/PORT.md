@@ -111,6 +111,80 @@ The *funnel* signatures (`tree.rs::insert_box`, view → render `From` impls) ac
 
 **Regex:** `^\s+(pub\s+)?\w+\s*:\s*(Option<\s*)?Arc<\s*(parking_lot::)?(Mutex|RwLock)<\s*((super::)?(\w+::)*\w*(Renderer|Pool)\w*|wgpu::\w+)` constrained to `crates/flui-engine/src/wgpu/`, with file-glob exclusions for the three Friction-log-tracked sites listed above. Anchored to struct-field syntax (leading whitespace + optional `pub` + ident + `:`); inner alternation `((super::)?(\w+::)*\w*(Renderer|Pool)\w*|wgpu::\w+)` is grouped so `wgpu::*` matches only at the outer-type position. Catches both `Arc<...>` and `Option<Arc<...>>` field shapes. Tightened after Copilot review on PR #79.
 
+### 8. `unimplemented!()` / `todo!()` in production `fn` body
+
+**SP-1 — stubbed-but-called.** A function whose body panics on entry is an API that publishes a contract without honoring it. The trigger fires whenever `unimplemented!(` or `todo!(` appears outside test code.
+
+**Allowlist marker:** `// PORT-CHECK-OK-STUB: <reason + tracking-issue>` on the same line as the panic. The reason should name the tracking issue or follow-up doc so the stub doesn't become permanent.
+
+**Scope:** framework crates (`crates/`), excluding tests (`tests/`, `test*.rs`), examples, and the per-platform stub modules (`crates/flui-platform/src/platforms/{linux,ios,android}/`) which are tracked outside SP-1 under the platform-impl track in [`ROADMAP.md`](ROADMAP.md).
+
+**Regex:** `unimplemented!\s*\(|todo!\s*\(` with doc-comment and marker filters.
+
+**Back-references:** [architecture-correction-plan §SP-1](research/2026-05-22-architecture-correction-plan.md), [D-block plan §U41](plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md).
+
+### 9. Sanctioned `dyn`-boundary registry (FR-036)
+
+**FR-036 — every `Box<dyn …>` / `&dyn …` / `Arc<dyn …>` / `Rc<dyn …>` introduction (and every type alias of that shape) in the framework crates must either (a) name a sanctioned trait from the inline allowlist, (b) match a language-runtime exempt pattern (`Pin<Box<dyn Future>>`, `Box<dyn Iterator>`, `&dyn Fn*` callback parameters), or (c) carry an explicit `// PORT-CHECK-OK-DYN:` marker on the same line.** Phase 3.1 §U30 of the view/element core-contracts plan installs this trigger as the canonical FR-036 enforcement layer.
+
+**Allowlist marker:** `// PORT-CHECK-OK-DYN: <one-line justification>` on the same line as the `dyn`-introducing declaration. Multi-line declarations either keep the marker on the `Box<` line (matched by the scan) or refactor to a type alias that fits one line + carries its own marker.
+
+**Sanctioned trait allowlist** (categories per FR-029 #1-#5 + pre-existing framework surfaces): element-storage sub-traits (`ElementBase` / `ElementBehavior` / `StatelessElementBase` / `StatefulElementBase` / `ProxyElementBase` / `InheritedElementBase` / `RenderElementBase`), BoxedView (`View` / `BoxedView` / `ViewObject`), pipeline-owner type-erasure (`Any`), error / observer / animation / owned-callback chains (`Error` / `Listenable` / `Animation` / `WidgetsBindingObserver` / `Fn` / `FnMut` / `FnOnce`), protocol-layout erasure (`BoxLayoutCtxErased` / `SliverLayoutCtxErased` — D-block PR-A1b §U19 / memo D5), and pre-existing surfaces (`ViewKey` / `BuildContext` / `Notification` / `NotifiableElement` / `RenderObject` / `RenderObjectTrait`). Add a trait here when its `dyn` usage is widespread enough that per-site markers become noise; remove only after auditing that the trait's `dyn` surface is genuinely gone.
+
+**Scope:** framework crates (`crates/flui-view/src`, `crates/flui-foundation/src`, `crates/flui-tree/src`, `crates/flui-engine/src`, `crates/flui-rendering/src`, `crates/flui-interaction/src`).
+
+**Multi-line declaration handling:** the scan does NOT use `rg -U` multiline mode (mixing multi-line output blocks with line-oriented `grep -Ev` filters partial-filters multi-line matches → false positives and silent bypasses). The single-line scan catches rustfmt-formatted code (which collapses `Box<dyn Trait>` to one line whenever possible).
+
+**Back-references:** [specs/004-view-element-core/spec.md FR-036](../specs/004-view-element-core/spec.md), [Phase 3.1 §U30](plans/2026-05-22-005-feat-view-element-core-contracts-plan.md).
+
+### 10. Parallel cross-crate type definitions
+
+**SP-3 — same identifier `pub struct` / `pub enum` / `pub trait` defined in 2+ distinct framework crates.** Either the same concept is implemented twice (consolidate) or two unrelated concepts collide on a single name (rename one).
+
+Re-exports (`pub use foo::Bar`) do not trip the trigger — only literal `pub <kind> <Name>` declarations are counted.
+
+**Allowlist marker:** `// PORT-CHECK-OK-SP3: <reason + tracking-issue>`. The scan checks a ±2-line window around the `pub <kind> <Name>` declaration (preceding line + same line + 2 lines after), so the marker survives rustfmt moving a trailing same-line comment on block-opening decls (`pub enum Foo {`, `pub struct Bar {`) into the body as the first non-blank line. Place the marker on the same line for one-liner decls (`pub struct Foo(pub u32);`) or on the preceding line for block decls; both forms are accepted.
+
+**Scope:** framework crates (`crates/`), excluding tests + examples.
+
+**Regex:** `pub +(struct|enum|trait) +[A-Z][a-zA-Z0-9_]*` with crate-attribution via path (backslash-normalized for Windows portability), then duplicate detection across distinct crates.
+
+**Back-references:** [architecture-correction-plan §SP-3](research/2026-05-22-architecture-correction-plan.md), [D-block plan §U42](plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md).
+
+### 11. Speculative scaffolding: `pub mod` with zero workspace consumers
+
+**SP-4 — `pub mod <name>;` declared in `lib.rs` that is (a) not behind `#[cfg(feature = "unstable-*")]` on its preceding non-blank line, (b) not re-exported via `pub use [crate::]<name>::` in the same `lib.rs`, AND (c) not referenced as `<crate>::<name>` anywhere in the workspace outside the defining crate.** This catches speculative `pub mod` surfaces that publish API without consumers.
+
+**Allowlist marker:** `// PORT-CHECK-OK-SP4: <reason + tracking-issue>` on the same line as the `pub mod` declaration. Common reasons: macro export bypass (`#[macro_export]` items consumed via macro invocation not module path), future-consumer binding entry, intentional API surface for downstream integrators.
+
+**Limitations:** mechanical scan — catches lib.rs-level `pub mod`, NOT sub-module speculation (`mod foo { pub mod bar; }`). For deeper SP-4 audits see the manual verdicts in [architecture-correction-plan §SP-4](research/2026-05-22-architecture-correction-plan.md).
+
+**Back-references:** [architecture-correction-plan §SP-4](research/2026-05-22-architecture-correction-plan.md), [D-block plan §U43](plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md), [view-tree-foundation audit "Post-audit correction"](research/2026-05-21-view-tree-foundation-audit.md) (zero-consumer flui-tree surface is deliberate unified-tree infrastructure, not a deletion signal).
+
+### 12. Lock placement in public API
+
+**SP-6 — `RwLock` / `Mutex` / `Arc<RwLock<...>>` in a `pub fn` return type OR a `pub` field of a trait/struct.** Lock types leak the framework's concurrency model across module boundaries; every caller has to reason about lock ordering / poisoning / re-entrancy. SP-6's verdict is that locks should live behind private fields; public APIs should expose immutable snapshots or scoped callbacks.
+
+**Patterns flagged:**
+* `pub fn foo() -> RwLockReadGuard<...>` / `RwLockWriteGuard<...>` / `MutexGuard<...>` / `RwLock<...>` / `Mutex<...>`
+* `pub field: (Arc<)?(parking_lot::)?(RwLock|Mutex)<...>`
+
+**Allowlist marker:** `// PORT-CHECK-OK-SP6: <reason + tracking-issue>`. Same ±2-line window logic as trigger 10 — the marker is accepted on the preceding line, the same line, or 2 lines after the declaration (rustfmt may move trailing same-line markers on block-opening signatures like `pub fn foo() -> RwLockReadGuard {` into the body). Pre-existing leaks in the binding / context / callback-storage layers are marked individually.
+
+**Back-references:** [architecture-correction-plan §SP-6](research/2026-05-22-architecture-correction-plan.md), [D-block plan §U44](plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md).
+
+### 13. Constructor-time panics
+
+**SP-8 — `unwrap()` / `expect(` / `panic!(` / `assert!(` inside a public CONSTRUCTOR body (`pub fn new` / `pub fn from_*` / `pub fn try_*`).** Turns argument-validation bugs into process aborts at the public API surface. The SP-8 verdict is that public constructors should return `Result` or take pre-validated types.
+
+**Allowed:** `debug_assert!` (compiled out in release).
+
+**Mechanical scope (deliberately narrow — high precision, accepts false-negatives):** single-line constructor bodies of the shape `pub fn new(...) -> Self { ... .unwrap()/.expect()/panic!/assert! ... }` (inline body with one of the panic forms on the SAME line as the `pub fn (new|from_*|try_*)` signature). Multi-line constructor bodies are NOT inspected; rustc + clippy lints (`clippy::expect_used`, `clippy::unwrap_used`) cover that surface where opted in.
+
+**Allowlist marker:** `// PORT-CHECK-OK-SP8: <reason>` on the same line as the panic.
+
+**Back-references:** [architecture-correction-plan §SP-8](research/2026-05-22-architecture-correction-plan.md), [D-block plan §U45](plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md).
+
 ### Reactive lint promotion
 
 Triggers grow reactively. A new trigger is added to this list when an anti-pattern is caught in review; it does not pre-exist its first observation.
