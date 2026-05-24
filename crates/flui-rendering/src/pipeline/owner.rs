@@ -892,11 +892,27 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// layout-phase debug flag because compositing-bits update runs
     /// as part of the layout pipeline per the typestate transitions).
     ///
+    /// **PR-A2 Codex review #3294562493:** also sets the
+    /// `NEEDS_COMPOSITING_BITS_UPDATE` flag on the node so the
+    /// `run_compositing` walk's per-entry `needs_compositing_bits_update()`
+    /// short-circuit doesn't silently drop this queue entry. The
+    /// invariant "queue entry ⇒ flag set" makes the queue-clear at
+    /// end of `run_compositing` safe — a queued entry can no longer
+    /// be a no-op walk that loses the scheduling signal. Callers
+    /// that want the bit set without queue membership should reach
+    /// for [`RenderNode::mark_needs_compositing_bits_update`] directly.
+    ///
     /// # Arguments
     ///
     /// * `node_id` - The `RenderId` of the render object (1-based)
     /// * `depth` - The depth of the node in the render tree
     pub fn add_node_needing_compositing_bits_update(&mut self, node_id: RenderId, depth: usize) {
+        // Set the bit first so the run_compositing walk doesn't
+        // skip this entry on the early-return path. No-op if the id
+        // is not present in the tree (defensive).
+        if let Some(node) = self.render_tree.get(node_id) {
+            node.mark_needs_compositing_bits_update();
+        }
         let target = if self.debug_doing_layout {
             &mut self.mid_layout_marks.needs_compositing
         } else {

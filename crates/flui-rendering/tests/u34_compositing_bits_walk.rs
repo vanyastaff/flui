@@ -121,18 +121,31 @@ fn u34_run_compositing_clears_needs_compositing_bits_update_flag() {
     );
 }
 
-/// U34: a node that doesn't have the bits-update flag set is left
-/// alone — the walk short-circuits at the entry.
+/// U34: a node whose flag was cleared between enqueue and run
+/// (e.g., parent's walk processed this child mid-iteration) hits the
+/// `update_subtree_compositing_bits` early-return path. The walk
+/// short-circuits at the entry and leaves NEEDS_COMPOSITING alone.
+///
+/// **PR-A2 Codex review #3294562493:** post-fix
+/// `add_node_needing_compositing_bits_update` sets the flag on
+/// enqueue so an unflagged enqueue is no longer possible. To exercise
+/// the short-circuit path the test now manually clears the flag
+/// after enqueue (simulating the parent-cleared-me-mid-walk case).
 #[test]
-fn u34_run_compositing_short_circuits_when_flag_not_set() {
+fn u34_run_compositing_short_circuits_when_flag_cleared_after_enqueue() {
     let mut owner = PipelineOwner::new();
     let padding_id = owner.insert(Box::new(RenderPadding::all(5.0))
         as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
-    // Queue the id WITHOUT setting the flag (simulates a stale dirty
-    // entry whose update has already been satisfied by an earlier
-    // walk in the same frame, e.g. an ancestor processing first).
     let depth = owner.render_tree().depth(padding_id).unwrap_or(0) as usize;
     owner.add_node_needing_compositing_bits_update(padding_id, depth);
+    // Clear the flag the enqueue just set, simulating the case where
+    // an earlier iteration's walk (e.g., the parent's recursion)
+    // already processed this node and cleared its flag.
+    owner
+        .render_tree()
+        .get(padding_id)
+        .expect("padding")
+        .clear_needs_compositing_bits_update();
 
     owner.set_root_id(Some(padding_id));
     owner.set_root_constraints(Some(BoxConstraints::new(
@@ -163,6 +176,47 @@ fn u34_run_compositing_short_circuits_when_flag_not_set() {
         needs_compositing_before, needs_compositing_after,
         "short-circuit branch must not mutate NEEDS_COMPOSITING when \
          NEEDS_COMPOSITING_BITS_UPDATE is false",
+    );
+}
+
+/// PR-A2 Codex #3294562493 regression: enqueueing via
+/// `add_node_needing_compositing_bits_update` MUST set the
+/// `NEEDS_COMPOSITING_BITS_UPDATE` flag on the node, so that
+/// `run_compositing`'s per-entry short-circuit can't silently drop
+/// the queued work.
+#[test]
+fn u34_add_node_needing_compositing_bits_update_sets_flag_on_enqueue() {
+    let mut owner = PipelineOwner::new();
+    let padding_id = owner.insert(Box::new(RenderPadding::all(5.0))
+        as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
+
+    // Pre-enqueue: clear any stale flag bits from insert / bootstrap.
+    owner
+        .render_tree()
+        .get(padding_id)
+        .expect("padding")
+        .clear_needs_compositing_bits_update();
+    assert!(
+        !owner
+            .render_tree()
+            .get(padding_id)
+            .unwrap()
+            .needs_compositing_bits_update(),
+        "precondition: flag cleared before enqueue",
+    );
+
+    let depth = owner.render_tree().depth(padding_id).unwrap_or(0) as usize;
+    owner.add_node_needing_compositing_bits_update(padding_id, depth);
+
+    assert!(
+        owner
+            .render_tree()
+            .get(padding_id)
+            .unwrap()
+            .needs_compositing_bits_update(),
+        "add_node_needing_compositing_bits_update must set the flag \
+         (invariant: queue entry ⇒ flag set, so the run_compositing \
+         walk never silently drops queued work)",
     );
 }
 
