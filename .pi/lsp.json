@@ -1,0 +1,22 @@
+{
+  "timeout": 60000,
+  "servers": {
+    "rust-analyzer": {
+      "command": ["rust-analyzer"],
+      "extensions": [".rs"],
+      "rootPatterns": ["Cargo.toml", "rust-toolchain.toml"],
+      "initializationOptions": {
+        "cargo": {
+          "allTargets": true,
+          "features": "all"
+        },
+        "check": {
+          "command": "clippy",
+          "extraArgs": ["--workspace", "--all-targets"]
+        },
+        "procMacro": { "enable": true },
+        "diagnostics": { "enable": true }
+      }
+    }
+  }
+}

@@ -16,22 +16,25 @@ FLUI is a modular, Flutter-inspired declarative UI framework for Rust with a thr
 - **Diagnostics:** `tracing`, `tracing-forest`
 - **Errors:** `thiserror` (libraries), `anyhow` (applications)
 
+See [`docs/FOUNDATIONS.md`](docs/FOUNDATIONS.md) for the full architectural and stack rationale.
+
 ## Project Structure
 
 ```
 flui/
 ├── crates/                   # Workspace member crates
 │   ├── flui-types/           # Foundation: base types and units (ACTIVE)
-│   ├── flui-foundation/      # Foundation: utilities and primitives (ACTIVE)
+│   ├── flui-geometry/        # Foundation: geometry primitives (ACTIVE)
+│   ├── flui-foundation/      # Foundation: utilities, primitives, log helpers (ACTIVE)
 │   ├── flui-tree/            # Foundation: generic tree abstractions (ACTIVE)
 │   ├── flui-platform/        # Foundation: cross-platform abstraction (ACTIVE — MVP)
+│   ├── flui-macros/          # Foundation: derive macros (ACTIVE)
 │   ├── flui-painting/        # Core: painting primitives (ACTIVE)
 │   ├── flui-semantics/       # Core: accessibility (ACTIVE)
 │   ├── flui-scheduler/       # Core: frame scheduling (ACTIVE)
 │   ├── flui-layer/           # Core: layer composition (ACTIVE)
 │   ├── flui-interaction/     # Core: gesture recognition (ACTIVE)
 │   ├── flui-engine/          # Core: GPU rendering engine (ACTIVE)
-│   ├── flui-log/             # Core: tracing setup and helpers (ACTIVE)
 │   ├── flui-hot-reload/      # Core: scene-plugin hot reload via dlopen (ACTIVE)
 │   ├── flui-rendering/       # Framework: render tree (ACTIVE)
 │   ├── flui-view/            # Framework: view + element tree (ACTIVE)
@@ -55,12 +58,13 @@ flui/
 ├── docs/
 │   ├── plans/                # Dated planning notes per major workstream
 │   └── research/             # Dated research notes
-├── .specify/                 # Speckit workflow (constitution + templates)
-│   ├── memory/constitution.md  # Project constitution (v2.3.0) — REQUIRED reading
-│   └── templates/            # Spec / plan / tasks / checklist templates
-├── .claude/                  # Claude Code agent configuration (skills, agents, commands)
-├── .codex/skills/            # Codex agent skill mirror
-├── .agents/skills/           # Generic agent skill directory
+├── specs/                    # Feature specs and per-change task notes
+├── .pi/                      # Pi runtime configuration (settings, extensions, LSP)
+├── .mcp.json                 # MCP server configuration (cratesio, rust-docs)
+├── .compound-engineering/    # Compound Engineering config (legacy, being phased out)
+├── .agents/skills/           # Generic agent skills (vendor-neutral)
+├── .atl/skill-registry.md    # Auto-generated cross-agent skill index
+├── .claude/                  # Claude Code residuals (hooks + active git worktrees only)
 ├── .flutter/                 # Vendored Flutter source (UI architecture reference, read-only)
 ├── .gpui/                    # Vendored GPUI source (Rust platform-pattern reference, read-only)
 ├── .cargo/config.toml        # Cargo build profile, linker, and target overrides
@@ -68,7 +72,6 @@ flui/
 ├── Cargo.lock                # Resolved dependency graph
 ├── rustfmt.toml              # Formatter configuration
 ├── README.md                 # Public-facing project README
-├── CLAUDE.md                 # Working-with-Claude instructions for this repo
 └── AGENTS.md                 # This file — structural map for AI agents
 ```
 
@@ -81,7 +84,9 @@ flui/
 | `.cargo/config.toml` | Cargo profiles, linker selection per target, Android NDK / WASM hooks |
 | `rustfmt.toml` | Formatter settings (edition 2024, max_width = 100, Tall fn params) |
 | `crates/flui-types/src/lib.rs` | Foundation types and unit system entry |
-| `crates/flui-foundation/src/lib.rs` | Foundation utilities and error types |
+| `crates/flui-geometry/src/lib.rs` | Geometry primitives (Point, Rect, Size, transforms) |
+| `crates/flui-foundation/src/lib.rs` | Foundation utilities, error types, log helpers |
+| `crates/flui-macros/src/lib.rs` | Derive macros (Stateless, Stateful) |
 | `crates/flui-tree/src/lib.rs` | Generic tree primitives shared by view / element / render trees |
 | `crates/flui-platform/src/lib.rs` | `Platform` trait and `current_platform()` factory |
 | `crates/flui-engine/src/lib.rs` | GPU rendering engine entry |
@@ -103,20 +108,22 @@ flui/
 | Architecture | `docs/architecture.md` | Three-tree pipeline + layered DAG overview (current state) |
 | Crates Map | `docs/crates.md` | Per-layer crate inventory and status |
 | Testing | `docs/testing.md` | Build / test / clippy / fmt commands and coverage targets |
-| Contributing | `docs/contributing.md` | Workflow, commits, speckit, AI Factory skills |
-| Constitution | `.specify/memory/constitution.md` | Mandatory project principles (v2.3.0) |
+| Contributing | `docs/contributing.md` | Workflow, commits, agent conventions |
 | Crate architecture notes | `crates/<crate>/ARCHITECTURE.md` | Per-crate architecture (e.g. `flui-foundation/ARCHITECTURE.md`) |
 | Plans | `docs/plans/` | Dated planning notes per workstream |
 | Research | `docs/research/` | Dated investigations (e.g. GPU tessellation, Skia techniques) |
-| Speckit specs | `specs/` | Feature specifications produced via `/speckit.*` skills |
+| Specs | `specs/` | Per-feature specifications and task notes |
 
 ## AI Context Files
 
 | File | Purpose |
 |------|---------|
 | `AGENTS.md` | Structural map of the repository for any AI agent (this file) |
-| `CLAUDE.md` | Claude Code-specific guidance — build commands, conventions, troubleshooting |
-| `.specify/memory/constitution.md` | Speckit constitution — non-negotiable principles |
+| `.pi/settings.json` | Pi runtime settings (primary agent harness for this repo) |
+| `.pi/lsp.json` | LSP server registration for Pi |
+| `.mcp.json` | MCP servers exposed to agents (cratesio, rust-docs) |
+| `.atl/skill-registry.md` | Auto-generated cross-agent skill index (regenerate via `/skill-registry:refresh`) |
+| `.agents/skills/` | Vendor-neutral agent skills usable from any harness |
 
 ## Build & Development Commands
 
@@ -144,7 +151,7 @@ Run `just` (no argument) for the full grouped recipe list. Raw `cargo` commands 
   - Incorrect: `git checkout main && git pull`
   - Correct: first `git checkout main`, then `git pull origin main`
 - **Never run destructive git operations** (`git checkout`, `git reset`, `git stash`, `git push --force`, `git branch -D`, etc.) without explicit user permission. Prefer non-destructive alternatives (new branches, new commits, tagging) and ask before discarding work.
-- **Honor the constitution.** Cross-check any non-trivial change against `.specify/memory/constitution.md` (v2.3.0) — especially the dependency DAG, `unsafe` boundaries, and the no-`unwrap`/`println!` rules.
+- **Honor the architecture contract.** Cross-check any non-trivial change against [`docs/FOUNDATIONS.md`](docs/FOUNDATIONS.md) and [`docs/ROADMAP.md`](docs/ROADMAP.md) — especially the dependency DAG, `unsafe` boundaries, and the no-`unwrap`/`println!` rules.
 - **Pin `wgpu` at 25.x.** 26.0+ is broken upstream (`https://github.com/gfx-rs/wgpu/issues/7915`).
 - **Reference, don't copy.** `.flutter/` and `.gpui/` exist as architectural references only; adapt their patterns to FLUI idioms (Arity system, Ambassador delegation, no nullability).
 - **Use the ID offset pattern.** Slab indices are 0-based; public IDs (`ViewId`, `ElementId`, `RenderId`, `LayerId`, `SemanticsId`) are 1-based `NonZeroUsize`. Insert: `slab_index + 1`; lookup: `id.get() - 1`.

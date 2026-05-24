@@ -183,3 +183,13 @@ flamegraph.svg
 .auto-claude/
 
 .compound-engineering/*.local.yaml
+.worktrees
+
+# Pi coding agent — keep config, ignore downloaded npm packages, sessions, and peer-review artefacts
+.pi/npm/
+.pi/sessions/
+.pi/cache/
+.peer-review/
+
+# Local Pi runtime state
+.atl/
