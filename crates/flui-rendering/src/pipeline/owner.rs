@@ -13,9 +13,18 @@ use std::{
 
 use flui_foundation::RenderId;
 use flui_layer::LayerTree;
-use flui_types::Offset;
+use flui_types::{Offset, Size};
 
-use crate::{context::CanvasContext, storage::RenderTree};
+use crate::{
+    constraints::BoxConstraints,
+    context::CanvasContext,
+    parent_data::BoxParentData,
+    protocol::{
+        BoxLayoutCtx, BoxProtocol, ChildState, Protocol,
+        box_protocol::{BoxLayoutCtxErased, LayoutChildCallback},
+    },
+    storage::{RenderEntry, RenderTree},
+};
 
 use super::{
     dirty::{DirtyNode, DirtySets},
@@ -981,6 +990,506 @@ impl PipelineOwner<Layout> {
 
         Ok(())
     }
+
+    /// D-block PR-A1b3 U20 — production disjoint-borrow layout walk.
+    ///
+    /// **⚠ STAGING-WINDOW API.** Public for U23's eventual `run_layout`
+    /// wiring + the U20 integration-test surface. Pre-U21/U23 callers
+    /// must respect the soundness & retry caveats below; this method is
+    /// `#[doc(hidden)]` until U23 promotes it.
+    ///
+    /// Lays out the subtree rooted at `id` with the supplied
+    /// `constraints`, running `RenderObject::perform_layout_raw` against a
+    /// typed [`BoxLayoutCtx`] populated with the parent's direct children
+    /// (companion memo D1). Returns the parent's computed `Size` on
+    /// success.
+    ///
+    /// Replaces the recursion shape of
+    /// [`Self::layout_node_with_children`] (which only walks the dirty
+    /// tree without invoking per-node layout — see the audit comment in
+    /// that method). The pipeline-side `run_layout` outer loop is rewired
+    /// to this method in U23.
+    ///
+    /// # Mechanism
+    ///
+    /// The walk is driven by [`layout_subtree_raw`] (private helper). Each
+    /// invocation:
+    ///
+    /// 1. Snapshots the node's `child_ids` from the tree.
+    /// 2. **Leaf path** (no children): routes through
+    ///    [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only)
+    ///    which constructs a leaf-mode `BoxLayoutCtx` and invokes
+    ///    `perform_layout_raw` — same code path the U18/U19 leaf bridge
+    ///    tests cover.
+    /// 3. **Non-leaf path**: builds `Vec<ChildState<BoxParentData>>`,
+    ///    constructs a Direct-storage `BoxLayoutCtx` via
+    ///    [`BoxLayoutCtx::with_layout_callback`] with a closure that
+    ///    re-enters [`layout_subtree_raw`] for each child, materialises
+    ///    the parent entry from the tree, and calls `perform_layout_raw`
+    ///    wrapped in [`std::panic::catch_unwind`] (so third-party panics
+    ///    surface as [`RenderError::Poisoned`] symmetric with the leaf
+    ///    path). The bridge in `traits/render_box.rs` reconstructs a
+    ///    typed `BoxLayoutCtx<T::Arity, T::ParentData>` (Proxy storage
+    ///    variant) and forwards to `RenderBox::perform_layout`.
+    ///    Synchronous `ctx.layout_child(i, c)` calls dispatch through
+    ///    the callback, recursing into the child's subtree.
+    /// 4. On success **AND when no descendant errored**, updates
+    ///    `state.set_geometry` / `state.set_constraints`, bootstraps
+    ///    `IS_RELAYOUT_BOUNDARY` (mirroring
+    ///    [`RenderEntry::layout_leaf_only`]'s U17 path), and clears
+    ///    `NEEDS_LAYOUT`. When a descendant errored mid-callback (see
+    ///    Error handling below), geometry + constraints are still
+    ///    recorded but `NEEDS_LAYOUT` stays set on the parent so the
+    ///    next dirty walk re-runs the subtree.
+    ///
+    /// # Error handling
+    ///
+    /// - **Leaf-path panics** in user `perform_layout` → caught by
+    ///   `layout_leaf_only`'s `catch_unwind`, returned as
+    ///   [`RenderError::Poisoned`].
+    /// - **Non-leaf-path panics** (review-fix PR-A1b3): wrapped in
+    ///   `catch_unwind` at stage 5 here, returned as the same
+    ///   [`RenderError::Poisoned`]. Symmetric with the leaf path.
+    /// - **Descendant `Err` returned through the callback** → tracking
+    ///   flag (`AtomicBool`) set; outer `perform_layout` still completes
+    ///   with `Size::ZERO` for that child; outer `Ok` is returned to the
+    ///   caller, BUT parent's `NEEDS_LAYOUT` is **not cleared** (review
+    ///   fix). Next-frame dirty walk re-runs the parent. This is a
+    ///   compromise: the [`LayoutChildCallback`] signature is `Fn(_) ->
+    ///   Size`, not `Fn(_) -> Result<Size, _>`, so callback failures
+    ///   can't propagate as typed `Err` through the parent's
+    ///   `perform_layout` body. The retry-via-NEEDS_LAYOUT path is the
+    ///   minimum-disruption shape that preserves the documented
+    ///   retry-next-frame semantics. Surfacing the typed error to the
+    ///   outer caller requires widening `LayoutChildCallback` to
+    ///   `Result`; that's an API-shape change deferred to Core.1.
+    /// - **Stale tree state** (id not in tree → `NodeNotFound`; id is
+    ///   present but wrong protocol → `ProtocolMismatch` — review fix
+    ///   to disambiguate; the diff's leaf + non-leaf stages both
+    ///   distinguish the two cases).
+    ///
+    /// # Soundness — KNOWN MIRI BLOCKER
+    ///
+    /// **The recursive raw-pointer reborrow pattern in
+    /// [`layout_subtree_raw`] holds an outer `&mut RenderEntry` borrow
+    /// live across `perform_layout_raw`, during which the synchronous
+    /// callback re-enters and synthesises a fresh `&mut RenderTree`
+    /// reborrow from the same `*mut RenderTree`. Under Stacked Borrows
+    /// / Tree Borrows this invalidates the outer borrow's tag**;
+    /// `cargo +nightly miri test -p flui-rendering --test
+    /// u20_layout_dirty_root` would flag the 2-level and 3-level happy
+    /// paths. Current rustc/LLVM does not miscompile but the pattern
+    /// is latently unsound.
+    ///
+    /// The architectural fix is to pre-acquire all subtree
+    /// `&mut RenderNode` borrows upfront via a new `RenderTree::get_subtree_mut`
+    /// primitive (or to drop the parent borrow before invoking
+    /// `perform_layout_raw` and re-acquire after), eliminating the
+    /// raw-pointer recursion entirely. This is **a blocker for U23's
+    /// `run_layout` wiring** — `run_layout` must not call
+    /// `layout_dirty_root` until the soundness fix lands. Tracked as
+    /// the U20.1 follow-up; do not promote this method to non-`#[doc(hidden)]`
+    /// before the fix.
+    ///
+    /// # ParentData scope (current limitation)
+    ///
+    /// The pipeline-side Direct `BoxLayoutCtx` is parameterised over
+    /// [`BoxParentData`], so widgets whose `T::ParentData` is the default
+    /// (`RenderPadding`, `RenderCenter`, `RenderColoredBox`,
+    /// `RenderOpacity`, `RenderTransform`, `RenderSizedBox`) drive
+    /// through correctly. Non-default parent-data types (e.g.,
+    /// `FlexParentData` on `RenderFlex`) trigger a
+    /// `BoxLayoutCtx::from_erased` debug-assert mismatch in debug builds
+    /// and silently fail to downcast in release builds. Pipeline-driven
+    /// flex layout is out of scope for D-block; per-render-object
+    /// `T::ParentData` dispatch lands as a Core.1 follow-up alongside the
+    /// real `RenderFlex` slice integration.
+    ///
+    /// # Cycle / depth safety
+    ///
+    /// The current implementation has **no cycle guard and no depth
+    /// limit** — a render object whose `perform_layout` re-enters its
+    /// own ancestor via `layout_child` triggers unbounded recursion
+    /// that overflows the stack; a self-cycle additionally produces
+    /// two `&mut RenderEntry` aliasing the same slab slot (hard UB,
+    /// not just stack overflow). The cycle guard is U21's job
+    /// (companion memo D6): `currently_laying_out:
+    /// FxHashSet<RenderId>` with RAII drop-guard detects re-entry and
+    /// returns
+    /// [`RenderError::LayoutCycle`](crate::error::RenderError::LayoutCycle).
+    /// Until U21 lands, callers must ensure the tree is acyclic. **Do
+    /// not wire `run_layout` to call `layout_dirty_root` until U21 +
+    /// the Miri soundness fix above both ship.** U23 performs the
+    /// wiring after both.
+    #[doc(hidden)]
+    pub fn layout_dirty_root(
+        &mut self,
+        id: RenderId,
+        constraints: BoxConstraints,
+    ) -> crate::error::RenderResult<Size> {
+        // Raw pointer to render_tree: stays valid for the duration of
+        // this call because `&mut self` keeps `self.render_tree` alive.
+        // The recursive helper's safety invariant covers downstream uses.
+        let tree_ptr = TreePtr::new(&mut self.render_tree);
+
+        // SAFETY: tree_ptr is valid and no outstanding borrows exist on
+        // `self.render_tree` at this call site (the `&mut self` receiver
+        // is the unique owner). See [`layout_subtree_raw`] for the
+        // recursive disjoint-slot discipline AND the known Stacked
+        // Borrows / Tree Borrows latent UB documented on this method.
+        unsafe { layout_subtree_raw(tree_ptr, id, constraints) }
+    }
+}
+
+// ============================================================================
+// PR-A1b3 U20 — recursive disjoint-borrow layout helper
+// ============================================================================
+
+/// `Send + Sync` raw-pointer wrapper for `RenderTree` carrying the
+/// owning thread's `ThreadId` for runtime affinity enforcement.
+///
+/// **D-block PR-A1b3 U20:** the pipeline-side
+/// [`PipelineOwner::layout_dirty_root`] hands this wrapper to a layout
+/// callback that re-enters [`layout_subtree_raw`] for each child. The
+/// callback type [`LayoutChildCallback`] requires `Send + Sync`
+/// (inherited from the [`BoxLayoutCtxErased`] supertrait auto-trait
+/// bound), so a bare `*mut RenderTree` cannot be captured.
+///
+/// The wrapper is `Copy` so the closure captures by value without
+/// `Arc` ceremony.
+///
+/// # Thread-affinity guard (PR #144 Copilot review fix)
+///
+/// Although the documented invariant is "callback fires synchronously
+/// from the pipeline thread", the `BoxLayoutCtxErased: Send + Sync`
+/// supertrait permits a user `perform_layout` body to spawn child
+/// layout calls onto another thread (e.g., via `std::thread::scope` or
+/// `rayon::scope`). Two threads simultaneously dereferencing
+/// `TreePtr.ptr` would race on `Slab` internals → data race / UB.
+///
+/// `TreePtr` therefore records the owning thread's `ThreadId` at
+/// construction and exposes [`Self::check_thread`] which the unsafe
+/// `*ptr` deref sites call before reborrowing. Mismatched-thread
+/// access panics with a clear diagnostic instead of corrupting the
+/// slab silently. The check is active in **all builds** (not gated
+/// behind `debug_assertions`) because data-race UB is undetectable
+/// after the fact; the runtime cost is one `ThreadId::eq` (cheap;
+/// effectively a `u64` compare).
+///
+/// The structural fix (remove `Send + Sync` from `BoxLayoutCtxErased`
+/// or refactor `layout_child` to dispatch via the pipeline thread only)
+/// is deferred to the same U20.1 follow-up as the recursive-reborrow
+/// soundness fix.
+#[derive(Clone, Copy)]
+struct TreePtr {
+    ptr: *mut RenderTree,
+    owner_thread: std::thread::ThreadId,
+}
+
+impl TreePtr {
+    /// Constructs a `TreePtr` from an exclusive `&mut RenderTree` borrow.
+    /// Records the current thread's `ThreadId` as the owner; every
+    /// subsequent `*ptr` deref via [`Self::check_thread`] verifies the
+    /// caller is on the same thread.
+    fn new(tree: &mut RenderTree) -> Self {
+        Self {
+            ptr: tree as *mut _,
+            owner_thread: std::thread::current().id(),
+        }
+    }
+
+    /// Verifies the current thread matches the `TreePtr`'s owner thread.
+    /// Panics otherwise. Called before every `*ptr` deref in
+    /// [`layout_subtree_raw`] to fail loudly on cross-thread callback
+    /// invocation (see thread-affinity guard rationale on [`TreePtr`]).
+    #[inline]
+    fn check_thread(&self) {
+        let current = std::thread::current().id();
+        if current != self.owner_thread {
+            panic!(
+                "TreePtr accessed from non-owner thread: \
+                 owner = {:?}, current = {:?}. The U20 layout walk \
+                 requires the layout_child callback to fire on the \
+                 same thread as PipelineOwner::layout_dirty_root \
+                 (the pipeline phase holds &mut self synchronously). \
+                 User RenderBox::perform_layout body must not spawn \
+                 ctx.layout_child(...) calls to other threads — the \
+                 underlying RenderTree slab is not Sync.",
+                self.owner_thread, current,
+            );
+        }
+    }
+}
+
+// SAFETY: the raw pointer is just an address; the per-call-site
+// `&mut RenderTree` synthesised inside [`layout_subtree_raw`] is the load-
+// bearing borrow, and that borrow is scoped to a single statement at each
+// use site. Cross-thread access is rejected by the runtime
+// [`TreePtr::check_thread`] guard called before every `*ptr` deref.
+unsafe impl Send for TreePtr {}
+// SAFETY: the same reasoning as `Send` — see above.
+unsafe impl Sync for TreePtr {}
+
+/// Recursive helper for [`PipelineOwner::layout_dirty_root`].
+///
+/// Drives the disjoint-borrow walk per companion memo D1 + plan §U20:
+/// at each level, snapshots `child_ids`, materialises the parent entry
+/// from the tree, builds a Direct-storage `BoxLayoutCtx` with a
+/// recursive `layout_child` callback, and invokes
+/// `perform_layout_raw`. The callback re-enters this helper for each
+/// child slot synchronously, threading the recursion through the
+/// trait-object bridge in `traits/render_box.rs`.
+///
+/// # Safety
+///
+/// Caller must guarantee:
+///
+/// 1. `tree_ptr.0` points to a valid `RenderTree` that lives for the
+///    entire duration of this call (transitively, the duration of every
+///    nested recursive call this helper triggers via the callback).
+///    [`PipelineOwner::layout_dirty_root`] satisfies this by deriving
+///    `tree_ptr` from `&mut self.render_tree` and only invoking the
+///    helper while holding `&mut self`.
+/// 2. No other `&RenderTree` / `&mut RenderTree` borrow exists at the
+///    *moment of each helper invocation*. Inside the helper the
+///    `&mut RenderTree` synthesised via `&mut *tree_ptr.0` is scoped to
+///    the single `get` / `get_mut` / `get_parent_and_children_mut` call
+///    that uses it — the resulting `&mut RenderEntry` / `&mut RenderNode`
+///    borrows the tree's slab slot only, releasing the `&mut Slab` parent
+///    borrow.
+/// 3. Distinct call levels of this helper hold borrows on *disjoint
+///    slab slots*. The outer call's parent-entry borrow is on `id`'s
+///    slot; the inner call (triggered by the callback) acquires its
+///    own parent-entry borrow on the child's slot. Tree structure
+///    (parent ≠ child in a well-formed tree) guarantees these are
+///    distinct. **Cycles in the parent-child graph would violate this
+///    invariant** — the cycle guard arrives in U21
+///    ([`RenderError::LayoutCycle`](crate::error::RenderError::LayoutCycle));
+///    until then this helper relies on tree construction being acyclic.
+///
+/// The disjoint-slot discipline mirrors the existing
+/// [`RenderTree::get_two_mut`] / [`RenderTree::get_parent_and_children_mut`]
+/// primitives — same `*mut slab::Slab<RenderNode>` reborrow pattern,
+/// extended across recursion levels.
+unsafe fn layout_subtree_raw(
+    tree_ptr: TreePtr,
+    id: RenderId,
+    constraints: BoxConstraints,
+) -> crate::error::RenderResult<Size> {
+    // Thread-affinity guard: panic loudly if a user perform_layout body
+    // dispatched the layout_child callback to a non-pipeline thread (see
+    // TreePtr::check_thread doc). Cheap: one ThreadId compare.
+    tree_ptr.check_thread();
+    let ptr = tree_ptr.ptr;
+
+    // Stage 1 — snapshot child_ids. The `&RenderTree` borrow lives only
+    // for the `to_vec` call; releasing it here means we never hold a
+    // shared borrow across the mutable acquisitions below.
+    // SAFETY: see helper-level safety doc invariant 1+2.
+    let child_ids: Vec<RenderId> = unsafe {
+        match (*ptr).get(id) {
+            Some(node) => node.children().to_vec(),
+            None => return Err(crate::error::RenderError::NodeNotFound(id)),
+        }
+    };
+
+    // Stage 2 — leaf path: delegate to layout_leaf_only, which already
+    // implements the full leaf-mode bridge (constraints → typed
+    // BoxLayoutCtx<Leaf> → perform_layout_raw → geometry, with the
+    // catch_unwind wrapper for Poisoned + state update + relayout-boundary
+    // bootstrap). The U18/U19 leaf bridge tests cover this path; we just
+    // forward.
+    if child_ids.is_empty() {
+        // SAFETY: see helper-level safety doc invariant 2. This `&mut
+        // RenderTree` is scoped to the `get_mut(...)` call and the
+        // returned `&mut RenderEntry<BoxProtocol>` borrow keeps only
+        // `id`'s slab slot live.
+        //
+        // Review fix: distinguish missing-from-tree (NodeNotFound) from
+        // present-but-wrong-protocol (ProtocolMismatch) — `as_box_mut`
+        // returning `None` previously collapsed both into NodeNotFound,
+        // masking the protocol-mismatch bug class.
+        let entry: &mut RenderEntry<BoxProtocol> = unsafe {
+            let node = match (*ptr).get_mut(id) {
+                Some(n) => n,
+                None => return Err(crate::error::RenderError::NodeNotFound(id)),
+            };
+            let node_protocol = node.protocol_name();
+            match node.as_box_mut() {
+                Some(e) => e,
+                None => {
+                    return Err(crate::error::RenderError::ProtocolMismatch {
+                        node_protocol,
+                        constraints_protocol: "Box",
+                    });
+                }
+            }
+        };
+        return entry.layout_leaf_only(constraints);
+    }
+
+    // Stage 3 — non-leaf path: build callback closure + ChildState
+    // backing vec. ChildState carries BoxParentData per child (see the
+    // ParentData scope limitation on `layout_dirty_root`).
+    let mut child_states: Vec<ChildState<BoxParentData>> =
+        child_ids.iter().map(|&cid| ChildState::new(cid)).collect();
+
+    // Review fix: descendant-error tracking flag. The recursive
+    // callback collapses descendant `RenderError` to `Size::ZERO` (the
+    // `LayoutChildCallback` signature is fixed at `Fn(_) -> Size` and
+    // can't widen to `Result` without API churn). Without this flag,
+    // stage 6 below would clear the parent's NEEDS_LAYOUT after a
+    // successful `perform_layout_raw` even when a descendant failed,
+    // leaving the parent CLEAN with stale geometry derived from a
+    // ZERO-sized child — and the dirty queue would not re-process the
+    // parent next frame because its flag is cleared. The flag lets
+    // stage 6 SKIP `clear_needs_layout` so the next dirty walk re-runs
+    // the parent (and transitively the descendant) to surface the
+    // genuine sizing.
+    //
+    // Shared via `Arc<AtomicBool>` because the closure is `Send + Sync`
+    // (inherited from `LayoutChildCallback`'s `Send + Sync` bound) and
+    // must own its handle to flip the flag; outer scope reads via the
+    // sibling Arc clone.
+    let descendant_error_flag: std::sync::Arc<std::sync::atomic::AtomicBool> =
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let descendant_error_for_cb = std::sync::Arc::clone(&descendant_error_flag);
+
+    // Recursive callback. `tree_ptr` is captured by value (Copy); the
+    // closure is `move` so it owns its copy. The callback fires
+    // synchronously from inside `parent_entry.perform_layout_raw(...)`,
+    // which is downstream of the parent_entry borrow taken in stage 4
+    // below. Per the helper-level safety doc invariant 3, the parent
+    // and child slots are distinct so the disjoint-borrow discipline
+    // holds across the recursion boundary (see the KNOWN MIRI BLOCKER
+    // note on `layout_dirty_root` for the latent UB caveat).
+    let cb_owned = move |child_id: RenderId, child_constraints: BoxConstraints| -> Size {
+        // SAFETY: see helper-level safety doc + the closure's own
+        // doc above. The recursive call's borrows are on
+        // `child_id`'s slab slot (and its descendants), disjoint
+        // from the outer call's `id`-slot borrow.
+        match unsafe { layout_subtree_raw(tree_ptr, child_id, child_constraints) } {
+            Ok(size) => size,
+            Err(err) => {
+                // Set the flag so stage 6 preserves the parent's
+                // NEEDS_LAYOUT for next-frame retry.
+                descendant_error_for_cb.store(true, std::sync::atomic::Ordering::Relaxed);
+                tracing::error!(
+                    parent = ?id,
+                    ?child_id,
+                    ?err,
+                    "layout_dirty_root: descendant layout failed; \
+                         returning Size::ZERO to caller's perform_layout. \
+                         Parent NEEDS_LAYOUT preserved for next-frame retry.",
+                );
+                Size::ZERO
+            }
+        }
+    };
+    // Bind the closure to a name so we can take a stable `&dyn Fn`
+    // reference whose lifetime matches the BoxLayoutCtx 'ctx lifetime
+    // (both end at this function's return).
+    let cb_ref: LayoutChildCallback<'_> = &cb_owned;
+
+    // Stage 4 — materialise parent_entry borrow on `id`'s slot. This
+    // is the single outstanding mutable borrow when the callback fires
+    // in stage 5.
+    // SAFETY: see helper-level safety doc invariant 2+3 AND the known
+    // soundness gap documented on `layout_dirty_root`.
+    //
+    // Review fix: split NodeNotFound vs ProtocolMismatch (same shape as
+    // the leaf-path acquisition above).
+    let parent_entry: &mut RenderEntry<BoxProtocol> = unsafe {
+        let node = match (*ptr).get_mut(id) {
+            Some(n) => n,
+            None => return Err(crate::error::RenderError::NodeNotFound(id)),
+        };
+        let node_protocol = node.protocol_name();
+        match node.as_box_mut() {
+            Some(e) => e,
+            None => {
+                return Err(crate::error::RenderError::ProtocolMismatch {
+                    node_protocol,
+                    constraints_protocol: "Box",
+                });
+            }
+        }
+    };
+
+    // Stage 5 — construct pipeline-side Direct BoxLayoutCtx and invoke
+    // the trait-erased bridge. The pipeline-side ctx is parameterised
+    // over `Variable` arity (most permissive — the Proxy bridge picks
+    // `T::Arity` from the user's `RenderBox` impl regardless) and
+    // `BoxParentData` (see ParentData scope limitation on
+    // `layout_dirty_root`).
+    //
+    // Review fix: wrap `perform_layout_raw` in `catch_unwind` so a
+    // third-party panic from a non-leaf user widget surfaces as
+    // `RenderError::Poisoned` instead of unwinding out of
+    // `layout_dirty_root`. Symmetric with the leaf path in
+    // `RenderEntry::layout_leaf_only`. Pattern matches the leaf-path
+    // shape verbatim (capture `debug_name` before the &mut reborrow;
+    // downcast panic payload for tracing).
+    let mut ctx = BoxLayoutCtx::<flui_tree::Variable, BoxParentData>::with_layout_callback(
+        constraints,
+        &mut child_states,
+        &child_ids,
+        cb_ref,
+    );
+    let erased: &mut dyn BoxLayoutCtxErased = &mut ctx;
+
+    let debug_name = parent_entry.render_object().debug_name();
+    let render_object = parent_entry.render_object_mut();
+    let unwind_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        render_object.perform_layout_raw(erased)
+    }));
+    let geometry = match unwind_result {
+        Ok(inner) => inner?,
+        Err(payload) => {
+            let msg = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&'static str>().copied())
+                .unwrap_or("(non-string panic payload)");
+            tracing::error!(
+                render_object = debug_name,
+                panic_msg = msg,
+                "perform_layout panicked in non-leaf path — surfacing as \
+                     RenderError::Poisoned (symmetric with leaf-path \
+                     layout_leaf_only catch_unwind discipline)",
+            );
+            return Err(crate::error::RenderError::poisoned(debug_name, "layout"));
+        }
+    };
+
+    // Stage 6 — update state on the success path (mirrors
+    // `RenderEntry::layout_leaf_only`'s post-perform_layout discipline).
+    // On the Err path above (propagated via `?` or returned from the
+    // catch_unwind arm), state is intentionally unmodified so
+    // `NEEDS_LAYOUT` stays set and the pipeline can retry next frame.
+    parent_entry.state_mut().set_geometry(geometry);
+    parent_entry.state_mut().set_constraints(constraints);
+
+    // Bootstrap relayout boundary (U17). For BoxProtocol this runs the
+    // Flutter formula; for SliverProtocol it's a no-op.
+    let has_parent = parent_entry.links().parent().is_some();
+    <BoxProtocol as Protocol>::bootstrap_relayout_boundary(parent_entry.state(), has_parent);
+
+    // Review fix: only clear NEEDS_LAYOUT if the recursive callback
+    // didn't observe a descendant failure. If it did, we keep the flag
+    // set so the next dirty walk re-runs the subtree — preserves the
+    // documented retry-next-frame semantics.
+    if !descendant_error_flag.load(std::sync::atomic::Ordering::Relaxed) {
+        parent_entry.clear_needs_layout();
+    } else {
+        tracing::debug!(
+            parent = ?id,
+            "layout_dirty_root: a descendant errored during this walk; \
+                 keeping parent NEEDS_LAYOUT set for next-frame retry"
+        );
+    }
+
+    Ok(geometry)
 }
 
 // ============================================================================
