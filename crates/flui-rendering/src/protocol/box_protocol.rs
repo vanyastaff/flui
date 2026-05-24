@@ -383,7 +383,16 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
     /// [`LayoutContextApi::constraints`] can return `&BoxConstraints`
     /// against a stable storage slot rather than an ephemeral owned
     /// value produced per call.
-    pub fn from_erased(erased: &'ctx mut dyn BoxLayoutCtxErased) -> Self {
+    ///
+    /// **Visibility** — `pub(crate)`. The only sanctioned consumer is
+    /// the `RenderObject<BoxProtocol>` blanket impl in
+    /// [`crate::traits::RenderBox`] (in-crate). User render-object
+    /// authors implement `RenderBox::perform_layout` directly and never
+    /// see the erased context; restricting the ctor prevents downstream
+    /// code from constructing Proxy contexts (a sharp tool that requires
+    /// the parent_data-downcast invariants and Direct↔Proxy semantic
+    /// awareness documented on [`BoxLayoutCtxErased`]).
+    pub(crate) fn from_erased(erased: &'ctx mut dyn BoxLayoutCtxErased) -> Self {
         let constraints = erased.constraints();
         Self {
             storage: BoxLayoutCtxStorage::Proxy {
