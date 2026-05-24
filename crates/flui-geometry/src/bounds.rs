@@ -703,8 +703,9 @@ impl<T: Unit> Bounds<T> {
 
 /// Convenience constructor for [`Bounds<Pixels>`] from an origin point and size.
 ///
-/// Mirrors the constructor-function pattern used by [`rect`](crate::rect),
-/// [`point`](crate::point), [`size`](crate::size), and [`edges`](crate::edges).
+/// Mirrors the constructor-function pattern used by [`rect()`](crate::rect()),
+/// [`point()`](crate::point()), [`size()`](crate::size()), and
+/// [`edges()`](crate::edges()).
 #[inline]
 #[must_use]
 pub fn bounds(origin: Point<Pixels>, size: Size<Pixels>) -> Bounds<Pixels> {
