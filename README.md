@@ -83,7 +83,7 @@ Run with `cargo run --example hello_world`. More examples live under `examples/`
 | [Testing](docs/testing.md) | Build / test / clippy / fmt commands, coverage targets, benchmarks |
 | [Contributing](docs/contributing.md) | Constitution, commits, speckit workflow, AI Factory skills |
 
-For deep architectural rules (dependency DAG, pipeline contracts, anti-patterns) see [`.ai-factory/ARCHITECTURE.md`](.ai-factory/ARCHITECTURE.md).
+For deep architectural rules (dependency DAG, pipeline contracts, anti-patterns) see [`docs/FOUNDATIONS.md`](docs/FOUNDATIONS.md).
 For Claude Code-specific guidance (build commands, troubleshooting) see [`CLAUDE.md`](CLAUDE.md).
 
 ## License
