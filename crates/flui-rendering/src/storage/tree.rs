@@ -300,6 +300,91 @@ impl RenderTree {
         }
     }
 
+    /// Returns mutable references to **every** node id in the given list,
+    /// materialised in a single function scope so all `&mut RenderNode`
+    /// borrows coexist on disjoint slab slots without re-entering the
+    /// slab borrow checker.
+    ///
+    /// Generalises [`get_parent_and_children_mut`](Self::get_parent_and_children_mut)
+    /// from N+1 (parent + direct children) to arbitrary N (whole subtree
+    /// pre-acquisition). The returned `Vec<&mut RenderNode>` is in input
+    /// order so callers indexing by id can pre-compute a
+    /// `HashMap<RenderId, usize>` lookup.
+    ///
+    /// Returns `None` if any id is missing from the slab OR if `ids`
+    /// contains duplicates.
+    ///
+    /// # Use case (D-block PR-A1b3 U20.1)
+    ///
+    /// [`PipelineOwner::layout_dirty_root`](crate::pipeline::PipelineOwner::layout_dirty_root)
+    /// uses this to pre-acquire the entire subtree's `&mut RenderNode`
+    /// borrows up front, then drives `perform_layout_raw` recursively
+    /// against an index-into-pre-acquired-pool — eliminating the
+    /// recursive raw-pointer reborrow pattern that the prior U20
+    /// implementation used (latent Stacked/Tree Borrows UB, see
+    /// PR #144 review). All borrows live in one stack frame so the
+    /// aliasing model is satisfied: `&mut Slab` is borrowed once,
+    /// N disjoint `&mut RenderNode` borrows on distinct slots are
+    /// returned, no nested reborrow.
+    ///
+    /// # Safety
+    ///
+    /// Same invariant as [`get_two_mut`](Self::get_two_mut) and
+    /// [`get_parent_and_children_mut`](Self::get_parent_and_children_mut),
+    /// extended to arbitrary N: caller passes pairwise-distinct ids
+    /// (checked at function entry, returns `None` on collision); all
+    /// ids must be present in the slab (checked, returns `None`
+    /// otherwise); the returned `&mut RenderNode` references alias
+    /// disjoint slots in the underlying `Vec<Entry<RenderNode>>` and
+    /// therefore do not violate Rust's aliasing rules. Receiver
+    /// `&mut self` keeps the slab borrow alive for the returned
+    /// references' lifetime.
+    ///
+    /// # Complexity
+    ///
+    /// O(N²) uniqueness check for small N (typical render-tree subtrees
+    /// are 10–100 nodes). O(N) slab presence check. O(N) borrow
+    /// materialisation. Switch to a HashSet-based duplicate check if a
+    /// subtree of >1000 nodes ever becomes hot — the inner loop's `==`
+    /// compare on `NonZeroUsize` is dominant under typical N.
+    pub fn get_subtree_mut<'a>(
+        &'a mut self,
+        ids: &[RenderId],
+    ) -> Option<Vec<&'a mut RenderNode>> {
+        // Verify pairwise uniqueness. O(N²) acceptable for small N.
+        for (i, &a) in ids.iter().enumerate() {
+            for &b in &ids[i + 1..] {
+                if a == b {
+                    return None;
+                }
+            }
+        }
+
+        // Verify all ids present in slab.
+        for id in ids {
+            if !self.nodes.contains(id.get() - 1) {
+                return None;
+            }
+        }
+
+        // SAFETY: see method-level safety doc. Uniqueness verified above;
+        // all indices are valid; the receiver `&mut self` keeps the slab
+        // borrow alive for the lifetime of the returned references. The
+        // N disjoint `&mut RenderNode` references alias distinct
+        // `Vec<Entry<RenderNode>>` cells which the slab's internal Vec
+        // resolves via independent pointer offsets — sound under Rust's
+        // aliasing model (mirrors the proven get_two_mut /
+        // get_parent_and_children_mut pattern, extended to arbitrary N).
+        let nodes_ptr: *mut slab::Slab<RenderNode> = &mut self.nodes;
+        unsafe {
+            let mut refs = Vec::with_capacity(ids.len());
+            for id in ids {
+                refs.push((*nodes_ptr).get_mut(id.get() - 1)?);
+            }
+            Some(refs)
+        }
+    }
+
     /// Inserts a Box protocol render object into the tree (no parent).
     ///
     /// Returns the RenderId of the inserted node.
@@ -894,6 +979,71 @@ mod tests {
             tree.get_parent_and_children_mut(parent, &[c1, parent])
                 .is_none()
         );
+    }
+
+    // ========================================================================
+    // get_subtree_mut (D-block PR-A1b3 U20.1)
+    // ========================================================================
+
+    #[test]
+    fn get_subtree_mut_returns_n_disjoint_refs_in_input_order() {
+        let mut tree = RenderTree::new();
+        let a = tree.insert_box(make_leaf());
+        let b = tree.insert_box(make_leaf());
+        let c = tree.insert_box(make_leaf());
+        let d = tree.insert_box(make_leaf());
+
+        // Acquire all 4 nodes in [c, a, d, b] order — verifies input
+        // ordering is preserved in the returned Vec (not slot-id-sorted).
+        let ids = [c, a, d, b];
+        let refs = tree.get_subtree_mut(&ids).expect("4 distinct ids must yield Some");
+        assert_eq!(refs.len(), 4);
+
+        // Verify disjointness — all 4 references point to distinct
+        // RenderNodes (compare addresses through *const _).
+        let addrs: Vec<*const RenderNode> = refs.iter().map(|r| *r as *const RenderNode).collect();
+        for (i, &a_addr) in addrs.iter().enumerate() {
+            for &b_addr in &addrs[i + 1..] {
+                assert!(
+                    !std::ptr::eq(a_addr, b_addr),
+                    "all returned refs must alias distinct slab slots",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn get_subtree_mut_rejects_duplicate_id() {
+        let mut tree = RenderTree::new();
+        let a = tree.insert_box(make_leaf());
+        let b = tree.insert_box(make_leaf());
+        // a appears twice in the id list — duplicate detection must fail.
+        assert!(tree.get_subtree_mut(&[a, b, a]).is_none());
+    }
+
+    #[test]
+    fn get_subtree_mut_rejects_missing_id() {
+        let mut tree = RenderTree::new();
+        let a = tree.insert_box(make_leaf());
+        let missing = RenderId::new(a.get() + 999);
+        assert!(tree.get_subtree_mut(&[a, missing]).is_none());
+        assert!(tree.get_subtree_mut(&[missing, a]).is_none());
+    }
+
+    #[test]
+    fn get_subtree_mut_empty_id_list_returns_empty_vec() {
+        let mut tree = RenderTree::new();
+        let _a = tree.insert_box(make_leaf());
+        let refs = tree.get_subtree_mut(&[]).expect("empty input must yield empty Vec");
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn get_subtree_mut_single_id_works() {
+        let mut tree = RenderTree::new();
+        let a = tree.insert_box(make_leaf());
+        let refs = tree.get_subtree_mut(&[a]).expect("single id must yield Some");
+        assert_eq!(refs.len(), 1);
     }
 
     /// Cycle 4 PR #116 review fix: pre-order traversal of the
