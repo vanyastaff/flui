@@ -268,7 +268,17 @@ bitflags! {
         /// node — or some descendant — needs a compositing layer for
         /// the upcoming paint).
         ///
-        /// Set by [`PipelineOwner::add_node_needing_compositing_bits_update`](crate::pipeline::PipelineOwner::add_node_needing_compositing_bits_update).
+        /// Set via `AtomicRenderFlags::mark_needs_compositing_bits_update`
+        /// (typically reached through `RenderNode::mark_needs_compositing_bits_update`)
+        /// by callers that schedule a compositing-bits recompute; the
+        /// caller is then expected to enqueue the node via
+        /// [`PipelineOwner::add_node_needing_compositing_bits_update`](crate::pipeline::PipelineOwner::add_node_needing_compositing_bits_update),
+        /// which appends to `dirty.needs_compositing` but does not
+        /// itself touch this flag. The two steps are split to match
+        /// the layout-side pattern (`mark_layout_flag` + queue push)
+        /// and so test code can mark a node dirty without going through
+        /// the full ancestor walk.
+        ///
         /// Cleared by `run_compositing` after the subtree walk finishes
         /// (analogous to how `NEEDS_LAYOUT` clears post-layout).
         ///

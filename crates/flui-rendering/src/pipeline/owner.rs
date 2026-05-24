@@ -670,14 +670,20 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// ([`Self::insert`], [`Self::insert_child_render_object`],
     /// [`Self::insert_render_node`]; [`Self::set_root_render_object`]
     /// inherits via `insert`) calls this immediately after the tree
-    /// `insert` so the compositing-bits walk (U34) and paint phase
-    /// can consult a single source of truth — the storage flag — for
-    /// repaint-boundary discrimination.
+    /// `insert` so the compositing-bits walk (U34) has accurate
+    /// boundary info via the storage flag from frame 1.
     ///
-    /// Pre-U33 only `WAS_REPAINT_BOUNDARY` was written by the paint
-    /// phase; `IS_REPAINT_BOUNDARY` itself was effectively `false` for
-    /// every node from the moment it entered the tree, which forced
-    /// downstream walks to fall through to the trait answer
+    /// **Current consumer scope:** the compositing-bits walk consults
+    /// `RenderNode::is_repaint_boundary_flag()`. The paint walk
+    /// (`paint_node_recursive`) still reads `render_object.is_repaint_boundary()`
+    /// directly — this matches Flutter parity (Flutter's `paint`
+    /// reads the `isRepaintBoundary` final getter, equivalent to our
+    /// trait answer; the bootstrap flag is the optimization target
+    /// for a later sweep that swaps the paint check too).
+    ///
+    /// Pre-U33 the storage flag was effectively `false` for every node
+    /// from the moment it entered the tree, which forced the
+    /// compositing walk to fall through to the trait answer
     /// (`render_object().is_repaint_boundary()`) at every check site —
     /// a virtual dispatch and a divergence risk if a future caller
     /// flipped the flag dynamically.
@@ -1887,12 +1893,17 @@ impl PipelineOwner<Compositing> {
             .needs_compositing
             .sort_unstable_by_key(|node| node.depth);
 
-        // Snapshot ids to iterate (avoids borrow conflict with
-        // `update_subtree_compositing_bits` which takes `&self`).
-        let dirty_ids: Vec<RenderId> = self.dirty.needs_compositing.iter().map(|d| d.id).collect();
-
+        // Iterate by index over the dirty list so the loop body can
+        // call `&self` recursion without holding the iterator's
+        // borrow across the call (the `update_subtree_compositing_bits`
+        // method takes `&self`, which conflicts with the iter's
+        // simultaneous `&self.dirty.needs_compositing` borrow under
+        // some borrow-checker versions). Pre-fix this snapshotted
+        // the ids into a fresh `Vec<RenderId>` per frame
+        // (PR-A2 Copilot #3294557191).
         let mut actions = CompositingWalkActions::default();
-        for id in dirty_ids {
+        for i in 0..self.dirty.needs_compositing.len() {
+            let id = self.dirty.needs_compositing[i].id;
             self.update_subtree_compositing_bits(id, &mut actions);
         }
 
@@ -1930,11 +1941,23 @@ impl PipelineOwner<Compositing> {
         let old_needs_compositing = node.needs_compositing();
         node.clear_needs_compositing();
 
-        // Clone the child id slice — the recursive call needs to call
-        // `self.render_tree.get(child)` again, which would re-borrow
-        // the tree while the `tree.children(id)` slice is live.
-        let child_ids: Vec<RenderId> = self.render_tree.children(id).to_vec();
-        for child_id in child_ids {
+        // Iterate the child slice in-place — both `tree.children(id)`
+        // and the recursive `update_subtree_compositing_bits` call are
+        // shared borrows of `&self.render_tree`, so they coexist
+        // without a clone. Pre-fix the loop cloned children into a
+        // fresh `Vec<RenderId>` per visited node (per-node heap
+        // allocation) — flagged by Copilot #3294557204 as conflicting
+        // with the repo's documented "no per-node child clone"
+        // optimization in `RenderTree::visit_depth_first`
+        // (`storage/tree.rs:738-751`).
+        //
+        // Index loop (not iterator) so the loop body can call `&self`
+        // recursion without holding the slice iterator across the
+        // call (slice iter would borrow `&self.render_tree.children(id)`,
+        // which transitively borrows `&self`).
+        let child_count = self.render_tree.children(id).len();
+        for i in 0..child_count {
+            let child_id = self.render_tree.children(id)[i];
             self.update_subtree_compositing_bits(child_id, actions);
             if let Some(child) = self.render_tree.get(child_id)
                 && child.needs_compositing()

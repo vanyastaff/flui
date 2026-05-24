@@ -97,8 +97,11 @@ fn u34_run_compositing_clears_needs_compositing_bits_update_flag() {
     let depth = owner.render_tree().depth(padding_id).unwrap_or(0) as usize;
     owner.add_node_needing_compositing_bits_update(padding_id, depth);
 
-    // Layout phase must run first so the typestate transitions reach
-    // compositing.
+    // Transition through the typestate Idle → Layout → Compositing
+    // to reach the compositing phase. No actual layout work needed
+    // for this test — `NEEDS_COMPOSITING_BITS_UPDATE` was set
+    // directly above, so `run_compositing` has all the state it needs
+    // from the typestate transition alone (no `run_layout` call).
     owner.set_root_id(Some(padding_id));
     owner.set_root_constraints(Some(BoxConstraints::new(
         px(0.0),
