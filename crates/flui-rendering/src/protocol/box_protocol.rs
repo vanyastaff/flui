@@ -394,6 +394,28 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
     /// awareness documented on [`BoxLayoutCtxErased`]).
     pub(crate) fn from_erased(erased: &'ctx mut dyn BoxLayoutCtxErased) -> Self {
         let constraints = erased.constraints();
+        // Review fix #2: assert at construction time that the typed
+        // wrapper P matches the underlying Direct ctx's P. The Proxy
+        // bridge later downcasts via `child_parent_data_dyn().and_then(
+        // |d| d.downcast_ref::<P>())` — a mismatch silently returns
+        // None and causes the user's perform_layout to see no flex
+        // (for example), producing wrong-but-quiet layout. This
+        // debug_assert catches the construction-site bug instead. None
+        // = no static evidence available (Proxy chain / no-children
+        // Direct) → assert is a no-op, the downcast still guards at
+        // runtime.
+        debug_assert!(
+            match erased.parent_data_type_id() {
+                Some(id) => id == std::any::TypeId::of::<P>(),
+                None => true,
+            },
+            "BoxLayoutCtx::from_erased: ParentData type mismatch — \
+             underlying erased ctx reports TypeId={:?}, typed wrapper \
+             requested {:?} ({})",
+            erased.parent_data_type_id(),
+            std::any::TypeId::of::<P>(),
+            std::any::type_name::<P>(),
+        );
         Self {
             storage: BoxLayoutCtxStorage::Proxy {
                 constraints,
@@ -647,6 +669,33 @@ pub trait BoxLayoutCtxErased: Send + Sync {
 
     /// Mutable counterpart to [`Self::child_parent_data_dyn`].
     fn child_parent_data_dyn_mut(&mut self, index: usize) -> Option<&mut dyn ParentData>;
+
+    /// `TypeId` of the underlying parent-data type held by this erased
+    /// context, when known.
+    ///
+    /// Returns `Some(TypeId::of::<P>())` for the blanket impl on
+    /// `BoxLayoutCtx<A, P>` when the context was constructed with
+    /// children access (and therefore the `P` type is observable as
+    /// type-of-the-stored-Vec). Returns `None` for children-less Direct
+    /// contexts (P is still in the type parameter but no concrete
+    /// payload exists) and for Proxy contexts (which delegate to the
+    /// underlying erased ctx).
+    ///
+    /// **Use:** [`BoxLayoutCtx::from_erased`] consults this to
+    /// `debug_assert!` that the typed wrapper it is about to construct
+    /// matches the underlying P — a mismatch indicates a pipeline /
+    /// blanket-impl construction bug (a Direct ctx built with
+    /// `Vec<ChildState<FlexParentData>>` would only be bridged to a
+    /// typed `BoxLayoutCtx<_, FlexParentData>`, never to a
+    /// `BoxLayoutCtx<_, BoxParentData>`). The default return is `None`
+    /// so the debug_assert is a no-op for Proxy / no-children paths,
+    /// which is correct: those carry no static evidence to check.
+    ///
+    /// Default `None` keeps the assertion conservative — only triggers
+    /// on bug-shapes we can actually detect.
+    fn parent_data_type_id(&self) -> Option<std::any::TypeId> {
+        None
+    }
 }
 
 impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, A, P> {
@@ -699,6 +748,25 @@ impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, 
                 .and_then(|c| c.get_mut(index))
                 .map(|child| &mut child.parent_data as &mut dyn ParentData),
             BoxLayoutCtxStorage::Proxy { erased, .. } => erased.child_parent_data_dyn_mut(index),
+        }
+    }
+
+    #[inline]
+    fn parent_data_type_id(&self) -> Option<std::any::TypeId> {
+        // Only report a concrete P when the Direct ctx actually holds
+        // a `Vec<ChildState<P>>` payload (children present). For
+        // children-less Direct ctxs and Proxy ctxs, returning None
+        // (default) is correct — no concrete-payload evidence to assert
+        // against. Proxy could chain through to the underlying erased's
+        // own `parent_data_type_id` but today the upstream is always a
+        // Direct ctx with the same P (the from_erased site is the only
+        // construction path), so the extra plumbing buys nothing.
+        match &self.storage {
+            BoxLayoutCtxStorage::Direct {
+                children: Some(_), ..
+            } => Some(std::any::TypeId::of::<P>()),
+            BoxLayoutCtxStorage::Direct { children: None, .. }
+            | BoxLayoutCtxStorage::Proxy { .. } => None,
         }
     }
 }
