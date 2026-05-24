@@ -10,7 +10,7 @@
 //! of coordinate systems:
 //!
 //! ```ignore
-//! use flui_types::geometry::{Bounds, Point, Size, Pixels, DevicePixels, px, device_px};
+//! use flui_geometry::{Bounds, Point, Size, Pixels, DevicePixels, px, device_px};
 //!
 //! let ui_bounds = Bounds::<Pixels>::new(
 //!     Point::new(px(10.0), px(20.0)),
@@ -36,7 +36,7 @@
 //! # Examples
 //!
 //! ```
-//! use flui_types::geometry::{bounds, point, size};
+//! use flui_geometry::{bounds, point, size};
 //!
 //! let a = bounds(point(0.0, 0.0), size(10.0, 10.0));
 //! let b = bounds(point(5.0, 5.0), size(10.0, 10.0));
@@ -695,4 +695,18 @@ impl<T: Unit> Bounds<T> {
             ),
         }
     }
+}
+
+// =============================================================================
+// CONSTRUCTOR FUNCTION (symmetric with `rect()`, `point()`, `size()`, `edges()`)
+// =============================================================================
+
+/// Convenience constructor for [`Bounds<Pixels>`] from an origin point and size.
+///
+/// Mirrors the constructor-function pattern used by [`rect`](crate::rect),
+/// [`point`](crate::point), [`size`](crate::size), and [`edges`](crate::edges).
+#[inline]
+#[must_use]
+pub fn bounds(origin: Point<Pixels>, size: Size<Pixels>) -> Bounds<Pixels> {
+    Bounds::new(origin, size)
 }

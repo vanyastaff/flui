@@ -16,7 +16,7 @@
 //! ## Basic Transforms
 //!
 //! ```rust,ignore
-//! use flui_types::geometry::{Transform, Matrix4, Offset};
+//! use flui_geometry::{Transform, Matrix4, Offset};
 //! use std::f32::consts::PI;
 //!
 //! // Translation - move by offset
@@ -298,7 +298,7 @@ impl Transform {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_types::geometry::{Radians, Transform};
+    /// use flui_geometry::{Radians, Transform};
     ///
     /// let t = Transform::rotate_radians(Radians::from_degrees(45.0));
     /// ```
@@ -350,7 +350,7 @@ impl Transform {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_types::geometry::{Radians, Transform};
+    /// use flui_geometry::{Radians, Transform};
     ///
     /// let t = Transform::rotate_around_radians(Radians::from_degrees(45.0), 100.0, 100.0);
     /// ```

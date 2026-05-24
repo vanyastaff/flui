@@ -164,7 +164,7 @@ impl Edges<super::units::Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Edges, px};
+    /// use flui_geometry::{Edges, px};
     ///
     /// let insets = Edges::only_left(px(10.0));
     /// assert_eq!(insets.left, px(10.0));
@@ -223,7 +223,7 @@ impl Edges<super::units::Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Edges, Size, px};
+    /// use flui_geometry::{Edges, Size, px};
     ///
     /// let insets = Edges::new(px(10.0), px(20.0), px(30.0), px(40.0));
     /// let size = insets.total_size();
@@ -241,7 +241,7 @@ impl Edges<super::units::Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Edges, Offset, px};
+    /// use flui_geometry::{Edges, Offset, px};
     ///
     /// let insets = Edges::new(px(10.0), px(20.0), px(30.0), px(40.0));
     /// let offset = insets.top_left();
@@ -259,7 +259,7 @@ impl Edges<super::units::Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Edges, Offset, px};
+    /// use flui_geometry::{Edges, Offset, px};
     ///
     /// let insets = Edges::new(px(10.0), px(20.0), px(30.0), px(40.0));
     /// let offset = insets.bottom_right();
@@ -277,7 +277,7 @@ impl Edges<super::units::Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Edges, px};
+    /// use flui_geometry::{Edges, px};
     ///
     /// let zero_insets = Edges::ZERO;
     /// assert!(zero_insets.is_zero());
@@ -300,7 +300,7 @@ impl Edges<super::units::Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Edges, px};
+    /// use flui_geometry::{Edges, px};
     ///
     /// let positive = Edges::all(px(10.0));
     /// assert!(positive.is_non_negative());
@@ -323,7 +323,7 @@ impl Edges<super::units::Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Edges, px};
+    /// use flui_geometry::{Edges, px};
     ///
     /// let insets = Edges::new(px(-5.0), px(10.0), px(-3.0), px(20.0));
     /// let clamped = insets.clamp_non_negative();
@@ -379,7 +379,7 @@ impl Edges<super::units::Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Edges, Point, Rect, px};
+    /// use flui_geometry::{Edges, Point, Rect, px};
     ///
     /// let insets = Edges::all(px(10.0));
     /// let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
@@ -408,7 +408,7 @@ impl Edges<super::units::Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Edges, Point, Rect, px};
+    /// use flui_geometry::{Edges, Point, Rect, px};
     ///
     /// let insets = Edges::all(px(10.0));
     /// let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
@@ -437,7 +437,7 @@ impl Edges<super::units::Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Edges, Size, px};
+    /// use flui_geometry::{Edges, Size, px};
     ///
     /// let insets = Edges::all(px(10.0));
     /// let size = Size::new(px(100.0), px(100.0));
@@ -464,7 +464,7 @@ impl Edges<super::units::Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Edges, Size, px};
+    /// use flui_geometry::{Edges, Size, px};
     ///
     /// let insets = Edges::all(px(10.0));
     /// let size = Size::new(px(100.0), px(100.0));
@@ -489,7 +489,7 @@ impl Edges<super::units::Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Edges, px};
+    /// use flui_geometry::{Edges, px};
     ///
     /// let insets = Edges::new(px(10.0), px(20.0), px(30.0), px(40.0));
     /// let flipped = insets.flip_horizontal();
@@ -512,7 +512,7 @@ impl Edges<super::units::Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Edges, px};
+    /// use flui_geometry::{Edges, px};
     ///
     /// let insets = Edges::new(px(10.0), px(20.0), px(30.0), px(40.0));
     /// let flipped = insets.flip_vertical();

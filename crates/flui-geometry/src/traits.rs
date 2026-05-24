@@ -166,7 +166,7 @@ pub trait Along {
 /// # Examples
 ///
 /// ```rust
-/// use flui_types::geometry::{Half, Pixels, px};
+/// use flui_geometry::{Half, Pixels, px};
 ///
 /// let width = px(100.0);
 /// assert_eq!(width.half(), px(50.0));
@@ -225,7 +225,7 @@ impl Half for DevicePixels {
 /// # Examples
 ///
 /// ```rust
-/// use flui_types::geometry::{Double, Pixels, px};
+/// use flui_geometry::{Double, Pixels, px};
 ///
 /// let width = px(50.0);
 /// assert_eq!(width.double(), px(100.0));
@@ -284,7 +284,7 @@ impl Double for DevicePixels {
 /// # Examples
 ///
 /// ```rust
-/// use flui_types::geometry::{IsZero, Pixels, px};
+/// use flui_geometry::{IsZero, Pixels, px};
 ///
 /// assert!(px(0.0).is_zero());
 /// assert!(!px(1.0).is_zero());
@@ -361,7 +361,7 @@ impl IsZero for DevicePixels {
 /// `Sign::signum(value)` when you need the result in the same type.
 ///
 /// ```rust
-/// use flui_types::geometry::{Pixels, Sign, px};
+/// use flui_geometry::{Pixels, Sign, px};
 ///
 /// let value = px(100.0);
 ///
@@ -375,7 +375,7 @@ impl IsZero for DevicePixels {
 /// # Examples
 ///
 /// ```rust
-/// use flui_types::geometry::{Pixels, Sign, px};
+/// use flui_geometry::{Pixels, Sign, px};
 ///
 /// let positive = px(100.0);
 /// assert!(positive.is_positive());
@@ -519,7 +519,7 @@ impl Sign for DevicePixels {
 /// # Examples
 ///
 /// ```rust
-/// use flui_types::geometry::{ApproxEq, Pixels, px};
+/// use flui_geometry::{ApproxEq, Pixels, px};
 ///
 /// let a = px(100.0);
 /// let b = px(100.0 + 1e-8); // Very close but not exactly equal
@@ -595,7 +595,7 @@ impl ApproxEq for DevicePixels {
 /// # Examples
 ///
 /// ```rust
-/// use flui_types::geometry::{GeometryOps, Pixels, px};
+/// use flui_geometry::{GeometryOps, Pixels, px};
 ///
 /// let a = px(-100.0);
 /// assert_eq!(a.abs(), px(100.0));
@@ -633,7 +633,7 @@ pub trait GeometryOps: NumericUnit {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_types::geometry::{GeometryOps, Pixels, px};
+    /// use flui_geometry::{GeometryOps, Pixels, px};
     ///
     /// let start = px(0.0);
     /// let end = px(100.0);

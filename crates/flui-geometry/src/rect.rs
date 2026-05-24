@@ -27,7 +27,7 @@ use super::{
 /// # Examples
 ///
 /// ```
-/// use flui_types::geometry::{Point, Rect, Size, point, size};
+/// use flui_geometry::{Point, Rect, Size, point, size};
 ///
 /// // Create from origin and size
 /// let rect = Rect::from_origin_size(point(0.0, 0.0), size(100.0, 50.0));
@@ -796,12 +796,9 @@ impl Rect<Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{DevicePixels, Pixels, Point, Rect, ScaleFactor, Size, px};
+    /// use flui_geometry::{DevicePixels, Pixels, Rect, ScaleFactor, px};
     ///
-    /// let logical = Rect::new(
-    ///     Point::new(px(10.0), px(20.0)),
-    ///     Size::new(px(100.0), px(200.0)),
-    /// );
+    /// let logical = Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(200.0));
     /// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
     /// let device = logical.scale_with(scale);
     /// assert_eq!(device.origin().x.get(), 20);
@@ -826,7 +823,7 @@ impl Rect<super::units::DevicePixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{
+    /// use flui_geometry::{
     ///     DevicePixels, Pixels, Point, Rect, ScaleFactor, Size, device_px, px,
     /// };
     ///

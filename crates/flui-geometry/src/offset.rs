@@ -32,7 +32,7 @@ use super::{
 /// # Examples
 ///
 /// ```
-/// use flui_types::geometry::{Offset, px, Pixels};
+/// use flui_geometry::{Offset, px, Pixels};
 ///
 /// let offset = Offset::<Pixels>::new(px(10.0), px(20.0));
 /// assert_eq!(offset.dx.get(), 10.0);
@@ -72,7 +72,7 @@ impl<T: Unit> Offset<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Offset, px};
+    /// use flui_geometry::{Offset, px};
     ///
     /// let offset = Offset::new(px(10.0), px(20.0));
     /// assert_eq!(offset.dx.get(), 10.0);
@@ -88,7 +88,7 @@ impl<T: Unit> Offset<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Offset, px};
+    /// use flui_geometry::{Offset, px};
     ///
     /// let offset = Offset::new(px(10.0), px(20.0));
     /// let swapped = offset.swap();
@@ -108,7 +108,7 @@ impl<T: Unit> Offset<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Offset, px, Pixels};
+    /// use flui_geometry::{Offset, px, Pixels};
     ///
     /// let offset: Offset<Pixels> = Offset::new(px(10.0), px(20.0));
     /// let doubled: Offset<Pixels> = offset.map(|v| v * 2.0);
@@ -148,7 +148,7 @@ impl<T: Unit> Offset<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Offset, Vec2, px, Pixels};
+    /// use flui_geometry::{Offset, Vec2, px, Pixels};
     ///
     /// let offset = Offset::new(px(10.0), px(20.0));
     /// let vec: Vec2<Pixels> = offset.to_vec2();
@@ -174,7 +174,7 @@ impl<T: Unit> Offset<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Offset, Pixels, px};
+    /// use flui_geometry::{Offset, Pixels, px};
     ///
     /// let px_offset = Offset::<Pixels>::new(px(10.0), px(20.0));
     /// let f32_offset: Offset<Pixels> = px_offset.cast();
@@ -201,7 +201,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Offset, px};
+    /// use flui_geometry::{Offset, px};
     ///
     /// let offset = Offset::new(px(10.0), px(20.0));
     /// let f32_offset = offset.to_f32();
@@ -226,7 +226,7 @@ impl Offset<Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Offset, px};
+    /// use flui_geometry::{Offset, px};
     ///
     /// let offset = Offset::from_direction(0.0, 10.0);
     /// assert!((offset.dx.get() - 10.0).abs() < 0.001);
@@ -248,7 +248,7 @@ impl Offset<Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Offset, Point, px};
+    /// use flui_geometry::{Offset, Point, px};
     ///
     /// let from = Point::new(px(10.0), px(20.0));
     /// let to = Point::new(px(30.0), px(50.0));
@@ -266,7 +266,7 @@ impl Offset<Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Offset, px};
+    /// use flui_geometry::{Offset, px};
     ///
     /// assert!(Offset::ZERO.is_zero());
     /// assert!(!Offset::new(px(1.0), px(0.0)).is_zero());
@@ -281,7 +281,7 @@ impl Offset<Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Offset, px};
+    /// use flui_geometry::{Offset, px};
     ///
     /// let offset = Offset::new(px(3.0), px(4.0));
     /// assert_eq!(offset.distance().get(), 5.0); // 3-4-5 triangle
@@ -296,7 +296,7 @@ impl Offset<Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Offset, px};
+    /// use flui_geometry::{Offset, px};
     ///
     /// let offset = Offset::new(px(3.0), px(4.0));
     /// assert_eq!(offset.distance_squared().get(), 25.0);
@@ -311,7 +311,7 @@ impl Offset<Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Offset, px};
+    /// use flui_geometry::{Offset, px};
     ///
     /// let right = Offset::new(px(1.0), px(0.0));
     /// assert!((right.direction() - 0.0).abs() < 0.001);
@@ -326,7 +326,7 @@ impl Offset<Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::Offset;
+    /// use flui_geometry::Offset;
     ///
     /// assert!(Offset::ZERO.is_finite());
     /// assert!(!Offset::INFINITE.is_finite());
@@ -347,7 +347,7 @@ impl Offset<Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Offset, px};
+    /// use flui_geometry::{Offset, px};
     ///
     /// let offset = Offset::new(px(10.0), px(20.0));
     /// let scaled = offset.scale(2.0);
@@ -363,7 +363,7 @@ impl Offset<Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Offset, px};
+    /// use flui_geometry::{Offset, px};
     ///
     /// let a = Offset::new(px(10.0), px(20.0));
     /// let b = Offset::new(px(5.0), px(10.0));
@@ -381,7 +381,7 @@ impl Offset<Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Offset, px};
+    /// use flui_geometry::{Offset, px};
     ///
     /// let a = Offset::new(px(0.0), px(0.0));
     /// let b = Offset::new(px(10.0), px(10.0));
@@ -403,7 +403,7 @@ impl Offset<Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Offset, Point, px};
+    /// use flui_geometry::{Offset, Point, px};
     ///
     /// let offset = Offset::new(px(10.0), px(20.0));
     /// let point = offset.to_point();
@@ -421,7 +421,7 @@ impl Offset<Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Offset, Size, px};
+    /// use flui_geometry::{Offset, Size, px};
     ///
     /// let offset = Offset::new(px(10.0), px(20.0));
     /// let size = offset.to_size();
@@ -519,7 +519,7 @@ impl Offset<Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Offset, px};
+    /// use flui_geometry::{Offset, px};
     ///
     /// let offset = Offset::new(px(30.0), px(40.0)); // magnitude = 50
     /// let clamped = offset.clamp_magnitude(25.0);
@@ -550,7 +550,7 @@ impl Offset<Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Offset, px};
+    /// use flui_geometry::{Offset, px};
     ///
     /// let start = Offset::new(px(0.0), px(0.0));
     /// let target = Offset::new(px(10.0), px(0.0));
@@ -588,7 +588,7 @@ impl Offset<Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Offset, px};
+    /// use flui_geometry::{Offset, px};
     /// use std::f32::consts::PI;
     ///
     /// let right = Offset::new(px(1.0), px(0.0));
@@ -940,7 +940,7 @@ impl Offset<Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{DevicePixels, Offset, Pixels, ScaleFactor, device_px, px};
+    /// use flui_geometry::{DevicePixels, Offset, Pixels, ScaleFactor, device_px, px};
     ///
     /// let logical = Offset::new(px(10.0), px(20.0));
     /// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
@@ -968,7 +968,7 @@ impl Offset<super::units::DevicePixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{DevicePixels, Offset, Pixels, ScaleFactor, device_px, px};
+    /// use flui_geometry::{DevicePixels, Offset, Pixels, ScaleFactor, device_px, px};
     ///
     /// let device = Offset::new(device_px(20), device_px(40));
     /// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);

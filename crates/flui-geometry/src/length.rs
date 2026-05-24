@@ -22,7 +22,7 @@
 //! # Examples
 //!
 //! ```rust
-//! use flui_types::geometry::{Pixels, auto, px, relative, rems};
+//! use flui_geometry::{Pixels, auto, px, relative, rems};
 //!
 //! // Absolute lengths
 //! let width = px(100.0); // 100 pixels
@@ -249,7 +249,7 @@ impl std::str::FromStr for Rems {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::Rems;
+    /// use flui_geometry::Rems;
     ///
     /// let r: Rems = "1.5".parse().unwrap();
     /// assert_eq!(r.get(), 1.5);
@@ -506,7 +506,7 @@ impl AbsoluteLength {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_types::geometry::{AbsoluteLength, px, rems};
+    /// use flui_geometry::{AbsoluteLength, px, rems};
     ///
     /// let zero_px: AbsoluteLength = px(0.0).into();
     /// let zero_rem: AbsoluteLength = rems(0.0).into();

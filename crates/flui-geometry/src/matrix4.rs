@@ -20,7 +20,7 @@
 //! ## Basic Transformations
 //!
 //! ```
-//! use flui_types::Matrix4;
+//! use flui_geometry::{Matrix4, px};
 //!
 //! // Identity matrix (const-evaluable)
 //! const IDENTITY: Matrix4 = Matrix4::identity();
@@ -38,13 +38,13 @@
 //! let combined = translate * rotate * scale;
 //!
 //! // Transform a point
-//! let (x, y) = combined.transform_point(1.0, 0.0);
+//! let (x, y) = combined.transform_point(px(1.0), px(0.0));
 //! ```
 //!
 //! ## Advanced Operations
 //!
 //! ```
-//! use flui_types::Matrix4;
+//! use flui_geometry::Matrix4;
 //!
 //! let m = Matrix4::rotation_z(0.5);
 //!
@@ -64,7 +64,7 @@
 //! ## Type-Safe Access
 //!
 //! ```
-//! use flui_types::Matrix4;
+//! use flui_geometry::Matrix4;
 //!
 //! let mut m = Matrix4::identity();
 //!
@@ -83,7 +83,7 @@
 //! ## Approximate Equality
 //!
 //! ```
-//! use flui_types::Matrix4;
+//! use flui_geometry::Matrix4;
 //!
 //! let m1 = Matrix4::translation(1.0, 2.0, 0.0);
 //! let m2 = Matrix4::translation(1.0000001, 2.0, 0.0);
@@ -134,7 +134,7 @@ impl Matrix4 {
     /// # Example
     ///
     /// ```
-    /// use flui_types::Matrix4;
+    /// use flui_geometry::Matrix4;
     ///
     /// let transform = Matrix4::IDENTITY;
     /// assert!(transform.is_identity());
@@ -150,7 +150,7 @@ impl Matrix4 {
     /// # Example
     ///
     /// ```
-    /// use flui_types::Matrix4;
+    /// use flui_geometry::Matrix4;
     ///
     /// let zero = Matrix4::ZERO;
     /// assert_eq!(zero.determinant(), 0.0);
@@ -925,7 +925,7 @@ impl MulAssign for Matrix4 {
 ///
 /// # Example
 /// ```
-/// use flui_types::Matrix4;
+/// use flui_geometry::Matrix4;
 /// let m = Matrix4::identity();
 /// assert_eq!(m[0], 1.0); // m00
 /// assert_eq!(m[5], 1.0); // m11
