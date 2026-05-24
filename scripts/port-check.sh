@@ -445,7 +445,7 @@ fi
 # issue or follow-up doc so the stub doesn't become permanent. Per-site
 # audit during PR review enforces this.
 # -----------------------------------------------------------------------------
-trigger8_hits=$(rg --line-number --column \
+trigger8_raw=$(rg --line-number --column \
     -e 'unimplemented!\s*\(' \
     -e 'todo!\s*\(' \
     --type rust \
@@ -459,7 +459,34 @@ trigger8_hits=$(rg --line-number --column \
   | grep -Ev '//\s*PORT-CHECK-OK-STUB:' \
   || true)
 
-if [[ -n "${trigger8_hits}" ]]; then
+# **PR #151 Codex review #3295220689:** post-filter out matches inside
+# in-file `#[cfg(test)]` blocks (Rust convention: `#[cfg(test)] mod
+# tests { ... }` at end of source file). The path-glob exclusions
+# above only drop dedicated test files; in-file test modules slip
+# through and false-positive on test-only `todo!()` / `unimplemented!()`
+# scaffolding.
+#
+# Heuristic: scan the file from the top to the matched line for a
+# `#[cfg(test)]` attribute on its own line. If found, assume the match
+# is inside a test mod and drop. This accepts the false-negative of
+# a `cfg(test)` ancestor that doesn't actually enclose the match
+# (rare in practice; tests/ + test*.rs path-exclusion handles the
+# dedicated-test-file case).
+trigger8_hits=""
+while IFS= read -r match_line; do
+  [[ -z "${match_line}" ]] && continue
+  match_file=$(echo "${match_line}" | awk -F':' '{print $1}' | tr '\\' '/')
+  match_lineno=$(echo "${match_line}" | awk -F':' '{print $2}')
+  [[ -z "${match_file}" || -z "${match_lineno}" ]] && continue
+  if head -n "${match_lineno}" "${match_file}" 2>/dev/null \
+      | grep -qE '^[[:space:]]*#\[cfg\(test\)\][[:space:]]*$'; then
+    continue
+  fi
+  trigger8_hits="${trigger8_hits}${match_line}
+"
+done <<< "${trigger8_raw}"
+
+if [[ -n "${trigger8_hits// }" ]]; then
   echo 'VIOLATION 8: SP-1 stubbed-but-called (unimplemented!()/todo!() in production fn body)'
   echo "see ${trigger_doc} (trigger 8)"
   echo "${trigger8_hits}"
@@ -533,11 +560,17 @@ while IFS= read -r raw_line; do
   fi
 done <<< "${trigger10_defs_raw}"
 
-# Build a tab-separated index: crate \t kind \t name \t full-line
+# Build a tab-separated index: crate \t kind \t name \t full-line.
+# **PR #151 Copilot review #3295220014:** Windows rg output uses `\`
+# in paths; the awk `split($1, parts, "/")` then yields `n < 2` and
+# silently drops every entry, suppressing all SP-3 duplicate detection.
+# Normalize backslash → forward slash before splitting.
 trigger10_index=$(echo "${trigger10_defs}" | awk -F':' '
 BEGIN { OFS = "\t" }
 {
-  n = split($1, parts, "/")
+  fp = $1
+  gsub(/\\/, "/", fp)
+  n = split(fp, parts, "/")
   if (n < 2) next
   crate = parts[2]
   line = $0
@@ -626,8 +659,21 @@ for libfile in ${trigger11_lib_files}; do
     [[ -z "${modname}" ]] && continue
 
     # Skip if previous non-blank line is `#[cfg(feature = "unstable-...")]`.
+    # **PR #151 Copilot review #3295220020 + Codex #3295220690:** the
+    # comment promises "previous non-blank line" but pre-fix only
+    # checked `lineno - 1`, so a blank separator between the cfg
+    # attribute and `pub mod` would false-positive. Scan backward
+    # until a non-blank line is found.
     prev_lineno=$((lineno - 1))
-    prev_content=$(sed -n "${prev_lineno}p" "${libfile}")
+    prev_content=""
+    while [[ "${prev_lineno}" -gt 0 ]]; do
+      prev_content=$(sed -n "${prev_lineno}p" "${libfile}")
+      # Strip whitespace; if non-empty, this is our target line.
+      if [[ -n "${prev_content// }" ]]; then
+        break
+      fi
+      prev_lineno=$((prev_lineno - 1))
+    done
     if echo "${prev_content}" | grep -qE '#\[cfg\(feature[[:space:]]*=[[:space:]]*"unstable-'; then
       continue
     fi
