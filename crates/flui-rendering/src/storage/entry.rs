@@ -344,10 +344,12 @@ impl<P: Protocol> RenderEntry<P> {
         //   message for diagnostics.
         //
         // Flatten shape: `catch_unwind` returns
-        // `Result<Result<G, RenderError>, Box<dyn Any + Send>>`. We
-        // map the outer Err (panic payload) to Poisoned and the inner
-        // Ok carries through; `.and_then(|inner| inner)` collapses to
-        // `Result<G, RenderError>` for the closure return.
+        // `Result<Result<G, RenderError>, Box<dyn Any + Send>>`. The
+        // `match` below explicitly forwards `Ok(inner)` verbatim (the
+        // inner `Result<G, RenderError>` from `perform_layout_raw`
+        // becomes the closure's return) and maps `Err(panic_payload)`
+        // into `Err(RenderError::Poisoned)` after logging the payload
+        // message. Net: closure returns `Result<G, RenderError>`.
         let geometry = <P as crate::protocol::Protocol>::with_leaf_erased_ctx(
             constraints_for_ctx,
             |erased_ctx| {

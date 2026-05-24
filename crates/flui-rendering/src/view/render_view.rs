@@ -506,8 +506,15 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
         // constraints (Flutter parity, `.flutter/.../view.dart`).
         //
         // Follow-up to PR #141 #5 Option A: signature returns
-        // `RenderResult<Size>`. Root always succeeds (no contract
-        // surface to violate) so this is always `Ok(...)`.
+        // `RenderResult<Size>`. The adapter itself has no contract
+        // surface to violate — there is no `complete_with_size`
+        // analogue to forget — so it never returns a typed `Err`.
+        // `RenderView::perform_layout` can still trip its internal
+        // `assert!` invariants (e.g. missing `prepare_initial_frame`)
+        // which propagate as panics; those are caught upstream by
+        // `RenderEntry::layout_leaf_only`'s `catch_unwind` and surface
+        // as `RenderError::Poisoned` — same as any third-party panic
+        // from user widget code.
         self.view.perform_layout();
         Ok(self.view.size())
     }

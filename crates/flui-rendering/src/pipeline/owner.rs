@@ -1778,11 +1778,14 @@ mod tests {
             crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>,
         > {
             // Intentional unstructured panic — exercises the catch_unwind →
-            // Poisoned path in `RenderEntry::layout_leaf_only`. After the
-            // Option A signature change, this panic is the ONE remaining
-            // way to produce `RenderError::Poisoned` (typed
-            // ContractViolation returns are reserved for bridge-detected
-            // contract violations that go through the `Result` chain).
+            // Poisoned path in `RenderEntry::layout_leaf_only`. This test
+            // fixture is one explicit way to produce
+            // `RenderError::Poisoned`; in production any third-party
+            // panic in user widget code (`panic!`, `unwrap()`, assertion
+            // failure inside `RenderBox::perform_layout`) reaches the
+            // same path. Bridge-detected contract violations go through
+            // the typed `Result` chain instead and surface as
+            // `RenderError::ContractViolation`.
             panic!("PanickingLayoutBox::perform_layout_raw -- intentional test panic");
         }
 
