@@ -43,13 +43,6 @@ use super::{
 /// via [`PipelineOwner::new_with_capacity`].
 const DEFAULT_DIRTY_CHANNEL_CAPACITY: usize = 256;
 
-/// Maximum render-tree recursion depth during layout. Going deeper means
-/// the parent-child layout has cycled or the tree is pathologically
-/// deep. The pipeline aborts the offending subtree, surfaces
-/// [`RenderError::LayoutDepthExceeded`](crate::RenderError::LayoutDepthExceeded) via tracing, and continues with
-/// the next dirty root. Mythos Step 12 (2026-05-20).
-pub const LAYOUT_DEPTH_LIMIT: usize = 1024;
-
 // ============================================================================
 // Pipeline ID Counter
 // ============================================================================
@@ -140,6 +133,18 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// (same non-shrinking discipline as `dirty`).
     mid_layout_marks: DirtySets,
 
+    /// Constraints to pass to [`Self::layout_dirty_root`] when the
+    /// dirty entry is the tree root (`root_id`) and the root has no
+    /// cached `state.constraints()` yet (first frame).
+    ///
+    /// **D-block PR-A1 U23:** the binding layer (`flui-view` /
+    /// `flui-app` / `flui-hot-reload`) sets this once per
+    /// configuration via [`Self::set_root_constraints`] before the
+    /// first `run_frame` invocation. On subsequent frames the root's
+    /// cached constraints (post-layout) supersede this field; the
+    /// fallback only fires on the very first layout pass.
+    root_constraints: Option<BoxConstraints>,
+
     /// Whether we're currently doing layout.
     debug_doing_layout: bool,
 
@@ -216,6 +221,7 @@ impl PipelineOwner<Idle> {
             notifier: VisualUpdateNotifier::new(),
             dirty: DirtySets::new(),
             mid_layout_marks: DirtySets::new(),
+            root_constraints: None,
             debug_doing_layout: false,
             debug_doing_paint: false,
             debug_doing_semantics: false,
@@ -256,6 +262,7 @@ impl PipelineOwner<Idle> {
             notifier,
             dirty: DirtySets::new(),
             mid_layout_marks: DirtySets::new(),
+            root_constraints: None,
             debug_doing_layout: false,
             debug_doing_paint: false,
             debug_doing_semantics: false,
@@ -445,6 +452,34 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// Sets the root render object ID.
     pub fn set_root_id(&mut self, id: Option<RenderId>) {
         self.root_id = id;
+    }
+
+    /// Returns the constraints to apply to the root render object on
+    /// the next layout pass (if no cached constraints yet).
+    ///
+    /// **D-block PR-A1 U23:** see [`Self::set_root_constraints`].
+    #[inline]
+    pub fn root_constraints(&self) -> Option<BoxConstraints> {
+        self.root_constraints
+    }
+
+    /// Sets the constraints to apply to the root render object on the
+    /// next layout pass when no cached constraints exist yet
+    /// (first-frame initialization).
+    ///
+    /// **D-block PR-A1 U23:** the binding layer (`flui-view` /
+    /// `flui-app` / `flui-hot-reload`) calls this once after
+    /// constructing the pipeline + before the first `run_frame`
+    /// invocation. On subsequent frames the root's cached
+    /// `state.constraints()` (post-layout) supersedes this field; the
+    /// fallback only fires on the very first layout pass.
+    ///
+    /// Pass `None` to clear (e.g., when the binding wants to defer to
+    /// a yet-unmounted root render object that supplies its own
+    /// constraints via `RootRenderElement::mount`).
+    #[inline]
+    pub fn set_root_constraints(&mut self, constraints: Option<BoxConstraints>) {
+        self.root_constraints = constraints;
     }
 
     /// Returns a reference to the render tree.
@@ -718,14 +753,13 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 };
                 // Idempotent flag set — the AtomicRenderFlags fetch-or is a
                 // no-op when the bit is already set. The walk does NOT
-                // short-circuit on "already marked"; the prior mark's
-                // dirty-queue entry may have been drained by `run_layout`
-                // without clearing the flag (the current run_layout still
-                // contains the `layout_node_with_children` no-op walk that
-                // doesn't invoke `RenderEntry::layout` — once PR-A1b lands
-                // the walk rewrite, layout clears `NEEDS_LAYOUT` and the
-                // walk could short-circuit, but the always-walk shape
-                // remains correct).
+                // short-circuit on "already marked": even with U23's
+                // `run_layout` → `layout_dirty_root` wiring (which
+                // clears NEEDS_LAYOUT after each successful layout via
+                // `layout_subtree_borrowed`), a stale flag can persist
+                // briefly between phases. Always-walking preserves
+                // correctness without depending on the precise clearing
+                // schedule; idempotence keeps it cheap.
                 node.mark_layout_flag();
                 let parent = node.links().parent();
                 let boundary = node.is_relayout_boundary() || parent.is_none();
@@ -983,7 +1017,9 @@ impl PipelineOwner<Layout> {
             self.debug_doing_layout = true;
 
             // Take the dirty nodes and replace with empty vec
-            // This allows new nodes to be added during layout
+            // This allows new nodes to be added during layout (routed
+            // to mid_layout_marks per U22; drained back at end of
+            // iteration below).
             let mut dirty_nodes = std::mem::take(&mut self.dirty.needs_layout);
 
             // Sort by depth (shallow first) - parents before children
@@ -998,21 +1034,30 @@ impl PipelineOwner<Layout> {
                     .collect::<Vec<_>>()
             );
 
-            // Process each dirty node
+            // Process each dirty node.
+            //
+            // **D-block PR-A1 U23:** layout_dirty_root replaces the
+            // legacy layout_node_with_children no-op recursion. Each
+            // dirty entry is laid out via the pre-acquired-subtree
+            // walk (U20.1) protected by LayoutCycleGuard (U21).
+            // Constraints come from cached state (post-frame-1) OR
+            // the binding-set root_constraints (frame-1 root).
             for dirty_node in dirty_nodes {
-                // Layout this node with synchronous child layout support.
-                // Depth starts at 0; recursion limit enforced inside.
-                //
-                // Mythos Step 12: layout_node_with_children returns
-                // RenderResult<()>. On error we restore
-                // debug_doing_layout and bail.
-                if let Err(e) = self.layout_node_with_children(dirty_node.id, 0) {
+                let Some(constraints) = self.cached_or_root_constraints(dirty_node.id) else {
+                    tracing::warn!(
+                        id = ?dirty_node.id,
+                        "run_layout: no cached state.constraints() AND id != root_id (or \
+                         root_constraints unset); skipping layout for this dirty entry. \
+                         Caller must either set_root_constraints OR mark the node's parent \
+                         dirty so the parent's layout propagates constraints."
+                    );
+                    continue;
+                };
+                if let Err(e) = self.layout_dirty_root(dirty_node.id, constraints) {
                     self.debug_doing_layout = false;
                     // PR-A1 U22 P1 review fix (Codex 3294365736): drain
                     // mid-phase marks back into `dirty` even on error
                     // path so they survive across phase invocations.
-                    // Without this, a panic / Err mid-iteration would
-                    // strand mid-phase marks indefinitely.
                     self.drain_mid_layout_marks();
                     return Err(e);
                 }
@@ -1022,121 +1067,42 @@ impl PipelineOwner<Layout> {
 
             // PR-A1 U22 P1 review fix (Codex 3294365736): drain
             // mid_layout_marks back into `dirty` so the outer while
-            // condition `!self.dirty.needs_layout.is_empty()` picks up
-            // marks that were routed to the side queue during this
-            // iteration's `debug_doing_layout = true` window. Without
-            // this drain, mid-phase marks accumulate in
-            // `mid_layout_marks` and are never processed.
+            // condition picks up marks routed to the side queue
+            // during this iteration's `debug_doing_layout = true`
+            // window.
             self.drain_mid_layout_marks();
         }
         Ok(())
     }
 
-    /// Lays out a single node with depth-first child layout.
+    /// Returns the constraints to apply when laying out `id` as a
+    /// dirty root.
     ///
-    /// This method follows Flutter's layout model:
-    /// 1. Propagate constraints to children
-    /// 2. Layout children first (depth-first) so their sizes are available
-    /// 3. Sync child sizes to parent's ChildState
-    /// 4. Layout parent using child sizes via `layout_child()` calls
+    /// **D-block PR-A1 U23:** sourced from (in priority order):
     ///
-    /// This ensures that when parent's `perform_layout` calls `layout_child()`,
-    /// the child's size is already cached and available.
-    fn layout_node_with_children(
-        &mut self,
-        render_id: RenderId,
-        depth: usize,
-    ) -> crate::error::RenderResult<()> {
-        // Mythos Step 12: bound recursion depth to detect infinite
-        // parent-child cycles. Going past LAYOUT_DEPTH_LIMIT surfaces
-        // RenderError::LayoutDepthExceeded; the caller (run_layout)
-        // propagates the error.
-        if depth > LAYOUT_DEPTH_LIMIT {
-            tracing::error!(
-                ?render_id,
-                "layout_node_with_children: depth limit exceeded ({})",
-                LAYOUT_DEPTH_LIMIT
-            );
-            return Err(crate::error::RenderError::layout_depth_exceeded(
-                LAYOUT_DEPTH_LIMIT,
-            ));
+    /// 1. The node's cached `state.constraints()` — set on the
+    ///    previous frame's successful layout. This is the common
+    ///    case for re-layout (constraints unchanged → cache hit
+    ///    fast path inside `layout_dirty_root`).
+    /// 2. The binding-set [`Self::root_constraints`] if `id` is the
+    ///    tree root (`root_id`). Used on the very first frame
+    ///    before any layout has cached its own constraints.
+    /// 3. Otherwise `None` — caller skips this dirty entry with a
+    ///    warning (no constraints available means the parent's
+    ///    perform_layout must propagate constraints first; the
+    ///    dirty queue's shallow-first ordering ensures parents are
+    ///    processed before children).
+    fn cached_or_root_constraints(&self, id: RenderId) -> Option<BoxConstraints> {
+        if let Some(node) = self.render_tree.get(id)
+            && let Some(entry) = node.as_box()
+            && let Some(cached) = entry.state().constraints()
+        {
+            return Some(*cached);
         }
-
-        // Check if node exists and needs layout
-        let needs_layout = {
-            if let Some(render_node) = self.render_tree.get(render_id) {
-                render_node.needs_layout()
-            } else {
-                return Ok(());
-            }
-        };
-
-        if !needs_layout {
-            return Ok(());
+        if self.root_id == Some(id) {
+            return self.root_constraints;
         }
-
-        tracing::trace!(
-            "layout_node_with_children: laying out node id={:?}",
-            render_id
-        );
-
-        // STEP 1: Get children IDs and propagate constraints
-        let children: Vec<RenderId> = {
-            if let Some(render_node) = self.render_tree.get(render_id) {
-                render_node.children().to_vec()
-            } else {
-                Vec::new()
-            }
-        };
-
-        // STEP 2: Layout children FIRST (depth-first)
-        // This ensures child sizes are available when parent's perform_layout runs.
-        //
-        // Cycle 4 R-13: the previous `propagate_constraints_to_child` and
-        // `sync_child_size_to_parent` calls bracketed each recursive child
-        // walk. Both were empty-body stubs (`fn ..(_) {}`) -- no constraints
-        // propagated, no sizes synced. Workspace audit:
-        //
-        //   - `RenderEntry::layout(constraints)` is the canonical per-node
-        //     layout entry point at `storage/entry.rs:252`. It accepts the
-        //     constraints as a parameter and is the only path that runs
-        //     `RenderObject::perform_layout_raw`.
-        //   - `layout_node_with_children` itself never calls
-        //     `entry.layout_leaf_only(...)` -- it only walks the tree
-        //     marking `needs_layout` checks and recursing. The actual
-        //     per-node layout happens nowhere in production today; the
-        //     only `entry.layout_leaf_only()` callsite in the file is
-        //     inside a `#[test]` block.
-        //
-        // So both stubs were dead code embedded in a larger half-implemented
-        // walk. They were called every layout pass at zero cost (empty body)
-        // but produced no behavior; deletion is strictly subtractive.
-        //
-        // The remaining `needs_layout()` walk preserves the depth-first
-        // recursion shape so that when the per-node layout call lands, the
-        // post-order traversal is already in place. The post-order ordering
-        // is what Flutter's `performLayout` relies on so child sizes are
-        // available when the parent's `performLayout` runs -- structurally
-        // correct even though no node-level layout call exists yet.
-        for child_id in &children {
-            let child_needs_layout = {
-                if let Some(child_node) = self.render_tree.get(*child_id) {
-                    child_node.needs_layout()
-                } else {
-                    false
-                }
-            };
-
-            if child_needs_layout {
-                // Recursively layout the child (depth-first), incrementing
-                // the recursion-depth counter so LAYOUT_DEPTH_LIMIT can
-                // catch infinite cycles. Errors propagate up the
-                // recursion via `?`.
-                self.layout_node_with_children(*child_id, depth + 1)?;
-            }
-        }
-
-        Ok(())
+        None
     }
 
     /// D-block PR-A1b3 U20 — production disjoint-borrow layout walk.
@@ -2292,6 +2258,7 @@ where
         notifier: from.notifier,
         dirty: from.dirty,
         mid_layout_marks: from.mid_layout_marks,
+        root_constraints: from.root_constraints,
         debug_doing_layout: from.debug_doing_layout,
         debug_doing_paint: from.debug_doing_paint,
         debug_doing_semantics: from.debug_doing_semantics,
