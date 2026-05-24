@@ -1,36 +1,6 @@
 {
-	"defaultThinkingLevel": "high",
-	"thinkingBudgets": {
-		"medium": 12288,
-		"high": 32768
-	},
-	"compaction": {
-		"enabled": true,
-		"reserveTokens": 20480,
-		"keepRecentTokens": 28000
-	},
-	"retry": {
-		"enabled": true,
-		"maxRetries": 5
-	},
-	"warnings": {
-		"anthropicExtraUsage": false
-	},
 	"skills": [
 		"../.agents/skills"
 	],
-	"packages": [
-		"npm:@narumitw/pi-lsp",
-		"npm:@narumitw/pi-plan-mode",
-		"npm:@narumitw/pi-goal",
-		"npm:@narumitw/pi-retry",
-		"npm:@narumitw/pi-statusline",
-		"npm:@narumitw/pi-subagents",
-		"npm:@narumitw/pi-firecrawl",
-		"npm:gentle-pi",
-		"npm:pi-hermes-memory",
-		"npm:@gotgenes/pi-permission-system",
-		"npm:@juicesharp/rpiv-todo",
-		"npm:@juicesharp/rpiv-advisor"
-	]
+	"packages": []
 }

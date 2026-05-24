@@ -189,6 +189,8 @@ flamegraph.svg
 .pi/npm/
 .pi/sessions/
 .pi/cache/
+.pi/APPEND_SYSTEM.md
+.pi/gentle-ai/
 .peer-review/
 
 # Local Pi runtime state
