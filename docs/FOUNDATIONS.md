@@ -217,7 +217,7 @@ graph TD
     facade --> widgets
 ```
 
-The DAG is acyclic and downward-correct. The Constitution **v2.3.0** layer table reflects current-state layering (geometry in `flui-types`, edition 2024 / Rust 1.94, accurate workspace member list); the **target graph above** is the forward-looking Part IV decomposition that Part V's roadmap migrates the workspace toward. The constitution remains "current state, locked"; this document is "target state, in progress." Full reasoning and the ordered migration delta: [`research/2026-05-22-crate-decomposition-redesign.md`](research/2026-05-22-crate-decomposition-redesign.md).
+The DAG is acyclic and downward-correct. The Constitution **v2.3.0** layer table reflects current-state layering (geometry in `flui-types`, edition 2024 / Rust 1.95, accurate workspace member list); the **target graph above** is the forward-looking Part IV decomposition that Part V's roadmap migrates the workspace toward. The constitution remains "current state, locked"; this document is "target state, in progress." Full reasoning and the ordered migration delta: [`research/2026-05-22-crate-decomposition-redesign.md`](research/2026-05-22-crate-decomposition-redesign.md).
 
 ---
 
@@ -270,7 +270,7 @@ This document is the **architecture contract** for the port. Its relationship to
 - **`FOUNDATIONS.md`** (this document) — *what* (the target architecture, the locked contracts, the crate graph).
 - [`PORT.md`](PORT.md) — *how* (the port methodology, refusal triggers, mapping rules).
 - [`ROADMAP.md`](ROADMAP.md) — *when / in what order* (the dependency-ordered construction phases).
-- [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) — the ratified rules. **It requires amendment** (MINOR bump): the layer table must be replaced with Part IV's, and the edition/Rust-version line corrected to 2024 / 1.94.
+- [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) — the ratified rules. **It requires amendment** (MINOR bump): the layer table must be replaced with Part IV's, and the edition/Rust-version line corrected to 2024 / 1.95.
 
 **Amendment.** A change to a locked contract (Part III) or the target crate graph (Part IV) requires: documented rationale, a corresponding `STRATEGY.md`/`PORT.md`/constitution sync if affected, and — once construction has begun — an explicit migration assessment, because a contract change after Phase 1 has catalog-wide blast radius. The contracts are locked precisely so that they are *not* casually amended.
 

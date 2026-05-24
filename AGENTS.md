@@ -8,7 +8,7 @@ FLUI is a modular, Flutter-inspired declarative UI framework for Rust with a thr
 
 ## Tech Stack
 
-- **Programming language:** Rust 1.94 (edition 2024)
+- **Programming language:** Rust 1.95 (edition 2024)
 - **Build system:** Cargo workspace (20+ crates organized in foundation / core / rendering / framework / application layers)
 - **Async runtime:** `tokio` 1.43 LTS
 - **Graphics:** `wgpu` 25.x (pinned), `lyon`, `glyphon`, `cosmic-text`, `glam`
