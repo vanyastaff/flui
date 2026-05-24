@@ -658,7 +658,7 @@ fn u20_1_four_level_padding_chain() {
         .render_tree_mut()
         .insert_box_child(mid, Box::new(RenderPadding::all(2.0)))
         .expect("inner insert must succeed");
-    let _leaf = pipeline
+    let leaf = pipeline
         .render_tree_mut()
         .insert_box_child(inner, Box::new(RenderColoredBox::green(20.0, 20.0)))
         .expect("leaf insert must succeed");
@@ -676,15 +676,18 @@ fn u20_1_four_level_padding_chain() {
          layout_subtree_borrowed scales to deeper trees than 3 levels",
     );
 
-    // Every node must be marked clean post-layout (no descendant errors).
-    for id in [outer, mid, inner] {
+    // Every node — INCLUDING the leaf — must be marked clean
+    // post-layout (no descendant errors). PR #145 review fix
+    // (Copilot 3294267600): prior version excluded `_leaf` from the
+    // loop while the message claimed "every node".
+    for id in [outer, mid, inner, leaf] {
         let node = pipeline
             .render_tree()
             .get(id)
             .expect("node must still be in tree");
         assert!(
             !node.needs_layout(),
-            "depth-4 chain: every parent must be clean post-layout",
+            "depth-4 chain: every node (including leaf) must be clean post-layout",
         );
     }
 }

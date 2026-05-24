@@ -560,10 +560,29 @@ impl RenderTree {
     /// pushed in reverse so they pop in stored order — preserves
     /// pre-order with children-left-to-right.
     ///
+    /// # Cycle protection (PR #145 review fix)
+    ///
+    /// Carries a `visited` `HashSet<RenderId>` to short-circuit on
+    /// repeated ids. Without this guard, a malformed tree containing
+    /// a parent / child cycle (which `RenderNode::add_child` does not
+    /// prevent; full cycle protection arrives in U21) would loop
+    /// forever — repeatedly re-pushing the cycle's nodes onto `stack`
+    /// while `out` grows unbounded → hang / OOM. The visited-set
+    /// short-circuit terminates the walk on the first repeated id and
+    /// produces a deduplicated `Vec<RenderId>` suitable for
+    /// [`Self::get_subtree_mut`] (which requires pairwise uniqueness).
+    /// The cyclic edge itself is silently dropped; full
+    /// [`RenderError::LayoutCycle`](crate::error::RenderError::LayoutCycle)
+    /// reporting is U21's job — this fix is the minimum-disruption
+    /// termination guard so the pre-acquired-subtree walk does not
+    /// regress on cycles vs the prior PR #144 stack-overflow failure
+    /// mode.
+    ///
     /// # Complexity
     ///
     /// O(N) where N is the subtree node count. Single pass; each
-    /// node's `children()` slice is borrowed once.
+    /// node's `children()` slice is borrowed once. `visited` is a
+    /// `HashSet<RenderId>` — O(1) amortised lookup + insert per id.
     pub fn collect_subtree_ids(&self, root_id: RenderId) -> Vec<RenderId> {
         let mut out = Vec::new();
         // If the root doesn't exist, return empty to mirror other
@@ -573,7 +592,20 @@ impl RenderTree {
             return out;
         }
         let mut stack: Vec<RenderId> = vec![root_id];
+        // PR #145 review fix: visited-set short-circuits on repeated
+        // ids so a cyclic tree terminates instead of hanging /
+        // OOMing. Pre-sized to a conservative guess (small trees are
+        // the common case; HashSet grows by power-of-two doubling
+        // otherwise).
+        let mut visited: std::collections::HashSet<RenderId> =
+            std::collections::HashSet::with_capacity(16);
         while let Some(id) = stack.pop() {
+            // Skip ids already visited — preserves uniqueness in `out`
+            // and breaks cycles. Without this, a parent/child cycle
+            // (A → B → A) re-pushes A onto stack forever.
+            if !visited.insert(id) {
+                continue;
+            }
             if let Some(node) = self.get(id) {
                 out.push(id);
                 // Reverse-push so the leftmost child pops first,
@@ -1057,6 +1089,70 @@ mod tests {
                 );
             }
         }
+        // Drop the disjointness check's borrow before the order check.
+        drop(refs);
+
+        // PR #145 review fix (Copilot 3294267590): verify refs[i]
+        // CORRESPONDS to ids[i] — not just disjoint / correct count.
+        // Write a distinct marker via refs[i] (depth = i + 100), drop
+        // the Vec, read back via tree.get(ids[i]) to confirm
+        // position-by-position alignment. The +100 offset avoids
+        // collision with depths set by insert_box_child (these were
+        // all 0 since the nodes are roots here).
+        {
+            let mut refs = tree
+                .get_subtree_mut(&ids)
+                .expect("re-acquire for marker write");
+            for (i, r) in refs.iter_mut().enumerate() {
+                r.set_depth((i + 100) as u16);
+            }
+            // refs Vec drops here, freeing slab for the read-back below.
+        }
+        for (i, &id) in ids.iter().enumerate() {
+            let depth = tree.get(id).expect("node still in tree").depth();
+            assert_eq!(
+                depth,
+                (i + 100) as u16,
+                "refs[{i}] must alias ids[{i}]'s slot — input order preserved",
+            );
+        }
+    }
+
+    /// PR #145 review fix (Codex 3294268624 + Copilot 3294267583):
+    /// `collect_subtree_ids` must terminate on cyclic trees instead of
+    /// hanging / OOMing. The visited-set short-circuit dedups repeated
+    /// ids on the DFS stack.
+    #[test]
+    fn collect_subtree_ids_terminates_on_cycle() {
+        let mut tree = RenderTree::new();
+        let a = tree.insert_box(make_leaf());
+        let b = tree.insert_box_child(a, make_leaf()).expect("b insert");
+
+        // Inject a synthetic A → B → A cycle by adding A back as a
+        // child of B (defeats the natural tree-construction
+        // discipline — would normally come from a hot-reload bug or
+        // programmatic tree mutation).
+        tree.get_mut(b).expect("b in tree").add_child(a);
+
+        // Without the visited-set guard this would loop forever:
+        // pop A → push B → pop B → push A → pop A → push B → ...
+        let ids = tree.collect_subtree_ids(a);
+
+        // Must terminate. Output must contain A and B exactly once
+        // (deduped by visited-set). Order: A first (DFS pre-order
+        // root), then B.
+        assert_eq!(
+            ids.len(),
+            2,
+            "cyclic A → B → A subtree must collect to exactly 2 unique ids; got {ids:?}",
+        );
+        assert!(ids.contains(&a) && ids.contains(&b));
+
+        // Output must satisfy get_subtree_mut's uniqueness requirement.
+        assert!(
+            tree.get_subtree_mut(&ids).is_some(),
+            "deduped output must be acceptable to get_subtree_mut",
+        );
     }
 
     #[test]

@@ -1107,20 +1107,34 @@ impl PipelineOwner<Layout> {
     ///
     /// # Cycle / depth safety
     ///
-    /// The current implementation has **no cycle guard and no depth
-    /// limit**. A render object whose `perform_layout` re-enters its
-    /// own ancestor via `layout_child` would attempt a SECOND reborrow
-    /// of an already-borrowed `NodePtr` slot — this is detectable in
-    /// debug builds (a future `RefCell`-style guard inside
-    /// `SubtreeBorrows` could surface it as `RenderError::LayoutCycle`)
-    /// but currently overflows the stack. The cycle guard is U21's job
-    /// (companion memo D6): `currently_laying_out:
-    /// FxHashSet<RenderId>` with RAII drop-guard detects re-entry and
-    /// returns
-    /// [`RenderError::LayoutCycle`](crate::error::RenderError::LayoutCycle).
-    /// Until U21 lands, callers must ensure the tree is acyclic. **Do
-    /// not wire `run_layout` to call `layout_dirty_root` until U21
-    /// ships.** U23 performs the wiring after U21.
+    /// The current implementation has **no full cycle guard and no
+    /// depth limit**. Behaviour on a malformed (cyclic) tree:
+    ///
+    /// 1. `collect_subtree_ids` terminates safely on cycles via its
+    ///    `visited` `HashSet<RenderId>` short-circuit (PR #145 review
+    ///    fix) — the cyclic id is visited at most once, the cycle
+    ///    edge is silently dropped from the collected subtree, and
+    ///    `Vec<RenderId>` returns deduplicated. No hang / OOM.
+    /// 2. `get_subtree_mut` receives a deduplicated id list →
+    ///    uniqueness precondition satisfied → returns `Some(refs)`.
+    ///    No double-borrow attempt.
+    /// 3. `layout_subtree_borrowed` walks via [`NodePtr`] lookup
+    ///    against the deduped index. A `perform_layout` body that
+    ///    calls `layout_child` for a cyclic descendant id whose slot
+    ///    is already in scope at the parent level would attempt a
+    ///    SECOND reborrow of the same `NodePtr` → undefined behaviour.
+    ///    This is the residual failure mode the U21 cycle guard
+    ///    (`currently_laying_out: FxHashSet<RenderId>` + RAII
+    ///    drop-guard) closes by returning
+    ///    [`crate::error::RenderError::LayoutCycle`].
+    ///
+    /// Compared to PR #144 (where a cycle overflowed the stack
+    /// loudly), the PR #145 architecture turns the cycle into:
+    /// hung tree-link → silent layout-incompleteness via the dropped
+    /// cycle edge, no hang. U21 promotes this to a typed error.
+    ///
+    /// **Do not wire `run_layout` to call `layout_dirty_root` until
+    /// U21 ships.** U23 performs the wiring after U21.
     pub fn layout_dirty_root(
         &mut self,
         id: RenderId,
@@ -1134,9 +1148,15 @@ impl PipelineOwner<Layout> {
         }
 
         // Step 2: pre-acquire N disjoint &mut RenderNode borrows on
-        // every subtree slot in ONE function scope. Returns None on
-        // duplicate or missing ids (cannot happen given step 1's
-        // contract, but the error path is preserved for defence).
+        // every subtree slot in ONE function scope. `get_subtree_mut`
+        // returns None on (a) duplicate ids or (b) missing slab slots.
+        // Per `collect_subtree_ids`'s PR #145 visited-set fix the
+        // returned id list is GUARANTEED deduplicated, so case (a) is
+        // unreachable here — None can only mean a slab slot
+        // disappeared between collect and acquire (a race-condition
+        // shape that doesn't occur with &mut self access; defensive
+        // fallback only). NodeNotFound is the most accurate variant
+        // for that residual case.
         let node_refs = self
             .render_tree
             .get_subtree_mut(&subtree_ids)
