@@ -1,22 +1,63 @@
 #!/usr/bin/env bash
 # scripts/port-check.sh
 #
-# Verifies the six refusal triggers documented in docs/PORT.md against
-# the workspace. Exits non-zero on the first violation outside the
-# whitelist; prints offending file:line and the trigger ID.
+# Verifies the seven refusal triggers documented in docs/PORT.md against
+# the workspace, plus the FR-033 / FR-036 sanctioned-dyn-boundary checks.
+# Exits non-zero on the first violation outside the whitelist; prints the
+# offending file:line and the trigger ID.
+#
+# Additionally reports the inline port-marker budget (TODO(port),
+# PERF(port), PORT NOTE) — markers are deliberate Phase B deferrals, NOT
+# violations; the script never fails on marker count.
 #
 # Cross-platform note: this script is bash. On Windows, run via Git Bash
 # or WSL. A PowerShell sibling is not provided in this iteration; see
 # docs/PORT.md "## Verification" for usage and rationale.
 #
 # Usage:
-#   bash scripts/port-check.sh        # check all six triggers
-#   bash scripts/port-check.sh -v     # verbose (print each check's pass line)
+#   bash scripts/port-check.sh             # check all triggers; silent on pass
+#   bash scripts/port-check.sh -v          # verbose: per-trigger pass + marker totals
+#   bash scripts/port-check.sh -b          # marker-budget mode (per-file breakdown)
+#   bash scripts/port-check.sh --verbose   # alias for -v
+#   bash scripts/port-check.sh --budget    # alias for -b
 
 set -euo pipefail
 
 verbose=0
-if [[ "${1:-}" == "-v" ]]; then verbose=1; fi
+budget=0
+# Accept at most one flag — `-v` and `-b` are mutually exclusive (one is a
+# trigger-check run with marker summary tail; the other is a marker-only
+# scan that skips trigger checks). Extra args are a usage error so typos
+# like `port-check -v -b` or `port-check -vfoo` fail loud instead of
+# silently using only $1. Copilot review on PR #150.
+# Print usage to stdout (used by --help) or stderr (used by error paths).
+print_usage() {
+  cat <<USAGE
+usage: $0 [-v|--verbose|-b|--budget|-h|--help]
+
+  (no flag)     Run all refusal triggers; silent on pass, list violations on fail.
+  -v --verbose  Run triggers with per-trigger pass lines + marker-budget summary tail.
+  -b --budget   Skip triggers; print per-file TODO(port) / PERF(port) / PORT NOTE breakdown. Exits 0 unconditionally.
+  -h --help     Print this usage and exit 0.
+
+See docs/PORT.md ## Verification for the full contract.
+USAGE
+}
+
+if [[ $# -gt 1 ]]; then
+  echo "port-check: at most one argument accepted; got $#: $*" >&2
+  print_usage >&2
+  exit 2
+fi
+case "${1:-}" in
+  -v|--verbose) verbose=1 ;;
+  -b|--budget)  budget=1  ;;
+  -h|--help)    print_usage; exit 0 ;;
+  "")           ;;
+  *) echo "port-check: unknown arg: $1" >&2
+     print_usage >&2
+     exit 2 ;;
+esac
 
 # Resolve repo root regardless of cwd.
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,6 +72,74 @@ fi
 
 violations=0
 trigger_doc="docs/PORT.md#refusal-triggers"
+
+# -----------------------------------------------------------------------------
+# Marker scanning helpers (used by both -b mode and the -v summary tail).
+#
+# Three markers are tracked per docs/PORT.md ## Inline port markers tier:
+#   - // TODO(port): <reason>        — Phase B re-read needed
+#   - // PERF(port): <reason>        — Dart perf idiom elided; profile candidate
+#   - // PORT NOTE: <reshape reason> — Rust shape diverged intentionally
+#
+# SAFETY: comments are standard Rust practice and NOT counted here; the unsafe
+# audit is a separate concern from port-translation marker discipline.
+# -----------------------------------------------------------------------------
+
+# Regex set scanned across crates/. Slashes escaped (`\/\/`) because MSYS2
+# bash on Windows path-mangles unescaped `//<x>` args as UNC paths and breaks
+# the match silently. No `\b` anchor after `\)` because both `)` and `:` are
+# non-word characters — `\b` requires a word/non-word transition, which is
+# absent here, so the boundary silently never matches.
+marker_pattern='\/\/\s+(TODO\(port\)|PERF\(port\)|PORT NOTE)'
+
+# Count markers of one kind ("TODO(port)" | "PERF(port)" | "PORT NOTE") in a
+# crate path. Echoes the count. Tolerates rg exit-1 (no matches) under
+# `set -e pipefail` via `|| true`.
+count_markers() {
+  local kind="$1"
+  local crate_path="$2"
+  # Escape parens for grep -E; literal kind otherwise.
+  local esc_kind="${kind//(/\\(}"
+  esc_kind="${esc_kind//)/\\)}"
+  local raw
+  raw=$(rg --count-matches --type rust "\/\/\s+${esc_kind}" "${crate_path}" 2>/dev/null || true)
+  if [[ -z "${raw}" ]]; then
+    echo 0
+  else
+    echo "${raw}" | awk -F: '{s+=$NF} END {print s+0}'
+  fi
+}
+
+# -----------------------------------------------------------------------------
+# Marker-budget mode: skip all refusal-trigger checks and print a per-file
+# breakdown of every marker hit under crates/. Exits 0 unconditionally —
+# markers are deferred work, not violations.
+# -----------------------------------------------------------------------------
+if [[ "${budget}" -eq 1 ]]; then
+  echo "port-check: marker-budget report (crates/)"
+  echo ""
+  hits=$(rg --line-number --no-heading --type rust "${marker_pattern}" crates/ 2>/dev/null || true)
+  if [[ -z "${hits}" ]]; then
+    echo "  (no TODO(port) / PERF(port) / PORT NOTE markers found)"
+    echo ""
+    echo "marker-budget: 0 markers across crates/"
+    exit 0
+  fi
+  echo "${hits}"
+  echo ""
+  # Unified counting: reuse the same `count_markers` helper the verbose
+  # summary tail uses. This was previously three inline `grep -E -c` pipes
+  # that diverged from `count_markers` on tab-indented markers (the inline
+  # form anchored on `\s+`, the helper passed the kind string directly to
+  # rg). Maintainability finding on PR #150 — single source of truth for
+  # the count semantics.
+  total_todo=$(count_markers "TODO(port)" crates/)
+  total_perf=$(count_markers "PERF(port)" crates/)
+  total_note=$(count_markers "PORT NOTE"  crates/)
+  total_all=$((total_todo + total_perf + total_note))
+  echo "marker-budget: ${total_all} markers (${total_todo} TODO(port), ${total_perf} PERF(port), ${total_note} PORT NOTE)"
+  exit 0
+fi
 
 # Run a refusal-trigger check. Filters out doc-comment lines (`//!`, `///`,
 # leading `//`) from rg output before evaluating the result.
@@ -483,4 +592,40 @@ if [[ "${violations}" -gt 0 ]]; then
 fi
 
 echo "port-check: all seven refusal triggers + FR-033 grep + trigger 9 (FR-036) clean"
+
+# -----------------------------------------------------------------------------
+# Marker summary (verbose mode only). Non-blocking — markers are Phase B
+# work-queue, not violations. See docs/PORT.md ## Inline port markers tier.
+# -----------------------------------------------------------------------------
+if [[ "${verbose}" -eq 1 ]]; then
+  echo ""
+  echo "marker budget (TODO(port) / PERF(port) / PORT NOTE):"
+  total_todo=0
+  total_perf=0
+  total_note=0
+  # Iterate every crate directory under crates/.
+  for crate_dir in crates/*/; do
+    crate_name="$(basename "${crate_dir}")"
+    # Skip crates without a src/ directory (e.g., flui-macros workspace shim).
+    [[ -d "${crate_dir}src" ]] || continue
+    c_todo=$(count_markers "TODO(port)" "${crate_dir}src")
+    c_perf=$(count_markers "PERF(port)" "${crate_dir}src")
+    c_note=$(count_markers "PORT NOTE"  "${crate_dir}src")
+    total_todo=$((total_todo + c_todo))
+    total_perf=$((total_perf + c_perf))
+    total_note=$((total_note + c_note))
+    if [[ $((c_todo + c_perf + c_note)) -gt 0 ]]; then
+      printf "  %-22s %3d TODO  %3d PERF  %3d NOTE\n" "${crate_name}" "${c_todo}" "${c_perf}" "${c_note}"
+    fi
+  done
+  total_all=$((total_todo + total_perf + total_note))
+  if [[ "${total_all}" -eq 0 ]]; then
+    echo "  (no markers across crates/)"
+  else
+    printf "  %-22s %3d TODO  %3d PERF  %3d NOTE\n" "TOTAL" "${total_todo}" "${total_perf}" "${total_note}"
+    echo ""
+    echo "  Run 'just port-markers' for the per-file breakdown."
+  fi
+fi
+
 exit 0

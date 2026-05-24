@@ -153,9 +153,14 @@ port-check:
     bash scripts/port-check.sh
 
 [group("port")]
-[doc("Run refusal-trigger checks with verbose pass/fail per trigger")]
+[doc("Run refusal-trigger checks with verbose pass/fail per trigger + marker totals")]
 port-check-verbose:
     bash scripts/port-check.sh -v
+
+[group("port")]
+[doc("Per-file breakdown of TODO(port) / PERF(port) / PORT NOTE markers across crates/")]
+port-markers:
+    bash scripts/port-check.sh -b
 
 # =============================================================================
 # Benchmarks
