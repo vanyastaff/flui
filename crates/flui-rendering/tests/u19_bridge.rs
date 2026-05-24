@@ -17,7 +17,7 @@
 //!   * docs/plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md §U19
 //!   * docs/research/2026-05-23-d-block-architecture-decision-memo.md §D5
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use flui_foundation::RenderId;
 use flui_rendering::{
@@ -163,10 +163,30 @@ fn u19_single_bridge_pads_child_and_returns_total_size() {
 ///    the Proxy variant downcasts through `&dyn ParentData`. This is
 ///    the test for the parent-data downcast soundness path documented
 ///    on `BoxLayoutCtxErased::child_parent_data_dyn`.
+///
+/// # Deterministic flex math
+///
+/// `FlexParentData::flexible(n)` uses `FlexFit::Tight` (see
+/// [`FlexParentData::flexible`]). With two children of flex factors 1
+/// and 2, no inflexible children, and parent constraints
+/// `(0..300, 0..100)`:
+///
+/// - `total_flex = 3`, `inflexible_main = 0`, `remaining = 300`
+/// - Child A (flex=1): `allocated = 300 * 1/3 = 100`, tight constraints
+///   `(100, 100, 0, 100)`; the callback returns `(max_w, max_h) =
+///   (100, 100)`.
+/// - Child B (flex=2): `allocated = 300 * 2/3 = 200`, tight constraints
+///   `(200, 200, 0, 100)`; the callback returns `(200, 100)`.
+/// - `total_main = 100 + 200 = 300`, `cross = 100`.
+/// - Final `size = (300, 100)`.
+///
+/// We assert exact dimensions AND each child's received constraints to
+/// prove the Proxy bridge actually forwarded the correct `flex` factor
+/// through `child_parent_data` (a failed downcast would treat children
+/// as inflexible — `total_flex = 0` and the layout would collapse to
+/// `(0, 0)` per the `if total_flex > 0` guard in `RenderFlex`).
 #[test]
 fn u19_variable_bridge_walks_child_slice_with_typed_parent_data() {
-    use flui_rendering::objects::FlexDirection;
-
     let mut obj = RenderFlex::row();
 
     // Two children with distinct flex factors so we can verify typed
@@ -178,24 +198,18 @@ fn u19_variable_bridge_walks_child_slice_with_typed_parent_data() {
     ];
     let child_ids = [RenderId::new(1), RenderId::new(2)];
 
-    // Synthetic child callback: respond with a 50×50 fixed size per
-    // child for the non-flex pre-pass; for flex children the second
-    // pass will hand back exactly the constraints we receive (loose).
+    // Capture per-child (id, constraints) so we can assert the exact
+    // tight constraints each child was offered — proves the Proxy
+    // bridge forwarded the typed `flex` factor correctly.
+    let observed: Arc<Mutex<Vec<(RenderId, BoxConstraints)>>> = Arc::new(Mutex::new(Vec::new()));
+    let observed_for_cb = Arc::clone(&observed);
     let layout_child_callback: Arc<
         dyn Fn(flui_foundation::RenderId, BoxConstraints) -> Size + Send + Sync,
-    > = Arc::new(|_id, c| {
-        // Just return a fixed-ish size that respects max bounds.
-        let w = if c.max_width.get().is_finite() {
-            c.max_width
-        } else {
-            px(50.0)
-        };
-        let h = if c.max_height.get().is_finite() {
-            c.max_height
-        } else {
-            px(50.0)
-        };
-        Size::new(w, h)
+    > = Arc::new(move |id, c| {
+        observed_for_cb.lock().unwrap().push((id, c));
+        // Respond at the largest allowed size — tight constraints give
+        // (max, max) which is exactly the allocated flex slice.
+        Size::new(c.max_width, c.max_height)
     });
 
     let mut direct_ctx: BoxLayoutCtx<'_, Variable, FlexParentData> =
@@ -208,38 +222,47 @@ fn u19_variable_bridge_walks_child_slice_with_typed_parent_data() {
 
     let erased: &mut dyn BoxLayoutCtxErased = &mut direct_ctx;
 
-    // The actual `size` returned depends on flex layout math — we
-    // assert it completes layout (i.e., returns Some non-ZERO size for
-    // a configured row), not specific dimensions which would tie this
-    // test to flex's internal layout algorithm.
     let size = <RenderFlex as RenderObject<BoxProtocol>>::perform_layout_raw(&mut obj, erased);
 
-    // Sanity: size is constrained — RenderFlex.complete_with_size always
-    // produces a valid size within the parent constraints.
-    assert!(
-        size.width.get() >= 0.0 && size.height.get() >= 0.0,
-        "size {:?} must be non-negative",
-        size
-    );
-    assert!(
-        size.width.get() <= 300.0 && size.height.get() <= 100.0,
-        "size {:?} must respect parent constraints (max 300×100)",
-        size
+    // Deterministic flex math (see test doc): both children flex with
+    // factors 1:2, parent max_width=300, no inflexible/spacing.
+    assert_eq!(
+        size,
+        Size::new(px(300.0), px(100.0)),
+        "Variable bridge with flex 1:2 over 300px main axis must produce \
+         exact (300, 100) — actual {:?}",
+        size,
     );
 
-    // The flex children's typed parent_data (FlexParentData) must have
-    // been observed by RenderFlex::perform_layout via the Proxy
-    // downcast — children[0]'s flex factor is 1 and children[1]'s is 2.
-    // If the Proxy downcast had failed, RenderFlex would have treated
-    // them as non-flex (since `child_parent_data` returning None means
-    // the child is not flexible) and produced different layout
-    // behaviour. We verify the flex factors round-tripped (they're
-    // stored on the children Vec the test owns):
-    assert_eq!(children[0].parent_data.flex, Some(1));
-    assert_eq!(children[1].parent_data.flex, Some(2));
-
-    // Suppress unused-direction warning — we used row() above.
-    let _ = FlexDirection::Horizontal;
+    // Each child's constraints prove the typed parent-data round-tripped
+    // through Proxy → erased. If the FlexParentData downcast had failed,
+    // RenderFlex would have treated both children as inflexible (flex =
+    // None) — total_flex = 0 — and not invoked any layout_child calls
+    // (because the inflexible pre-pass also skips when flex is None per
+    // the `if flex_factors[i].is_none() || flex_factors[i] == Some(0)`
+    // guard — wait, actually inflexible children DO get laid out with
+    // unbounded constraints in pass 1). Either way the captured
+    // constraints would not be the tight allocated slices below.
+    let obs = observed.lock().unwrap();
+    assert_eq!(
+        obs.len(),
+        2,
+        "Both flex children must have triggered a single layout_child call each",
+    );
+    // Child A (flex=1): allocated = 300 * 1/3 = 100, tight.
+    assert_eq!(obs[0].0, RenderId::new(1));
+    assert_eq!(
+        obs[0].1,
+        BoxConstraints::new(px(100.0), px(100.0), px(0.0), px(100.0)),
+        "Child A (flex=1) must receive tight 100×{{0..100}} constraints",
+    );
+    // Child B (flex=2): allocated = 300 * 2/3 = 200, tight.
+    assert_eq!(obs[1].0, RenderId::new(2));
+    assert_eq!(
+        obs[1].1,
+        BoxConstraints::new(px(200.0), px(200.0), px(0.0), px(100.0)),
+        "Child B (flex=2) must receive tight 200×{{0..100}} constraints",
+    );
 }
 
 // ============================================================================
