@@ -1118,7 +1118,7 @@ impl PipelineOwner<Layout> {
     /// 2. `get_subtree_mut` receives a deduplicated id list →
     ///    uniqueness precondition satisfied → returns `Some(refs)`.
     ///    No double-borrow attempt.
-    /// 3. `layout_subtree_borrowed` walks via [`NodePtr`] lookup
+    /// 3. `layout_subtree_borrowed` walks via `NodePtr` lookup
     ///    against the deduped index. A `perform_layout` body that
     ///    calls `layout_child` for a cyclic descendant id whose slot
     ///    is already in scope at the parent level would attempt a
