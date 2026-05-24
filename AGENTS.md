@@ -59,7 +59,7 @@ flui/
 │   ├── plans/                # Dated planning notes per major workstream
 │   └── research/             # Dated research notes
 ├── specs/                    # Feature specs and per-change task notes
-├── .pi/                      # Pi runtime configuration (settings, extensions, LSP)
+├── .pi/                      # Pi runtime configuration (settings + LSP)
 ├── .mcp.json                 # MCP server configuration (cratesio, rust-docs)
 ├── .compound-engineering/    # Compound Engineering config (legacy, being phased out)
 ├── .agents/skills/           # Generic agent skills (vendor-neutral)
