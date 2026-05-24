@@ -43,7 +43,7 @@ pub type AnnotationValue = Arc<dyn Any + Send + Sync>;
 /// use std::sync::Arc;
 ///
 /// use flui_layer::{AnnotatedRegionLayer, AnnotationValue};
-/// use flui_types::geometry::Rect;
+/// use flui_types::geometry::{Rect, px};
 ///
 /// // Define a status bar style annotation
 /// #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,7 +54,7 @@ pub type AnnotationValue = Arc<dyn Any + Send + Sync>;
 ///
 /// // Create an annotation for status bar style
 /// let style = Arc::new(SystemUiOverlayStyle::Dark);
-/// let layer = AnnotatedRegionLayer::new(Rect::from_xywh(0.0, 0.0, 400.0, 24.0), style);
+/// let layer = AnnotatedRegionLayer::new(Rect::from_xywh(px(0.0), px(0.0), px(400.0), px(24.0)), style);
 /// ```
 pub struct AnnotatedRegionLayer {
     /// The annotated region bounds

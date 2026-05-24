@@ -22,12 +22,13 @@
 //! # Example
 //!
 //! ```rust
+//! use flui_types::geometry::px;
 //! use flui_layer::{CanvasLayer, Layer, LayerTree, Scene};
 //! use flui_types::Size;
 //!
 //! // Create scene from a single layer
 //! let scene = Scene::from_layer(
-//!     Size::new(800.0, 600.0),
+//!     Size::new(px(800.0), px(600.0)),
 //!     Layer::from(CanvasLayer::new()),
 //!     0,
 //! );
@@ -353,6 +354,7 @@ impl crate::compositor::SceneBuilder<'_> {
     /// # Example
     ///
     /// ```rust
+    /// use flui_types::geometry::px;
     /// use flui_layer::{CanvasLayer, LayerTree, Scene, SceneBuilder};
     /// use flui_types::Size;
     ///
@@ -365,7 +367,7 @@ impl crate::compositor::SceneBuilder<'_> {
     ///
     /// // Create scene with the tree
     /// let root_id = tree.root();
-    /// let scene = Scene::new(Size::new(800.0, 600.0), tree, root_id, 0);
+    /// let scene = Scene::new(Size::new(px(800.0), px(600.0)), tree, root_id, 0);
     /// assert!(scene.has_content());
     /// ```
     pub fn finish(self) -> Option<LayerId> {

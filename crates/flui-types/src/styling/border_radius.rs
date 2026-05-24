@@ -16,7 +16,7 @@ use crate::geometry::{Corners, Pixels, Radius};
 /// ```
 /// use flui_types::{
 ///     geometry::{Radius, px},
-///     styling::BorderRadius,
+///     styling::{BorderRadius, BorderRadiusExt},
 /// };
 ///
 /// // All corners with the same circular radius
@@ -47,7 +47,10 @@ pub trait BorderRadiusExt {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::{geometry::px, styling::BorderRadius};
+    /// use flui_types::{
+    ///     geometry::px,
+    ///     styling::{BorderRadius, BorderRadiusExt},
+    /// };
     ///
     /// let radius = BorderRadius::circular(px(16.0));
     /// ```
@@ -59,7 +62,10 @@ pub trait BorderRadiusExt {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::{geometry::px, styling::BorderRadius};
+    /// use flui_types::{
+    ///     geometry::px,
+    ///     styling::{BorderRadius, BorderRadiusExt},
+    /// };
     ///
     /// let radius = BorderRadius::elliptical(px(20.0), px(10.0));
     /// ```
@@ -152,7 +158,7 @@ pub trait BorderRadiusExt {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::styling::BorderRadius;
+    /// use flui_types::styling::{BorderRadius, BorderRadiusExt};
     ///
     /// // Perfect for buttons, tags, and badges
     /// let radius = BorderRadius::pill();

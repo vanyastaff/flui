@@ -31,6 +31,7 @@ use flui_types::{
 /// # Example
 ///
 /// ```rust
+/// use flui_types::geometry::px;
 /// use flui_layer::ClipPathLayer;
 /// use flui_types::{
 ///     geometry::Point,
@@ -39,9 +40,9 @@ use flui_types::{
 ///
 /// // Create a triangular clip path
 /// let path = Path::polygon(&[
-///     Point::new(50.0, 0.0),
-///     Point::new(100.0, 100.0),
-///     Point::new(0.0, 100.0),
+///     Point::new(px(50.0), px(0.0)),
+///     Point::new(px(100.0), px(100.0)),
+///     Point::new(px(0.0), px(100.0)),
 /// ]);
 /// let layer = ClipPathLayer::new(path, Clip::AntiAlias);
 /// ```

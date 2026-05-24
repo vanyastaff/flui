@@ -65,7 +65,7 @@ impl Default for LayerLink {
 ///
 /// ```rust
 /// use flui_layer::{FollowerLayer, LayerLink, LeaderLayer};
-/// use flui_types::geometry::{Offset, Size};
+/// use flui_types::geometry::{Offset, Size, px};
 ///
 /// // Create a link between leader and follower
 /// let link = LayerLink::new();

@@ -42,6 +42,7 @@ use crate::{
 /// # Example
 ///
 /// ```rust
+/// use flui_types::geometry::px;
 /// use flui_layer::{CanvasLayer, LayerTree, SceneBuilder};
 /// use flui_types::Offset;
 ///
@@ -49,7 +50,7 @@ use crate::{
 /// let mut builder = SceneBuilder::new(&mut tree);
 ///
 /// // Build a simple scene
-/// builder.push_offset(Offset::new(100.0, 50.0));
+/// builder.push_offset(Offset::new(px(100.0), px(50.0)));
 /// builder.push_opacity(0.8);
 /// builder.add_canvas(CanvasLayer::new());
 /// builder.pop();
@@ -149,13 +150,14 @@ impl<'a> SceneBuilder<'a> {
     /// # Example
     ///
     /// ```rust
+    /// use flui_types::geometry::px;
     /// use flui_layer::{LayerTree, SceneBuilder};
     /// use flui_types::Offset;
     ///
     /// let mut tree = LayerTree::new();
     /// let mut builder = SceneBuilder::new(&mut tree);
     ///
-    /// builder.push_offset(Offset::new(100.0, 50.0));
+    /// builder.push_offset(Offset::new(px(100.0), px(50.0)));
     /// // ... add children ...
     /// builder.pop();
     /// ```

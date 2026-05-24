@@ -23,10 +23,11 @@ use flui_types::{
 /// # Example
 ///
 /// ```rust
+/// use flui_types::geometry::px;
 /// use flui_layer::ClipRectLayer;
 /// use flui_types::{geometry::Rect, painting::Clip};
 ///
-/// let layer = ClipRectLayer::new(Rect::from_xywh(10.0, 10.0, 100.0, 100.0), Clip::HardEdge);
+/// let layer = ClipRectLayer::new(Rect::from_xywh(px(10.0), px(10.0), px(100.0), px(100.0)), Clip::HardEdge);
 ///
 /// assert_eq!(layer.clip_rect().width(), 100.0);
 /// ```

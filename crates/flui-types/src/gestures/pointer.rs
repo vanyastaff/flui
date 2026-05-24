@@ -14,15 +14,15 @@ use crate::geometry::{Offset, Pixels};
 /// # Examples
 ///
 /// ```
-/// use flui_types::{Offset, gestures::OffsetPair};
+/// use flui_types::{Offset, geometry::px, gestures::OffsetPair};
 ///
 /// let pair = OffsetPair::new(
-///     Offset::new(10.0, 20.0),   // local
-///     Offset::new(100.0, 200.0), // global
+///     Offset::new(px(10.0), px(20.0)),   // local
+///     Offset::new(px(100.0), px(200.0)), // global
 /// );
 ///
-/// assert_eq!(pair.local, Offset::new(10.0, 20.0));
-/// assert_eq!(pair.global, Offset::new(100.0, 200.0));
+/// assert_eq!(pair.local, Offset::new(px(10.0), px(20.0)));
+/// assert_eq!(pair.global, Offset::new(px(100.0), px(200.0)));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -46,9 +46,12 @@ impl OffsetPair {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::{Offset, gestures::OffsetPair};
+    /// use flui_types::{Offset, geometry::px, gestures::OffsetPair};
     ///
-    /// let pair = OffsetPair::new(Offset::new(10.0, 20.0), Offset::new(100.0, 200.0));
+    /// let pair = OffsetPair::new(
+    ///     Offset::new(px(10.0), px(20.0)),
+    ///     Offset::new(px(100.0), px(200.0)),
+    /// );
     /// ```
     #[inline]
     #[must_use]
@@ -61,9 +64,9 @@ impl OffsetPair {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::{Offset, gestures::OffsetPair};
+    /// use flui_types::{Offset, geometry::px, gestures::OffsetPair};
     ///
-    /// let pair = OffsetPair::from_offset(Offset::new(50.0, 75.0));
+    /// let pair = OffsetPair::from_offset(Offset::new(px(50.0), px(75.0)));
     /// assert_eq!(pair.local, pair.global);
     /// ```
     #[inline]
@@ -82,11 +85,14 @@ impl OffsetPair {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::{Offset, gestures::OffsetPair};
+    /// use flui_types::{Offset, geometry::px, gestures::OffsetPair};
     ///
-    /// let pair = OffsetPair::new(Offset::new(10.0, 20.0), Offset::new(100.0, 200.0));
+    /// let pair = OffsetPair::new(
+    ///     Offset::new(px(10.0), px(20.0)),
+    ///     Offset::new(px(100.0), px(200.0)),
+    /// );
     /// let delta = pair.delta();
-    /// assert_eq!(delta, Offset::new(90.0, 180.0));
+    /// assert_eq!(delta, Offset::new(px(90.0), px(180.0)));
     /// ```
     #[inline]
     #[must_use]
@@ -99,12 +105,18 @@ impl OffsetPair {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::{Offset, gestures::OffsetPair};
+    /// use flui_types::{Offset, geometry::px, gestures::OffsetPair};
     ///
-    /// let valid = OffsetPair::new(Offset::new(10.0, 20.0), Offset::new(100.0, 200.0));
+    /// let valid = OffsetPair::new(
+    ///     Offset::new(px(10.0), px(20.0)),
+    ///     Offset::new(px(100.0), px(200.0)),
+    /// );
     /// assert!(valid.is_finite());
     ///
-    /// let invalid = OffsetPair::new(Offset::new(f32::NAN, 20.0), Offset::new(100.0, 200.0));
+    /// let invalid = OffsetPair::new(
+    ///     Offset::new(px(f32::NAN), px(20.0)),
+    ///     Offset::new(px(100.0), px(200.0)),
+    /// );
     /// assert!(!invalid.is_finite());
     /// ```
     #[inline]
@@ -163,17 +175,18 @@ pub enum PointerDeviceKind {
 ///
 /// use flui_types::{
 ///     Offset,
+///     geometry::px,
 ///     gestures::{PointerData, PointerDeviceKind},
 /// };
 ///
 /// let data = PointerData::new(
 ///     Duration::from_millis(100),
-///     Offset::new(100.0, 200.0),
+///     Offset::new(px(100.0), px(200.0)),
 ///     0,
 ///     PointerDeviceKind::Touch,
 /// );
 ///
-/// assert_eq!(data.position, Offset::new(100.0, 200.0));
+/// assert_eq!(data.position, Offset::new(px(100.0), px(200.0)));
 /// assert_eq!(data.pointer, 0);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -260,12 +273,13 @@ impl PointerData {
     ///
     /// use flui_types::{
     ///     Offset,
+    ///     geometry::px,
     ///     gestures::{PointerData, PointerDeviceKind},
     /// };
     ///
     /// let data = PointerData::new(
     ///     Duration::from_millis(100),
-    ///     Offset::new(100.0, 200.0),
+    ///     Offset::new(px(100.0), px(200.0)),
     ///     0,
     ///     PointerDeviceKind::Touch,
     /// );
@@ -520,12 +534,13 @@ impl PointerData {
     ///
     /// use flui_types::{
     ///     Offset,
+    ///     geometry::px,
     ///     gestures::{PointerData, PointerDeviceKind},
     /// };
     ///
     /// let valid = PointerData::new(
     ///     Duration::from_millis(100),
-    ///     Offset::new(100.0, 200.0),
+    ///     Offset::new(px(100.0), px(200.0)),
     ///     0,
     ///     PointerDeviceKind::Touch,
     /// );
@@ -562,6 +577,7 @@ impl PointerData {
     ///
     /// use flui_types::{
     ///     Offset,
+    ///     geometry::px,
     ///     gestures::{PointerData, PointerDeviceKind},
     /// };
     ///
@@ -571,7 +587,7 @@ impl PointerData {
     ///     0,
     ///     PointerDeviceKind::Touch,
     /// )
-    /// .with_delta(Offset::new(3.0, 4.0));
+    /// .with_delta(Offset::new(px(3.0), px(4.0)));
     /// assert_eq!(data.speed(), 5.0);
     /// ```
     #[inline]

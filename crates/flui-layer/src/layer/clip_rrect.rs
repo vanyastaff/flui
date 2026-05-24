@@ -26,6 +26,7 @@ use flui_types::{
 /// # Example
 ///
 /// ```rust
+/// use flui_types::geometry::px;
 /// use flui_layer::ClipRRectLayer;
 /// use flui_types::{
 ///     geometry::{RRect, Rect},
@@ -33,7 +34,10 @@ use flui_types::{
 /// };
 ///
 /// // Create rounded rectangle with 10px corner radius
-/// let rrect = RRect::from_rect_circular(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), 10.0);
+/// let rrect = RRect::from_rect_circular(
+///     Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
+///     px(10.0),
+/// );
 /// let layer = ClipRRectLayer::new(rrect, Clip::AntiAlias);
 ///
 /// assert_eq!(layer.clip_rrect().width(), 100.0);

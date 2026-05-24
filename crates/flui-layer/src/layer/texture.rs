@@ -33,6 +33,7 @@ use flui_types::{
 /// # Example
 ///
 /// ```rust
+/// use flui_types::geometry::px;
 /// use flui_layer::TextureLayer;
 /// use flui_types::{
 ///     geometry::Rect,
@@ -41,7 +42,7 @@ use flui_types::{
 ///
 /// // Create a texture layer for video playback
 /// let texture_id = TextureId::new(42);
-/// let rect = Rect::from_xywh(0.0, 0.0, 640.0, 480.0);
+/// let rect = Rect::from_xywh(px(0.0), px(0.0), px(640.0), px(480.0));
 /// let layer = TextureLayer::new(texture_id, rect);
 ///
 /// // With custom filter quality

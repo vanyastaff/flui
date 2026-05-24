@@ -22,14 +22,14 @@
 //!
 //! ```rust
 //! use flui_layer::{FollowerLayer, Layer, LayerLink, LayerTree, LeaderLayer, LinkRegistry};
-//! use flui_types::geometry::{Offset, Size};
+//! use flui_types::geometry::{Offset, Size, px};
 //!
 //! let mut tree = LayerTree::new();
 //! let mut registry = LinkRegistry::new();
 //!
 //! // Create linked layers
 //! let link = LayerLink::new();
-//! let leader = LeaderLayer::new(link, Size::new(100.0, 30.0));
+//! let leader = LeaderLayer::new(link, Size::new(px(100.0), px(30.0)));
 //! let follower = FollowerLayer::below(link, 5.0);
 //!
 //! // Insert into tree
@@ -40,8 +40,8 @@
 //! registry.register_leader(
 //!     link,
 //!     leader_id,
-//!     Offset::new(50.0, 100.0),
-//!     Size::new(100.0, 30.0),
+//!     Offset::new(px(50.0), px(100.0)),
+//!     Size::new(px(100.0), px(30.0)),
 //! );
 //! registry.register_follower(follower_id, link);
 //!

@@ -28,6 +28,7 @@ use flui_types::{
 /// # Example
 ///
 /// ```rust
+/// use flui_types::geometry::px;
 /// use flui_layer::ClipSuperellipseLayer;
 /// use flui_types::{
 ///     geometry::{RSuperellipse, Radius, Rect},
@@ -35,7 +36,10 @@ use flui_types::{
 /// };
 ///
 /// // Create superellipse with 20px corner radius
-/// let squircle = RSuperellipse::from_rect_circular(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), 20.0);
+/// let squircle = RSuperellipse::from_rect_circular(
+///     Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
+///     px(20.0),
+/// );
 /// let layer = ClipSuperellipseLayer::new(squircle, Clip::AntiAlias);
 ///
 /// assert_eq!(layer.clip_superellipse().width(), 100.0);

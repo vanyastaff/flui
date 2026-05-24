@@ -28,6 +28,7 @@ use flui_types::{
 /// # Example
 ///
 /// ```rust
+/// use flui_types::geometry::px;
 /// use flui_layer::BackdropFilterLayer;
 /// use flui_types::{
 ///     geometry::Rect,
@@ -38,7 +39,7 @@ use flui_types::{
 /// let frosted_glass = BackdropFilterLayer::new(
 ///     ImageFilter::blur(10.0), // 10px gaussian blur
 ///     BlendMode::SrcOver,
-///     Rect::from_xywh(0.0, 0.0, 400.0, 300.0),
+///     Rect::from_xywh(px(0.0), px(0.0), px(400.0), px(300.0)),
 /// );
 /// ```
 #[derive(Debug, Clone)]

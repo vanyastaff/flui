@@ -14,11 +14,11 @@ use crate::{
 /// # Examples
 ///
 /// ```
-/// use flui_types::{painting::Shader, styling::Color};
+/// use flui_types::{geometry::px, painting::Shader, styling::Color};
 ///
 /// let shader = Shader::linear_gradient(
 ///     flui_types::geometry::Offset::ZERO,
-///     flui_types::geometry::Offset::new(100.0, 100.0),
+///     flui_types::geometry::Offset::new(px(100.0), px(100.0)),
 ///     vec![Color::RED, Color::BLUE],
 ///     None,
 ///     flui_types::painting::TileMode::Clamp,
@@ -174,11 +174,15 @@ impl Shader {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::{geometry::Offset, painting::Shader, styling::Color};
+    /// use flui_types::{
+    ///     geometry::{Offset, px},
+    ///     painting::Shader,
+    ///     styling::Color,
+    /// };
     ///
     /// let shader = Shader::simple_linear(
     ///     Offset::ZERO,
-    ///     Offset::new(100.0, 0.0),
+    ///     Offset::new(px(100.0), px(0.0)),
     ///     vec![Color::RED, Color::BLUE],
     /// );
     /// ```
@@ -198,10 +202,17 @@ impl Shader {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::{geometry::Offset, painting::Shader, styling::Color};
+    /// use flui_types::{
+    ///     geometry::{Offset, px},
+    ///     painting::Shader,
+    ///     styling::Color,
+    /// };
     ///
-    /// let shader =
-    ///     Shader::simple_radial(Offset::new(50.0, 50.0), 25.0, vec![Color::RED, Color::BLUE]);
+    /// let shader = Shader::simple_radial(
+    ///     Offset::new(px(50.0), px(50.0)),
+    ///     25.0,
+    ///     vec![Color::RED, Color::BLUE],
+    /// );
     /// ```
     #[inline]
     #[must_use]
@@ -220,10 +231,14 @@ impl Shader {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::{geometry::Offset, painting::Shader, styling::Color};
+    /// use flui_types::{
+    ///     geometry::{Offset, px},
+    ///     painting::Shader,
+    ///     styling::Color,
+    /// };
     ///
     /// let shader = Shader::simple_sweep(
-    ///     Offset::new(50.0, 50.0),
+    ///     Offset::new(px(50.0), px(50.0)),
     ///     vec![Color::RED, Color::GREEN, Color::BLUE],
     /// );
     /// ```

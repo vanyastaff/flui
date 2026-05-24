@@ -330,12 +330,12 @@ impl Drop for LayerNode {
 /// let mut tree = LayerTree::new();
 ///
 /// // Insert canvas layer
-/// let canvas_layer = Layer::Canvas(CanvasLayer::new());
+/// let canvas_layer = Layer::Canvas(Box::new(CanvasLayer::new()));
 /// let id = tree.insert(canvas_layer);
 ///
 /// // Access layer
 /// let node = tree.get(id).unwrap();
-/// assert!(node.needs_compositing());
+/// assert!(matches!(node.layer(), Layer::Canvas(_)));
 /// ```
 #[derive(Debug)]
 pub struct LayerTree {
@@ -411,7 +411,7 @@ impl LayerTree {
     /// use flui_layer::{CanvasLayer, Layer, LayerTree};
     ///
     /// let mut tree = LayerTree::new();
-    /// let layer = Layer::Canvas(CanvasLayer::new());
+    /// let layer = Layer::Canvas(Box::new(CanvasLayer::new()));
     /// let id = tree.insert(layer);
     /// ```
     pub fn insert(&mut self, layer: Layer) -> LayerId {

@@ -308,16 +308,16 @@ impl BoxShape {
 ///
 /// ```
 /// use flui_types::{
-///     geometry::Size,
+///     geometry::{Size, px},
 ///     layout::{BoxFit, FittedSizes},
 /// };
 ///
-/// let input = Size::new(200.0, 100.0);
-/// let output = Size::new(100.0, 100.0);
+/// let input = Size::new(px(200.0), px(100.0));
+/// let output = Size::new(px(100.0), px(100.0));
 /// let fitted = BoxFit::Contain.apply(input, output);
 ///
-/// assert_eq!(fitted.destination.width, 100.0);
-/// assert_eq!(fitted.destination.height, 50.0);
+/// assert_eq!(fitted.destination.width, px(100.0));
+/// assert_eq!(fitted.destination.height, px(50.0));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

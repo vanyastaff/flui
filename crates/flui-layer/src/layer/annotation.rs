@@ -17,7 +17,7 @@
 //!
 //! ```rust
 //! use flui_layer::layer::annotation::{AnnotationEntry, AnnotationResult};
-//! use flui_types::geometry::Offset;
+//! use flui_types::geometry::{Offset, px};
 //!
 //! // Create a result collector
 //! let mut result = AnnotationResult::<String>::new();
