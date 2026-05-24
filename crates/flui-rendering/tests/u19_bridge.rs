@@ -285,3 +285,121 @@ fn u19_with_leaf_erased_ctx_matches_direct_bridge_call() {
 
     assert_eq!(size, Size::new(px(60.0), px(30.0)));
 }
+
+// ============================================================================
+// Bridge contract violation (review fix #4): a RenderBox::perform_layout
+// that forgets to call ctx.complete_with_size() must trip the bridge's
+// expect/panic, naming the offending render object.
+// ============================================================================
+
+/// Plan U19 §407 contract: if `RenderBox::perform_layout` returns without
+/// calling `ctx.complete_with_size()`, the blanket bridge panics with a
+/// descriptive message naming the offending render object. Caught by
+/// `catch_unwind` in `RenderEntry::layout` → `RenderError::Poisoned`.
+///
+/// This test instantiates a deliberately-broken `ForgetfulBox` whose
+/// `perform_layout` body is empty (no completion call), drives it
+/// directly through the blanket `perform_layout_raw`, and asserts the
+/// panic message contains the contract-violation phrasing.
+#[test]
+fn u19_bridge_panics_on_missing_complete_with_size() {
+    use flui_foundation::Diagnosticable;
+    use flui_rendering::{
+        context::{BoxHitTestContext, BoxLayoutContext},
+        hit_testing::HitTestBehavior,
+        traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+    };
+    use flui_types::{Point, Rect};
+
+    #[derive(Debug, Default)]
+    struct ForgetfulBox {
+        size: Size,
+    }
+
+    impl Diagnosticable for ForgetfulBox {}
+    impl PaintEffectsCapability for ForgetfulBox {}
+    impl SemanticsCapability for ForgetfulBox {}
+    impl HotReloadCapability for ForgetfulBox {}
+
+    impl RenderBox for ForgetfulBox {
+        type Arity = Leaf;
+        type ParentData = BoxParentData;
+
+        fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) {
+            // INTENTIONAL: forgets to call ctx.complete_with_size(...)
+        }
+
+        fn size(&self) -> &Size {
+            &self.size
+        }
+        fn size_mut(&mut self) -> &mut Size {
+            &mut self.size
+        }
+        fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Leaf, BoxParentData>) -> bool {
+            false
+        }
+        fn hit_test_behavior(&self) -> HitTestBehavior {
+            HitTestBehavior::Opaque
+        }
+        fn box_paint_bounds(&self) -> Rect {
+            Rect::from_origin_size(Point::ZERO, self.size)
+        }
+    }
+
+    let mut obj = ForgetfulBox::default();
+    let constraints = BoxConstraints::tight(Size::new(px(10.0), px(10.0)));
+    let mut direct_ctx: BoxLayoutCtx<'_, Leaf, BoxParentData> = BoxLayoutCtx::new(constraints);
+    let erased: &mut dyn BoxLayoutCtxErased = &mut direct_ctx;
+
+    // Panic propagates from the blanket impl's unwrap_or_else;
+    // assert via catch_unwind. AssertUnwindSafe is fine — we own all
+    // the borrowed state on this test stack frame.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        <ForgetfulBox as RenderObject<BoxProtocol>>::perform_layout_raw(&mut obj, erased)
+    }));
+
+    let panic_payload =
+        result.expect_err("perform_layout that forgets complete_with_size must panic");
+    let message = panic_payload
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic_payload.downcast_ref::<&'static str>().copied())
+        .unwrap_or("(non-string payload)");
+    assert!(
+        message.contains("did not call complete_with_size"),
+        "panic message should name the contract violation, got: {message}",
+    );
+}
+
+// ============================================================================
+// Edge case (review fix #16): zero-child Variable bridge.
+// ============================================================================
+
+/// `RenderFlex::row()` with zero children completes layout with
+/// `constraints.smallest()` per the early-return path in
+/// `RenderFlex::perform_layout` (`if child_count == 0`). The bridge must
+/// propagate this small size — it must not assume children are present
+/// just because the typed wrapper has `Variable` arity.
+#[test]
+fn u19_variable_bridge_handles_zero_children() {
+    let mut obj = RenderFlex::row();
+    // min=0 / max=300 etc — `smallest()` is (0, 0).
+    let constraints = BoxConstraints::new(px(0.0), px(300.0), px(0.0), px(100.0));
+    let mut children: Vec<ChildState<FlexParentData>> = vec![];
+    let child_ids: [RenderId; 0] = [];
+
+    let cb: Arc<dyn Fn(RenderId, BoxConstraints) -> Size + Send + Sync> =
+        Arc::new(|_, _| Size::ZERO);
+
+    let mut direct_ctx: BoxLayoutCtx<'_, Variable, FlexParentData> =
+        BoxLayoutCtx::with_layout_callback(constraints, &mut children, &child_ids, cb.as_ref());
+
+    let erased: &mut dyn BoxLayoutCtxErased = &mut direct_ctx;
+    let size = <RenderFlex as RenderObject<BoxProtocol>>::perform_layout_raw(&mut obj, erased);
+
+    assert_eq!(
+        size,
+        Size::new(px(0.0), px(0.0)),
+        "Zero-child RenderFlex must complete with constraints.smallest() = (0, 0)",
+    );
+}
