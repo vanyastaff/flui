@@ -1138,9 +1138,10 @@ impl PipelineOwner<Layout> {
         // every subtree slot in ONE function scope. Returns None on
         // duplicate or missing ids (cannot happen given step 1's
         // contract, but the error path is preserved for defence).
-        let node_refs = self.render_tree.get_subtree_mut(&subtree_ids).ok_or(
-            crate::error::RenderError::NodeNotFound(id),
-        )?;
+        let node_refs = self
+            .render_tree
+            .get_subtree_mut(&subtree_ids)
+            .ok_or(crate::error::RenderError::NodeNotFound(id))?;
 
         // Step 3: wrap the borrows in a SubtreeBorrows index for O(1)
         // by-id lookup. The HashMap holds NodePtr (raw alias of the

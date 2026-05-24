@@ -347,10 +347,7 @@ impl RenderTree {
     /// materialisation. Switch to a HashSet-based duplicate check if a
     /// subtree of >1000 nodes ever becomes hot — the inner loop's `==`
     /// compare on `NonZeroUsize` is dominant under typical N.
-    pub fn get_subtree_mut<'a>(
-        &'a mut self,
-        ids: &[RenderId],
-    ) -> Option<Vec<&'a mut RenderNode>> {
+    pub fn get_subtree_mut<'a>(&'a mut self, ids: &[RenderId]) -> Option<Vec<&'a mut RenderNode>> {
         // Verify pairwise uniqueness. O(N²) acceptable for small N.
         for (i, &a) in ids.iter().enumerate() {
             for &b in &ids[i + 1..] {
@@ -1044,7 +1041,9 @@ mod tests {
         // Acquire all 4 nodes in [c, a, d, b] order — verifies input
         // ordering is preserved in the returned Vec (not slot-id-sorted).
         let ids = [c, a, d, b];
-        let refs = tree.get_subtree_mut(&ids).expect("4 distinct ids must yield Some");
+        let refs = tree
+            .get_subtree_mut(&ids)
+            .expect("4 distinct ids must yield Some");
         assert_eq!(refs.len(), 4);
 
         // Verify disjointness — all 4 references point to distinct
@@ -1082,7 +1081,9 @@ mod tests {
     fn get_subtree_mut_empty_id_list_returns_empty_vec() {
         let mut tree = RenderTree::new();
         let _a = tree.insert_box(make_leaf());
-        let refs = tree.get_subtree_mut(&[]).expect("empty input must yield empty Vec");
+        let refs = tree
+            .get_subtree_mut(&[])
+            .expect("empty input must yield empty Vec");
         assert!(refs.is_empty());
     }
 
@@ -1090,7 +1091,9 @@ mod tests {
     fn get_subtree_mut_single_id_works() {
         let mut tree = RenderTree::new();
         let a = tree.insert_box(make_leaf());
-        let refs = tree.get_subtree_mut(&[a]).expect("single id must yield Some");
+        let refs = tree
+            .get_subtree_mut(&[a])
+            .expect("single id must yield Some");
         assert_eq!(refs.len(), 1);
     }
 
