@@ -323,49 +323,64 @@ impl<P: Protocol> RenderEntry<P> {
         // `SliverLayoutCtx::new` on its own stack frame and lends an
         // erased `&mut dyn` view; the borrow expires when the FnOnce
         // closure returns, keeping the storage local to this call.
+        //
+        // # Error-handling shape (follow-up to PR #141 #5 Option A)
+        //
+        // `perform_layout_raw` now returns
+        // `RenderResult<ProtocolGeometry<P>>` — contract violations
+        // (e.g., bridge-detected missing `complete_with_size`) flow
+        // through the `Err(...)` channel of the inner Result; the
+        // `catch_unwind` boundary remains, but ONLY for genuine
+        // third-party panics (user widget calling `panic!` /
+        // `unwrap()` etc.), which still surface as
+        // `RenderError::Poisoned`.
+        //
+        // The two error classes are now distinct at the variant level:
+        // - `ContractViolation` — bridge or pipeline detected an
+        //   invariant violation it can name. Propagated as
+        //   `Result<_, _>` through `?`.
+        // - `Poisoned` — opaque panic payload caught by `catch_unwind`.
+        //   Cannot be named specifically; tracing logs the payload
+        //   message for diagnostics.
+        //
+        // Flatten shape: `catch_unwind` returns
+        // `Result<Result<G, RenderError>, Box<dyn Any + Send>>`. The
+        // `match` below explicitly forwards `Ok(inner)` verbatim (the
+        // inner `Result<G, RenderError>` from `perform_layout_raw`
+        // becomes the closure's return) and maps `Err(panic_payload)`
+        // into `Err(RenderError::Poisoned)` after logging the payload
+        // message. Net: closure returns `Result<G, RenderError>`.
         let geometry = <P as crate::protocol::Protocol>::with_leaf_erased_ctx(
             constraints_for_ctx,
             |erased_ctx| {
                 let unwind_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     render_object.perform_layout_raw(erased_ctx)
                 }));
-                unwind_result.map_err(|payload| {
-                    // **D-block PR-A1b U19 review fix #5 (Option B).**
-                    // Try structured `RenderError` payload first — the
-                    // `RenderObject<BoxProtocol>` blanket impl raises
-                    // `RenderError::ContractViolation` via
-                    // `std::panic::panic_any(...)` when the user's
-                    // `RenderBox::perform_layout` forgets to call
-                    // `ctx.complete_with_size(...)`. Recovering the
-                    // typed payload here means contract violations
-                    // surface as their own `RenderError` variant rather
-                    // than collapsing to `Poisoned` (which is reserved
-                    // for unstructured runtime panics).
-                    match payload.downcast::<crate::error::RenderError>() {
-                        Ok(typed) => *typed,
-                        Err(payload) => {
-                            // Review fix #6: forward the unstructured
-                            // panic message to tracing before discarding
-                            // the payload. Without this, panics that
-                            // pre-date the structured-payload path (or
-                            // arrive from third-party `panic!` calls in
-                            // user widgets) become opaque
-                            // `RenderError::Poisoned` errors with no
-                            // diagnostic detail.
-                            let msg = payload
-                                .downcast_ref::<String>()
-                                .map(String::as_str)
-                                .or_else(|| payload.downcast_ref::<&'static str>().copied())
-                                .unwrap_or("(non-string panic payload)");
-                            tracing::error!(
-                                render_object = debug_name,
-                                panic_msg = msg,
-                                "perform_layout panicked — surfacing as RenderError::Poisoned",
-                            );
-                            crate::error::RenderError::poisoned(debug_name, "layout")
-                        }
+                match unwind_result {
+                    // Inner Result propagates verbatim — Ok(geometry)
+                    // or Err(RenderError::ContractViolation { ... } /
+                    // any other typed error the bridge returns).
+                    Ok(inner) => inner,
+                    // Catch_unwind caught a panic — log the payload
+                    // message to tracing for diagnostics, then surface
+                    // as Poisoned. Distinct from ContractViolation:
+                    // panics are unstructured (third-party `panic!` /
+                    // `unwrap()` in user widget code), Poisoned is the
+                    // catch-all bucket for "we don't know more".
+                    Err(payload) => {
+                        let msg = payload
+                            .downcast_ref::<String>()
+                            .map(String::as_str)
+                            .or_else(|| payload.downcast_ref::<&'static str>().copied())
+                            .unwrap_or("(non-string panic payload)");
+                        tracing::error!(
+                            render_object = debug_name,
+                            panic_msg = msg,
+                            "perform_layout panicked — surfacing as RenderError::Poisoned",
+                        );
+                        Err(crate::error::RenderError::poisoned(debug_name, "layout"))
                     }
-                })
+                }
             },
         )?;
 

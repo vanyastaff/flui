@@ -497,14 +497,26 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
     fn perform_layout_raw(
         &mut self,
         _ctx: &mut <crate::protocol::BoxProtocol as crate::protocol::Protocol>::LayoutCtxErased<'_>,
-    ) -> crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol> {
+    ) -> crate::error::RenderResult<crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>>
+    {
         // D-block PR-A1b U19 — RenderView is the root and manages its own
         // layout via the `perform_layout()` method on the embedded
         // `RenderView`. The erased ctx is unused — root layout is driven
         // by `configuration().preferred_size` rather than parent-supplied
         // constraints (Flutter parity, `.flutter/.../view.dart`).
+        //
+        // Follow-up to PR #141 #5 Option A: signature returns
+        // `RenderResult<Size>`. The adapter itself has no contract
+        // surface to violate — there is no `complete_with_size`
+        // analogue to forget — so it never returns a typed `Err`.
+        // `RenderView::perform_layout` can still trip its internal
+        // `assert!` invariants (e.g. missing `prepare_initial_frame`)
+        // which propagate as panics; those are caught upstream by
+        // `RenderEntry::layout_leaf_only`'s `catch_unwind` and surface
+        // as `RenderError::Poisoned` — same as any third-party panic
+        // from user widget code.
         self.view.perform_layout();
-        self.view.size()
+        Ok(self.view.size())
     }
 
     fn paint(&self, context: &mut CanvasContext, offset: Offset) {

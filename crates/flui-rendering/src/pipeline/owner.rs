@@ -1713,8 +1713,10 @@ mod tests {
             _ctx: &mut <crate::protocol::BoxProtocol as crate::protocol::Protocol>::LayoutCtxErased<
                 '_,
             >,
-        ) -> crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol> {
-            self.size
+        ) -> crate::error::RenderResult<
+            crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>,
+        > {
+            Ok(self.size)
         }
 
         fn paint(&self, _context: &mut crate::context::CanvasContext, _offset: flui_types::Offset) {
@@ -1772,7 +1774,18 @@ mod tests {
             _ctx: &mut <crate::protocol::BoxProtocol as crate::protocol::Protocol>::LayoutCtxErased<
                 '_,
             >,
-        ) -> crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol> {
+        ) -> crate::error::RenderResult<
+            crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>,
+        > {
+            // Intentional unstructured panic — exercises the catch_unwind →
+            // Poisoned path in `RenderEntry::layout_leaf_only`. This test
+            // fixture is one explicit way to produce
+            // `RenderError::Poisoned`; in production any third-party
+            // panic in user widget code (`panic!`, `unwrap()`, assertion
+            // failure inside `RenderBox::perform_layout`) reaches the
+            // same path. Bridge-detected contract violations go through
+            // the typed `Result` chain instead and surface as
+            // `RenderError::ContractViolation`.
             panic!("PanickingLayoutBox::perform_layout_raw -- intentional test panic");
         }
 

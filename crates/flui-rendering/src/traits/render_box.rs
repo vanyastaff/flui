@@ -383,46 +383,49 @@ where
     fn perform_layout_raw(
         &mut self,
         ctx: &mut <BoxProtocol as crate::protocol::Protocol>::LayoutCtxErased<'_>,
-    ) -> crate::protocol::ProtocolGeometry<BoxProtocol> {
+    ) -> crate::error::RenderResult<crate::protocol::ProtocolGeometry<BoxProtocol>> {
         // D-block PR-A1b U19 / memo D5 — the real bridge.
         //
-        // The pipeline / `RenderEntry::layout` hands us a `&mut dyn
-        // BoxLayoutCtxErased` (the GAT for `BoxProtocol` resolves to
-        // exactly this). We reconstruct a typed
+        // The pipeline / `RenderEntry::layout_leaf_only` hands us a
+        // `&mut dyn BoxLayoutCtxErased` (the GAT for `BoxProtocol`
+        // resolves to exactly this). We reconstruct a typed
         // `BoxLayoutCtx<T::Arity, T::ParentData>` via the `from_erased`
-        // ctor (Proxy storage that delegates child / completion ops back
-        // through the erased trait), wrap it in the ergonomic
-        // `BoxLayoutContext` so user widgets get
-        // `complete_with_size` etc., and call `T::perform_layout`.
+        // ctor (Proxy storage that delegates child / completion ops
+        // back through the erased trait), wrap it in the ergonomic
+        // `BoxLayoutContext` so user widgets get `complete_with_size`
+        // etc., and call `T::perform_layout`.
         //
         // The user's `perform_layout` body must call
         // `ctx.complete_with_size(...)` (or equivalent) to record the
         // computed size; we read it back from the inner BoxLayoutCtx
         // and return to the caller.
         //
-        // **Contract violation handling (review fix #5, Option B).**
+        // # Contract-violation handling (follow-up to PR #141 #5 Option A)
+        //
         // If `perform_layout` returns without calling
-        // `ctx.complete_with_size(...)`, we raise
-        // [`RenderError::ContractViolation`] via
-        // `std::panic::panic_any(...)` — the structured-payload form of
-        // `panic!` that survives `catch_unwind` cleanly. The
-        // catch_unwind handler in
-        // [`RenderEntry::layout`](crate::storage::RenderEntry::layout)
-        // downcasts the panic payload to recover the typed
-        // [`RenderError`] and returns it through `RenderResult`,
-        // distinct from `RenderError::Poisoned` (which covers
-        // unstructured runtime panics).
+        // `ctx.complete_with_size(...)`, we return
+        // [`RenderError::ContractViolation`] as `Err(...)` directly —
+        // no `panic_any`, no `catch_unwind` dance. The PR #141 review
+        // (finding #5) called out the previous panic_any path as a
+        // Constitution Principle 6 violation; this PR closes that
+        // technical debt by making the signature
+        // `RenderResult<ProtocolGeometry<P>>` so contract violations
+        // propagate as typed errors through `?`.
+        //
+        // `catch_unwind` in `RenderEntry::layout_leaf_only` is retained
+        // only for genuine third-party panics (panic! / unwrap in user
+        // widget code) which still surface as `RenderError::Poisoned`.
         let typed_inner =
             crate::protocol::BoxLayoutCtx::<T::Arity, T::ParentData>::from_erased(ctx);
         let mut layout_ctx =
             crate::context::BoxLayoutContext::<T::Arity, T::ParentData>::new(typed_inner);
         T::perform_layout(self, &mut layout_ctx);
-        layout_ctx.inner().geometry().copied().unwrap_or_else(|| {
-            std::panic::panic_any(crate::error::RenderError::contract_violation(
+        layout_ctx.inner().geometry().copied().ok_or_else(|| {
+            crate::error::RenderError::contract_violation(
                 self.debug_name(),
                 "RenderBox::perform_layout returned without calling \
                      ctx.complete_with_size(...)",
-            ))
+            )
         })
     }
 

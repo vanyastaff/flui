@@ -235,30 +235,35 @@ pub enum RenderError {
     ///
     /// Distinct from [`Poisoned`](Self::Poisoned): `Poisoned` covers
     /// unstructured panics surfaced through `catch_unwind` (genuine
-    /// runtime bugs, double-frees, etc.); `ContractViolation` covers
-    /// **specific, named** invariants the bridge / pipeline can detect
-    /// and report by name.
+    /// runtime bugs, double-frees, third-party `panic!` / `unwrap` in
+    /// user widget code); `ContractViolation` covers **specific, named**
+    /// invariants the bridge / pipeline can detect and report by name.
     ///
-    /// **D-block PR-A1b U19 review fix #5 (Option B):** introduced so
-    /// the `RenderObject<BoxProtocol>` blanket impl on
+    /// # History
+    ///
+    /// **D-block PR-A1b U19 review fix #5 (Option B, PR #141):**
+    /// introduced so the `RenderObject<BoxProtocol>` blanket impl on
     /// [`crate::traits::RenderBox`] can signal "user's
     /// [`RenderBox::perform_layout`](crate::traits::RenderBox::perform_layout)
     /// returned without calling `ctx.complete_with_size`" as a typed
-    /// error rather than an opaque panic. The bridge raises it via
-    /// `std::panic::panic_any(RenderError::ContractViolation { ... })`;
+    /// error rather than an opaque panic. The original landing used
+    /// `std::panic::panic_any(RenderError::ContractViolation { ... })`
+    /// caught by `catch_unwind` in
     /// [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only)
-    /// downcasts the panic payload to recover the typed value and
-    /// returns it through `RenderResult` alongside other render errors.
+    /// and downcast back to the typed value — `panic_any` was the
+    /// minimum-disruption shape that preserved the existing
+    /// `perform_layout_raw` infallible signature.
     ///
-    /// `panic_any` (not plain `panic!`) is used so the payload survives
-    /// `catch_unwind` cleanly — `catch_unwind`'s `Box<dyn Any + Send>`
-    /// boxes it; the entry-layout handler downcasts to
-    /// `Box<RenderError>` and unwraps. Constitution Principle 6 reading:
-    /// the panic_any primitive is the structured-payload escape hatch
-    /// the standard library provides for exactly this catch-and-recover
-    /// shape; the alternative (full `Result<T, RenderError>` return on
-    /// `perform_layout_raw`) ripples through ~50 LOC across the trait
-    /// surface and is deferred to a dedicated typed-errors PR.
+    /// **Follow-up PR (this commit, Option A):** the
+    /// `perform_layout_raw` signature now returns
+    /// `RenderResult<ProtocolGeometry<P>>` so contract violations
+    /// propagate as typed `Err(...)` through `?` directly — no panic
+    /// primitive in the normal error path. The variant + constructor
+    /// stay; the only change is how the value reaches
+    /// `RenderEntry::layout_leaf_only` (via `Result` chain, not via
+    /// `panic_any` + downcast). `catch_unwind` in the entry is retained
+    /// only for genuine third-party panics from user widget code, which
+    /// continue to surface as `Poisoned`.
     #[error("contract violation in {render_object}: {what}")]
     ContractViolation {
         /// Static debug name of the render object that violated the contract.
@@ -341,15 +346,14 @@ impl RenderError {
 
     /// Creates a ContractViolation error.
     ///
-    /// **D-block PR-A1b U19 review fix #5:** raised by the
+    /// **D-block PR-A1b U19 review fix #5 (Option A follow-up):**
+    /// returned as `Err(...)` by the
     /// [`RenderObject<BoxProtocol>`](crate::traits::RenderObject)
     /// blanket impl when the user's
     /// [`RenderBox::perform_layout`](crate::traits::RenderBox::perform_layout)
-    /// returns without calling `ctx.complete_with_size`. The bridge
-    /// passes this through
-    /// `std::panic::panic_any(RenderError::ContractViolation { ... })`;
-    /// [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only)
-    /// downcasts the catch_unwind payload to recover the typed value.
+    /// returns without calling `ctx.complete_with_size`. Propagates
+    /// through the `RenderResult<ProtocolGeometry<P>>` channel of
+    /// [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only).
     pub fn contract_violation(render_object: &'static str, what: &'static str) -> Self {
         Self::ContractViolation {
             render_object,
