@@ -143,6 +143,9 @@ Desktop.ini
 # Flutter SDK (for reference only, not part of project)
 .flutter/
 
+# GPUI (Zed) source (for reference only, not part of project)
+.gpui/
+
 # Generated documentation
 /doc/
 /target/doc/
