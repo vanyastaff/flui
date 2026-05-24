@@ -14,6 +14,8 @@ use std::{
 use flui_foundation::RenderId;
 use flui_layer::LayerTree;
 use flui_types::{Offset, Size};
+use parking_lot::Mutex;
+use rustc_hash::FxHashSet;
 
 use crate::{
     constraints::BoxConstraints,
@@ -1105,36 +1107,44 @@ impl PipelineOwner<Layout> {
     /// `T::ParentData` dispatch lands as a Core.1 follow-up alongside the
     /// real `RenderFlex` slice integration.
     ///
-    /// # Cycle / depth safety
+    /// # Cycle / depth safety (U21 wired)
     ///
-    /// The current implementation has **no full cycle guard and no
-    /// depth limit**. Behaviour on a malformed (cyclic) tree:
+    /// Three-layer cycle protection (U20.1 + U21 combined):
     ///
     /// 1. `collect_subtree_ids` terminates safely on cycles via its
-    ///    `visited` `HashSet<RenderId>` short-circuit (PR #145 review
-    ///    fix) — the cyclic id is visited at most once, the cycle
-    ///    edge is silently dropped from the collected subtree, and
-    ///    `Vec<RenderId>` returns deduplicated. No hang / OOM.
-    /// 2. `get_subtree_mut` receives a deduplicated id list →
+    ///    `visited` `HashSet<RenderId>` short-circuit (PR #145) —
+    ///    the cyclic id is visited at most once, the cycle edge is
+    ///    silently dropped from the collected subtree, deduplicated
+    ///    `Vec<RenderId>` returns. No hang / OOM at the collect
+    ///    phase.
+    /// 2. `get_subtree_mut` receives the deduplicated id list →
     ///    uniqueness precondition satisfied → returns `Some(refs)`.
-    ///    No double-borrow attempt.
-    /// 3. `layout_subtree_borrowed` walks via `NodePtr` lookup
-    ///    against the deduped index. A `perform_layout` body that
-    ///    calls `layout_child` for a cyclic descendant id whose slot
-    ///    is already in scope at the parent level would attempt a
-    ///    SECOND reborrow of the same `NodePtr` → undefined behaviour.
-    ///    This is the residual failure mode the U21 cycle guard
-    ///    (`currently_laying_out: FxHashSet<RenderId>` + RAII
-    ///    drop-guard) closes by returning
-    ///    [`crate::error::RenderError::LayoutCycle`].
+    ///    No double-borrow attempt at acquisition.
+    /// 3. `layout_subtree_borrowed` registers each `id` in
+    ///    `SubtreeBorrows::currently_laying_out` via the
+    ///    `LayoutCycleGuard` RAII on entry (U21). A `perform_layout`
+    ///    body that calls `layout_child` for an ancestor id already
+    ///    in flight hits the guard's `enter` collision check →
+    ///    returns [`crate::error::RenderError::LayoutCycle`]
+    ///    immediately instead of attempting a second `NodePtr`
+    ///    reborrow (which would be UB).
     ///
-    /// Compared to PR #144 (where a cycle overflowed the stack
-    /// loudly), the PR #145 architecture turns the cycle into:
-    /// hung tree-link → silent layout-incompleteness via the dropped
-    /// cycle edge, no hang. U21 promotes this to a typed error.
+    /// The cycle error collapses through the layout-child callback
+    /// (Size::ZERO + `descendant_error_flag`) so the parent stays
+    /// `NEEDS_LAYOUT` for next-frame retry. The cycle persists
+    /// structurally so retry will re-surface `LayoutCycle` — but
+    /// predictably, never as panic/UB/hang. The user can fix the
+    /// tree (remove the cyclic `add_child`) and the next retry
+    /// succeeds.
     ///
-    /// **Do not wire `run_layout` to call `layout_dirty_root` until
-    /// U21 ships.** U23 performs the wiring after U21.
+    /// Frame-cross panic safety: `LayoutCycleGuard::Drop` runs on
+    /// every exit path including unwind from a panicking
+    /// `perform_layout`. Combined with the non-leaf path's
+    /// `catch_unwind` wrapper, the cycle set stays consistent across
+    /// frames — a panic does not leak an in-flight id.
+    ///
+    /// **U23 wiring is now soundness-unblocked.** `run_layout` may
+    /// wire `layout_dirty_root` per its dirty-queue iteration in U23.
     pub fn layout_dirty_root(
         &mut self,
         id: RenderId,
@@ -1247,6 +1257,20 @@ unsafe impl Sync for NodePtr {}
 /// Cheap: one `ThreadId::eq` per lookup.
 struct SubtreeBorrows<'tree> {
     by_id: std::collections::HashMap<RenderId, NodePtr>,
+    /// Set of ids whose layout is currently in flight at some recursion
+    /// level above the current call. Insert on layout entry, remove on
+    /// drop (RAII via [`LayoutCycleGuard`]). Re-entry on a member id
+    /// surfaces as [`crate::error::RenderError::LayoutCycle`] — closes
+    /// the U21 cycle-detection blocker (companion memo D6).
+    ///
+    /// Wrapped in `parking_lot::Mutex` because the layout-child closure
+    /// requires `&SubtreeBorrows: Send + Sync` (inherited from
+    /// `BoxLayoutCtxErased`). Uncontended `parking_lot::Mutex` acquire
+    /// is ~10 ns — negligible vs `perform_layout` cost. The cross-
+    /// thread closure-smuggle attack vector is independently rejected
+    /// by [`Self::check_thread`], so the Mutex serves only as the
+    /// shared-mutability cell, not as actual cross-thread sync.
+    currently_laying_out: Mutex<FxHashSet<RenderId>>,
     owner_thread: std::thread::ThreadId,
     _lifetime: std::marker::PhantomData<&'tree mut ()>,
 }
@@ -1275,6 +1299,13 @@ impl<'tree> SubtreeBorrows<'tree> {
         }
         Self {
             by_id,
+            // Pre-sized to subtree size — at most `ids.len()` entries
+            // can be in-flight concurrently (the recursive walk
+            // descends linearly through one path at a time).
+            currently_laying_out: Mutex::new(FxHashSet::with_capacity_and_hasher(
+                ids.len(),
+                Default::default(),
+            )),
             owner_thread,
             _lifetime: std::marker::PhantomData,
         }
@@ -1309,6 +1340,66 @@ impl<'tree> SubtreeBorrows<'tree> {
     }
 }
 
+// ============================================================================
+// PR-A1 U21 — RAII layout-cycle guard
+// ============================================================================
+
+/// RAII guard that registers `id` in [`SubtreeBorrows::currently_laying_out`]
+/// on construction and unregisters on drop.
+///
+/// **D-block PR-A1 U21 (companion memo D6):** detects re-entry into a
+/// node's `layout_subtree_borrowed` call (the situation where a user
+/// `perform_layout` body calls `ctx.layout_child` for an ancestor id
+/// whose layout is already in flight up the stack). On collision the
+/// constructor returns [`crate::error::RenderError::LayoutCycle`]
+/// instead of attempting a second [`NodePtr`] reborrow (which would be
+/// UB under aliasing rules — the same slot's Unique tag is live up the
+/// recursion stack).
+///
+/// The guard's `Drop` impl unconditionally removes `id` from the set,
+/// even on unwind (Rust's drop semantics guarantee this for any
+/// `Drop`-implementing value going out of scope). Combined with the
+/// `catch_unwind` wrapper around `perform_layout_raw` in the non-leaf
+/// path, this means the cycle set stays consistent across frames: a
+/// panicking widget's id is cleared, the next frame's walk does not
+/// see it as in-flight.
+struct LayoutCycleGuard<'b, 'tree> {
+    borrows: &'b SubtreeBorrows<'tree>,
+    id: RenderId,
+}
+
+impl<'b, 'tree> LayoutCycleGuard<'b, 'tree> {
+    /// Registers `id` as currently-laying-out. Returns
+    /// `Err(RenderError::LayoutCycle(id))` if `id` is already
+    /// registered — caller must propagate immediately.
+    fn enter(borrows: &'b SubtreeBorrows<'tree>, id: RenderId) -> crate::error::RenderResult<Self> {
+        // check_thread here so the diagnostic surfaces at the cycle-
+        // guard layer too (covers callers that bypass `get`).
+        borrows.check_thread();
+        let mut set = borrows.currently_laying_out.lock();
+        if !set.insert(id) {
+            tracing::error!(
+                ?id,
+                "layout_subtree_borrowed: layout cycle detected — id is \
+                     already in flight at a parent call level; returning \
+                     RenderError::LayoutCycle(id)",
+            );
+            return Err(crate::error::RenderError::layout_cycle(id));
+        }
+        // Lock drops here — set is held only for the insert.
+        Ok(Self { borrows, id })
+    }
+}
+
+impl<'b, 'tree> Drop for LayoutCycleGuard<'b, 'tree> {
+    fn drop(&mut self) {
+        // Unconditional remove — runs on every exit path including
+        // unwind. Cycle set stays consistent for the next frame.
+        // `Mutex::lock` is panic-safe (no poisoning in parking_lot).
+        self.borrows.currently_laying_out.lock().remove(&self.id);
+    }
+}
+
 /// Recursive helper for [`PipelineOwner::layout_dirty_root`].
 ///
 /// Reborrows one [`NodePtr`] from the pre-acquired [`SubtreeBorrows`]
@@ -1329,14 +1420,24 @@ impl<'tree> SubtreeBorrows<'tree> {
 ///    helper while the binding is live.
 /// 2. At any moment, no two concurrent reborrows of the SAME
 ///    [`NodePtr`] exist. Sequential call levels (parent → child →
-///    grandchild) reborrow DIFFERENT slots; the disjoint-slot
-///    discipline is preserved by tree acyclicity (cycle protection is
-///    U21's job — see the `layout_dirty_root` doc).
+///    grandchild) reborrow DIFFERENT slots — preserved by the U21
+///    `LayoutCycleGuard` (returns
+///    [`crate::error::RenderError::LayoutCycle`] on re-entry into
+///    a slot already in flight up the stack).
 unsafe fn layout_subtree_borrowed<'tree>(
     borrows: &SubtreeBorrows<'tree>,
     id: RenderId,
     constraints: BoxConstraints,
 ) -> crate::error::RenderResult<Size> {
+    // U21 cycle guard: register `id` in currently_laying_out *before*
+    // any NodePtr reborrow. Drop on every exit path (RAII) — set stays
+    // consistent across panics via the catch_unwind in the non-leaf
+    // path below + Rust's drop-on-unwind discipline. Re-entry returns
+    // RenderError::LayoutCycle(id) immediately, skipping the reborrow
+    // attempt entirely (avoids the otherwise-UB second-Unique-tag on
+    // an in-flight slot).
+    let _cycle_guard = LayoutCycleGuard::enter(borrows, id)?;
+
     // Resolve id → NodePtr. Cross-thread access panics inside `get`.
     let NodePtr(node_ptr) = match borrows.get(id) {
         Some(np) => np,
