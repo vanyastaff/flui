@@ -999,11 +999,11 @@ impl PipelineOwner<Layout> {
     /// (companion memo D1). Returns the parent's computed `Size` on
     /// success.
     ///
-    /// Replaces the recursion shape of
-    /// [`Self::layout_node_with_children`] (which only walks the dirty
-    /// tree without invoking per-node layout — see the audit comment in
-    /// that method). The pipeline-side `run_layout` outer loop is rewired
-    /// to this method in U23.
+    /// Replaces the recursion shape of `layout_node_with_children`
+    /// (which only walks the dirty tree without invoking per-node
+    /// layout — see the audit comment in that method). The
+    /// pipeline-side `run_layout` outer loop is rewired to this method
+    /// in U23.
     ///
     /// # Mechanism (U20.1 — pre-acquired subtree borrows)
     ///
@@ -1016,24 +1016,23 @@ impl PipelineOwner<Layout> {
     ///    the proven `*mut Slab` reborrow pattern that already powers
     ///    [`RenderTree::get_two_mut`] and
     ///    [`RenderTree::get_parent_and_children_mut`].
-    /// 3. **Index by id**: the N borrows are wrapped in
-    ///    [`SubtreeBorrows`] as a `HashMap<RenderId, NodePtr>` (raw
+    /// 3. **Index by id**: the N borrows are wrapped in a private
+    ///    `SubtreeBorrows` as a `HashMap<RenderId, NodePtr>` (raw
     ///    pointer alias of the still-live `&mut RenderNode` borrows).
     ///    Lookup is O(1) by id.
-    /// 4. **Recursive walk**: [`layout_subtree_borrowed`] indexes into
-    ///    `SubtreeBorrows` to acquire one node's reborrow at each call
-    ///    level. The leaf path delegates to
+    /// 4. **Recursive walk**: a private `layout_subtree_borrowed`
+    ///    helper indexes into `SubtreeBorrows` to acquire one node's
+    ///    reborrow at each call level. The leaf path delegates to
     ///    [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only).
     ///    The non-leaf path constructs a Direct-storage `BoxLayoutCtx`
     ///    via [`BoxLayoutCtx::with_layout_callback`] with a closure
-    ///    that captures `&SubtreeBorrows` (Sync via [`NodePtr`]'s
-    ///    `unsafe impl`) and re-enters
-    ///    [`layout_subtree_borrowed`] for each child. The bridge in
-    ///    `traits/render_box.rs` reconstructs a typed
-    ///    `BoxLayoutCtx<T::Arity, T::ParentData>` (Proxy variant) and
-    ///    forwards to `RenderBox::perform_layout`. Synchronous
-    ///    `ctx.layout_child(i, c)` calls dispatch through the
-    ///    callback, recursing into the child's subtree via its
+    ///    that captures `&SubtreeBorrows` (Sync via `NodePtr`'s
+    ///    `unsafe impl`) and re-enters `layout_subtree_borrowed` for
+    ///    each child. The bridge in `traits/render_box.rs` reconstructs
+    ///    a typed `BoxLayoutCtx<T::Arity, T::ParentData>` (Proxy
+    ///    variant) and forwards to `RenderBox::perform_layout`.
+    ///    Synchronous `ctx.layout_child(i, c)` calls dispatch through
+    ///    the callback, recursing into the child's subtree via its
     ///    pre-acquired `NodePtr`.
     /// 5. **Per-level cleanup**: on success **AND when no descendant
     ///    errored**, updates `state.set_geometry` /
@@ -1065,7 +1064,7 @@ impl PipelineOwner<Layout> {
     /// scope are: one for the current call's parent + one for each
     /// active recursive child call below it. All on **distinct slab
     /// slots** (parent ≠ child in a well-formed tree). The Unique tag
-    /// for each slot lives independently because [`NodePtr`] is a raw
+    /// for each slot lives independently because `NodePtr` is a raw
     /// pointer (SharedReadWrite permission on the allocation, distinct
     /// derived Unique tags per slot reborrow). Miri verifies this on
     /// the existing U20 integration tests.
@@ -1074,16 +1073,16 @@ impl PipelineOwner<Layout> {
     ///
     /// - **Leaf-path panics** in user `perform_layout` → caught by
     ///   `layout_leaf_only`'s `catch_unwind`, returned as
-    ///   [`RenderError::Poisoned`].
+    ///   [`crate::error::RenderError::Poisoned`].
     /// - **Non-leaf-path panics** (PR-A1b3 review fix): wrapped in
     ///   `catch_unwind` at the non-leaf `perform_layout_raw` call site,
-    ///   returned as the same [`RenderError::Poisoned`]. Symmetric
-    ///   with the leaf path.
+    ///   returned as the same [`crate::error::RenderError::Poisoned`].
+    ///   Symmetric with the leaf path.
     /// - **Descendant `Err` returned through the callback** → tracking
     ///   flag (`AtomicBool`) set; outer `perform_layout` still completes
     ///   with `Size::ZERO` for that child; outer `Ok` is returned to the
     ///   caller, BUT parent's `NEEDS_LAYOUT` is **not cleared**.
-    ///   Next-frame dirty walk re-runs the parent. The [`LayoutChildCallback`]
+    ///   Next-frame dirty walk re-runs the parent. The `LayoutChildCallback`
     ///   signature is `Fn(_) -> Size`, not `Fn(_) -> Result<Size, _>`,
     ///   so callback failures can't propagate as typed `Err` through
     ///   the parent's `perform_layout` body. Surfacing the typed error
