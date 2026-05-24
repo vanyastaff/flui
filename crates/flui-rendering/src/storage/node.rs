@@ -306,6 +306,79 @@ impl RenderNode {
         }
     }
 
+    /// Sets the `NEEDS_PAINT` flag on this node's state — flag-only,
+    /// no propagation.
+    ///
+    /// **D-block PR-A1 U22 (memo D7):** additive helper mirroring
+    /// [`Self::mark_layout_flag`]. NOT used by U22's dedup path —
+    /// `PipelineOwner::add_node_needing_paint` uses queue-membership
+    /// scanning instead of flag-based dedup (flag-based dedup is
+    /// unsuitable because `RenderState::new()` defaults
+    /// `NEEDS_PAINT = true` and would silently no-op on first add
+    /// for fresh nodes). Kept available for future callers that need
+    /// direct flag manipulation outside the dirty-queue scheduling
+    /// path.
+    #[inline]
+    pub fn mark_paint_flag(&self) {
+        match self {
+            Self::Box(entry) => entry.state().flags().mark_needs_paint(),
+            Self::Sliver(entry) => entry.state().flags().mark_needs_paint(),
+        }
+    }
+
+    /// Sets the `NEEDS_COMPOSITING` flag on this node's state —
+    /// flag-only, no propagation. **D-block PR-A1 U22:** additive
+    /// helper; not used by the queue-scan dedup path (see
+    /// [`Self::mark_paint_flag`] doc for rationale).
+    #[inline]
+    pub fn mark_compositing_flag(&self) {
+        match self {
+            Self::Box(entry) => entry.state().flags().mark_needs_compositing(),
+            Self::Sliver(entry) => entry.state().flags().mark_needs_compositing(),
+        }
+    }
+
+    /// Sets the `NEEDS_SEMANTICS` flag on this node's state —
+    /// flag-only, no propagation. **D-block PR-A1 U22:** additive
+    /// helper; not used by the queue-scan dedup path (see
+    /// [`Self::mark_paint_flag`] doc for rationale).
+    #[inline]
+    pub fn mark_semantics_flag(&self) {
+        match self {
+            Self::Box(entry) => entry.state().flags().mark_needs_semantics(),
+            Self::Sliver(entry) => entry.state().flags().mark_needs_semantics(),
+        }
+    }
+
+    /// Returns true if `NEEDS_SEMANTICS` is set on this node's state.
+    /// **D-block PR-A1 U22:** additive accessor for future flag-based
+    /// callers (current `add_node_needing_semantics` uses queue-scan
+    /// dedup, not this flag).
+    #[inline]
+    pub fn needs_semantics(&self) -> bool {
+        match self {
+            Self::Box(entry) => entry
+                .state()
+                .flags()
+                .contains(crate::storage::flags::RenderFlags::NEEDS_SEMANTICS),
+            Self::Sliver(entry) => entry
+                .state()
+                .flags()
+                .contains(crate::storage::flags::RenderFlags::NEEDS_SEMANTICS),
+        }
+    }
+
+    /// Returns true if `NEEDS_COMPOSITING` is set on this node's
+    /// state. **D-block PR-A1 U22:** additive accessor (see
+    /// [`Self::needs_semantics`] doc for usage notes).
+    #[inline]
+    pub fn needs_compositing(&self) -> bool {
+        match self {
+            Self::Box(entry) => entry.state().needs_compositing(),
+            Self::Sliver(entry) => entry.state().needs_compositing(),
+        }
+    }
+
     /// Protocol-erased **leaf-mode** layout dispatch.
     ///
     /// Matches the inner `RenderEntry<P>` against the supplied
