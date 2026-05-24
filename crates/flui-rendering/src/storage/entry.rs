@@ -326,26 +326,41 @@ impl<P: Protocol> RenderEntry<P> {
                     render_object.perform_layout_raw(erased_ctx)
                 }));
                 unwind_result.map_err(|payload| {
-                    // Review fix #6: forward the panic message to
-                    // tracing before discarding the payload. Without
-                    // this, panics like "RenderBox::perform_layout for
-                    // … did not call complete_with_size" (the U19
-                    // bridge contract violation panic) become opaque
-                    // `RenderError::Poisoned` errors with no
-                    // diagnostic detail — the message exists only on
-                    // the panic stack at this point and is dropped on
-                    // `_ => Err(...)` discard.
-                    let msg = payload
-                        .downcast_ref::<String>()
-                        .map(String::as_str)
-                        .or_else(|| payload.downcast_ref::<&'static str>().copied())
-                        .unwrap_or("(non-string panic payload)");
-                    tracing::error!(
-                        render_object = debug_name,
-                        panic_msg = msg,
-                        "perform_layout panicked — surfacing as RenderError::Poisoned",
-                    );
-                    crate::error::RenderError::poisoned(debug_name, "layout")
+                    // **D-block PR-A1b U19 review fix #5 (Option B).**
+                    // Try structured `RenderError` payload first — the
+                    // `RenderObject<BoxProtocol>` blanket impl raises
+                    // `RenderError::ContractViolation` via
+                    // `std::panic::panic_any(...)` when the user's
+                    // `RenderBox::perform_layout` forgets to call
+                    // `ctx.complete_with_size(...)`. Recovering the
+                    // typed payload here means contract violations
+                    // surface as their own `RenderError` variant rather
+                    // than collapsing to `Poisoned` (which is reserved
+                    // for unstructured runtime panics).
+                    match payload.downcast::<crate::error::RenderError>() {
+                        Ok(typed) => *typed,
+                        Err(payload) => {
+                            // Review fix #6: forward the unstructured
+                            // panic message to tracing before discarding
+                            // the payload. Without this, panics that
+                            // pre-date the structured-payload path (or
+                            // arrive from third-party `panic!` calls in
+                            // user widgets) become opaque
+                            // `RenderError::Poisoned` errors with no
+                            // diagnostic detail.
+                            let msg = payload
+                                .downcast_ref::<String>()
+                                .map(String::as_str)
+                                .or_else(|| payload.downcast_ref::<&'static str>().copied())
+                                .unwrap_or("(non-string panic payload)");
+                            tracing::error!(
+                                render_object = debug_name,
+                                panic_msg = msg,
+                                "perform_layout panicked — surfacing as RenderError::Poisoned",
+                            );
+                            crate::error::RenderError::poisoned(debug_name, "layout")
+                        }
+                    }
                 })
             },
         )?;

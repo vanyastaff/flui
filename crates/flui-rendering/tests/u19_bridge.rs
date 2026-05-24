@@ -293,19 +293,28 @@ fn u19_with_leaf_erased_ctx_matches_direct_bridge_call() {
 // ============================================================================
 
 /// Plan U19 §407 contract: if `RenderBox::perform_layout` returns without
-/// calling `ctx.complete_with_size()`, the blanket bridge panics with a
-/// descriptive message naming the offending render object. Caught by
-/// `catch_unwind` in `RenderEntry::layout` → `RenderError::Poisoned`.
+/// calling `ctx.complete_with_size()`, the blanket bridge raises
+/// `RenderError::ContractViolation` via `std::panic::panic_any(...)`.
+/// `RenderEntry::layout`'s `catch_unwind` handler downcasts the panic
+/// payload to recover the typed value and returns it through
+/// `RenderResult` — distinct from `RenderError::Poisoned`, which is
+/// reserved for unstructured runtime panics.
 ///
-/// This test instantiates a deliberately-broken `ForgetfulBox` whose
-/// `perform_layout` body is empty (no completion call), drives it
-/// directly through the blanket `perform_layout_raw`, and asserts the
-/// panic message contains the contract-violation phrasing.
+/// This test:
+/// 1. Drives a deliberately-broken `ForgetfulBox` directly through the
+///    blanket `perform_layout_raw` and asserts the panic payload is a
+///    typed `RenderError::ContractViolation` carrying the render
+///    object's debug name and the contract description.
+/// 2. (See [`u19_contract_violation_surfaces_through_render_entry_layout`])
+///    Wraps the same fixture in a `RenderEntry<BoxProtocol>` and
+///    asserts the typed error round-trips out as `Err(RenderError::ContractViolation)`
+///    — verifying the entry-layout payload-downcast handler.
 #[test]
 fn u19_bridge_panics_on_missing_complete_with_size() {
     use flui_foundation::Diagnosticable;
     use flui_rendering::{
         context::{BoxHitTestContext, BoxLayoutContext},
+        error::RenderError,
         hit_testing::HitTestBehavior,
         traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
     };
@@ -351,23 +360,134 @@ fn u19_bridge_panics_on_missing_complete_with_size() {
     let mut direct_ctx: BoxLayoutCtx<'_, Leaf, BoxParentData> = BoxLayoutCtx::new(constraints);
     let erased: &mut dyn BoxLayoutCtxErased = &mut direct_ctx;
 
-    // Panic propagates from the blanket impl's unwrap_or_else;
-    // assert via catch_unwind. AssertUnwindSafe is fine — we own all
-    // the borrowed state on this test stack frame.
+    // Panic propagates from the blanket impl's `panic_any`; assert via
+    // catch_unwind. AssertUnwindSafe is fine — we own all the borrowed
+    // state on this test stack frame.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         <ForgetfulBox as RenderObject<BoxProtocol>>::perform_layout_raw(&mut obj, erased)
     }));
 
     let panic_payload =
         result.expect_err("perform_layout that forgets complete_with_size must panic");
-    let message = panic_payload
-        .downcast_ref::<String>()
-        .map(String::as_str)
-        .or_else(|| panic_payload.downcast_ref::<&'static str>().copied())
-        .unwrap_or("(non-string payload)");
+
+    // **Review fix #5 (Option B).** Payload is a typed `RenderError`
+    // (via `std::panic::panic_any(RenderError::ContractViolation { ... })`
+    // in the blanket impl), not an opaque string. Downcast to the typed
+    // value and assert variant + fields.
+    let typed_err = panic_payload
+        .downcast::<RenderError>()
+        .map(|boxed| *boxed)
+        .unwrap_or_else(|_| {
+            panic!("panic payload should be RenderError, got non-RenderError payload")
+        });
+    match typed_err {
+        RenderError::ContractViolation {
+            render_object,
+            what,
+        } => {
+            assert!(
+                render_object.contains("ForgetfulBox"),
+                "render_object should name the offending type, got: {render_object}",
+            );
+            assert!(
+                what.contains("complete_with_size"),
+                "what should describe the missing-completion contract, got: {what}",
+            );
+        }
+        other => panic!("expected ContractViolation, got {other:?}"),
+    }
+}
+
+/// Review fix #5 (Option B) round-trip: a `RenderBox` that forgets to
+/// call `ctx.complete_with_size(...)` produces
+/// `Err(RenderError::ContractViolation { ... })` when driven through
+/// `RenderEntry::<BoxProtocol>::layout`, not `Err(RenderError::Poisoned)`.
+/// `Poisoned` is reserved for unstructured runtime panics.
+#[test]
+fn u19_contract_violation_surfaces_through_render_entry_layout() {
+    use flui_foundation::Diagnosticable;
+    use flui_rendering::{
+        context::{BoxHitTestContext, BoxLayoutContext},
+        error::RenderError,
+        hit_testing::HitTestBehavior,
+        storage::RenderEntry,
+        traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+    };
+    use flui_types::{Point, Rect};
+
+    #[derive(Debug, Default)]
+    struct ForgetfulBox {
+        size: Size,
+    }
+
+    impl Diagnosticable for ForgetfulBox {}
+    impl PaintEffectsCapability for ForgetfulBox {}
+    impl SemanticsCapability for ForgetfulBox {}
+    impl HotReloadCapability for ForgetfulBox {}
+
+    impl RenderBox for ForgetfulBox {
+        type Arity = Leaf;
+        type ParentData = BoxParentData;
+
+        fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) {
+            // INTENTIONAL: forgets ctx.complete_with_size(...)
+        }
+
+        fn size(&self) -> &Size {
+            &self.size
+        }
+        fn size_mut(&mut self) -> &mut Size {
+            &mut self.size
+        }
+        fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Leaf, BoxParentData>) -> bool {
+            false
+        }
+        fn hit_test_behavior(&self) -> HitTestBehavior {
+            HitTestBehavior::Opaque
+        }
+        fn box_paint_bounds(&self) -> Rect {
+            Rect::from_origin_size(Point::ZERO, self.size)
+        }
+    }
+
+    let obj: Box<dyn RenderObject<BoxProtocol>> = Box::new(ForgetfulBox::default());
+    let mut entry: RenderEntry<BoxProtocol> = RenderEntry::new(obj);
+    let constraints = BoxConstraints::tight(Size::new(px(10.0), px(10.0)));
+
+    let result = entry.layout(constraints);
+
+    let err = result.expect_err("ForgetfulBox::perform_layout must surface as Err");
+    match err {
+        RenderError::ContractViolation {
+            render_object,
+            what,
+        } => {
+            assert!(
+                render_object.contains("ForgetfulBox"),
+                "render_object should name the offending type, got: {render_object}",
+            );
+            assert!(
+                what.contains("complete_with_size"),
+                "what should describe the missing-completion contract, got: {what}",
+            );
+        }
+        other => panic!(
+            "expected RenderError::ContractViolation, got {other:?} — \
+                 Poisoned should be reserved for unstructured runtime panics",
+        ),
+    }
+
+    // State invariants: geometry not set, NEEDS_LAYOUT still true so
+    // the pipeline can retry next frame after the offending node is
+    // removed or fixed.
+    let box_entry = entry; // shadow to drop the explicit type annotation
     assert!(
-        message.contains("did not call complete_with_size"),
-        "panic message should name the contract violation, got: {message}",
+        box_entry.state().geometry().is_none(),
+        "geometry must not be recorded on the contract-violation path",
+    );
+    assert!(
+        box_entry.state().needs_layout(),
+        "NEEDS_LAYOUT must remain set so a retry is possible next frame",
     );
 }
 

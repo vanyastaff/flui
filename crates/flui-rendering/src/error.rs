@@ -230,6 +230,44 @@ pub enum RenderError {
     /// already stable when U21 wires the guard.
     #[error("layout cycle detected: node {0:?} re-entered while its own layout was in flight")]
     LayoutCycle(RenderId),
+
+    /// A render object's `perform_layout` violated its layout contract.
+    ///
+    /// Distinct from [`Poisoned`](Self::Poisoned): `Poisoned` covers
+    /// unstructured panics surfaced through `catch_unwind` (genuine
+    /// runtime bugs, double-frees, etc.); `ContractViolation` covers
+    /// **specific, named** invariants the bridge / pipeline can detect
+    /// and report by name.
+    ///
+    /// **D-block PR-A1b U19 review fix #5 (Option B):** introduced so
+    /// the `RenderObject<BoxProtocol>` blanket impl on
+    /// [`crate::traits::RenderBox`] can signal "user's
+    /// [`RenderBox::perform_layout`](crate::traits::RenderBox::perform_layout)
+    /// returned without calling `ctx.complete_with_size`" as a typed
+    /// error rather than an opaque panic. The bridge raises it via
+    /// `std::panic::panic_any(RenderError::ContractViolation { ... })`;
+    /// [`RenderEntry::layout`](crate::storage::RenderEntry::layout)
+    /// downcasts the panic payload to recover the typed value and
+    /// returns it through `RenderResult` alongside other render errors.
+    ///
+    /// `panic_any` (not plain `panic!`) is used so the payload survives
+    /// `catch_unwind` cleanly — `catch_unwind`'s `Box<dyn Any + Send>`
+    /// boxes it; the entry-layout handler downcasts to
+    /// `Box<RenderError>` and unwraps. Constitution Principle 6 reading:
+    /// the panic_any primitive is the structured-payload escape hatch
+    /// the standard library provides for exactly this catch-and-recover
+    /// shape; the alternative (full `Result<T, RenderError>` return on
+    /// `perform_layout_raw`) ripples through ~50 LOC across the trait
+    /// surface and is deferred to a dedicated typed-errors PR.
+    #[error("contract violation in {render_object}: {what}")]
+    ContractViolation {
+        /// Static debug name of the render object that violated the contract.
+        render_object: &'static str,
+        /// Description of the specific contract that was violated
+        /// (`'static` because all contract names are compile-time literals
+        /// owned by the bridge that raises the variant).
+        what: &'static str,
+    },
 }
 
 /// Result type alias for render operations.
@@ -299,6 +337,24 @@ impl RenderError {
     /// Creates a LayoutDepthExceeded error.
     pub fn layout_depth_exceeded(limit: usize) -> Self {
         Self::LayoutDepthExceeded { limit }
+    }
+
+    /// Creates a ContractViolation error.
+    ///
+    /// **D-block PR-A1b U19 review fix #5:** raised by the
+    /// [`RenderObject<BoxProtocol>`](crate::traits::RenderObject)
+    /// blanket impl when the user's
+    /// [`RenderBox::perform_layout`](crate::traits::RenderBox::perform_layout)
+    /// returns without calling `ctx.complete_with_size`. The bridge
+    /// passes this through
+    /// `std::panic::panic_any(RenderError::ContractViolation { ... })`;
+    /// [`RenderEntry::layout`](crate::storage::RenderEntry::layout)
+    /// downcasts the catch_unwind payload to recover the typed value.
+    pub fn contract_violation(render_object: &'static str, what: &'static str) -> Self {
+        Self::ContractViolation {
+            render_object,
+            what,
+        }
     }
 
     /// Creates a Poisoned error.

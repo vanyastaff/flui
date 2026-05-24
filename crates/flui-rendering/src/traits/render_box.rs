@@ -398,20 +398,31 @@ where
         // The user's `perform_layout` body must call
         // `ctx.complete_with_size(...)` (or equivalent) to record the
         // computed size; we read it back from the inner BoxLayoutCtx
-        // and return to the caller. Failure to complete is treated as
-        // a contract violation — `expect` panics with a descriptive
-        // message naming the offending render object.
+        // and return to the caller.
+        //
+        // **Contract violation handling (review fix #5, Option B).**
+        // If `perform_layout` returns without calling
+        // `ctx.complete_with_size(...)`, we raise
+        // [`RenderError::ContractViolation`] via
+        // `std::panic::panic_any(...)` — the structured-payload form of
+        // `panic!` that survives `catch_unwind` cleanly. The
+        // catch_unwind handler in
+        // [`RenderEntry::layout`](crate::storage::RenderEntry::layout)
+        // downcasts the panic payload to recover the typed
+        // [`RenderError`] and returns it through `RenderResult`,
+        // distinct from `RenderError::Poisoned` (which covers
+        // unstructured runtime panics).
         let typed_inner =
             crate::protocol::BoxLayoutCtx::<T::Arity, T::ParentData>::from_erased(ctx);
         let mut layout_ctx =
             crate::context::BoxLayoutContext::<T::Arity, T::ParentData>::new(typed_inner);
         T::perform_layout(self, &mut layout_ctx);
         layout_ctx.inner().geometry().copied().unwrap_or_else(|| {
-            panic!(
-                "RenderBox::perform_layout for {} did not call complete_with_size — \
-                     no geometry recorded by completion of perform_layout_raw",
-                self.debug_name()
-            )
+            std::panic::panic_any(crate::error::RenderError::contract_violation(
+                self.debug_name(),
+                "RenderBox::perform_layout returned without calling \
+                     ctx.complete_with_size(...)",
+            ))
         })
     }
 
