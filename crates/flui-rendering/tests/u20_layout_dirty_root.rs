@@ -580,6 +580,54 @@ fn u20_sliver_node_surfaces_as_protocol_mismatch() {
     }
 }
 
+// ============================================================================
+// Bot-review fix — TreePtr same-thread invariant smoke
+// ============================================================================
+
+/// PR #144 Copilot review (comment_id=3294225417) fix: `TreePtr` carries
+/// the owning thread's `ThreadId` (set at construction in
+/// `layout_dirty_root`) and exposes `check_thread()` which the
+/// `layout_subtree_raw` entry calls before any unsafe `*ptr` deref. The
+/// guard panics with a documented diagnostic if a future caller smuggles
+/// `TreePtr` across threads via the `Send + Sync` auto-trait inherited
+/// from `BoxLayoutCtxErased`.
+///
+/// This test verifies the legitimate worker-thread case: a pipeline
+/// run inside `std::thread::spawn` still works because the `TreePtr`
+/// is constructed AND deref'd on the SAME (worker) thread per call.
+/// The pathological cross-thread case (TreePtr constructed on thread A,
+/// deref'd on thread B via a smuggled closure capture) cannot be
+/// exercised from integration tests because both `TreePtr` and the
+/// `BoxLayoutCtx::with_layout_callback` ctor are `pub(crate)` / private —
+/// the guard is a defensive layer for the closure-smuggle attack vector
+/// the Copilot review flagged, validated by code reading.
+#[test]
+fn u20_treeptr_worker_thread_pipeline_succeeds() {
+    let mut pipeline = fresh_layout_pipeline();
+    let padding_id = pipeline
+        .render_tree_mut()
+        .insert_box(Box::new(RenderPadding::all(5.0)));
+    let _child_id = pipeline
+        .render_tree_mut()
+        .insert_box_child(padding_id, Box::new(RenderColoredBox::red(40.0, 40.0)))
+        .expect("child insert must succeed");
+
+    let constraints = BoxConstraints::tight(Size::new(px(50.0), px(50.0)));
+
+    // Move pipeline into a worker thread, run layout there. TreePtr is
+    // constructed inside `layout_dirty_root` using the worker thread's
+    // id; subsequent `check_thread()` calls inside `layout_subtree_raw`
+    // are on the same worker thread; guard does NOT fire.
+    let join = std::thread::spawn(move || pipeline.layout_dirty_root(padding_id, constraints));
+
+    let result = join.join().expect("worker thread must not panic");
+    assert!(
+        result.is_ok(),
+        "single-threaded worker pipeline must succeed (TreePtr \
+         constructed AND deref'd on the same worker thread)",
+    );
+}
+
 /// `RenderViewAdapter` carries a manual (non-blanket)
 /// `RenderObject<BoxProtocol>` impl that ignores the erased ctx and
 /// drives layout from its embedded `ViewConfiguration`. The U20 walk

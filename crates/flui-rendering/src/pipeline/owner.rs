@@ -1130,7 +1130,7 @@ impl PipelineOwner<Layout> {
         // Raw pointer to render_tree: stays valid for the duration of
         // this call because `&mut self` keeps `self.render_tree` alive.
         // The recursive helper's safety invariant covers downstream uses.
-        let tree_ptr = TreePtr(&raw mut self.render_tree);
+        let tree_ptr = TreePtr::new(&mut self.render_tree);
 
         // SAFETY: tree_ptr is valid and no outstanding borrows exist on
         // `self.render_tree` at this call site (the `&mut self` receiver
@@ -1145,7 +1145,8 @@ impl PipelineOwner<Layout> {
 // PR-A1b3 U20 — recursive disjoint-borrow layout helper
 // ============================================================================
 
-/// `Send + Sync` raw-pointer wrapper for `RenderTree`.
+/// `Send + Sync` raw-pointer wrapper for `RenderTree` carrying the
+/// owning thread's `ThreadId` for runtime affinity enforcement.
 ///
 /// **D-block PR-A1b3 U20:** the pipeline-side
 /// [`PipelineOwner::layout_dirty_root`] hands this wrapper to a layout
@@ -1155,22 +1156,76 @@ impl PipelineOwner<Layout> {
 /// bound), so a bare `*mut RenderTree` cannot be captured.
 ///
 /// The wrapper is `Copy` so the closure captures by value without
-/// `Arc` ceremony. The unsafe `Send + Sync` impls are sound because
-/// the raw pointer itself is just an address — the soundness obligation
-/// is on the *uses* of the pointer at call sites inside
-/// [`layout_subtree_raw`] (each use synthesises a transient
-/// `&mut RenderTree` whose lifetime ends before the next synthesis,
-/// matching the discipline of [`RenderTree::get_two_mut`] /
-/// [`RenderTree::get_parent_and_children_mut`]).
+/// `Arc` ceremony.
+///
+/// # Thread-affinity guard (PR #144 Copilot review fix)
+///
+/// Although the documented invariant is "callback fires synchronously
+/// from the pipeline thread", the `BoxLayoutCtxErased: Send + Sync`
+/// supertrait permits a user `perform_layout` body to spawn child
+/// layout calls onto another thread (e.g., via `std::thread::scope` or
+/// `rayon::scope`). Two threads simultaneously dereferencing
+/// `TreePtr.ptr` would race on `Slab` internals → data race / UB.
+///
+/// `TreePtr` therefore records the owning thread's `ThreadId` at
+/// construction and exposes [`Self::check_thread`] which the unsafe
+/// `*ptr` deref sites call before reborrowing. Mismatched-thread
+/// access panics with a clear diagnostic instead of corrupting the
+/// slab silently. The check is active in **all builds** (not gated
+/// behind `debug_assertions`) because data-race UB is undetectable
+/// after the fact; the runtime cost is one `ThreadId::eq` (cheap;
+/// effectively a `u64` compare).
+///
+/// The structural fix (remove `Send + Sync` from `BoxLayoutCtxErased`
+/// or refactor `layout_child` to dispatch via the pipeline thread only)
+/// is deferred to the same U20.1 follow-up as the recursive-reborrow
+/// soundness fix.
 #[derive(Clone, Copy)]
-struct TreePtr(*mut RenderTree);
+struct TreePtr {
+    ptr: *mut RenderTree,
+    owner_thread: std::thread::ThreadId,
+}
+
+impl TreePtr {
+    /// Constructs a `TreePtr` from an exclusive `&mut RenderTree` borrow.
+    /// Records the current thread's `ThreadId` as the owner; every
+    /// subsequent `*ptr` deref via [`Self::check_thread`] verifies the
+    /// caller is on the same thread.
+    fn new(tree: &mut RenderTree) -> Self {
+        Self {
+            ptr: tree as *mut _,
+            owner_thread: std::thread::current().id(),
+        }
+    }
+
+    /// Verifies the current thread matches the `TreePtr`'s owner thread.
+    /// Panics otherwise. Called before every `*ptr` deref in
+    /// [`layout_subtree_raw`] to fail loudly on cross-thread callback
+    /// invocation (see thread-affinity guard rationale on [`TreePtr`]).
+    #[inline]
+    fn check_thread(&self) {
+        let current = std::thread::current().id();
+        if current != self.owner_thread {
+            panic!(
+                "TreePtr accessed from non-owner thread: \
+                 owner = {:?}, current = {:?}. The U20 layout walk \
+                 requires the layout_child callback to fire on the \
+                 same thread as PipelineOwner::layout_dirty_root \
+                 (the pipeline phase holds &mut self synchronously). \
+                 User RenderBox::perform_layout body must not spawn \
+                 ctx.layout_child(...) calls to other threads — the \
+                 underlying RenderTree slab is not Sync.",
+                self.owner_thread, current,
+            );
+        }
+    }
+}
 
 // SAFETY: the raw pointer is just an address; the per-call-site
 // `&mut RenderTree` synthesised inside [`layout_subtree_raw`] is the load-
 // bearing borrow, and that borrow is scoped to a single statement at each
-// use site. No data races are possible because the pipeline phase holds
-// `&mut self` for the entire layout walk and the callback fires
-// synchronously from inside `perform_layout_raw` on the same thread.
+// use site. Cross-thread access is rejected by the runtime
+// [`TreePtr::check_thread`] guard called before every `*ptr` deref.
 unsafe impl Send for TreePtr {}
 // SAFETY: the same reasoning as `Send` — see above.
 unsafe impl Sync for TreePtr {}
@@ -1221,7 +1276,11 @@ unsafe fn layout_subtree_raw(
     id: RenderId,
     constraints: BoxConstraints,
 ) -> crate::error::RenderResult<Size> {
-    let TreePtr(ptr) = tree_ptr;
+    // Thread-affinity guard: panic loudly if a user perform_layout body
+    // dispatched the layout_child callback to a non-pipeline thread (see
+    // TreePtr::check_thread doc). Cheap: one ThreadId compare.
+    tree_ptr.check_thread();
+    let ptr = tree_ptr.ptr;
 
     // Stage 1 — snapshot child_ids. The `&RenderTree` borrow lives only
     // for the `to_vec` call; releasing it here means we never hold a
