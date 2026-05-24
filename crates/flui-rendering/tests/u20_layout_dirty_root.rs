@@ -581,28 +581,25 @@ fn u20_sliver_node_surfaces_as_protocol_mismatch() {
 }
 
 // ============================================================================
-// Bot-review fix — TreePtr same-thread invariant smoke
+// SubtreeBorrows thread-affinity smoke (PR #144 Copilot review legacy)
 // ============================================================================
 
-/// PR #144 Copilot review (comment_id=3294225417) fix: `TreePtr` carries
-/// the owning thread's `ThreadId` (set at construction in
-/// `layout_dirty_root`) and exposes `check_thread()` which the
-/// `layout_subtree_raw` entry calls before any unsafe `*ptr` deref. The
-/// guard panics with a documented diagnostic if a future caller smuggles
-/// `TreePtr` across threads via the `Send + Sync` auto-trait inherited
-/// from `BoxLayoutCtxErased`.
+/// PR #144 Copilot review (comment_id=3294225417) fix carried forward
+/// to U20.1: [`SubtreeBorrows`] (the U20.1 replacement for `TreePtr`)
+/// carries the owning thread's `ThreadId` and panics with a
+/// documented diagnostic on cross-thread access via
+/// [`SubtreeBorrows::check_thread`].
 ///
 /// This test verifies the legitimate worker-thread case: a pipeline
-/// run inside `std::thread::spawn` still works because the `TreePtr`
-/// is constructed AND deref'd on the SAME (worker) thread per call.
-/// The pathological cross-thread case (TreePtr constructed on thread A,
-/// deref'd on thread B via a smuggled closure capture) cannot be
-/// exercised from integration tests because both `TreePtr` and the
-/// `BoxLayoutCtx::with_layout_callback` ctor are `pub(crate)` / private —
-/// the guard is a defensive layer for the closure-smuggle attack vector
-/// the Copilot review flagged, validated by code reading.
+/// run inside `std::thread::spawn` succeeds because `SubtreeBorrows`
+/// is constructed AND queried on the SAME (worker) thread per call.
+/// The pathological cross-thread case (`SubtreeBorrows` constructed
+/// on thread A, queried on thread B via a smuggled closure capture)
+/// cannot be exercised from integration tests because the type is
+/// private to `pipeline/owner.rs` — the guard is a defensive layer
+/// validated by code reading.
 #[test]
-fn u20_treeptr_worker_thread_pipeline_succeeds() {
+fn u20_subtree_borrows_worker_thread_pipeline_succeeds() {
     let mut pipeline = fresh_layout_pipeline();
     let padding_id = pipeline
         .render_tree_mut()
@@ -614,18 +611,85 @@ fn u20_treeptr_worker_thread_pipeline_succeeds() {
 
     let constraints = BoxConstraints::tight(Size::new(px(50.0), px(50.0)));
 
-    // Move pipeline into a worker thread, run layout there. TreePtr is
-    // constructed inside `layout_dirty_root` using the worker thread's
-    // id; subsequent `check_thread()` calls inside `layout_subtree_raw`
-    // are on the same worker thread; guard does NOT fire.
+    // Move pipeline into a worker thread, run layout there.
+    // SubtreeBorrows is constructed inside `layout_dirty_root` using
+    // the worker thread's id; subsequent `check_thread()` calls inside
+    // `layout_subtree_borrowed` are on the same worker thread; guard
+    // does NOT fire.
     let join = std::thread::spawn(move || pipeline.layout_dirty_root(padding_id, constraints));
 
     let result = join.join().expect("worker thread must not panic");
     assert!(
         result.is_ok(),
-        "single-threaded worker pipeline must succeed (TreePtr \
-         constructed AND deref'd on the same worker thread)",
+        "single-threaded worker pipeline must succeed (SubtreeBorrows \
+         constructed AND queried on the same worker thread)",
     );
+}
+
+// ============================================================================
+// U20.1 — 4-level deep recursion (verifies pre-acquired subtree borrows
+// scale to deeper trees than the original PR #144 tests covered)
+// ============================================================================
+
+/// PR-A1b3 U20.1 deep-recursion smoke: a 4-level Padding chain
+/// successfully lays out through the pre-acquired-subtree walk.
+/// Verifies `collect_subtree_ids` + `get_subtree_mut` + recursive
+/// `layout_subtree_borrowed` correctly handle deeper-than-typical
+/// trees (the prior U20 tests topped out at 3 levels).
+///
+/// Math: outer Padding(10) → mid Padding(5) → inner Padding(2) →
+/// ColoredBox(20×20). Parent constraints (0..200) × (0..200) — loose.
+/// - ColoredBox: clamps 20×20 to its constraints → 20×20.
+/// - inner Padding: wraps 20×20 + (2+2) = 24×24.
+/// - mid Padding: wraps 24×24 + (5+5) = 34×34.
+/// - outer Padding: wraps 34×34 + (10+10) = 54×54.
+#[test]
+fn u20_1_four_level_padding_chain() {
+    let mut pipeline = fresh_layout_pipeline();
+
+    let outer = pipeline
+        .render_tree_mut()
+        .insert_box(Box::new(RenderPadding::all(10.0)));
+    let mid = pipeline
+        .render_tree_mut()
+        .insert_box_child(outer, Box::new(RenderPadding::all(5.0)))
+        .expect("mid insert must succeed");
+    let inner = pipeline
+        .render_tree_mut()
+        .insert_box_child(mid, Box::new(RenderPadding::all(2.0)))
+        .expect("inner insert must succeed");
+    let leaf = pipeline
+        .render_tree_mut()
+        .insert_box_child(inner, Box::new(RenderColoredBox::green(20.0, 20.0)))
+        .expect("leaf insert must succeed");
+
+    let constraints = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0));
+    let size = pipeline
+        .layout_dirty_root(outer, constraints)
+        .expect("4-level layout must succeed under pre-acquired-subtree walk");
+
+    assert_eq!(
+        size,
+        Size::new(px(54.0), px(54.0)),
+        "Padding(10) → Padding(5) → Padding(2) → ColoredBox(20×20) must \
+         compose to (20+4+10+20=54) × (54) — verifies recursive \
+         layout_subtree_borrowed scales to deeper trees than 3 levels",
+    );
+
+    // Every node — INCLUDING the leaf — must be marked clean
+    // post-layout (no descendant errors). PR #145 review fix
+    // (Copilot 3294267600): prior version excluded `_leaf` from the
+    // loop while the message claimed "every node".
+    for id in [outer, mid, inner, leaf] {
+        let node = pipeline
+            .render_tree()
+            .get(id)
+            .expect("node must still be in tree");
+        assert!(
+            !node.needs_layout(),
+            "depth-4 chain: every node (including leaf) must be clean post-layout",
+        );
+    }
 }
 
 /// `RenderViewAdapter` carries a manual (non-blanket)
