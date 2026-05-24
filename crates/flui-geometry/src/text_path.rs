@@ -16,7 +16,7 @@
 //!
 //! ## Arc Text
 //! ```rust,ignore
-//! use flui_types::geometry::text_path::*;
+//! use flui_geometry::text_path::*;
 //!
 //! let text = "CIRCULAR TEXT";
 //! for (i, ch) in text.chars().enumerate() {

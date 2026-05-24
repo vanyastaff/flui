@@ -23,7 +23,7 @@ use super::{
 /// # Examples
 ///
 /// ```
-/// use flui_types::geometry::{Pixels, Size, px};
+/// use flui_geometry::{Pixels, Size, px};
 ///
 /// let ui_size = Size::<Pixels>::new(px(800.0), px(600.0));
 /// assert_eq!(ui_size.area(), 480_000.0);
@@ -89,7 +89,7 @@ impl<T: Unit> Size<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Pixels, Size, px};
+    /// use flui_geometry::{Pixels, Size, px};
     ///
     /// let s = Size::<Pixels>::square(px(10.0));
     /// assert_eq!(s.width, px(10.0));
@@ -111,7 +111,7 @@ impl<T: NumericUnit> Size<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Pixels, Size, px};
+    /// use flui_geometry::{Pixels, Size, px};
     ///
     /// let s1 = Size::<Pixels>::new(px(100.0), px(50.0));
     /// let s2 = Size::<Pixels>::new(px(80.0), px(60.0));
@@ -132,7 +132,7 @@ impl<T: NumericUnit> Size<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Pixels, Size, px};
+    /// use flui_geometry::{Pixels, Size, px};
     ///
     /// let s1 = Size::<Pixels>::new(px(100.0), px(50.0));
     /// let s2 = Size::<Pixels>::new(px(80.0), px(60.0));
@@ -158,7 +158,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Pixels, Size, px};
+    /// use flui_geometry::{Pixels, Size, px};
     ///
     /// let s1 = Size::<Pixels>::new(px(0.0), px(10.0));
     /// assert!(s1.is_empty());
@@ -180,7 +180,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Pixels, Size, px};
+    /// use flui_geometry::{Pixels, Size, px};
     ///
     /// let s = Size::<Pixels>::new(px(10.0), px(20.0));
     /// assert_eq!(s.area(), 200.0);
@@ -200,7 +200,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Pixels, Size, px};
+    /// use flui_geometry::{Pixels, Size, px};
     ///
     /// let s = Size::<Pixels>::new(px(16.0), px(9.0));
     /// assert!((s.aspect_ratio() - 1.777).abs() < 0.01);
@@ -218,7 +218,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Pixels, Point, Size, px};
+    /// use flui_geometry::{Pixels, Point, Size, px};
     ///
     /// let s = Size::<Pixels>::new(px(100.0), px(200.0));
     /// let c = s.center();
@@ -245,7 +245,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Pixels, Point, Size, px};
+    /// use flui_geometry::{Pixels, Point, Size, px};
     ///
     /// let s = Size::<Pixels>::new(px(10.0), px(20.0));
     /// assert!(s.contains(Point::<Pixels>::new(px(5.0), px(10.0))));
@@ -273,7 +273,7 @@ impl<T: Unit> Size<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Size, px};
+    /// use flui_geometry::{Pixels, Size, px};
     ///
     /// let size_px = Size::new(px(100.0), px(200.0));
     /// let size_f32: Size<Pixels> = size_px.cast();
@@ -301,7 +301,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Size, px};
+    /// use flui_geometry::{Size, px};
     ///
     /// let size = Size::new(px(100.0), px(200.0));
     /// let f32_size = size.to_f32();
@@ -321,7 +321,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Pixels, Size, px};
+    /// use flui_geometry::{Pixels, Size, px};
     ///
     /// let s = Size::<Pixels>::new(px(100.0), px(200.0));
     /// assert_eq!(s.to_array(), [100.0, 200.0]);
@@ -337,7 +337,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Pixels, Size, Vec2, px};
+    /// use flui_geometry::{Pixels, Size, Vec2, px};
     ///
     /// let s = Size::<Pixels>::new(px(100.0), px(200.0));
     /// let v = s.to_vec2();
@@ -623,7 +623,7 @@ impl Size<Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{DevicePixels, Pixels, ScaleFactor, Size, device_px, px};
+    /// use flui_geometry::{DevicePixels, Pixels, ScaleFactor, Size, device_px, px};
     ///
     /// let logical = Size::new(px(100.0), px(200.0));
     /// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
@@ -651,9 +651,9 @@ impl Size<super::units::DevicePixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{DevicePixels, Pixels, ScaleFactor, Size, device_px, px};
+    /// use flui_geometry::{DevicePixels, Pixels, ScaleFactor, Size, device_px, px};
     ///
-    /// let device = Size::new(device_px(200.0), device_px(400.0));
+    /// let device = Size::new(device_px(200), device_px(400));
     /// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
     /// let logical = device.unscale(scale);
     /// assert_eq!(logical.width, px(100.0));
@@ -1002,7 +1002,7 @@ impl Size<super::units::Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Size, px};
+    /// use flui_geometry::{Size, px};
     ///
     /// let size = Size::new(px(100.0), px(200.0));
     /// let scaled = size.scale(2.0); // 2x Retina display
@@ -1027,7 +1027,7 @@ impl Size<super::units::ScaledPixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Size, scaled_px};
+    /// use flui_geometry::{Size, scaled_px};
     ///
     /// let size = Size::new(scaled_px(199.7), scaled_px(299.3));
     /// let device = size.to_device_pixels();

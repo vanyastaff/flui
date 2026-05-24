@@ -8,7 +8,7 @@
 //! of coordinate systems:
 //!
 //! ```ignore
-//! use flui_types::geometry::{Circle, Point, Pixels, px};
+//! use flui_geometry::{Circle, Point, Pixels, px};
 //!
 //! let ui_circle = Circle::<Pixels>::new(
 //!     Point::new(px(50.0), px(50.0)),

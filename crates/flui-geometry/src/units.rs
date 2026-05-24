@@ -20,7 +20,7 @@
 //! # Examples
 //!
 //! ```rust
-//! use flui_types::geometry::{DevicePixels, Pixels, ScaledPixels, device_px, px};
+//! use flui_geometry::{DevicePixels, Pixels, ScaledPixels, device_px, px};
 //!
 //! // Type-safe logical pixels
 //! let width = px(100.0);
@@ -1662,7 +1662,7 @@ impl std::str::FromStr for Pixels {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::Pixels;
+    /// use flui_geometry::Pixels;
     ///
     /// let p: Pixels = "100".parse().unwrap();
     /// assert_eq!(p.get(), 100.0);
@@ -1699,7 +1699,7 @@ impl std::str::FromStr for DevicePixels {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::DevicePixels;
+    /// use flui_geometry::DevicePixels;
     ///
     /// let dp: DevicePixels = "1920".parse().unwrap();
     /// assert_eq!(dp.get(), 1920);
@@ -1734,7 +1734,7 @@ impl std::str::FromStr for ScaledPixels {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::ScaledPixels;
+    /// use flui_geometry::ScaledPixels;
     ///
     /// let sp: ScaledPixels = "200".parse().unwrap();
     /// assert_eq!(sp.get(), 200.0);
@@ -2068,7 +2068,7 @@ impl std::str::FromStr for Radians {
     /// ```
     /// use std::f32::consts::PI;
     ///
-    /// use flui_types::geometry::Radians;
+    /// use flui_geometry::Radians;
     ///
     /// let r: Radians = "1.57".parse().unwrap();
     /// assert!((r.get() - 1.57).abs() < 0.01);
@@ -2120,14 +2120,14 @@ impl std::str::FromStr for Radians {
 /// # Examples
 ///
 /// ```
-/// use flui_types::geometry::{DevicePixels, Pixels, ScaleFactor, px};
+/// use flui_geometry::{DevicePixels, Pixels, ScaleFactor, px};
 ///
 /// // 2x scale factor (e.g., Retina display)
 /// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
 ///
 /// let logical = px(100.0);
 /// let physical = scale.transform_scalar(logical);
-/// assert_eq!(physical.get(), 200);
+/// assert_eq!(physical.get(), 200.0);
 /// ```
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct ScaleFactor<Src: Unit, Dst: Unit> {

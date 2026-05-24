@@ -34,7 +34,7 @@
 //! # Type Safety Example
 //!
 //! ```rust,ignore
-//! use flui_types::geometry::prelude::*;
+//! use flui_geometry::prelude::*;
 //!
 //! // Different coordinate systems are distinct types
 //! let ui_pos = Point::<Pixels>::new(px(100.0), px(200.0));
@@ -52,7 +52,7 @@
 //! Multiple conversion strategies for wgpu integration:
 //!
 //! ```rust,ignore
-//! use flui_types::geometry::prelude::*;
+//! use flui_geometry::prelude::*;
 //!
 //! let pos = Point::<Pixels>::new(px(100.0), px(200.0));
 //!
@@ -74,7 +74,7 @@
 //! Three constructor levels for different trust contexts:
 //!
 //! ```rust,ignore
-//! use flui_types::geometry::prelude::*;
+//! use flui_geometry::prelude::*;
 //!
 //! // Fast (no validation) - for hot loops
 //! let p = Point::new(x, y);
@@ -148,7 +148,7 @@ pub mod vector;
 /// # Usage
 ///
 /// ```rust,ignore
-/// use flui_types::geometry::prelude::*;
+/// use flui_geometry::prelude::*;
 ///
 /// let pos = Point::<Pixels>::new(px(100.0), px(200.0));
 /// let size = Size::<Pixels>::new(px(50.0), px(30.0));
@@ -188,7 +188,7 @@ pub mod prelude {
 // SHAPE TYPES
 // =============================================================================
 pub use bezier::{CubicBez, QuadBez};
-pub use bounds::Bounds;
+pub use bounds::{Bounds, bounds};
 pub use circle::Circle;
 // =============================================================================
 // STRUCTURAL TYPES
@@ -245,6 +245,7 @@ pub use traits::{
     Along, ApproxEq, Axis, Double, GeometryOps, Half, IsZero, NumericUnit, Sign, Unit,
 };
 pub use transform::Transform;
+pub use transform2d::Transform2D;
 // =============================================================================
 // UNIT TYPES
 // =============================================================================

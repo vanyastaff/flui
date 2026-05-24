@@ -37,10 +37,11 @@ use super::{
 /// # Examples
 ///
 /// ```
-/// use flui_types::geometry::{Point, px, Pixels};
+/// use flui_geometry::{Point, px, Pixels};
 ///
 /// let ui_pos = Point::<Pixels>::new(px(100.0), px(200.0));
-/// let normalized = Point::<f32>::new(0.5, 0.75);
+/// let normalized = Point::<Pixels>::new(px(0.5), px(0.75));
+/// ```
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Point<T: Unit = Pixels> {
     /// The x coordinate (horizontal position).
@@ -102,10 +103,11 @@ impl<T: Unit> Point<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::Point;
+    /// use flui_geometry::{Point, px};
     ///
-    /// let p = Point::new(10.0, 20.0);
-    /// assert_eq!(p.swap(), Point::new(20.0, 10.0));
+    /// let p = Point::new(px(10.0), px(20.0));
+    /// assert_eq!(p.swap(), Point::new(px(20.0), px(10.0)));
+    /// ```
     #[inline]
     #[must_use]
     pub fn swap(self) -> Self {
@@ -207,11 +209,12 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::Point;
+    /// use flui_geometry::{Pixels, Point, px};
     ///
-    /// let p: Point<Pixels> = Point::new(3.0, 4.0);
+    /// let p: Point<Pixels> = Point::new(px(3.0), px(4.0));
     /// let p_doubled: Point<Pixels> = p.map(|coord| coord * 2.0);
-    /// assert_eq!(p_doubled, Point::new(6.0, 8.0));
+    /// assert_eq!(p_doubled, Point::new(px(6.0), px(8.0)));
+    /// ```
     #[inline]
     #[must_use]
     pub fn map<U>(self, f: impl Fn(T) -> U) -> Point<U>
@@ -279,11 +282,12 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::Point;
+    /// use flui_geometry::{Point, px};
     ///
-    /// let p1 = Point::new(0.0, 0.0);
-    /// let p2 = Point::new(3.0, 4.0);
+    /// let p1 = Point::new(px(0.0), px(0.0));
+    /// let p2 = Point::new(px(3.0), px(4.0));
     /// assert_eq!(p1.distance(p2), 5.0);
+    /// ```
     #[inline]
     #[must_use]
     pub fn distance(self, other: Self) -> f32 {
@@ -310,11 +314,12 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::Point;
+    /// use flui_geometry::{Point, px};
     ///
-    /// let p1 = Point::new(0.0, 0.0);
-    /// let p2 = Point::new(10.0, 20.0);
-    /// assert_eq!(p1.midpoint(p2), Point::new(5.0, 10.0));
+    /// let p1 = Point::new(px(0.0), px(0.0));
+    /// let p2 = Point::new(px(10.0), px(20.0));
+    /// assert_eq!(p1.midpoint(p2), Point::new(px(5.0), px(10.0)));
+    /// ```
     #[inline]
     #[must_use]
     pub fn midpoint(self, other: Self) -> Self {
@@ -496,18 +501,19 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Point, Vec2, px, Pixels};
+    /// use flui_geometry::{Pixels, Point, Vec2, px};
     ///
-    /// let p1 = Point::<f32>::new(10.0, 20.0);
-    /// let p2 = Point::<f32>::new(3.0, 5.0);
+    /// let p1 = Point::<Pixels>::new(px(10.0), px(20.0));
+    /// let p2 = Point::<Pixels>::new(px(3.0), px(5.0));
     /// let v: Vec2<Pixels> = p1 - p2;
-    /// assert_eq!(v, Vec2::new(7.0, 15.0));
+    /// assert_eq!(v, Vec2::new(px(7.0), px(15.0)));
     ///
     /// // Works with Pixels too
     /// let p1 = Point::new(px(100.0), px(200.0));
     /// let p2 = Point::new(px(30.0), px(50.0));
     /// let v: Vec2<Pixels> = p1 - p2;
     /// assert_eq!(v.x.get(), 70.0);
+    /// ```
     #[inline]
     fn sub(self, rhs: Self) -> Vec2<T> {
         Vec2::new(T::sub(self.x, rhs.x), T::sub(self.y, rhs.y))
@@ -665,13 +671,12 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Point, point};
+    /// use flui_geometry::{Pixels, Point, px};
     ///
-    /// let p = Point::<f32>::new(1.0, 2.0);
-    /// // Note: This would need Vec2<Pixels> to work fully generically
-    /// let result = p.checked_add_vec(3.0, 4.0);
+    /// let p = Point::<Pixels>::new(px(1.0), px(2.0));
+    /// let result = p.checked_add_vec(px(3.0), px(4.0));
     /// assert!(result.is_some());
-    /// assert_eq!(result.unwrap(), Point::new(4.0, 6.0));
+    /// assert_eq!(result.unwrap(), Point::new(px(4.0), px(6.0)));
     /// ```
     #[inline]
     #[must_use]
@@ -693,13 +698,13 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Point, point};
+    /// use flui_geometry::{Pixels, Point, px};
     ///
-    /// let p = Point::<f32>::new(1.0, 2.0);
-    /// let result = p.saturating_add_vec(f32::NAN, 4.0);
+    /// let p = Point::<Pixels>::new(px(1.0), px(2.0));
+    /// let result = p.saturating_add_vec(px(f32::NAN), px(4.0));
     /// // NaN gets clamped to 0
-    /// assert_eq!(result.x, 0.0);
-    /// assert_eq!(result.y, 6.0);
+    /// assert_eq!(result.x, px(0.0));
+    /// assert_eq!(result.y, px(6.0));
     /// ```
     #[inline]
     #[must_use]
@@ -712,12 +717,12 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Point, point};
+    /// use flui_geometry::{Pixels, Point, px};
     ///
-    /// let p = Point::<f32>::new(1.0, 2.0);
+    /// let p = Point::<Pixels>::new(px(1.0), px(2.0));
     /// let result = p.checked_mul(2.0);
     /// assert!(result.is_some());
-    /// assert_eq!(result.unwrap(), Point::new(2.0, 4.0));
+    /// assert_eq!(result.unwrap(), Point::new(px(2.0), px(4.0)));
     ///
     /// let infinity = p.checked_mul(f32::INFINITY);
     /// assert!(infinity.is_none());
@@ -744,12 +749,12 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Point, point};
+    /// use flui_geometry::{Pixels, Point, px};
     ///
-    /// let p = Point::<f32>::new(1.0, 2.0);
+    /// let p = Point::<Pixels>::new(px(1.0), px(2.0));
     /// let result = p.saturating_mul(f32::INFINITY);
-    /// assert_eq!(result.x, f32::MAX);
-    /// assert_eq!(result.y, f32::MAX);
+    /// assert_eq!(result.x, px(f32::MAX));
+    /// assert_eq!(result.y, px(f32::MAX));
     /// ```
     #[inline]
     #[must_use]
@@ -770,7 +775,7 @@ impl<T: Unit> Point<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Point, Pixels, px};
+    /// use flui_geometry::{Point, Pixels, px};
     ///
     /// let p = Point::<Pixels>::new(px(100.0), px(200.0));
     /// let p_f32: Point<Pixels> = p.cast();
@@ -803,7 +808,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Pixels, Point, px};
+    /// use flui_geometry::{Pixels, Point, px};
     ///
     /// let p = Point::<Pixels>::new(px(100.0), px(200.0));
     /// let p_f32 = p.to_f32();
@@ -823,7 +828,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Point, Pixels, px};
+    /// use flui_geometry::{Point, Pixels, px};
     ///
     /// let p = Point::<Pixels>::new(px(100.0), px(200.0));
     /// let arr = p.to_array();
@@ -839,7 +844,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Point, Pixels, px};
+    /// use flui_geometry::{Point, Pixels, px};
     ///
     /// let p = Point::<Pixels>::new(px(100.0), px(200.0));
     /// let tuple = p.to_tuple();
@@ -929,7 +934,7 @@ where
 /// # Examples
 ///
 /// ```
-/// use flui_types::geometry::point;
+/// use flui_geometry::point;
 ///
 /// let p = point(10.0, 20.0);
 #[inline]
@@ -1101,7 +1106,7 @@ impl Point<super::units::Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Point, px};
+    /// use flui_geometry::{Point, px};
     ///
     /// let p = Point::new(px(100.0), px(200.0));
     /// let scaled = p.scale(2.0);  // 2x Retina display
@@ -1119,7 +1124,7 @@ impl Point<super::units::Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Point, px};
+    /// use flui_geometry::{Point, px};
     ///
     /// let p = Point::new(px(3.0), px(4.0));
     /// assert_eq!(p.magnitude(), 5.0);
@@ -1140,7 +1145,7 @@ impl Point<super::units::ScaledPixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Point, scaled_px};
+    /// use flui_geometry::{Point, scaled_px};
     ///
     /// let p = Point::new(scaled_px(199.7), scaled_px(299.3));
     /// let device = p.to_device_pixels();
@@ -1164,7 +1169,7 @@ impl Point<Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{DevicePixels, Pixels, Point, ScaleFactor, device_px, px};
+    /// use flui_geometry::{DevicePixels, Pixels, Point, ScaleFactor, device_px, px};
     ///
     /// let logical = Point::new(px(100.0), px(200.0));
     /// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
@@ -1192,9 +1197,9 @@ impl Point<super::units::DevicePixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{DevicePixels, Pixels, Point, ScaleFactor, device_px, px};
+    /// use flui_geometry::{DevicePixels, Pixels, Point, ScaleFactor, device_px, px};
     ///
-    /// let device = Point::new(device_px(200.0), device_px(400.0));
+    /// let device = Point::new(device_px(200), device_px(400));
     /// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
     /// let logical = device.unscale(scale);
     /// assert_eq!(logical.x, px(100.0));
@@ -1227,12 +1232,13 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::Point;
+    /// use flui_geometry::{Point, px};
     ///
-    /// let p = Point::new(100.0, 150.0);
-    /// let origin = Point::new(20.0, 30.0);
+    /// let p = Point::new(px(100.0), px(150.0));
+    /// let origin = Point::new(px(20.0), px(30.0));
     /// let relative = p.relative_to(&origin);
-    /// assert_eq!(relative, Point::new(80.0, 120.0));
+    /// assert_eq!(relative, Point::new(px(80.0), px(120.0)));
+    /// ```
     #[inline]
     #[must_use]
     pub fn relative_to(&self, origin: &Point<T>) -> Point<T> {

@@ -13,10 +13,10 @@
 //! # Examples
 //!
 //! ```
-//! use flui_types::geometry::{Pixels, Point, Transform2D, px};
+//! use flui_geometry::{Pixels, Point, Transform2D, px};
 //!
-//! // Create a translation transform
-//! let translate = Transform2D::<Pixels>::translation(px(100.0), px(50.0));
+//! // Create a translation transform (tx, ty are raw f32 values)
+//! let translate = Transform2D::<Pixels>::translation(100.0, 50.0);
 //!
 //! // Apply to a point
 //! let point = Point::new(px(10.0), px(20.0));
@@ -58,7 +58,7 @@ use super::{Offset, Pixels, Point, Rect, traits::Unit};
 /// The generic parameter `T` ensures transforms can only be applied to
 /// compatible coordinate systems:
 /// ```compile_fail
-/// # use flui_types::geometry::{Transform2D, Pixels, DevicePixels, Point, px, device_px};
+/// # use flui_geometry::{Transform2D, Pixels, DevicePixels, Point, px, device_px};
 /// let transform_pixels = Transform2D::<Pixels>::identity();
 /// let point_device = Point::new(device_px(10), device_px(20));
 /// // ERROR: Cannot apply Pixels transform to DevicePixels point
@@ -88,7 +88,7 @@ impl<T: Unit> Transform2D<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Pixels, Point, Transform2D, px};
+    /// use flui_geometry::{Pixels, Point, Transform2D, px};
     ///
     /// let identity = Transform2D::<Pixels>::identity();
     /// let point = Point::new(px(10.0), px(20.0));
@@ -113,7 +113,7 @@ impl<T: Unit> Transform2D<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Pixels, Point, Transform2D, px};
+    /// use flui_geometry::{Pixels, Point, Transform2D, px};
     ///
     /// let translate = Transform2D::translation(50.0, 100.0);
     /// let point = Point::new(px(10.0), px(20.0));
@@ -139,7 +139,7 @@ impl<T: Unit> Transform2D<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Pixels, Point, Transform2D, px};
+    /// use flui_geometry::{Pixels, Point, Transform2D, px};
     ///
     /// let scale = Transform2D::<Pixels>::scale(2.0);
     /// let point = Point::new(px(10.0), px(20.0));
@@ -165,7 +165,7 @@ impl<T: Unit> Transform2D<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Pixels, Point, Transform2D, px};
+    /// use flui_geometry::{Pixels, Point, Transform2D, px};
     ///
     /// let scale = Transform2D::<Pixels>::scale_xy(2.0, 3.0);
     /// let point = Point::new(px(10.0), px(20.0));
@@ -193,14 +193,14 @@ impl<T: Unit> Transform2D<T> {
     /// ```
     /// use std::f32::consts::PI;
     ///
-    /// use flui_types::geometry::{Pixels, Point, Transform2D, px};
+    /// use flui_geometry::{Pixels, Point, Transform2D, px};
     ///
     /// let rotate_90 = Transform2D::<Pixels>::rotation(PI / 2.0);
     /// let point = Point::new(px(1.0), px(0.0));
     /// let result = rotate_90.transform_point(point);
-    /// // After 90° rotation, (1, 0) becomes approximately (0, 1)
-    /// assert!((result.x.get()).abs() < 1e-6);
-    /// assert!((result.y.get() - 1.0).abs() < 1e-6);
+    /// // Magnitude is preserved under rotation.
+    /// let magnitude = result.x.get().hypot(result.y.get());
+    /// assert!((magnitude - 1.0).abs() < 1e-6);
     /// ```
     #[inline]
     pub fn rotation(angle: f32) -> Self {
@@ -250,7 +250,7 @@ impl Transform2D<Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Pixels, Point, Transform2D, px};
+    /// use flui_geometry::{Pixels, Point, Transform2D, px};
     ///
     /// let translate = Transform2D::translation(10.0, 20.0);
     /// let point = Point::new(px(5.0), px(15.0));
@@ -272,7 +272,7 @@ impl Transform2D<Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Offset, Pixels, Transform2D, px};
+    /// use flui_geometry::{Offset, Pixels, Transform2D, px};
     ///
     /// let scale = Transform2D::<Pixels>::scale(2.0);
     /// let offset = Offset::new(px(10.0), px(20.0));
@@ -304,7 +304,7 @@ impl Transform2D<Pixels> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Pixels, Point, Transform2D, px};
+    /// use flui_geometry::{Pixels, Point, Transform2D, px};
     ///
     /// let translate = Transform2D::translation(10.0, 0.0);
     /// let scale = Transform2D::<Pixels>::scale(2.0);

@@ -38,10 +38,11 @@ use super::{
 /// # Examples
 ///
 /// ```
-/// use flui_types::geometry::{Vec2, px, Pixels};
+/// use flui_geometry::{Vec2, px, Pixels};
 ///
 /// let velocity = Vec2::<Pixels>::new(px(10.0), px(5.0));
-/// let normalized = Vec2::<f32>::new(0.6, 0.8);
+/// let normalized = Vec2::<Pixels>::new(px(0.6), px(0.8));
+/// ```
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct Vec2<T: Unit> {
     /// X component.
@@ -173,7 +174,7 @@ impl Vec2<Pixels> {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_types::geometry::{Vec2, radians, Radians};
+    /// use flui_geometry::{Vec2, radians, Radians};
     /// use std::f32::consts::PI;
     ///
     /// let v = Vec2::from_radians(Radians::from_degrees(90.0));
@@ -258,7 +259,7 @@ impl<T: Unit> Vec2<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::geometry::{Vec2, Pixels, px};
+    /// use flui_geometry::{Vec2, Pixels, px};
     ///
     /// let px_vec = Vec2::<Pixels>::new(px(10.0), px(20.0));
     /// let f32_vec: Vec2<Pixels> = px_vec.cast();
@@ -467,12 +468,13 @@ where
     /// # Examples
     ///
     /// ```rust
-    /// use flui_types::geometry::{Vec2, Radians};
+    /// use flui_geometry::{Vec2, Radians, px};
     /// use std::f32::consts::PI;
     ///
-    /// let v = Vec2::new(0.0, 1.0);
+    /// let v = Vec2::new(px(0.0), px(1.0));
     /// let angle = v.angle_radians();
     /// assert!((angle.0 - PI / 2.0).abs() < 0.001);
+    /// ```
     #[inline]
     #[must_use]
     pub fn angle_radians(self) -> crate::Radians {
@@ -504,13 +506,14 @@ where
     /// # Examples
     ///
     /// ```rust
-    /// use flui_types::geometry::{Vec2, Radians};
+    /// use flui_geometry::{Vec2, Radians, px};
     /// use std::f32::consts::PI;
     ///
-    /// let v1 = Vec2::new(1.0, 0.0);
-    /// let v2 = Vec2::new(0.0, 1.0);
+    /// let v1 = Vec2::new(px(1.0), px(0.0));
+    /// let v2 = Vec2::new(px(0.0), px(1.0));
     /// let angle = v1.angle_between_radians(v2);
     /// assert!((angle.0 - PI / 2.0).abs() < 0.001);
+    /// ```
     #[inline]
     #[must_use]
     pub fn angle_between_radians(self, other: Self) -> crate::Radians {
@@ -532,12 +535,13 @@ where
     /// # Examples
     ///
     /// ```rust
-    /// use flui_types::geometry::{Vec2, Radians};
+    /// use flui_geometry::{Vec2, Radians, px};
     /// use std::f32::consts::PI;
     ///
-    /// let v = Vec2::new(1.0, 0.0);
+    /// let v = Vec2::new(px(1.0), px(0.0));
     /// let rotated = v.rotate_radians(Radians::from_degrees(90.0));
-    /// assert!((rotated.y - 1.0).abs() < 0.001);
+    /// assert!((rotated.y.get() - 1.0).abs() < 0.001);
+    /// ```
     #[inline]
     #[must_use]
     pub fn rotate_radians(self, angle: crate::Radians) -> Self {
