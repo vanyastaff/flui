@@ -266,7 +266,7 @@ impl<'ctx, A: Arity, P: ParentData> LayoutContextApi<'ctx, SliverLayout, A, P>
 ///
 /// **D-block scope (PR-A1b U19, memo D5):** the sliver bridge ships as a
 /// minimal trait surface so the
-/// [`crate::traits::render_sliver`] blanket impl compiles with the new
+/// [`crate::traits::RenderSliver`] blanket impl compiles with the new
 /// erased-context signature, but the full bridge (children walk +
 /// parent-data downcast + intrinsic dimensions) is deferred to Core.2
 /// alongside the rest of the sliver layout work. There are no sliver
