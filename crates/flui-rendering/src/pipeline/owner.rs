@@ -754,11 +754,13 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 
     /// Adds a node to the paint dirty list.
     ///
-    /// **D-block PR-A1 U22 (memo D7):** same flag-check dedup +
+    /// **D-block PR-A1 U22 (memo D7):** same queue-membership dedup
+    /// (O(N) `iter().any()` scan; flag-based dedup is unsuitable
+    /// because `RenderState::new()` defaults `NEEDS_PAINT = true`) and
     /// mid-phase routing discipline as
     /// [`Self::add_node_needing_layout`]; see that method's doc for
     /// the dispatch rules. Mid-phase route is gated by
-    /// [`Self::debug_doing_paint`].
+    /// `debug_doing_paint`.
     ///
     /// # Arguments
     ///
@@ -778,12 +780,12 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 
     /// Adds a node to the compositing bits dirty list.
     ///
-    /// **D-block PR-A1 U22 (memo D7):** same flag-check dedup +
-    /// mid-phase routing discipline as [`Self::add_node_needing_layout`].
-    /// Mid-phase route is gated by [`Self::debug_doing_layout`] (the
-    /// compositing phase shares the layout-phase debug flag because
-    /// compositing-bits update runs as part of the layout pipeline
-    /// per the typestate transitions).
+    /// **D-block PR-A1 U22 (memo D7):** same queue-membership dedup
+    /// and mid-phase routing discipline as
+    /// [`Self::add_node_needing_layout`]. Mid-phase route is gated by
+    /// `debug_doing_layout` (the compositing phase shares the
+    /// layout-phase debug flag because compositing-bits update runs
+    /// as part of the layout pipeline per the typestate transitions).
     ///
     /// # Arguments
     ///
@@ -803,9 +805,10 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 
     /// Adds a node to the semantics dirty list.
     ///
-    /// **D-block PR-A1 U22 (memo D7):** same flag-check dedup +
-    /// mid-phase routing discipline as [`Self::add_node_needing_layout`].
-    /// Mid-phase route is gated by [`Self::debug_doing_semantics`].
+    /// **D-block PR-A1 U22 (memo D7):** same queue-membership dedup
+    /// and mid-phase routing discipline as
+    /// [`Self::add_node_needing_layout`]. Mid-phase route is gated by
+    /// `debug_doing_semantics`.
     ///
     /// # Arguments
     ///
@@ -2707,6 +2710,85 @@ mod tests {
         assert!(
             name.contains("PanickingPaintBox"),
             "debug_name() should resolve to the concrete type via vtable; got `{name}`"
+        );
+    }
+
+    // ========================================================================
+    // D-block PR-A1 U22 P1 regression (Codex 3294365736 / Copilot 3294367387)
+    // ========================================================================
+    //
+    // Verifies the mid-phase routing + drain integration: when
+    // debug_doing_layout is true, add_node_needing_layout routes into
+    // mid_layout_marks; the wired drain at run_layout iteration end
+    // moves those entries back into dirty so the next iteration picks
+    // them up. Lib-scoped because debug_doing_layout is a private field.
+
+    /// Direct test of the U22 mid-phase routing → drain integration.
+    /// Flips debug_doing_layout=true, pushes via the public
+    /// add_node_needing_layout API, verifies the entry went to
+    /// mid_layout_marks (NOT dirty); then calls drain_mid_layout_marks
+    /// and verifies the entry is now in dirty.
+    #[test]
+    fn test_mid_phase_layout_marks_route_to_side_queue_then_drain_back() {
+        let mut owner = PipelineOwner::new();
+        let id = owner.insert(Box::new(PanickingPaintBox::new())
+            as Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>);
+        owner.clear_all_dirty_nodes();
+
+        // Phase 1: regular add (debug_doing_layout=false) goes to dirty.
+        owner.add_node_needing_layout(id, 0);
+        assert_eq!(owner.nodes_needing_layout().len(), 1);
+        assert!(!owner.has_mid_layout_marks());
+        owner.clear_all_dirty_nodes();
+
+        // Phase 2: simulate mid-phase by flipping the private debug
+        // flag. Subsequent add_node_needing_layout routes into
+        // mid_layout_marks instead of dirty.
+        owner.debug_doing_layout = true;
+        owner.add_node_needing_layout(id, 0);
+        owner.debug_doing_layout = false;
+
+        assert_eq!(
+            owner.nodes_needing_layout().len(),
+            0,
+            "mid-phase add must NOT land in dirty.needs_layout",
+        );
+        assert!(
+            owner.has_mid_layout_marks(),
+            "mid-phase add must land in mid_layout_marks",
+        );
+
+        // Phase 3: drain moves the side-queued entry back to dirty.
+        let drained = owner.drain_mid_layout_marks();
+        assert_eq!(drained, 1, "drain must report 1 entry moved");
+        assert_eq!(
+            owner.nodes_needing_layout().len(),
+            1,
+            "drained mid-mark must land in dirty.needs_layout",
+        );
+        assert!(!owner.has_mid_layout_marks(), "mid queue must be empty post-drain");
+    }
+
+    /// Same shape for the dedup invariant under mid-phase routing:
+    /// repeated mid-phase adds collapse to one entry in
+    /// mid_layout_marks.
+    #[test]
+    fn test_mid_phase_routing_dedups_repeated_marks() {
+        let mut owner = PipelineOwner::new();
+        let id = owner.insert(Box::new(PanickingPaintBox::new())
+            as Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>);
+        owner.clear_all_dirty_nodes();
+
+        owner.debug_doing_layout = true;
+        owner.add_node_needing_layout(id, 0);
+        owner.add_node_needing_layout(id, 0);
+        owner.add_node_needing_layout(id, 0);
+        owner.debug_doing_layout = false;
+
+        let drained = owner.drain_mid_layout_marks();
+        assert_eq!(
+            drained, 1,
+            "3 repeated mid-phase marks must dedup to 1 entry; got {drained}",
         );
     }
 

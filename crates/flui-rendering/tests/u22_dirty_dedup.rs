@@ -127,29 +127,22 @@ fn u22_distinct_ids_remain_distinct_queue_entries() {
 // Mid-phase routing — debug_doing_layout=true routes to mid_layout_marks
 // ============================================================================
 
-/// Direct test for the mid-phase routing branch. The
-/// `debug_doing_layout` flag is private to PipelineOwner, but
-/// `run_layout` flips it true during iteration. We can't trigger that
-/// from a test without invoking a full layout phase, so this test
-/// uses the typestate transition `into_layout()` and exercises the
-/// drain helper directly.
+/// Drain-helper smoke (empty case). The `debug_doing_layout` flag
+/// that triggers mid-phase routing is private to PipelineOwner;
+/// integration tests can't flip it directly. The mid-phase routing
+/// integration with `run_layout` / `run_paint` / `run_semantics`
+/// (where the flag does get flipped by the phase loop) is covered
+/// by the wire-up commit's regression below
+/// (`u22_drained_mid_marks_become_dirty_entries`) and by the lib-
+/// scoped pipeline tests that exercise the private field directly.
 ///
-/// The contract: while inside a `<Layout>`-phase impl block, a call
-/// to `add_node_needing_layout` (e.g., from a `mark_needs_layout`
-/// fired by a `perform_layout` body) should route to
-/// `mid_layout_marks` so the outer `while !dirty.is_empty()` loop's
-/// snapshot semantics aren't violated. The drain helper then moves
-/// the side-queued entries back for the next iteration.
-///
-/// This test verifies the drain mechanic directly (the routing
-/// branch's full integration with `run_layout` lands in U23).
+/// This test verifies the empty-case drain shape: no mid marks ⇒
+/// `drain_mid_layout_marks()` returns 0 + leaves dirty unchanged.
 #[test]
-fn u22_drain_mid_layout_marks_moves_entries_back() {
+fn u22_drain_helper_returns_zero_when_mid_queue_empty() {
     let (mut owner, _id) = fresh_owner_with_one_node();
     owner.clear_all_dirty_nodes();
 
-    // Without the debug flag, add_node_needing_* goes into `dirty`,
-    // not `mid_layout_marks`. So the drain has nothing to move.
     assert!(!owner.has_mid_layout_marks());
     let drained = owner.drain_mid_layout_marks();
     assert_eq!(drained, 0, "empty mid-queue must drain 0");
