@@ -347,7 +347,7 @@ where
         &mut self,
         _ctx: &mut <SliverProtocol as crate::protocol::Protocol>::LayoutCtxErased<'_>,
     ) -> crate::protocol::ProtocolGeometry<SliverProtocol> {
-        // D-block PR-A1b U19 / memo D5 — Sliver bridge is stubbed.
+        // D-block PR-A1b U19 / memo D5 — Sliver bridge is unimplemented.
         //
         // The Box bridge in `render_box.rs` reconstructs a typed
         // `BoxLayoutCtx` from the erased trait object and calls the
@@ -359,11 +359,23 @@ where
         // "Out of scope. Sliver bridge — analogous shape, lands as part
         // of Core.2 sliver work").
         //
-        // The body keeps the pre-U19 placeholder semantic (return current
-        // geometry) so existing sliver state-reading flows continue to
-        // observe the stored geometry rather than seeing an uninitialised
-        // `Default::default()` value.
-        *RenderSliver::geometry(self)
+        // **Loud-fail rather than silent-return** (review fix #1): the
+        // pre-fix body returned `*RenderSliver::geometry(self)` — a
+        // silent no-op that papered over any accidental reach into the
+        // unbridged path. Production callers in D-block cannot reach
+        // this stub (no concrete `RenderSliver` impls exist in the
+        // workspace; the only sliver flow is the generic blanket impl
+        // here). The unimplemented! is caught by
+        // `RenderEntry::layout`'s `catch_unwind` and surfaces as
+        // `RenderError::Poisoned` with the offending render-object's
+        // debug name — making any accidental reach immediately visible
+        // rather than producing wrong-but-quiet layout results.
+        unimplemented!(
+            "Sliver bridge — RenderObject<SliverProtocol>::perform_layout_raw is \
+             Core.2 work and not reachable from D-block scope (memo D5). \
+             Offending RenderSliver: {}",
+            core::any::type_name::<T>()
+        )
     }
 
     fn paint(&self, _context: &mut CanvasContext, _offset: Offset) {
