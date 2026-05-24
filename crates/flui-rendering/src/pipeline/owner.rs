@@ -1378,7 +1378,15 @@ impl<'b, 'tree> LayoutCycleGuard<'b, 'tree> {
         borrows.check_thread();
         let mut set = borrows.currently_laying_out.lock();
         if !set.insert(id) {
-            tracing::error!(
+            // Debug-level: the layout-child callback in
+            // `layout_subtree_borrowed` already logs the propagated
+            // Err at tracing::error when it collapses descendant Err
+            // to Size::ZERO. Logging here at error too would produce
+            // 2 log lines per cycle event (PR #146 Copilot review
+            // comment 3294315141). The API-boundary error log is the
+            // user-facing one; this debug-level log retains the
+            // collision-point diagnostic for tracing.
+            tracing::debug!(
                 ?id,
                 "layout_subtree_borrowed: layout cycle detected — id is \
                      already in flight at a parent call level; returning \

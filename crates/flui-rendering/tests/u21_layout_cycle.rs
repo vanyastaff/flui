@@ -23,38 +23,33 @@ fn fresh_layout_pipeline() -> PipelineOwner<flui_rendering::pipeline::Layout> {
 }
 
 // ============================================================================
-// Cycle detection — cyclic tree returns LayoutCycle (not hang / UB)
+// Structural cycle on leaf-only path — guard does NOT trigger
 // ============================================================================
 
-/// Plan §U21 happy path: a tree containing a parent → child → parent
-/// cycle is detected by [`SubtreeBorrows::currently_laying_out`].
-/// The outer `layout_dirty_root` call recurses into the child via the
-/// layout-child callback; the child's recursion attempts to register
-/// the parent's id (already in flight) → `LayoutCycleGuard::enter`
-/// returns `Err(RenderError::LayoutCycle(parent_id))`.
+/// PR #146 Copilot review (3294315112, 3294315119) rename: prior name
+/// "u21_cyclic_tree_layout_returns_layout_cycle_via_callback" was
+/// misleading — this test does NOT surface LayoutCycle. The contract
+/// it verifies is: a structural cycle on a leaf-traversal path
+/// (RenderColoredBox child whose `children()` lists its parent) does
+/// NOT trigger the guard because the leaf widget's `perform_layout`
+/// never calls `ctx.layout_child` for the cyclic edge.
 ///
-/// The error propagates through the callback's Size-collapse path
-/// (parent sees Size::ZERO for child, descendant_error_flag set, parent
-/// stays NEEDS_LAYOUT for retry). Outer `layout_dirty_root` returns Ok
-/// for the parent (it completed perform_layout with a wrong-but-not-
-/// panicking child size) but the per-node LayoutCycle is surfaced via
-/// tracing::error.
+/// Cycle protection layers exercised:
+/// - `collect_subtree_ids` visited HashSet (PR #145) dedups the cycle
+///   edge → returned `Vec<RenderId>` is unique → `get_subtree_mut`
+///   precondition satisfied.
+/// - Padding's `perform_layout` calls `layout_child(0)` for ColoredBox.
+/// - ColoredBox is a leaf — never enters the layout-child callback
+///   chain for the cyclic edge → guard never fires.
 ///
-/// To verify the variant reaches a caller, we test the simpler shape:
-/// `layout_dirty_root` invoked on a cyclic root WITHOUT the synthetic
-/// cycle-injecting widget — `collect_subtree_ids` deduplicates the
-/// cycle edge so `get_subtree_mut` succeeds; the recursive walk hits
-/// the cyclic child via callback. The cycle guard catches the second-
-/// entry attempt + returns LayoutCycle.
+/// Result: layout succeeds. The cycle exists structurally but is
+/// invisible to the layout walk. (The `LayoutCycle`-surfacing
+/// contract is tested separately by
+/// `u21_callback_reentry_marks_parent_dirty_for_retry`.)
 #[test]
-fn u21_cyclic_tree_layout_returns_layout_cycle_via_callback() {
+fn u21_structural_cycle_on_leaf_path_does_not_trigger_guard() {
     let mut pipeline = fresh_layout_pipeline();
 
-    // Build Padding → ColoredBox(child), then add Padding back as a
-    // child of ColoredBox (cycle). PR-A1b3 review's
-    // collect_subtree_ids_terminates_on_cycle test established
-    // collect_subtree_ids dedups via visited HashSet; the U21 guard
-    // protects the layout-time re-entry attempt.
     let padding_id = pipeline
         .render_tree_mut()
         .insert_box(Box::new(RenderPadding::all(5.0)));
@@ -70,16 +65,6 @@ fn u21_cyclic_tree_layout_returns_layout_cycle_via_callback() {
         .add_child(padding_id);
 
     let constraints = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
-    // Outer call must NOT hang (collect_subtree_ids visited-set) and
-    // must NOT trigger UB second-borrow (U21 guard catches re-entry).
-    // ColoredBox::perform_layout is a leaf widget that doesn't call
-    // ctx.layout_child — the cyclic edge in its children list is
-    // present but never traversed by the user widget. So the actual
-    // failure mode here is: collect_subtree_ids dedups, get_subtree_mut
-    // succeeds, Padding lays out normally calling layout_child on its
-    // direct child (ColoredBox), ColoredBox is a leaf and never reaches
-    // the cycle-loop callback. Result: layout succeeds (cycle exists
-    // structurally but isn't exercised by the leaf-widget walk).
     let result = pipeline.layout_dirty_root(padding_id, constraints);
     assert!(
         result.is_ok(),
@@ -90,59 +75,31 @@ fn u21_cyclic_tree_layout_returns_layout_cycle_via_callback() {
 }
 
 // ============================================================================
-// Cycle detection — explicit re-entry via callback
+// Callback re-entry — guard fires, parent marked dirty for retry
 // ============================================================================
 
-/// Plan §U21 explicit cycle test: a user widget that calls
-/// `ctx.layout_child(0, c)` with an explicit ancestor's id triggers
-/// the cycle guard. Requires a custom RenderBox that captures the
-/// ancestor id and calls `ctx.layout_child` against it.
+/// PR #146 Copilot review (3294315124, 3294315130) rename + cleanup:
+/// prior name claimed the test "surfaces LayoutCycle" but it actually
+/// asserts `result.is_ok()` and only verifies the dirty-bit-preserved-
+/// for-retry semantics (the LayoutCycle Err is collapsed at the
+/// inner callback, never reaching the outer caller). Dead Padding →
+/// ColoredBox setup at the top has been removed.
 ///
-/// Direct test of the U21 guard surface — independent of the
-/// structural-cycle case above. Constructs the synthetic re-entry by
-/// pointing a child's "child slot" at its grandparent's id via the
-/// tree's add_child after insertion.
+/// The contract: when a user widget's `perform_layout` calls
+/// `ctx.layout_child` for an ancestor id that's already in flight up
+/// the recursion stack, the `LayoutCycleGuard::enter` collision
+/// returns `Err(RenderError::LayoutCycle(id))`. The layout-child
+/// callback in `layout_subtree_borrowed` collapses that Err to
+/// `Size::ZERO` + sets `descendant_error_flag` for the current call
+/// frame. The dirty-bit-preserved contract (parent stays
+/// `NEEDS_LAYOUT`) is observable via tree state after the outer call
+/// returns Ok.
 ///
-/// The U21 guard fires when the recursive callback dispatches into
-/// the grandparent's slot whose entry is mid-perform_layout up the
-/// stack — the `currently_laying_out` set already contains that id,
-/// so `LayoutCycleGuard::enter` returns `Err(LayoutCycle)`. The
-/// callback collapses that Err to `Size::ZERO` + sets the
-/// `descendant_error_flag`; parent stays NEEDS_LAYOUT.
+/// Trigger: Padding(P1) → Padding(P2) with P2.children additionally
+/// containing P1 (cyclic edge). Both widgets call `layout_child(0)`
+/// for their declared first child, so the cycle is reachable.
 #[test]
-fn u21_callback_reentry_into_ancestor_surfaces_layout_cycle() {
-    let mut pipeline = fresh_layout_pipeline();
-
-    // Build Padding (parent) → ColoredBox (child).
-    let parent_id = pipeline
-        .render_tree_mut()
-        .insert_box(Box::new(RenderPadding::all(5.0)));
-    let child_id = pipeline
-        .render_tree_mut()
-        .insert_box_child(parent_id, Box::new(RenderColoredBox::red(20.0, 20.0)))
-        .expect("child insert");
-
-    // Inject a cycle: ColoredBox's children list now contains
-    // parent_id (Padding). collect_subtree_ids dedups (visited-set),
-    // so the subtree pre-acquisition succeeds. The cycle edge exists
-    // structurally but ColoredBox is a leaf widget that never calls
-    // layout_child — so the U21 guard's protective firing path needs
-    // a widget that DOES call layout_child on its declared children
-    // (Padding does — single-child Padding calls layout_child(0)).
-    //
-    // The shape that DOES trigger LayoutCycle: replace ColoredBox
-    // with a Padding so its perform_layout calls layout_child(0),
-    // and inject a cycle so the layout_child dispatch hits a slot
-    // already in flight up the stack. Done below via a fresh tree.
-    let _ = (child_id, parent_id);
-    drop(pipeline);
-
-    // Cleaner shape: Padding (P1) → Padding (P2) where P2.children
-    // additionally contains P1 (the cyclic edge). P2's perform_layout
-    // calls ctx.layout_child(0) for its FIRST child only — but the
-    // tree has P2.children == [P1] after add_child injection (since
-    // P2 was inserted as P1's child, P2.children starts empty; we
-    // explicitly add P1).
+fn u21_callback_reentry_marks_parent_dirty_for_retry() {
     let mut pipeline = fresh_layout_pipeline();
     let p1 = pipeline
         .render_tree_mut()
@@ -158,29 +115,22 @@ fn u21_callback_reentry_into_ancestor_surfaces_layout_cycle() {
         .add_child(p1);
 
     let constraints = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
-    // P1.perform_layout calls layout_child(0) → recurses into P2.
-    // P2.perform_layout calls layout_child(0) → recurses into P1 (the
-    // cyclic edge). P1 is already in currently_laying_out → guard
-    // returns Err(LayoutCycle(P1)) → callback collapses to Size::ZERO,
-    // descendant_error_flag set → P2 completes with wrong size →
-    // P1 completes with wrong size; P1 stays NEEDS_LAYOUT for retry.
+    // P1.perform_layout → layout_child(0) → recurses into P2.
+    // P2.perform_layout → layout_child(0) → recurses into P1 (cyclic
+    // edge). P1 is already in currently_laying_out → guard returns
+    // Err(LayoutCycle(P1)) → callback collapses to Size::ZERO; P2's
+    // descendant_error_flag set → P2 stays NEEDS_LAYOUT. P1's
+    // callback only sees Ok(Size) from P2, so P1 is marked clean.
     let result = pipeline.layout_dirty_root(p1, constraints);
     assert!(
         result.is_ok(),
-        "cyclic re-entry into ancestor must not panic — the LayoutCycle \
-         error is collapsed via the callback's Size::ZERO path; outer \
-         Ok is returned with parent NEEDS_LAYOUT preserved; got \
+        "cyclic re-entry must not panic — LayoutCycle Err is collapsed \
+         at the inner callback boundary, outer Ok is returned; got \
          {result:?}",
     );
 
-    // The LayoutCycle Err is collapsed at P2's call frame (P2's
-    // callback re-entered P1 and got Err(LayoutCycle(P1)), which set
-    // P2's descendant_error_flag). P2 stays NEEDS_LAYOUT for retry.
-    // P1's callback only saw Ok(Size) from P2 (the cycle Err never
-    // bubbles past one frame's descendant_error_flag), so P1 is
-    // marked clean. Next-frame dirty queue re-processes P2; the
-    // cycle persists structurally so P2 will re-surface LayoutCycle
-    // again (predictably; never panic/UB/hang).
+    // Retry-next-frame contract: P2 stays dirty because its callback
+    // observed LayoutCycle on the cyclic re-entry into P1.
     let p2_node = pipeline.render_tree().get(p2).expect("p2 in tree");
     assert!(
         p2_node.needs_layout(),
@@ -188,7 +138,6 @@ fn u21_callback_reentry_into_ancestor_surfaces_layout_cycle() {
          LayoutCycle on the cyclic re-entry into P1 — preserves \
          retry-next-frame semantics",
     );
-    let _ = p1;
 }
 
 // ============================================================================
