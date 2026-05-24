@@ -261,7 +261,7 @@ impl<'ctx, A: Arity, P: ParentData> LayoutContextApi<'ctx, SliverLayout, A, P>
 // ============================================================================
 
 /// Sliver counterpart to
-/// [`BoxLayoutCtxErased`](super::BoxLayoutCtxErased) — protocol-typed but
+/// [`BoxLayoutCtxErased`](super::box_protocol::BoxLayoutCtxErased) — protocol-typed but
 /// arity- and parent-data-erased view of a sliver layout context for use
 /// at the `RenderObject<SliverProtocol>::perform_layout_raw` trait
 /// boundary.
@@ -281,7 +281,7 @@ pub trait SliverLayoutCtxErased: Send + Sync {
 
     /// Records the layout result (parent's own geometry) on the context.
     ///
-    /// Symmetric with [`super::BoxLayoutCtxErased::complete_layout`] — the
+    /// Symmetric with [`super::box_protocol::BoxLayoutCtxErased::complete_layout`] — the
     /// typed-side reader is [`SliverLayoutCtx::geometry`] returning
     /// `Option<&SliverGeometry>`. The erased trait intentionally exposes
     /// only the write.

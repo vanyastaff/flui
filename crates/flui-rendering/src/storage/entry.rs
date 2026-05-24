@@ -232,7 +232,48 @@ impl<P: Protocol> RenderEntry<P> {
 // ============================================================================
 
 impl<P: Protocol> RenderEntry<P> {
-    /// Performs layout on this entry.
+    /// Performs **leaf-mode** layout on this entry.
+    ///
+    /// # ⚠ LEAF-ONLY — DO NOT CALL FOR NON-LEAF RENDER OBJECTS
+    ///
+    /// This method constructs a leaf-mode typed layout context via
+    /// [`Protocol::with_leaf_erased_ctx`]
+    /// (`BoxLayoutCtx::<Leaf, BoxParentData>::new(constraints)` with
+    /// **no children**). Non-leaf render objects (Padding, Flex,
+    /// Center, etc.) routed through this method observe
+    /// `ctx.child_count() == 0` and take their no-child branches —
+    /// **silent wrong geometry** (a `RenderFlex` sizes to
+    /// `constraints.smallest()`, a `RenderPadding` sizes to just the
+    /// padding box, etc.).
+    ///
+    /// The method is named `layout_leaf_only` (PR #141 Codex review
+    /// comment 3293746309 P1) so the constraint is compile-time
+    /// obvious at every callsite — callers must explicitly name the
+    /// leaf-only intent rather than calling a generic `layout()`.
+    ///
+    /// # When to use
+    ///
+    /// 1. **Leaf-node layout** — `Self::Arity = Leaf` widgets where
+    ///    children-absent is correct (Text, Image, ColoredBox, …).
+    /// 2. **Single-node layout tests** — fixtures where the pipeline is
+    ///    not involved (most of `crates/flui-rendering/tests/*.rs`,
+    ///    including the U19 bridge tests' direct
+    ///    `perform_layout_raw` invocations).
+    ///
+    /// # Production non-leaf path (U20, not yet landed)
+    ///
+    /// `PipelineOwner::layout_dirty_root` obtains disjoint mut refs via
+    /// `RenderTree::get_parent_and_children_mut` and constructs a typed
+    /// `BoxLayoutCtx` with the child slice via
+    /// [`crate::protocol::BoxLayoutCtx::with_layout_callback`] —
+    /// bypassing this method entirely. Until U20 lands, callers wanting
+    /// parent-children layout should either:
+    /// (a) hold off until U20, or
+    /// (b) directly construct a `BoxLayoutCtx` with `with_layout_callback`
+    /// and invoke `render_object.perform_layout_raw(&mut typed_ctx)`
+    /// against an erased view, replicating what U20 will do internally.
+    ///
+    /// # Mechanics
     ///
     /// Requires `&mut self`: the caller (typically `PipelineOwner` holding
     /// `&mut RenderTree`) has exclusive access to this entry for the duration
@@ -242,55 +283,18 @@ impl<P: Protocol> RenderEntry<P> {
     ///
     /// The `perform_layout_raw` call is wrapped in
     /// [`std::panic::catch_unwind`]; a panic surfaces as
-    /// [`crate::error::RenderError::Poisoned`] (Mythos Step 12). On the
-    /// panic path the state's geometry is **not** updated -- the previous
-    /// geometry (or `None` if this is the first layout) remains valid.
-    /// The `NEEDS_LAYOUT` flag is also left set so the pipeline can retry
-    /// next frame after the offending node has been removed or fixed.
+    /// [`crate::error::RenderError::Poisoned`] (Mythos Step 12), and
+    /// `panic_any(RenderError::ContractViolation)` from the
+    /// `RenderObject<BoxProtocol>` blanket impl surfaces as
+    /// [`crate::error::RenderError::ContractViolation`] (review fix
+    /// #5). On the error path the state's geometry is **not** updated
+    /// — the previous geometry (or `None` if this is the first layout)
+    /// remains valid. The `NEEDS_LAYOUT` flag is also left set so the
+    /// pipeline can retry next frame after the offending node has been
+    /// removed or fixed.
     ///
     /// Returns the computed geometry on success.
-    ///
-    /// **D-block PR-A1b U19:** `perform_layout_raw` now takes a
-    /// `&mut <P as Protocol>::LayoutCtxErased<'_>` (the protocol-erased
-    /// layout context trait object) rather than raw constraints.
-    /// `RenderEntry::layout` constructs a leaf-mode typed layout context
-    /// via [`Protocol::with_leaf_erased_ctx`] and hands its erased view
-    /// to the render object — this preserves the previous "no children
-    /// access at this seam" semantic (the pipeline's
-    /// `layout_dirty_root` in U20 takes over for the parent + children
-    /// disjoint-borrow shape).
-    ///
-    /// # LEAF-MODE SCOPE (D-block PR-A1b U19 — review fix #9)
-    ///
-    /// This method uses [`Protocol::with_leaf_erased_ctx`] which
-    /// constructs a `BoxLayoutCtx::<Leaf, BoxParentData>::new(constraints)`
-    /// with **no children**. Non-leaf render objects (Padding, Flex,
-    /// Center, etc.) passing through this method will see
-    /// `ctx.child_count() == 0` and take their no-child branches —
-    /// visually wrong output (a `RenderFlex` would size to
-    /// `constraints.smallest()`, a `RenderPadding` would size to just
-    /// the padding box, etc.).
-    ///
-    /// **Production layout for non-leaf nodes uses
-    /// `PipelineOwner::layout_dirty_root` (U20, not yet landed)**,
-    /// which obtains disjoint mut refs via
-    /// `RenderTree::get_parent_and_children_mut` and constructs a typed
-    /// `BoxLayoutCtx` with the child slice via
-    /// [`crate::protocol::BoxLayoutCtx::with_layout_callback`] —
-    /// bypassing this method entirely.
-    ///
-    /// `RenderEntry::layout` is retained for:
-    ///
-    /// 1. **Leaf-node layout** — `Self::Arity = Leaf` widgets where
-    ///    children-absent is correct (Text, Image, ColoredBox, …).
-    /// 2. **Single-node layout tests** — fixtures where the pipeline is
-    ///    not involved (most of `crates/flui-rendering/tests/*.rs`,
-    ///    including the U19 bridge tests' direct
-    ///    `perform_layout_raw` invocations).
-    ///
-    /// Callers using this for parent-children layout must migrate to
-    /// U20's `layout_dirty_root` path once it lands.
-    pub fn layout(
+    pub fn layout_leaf_only(
         &mut self,
         constraints: ProtocolConstraints<P>,
     ) -> crate::error::RenderResult<ProtocolGeometry<P>>

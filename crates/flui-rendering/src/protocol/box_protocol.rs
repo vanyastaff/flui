@@ -249,13 +249,26 @@ pub type LayoutChildCallback<'a> =
 /// the [`LayoutContextApi::child_geometry`] contract
 /// (`Option<&Size>` — borrow-returning). The erased trait can only hand
 /// out owned `Size` (no reference lifetime to bind to). The Proxy
-/// variant therefore lazily caches child sizes here on first
-/// `layout_child` call (which already produces a `Size` synchronously),
-/// and `child_geometry` reads from the cache. This loses the strict
-/// "pre-existing geometry from a sibling's prior call" semantics that
-/// Direct mode provides, but matches the typical user-widget flow
+/// variant therefore caches child sizes in this dense `Vec<Option<Size>>`
+/// on `layout_child` calls (which already produce a `Size`
+/// synchronously), and `child_geometry` reads from the cache. This loses
+/// the strict "pre-existing geometry from a sibling's prior call"
+/// semantics that Direct mode provides, but matches the typical
+/// user-widget flow
 /// (`let s = ctx.layout_child(i, c); … ctx.child_geometry(i)`).
-type ProxyChildSizeCache = std::collections::HashMap<usize, Size>;
+///
+/// # Storage shape (PR #141 Copilot review feedback, comment 3293746260)
+///
+/// Indexed by dense child index (`0..child_count`) so a hash map is
+/// strictly worse on every dimension: lookup is `O(log n)` ↔ `O(1)`
+/// indexed, allocation pattern is many small Hash buckets ↔ one
+/// contiguous Vec, and CPU prefetch favours the contiguous Vec on the
+/// hot layout path. `Option<Size>` is `Copy` and 12 bytes (Size +
+/// discriminant); `Vec::with_capacity(child_count)` from
+/// `erased.child_count()` pre-sizes the cache at Proxy construction
+/// (one allocation per `from_erased` call); subsequent `layout_child`
+/// writes are an in-place assignment with no reallocation.
+type ProxyChildSizeCache = Vec<Option<Size>>;
 
 /// The children reference allows `position_child` to store offsets that
 /// will be used during painting.
@@ -266,7 +279,7 @@ type ProxyChildSizeCache = std::collections::HashMap<usize, Size>;
 /// 1. `Direct` (default constructors `new`, `with_children`,
 ///    `with_layout_callback`): pipeline owns the children `Vec`, child
 ///    IDs, and synchronous layout callback. This is the production path
-///    used by `RenderEntry::layout` (leaf shape) and U20's
+///    used by `RenderEntry::layout_leaf_only` (leaf shape) and U20's
 ///    `layout_dirty_root` (parent+children disjoint-borrow shape).
 /// 2. `Proxy` (constructor `from_erased`): wraps `&mut dyn
 ///    BoxLayoutCtxErased` so the `RenderObject<BoxProtocol>` blanket
@@ -420,11 +433,17 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
             std::any::TypeId::of::<P>(),
             std::any::type_name::<P>(),
         );
+        // Pre-size the dense `Vec<Option<Size>>` cache to the erased
+        // ctx's child_count — one allocation per Proxy construction, no
+        // per-`layout_child` reallocation. PR #141 Copilot review fix:
+        // swapped from `HashMap<usize, Size>` (sparse + hashing on hot
+        // path) to indexed `Vec<Option<Size>>` (O(1) access, contiguous).
+        let child_count = erased.child_count();
         Self {
             storage: BoxLayoutCtxStorage::Proxy {
                 constraints,
                 geometry: None,
-                child_sizes: ProxyChildSizeCache::new(),
+                child_sizes: vec![None; child_count],
                 erased,
             },
             _phantom: std::marker::PhantomData,
@@ -524,7 +543,16 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
                 ..
             } => {
                 let size = erased.layout_child(index, constraints);
-                child_sizes.insert(index, size);
+                // Indexed write — `child_sizes` is pre-sized to
+                // `erased.child_count()` at `from_erased` time. An
+                // out-of-bounds index (caller passed an `index >=
+                // child_count`) silently no-ops the cache write so
+                // `child_geometry(index)` returns `None` — matches
+                // Direct's behaviour where an out-of-range
+                // `children.get(index)` also returns None.
+                if let Some(slot) = child_sizes.get_mut(index) {
+                    *slot = Some(size);
+                }
                 size
             }
         }
@@ -551,7 +579,12 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
                 .as_ref()
                 .and_then(|c| c.get(index))
                 .map(|child| &child.size),
-            BoxLayoutCtxStorage::Proxy { child_sizes, .. } => child_sizes.get(&index),
+            BoxLayoutCtxStorage::Proxy { child_sizes, .. } => {
+                // Indexed access — out-of-range returns None (consistent
+                // with Direct's `children.get(index).map(...)`); in-range
+                // unfilled slot (Some(None)) also returns None.
+                child_sizes.get(index).and_then(Option::as_ref)
+            }
         }
     }
 
@@ -603,7 +636,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
 /// concretely showed `Size::ZERO` for fresh boxes (companion memo §D5).
 ///
 /// `BoxLayoutCtxErased` is the trait-object-friendly wrapper picked in
-/// memo D5: the pipeline / [`RenderEntry::layout`](crate::storage::RenderEntry::layout)
+/// memo D5: the pipeline / [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only)
 /// constructs a typed [`BoxLayoutCtx<'_, A, P>`], the trait blanket impl
 /// below coerces it to `&mut dyn BoxLayoutCtxErased`, and the
 /// `RenderObject<BoxProtocol>` blanket impl in
@@ -625,7 +658,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
 ///
 /// # Sliver counterpart
 ///
-/// [`SliverLayoutCtxErased`](super::SliverLayoutCtxErased) is the
+/// [`SliverLayoutCtxErased`](super::sliver_protocol::SliverLayoutCtxErased) is the
 /// analogous trait for sliver layout. The sliver bridge is stubbed for
 /// D-block — see [`crate::traits::RenderSliver`].
 ///

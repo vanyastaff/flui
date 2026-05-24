@@ -188,7 +188,7 @@ pub enum RenderError {
     /// decide (drop the node, retry next frame, abort).
     ///
     /// Mythos Step 12 (2026-05-20): the catch_unwind plumbing is live.
-    /// See [`RenderEntry::layout`](crate::storage::RenderEntry::layout)
+    /// See [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only)
     /// for the layout wrapper and `PipelineOwner::<PaintPhase>` for the
     /// paint wrapper. The `Mapping decisions` section of
     /// `crates/flui-rendering/ARCHITECTURE.md` documents the design.
@@ -205,7 +205,7 @@ pub enum RenderError {
     // ========================================================================
     /// The protocol-erased constraints or geometry variant did not match
     /// the node's protocol. Returned from
-    /// [`RenderNode::layout_erased`](crate::storage::RenderNode::layout_erased)
+    /// [`RenderNode::layout_leaf_erased`](crate::storage::RenderNode::layout_leaf_erased)
     /// when a `Box(_)` constraint is handed to a `Sliver` node (or vice
     /// versa). Indicates a bug in the pipeline-dispatch caller.
     #[error(
@@ -218,7 +218,7 @@ pub enum RenderError {
         constraints_protocol: &'static str,
     },
 
-    /// Detected a layout cycle: a `RenderEntry::layout` call recursed
+    /// Detected a layout cycle: a `RenderEntry::layout_leaf_only` call recursed
     /// (via `LayoutContext::layout_child`) back into a node whose layout
     /// was still in flight on the same frame.
     ///
@@ -246,7 +246,7 @@ pub enum RenderError {
     /// returned without calling `ctx.complete_with_size`" as a typed
     /// error rather than an opaque panic. The bridge raises it via
     /// `std::panic::panic_any(RenderError::ContractViolation { ... })`;
-    /// [`RenderEntry::layout`](crate::storage::RenderEntry::layout)
+    /// [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only)
     /// downcasts the panic payload to recover the typed value and
     /// returns it through `RenderResult` alongside other render errors.
     ///
@@ -348,7 +348,7 @@ impl RenderError {
     /// returns without calling `ctx.complete_with_size`. The bridge
     /// passes this through
     /// `std::panic::panic_any(RenderError::ContractViolation { ... })`;
-    /// [`RenderEntry::layout`](crate::storage::RenderEntry::layout)
+    /// [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only)
     /// downcasts the catch_unwind payload to recover the typed value.
     pub fn contract_violation(render_object: &'static str, what: &'static str) -> Self {
         Self::ContractViolation {

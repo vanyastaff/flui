@@ -153,9 +153,9 @@ Concrete cleanups visible from `flui-rendering` outward, sized for an `/aif-impl
 
 **File:** [`src/pipeline/owner.rs`](src/pipeline/owner.rs).
 
-**Goal:** today `RenderEntry::layout` has no production callers; `layout_node_with_children` recurses through children but `propagate_constraints_to_child` (line 680) and `sync_child_size_to_parent` (line 687) are empty stubs. The plan is to wire `RenderEntry::layout` into `layout_node_with_children` once the disjoint-borrow primitive (above) lands. Until then, layout is exercised only through the test fixture in `flui-rendering/tests/`.
+**Goal:** today `RenderEntry::layout_leaf_only` has no production callers; `layout_node_with_children` recurses through children but `propagate_constraints_to_child` (line 680) and `sync_child_size_to_parent` (line 687) are empty stubs. **Note:** `RenderEntry::layout_leaf_only` is exactly that — leaf-only (PR #141 Codex review comment 3293746309). For non-leaf parent + children layout, U20's `PipelineOwner::layout_dirty_root` constructs typed `BoxLayoutCtx::with_layout_callback` directly and invokes `render_object.perform_layout_raw` against an erased view, bypassing this method entirely. Until U20 lands, the leaf-only path is exercised only through the test fixture in `flui-rendering/tests/`.
 
-**Shape:** `layout_node_with_children` becomes the dispatcher: it computes the child constraint, calls `tree.get_two_mut(parent, child)` to obtain disjoint `&mut`s, calls `child_entry.layout(child_constraints)`, reads the resulting geometry, and writes the parent's `child_offset` from it. Multi-child layout uses `get_many_mut`.
+**Shape (U20):** `layout_dirty_root` becomes the dispatcher: it computes the child constraint, calls `tree.get_two_mut(parent, child)` to obtain disjoint `&mut`s, constructs a typed `BoxLayoutCtx` with children + callback, and calls `parent_entry.render_object_mut().perform_layout_raw(&mut typed_ctx_as_erased)` — the blanket impl in `traits/render_box.rs` reconstructs the typed Proxy view internally. Multi-child layout uses `get_many_mut`. The legacy `child_entry.layout_leaf_only(child_constraints)` shape is NOT used in this path because it would strip children.
 
 **Dependencies:** disjoint-borrow primitive (above).
 

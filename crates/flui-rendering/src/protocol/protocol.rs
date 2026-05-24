@@ -134,7 +134,7 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
     /// borrows it, and the borrow expires when `f` returns.
     ///
     /// **D-block PR-A1b U19 (companion memo D5):** used by
-    /// [`RenderEntry::layout`](crate::storage::RenderEntry::layout) for
+    /// [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only) for
     /// the leaf / single-node layout path. The pipeline's
     /// `layout_dirty_root` (U20) constructs its own typed context with
     /// children access via disjoint borrows and bypasses this helper.

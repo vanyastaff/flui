@@ -24,7 +24,14 @@ use flui_rendering::{
     constraints::BoxConstraints,
     objects::{RenderColoredBox, RenderFlex, RenderPadding},
     parent_data::{BoxParentData, FlexParentData},
-    protocol::{BoxLayoutCtx, BoxLayoutCtxErased, BoxProtocol, ChildState, Protocol, RenderObject},
+    // `BoxLayoutCtxErased` is intentionally NOT re-exported under
+    // `protocol::*` (PR #141 review comment 3293746269) — `protocol::*`
+    // glob would pull it in alongside `LayoutContextApi` and collide
+    // on method names. Pull it from the explicit module path here.
+    protocol::{
+        BoxLayoutCtx, BoxProtocol, ChildState, Protocol, RenderObject,
+        box_protocol::BoxLayoutCtxErased,
+    },
 };
 use flui_tree::{Leaf, Single, Variable};
 use flui_types::{Size, geometry::px};
@@ -454,7 +461,7 @@ fn u19_contract_violation_surfaces_through_render_entry_layout() {
     let mut entry: RenderEntry<BoxProtocol> = RenderEntry::new(obj);
     let constraints = BoxConstraints::tight(Size::new(px(10.0), px(10.0)));
 
-    let result = entry.layout(constraints);
+    let result = entry.layout_leaf_only(constraints);
 
     let err = result.expect_err("ForgetfulBox::perform_layout must surface as Err");
     match err {

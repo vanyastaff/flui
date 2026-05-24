@@ -641,7 +641,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// computed the correct boundary id (e.g. testing surfaces).
     ///
     /// **Bootstrap dependency (U17):** the relayout-boundary flag is set
-    /// per-instance only after [`RenderEntry::layout`](crate::storage::RenderEntry::layout)
+    /// per-instance only after [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only)
     /// has run once. Pre-bootstrap (no layout has executed yet) every node
     /// reports `is_relayout_boundary() == false` and propagation runs to
     /// root — which is the correct fallback (root is always an implicit
@@ -945,10 +945,11 @@ impl PipelineOwner<Layout> {
         //     constraints as a parameter and is the only path that runs
         //     `RenderObject::perform_layout_raw`.
         //   - `layout_node_with_children` itself never calls
-        //     `entry.layout(...)` -- it only walks the tree marking
-        //     `needs_layout` checks and recursing. The actual per-node layout
-        //     happens nowhere in production today; the only `entry.layout()`
-        //     callsite in the file is inside a `#[test]` block at line ~1729.
+        //     `entry.layout_leaf_only(...)` -- it only walks the tree
+        //     marking `needs_layout` checks and recursing. The actual
+        //     per-node layout happens nowhere in production today; the
+        //     only `entry.layout_leaf_only()` callsite in the file is
+        //     inside a `#[test]` block.
         //
         // So both stubs were dead code embedded in a larger half-implemented
         // walk. They were called every layout pass at zero cost (empty body)
@@ -1877,7 +1878,7 @@ mod tests {
             RenderEntry::<crate::protocol::BoxProtocol>::new(Box::new(PanickingLayoutBox::new())
                 as Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>);
 
-        let result = entry.layout(crate::constraints::BoxConstraints::tight(Size::ZERO));
+        let result = entry.layout_leaf_only(crate::constraints::BoxConstraints::tight(Size::ZERO));
 
         std::panic::set_hook(prev);
 
