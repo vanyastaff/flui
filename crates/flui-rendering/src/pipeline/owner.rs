@@ -1865,10 +1865,11 @@ impl PipelineOwner<Compositing> {
     ///    - **No change**: clear `NEEDS_COMPOSITING_BITS_UPDATE` and
     ///      leave paint state untouched (Flutter object.dart:3255).
     ///
-    /// The walk is staged via [`CompositingWalkActions`] so that
-    /// post-walk paint-queue mutations don't fight the recursive
-    /// borrows: the recursion reads `&self.render_tree` (shared) and
-    /// accumulates actions, then we apply them under `&mut self`.
+    /// The walk is staged via a private `CompositingWalkActions`
+    /// accumulator so that post-walk paint-queue mutations don't
+    /// fight the recursive borrows: the recursion reads
+    /// `&self.render_tree` (shared) and accumulates actions, then
+    /// we apply them under `&mut self`.
     pub fn run_compositing(&mut self) -> crate::error::RenderResult<()> {
         // Empty fast-path: no allocation, no logging churn for the
         // common "nothing changed" frame.
