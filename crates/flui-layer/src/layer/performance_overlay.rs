@@ -244,10 +244,10 @@ impl std::ops::BitOrAssign for PerformanceOverlayOption {
 ///
 /// ```rust
 /// use flui_layer::{PerformanceOverlayLayer, PerformanceOverlayOption};
-/// use flui_types::geometry::Rect;
+/// use flui_types::geometry::{Rect, px};
 ///
 /// let overlay = PerformanceOverlayLayer::new(
-///     Rect::from_xywh(10.0, 10.0, 200.0, 100.0),
+///     Rect::from_xywh(px(10.0), px(10.0), px(200.0), px(100.0)),
 ///     PerformanceOverlayOption::DISPLAY_RASTER_STATISTICS
 ///         | PerformanceOverlayOption::VISUALIZE_RASTER_STATISTICS,
 /// );

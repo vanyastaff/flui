@@ -164,15 +164,16 @@ pub use transform::TransformLayer;
 /// # Example
 ///
 /// ```rust
+/// use flui_types::geometry::px;
 /// use flui_layer::{CanvasLayer, ClipRectLayer, Layer, OpacityLayer};
 /// use flui_types::{geometry::Rect, painting::Clip};
 ///
 /// // Leaf layer
-/// let canvas_layer = Layer::Canvas(CanvasLayer::new());
+/// let canvas_layer = Layer::Canvas(Box::new(CanvasLayer::new()));
 ///
 /// // Clip layer
 /// let clip_layer = Layer::ClipRect(ClipRectLayer::new(
-///     Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+///     Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
 ///     Clip::HardEdge,
 /// ));
 ///

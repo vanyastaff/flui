@@ -35,10 +35,11 @@ use flui_types::{
 /// # Example
 ///
 /// ```rust
+/// use flui_types::geometry::px;
 /// use flui_layer::OffsetLayer;
 /// use flui_types::Offset;
 ///
-/// let layer = OffsetLayer::new(Offset::new(10.0, 20.0));
+/// let layer = OffsetLayer::new(Offset::new(px(10.0), px(20.0)));
 ///
 /// assert_eq!(layer.offset().dx, 10.0);
 /// assert_eq!(layer.offset().dy, 20.0);

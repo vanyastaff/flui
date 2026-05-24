@@ -274,10 +274,13 @@ pub enum ImageRepeat {
 /// # Examples
 ///
 /// ```
-/// use flui_types::{geometry::Size, painting::ImageConfiguration};
+/// use flui_types::{
+///     geometry::{Size, px},
+///     painting::ImageConfiguration,
+/// };
 ///
 /// let config = ImageConfiguration::new()
-///     .with_size(Size::new(100.0, 100.0))
+///     .with_size(Size::new(px(100.0), px(100.0)))
 ///     .with_device_pixel_ratio(2.0);
 /// ```
 #[derive(Debug, Clone, PartialEq)]

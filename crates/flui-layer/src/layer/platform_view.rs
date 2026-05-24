@@ -71,18 +71,18 @@ pub enum PlatformViewHitTestBehavior {
 ///
 /// ```rust
 /// use flui_layer::{PlatformViewHitTestBehavior, PlatformViewId, PlatformViewLayer};
-/// use flui_types::geometry::Rect;
+/// use flui_types::geometry::{Rect, px};
 ///
 /// // Embed a map view
 /// let map_view = PlatformViewLayer::new(
 ///     PlatformViewId::new(1),
-///     Rect::from_xywh(0.0, 0.0, 400.0, 300.0),
+///     Rect::from_xywh(px(0.0), px(0.0), px(400.0), px(300.0)),
 /// );
 ///
 /// // Embed a web view with custom hit testing
 /// let web_view = PlatformViewLayer::new(
 ///     PlatformViewId::new(2),
-///     Rect::from_xywh(0.0, 0.0, 800.0, 600.0),
+///     Rect::from_xywh(px(0.0), px(0.0), px(800.0), px(600.0)),
 /// )
 /// .with_hit_test_behavior(PlatformViewHitTestBehavior::Defer);
 /// ```

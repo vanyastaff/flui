@@ -46,7 +46,7 @@
 //! ## Basic Usage
 //!
 //! ```rust
-//! use flui_rendering::core::{AtomicRenderFlags, RenderFlags};
+//! use flui_rendering::storage::{AtomicRenderFlags, RenderFlags};
 //!
 //! let flags = AtomicRenderFlags::empty();
 //!
@@ -62,7 +62,7 @@
 //! ## Flutter-Style API
 //!
 //! ```rust
-//! use flui_rendering::core::AtomicRenderFlags;
+//! use flui_rendering::storage::AtomicRenderFlags;
 //!
 //! let flags = AtomicRenderFlags::empty();
 //!
@@ -295,7 +295,7 @@ impl RenderFlags {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::core::RenderFlags;
+    /// use flui_rendering::storage::RenderFlags;
     ///
     /// let dirty = RenderFlags::dirty_flags();
     /// assert!(dirty.contains(RenderFlags::NEEDS_LAYOUT));
@@ -318,7 +318,7 @@ impl RenderFlags {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::core::RenderFlags;
+    /// use flui_rendering::storage::RenderFlags;
     ///
     /// let clean = RenderFlags::empty();
     /// assert!(!clean.is_dirty());
@@ -412,7 +412,7 @@ impl fmt::Display for RenderFlags {
 /// ## Basic Operations
 ///
 /// ```rust
-/// use flui_rendering::core::{AtomicRenderFlags, RenderFlags};
+/// use flui_rendering::storage::{AtomicRenderFlags, RenderFlags};
 ///
 /// let flags = AtomicRenderFlags::empty();
 ///
@@ -433,7 +433,7 @@ impl fmt::Display for RenderFlags {
 /// ## Flutter-Style API
 ///
 /// ```rust
-/// use flui_rendering::core::AtomicRenderFlags;
+/// use flui_rendering::storage::AtomicRenderFlags;
 ///
 /// let flags = AtomicRenderFlags::empty();
 ///
@@ -462,7 +462,7 @@ impl AtomicRenderFlags {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::core::{AtomicRenderFlags, RenderFlags};
+    /// use flui_rendering::storage::{AtomicRenderFlags, RenderFlags};
     ///
     /// let flags = AtomicRenderFlags::new(RenderFlags::NEEDS_LAYOUT | RenderFlags::NEEDS_PAINT);
     /// assert!(flags.needs_layout());
@@ -478,7 +478,7 @@ impl AtomicRenderFlags {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::core::AtomicRenderFlags;
+    /// use flui_rendering::storage::AtomicRenderFlags;
     ///
     /// let flags = AtomicRenderFlags::empty();
     /// assert!(flags.is_clean());
@@ -498,7 +498,7 @@ impl AtomicRenderFlags {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::core::{AtomicRenderFlags, RenderFlags};
+    /// use flui_rendering::storage::{AtomicRenderFlags, RenderFlags};
     ///
     /// let flags = AtomicRenderFlags::new(RenderFlags::NEEDS_LAYOUT);
     /// let current = flags.load();
@@ -516,7 +516,7 @@ impl AtomicRenderFlags {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::core::{AtomicRenderFlags, RenderFlags};
+    /// use flui_rendering::storage::{AtomicRenderFlags, RenderFlags};
     ///
     /// let flags = AtomicRenderFlags::empty();
     /// flags.store(RenderFlags::NEEDS_LAYOUT | RenderFlags::NEEDS_PAINT);
@@ -537,7 +537,7 @@ impl AtomicRenderFlags {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::core::{AtomicRenderFlags, RenderFlags};
+    /// use flui_rendering::storage::{AtomicRenderFlags, RenderFlags};
     ///
     /// let flags = AtomicRenderFlags::new(RenderFlags::NEEDS_LAYOUT);
     /// assert!(flags.contains(RenderFlags::NEEDS_LAYOUT));
@@ -555,7 +555,7 @@ impl AtomicRenderFlags {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::core::{AtomicRenderFlags, RenderFlags};
+    /// use flui_rendering::storage::{AtomicRenderFlags, RenderFlags};
     ///
     /// let flags = AtomicRenderFlags::empty();
     /// flags.set(RenderFlags::NEEDS_LAYOUT);
@@ -573,7 +573,7 @@ impl AtomicRenderFlags {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::core::{AtomicRenderFlags, RenderFlags};
+    /// use flui_rendering::storage::{AtomicRenderFlags, RenderFlags};
     ///
     /// let flags = AtomicRenderFlags::new(RenderFlags::NEEDS_LAYOUT);
     /// flags.remove(RenderFlags::NEEDS_LAYOUT);
@@ -591,7 +591,7 @@ impl AtomicRenderFlags {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::core::{AtomicRenderFlags, RenderFlags};
+    /// use flui_rendering::storage::{AtomicRenderFlags, RenderFlags};
     ///
     /// let flags = AtomicRenderFlags::empty();
     /// flags.toggle(RenderFlags::NEEDS_LAYOUT);
@@ -611,7 +611,7 @@ impl AtomicRenderFlags {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::core::{AtomicRenderFlags, RenderFlags};
+    /// use flui_rendering::storage::{AtomicRenderFlags, RenderFlags};
     ///
     /// let flags = AtomicRenderFlags::empty();
     /// flags.insert(RenderFlags::NEEDS_LAYOUT | RenderFlags::NEEDS_PAINT);
@@ -630,7 +630,7 @@ impl AtomicRenderFlags {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::core::{AtomicRenderFlags, RenderFlags};
+    /// use flui_rendering::storage::{AtomicRenderFlags, RenderFlags};
     ///
     /// let flags = AtomicRenderFlags::new(RenderFlags::NEEDS_LAYOUT | RenderFlags::NEEDS_PAINT);
     /// flags.clear();
@@ -652,7 +652,7 @@ impl AtomicRenderFlags {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::core::AtomicRenderFlags;
+    /// use flui_rendering::storage::AtomicRenderFlags;
     ///
     /// let flags = AtomicRenderFlags::empty();
     /// flags.mark_needs_layout();
@@ -670,7 +670,7 @@ impl AtomicRenderFlags {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::core::AtomicRenderFlags;
+    /// use flui_rendering::storage::AtomicRenderFlags;
     ///
     /// let flags = AtomicRenderFlags::empty();
     /// flags.mark_needs_layout();
@@ -690,7 +690,7 @@ impl AtomicRenderFlags {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::core::AtomicRenderFlags;
+    /// use flui_rendering::storage::AtomicRenderFlags;
     ///
     /// let flags = AtomicRenderFlags::empty();
     /// assert!(!flags.needs_layout());
@@ -709,7 +709,7 @@ impl AtomicRenderFlags {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::core::AtomicRenderFlags;
+    /// use flui_rendering::storage::AtomicRenderFlags;
     ///
     /// let flags = AtomicRenderFlags::empty();
     /// flags.mark_needs_paint();
@@ -821,7 +821,7 @@ impl AtomicRenderFlags {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::core::AtomicRenderFlags;
+    /// use flui_rendering::storage::AtomicRenderFlags;
     ///
     /// let flags = AtomicRenderFlags::empty();
     /// flags.set_relayout_boundary(true);
@@ -851,7 +851,7 @@ impl AtomicRenderFlags {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::core::AtomicRenderFlags;
+    /// use flui_rendering::storage::AtomicRenderFlags;
     ///
     /// let flags = AtomicRenderFlags::empty();
     /// flags.set_repaint_boundary(true);
@@ -942,7 +942,7 @@ impl AtomicRenderFlags {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::core::AtomicRenderFlags;
+    /// use flui_rendering::storage::AtomicRenderFlags;
     ///
     /// let flags = AtomicRenderFlags::empty();
     /// assert!(flags.is_clean());
