@@ -273,7 +273,7 @@ impl<'ctx, A: Arity, P: ParentData> LayoutContextApi<'ctx, SliverLayout, A, P>
 /// render objects in the D-block test surface; this trait keeps the
 /// signature symmetrical with `BoxLayoutCtxErased` so when Core.2 enables
 /// sliver layout, the trait surface is already stable.
-pub trait SliverLayoutCtxErased {
+pub trait SliverLayoutCtxErased: Send + Sync {
     /// Sliver constraints from parent.
     fn constraints(&self) -> SliverConstraints;
 
