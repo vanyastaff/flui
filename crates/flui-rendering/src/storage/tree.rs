@@ -541,6 +541,54 @@ impl RenderTree {
         self.get(id).map(|n| n.depth())
     }
 
+    /// Collects `root_id` plus every transitive descendant in
+    /// **DFS pre-order** (parent before children; children visited in
+    /// stored order). Returns an empty `Vec` if `root_id` is not in
+    /// the tree.
+    ///
+    /// # Use case (D-block PR-A1b3 U20.1)
+    ///
+    /// [`PipelineOwner::layout_dirty_root`](crate::pipeline::PipelineOwner::layout_dirty_root)
+    /// passes the result into
+    /// [`Self::get_subtree_mut`] to pre-acquire every subtree node's
+    /// `&mut RenderNode` borrow in one stack frame, eliminating the
+    /// recursive raw-pointer reborrow pattern (latent Stacked / Tree
+    /// Borrows UB) the prior U20 implementation used.
+    ///
+    /// # Implementation
+    ///
+    /// Iterative DFS with an explicit `Vec` stack so deep trees do
+    /// not overflow Rust's call stack (the layout walk has no other
+    /// depth limit until U21's cycle guard lands). Children are
+    /// pushed in reverse so they pop in stored order — preserves
+    /// pre-order with children-left-to-right.
+    ///
+    /// # Complexity
+    ///
+    /// O(N) where N is the subtree node count. Single pass; each
+    /// node's `children()` slice is borrowed once.
+    pub fn collect_subtree_ids(&self, root_id: RenderId) -> Vec<RenderId> {
+        let mut out = Vec::new();
+        // If the root doesn't exist, return empty to mirror other
+        // tree-walk methods (e.g., `depth()` returns None) — callers
+        // should check before doing further work with the result.
+        if self.get(root_id).is_none() {
+            return out;
+        }
+        let mut stack: Vec<RenderId> = vec![root_id];
+        while let Some(id) = stack.pop() {
+            if let Some(node) = self.get(id) {
+                out.push(id);
+                // Reverse-push so the leftmost child pops first,
+                // preserving pre-order with children-in-stored-order.
+                for &child_id in node.children().iter().rev() {
+                    stack.push(child_id);
+                }
+            }
+        }
+        out
+    }
+
     /// Checks if `ancestor` is an ancestor of `descendant`.
     pub fn is_ancestor(&self, ancestor: RenderId, descendant: RenderId) -> bool {
         let mut current = self.parent(descendant);
@@ -1044,6 +1092,107 @@ mod tests {
         let a = tree.insert_box(make_leaf());
         let refs = tree.get_subtree_mut(&[a]).expect("single id must yield Some");
         assert_eq!(refs.len(), 1);
+    }
+
+    // ========================================================================
+    // collect_subtree_ids (D-block PR-A1b3 U20.1)
+    // ========================================================================
+
+    #[test]
+    fn collect_subtree_ids_root_only() {
+        let mut tree = RenderTree::new();
+        let root = tree.insert_box(make_leaf());
+        assert_eq!(tree.collect_subtree_ids(root), vec![root]);
+    }
+
+    #[test]
+    fn collect_subtree_ids_missing_root_returns_empty() {
+        let tree = RenderTree::new();
+        let missing = RenderId::new(42);
+        assert!(tree.collect_subtree_ids(missing).is_empty());
+    }
+
+    #[test]
+    fn collect_subtree_ids_two_level_preserves_child_order() {
+        let mut tree = RenderTree::new();
+        let root = tree.insert_box(make_leaf());
+        let c1 = tree.insert_box_child(root, make_leaf()).unwrap();
+        let c2 = tree.insert_box_child(root, make_leaf()).unwrap();
+        let c3 = tree.insert_box_child(root, make_leaf()).unwrap();
+
+        // Pre-order: root, c1, c2, c3 (children visited in stored order)
+        assert_eq!(tree.collect_subtree_ids(root), vec![root, c1, c2, c3]);
+    }
+
+    #[test]
+    fn collect_subtree_ids_three_level_dfs_preorder() {
+        // Tree:
+        //     root
+        //    /    \
+        //   a      b
+        //  / \      \
+        // a1 a2     b1
+        //
+        // Pre-order: root, a, a1, a2, b, b1
+        let mut tree = RenderTree::new();
+        let root = tree.insert_box(make_leaf());
+        let a = tree.insert_box_child(root, make_leaf()).unwrap();
+        let a1 = tree.insert_box_child(a, make_leaf()).unwrap();
+        let a2 = tree.insert_box_child(a, make_leaf()).unwrap();
+        let b = tree.insert_box_child(root, make_leaf()).unwrap();
+        let b1 = tree.insert_box_child(b, make_leaf()).unwrap();
+
+        assert_eq!(
+            tree.collect_subtree_ids(root),
+            vec![root, a, a1, a2, b, b1],
+            "DFS pre-order must visit each subtree completely before moving \
+             to the next sibling",
+        );
+    }
+
+    #[test]
+    fn collect_subtree_ids_subtree_root_works() {
+        // Same tree as above, but call collect_subtree_ids on `a`
+        // instead of `root`. Expect: a, a1, a2 (excludes root and b's subtree).
+        let mut tree = RenderTree::new();
+        let root = tree.insert_box(make_leaf());
+        let a = tree.insert_box_child(root, make_leaf()).unwrap();
+        let a1 = tree.insert_box_child(a, make_leaf()).unwrap();
+        let a2 = tree.insert_box_child(a, make_leaf()).unwrap();
+        let _b = tree.insert_box_child(root, make_leaf()).unwrap();
+
+        assert_eq!(tree.collect_subtree_ids(a), vec![a, a1, a2]);
+    }
+
+    #[test]
+    fn collect_subtree_ids_chain_is_linear() {
+        // Linear chain: root → mid → leaf
+        let mut tree = RenderTree::new();
+        let root = tree.insert_box(make_leaf());
+        let mid = tree.insert_box_child(root, make_leaf()).unwrap();
+        let leaf = tree.insert_box_child(mid, make_leaf()).unwrap();
+        assert_eq!(tree.collect_subtree_ids(root), vec![root, mid, leaf]);
+    }
+
+    /// Pairs `collect_subtree_ids` with `get_subtree_mut` — the canonical
+    /// U20.1 usage pattern. Should always yield Some, and the returned
+    /// Vec length should equal the collected id count.
+    #[test]
+    fn collect_subtree_ids_feeds_get_subtree_mut() {
+        let mut tree = RenderTree::new();
+        let root = tree.insert_box(make_leaf());
+        let a = tree.insert_box_child(root, make_leaf()).unwrap();
+        let _a1 = tree.insert_box_child(a, make_leaf()).unwrap();
+        let _b = tree.insert_box_child(root, make_leaf()).unwrap();
+
+        let ids = tree.collect_subtree_ids(root);
+        assert_eq!(ids.len(), 4);
+
+        let refs = tree.get_subtree_mut(&ids).expect(
+            "collect_subtree_ids output must always satisfy get_subtree_mut \
+             uniqueness + presence preconditions",
+        );
+        assert_eq!(refs.len(), 4);
     }
 
     /// Cycle 4 PR #116 review fix: pre-order traversal of the
