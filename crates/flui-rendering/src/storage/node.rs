@@ -447,10 +447,45 @@ impl RenderNode {
     }
 
     /// Returns true if this is a repaint boundary.
+    ///
+    /// Reads the static `RenderObject::is_repaint_boundary()` trait answer.
+    /// This is the per-instance, type-level value (constant for a given
+    /// render object). For the runtime per-state flag value (as bootstrapped
+    /// by `PipelineOwner::bootstrap_repaint_boundary_flag` on insert), use
+    /// [`Self::is_repaint_boundary_flag`].
     pub fn is_repaint_boundary(&self) -> bool {
         match self {
             Self::Box(entry) => entry.render_object().is_repaint_boundary(),
             Self::Sliver(entry) => entry.render_object().is_repaint_boundary(),
+        }
+    }
+
+    /// Reads the `IS_REPAINT_BOUNDARY` storage flag (D-block PR-A2 U33).
+    ///
+    /// The flag is bootstrapped on insert from the trait answer via
+    /// `PipelineOwner::bootstrap_repaint_boundary_flag`. The compositing-bits
+    /// walk consults the flag (not the trait answer directly) so that future
+    /// dynamic repaint-boundary scenarios — and the
+    /// `WAS_REPAINT_BOUNDARY` paint-phase write-back — share a single
+    /// source of truth.
+    #[inline]
+    pub fn is_repaint_boundary_flag(&self) -> bool {
+        match self {
+            Self::Box(entry) => entry.state().flags().is_repaint_boundary(),
+            Self::Sliver(entry) => entry.state().flags().is_repaint_boundary(),
+        }
+    }
+
+    /// Sets the `IS_REPAINT_BOUNDARY` storage flag (D-block PR-A2 U33).
+    ///
+    /// Called by `PipelineOwner::bootstrap_repaint_boundary_flag` at insert
+    /// time after reading the trait answer; not called from layout/paint
+    /// hot paths (the flag is configuration, not dirty state).
+    #[inline]
+    pub fn set_repaint_boundary_flag(&self, is_boundary: bool) {
+        match self {
+            Self::Box(entry) => entry.state().flags().set_repaint_boundary(is_boundary),
+            Self::Sliver(entry) => entry.state().flags().set_repaint_boundary(is_boundary),
         }
     }
 
@@ -536,6 +571,102 @@ impl RenderNode {
         match self {
             Self::Box(entry) => entry.clear_needs_layout(),
             Self::Sliver(entry) => entry.clear_needs_layout(),
+        }
+    }
+
+    /// Reads the `RenderObject::always_needs_compositing()` static trait
+    /// answer (D-block PR-A2 U34 / memo R26b).
+    ///
+    /// Consulted by the compositing-bits walk to force `NEEDS_COMPOSITING`
+    /// regardless of subtree state — used by render objects that apply
+    /// per-frame compositor effects (e.g., shader masks, backdrop filters).
+    #[inline]
+    pub fn always_needs_compositing(&self) -> bool {
+        match self {
+            Self::Box(entry) => entry.render_object().always_needs_compositing(),
+            Self::Sliver(entry) => entry.render_object().always_needs_compositing(),
+        }
+    }
+
+    /// Reads the `WAS_REPAINT_BOUNDARY` storage flag (D-block PR-A2 U34).
+    ///
+    /// Set by the paint phase after a node was painted as a repaint
+    /// boundary. The compositing-bits walk consults this to detect the
+    /// "lost-boundary-status" transition (`!is_repaint_boundary &&
+    /// was_repaint_boundary`) per Flutter `_updateCompositingBits`
+    /// (object.dart:3246-3251).
+    #[inline]
+    pub fn was_repaint_boundary(&self) -> bool {
+        match self {
+            Self::Box(entry) => entry.state().flags().was_repaint_boundary(),
+            Self::Sliver(entry) => entry.state().flags().was_repaint_boundary(),
+        }
+    }
+
+    /// Writes the `WAS_REPAINT_BOUNDARY` storage flag (D-block PR-A2 U35).
+    ///
+    /// Called by the paint phase after a node is painted so subsequent
+    /// compositing-bits walks can detect boundary-status transitions.
+    #[inline]
+    pub fn set_was_repaint_boundary(&self, was_boundary: bool) {
+        match self {
+            Self::Box(entry) => entry.state().flags().set_was_repaint_boundary(was_boundary),
+            Self::Sliver(entry) => entry.state().flags().set_was_repaint_boundary(was_boundary),
+        }
+    }
+
+    /// Sets the `NEEDS_COMPOSITING` flag (D-block PR-A2 U34).
+    ///
+    /// Distinct from [`Self::mark_compositing_flag`] only in that this
+    /// method documents its role in the per-frame compositing-bits walk
+    /// (`_updateCompositingBits`); `mark_compositing_flag` was added in
+    /// U22 as an additive helper.
+    #[inline]
+    pub fn mark_needs_compositing(&self) {
+        match self {
+            Self::Box(entry) => entry.state().flags().mark_needs_compositing(),
+            Self::Sliver(entry) => entry.state().flags().mark_needs_compositing(),
+        }
+    }
+
+    /// Clears the `NEEDS_COMPOSITING` flag (D-block PR-A2 U34).
+    #[inline]
+    pub fn clear_needs_compositing(&self) {
+        match self {
+            Self::Box(entry) => entry.state().flags().clear_needs_compositing(),
+            Self::Sliver(entry) => entry.state().flags().clear_needs_compositing(),
+        }
+    }
+
+    /// Reads the `NEEDS_COMPOSITING_BITS_UPDATE` flag (D-block PR-A2 U32).
+    ///
+    /// Set by `markNeedsCompositingBitsUpdate` (parent chain walks up to
+    /// the first repaint boundary or already-dirty ancestor) and consulted
+    /// by `_updateCompositingBits` to short-circuit subtrees that have
+    /// nothing to do.
+    #[inline]
+    pub fn needs_compositing_bits_update(&self) -> bool {
+        match self {
+            Self::Box(entry) => entry.state().flags().needs_compositing_bits_update(),
+            Self::Sliver(entry) => entry.state().flags().needs_compositing_bits_update(),
+        }
+    }
+
+    /// Sets the `NEEDS_COMPOSITING_BITS_UPDATE` flag (D-block PR-A2 U32).
+    #[inline]
+    pub fn mark_needs_compositing_bits_update(&self) {
+        match self {
+            Self::Box(entry) => entry.state().flags().mark_needs_compositing_bits_update(),
+            Self::Sliver(entry) => entry.state().flags().mark_needs_compositing_bits_update(),
+        }
+    }
+
+    /// Clears the `NEEDS_COMPOSITING_BITS_UPDATE` flag (D-block PR-A2 U32).
+    #[inline]
+    pub fn clear_needs_compositing_bits_update(&self) {
+        match self {
+            Self::Box(entry) => entry.state().flags().clear_needs_compositing_bits_update(),
+            Self::Sliver(entry) => entry.state().flags().clear_needs_compositing_bits_update(),
         }
     }
 }
