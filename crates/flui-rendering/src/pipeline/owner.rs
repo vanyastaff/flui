@@ -1005,11 +1005,26 @@ impl PipelineOwner<Layout> {
                 // debug_doing_layout and bail.
                 if let Err(e) = self.layout_node_with_children(dirty_node.id, 0) {
                     self.debug_doing_layout = false;
+                    // PR-A1 U22 P1 review fix (Codex 3294365736): drain
+                    // mid-phase marks back into `dirty` even on error
+                    // path so they survive across phase invocations.
+                    // Without this, a panic / Err mid-iteration would
+                    // strand mid-phase marks indefinitely.
+                    self.drain_mid_layout_marks();
                     return Err(e);
                 }
             }
 
             self.debug_doing_layout = false;
+
+            // PR-A1 U22 P1 review fix (Codex 3294365736): drain
+            // mid_layout_marks back into `dirty` so the outer while
+            // condition `!self.dirty.needs_layout.is_empty()` picks up
+            // marks that were routed to the side queue during this
+            // iteration's `debug_doing_layout = true` window. Without
+            // this drain, mid-phase marks accumulate in
+            // `mid_layout_marks` and are never processed.
+            self.drain_mid_layout_marks();
         }
         Ok(())
     }
@@ -1941,6 +1956,17 @@ impl PipelineOwner<PaintPhase> {
         self.dirty.needs_paint.clear();
 
         self.debug_doing_paint = false;
+
+        // PR-A1 U22 P1 review fix (Codex 3294365736): drain
+        // mid_layout_marks.needs_paint back into dirty so paint marks
+        // made during this iteration's `debug_doing_paint = true`
+        // window aren't stranded. The current run_paint is single-
+        // pass (no outer while loop), so drained entries land on
+        // dirty.needs_paint for the NEXT run_paint invocation rather
+        // than this one — matches Flutter's flushPaint semantics
+        // where mid-paint marks become next-frame work.
+        self.drain_mid_layout_marks();
+
         Ok(())
     }
 
@@ -2235,6 +2261,15 @@ impl PipelineOwner<Semantics> {
         self.dirty.needs_semantics.clear();
 
         self.debug_doing_semantics = false;
+
+        // PR-A1 U22 P1 review fix (Codex 3294365736): drain
+        // mid_layout_marks.needs_semantics so semantics marks made
+        // during this iteration's `debug_doing_semantics = true`
+        // window aren't stranded. Drained entries land on
+        // dirty.needs_semantics for the NEXT run_semantics
+        // invocation.
+        self.drain_mid_layout_marks();
+
         Ok(())
     }
 }
