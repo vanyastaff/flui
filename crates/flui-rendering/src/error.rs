@@ -234,20 +234,29 @@ pub enum RenderError {
     /// A pipeline-side disjoint-borrow walk requested a child slot
     /// outside the parent's child-id range.
     ///
-    /// **D-block PR-A1b3 U20 (companion memo D1):** returned from
-    /// [`PipelineOwner::layout_dirty_root`](crate::pipeline::PipelineOwner::layout_dirty_root)
-    /// when an off-by-one or stale-id condition would make
-    /// `RenderTree::get_parent_and_children_mut` reject the request.
+    /// **D-block PR-A1b3 U20 (companion memo D1):** reserved variant
+    /// for future defensive bounds checks at the pipeline-side
+    /// disjoint-borrow seam (e.g., when an off-by-one or stale-id
+    /// condition would make a `child_ids[index]` access panic).
     /// Indicates a pipeline-side bug (tree-link corruption, off-by-one
-    /// in the dirty-queue walk, etc.) rather than a user-widget defect;
-    /// surfaces as a typed error so the caller can drop the frame and
-    /// log the offending id without aborting the process.
+    /// in the dirty-queue walk, etc.) rather than a user-widget
+    /// defect; surfaces as a typed error so the caller can drop the
+    /// frame and log the offending parent / index without aborting
+    /// the process.
     ///
-    /// Currently no production code constructs this variant — it is
-    /// reserved alongside U20's disjoint-borrow primitive so the error
-    /// surface is stable when callers grow defensive checks. The U20
-    /// failure-path unit test exercises the variant through a synthetic
-    /// `child_ids` whose entry has been removed from the tree.
+    /// **No production construction site exists yet.** The current
+    /// [`PipelineOwner::layout_dirty_root`](crate::pipeline::PipelineOwner::layout_dirty_root)
+    /// walk iterates over a snapshotted `child_ids` (always in-bounds
+    /// by construction), so stale child-ids surface as
+    /// [`RenderError::NodeNotFound`](Self::NodeNotFound) (id missing
+    /// from tree) or
+    /// [`RenderError::ProtocolMismatch`](Self::ProtocolMismatch) (id
+    /// present but wrong protocol) downstream. Only the
+    /// [`Self::child_index_out_of_bounds`] constructor + round-trip
+    /// unit test cover this variant in the current diff. Future
+    /// defensive checks that grow on the disjoint-borrow primitive
+    /// will produce this variant; pre-adding it keeps the error
+    /// surface stable.
     #[error(
         "child index {index} out of bounds for parent {parent:?} (child_count = {child_count})"
     )]

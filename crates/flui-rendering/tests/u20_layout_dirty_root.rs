@@ -308,6 +308,278 @@ fn u20_double_layout_does_not_panic_on_frame_two() {
 // still drives perform_layout_raw on them via the trait dispatch.
 // ============================================================================
 
+// ============================================================================
+// Review-fix regression — non-leaf perform_layout panic surfaces as Poisoned
+// ============================================================================
+
+/// PR-A1b3 review fix: a panicking user widget at NON-LEAF position
+/// surfaces as `RenderError::Poisoned`, symmetric with the leaf path.
+/// Pre-fix the non-leaf branch invoked `perform_layout_raw` without
+/// `catch_unwind` — a panic would have unwound out of
+/// `layout_dirty_root` and terminated the rendering thread. With the
+/// fix, the non-leaf branch wraps `perform_layout_raw` in
+/// `catch_unwind(AssertUnwindSafe(...))` mirroring
+/// `RenderEntry::layout_leaf_only`'s discipline.
+#[test]
+fn u20_non_leaf_perform_layout_panic_surfaces_as_poisoned() {
+    use flui_foundation::Diagnosticable;
+    use flui_rendering::{
+        context::{BoxHitTestContext, BoxLayoutContext},
+        hit_testing::HitTestBehavior,
+        traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+    };
+    use flui_tree::Single;
+    use flui_types::{Point, Rect};
+
+    /// A non-leaf user widget that panics inside `perform_layout`.
+    /// Single arity so it requires a child (i.e., goes through the
+    /// NON-leaf path of `layout_subtree_raw`).
+    #[derive(Debug, Default)]
+    struct PanickingNonLeaf {
+        size: Size,
+    }
+
+    impl Diagnosticable for PanickingNonLeaf {}
+    impl PaintEffectsCapability for PanickingNonLeaf {}
+    impl SemanticsCapability for PanickingNonLeaf {}
+    impl HotReloadCapability for PanickingNonLeaf {}
+
+    impl RenderBox for PanickingNonLeaf {
+        type Arity = Single;
+        type ParentData = flui_rendering::parent_data::BoxParentData;
+
+        fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Single, Self::ParentData>) {
+            panic!("PanickingNonLeaf intentionally panics");
+        }
+
+        fn size(&self) -> &Size {
+            &self.size
+        }
+        fn size_mut(&mut self) -> &mut Size {
+            &mut self.size
+        }
+        fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Single, Self::ParentData>) -> bool {
+            false
+        }
+        fn hit_test_behavior(&self) -> HitTestBehavior {
+            HitTestBehavior::Opaque
+        }
+        fn box_paint_bounds(&self) -> Rect {
+            Rect::from_origin_size(Point::ZERO, self.size)
+        }
+    }
+
+    let mut pipeline = fresh_layout_pipeline();
+
+    // Parent (panics) with a benign child so the walk takes the non-leaf path.
+    let parent_obj: Box<dyn RenderObject<BoxProtocol>> = Box::new(PanickingNonLeaf::default());
+    let parent_id = pipeline.render_tree_mut().insert_box(parent_obj);
+    let _child_id = pipeline
+        .render_tree_mut()
+        .insert_box_child(parent_id, Box::new(RenderColoredBox::red(10.0, 10.0)))
+        .expect("child insert must succeed");
+
+    let constraints = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
+    let result = pipeline.layout_dirty_root(parent_id, constraints);
+
+    let err = result.expect_err("panicking non-leaf widget must return Err, not unwind");
+    match err {
+        RenderError::Poisoned {
+            render_object,
+            phase,
+        } => {
+            assert!(
+                render_object.contains("PanickingNonLeaf"),
+                "render_object name must identify the offending widget; got {render_object}",
+            );
+            assert_eq!(
+                phase, "layout",
+                "phase tag should identify the layout phase, got {phase}",
+            );
+        }
+        other => panic!(
+            "expected RenderError::Poisoned, got {other:?} — \
+                 non-leaf panic must surface symmetric with leaf path",
+        ),
+    }
+}
+
+// ============================================================================
+// Review-fix regression — descendant Err preserves parent NEEDS_LAYOUT
+// ============================================================================
+
+/// PR-A1b3 review fix: when the recursive callback observes a
+/// descendant `Err`, the outer parent's `NEEDS_LAYOUT` must STAY SET
+/// so the next dirty walk re-runs the subtree. Pre-fix the parent
+/// was unconditionally `clear_needs_layout`'d after a successful
+/// `perform_layout_raw`, leaving the parent CLEAN with stale geometry
+/// derived from the `Size::ZERO` returned by the swallowed-error
+/// callback.
+///
+/// Trigger: `RenderPadding` (Single arity, non-leaf) with a child id
+/// that points to a node which was inserted but then removed from the
+/// tree before the layout walk. The recursive callback's stage 1
+/// snapshot reads the stale id from `parent.children()`, then the
+/// stage 4 `(*ptr).get_mut(stale_id)` returns `None` →
+/// `RenderError::NodeNotFound`. Callback swallows to `Size::ZERO` +
+/// flips the `descendant_error_flag`. Padding's perform_layout
+/// completes (0+padding = small size); stage 6 skips
+/// `clear_needs_layout` per the flag.
+#[test]
+fn u20_descendant_err_preserves_parent_needs_layout() {
+    let mut pipeline = fresh_layout_pipeline();
+
+    // Build Padding → Child. Insert both, then REMOVE the child from
+    // the slab (without removing the link from Padding.children()) —
+    // simulates a torn tree state where parent.children() contains a
+    // stale id.
+    let padding_id = pipeline
+        .render_tree_mut()
+        .insert_box(Box::new(RenderPadding::all(5.0)));
+    let child_id = pipeline
+        .render_tree_mut()
+        .insert_box_child(padding_id, Box::new(RenderColoredBox::red(20.0, 20.0)))
+        .expect("child insert must succeed");
+
+    // Remove the child node from the slab WITHOUT updating the
+    // parent's children list — this synthesises the stale-id condition.
+    // (In production this shouldn't happen; the test deliberately
+    // constructs it.)
+    pipeline
+        .render_tree_mut()
+        .remove_shallow(child_id)
+        .expect("shallow remove must succeed");
+    // remove_shallow also strips the child from parent.children() per
+    // its impl, so we have to re-add it manually to simulate the stale
+    // link.
+    let padding_node = pipeline
+        .render_tree_mut()
+        .get_mut(padding_id)
+        .expect("padding node must exist");
+    padding_node.add_child(child_id);
+
+    let constraints = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
+    let result = pipeline.layout_dirty_root(padding_id, constraints);
+
+    // Outer call SUCCEEDS (Padding's perform_layout completes with
+    // child_size = Size::ZERO from the swallowed callback Err).
+    let size = result.expect("padding perform_layout completes even when child layout fails");
+    // Padding(all=5) wrapping a Size::ZERO child = 10×10; constrained
+    // to tight (100, 100) constraints clamps it back to 100×100. Either
+    // way, the test only cares about NEEDS_LAYOUT preservation; assert
+    // size is non-NaN as a sanity check.
+    assert!(size.width.get().is_finite() && size.height.get().is_finite());
+
+    // CRITICAL ASSERTION: padding's NEEDS_LAYOUT must STAY SET because
+    // the descendant errored during the walk (pre-fix this would have
+    // been cleared, leading to stale layout persisting indefinitely).
+    let padding_node = pipeline
+        .render_tree()
+        .get(padding_id)
+        .expect("padding node must still exist");
+    assert!(
+        padding_node.needs_layout(),
+        "padding NEEDS_LAYOUT must remain SET when a descendant errored \
+             during the walk, so the next dirty pass re-runs the subtree",
+    );
+}
+
+// ============================================================================
+// Review-fix regression — Sliver protocol mismatch surfaces as ProtocolMismatch
+// ============================================================================
+
+/// PR-A1b3 review fix: when `layout_dirty_root` is called on a
+/// `RenderId` whose node is a `SliverProtocol` entry (not `Box`), it
+/// surfaces as `RenderError::ProtocolMismatch` — NOT
+/// `RenderError::NodeNotFound`. Pre-fix the `.get_mut(id).and_then(|n|
+/// n.as_box_mut())` chain collapsed both cases into `NodeNotFound`,
+/// masking the protocol-mismatch bug class.
+#[test]
+fn u20_sliver_node_surfaces_as_protocol_mismatch() {
+    use flui_rendering::{
+        constraints::{SliverConstraints, SliverGeometry},
+        context::{SliverHitTestContext, SliverLayoutContext},
+        protocol::SliverProtocol,
+        traits::{HotReloadCapability, PaintEffectsCapability, RenderSliver, SemanticsCapability},
+    };
+    use flui_tree::Leaf;
+    use flui_types::{Point, Rect};
+
+    /// Minimal sliver render-object stub for the test fixture — never
+    /// laid out (the test triggers the protocol-mismatch error path
+    /// before reaching perform_layout).
+    #[derive(Debug, Default)]
+    struct StubSliver {
+        constraints: SliverConstraints,
+        geometry: SliverGeometry,
+    }
+
+    impl flui_foundation::Diagnosticable for StubSliver {}
+    impl PaintEffectsCapability for StubSliver {}
+    impl SemanticsCapability for StubSliver {}
+    impl HotReloadCapability for StubSliver {}
+
+    impl RenderSliver for StubSliver {
+        type Arity = Leaf;
+        type ParentData = flui_rendering::parent_data::SliverParentData;
+
+        fn perform_layout(&mut self, _ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
+            // Never invoked in this test — protocol-mismatch error
+            // returns before perform_layout.
+        }
+
+        fn constraints(&self) -> &SliverConstraints {
+            &self.constraints
+        }
+
+        fn geometry(&self) -> &SliverGeometry {
+            &self.geometry
+        }
+
+        fn set_geometry(&mut self, geometry: SliverGeometry) {
+            self.geometry = geometry;
+        }
+
+        fn hit_test(&self, _ctx: &mut SliverHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
+            false
+        }
+
+        fn sliver_paint_bounds(&self) -> Rect {
+            Rect::from_origin_size(Point::ZERO, Size::ZERO)
+        }
+    }
+
+    let mut pipeline = fresh_layout_pipeline();
+
+    let sliver_obj: Box<dyn flui_rendering::traits::RenderObject<SliverProtocol>> =
+        Box::new(StubSliver::default());
+    let sliver_id = pipeline.render_tree_mut().insert_sliver(sliver_obj);
+
+    let constraints = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
+    let result = pipeline.layout_dirty_root(sliver_id, constraints);
+
+    let err = result.expect_err("box layout on sliver node must fail");
+    match err {
+        RenderError::ProtocolMismatch {
+            node_protocol,
+            constraints_protocol,
+        } => {
+            assert_eq!(node_protocol, "Sliver", "node_protocol must name Sliver");
+            assert_eq!(
+                constraints_protocol, "Box",
+                "constraints_protocol must name Box (the layout entry point)",
+            );
+        }
+        // The leaf path was taken (sliver has no children), but the
+        // refactored stage 2 distinguishes NodeNotFound vs
+        // ProtocolMismatch.
+        other => panic!(
+            "expected RenderError::ProtocolMismatch, got {other:?} — \
+                 sliver id should not collapse to NodeNotFound",
+        ),
+    }
+}
+
 /// `RenderViewAdapter` carries a manual (non-blanket)
 /// `RenderObject<BoxProtocol>` impl that ignores the erased ctx and
 /// drives layout from its embedded `ViewConfiguration`. The U20 walk
