@@ -196,5 +196,10 @@ flamegraph.svg
 .pi/gentle-ai/
 .peer-review/
 
+# pi-lens LSP/AST cache directories — generated per-crate by the lens MCP server,
+# never useful to share. Matches `.pi-lens/` at the workspace root and in every
+# crate directory.
+.pi-lens/
+
 # Local Pi runtime state
 .atl/
