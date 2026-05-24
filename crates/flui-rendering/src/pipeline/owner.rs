@@ -2766,7 +2766,10 @@ mod tests {
             1,
             "drained mid-mark must land in dirty.needs_layout",
         );
-        assert!(!owner.has_mid_layout_marks(), "mid queue must be empty post-drain");
+        assert!(
+            !owner.has_mid_layout_marks(),
+            "mid queue must be empty post-drain"
+        );
     }
 
     /// Same shape for the dedup invariant under mid-phase routing:
