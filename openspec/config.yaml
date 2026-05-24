@@ -1,0 +1,73 @@
+strict_tdd: true
+context: |
+  FLUI is a modular, Flutter-inspired declarative UI framework for Rust with a
+  three-tree architecture (View → Element → Render) and a wgpu-backed GPU
+  rendering engine. Pure Rust workspace (edition 2024, rust 1.94).
+  See AGENTS.md, docs/FOUNDATIONS.md, and docs/ROADMAP.md.
+
+  Vendored references (DO NOT treat as project source):
+    .flutter/  — Flutter source for architectural reference (read-only)
+    .gpui/     — GPUI source for Rust platform-pattern reference (read-only)
+
+  Stack: Rust 1.94 + Cargo workspace, tokio, wgpu 25.x (pinned),
+  lyon, glyphon, cosmic-text, glam, tracing.
+rules:
+  proposal:
+    require_problem_statement: true
+  spec:
+    require_acceptance_criteria: true
+  design:
+    require_tradeoffs: true
+  tasks:
+    protect_review_workload: true
+  apply:
+    test_command: "cargo test --workspace"
+  verify:
+    test_command: "just ci"
+testing:
+  detected: "2026-05-24"
+  runner:
+    command: "cargo test --workspace"
+    framework: "cargo test"
+  layers:
+    unit: "cargo test"
+    integration: "cargo test"
+    e2e: ""
+  commands:
+    unit:
+      - scope: "workspace"
+        command: "cargo test --workspace"
+        framework: "cargo test"
+    integration:
+      - scope: "workspace"
+        command: "cargo test --workspace --all-targets"
+        framework: "cargo test"
+    e2e: []
+  coverage:
+    command: ""
+    commands: []
+quality:
+  lint: "cargo clippy"
+  lint_commands:
+    - scope: "workspace"
+      command: "cargo clippy --workspace -- -D warnings"
+  typecheck: "cargo check"
+  typecheck_commands:
+    - scope: "workspace"
+      command: "cargo check --workspace --all-targets"
+  format: "cargo fmt"
+  format_commands:
+    - scope: "workspace"
+      command: "cargo fmt --all -- --check"
+ignore:
+  # Vendored references — not project source
+  - ".flutter/"
+  - ".gpui/"
+  # Agent/runtime configs and worktree clones
+  - ".pi/"
+  - ".claude/"
+  - ".compound-engineering/"
+  # Build artifacts
+  - "target/"
+  - "examples/*/pkg/"
+  - "**/node_modules/"
