@@ -1713,8 +1713,10 @@ mod tests {
             _ctx: &mut <crate::protocol::BoxProtocol as crate::protocol::Protocol>::LayoutCtxErased<
                 '_,
             >,
-        ) -> crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol> {
-            self.size
+        ) -> crate::error::RenderResult<
+            crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>,
+        > {
+            Ok(self.size)
         }
 
         fn paint(&self, _context: &mut crate::context::CanvasContext, _offset: flui_types::Offset) {
@@ -1772,7 +1774,15 @@ mod tests {
             _ctx: &mut <crate::protocol::BoxProtocol as crate::protocol::Protocol>::LayoutCtxErased<
                 '_,
             >,
-        ) -> crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol> {
+        ) -> crate::error::RenderResult<
+            crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>,
+        > {
+            // Intentional unstructured panic — exercises the catch_unwind →
+            // Poisoned path in `RenderEntry::layout_leaf_only`. After the
+            // Option A signature change, this panic is the ONE remaining
+            // way to produce `RenderError::Poisoned` (typed
+            // ContractViolation returns are reserved for bridge-detected
+            // contract violations that go through the `Result` chain).
             panic!("PanickingLayoutBox::perform_layout_raw -- intentional test panic");
         }
 

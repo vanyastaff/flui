@@ -56,13 +56,17 @@ fn u19_leaf_bridge_returns_constrained_size() {
     let mut direct_ctx: BoxLayoutCtx<'_, Leaf, BoxParentData> = BoxLayoutCtx::new(constraints);
     let erased: &mut dyn BoxLayoutCtxErased = &mut direct_ctx;
 
+    // perform_layout_raw returns `RenderResult<Size>` (Option A
+    // follow-up to PR #141 #5); on the happy path we unwrap to assert
+    // the concrete Size.
     let size = <RenderColoredBox as RenderObject<BoxProtocol>>::perform_layout_raw(
         &mut obj,
         // GAT resolves `<BoxProtocol as Protocol>::LayoutCtxErased<'_>` to
         // `dyn BoxLayoutCtxErased + '_`; the coercion above gives us
         // exactly that.
         erased,
-    );
+    )
+    .expect("Leaf bridge happy path must succeed");
 
     assert_eq!(
         size,
@@ -84,7 +88,8 @@ fn u19_leaf_bridge_honours_loose_constraints() {
     let erased: &mut dyn BoxLayoutCtxErased = &mut direct_ctx;
 
     let size =
-        <RenderColoredBox as RenderObject<BoxProtocol>>::perform_layout_raw(&mut obj, erased);
+        <RenderColoredBox as RenderObject<BoxProtocol>>::perform_layout_raw(&mut obj, erased)
+            .expect("Leaf bridge happy path must succeed");
 
     assert_eq!(size, Size::new(px(80.0), px(40.0)));
 }
@@ -134,7 +139,8 @@ fn u19_single_bridge_pads_child_and_returns_total_size() {
 
     let erased: &mut dyn BoxLayoutCtxErased = &mut direct_ctx;
 
-    let size = <RenderPadding as RenderObject<BoxProtocol>>::perform_layout_raw(&mut obj, erased);
+    let size = <RenderPadding as RenderObject<BoxProtocol>>::perform_layout_raw(&mut obj, erased)
+        .expect("Single bridge happy path must succeed");
 
     assert_eq!(
         size,
@@ -229,7 +235,8 @@ fn u19_variable_bridge_walks_child_slice_with_typed_parent_data() {
 
     let erased: &mut dyn BoxLayoutCtxErased = &mut direct_ctx;
 
-    let size = <RenderFlex as RenderObject<BoxProtocol>>::perform_layout_raw(&mut obj, erased);
+    let size = <RenderFlex as RenderObject<BoxProtocol>>::perform_layout_raw(&mut obj, erased)
+        .expect("Variable bridge happy path must succeed");
 
     // Deterministic flex math (see test doc): both children flex with
     // factors 1:2, parent max_width=300, no inflexible/spacing.
@@ -285,39 +292,43 @@ fn u19_with_leaf_erased_ctx_matches_direct_bridge_call() {
     let mut obj = RenderColoredBox::green(60.0, 30.0);
     let constraints = BoxConstraints::tight(Size::new(px(60.0), px(30.0)));
 
-    // Mirror what RenderEntry::layout does.
+    // Mirror what RenderEntry::layout_leaf_only does.
+    // `with_leaf_erased_ctx` forwards the closure return, which is now
+    // `RenderResult<Size>`; unwrap on the happy path.
     let size = <BoxProtocol as Protocol>::with_leaf_erased_ctx(constraints, |erased| {
         <RenderColoredBox as RenderObject<BoxProtocol>>::perform_layout_raw(&mut obj, erased)
-    });
+    })
+    .expect("with_leaf_erased_ctx happy path must succeed");
 
     assert_eq!(size, Size::new(px(60.0), px(30.0)));
 }
 
 // ============================================================================
-// Bridge contract violation (review fix #4): a RenderBox::perform_layout
-// that forgets to call ctx.complete_with_size() must trip the bridge's
-// expect/panic, naming the offending render object.
+// Bridge contract violation (review fix #4 + follow-up #5 Option A): a
+// RenderBox::perform_layout that forgets to call ctx.complete_with_size()
+// must return Err(RenderError::ContractViolation) directly from the
+// bridge — no panic, no catch_unwind dance.
 // ============================================================================
 
 /// Plan U19 §407 contract: if `RenderBox::perform_layout` returns without
-/// calling `ctx.complete_with_size()`, the blanket bridge raises
-/// `RenderError::ContractViolation` via `std::panic::panic_any(...)`.
-/// `RenderEntry::layout`'s `catch_unwind` handler downcasts the panic
-/// payload to recover the typed value and returns it through
-/// `RenderResult` — distinct from `RenderError::Poisoned`, which is
-/// reserved for unstructured runtime panics.
+/// calling `ctx.complete_with_size()`, the blanket bridge returns
+/// `Err(RenderError::ContractViolation { ... })` directly through the
+/// `RenderResult<ProtocolGeometry<P>>` return channel — no
+/// `panic_any` / `catch_unwind` dance.
 ///
-/// This test:
-/// 1. Drives a deliberately-broken `ForgetfulBox` directly through the
-///    blanket `perform_layout_raw` and asserts the panic payload is a
-///    typed `RenderError::ContractViolation` carrying the render
-///    object's debug name and the contract description.
-/// 2. (See [`u19_contract_violation_surfaces_through_render_entry_layout`])
-///    Wraps the same fixture in a `RenderEntry<BoxProtocol>` and
-///    asserts the typed error round-trips out as `Err(RenderError::ContractViolation)`
-///    — verifying the entry-layout payload-downcast handler.
+/// This is the follow-up to PR #141 #5 (Option A): pre-fix the bridge
+/// used `std::panic::panic_any(RenderError::ContractViolation)` caught
+/// by `catch_unwind` in `RenderEntry::layout_leaf_only` and downcast
+/// back to typed RenderError. Now the same value flows through `Result`
+/// directly, removing the panic primitive from the normal error path.
+///
+/// This test drives `ForgetfulBox` directly through the blanket
+/// `perform_layout_raw` and asserts the returned `Err` carries
+/// `ContractViolation` with the render object's debug name + contract
+/// description. The entry-layout round-trip is covered by
+/// [`u19_contract_violation_surfaces_through_render_entry_layout`].
 #[test]
-fn u19_bridge_panics_on_missing_complete_with_size() {
+fn u19_bridge_returns_contract_violation_on_missing_complete_with_size() {
     use flui_foundation::Diagnosticable;
     use flui_rendering::{
         context::{BoxHitTestContext, BoxLayoutContext},
@@ -367,27 +378,13 @@ fn u19_bridge_panics_on_missing_complete_with_size() {
     let mut direct_ctx: BoxLayoutCtx<'_, Leaf, BoxParentData> = BoxLayoutCtx::new(constraints);
     let erased: &mut dyn BoxLayoutCtxErased = &mut direct_ctx;
 
-    // Panic propagates from the blanket impl's `panic_any`; assert via
-    // catch_unwind. AssertUnwindSafe is fine — we own all the borrowed
-    // state on this test stack frame.
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        <ForgetfulBox as RenderObject<BoxProtocol>>::perform_layout_raw(&mut obj, erased)
-    }));
+    // No catch_unwind needed — bridge returns Err directly.
+    let result = <ForgetfulBox as RenderObject<BoxProtocol>>::perform_layout_raw(&mut obj, erased);
 
-    let panic_payload =
-        result.expect_err("perform_layout that forgets complete_with_size must panic");
+    let err =
+        result.expect_err("perform_layout that forgets complete_with_size must return Err, not Ok");
 
-    // **Review fix #5 (Option B).** Payload is a typed `RenderError`
-    // (via `std::panic::panic_any(RenderError::ContractViolation { ... })`
-    // in the blanket impl), not an opaque string. Downcast to the typed
-    // value and assert variant + fields.
-    let typed_err = panic_payload
-        .downcast::<RenderError>()
-        .map(|boxed| *boxed)
-        .unwrap_or_else(|_| {
-            panic!("panic payload should be RenderError, got non-RenderError payload")
-        });
-    match typed_err {
+    match err {
         RenderError::ContractViolation {
             render_object,
             what,
@@ -522,7 +519,8 @@ fn u19_variable_bridge_handles_zero_children() {
         BoxLayoutCtx::with_layout_callback(constraints, &mut children, &child_ids, cb.as_ref());
 
     let erased: &mut dyn BoxLayoutCtxErased = &mut direct_ctx;
-    let size = <RenderFlex as RenderObject<BoxProtocol>>::perform_layout_raw(&mut obj, erased);
+    let size = <RenderFlex as RenderObject<BoxProtocol>>::perform_layout_raw(&mut obj, erased)
+        .expect("Zero-child Variable bridge happy path must succeed");
 
     assert_eq!(
         size,
@@ -567,7 +565,8 @@ fn u19_render_view_adapter_bridge_smoke() {
     let sentinel_constraints = BoxConstraints::tight(Size::new(px(999.0), px(999.0)));
     let size = <BoxProtocol as Protocol>::with_leaf_erased_ctx(sentinel_constraints, |erased| {
         <RenderViewAdapter as RenderObject<BoxProtocol>>::perform_layout_raw(&mut adapter, erased)
-    });
+    })
+    .expect("RenderViewAdapter root layout must always succeed");
 
     // Logical constraints from from_size(200×150, 1.0) are tight at
     // (200, 150). RenderView::perform_layout writes size =

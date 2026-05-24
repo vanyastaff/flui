@@ -346,36 +346,36 @@ where
     fn perform_layout_raw(
         &mut self,
         _ctx: &mut <SliverProtocol as crate::protocol::Protocol>::LayoutCtxErased<'_>,
-    ) -> crate::protocol::ProtocolGeometry<SliverProtocol> {
+    ) -> crate::error::RenderResult<crate::protocol::ProtocolGeometry<SliverProtocol>> {
         // D-block PR-A1b U19 / memo D5 — Sliver bridge is unimplemented.
         //
         // The Box bridge in `render_box.rs` reconstructs a typed
         // `BoxLayoutCtx` from the erased trait object and calls the
         // user's `RenderBox::perform_layout`. The analogous Sliver
         // bridge (reconstruct `SliverLayoutCtx` → call
-        // `RenderSliver::perform_layout`) is deferred to Core.2 alongside
-        // the rest of the sliver layout work — no sliver render objects
-        // are in the D-block test surface (companion memo §D5
-        // "Out of scope. Sliver bridge — analogous shape, lands as part
-        // of Core.2 sliver work").
+        // `RenderSliver::perform_layout`) is deferred to Core.2
+        // alongside the rest of the sliver layout work — no sliver
+        // render objects are in the D-block test surface (companion
+        // memo §D5 "Out of scope. Sliver bridge — analogous shape,
+        // lands as part of Core.2 sliver work").
         //
         // **Loud-fail rather than silent-return** (review fix #1): the
         // pre-fix body returned `*RenderSliver::geometry(self)` — a
         // silent no-op that papered over any accidental reach into the
-        // unbridged path. Production callers in D-block cannot reach
-        // this stub (no concrete `RenderSliver` impls exist in the
-        // workspace; the only sliver flow is the generic blanket impl
-        // here). The unimplemented! is caught by
-        // `RenderEntry::layout`'s `catch_unwind` and surfaces as
-        // `RenderError::Poisoned` with the offending render-object's
-        // debug name — making any accidental reach immediately visible
-        // rather than producing wrong-but-quiet layout results.
-        unimplemented!(
-            "Sliver bridge — RenderObject<SliverProtocol>::perform_layout_raw is \
-             Core.2 work and not reachable from D-block scope (memo D5). \
-             Offending RenderSliver: {}",
-            core::any::type_name::<T>()
-        )
+        // unbridged path.
+        //
+        // **Typed error rather than panic** (this PR, follow-up to
+        // #141 #5 Option A): pre-fix code called `unimplemented!`
+        // (which panics) and relied on `RenderEntry::layout_leaf_only`'s
+        // catch_unwind to convert to `RenderError::Poisoned`. With the
+        // new `Result<T, RenderError>` signature, we return
+        // `Err(RenderError::ContractViolation)` directly — typed
+        // propagation, no panic primitive in the normal error path.
+        Err(crate::error::RenderError::contract_violation(
+            core::any::type_name::<T>(),
+            "RenderObject<SliverProtocol>::perform_layout_raw is Core.2 \
+             work and not reachable from D-block scope (memo D5)",
+        ))
     }
 
     fn paint(&self, _context: &mut CanvasContext, _offset: Offset) {

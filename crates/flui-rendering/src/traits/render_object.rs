@@ -155,9 +155,10 @@ pub trait RenderObject<P: Protocol>:
 
     /// Performs layout with a protocol-erased layout context.
     ///
-    /// Called by `RenderEntry::layout()` (leaf path) and the pipeline's
-    /// `layout_dirty_root` (U20, parent+children disjoint-borrow path).
-    /// Returns the computed geometry.
+    /// Called by `RenderEntry::layout_leaf_only()` (leaf path) and the
+    /// pipeline's `layout_dirty_root` (U20, parent+children
+    /// disjoint-borrow path). Returns either the computed geometry on
+    /// success, or a typed [`RenderError`] on contract violation.
     ///
     /// **Users don't implement this directly.** Protocol traits like
     /// `RenderBox` provide blanket implementations that reconstruct a
@@ -165,24 +166,46 @@ pub trait RenderObject<P: Protocol>:
     /// erased context (via the in-crate `BoxLayoutCtx::from_erased`
     /// ctor) and call the typed [`RenderBox::perform_layout`] method.
     ///
-    /// **D-block PR-A1b U19 (companion memo D5):** the signature changed
-    /// from `fn perform_layout_raw(&mut self, constraints:
-    /// ProtocolConstraints<P>) -> ProtocolGeometry<P>` to the current
-    /// shape so the blanket impl can construct a typed
-    /// [`BoxLayoutCtx`] with children access — the prior signature
-    /// shipped a no-op returning `*self.size()` because the trait
-    /// surface didn't carry children. The
-    /// [`Protocol::LayoutCtxErased`] GAT resolves to the per-protocol
-    /// trait-object form: `dyn BoxLayoutCtxErased` for `BoxProtocol`,
-    /// `dyn SliverLayoutCtxErased` for `SliverProtocol`.
+    /// # Signature evolution
+    ///
+    /// 1. **Pre-U19** — `fn perform_layout_raw(&mut self, constraints:
+    ///    ProtocolConstraints<P>) -> ProtocolGeometry<P>`. Blanket impl
+    ///    shipped as a no-op returning `*self.size()` because the trait
+    ///    surface didn't carry children (companion memo D5).
+    ///
+    /// 2. **D-block PR-A1b U19 (PR #141)** — signature changed to
+    ///    `fn perform_layout_raw(&mut self, ctx: &mut <P as Protocol>::LayoutCtxErased<'_>) -> ProtocolGeometry<P>`
+    ///    so the blanket impl can construct a typed [`BoxLayoutCtx`]
+    ///    with children access. Contract-violation signalling went
+    ///    through `std::panic::panic_any(RenderError::ContractViolation)`
+    ///    caught by `catch_unwind` in `RenderEntry::layout_leaf_only` —
+    ///    `panic_any` was a niche escape hatch with hidden control flow.
+    ///
+    ///    The PR #141 review (finding #5) called this out as a
+    ///    Constitution Principle 6 violation — using panic primitives
+    ///    for an error condition the caller can structurally handle.
+    ///
+    /// 3. **Current shape (this PR, follow-up to #141 #5 Option A)** —
+    ///    signature returns `RenderResult<ProtocolGeometry<P>>` so
+    ///    contract violations propagate as typed `Err(RenderError::...)`
+    ///    directly through `?`. `panic_any` removed; `catch_unwind` in
+    ///    `RenderEntry::layout_leaf_only` retained only to wrap genuine
+    ///    runtime panics from third-party user widget code into
+    ///    [`RenderError::Poisoned`].
+    ///
+    /// The [`Protocol::LayoutCtxErased`] GAT resolves to the
+    /// per-protocol trait-object form: `dyn BoxLayoutCtxErased` for
+    /// `BoxProtocol`, `dyn SliverLayoutCtxErased` for `SliverProtocol`.
     ///
     /// [`BoxLayoutCtx`]: crate::protocol::BoxLayoutCtx
     /// [`RenderBox::perform_layout`]: crate::traits::RenderBox::perform_layout
     /// [`Protocol::LayoutCtxErased`]: crate::protocol::Protocol::LayoutCtxErased
+    /// [`RenderError`]: crate::error::RenderError
+    /// [`RenderError::Poisoned`]: crate::error::RenderError::Poisoned
     fn perform_layout_raw(
         &mut self,
         ctx: &mut <P as Protocol>::LayoutCtxErased<'_>,
-    ) -> ProtocolGeometry<P>;
+    ) -> crate::error::RenderResult<ProtocolGeometry<P>>;
 
     /// Paints this render object.
     ///
