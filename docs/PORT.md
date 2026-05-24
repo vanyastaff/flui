@@ -2,16 +2,21 @@
 
 # Port Methodology
 
-FLUI is a **port** of Flutter's three-tree architecture into Rust, not a redesign. This page is the working methodology for that port — the rules the maintainer refuses to break at write time, the per-crate documentation shape that records the port decisions, and the index that pins which crate holds which mapping.
+FLUI is a **port** of Flutter's three-tree architecture into Rust, not a redesign. This page is the working methodology for that port. It plays two roles in one document:
+
+1. **Governance layer** — the rules the maintainer refuses to break at write time (refusal triggers), the lock-decision matrix, the per-crate documentation shape that records port decisions, and the index of which crate holds which mapping.
+2. **Operational translation manual** — the concrete Dart→Rust type map, idiom map, string discipline, error-shape canon, marker tier, and ecosystem-adoption table that turn a Dart file into a Rust file without ad-hoc per-unit re-derivation.
 
 PORT.md sits inside a four-document governance set:
 
 1. [`STRATEGY.md`](../STRATEGY.md) — product strategy, the three port rules, "behavior loyal, structure Rust-native".
 2. [`FOUNDATIONS.md`](FOUNDATIONS.md) — the architecture contract (target architecture, locked contracts, target crate graph).
-3. **`PORT.md` (this page)** — the operational port methodology (refusal triggers, per-crate documentation template).
+3. **`PORT.md` (this page)** — governance + operational translation manual.
 4. [`ROADMAP.md`](ROADMAP.md) — the construction plan (dependency-ordered phases from current to target).
 
 For the rule-by-rule architectural guide (workspace layers, anti-pattern code examples, dependency DAG), read [`.ai-factory/ARCHITECTURE.md`](../.ai-factory/ARCHITECTURE.md). This page does not restate the strategy or contract layers; it is the operational layer that hangs off them.
+
+The translation manual draws inspiration from Bun's [oven-sh/bun#PORTING.md](https://github.com/oven-sh/bun/blob/main/docs/PORTING.md), with one principled inversion: **flui actively embraces the Rust ecosystem**. Where Bun bans `tokio`/`rayon`/`hyper`/`futures` and rolls its own primitives, flui adopts mature ecosystem crates (`parking_lot`, `dashmap`, `smallvec`, `ambassador`, `bon`, `thiserror`, `tracing`, `wgpu`, `moka`, `tokio` LTS). See [§Ecosystem-first principle](#ecosystem-first-principle) for the adoption table and the version policy.
 
 ---
 
@@ -153,6 +158,502 @@ The per-crate `ARCHITECTURE.md` `## Mapping decisions` section may cite any audi
 
 ---
 
+## Dart → Rust type map
+
+This table is the canonical lookup when translating a single Dart symbol into Rust. When a row says "see §X", read that section before choosing. When two rows could both apply, the **more specific** row wins (e.g. `BuildContext` overrides the generic `Object` rule).
+
+### Primitive and core-library types
+
+| Dart | Rust | Notes |
+|---|---|---|
+| `int` | `i64` for arithmetic that crosses Dart-int range; `i32` / `u32` / `usize` where the source range proves narrower | Dart `int` is 64-bit native; `int` indices that feed `List` are `usize` after the bounds proof. Use `i64::try_from` at the boundary if narrowing. |
+| `double` | `f64` | 1:1. Never `f32` unless the source explicitly used a 32-bit type. |
+| `bool` | `bool` | 1:1. |
+| `String` | see [§Strings discipline](#strings-discipline) — `String` for owned mutable UI text, `&str` for borrowed, `Box<str>` for written-once message fields, `Cow<'static, str>` for "literal or owned", `Arc<str>` for shared interned, **never** `String` for syscall bytes |  |
+| `List<T>` (growable) | `Vec<T>` (or `SmallVec<[T; N]>` for hot small-N — `smallvec` workspace dep) | Pre-allocated with `Vec::with_capacity(n)` mirrors Dart `List.filled` / `List.generate` capacity hints. |
+| `List<T>` (fixed-length, `growable: false`) | `Box<[T]>` (or `[T; N]` if `N` is `const`) | Captures the immutable-length invariant; `Box<[T]>` skips the spare capacity word. |
+| `UnmodifiableListView<T>` | `&[T]` borrow when lifetime allows; otherwise `Arc<[T]>` | `Arc<[T]>` lets the view be cloned cheaply with a shared payload. |
+| `Map<K, V>` (default) | `HashMap<K, V, ahash::RandomState>` or `ahash::AHashMap<K, V>` | Default workspace hasher is `ahash` — faster than `SipHash`. Use the `std::collections::HashMap` default hasher **only** when the keys cross an FFI boundary or carry an attacker-controlled-input risk; that contradicts the default and warrants a `// PORT NOTE`. |
+| `Map<K, V>` (ordered iteration required) | `BTreeMap<K, V>` | Dart `LinkedHashMap` insertion-order is approximated by `indexmap::IndexMap` for non-comparable keys — workspace does not yet depend on `indexmap`; flag with `// TODO(port)` if needed. |
+| `Set<T>` | `ahash::AHashSet<T>` or `HashSet<T, ahash::RandomState>` | Same hasher rationale as `Map`. |
+| `Iterable<T>` (lazy) | `impl Iterator<Item = T>` (or `&dyn Iterator<Item = T>` at FFI boundary — needs `// PORT-CHECK-OK-DYN` marker per Trigger 9) | Strict-eager → `Vec<T>`. |
+| `Future<T>` | `impl Future<Output = T>` (or `Pin<Box<dyn Future<Output = T> + Send>>` at FFI/storage — exempted by FR-029) | **Forbidden** on hot path (Refusal trigger 3). Permitted in `flui-assets`, `flui-scheduler`, `flui-build`. Use `tokio::task::spawn` only at those boundaries. |
+| `Stream<T>` | `impl futures::Stream<Item = T>` or `tokio::sync::broadcast::Receiver<T>` | **Forbidden** on hot path. UI change-notification → `Listenable` trait + manual notify loop, not `Stream`. |
+| `dynamic` | **forbidden** — convert to a typed surface. If literally unavoidable at an FFI boundary: `&dyn Any` with `// PORT-CHECK-OK-DYN: <reason>` and a `downcast_ref::<ConcreteT>` site marked with `// PORT-CHECK-OK-DOWNCAST: <reason>` | Constitution Principle IV forbids open-world `dyn`. The Dart `dynamic` keyword is a port-time conversation, not a 1:1 mapping. |
+| `Object` (untyped base) | concrete type, or `&dyn Any` with markers (same rule as `dynamic`) | Most Flutter uses of `Object` are debugging payloads or untyped equality keys; pick the concrete type from the call graph. |
+| `T?` (nullable) | `Option<T>` | `null` literal → `None`. |
+| `Object?` (nullable untyped) | `Option<Box<dyn Any + Send>>` at FFI boundary only — usually a sign the source needs a typed enum | Flag with `// TODO(port): typed-enum candidate`. |
+| `void` (return) | `()` | Never `Result<(), ()>` — use `Result<(), ErrorType>` if fallible. |
+| `Never` (return) | `!` (never type) or `core::convert::Infallible` | Diverging fns use `-> !`; type-system slot for "this Result branch is impossible" uses `Infallible`. |
+| `Function` (untyped) | **forbidden** — narrow to `fn(Args) -> R` (zero-overhead fn pointer) or `Box<dyn Fn(Args) -> R + Send + Sync>` (owned callback storage, sanctioned by FR-029 #5) | Typed function pointers always win when the call site has a fixed signature. |
+| `typedef Cb = void Function(int)` | `type Cb = fn(i32);` for zero-overhead; `type Cb = Box<dyn Fn(i32) + Send + Sync>;` for owned storage | Owned-storage variant carries the `+ Send + Sync` bound to interop with `Listenable` plumbing. |
+| `Symbol` | `&'static str` or `core::any::TypeId` | Use `TypeId` for the `InheritedView` registry; use `&'static str` for `debug_name` slots. |
+| `DateTime` | `std::time::SystemTime` (wall clock) or `std::time::Instant` (monotonic) | Use `Instant` for frame timing; `SystemTime` for serialised timestamps only. |
+| `Duration` | `std::time::Duration` | 1:1. |
+| `Uri` | `url::Url` (workspace already pulls it via `reqwest`) | Path-only URIs may use `&Path` / `PathBuf`. |
+
+### Nullability and late initialization
+
+| Dart | Rust | Notes |
+|---|---|---|
+| `late T x;` (single-init, throws if read before set) | `OnceCell<T>` (`once_cell::unsync::OnceCell` if `!Send`, `once_cell::sync::OnceCell` otherwise) | Read returns `Option<&T>`. Initial `panic` on uninit-read mirrors Dart's `LateInitializationError`. |
+| `late final T x;` | `OnceCell<T>` (set-once) or `LazyLock<T>` (init by fn) | Stable since Rust 1.80 (`std::sync::LazyLock` replaces `once_cell::sync::Lazy`). |
+| `late T x = compute();` (eager-on-first-read) | `LazyLock<T, fn() -> T>` | Stable in std since 1.80; prefer over `once_cell::sync::Lazy`. |
+| `static late final T = ...` (process-wide singleton) | `static FOO: LazyLock<T> = LazyLock::new(\|\| ...)` | If the init can fail, use `OnceLock<T>` + explicit init at boot. |
+| `T? x;` (optional field, set lazily) | `Option<T>` (preferred) or `Cell<Option<T>>` if mutated through `&self` | `Option<T>` is the default; reach for `Cell`/`RefCell` only when the parent is borrowed immutable. |
+
+### Flutter framework types
+
+| Flutter | flui | Crate / notes |
+|---|---|---|
+| `Widget` | `impl View` (return) / `&dyn View` (param, FR-029 sanctioned, allowed in port-check) / `BoxedView` (heterogeneous storage) | `flui-view`. Storage form is `Element<V, A, B>` — see §Refusal trigger 6. |
+| `StatelessWidget` | `View` impl whose `build(&self, &BuildContext)` returns `impl View` | `flui-view`. |
+| `StatefulWidget` + `State<T>` | typestate-style `View` + `Element` pair — `StatefulElement<S>` owns the state | `flui-view`. State is an arena field, not a separate object. |
+| `InheritedWidget` | `InheritedView` + `TypeId` registry | `flui-view`. `TypeId::of::<T>()` lookup is the single allowed runtime-reflection window per strategy. |
+| `BuildContext` | `&BuildContext<'_>` borrowed; opaque accessor surface | `flui-view`. **Always borrowed**, never owned, never stored across `await` (moot — sync hot path). |
+| `Element` | arena-allocated; reached via `ElementId` (`NonZeroUsize` newtype) | `flui-view`. `Slab<ElementCore>` storage; tree links via IDs, not pointers. |
+| `RenderObject` | `Box<dyn RenderObject<P>>` (plain field — sanctioned by FR-029) inside `RenderEntry<P>` | `flui-rendering`. `P` is the protocol (Box / Sliver); the trait is open-set. |
+| `Layer`, `ContainerLayer`, `PictureLayer`, `OffsetLayer`, `OpacityLayer`, etc. | closed `Layer` enum + `Vec<LayerId>` children on container variants | `flui-layer`. No `Box<dyn Layer>` — see [`crates/flui-layer/ARCHITECTURE.md`](../crates/flui-layer/ARCHITECTURE.md) "closed Layer enum" decision. |
+| `Canvas` | `&mut Canvas` borrow; backing `DisplayList` accumulates `DrawCommand` enum variants | `flui-painting`. |
+| `Paint` | `Paint` value-type, `Copy` where possible | `flui-painting`. |
+| `Picture` / `Scene` | `DisplayList` (recorded) → `LayerTree` (composited) → wgpu draw | `flui-painting` → `flui-layer` → `flui-engine`. |
+| `Rect`, `RRect`, `Offset`, `Size`, `EdgeInsets` | identically-named structs in `flui-types` | `flui-types`. `Copy` types. |
+| `Color` | `Color` (`flui-types`, sRGB by default) | `flui-types`. Alpha is straight (not pre-multiplied) at the API surface; the engine pre-multiplies before upload. |
+| `Key` (`ValueKey`, `ObjectKey`, `UniqueKey`, etc.) | `ViewKey` (sealed enum — sanctioned by FR-029) | `flui-view`. Storage via `Option<ViewKey>` on every `Element`. |
+| `GlobalKey<T>` | typestate-checked `GlobalKey<T>` — separate machinery, not all keys are global | `flui-view`. |
+| `Notification` | `Notification` trait (sanctioned by FR-029) + `NotifiableElement` | `flui-view`. Bubble dispatch via element walk. |
+| `ChangeNotifier` | `Listenable` trait (sanctioned by FR-029) | `flui-foundation`. Multiple impls; `ChangeNotifier` struct is a default fan-out impl. |
+| `ValueNotifier<T>` | `ValueNotifier<T>` struct implementing `Listenable` | `flui-foundation`. |
+| `ValueChanged<T>` callback | `Box<dyn Fn(T) + Send + Sync>` (owned storage) or `&dyn Fn(T)` (borrowed param) | Storage form sanctioned by FR-029 #5. |
+| `VoidCallback` | `Box<dyn Fn() + Send + Sync>` (storage) or `&dyn Fn()` (param) | Same. |
+| `AnimationController`, `Animation<T>`, `CurvedAnimation` | `Animation<T>` trait (sanctioned by FR-029) + concrete impls | `flui-animation` (currently disabled — see `## Index`). |
+| `Listenable` (Dart base class) | `Listenable` trait — `flui-foundation` | Multiple-source: also see `Animation` for animation-as-listenable. |
+| `mixin Foo on Bar` | `trait Foo` + `#[delegate(Foo)]` via `ambassador` (workspace dep) | See [§Dart → Rust idiom map](#dart--rust-idiom-map) row "mixin". |
+
+### Sentinel and error types
+
+| Dart | Rust | Notes |
+|---|---|---|
+| `throw FlutterError(...)` | `return Err(<CrateError>::Variant { ... })` | See [§Error mapping canonical shape](#error-mapping-canonical-shape). |
+| `assert(x)` / `assert(x, "msg")` | `debug_assert!(x)` / `debug_assert!(x, "msg")` | Stripped in release. |
+| `unreachable` (Dart marker for `// ignore: dead_code`) | `unreachable!()` (panic on hit) or `unreachable_unchecked()` only in `unsafe` proven-impossible spots | Default = `unreachable!()`. The `_unchecked` form requires a proof comment + a `// SAFETY:` marker. |
+| `runtimeType` | `core::any::TypeId::of::<T>()` (registry lookup) or `core::any::type_name::<T>()` (debug name) | Type name is monomorphized; calling through `&dyn Trait` returns the concrete type via vtable. |
+| `is Foo` | `matches!(x, Foo { .. })` for an enum variant; `<Any as Any>::is::<Foo>()` for typed `Any`-cast | The `Any::is` form requires `&dyn Any` first. |
+| `as Foo` (typed downcast) | `x.downcast_ref::<Foo>()` / `x.downcast_mut::<Foo>()` with `// PORT-CHECK-OK-DOWNCAST: <reason>` marker | Bare cast (`x as Foo`) does not apply — Dart `as` is a typed downcast, not a numeric cast. |
+| `Iterable<T>.cast<U>()` | typed channel, not `.cast` — convert to `Vec<U>` via `.into_iter().map(Into::into).collect()` | Cast is a Dart wart; the Rust shape forces an explicit conversion. |
+
+---
+
+## Dart → Rust idiom map
+
+Patterns, not types. When a Dart construct could compile to multiple Rust shapes, the first row is the default; subsequent rows are exceptions.
+
+### Control flow
+
+| Dart pattern | Rust pattern | Notes |
+|---|---|---|
+| `if (cond) { ... } else { ... }` | `if cond { ... } else { ... }` | 1:1. Rust `if` is an expression. |
+| `cond ? a : b` (ternary) | `if cond { a } else { b }` | No ternary; the `if` expression covers it. |
+| `switch (x) { case A: ...; case B: ...; default: ... }` | `match x { A => ..., B => ..., _ => ... }` | `match` is exhaustive by default. Drop the `default` arm if you've named every variant. |
+| `switch (x) { case A when cond: ... }` (pattern + guard, Dart 3) | `match x { A if cond => ..., ... }` — or `match x { A if let Some(v) = inner => ... }` (Rust **1.95+** if-let guards) | The if-let-guard form is stable since 1.95. |
+| `for (var x in iter) { ... }` | `for x in iter { ... }` | If `iter` is owned and consumed, `.into_iter()` is implicit. |
+| `for (var i = 0; i < n; i++) { ... }` | `for i in 0..n { ... }` | Half-open range. |
+| `while (cond) { ... }` | `while cond { ... }` | 1:1. |
+| `do { ... } while (cond);` | `loop { ...; if !cond { break; } }` | Rust has no `do-while`. |
+| `try { ... } catch (e) { ... }` | `match fallible() { Ok(v) => ..., Err(e) => ... }` or `let v = fallible()?;` for propagation | Rust has no exceptions; everything goes through `Result`. |
+| `try { ... } on FlutterError catch (e) { ... }` (typed catch) | `match fallible() { Err(RenderError::Specific(...)) => ..., Err(e) => return Err(e), Ok(v) => ... }` | Per-variant matching. |
+| `try { ... } finally { cleanup(); }` | `let _guard = scopeguard::guard((), \|_\| cleanup());` (`scopeguard` is not currently a workspace dep — flag with `// TODO(port): add scopeguard` and inline a `Drop` wrapper if needed) | For the common case where cleanup is `drop` on owned values, scope exit is automatic and no guard is needed. |
+| `throw error;` | `return Err(error);` | See [§Error mapping](#error-mapping-canonical-shape). |
+| `rethrow;` | `return Err(e);` after capturing in a previous arm | Rust has no `rethrow` keyword; explicit re-return. |
+
+### Optional / null
+
+| Dart | Rust | Notes |
+|---|---|---|
+| `x ?? y` | `x.unwrap_or(y)` (eager) or `x.unwrap_or_else(\|\| y)` (lazy) | Eager is fine for cheap defaults; lazy for non-trivial. |
+| `x ??= y` | `x.get_or_insert(y)` (on `Option<&mut T>`) | Returns `&mut T` to the now-Some inner. |
+| `x?.method()` | `x.as_ref().map(\|v\| v.method())` or `if let Some(v) = x.as_ref() { v.method() }` | `.as_ref()` borrows the Option's content. |
+| `x?.method() ?? default` | `x.as_ref().map(\|v\| v.method()).unwrap_or(default)` | Chained. |
+| `x!` (null-assertion) | `x.unwrap()` or `x.expect("invariant: …")` | Prefer `.expect` with a context string in framework code. |
+
+### Closures and callbacks
+
+| Dart | Rust | Notes |
+|---|---|---|
+| `(int x) => x * 2` (arrow lambda) | `\|x: i32\| x * 2` | Type annotation usually elided. |
+| `(int x) { return x * 2; }` (block lambda) | `\|x: i32\| { x * 2 }` | Same. |
+| `void Function() cb = () { ... };` (storage) | `let cb: Box<dyn Fn() + Send + Sync> = Box::new(\|\| { ... });` | Storage form per FR-029 #5. |
+| `cb()` (invocation) | `cb()` | Boxed closures call directly. |
+| capture by reference (Dart default) | move closures explicitly with `move \|\| { ... }` when crossing threads | Rust closure capture is inferred; `move` forces by-value. |
+
+### Object model
+
+| Dart | Rust | Notes |
+|---|---|---|
+| `class Foo { final int x; Foo(this.x); }` | `pub struct Foo { pub x: i32 } impl Foo { pub fn new(x: i32) -> Self { Self { x } } }` | Constructor naming convention: `new` for primary, `with_*`/`from_*` for alternates. |
+| `factory Foo.fromX(int n) => Foo._internal(n * 2);` | `impl Foo { pub fn from_x(n: i32) -> Self { Self::_internal(n * 2) } }` | Factory just maps to an associated `fn`. |
+| `const Foo(this.x);` (const constructor) | `impl Foo { pub const fn new(x: i32) -> Self { Self { x } } }` | Use `const fn` only when the body is const-eligible. |
+| `class Foo extends Bar` (inheritance) | `impl Bar for Foo` (trait impl) — no inheritance | Add an `inner: Bar` field if behavior reuse via composition is needed. |
+| `class Foo extends Bar with M1, M2` (mixin) | `impl Foo { ... } #[derive(Delegate)] #[delegate(M1, target = "inner")] #[delegate(M2, target = "inner")]` | `ambassador` is the workspace dep for delegation. |
+| `super.method()` (call parent impl) | call the delegated field directly: `self.inner.method()` | No automatic super-dispatch. |
+| `@override void foo() { ... }` | `impl Trait for Foo { fn foo(&mut self) { ... } }` | Trait method placement. |
+| `@protected` / `@visibleForTesting` | `pub(crate)` for protected; `#[cfg(test)]` for test-only | No annotation equivalent. |
+| `@deprecated` | `#[deprecated(note = "...", since = "...")]` | 1:1. |
+| `..` cascade (`obj..a()..b()`) | builder method chain returning `&mut Self` or `Self`: `obj.a().b()` | For typestate builders use `bon` (workspace dep). |
+| `==` operator override | `#[derive(PartialEq, Eq)]` (structural) or hand-written `impl PartialEq` (custom) | Always pair `Eq` with `Hash` — Rust does not enforce it; we do. |
+| `hashCode` getter override | `#[derive(Hash)]` (structural) or `impl Hash` (custom — must agree with custom `PartialEq`) | Same. |
+| `toString()` override | `impl Display for Foo` (or `impl Debug`) | `Display` is the human form; `Debug` is the diagnostic form. |
+| operator overload (`Offset operator +(Offset other)`) | `impl Add for Offset { type Output = Self; fn add(self, rhs: Self) -> Self { ... } }` | `core::ops::*` traits. |
+| `class Foo<T extends Bar>` (generic with bound) | `pub struct Foo<T: Bar> { ... }` or `pub struct Foo<T> where T: Bar { ... }` | `where` clause for >1 bound. |
+
+### Compile-time-conditional code
+
+| Dart | Rust | Notes |
+|---|---|---|
+| `if (kIsWeb) { ... }` / `Platform.isWindows` | `#[cfg(target_arch = "wasm32")]` / `#[cfg(windows)]` — or `cfg_select! { target_os = "windows" => ..., _ => ... }` (Rust **1.95+**) | `cfg_select!` was stabilized in 1.95 — prefer it over paired `#[cfg(...)]` + `#[cfg(not(...))]` blocks. |
+| `if (kReleaseMode) { ... }` | `#[cfg(not(debug_assertions))]` | 1:1. |
+| `assert(x)` (stripped in release) | `debug_assert!(x)` | 1:1. |
+| `const x = ...` (compile-time constant) | `const X: T = ...;` | Item-level; types must be `const`-eligible. |
+
+### Iteration
+
+| Dart | Rust | Notes |
+|---|---|---|
+| `iter.map((x) => f(x))` | `iter.map(\|x\| f(x))` or `iter.map(f)` | Drop the closure if `f` matches. |
+| `iter.where((x) => p(x))` | `iter.filter(\|x\| p(x))` | Rust uses `filter`. |
+| `iter.fold(init, (acc, x) => g(acc, x))` | `iter.fold(init, \|acc, x\| g(acc, x))` | 1:1. |
+| `iter.reduce((a, b) => g(a, b))` | `iter.reduce(\|a, b\| g(a, b))` — returns `Option<T>` (empty iter = None) | Behavior matches Dart's empty-iter throw if `.unwrap()` follows; prefer explicit handling. |
+| `iter.toList()` | `iter.collect::<Vec<_>>()` | Or `.collect()` if the target type is inferred. |
+| `iter.toSet()` | `iter.collect::<ahash::AHashSet<_>>()` | Match the hasher rule in [§type map](#dart--rust-type-map). |
+| `iter.length` (eager) | `iter.count()` (consumes) or `iter.size_hint()` (peek-only) | `.count()` walks the iterator; cache it if reused. |
+| `list.length` (O(1)) | `vec.len()` | 1:1. |
+| `list[i] = x` | `vec[i] = x;` | Panics on out-of-bounds in both. |
+| `list.add(x)` | `vec.push(x);` (returns `()` in stable; **Rust 1.95+** `vec.push_mut(x)` returns `&mut T` to the inserted slot) | Use `push_mut` when the next op mutates the new element in-place. |
+| `list.insert(i, x)` | `vec.insert(i, x);` (`()` return; Rust 1.95+ `vec.insert_mut(i, x)` returns `&mut T`) | Same. |
+| `list.removeLast()` | `vec.pop()` returns `Option<T>` | Dart returns the element; Rust returns Option. |
+| `list.removeAt(i)` | `vec.remove(i)` (O(n)) or `vec.swap_remove(i)` (O(1) if order doesn't matter) | Prefer swap_remove for hot paths. |
+| `list.clear()` | `vec.clear()` (keeps capacity) | 1:1. |
+| `map[k] = v` | `map.insert(k, v);` | Returns `Option<V>` (previous value). |
+| `map[k]` (lookup) | `map.get(&k)` returns `Option<&V>` | Indexing operator panics on missing in std HashMap. |
+| `map.containsKey(k)` | `map.contains_key(&k)` | 1:1. |
+| `map.putIfAbsent(k, () => v())` | `map.entry(k).or_insert_with(\|\| v())` | Entry API avoids double lookup. |
+
+### Concurrency primitives
+
+| Dart | Rust | Notes |
+|---|---|---|
+| `Future.delayed(Duration)` | `tokio::time::sleep(Duration)` (async edges only — Refusal trigger 3) | Forbidden on hot path. |
+| `Future.wait([a, b])` | `tokio::join!(a, b)` or `futures::future::join_all(...)` | Edges only. |
+| `Stream.broadcast()` | `tokio::sync::broadcast::channel(cap)` | Edges only. UI change-notification → `Listenable`, not `Stream`. |
+| `Completer<T>` | `tokio::sync::oneshot::channel::<T>()` | Edges only. |
+| `Isolate.spawn(...)` (separate heap) | `std::thread::spawn(...)` or `tokio::task::spawn_blocking(...)` | flui has no isolate model; threads share memory via `Arc`. |
+| `compute(...)` (Dart background-isolate worker) | `tokio::task::spawn_blocking(...)` (CPU-bound) or `rayon::spawn(...)` (parallel iter — `rayon` not currently in workspace; flag with `// TODO(port)`) | flag with `// TODO(port): add rayon` if parallel reduction is needed. |
+| `synchronized(...)` (Dart `synchronized` package) | `parking_lot::Mutex<T>::lock()` returns a guard | `parking_lot` is the workspace default (smaller, faster, no poisoning). |
+
+### Atomics
+
+Rust **1.95+** added `update()` / `try_update()` on `AtomicBool`, `AtomicIsize`, `AtomicUsize`, `AtomicPtr` — they encapsulate the standard `load → fn → compare_exchange_weak` loop into a single call. The dirty-flag CAS sites in `crates/flui-rendering/src/storage/state.rs` are candidates for the cleanup (track with `// PERF(port): pre-1.95 CAS loop, swap to update()` so the Phase B pass finds them).
+
+### Strings (cross-reference)
+
+Strings are covered fully in [§Strings discipline](#strings-discipline). The short form:
+
+| Dart | Rust | Notes |
+|---|---|---|
+| `'hello ' + name` (concat) | `format!("hello {name}")` (heap-allocs) | **Not** on hot path. |
+| `'$x + $y = ${x+y}'` (interpolation) | `format!("{x} + {y} = {sum}", sum = x + y)` | 1:1 capture syntax (Rust 1.58+). |
+| `'abc'.length` (UTF-16 code units in Dart) | `s.chars().count()` (Unicode scalars) — **not** `s.len()` (UTF-8 bytes) | Semantics differ; the right answer depends on what the Dart code meant. Flag with `// PORT NOTE: char count vs byte len`. |
+| `'abc'.toLowerCase()` | `s.to_lowercase()` (Unicode-aware) | Heap-allocates. |
+| string equality | `a == b` | 1:1 for `&str` and `String`. |
+
+### Mixin → trait + ambassador (worked example)
+
+Dart:
+```dart
+mixin DiagnosticableMixin {
+  String toStringShort() => runtimeType.toString();
+  Map<String, Object?> toDiagnostics() => {};
+}
+
+class Foo with DiagnosticableMixin {
+  // inherits both methods
+}
+```
+
+Rust:
+```rust
+pub trait Diagnosticable {
+    fn to_string_short(&self) -> String;
+    fn to_diagnostics(&self) -> ahash::AHashMap<String, Box<dyn core::any::Any>>;
+}
+
+// Default impl using ambassador for delegate-style reuse
+#[derive(ambassador::Delegate)]
+#[delegate(Diagnosticable, target = "inner")]
+pub struct Foo {
+    inner: DefaultDiagnostics,
+}
+```
+
+The `inner` field carries the default behavior; `ambassador` generates the delegating impl. When a method needs an override, write the trait impl by hand and skip the delegate for that one method.
+
+---
+
+## Strings discipline
+
+Dart conflates "UI text", "identifier", "syscall byte sequence", "source code", and "encoded resource" into a single `String` type (UTF-16 internal, UTF-8 on the wire). Rust forces a choice. The rules below resolve the choice deterministically by **what the data is**, not where it came from.
+
+### Decision tree
+
+1. **UI text the user reads** (`Text("Hello")` content, `TextSpan.text`, button labels) → `String` (owned mutable, growable) or `&str` (borrowed). Always valid UTF-8 by Rust invariant.
+
+2. **Written-once message fields** on error variants, debug-name slots, log payloads → `Box<str>`. One header word smaller than `String`, no growth amortization needed. This is the **established flui convention** (precedent: `crates/flui-rendering/src/error.rs` R-17, all `RenderError` variants).
+
+3. **Static identifiers** (trait `debug_name` returning `&'static str`, layer-kind tags) → `&'static str`. Zero allocation, comparable by pointer.
+
+4. **Literal-or-owned strings** (rare, but useful for "default = literal, user-customizable = String") → `Cow<'static, str>`. The crate must justify why `String`+`&'static str` split is insufficient — usually not worth it.
+
+5. **Shared interned strings** (debug labels referenced from many sites; widget keys that repeat) → `Arc<str>`. Cheaper to clone than `Arc<String>` (one fewer indirection). `string-interner` crate is **not** currently a workspace dep — adding it is a port-time decision flagged with `// TODO(port): adopt string-interner`.
+
+6. **Byte sequences from the outside world** (asset blobs, hot-reload source code, image bytes, network payloads) → `Vec<u8>` / `&[u8]` / `Box<[u8]>`. **Never** `String::from_utf8_lossy` on external data without an explicit `// PORT NOTE: lossy is acceptable here because …` justification — that operation silently rewrites U+FFFD over surrogate fragments and invalid sequences. If the data must round-trip, keep it as bytes.
+
+7. **Filesystem paths** → `std::path::PathBuf` (owned) / `&std::path::Path` (borrowed). `PathBuf` handles OS-specific encoding (UTF-16 on Windows, bytes on Unix). **Never** `String` for paths — Windows paths can contain unpaired surrogates that `String` rejects.
+
+8. **Widget keys, identifier-shaped data** (`ValueKey<&'static str>`, `ObjectKey`, debug IDs) → `ViewKey` enum (sealed, sanctioned by FR-029). The enum carries the typed payload; do not flatten to `String`.
+
+### Anti-patterns
+
+- `String::from_utf8(bytes).unwrap()` on external data — **forbidden**. Replace with explicit error handling: `String::from_utf8(bytes).map_err(|e| MyError::InvalidUtf8 { source: e.utf8_error() })?;`.
+- `s.to_string()` on a `&str` parameter you're just going to return — wasteful. Return `&str` with the right lifetime, or take `impl Into<String>` to defer the allocation to the caller.
+- `String` interpolation in a hot-path log line — `format!` heap-allocates. Use `tracing::debug!(?value, "context")` which lazily formats only when the subscriber accepts the event.
+- `String` for a `pub fn name(&self) -> String` that returns a constant — return `&'static str`.
+
+### Performance footnote
+
+`String` push-and-grow is O(1) amortized; if you know the final size, `String::with_capacity(n)` skips reallocations. For very small inline strings, `compact_str::CompactString` packs ≤24-byte strings into the stack (inline-or-heap, like `SmallVec`). It is **not** currently a workspace dep — adopting it is a port-time decision when a hot path measures string allocation cost (track with `// PERF(port): adopt compact_str if profiled hot`).
+
+---
+
+## Error mapping canonical shape
+
+flui's error handling is codified across `flui-rendering`, `flui-engine`, and `flui-view`. The pattern below is the canonical shape — diverging from it requires a `// PORT NOTE` and a per-crate `## Mapping decisions` entry.
+
+### The canonical shape
+
+Library crates define a single error type per crate (e.g., `RenderError`, `EngineError`, `LayoutError`) using `thiserror`:
+
+```rust
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+#[non_exhaustive]
+pub enum RenderError {
+    #[error("layout cycle detected involving {nodes} nodes")]
+    LayoutCycle { nodes: usize },
+
+    #[error("render object panicked during {phase}: {message}")]
+    Poisoned {
+        phase: Phase,
+        message: Box<str>,
+    },
+
+    #[error("upstream IO failure")]
+    Io(#[from] std::io::Error),
+}
+
+pub type RenderResult<T> = Result<T, RenderError>;
+```
+
+### Rules
+
+1. **Use `thiserror`** for derive macros (`#[derive(Error)]` + `#[error("...")]`). Workspace dep, already adopted by every error-bearing crate.
+
+2. **Use `#[non_exhaustive]`** on every public error enum. Lets variants be added without breaking downstream `match` exhaustively. Crates internal to a feature boundary may omit it.
+
+3. **`Box<str>` for message fields**, not `String`. Errors are written-once / read-rarely; the spare-capacity word of `String` is wasted. (Precedent: `flui-rendering/src/error.rs:36`.)
+
+4. **`#[source]` on wrapping variants** (or `#[from]` which implies `#[source]`). Preserves the `Error::source()` chain for `Display`/`tracing` consumers. Use `#[from]` only when the conversion is the **only** way that variant is constructed; otherwise hand-write the constructor and use `#[source]` on the wrapped field.
+
+5. **No `Clone` derive on errors.** Errors are terminal values — duplicated propagation indicates a code smell. The few sites that genuinely need to share an error use `Arc<RenderError>`; that is a per-site decision flagged in the call graph.
+
+6. **`Result<T, E>` typed end-to-end in framework code.** Library crates never use `anyhow::Error` in public APIs. The dependency `anyhow = "1.0"` is in `[workspace.dependencies]` for **app-edge** use (`crates/flui-app`, binary `main`, example apps) — never for library APIs. If a library crate adds `anyhow::Error` to a public signature, that is the signal to introduce a typed `Error` for that crate.
+
+7. **Never `Box<dyn Error>` in storage.** It is `!Copy`, heap-allocates, and loses variant information (no `match`). Storage form for cross-crate errors is the concrete `OuterError` with `#[from] InnerError` or a manual `From` impl. `Box<dyn std::error::Error + Send + Sync>` may appear at a single FFI boundary — flag with `// PORT-CHECK-OK-DYN: error trait erasure at FFI`.
+
+8. **`build()` is infallible.** Per FOUNDATIONS.md C7: a panic inside user `View::build` is caught by `std::panic::catch_unwind` at the dispatch site and surfaced as `RenderError::Poisoned` (per `crates/flui-rendering/ARCHITECTURE.md` ## Mapping decisions). User code does not return `Result` from `build`; framework code does.
+
+9. **Cross-crate error conversion** flows through `#[from]` or a hand-written `impl From<InnerCrateError> for OuterCrateError`. Never via `.map_err(|e| OuterError::Other(format!("{e}")))` — that loses the source chain.
+
+### Anti-patterns
+
+- `anyhow::Error` in a `pub fn` signature of a library crate — see rule 6.
+- `Result<T, String>` — strings are not errors; they are messages on errors.
+- `panic!` in framework code as the error-handling mechanism — `panic!` is reserved for invariant violations the type system cannot express. User-side panics are caught; framework-side panics are bugs.
+- `Result<(), ()>` — `()` is not an error; use a typed enum even if it has one variant.
+
+### When to introduce a new error type
+
+A new error enum is justified when:
+- The crate produces ≥2 distinct error conditions.
+- A consumer needs to `match` on which condition fired (programmatic recovery, not just logging).
+- The error crosses a public crate boundary.
+
+A crate with one error condition and one consumer can use a unit struct (`struct MyError;`) implementing `Error` + `Display` — but the moment a second condition appears, switch to a `thiserror` enum.
+
+---
+
+## Inline port markers tier
+
+Decisions made at the line level need to survive the journey from Phase A (mechanical port) to Phase B (idiom polish + perf comparison + soundness re-read). Per-crate `ARCHITECTURE.md ## Mapping decisions` covers crate-scope decisions; the four markers below cover line-scope decisions.
+
+| Marker | When | Action expected |
+|---|---|---|
+| `// TODO(port): <reason>` | The Dart construct couldn't be translated confidently; the current Rust shape is a placeholder | Phase B re-reads the Dart, picks a translation, removes the marker. |
+| `// PERF(port): <Dart idiom> — profile if hot` | Translated to the idiomatic Rust shape, but the Dart used a perf-specific construct (capacity hint, comptime mono, arena bulk-free) that the port elided in favour of clarity | Phase B greps `PERF(port)` and benchmarks the listed call sites; if the perf gap matters, restore the idiom (e.g., add `Vec::with_capacity`). |
+| `// PORT NOTE: <reshape reason>` | The Rust shape diverged from the Dart shape on purpose — borrow-checker requires a reorder, Rust idiom is cleaner, or a typestate replaces a runtime check | Reviewer diff-reads `.dart` ↔ `.rs` side-by-side and uses the marker as the "expected divergence" anchor. |
+| `// SAFETY: <invariant>` | Above every `unsafe` block — mirrors the unsafe code guidelines | Reviewer audits the invariant. This is standard Rust practice, included for completeness. |
+
+### Grammar
+
+- Markers live on the line immediately above the affected expression, or as a trailing comment on the same line if the expression fits.
+- The marker prefix is **exact** — `TODO(port)`, `PERF(port)`, `PORT NOTE`, `SAFETY` — case-sensitive, no abbreviations.
+- The reason text after `:` is free-form, but must name **what** is deferred or reshaped (not "fix later"). Good: `TODO(port): late initialization needs OnceCell or Option — pick after build-context wiring lands`. Bad: `TODO(port): fix`.
+- Markers may stack: `// TODO(port): ...` immediately above `// PORT NOTE: ...` is fine when both apply.
+
+### Worked examples
+
+```rust
+// PORT NOTE: Dart held the list as `late final List<int> ids = [];`; Rust uses
+// OnceCell so reads-before-init panic with a typed error rather than the Dart
+// LateInitializationError. Init point is `attach()`.
+ids: OnceCell<Vec<ElementId>>,
+
+// PERF(port): Dart used `List.filled(n, 0, growable: false)` (one alloc, no
+// growth). Rust path collects into Vec; pre-size if profiling shows pressure.
+let buf: Vec<u8> = source.bytes().collect();
+
+unsafe {
+    // SAFETY: `idx` is checked against `slab.len()` two lines above; the
+    // disjoint-keys invariant for get_two_mut holds because parent != child.
+    let (parent, child) = slab.get_two_mut(parent_id, child_id);
+    ...
+}
+
+// TODO(port): Dart's `_dependents.add(WeakReference(element))` has no direct
+// Rust analog — `std::rc::Weak` requires the owner to be `Rc<T>`, which the
+// element arena is not. Hold a raw `ElementId` and validate on use.
+self.dependents.push(element.id());
+```
+
+### `port-check` integration
+
+`scripts/port-check.sh` exposes a **marker budget report** alongside the refusal-trigger checks. It does **not** fail on marker presence — markers are deliberate deferrals, not violations. It reports counts so Phase B can grep them when ready.
+
+```text
+just port-check               # refusal triggers only; markers reported in -v
+just port-check-verbose       # adds per-trigger pass lines + marker totals
+just port-markers             # per-file marker breakdown (TODO/PERF/PORT NOTE)
+```
+
+The marker grammar above is enforced by the grep — a `TODO` without `(port)` is a regular `TODO` (handled by clippy, not this script).
+
+---
+
+## Ecosystem-first principle
+
+flui actively adopts the Rust ecosystem. Bun's PORTING.md bans `tokio`/`rayon`/`hyper`/`futures` and rolls its own primitives because Bun is a runtime — it owns its event loop and syscalls. flui is a UI framework — it sits **on top of** Rust's ecosystem and benefits from every mature crate it can absorb. **Reinventing the wheel is an anti-pattern.**
+
+### Adopted ecosystem crates
+
+The table below is the canonical "use this, don't write a custom one" lookup. Versions track `Cargo.toml` `[workspace.dependencies]`; see the file for the authoritative pin.
+
+| Domain | Crate | Why not std / hand-rolled |
+|---|---|---|
+| Sync primitives | `parking_lot` | Faster, smaller, no lock poisoning. `parking_lot::Mutex` / `RwLock` are the workspace default; `std::sync::*` are used only when `Send`/`Sync` bounds or `MutexGuard` lifetime cross a tokio await point. |
+| Concurrent map | `dashmap` | Shard-locked; no global contention. Use when a `HashMap` is read concurrently from multiple threads without a coarser external lock. |
+| Inline-storage Vec | `smallvec` | Stack-fallback `Vec` for hot small-N (typical: `SmallVec<[T; 4]>` for child arrays). Avoids the heap allocation in the small case. |
+| Delegation | `ambassador` | The Dart `with` mixin maps to `#[derive(Delegate)] #[delegate(Trait, target = "field")]`. Hand-written delegation is ~10x more code. |
+| Builders | `bon` | Typestate-checked builder DSL — replaces hand-rolled `BuilderContextBuilder<P, Pr>` boilerplate. |
+| Errors | `thiserror` | Derive macros for `Error` + `Display` + `source()`. See [§Error mapping canonical shape](#error-mapping-canonical-shape). |
+| App-edge errors | `anyhow` | Boxed error for binary `main` and ad-hoc tooling — **never** in library APIs (rule 6 in §Error mapping). |
+| Logging | `tracing` + `tracing-forest` | Span-aware structured logging. `tracing::debug!(?value)` lazily formats only when the subscriber accepts. |
+| Hashing | `ahash` | Faster than std `SipHash` for non-DoS data. Workspace-default hasher (see §Type map — `Map`, `Set`). |
+| Caching | `moka` | Concurrent LRU/TLRU with future-aware loaders. Used by `flui-assets`. |
+| GPU | `wgpu` (25.x — see Cargo.toml comment about codespan-reporting bug in 26.x/27.x) | The cross-platform GPU abstraction. flui-engine sits directly on wgpu; no intermediate (no Skia, no custom backend). |
+| Windowing | `winit` (0.30) | Cross-platform window + event loop. |
+| Image decoding | `image` (PNG/JPEG/GIF; WebP deferred per upstream fix for Rust 1.91+) | Standard image-decoding crate. |
+| Font parsing | `ttf-parser` | Lightweight, no allocation. |
+| Async runtime | `tokio` (1.43 LTS) | **Edges only** — Refusal trigger 3. Pinned to the LTS line for stability. |
+| HTTP client | `reqwest` | Async HTTP, rustls TLS. `flui-assets` only. |
+| UI events | `ui-events` + `ui-events-winit` | W3C-compliant cross-platform input abstraction. |
+| Pointer-projection / pin | `pin-project-lite` | Light pin-projection without proc-macro cost. |
+| Cancellation / signaling | `crossbeam` | Lock-free channels and atomics. |
+| One-shot init | `once_cell` (kept) + std `LazyLock`/`OnceLock` (Rust 1.80+) | Use std forms when the bound supports it; fall back to `once_cell::sync::Lazy` only when the init signature does not fit. |
+
+When a need arises that the table does not cover, the order of operations is:
+
+1. Check if a crate already in the workspace can be repurposed.
+2. Search [crates.io](https://crates.io) and read the candidate's README + recent issues; check `crates.io` health (last release date, dependency count, reverse dependencies — `mcp__cratesio__crate_health_check` is available).
+3. Add to `[workspace.dependencies]` with the **caret-pinned** latest stable; document the addition in a `## Mapping decisions` entry of the first consumer crate.
+4. Hand-rolling is the last resort — and requires a `## Mapping decisions` entry explaining why no crate fits.
+
+### Version policy
+
+- **Rust toolchain**: `channel = "stable"` per [`rust-toolchain.toml`](../rust-toolchain.toml). Tracks the latest stable release.
+- **MSRV** (`rust-version` in [`Cargo.toml`](../Cargo.toml)): bumped **no later than 6 weeks** after a new stable release. Rust ships every 6 weeks (current: **1.95**, released 2026-04-16; next: **1.96** ~2026-05-28). The MSRV bump PR is mechanical — bump the field, update the CI matrix, ship.
+- **Workspace dependencies**: caret-pinned (`"1.43"`, not `"=1.43.2"`). Patch bumps automatic via `cargo update`. Minor bumps batched monthly; major bumps reviewed individually.
+- **Pinned exceptions**: documented inline in `Cargo.toml` (current: `wgpu = "25.0"` due to `codespan-reporting` bug in 26.x/27.x; `image` `webp` feature disabled per `image-webp` issue #102).
+
+### Recent stabilizations to fold into the port
+
+Rust 1.95 (2026-04-16) introduced features directly relevant to this port:
+
+| Feature | Where it lands in the port |
+|---|---|
+| `cfg_select!` macro | Replaces paired `#[cfg(...)]` + `#[cfg(not(...))]` blocks for platform conditionals. See [§Dart → Rust idiom map](#dart--rust-idiom-map) row "compile-time-conditional code". |
+| `if let` guards in `match` | Sharpens the Dart `is Foo` + downcast pattern: `match x { Foo(v) if let Some(inner) = v.maybe_extract() => ... }`. See [§Dart → Rust idiom map](#dart--rust-idiom-map) row "switch + pattern guard". |
+| `AtomicBool/Isize/Usize/Ptr::update` and `try_update` | Encapsulates the standard `load → compute → compare_exchange_weak` loop. Candidate cleanup sites in `crates/flui-rendering/src/storage/state.rs` (`AtomicRenderFlags` CAS loops); mark with `// PERF(port): pre-1.95 CAS loop`. |
+| `Vec::push_mut` / `insert_mut`, `VecDeque::push_front_mut` / `push_back_mut`, `LinkedList::*_mut` | Returns `&mut T` to the inserted slot — useful for chained init like `vec.push_mut(Node::new()).attach(parent_id);`. |
+| `Layout::dangling_ptr` / `repeat` / `repeat_packed` / `extend_packed` | Allocator primitives. Phase B hot-path candidates if/when flui adopts an arena allocator beyond `bumpalo` (currently not a workspace dep). |
+
+Rust 1.96 will be tracked in this section on release.
+
+---
+
+## Don't translate
+
+Some Dart constructs do **not** map to Rust at all. Listing them up front prevents one-way translation effort on code that should be deleted or replaced wholesale.
+
+### Source-level dropped
+
+- **`import 'package:flutter/...';`** lines — Rust uses `use` at the top of each module; do not 1:1 the Dart import block. The Rust file's import surface is shaped by what it actually uses, not by what the Dart file declared.
+- **Test files mirroring Flutter's `test/` layout** — Rust has `#[cfg(test)] mod tests { #[test] fn ...() {} }` inline in the source file (preferred for unit) or `tests/<name>.rs` (for integration). Do not create `crates/<crate>/test/` directories.
+- **`mockito` / `flutter_test` fixtures** that are pure Dart-API ceremony — Rust uses `#[cfg(test)]` modules and `mockall` / hand-written fakes; the fixture surface is different.
+- **Generated `.g.dart` files** (json_serializable, freezed, etc.) — translate the *intent* (data class, serde derive) rather than the generated output. Mark with `// PORT NOTE: was generated from <generator>`.
+- **`pubspec.yaml`** — replaced by `Cargo.toml`. Do not translate dep lines 1:1 — see [§Ecosystem-first principle](#ecosystem-first-principle) for the workspace-default mapping.
+
+### Deleted, not ported (binding-deletion carve-out)
+
+A Flutter binding may be **deleted**, not ported, when a Rust-native crate stack already owns the responsibility end-to-end. This is the [§Mapping rules](#flutter-behaviour-primacy-with-binding-deletion-carve-out) carve-out. Recorded precedents:
+
+| Dart construct | Replaced by | Recorded in |
+|---|---|---|
+| `PlatformTextSystem` (Flutter text-shaping abstraction) | `cosmic-text` + `glyphon` + `flui-assets` text stack | [`docs/plans/2026-03-31-platform-roadmap.md`](plans/2026-03-31-platform-roadmap.md) Task 1 |
+| `LayerHandle<T>` (Flutter cached-layer pointer, 467 LOC + 17 aliases, 0 external callers) | deleted; layer caching handled at the `flui-layer` enum + `LayerId` level | [`crates/flui-layer/ARCHITECTURE.md`](../crates/flui-layer/ARCHITECTURE.md) Mythos Step 1 |
+| `ShaderWarmUp` (Flutter Skia shader pre-compilation hook) | deleted; wgpu compiles pipelines on first use, no warm-up phase | [`crates/flui-painting/ARCHITECTURE.md`](../crates/flui-painting/ARCHITECTURE.md) |
+
+When proposing a new binding-deletion, the three conditions in [§Mapping rules](#flutter-behaviour-primacy-with-binding-deletion-carve-out) apply: end-to-end Rust-native ownership, no Flutter-semantic break, and a `## Mapping decisions` entry citing the precedent table above.
+
+### Not yet replaced — leave for Phase B
+
+When a Dart construct has no obvious Rust mapping and no precedent for deletion, the right move is a `// TODO(port)` marker, not a forced translation. Examples:
+
+- **`Isolate.spawn` with closed-over state** — Dart isolates have no shared heap; Rust threads share via `Arc`. The translation depends on what the isolate was *for* (CPU work → `tokio::spawn_blocking`; UI thread isolation → already implicit in Rust's sync hot path).
+- **Dart mirrors / `dart:mirrors`** — runtime reflection, removed from Flutter long ago. Any source still using it indicates dead code; verify via the Flutter Master branch and delete.
+- **Dart FFI auto-generated bindings** (`dart:ffi`) — replaced by hand-written `extern "C"` blocks against the same C ABI; do not translate the FFI scaffolding.
+
+---
+
 ## Per-crate `ARCHITECTURE.md` template
 
 Each active crate that participates in the port carries a root-level `crates/<crate>/ARCHITECTURE.md` (per [`AGENTS.md`](../AGENTS.md) naming convention). The file follows this template. Crates adopt the template incrementally as a port or refactor touches them — no big-bang sweep.
@@ -171,6 +672,7 @@ Add per crate when warranted:
 
 - **`## Test parity notes`** — places where the crate's test suite intentionally diverges from Flutter's test surface.
 - **`## Exception ledger`** — when the crate accumulates more than one justified exception to a refusal trigger, consolidate the "Accepted trade-offs" entries here.
+- **`## Marker budget`** — when the crate carries more than a handful of `TODO(port)` / `PERF(port)` / `PORT NOTE` markers, list them here as a Phase B work-queue. `just port-markers` produces the per-file breakdown that seeds this section.
 
 ### Graft instructions for existing docs
 
@@ -221,6 +723,7 @@ External references this methodology builds on:
 - [`docs/plans/2026-03-31-platform-roadmap.md`](plans/2026-03-31-platform-roadmap.md) — `PlatformTextSystem` deletion precedent (source of the binding-deletion carve-out).
 - [`docs/plans/2026-03-31-custom-render-callback-design.md`](plans/2026-03-31-custom-render-callback-design.md) — canonical justified `Box<dyn>` exception template.
 - [`docs/plans/2026-03-31-engine-hardening.md`](plans/2026-03-31-engine-hardening.md) — multi-source reference precedent (GPUI, Makepad, Iced, Vello, Skia).
+- [Bun PORTING.md](https://github.com/oven-sh/bun/blob/main/docs/PORTING.md) — the structural inspiration for §Dart→Rust type/idiom maps and the marker-tier convention. flui inverts Bun's "no ecosystem" stance — see [§Ecosystem-first principle](#ecosystem-first-principle).
 
 ---
 
@@ -230,10 +733,13 @@ The `just port-check` recipe runs the refusal-trigger regexes from this document
 
 ```text
 just port-check               # silent on pass; lists each violation on fail
-just port-check-verbose       # prints "ok" lines for each passing trigger
+just port-check-verbose       # prints "ok" lines for each passing trigger + marker totals
+just port-markers             # per-file marker breakdown (TODO(port) / PERF(port) / PORT NOTE)
 ```
 
 The underlying script lives at [`scripts/port-check.sh`](../scripts/port-check.sh). It runs seven `rg` (ripgrep) invocations — one per refusal trigger — and filters out doc-comment matches. The regexes are derived directly from the trigger entries in this document; when a trigger changes here, the script changes too.
+
+The marker-budget report is a **non-blocking** addition: it counts `TODO(port)`, `PERF(port)`, and `PORT NOTE` occurrences across `crates/` and prints a per-crate summary. Markers are deliberate deferrals (Phase B work-queue), not violations — the script never fails on marker count.
 
 **Cross-platform note.** The script is bash. On Windows, run via Git Bash or WSL — both ship with `bash` and modern `rg` on PATH. A PowerShell sibling is not provided in this iteration because the regex set is identical and dual-maintenance is not warranted at solo-maintainer scale.
 
@@ -242,6 +748,8 @@ The recipe is not part of `just ci` by default — refusal triggers are a write-
 ### Self-test (negative-test confirmation)
 
 `port-check` itself can be exercised by introducing a deliberate violation in a scratch file (e.g., `crates/flui-rendering/src/__port_check_scratch.rs` with a `RwLock<Box<dyn RenderObject<P>>>` field) and confirming the recipe exits non-zero, names the file and line, and references the correct trigger ID. Delete the scratch file when done. This confirms the recipe still distinguishes real violations from whitelist entries; do it after any change to the trigger regexes or the whitelist file globs.
+
+The marker-budget pass can be self-tested by adding a `// TODO(port): scratch` line in a scratch file and confirming `just port-markers` lists the file and the marker count rises by one.
 
 ---
 
