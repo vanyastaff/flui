@@ -232,7 +232,48 @@ impl<P: Protocol> RenderEntry<P> {
 // ============================================================================
 
 impl<P: Protocol> RenderEntry<P> {
-    /// Performs layout on this entry.
+    /// Performs **leaf-mode** layout on this entry.
+    ///
+    /// # ⚠ LEAF-ONLY — DO NOT CALL FOR NON-LEAF RENDER OBJECTS
+    ///
+    /// This method constructs a leaf-mode typed layout context via
+    /// [`Protocol::with_leaf_erased_ctx`]
+    /// (`BoxLayoutCtx::<Leaf, BoxParentData>::new(constraints)` with
+    /// **no children**). Non-leaf render objects (Padding, Flex,
+    /// Center, etc.) routed through this method observe
+    /// `ctx.child_count() == 0` and take their no-child branches —
+    /// **silent wrong geometry** (a `RenderFlex` sizes to
+    /// `constraints.smallest()`, a `RenderPadding` sizes to just the
+    /// padding box, etc.).
+    ///
+    /// The method is named `layout_leaf_only` (PR #141 Codex review
+    /// comment 3293746309 P1) so the constraint is compile-time
+    /// obvious at every callsite — callers must explicitly name the
+    /// leaf-only intent rather than calling a generic `layout()`.
+    ///
+    /// # When to use
+    ///
+    /// 1. **Leaf-node layout** — `Self::Arity = Leaf` widgets where
+    ///    children-absent is correct (Text, Image, ColoredBox, …).
+    /// 2. **Single-node layout tests** — fixtures where the pipeline is
+    ///    not involved (most of `crates/flui-rendering/tests/*.rs`,
+    ///    including the U19 bridge tests' direct
+    ///    `perform_layout_raw` invocations).
+    ///
+    /// # Production non-leaf path (U20, not yet landed)
+    ///
+    /// `PipelineOwner::layout_dirty_root` obtains disjoint mut refs via
+    /// `RenderTree::get_parent_and_children_mut` and constructs a typed
+    /// `BoxLayoutCtx` with the child slice via
+    /// [`crate::protocol::BoxLayoutCtx::with_layout_callback`] —
+    /// bypassing this method entirely. Until U20 lands, callers wanting
+    /// parent-children layout should either:
+    /// (a) hold off until U20, or
+    /// (b) directly construct a `BoxLayoutCtx` with `with_layout_callback`
+    /// and invoke `render_object.perform_layout_raw(&mut typed_ctx)`
+    /// against an erased view, replicating what U20 will do internally.
+    ///
+    /// # Mechanics
     ///
     /// Requires `&mut self`: the caller (typically `PipelineOwner` holding
     /// `&mut RenderTree`) has exclusive access to this entry for the duration
@@ -242,14 +283,18 @@ impl<P: Protocol> RenderEntry<P> {
     ///
     /// The `perform_layout_raw` call is wrapped in
     /// [`std::panic::catch_unwind`]; a panic surfaces as
-    /// [`crate::error::RenderError::Poisoned`] (Mythos Step 12). On the
-    /// panic path the state's geometry is **not** updated -- the previous
-    /// geometry (or `None` if this is the first layout) remains valid.
-    /// The `NEEDS_LAYOUT` flag is also left set so the pipeline can retry
-    /// next frame after the offending node has been removed or fixed.
+    /// [`crate::error::RenderError::Poisoned`] (Mythos Step 12), and
+    /// `panic_any(RenderError::ContractViolation)` from the
+    /// `RenderObject<BoxProtocol>` blanket impl surfaces as
+    /// [`crate::error::RenderError::ContractViolation`] (review fix
+    /// #5). On the error path the state's geometry is **not** updated
+    /// — the previous geometry (or `None` if this is the first layout)
+    /// remains valid. The `NEEDS_LAYOUT` flag is also left set so the
+    /// pipeline can retry next frame after the offending node has been
+    /// removed or fixed.
     ///
     /// Returns the computed geometry on success.
-    pub fn layout(
+    pub fn layout_leaf_only(
         &mut self,
         constraints: ProtocolConstraints<P>,
     ) -> crate::error::RenderResult<ProtocolGeometry<P>>
@@ -270,11 +315,59 @@ impl<P: Protocol> RenderEntry<P> {
         // (geometry / constraints / flags) on `self.state` is not touched
         // before the panic site, so the render tree stays consistent.
         let render_object = &mut *self.render_object;
-        let constraints_for_call = constraints.clone();
-        let geometry = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            render_object.perform_layout_raw(constraints_for_call)
-        }))
-        .map_err(|_| crate::error::RenderError::poisoned(debug_name, "layout"))?;
+        let constraints_for_ctx = constraints.clone();
+
+        // D-block PR-A1b U19 — wrap constraints in a leaf-mode erased
+        // ctx scoped to the inner closure. The protocol's
+        // `with_leaf_erased_ctx` constructs a typed `BoxLayoutCtx::new` /
+        // `SliverLayoutCtx::new` on its own stack frame and lends an
+        // erased `&mut dyn` view; the borrow expires when the FnOnce
+        // closure returns, keeping the storage local to this call.
+        let geometry = <P as crate::protocol::Protocol>::with_leaf_erased_ctx(
+            constraints_for_ctx,
+            |erased_ctx| {
+                let unwind_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    render_object.perform_layout_raw(erased_ctx)
+                }));
+                unwind_result.map_err(|payload| {
+                    // **D-block PR-A1b U19 review fix #5 (Option B).**
+                    // Try structured `RenderError` payload first — the
+                    // `RenderObject<BoxProtocol>` blanket impl raises
+                    // `RenderError::ContractViolation` via
+                    // `std::panic::panic_any(...)` when the user's
+                    // `RenderBox::perform_layout` forgets to call
+                    // `ctx.complete_with_size(...)`. Recovering the
+                    // typed payload here means contract violations
+                    // surface as their own `RenderError` variant rather
+                    // than collapsing to `Poisoned` (which is reserved
+                    // for unstructured runtime panics).
+                    match payload.downcast::<crate::error::RenderError>() {
+                        Ok(typed) => *typed,
+                        Err(payload) => {
+                            // Review fix #6: forward the unstructured
+                            // panic message to tracing before discarding
+                            // the payload. Without this, panics that
+                            // pre-date the structured-payload path (or
+                            // arrive from third-party `panic!` calls in
+                            // user widgets) become opaque
+                            // `RenderError::Poisoned` errors with no
+                            // diagnostic detail.
+                            let msg = payload
+                                .downcast_ref::<String>()
+                                .map(String::as_str)
+                                .or_else(|| payload.downcast_ref::<&'static str>().copied())
+                                .unwrap_or("(non-string panic payload)");
+                            tracing::error!(
+                                render_object = debug_name,
+                                panic_msg = msg,
+                                "perform_layout panicked — surfacing as RenderError::Poisoned",
+                            );
+                            crate::error::RenderError::poisoned(debug_name, "layout")
+                        }
+                    }
+                })
+            },
+        )?;
 
         // Update state -- only on the success path. On panic, state remains
         // untouched and NEEDS_LAYOUT stays set so a retry is possible.

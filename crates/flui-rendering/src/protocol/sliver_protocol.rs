@@ -38,8 +38,26 @@ impl Protocol for SliverProtocol {
     type HitTest = SliverHitTest;
     type DefaultParentData = SliverParentData;
 
+    // PORT-CHECK-OK-DYN: protocol-layout-erasure (D-block PR-A1b U19, memo D5)
+    type LayoutCtxErased<'ctx> = dyn SliverLayoutCtxErased + 'ctx;
+
     fn name() -> &'static str {
         "sliver"
+    }
+
+    /// D-block PR-A1b U19 — Sliver counterpart to
+    /// [`BoxProtocol::with_leaf_erased_ctx`](super::BoxProtocol::with_leaf_erased_ctx).
+    /// Wraps the given `SliverConstraints` in a typed
+    /// `SliverLayoutCtx::<Leaf, SliverParentData>::new(constraints)` and
+    /// hands an erased `&mut dyn SliverLayoutCtxErased` view to `f`.
+    fn with_leaf_erased_ctx<R>(
+        constraints: SliverConstraints,
+        f: impl FnOnce(&mut Self::LayoutCtxErased<'_>) -> R,
+    ) -> R {
+        let mut typed = SliverLayoutCtx::<flui_tree::Leaf, SliverParentData>::new(constraints);
+        // PORT-CHECK-OK-DYN: protocol-layout-erasure (D-block PR-A1b U19, memo D5)
+        let erased: &mut dyn SliverLayoutCtxErased = &mut typed;
+        f(erased)
     }
 }
 
@@ -235,6 +253,50 @@ impl<'ctx, A: Arity, P: ParentData> LayoutContextApi<'ctx, SliverLayout, A, P>
 
     fn child_parent_data_mut(&mut self, _index: usize) -> Option<&mut P> {
         None // Override in actual implementation
+    }
+}
+
+// ============================================================================
+// SLIVER LAYOUT CTX ERASED (D-block PR-A1b U19 / memo D5 — Sliver counterpart)
+// ============================================================================
+
+/// Sliver counterpart to
+/// [`BoxLayoutCtxErased`](super::box_protocol::BoxLayoutCtxErased) — protocol-typed but
+/// arity- and parent-data-erased view of a sliver layout context for use
+/// at the `RenderObject<SliverProtocol>::perform_layout_raw` trait
+/// boundary.
+///
+/// **D-block scope (PR-A1b U19, memo D5):** the sliver bridge ships as a
+/// minimal trait surface so the
+/// [`crate::traits::RenderSliver`] blanket impl compiles with the new
+/// erased-context signature, but the full bridge (children walk +
+/// parent-data downcast + intrinsic dimensions) is deferred to Core.2
+/// alongside the rest of the sliver layout work. There are no sliver
+/// render objects in the D-block test surface; this trait keeps the
+/// signature symmetrical with `BoxLayoutCtxErased` so when Core.2 enables
+/// sliver layout, the trait surface is already stable.
+pub trait SliverLayoutCtxErased: Send + Sync {
+    /// Sliver constraints from parent.
+    fn constraints(&self) -> SliverConstraints;
+
+    /// Records the layout result (parent's own geometry) on the context.
+    ///
+    /// Symmetric with [`super::box_protocol::BoxLayoutCtxErased::complete_layout`] — the
+    /// typed-side reader is [`SliverLayoutCtx::geometry`] returning
+    /// `Option<&SliverGeometry>`. The erased trait intentionally exposes
+    /// only the write.
+    fn complete_layout(&mut self, geometry: SliverGeometry);
+}
+
+impl<A: Arity, P: ParentData> SliverLayoutCtxErased for SliverLayoutCtx<'_, A, P> {
+    #[inline]
+    fn constraints(&self) -> SliverConstraints {
+        self.constraints
+    }
+
+    #[inline]
+    fn complete_layout(&mut self, geometry: SliverGeometry) {
+        self.geometry = Some(geometry);
     }
 }
 

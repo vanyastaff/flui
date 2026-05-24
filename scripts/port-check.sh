@@ -382,6 +382,18 @@ fi
 #      markers — see commit body of Phase 3.1 §U30 for the plan-time-
 #      vs-reality rationale; 96 owned-callback storage sites would have
 #      required per-site markers under the original plan §U30.4 sweep.)
+#   #6 protocol-layout-erasure at the RenderObject<P>::perform_layout_raw
+#      trait seam (D-block PR-A1b U19 / companion memo D5):
+#      BoxLayoutCtxErased, SliverLayoutCtxErased. The trait-object form
+#      lets the pipeline / RenderEntry hand a typed layout context to
+#      the erased perform_layout_raw method without per-protocol dispatch
+#      in the caller; the blanket impl reconstructs the typed
+#      `BoxLayoutCtx<T::Arity, T::ParentData>` via the Proxy storage
+#      ctor (`BoxLayoutCtx::from_erased`). This is a sanctioned shape
+#      analogous to FR-029 #4 (pipeline-owner type-erasure) — without
+#      `dyn`, RenderObject<P> would either ripple the typed context
+#      into every impl (16+ user-widget call sites) or fragment the
+#      perform_layout_raw API per-protocol.
 #   Pre-existing surfaces: ViewKey, BuildContext, Notification,
 #                          NotifiableElement, RenderObject, RenderObjectTrait
 #   Framework trait surfaces (gesture / focus / delegate / parent-data /
@@ -390,7 +402,7 @@ fi
 #   GestureArenaMember, FocusTraversalPolicy, SliverGridDelegate,
 #   SingleChildLayoutDelegate, MultiChildLayoutDelegate, FlowDelegate,
 #   CustomPainter, ParentData, CustomClipper, RendererBinding, Debug
-fr036_allowed='dyn\s+(\$crate::|[a-zA-Z_][a-zA-Z0-9_]*::)*(View|ViewKey|BuildContext|ElementBase|ElementBehavior|StatelessElementBase|StatefulElementBase|ProxyElementBase|InheritedElementBase|RenderElementBase|InheritedElementAccess|RenderObjectTrait|RenderObject|Listenable|Notification|NotifiableElement|WidgetsBindingObserver|Animation|BoxedView|ViewObject|Any|Error|GestureArenaMember|FocusTraversalPolicy|SliverGridDelegate|SingleChildLayoutDelegate|MultiChildLayoutDelegate|MultiChildLayoutContext|FlowDelegate|CustomPainter|ParentData|CustomClipper|RendererBinding|HitTestable|Debug|Fn|FnMut|FnOnce)\b'
+fr036_allowed='dyn\s+(\$crate::|[a-zA-Z_][a-zA-Z0-9_]*::)*(View|ViewKey|BuildContext|ElementBase|ElementBehavior|StatelessElementBase|StatefulElementBase|ProxyElementBase|InheritedElementBase|RenderElementBase|InheritedElementAccess|RenderObjectTrait|RenderObject|Listenable|Notification|NotifiableElement|WidgetsBindingObserver|Animation|BoxedView|ViewObject|Any|Error|GestureArenaMember|FocusTraversalPolicy|SliverGridDelegate|SingleChildLayoutDelegate|MultiChildLayoutDelegate|MultiChildLayoutContext|FlowDelegate|CustomPainter|ParentData|CustomClipper|RendererBinding|HitTestable|Debug|Fn|FnMut|FnOnce|BoxLayoutCtxErased|SliverLayoutCtxErased)\b'
 
 # Framework crates under enforcement.
 fr036_scope=(

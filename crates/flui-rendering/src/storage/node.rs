@@ -306,32 +306,58 @@ impl RenderNode {
         }
     }
 
-    /// Protocol-erased layout dispatch: matches the inner `RenderEntry<P>`
-    /// against the supplied [`ErasedConstraints`](crate::storage::ErasedConstraints)
-    /// variant and forwards to `RenderEntry::<P>::layout(constraints)`,
+    /// Protocol-erased **leaf-mode** layout dispatch.
+    ///
+    /// Matches the inner `RenderEntry<P>` against the supplied
+    /// [`ErasedConstraints`](crate::storage::ErasedConstraints) variant
+    /// and forwards to
+    /// [`RenderEntry::<P>::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only),
     /// returning the result as
     /// [`ErasedGeometry`](crate::storage::ErasedGeometry).
     ///
+    /// # ⚠ LEAF-ONLY — DO NOT CALL FOR NON-LEAF RENDER OBJECTS
+    ///
+    /// This method delegates to `RenderEntry::layout_leaf_only`, which
+    /// builds a `BoxLayoutCtx::<Leaf, BoxParentData>` with **no
+    /// children**. Non-leaf render objects routed through this method
+    /// observe `ctx.child_count() == 0` and silently produce wrong
+    /// geometry. The name `layout_leaf_erased` (PR #141 Codex review
+    /// comment 3293746309 P1) makes the constraint compile-time
+    /// obvious at every callsite.
+    ///
+    /// # Background
+    ///
     /// **D-block PR-A1b U18 (companion memo D4):** the pipeline operates on
-    /// protocol-erased `RenderNode`s, but `RenderEntry::layout` is generic
-    /// over `P: Protocol`. This method bridges the seam — variant mismatch
-    /// (e.g., `Box` constraints handed to a `Sliver` entry) returns
+    /// protocol-erased `RenderNode`s, but
+    /// `RenderEntry::layout_leaf_only` is generic over `P: Protocol`.
+    /// This method bridges the seam — variant mismatch (e.g., `Box`
+    /// constraints handed to a `Sliver` entry) returns
     /// [`RenderError::ProtocolMismatch`](crate::error::RenderError::ProtocolMismatch).
     ///
-    /// Pipeline-side callers (`PipelineOwner::layout_dirty_root`, U20) lift
-    /// the protocol-typed root constraints to `ErasedConstraints` via the
-    /// `From<BoxConstraints>` / `From<SliverConstraints>` impls before
-    /// invoking. Per-protocol-typed callers (the `RenderBox` bridge and
-    /// `RenderSliver` bridge in U19) downcast the returned geometry via
+    /// Pipeline-side callers lift the protocol-typed root constraints
+    /// to `ErasedConstraints` via the `From<BoxConstraints>` /
+    /// `From<SliverConstraints>` impls before invoking. Per-protocol-typed
+    /// callers (the `RenderBox` bridge and `RenderSliver` bridge in
+    /// U19) downcast the returned geometry via
     /// `TryFrom<ErasedGeometry>`.
-    pub fn layout_erased(
+    ///
+    /// U20's `PipelineOwner::layout_dirty_root` does NOT route through
+    /// this method — it builds typed `BoxLayoutCtx` with children via
+    /// disjoint borrows and calls `render_object.perform_layout_raw`
+    /// directly against an erased view, bypassing the leaf-mode
+    /// constraint entirely.
+    pub fn layout_leaf_erased(
         &mut self,
         constraints: crate::storage::ErasedConstraints,
     ) -> crate::error::RenderResult<crate::storage::ErasedGeometry> {
         use crate::storage::ErasedConstraints;
         match (self, constraints) {
-            (Self::Box(entry), ErasedConstraints::Box(c)) => entry.layout(c).map(Into::into),
-            (Self::Sliver(entry), ErasedConstraints::Sliver(c)) => entry.layout(c).map(Into::into),
+            (Self::Box(entry), ErasedConstraints::Box(c)) => {
+                entry.layout_leaf_only(c).map(Into::into)
+            }
+            (Self::Sliver(entry), ErasedConstraints::Sliver(c)) => {
+                entry.layout_leaf_only(c).map(Into::into)
+            }
             (Self::Box(_), ErasedConstraints::Sliver(_)) => {
                 Err(crate::error::RenderError::ProtocolMismatch {
                     node_protocol: "Box",

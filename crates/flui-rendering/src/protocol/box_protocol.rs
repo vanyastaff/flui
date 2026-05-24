@@ -91,6 +91,9 @@ impl Protocol for BoxProtocol {
     type HitTest = BoxHitTest;
     type DefaultParentData = BoxParentData;
 
+    // PORT-CHECK-OK-DYN: protocol-layout-erasure (D-block PR-A1b U19, memo D5)
+    type LayoutCtxErased<'ctx> = dyn BoxLayoutCtxErased + 'ctx;
+
     fn name() -> &'static str {
         "box"
     }
@@ -118,6 +121,31 @@ impl Protocol for BoxProtocol {
     /// dimension protocol.
     fn bootstrap_relayout_boundary(state: &crate::storage::RenderState<Self>, has_parent: bool) {
         state.compute_relayout_boundary(true, false, has_parent);
+    }
+
+    /// D-block PR-A1b U19 — wraps the given `BoxConstraints` in a typed
+    /// `BoxLayoutCtx::<Leaf, BoxParentData>::new(constraints)` (no
+    /// children, no callback) and hands an erased `&mut dyn
+    /// BoxLayoutCtxErased` view to `f`.
+    ///
+    /// `Leaf` arity is used for the typed wrapper because this entry
+    /// point does not expose children — calls to `layout_child` /
+    /// `position_child` through the erased view will hit the
+    /// `BoxLayoutCtxErased` blanket on `BoxLayoutCtx`, which forwards to
+    /// `LayoutContextApi` whose `Leaf`-arity body returns `Size::ZERO` /
+    /// no-op (the existing semantics for a no-children context).
+    ///
+    /// The pipeline's `layout_dirty_root` (U20) constructs its own typed
+    /// context with children via disjoint borrows and bypasses this
+    /// helper.
+    fn with_leaf_erased_ctx<R>(
+        constraints: BoxConstraints,
+        f: impl FnOnce(&mut Self::LayoutCtxErased<'_>) -> R,
+    ) -> R {
+        let mut typed = BoxLayoutCtx::<flui_tree::Leaf, BoxParentData>::new(constraints);
+        // PORT-CHECK-OK-DYN: protocol-layout-erasure (D-block PR-A1b U19, memo D5)
+        let erased: &mut dyn BoxLayoutCtxErased = &mut typed;
+        f(erased)
     }
 }
 
@@ -212,51 +240,130 @@ impl LayoutCapability for BoxLayout {
 pub type LayoutChildCallback<'a> =
     &'a (dyn Fn(flui_foundation::RenderId, BoxConstraints) -> Size + Send + Sync);
 
+/// Per-child geometry storage owned by the typed wrapper when bridging
+/// from an erased context.
+///
+/// **D-block PR-A1b U19 (companion memo D5):** when the `RenderBox`
+/// blanket impl constructs a `BoxLayoutCtx::from_erased(...)` Proxy view
+/// of an `&mut dyn BoxLayoutCtxErased`, the typed wrapper needs to honour
+/// the [`LayoutContextApi::child_geometry`] contract
+/// (`Option<&Size>` — borrow-returning). The erased trait can only hand
+/// out owned `Size` (no reference lifetime to bind to). The Proxy
+/// variant therefore caches child sizes in this dense `Vec<Option<Size>>`
+/// on `layout_child` calls (which already produce a `Size`
+/// synchronously), and `child_geometry` reads from the cache. This loses
+/// the strict "pre-existing geometry from a sibling's prior call"
+/// semantics that Direct mode provides, but matches the typical
+/// user-widget flow
+/// (`let s = ctx.layout_child(i, c); … ctx.child_geometry(i)`).
+///
+/// # Storage shape (PR #141 Copilot review feedback, comment 3293746260)
+///
+/// Indexed by dense child index (`0..child_count`) so a hash map is
+/// strictly worse on every dimension: lookup is `O(log n)` ↔ `O(1)`
+/// indexed, allocation pattern is many small Hash buckets ↔ one
+/// contiguous Vec, and CPU prefetch favours the contiguous Vec on the
+/// hot layout path. `Option<Size>` is `Copy` and 12 bytes (Size +
+/// discriminant); `Vec::with_capacity(child_count)` from
+/// `erased.child_count()` pre-sizes the cache at Proxy construction
+/// (one allocation per `from_erased` call); subsequent `layout_child`
+/// writes are an in-place assignment with no reallocation.
+type ProxyChildSizeCache = Vec<Option<Size>>;
+
 /// The children reference allows `position_child` to store offsets that
 /// will be used during painting.
+///
+/// **D-block PR-A1b U19 (companion memo D5) — storage variants.** The
+/// context carries two storage modes:
+///
+/// 1. `Direct` (default constructors `new`, `with_children`,
+///    `with_layout_callback`): pipeline owns the children `Vec`, child
+///    IDs, and synchronous layout callback. This is the production path
+///    used by `RenderEntry::layout_leaf_only` (leaf shape) and U20's
+///    `layout_dirty_root` (parent+children disjoint-borrow shape).
+/// 2. `Proxy` (constructor `from_erased`): wraps `&mut dyn
+///    BoxLayoutCtxErased` so the `RenderObject<BoxProtocol>` blanket
+///    impl can reconstruct a typed
+///    `BoxLayoutCtx<T::Arity, T::ParentData>` to hand to
+///    `RenderBox::perform_layout`. Child operations delegate through
+///    the erased trait; typed parent-data access downcasts via
+///    [`ParentData`].
 pub struct BoxLayoutCtx<'ctx, A: Arity, P: ParentData + Default> {
-    constraints: BoxConstraints,
-    geometry: Option<Size>,
-    /// Reference to children states for position_child to update offsets.
-    children: Option<&'ctx mut Vec<ChildState<P>>>,
-    /// Child render IDs for tree lookup during layout_child.
-    child_ids: Option<&'ctx [flui_foundation::RenderId]>,
-    /// Callback to perform synchronous child layout through RenderTree.
-    layout_child_callback: Option<LayoutChildCallback<'ctx>>,
+    storage: BoxLayoutCtxStorage<'ctx, P>,
     _phantom: std::marker::PhantomData<A>,
+}
+
+/// Internal storage variants. See [`BoxLayoutCtx`] doc.
+enum BoxLayoutCtxStorage<'ctx, P: ParentData + Default> {
+    /// Production / pipeline path: owns child state and an optional
+    /// synchronous layout callback.
+    Direct {
+        constraints: BoxConstraints,
+        geometry: Option<Size>,
+        /// Reference to children states for position_child to update
+        /// offsets.
+        children: Option<&'ctx mut Vec<ChildState<P>>>,
+        /// Child render IDs for tree lookup during layout_child.
+        child_ids: Option<&'ctx [flui_foundation::RenderId]>,
+        /// Callback to perform synchronous child layout through
+        /// RenderTree.
+        layout_child_callback: Option<LayoutChildCallback<'ctx>>,
+    },
+    /// Bridge path used by the `RenderObject<BoxProtocol>` blanket impl
+    /// to reconstruct a typed view of an erased context.
+    Proxy {
+        /// Cached at construction from `erased.constraints()`. `BoxConstraints`
+        /// is `Copy`, so the cache is byte-cheap; caching avoids the
+        /// `LayoutContextApi::constraints(&self) -> &BoxConstraints`
+        /// reference-lifetime mismatch with the erased
+        /// `fn constraints(&self) -> BoxConstraints` (owned).
+        constraints: BoxConstraints,
+        geometry: Option<Size>,
+        /// Lazy cache of child sizes returned from
+        /// `erased.layout_child(idx, c)` — see [`ProxyChildSizeCache`].
+        child_sizes: ProxyChildSizeCache,
+        /// The underlying erased context (typically a pipeline-side
+        /// `BoxLayoutCtx` in Direct mode).
+        // PORT-CHECK-OK-DYN: protocol-layout-erasure (D-block PR-A1b U19, memo D5)
+        erased: &'ctx mut dyn BoxLayoutCtxErased,
+    },
 }
 
 impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
     /// Creates a new box layout context with given constraints (no children
-    /// access).
+    /// access). Direct storage.
     pub fn new(constraints: BoxConstraints) -> Self {
         Self {
-            constraints,
-            geometry: None,
-            children: None,
-            child_ids: None,
-            layout_child_callback: None,
+            storage: BoxLayoutCtxStorage::Direct {
+                constraints,
+                geometry: None,
+                children: None,
+                child_ids: None,
+                layout_child_callback: None,
+            },
             _phantom: std::marker::PhantomData,
         }
     }
 
-    /// Creates a new box layout context with children access.
+    /// Creates a new box layout context with children access. Direct storage.
     pub fn with_children(
         constraints: BoxConstraints,
         children: &'ctx mut Vec<ChildState<P>>,
     ) -> Self {
         Self {
-            constraints,
-            geometry: None,
-            children: Some(children),
-            child_ids: None,
-            layout_child_callback: None,
+            storage: BoxLayoutCtxStorage::Direct {
+                constraints,
+                geometry: None,
+                children: Some(children),
+                child_ids: None,
+                layout_child_callback: None,
+            },
             _phantom: std::marker::PhantomData,
         }
     }
 
     /// Creates a new box layout context with full access for synchronous child
-    /// layout.
+    /// layout. Direct storage.
     ///
     /// This constructor enables proper Flutter-style layout where parent's
     /// `layout_child()` triggers synchronous child layout through the
@@ -268,18 +375,87 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
         layout_child_callback: LayoutChildCallback<'ctx>,
     ) -> Self {
         Self {
-            constraints,
-            geometry: None,
-            children: Some(children),
-            child_ids: Some(child_ids),
-            layout_child_callback: Some(layout_child_callback),
+            storage: BoxLayoutCtxStorage::Direct {
+                constraints,
+                geometry: None,
+                children: Some(children),
+                child_ids: Some(child_ids),
+                layout_child_callback: Some(layout_child_callback),
+            },
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    /// **D-block PR-A1b U19** — constructs a Proxy-mode `BoxLayoutCtx`
+    /// that delegates child / completion operations to the given erased
+    /// context. Used by the `RenderObject<BoxProtocol>` blanket impl in
+    /// [`crate::traits::RenderBox`] to hand a typed
+    /// `&mut BoxLayoutCtx<T::Arity, T::ParentData>` to
+    /// `RenderBox::perform_layout`, given only `&mut dyn BoxLayoutCtxErased`
+    /// at the trait boundary.
+    ///
+    /// Constraints are eagerly cached from `erased.constraints()` (cheap —
+    /// `BoxConstraints` is `Copy`) so
+    /// [`LayoutContextApi::constraints`] can return `&BoxConstraints`
+    /// against a stable storage slot rather than an ephemeral owned
+    /// value produced per call.
+    ///
+    /// **Visibility** — `pub(crate)`. The only sanctioned consumer is
+    /// the `RenderObject<BoxProtocol>` blanket impl in
+    /// [`crate::traits::RenderBox`] (in-crate). User render-object
+    /// authors implement `RenderBox::perform_layout` directly and never
+    /// see the erased context; restricting the ctor prevents downstream
+    /// code from constructing Proxy contexts (a sharp tool that requires
+    /// the parent_data-downcast invariants and Direct↔Proxy semantic
+    /// awareness documented on [`BoxLayoutCtxErased`]).
+    // PORT-CHECK-OK-DYN: protocol-layout-erasure (D-block PR-A1b U19, memo D5)
+    pub(crate) fn from_erased(erased: &'ctx mut dyn BoxLayoutCtxErased) -> Self {
+        let constraints = erased.constraints();
+        // Review fix #2: assert at construction time that the typed
+        // wrapper P matches the underlying Direct ctx's P. The Proxy
+        // bridge later downcasts via `child_parent_data_dyn().and_then(
+        // |d| d.downcast_ref::<P>())` — a mismatch silently returns
+        // None and causes the user's perform_layout to see no flex
+        // (for example), producing wrong-but-quiet layout. This
+        // debug_assert catches the construction-site bug instead. None
+        // = no static evidence available (Proxy chain / no-children
+        // Direct) → assert is a no-op, the downcast still guards at
+        // runtime.
+        debug_assert!(
+            match erased.parent_data_type_id() {
+                Some(id) => id == std::any::TypeId::of::<P>(),
+                None => true,
+            },
+            "BoxLayoutCtx::from_erased: ParentData type mismatch — \
+             underlying erased ctx reports TypeId={:?}, typed wrapper \
+             requested {:?} ({})",
+            erased.parent_data_type_id(),
+            std::any::TypeId::of::<P>(),
+            std::any::type_name::<P>(),
+        );
+        // Pre-size the dense `Vec<Option<Size>>` cache to the erased
+        // ctx's child_count — one allocation per Proxy construction, no
+        // per-`layout_child` reallocation. PR #141 Copilot review fix:
+        // swapped from `HashMap<usize, Size>` (sparse + hashing on hot
+        // path) to indexed `Vec<Option<Size>>` (O(1) access, contiguous).
+        let child_count = erased.child_count();
+        Self {
+            storage: BoxLayoutCtxStorage::Proxy {
+                constraints,
+                geometry: None,
+                child_sizes: vec![None; child_count],
+                erased,
+            },
             _phantom: std::marker::PhantomData,
         }
     }
 
     /// Gets the current geometry if layout is complete.
     pub fn geometry(&self) -> Option<&Size> {
-        self.geometry.as_ref()
+        match &self.storage {
+            BoxLayoutCtxStorage::Direct { geometry, .. }
+            | BoxLayoutCtxStorage::Proxy { geometry, .. } => geometry.as_ref(),
+        }
     }
 }
 
@@ -287,77 +463,348 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
     for BoxLayoutCtx<'ctx, A, P>
 {
     fn constraints(&self) -> &BoxConstraints {
-        &self.constraints
+        match &self.storage {
+            BoxLayoutCtxStorage::Direct { constraints, .. }
+            | BoxLayoutCtxStorage::Proxy { constraints, .. } => constraints,
+        }
     }
 
     fn is_complete(&self) -> bool {
-        self.geometry.is_some()
+        match &self.storage {
+            BoxLayoutCtxStorage::Direct { geometry, .. }
+            | BoxLayoutCtxStorage::Proxy { geometry, .. } => geometry.is_some(),
+        }
     }
 
     fn complete_layout(&mut self, geometry: Size) {
-        self.geometry = Some(geometry);
+        match &mut self.storage {
+            BoxLayoutCtxStorage::Direct { geometry: g, .. } => *g = Some(geometry),
+            BoxLayoutCtxStorage::Proxy {
+                geometry: g,
+                erased,
+                ..
+            } => {
+                *g = Some(geometry);
+                // Mirror completion to the underlying erased ctx so any
+                // pipeline-side reader of the original Direct ctx sees
+                // the result. (The blanket-impl bridge returns the Size
+                // directly as well — this keeps both paths consistent.)
+                erased.complete_layout(geometry);
+            }
+        }
     }
 
     fn child_count(&self) -> usize {
-        self.children.as_ref().map(|c| c.len()).unwrap_or(0)
+        match &self.storage {
+            BoxLayoutCtxStorage::Direct { children, .. } => {
+                children.as_ref().map(|c| c.len()).unwrap_or(0)
+            }
+            BoxLayoutCtxStorage::Proxy { erased, .. } => erased.child_count(),
+        }
     }
 
     fn layout_child(&mut self, index: usize, constraints: BoxConstraints) -> Size {
-        // Try to use the layout callback for synchronous child layout
-        if let (Some(child_ids), Some(callback)) =
-            (self.child_ids, self.layout_child_callback.as_ref())
-            && let Some(&child_id) = child_ids.get(index)
-        {
-            // Perform synchronous layout through RenderTree
-            let size = callback(child_id, constraints);
+        match &mut self.storage {
+            BoxLayoutCtxStorage::Direct {
+                children,
+                child_ids,
+                layout_child_callback,
+                ..
+            } => {
+                // Try to use the layout callback for synchronous child layout
+                if let (Some(child_ids), Some(callback)) =
+                    (*child_ids, layout_child_callback.as_ref())
+                    && let Some(&child_id) = child_ids.get(index)
+                {
+                    // Perform synchronous layout through RenderTree
+                    let size = callback(child_id, constraints);
 
-            // Update cached size in children state
-            if let Some(children) = &mut self.children
-                && let Some(child) = children.get_mut(index)
-            {
-                child.size = size;
+                    // Update cached size in children state
+                    if let Some(children) = children.as_mut()
+                        && let Some(child) = children.get_mut(index)
+                    {
+                        child.size = size;
+                    }
+
+                    return size;
+                }
+
+                // Fallback: return cached size if available
+                if let Some(children) = children.as_ref()
+                    && let Some(child) = children.get(index)
+                {
+                    return child.size;
+                }
+                Size::ZERO
             }
-
-            return size;
+            BoxLayoutCtxStorage::Proxy {
+                erased,
+                child_sizes,
+                ..
+            } => {
+                let size = erased.layout_child(index, constraints);
+                // Indexed write — `child_sizes` is pre-sized to
+                // `erased.child_count()` at `from_erased` time. An
+                // out-of-bounds index (caller passed an `index >=
+                // child_count`) silently no-ops the cache write so
+                // `child_geometry(index)` returns `None` — matches
+                // Direct's behaviour where an out-of-range
+                // `children.get(index)` also returns None.
+                if let Some(slot) = child_sizes.get_mut(index) {
+                    *slot = Some(size);
+                }
+                size
+            }
         }
-
-        // Fallback: return cached size if available
-        if let Some(children) = &self.children
-            && let Some(child) = children.get(index)
-        {
-            return child.size;
-        }
-        Size::ZERO
     }
 
     fn position_child(&mut self, index: usize, offset: Offset) {
-        // Store the offset in the child's state
-        if let Some(children) = &mut self.children
-            && let Some(child) = children.get_mut(index)
-        {
-            child.offset = offset;
+        match &mut self.storage {
+            BoxLayoutCtxStorage::Direct { children, .. } => {
+                if let Some(children) = children.as_mut()
+                    && let Some(child) = children.get_mut(index)
+                {
+                    child.offset = offset;
+                }
+            }
+            BoxLayoutCtxStorage::Proxy { erased, .. } => {
+                erased.position_child(index, offset);
+            }
         }
     }
 
     fn child_geometry(&self, index: usize) -> Option<&Size> {
-        self.children
-            .as_ref()
-            .and_then(|c| c.get(index))
-            .map(|child| &child.size)
+        match &self.storage {
+            BoxLayoutCtxStorage::Direct { children, .. } => children
+                .as_ref()
+                .and_then(|c| c.get(index))
+                .map(|child| &child.size),
+            BoxLayoutCtxStorage::Proxy { child_sizes, .. } => {
+                // Indexed access — out-of-range returns None (consistent
+                // with Direct's `children.get(index).map(...)`); in-range
+                // unfilled slot (Some(None)) also returns None.
+                child_sizes.get(index).and_then(Option::as_ref)
+            }
+        }
     }
 
     fn child_parent_data(&self, index: usize) -> Option<&P> {
-        self.children
-            .as_ref()
-            .and_then(|c| c.get(index))
-            .map(|child| &child.parent_data)
+        match &self.storage {
+            BoxLayoutCtxStorage::Direct { children, .. } => children
+                .as_ref()
+                .and_then(|c| c.get(index))
+                .map(|child| &child.parent_data),
+            BoxLayoutCtxStorage::Proxy { erased, .. } => {
+                // P: ParentData : DowncastSync : 'static, so downcast is sound.
+                erased
+                    .child_parent_data_dyn(index)
+                    .and_then(|d| d.downcast_ref::<P>())
+            }
+        }
     }
 
     fn child_parent_data_mut(&mut self, index: usize) -> Option<&mut P> {
-        self.children
-            .as_mut()
-            .and_then(|c| c.get_mut(index))
-            .map(|child| &mut child.parent_data)
+        match &mut self.storage {
+            BoxLayoutCtxStorage::Direct { children, .. } => children
+                .as_mut()
+                .and_then(|c| c.get_mut(index))
+                .map(|child| &mut child.parent_data),
+            BoxLayoutCtxStorage::Proxy { erased, .. } => erased
+                .child_parent_data_dyn_mut(index)
+                .and_then(|d| d.downcast_mut::<P>()),
+        }
+    }
+}
+
+// ============================================================================
+// BOX LAYOUT CTX ERASED (D-block PR-A1b U19 / memo D5)
+// ============================================================================
+
+/// Protocol-typed but **arity- and parent-data-erased** view of a box layout
+/// context, suitable for trait-object use at the
+/// [`RenderObject<BoxProtocol>::perform_layout_raw`](crate::traits::RenderObject::perform_layout_raw)
+/// boundary.
+///
+/// # Motivation (D-block PR-A1b U19 / companion memo D5)
+///
+/// Pre-U19, the blanket impl `impl<T: RenderBox> RenderObject<BoxProtocol> for T`
+/// could not bridge to the user's typed `RenderBox::perform_layout(ctx:
+/// &mut BoxLayoutCtx<Self::Arity, Self::ParentData>)` because the trait
+/// surface only carried protocol-typed constraints (no children, no
+/// layout-callback). As a consequence, the blanket `perform_layout_raw`
+/// shipped as a no-op returning the cached `*self.size()` — D-1's AE1
+/// concretely showed `Size::ZERO` for fresh boxes (companion memo §D5).
+///
+/// `BoxLayoutCtxErased` is the trait-object-friendly wrapper picked in
+/// memo D5: the pipeline / [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only)
+/// constructs a typed [`BoxLayoutCtx<'_, A, P>`], the trait blanket impl
+/// below coerces it to `&mut dyn BoxLayoutCtxErased`, and the
+/// `RenderObject<BoxProtocol>` blanket impl in
+/// [`crate::traits::RenderBox`] reconstructs a typed
+/// `BoxLayoutCtx<T::Arity, T::ParentData>` via a `Proxy` storage variant
+/// that delegates all child / position / parent-data operations back
+/// through this trait.
+///
+/// # Parent-data downcast
+///
+/// `child_parent_data_dyn` / `_mut` expose children's parent data through
+/// `&dyn ParentData`. The blanket impl's `Proxy` view then `downcast_ref::<T::ParentData>()`s
+/// to recover the typed payload required by user widget code
+/// (`ctx.child_parent_data(i) -> Option<&FlexParentData>` and similar).
+/// The downcast is total in practice because the typed BoxLayoutCtx that
+/// produced the erased view was constructed with `Vec<ChildState<P>>`
+/// matching the same P; a mismatch indicates a bug at the construction
+/// site (pipeline / blanket-impl logic error, not user code).
+///
+/// # Sliver counterpart
+///
+/// [`SliverLayoutCtxErased`](super::sliver_protocol::SliverLayoutCtxErased) is the
+/// analogous trait for sliver layout. The sliver bridge is stubbed for
+/// D-block — see [`crate::traits::RenderSliver`].
+///
+/// # Thread-safety
+///
+/// `Send + Sync` is required so the trait object can live inside a
+/// `LayoutContextApi`-implementing type whose own supertrait requires
+/// `Send + Sync` (see [`LayoutContextApi`] — the `Proxy` storage of
+/// [`BoxLayoutCtx`] carries `&mut dyn BoxLayoutCtxErased`).
+pub trait BoxLayoutCtxErased: Send + Sync {
+    /// Box constraints from parent. Cheap copy (`BoxConstraints` is `Copy`).
+    fn constraints(&self) -> BoxConstraints;
+
+    /// Number of children visible to this context.
+    fn child_count(&self) -> usize;
+
+    /// Performs synchronous layout on child at `index` with the given
+    /// constraints; returns the child's computed `Size`.
+    fn layout_child(&mut self, index: usize, constraints: BoxConstraints) -> Size;
+
+    /// Records the paint offset for child at `index`.
+    fn position_child(&mut self, index: usize, offset: Offset);
+
+    /// Records the layout result (parent's own size) on the context.
+    ///
+    /// The completed size is read back from the typed context via
+    /// `BoxLayoutCtx::geometry()` (returning `Option<&Size>`) — see the
+    /// `RenderObject<BoxProtocol>` blanket impl in
+    /// [`crate::traits::RenderBox`] for the read site. The erased trait
+    /// intentionally exposes only the write — owned-`Size`-by-reference
+    /// has no stable storage to bind to through trait-object dispatch,
+    /// and the only readers are the bridge (typed-side `.geometry()`)
+    /// and Proxy `complete_layout` mirror.
+    fn complete_layout(&mut self, size: Size);
+
+    /// Reads child `index`'s parent data as `&dyn ParentData`. Returns
+    /// `None` if `index` is out of bounds or the context wasn't
+    /// constructed with children access.
+    ///
+    /// The blanket impl downcasts via `downcast_ref` (the
+    /// `DowncastSync` method generated by the `impl_downcast!` macro
+    /// on `ParentData`) to recover the typed payload required by user
+    /// widget code.
+    fn child_parent_data_dyn(&self, index: usize) -> Option<&dyn ParentData>;
+
+    /// Mutable counterpart to [`Self::child_parent_data_dyn`].
+    fn child_parent_data_dyn_mut(&mut self, index: usize) -> Option<&mut dyn ParentData>;
+
+    /// `TypeId` of the underlying parent-data type held by this erased
+    /// context, when known.
+    ///
+    /// Returns `Some(TypeId::of::<P>())` for the blanket impl on
+    /// `BoxLayoutCtx<A, P>` when the context was constructed with
+    /// children access (and therefore the `P` type is observable as
+    /// type-of-the-stored-Vec). Returns `None` for children-less Direct
+    /// contexts (P is still in the type parameter but no concrete
+    /// payload exists) and for Proxy contexts (which delegate to the
+    /// underlying erased ctx).
+    ///
+    /// **Use:** the in-crate `BoxLayoutCtx::from_erased` ctor consults
+    /// this to `debug_assert!` that the typed wrapper it is about to
+    /// construct matches the underlying P — a mismatch indicates a
+    /// pipeline / blanket-impl construction bug (a Direct ctx built
+    /// with `Vec<ChildState<FlexParentData>>` would only be bridged
+    /// to a typed `BoxLayoutCtx<_, FlexParentData>`, never to a
+    /// `BoxLayoutCtx<_, BoxParentData>`). The default return is `None`
+    /// so the debug_assert is a no-op for Proxy / no-children paths,
+    /// which is correct: those carry no static evidence to check.
+    ///
+    /// Default `None` keeps the assertion conservative — only triggers
+    /// on bug-shapes we can actually detect.
+    fn parent_data_type_id(&self) -> Option<std::any::TypeId> {
+        None
+    }
+}
+
+impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, A, P> {
+    #[inline]
+    fn constraints(&self) -> BoxConstraints {
+        // Owned by-value (Copy). Inner storage holds the canonical copy
+        // (Direct.constraints or Proxy.constraints cache); read via the
+        // LayoutContextApi accessor and deref-copy.
+        *<Self as LayoutContextApi<'_, BoxLayout, A, P>>::constraints(self)
+    }
+
+    #[inline]
+    fn child_count(&self) -> usize {
+        <Self as LayoutContextApi<'_, BoxLayout, A, P>>::child_count(self)
+    }
+
+    #[inline]
+    fn layout_child(&mut self, index: usize, constraints: BoxConstraints) -> Size {
+        <Self as LayoutContextApi<'_, BoxLayout, A, P>>::layout_child(self, index, constraints)
+    }
+
+    #[inline]
+    fn position_child(&mut self, index: usize, offset: Offset) {
+        <Self as LayoutContextApi<'_, BoxLayout, A, P>>::position_child(self, index, offset)
+    }
+
+    #[inline]
+    fn complete_layout(&mut self, size: Size) {
+        <Self as LayoutContextApi<'_, BoxLayout, A, P>>::complete_layout(self, size)
+    }
+
+    #[inline]
+    fn child_parent_data_dyn(&self, index: usize) -> Option<&dyn ParentData> {
+        // Storage-aware: Direct returns own children's parent_data;
+        // Proxy delegates back through the underlying erased ctx.
+        match &self.storage {
+            BoxLayoutCtxStorage::Direct { children, .. } => children
+                .as_ref()
+                .and_then(|c| c.get(index))
+                .map(|child| &child.parent_data as &dyn ParentData),
+            BoxLayoutCtxStorage::Proxy { erased, .. } => erased.child_parent_data_dyn(index),
+        }
+    }
+
+    #[inline]
+    fn child_parent_data_dyn_mut(&mut self, index: usize) -> Option<&mut dyn ParentData> {
+        match &mut self.storage {
+            BoxLayoutCtxStorage::Direct { children, .. } => children
+                .as_mut()
+                .and_then(|c| c.get_mut(index))
+                .map(|child| &mut child.parent_data as &mut dyn ParentData),
+            BoxLayoutCtxStorage::Proxy { erased, .. } => erased.child_parent_data_dyn_mut(index),
+        }
+    }
+
+    #[inline]
+    fn parent_data_type_id(&self) -> Option<std::any::TypeId> {
+        // Only report a concrete P when the Direct ctx actually holds
+        // a `Vec<ChildState<P>>` payload (children present). For
+        // children-less Direct ctxs and Proxy ctxs, returning None
+        // (default) is correct — no concrete-payload evidence to assert
+        // against. Proxy could chain through to the underlying erased's
+        // own `parent_data_type_id` but today the upstream is always a
+        // Direct ctx with the same P (the from_erased site is the only
+        // construction path), so the extra plumbing buys nothing.
+        match &self.storage {
+            BoxLayoutCtxStorage::Direct {
+                children: Some(_), ..
+            } => Some(std::any::TypeId::of::<P>()),
+            BoxLayoutCtxStorage::Direct { children: None, .. }
+            | BoxLayoutCtxStorage::Proxy { .. } => None,
+        }
     }
 }
 
@@ -656,10 +1103,31 @@ mod tests {
         let constraints = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
         let mut ctx: BoxLayoutCtx<'_, Leaf, BoxParentData> = BoxLayoutCtx::new(constraints);
 
+        // D-block PR-A1b U19: `BoxLayoutCtx` now implements both
+        // `LayoutContextApi` (user-facing API, returns `&BoxConstraints`)
+        // and `BoxLayoutCtxErased` (trait-object bridge, returns owned
+        // `BoxConstraints` by Copy). UFCS disambiguates inside this
+        // module where both traits are in scope; downstream user code
+        // typically only imports `LayoutContextApi` so the bare-method
+        // form keeps working.
         assert!(!ctx.is_complete());
-        assert_eq!(ctx.constraints().max_width, 100.0);
+        assert_eq!(
+            <BoxLayoutCtx<'_, Leaf, BoxParentData> as LayoutContextApi<
+                '_,
+                BoxLayout,
+                Leaf,
+                BoxParentData,
+            >>::constraints(&ctx)
+            .max_width,
+            100.0
+        );
 
-        ctx.complete_layout(Size::new(px(100.0), px(100.0)));
+        <BoxLayoutCtx<'_, Leaf, BoxParentData> as LayoutContextApi<
+            '_,
+            BoxLayout,
+            Leaf,
+            BoxParentData,
+        >>::complete_layout(&mut ctx, Size::new(px(100.0), px(100.0)));
         assert!(ctx.is_complete());
     }
 

@@ -40,12 +40,26 @@
 // MODULE DECLARATIONS
 // ============================================================================
 
-mod box_protocol;
+// `box_protocol` and `sliver_protocol` are `pub` (rather than the
+// historical private `mod`) so the pipeline-seam traits
+// `BoxLayoutCtxErased` / `SliverLayoutCtxErased` are reachable to
+// downstream consumers via the fully-qualified path
+// `flui_rendering::protocol::box_protocol::BoxLayoutCtxErased` without
+// being pulled into scope by a glob `use flui_rendering::protocol::*`.
+// PR #141 Copilot review feedback (comment 3293746269): a glob re-export
+// of the erased trait collides with `LayoutContextApi`'s method names
+// (`constraints` / `layout_child` / `position_child` / `complete_layout`
+// overlap by design) and triggers ambiguous-method E0034 in widget
+// code. The submodule-pub approach surfaces the trait at one explicit
+// path without polluting the common namespace. The most-used surfaces
+// (`BoxLayoutCtx`, `BoxProtocol`, `LayoutContextApi`, …) are still
+// re-exported at `protocol::*` below for ergonomics.
+pub mod box_protocol;
 mod capabilities;
 mod into_render_object;
 #[allow(clippy::module_inception)] // protocol.rs inside protocol/ contains core Protocol trait
 mod protocol;
-mod sliver_protocol;
+pub mod sliver_protocol;
 
 // ============================================================================
 // PROTOCOL TRAIT EXPORTS
@@ -71,6 +85,23 @@ pub use box_protocol::{
     // children_access.rs in Mythos Step 5b)
     ChildState,
 };
+// Erased layout-context trait (D-block PR-A1b U19 / memo D5).
+//
+// **Deliberately NOT re-exported** at the `protocol::*` level (PR #141
+// Copilot review feedback, comment 3293746269):
+// `BoxLayoutCtxErased::constraints` / `layout_child` / `position_child`
+// / `complete_layout` overlap with `LayoutContextApi`'s method names by
+// design (both view the same operations from different angles); putting
+// the trait into `protocol::*` would force user widget code that does
+// `use flui_rendering::protocol::*;` into ambiguous-method E0034 on
+// `ctx.constraints()` etc. The trait stays declared `pub` at its own
+// module path so a future `pub mod box_protocol;` lift (when an
+// external Protocol impl outside the sealed set is allowed) is a
+// one-line change; today no such consumer exists, so the trait is
+// effectively crate-internal — the blanket impl on `BoxLayoutCtx` and
+// the `from_erased` ctor reach it via the local
+// `super::box_protocol::BoxLayoutCtxErased` path within
+// `protocol/box_protocol.rs` itself.
 // ============================================================================
 // CAPABILITY EXPORTS
 // ============================================================================
@@ -118,6 +149,8 @@ pub use sliver_protocol::{
     // Protocol
     SliverProtocol,
 };
+// Sliver counterpart to `BoxLayoutCtxErased` — same no-public-re-export
+// rationale; see the BoxLayoutCtxErased note above.
 
 // ============================================================================
 // RENDER OBJECT TRAIT EXPORTS (re-exported from traits module)

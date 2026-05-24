@@ -38,9 +38,7 @@ use flui_foundation::Diagnosticable;
 use flui_types::{Offset, Rect};
 
 use crate::{
-    protocol::{
-        Protocol, ProtocolConstraints, ProtocolGeometry, ProtocolHitResult, ProtocolPosition,
-    },
+    protocol::{Protocol, ProtocolGeometry, ProtocolHitResult, ProtocolPosition},
     semantics::SemanticsConfiguration,
 };
 
@@ -155,14 +153,36 @@ pub trait RenderObject<P: Protocol>:
     // Core Operations
     // ========================================================================
 
-    /// Performs layout with raw protocol constraints.
+    /// Performs layout with a protocol-erased layout context.
     ///
-    /// Called by `RenderEntry::layout()`. Returns the computed geometry.
+    /// Called by `RenderEntry::layout()` (leaf path) and the pipeline's
+    /// `layout_dirty_root` (U20, parent+children disjoint-borrow path).
+    /// Returns the computed geometry.
     ///
     /// **Users don't implement this directly.** Protocol traits like
-    /// `RenderBox` provide blanket implementations that create typed
-    /// contexts and call the typed `perform_layout()` method.
-    fn perform_layout_raw(&mut self, constraints: ProtocolConstraints<P>) -> ProtocolGeometry<P>;
+    /// `RenderBox` provide blanket implementations that reconstruct a
+    /// typed `BoxLayoutCtx<Self::Arity, Self::ParentData>` from the
+    /// erased context (via the in-crate `BoxLayoutCtx::from_erased`
+    /// ctor) and call the typed [`RenderBox::perform_layout`] method.
+    ///
+    /// **D-block PR-A1b U19 (companion memo D5):** the signature changed
+    /// from `fn perform_layout_raw(&mut self, constraints:
+    /// ProtocolConstraints<P>) -> ProtocolGeometry<P>` to the current
+    /// shape so the blanket impl can construct a typed
+    /// [`BoxLayoutCtx`] with children access — the prior signature
+    /// shipped a no-op returning `*self.size()` because the trait
+    /// surface didn't carry children. The
+    /// [`Protocol::LayoutCtxErased`] GAT resolves to the per-protocol
+    /// trait-object form: `dyn BoxLayoutCtxErased` for `BoxProtocol`,
+    /// `dyn SliverLayoutCtxErased` for `SliverProtocol`.
+    ///
+    /// [`BoxLayoutCtx`]: crate::protocol::BoxLayoutCtx
+    /// [`RenderBox::perform_layout`]: crate::traits::RenderBox::perform_layout
+    /// [`Protocol::LayoutCtxErased`]: crate::protocol::Protocol::LayoutCtxErased
+    fn perform_layout_raw(
+        &mut self,
+        ctx: &mut <P as Protocol>::LayoutCtxErased<'_>,
+    ) -> ProtocolGeometry<P>;
 
     /// Paints this render object.
     ///

@@ -65,6 +65,27 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
     /// Default parent data for child render objects.
     type DefaultParentData: ParentData + Default;
 
+    /// Protocol-specific erased layout context — the trait-object form
+    /// of the typed `<Self::Layout as LayoutCapability>::Context<'_, A, P>`
+    /// without exposing the arity / parent-data type parameters.
+    ///
+    /// Used at the
+    /// [`RenderObject<P>::perform_layout_raw`](crate::traits::RenderObject::perform_layout_raw)
+    /// trait boundary so the pipeline can hand a typed layout context to
+    /// a protocol-erased render-object trait method without per-protocol
+    /// dispatch in the caller.
+    ///
+    /// **D-block PR-A1b U19 (companion memo D5):** for `BoxProtocol` this
+    /// resolves to `dyn BoxLayoutCtxErased + 'ctx`; for `SliverProtocol`
+    /// to `dyn SliverLayoutCtxErased + 'ctx`. Each per-protocol trait
+    /// exposes the small protocol-shared surface (constraints, child ops,
+    /// complete_layout) that the [`RenderObject`](crate::traits::RenderObject)
+    /// blanket impl needs to reconstruct a typed layout context via a
+    /// `Proxy` storage variant on the typed context type.
+    type LayoutCtxErased<'ctx>: ?Sized
+    where
+        Self: 'ctx;
+
     /// Protocol name for debugging and diagnostics.
     fn name() -> &'static str;
 
@@ -102,6 +123,27 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
     {
         let _ = (state, has_parent);
     }
+
+    /// Constructs a leaf-mode (no children, no layout callback) erased
+    /// layout context from protocol-typed constraints, then invokes `f`
+    /// with a `&mut Self::LayoutCtxErased<'_>` referencing it.
+    ///
+    /// Closure shape (`FnOnce`) keeps the typed context's lifetime scoped
+    /// to the call — the typed `BoxLayoutCtx::new(...)` value lives on
+    /// the caller's stack inside the trait method, the erased coercion
+    /// borrows it, and the borrow expires when `f` returns.
+    ///
+    /// **D-block PR-A1b U19 (companion memo D5):** used by
+    /// [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only) for
+    /// the leaf / single-node layout path. The pipeline's
+    /// `layout_dirty_root` (U20) constructs its own typed context with
+    /// children access via disjoint borrows and bypasses this helper.
+    fn with_leaf_erased_ctx<R>(
+        constraints: <Self::Layout as LayoutCapability>::Constraints,
+        f: impl FnOnce(&mut Self::LayoutCtxErased<'_>) -> R,
+    ) -> R
+    where
+        Self: Sized;
 }
 
 // ============================================================================
