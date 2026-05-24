@@ -65,6 +65,8 @@ pub use box_protocol::{
     // Layout
     BoxLayout,
     BoxLayoutCtx,
+    // Erased layout-context trait (D-block PR-A1b U19 / memo D5)
+    BoxLayoutCtxErased,
     // Protocol
     BoxProtocol,
     // Per-child layout state (moved here from the deleted
@@ -115,6 +117,8 @@ pub use sliver_protocol::{
     // Layout
     SliverLayout,
     SliverLayoutCtx,
+    // Erased layout-context trait (D-block PR-A1b U19 / memo D5)
+    SliverLayoutCtxErased,
     // Protocol
     SliverProtocol,
 };
