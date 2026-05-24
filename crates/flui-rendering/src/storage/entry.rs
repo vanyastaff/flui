@@ -249,6 +249,16 @@ impl<P: Protocol> RenderEntry<P> {
     /// next frame after the offending node has been removed or fixed.
     ///
     /// Returns the computed geometry on success.
+    ///
+    /// **D-block PR-A1b U19:** `perform_layout_raw` now takes a
+    /// `&mut <P as Protocol>::LayoutCtxErased<'_>` (the protocol-erased
+    /// layout context trait object) rather than raw constraints.
+    /// `RenderEntry::layout` constructs a leaf-mode typed layout context
+    /// via [`Protocol::with_leaf_erased_ctx`] and hands its erased view
+    /// to the render object — this preserves the previous "no children
+    /// access at this seam" semantic (the pipeline's
+    /// `layout_dirty_root` in U20 takes over for the parent + children
+    /// disjoint-borrow shape).
     pub fn layout(
         &mut self,
         constraints: ProtocolConstraints<P>,
@@ -270,11 +280,23 @@ impl<P: Protocol> RenderEntry<P> {
         // (geometry / constraints / flags) on `self.state` is not touched
         // before the panic site, so the render tree stays consistent.
         let render_object = &mut *self.render_object;
-        let constraints_for_call = constraints.clone();
-        let geometry = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            render_object.perform_layout_raw(constraints_for_call)
-        }))
-        .map_err(|_| crate::error::RenderError::poisoned(debug_name, "layout"))?;
+        let constraints_for_ctx = constraints.clone();
+
+        // D-block PR-A1b U19 — wrap constraints in a leaf-mode erased
+        // ctx scoped to the inner closure. The protocol's
+        // `with_leaf_erased_ctx` constructs a typed `BoxLayoutCtx::new` /
+        // `SliverLayoutCtx::new` on its own stack frame and lends an
+        // erased `&mut dyn` view; the borrow expires when the FnOnce
+        // closure returns, keeping the storage local to this call.
+        let geometry = <P as crate::protocol::Protocol>::with_leaf_erased_ctx(
+            constraints_for_ctx,
+            |erased_ctx| {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    render_object.perform_layout_raw(erased_ctx)
+                }))
+                .map_err(|_| crate::error::RenderError::poisoned(debug_name, "layout"))
+            },
+        )?;
 
         // Update state -- only on the success path. On panic, state remains
         // untouched and NEEDS_LAYOUT stays set so a retry is possible.

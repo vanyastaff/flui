@@ -1709,7 +1709,9 @@ mod tests {
     impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for PanickingPaintBox {
         fn perform_layout_raw(
             &mut self,
-            _constraints: crate::protocol::ProtocolConstraints<crate::protocol::BoxProtocol>,
+            _ctx: &mut <crate::protocol::BoxProtocol as crate::protocol::Protocol>::LayoutCtxErased<
+                '_,
+            >,
         ) -> crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol> {
             self.size
         }
@@ -1766,7 +1768,9 @@ mod tests {
     impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for PanickingLayoutBox {
         fn perform_layout_raw(
             &mut self,
-            _constraints: crate::protocol::ProtocolConstraints<crate::protocol::BoxProtocol>,
+            _ctx: &mut <crate::protocol::BoxProtocol as crate::protocol::Protocol>::LayoutCtxErased<
+                '_,
+            >,
         ) -> crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol> {
             panic!("PanickingLayoutBox::perform_layout_raw -- intentional test panic");
         }

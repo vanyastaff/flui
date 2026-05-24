@@ -349,23 +349,25 @@ pub enum TextBaseline {
 /// This blanket impl bridges the typed RenderBox API (with Arity/ParentData)
 /// and the protocol-specific `RenderObject<P>` trait needed for storage.
 ///
-/// # Architecture Note
+/// # Architecture Note (D-block PR-A1b U19 / companion memo D5)
 ///
-/// The `perform_layout_raw` and `hit_test_raw` methods are **protocol bridges
-/// only**. They exist to satisfy trait bounds for storing `dyn
-/// RenderObject<BoxProtocol>`.
+/// The `perform_layout_raw` body **is** the real bridge — it receives a
+/// protocol-erased `&mut dyn BoxLayoutCtxErased`, reconstructs a typed
+/// `BoxLayoutCtx<T::Arity, T::ParentData>` via
+/// [`BoxLayoutCtx::from_erased`], wraps it in a `BoxLayoutContext`
+/// (the rich ergonomic wrapper), and calls
+/// [`RenderBox::perform_layout`]. The completion size is read back from
+/// the inner context's geometry and returned to the pipeline.
 ///
-/// **Actual layout and hit testing flow:**
-/// 1. Pipeline creates `BoxLayoutContext` with children access
-/// 2. Pipeline calls `RenderBox::perform_layout()` directly (not through this
-///    blanket impl)
-/// 3. The typed method receives proper context with `layout_child()`,
-///    `position_child()` etc.
+/// Pre-U19 this method returned `*self.size()` as a no-op placeholder
+/// (companion memo §D5: D-1 AE1 demonstrably returned `Size::ZERO` for
+/// fresh boxes). The real bridge is now live.
 ///
-/// The blanket impl methods return placeholder values because:
-/// - `perform_layout_raw` can't create BoxLayoutContext (needs external
-///   children access)
-/// - `hit_test_raw` can't create BoxHitTestContext (needs external state)
+/// `hit_test_raw` is still a placeholder — hit testing flows through
+/// `RenderBox::hit_test()` with `BoxHitTestContext` and is wired
+/// separately by the hit-test pipeline. The painting flow is also still
+/// out-of-band: the pipeline constructs `BoxPaintContext` and calls
+/// `RenderBox::paint()` directly.
 ///
 /// Note: This requires T to also implement Diagnosticable since `RenderObject<P>`
 /// requires it.
@@ -379,11 +381,37 @@ where
 {
     fn perform_layout_raw(
         &mut self,
-        _constraints: crate::protocol::ProtocolConstraints<BoxProtocol>,
+        ctx: &mut <BoxProtocol as crate::protocol::Protocol>::LayoutCtxErased<'_>,
     ) -> crate::protocol::ProtocolGeometry<BoxProtocol> {
-        // Protocol bridge only - returns current size.
-        // Real layout flows through RenderBox::perform_layout() with BoxLayoutContext.
-        *self.size()
+        // D-block PR-A1b U19 / memo D5 — the real bridge.
+        //
+        // The pipeline / `RenderEntry::layout` hands us a `&mut dyn
+        // BoxLayoutCtxErased` (the GAT for `BoxProtocol` resolves to
+        // exactly this). We reconstruct a typed
+        // `BoxLayoutCtx<T::Arity, T::ParentData>` via the `from_erased`
+        // ctor (Proxy storage that delegates child / completion ops back
+        // through the erased trait), wrap it in the ergonomic
+        // `BoxLayoutContext` so user widgets get
+        // `complete_with_size` etc., and call `T::perform_layout`.
+        //
+        // The user's `perform_layout` body must call
+        // `ctx.complete_with_size(...)` (or equivalent) to record the
+        // computed size; we read it back from the inner BoxLayoutCtx
+        // and return to the caller. Failure to complete is treated as
+        // a contract violation — `expect` panics with a descriptive
+        // message naming the offending render object.
+        let typed_inner =
+            crate::protocol::BoxLayoutCtx::<T::Arity, T::ParentData>::from_erased(ctx);
+        let mut layout_ctx =
+            crate::context::BoxLayoutContext::<T::Arity, T::ParentData>::new(typed_inner);
+        T::perform_layout(self, &mut layout_ctx);
+        layout_ctx.inner().geometry().copied().unwrap_or_else(|| {
+            panic!(
+                "RenderBox::perform_layout for {} did not call complete_with_size — \
+                     no geometry recorded by completion of perform_layout_raw",
+                self.debug_name()
+            )
+        })
     }
 
     fn paint(&self, _context: &mut CanvasContext, _offset: Offset) {

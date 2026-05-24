@@ -345,12 +345,25 @@ where
 {
     fn perform_layout_raw(
         &mut self,
-        _constraints: crate::protocol::ProtocolConstraints<SliverProtocol>,
+        _ctx: &mut <SliverProtocol as crate::protocol::Protocol>::LayoutCtxErased<'_>,
     ) -> crate::protocol::ProtocolGeometry<SliverProtocol> {
-        // Protocol bridge only - returns current geometry.
-        // Real layout flows through RenderSliver::perform_layout() with
-        // SliverLayoutContext.
-        *self.geometry()
+        // D-block PR-A1b U19 / memo D5 — Sliver bridge is stubbed.
+        //
+        // The Box bridge in `render_box.rs` reconstructs a typed
+        // `BoxLayoutCtx` from the erased trait object and calls the
+        // user's `RenderBox::perform_layout`. The analogous Sliver
+        // bridge (reconstruct `SliverLayoutCtx` → call
+        // `RenderSliver::perform_layout`) is deferred to Core.2 alongside
+        // the rest of the sliver layout work — no sliver render objects
+        // are in the D-block test surface (companion memo §D5
+        // "Out of scope. Sliver bridge — analogous shape, lands as part
+        // of Core.2 sliver work").
+        //
+        // The body keeps the pre-U19 placeholder semantic (return current
+        // geometry) so existing sliver state-reading flows continue to
+        // observe the stored geometry rather than seeing an uninitialised
+        // `Default::default()` value.
+        *RenderSliver::geometry(self)
     }
 
     fn paint(&self, _context: &mut CanvasContext, _offset: Offset) {

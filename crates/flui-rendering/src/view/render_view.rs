@@ -496,9 +496,13 @@ impl crate::traits::HotReloadCapability for RenderViewAdapter {}
 impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewAdapter {
     fn perform_layout_raw(
         &mut self,
-        _constraints: crate::protocol::ProtocolConstraints<crate::protocol::BoxProtocol>,
+        _ctx: &mut <crate::protocol::BoxProtocol as crate::protocol::Protocol>::LayoutCtxErased<'_>,
     ) -> crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol> {
-        // RenderView manages its own layout via perform_layout()
+        // D-block PR-A1b U19 — RenderView is the root and manages its own
+        // layout via the `perform_layout()` method on the embedded
+        // `RenderView`. The erased ctx is unused — root layout is driven
+        // by `configuration().preferred_size` rather than parent-supplied
+        // constraints (Flutter parity, `.flutter/.../view.dart`).
         self.view.perform_layout();
         self.view.size()
     }
