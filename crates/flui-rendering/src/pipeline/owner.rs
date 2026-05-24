@@ -556,6 +556,12 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         let id = self.render_tree.insert(node);
         let depth = self.render_tree.depth(id).unwrap_or(0) as usize;
 
+        // PR-A2 U33: bootstrap IS_REPAINT_BOUNDARY flag from the
+        // render_object's static answer before the dirty pushes (so
+        // the compositing walk has accurate boundary info on first
+        // run_compositing).
+        self.bootstrap_repaint_boundary_flag(id);
+
         // New nodes need layout and paint
         self.add_node_needing_layout(id, depth);
         self.add_node_needing_paint(id, depth);
@@ -596,6 +602,11 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             .insert_box_child(parent_id, render_object)?;
         let child_depth = parent_depth + 1;
 
+        // PR-A2 U33: bootstrap IS_REPAINT_BOUNDARY flag from the
+        // child render_object's static answer before any compositing
+        // walk runs.
+        self.bootstrap_repaint_boundary_flag(child_id);
+
         // Mark child as needing layout and paint
         self.add_node_needing_layout(child_id, child_depth as usize);
         self.add_node_needing_paint(child_id, child_depth as usize);
@@ -621,6 +632,12 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         let id = self.render_tree.insert(node);
         let depth = self.render_tree.depth(id).unwrap_or(0) as usize;
 
+        // PR-A2 U33: bootstrap IS_REPAINT_BOUNDARY flag (matches the
+        // `insert` / `insert_child_render_object` paths so every code
+        // path that adds nodes leaves the compositing flag in sync
+        // with the trait answer).
+        self.bootstrap_repaint_boundary_flag(id);
+
         self.add_node_needing_layout(id, depth);
         self.add_node_needing_paint(id, depth);
 
@@ -644,6 +661,42 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         let id = self.insert(render_object);
         self.root_id = Some(id);
         id
+    }
+
+    /// Bootstraps the `IS_REPAINT_BOUNDARY` storage flag from the render
+    /// object's static trait answer (`RenderObject::is_repaint_boundary()`).
+    ///
+    /// **D-block PR-A2 U33 (memo R26b).** Every node-insert path
+    /// ([`Self::insert`], [`Self::insert_child_render_object`],
+    /// [`Self::insert_render_node`]; [`Self::set_root_render_object`]
+    /// inherits via `insert`) calls this immediately after the tree
+    /// `insert` so the compositing-bits walk (U34) has accurate
+    /// boundary info via the storage flag from frame 1.
+    ///
+    /// **Current consumer scope:** the compositing-bits walk consults
+    /// `RenderNode::is_repaint_boundary_flag()`. The paint walk
+    /// (`paint_node_recursive`) still reads `render_object.is_repaint_boundary()`
+    /// directly — this matches Flutter parity (Flutter's `paint`
+    /// reads the `isRepaintBoundary` final getter, equivalent to our
+    /// trait answer; the bootstrap flag is the optimization target
+    /// for a later sweep that swaps the paint check too).
+    ///
+    /// Pre-U33 the storage flag was effectively `false` for every node
+    /// from the moment it entered the tree, which forced the
+    /// compositing walk to fall through to the trait answer
+    /// (`render_object().is_repaint_boundary()`) at every check site —
+    /// a virtual dispatch and a divergence risk if a future caller
+    /// flipped the flag dynamically.
+    ///
+    /// No-op if `id` is not present (defensive — every call site holds
+    /// a freshly-inserted id, but a stale id passes through silently
+    /// rather than panicking).
+    #[inline]
+    fn bootstrap_repaint_boundary_flag(&self, id: RenderId) {
+        if let Some(node) = self.render_tree.get(id) {
+            let is_boundary = node.is_repaint_boundary();
+            node.set_repaint_boundary_flag(is_boundary);
+        }
     }
 
     // ========================================================================
@@ -839,11 +892,27 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// layout-phase debug flag because compositing-bits update runs
     /// as part of the layout pipeline per the typestate transitions).
     ///
+    /// **PR-A2 Codex review #3294562493:** also sets the
+    /// `NEEDS_COMPOSITING_BITS_UPDATE` flag on the node so the
+    /// `run_compositing` walk's per-entry `needs_compositing_bits_update()`
+    /// short-circuit doesn't silently drop this queue entry. The
+    /// invariant "queue entry ⇒ flag set" makes the queue-clear at
+    /// end of `run_compositing` safe — a queued entry can no longer
+    /// be a no-op walk that loses the scheduling signal. Callers
+    /// that want the bit set without queue membership should reach
+    /// for [`RenderNode::mark_needs_compositing_bits_update`] directly.
+    ///
     /// # Arguments
     ///
     /// * `node_id` - The `RenderId` of the render object (1-based)
     /// * `depth` - The depth of the node in the render tree
     pub fn add_node_needing_compositing_bits_update(&mut self, node_id: RenderId, depth: usize) {
+        // Set the bit first so the run_compositing walk doesn't
+        // skip this entry on the early-return path. No-op if the id
+        // is not present in the tree (defensive).
+        if let Some(node) = self.render_tree.get(node_id) {
+            node.mark_needs_compositing_bits_update();
+        }
         let target = if self.debug_doing_layout {
             &mut self.mid_layout_marks.needs_compositing
         } else {
@@ -1790,23 +1859,42 @@ impl PipelineOwner<Compositing> {
 
     /// Updates compositing bits for all dirty render objects.
     ///
-    /// This is phase 2 of the rendering pipeline. During this phase:
-    /// - Each object determines if it needs a compositing layer
-    /// - This information is used during paint
+    /// **D-block PR-A2 U34 (memo D3-3).** Port of Flutter's
+    /// `PipelineOwner.flushCompositingBits` + per-object
+    /// `RenderObject._updateCompositingBits`
+    /// (`.flutter/.../object.dart:3226-3258`). For each entry in
+    /// `dirty.needs_compositing` (sorted shallow-first to match
+    /// Flutter's `_nodesNeedingCompositingBitsUpdate.sort`), this
+    /// method recursively walks the subtree, recomputing
+    /// `NEEDS_COMPOSITING` bottom-up:
     ///
-    /// Nodes are sorted by depth (shallow first). This matches Flutter's
-    /// `flushCompositingBits` behavior.
+    /// 1. If a node does NOT have `NEEDS_COMPOSITING_BITS_UPDATE`
+    ///    set, skip (parent walk already covered, or no work to do).
+    /// 2. Otherwise: save `old_needs_compositing`, clear current
+    ///    `NEEDS_COMPOSITING`, recurse into each child, OR-in each
+    ///    child's `NEEDS_COMPOSITING` result.
+    /// 3. Force `NEEDS_COMPOSITING = true` if the node is a repaint
+    ///    boundary (`IS_REPAINT_BOUNDARY`) or always needs compositing
+    ///    (`RenderObject::always_needs_compositing()`).
+    /// 4. Three transition cases:
+    ///    - **Lost-boundary**: if the node previously was a repaint
+    ///      boundary (`WAS_REPAINT_BOUNDARY`) but no longer is, clear
+    ///      its accumulated paint state and re-enqueue for paint so
+    ///      a new boundary owner picks it up (Flutter object.dart:3246).
+    ///    - **Compositing changed**: if `old_needs_compositing !=
+    ///      new_needs_compositing`, mark dirty for paint so the
+    ///      compositor sees the new shape (Flutter object.dart:3252).
+    ///    - **No change**: clear `NEEDS_COMPOSITING_BITS_UPDATE` and
+    ///      leave paint state untouched (Flutter object.dart:3255).
+    ///
+    /// The walk is staged via a private `CompositingWalkActions`
+    /// accumulator so that post-walk paint-queue mutations don't
+    /// fight the recursive borrows: the recursion reads
+    /// `&self.render_tree` (shared) and accumulates actions, then
+    /// we apply them under `&mut self`.
     pub fn run_compositing(&mut self) -> crate::error::RenderResult<()> {
-        // PR #109 review feedback: pre-fix this path used
-        // `std::mem::take(&mut self.dirty.needs_compositing)` to drain in
-        // one step. Take leaves an empty `Vec::new()` (capacity 0) behind,
-        // so every subsequent frame's first compositing push re-allocates.
-        // The compositing dirty list churns per-frame in any animated
-        // scene, so the realloc cost is hot-path. Switch to an in-place
-        // sort + iterate + clear pattern that preserves the Vec's backing
-        // capacity across frames (idiom: *Programming Rust* 2nd ed §11
-        // "Owned vs Borrowed", retain the allocation by retaining
-        // ownership).
+        // Empty fast-path: no allocation, no logging churn for the
+        // common "nothing changed" frame.
         if self.dirty.needs_compositing.is_empty() {
             return Ok(());
         }
@@ -1815,47 +1903,140 @@ impl PipelineOwner<Compositing> {
             self.dirty.needs_compositing.len()
         );
 
-        // Sort by depth (shallow first). Flutter:
+        // Sort shallow-first per Flutter
         // `_nodesNeedingCompositingBitsUpdate.sort((a, b) => a.depth - b.depth)`.
         self.dirty
             .needs_compositing
             .sort_unstable_by_key(|node| node.depth);
 
-        // Cycle 4 R-4: pre-cycle this path emitted a `tracing::trace!`
-        // per dirty node and returned `Ok(())` without actually
-        // updating any compositing bit — a SILENT half-impl flagged
-        // as P0 "worse than R-1 because R-1 panics loudly; this just
-        // returns success with no work done."
-        //
-        // The honest stub: keep the walk (so callers see the dirty
-        // node ids in logs), but UPGRADE the per-node log to
-        // `tracing::warn!` so the missing-impl is visible in any
-        // production log scrape. The full Flutter parity
-        // (`_updateSubtreeCompositingBits` recursion + repaint-
-        // boundary check) is its own follow-up that needs the
-        // `RenderObject::always_needs_compositing` + `is_repaint_boundary`
-        // bool accessors plumbed through the dyn surface.
-        //
-        // Split-borrow: `self.dirty.needs_compositing` (immutable) and
-        // `self.render_tree` (immutable) are disjoint fields under
-        // Rust 2024's disjoint capture, so this loop compiles without
-        // a temporary clone.
-        for node in &self.dirty.needs_compositing {
-            if self.render_tree.contains(node.id) {
-                tracing::warn!(
-                    id = ?node.id,
-                    depth = node.depth,
-                    "run_compositing: compositing-bits update is a no-op until \
-                     `_updateSubtreeCompositingBits` recursion + repaint-boundary \
-                     dispatch land; this node's compositing flags are unchanged"
-                );
-            }
+        // Iterate by index over the dirty list so the loop body can
+        // call `&self` recursion without holding the iterator's
+        // borrow across the call (the `update_subtree_compositing_bits`
+        // method takes `&self`, which conflicts with the iter's
+        // simultaneous `&self.dirty.needs_compositing` borrow under
+        // some borrow-checker versions). Pre-fix this snapshotted
+        // the ids into a fresh `Vec<RenderId>` per frame
+        // (PR-A2 Copilot #3294557191).
+        let mut actions = CompositingWalkActions::default();
+        for i in 0..self.dirty.needs_compositing.len() {
+            let id = self.dirty.needs_compositing[i].id;
+            self.update_subtree_compositing_bits(id, &mut actions);
         }
-        // `clear()` retains the Vec's allocated capacity; next frame's
-        // pushes amortise into the existing buffer.
+
+        // Apply paint-queue mutations after the walk completes (under
+        // disjoint `&mut self`). Remove-first, then re-enqueue, so an
+        // id present in both buckets ends up correctly re-queued at the
+        // post-walk depth.
+        if !actions.remove_from_paint_queue.is_empty() {
+            self.dirty
+                .needs_paint
+                .retain(|d| !actions.remove_from_paint_queue.contains(&d.id));
+        }
+        for (id, depth) in actions.mark_needs_paint {
+            self.add_node_needing_paint(id, depth);
+        }
+
+        // PR #109 retain-capacity idiom (kept from pre-U34 stub): `clear()`
+        // preserves the Vec's backing capacity across frames.
         self.dirty.needs_compositing.clear();
         Ok(())
     }
+
+    /// Recursive helper for [`Self::run_compositing`] — see that method's
+    /// doc for the algorithm. Operates on shared `&self.render_tree` via
+    /// interior-mutability flag accessors; paint-queue side effects are
+    /// staged via `actions` for post-walk application.
+    fn update_subtree_compositing_bits(&self, id: RenderId, actions: &mut CompositingWalkActions) {
+        let Some(node) = self.render_tree.get(id) else {
+            return;
+        };
+        if !node.needs_compositing_bits_update() {
+            return;
+        }
+
+        let old_needs_compositing = node.needs_compositing();
+        node.clear_needs_compositing();
+
+        // Iterate the child slice in-place — both `tree.children(id)`
+        // and the recursive `update_subtree_compositing_bits` call are
+        // shared borrows of `&self.render_tree`, so they coexist
+        // without a clone. Pre-fix the loop cloned children into a
+        // fresh `Vec<RenderId>` per visited node (per-node heap
+        // allocation) — flagged by Copilot #3294557204 as conflicting
+        // with the repo's documented "no per-node child clone"
+        // optimization in `RenderTree::visit_depth_first`
+        // (`storage/tree.rs:738-751`).
+        //
+        // Index loop (not iterator) so the loop body can call `&self`
+        // recursion without holding the slice iterator across the
+        // call (slice iter would borrow `&self.render_tree.children(id)`,
+        // which transitively borrows `&self`).
+        let child_count = self.render_tree.children(id).len();
+        for i in 0..child_count {
+            let child_id = self.render_tree.children(id)[i];
+            self.update_subtree_compositing_bits(child_id, actions);
+            if let Some(child) = self.render_tree.get(child_id)
+                && child.needs_compositing()
+            {
+                node.mark_needs_compositing();
+            }
+        }
+
+        if node.is_repaint_boundary_flag() || node.always_needs_compositing() {
+            node.mark_needs_compositing();
+        }
+
+        let new_needs_compositing = node.needs_compositing();
+        let is_boundary = node.is_repaint_boundary_flag();
+        let was_boundary = node.was_repaint_boundary();
+
+        // Flutter object.dart:3246 — lost-boundary status: drop the
+        // accumulated paint state so a NEW boundary parent picks this
+        // node up for paint. The id is removed from the dirty paint
+        // queue (since the queued paint targeted us-as-a-boundary)
+        // and re-enqueued at our current depth so the walk in
+        // `mark_needs_paint`'s spirit re-locates the responsible
+        // boundary owner.
+        if !is_boundary && was_boundary {
+            node.clear_needs_paint();
+            actions.remove_from_paint_queue.insert(id);
+            node.clear_needs_compositing_bits_update();
+            let depth = self.render_tree.depth(id).unwrap_or(0) as usize;
+            actions.mark_needs_paint.push((id, depth));
+        } else if old_needs_compositing != new_needs_compositing {
+            // Flutter object.dart:3252 — compositing shape changed:
+            // mark paint dirty so the compositor sees the new shape.
+            node.clear_needs_compositing_bits_update();
+            let depth = self.render_tree.depth(id).unwrap_or(0) as usize;
+            actions.mark_needs_paint.push((id, depth));
+        } else {
+            // Flutter object.dart:3255 — no shape change: just clear
+            // the bits-update flag.
+            node.clear_needs_compositing_bits_update();
+        }
+    }
+}
+
+/// Side-effects staged during a compositing-bits walk and applied
+/// after the recursion under `&mut self` (D-block PR-A2 U34).
+///
+/// The recursive walk in
+/// [`PipelineOwner::update_subtree_compositing_bits`] runs under
+/// `&self` (interior-mutability flag access only). Paint-queue
+/// mutations (remove-from / push-to `dirty.needs_paint`) can't
+/// happen mid-recursion without re-borrowing `&mut self`, so they
+/// are recorded here and replayed by [`PipelineOwner::run_compositing`]
+/// post-walk.
+#[derive(Default)]
+struct CompositingWalkActions {
+    /// `(id, depth)` pairs to enqueue via `add_node_needing_paint`
+    /// after the walk. Either the lost-boundary or compositing-shape-
+    /// changed branch may push here.
+    mark_needs_paint: Vec<(RenderId, usize)>,
+    /// Ids to drop from `dirty.needs_paint` before the re-enqueue
+    /// (lost-boundary branch only — a queued paint targeted the node
+    /// as-a-boundary, which it no longer is).
+    remove_from_paint_queue: rustc_hash::FxHashSet<RenderId>,
 }
 
 // ============================================================================
@@ -2193,20 +2374,32 @@ impl PipelineOwner<PaintPhase> {
             return Err(err);
         }
 
-        // Track that this was a repaint boundary for future reference.
+        // Track repaint-boundary status for the next compositing-bits
+        // walk. Per Flutter `object.dart:3560` the field is written
+        // UNCONDITIONALLY at every paint (`_wasRepaintBoundary =
+        // isRepaintBoundary`) so a node that flips from boundary to
+        // non-boundary leaves a `WAS_REPAINT_BOUNDARY=true` trail
+        // exactly once, and the next compositing walk's
+        // `!is_boundary && was_boundary` check catches the transition
+        // (see [`PipelineOwner::update_subtree_compositing_bits`],
+        // D-block PR-A2 U34).
         //
-        // U2 exemplar refactor: the previous shape took a write lock on the
-        // trait object (`render_node.box_render_object_mut()`) to flip a single
-        // bool via `set_was_repaint_boundary`. The bit lives on `RenderState`
-        // as `WAS_REPAINT_BOUNDARY` (see `storage/flags.rs`); the paint phase
-        // now flips an atomic without touching the trait object. The trait
-        // method has been removed. See `docs/PORT.md` Refusal trigger 1 and
-        // `crates/flui-rendering/ARCHITECTURE.md`.
-        if is_repaint_boundary
-            && let Some(render_node) = self.render_tree.get(node_id)
+        // **PR-A2 U35:** pre-U35 only the `is_repaint_boundary == true`
+        // branch wrote here; a node going from boundary to non-boundary
+        // never cleared `WAS_REPAINT_BOUNDARY`, so the compositing
+        // walk's lost-boundary branch would fire repeatedly. Now matches
+        // Flutter's unconditional write semantics.
+        //
+        // U2 exemplar refactor: the previous shape took a write lock on
+        // the trait object (`render_node.box_render_object_mut()`) to
+        // flip a single bool via `set_was_repaint_boundary`. The bit
+        // lives on `RenderState` as `WAS_REPAINT_BOUNDARY` (see
+        // `storage/flags.rs`); the paint phase flips an atomic without
+        // touching the trait object.
+        if let Some(render_node) = self.render_tree.get(node_id)
             && let Some(entry) = render_node.as_box()
         {
-            entry.state().set_was_repaint_boundary(true);
+            entry.state().set_was_repaint_boundary(is_repaint_boundary);
         }
 
         Ok(())

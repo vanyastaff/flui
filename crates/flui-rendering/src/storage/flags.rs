@@ -145,7 +145,8 @@ bitflags! {
     /// Bit 8: NEEDS_LAYOUT_PROPAGATION
     /// Bit 9: NEEDS_PAINT_PROPAGATION
     /// Bit 10: WAS_REPAINT_BOUNDARY
-    /// Bits 11-31: Reserved for future use
+    /// Bit 11: NEEDS_COMPOSITING_BITS_UPDATE (PR-A2 U32)
+    /// Bits 12-31: Reserved for future use
     /// ```
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct RenderFlags: u32 {
@@ -255,6 +256,36 @@ bitflags! {
         ///
         /// Flutter equivalent: `_wasRepaintBoundary` field on `RenderObject`.
         const WAS_REPAINT_BOUNDARY = 1 << 10;
+
+        /// **PR-A2 U32 (memo D3-3):** marks a node whose compositing-bits
+        /// subtree walk must be re-run on the next `run_compositing`
+        /// invocation.
+        ///
+        /// Distinct from `NEEDS_COMPOSITING` (bit 2): this flag is the
+        /// *scheduling* signal (the node is queued in
+        /// `dirty.needs_compositing` and the walk has work to do here),
+        /// whereas `NEEDS_COMPOSITING` is the *computed result* (the
+        /// node — or some descendant — needs a compositing layer for
+        /// the upcoming paint).
+        ///
+        /// Set via `AtomicRenderFlags::mark_needs_compositing_bits_update`
+        /// (typically reached through `RenderNode::mark_needs_compositing_bits_update`)
+        /// by callers that schedule a compositing-bits recompute; the
+        /// caller is then expected to enqueue the node via
+        /// [`PipelineOwner::add_node_needing_compositing_bits_update`](crate::pipeline::PipelineOwner::add_node_needing_compositing_bits_update),
+        /// which appends to `dirty.needs_compositing` but does not
+        /// itself touch this flag. The two steps are split to match
+        /// the layout-side pattern (`mark_layout_flag` + queue push)
+        /// and so test code can mark a node dirty without going through
+        /// the full ancestor walk.
+        ///
+        /// Cleared by `run_compositing` after the subtree walk finishes
+        /// (analogous to how `NEEDS_LAYOUT` clears post-layout).
+        ///
+        /// Flutter equivalent: `_needsCompositingBitsUpdate` (the
+        /// dirty-queue signal). `NEEDS_COMPOSITING` aligns with
+        /// Flutter's per-node `needsCompositing` computed-property.
+        const NEEDS_COMPOSITING_BITS_UPDATE = 1 << 11;
     }
 }
 
@@ -725,6 +756,40 @@ impl AtomicRenderFlags {
     #[inline]
     pub fn needs_compositing(&self) -> bool {
         self.contains(RenderFlags::NEEDS_COMPOSITING)
+    }
+
+    /// Marks the render object as needing a compositing-bits subtree walk
+    /// on the next `run_compositing` invocation.
+    ///
+    /// **PR-A2 U32 (memo D3-3):** distinct from `mark_needs_compositing`
+    /// — this is the *scheduling* signal (paired with the dirty-queue
+    /// push in
+    /// [`PipelineOwner::add_node_needing_compositing_bits_update`](crate::pipeline::PipelineOwner::add_node_needing_compositing_bits_update)),
+    /// whereas `NEEDS_COMPOSITING` is the *computed result* of the
+    /// walk.
+    ///
+    /// Flutter equivalent: setting `_needsCompositingBitsUpdate = true`.
+    #[inline]
+    pub fn mark_needs_compositing_bits_update(&self) {
+        self.set(RenderFlags::NEEDS_COMPOSITING_BITS_UPDATE);
+    }
+
+    /// Clears the needs-compositing-bits-update flag.
+    ///
+    /// **PR-A2 U32:** called by `run_compositing` after the subtree
+    /// walk visits this node and updates its `NEEDS_COMPOSITING`
+    /// result bit.
+    #[inline]
+    pub fn clear_needs_compositing_bits_update(&self) {
+        self.remove(RenderFlags::NEEDS_COMPOSITING_BITS_UPDATE);
+    }
+
+    /// Checks if the render object's compositing-bits walk is queued.
+    ///
+    /// Flutter equivalent: `_needsCompositingBitsUpdate` (private field).
+    #[inline]
+    pub fn needs_compositing_bits_update(&self) -> bool {
+        self.contains(RenderFlags::NEEDS_COMPOSITING_BITS_UPDATE)
     }
 
     /// Marks the render object as needing semantics update.
