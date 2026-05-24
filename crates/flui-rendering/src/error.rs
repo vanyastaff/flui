@@ -231,6 +231,35 @@ pub enum RenderError {
     #[error("layout cycle detected: node {0:?} re-entered while its own layout was in flight")]
     LayoutCycle(RenderId),
 
+    /// A pipeline-side disjoint-borrow walk requested a child slot
+    /// outside the parent's child-id range.
+    ///
+    /// **D-block PR-A1b3 U20 (companion memo D1):** returned from
+    /// [`PipelineOwner::layout_dirty_root`](crate::pipeline::PipelineOwner::layout_dirty_root)
+    /// when an off-by-one or stale-id condition would make
+    /// `RenderTree::get_parent_and_children_mut` reject the request.
+    /// Indicates a pipeline-side bug (tree-link corruption, off-by-one
+    /// in the dirty-queue walk, etc.) rather than a user-widget defect;
+    /// surfaces as a typed error so the caller can drop the frame and
+    /// log the offending id without aborting the process.
+    ///
+    /// Currently no production code constructs this variant — it is
+    /// reserved alongside U20's disjoint-borrow primitive so the error
+    /// surface is stable when callers grow defensive checks. The U20
+    /// failure-path unit test exercises the variant through a synthetic
+    /// `child_ids` whose entry has been removed from the tree.
+    #[error(
+        "child index {index} out of bounds for parent {parent:?} (child_count = {child_count})"
+    )]
+    ChildIndexOutOfBounds {
+        /// The parent `RenderId` whose child slice was indexed.
+        parent: RenderId,
+        /// The out-of-range index that was requested.
+        index: usize,
+        /// The actual number of children the parent has.
+        child_count: usize,
+    },
+
     /// A render object's `perform_layout` violated its layout contract.
     ///
     /// Distinct from [`Poisoned`](Self::Poisoned): `Poisoned` covers
@@ -368,6 +397,20 @@ impl RenderError {
             phase,
         }
     }
+
+    /// Creates a [`ChildIndexOutOfBounds`](Self::ChildIndexOutOfBounds) error.
+    ///
+    /// **D-block PR-A1b3 U20 (companion memo D1):** used by the
+    /// pipeline-side disjoint-borrow walk to surface stale-id /
+    /// off-by-one conditions on the child-id slice as a typed error
+    /// instead of a panic or silent `Size::ZERO`.
+    pub fn child_index_out_of_bounds(parent: RenderId, index: usize, child_count: usize) -> Self {
+        Self::ChildIndexOutOfBounds {
+            parent,
+            index,
+            child_count,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -393,5 +436,30 @@ mod tests {
 
         let err = RenderError::compositing("invalid bit state");
         assert!(matches!(err, RenderError::CompositingError { .. }));
+    }
+
+    /// PR-A1b3 U20: `ChildIndexOutOfBounds` round-trips its parent / index
+    /// / child_count fields and renders the expected display string.
+    #[test]
+    fn test_child_index_out_of_bounds() {
+        let parent = RenderId::new(7);
+        let err = RenderError::child_index_out_of_bounds(parent, 4, 2);
+        match err {
+            RenderError::ChildIndexOutOfBounds {
+                parent: p,
+                index,
+                child_count,
+            } => {
+                assert_eq!(p, parent);
+                assert_eq!(index, 4);
+                assert_eq!(child_count, 2);
+            }
+            other => panic!("expected ChildIndexOutOfBounds, got {other:?}"),
+        }
+        let display = RenderError::child_index_out_of_bounds(parent, 4, 2).to_string();
+        assert!(
+            display.contains("child index 4") && display.contains("child_count = 2"),
+            "display string `{display}` should name the index and child_count",
+        );
     }
 }
