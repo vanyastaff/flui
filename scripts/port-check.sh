@@ -25,6 +25,16 @@ set -euo pipefail
 
 verbose=0
 budget=0
+# Accept at most one flag — `-v` and `-b` are mutually exclusive (one is a
+# trigger-check run with marker summary tail; the other is a marker-only
+# scan that skips trigger checks). Extra args are a usage error so typos
+# like `port-check -v -b` or `port-check -vfoo` fail loud instead of
+# silently using only $1. Copilot review on PR #150.
+if [[ $# -gt 1 ]]; then
+  echo "port-check: at most one argument accepted; got $#: $*" >&2
+  echo "usage: $0 [-v|--verbose|-b|--budget]" >&2
+  exit 2
+fi
 case "${1:-}" in
   -v|--verbose) verbose=1 ;;
   -b|--budget)  budget=1  ;;
@@ -105,9 +115,18 @@ if [[ "${budget}" -eq 1 ]]; then
   # grep -E "//\s+..." here also suffers from MSYS2's `//<x>` path-mangling
   # when the regex is passed unescaped on Windows; mirror the escaped form
   # used by `marker_pattern` above to keep cross-platform behavior identical.
-  total_todo=$(echo "${hits}" | grep -E '/\/\s+TODO\(port\)' | wc -l | tr -d ' ')
-  total_perf=$(echo "${hits}" | grep -E '/\/\s+PERF\(port\)' | wc -l | tr -d ' ')
-  total_note=$(echo "${hits}" | grep -E '/\/\s+PORT NOTE'   | wc -l | tr -d ' ')
+  #
+  # The trailing `|| true` is load-bearing: under `set -e pipefail` a
+  # zero-match grep exits 1 and the whole pipeline fails, aborting the
+  # script. Budget mode contract is "exit 0 unconditionally", so any
+  # marker class being absent (common: a tree with only TODO(port)) MUST
+  # NOT abort. Codex P1 on PR #150.
+  total_todo=$(echo "${hits}" | { grep -E -c '/\/\s+TODO\(port\)' || true; })
+  total_perf=$(echo "${hits}" | { grep -E -c '/\/\s+PERF\(port\)' || true; })
+  total_note=$(echo "${hits}" | { grep -E -c '/\/\s+PORT NOTE'   || true; })
+  total_todo=${total_todo:-0}
+  total_perf=${total_perf:-0}
+  total_note=${total_note:-0}
   total_all=$((total_todo + total_perf + total_note))
   echo "marker-budget: ${total_all} markers (${total_todo} TODO(port), ${total_perf} PERF(port), ${total_note} PORT NOTE)"
   exit 0

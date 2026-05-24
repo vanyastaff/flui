@@ -190,7 +190,7 @@ This table is the canonical lookup when translating a single Dart symbol into Ru
 | `Symbol` | `&'static str` or `core::any::TypeId` | Use `TypeId` for the `InheritedView` registry; use `&'static str` for `debug_name` slots. |
 | `DateTime` | `std::time::SystemTime` (wall clock) or `std::time::Instant` (monotonic) | Use `Instant` for frame timing; `SystemTime` for serialised timestamps only. |
 | `Duration` | `std::time::Duration` | 1:1. |
-| `Uri` | `url::Url` (workspace already pulls it via `reqwest`) | Path-only URIs may use `&Path` / `PathBuf`. |
+| `Uri` | `url::Url` (requires adding `url` to `[workspace.dependencies]` — currently only a transitive dep of `reqwest`, not declared at workspace root) | Path-only URIs may use `&Path` / `PathBuf` without the extra dep. |
 
 ### Nullability and late initialization
 
@@ -200,7 +200,7 @@ This table is the canonical lookup when translating a single Dart symbol into Ru
 | `late final T x;` | `OnceCell<T>` (set-once) or `LazyLock<T>` (init by fn) | Stable since Rust 1.80 (`std::sync::LazyLock` replaces `once_cell::sync::Lazy`). |
 | `late T x = compute();` (eager-on-first-read) | `LazyLock<T, fn() -> T>` | Stable in std since 1.80; prefer over `once_cell::sync::Lazy`. |
 | `static late final T = ...` (process-wide singleton) | `static FOO: LazyLock<T> = LazyLock::new(\|\| ...)` | If the init can fail, use `OnceLock<T>` + explicit init at boot. |
-| `T? x;` (optional field, set lazily) | `Option<T>` (preferred) or `Cell<Option<T>>` if mutated through `&self` | `Option<T>` is the default; reach for `Cell`/`RefCell` only when the parent is borrowed immutable. |
+| `T? x;` (optional field, set lazily) | `Option<T>` (preferred) — or interior mutability when the parent is borrowed `&self`: `Cell<Option<T>>` if `T: Copy`, `RefCell<Option<T>>` otherwise, `OnceCell<T>` for set-once semantics | `Option<T>` is the default. `Cell` requires `Copy` (it returns by value on `.get()`); reach for `RefCell` when `T` is non-`Copy`, and `OnceCell` when the lazy-init contract is "set exactly once". |
 
 ### Flutter framework types
 
@@ -271,7 +271,7 @@ Patterns, not types. When a Dart construct could compile to multiple Rust shapes
 | Dart | Rust | Notes |
 |---|---|---|
 | `x ?? y` | `x.unwrap_or(y)` (eager) or `x.unwrap_or_else(\|\| y)` (lazy) | Eager is fine for cheap defaults; lazy for non-trivial. |
-| `x ??= y` | `x.get_or_insert(y)` (on `Option<&mut T>`) | Returns `&mut T` to the now-Some inner. |
+| `x ??= y` | `x.get_or_insert(y)` where `x: &mut Option<T>` | Returns `&mut T` to the now-Some inner. Use `get_or_insert_with(\|\| y)` if `y` is non-trivial. |
 | `x?.method()` | `x.as_ref().map(\|v\| v.method())` or `if let Some(v) = x.as_ref() { v.method() }` | `.as_ref()` borrows the Option's content. |
 | `x?.method() ?? default` | `x.as_ref().map(\|v\| v.method()).unwrap_or(default)` | Chained. |
 | `x!` (null-assertion) | `x.unwrap()` or `x.expect("invariant: …")` | Prefer `.expect` with a context string in framework code. |
