@@ -17,7 +17,7 @@ error[E0308]: mismatched types
    = note: expected reference `&Rect<flui_types::Pixels>`
               found reference `&Rect<DevicePixels>`
 note: method defined here
-  --> src/geometry/rect.rs
+  --> $WORKSPACE/crates/flui-geometry/src/rect.rs
    |
    |     pub fn intersect(&self, other: &Self) -> Option<Self> {
    |            ^^^^^^^^^

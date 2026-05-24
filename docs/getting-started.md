@@ -8,7 +8,7 @@ This page covers prerequisites, the first build, and how to run the bundled exam
 
 | Tool | Minimum version | Notes |
 |------|-----------------|-------|
-| Rust | 1.94 | Pinned via `workspace.package.rust-version`. Use `rustup toolchain install stable`. |
+| Rust | 1.95 | Pinned via `workspace.package.rust-version` **and** `rust-toolchain.toml` (channel `1.95.0`). `rustup` installs/selects it automatically on first `cargo` invocation. |
 | Cargo | bundled with Rust | Workspace uses `resolver = "2"` and edition 2024. |
 | Git | any recent | Required to clone the repo. |
 | `cargo-ndk` | 3.x | Required only for Android targets. |

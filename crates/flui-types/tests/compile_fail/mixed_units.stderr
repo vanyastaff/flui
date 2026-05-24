@@ -6,7 +6,7 @@ error[E0277]: cannot add `DevicePixels` to `flui_types::Pixels`
    |
    = help: the trait `Add<DevicePixels>` is not implemented for `flui_types::Pixels`
 help: the following other types implement trait `Add<Rhs>`
-  --> src/geometry/units.rs
+  --> $WORKSPACE/crates/flui-geometry/src/units.rs
    |
    | impl Add for Pixels {
    | ^^^^^^^^^^^^^^^^^^^ `flui_types::Pixels` implements `Add`
