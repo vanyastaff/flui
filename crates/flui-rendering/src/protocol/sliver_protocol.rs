@@ -278,12 +278,12 @@ pub trait SliverLayoutCtxErased: Send + Sync {
     fn constraints(&self) -> SliverConstraints;
 
     /// Records the layout result (parent's own geometry) on the context.
+    ///
+    /// Symmetric with [`BoxLayoutCtxErased::complete_layout`] — the
+    /// typed-side reader is `SliverLayoutCtx::geometry()` returning
+    /// `Option<&SliverGeometry>`. The erased trait intentionally exposes
+    /// only the write.
     fn complete_layout(&mut self, geometry: SliverGeometry);
-
-    /// Returns the recorded geometry after a successful
-    /// [`Self::complete_layout`] call, or `None` if layout hasn't
-    /// completed.
-    fn current_geometry(&self) -> Option<SliverGeometry>;
 }
 
 impl<A: Arity, P: ParentData> SliverLayoutCtxErased for SliverLayoutCtx<'_, A, P> {
@@ -295,11 +295,6 @@ impl<A: Arity, P: ParentData> SliverLayoutCtxErased for SliverLayoutCtx<'_, A, P
     #[inline]
     fn complete_layout(&mut self, geometry: SliverGeometry) {
         self.geometry = Some(geometry);
-    }
-
-    #[inline]
-    fn current_geometry(&self) -> Option<SliverGeometry> {
-        self.geometry
     }
 }
 

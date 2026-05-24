@@ -615,13 +615,16 @@ pub trait BoxLayoutCtxErased: Send + Sync {
     fn position_child(&mut self, index: usize, offset: Offset);
 
     /// Records the layout result (parent's own size) on the context.
-    /// Subsequent [`Self::current_geometry`] returns `Some(size)`.
+    ///
+    /// The completed size is read back from the typed context via
+    /// `BoxLayoutCtx::geometry()` (returning `Option<&Size>`) — see the
+    /// `RenderObject<BoxProtocol>` blanket impl in
+    /// [`crate::traits::RenderBox`] for the read site. The erased trait
+    /// intentionally exposes only the write — owned-`Size`-by-reference
+    /// has no stable storage to bind to through trait-object dispatch,
+    /// and the only readers are the bridge (typed-side `.geometry()`)
+    /// and Proxy `complete_layout` mirror.
     fn complete_layout(&mut self, size: Size);
-
-    /// Returns the recorded geometry after a successful
-    /// [`Self::complete_layout`] call, or `None` if layout hasn't
-    /// completed.
-    fn current_geometry(&self) -> Option<Size>;
 
     /// Reads child `index`'s parent data as `&dyn ParentData`. Returns
     /// `None` if `index` is out of bounds or the context wasn't
@@ -664,11 +667,6 @@ impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, 
     #[inline]
     fn complete_layout(&mut self, size: Size) {
         <Self as LayoutContextApi<'_, BoxLayout, A, P>>::complete_layout(self, size)
-    }
-
-    #[inline]
-    fn current_geometry(&self) -> Option<Size> {
-        self.geometry().copied()
     }
 
     #[inline]
