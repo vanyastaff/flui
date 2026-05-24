@@ -102,7 +102,7 @@ flui/
 | **Foundations** | `docs/FOUNDATIONS.md` | **Architecture contract** — target architecture, locked contracts (C1–C9), target crate graph (Part IV) |
 | **Roadmap** | `docs/ROADMAP.md` | **Construction plan** — dependency-ordered phases from current state to target |
 | Strategy | `STRATEGY.md` | Product strategy and the three port rules ("behavior loyal, structure Rust-native") |
-| Port methodology | `docs/PORT.md` | Port methodology, refusal triggers, per-crate ARCHITECTURE.md template |
+| Port methodology | `docs/PORT.md` | Governance + Dart→Rust translation manual: refusal triggers, lock decisions, per-crate ARCHITECTURE.md template, type map, idiom map, strings discipline, error mapping canon, inline port-marker tier, ecosystem-first adoption table |
 | README | `README.md` | Project landing page |
 | Getting Started | `docs/getting-started.md` | Prerequisites, build, run examples |
 | Architecture | `docs/architecture.md` | Three-tree pipeline + layered DAG overview (current state) |

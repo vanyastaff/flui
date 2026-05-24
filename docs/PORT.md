@@ -18,6 +18,27 @@ For the rule-by-rule architectural guide (workspace layers, anti-pattern code ex
 
 The translation manual draws inspiration from Bun's [oven-sh/bun#PORTING.md](https://github.com/oven-sh/bun/blob/main/docs/PORTING.md), with one principled inversion: **flui actively embraces the Rust ecosystem**. Where Bun bans `tokio`/`rayon`/`hyper`/`futures` and rolls its own primitives, flui adopts mature ecosystem crates (`parking_lot`, `dashmap`, `smallvec`, `ambassador`, `bon`, `thiserror`, `tracing`, `wgpu`, `moka`, `tokio` LTS). See [§Ecosystem-first principle](#ecosystem-first-principle) for the adoption table and the version policy.
 
+## Contents
+
+**Governance layer** (write-time refusal rules, lock-decision matrix, per-crate documentation shape):
+
+- [§Refusal triggers](#refusal-triggers) — 7 anti-patterns the maintainer refuses to introduce, with grep regexes
+- [§Lock decisions](#lock-decisions) — allowed vs forbidden `RwLock`/`Mutex` placements
+- [§Mapping rules](#mapping-rules) — Flutter behaviour primacy + binding-deletion carve-out + compile-time-over-runtime + sync-hot-path
+- [§Per-crate `ARCHITECTURE.md` template](#per-crate-architecturemd-template) — required and optional sections per crate
+- [§Index](#index) — which crate carries which template state
+- [§Verification](#verification) — `just port-check` recipe + self-test
+
+**Translation manual** (operational Dart→Rust conversion guidance):
+
+- [§Dart → Rust type map](#dart--rust-type-map) — primitives, nullability, Flutter framework types, sentinel/error types
+- [§Dart → Rust idiom map](#dart--rust-idiom-map) — control flow, optional/null, closures, object model, cfg, iteration, concurrency, atomics, mixin worked example
+- [§Strings discipline](#strings-discipline) — 8-row decision tree (UI text / message fields / static IDs / Cow / interned / external bytes / paths / widget keys)
+- [§Error mapping canonical shape](#error-mapping-canonical-shape) — `thiserror` + `#[non_exhaustive]` + `Box<str>` + `anyhow` at app-edge only
+- [§Inline port markers tier](#inline-port-markers-tier) — `TODO(port)` / `PERF(port)` / `PORT NOTE` / `SAFETY` grammar + `port-check.sh` integration
+- [§Ecosystem-first principle](#ecosystem-first-principle) — adopted-crates table + version policy + Rust 1.95 stabilizations folded into the port
+- [§Don't translate](#dont-translate) — source-level dropped + binding-deletion precedents
+
 ---
 
 ## Refusal triggers
@@ -62,7 +83,7 @@ The *funnel* signatures (`tree.rs::insert_box`, view → render `From` impls) ac
 
 **Why:** dirty-list state is touched per-frame; a mutex would serialise frame producers and consumers needlessly. Lock-free atomics are the in-crate precedent.
 
-**Regex:** `Mutex<\s*Vec<\s*ElementId\b|Mutex<\s*HashSet<\s*ElementId\b|Mutex<\s*HashMap<\s*ElementId\b` constrained to `crates/flui-rendering/src/**` excluding `#[cfg(test)]` modules.
+**Regex:** `Mutex<\s*(Vec|HashSet|HashMap|BTreeSet|BTreeMap)<\s*ElementId` constrained to `crates/flui-rendering/src/**` excluding `#[cfg(test)]` modules and `**/state.rs` (which hosts the `MockTree` test fixture). The collection-type set is unified with the script (`scripts/port-check.sh` trigger 4) — both ordered and unordered map/set forms catch a regression.
 
 ### 5. `Arc::clone` performed inside the per-frame paint loop on a per-render-object basis 🔮
 
@@ -224,8 +245,8 @@ This table is the canonical lookup when translating a single Dart symbol into Ru
 | `Notification` | `Notification` trait (sanctioned by FR-029) + `NotifiableElement` | `flui-view`. Bubble dispatch via element walk. |
 | `ChangeNotifier` | `Listenable` trait (sanctioned by FR-029) | `flui-foundation`. Multiple impls; `ChangeNotifier` struct is a default fan-out impl. |
 | `ValueNotifier<T>` | `ValueNotifier<T>` struct implementing `Listenable` | `flui-foundation`. |
-| `ValueChanged<T>` callback | `Box<dyn Fn(T) + Send + Sync>` (owned storage) or `&dyn Fn(T)` (borrowed param) | Storage form sanctioned by FR-029 #5. |
-| `VoidCallback` | `Box<dyn Fn() + Send + Sync>` (storage) or `&dyn Fn()` (param) | Same. |
+| `ValueChanged<T>` callback | `Arc<dyn Fn(T) + Send + Sync>` (owned storage — matches `crates/flui-foundation/src/callbacks.rs:70`) or `&dyn Fn(T)` (borrowed param) | Storage form sanctioned by FR-029 #5. `Arc` not `Box` because the listener registry clones callbacks across notifier fan-out. Note: `crates/flui-foundation/ARCHITECTURE.md:62` is stale and still says `Box<dyn Fn(T)>` — graft pending. |
+| `VoidCallback` | `Arc<dyn Fn() + Send + Sync>` (storage — matches `crates/flui-foundation/src/callbacks.rs:51`) or `&dyn Fn()` (param) | Same. |
 | `AnimationController`, `Animation<T>`, `CurvedAnimation` | `Animation<T>` trait (sanctioned by FR-029) + concrete impls | `flui-animation` (currently disabled — see `## Index`). |
 | `Listenable` (Dart base class) | `Listenable` trait — `flui-foundation` | Multiple-source: also see `Animation` for animation-as-listenable. |
 | `mixin Foo on Bar` | `trait Foo` + `#[delegate(Foo)]` via `ambassador` (workspace dep) | See [§Dart → Rust idiom map](#dart--rust-idiom-map) row "mixin". |
@@ -413,7 +434,7 @@ Dart conflates "UI text", "identifier", "syscall byte sequence", "source code", 
 
 4. **Literal-or-owned strings** (rare, but useful for "default = literal, user-customizable = String") → `Cow<'static, str>`. The crate must justify why `String`+`&'static str` split is insufficient — usually not worth it.
 
-5. **Shared interned strings** (debug labels referenced from many sites; widget keys that repeat) → `Arc<str>`. Cheaper to clone than `Arc<String>` (one fewer indirection). `string-interner` crate is **not** currently a workspace dep — adding it is a port-time decision flagged with `// TODO(port): adopt string-interner`.
+5. **Shared interned strings** (debug labels referenced from many sites; widget keys that repeat) → `Arc<str>`. Cheaper to clone than `Arc<String>` (one fewer indirection). For true interning with deduplication, use `lasso` (already in `[workspace.dependencies]` with the `multi-threaded` feature) — its `ThreadedRodeo` returns `Spur` handles that are smaller than `Arc<str>` and the dedupe table amortises across the program. Prefer `lasso` for high-cardinality identifier interning (debug names, registered widget keys); reach for `Arc<str>` for low-cardinality one-off shared strings where the interner overhead is not worth it.
 
 6. **Byte sequences from the outside world** (asset blobs, hot-reload source code, image bytes, network payloads) → `Vec<u8>` / `&[u8]` / `Box<[u8]>`. **Never** `String::from_utf8_lossy` on external data without an explicit `// PORT NOTE: lossy is acceptable here because …` justification — that operation silently rewrites U+FFFD over surrogate fragments and invalid sequences. If the data must round-trip, keep it as bytes.
 
@@ -470,7 +491,7 @@ pub type RenderResult<T> = Result<T, RenderError>;
 
 2. **Use `#[non_exhaustive]`** on every public error enum. Lets variants be added without breaking downstream `match` exhaustively. Crates internal to a feature boundary may omit it.
 
-3. **`Box<str>` for message fields**, not `String`. Errors are written-once / read-rarely; the spare-capacity word of `String` is wasted. (Precedent: `flui-rendering/src/error.rs:36`.)
+3. **`Box<str>` is preferred for message fields on new error types**, not `String`. Errors are written-once / read-rarely; the spare-capacity word of `String` is wasted. **Codebase state:** `flui-rendering` follows this rule (`crates/flui-rendering/src/error.rs` — every `RenderError` variant). Older crates (`flui-assets`, `flui-build`, `flui-cli`, `flui-engine`, `flui-painting`, etc.) still use `String` and are not retrofit targets for this PR — log them in the respective crate's `## Outstanding refactors` if the cost matters. New error types should adopt `Box<str>` from inception.
 
 4. **`#[source]` on wrapping variants** (or `#[from]` which implies `#[source]`). Preserves the `Error::source()` chain for `Display`/`tracing` consumers. Use `#[from]` only when the conversion is the **only** way that variant is constructed; otherwise hand-write the constructor and use `#[source]` on the wrapped field.
 
@@ -480,7 +501,7 @@ pub type RenderResult<T> = Result<T, RenderError>;
 
 7. **Never `Box<dyn Error>` in storage.** It is `!Copy`, heap-allocates, and loses variant information (no `match`). Storage form for cross-crate errors is the concrete `OuterError` with `#[from] InnerError` or a manual `From` impl. `Box<dyn std::error::Error + Send + Sync>` may appear at a single FFI boundary — flag with `// PORT-CHECK-OK-DYN: error trait erasure at FFI`.
 
-8. **`build()` is infallible.** Per FOUNDATIONS.md C7: a panic inside user `View::build` is caught by `std::panic::catch_unwind` at the dispatch site and surfaced as `RenderError::Poisoned` (per `crates/flui-rendering/ARCHITECTURE.md` ## Mapping decisions). User code does not return `Result` from `build`; framework code does.
+8. **`build()` is infallible.** Per FOUNDATIONS.md C7: a panic inside user `View::build` is caught by `std::panic::catch_unwind` at the dispatch site and substituted with an `ErrorView` (the build-phase recovery surface — user-facing error widget). `RenderError::Poisoned` is the separate variant for panics inside render-object trait methods (`perform_layout` / `paint`) per `crates/flui-rendering/ARCHITECTURE.md ## Mapping decisions`. User code does not return `Result` from `build`; framework code does.
 
 9. **Cross-crate error conversion** flows through `#[from]` or a hand-written `impl From<InnerCrateError> for OuterCrateError`. Never via `.map_err(|e| OuterError::Other(format!("{e}")))` — that loses the source chain.
 
@@ -511,7 +532,7 @@ Decisions made at the line level need to survive the journey from Phase A (mecha
 | `// TODO(port): <reason>` | The Dart construct couldn't be translated confidently; the current Rust shape is a placeholder | Phase B re-reads the Dart, picks a translation, removes the marker. |
 | `// PERF(port): <Dart idiom> — profile if hot` | Translated to the idiomatic Rust shape, but the Dart used a perf-specific construct (capacity hint, comptime mono, arena bulk-free) that the port elided in favour of clarity | Phase B greps `PERF(port)` and benchmarks the listed call sites; if the perf gap matters, restore the idiom (e.g., add `Vec::with_capacity`). |
 | `// PORT NOTE: <reshape reason>` | The Rust shape diverged from the Dart shape on purpose — borrow-checker requires a reorder, Rust idiom is cleaner, or a typestate replaces a runtime check | Reviewer diff-reads `.dart` ↔ `.rs` side-by-side and uses the marker as the "expected divergence" anchor. |
-| `// SAFETY: <invariant>` | Above every `unsafe` block — mirrors the unsafe code guidelines | Reviewer audits the invariant. This is standard Rust practice, included for completeness. |
+| `// SAFETY: <invariant>` | Above every `unsafe` block — mirrors the unsafe code guidelines | Reviewer audits the invariant. Standard Rust practice, included here for completeness. **Not counted by `just port-markers`** — the unsafe audit is a separate concern from port-translation marker discipline. |
 
 ### Grammar
 
@@ -519,6 +540,8 @@ Decisions made at the line level need to survive the journey from Phase A (mecha
 - The marker prefix is **exact** — `TODO(port)`, `PERF(port)`, `PORT NOTE`, `SAFETY` — case-sensitive, no abbreviations.
 - The reason text after `:` is free-form, but must name **what** is deferred or reshaped (not "fix later"). Good: `TODO(port): late initialization needs OnceCell or Option — pick after build-context wiring lands`. Bad: `TODO(port): fix`.
 - Markers may stack: `// TODO(port): ...` immediately above `// PORT NOTE: ...` is fine when both apply.
+
+**Regex (used by `just port-markers`):** `\/\/\s+(TODO\(port\)|PERF\(port\)|PORT NOTE)` matched against every `.rs` file under `crates/`. Slashes escaped to survive MSYS2 bash path-mangling on Windows; no `\b` after `\)` because both `)` and `:` are non-word characters and the boundary would silently never fire. `SAFETY` is intentionally omitted (see table row above). When this grammar changes, update **both** this regex and `scripts/port-check.sh` `marker_pattern` in the same PR — the two must stay byte-identical or the script silently diverges from the doc.
 
 ### Worked examples
 
@@ -613,7 +636,7 @@ Rust 1.95 (2026-04-16) introduced features directly relevant to this port:
 | `cfg_select!` macro | Replaces paired `#[cfg(...)]` + `#[cfg(not(...))]` blocks for platform conditionals. See [§Dart → Rust idiom map](#dart--rust-idiom-map) row "compile-time-conditional code". |
 | `if let` guards in `match` | Sharpens the Dart `is Foo` + downcast pattern: `match x { Foo(v) if let Some(inner) = v.maybe_extract() => ... }`. See [§Dart → Rust idiom map](#dart--rust-idiom-map) row "switch + pattern guard". |
 | `AtomicBool/Isize/Usize/Ptr::update` and `try_update` | Encapsulates the standard `load → compute → compare_exchange_weak` loop. Candidate cleanup sites in `crates/flui-rendering/src/storage/state.rs` (`AtomicRenderFlags` CAS loops); mark with `// PERF(port): pre-1.95 CAS loop`. |
-| `Vec::push_mut` / `insert_mut`, `VecDeque::push_front_mut` / `push_back_mut`, `LinkedList::*_mut` | Returns `&mut T` to the inserted slot — useful for chained init like `vec.push_mut(Node::new()).attach(parent_id);`. |
+| `Vec::push_mut` / `insert_mut`, `VecDeque::push_front_mut` / `push_back_mut`, `LinkedList::push_front_mut` / `push_back_mut` | Returns `&mut T` to the inserted slot — useful for chained init like `vec.push_mut(Node::new()).attach(parent_id);`. `LinkedList::insert_mut` was **not** stabilized in 1.95. |
 | `Layout::dangling_ptr` / `repeat` / `repeat_packed` / `extend_packed` | Allocator primitives. Phase B hot-path candidates if/when flui adopts an arena allocator beyond `bumpalo` (currently not a workspace dep). |
 
 Rust 1.96 will be tracked in this section on release.
@@ -688,6 +711,8 @@ Four other crates carry `crates/<crate>/docs/ARCHITECTURE.md` files (`flui-paint
 
 ## Index
 
+This section indexes **crate-level** `ARCHITECTURE.md` template state. For document-level section navigation see [§Contents](#contents) at the top of this page.
+
 | Crate | `ARCHITECTURE.md` state | Status |
 | --- | --- | --- |
 | [`flui-foundation`](../crates/flui-foundation/ARCHITECTURE.md) | Templated (grafted 2026-05-19) | Active |
@@ -737,7 +762,7 @@ just port-check-verbose       # prints "ok" lines for each passing trigger + mar
 just port-markers             # per-file marker breakdown (TODO(port) / PERF(port) / PORT NOTE)
 ```
 
-The underlying script lives at [`scripts/port-check.sh`](../scripts/port-check.sh). It runs seven `rg` (ripgrep) invocations — one per refusal trigger — and filters out doc-comment matches. The regexes are derived directly from the trigger entries in this document; when a trigger changes here, the script changes too.
+The underlying script lives at [`scripts/port-check.sh`](../scripts/port-check.sh). It runs nine `rg` (ripgrep) passes total — refusal triggers 1–7 plus the FR-033 downcast grep and the FR-036 sanctioned-`dyn`-boundary registry (main pattern + type-alias closure) — and filters out doc-comment matches. The marker-budget scan is an additional non-blocking pass in `-v` and `-b` modes. The regexes are derived directly from the trigger entries in this document; when a trigger changes here, the script changes too.
 
 The marker-budget report is a **non-blocking** addition: it counts `TODO(port)`, `PERF(port)`, and `PORT NOTE` occurrences across `crates/` and prints a per-crate summary. Markers are deliberate deferrals (Phase B work-queue), not violations — the script never fails on marker count.
 
