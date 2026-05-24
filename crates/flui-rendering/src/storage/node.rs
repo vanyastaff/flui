@@ -306,6 +306,66 @@ impl RenderNode {
         }
     }
 
+    /// Sets the `NEEDS_PAINT` flag on this node's state — flag-only,
+    /// no propagation. **D-block PR-A1 U22 (memo D7):** used by
+    /// [`PipelineOwner::add_node_needing_paint`](crate::pipeline::PipelineOwner::add_node_needing_paint)
+    /// to pair flag-set with the dirty-queue push for the flag-check
+    /// dedup discipline.
+    #[inline]
+    pub fn mark_paint_flag(&self) {
+        match self {
+            Self::Box(entry) => entry.state().flags().mark_needs_paint(),
+            Self::Sliver(entry) => entry.state().flags().mark_needs_paint(),
+        }
+    }
+
+    /// Sets the `NEEDS_COMPOSITING` flag on this node's state —
+    /// flag-only, no propagation. **D-block PR-A1 U22 (memo D7).**
+    #[inline]
+    pub fn mark_compositing_flag(&self) {
+        match self {
+            Self::Box(entry) => entry.state().flags().mark_needs_compositing(),
+            Self::Sliver(entry) => entry.state().flags().mark_needs_compositing(),
+        }
+    }
+
+    /// Sets the `NEEDS_SEMANTICS` flag on this node's state —
+    /// flag-only, no propagation. **D-block PR-A1 U22 (memo D7).**
+    #[inline]
+    pub fn mark_semantics_flag(&self) {
+        match self {
+            Self::Box(entry) => entry.state().flags().mark_needs_semantics(),
+            Self::Sliver(entry) => entry.state().flags().mark_needs_semantics(),
+        }
+    }
+
+    /// Returns true if `NEEDS_SEMANTICS` is set on this node's state.
+    /// **D-block PR-A1 U22:** needed by add_node_needing_semantics's
+    /// flag-check dedup.
+    #[inline]
+    pub fn needs_semantics(&self) -> bool {
+        match self {
+            Self::Box(entry) => entry
+                .state()
+                .flags()
+                .contains(crate::storage::flags::RenderFlags::NEEDS_SEMANTICS),
+            Self::Sliver(entry) => entry
+                .state()
+                .flags()
+                .contains(crate::storage::flags::RenderFlags::NEEDS_SEMANTICS),
+        }
+    }
+
+    /// Returns true if `NEEDS_COMPOSITING` is set on this node's state.
+    /// **D-block PR-A1 U22.**
+    #[inline]
+    pub fn needs_compositing(&self) -> bool {
+        match self {
+            Self::Box(entry) => entry.state().needs_compositing(),
+            Self::Sliver(entry) => entry.state().needs_compositing(),
+        }
+    }
+
     /// Protocol-erased **leaf-mode** layout dispatch.
     ///
     /// Matches the inner `RenderEntry<P>` against the supplied

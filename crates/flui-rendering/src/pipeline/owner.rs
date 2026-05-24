@@ -122,6 +122,24 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// parallel `Vec<DirtyNode>` fields scattered across the struct.
     dirty: DirtySets,
 
+    /// Side queue for marks made DURING a phase iteration
+    /// (`debug_doing_layout` / `debug_doing_paint` / etc. true).
+    ///
+    /// **D-block PR-A1 U22 (companion memo D7):** Flutter's pipeline
+    /// permits a render object's `perform_layout` to mark another
+    /// node dirty via `markNeedsLayout`. Pushing into the active
+    /// `dirty` queue mid-iteration would either be silently ignored
+    /// (the outer loop already snapshot the queue via `std::mem::take`)
+    /// or processed in the wrong order. The side queue captures these
+    /// mid-phase marks; the outer `while` loop in `run_layout` /
+    /// `run_paint` drains it after the current iteration via
+    /// [`Self::drain_mid_layout_marks`] before deciding whether to
+    /// continue.
+    ///
+    /// Each phase's mid-mark vector retains capacity across frames
+    /// (same non-shrinking discipline as `dirty`).
+    mid_layout_marks: DirtySets,
+
     /// Whether we're currently doing layout.
     debug_doing_layout: bool,
 
@@ -197,6 +215,7 @@ impl PipelineOwner<Idle> {
             root_id: None,
             notifier: VisualUpdateNotifier::new(),
             dirty: DirtySets::new(),
+            mid_layout_marks: DirtySets::new(),
             debug_doing_layout: false,
             debug_doing_paint: false,
             debug_doing_semantics: false,
@@ -236,6 +255,7 @@ impl PipelineOwner<Idle> {
             root_id: None,
             notifier,
             dirty: DirtySets::new(),
+            mid_layout_marks: DirtySets::new(),
             debug_doing_layout: false,
             debug_doing_paint: false,
             debug_doing_semantics: false,
@@ -609,12 +629,41 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 
     /// Adds a node to the layout dirty list.
     ///
+    /// # Dedup + mid-layout routing (D-block PR-A1 U22, memo D7)
+    ///
+    /// 1. **Queue-membership dedup**: scans the target queue
+    ///    (`dirty.needs_layout` OR `mid_layout_marks.needs_layout`
+    ///    depending on the routing decision in step 2) and skips the
+    ///    push if `node_id` is already present. O(N) scan matches
+    ///    [`Self::mark_needs_layout`]'s pre-existing dedup pattern.
+    ///    Flag-based dedup is unsuitable because `RenderState::new()`
+    ///    defaults `NEEDS_LAYOUT = true` — a flag check would
+    ///    silently no-op on the FIRST add for every newly-inserted
+    ///    node (this is the regression the test
+    ///    `test_run_frame_catches_paint_panic` flagged).
+    /// 2. **Mid-layout routing**: if [`Self::debug_doing_layout`] is
+    ///    `true`, the outer `run_layout` loop is iterating the
+    ///    current `dirty.needs_layout` snapshot — pushing into the
+    ///    active queue mid-iteration would either be silently ignored
+    ///    (`std::mem::take` snapshot) or processed in the wrong
+    ///    order. Push into `mid_layout_marks.needs_layout` instead;
+    ///    the outer loop drains it after the current iteration via
+    ///    [`Self::drain_mid_layout_marks`].
+    ///
     /// # Arguments
     ///
     /// * `node_id` - The `RenderId` of the render object (1-based)
     /// * `depth` - The depth of the node in the render tree
     pub fn add_node_needing_layout(&mut self, node_id: RenderId, depth: usize) {
-        self.dirty.needs_layout.push(DirtyNode::new(node_id, depth));
+        let target = if self.debug_doing_layout {
+            &mut self.mid_layout_marks.needs_layout
+        } else {
+            &mut self.dirty.needs_layout
+        };
+        if target.iter().any(|d| d.id == node_id) {
+            return;
+        }
+        target.push(DirtyNode::new(node_id, depth));
     }
 
     /// Marks a node as needing layout, propagating the `NEEDS_LAYOUT` flag
@@ -705,36 +754,73 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 
     /// Adds a node to the paint dirty list.
     ///
+    /// **D-block PR-A1 U22 (memo D7):** same flag-check dedup +
+    /// mid-phase routing discipline as
+    /// [`Self::add_node_needing_layout`]; see that method's doc for
+    /// the dispatch rules. Mid-phase route is gated by
+    /// [`Self::debug_doing_paint`].
+    ///
     /// # Arguments
     ///
     /// * `node_id` - The `RenderId` of the render object (1-based)
     /// * `depth` - The depth of the node in the render tree
     pub fn add_node_needing_paint(&mut self, node_id: RenderId, depth: usize) {
-        self.dirty.needs_paint.push(DirtyNode::new(node_id, depth));
+        let target = if self.debug_doing_paint {
+            &mut self.mid_layout_marks.needs_paint
+        } else {
+            &mut self.dirty.needs_paint
+        };
+        if target.iter().any(|d| d.id == node_id) {
+            return;
+        }
+        target.push(DirtyNode::new(node_id, depth));
     }
 
     /// Adds a node to the compositing bits dirty list.
+    ///
+    /// **D-block PR-A1 U22 (memo D7):** same flag-check dedup +
+    /// mid-phase routing discipline as [`Self::add_node_needing_layout`].
+    /// Mid-phase route is gated by [`Self::debug_doing_layout`] (the
+    /// compositing phase shares the layout-phase debug flag because
+    /// compositing-bits update runs as part of the layout pipeline
+    /// per the typestate transitions).
     ///
     /// # Arguments
     ///
     /// * `node_id` - The `RenderId` of the render object (1-based)
     /// * `depth` - The depth of the node in the render tree
     pub fn add_node_needing_compositing_bits_update(&mut self, node_id: RenderId, depth: usize) {
-        self.dirty
-            .needs_compositing
-            .push(DirtyNode::new(node_id, depth));
+        let target = if self.debug_doing_layout {
+            &mut self.mid_layout_marks.needs_compositing
+        } else {
+            &mut self.dirty.needs_compositing
+        };
+        if target.iter().any(|d| d.id == node_id) {
+            return;
+        }
+        target.push(DirtyNode::new(node_id, depth));
     }
 
     /// Adds a node to the semantics dirty list.
+    ///
+    /// **D-block PR-A1 U22 (memo D7):** same flag-check dedup +
+    /// mid-phase routing discipline as [`Self::add_node_needing_layout`].
+    /// Mid-phase route is gated by [`Self::debug_doing_semantics`].
     ///
     /// # Arguments
     ///
     /// * `node_id` - The `RenderId` of the render object (1-based)
     /// * `depth` - The depth of the node in the render tree
     pub fn add_node_needing_semantics(&mut self, node_id: RenderId, depth: usize) {
-        self.dirty
-            .needs_semantics
-            .push(DirtyNode::new(node_id, depth));
+        let target = if self.debug_doing_semantics {
+            &mut self.mid_layout_marks.needs_semantics
+        } else {
+            &mut self.dirty.needs_semantics
+        };
+        if target.iter().any(|d| d.id == node_id) {
+            return;
+        }
+        target.push(DirtyNode::new(node_id, depth));
     }
 
     // ========================================================================
@@ -810,6 +896,48 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         self.dirty.needs_compositing.clear();
         self.dirty.needs_paint.clear();
         self.dirty.needs_semantics.clear();
+        // PR-A1 U22 (memo D7): also clear mid-phase side queue.
+        self.mid_layout_marks.needs_layout.clear();
+        self.mid_layout_marks.needs_compositing.clear();
+        self.mid_layout_marks.needs_paint.clear();
+        self.mid_layout_marks.needs_semantics.clear();
+    }
+
+    /// Drains the mid-phase side queue into the active `dirty` set.
+    ///
+    /// **D-block PR-A1 U22 (memo D7):** called by U23's `run_layout`
+    /// / `run_paint` outer `while` loops at the end of each iteration
+    /// — picks up the side-queued marks made during the iteration
+    /// (when `debug_doing_*` was `true`) so the next iteration of the
+    /// outer loop processes them.
+    ///
+    /// Capacity-preserving: each side-queue vector is moved via
+    /// `Vec::append` (drains source, keeps source's allocation
+    /// reservation for the next frame). Returns the total number of
+    /// entries drained, summed across all four phases — callers may
+    /// use this as the loop-continue signal.
+    pub fn drain_mid_layout_marks(&mut self) -> usize {
+        let drained = self.mid_layout_marks.total();
+        self.dirty
+            .needs_layout
+            .append(&mut self.mid_layout_marks.needs_layout);
+        self.dirty
+            .needs_compositing
+            .append(&mut self.mid_layout_marks.needs_compositing);
+        self.dirty
+            .needs_paint
+            .append(&mut self.mid_layout_marks.needs_paint);
+        self.dirty
+            .needs_semantics
+            .append(&mut self.mid_layout_marks.needs_semantics);
+        drained
+    }
+
+    /// Returns whether any mid-phase marks are pending drain.
+    /// **D-block PR-A1 U22.**
+    #[inline]
+    pub fn has_mid_layout_marks(&self) -> bool {
+        self.mid_layout_marks.any()
     }
 }
 
@@ -2125,6 +2253,7 @@ where
         root_id: from.root_id,
         notifier: from.notifier,
         dirty: from.dirty,
+        mid_layout_marks: from.mid_layout_marks,
         debug_doing_layout: from.debug_doing_layout,
         debug_doing_paint: from.debug_doing_paint,
         debug_doing_semantics: from.debug_doing_semantics,
