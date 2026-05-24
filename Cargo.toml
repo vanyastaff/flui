@@ -166,6 +166,11 @@ downcast-rs = "2.0.2"
 which = "5.0"         # Command discovery - Used by flui-build
 indicatif = "0.17"    # Progress bars - Used by flui-build
 
+# FAST HASHING - Used by flui-rendering (FxHashSet for layout cycle guard
+# per D-block U21; deterministic + faster than std SipHash for small keys
+# like RenderId)
+rustc-hash = "2.1"
+
 # STRING INTERNING - Used by flui-assets
 lasso = { version = "0.7", features = ["multi-threaded"] }
 

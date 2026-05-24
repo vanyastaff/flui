@@ -420,6 +420,19 @@ impl RenderError {
             child_count,
         }
     }
+
+    /// Creates a [`LayoutCycle`](Self::LayoutCycle) error.
+    ///
+    /// **D-block PR-A1 U21 (companion memo D6):** returned by
+    /// [`PipelineOwner::layout_dirty_root`](crate::pipeline::PipelineOwner::layout_dirty_root)
+    /// when a render object's `perform_layout` re-enters an ancestor's
+    /// layout via `ctx.layout_child` — the `currently_laying_out`
+    /// `FxHashSet<RenderId>` guard detects the second-borrow attempt
+    /// and surfaces this variant instead of triggering an aliasing
+    /// reborrow or stack overflow.
+    pub fn layout_cycle(id: RenderId) -> Self {
+        Self::LayoutCycle(id)
+    }
 }
 
 #[cfg(test)]
