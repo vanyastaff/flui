@@ -291,10 +291,31 @@ impl<P: Protocol> RenderEntry<P> {
         let geometry = <P as crate::protocol::Protocol>::with_leaf_erased_ctx(
             constraints_for_ctx,
             |erased_ctx| {
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let unwind_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     render_object.perform_layout_raw(erased_ctx)
-                }))
-                .map_err(|_| crate::error::RenderError::poisoned(debug_name, "layout"))
+                }));
+                unwind_result.map_err(|payload| {
+                    // Review fix #6: forward the panic message to
+                    // tracing before discarding the payload. Without
+                    // this, panics like "RenderBox::perform_layout for
+                    // … did not call complete_with_size" (the U19
+                    // bridge contract violation panic) become opaque
+                    // `RenderError::Poisoned` errors with no
+                    // diagnostic detail — the message exists only on
+                    // the panic stack at this point and is dropped on
+                    // `_ => Err(...)` discard.
+                    let msg = payload
+                        .downcast_ref::<String>()
+                        .map(String::as_str)
+                        .or_else(|| payload.downcast_ref::<&'static str>().copied())
+                        .unwrap_or("(non-string panic payload)");
+                    tracing::error!(
+                        render_object = debug_name,
+                        panic_msg = msg,
+                        "perform_layout panicked — surfacing as RenderError::Poisoned",
+                    );
+                    crate::error::RenderError::poisoned(debug_name, "layout")
+                })
             },
         )?;
 
