@@ -281,8 +281,8 @@ pub trait SliverLayoutCtxErased: Send + Sync {
 
     /// Records the layout result (parent's own geometry) on the context.
     ///
-    /// Symmetric with [`BoxLayoutCtxErased::complete_layout`] — the
-    /// typed-side reader is `SliverLayoutCtx::geometry()` returning
+    /// Symmetric with [`super::BoxLayoutCtxErased::complete_layout`] — the
+    /// typed-side reader is [`SliverLayoutCtx::geometry`] returning
     /// `Option<&SliverGeometry>`. The erased trait intentionally exposes
     /// only the write.
     fn complete_layout(&mut self, geometry: SliverGeometry);

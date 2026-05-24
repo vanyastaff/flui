@@ -162,8 +162,8 @@ pub trait RenderObject<P: Protocol>:
     /// **Users don't implement this directly.** Protocol traits like
     /// `RenderBox` provide blanket implementations that reconstruct a
     /// typed `BoxLayoutCtx<Self::Arity, Self::ParentData>` from the
-    /// erased context (via [`BoxLayoutCtx::from_erased`]) and call the
-    /// typed [`RenderBox::perform_layout`] method.
+    /// erased context (via the in-crate `BoxLayoutCtx::from_erased`
+    /// ctor) and call the typed [`RenderBox::perform_layout`] method.
     ///
     /// **D-block PR-A1b U19 (companion memo D5):** the signature changed
     /// from `fn perform_layout_raw(&mut self, constraints:
@@ -177,7 +177,6 @@ pub trait RenderObject<P: Protocol>:
     /// `dyn SliverLayoutCtxErased` for `SliverProtocol`.
     ///
     /// [`BoxLayoutCtx`]: crate::protocol::BoxLayoutCtx
-    /// [`BoxLayoutCtx::from_erased`]: crate::protocol::BoxLayoutCtx::from_erased
     /// [`RenderBox::perform_layout`]: crate::traits::RenderBox::perform_layout
     /// [`Protocol::LayoutCtxErased`]: crate::protocol::Protocol::LayoutCtxErased
     fn perform_layout_raw(

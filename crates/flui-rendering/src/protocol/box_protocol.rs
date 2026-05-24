@@ -685,12 +685,12 @@ pub trait BoxLayoutCtxErased: Send + Sync {
     /// payload exists) and for Proxy contexts (which delegate to the
     /// underlying erased ctx).
     ///
-    /// **Use:** [`BoxLayoutCtx::from_erased`] consults this to
-    /// `debug_assert!` that the typed wrapper it is about to construct
-    /// matches the underlying P — a mismatch indicates a pipeline /
-    /// blanket-impl construction bug (a Direct ctx built with
-    /// `Vec<ChildState<FlexParentData>>` would only be bridged to a
-    /// typed `BoxLayoutCtx<_, FlexParentData>`, never to a
+    /// **Use:** the in-crate `BoxLayoutCtx::from_erased` ctor consults
+    /// this to `debug_assert!` that the typed wrapper it is about to
+    /// construct matches the underlying P — a mismatch indicates a
+    /// pipeline / blanket-impl construction bug (a Direct ctx built
+    /// with `Vec<ChildState<FlexParentData>>` would only be bridged
+    /// to a typed `BoxLayoutCtx<_, FlexParentData>`, never to a
     /// `BoxLayoutCtx<_, BoxParentData>`). The default return is `None`
     /// so the debug_assert is a no-op for Proxy / no-children paths,
     /// which is correct: those carry no static evidence to check.

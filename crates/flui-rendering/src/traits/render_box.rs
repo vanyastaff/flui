@@ -353,9 +353,9 @@ pub enum TextBaseline {
 ///
 /// The `perform_layout_raw` body **is** the real bridge — it receives a
 /// protocol-erased `&mut dyn BoxLayoutCtxErased`, reconstructs a typed
-/// `BoxLayoutCtx<T::Arity, T::ParentData>` via
-/// [`crate::protocol::BoxLayoutCtx::from_erased`], wraps it in a
-/// `BoxLayoutContext`
+/// `BoxLayoutCtx<T::Arity, T::ParentData>` via the in-crate
+/// `BoxLayoutCtx::from_erased` ctor (`pub(crate)` — see
+/// [`crate::protocol::BoxLayoutCtx`]), wraps it in a `BoxLayoutContext`
 /// (the rich ergonomic wrapper), and calls
 /// [`RenderBox::perform_layout`]. The completion size is read back from
 /// the inner context's geometry and returned to the pipeline.

@@ -272,7 +272,7 @@ impl<P: Protocol> RenderEntry<P> {
     /// the padding box, etc.).
     ///
     /// **Production layout for non-leaf nodes uses
-    /// [`crate::pipeline::PipelineOwner::layout_dirty_root`] (U20)**,
+    /// `PipelineOwner::layout_dirty_root` (U20, not yet landed)**,
     /// which obtains disjoint mut refs via
     /// `RenderTree::get_parent_and_children_mut` and constructs a typed
     /// `BoxLayoutCtx` with the child slice via
