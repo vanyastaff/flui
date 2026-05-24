@@ -403,3 +403,52 @@ fn u19_variable_bridge_handles_zero_children() {
         "Zero-child RenderFlex must complete with constraints.smallest() = (0, 0)",
     );
 }
+
+// ============================================================================
+// RenderViewAdapter smoke test (review fix #15): the root view's manual
+// RenderObject<BoxProtocol> impl uses the erased ctx as a sentinel and
+// drives its own perform_layout via embedded RenderView state.
+// ============================================================================
+
+/// `RenderViewAdapter::perform_layout_raw` ignores the erased ctx and
+/// calls `RenderView::perform_layout()`, which reads logical
+/// constraints from the embedded `ViewConfiguration` and writes
+/// `RenderView::size` to `logical_constraints.smallest()`. Returns
+/// that size unchanged.
+///
+/// This smoke test covers the manual (non-blanket) `RenderObject<P>`
+/// implementation path. The blanket bridge handles user
+/// `RenderBox`/`RenderSliver` impls; the root view sidesteps it
+/// because its layout shape (no parent constraints, own-configuration
+/// driven) doesn't fit the `RenderBox::perform_layout(ctx)` signature.
+#[test]
+fn u19_render_view_adapter_bridge_smoke() {
+    use flui_rendering::view::{RenderView, RenderViewAdapter, ViewConfiguration};
+
+    // Tight configuration: logical_size = (200, 150) at 1x DPR.
+    let config = ViewConfiguration::from_size(Size::new(px(200.0), px(150.0)), 1.0);
+    let mut view = RenderView::with_configuration(config);
+    // Without prepare_initial_frame*, root_transform stays None and
+    // perform_layout asserts. The without-owner variant is the
+    // sanctioned test-side path (see RenderView::prepare_initial_frame).
+    view.prepare_initial_frame_without_owner();
+
+    let mut adapter = RenderViewAdapter::new(view);
+
+    // Hand the adapter a sentinel erased ctx — its body ignores the
+    // ctx and drives layout from its own configuration.
+    let sentinel_constraints = BoxConstraints::tight(Size::new(px(999.0), px(999.0)));
+    let size = <BoxProtocol as Protocol>::with_leaf_erased_ctx(sentinel_constraints, |erased| {
+        <RenderViewAdapter as RenderObject<BoxProtocol>>::perform_layout_raw(&mut adapter, erased)
+    });
+
+    // Logical constraints from from_size(200×150, 1.0) are tight at
+    // (200, 150). RenderView::perform_layout writes size =
+    // constraints.smallest() = (200, 150).
+    assert_eq!(
+        size,
+        Size::new(px(200.0), px(150.0)),
+        "RenderViewAdapter must layout from its embedded configuration, \
+         not from the sentinel erased-ctx constraints",
+    );
+}
