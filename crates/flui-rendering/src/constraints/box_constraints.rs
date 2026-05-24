@@ -39,6 +39,7 @@ use super::Constraints;
 /// Maps directly to Flutter's `BoxConstraints` class with identical semantics.
 #[derive(Clone, Copy, PartialEq)]
 pub struct BoxConstraints {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Minimum width that satisfies the constraints.
     pub min_width: Pixels,
     /// Maximum width that satisfies the constraints (may be infinite).

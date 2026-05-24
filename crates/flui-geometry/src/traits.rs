@@ -17,6 +17,7 @@ use super::{DevicePixels, PixelDelta, Pixels, Radians, Rems, ScaledPixels};
 /// The two axes of a 2D cartesian coordinate system.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
 pub enum Axis {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The vertical axis (y, up and down).
     Vertical,
     /// The horizontal axis (x, left and right).

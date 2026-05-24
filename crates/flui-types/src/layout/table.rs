@@ -40,6 +40,7 @@ impl Default for TableColumnWidth {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TableCellVerticalAlignment {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     #[default]
     Top,
 

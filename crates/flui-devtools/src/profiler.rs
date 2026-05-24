@@ -56,6 +56,7 @@ use crate::common::DevToolsConfig;
 /// Frame rendering phase
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FramePhase {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Widget tree build phase
     Build,
     /// Layout computation phase

@@ -42,6 +42,7 @@ pub type LongPressCallback = Arc<dyn Fn(LongPressDetails) + Send + Sync>;
 /// Details about long press down (initial contact)
 #[derive(Debug, Clone, PartialEq)]
 pub struct LongPressDownDetails {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Global position where pointer contacted screen
     pub global_position: Offset<Pixels>,
     /// Local position (relative to widget)
@@ -53,6 +54,7 @@ pub struct LongPressDownDetails {
 /// Details about long press start
 #[derive(Debug, Clone, PartialEq)]
 pub struct LongPressStartDetails {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Global position where long press started
     pub global_position: Offset<Pixels>,
     /// Local position (relative to widget)

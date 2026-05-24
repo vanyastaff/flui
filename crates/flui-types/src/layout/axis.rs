@@ -11,6 +11,7 @@ use crate::{Size, geometry::Pixels};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Axis {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The horizontal axis (left to right).
     #[default]
     Horizontal,

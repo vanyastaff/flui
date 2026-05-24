@@ -36,7 +36,7 @@ pub(super) struct WindowContext {
     /// Window ID for event dispatch
     pub window_id: WindowId,
     /// Reference to platform handlers (global)
-    pub handlers: Arc<Mutex<PlatformHandlers>>,
+    pub handlers: Arc<Mutex<PlatformHandlers>>, // PORT-CHECK-OK-SP6: WindowsPlatform handlers Arc<Mutex<>>; mirrors PlatformHandlers callback storage; pre-existing SP-6
     /// Per-window callbacks for event delivery
     pub callbacks: Arc<WindowCallbacks>,
     /// Scale factor for coordinate conversion

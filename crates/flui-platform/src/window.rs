@@ -205,7 +205,7 @@ pub trait Window {
 /// This ID is unique within the application and persists for the window's
 /// lifetime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct WindowId(pub u64);
+pub struct WindowId(pub u64); // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
 
 impl WindowId {
     /// Create a new window ID.

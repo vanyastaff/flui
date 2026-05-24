@@ -86,6 +86,7 @@ impl TapUpDetails {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DragStartDetails {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The time when the drag started
     pub source_time_stamp: Duration,
 
@@ -126,6 +127,7 @@ impl DragStartDetails {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DragDownDetails {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The global position where the pointer contacted
     pub global_position: Offset<Pixels>,
 
@@ -147,6 +149,7 @@ impl DragDownDetails {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DragUpdateDetails {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The time when the update occurred
     pub source_time_stamp: Duration,
 
@@ -195,6 +198,7 @@ impl DragUpdateDetails {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DragEndDetails {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The velocity of the pointer when the drag ended
     pub velocity: Velocity,
 
@@ -227,6 +231,7 @@ impl DragEndDetails {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ScaleStartDetails {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The focal point of the pointers in contact with the screen
     pub focal_point: OffsetPair,
 
@@ -248,6 +253,7 @@ impl ScaleStartDetails {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ScaleUpdateDetails {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The focal point of the pointers in contact with the screen
     pub focal_point: OffsetPair,
 
@@ -311,6 +317,7 @@ impl ScaleUpdateDetails {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ScaleEndDetails {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The velocity of the gesture
     pub velocity: Velocity,
 
@@ -336,6 +343,7 @@ impl ScaleEndDetails {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LongPressDownDetails {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The global position where the pointer contacted
     pub global_position: Offset<Pixels>,
 
@@ -368,6 +376,7 @@ impl LongPressDownDetails {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LongPressStartDetails {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The global position where the long press started
     pub global_position: Offset<Pixels>,
 

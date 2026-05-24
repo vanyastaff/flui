@@ -37,9 +37,9 @@
 // Modules
 pub mod app;
 pub mod bindings;
-pub mod embedder;
-pub mod overlay;
-pub mod theme;
+pub mod embedder; // PORT-CHECK-OK-SP4: embedder API surface; binding entry for app integrators
+pub mod overlay; // PORT-CHECK-OK-SP4: overlay API surface; binding entry for app integrators
+pub mod theme; // PORT-CHECK-OK-SP4: theme API surface; binding entry for app integrators
 
 // Primary exports - Flutter naming
 // Legacy alias

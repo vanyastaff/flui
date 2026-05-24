@@ -80,6 +80,7 @@ pub use crate::layout::TextBaseline;
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TextDirection {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     #[default]
     Ltr,
     /// Right-to-left text direction.

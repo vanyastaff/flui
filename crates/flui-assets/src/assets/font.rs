@@ -26,6 +26,7 @@ use crate::types::AssetKey;
 /// ```
 #[derive(Debug, Clone)]
 pub struct FontAsset {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Source path or identifier
     path: String,
 

@@ -32,6 +32,7 @@ pub struct TableCellParentData {
 /// Vertical alignment options for table cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TableCellVerticalAlignment {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Align to top of cell.
     Top,
 
@@ -139,6 +140,7 @@ pub struct TextParentData {
 /// Range of text in a paragraph (start and end character indices).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TextRange {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Start character index (inclusive).
     pub start: usize,
 

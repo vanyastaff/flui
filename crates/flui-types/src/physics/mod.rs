@@ -41,6 +41,7 @@ pub use tolerance::Tolerance;
 /// let vel = sim.velocity(0.1);
 /// ```
 pub trait Simulation {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     #[must_use]
     fn position(&self, time: f32) -> f32;
 

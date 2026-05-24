@@ -83,7 +83,7 @@ pub use pipeline::PluginPipeline;
 
 // Dynamic library loading is not available on wasm32
 #[cfg(not(target_arch = "wasm32"))]
-pub mod dynlib;
+pub mod dynlib; // PORT-CHECK-OK-SP4: dynlib API surface; binding entry for hot-reload integrators
 
 #[cfg(not(target_arch = "wasm32"))]
 mod driver;

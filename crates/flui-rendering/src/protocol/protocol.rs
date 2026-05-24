@@ -20,7 +20,7 @@ use crate::parent_data::ParentData;
 /// Private module for sealed trait pattern.
 pub(crate) mod sealed {
     /// Sealed marker trait preventing external Protocol implementations.
-    pub trait Sealed {}
+    pub trait Sealed {} // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
 }
 
 // ============================================================================

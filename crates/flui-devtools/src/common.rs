@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 /// DevTools configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DevToolsConfig {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Enable performance profiling
     pub profiling_enabled: bool,
 

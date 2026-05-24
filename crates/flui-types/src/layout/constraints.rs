@@ -35,6 +35,7 @@ use crate::geometry::{Pixels, Size};
 /// ```
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct BoxConstraints {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Minimum width
     pub min_width: Pixels,
     /// Maximum width

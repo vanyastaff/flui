@@ -248,7 +248,7 @@ pub mod sealed {
     use super::*;
 
     /// Sealed trait to prevent external implementations of AssetCacheCore.
-    pub trait Sealed {}
+    pub trait Sealed {} // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
 
     impl<T: Asset> Sealed for AssetCache<T> {}
     impl<T: Asset> Sealed for &AssetCache<T> {}

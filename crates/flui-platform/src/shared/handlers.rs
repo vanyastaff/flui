@@ -137,34 +137,34 @@ pub struct WindowCallbacks {
     /// Called when an input event (pointer, keyboard) is delivered to this
     /// window. Returns `DispatchEventResult` indicating if the event was
     /// consumed.
-    pub on_input: Mutex<Option<Box<dyn FnMut(PlatformInput) -> DispatchEventResult + Send>>>,
+    pub on_input: Mutex<Option<Box<dyn FnMut(PlatformInput) -> DispatchEventResult + Send>>>, // PORT-CHECK-OK-SP6: PlatformHandlers callback storage; FR-029 #5 sanctioned; SP-6 lock-placement tracked
 
     /// Called when the platform requests a new frame to be rendered.
-    pub on_request_frame: Mutex<Option<Box<dyn FnMut() + Send>>>,
+    pub on_request_frame: Mutex<Option<Box<dyn FnMut() + Send>>>, // PORT-CHECK-OK-SP6: PlatformHandlers callback storage; FR-029 #5 sanctioned; SP-6 lock-placement tracked
 
     /// Called when the window is resized. Parameters: new size (logical), scale
     /// factor.
-    pub on_resize: Mutex<Option<Box<dyn FnMut(Size<Pixels>, f32) + Send>>>,
+    pub on_resize: Mutex<Option<Box<dyn FnMut(Size<Pixels>, f32) + Send>>>, // PORT-CHECK-OK-SP6: PlatformHandlers callback storage; FR-029 #5 sanctioned; SP-6 lock-placement tracked
 
     /// Called when the window is moved.
-    pub on_moved: Mutex<Option<Box<dyn FnMut() + Send>>>,
+    pub on_moved: Mutex<Option<Box<dyn FnMut() + Send>>>, // PORT-CHECK-OK-SP6: PlatformHandlers callback storage; FR-029 #5 sanctioned; SP-6 lock-placement tracked
 
     /// Called when the window is about to be destroyed. Only fires once
     /// (FnOnce).
-    pub on_close: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    pub on_close: Mutex<Option<Box<dyn FnOnce() + Send>>>, // PORT-CHECK-OK-SP6: PlatformHandlers callback storage; FR-029 #5 sanctioned; SP-6 lock-placement tracked
 
     /// Called to ask if the window should close. Return `false` to veto.
-    pub on_should_close: Mutex<Option<Box<dyn FnMut() -> bool + Send>>>,
+    pub on_should_close: Mutex<Option<Box<dyn FnMut() -> bool + Send>>>, // PORT-CHECK-OK-SP6: PlatformHandlers callback storage; FR-029 #5 sanctioned; SP-6 lock-placement tracked
 
     /// Called when the window gains or loses focus. Parameter: is_active.
-    pub on_active_status_change: Mutex<Option<Box<dyn FnMut(bool) + Send>>>,
+    pub on_active_status_change: Mutex<Option<Box<dyn FnMut(bool) + Send>>>, // PORT-CHECK-OK-SP6: PlatformHandlers callback storage; FR-029 #5 sanctioned; SP-6 lock-placement tracked
 
     /// Called when the mouse enters or leaves the window. Parameter:
     /// is_hovered.
-    pub on_hover_status_change: Mutex<Option<Box<dyn FnMut(bool) + Send>>>,
+    pub on_hover_status_change: Mutex<Option<Box<dyn FnMut(bool) + Send>>>, // PORT-CHECK-OK-SP6: PlatformHandlers callback storage; FR-029 #5 sanctioned; SP-6 lock-placement tracked
 
     /// Called when the system appearance (light/dark) changes.
-    pub on_appearance_changed: Mutex<Option<Box<dyn FnMut() + Send>>>,
+    pub on_appearance_changed: Mutex<Option<Box<dyn FnMut() + Send>>>, // PORT-CHECK-OK-SP6: PlatformHandlers callback storage; FR-029 #5 sanctioned; SP-6 lock-placement tracked
 }
 
 impl WindowCallbacks {

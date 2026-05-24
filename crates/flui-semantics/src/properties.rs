@@ -14,6 +14,7 @@ use crate::flags::SemanticsFlag;
 /// Text direction for semantics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TextDirection {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Right-to-left text.
     Rtl,
     /// Left-to-right text.

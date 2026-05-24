@@ -136,11 +136,13 @@ impl ElementBuildContext {
 
     /// Get a reference to the tree.
     pub fn tree(&self) -> &Arc<RwLock<ElementTree>> {
+        // PORT-CHECK-OK-SP6: ElementBuildContext tree accessor; pre-existing SP-6
         &self.tree
     }
 
     /// Get a reference to the owner.
     pub fn build_owner(&self) -> &Arc<RwLock<BuildOwner>> {
+        // PORT-CHECK-OK-SP6: ElementBuildContext build_owner accessor; pre-existing SP-6
         &self.owner
     }
 

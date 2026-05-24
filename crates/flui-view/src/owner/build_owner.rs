@@ -242,6 +242,7 @@ impl BuildOwner {
     /// — eliminates the per-build `Arc::new(RwLock::new(_))` allocation
     /// in the stateless/stateful build paths.
     pub fn shared_dummy_tree() -> Arc<RwLock<ElementTree>> {
+        // PORT-CHECK-OK-SP6: shared_dummy_tree test-harness accessor; pre-existing SP-6
         Arc::clone(SHARED_DUMMY_TREE.get_or_init(|| Arc::new(RwLock::new(ElementTree::new()))))
     }
 
@@ -250,6 +251,7 @@ impl BuildOwner {
     /// [`shared_dummy_tree`](Self::shared_dummy_tree) for the
     /// allocation-elimination rationale.
     pub fn shared_dummy_owner() -> Arc<RwLock<BuildOwner>> {
+        // PORT-CHECK-OK-SP6: shared_dummy_owner test-harness accessor; pre-existing SP-6
         Arc::clone(SHARED_DUMMY_OWNER.get_or_init(|| Arc::new(RwLock::new(BuildOwner::new()))))
     }
 

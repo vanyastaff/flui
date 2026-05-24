@@ -6,6 +6,7 @@
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Tolerance {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The minimum distance between samples to consider them different
     ///
     /// Default: 0.001 (1/1000th of a pixel)

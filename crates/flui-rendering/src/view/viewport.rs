@@ -15,6 +15,7 @@ use crate::{protocol::BoxProtocol, traits::RenderObject};
 /// The unit of measurement for a viewport's cache extent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum CacheExtentStyle {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Treat the cache extent as logical pixels.
     #[default]
     Pixel,

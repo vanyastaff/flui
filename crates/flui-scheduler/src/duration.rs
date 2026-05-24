@@ -582,7 +582,7 @@ impl fmt::Display for FrameDuration {
 /// Type-safe percentage wrapper (0.0 to 100.0)
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct Percentage(f64);
+pub struct Percentage(f64); // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
 
 impl Percentage {
     /// Zero percent

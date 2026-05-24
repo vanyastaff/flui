@@ -97,6 +97,7 @@ impl RenderTree {
     /// Returns the pipeline owner.
     #[inline]
     pub fn owner(&self) -> Option<&Arc<RwLock<PipelineOwner>>> {
+        // PORT-CHECK-OK-SP6: RenderTree owner accessor; pre-existing SP-6
         self.owner.as_ref()
     }
 

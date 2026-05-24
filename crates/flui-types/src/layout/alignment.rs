@@ -35,6 +35,7 @@ impl MainAxisSize {
 #[derive(Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum MainAxisAlignment {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     #[default]
     Start,
 
@@ -138,6 +139,7 @@ impl MainAxisAlignment {
 #[derive(Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CrossAxisAlignment {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     #[default]
     Start,
 
@@ -187,6 +189,7 @@ impl CrossAxisAlignment {
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Alignment {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Horizontal alignment: -1.0 = left, 0.0 = center, 1.0 = right
     pub x: f32,
 

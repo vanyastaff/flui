@@ -16,6 +16,7 @@ use flui_types::{Size, geometry::px};
 /// ```
 #[derive(Debug, Clone)]
 pub struct AppConfig {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Window title.
     pub title: String,
 

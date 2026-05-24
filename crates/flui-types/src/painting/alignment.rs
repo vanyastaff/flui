@@ -41,6 +41,7 @@ use crate::geometry::{Offset, Pixels, Rect};
 #[non_exhaustive]
 #[must_use]
 pub struct Alignment {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Horizontal position. `-1.0` = left, `0.0` = center, `+1.0` = right.
     pub x: f32,
     /// Vertical position. `-1.0` = top, `0.0` = center, `+1.0` = bottom.

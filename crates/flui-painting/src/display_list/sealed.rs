@@ -42,7 +42,7 @@ use crate::display_list::DisplayList;
 pub mod private {
     /// Sealed trait to prevent external implementations of
     /// `DisplayListCore`.
-    pub trait Sealed {}
+    pub trait Sealed {} // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
 }
 
 /// Core `DisplayList` API providing fundamental access methods.

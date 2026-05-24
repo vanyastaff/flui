@@ -128,6 +128,7 @@ impl<V: View + Clone + Send + Sync + 'static> RootRenderElement<V> {
 
     /// Get the PipelineOwner.
     pub fn pipeline_owner(&self) -> Option<&Arc<RwLock<PipelineOwner>>> {
+        // PORT-CHECK-OK-SP6: RootView pipeline_owner accessor; pre-existing SP-6; consolidation tracked
         self.pipeline_owner.as_ref()
     }
 

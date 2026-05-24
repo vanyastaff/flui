@@ -93,8 +93,8 @@ pub use flui_geometry as geometry;
 pub mod gestures;
 pub mod layout;
 pub mod painting;
-pub mod physics;
-pub mod platform;
+pub mod physics; // PORT-CHECK-OK-SP4: physics types API surface; future consumer in flui-animation per ROADMAP
+pub mod platform; // PORT-CHECK-OK-SP4: platform types API surface; future consumer in flui-platform per ROADMAP
 pub mod styling;
 pub mod typography;
 
