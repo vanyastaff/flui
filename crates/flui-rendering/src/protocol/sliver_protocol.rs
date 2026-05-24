@@ -38,6 +38,7 @@ impl Protocol for SliverProtocol {
     type HitTest = SliverHitTest;
     type DefaultParentData = SliverParentData;
 
+    // PORT-CHECK-OK-DYN: protocol-layout-erasure (D-block PR-A1b U19, memo D5)
     type LayoutCtxErased<'ctx> = dyn SliverLayoutCtxErased + 'ctx;
 
     fn name() -> &'static str {
@@ -54,6 +55,7 @@ impl Protocol for SliverProtocol {
         f: impl FnOnce(&mut Self::LayoutCtxErased<'_>) -> R,
     ) -> R {
         let mut typed = SliverLayoutCtx::<flui_tree::Leaf, SliverParentData>::new(constraints);
+        // PORT-CHECK-OK-DYN: protocol-layout-erasure (D-block PR-A1b U19, memo D5)
         let erased: &mut dyn SliverLayoutCtxErased = &mut typed;
         f(erased)
     }
