@@ -19,19 +19,21 @@
 //!
 //! # Rust-native improvements
 //!
-//! * Pure-function math helpers ([`Self::padded_geometry`],
-//!   [`Self::empty_geometry`], [`Self::child_constraints`]) are
-//!   factored out of `perform_layout` so the geometry composition is
-//!   directly unit-testable without standing up a full pipeline /
+//! * Pure-function math helpers
+//!   ([`RenderSliverPadding::padded_geometry`],
+//!   [`RenderSliverPadding::empty_geometry`],
+//!   [`RenderSliverPadding::child_constraints`]) are factored out of
+//!   `perform_layout` so the geometry composition is directly
+//!   unit-testable without standing up a full pipeline /
 //!   `SliverLayoutContext`. The `perform_layout` body becomes a thin
 //!   driver over those helpers + the context's `layout_child` /
 //!   `child_parent_data_mut` calls.
 //! * `set_padding` returns a `bool` change-flag for pipeline
 //!   `mark_needs_layout` short-circuit.
 //! * Sliver-protocol calculate_paint_offset / calculate_cache_offset are
-//!   inlined as private associated functions ([`Self::paint_offset`],
-//!   [`Self::cache_offset`]) so helpers can be `&self`-free pure
-//!   functions and remain test-friendly.
+//!   inlined as private associated functions (`paint_offset`,
+//!   `cache_offset`) so helpers can be `&self`-free pure functions and
+//!   remain test-friendly.
 
 use flui_tree::Single;
 use flui_types::{Axis, EdgeInsets, Offset, Pixels, Rect};
@@ -171,7 +173,7 @@ impl RenderSliverPadding {
     /// Computes the sliver child's constraints given the parent
     /// constraints and the padding insets.
     ///
-    /// Flutter's [`SliverPadding`] passes the child a copy of the parent
+    /// Flutter's `SliverPadding` passes the child a copy of the parent
     /// constraints with:
     /// - `scroll_offset` reduced by the leading padding (clamped to 0),
     /// - `cache_origin` extended by the leading padding (clamped to 0

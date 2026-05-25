@@ -197,7 +197,8 @@ pub struct RenderStack {
     alignment: Alignment,
     clip_behavior: Clip,
     size: Size,
-    /// Computed during layout — read by [`has_visual_overflow`].
+    /// Computed during layout — read by
+    /// [`RenderStack::has_visual_overflow`].
     has_visual_overflow: bool,
     /// Child count snapshot for hit-testing.
     child_count: usize,
