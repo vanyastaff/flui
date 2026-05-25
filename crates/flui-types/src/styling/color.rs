@@ -211,26 +211,10 @@ impl Color {
     /// ```
     #[inline]
     pub fn lerp(a: Color, b: Color, t: f32) -> Color {
-        #[cfg(all(feature = "simd", target_arch = "x86_64", target_feature = "sse2"))]
-        {
-            Self::lerp_simd_sse(a, b, t)
-        }
-
-        #[cfg(all(feature = "simd", target_arch = "aarch64", target_feature = "neon"))]
-        {
-            Self::lerp_simd_neon(a, b, t)
-        }
-
-        #[cfg(not(all(
-            feature = "simd",
-            any(
-                all(target_arch = "x86_64", target_feature = "sse2"),
-                all(target_arch = "aarch64", target_feature = "neon")
-            )
-        )))]
-        {
-            Self::lerp_scalar(a, b, t)
-        }
+        // U14 (Option D): hand-written SSE/NEON paths removed; modern
+        // compilers auto-vectorise the scalar form for `u8` channels with
+        // no measurable difference at the call sites that exercise it.
+        Self::lerp_scalar(a, b, t)
     }
 
     #[inline]
@@ -244,71 +228,6 @@ impl Color {
             lerp_u8(a.b, b.b),
             lerp_u8(a.a, b.a),
         )
-    }
-
-    #[inline]
-    #[cfg(all(target_arch = "x86_64", not(target_family = "wasm")))]
-    #[allow(dead_code, unsafe_code)]
-    fn lerp_simd_sse(a: Color, b: Color, t: f32) -> Color {
-        #[cfg(target_feature = "sse2")]
-        unsafe {
-            use std::arch::x86_64::*;
-
-            let t = t.clamp(0.0, 1.0);
-
-            // Convert u8 channels to f32
-            let a_vec = _mm_set_ps(a.a as f32, a.b as f32, a.g as f32, a.r as f32);
-            let b_vec = _mm_set_ps(b.a as f32, b.b as f32, b.g as f32, b.r as f32);
-            let t_vec = _mm_set1_ps(t);
-
-            // lerp: a + (b - a) * t
-            let diff = _mm_sub_ps(b_vec, a_vec);
-            let scaled = _mm_mul_ps(diff, t_vec);
-            let result = _mm_add_ps(a_vec, scaled);
-
-            // Convert back to u8
-            let mut out = [0.0f32; 4];
-            _mm_storeu_ps(out.as_mut_ptr(), result);
-
-            Color::rgba(out[0] as u8, out[1] as u8, out[2] as u8, out[3] as u8)
-        }
-
-        #[cfg(not(target_feature = "sse2"))]
-        {
-            Self::lerp_scalar(a, b, t)
-        }
-    }
-
-    #[inline]
-    #[cfg(all(target_arch = "aarch64", not(target_family = "wasm")))]
-    fn lerp_simd_neon(a: Color, b: Color, t: f32) -> Color {
-        #[cfg(target_feature = "neon")]
-        unsafe {
-            use std::arch::aarch64::*;
-
-            let t = t.clamp(0.0, 1.0);
-
-            // Convert u8 channels to f32
-            let a_vec = vld1q_f32([a.r as f32, a.g as f32, a.b as f32, a.a as f32].as_ptr());
-            let b_vec = vld1q_f32([b.r as f32, b.g as f32, b.b as f32, b.a as f32].as_ptr());
-            let t_vec = vdupq_n_f32(t);
-
-            // lerp: a + (b - a) * t
-            let diff = vsubq_f32(b_vec, a_vec);
-            let scaled = vmulq_f32(diff, t_vec);
-            let result = vaddq_f32(a_vec, scaled);
-
-            // Convert back to u8
-            let mut out = [0.0f32; 4];
-            vst1q_f32(out.as_mut_ptr(), result);
-
-            Color::rgba(out[0] as u8, out[1] as u8, out[2] as u8, out[3] as u8)
-        }
-
-        #[cfg(not(target_feature = "neon"))]
-        {
-            Self::lerp_scalar(a, b, t)
-        }
     }
 
     #[inline]
@@ -424,26 +343,9 @@ impl Color {
             return background;
         }
 
-        #[cfg(all(feature = "simd", target_arch = "x86_64", target_feature = "sse2"))]
-        {
-            self.blend_over_simd_sse(background)
-        }
-
-        #[cfg(all(feature = "simd", target_arch = "aarch64", target_feature = "neon"))]
-        {
-            self.blend_over_simd_neon(background)
-        }
-
-        #[cfg(not(all(
-            feature = "simd",
-            any(
-                all(target_arch = "x86_64", target_feature = "sse2"),
-                all(target_arch = "aarch64", target_feature = "neon")
-            )
-        )))]
-        {
-            self.blend_over_scalar(background)
-        }
+        // U14 (Option D): hand-written SSE/NEON paths removed; same
+        // reasoning as `Color::lerp` above.
+        self.blend_over_scalar(background)
     }
 
     #[inline]
@@ -465,117 +367,6 @@ impl Color {
         let a = (alpha_out * 255.0) as u8;
 
         Color::rgba(r, g, b, a)
-    }
-
-    #[inline]
-    #[cfg(all(target_arch = "x86_64", not(target_family = "wasm")))]
-    #[allow(dead_code, unsafe_code)]
-    fn blend_over_simd_sse(&self, background: Color) -> Color {
-        #[cfg(target_feature = "sse2")]
-        unsafe {
-            use std::arch::x86_64::*;
-
-            let alpha_src = self.a as f32 / 255.0;
-            let alpha_dst = background.a as f32 / 255.0;
-            let alpha_out = alpha_src + alpha_dst * (1.0 - alpha_src);
-
-            if alpha_out == 0.0 {
-                return Color::TRANSPARENT;
-            }
-
-            // Load colors as f32 vectors
-            let src_vec = _mm_set_ps(self.a as f32, self.b as f32, self.g as f32, self.r as f32);
-            let dst_vec = _mm_set_ps(
-                background.a as f32,
-                background.b as f32,
-                background.g as f32,
-                background.r as f32,
-            );
-
-            // Blend formula: (src * alpha_src + dst * alpha_dst * (1 - alpha_src)) /
-            // alpha_out
-            let alpha_src_vec = _mm_set1_ps(alpha_src);
-            let alpha_dst_factor = _mm_set1_ps(alpha_dst * (1.0 - alpha_src));
-            let alpha_out_vec = _mm_set1_ps(alpha_out);
-
-            let src_contrib = _mm_mul_ps(src_vec, alpha_src_vec);
-            let dst_contrib = _mm_mul_ps(dst_vec, alpha_dst_factor);
-            let sum = _mm_add_ps(src_contrib, dst_contrib);
-            let result = _mm_div_ps(sum, alpha_out_vec);
-
-            // Convert back to u8
-            let mut out = [0.0f32; 4];
-            _mm_storeu_ps(out.as_mut_ptr(), result);
-
-            Color::rgba(
-                out[0] as u8,
-                out[1] as u8,
-                out[2] as u8,
-                (alpha_out * 255.0) as u8,
-            )
-        }
-
-        #[cfg(not(target_feature = "sse2"))]
-        {
-            self.blend_over_scalar(background)
-        }
-    }
-
-    #[inline]
-    #[cfg(all(target_arch = "aarch64", not(target_family = "wasm")))]
-    fn blend_over_simd_neon(&self, background: Color) -> Color {
-        #[cfg(target_feature = "neon")]
-        unsafe {
-            use std::arch::aarch64::*;
-
-            let alpha_src = self.a as f32 / 255.0;
-            let alpha_dst = background.a as f32 / 255.0;
-            let alpha_out = alpha_src + alpha_dst * (1.0 - alpha_src);
-
-            if alpha_out == 0.0 {
-                return Color::TRANSPARENT;
-            }
-
-            // Load colors as f32 vectors
-            let src_vec =
-                vld1q_f32([self.r as f32, self.g as f32, self.b as f32, self.a as f32].as_ptr());
-            let dst_vec = vld1q_f32(
-                [
-                    background.r as f32,
-                    background.g as f32,
-                    background.b as f32,
-                    background.a as f32,
-                ]
-                .as_ptr(),
-            );
-
-            // Blend formula: (src * alpha_src + dst * alpha_dst * (1 - alpha_src)) /
-            // alpha_out
-            let alpha_src_vec = vdupq_n_f32(alpha_src);
-            let alpha_dst_factor = vdupq_n_f32(alpha_dst * (1.0 - alpha_src));
-            let alpha_out_vec = vdupq_n_f32(alpha_out);
-
-            let src_contrib = vmulq_f32(src_vec, alpha_src_vec);
-            let dst_contrib = vmulq_f32(dst_vec, alpha_dst_factor);
-            let sum = vaddq_f32(src_contrib, dst_contrib);
-            let result = vdivq_f32(sum, alpha_out_vec);
-
-            // Convert back to u8
-            let mut out = [0.0f32; 4];
-            vst1q_f32(out.as_mut_ptr(), result);
-
-            Color::rgba(
-                out[0] as u8,
-                out[1] as u8,
-                out[2] as u8,
-                (alpha_out * 255.0) as u8,
-            )
-        }
-
-        #[cfg(not(target_feature = "neon"))]
-        {
-            self.blend_over_scalar(background)
-        }
     }
 
     #[inline]

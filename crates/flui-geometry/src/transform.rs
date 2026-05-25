@@ -456,8 +456,8 @@ impl Transform {
                 // [ 0      0       1  0 ]
                 // [ 0      0       0  1 ]
                 let mut matrix = Matrix4::identity();
-                matrix.m[4] = y.tan(); // m[1][0] = tan(y)
-                matrix.m[1] = x.tan(); // m[0][1] = tan(x)
+                matrix[4] = y.tan(); // m[1][0] = tan(y)
+                matrix[1] = x.tan(); // m[0][1] = tan(x)
                 matrix
             }
 
@@ -525,7 +525,7 @@ impl Transform {
             | Transform::RotateAround { .. }
             | Transform::ScaleAround { .. } => true,
             Transform::Compose(transforms) => transforms.iter().any(Transform::has_translation),
-            Transform::Matrix(m) => m.m[12] != 0.0 || m.m[13] != 0.0,
+            Transform::Matrix(m) => m[12] != 0.0 || m[13] != 0.0,
             _ => false,
         }
     }
@@ -635,8 +635,8 @@ impl Transform {
         let matrix: Matrix4 = self.clone().into();
 
         // Extract translation from matrix (m[12], m[13] are 2D translation)
-        let tx = matrix.m[12];
-        let ty = matrix.m[13];
+        let tx = matrix[12];
+        let ty = matrix[13];
 
         // For 2D affine transforms, the matrix looks like:
         // [ m[0]  m[4]  0   m[12] ]   [ a  c  0  tx ]
@@ -644,10 +644,10 @@ impl Transform {
         // [ m[2]  m[6]  1   m[14] ]   [ 0  0  1  0  ]
         // [ m[3]  m[7]  0   m[15] ]   [ 0  0  0  1  ]
 
-        let a = matrix.m[0];
-        let b = matrix.m[1];
-        let c = matrix.m[4];
-        let d = matrix.m[5];
+        let a = matrix[0];
+        let b = matrix[1];
+        let c = matrix[4];
+        let d = matrix[5];
 
         // Extract scale from column vectors
         let sx = (a * a + b * b).sqrt();
@@ -734,8 +734,8 @@ mod tests {
     fn test_translate() {
         let transform = Transform::translate(10.0, 20.0);
         let matrix = transform.to_matrix();
-        assert_eq!(matrix.m[12], 10.0);
-        assert_eq!(matrix.m[13], 20.0);
+        assert_eq!(matrix[12], 10.0);
+        assert_eq!(matrix[13], 20.0);
     }
 
     #[test]
@@ -744,24 +744,24 @@ mod tests {
         let matrix = transform.to_matrix();
 
         // At 90 degrees, cos(90°) ≈ 0, sin(90°) ≈ 1
-        assert!((matrix.m[0] - 0.0).abs() < 0.001); // cos(90°)
-        assert!((matrix.m[1] - 1.0).abs() < 0.001); // sin(90°)
+        assert!((matrix[0] - 0.0).abs() < 0.001); // cos(90°)
+        assert!((matrix[1] - 1.0).abs() < 0.001); // sin(90°)
     }
 
     #[test]
     fn test_scale_uniform() {
         let transform = Transform::scale(2.0);
         let matrix = transform.to_matrix();
-        assert_eq!(matrix.m[0], 2.0);
-        assert_eq!(matrix.m[5], 2.0);
+        assert_eq!(matrix[0], 2.0);
+        assert_eq!(matrix[5], 2.0);
     }
 
     #[test]
     fn test_scale_xy() {
         let transform = Transform::scale_xy(2.0, 3.0);
         let matrix = transform.to_matrix();
-        assert_eq!(matrix.m[0], 2.0);
-        assert_eq!(matrix.m[5], 3.0);
+        assert_eq!(matrix[0], 2.0);
+        assert_eq!(matrix[5], 3.0);
     }
 
     #[test]
@@ -770,10 +770,10 @@ mod tests {
         let matrix = transform.to_matrix();
 
         // Check skew matrix structure
-        assert_eq!(matrix.m[0], 1.0); // No scaling on X
-        assert_eq!(matrix.m[5], 1.0); // No scaling on Y
-        assert!((matrix.m[1] - 0.2f32.tan()).abs() < 0.001); // tan(x) in m[0][1]
-        assert!((matrix.m[4] - 0.3f32.tan()).abs() < 0.001); // tan(y) in m[1][0]
+        assert_eq!(matrix[0], 1.0); // No scaling on X
+        assert_eq!(matrix[5], 1.0); // No scaling on Y
+        assert!((matrix[1] - 0.2f32.tan()).abs() < 0.001); // tan(x) in m[0][1]
+        assert!((matrix[4] - 0.3f32.tan()).abs() < 0.001); // tan(y) in m[1][0]
     }
 
     #[test]
@@ -854,8 +854,8 @@ mod tests {
         // Verify that (50, 50) stays at (50, 50) after transform
         let x = 50.0;
         let y = 50.0;
-        let transformed_x = matrix.m[0] * x + matrix.m[4] * y + matrix.m[12];
-        let transformed_y = matrix.m[1] * x + matrix.m[5] * y + matrix.m[13];
+        let transformed_x = matrix[0] * x + matrix[4] * y + matrix[12];
+        let transformed_y = matrix[1] * x + matrix[5] * y + matrix[13];
 
         assert!((transformed_x - 50.0).abs() < 0.001);
         assert!((transformed_y - 50.0).abs() < 0.001);

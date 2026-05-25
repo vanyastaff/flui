@@ -318,15 +318,15 @@ mod tests {
     #[test]
     fn test_transform_rotation() {
         let transform = RenderTransform::rotation(PI / 2.0);
-        // Should be 90 degree rotation - m[0] is m11 in column-major order
-        assert!((transform.transform().m[0] - 0.0).abs() < 1e-6);
+        // Should be 90 degree rotation - index 0 is m11 in column-major order
+        assert!((transform.transform()[0] - 0.0).abs() < 1e-6);
     }
 
     #[test]
     fn test_transform_rotation_degrees() {
         let transform = RenderTransform::rotation_degrees(90.0);
-        // Should be same as PI/2 radians - m[0] is m11 in column-major order
-        assert!((transform.transform().m[0] - 0.0).abs() < 1e-6);
+        // Should be same as PI/2 radians - index 0 is m11 in column-major order
+        assert!((transform.transform()[0] - 0.0).abs() < 1e-6);
     }
 
     #[test]

@@ -3159,8 +3159,8 @@ impl WgpuPainter {
 
                     // Extract position from transform matrix
                     // Matrix4 is column-major: m[12] = x translation, m[13] = y translation
-                    let dst_x = transform.m[12];
-                    let dst_y = transform.m[13];
+                    let dst_x = transform[12];
+                    let dst_y = transform[13];
                     let dst_width = sprite_rect.width();
                     let dst_height = sprite_rect.height();
 

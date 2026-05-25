@@ -28,10 +28,13 @@ serde = { workspace = true, optional = true }
 smallvec = { workspace = true }
 
 # Note: mint and glam optional deps were dropped in D-block PR-C-2 (U6+U7);
-# the mint/glam interop now lives in flui-geometry. flui-types still exposes
-# `mint` and `glam` feature flags but they FORWARD to flui-geometry/{mint,glam}
-# (see [features] below) — no direct flui-types code uses those crates after
-# the geometry split.
+# the mint/glam interop now lives in flui-geometry. As of U14 (Option D)
+# both `glam` and `mint` are MANDATORY dependencies of `flui-geometry`, so
+# the forwarding `mint` / `glam` feature flags that used to live on this
+# crate were removed -- enabling them was a no-op once glam and mint
+# became default deps in `flui-geometry`. The hand-written `simd` feature
+# was also removed: `glam` ships portable SIMD by default and the
+# framework no longer maintains its own SSE/NEON paths.
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -50,25 +53,10 @@ default = []
 # post-split — a compat regression (Codex P1, PR #138).
 serde = ["dep:serde", "flui-geometry/serde"]
 
-# === Performance ===
-# SIMD acceleration for math operations
-# Auto-detects SSE/AVX (x86_64) or NEON (ARM). Locally gates flui-types own
-# color.rs SIMD code paths AND forwards to flui-geometry/simd for the
-# Matrix4 SSE/NEON multiplication fast paths.
-simd = ["flui-geometry/simd"]
-
-# === Interoperability ===
-# mint: Zero-cost conversions with glam, nalgebra, cgmath, kurbo.
-# Forwarded to flui-geometry/mint (impls live in flui-geometry post-split).
-mint = ["flui-geometry/mint"]
-
-# glam: Direct integration with glam math library.
-# Forwarded to flui-geometry/glam (impls live in flui-geometry post-split).
-glam = ["flui-geometry/glam"]
-
 # === Convenience ===
-# Enable all features
-full = ["serde", "simd", "mint", "glam"]
+# Enable all features (simd/mint/glam were removed in U14 -- see the note
+# above the [dev-dependencies] block).
+full = ["serde"]
 
 # NOTE: Image and font loading moved to flui-assets crate.
 # flui_types only provides type definitions!
