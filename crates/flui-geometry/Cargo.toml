@@ -64,7 +64,7 @@ glam = { version = "0.30", optional = true }
 mint = { version = "0.5", optional = true }
 
 [dev-dependencies]
-proptest = "1.5"
+proptest = "1.11"
 
 [features]
 default = []

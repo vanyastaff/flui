@@ -34,7 +34,7 @@ parking_lot = { workspace = true }
 raw-window-handle = "0.6"
 
 # Bitflags for platform-specific flags
-bitflags = "2.6"
+bitflags = "2.11"
 
 # Windows platform
 [target.'cfg(target_os = "windows")'.dependencies]
