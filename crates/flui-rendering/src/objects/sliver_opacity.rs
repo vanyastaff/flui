@@ -8,8 +8,8 @@
 //! (`packages/flutter/lib/src/rendering/sliver.dart` — `_RenderSliverOpacity`
 //! / the proxy-sliver variant). Layout is a pure passthrough of the
 //! parent's [`SliverConstraints`] to the child; the alpha is consumed
-//! by the compositor via the [`PaintEffectsCapability::paint_alpha`]
-//! override.
+//! by the compositor via the
+//! [`crate::traits::PaintEffectsCapability::paint_alpha`] override.
 //!
 //! # Rust-native improvements
 //!
@@ -20,8 +20,9 @@
 //!   `mark_needs_paint` short-circuit.
 //! * `always_needs_compositing` opt-in mirrors Flutter's
 //!   `RenderProxyBox.alwaysNeedsCompositing` toggle and is honoured by
-//!   [`needs_compositing`] independent of the alpha value, useful for
-//!   animations that want a stable compositing layer.
+//!   [`RenderSliverOpacity::needs_compositing`] independent of the
+//!   alpha value, useful for animations that want a stable compositing
+//!   layer.
 
 use flui_tree::Single;
 use flui_types::Rect;
@@ -42,13 +43,13 @@ use crate::{
 ///
 /// The `opacity` value ranges from `0.0` (fully transparent) to `1.0`
 /// (fully opaque). The compositor reads it via the
-/// [`PaintEffectsCapability::paint_alpha`] override; layout is a
-/// transparent passthrough.
+/// [`crate::traits::PaintEffectsCapability::paint_alpha`] override;
+/// layout is a transparent passthrough.
 ///
 /// # Performance
 ///
 /// When `opacity == 1.0` and `always_needs_compositing == false`, no
-/// compositing layer is required and [`paint_alpha`] returns `None`.
+/// compositing layer is required and `paint_alpha` returns `None`.
 /// For frequently-changing opacity (e.g. fade animations), set
 /// `always_needs_compositing = true` to avoid layer-tree churn each
 /// frame.

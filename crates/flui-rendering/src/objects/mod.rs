@@ -27,8 +27,9 @@
 //!   (Core.2 Wave 4)
 //! - [`RenderFractionalTranslation`] - Paint-time shift by fraction of
 //!   child size (Core.2 Wave 4)
-//! - [`RenderFittedBox`] - Scales child to fit via [`BoxFit`] +
-//!   [`Alignment`] (Core.2 Wave 4)
+//! - [`RenderFittedBox`] - Scales child to fit via
+//!   [`flui_types::layout::BoxFit`] + [`flui_types::Alignment`]
+//!   (Core.2 Wave 4)
 //!
 //! ## Multi-Child Objects
 //! - [`RenderFlex`] - Lays out children in a row or column
@@ -39,7 +40,8 @@
 //! - [`RenderSliverPadding`] - Pads a single sliver child on all four
 //!   sides, honouring the sliver layout protocol (Core.2 Wave 5a)
 //! - [`RenderSliverOpacity`] - Applies transparency to a single sliver
-//!   child via [`PaintEffectsCapability::paint_alpha`] (Core.2 Wave 5a)
+//!   child via [`crate::traits::PaintEffectsCapability::paint_alpha`]
+//!   (Core.2 Wave 5a)
 //! - [`RenderSliverIgnorePointer`] - Pointers pass through the sliver
 //!   subtree to siblings beneath in the viewport (Core.2 Wave 5a)
 //! - [`RenderSliverOffstage`] - Hides a sliver subtree (zero geometry,
