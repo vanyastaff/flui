@@ -5,14 +5,14 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use flui_types::geometry::{device_px, px};
+use flui_types::geometry::{ScaleFactor, device_px, px};
 
 fn pixels_to_device_pixels_benchmark(c: &mut Criterion) {
     let logical = px(100.0);
     let scale = 2.0;
 
     c.bench_function("Pixels::to_device_pixels", |b| {
-        b.iter(|| black_box(black_box(logical).to_device_pixels(black_box(scale))));
+        b.iter(|| black_box(black_box(logical).to_device(ScaleFactor::new(black_box(scale)))));
     });
 }
 
@@ -21,7 +21,7 @@ fn device_pixels_to_pixels_benchmark(c: &mut Criterion) {
     let scale = 2.0;
 
     c.bench_function("DevicePixels::to_pixels", |b| {
-        b.iter(|| black_box(black_box(device).to_pixels(black_box(scale))));
+        b.iter(|| black_box(black_box(device).to_logical(ScaleFactor::new(black_box(scale)))));
     });
 }
 

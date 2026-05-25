@@ -6,7 +6,7 @@
 //! - Pixels ↔ Rems
 //! - Round-trip conversions
 
-use flui_types::geometry::{Pixels, device_px, px, rems};
+use flui_types::geometry::{ScaleFactor, device_px, px, rems};
 
 // ============================================================================
 // T063: Pixels::to_device_pixels(scale)
@@ -15,21 +15,21 @@ use flui_types::geometry::{Pixels, device_px, px, rems};
 #[test]
 fn test_pixels_to_device_pixels_1x() {
     let logical = px(100.0);
-    let device = logical.to_device_pixels(1.0);
+    let device = logical.to_device(ScaleFactor::new(1.0));
     assert_eq!(device, device_px(100));
 }
 
 #[test]
 fn test_pixels_to_device_pixels_2x_retina() {
     let logical = px(100.0);
-    let device = logical.to_device_pixels(2.0);
+    let device = logical.to_device(ScaleFactor::new(2.0));
     assert_eq!(device, device_px(200));
 }
 
 #[test]
 fn test_pixels_to_device_pixels_1_5x() {
     let logical = px(100.0);
-    let device = logical.to_device_pixels(1.5);
+    let device = logical.to_device(ScaleFactor::new(1.5));
     // Should round to nearest integer
     assert_eq!(device, device_px(150));
 }
@@ -37,7 +37,7 @@ fn test_pixels_to_device_pixels_1_5x() {
 #[test]
 fn test_pixels_to_device_pixels_fractional() {
     let logical = px(10.5);
-    let device = logical.to_device_pixels(2.0);
+    let device = logical.to_device(ScaleFactor::new(2.0));
     // 10.5 * 2.0 = 21.0, rounds to 21
     assert_eq!(device, device_px(21));
 }
@@ -45,7 +45,7 @@ fn test_pixels_to_device_pixels_fractional() {
 #[test]
 fn test_pixels_to_device_pixels_rounding() {
     let logical = px(10.4);
-    let device = logical.to_device_pixels(2.0);
+    let device = logical.to_device(ScaleFactor::new(2.0));
     // 10.4 * 2.0 = 20.8, rounds to 21
     assert_eq!(device, device_px(21));
 }
@@ -53,14 +53,14 @@ fn test_pixels_to_device_pixels_rounding() {
 #[test]
 fn test_pixels_to_device_pixels_zero() {
     let logical = px(0.0);
-    let device = logical.to_device_pixels(2.0);
+    let device = logical.to_device(ScaleFactor::new(2.0));
     assert_eq!(device, device_px(0));
 }
 
 #[test]
 fn test_pixels_to_device_pixels_negative() {
     let logical = px(-50.0);
-    let device = logical.to_device_pixels(2.0);
+    let device = logical.to_device(ScaleFactor::new(2.0));
     assert_eq!(device, device_px(-100));
 }
 
@@ -71,28 +71,28 @@ fn test_pixels_to_device_pixels_negative() {
 #[test]
 fn test_device_pixels_to_logical_1x() {
     let device = device_px(100);
-    let logical = device.to_pixels(1.0);
+    let logical = device.to_logical(ScaleFactor::new(1.0));
     assert_eq!(logical, px(100.0));
 }
 
 #[test]
 fn test_device_pixels_to_logical_2x_retina() {
     let device = device_px(200);
-    let logical = device.to_pixels(2.0);
+    let logical = device.to_logical(ScaleFactor::new(2.0));
     assert_eq!(logical, px(100.0));
 }
 
 #[test]
 fn test_device_pixels_to_logical_1_5x() {
     let device = device_px(150);
-    let logical = device.to_pixels(1.5);
+    let logical = device.to_logical(ScaleFactor::new(1.5));
     assert_eq!(logical, px(100.0));
 }
 
 #[test]
 fn test_device_pixels_to_logical_fractional_result() {
     let device = device_px(101);
-    let logical = device.to_pixels(2.0);
+    let logical = device.to_logical(ScaleFactor::new(2.0));
     // 101 / 2.0 = 50.5
     assert_eq!(logical, px(50.5));
 }
@@ -100,14 +100,14 @@ fn test_device_pixels_to_logical_fractional_result() {
 #[test]
 fn test_device_pixels_to_logical_zero() {
     let device = device_px(0);
-    let logical = device.to_pixels(2.0);
+    let logical = device.to_logical(ScaleFactor::new(2.0));
     assert_eq!(logical, px(0.0));
 }
 
 #[test]
 fn test_device_pixels_to_logical_negative() {
     let device = device_px(-100);
-    let logical = device.to_pixels(2.0);
+    let logical = device.to_logical(ScaleFactor::new(2.0));
     assert_eq!(logical, px(-50.0));
 }
 
@@ -176,16 +176,16 @@ fn test_pixels_to_rems_manual() {
 #[test]
 fn test_round_trip_pixels_device_pixels_1x() {
     let original = px(100.0);
-    let device = original.to_device_pixels(1.0);
-    let back = device.to_pixels(1.0);
+    let device = original.to_device(ScaleFactor::new(1.0));
+    let back = device.to_logical(ScaleFactor::new(1.0));
     assert_eq!(back, original);
 }
 
 #[test]
 fn test_round_trip_pixels_device_pixels_2x() {
     let original = px(100.0);
-    let device = original.to_device_pixels(2.0);
-    let back = device.to_pixels(2.0);
+    let device = original.to_device(ScaleFactor::new(2.0));
+    let back = device.to_logical(ScaleFactor::new(2.0));
     assert_eq!(back, original);
 }
 
@@ -194,8 +194,8 @@ fn test_round_trip_pixels_device_pixels_fractional() {
     // Round-trip may lose precision due to rounding
     let original = px(100.5);
     let scale = 2.0;
-    let device = original.to_device_pixels(scale);
-    let back = device.to_pixels(scale);
+    let device = original.to_device(ScaleFactor::new(scale));
+    let back = device.to_logical(ScaleFactor::new(scale));
 
     // 100.5 * 2.0 = 201.0 (rounds to 201)
     // 201 / 2.0 = 100.5 (exact)
@@ -207,8 +207,8 @@ fn test_round_trip_pixels_device_pixels_precision_loss() {
     // Test case where rounding causes precision loss
     let original = px(10.4);
     let scale = 2.0;
-    let device = original.to_device_pixels(scale);
-    let back = device.to_pixels(scale);
+    let device = original.to_device(ScaleFactor::new(scale));
+    let back = device.to_logical(ScaleFactor::new(scale));
 
     // 10.4 * 2.0 = 20.8 (rounds to 21)
     // 21 / 2.0 = 10.5 (lost precision, difference of 0.1)
@@ -257,7 +257,7 @@ fn test_round_trip_rems_pixels_fractional_base() {
 #[test]
 fn test_pixels_from_device_pixels() {
     let device = device_px(200);
-    let logical = Pixels::from_device_pixels(device, 2.0);
+    let logical = device.to_logical(ScaleFactor::new(2.0));
     assert_eq!(logical, px(100.0));
 }
 
@@ -269,7 +269,7 @@ fn test_pixels_from_device_pixels() {
 fn test_conversion_with_zero_scale() {
     let logical = px(100.0);
     // Division by zero should produce infinity
-    let device = logical.to_device_pixels(0.0);
+    let device = logical.to_device(ScaleFactor::new(0.0));
     // 100.0 * 0.0 = 0.0
     assert_eq!(device, device_px(0));
 }
@@ -278,7 +278,7 @@ fn test_conversion_with_zero_scale() {
 fn test_conversion_very_large_scale() {
     let logical = px(1.0);
     let huge_scale = 1000.0;
-    let device = logical.to_device_pixels(huge_scale);
+    let device = logical.to_device(ScaleFactor::new(huge_scale));
     assert_eq!(device, device_px(1000));
 }
 
@@ -286,7 +286,7 @@ fn test_conversion_very_large_scale() {
 fn test_conversion_very_small_scale() {
     let logical = px(100.0);
     let tiny_scale = 0.01;
-    let device = logical.to_device_pixels(tiny_scale);
+    let device = logical.to_device(ScaleFactor::new(tiny_scale));
     // 100.0 * 0.01 = 1.0
     assert_eq!(device, device_px(1));
 }
@@ -294,7 +294,7 @@ fn test_conversion_very_small_scale() {
 #[test]
 fn test_negative_scale_factor() {
     let logical = px(100.0);
-    let device = logical.to_device_pixels(-2.0);
+    let device = logical.to_device(ScaleFactor::new(-2.0));
     // 100.0 * -2.0 = -200.0
     assert_eq!(device, device_px(-200));
 }
@@ -307,8 +307,8 @@ fn test_negative_scale_factor() {
 fn test_conversion_consistency_1x_vs_2x() {
     let logical = px(50.0);
 
-    let device_1x = logical.to_device_pixels(1.0);
-    let device_2x = logical.to_device_pixels(2.0);
+    let device_1x = logical.to_device(ScaleFactor::new(1.0));
+    let device_2x = logical.to_device(ScaleFactor::new(2.0));
 
     // At 2x scale, should be exactly double
     assert_eq!(device_2x.get(), device_1x.get() * 2);
@@ -320,8 +320,8 @@ fn test_conversion_proportional_scaling() {
     let logical2 = px(200.0);
     let scale = 1.5;
 
-    let device1 = logical1.to_device_pixels(scale);
-    let device2 = logical2.to_device_pixels(scale);
+    let device1 = logical1.to_device(ScaleFactor::new(scale));
+    let device2 = logical2.to_device(ScaleFactor::new(scale));
 
     // logical2 is 2x logical1, so device2 should be 2x device1
     assert_eq!(device2.get(), device1.get() * 2);
@@ -337,11 +337,11 @@ fn test_retina_display_conversion() {
     let button_width = px(100.0);
     let retina_scale = 2.0;
 
-    let device_width = button_width.to_device_pixels(retina_scale);
+    let device_width = button_width.to_device(ScaleFactor::new(retina_scale));
     assert_eq!(device_width, device_px(200));
 
     // Round-trip
-    let back = device_width.to_pixels(retina_scale);
+    let back = device_width.to_logical(ScaleFactor::new(retina_scale));
     assert_eq!(back, button_width);
 }
 
@@ -351,7 +351,7 @@ fn test_android_mdpi_conversion() {
     let view_height = px(48.0); // 48dp
     let mdpi_scale = 1.0;
 
-    let device_height = view_height.to_device_pixels(mdpi_scale);
+    let device_height = view_height.to_device(ScaleFactor::new(mdpi_scale));
     assert_eq!(device_height, device_px(48));
 }
 
@@ -361,7 +361,7 @@ fn test_android_xxhdpi_conversion() {
     let view_height = px(48.0); // 48dp
     let xxhdpi_scale = 3.0;
 
-    let device_height = view_height.to_device_pixels(xxhdpi_scale);
+    let device_height = view_height.to_device(ScaleFactor::new(xxhdpi_scale));
     assert_eq!(device_height, device_px(144));
 }
 
@@ -371,7 +371,7 @@ fn test_windows_125_percent_scaling() {
     let window_width = px(800.0);
     let windows_scale = 1.25;
 
-    let device_width = window_width.to_device_pixels(windows_scale);
+    let device_width = window_width.to_device(ScaleFactor::new(windows_scale));
     // 800.0 * 1.25 = 1000.0
     assert_eq!(device_width, device_px(1000));
 }

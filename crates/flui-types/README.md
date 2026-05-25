@@ -55,18 +55,18 @@ let intersection = rect1.intersect(&rect2);
 ### Unit Conversions (Layout → GPU Rendering)
 
 ```rust
-use flui_types::geometry::{px, device_px};
+use flui_types::geometry::{DevicePixels, Pixels, ScaleFactor, device_px, px};
 
 // Layout in logical pixels (density-independent)
 let button_width = px(100.0);
 
-// Convert to device pixels for GPU rendering
-let scale = 2.0; // Retina display
-let device_width = button_width.to_device_pixels(scale);
+// Convert to device pixels for GPU rendering via a typed scale factor
+let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0); // Retina display
+let device_width = button_width.to_device(scale);
 assert_eq!(device_width.get(), 200); // 200 physical pixels
 
-// Round-trip conversion
-let back_to_logical = device_width.to_pixels(scale);
+// Round-trip conversion (inverse direction reuses the same factor)
+let back_to_logical = device_width.to_logical(scale);
 assert_eq!(back_to_logical, button_width);
 ```
 
@@ -111,17 +111,17 @@ cargo run --example color_blending
 ### Type-Safe Units
 
 ```rust
-pub struct Pixels(f32);
-pub struct DevicePixels(i32);
-pub struct ScaledPixels(f32);
+pub struct Pixels(pub f32);
+pub struct DevicePixels(pub i32);
 
 // Cannot accidentally mix units:
 let logical = px(100.0);
 let device = device_px(200);
 // let mixed = logical + device; // ❌ Compile error!
 
-// Must explicitly convert:
-let converted = device.to_pixels(2.0);
+// Must explicitly convert through a typed ScaleFactor:
+let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
+let converted = device.to_logical(scale);
 let sum = logical + converted; // ✅ OK
 ```
 

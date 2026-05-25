@@ -3,7 +3,7 @@
 //! This module tests pixel-perfect GPU rendering with DevicePixels type,
 //! including conversions and geometric operations.
 
-use flui_types::geometry::{DevicePixels, IsZero, Point, Rect, Size, device_px, px};
+use flui_types::geometry::{DevicePixels, IsZero, Point, Rect, ScaleFactor, Size, device_px, px};
 
 // ============================================================================
 // Point<DevicePixels> Operations
@@ -67,8 +67,8 @@ fn test_device_point_to_logical_pixels() {
     let scale = 2.0;
 
     let logical_point = Point::new(
-        device_point.x.to_pixels(scale),
-        device_point.y.to_pixels(scale),
+        device_point.x.to_logical(ScaleFactor::new(scale)),
+        device_point.y.to_logical(ScaleFactor::new(scale)),
     );
 
     assert_eq!(logical_point.x, px(100.0));
@@ -220,10 +220,10 @@ fn test_device_rect_to_logical_pixels() {
     let scale = 2.0;
 
     let logical_rect = Rect::from_xywh(
-        device_rect.left().to_pixels(scale),
-        device_rect.top().to_pixels(scale),
-        device_rect.width().to_pixels(scale),
-        device_rect.height().to_pixels(scale),
+        device_rect.left().to_logical(ScaleFactor::new(scale)),
+        device_rect.top().to_logical(ScaleFactor::new(scale)),
+        device_rect.width().to_logical(ScaleFactor::new(scale)),
+        device_rect.height().to_logical(ScaleFactor::new(scale)),
     );
 
     assert_eq!(logical_rect.left(), px(100.0));
@@ -268,12 +268,12 @@ fn test_gpu_pixel_alignment_1x() {
     // Convert to device pixels (with rounding)
     let device_rect = Rect::<DevicePixels>::from_origin_size(
         Point::new(
-            logical_rect.left().to_device_pixels(scale),
-            logical_rect.top().to_device_pixels(scale),
+            logical_rect.left().to_device(ScaleFactor::new(scale)),
+            logical_rect.top().to_device(ScaleFactor::new(scale)),
         ),
         Size::new(
-            logical_rect.width().to_device_pixels(scale),
-            logical_rect.height().to_device_pixels(scale),
+            logical_rect.width().to_device(ScaleFactor::new(scale)),
+            logical_rect.height().to_device(ScaleFactor::new(scale)),
         ),
     );
 
@@ -292,12 +292,12 @@ fn test_gpu_pixel_alignment_2x() {
 
     let device_rect = Rect::<DevicePixels>::from_origin_size(
         Point::new(
-            logical_rect.left().to_device_pixels(scale),
-            logical_rect.top().to_device_pixels(scale),
+            logical_rect.left().to_device(ScaleFactor::new(scale)),
+            logical_rect.top().to_device(ScaleFactor::new(scale)),
         ),
         Size::new(
-            logical_rect.width().to_device_pixels(scale),
-            logical_rect.height().to_device_pixels(scale),
+            logical_rect.width().to_device(ScaleFactor::new(scale)),
+            logical_rect.height().to_device(ScaleFactor::new(scale)),
         ),
     );
 
@@ -315,12 +315,12 @@ fn test_gpu_pixel_alignment_fractional_scale() {
 
     let device_rect = Rect::<DevicePixels>::from_origin_size(
         Point::new(
-            logical_rect.left().to_device_pixels(scale),
-            logical_rect.top().to_device_pixels(scale),
+            logical_rect.left().to_device(ScaleFactor::new(scale)),
+            logical_rect.top().to_device(ScaleFactor::new(scale)),
         ),
         Size::new(
-            logical_rect.width().to_device_pixels(scale),
-            logical_rect.height().to_device_pixels(scale),
+            logical_rect.width().to_device(ScaleFactor::new(scale)),
+            logical_rect.height().to_device(ScaleFactor::new(scale)),
         ),
     );
 
@@ -342,12 +342,12 @@ fn test_framebuffer_clipping_rect() {
 
     let device_clip = Rect::<DevicePixels>::from_origin_size(
         Point::new(
-            logical_clip.left().to_device_pixels(scale),
-            logical_clip.top().to_device_pixels(scale),
+            logical_clip.left().to_device(ScaleFactor::new(scale)),
+            logical_clip.top().to_device(ScaleFactor::new(scale)),
         ),
         Size::new(
-            logical_clip.width().to_device_pixels(scale),
-            logical_clip.height().to_device_pixels(scale),
+            logical_clip.width().to_device(ScaleFactor::new(scale)),
+            logical_clip.height().to_device(ScaleFactor::new(scale)),
         ),
     );
 
@@ -387,8 +387,8 @@ fn test_viewport_transformation() {
     // Convert to logical pixels for layout
     let scale = 2.0;
     let logical_viewport = Size::new(
-        viewport.width.to_pixels(scale),
-        viewport.height.to_pixels(scale),
+        viewport.width.to_logical(ScaleFactor::new(scale)),
+        viewport.height.to_logical(ScaleFactor::new(scale)),
     );
 
     assert_eq!(logical_viewport.width, px(960.0));
@@ -403,8 +403,8 @@ fn test_subpixel_rendering_alignment() {
 
     // Convert to device pixels for GPU rendering
     let device_pos = Point::new(
-        text_pos.x.to_device_pixels(scale),
-        text_pos.y.to_device_pixels(scale),
+        text_pos.x.to_device(ScaleFactor::new(scale)),
+        text_pos.y.to_device(ScaleFactor::new(scale)),
     );
 
     // Device pixels are always integers (rounded)
@@ -424,21 +424,21 @@ fn test_logical_to_device_to_logical_1x() {
     // Convert to device pixels
     let device_rect = Rect::<DevicePixels>::from_origin_size(
         Point::new(
-            original.left().to_device_pixels(scale),
-            original.top().to_device_pixels(scale),
+            original.left().to_device(ScaleFactor::new(scale)),
+            original.top().to_device(ScaleFactor::new(scale)),
         ),
         Size::new(
-            original.width().to_device_pixels(scale),
-            original.height().to_device_pixels(scale),
+            original.width().to_device(ScaleFactor::new(scale)),
+            original.height().to_device(ScaleFactor::new(scale)),
         ),
     );
 
     // Convert back to logical pixels
     let back = Rect::from_xywh(
-        device_rect.left().to_pixels(scale),
-        device_rect.top().to_pixels(scale),
-        device_rect.width().to_pixels(scale),
-        device_rect.height().to_pixels(scale),
+        device_rect.left().to_logical(ScaleFactor::new(scale)),
+        device_rect.top().to_logical(ScaleFactor::new(scale)),
+        device_rect.width().to_logical(ScaleFactor::new(scale)),
+        device_rect.height().to_logical(ScaleFactor::new(scale)),
     );
 
     assert_eq!(back.left(), original.left());
@@ -454,20 +454,20 @@ fn test_logical_to_device_to_logical_2x() {
 
     let device_rect = Rect::<DevicePixels>::from_origin_size(
         Point::new(
-            original.left().to_device_pixels(scale),
-            original.top().to_device_pixels(scale),
+            original.left().to_device(ScaleFactor::new(scale)),
+            original.top().to_device(ScaleFactor::new(scale)),
         ),
         Size::new(
-            original.width().to_device_pixels(scale),
-            original.height().to_device_pixels(scale),
+            original.width().to_device(ScaleFactor::new(scale)),
+            original.height().to_device(ScaleFactor::new(scale)),
         ),
     );
 
     let back = Rect::from_xywh(
-        device_rect.left().to_pixels(scale),
-        device_rect.top().to_pixels(scale),
-        device_rect.width().to_pixels(scale),
-        device_rect.height().to_pixels(scale),
+        device_rect.left().to_logical(ScaleFactor::new(scale)),
+        device_rect.top().to_logical(ScaleFactor::new(scale)),
+        device_rect.width().to_logical(ScaleFactor::new(scale)),
+        device_rect.height().to_logical(ScaleFactor::new(scale)),
     );
 
     assert_eq!(back.left(), original.left());

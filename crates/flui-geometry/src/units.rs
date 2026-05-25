@@ -25,8 +25,10 @@
 //! let width = px(100.0);
 //! let height = px(200.0);
 //!
-//! // Convert to device pixels for 2x Retina display
-//! let device = width.to_device_pixels(2.0);
+//! // Convert to device pixels for 2x Retina display via typed scale factor
+//! use flui_geometry::ScaleFactor;
+//! let scale = ScaleFactor::<flui_geometry::Pixels, DevicePixels>::new(2.0);
+//! let device = width.to_device(scale);
 //! assert_eq!(device, device_px(200));
 //! ```
 
@@ -312,6 +314,10 @@ impl Pixels {
     /// Prefer [`Pixels::to_device`] with a typed [`ScaleFactor`] for
     /// compile-time safety.
     #[must_use]
+    #[deprecated(
+        since = "0.1.0",
+        note = "use `Pixels::to_device(ScaleFactor<Pixels, DevicePixels>)` for compile-time-checked unit conversion (U5)"
+    )]
     pub fn to_device_pixels(self, scale_factor: f32) -> DevicePixels {
         DevicePixels((self.0 * scale_factor).round() as i32)
     }
@@ -321,6 +327,10 @@ impl Pixels {
     /// Prefer [`DevicePixels::to_logical`] with a typed [`ScaleFactor`] for
     /// compile-time safety.
     #[must_use]
+    #[deprecated(
+        since = "0.1.0",
+        note = "use `DevicePixels::to_logical(ScaleFactor<Pixels, DevicePixels>)` for compile-time-checked unit conversion (U5)"
+    )]
     pub fn from_device_pixels(device: DevicePixels, scale_factor: f32) -> Self {
         Pixels(device.0 as f32 / scale_factor)
     }
@@ -1071,8 +1081,15 @@ impl DevicePixels {
         if self.0 < other.0 { self } else { other }
     }
 
-    /// Converts device pixels to logical pixels using a scale factor.
+    /// Converts device pixels to logical pixels using a raw scale factor.
+    ///
+    /// Prefer [`DevicePixels::to_logical`] with a typed [`ScaleFactor`] for
+    /// compile-time safety.
     #[must_use]
+    #[deprecated(
+        since = "0.1.0",
+        note = "use `DevicePixels::to_logical(ScaleFactor<Pixels, DevicePixels>)` for compile-time-checked unit conversion (U5)"
+    )]
     pub fn to_pixels(self, scale_factor: f32) -> Pixels {
         Pixels(self.0 as f32 / scale_factor)
     }

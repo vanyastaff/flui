@@ -9,7 +9,7 @@
 //! This showcases how FLUI handles different display densities (1x, 2x retina,
 //! 1.5x, etc.)
 
-use flui_types::geometry::{DevicePixels, Point, Rect, Size, device_px, px};
+use flui_types::geometry::{DevicePixels, Point, Rect, ScaleFactor, Size, device_px, px};
 
 fn main() {
     println!("=== FLUI Unit Conversions: Layout to Render Pipeline ===\n");
@@ -48,8 +48,10 @@ fn demonstrate_conversion(scale_factor: f32, display_name: &str) {
     println!("   Layout (logical pixels): {logical_size:?}");
 
     // Convert to device pixels for GPU rendering
-    let device_width = logical_size.width.to_device_pixels(scale_factor);
-    let device_height = logical_size.height.to_device_pixels(scale_factor);
+    let device_width = logical_size.width.to_device(ScaleFactor::new(scale_factor));
+    let device_height = logical_size
+        .height
+        .to_device(ScaleFactor::new(scale_factor));
     let device_size = Size::new(device_width, device_height);
 
     println!("   Render (device pixels): {device_size:?}");
@@ -61,8 +63,8 @@ fn demonstrate_conversion(scale_factor: f32, display_name: &str) {
     );
 
     // Round trip conversion
-    let back_to_logical_width = device_width.to_pixels(scale_factor);
-    let back_to_logical_height = device_height.to_pixels(scale_factor);
+    let back_to_logical_width = device_width.to_logical(ScaleFactor::new(scale_factor));
+    let back_to_logical_height = device_height.to_logical(ScaleFactor::new(scale_factor));
 
     println!("   Round-trip check: {back_to_logical_width:?} x {back_to_logical_height:?}");
 }
@@ -77,12 +79,12 @@ fn responsive_button_example() {
     for (scale, name) in [(1.0, "1x"), (1.5, "1.5x"), (2.0, "2x"), (3.0, "3x")] {
         let device_rect = Rect::<DevicePixels>::from_origin_size(
             Point::new(
-                button_rect.left().to_device_pixels(scale),
-                button_rect.top().to_device_pixels(scale),
+                button_rect.left().to_device(ScaleFactor::new(scale)),
+                button_rect.top().to_device(ScaleFactor::new(scale)),
             ),
             Size::new(
-                button_rect.width().to_device_pixels(scale),
-                button_rect.height().to_device_pixels(scale),
+                button_rect.width().to_device(ScaleFactor::new(scale)),
+                button_rect.height().to_device(ScaleFactor::new(scale)),
             ),
         );
 
@@ -107,12 +109,12 @@ fn gpu_pipeline_example() {
     let scale = 2.0; // Retina display
     let gpu_viewport = Rect::<DevicePixels>::from_origin_size(
         Point::new(
-            viewport.left().to_device_pixels(scale),
-            viewport.top().to_device_pixels(scale),
+            viewport.left().to_device(ScaleFactor::new(scale)),
+            viewport.top().to_device(ScaleFactor::new(scale)),
         ),
         Size::new(
-            viewport.width().to_device_pixels(scale),
-            viewport.height().to_device_pixels(scale),
+            viewport.width().to_device(ScaleFactor::new(scale)),
+            viewport.height().to_device(ScaleFactor::new(scale)),
         ),
     );
     println!("   2. GPU: Framebuffer = {gpu_viewport:?}");
@@ -126,12 +128,14 @@ fn gpu_pipeline_example() {
     let clip_rect_logical = Rect::from_xywh(px(100.0), px(100.0), px(200.0), px(150.0));
     let scissor_rect = Rect::<DevicePixels>::from_origin_size(
         Point::new(
-            clip_rect_logical.left().to_device_pixels(scale),
-            clip_rect_logical.top().to_device_pixels(scale),
+            clip_rect_logical.left().to_device(ScaleFactor::new(scale)),
+            clip_rect_logical.top().to_device(ScaleFactor::new(scale)),
         ),
         Size::new(
-            clip_rect_logical.width().to_device_pixels(scale),
-            clip_rect_logical.height().to_device_pixels(scale),
+            clip_rect_logical.width().to_device(ScaleFactor::new(scale)),
+            clip_rect_logical
+                .height()
+                .to_device(ScaleFactor::new(scale)),
         ),
     );
     println!("   3. Scissor: Clip region = {scissor_rect:?}");
@@ -147,7 +151,7 @@ fn pixel_perfect_example() {
 
     // Anti-pattern: Fractional logical pixels on retina
     let misaligned = px(100.5); // Will cause blur on 2x displays
-    let device = misaligned.to_device_pixels(2.0);
+    let device = misaligned.to_device(ScaleFactor::new(2.0));
     println!(
         "   ❌ Misaligned: {} logical -> {} device (fractional!)",
         misaligned.get(),
@@ -156,7 +160,7 @@ fn pixel_perfect_example() {
 
     // Best practice: Use integer logical pixels or round
     let aligned = px(100.0);
-    let device_aligned = aligned.to_device_pixels(2.0);
+    let device_aligned = aligned.to_device(ScaleFactor::new(2.0));
     println!(
         "   ✅ Aligned: {} logical -> {} device (sharp!)",
         aligned.get(),
@@ -165,7 +169,7 @@ fn pixel_perfect_example() {
 
     // Alternatively: Round to device pixel boundaries
     let rounded = px(100.5).round();
-    let device_rounded = rounded.to_device_pixels(2.0);
+    let device_rounded = rounded.to_device(ScaleFactor::new(2.0));
     println!(
         "   ✅ Rounded: {} logical -> {} device (sharp!)",
         rounded.get(),

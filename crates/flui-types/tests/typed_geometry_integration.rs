@@ -60,7 +60,7 @@ fn test_gpu_conversion_pipeline() {
 
     // Convert to device pixels using scale factor
     let scale_factor = 2.0;
-    let device_x = ui_pos.x.to_device_pixels(scale_factor);
+    let device_x = ui_pos.x.to_device(ScaleFactor::new(scale_factor));
     assert_eq!(device_x.0, 200);
 
     // Convert to GPU f32 - use .get() to extract raw value
@@ -224,7 +224,7 @@ fn test_coordinate_scaling_scenario() {
     assert_eq!(scaled.width.0, 750.0);
 
     // Convert to device pixels
-    let device_width = scaled.width.to_device_pixels(1.0);
+    let device_width = scaled.width.to_device(ScaleFactor::new(1.0));
     assert_eq!(device_width.0, 750);
 }
 
@@ -277,8 +277,8 @@ fn test_complete_rendering_pipeline() {
 
     // 2. Convert to device pixels for 2x display
     let scale_factor = 2.0;
-    let device_x = ui_button.origin.x.to_device_pixels(scale_factor);
-    let device_y = ui_button.origin.y.to_device_pixels(scale_factor);
+    let device_x = ui_button.origin.x.to_device(ScaleFactor::new(scale_factor));
+    let device_y = ui_button.origin.y.to_device(ScaleFactor::new(scale_factor));
 
     assert_eq!(device_x.0, 20);
     assert_eq!(device_y.0, 40);
