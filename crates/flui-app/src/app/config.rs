@@ -176,8 +176,8 @@ mod tests {
             .with_resizable(false);
 
         assert_eq!(config.title, "Test App");
-        assert_eq!(config.size.width, 1024.0);
-        assert_eq!(config.size.height, 768.0);
+        assert_eq!(config.size.width, px(1024.0));
+        assert_eq!(config.size.height, px(768.0));
         assert!(!config.resizable);
     }
 }

@@ -249,14 +249,14 @@ impl BoxConstraints {
     #[inline]
     #[must_use]
     pub fn has_loose_width(&self) -> bool {
-        self.min_width <= 0.0
+        self.min_width <= Pixels::ZERO
     }
 
     /// Returns whether height is loose (min == 0).
     #[inline]
     #[must_use]
     pub fn has_loose_height(&self) -> bool {
-        self.min_height <= 0.0
+        self.min_height <= Pixels::ZERO
     }
 
     /// Returns whether constraints are loose in both dimensions.
@@ -648,8 +648,8 @@ impl Constraints for BoxConstraints {
     }
 
     fn is_normalized(&self) -> bool {
-        self.min_width >= 0.0
-            && self.min_height >= 0.0
+        self.min_width >= Pixels::ZERO
+            && self.min_height >= Pixels::ZERO
             && self.min_width <= self.max_width
             && self.min_height <= self.max_height
             && !self.min_width.is_nan()

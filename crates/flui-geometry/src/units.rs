@@ -51,6 +51,35 @@ use super::traits::{NumericUnit, Unit};
 ///
 /// This is the primary unit for UI layout calculations, independent of device
 /// pixel density.
+///
+/// # U2 invariant — cross-type ops with `f32` are rejected
+///
+/// `Pixels` deliberately does **not** implement `PartialEq<f32>`,
+/// `PartialOrd<f32>`, `Add<f32>`, or `Sub<f32>` (and the symmetric `f32`-side
+/// impls). A forgotten `.0` literal at a call site must surface as a compile
+/// error rather than silently bypass the unit barrier. Cross at the boundary
+/// with `px(literal)` or `pixels.get()`.
+///
+/// Comparison rejected:
+///
+/// ```compile_fail
+/// use flui_geometry::px;
+/// let _ = px(10.0) == 10.0_f32; // U2: cross-type `PartialEq<f32>` removed
+/// ```
+///
+/// Arithmetic rejected:
+///
+/// ```compile_fail
+/// use flui_geometry::px;
+/// let _ = px(10.0) + 5.0_f32; // U2: cross-type `Add<f32>` removed
+/// ```
+///
+/// Scaling (dimensionally valid) is still allowed:
+///
+/// ```
+/// use flui_geometry::px;
+/// assert_eq!(px(10.0) * 2.0_f32, px(20.0));
+/// ```
 #[derive(Copy, Clone, Default, PartialEq)]
 #[repr(transparent)]
 pub struct Pixels(pub f32);
@@ -467,67 +496,11 @@ impl Neg for Pixels {
     }
 }
 
-// Cross-type comparisons with f32
-impl PartialEq<f32> for Pixels {
-    #[inline]
-    fn eq(&self, other: &f32) -> bool {
-        self.0 == *other
-    }
-}
-
-impl PartialEq<Pixels> for f32 {
-    #[inline]
-    fn eq(&self, other: &Pixels) -> bool {
-        *self == other.0
-    }
-}
-
-impl PartialOrd<f32> for Pixels {
-    #[inline]
-    fn partial_cmp(&self, other: &f32) -> Option<std::cmp::Ordering> {
-        self.0.partial_cmp(other)
-    }
-}
-
-impl PartialOrd<Pixels> for f32 {
-    #[inline]
-    fn partial_cmp(&self, other: &Pixels) -> Option<std::cmp::Ordering> {
-        self.partial_cmp(&other.0)
-    }
-}
-
-// Cross-type arithmetic with f32
-impl Add<f32> for Pixels {
-    type Output = Pixels;
-    #[inline]
-    fn add(self, rhs: f32) -> Self::Output {
-        Pixels(self.0 + rhs)
-    }
-}
-
-impl Add<Pixels> for f32 {
-    type Output = Pixels;
-    #[inline]
-    fn add(self, rhs: Pixels) -> Self::Output {
-        Pixels(self + rhs.0)
-    }
-}
-
-impl Sub<f32> for Pixels {
-    type Output = Pixels;
-    #[inline]
-    fn sub(self, rhs: f32) -> Self::Output {
-        Pixels(self.0 - rhs)
-    }
-}
-
-impl Sub<Pixels> for f32 {
-    type Output = Pixels;
-    #[inline]
-    fn sub(self, rhs: Pixels) -> Self::Output {
-        Pixels(self - rhs.0)
-    }
-}
+// Cross-type comparisons and arithmetic with `f32` were intentionally removed
+// (U2). The unit barrier between `Pixels` and raw scalars must be explicit:
+// use `px(literal)` at the boundary or `pixels.get()` to drop the unit when
+// crossing into a typed-scalar context. The `compile_fail` doctests on the
+// `Pixels` newtype below pin this invariant going forward.
 
 // Conversions
 impl From<f32> for Pixels {

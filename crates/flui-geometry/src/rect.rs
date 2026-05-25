@@ -27,14 +27,14 @@ use super::{
 /// # Examples
 ///
 /// ```
-/// use flui_geometry::{Point, Rect, Size, point, size};
+/// use flui_geometry::{Point, Rect, Size, point, px, size};
 ///
 /// // Create from origin and size
 /// let rect = Rect::from_origin_size(point(0.0, 0.0), size(100.0, 50.0));
 ///
 /// // Query properties
-/// assert_eq!(rect.width(), 100.0);
-/// assert_eq!(rect.height(), 50.0);
+/// assert_eq!(rect.width(), px(100.0));
+/// assert_eq!(rect.height(), px(50.0));
 /// assert_eq!(rect.area(), 5000.0);
 ///
 /// // Hit testing

@@ -209,7 +209,11 @@ impl RenderBox for RenderTransform {
             let (tx, ty) = inverse.transform_point(local_pos.dx, local_pos.dy);
 
             // Check if transformed point is within bounds
-            if tx < 0.0 || tx > self.size.width || ty < 0.0 || ty > self.size.height {
+            if tx < Pixels::ZERO
+                || tx > self.size.width
+                || ty < Pixels::ZERO
+                || ty > self.size.height
+            {
                 return false;
             }
 

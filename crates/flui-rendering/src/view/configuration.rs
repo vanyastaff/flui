@@ -210,10 +210,10 @@ mod tests {
             1.0,
         );
         let logical = config.logical_constraints();
-        assert_eq!(logical.min_width, 0.0);
-        assert_eq!(logical.max_width, 800.0);
-        assert_eq!(logical.min_height, 0.0);
-        assert_eq!(logical.max_height, 600.0);
+        assert_eq!(logical.min_width, px(0.0));
+        assert_eq!(logical.max_width, px(800.0));
+        assert_eq!(logical.min_height, px(0.0));
+        assert_eq!(logical.max_height, px(600.0));
     }
 
     #[test]
@@ -241,8 +241,9 @@ mod tests {
         let config = ViewConfiguration::from_size(Size::new(px(1920.0), px(1080.0)), 2.0);
         let logical = Size::new(px(960.0), px(540.0));
         let physical = config.to_physical_size(logical);
-        assert!((physical.width - 1920.0).abs() < 1e-6);
-        assert!((physical.height - 1080.0).abs() < 1e-6);
+        // Epsilon comparison is unitless: drop `Pixels` at the boundary.
+        assert!((physical.width.get() - 1920.0).abs() < 1e-6);
+        assert!((physical.height.get() - 1080.0).abs() < 1e-6);
     }
 
     #[test]
@@ -250,7 +251,8 @@ mod tests {
         let config = ViewConfiguration::from_size(Size::new(px(1920.0), px(1080.0)), 2.0);
         let physical = Size::new(px(1920.0), px(1080.0));
         let logical = config.to_logical_size(physical);
-        assert!((logical.width - 960.0).abs() < 1e-6);
-        assert!((logical.height - 540.0).abs() < 1e-6);
+        // Epsilon comparison is unitless: drop `Pixels` at the boundary.
+        assert!((logical.width.get() - 960.0).abs() < 1e-6);
+        assert!((logical.height.get() - 540.0).abs() < 1e-6);
     }
 }

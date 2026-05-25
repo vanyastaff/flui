@@ -174,11 +174,11 @@ impl Vec2<Pixels> {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_geometry::{Vec2, radians, Radians};
+    /// use flui_geometry::{Vec2, radians, Radians, px};
     /// use std::f32::consts::PI;
     ///
     /// let v = Vec2::from_radians(Radians::from_degrees(90.0));
-    /// assert!((v.y - 1.0).abs() < 0.001);
+    /// assert!((v.y - px(1.0)).abs() < px(0.001));
     #[inline]
     #[must_use]
     pub fn from_radians(angle: crate::Radians) -> Self {

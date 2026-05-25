@@ -779,8 +779,8 @@ impl<T: Unit> Point<T> {
     ///
     /// let p = Point::<Pixels>::new(px(100.0), px(200.0));
     /// let p_f32: Point<Pixels> = p.cast();
-    /// assert_eq!(p_f32.x, 100.0);
-    /// assert_eq!(p_f32.y, 200.0);
+    /// assert_eq!(p_f32.x, px(100.0));
+    /// assert_eq!(p_f32.y, px(200.0));
     #[inline]
     #[must_use]
     pub fn cast<U>(self) -> Point<U>
