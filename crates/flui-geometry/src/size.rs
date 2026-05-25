@@ -149,10 +149,7 @@ impl<T: NumericUnit> Size<T> {
     }
 }
 
-impl<T: NumericUnit> Size<T>
-where
-    T: Into<f32> + From<f32>,
-{
+impl<T: NumericUnit> Size<T> {
     /// Returns true if width or height is zero.
     ///
     /// # Examples
@@ -188,8 +185,8 @@ where
     #[inline]
     #[must_use]
     pub fn area(self) -> f32 {
-        let w: f32 = self.width.into();
-        let h: f32 = self.height.into();
+        let w = self.width.to_f32();
+        let h = self.height.to_f32();
         w * h
     }
 
@@ -208,8 +205,8 @@ where
     #[inline]
     #[must_use]
     pub fn aspect_ratio(self) -> f32 {
-        let w: f32 = self.width.into();
-        let h: f32 = self.height.into();
+        let w = self.width.to_f32();
+        let h = self.height.to_f32();
         if h == 0.0 { 0.0 } else { w / h }
     }
 
@@ -254,10 +251,10 @@ where
     #[inline]
     #[must_use]
     pub fn contains(self, point: Point<T>) -> bool {
-        let w: f32 = self.width.into();
-        let h: f32 = self.height.into();
-        let x: f32 = point.x.into();
-        let y: f32 = point.y.into();
+        let w = self.width.to_f32();
+        let h = self.height.to_f32();
+        let x = point.x.to_f32();
+        let y = point.y.to_f32();
 
         x >= 0.0 && x <= w && y >= 0.0 && y <= h
     }

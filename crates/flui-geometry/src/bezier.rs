@@ -80,13 +80,11 @@ impl<T: Unit> QuadBez<T> {
 }
 
 // ============================================================================
-// Numeric Operations (NumericUnit with Into<f32> + From<f32>)
+// Numeric Operations (NumericUnit only — scalar bridge via
+// `NumericUnit::from_f32` / `to_f32`, no `T: From<f32>` plumbing per U1)
 // ============================================================================
 
-impl<T: NumericUnit> QuadBez<T>
-where
-    T: Into<f32> + From<f32>,
-{
+impl<T: NumericUnit> QuadBez<T> {
     /// Evaluates the curve at parameter t ∈ [0, 1].
     #[inline]
     #[must_use]
@@ -95,16 +93,16 @@ where
         let mt2 = mt * mt;
         let t2 = t * t;
 
-        let p0x: f32 = self.p0.x.into();
-        let p0y: f32 = self.p0.y.into();
-        let p1x: f32 = self.p1.x.into();
-        let p1y: f32 = self.p1.y.into();
-        let p2x: f32 = self.p2.x.into();
-        let p2y: f32 = self.p2.y.into();
+        let p0x = self.p0.x.to_f32();
+        let p0y = self.p0.y.to_f32();
+        let p1x = self.p1.x.to_f32();
+        let p1y = self.p1.y.to_f32();
+        let p2x = self.p2.x.to_f32();
+        let p2y = self.p2.y.to_f32();
 
         Point::new(
-            T::from(mt2 * p0x + 2.0 * mt * t * p1x + t2 * p2x),
-            T::from(mt2 * p0y + 2.0 * mt * t * p1y + t2 * p2y),
+            T::from_f32(mt2 * p0x + 2.0 * mt * t * p1x + t2 * p2x),
+            T::from_f32(mt2 * p0y + 2.0 * mt * t * p1y + t2 * p2y),
         )
     }
 
@@ -114,20 +112,19 @@ where
     pub fn tangent(&self, t: f32) -> Vec2<T> {
         let mt = 1.0 - t;
 
-        let p0x: f32 = self.p0.x.into();
-        let p0y: f32 = self.p0.y.into();
-        let p1x: f32 = self.p1.x.into();
-        let p1y: f32 = self.p1.y.into();
-        let p2x: f32 = self.p2.x.into();
-        let p2y: f32 = self.p2.y.into();
+        let p0x = self.p0.x.to_f32();
+        let p0y = self.p0.y.to_f32();
+        let p1x = self.p1.x.to_f32();
+        let p1y = self.p1.y.to_f32();
+        let p2x = self.p2.x.to_f32();
+        let p2y = self.p2.y.to_f32();
 
         Vec2::new(
-            T::from(2.0 * mt * (p1x - p0x) + 2.0 * t * (p2x - p1x)),
-            T::from(2.0 * mt * (p1y - p0y) + 2.0 * t * (p2y - p1y)),
+            T::from_f32(2.0 * mt * (p1x - p0x) + 2.0 * t * (p2x - p1x)),
+            T::from_f32(2.0 * mt * (p1y - p0y) + 2.0 * t * (p2y - p1y)),
         )
     }
 
-    /// Splits the curve at parameter t into two curves.
     /// Splits the curve at parameter t into two curves.
     #[inline]
     #[must_use]
@@ -340,13 +337,11 @@ impl<T: Unit> CubicBez<T> {
 }
 
 // ============================================================================
-// Numeric Operations (NumericUnit with Into<f32> + From<f32>)
+// Numeric Operations (NumericUnit only — scalar bridge via
+// `NumericUnit::from_f32` / `to_f32`, no `T: From<f32>` plumbing per U1)
 // ============================================================================
 
-impl<T: NumericUnit> CubicBez<T>
-where
-    T: Into<f32> + From<f32>,
-{
+impl<T: NumericUnit> CubicBez<T> {
     /// Evaluates the curve at parameter t ∈ [0, 1].
     #[inline]
     #[must_use]
@@ -357,18 +352,18 @@ where
         let t2 = t * t;
         let t3 = t2 * t;
 
-        let p0x: f32 = self.p0.x.into();
-        let p0y: f32 = self.p0.y.into();
-        let p1x: f32 = self.p1.x.into();
-        let p1y: f32 = self.p1.y.into();
-        let p2x: f32 = self.p2.x.into();
-        let p2y: f32 = self.p2.y.into();
-        let p3x: f32 = self.p3.x.into();
-        let p3y: f32 = self.p3.y.into();
+        let p0x = self.p0.x.to_f32();
+        let p0y = self.p0.y.to_f32();
+        let p1x = self.p1.x.to_f32();
+        let p1y = self.p1.y.to_f32();
+        let p2x = self.p2.x.to_f32();
+        let p2y = self.p2.y.to_f32();
+        let p3x = self.p3.x.to_f32();
+        let p3y = self.p3.y.to_f32();
 
         Point::new(
-            T::from(mt3 * p0x + 3.0 * mt2 * t * p1x + 3.0 * mt * t2 * p2x + t3 * p3x),
-            T::from(mt3 * p0y + 3.0 * mt2 * t * p1y + 3.0 * mt * t2 * p2y + t3 * p3y),
+            T::from_f32(mt3 * p0x + 3.0 * mt2 * t * p1x + 3.0 * mt * t2 * p2x + t3 * p3x),
+            T::from_f32(mt3 * p0y + 3.0 * mt2 * t * p1y + 3.0 * mt * t2 * p2y + t3 * p3y),
         )
     }
 
@@ -380,18 +375,22 @@ where
         let mt2 = mt * mt;
         let t2 = t * t;
 
-        let p0x: f32 = self.p0.x.into();
-        let p0y: f32 = self.p0.y.into();
-        let p1x: f32 = self.p1.x.into();
-        let p1y: f32 = self.p1.y.into();
-        let p2x: f32 = self.p2.x.into();
-        let p2y: f32 = self.p2.y.into();
-        let p3x: f32 = self.p3.x.into();
-        let p3y: f32 = self.p3.y.into();
+        let p0x = self.p0.x.to_f32();
+        let p0y = self.p0.y.to_f32();
+        let p1x = self.p1.x.to_f32();
+        let p1y = self.p1.y.to_f32();
+        let p2x = self.p2.x.to_f32();
+        let p2y = self.p2.y.to_f32();
+        let p3x = self.p3.x.to_f32();
+        let p3y = self.p3.y.to_f32();
 
         Vec2::new(
-            T::from(3.0 * mt2 * (p1x - p0x) + 6.0 * mt * t * (p2x - p1x) + 3.0 * t2 * (p3x - p2x)),
-            T::from(3.0 * mt2 * (p1y - p0y) + 6.0 * mt * t * (p2y - p1y) + 3.0 * t2 * (p3y - p2y)),
+            T::from_f32(
+                3.0 * mt2 * (p1x - p0x) + 6.0 * mt * t * (p2x - p1x) + 3.0 * t2 * (p3x - p2x),
+            ),
+            T::from_f32(
+                3.0 * mt2 * (p1y - p0y) + 6.0 * mt * t * (p2y - p1y) + 3.0 * t2 * (p3y - p2y),
+            ),
         )
     }
 

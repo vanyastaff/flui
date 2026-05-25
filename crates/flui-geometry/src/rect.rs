@@ -647,22 +647,19 @@ where
     }
 }
 
-impl<T: NumericUnit> Rect<T>
-where
-    T: Into<f32> + From<f32>,
-{
+impl<T: NumericUnit> Rect<T> {
     /// Scales the rectangle from origin.
     #[inline]
     #[must_use]
     pub fn scale_from_origin(&self, factor: f32) -> Self {
         Self {
             min: Point::new(
-                T::from(self.min.x.into() * factor),
-                T::from(self.min.y.into() * factor),
+                T::from_f32(self.min.x.to_f32() * factor),
+                T::from_f32(self.min.y.to_f32() * factor),
             ),
             max: Point::new(
-                T::from(self.max.x.into() * factor),
-                T::from(self.max.y.into() * factor),
+                T::from_f32(self.max.x.to_f32() * factor),
+                T::from_f32(self.max.y.to_f32() * factor),
             ),
         }
     }
@@ -771,10 +768,7 @@ impl Rect<Pixels> {
 // Interpolation
 // ============================================================================
 
-impl<T: NumericUnit> Rect<T>
-where
-    T: Into<f32> + From<f32>,
-{
+impl<T: NumericUnit> Rect<T> {
     /// Linear interpolation between two rectangles.
     #[inline]
     #[must_use]

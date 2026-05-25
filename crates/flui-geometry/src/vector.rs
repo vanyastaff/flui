@@ -133,25 +133,22 @@ impl<T: Unit> Vec2<T> {
 }
 
 // ============================================================================
-// Array/Tuple Constructors (NumericUnit with Into<f32> + From<f32>)
+// Array/Tuple Constructors (NumericUnit — scalar bridge via `from_f32`)
 // ============================================================================
 
-impl<T: NumericUnit> Vec2<T>
-where
-    T: From<f32>,
-{
+impl<T: NumericUnit> Vec2<T> {
     /// Creates a vector from a two-element array.
     #[inline]
     #[must_use]
     pub fn from_array(a: [f32; 2]) -> Self {
-        Self::new(T::from(a[0]), T::from(a[1]))
+        Self::new(T::from_f32(a[0]), T::from_f32(a[1]))
     }
 
     /// Creates a vector from a tuple.
     #[inline]
     #[must_use]
     pub fn from_tuple(t: (f32, f32)) -> Self {
-        Self::new(T::from(t.0), T::from(t.1))
+        Self::new(T::from_f32(t.0), T::from_f32(t.1))
     }
 }
 
@@ -223,22 +220,19 @@ impl<T: Unit> Vec2<T> {
     }
 }
 
-impl<T: NumericUnit> Vec2<T>
-where
-    T: Into<f32>,
-{
+impl<T: NumericUnit> Vec2<T> {
     /// Converts the vector to a two-element array.
     #[inline]
     #[must_use]
     pub fn to_array(self) -> [f32; 2] {
-        [self.x.into(), self.y.into()]
+        [self.x.to_f32(), self.y.to_f32()]
     }
 
     /// Converts the vector to a tuple.
     #[inline]
     #[must_use]
     pub fn to_tuple(self) -> (f32, f32) {
-        (self.x.into(), self.y.into())
+        (self.x.to_f32(), self.y.to_f32())
     }
 
     /// Converts the vector to a point (displacement becomes position).
@@ -282,35 +276,29 @@ impl<T: Unit> Vec2<T> {
     }
 }
 
-impl<T: NumericUnit> Vec2<T>
-where
-    T: Into<f32>,
-{
+impl<T: NumericUnit> Vec2<T> {
     /// Converts the vector to use Pixels unit type.
     #[inline]
     #[must_use]
-    pub fn to_f32(self) -> Vec2<Pixels> {
+    pub fn to_pixels(self) -> Vec2<Pixels> {
         Vec2 {
-            x: px(self.x.into()),
-            y: px(self.y.into()),
+            x: px(self.x.to_f32()),
+            y: px(self.y.to_f32()),
         }
     }
 }
 
 // ============================================================================
-// Length & Normalization
+// Length & Normalization (NumericUnit — scalar bridge via `to_f32`)
 // ============================================================================
 
-impl<T: NumericUnit> Vec2<T>
-where
-    T: Into<f32> + From<f32>,
-{
+impl<T: NumericUnit> Vec2<T> {
     /// Returns the length (magnitude) of the vector.
     #[inline]
     #[must_use]
     pub fn length(self) -> f32 {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
+        let x = self.x.to_f32();
+        let y = self.y.to_f32();
         x.hypot(y)
     }
 
@@ -318,8 +306,8 @@ where
     #[inline]
     #[must_use]
     pub fn length_squared(self) -> f32 {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
+        let x = self.x.to_f32();
+        let y = self.y.to_f32();
         x * x + y * y
     }
 
@@ -329,7 +317,10 @@ where
     pub fn try_normalize(self) -> Option<Vec2<Pixels>> {
         let len = self.length();
         if len > f32::EPSILON {
-            Some(Vec2::new(px(self.x.into() / len), px(self.y.into() / len)))
+            Some(Vec2::new(
+                px(self.x.to_f32() / len),
+                px(self.y.to_f32() / len),
+            ))
         } else {
             None
         }
@@ -360,10 +351,7 @@ where
 // Vector Operations
 // ============================================================================
 
-impl<T: NumericUnit> Vec2<T>
-where
-    T: Into<f32>,
-{
+impl<T: NumericUnit> Vec2<T> {
     /// Dot product with another vector.
     ///
     /// Properties:
@@ -372,10 +360,10 @@ where
     #[inline]
     #[must_use]
     pub fn dot(self, other: Self) -> f32 {
-        let x1: f32 = self.x.into();
-        let y1: f32 = self.y.into();
-        let x2: f32 = other.x.into();
-        let y2: f32 = other.y.into();
+        let x1 = self.x.to_f32();
+        let y1 = self.y.to_f32();
+        let x2 = other.x.to_f32();
+        let y2 = other.y.to_f32();
         x1 * x2 + y1 * y2
     }
 
@@ -386,23 +374,23 @@ where
     #[inline]
     #[must_use]
     pub fn cross(self, other: Self) -> f32 {
-        let x1: f32 = self.x.into();
-        let y1: f32 = self.y.into();
-        let x2: f32 = other.x.into();
-        let y2: f32 = other.y.into();
+        let x1 = self.x.to_f32();
+        let y1 = self.y.to_f32();
+        let x2 = other.x.to_f32();
+        let y2 = other.y.to_f32();
         x1 * y2 - y1 * x2
     }
 }
 
-impl<T: NumericUnit> Vec2<T>
-where
-    T: Into<f32> + From<f32>,
-{
+impl<T: NumericUnit> Vec2<T> {
     /// Returns a perpendicular vector (rotated 90° counter-clockwise).
     #[inline]
     #[must_use]
     pub fn perp(self) -> Self {
-        Self::new(T::from(-(self.y.into())), T::from(self.x.into()))
+        Self::new(
+            T::from_f32(-(self.y.to_f32())),
+            T::from_f32(self.x.to_f32()),
+        )
     }
 
     /// Linear interpolation between two vectors.
@@ -412,12 +400,15 @@ where
     #[inline]
     #[must_use]
     pub fn lerp(self, other: Self, t: f32) -> Self {
-        let x1: f32 = self.x.into();
-        let y1: f32 = self.y.into();
-        let x2: f32 = other.x.into();
-        let y2: f32 = other.y.into();
+        let x1 = self.x.to_f32();
+        let y1 = self.y.to_f32();
+        let x2 = other.x.to_f32();
+        let y2 = other.y.to_f32();
 
-        Self::new(T::from(x1 + (x2 - x1) * t), T::from(y1 + (y2 - y1) * t))
+        Self::new(
+            T::from_f32(x1 + (x2 - x1) * t),
+            T::from_f32(y1 + (y2 - y1) * t),
+        )
     }
 
     /// Projects this vector onto another vector.
@@ -428,8 +419,8 @@ where
         if len_sq > f32::EPSILON {
             let scale = self.dot(onto) / len_sq;
             Self::new(
-                T::from(onto.x.into() * scale),
-                T::from(onto.y.into() * scale),
+                T::from_f32(onto.x.to_f32() * scale),
+                T::from_f32(onto.y.to_f32() * scale),
             )
         } else {
             Self::new(T::zero(), T::zero())
@@ -441,12 +432,15 @@ where
     #[must_use]
     pub fn reflect(self, normal: Self) -> Self {
         let dot = self.dot(normal);
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
-        let nx: f32 = normal.x.into();
-        let ny: f32 = normal.y.into();
+        let x = self.x.to_f32();
+        let y = self.y.to_f32();
+        let nx = normal.x.to_f32();
+        let ny = normal.y.to_f32();
 
-        Self::new(T::from(x - nx * (2.0 * dot)), T::from(y - ny * (2.0 * dot)))
+        Self::new(
+            T::from_f32(x - nx * (2.0 * dot)),
+            T::from_f32(y - ny * (2.0 * dot)),
+        )
     }
 }
 
@@ -454,16 +448,13 @@ where
 // Angle Operations
 // ============================================================================
 
-impl<T: NumericUnit> Vec2<T>
-where
-    T: Into<f32>,
-{
+impl<T: NumericUnit> Vec2<T> {
     /// Returns the angle from the positive X axis in radians.
     #[inline]
     #[must_use]
     pub fn angle(self) -> f32 {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
+        let x = self.x.to_f32();
+        let y = self.y.to_f32();
         y.atan2(x)
     }
 
@@ -488,10 +479,7 @@ where
     }
 }
 
-impl<T: NumericUnit> Vec2<T>
-where
-    T: Into<f32> + From<f32>,
-{
+impl<T: NumericUnit> Vec2<T> {
     /// Returns the angle between this vector and another in radians.
     #[inline]
     #[must_use]
@@ -530,10 +518,13 @@ where
     #[must_use]
     pub fn rotate(self, angle: f32) -> Self {
         let (sin, cos) = angle.sin_cos();
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
+        let x = self.x.to_f32();
+        let y = self.y.to_f32();
 
-        Self::new(T::from(x * cos - y * sin), T::from(x * sin + y * cos))
+        Self::new(
+            T::from_f32(x * cos - y * sin),
+            T::from_f32(x * sin + y * cos),
+        )
     }
 
     /// Rotates the vector by an angle (type-safe version).
@@ -556,51 +547,48 @@ where
 }
 
 // ============================================================================
-// Component-wise Operations
+// Component-wise Operations (NumericUnit — scalar bridge via `from_f32`/`to_f32`)
 // ============================================================================
 
-impl<T: NumericUnit> Vec2<T>
-where
-    T: Into<f32> + From<f32>,
-{
+impl<T: NumericUnit> Vec2<T> {
     /// Returns a vector with the minimum components from two vectors.
     #[inline]
     #[must_use]
     pub fn min(self, other: Self) -> Self {
-        let x1: f32 = self.x.into();
-        let y1: f32 = self.y.into();
-        let x2: f32 = other.x.into();
-        let y2: f32 = other.y.into();
+        let x1 = self.x.to_f32();
+        let y1 = self.y.to_f32();
+        let x2 = other.x.to_f32();
+        let y2 = other.y.to_f32();
 
-        Self::new(T::from(x1.min(x2)), T::from(y1.min(y2)))
+        Self::new(T::from_f32(x1.min(x2)), T::from_f32(y1.min(y2)))
     }
 
     /// Returns a vector with the maximum components from two vectors.
     #[inline]
     #[must_use]
     pub fn max(self, other: Self) -> Self {
-        let x1: f32 = self.x.into();
-        let y1: f32 = self.y.into();
-        let x2: f32 = other.x.into();
-        let y2: f32 = other.y.into();
+        let x1 = self.x.to_f32();
+        let y1 = self.y.to_f32();
+        let x2 = other.x.to_f32();
+        let y2 = other.y.to_f32();
 
-        Self::new(T::from(x1.max(x2)), T::from(y1.max(y2)))
+        Self::new(T::from_f32(x1.max(x2)), T::from_f32(y1.max(y2)))
     }
 
     /// Clamps each component between corresponding min and max values.
     #[inline]
     #[must_use]
     pub fn clamp(self, min: Self, max: Self) -> Self {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
-        let min_x: f32 = min.x.into();
-        let min_y: f32 = min.y.into();
-        let max_x: f32 = max.x.into();
-        let max_y: f32 = max.y.into();
+        let x = self.x.to_f32();
+        let y = self.y.to_f32();
+        let min_x = min.x.to_f32();
+        let min_y = min.y.to_f32();
+        let max_x = max.x.to_f32();
+        let max_y = max.y.to_f32();
 
         Self::new(
-            T::from(x.clamp(min_x, max_x)),
-            T::from(y.clamp(min_y, max_y)),
+            T::from_f32(x.clamp(min_x, max_x)),
+            T::from_f32(y.clamp(min_y, max_y)),
         )
     }
 
@@ -614,14 +602,14 @@ where
         } else if len < min {
             let scale = min / len;
             Self::new(
-                T::from(self.x.into() * scale),
-                T::from(self.y.into() * scale),
+                T::from_f32(self.x.to_f32() * scale),
+                T::from_f32(self.y.to_f32() * scale),
             )
         } else if len > max {
             let scale = max / len;
             Self::new(
-                T::from(self.x.into() * scale),
-                T::from(self.y.into() * scale),
+                T::from_f32(self.x.to_f32() * scale),
+                T::from_f32(self.y.to_f32() * scale),
             )
         } else {
             self
@@ -632,26 +620,26 @@ where
     #[inline]
     #[must_use]
     pub fn abs(self) -> Self {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
-        Self::new(T::from(x.abs()), T::from(y.abs()))
+        let x = self.x.to_f32();
+        let y = self.y.to_f32();
+        Self::new(T::from_f32(x.abs()), T::from_f32(y.abs()))
     }
 
     /// Returns a vector with the sign of each component (-1, 0, or 1).
     #[inline]
     #[must_use]
     pub fn signum(self) -> Self {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
-        Self::new(T::from(x.signum()), T::from(y.signum()))
+        let x = self.x.to_f32();
+        let y = self.y.to_f32();
+        Self::new(T::from_f32(x.signum()), T::from_f32(y.signum()))
     }
 
     /// Returns the minimum component value.
     #[inline]
     #[must_use]
     pub fn min_element(self) -> f32 {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
+        let x = self.x.to_f32();
+        let y = self.y.to_f32();
         x.min(y)
     }
 
@@ -659,54 +647,51 @@ where
     #[inline]
     #[must_use]
     pub fn max_element(self) -> f32 {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
+        let x = self.x.to_f32();
+        let y = self.y.to_f32();
         x.max(y)
     }
 }
 
 // ============================================================================
-// Rounding Operations
+// Rounding Operations (NumericUnit — scalar bridge via `from_f32`/`to_f32`)
 // ============================================================================
 
-impl<T: NumericUnit> Vec2<T>
-where
-    T: Into<f32> + From<f32>,
-{
+impl<T: NumericUnit> Vec2<T> {
     /// Rounds each component to the nearest integer.
     #[inline]
     #[must_use]
     pub fn round(self) -> Self {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
-        Self::new(T::from(x.round()), T::from(y.round()))
+        let x = self.x.to_f32();
+        let y = self.y.to_f32();
+        Self::new(T::from_f32(x.round()), T::from_f32(y.round()))
     }
 
     /// Rounds each component up to the nearest integer.
     #[inline]
     #[must_use]
     pub fn ceil(self) -> Self {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
-        Self::new(T::from(x.ceil()), T::from(y.ceil()))
+        let x = self.x.to_f32();
+        let y = self.y.to_f32();
+        Self::new(T::from_f32(x.ceil()), T::from_f32(y.ceil()))
     }
 
     /// Rounds each component down to the nearest integer.
     #[inline]
     #[must_use]
     pub fn floor(self) -> Self {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
-        Self::new(T::from(x.floor()), T::from(y.floor()))
+        let x = self.x.to_f32();
+        let y = self.y.to_f32();
+        Self::new(T::from_f32(x.floor()), T::from_f32(y.floor()))
     }
 
     /// Truncates each component toward zero.
     #[inline]
     #[must_use]
     pub fn trunc(self) -> Self {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
-        Self::new(T::from(x.trunc()), T::from(y.trunc()))
+        let x = self.x.to_f32();
+        let y = self.y.to_f32();
+        Self::new(T::from_f32(x.trunc()), T::from_f32(y.trunc()))
     }
 
     /// Expands each component away from zero (ceil for positive, floor for
@@ -714,12 +699,12 @@ where
     #[inline]
     #[must_use]
     pub fn expand(self) -> Self {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
+        let x = self.x.to_f32();
+        let y = self.y.to_f32();
 
         Self::new(
-            T::from(if x >= 0.0 { x.ceil() } else { x.floor() }),
-            T::from(if y >= 0.0 { y.ceil() } else { y.floor() }),
+            T::from_f32(if x >= 0.0 { x.ceil() } else { x.floor() }),
+            T::from_f32(if y >= 0.0 { y.ceil() } else { y.floor() }),
         )
     }
 
@@ -727,26 +712,23 @@ where
     #[inline]
     #[must_use]
     pub fn fract(self) -> Self {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
-        Self::new(T::from(x.fract()), T::from(y.fract()))
+        let x = self.x.to_f32();
+        let y = self.y.to_f32();
+        Self::new(T::from_f32(x.fract()), T::from_f32(y.fract()))
     }
 }
 
 // ============================================================================
-// Validation
+// Validation (NumericUnit — scalar bridge via `to_f32`)
 // ============================================================================
 
-impl<T: NumericUnit> Vec2<T>
-where
-    T: Into<f32>,
-{
+impl<T: NumericUnit> Vec2<T> {
     /// Checks if all components are finite (not infinity or NaN).
     #[inline]
     #[must_use]
     pub fn is_finite(self) -> bool {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
+        let x = self.x.to_f32();
+        let y = self.y.to_f32();
         x.is_finite() && y.is_finite()
     }
 
@@ -754,16 +736,11 @@ where
     #[inline]
     #[must_use]
     pub fn is_nan(self) -> bool {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
+        let x = self.x.to_f32();
+        let y = self.y.to_f32();
         x.is_nan() || y.is_nan()
     }
-}
 
-impl<T: NumericUnit> Vec2<T>
-where
-    T: Into<f32> + From<f32>,
-{
     /// Checks if the vector is approximately zero (length near zero).
     #[inline]
     #[must_use]
@@ -870,43 +847,24 @@ impl<T: NumericUnit + Neg<Output = T>> Neg for Vec2<T> {
 // Conversions
 // ============================================================================
 
-impl<T: NumericUnit> From<(f32, f32)> for Vec2<T>
-where
-    T: From<f32>,
-{
-    #[inline]
-    fn from((x, y): (f32, f32)) -> Self {
-        Self::new(T::from(x), T::from(y))
-    }
-}
+// `From<(f32, f32)> for Vec2<T>` and `From<[f32; 2]> for Vec2<T>` were
+// intentionally removed alongside U1. They re-opened the silent
+// scalar→unit path the polish pass closes. Use `Vec2::from_tuple` /
+// `Vec2::from_array` for the explicit-named construction; both go through
+// `NumericUnit::from_f32` and announce the f32↔unit boundary at the call
+// site.
 
-impl<T: NumericUnit> From<[f32; 2]> for Vec2<T>
-where
-    T: From<f32>,
-{
-    #[inline]
-    fn from([x, y]: [f32; 2]) -> Self {
-        Self::new(T::from(x), T::from(y))
-    }
-}
-
-impl<T: NumericUnit> From<Vec2<T>> for (f32, f32)
-where
-    T: Into<f32>,
-{
+impl<T: NumericUnit> From<Vec2<T>> for (f32, f32) {
     #[inline]
     fn from(v: Vec2<T>) -> Self {
-        (v.x.into(), v.y.into())
+        (v.x.to_f32(), v.y.to_f32())
     }
 }
 
-impl<T: NumericUnit> From<Vec2<T>> for [f32; 2]
-where
-    T: Into<f32>,
-{
+impl<T: NumericUnit> From<Vec2<T>> for [f32; 2] {
     #[inline]
     fn from(v: Vec2<T>) -> Self {
-        [v.x.into(), v.y.into()]
+        [v.x.to_f32(), v.y.to_f32()]
     }
 }
 
@@ -921,14 +879,11 @@ impl<T: Unit> From<Point<T>> for Vec2<T> {
 // Debug & Display
 // ============================================================================
 
-impl<T: NumericUnit> Display for Vec2<T>
-where
-    T: Into<f32>,
-{
+impl<T: NumericUnit> Display for Vec2<T> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
+        let x = self.x.to_f32();
+        let y = self.y.to_f32();
         write!(f, "({x}, {y})")
     }
 }
@@ -1115,12 +1070,15 @@ mod tests {
         assert_eq!(v.y, px(4.0));
 
         assert_eq!(Vec2::splat(px(5.0)), Vec2::new(px(5.0), px(5.0)));
+        // `From<[f32; 2]>` / `From<(f32, f32)>` for `Vec2<T>` were removed
+        // alongside U1 — use the explicit-named `from_array` / `from_tuple`
+        // constructors instead.
         assert_eq!(
-            Vec2::<Pixels>::from([1.0, 2.0]),
+            Vec2::<Pixels>::from_array([1.0, 2.0]),
             Vec2::new(px(1.0), px(2.0))
         );
         assert_eq!(
-            Vec2::<Pixels>::from((3.0, 4.0)),
+            Vec2::<Pixels>::from_tuple((3.0, 4.0)),
             Vec2::new(px(3.0), px(4.0))
         );
     }
@@ -1304,8 +1262,8 @@ mod tests {
     fn test_conversions() {
         let v = Vec2::new(px(10.0), px(20.0));
 
-        let from_tuple = Vec2::<Pixels>::from((10.0, 20.0));
-        let from_array = Vec2::<Pixels>::from([10.0, 20.0]);
+        let from_tuple = Vec2::<Pixels>::from_tuple((10.0, 20.0));
+        let from_array = Vec2::<Pixels>::from_array([10.0, 20.0]);
         assert_eq!(from_tuple, v);
         assert_eq!(from_array, v);
 

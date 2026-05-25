@@ -133,30 +133,27 @@ impl Circle<Pixels> {
 // Accessors (NumericUnit)
 // ============================================================================
 
-impl<T: NumericUnit> Circle<T>
-where
-    T: Into<f32> + From<f32>,
-{
+impl<T: NumericUnit> Circle<T> {
     /// Returns the diameter of the circle (2 × radius).
     #[inline]
     #[must_use]
     pub fn diameter(&self) -> T {
-        let r: f32 = self.radius.into();
-        T::from(r * 2.0)
+        let r = self.radius.to_f32();
+        T::from_f32(r * 2.0)
     }
 
     /// Returns the circumference of the circle (2πr).
     #[inline]
     #[must_use]
     pub fn circumference(&self) -> f32 {
-        std::f32::consts::TAU * self.radius.into()
+        std::f32::consts::TAU * self.radius.to_f32()
     }
 
     /// Returns the area of the circle (πr²).
     #[inline]
     #[must_use]
     pub fn area(&self) -> f32 {
-        let r: f32 = self.radius.into();
+        let r = self.radius.to_f32();
         std::f32::consts::PI * r * r
     }
 
@@ -178,15 +175,12 @@ where
 // Queries (NumericUnit)
 // ============================================================================
 
-impl<T: NumericUnit> Circle<T>
-where
-    T: Into<f32> + From<f32> + PartialOrd,
-{
+impl<T: NumericUnit> Circle<T> {
     /// Returns `true` if the circle has zero radius.
     #[inline]
     #[must_use]
     pub fn is_zero(&self) -> bool {
-        self.radius.into() == 0.0
+        self.radius.to_f32() == 0.0
     }
 
     /// Returns `true` if the circle is valid (non-negative radius, finite
@@ -194,7 +188,7 @@ where
     #[inline]
     #[must_use]
     pub fn is_valid(&self) -> bool {
-        let r: f32 = self.radius.into();
+        let r = self.radius.to_f32();
         r >= 0.0 && r.is_finite() && self.center.is_finite()
     }
 
@@ -202,7 +196,7 @@ where
     #[inline]
     #[must_use]
     pub fn contains(&self, point: Point<T>) -> bool {
-        let r: f32 = self.radius.into();
+        let r = self.radius.to_f32();
         self.center.distance_squared(point) <= r * r
     }
 
@@ -211,7 +205,7 @@ where
     #[inline]
     #[must_use]
     pub fn contains_strict(&self, point: Point<T>) -> bool {
-        let r: f32 = self.radius.into();
+        let r = self.radius.to_f32();
         self.center.distance_squared(point) < r * r
     }
 
@@ -220,8 +214,8 @@ where
     #[must_use]
     pub fn contains_circle(&self, other: &Circle<T>) -> bool {
         let dist = self.center.distance(other.center);
-        let my_r: f32 = self.radius.into();
-        let other_r: f32 = other.radius.into();
+        let my_r = self.radius.to_f32();
+        let other_r = other.radius.to_f32();
         dist + other_r <= my_r
     }
 
@@ -230,8 +224,8 @@ where
     #[must_use]
     pub fn overlaps(&self, other: &Circle<T>) -> bool {
         let dist_sq = self.center.distance_squared(other.center);
-        let my_r: f32 = self.radius.into();
-        let other_r: f32 = other.radius.into();
+        let my_r = self.radius.to_f32();
+        let other_r = other.radius.to_f32();
         let radii_sum = my_r + other_r;
         dist_sq < radii_sum * radii_sum
     }
@@ -242,7 +236,7 @@ where
     #[inline]
     #[must_use]
     pub fn signed_distance(&self, point: Point<T>) -> f32 {
-        self.center.distance(point) - self.radius.into()
+        self.center.distance(point) - self.radius.to_f32()
     }
 
     /// Returns the absolute distance from the point to the circle boundary.
@@ -252,36 +246,18 @@ where
         self.signed_distance(point).abs()
     }
 
-    /// Returns the nearest point on the circle boundary to the given point.
-    #[inline]
-    #[must_use]
-    pub fn nearest_point(&self, point: Point<T>) -> Point<T> {
-        let center_f32 = self.center.to_f32();
-        let point_f32 = point.to_f32();
-
-        if point_f32 == center_f32 {
-            // Any point on boundary is equally close
-            let r: f32 = self.radius.into();
-            return Point::new(T::from(center_f32.x.0 + r), T::from(center_f32.y.0));
-        }
-
-        let dir = (point_f32 - center_f32).normalize_or(Vec2::ZERO);
-        let r: f32 = self.radius.into();
-        let result = center_f32 + dir * r;
-        Point::new(T::from(result.x.0), T::from(result.y.0))
-    }
-
     /// Returns the point on the circle boundary at the given angle.
     ///
     /// Angle is measured from the positive X axis, counter-clockwise.
     #[inline]
     #[must_use]
     pub fn point_at_angle(&self, angle: Radians) -> Point<T> {
-        let center_f32 = self.center.to_f32();
-        let r: f32 = self.radius.into();
+        let cx = self.center.x.to_f32();
+        let cy = self.center.y.to_f32();
+        let r = self.radius.to_f32();
         Point::new(
-            T::from(center_f32.x.0 + r * angle.get().cos()),
-            T::from(center_f32.y.0 + r * angle.get().sin()),
+            T::from_f32(cx + r * angle.get().cos()),
+            T::from_f32(cy + r * angle.get().sin()),
         )
     }
 
@@ -291,9 +267,31 @@ where
     #[inline]
     #[must_use]
     pub fn angle_to(&self, point: Point<T>) -> Radians {
-        let center_f32 = self.center.to_f32();
-        let point_f32 = point.to_f32();
-        Radians::new((point_f32.y.0 - center_f32.y.0).atan2(point_f32.x.0 - center_f32.x.0))
+        let cx = self.center.x.to_f32();
+        let cy = self.center.y.to_f32();
+        let px = point.x.to_f32();
+        let py = point.y.to_f32();
+        Radians::new((py - cy).atan2(px - cx))
+    }
+}
+
+// `nearest_point` uses `Vec2::normalize_or`, which is dimensionally
+// `Pixels`-specific (normalization presumes `f32` semantics), so this stays
+// Pixels-only.
+impl Circle<Pixels> {
+    /// Returns the nearest point on the circle boundary to the given point.
+    #[inline]
+    #[must_use]
+    pub fn nearest_point(&self, point: Point<Pixels>) -> Point<Pixels> {
+        if point == self.center {
+            // Any point on boundary is equally close
+            let r = self.radius.get();
+            return Point::new(Pixels::new(self.center.x.get() + r), self.center.y);
+        }
+
+        let dir = (point - self.center).normalize_or(Vec2::ZERO);
+        let r = self.radius.get();
+        self.center + dir * r
     }
 }
 
@@ -301,10 +299,7 @@ where
 // Transformations (NumericUnit)
 // ============================================================================
 
-impl<T: NumericUnit> Circle<T>
-where
-    T: Into<f32> + From<f32>,
-{
+impl<T: NumericUnit> Circle<T> {
     /// Translates the circle by the given offset vector.
     #[inline]
     #[must_use]
@@ -321,7 +316,7 @@ where
     pub fn scale(&self, factor: f32) -> Self {
         Self {
             center: self.center,
-            radius: T::from(self.radius.into() * factor),
+            radius: T::from_f32(self.radius.to_f32() * factor),
         }
     }
 
@@ -331,10 +326,10 @@ where
     #[inline]
     #[must_use]
     pub fn inflate(&self, amount: T) -> Self {
-        let new_radius = (self.radius.into() + amount.into()).max(0.0);
+        let new_radius = (self.radius.to_f32() + amount.to_f32()).max(0.0);
         Self {
             center: self.center,
-            radius: T::from(new_radius),
+            radius: T::from_f32(new_radius),
         }
     }
 
@@ -354,11 +349,11 @@ where
     #[inline]
     #[must_use]
     pub fn lerp(self, other: Self, t: f32) -> Self {
-        let r1: f32 = self.radius.into();
-        let r2: f32 = other.radius.into();
+        let r1 = self.radius.to_f32();
+        let r2 = other.radius.to_f32();
         Self {
             center: self.center.lerp(other.center, t),
-            radius: T::from(r1 + (r2 - r1) * t),
+            radius: T::from_f32(r1 + (r2 - r1) * t),
         }
     }
 }

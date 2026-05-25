@@ -119,13 +119,11 @@ impl<T: Unit> Point<T> {
 }
 
 // ============================================================================
-// Safe Constructors (NumericUnit with Into<f32> + From<f32>)
+// Safe Constructors (NumericUnit only — scalar bridge via
+// `NumericUnit::from_f32` / `to_f32`, no `T: From<f32>` plumbing per U1)
 // ============================================================================
 
-impl<T: NumericUnit> Point<T>
-where
-    T: Into<f32> + From<f32>,
-{
+impl<T: NumericUnit> Point<T> {
     /// Creates a point with validation, returning an error for invalid
     /// coordinates.
     #[inline]
@@ -133,8 +131,8 @@ where
         let point = Self { x, y };
         if !point.is_valid() {
             return Err(GeometryError::InvalidCoordinates {
-                x: x.into(),
-                y: y.into(),
+                x: x.to_f32(),
+                y: y.to_f32(),
             });
         }
         Ok(point)
@@ -154,26 +152,23 @@ where
         };
 
         Self {
-            x: T::from(clamp_f32(x.into())),
-            y: T::from(clamp_f32(y.into())),
+            x: T::from_f32(clamp_f32(x.to_f32())),
+            y: T::from_f32(clamp_f32(y.to_f32())),
         }
     }
 }
 
 // ============================================================================
-// Validation Methods (NumericUnit with Into<f32>)
+// Validation Methods (NumericUnit)
 // ============================================================================
 
-impl<T: NumericUnit> Point<T>
-where
-    T: Into<f32>,
-{
+impl<T: NumericUnit> Point<T> {
     /// Checks if coordinates are valid (finite, not NaN).
     #[inline]
     #[must_use]
     pub fn is_valid(&self) -> bool {
-        let x_f32: f32 = self.x.into();
-        let y_f32: f32 = self.y.into();
+        let x_f32 = self.x.to_f32();
+        let y_f32 = self.y.to_f32();
         x_f32.is_finite() && y_f32.is_finite()
     }
 
@@ -188,8 +183,8 @@ where
     #[inline]
     #[must_use]
     pub fn is_nan(&self) -> bool {
-        let x_f32: f32 = self.x.into();
-        let y_f32: f32 = self.y.into();
+        let x_f32 = self.x.to_f32();
+        let y_f32 = self.y.to_f32();
         x_f32.is_nan() || y_f32.is_nan()
     }
 }
@@ -270,13 +265,11 @@ impl Point<Pixels> {
 }
 
 // ============================================================================
-// Geometric Operations (f32 only)
+// Geometric Operations (NumericUnit only — scalar bridge via
+// `NumericUnit::from_f32` / `to_f32`, no `T: From<f32>` plumbing per U1)
 // ============================================================================
 
-impl<T> Point<T>
-where
-    T: NumericUnit + Into<f32> + From<f32>,
-{
+impl<T: NumericUnit> Point<T> {
     /// Euclidean distance to another point.
     ///
     /// # Examples
@@ -291,8 +284,8 @@ where
     #[inline]
     #[must_use]
     pub fn distance(self, other: Self) -> f32 {
-        let dx: f32 = T::sub(other.x, self.x).into();
-        let dy: f32 = T::sub(other.y, self.y).into();
+        let dx = (other.x - self.x).to_f32();
+        let dy = (other.y - self.y).to_f32();
         dx.hypot(dy)
     }
 
@@ -302,10 +295,8 @@ where
     #[inline]
     #[must_use]
     pub fn distance_squared(self, other: Self) -> f32 {
-        let dx = T::sub(other.x, self.x);
-        let dy = T::sub(other.y, self.y);
-        let dx_f32: f32 = dx.into();
-        let dy_f32: f32 = dy.into();
+        let dx_f32 = (other.x - self.x).to_f32();
+        let dy_f32 = (other.y - self.y).to_f32();
         dx_f32 * dx_f32 + dy_f32 * dy_f32
     }
 
@@ -323,24 +314,11 @@ where
     #[inline]
     #[must_use]
     pub fn midpoint(self, other: Self) -> Self {
-        let sum_x = self.x + other.x;
-        let sum_y = self.y + other.y;
-        let sum_x_f32: f32 = sum_x.into();
-        let sum_y_f32: f32 = sum_y.into();
-        Self::new(T::from(sum_x_f32 / 2.0), T::from(sum_y_f32 / 2.0))
+        let sum_x_f32 = (self.x + other.x).to_f32();
+        let sum_y_f32 = (self.y + other.y).to_f32();
+        Self::new(T::from_f32(sum_x_f32 / 2.0), T::from_f32(sum_y_f32 / 2.0))
     }
-}
 
-impl Point<Pixels> {}
-
-// ============================================================================
-// Interpolation (generic with NumericUnit)
-// ============================================================================
-
-impl<T> Point<T>
-where
-    T: NumericUnit + Into<f32> + From<f32>,
-{
     /// Linear interpolation between two points.
     ///
     /// - `t = 0.0` returns `self`
@@ -349,12 +327,15 @@ where
     #[inline]
     #[must_use]
     pub fn lerp(self, other: Self, t: f32) -> Self {
-        let x0: f32 = self.x.into();
-        let y0: f32 = self.y.into();
-        let x1: f32 = other.x.into();
-        let y1: f32 = other.y.into();
+        let x0 = self.x.to_f32();
+        let y0 = self.y.to_f32();
+        let x1 = other.x.to_f32();
+        let y1 = other.y.to_f32();
 
-        Self::new(T::from(x0 + (x1 - x0) * t), T::from(y0 + (y1 - y0) * t))
+        Self::new(
+            T::from_f32(x0 + (x1 - x0) * t),
+            T::from_f32(y0 + (y1 - y0) * t),
+        )
     }
 }
 
@@ -659,13 +640,10 @@ where
 }
 
 // ============================================================================
-// Checked Arithmetic (NumericUnit with validation)
+// Checked Arithmetic (NumericUnit — scalar bridge via `from_f32`/`to_f32`)
 // ============================================================================
 
-impl<T: NumericUnit> Point<T>
-where
-    T: Into<f32> + From<f32>,
-{
+impl<T: NumericUnit> Point<T> {
     /// Checked addition with a vector, returns None if result is invalid.
     ///
     /// # Examples
@@ -730,11 +708,11 @@ where
     #[inline]
     #[must_use]
     pub fn checked_mul(self, scalar: f32) -> Option<Self> {
-        let x_f32: f32 = self.x.into();
-        let y_f32: f32 = self.y.into();
+        let x_f32 = self.x.to_f32();
+        let y_f32 = self.y.to_f32();
         let result = Self {
-            x: T::from(x_f32 * scalar),
-            y: T::from(y_f32 * scalar),
+            x: T::from_f32(x_f32 * scalar),
+            y: T::from_f32(y_f32 * scalar),
         };
 
         if result.is_valid() {
@@ -759,9 +737,9 @@ where
     #[inline]
     #[must_use]
     pub fn saturating_mul(self, scalar: f32) -> Self {
-        let x_f32: f32 = self.x.into();
-        let y_f32: f32 = self.y.into();
-        Self::new_clamped(T::from(x_f32 * scalar), T::from(y_f32 * scalar))
+        let x_f32 = self.x.to_f32();
+        let y_f32 = self.y.to_f32();
+        Self::new_clamped(T::from_f32(x_f32 * scalar), T::from_f32(y_f32 * scalar))
     }
 }
 

@@ -80,6 +80,29 @@ use super::traits::{NumericUnit, Unit};
 /// use flui_geometry::px;
 /// assert_eq!(px(10.0) * 2.0_f32, px(20.0));
 /// ```
+///
+/// # U1 invariant — scalar `.into()` upgrades are rejected
+///
+/// `Pixels` deliberately does **not** implement `From<f32>`, `From<f64>`,
+/// `From<i32>`, `From<u32>`, or `From<usize>`. Any bare scalar silently
+/// becoming `Pixels` defeats the unit-system barrier the rest of the type
+/// system enforces. Cross at the boundary with `px(literal)` /
+/// [`Pixels::new`] for `f32`, or [`Pixels::from_i32`] for explicit integer
+/// promotion.
+///
+/// `f32 → Pixels` rejected:
+///
+/// ```compile_fail
+/// use flui_geometry::Pixels;
+/// let _: Pixels = 10.0_f32.into(); // U1: `From<f32> for Pixels` removed
+/// ```
+///
+/// `f64 → Pixels` rejected (was lossy via `as f32`):
+///
+/// ```compile_fail
+/// use flui_geometry::Pixels;
+/// let _: Pixels = 10.0_f64.into(); // U1: `From<f64> for Pixels` removed (was lossy)
+/// ```
 #[derive(Copy, Clone, Default, PartialEq)]
 #[repr(transparent)]
 pub struct Pixels(pub f32);
@@ -336,6 +359,16 @@ impl NumericUnit for Pixels {
     fn max(self, other: Self) -> Self {
         Self(self.0.max(other.0))
     }
+
+    #[inline]
+    fn from_f32(value: f32) -> Self {
+        Self(value)
+    }
+
+    #[inline]
+    fn to_f32(self) -> f32 {
+        self.0
+    }
 }
 
 // ============================================================================
@@ -502,42 +535,15 @@ impl Neg for Pixels {
 // crossing into a typed-scalar context. The `compile_fail` doctests on the
 // `Pixels` newtype below pin this invariant going forward.
 
+// Scalar → Pixels `From` impls were intentionally removed (U1). Any bare
+// scalar silently becoming `Pixels` defeats the unit barrier; cross at the
+// boundary with `px(literal)` / `Pixels::new(scalar)` for `f32`, or
+// `Pixels::from_i32(int_val)` for explicit integer promotion. The
+// `compile_fail` doctests on the `Pixels` newtype above pin this invariant
+// going forward. `From<Pixels> for {f32, f64, i32, u32, usize}` stay —
+// extracting the raw value is always explicit at the call site.
+
 // Conversions
-impl From<f32> for Pixels {
-    #[inline]
-    fn from(value: f32) -> Self {
-        Self(value)
-    }
-}
-
-impl From<f64> for Pixels {
-    #[inline]
-    fn from(value: f64) -> Self {
-        Self(value as f32)
-    }
-}
-
-impl From<i32> for Pixels {
-    #[inline]
-    fn from(value: i32) -> Self {
-        Self(value as f32)
-    }
-}
-
-impl From<u32> for Pixels {
-    #[inline]
-    fn from(value: u32) -> Self {
-        Self(value as f32)
-    }
-}
-
-impl From<usize> for Pixels {
-    #[inline]
-    fn from(value: usize) -> Self {
-        Self(value as f32)
-    }
-}
-
 impl From<Pixels> for f32 {
     #[inline]
     fn from(pixels: Pixels) -> Self {
@@ -780,6 +786,16 @@ impl NumericUnit for PixelDelta {
     #[inline]
     fn max(self, other: Self) -> Self {
         Self(self.0.max(other.0))
+    }
+
+    #[inline]
+    fn from_f32(value: f32) -> Self {
+        Self(value)
+    }
+
+    #[inline]
+    fn to_f32(self) -> f32 {
+        self.0
     }
 }
 
@@ -1248,6 +1264,20 @@ impl NumericUnit for DevicePixels {
     fn max(self, other: Self) -> Self {
         Self(self.0.max(other.0))
     }
+
+    /// Lossy: rounds to the nearest `i32`. `DevicePixels` is integer-backed,
+    /// so the generic `NumericUnit::from_f32` bridge must round at the
+    /// boundary. Use the explicit `From<i32>` impl when the source is
+    /// already integral.
+    #[inline]
+    fn from_f32(value: f32) -> Self {
+        Self(value.round() as i32)
+    }
+
+    #[inline]
+    fn to_f32(self) -> f32 {
+        self.0 as f32
+    }
 }
 
 // Implement Mul<f32> for DevicePixels to satisfy NumericUnit trait bound
@@ -1551,6 +1581,16 @@ impl NumericUnit for ScaledPixels {
     #[inline]
     fn max(self, other: Self) -> Self {
         Self(self.0.max(other.0))
+    }
+
+    #[inline]
+    fn from_f32(value: f32) -> Self {
+        Self(value)
+    }
+
+    #[inline]
+    fn to_f32(self) -> f32 {
+        self.0
     }
 }
 
@@ -1986,6 +2026,16 @@ impl NumericUnit for Radians {
     #[inline]
     fn max(self, other: Self) -> Self {
         Self(self.0.max(other.0))
+    }
+
+    #[inline]
+    fn from_f32(value: f32) -> Self {
+        Self(value)
+    }
+
+    #[inline]
+    fn to_f32(self) -> f32 {
+        self.0
     }
 }
 
