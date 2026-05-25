@@ -109,6 +109,16 @@ pub trait Unit:
 /// and provides additional utility methods (`abs`, `min`, `max`) for common
 /// operations. Prefer using operators directly for clarity; utility methods are
 /// provided for generic programming contexts.
+///
+/// # U1 invariant — explicit-named scalar bridge
+///
+/// `from_f32` / `to_f32` are the **only** allowed bridge between raw scalars
+/// and unit types in generic geometry code. They replace the older
+/// `T: Into<f32> + From<f32>` plumbing that defeated the unit barrier by
+/// surfacing `<Pixels as From<f32>>::from(...)` as a silent `.into()` path.
+/// At every call site `T::from_f32(...)` and `value.to_f32()` are named
+/// methods that announce "raw f32 ↔ unit" intent, matching the explicit
+/// `Pixels::from_i32` shape already established for integer promotion.
 pub trait NumericUnit: Unit + Add<Output = Self> + Sub<Output = Self> {
     /// Returns the absolute value.
     fn abs(self) -> Self;
@@ -118,6 +128,20 @@ pub trait NumericUnit: Unit + Add<Output = Self> + Sub<Output = Self> {
 
     /// Returns the maximum of two values.
     fn max(self, other: Self) -> Self;
+
+    /// Constructs a unit value from a raw `f32`.
+    ///
+    /// This is the explicit-named replacement for `<Self as From<f32>>::from`
+    /// in generic geometry code. Integer-backed units (e.g. `DevicePixels`)
+    /// round and clamp; documented per-impl.
+    fn from_f32(value: f32) -> Self;
+
+    /// Extracts the raw `f32` magnitude of a unit value.
+    ///
+    /// This is the explicit-named replacement for `<Self as Into<f32>>::into`
+    /// in generic geometry code. Integer-backed units widen losslessly via
+    /// `as f32`.
+    fn to_f32(self) -> f32;
 }
 
 // Note: f32 impl removed - f32 cannot implement Unit due to Eq + Hash

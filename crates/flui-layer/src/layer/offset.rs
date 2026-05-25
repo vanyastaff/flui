@@ -41,8 +41,8 @@ use flui_types::{
 ///
 /// let layer = OffsetLayer::new(Offset::new(px(10.0), px(20.0)));
 ///
-/// assert_eq!(layer.offset().dx, 10.0);
-/// assert_eq!(layer.offset().dy, 20.0);
+/// assert_eq!(layer.offset().dx, px(10.0));
+/// assert_eq!(layer.offset().dy, px(20.0));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct OffsetLayer {

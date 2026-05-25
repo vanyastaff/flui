@@ -27,14 +27,14 @@ use super::{
 /// # Examples
 ///
 /// ```
-/// use flui_geometry::{Point, Rect, Size, point, size};
+/// use flui_geometry::{Point, Rect, Size, point, px, size};
 ///
 /// // Create from origin and size
 /// let rect = Rect::from_origin_size(point(0.0, 0.0), size(100.0, 50.0));
 ///
 /// // Query properties
-/// assert_eq!(rect.width(), 100.0);
-/// assert_eq!(rect.height(), 50.0);
+/// assert_eq!(rect.width(), px(100.0));
+/// assert_eq!(rect.height(), px(50.0));
 /// assert_eq!(rect.area(), 5000.0);
 ///
 /// // Hit testing
@@ -647,22 +647,19 @@ where
     }
 }
 
-impl<T: NumericUnit> Rect<T>
-where
-    T: Into<f32> + From<f32>,
-{
+impl<T: NumericUnit> Rect<T> {
     /// Scales the rectangle from origin.
     #[inline]
     #[must_use]
     pub fn scale_from_origin(&self, factor: f32) -> Self {
         Self {
             min: Point::new(
-                T::from(self.min.x.into() * factor),
-                T::from(self.min.y.into() * factor),
+                T::from_f32(self.min.x.to_f32() * factor),
+                T::from_f32(self.min.y.to_f32() * factor),
             ),
             max: Point::new(
-                T::from(self.max.x.into() * factor),
-                T::from(self.max.y.into() * factor),
+                T::from_f32(self.max.x.to_f32() * factor),
+                T::from_f32(self.max.y.to_f32() * factor),
             ),
         }
     }
@@ -771,10 +768,7 @@ impl Rect<Pixels> {
 // Interpolation
 // ============================================================================
 
-impl<T: NumericUnit> Rect<T>
-where
-    T: Into<f32> + From<f32>,
-{
+impl<T: NumericUnit> Rect<T> {
     /// Linear interpolation between two rectangles.
     #[inline]
     #[must_use]

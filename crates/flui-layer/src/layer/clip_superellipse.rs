@@ -42,7 +42,7 @@ use flui_types::{
 /// );
 /// let layer = ClipSuperellipseLayer::new(squircle, Clip::AntiAlias);
 ///
-/// assert_eq!(layer.clip_superellipse().width(), 100.0);
+/// assert_eq!(layer.clip_superellipse().width(), px(100.0));
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClipSuperellipseLayer {

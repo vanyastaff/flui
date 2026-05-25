@@ -704,15 +704,15 @@ impl Path {
     #[inline]
     fn eval_quadratic<T>(p0: Point<T>, p1: Point<T>, p2: Point<T>, t: f32) -> Point<T>
     where
-        T: NumericUnit + Into<f32> + From<f32>,
+        T: NumericUnit,
     {
         let t2 = t * t;
         let mt = 1.0 - t;
         let mt2 = mt * mt;
 
         Point::new(
-            T::from(mt2 * p0.x.into() + 2.0 * mt * t * p1.x.into() + t2 * p2.x.into()),
-            T::from(mt2 * p0.y.into() + 2.0 * mt * t * p1.y.into() + t2 * p2.y.into()),
+            T::from_f32(mt2 * p0.x.to_f32() + 2.0 * mt * t * p1.x.to_f32() + t2 * p2.x.to_f32()),
+            T::from_f32(mt2 * p0.y.to_f32() + 2.0 * mt * t * p1.y.to_f32() + t2 * p2.y.to_f32()),
         )
     }
 
@@ -720,7 +720,7 @@ impl Path {
     #[inline]
     fn eval_cubic<T>(p0: Point<T>, p1: Point<T>, p2: Point<T>, p3: Point<T>, t: f32) -> Point<T>
     where
-        T: NumericUnit + Into<f32> + From<f32>,
+        T: NumericUnit,
     {
         let t2 = t * t;
         let t3 = t2 * t;
@@ -729,17 +729,17 @@ impl Path {
         let mt3 = mt2 * mt;
 
         Point::new(
-            T::from(
-                mt3 * p0.x.into()
-                    + 3.0 * mt2 * t * p1.x.into()
-                    + 3.0 * mt * t2 * p2.x.into()
-                    + t3 * p3.x.into(),
+            T::from_f32(
+                mt3 * p0.x.to_f32()
+                    + 3.0 * mt2 * t * p1.x.to_f32()
+                    + 3.0 * mt * t2 * p2.x.to_f32()
+                    + t3 * p3.x.to_f32(),
             ),
-            T::from(
-                mt3 * p0.y.into()
-                    + 3.0 * mt2 * t * p1.y.into()
-                    + 3.0 * mt * t2 * p2.y.into()
-                    + t3 * p3.y.into(),
+            T::from_f32(
+                mt3 * p0.y.to_f32()
+                    + 3.0 * mt2 * t * p1.y.to_f32()
+                    + 3.0 * mt * t2 * p2.y.to_f32()
+                    + t3 * p3.y.to_f32(),
             ),
         )
     }

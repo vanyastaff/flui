@@ -302,6 +302,16 @@ impl super::traits::NumericUnit for Rems {
     fn max(self, other: Self) -> Self {
         Rems(self.0.max(other.0))
     }
+
+    #[inline]
+    fn from_f32(value: f32) -> Self {
+        Rems(value)
+    }
+
+    #[inline]
+    fn to_f32(self) -> f32 {
+        self.0
+    }
 }
 
 // ============================================================================

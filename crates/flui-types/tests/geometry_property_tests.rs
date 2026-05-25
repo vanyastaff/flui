@@ -49,11 +49,12 @@ proptest! {
     /// Property: Distance from A to B equals distance from B to A (symmetry)
     #[test]
     fn prop_point_distance_symmetric(a in arb_point(), b in arb_point()) {
+        // `Point::distance` returns `f32`, so epsilon stays unitless.
         let dist_ab = a.distance(b);
         let dist_ba = b.distance(a);
 
         // Allow small floating-point error
-        let epsilon = px(1e-5);
+        let epsilon: f32 = 1e-5;
         prop_assert!((dist_ab - dist_ba).abs() < epsilon,
             "Distance must be symmetric: distance({:?}, {:?}) = {}, but distance({:?}, {:?}) = {}",
             a, b, dist_ab, b, a, dist_ba);
@@ -63,7 +64,7 @@ proptest! {
     #[test]
     fn prop_point_distance_non_negative(a in arb_point(), b in arb_point()) {
         let dist = a.distance(b);
-        prop_assert!(dist >= px(0.0),
+        prop_assert!(dist >= 0.0_f32,
             "Distance must be non-negative: distance({:?}, {:?}) = {}",
             a, b, dist);
     }
@@ -72,7 +73,7 @@ proptest! {
     #[test]
     fn prop_point_distance_self_is_zero(p in arb_point()) {
         let dist = p.distance(p);
-        let epsilon = px(1e-6);
+        let epsilon: f32 = 1e-6;
         prop_assert!(dist < epsilon,
             "Distance to self must be zero: distance({:?}, {:?}) = {}",
             p, p, dist);
@@ -85,7 +86,7 @@ proptest! {
         let dist_ab = a.distance(b);
         let dist_bc = b.distance(c);
 
-        let epsilon = px(1e-4); // Larger epsilon for accumulated error
+        let epsilon: f32 = 1e-4; // Larger epsilon for accumulated error
         prop_assert!(dist_ac <= dist_ab + dist_bc + epsilon,
             "Triangle inequality violated: dist({:?},{:?})={} > dist({:?},{:?})={} + dist({:?},{:?})={}",
             a, c, dist_ac, a, b, dist_ab, b, c, dist_bc);

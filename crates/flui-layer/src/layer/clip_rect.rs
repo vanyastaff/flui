@@ -29,7 +29,7 @@ use flui_types::{
 ///
 /// let layer = ClipRectLayer::new(Rect::from_xywh(px(10.0), px(10.0), px(100.0), px(100.0)), Clip::HardEdge);
 ///
-/// assert_eq!(layer.clip_rect().width(), 100.0);
+/// assert_eq!(layer.clip_rect().width(), px(100.0));
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClipRectLayer {

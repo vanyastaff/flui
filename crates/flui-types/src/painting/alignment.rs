@@ -99,17 +99,15 @@ impl Alignment {
     ///
     /// Note: returns a position, not a delta — the caller adds this to nothing.
     pub fn align_within(self, rect: Rect<Pixels>) -> Offset<Pixels> {
-        let half_w: f32 = rect.width().into();
-        let half_h: f32 = rect.height().into();
-        let half_w = half_w * 0.5;
-        let half_h = half_h * 0.5;
-        let left: f32 = rect.left().into();
-        let top: f32 = rect.top().into();
+        let half_w = rect.width().get() * 0.5;
+        let half_h = rect.height().get() * 0.5;
+        let left = rect.left().get();
+        let top = rect.top().get();
         let cx = left + half_w;
         let cy = top + half_h;
         Offset::new(
-            Pixels::from(cx + self.x * half_w),
-            Pixels::from(cy + self.y * half_h),
+            Pixels::new(cx + self.x * half_w),
+            Pixels::new(cy + self.y * half_h),
         )
     }
 }
@@ -127,7 +125,7 @@ mod tests {
     use crate::geometry::{Pixels, Rect};
 
     fn px(v: f32) -> Pixels {
-        Pixels::from(v)
+        Pixels::new(v)
     }
 
     #[test]

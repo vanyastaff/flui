@@ -36,14 +36,14 @@
 //! # Examples
 //!
 //! ```
-//! use flui_geometry::{bounds, point, size};
+//! use flui_geometry::{bounds, point, px, size};
 //!
 //! let a = bounds(point(0.0, 0.0), size(10.0, 10.0));
 //! let b = bounds(point(5.0, 5.0), size(10.0, 10.0));
 //!
 //! assert!(a.intersects(&b));
 //! let intersection = a.intersect(&b);
-//! assert_eq!(intersection.size.width, 5.0);
+//! assert_eq!(intersection.size.width, px(5.0));
 //! ```
 
 use std::{

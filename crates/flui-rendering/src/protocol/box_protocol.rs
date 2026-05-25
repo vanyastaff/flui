@@ -1119,7 +1119,7 @@ mod tests {
                 BoxParentData,
             >>::constraints(&ctx)
             .max_width,
-            100.0
+            px(100.0)
         );
 
         <BoxLayoutCtx<'_, Leaf, BoxParentData> as LayoutContextApi<

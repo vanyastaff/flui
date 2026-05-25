@@ -616,6 +616,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use flui_types::geometry::px;
     use flui_view::{BuildContext, IntoView, View, ViewExt};
 
     use super::*;
@@ -645,6 +646,6 @@ mod tests {
         let config = AppConfig::new().with_title("Test").with_size(800, 600);
 
         assert_eq!(config.title, "Test");
-        assert_eq!(config.size.width, 800.0);
+        assert_eq!(config.size.width, px(800.0));
     }
 }
