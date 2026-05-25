@@ -1,9 +1,10 @@
 # Widget → Render-Object Mapping Checklist
 
 > **Status:** seeded by Core.2 Wave 1 (constraint family), extended
-> by Wave 3a (clip family), Wave 2a (`RenderStack`), and Wave 4
-> (pointer/proxy family). Subsequent waves extend this table.
-> Per `docs/ROADMAP.md` Core.0 exit criteria,
+> by Wave 3a (clip family), Wave 2a (`RenderStack`), Wave 4
+> (pointer/proxy family), and Wave 5a (sliver proxy family —
+> the first production `RenderSliver` impls). Subsequent waves
+> extend this table. Per `docs/ROADMAP.md` Core.0 exit criteria,
 > this document is the canonical mapping that gates Core.2 entry — once
 > every planned `flui-widgets` widget appears here with a green
 > render-object backing, Business.1 has no hidden bottleneck.
@@ -110,19 +111,31 @@ All four clip render objects share **one generic implementation** —
 | `RenderErrorBox` | error boundary | Leaf | `BoxParentData` | ⬜ | |
 | `RenderPerformanceOverlay` | devtools overlay | Leaf | `BoxParentData` | ⬜ | DX track |
 
+### Sliver protocol — proxy family (Wave 5a, Core.2)
+
+First production `RenderSliver` impls. All Single arity,
+`SliverPhysicalParentData`. Pure Sliver→Sliver passthroughs that
+establish the convention for the sliver catalog.
+
+| Render object | Widget(s) | Arity | Parent data | Status | File |
+|---|---|---|---|---|---|
+| `RenderSliverPadding` | `SliverPadding` | Single | `SliverPhysicalParentData` | ✅ | `objects/sliver_padding.rs` |
+| `RenderSliverOpacity` | `SliverOpacity` | Single | `SliverPhysicalParentData` | ✅ | `objects/sliver_opacity.rs` |
+| `RenderSliverIgnorePointer` | `SliverIgnorePointer` | Single | `SliverPhysicalParentData` | ✅ | `objects/sliver_ignore_pointer.rs` |
+| `RenderSliverOffstage` | `SliverOffstage` | Single | `SliverPhysicalParentData` | ✅ | `objects/sliver_offstage.rs` |
+
 ### Sliver protocol — outstanding
 
 | Render object | Widget(s) | Arity | Parent data | Status | Notes |
 |---|---|---|---|---|---|
-| `RenderViewport` | `Viewport`, `Scrollable` body | Variable | `SliverPhysicalParentData` | ⬜ | sliver protocol wired |
-| `RenderSliverList` | `SliverList`, `ListView.builder` | Variable | `SliverMultiBoxAdaptorParentData` | ⬜ | |
-| `RenderSliverGrid` | `SliverGrid`, `GridView` | Variable | `SliverGridParentData` | ⬜ | needs `SliverGridDelegate` (gated) |
-| `RenderSliverPadding` | `SliverPadding` | Single | `SliverPhysicalParentData` | ⬜ | |
-| `RenderSliverToBoxAdapter` | `SliverToBoxAdapter` | Single | `SliverPhysicalParentData` | ⬜ | |
-| `RenderSliverFillViewport` | `SliverFillViewport`, `PageView` | Variable | `SliverMultiBoxAdaptorParentData` | ⬜ | |
-| `RenderSliverFixedExtentList` | `SliverFixedExtentList` | Variable | `SliverMultiBoxAdaptorParentData` | ⬜ | |
-| `RenderSliverFillRemaining` | `SliverFillRemaining` | Single | `SliverPhysicalParentData` | ⬜ | |
-| `RenderSliverPersistentHeader` | `SliverPersistentHeader`, `SliverAppBar` | Single | `SliverPhysicalParentData` | ⬜ | |
+| `RenderViewport` | `Viewport`, `Scrollable` body | Variable | `SliverPhysicalParentData` | ⬜ | the Box↔Sliver bridge — Wave 5b |
+| `RenderSliverToBoxAdapter` | `SliverToBoxAdapter` | Single | `SliverPhysicalParentData` | ⬜ | the Sliver↔Box bridge — Wave 5b |
+| `RenderSliverList` | `SliverList`, `ListView.builder` | Variable | `SliverMultiBoxAdaptorParentData` | ⬜ | lazy children — Wave 5c |
+| `RenderSliverFillViewport` | `SliverFillViewport`, `PageView` | Variable | `SliverMultiBoxAdaptorParentData` | ⬜ | Wave 5c |
+| `RenderSliverFixedExtentList` | `SliverFixedExtentList` | Variable | `SliverMultiBoxAdaptorParentData` | ⬜ | Wave 5c |
+| `RenderSliverFillRemaining` | `SliverFillRemaining` | Single | `SliverPhysicalParentData` | ⬜ | Wave 5b |
+| `RenderSliverGrid` | `SliverGrid`, `GridView` | Variable | `SliverGridParentData` | ⬜ | needs `SliverGridDelegate` (gated) — Wave 6 |
+| `RenderSliverPersistentHeader` | `SliverPersistentHeader`, `SliverAppBar` | Single | `SliverPhysicalParentData` | ⬜ | Wave 6 |
 
 ### Semantics — outstanding
 
@@ -136,18 +149,21 @@ All four clip render objects share **one generic implementation** —
 
 ## Coverage summary
 
-* **Render objects implemented:** **22** (7 → 11 → 15 → 16 → 22
-  across Wave 1 → Wave 3a → Wave 2a → Wave 4). The 4 clip variants
-  share **one generic implementation** — monomorphisable, no vtables
-  in paint/hit-test.
+* **Render objects implemented:** **26** (7 → 11 → 15 → 16 → 22 → 26
+  across Wave 1 → Wave 3a → Wave 2a → Wave 4 → Wave 5a). The 4 clip
+  variants share **one generic implementation** — monomorphisable,
+  no vtables in paint/hit-test. Wave 5a adds the first production
+  `RenderSliver` impls (sliver-side proxy family).
 * **Render objects planned:** ~80 (Flutter's `rendering/` catalog).
-* **Coverage:** **~27.5%** of the planned catalog (was ~20%).
+* **Coverage:** **~32.5%** of the planned catalog (was ~27.5%).
 * **Core.1 vertical-slice unblocked widgets:** `ConstrainedBox`,
   `LimitedBox`, `AspectRatio`, `FractionallySizedBox`,
   `Container.constraints`, the full `ClipRect` / `ClipRRect` /
-  `ClipOval` / `ClipPath` family, `Stack` + `Positioned`, plus
-  Wave 4: `Offstage`, `AbsorbPointer`, `IgnorePointer`,
-  `MetaData`, `FractionalTranslation`, `FittedBox`.
+  `ClipOval` / `ClipPath` family, `Stack` + `Positioned`, the
+  Wave 4 pointer/proxy family (`Offstage`, `AbsorbPointer`,
+  `IgnorePointer`, `MetaData`, `FractionalTranslation`,
+  `FittedBox`), plus Wave 5a sliver proxies: `SliverPadding`,
+  `SliverOpacity`, `SliverIgnorePointer`, `SliverOffstage`.
 
 ## Wave plan
 
@@ -165,8 +181,10 @@ tests.
 | 3b | Decoration + repaint boundary | `RenderDecoratedBox`, `RenderRepaintBoundary` |
 | **4 (done)** | Pointer / visibility / transform proxy | `RenderOffstage`, `RenderAbsorbPointer`, `RenderIgnorePointer`, `RenderMetaData` (+ `MetaDataPayload`), `RenderFractionalTranslation` (+ `TranslationFraction`), `RenderFittedBox` |
 | 4b | Mouse / pointer events | `RenderMouseRegion`, `RenderPointerListener` (need mouse-tracker + pointer-event routing infra) |
-| 5 | Slivers (viewport baseline) | `RenderViewport`, `RenderSliverList`, `RenderSliverToBoxAdapter`, `RenderSliverPadding`, `RenderSliverFillViewport` |
-| 6 | Slivers (extended) | `RenderSliverGrid`, `RenderSliverFixedExtentList`, `RenderSliverFillRemaining`, `RenderSliverPersistentHeader` |
+| **5a (done)** | Sliver proxy family | `RenderSliverPadding`, `RenderSliverOpacity`, `RenderSliverIgnorePointer`, `RenderSliverOffstage` — first production `RenderSliver` impls |
+| 5b | Sliver bridges | `RenderViewport` (Box→Sliver bridge), `RenderSliverToBoxAdapter` (Sliver→Box bridge), `RenderSliverFillRemaining` |
+| 5c | Sliver lists | `RenderSliverList`, `RenderSliverFixedExtentList`, `RenderSliverFillViewport` (lazy children) |
+| 6 | Slivers (extended) | `RenderSliverGrid`, `RenderSliverPersistentHeader` |
 | 7 | Text + image leaf | `RenderParagraph`, `RenderImage` (gates Core.1 vertical slice text/image needs) |
 | 8 | Semantics annotations | `RenderSemanticsAnnotations`, `RenderBlockSemantics`, `RenderExcludeSemantics`, `RenderIndexedSemantics`, `RenderMergeSemantics` |
 | 9 | Filters + custom paint | `RenderBackdropFilter`, `RenderShaderMask`, `RenderCustomPaint`, `RenderBaseline`, `RenderIntrinsicWidth`/`Height` |

@@ -35,6 +35,16 @@
 //! - [`RenderStack`] - Overlays children with positioned + non-positioned
 //!   flows (Core.2 Wave 2a)
 //!
+//! ## Sliver Single-Child Objects
+//! - [`RenderSliverPadding`] - Pads a single sliver child on all four
+//!   sides, honouring the sliver layout protocol (Core.2 Wave 5a)
+//! - [`RenderSliverOpacity`] - Applies transparency to a single sliver
+//!   child via [`PaintEffectsCapability::paint_alpha`] (Core.2 Wave 5a)
+//! - [`RenderSliverIgnorePointer`] - Pointers pass through the sliver
+//!   subtree to siblings beneath in the viewport (Core.2 Wave 5a)
+//! - [`RenderSliverOffstage`] - Hides a sliver subtree (zero geometry,
+//!   skipped paint, no hit-test) (Core.2 Wave 5a)
+//!
 //! # Example
 //!
 //! ```ignore
@@ -64,6 +74,10 @@ mod offstage;
 mod opacity;
 mod padding;
 mod sized_box;
+mod sliver_ignore_pointer;
+mod sliver_offstage;
+mod sliver_opacity;
+mod sliver_padding;
 mod stack;
 mod transform;
 
@@ -87,5 +101,9 @@ pub use offstage::RenderOffstage;
 pub use opacity::RenderOpacity;
 pub use padding::RenderPadding;
 pub use sized_box::RenderSizedBox;
+pub use sliver_ignore_pointer::RenderSliverIgnorePointer;
+pub use sliver_offstage::RenderSliverOffstage;
+pub use sliver_opacity::RenderSliverOpacity;
+pub use sliver_padding::RenderSliverPadding;
 pub use stack::{PositionedSpec, RenderStack, StackFit};
 pub use transform::RenderTransform;
