@@ -1,8 +1,9 @@
 # Widget → Render-Object Mapping Checklist
 
 > **Status:** seeded by Core.2 Wave 1 (constraint family), extended
-> by Wave 3a (clip family) and Wave 2a (`RenderStack`). Subsequent
-> waves extend this table. Per `docs/ROADMAP.md` Core.0 exit criteria,
+> by Wave 3a (clip family), Wave 2a (`RenderStack`), and Wave 4
+> (pointer/proxy family). Subsequent waves extend this table.
+> Per `docs/ROADMAP.md` Core.0 exit criteria,
 > this document is the canonical mapping that gates Core.2 entry — once
 > every planned `flui-widgets` widget appears here with a green
 > render-object backing, Business.1 has no hidden bottleneck.
@@ -77,23 +78,28 @@ All four clip render objects share **one generic implementation** —
 | `RenderClipOval` | `ClipOval`, `CircleAvatar` | Single | `BoxParentData` | ✅ | `objects/clip.rs` |
 | `RenderClipPath` | `ClipPath`, custom-shaped surfaces | Single | `BoxParentData` | ✅ | `objects/clip.rs` |
 
+### Paint effects — pointer / visibility / transform proxy (Wave 4, Core.2)
+
+| Render object | Widget(s) | Arity | Parent data | Status | File |
+|---|---|---|---|---|---|
+| `RenderOffstage` | `Offstage` | Single | `BoxParentData` | ✅ | `objects/offstage.rs` |
+| `RenderAbsorbPointer` | `AbsorbPointer` | Single | `BoxParentData` | ✅ | `objects/absorb_pointer.rs` |
+| `RenderIgnorePointer` | `IgnorePointer` | Single | `BoxParentData` | ✅ | `objects/ignore_pointer.rs` |
+| `RenderMetaData` | `MetaData` | Single | `BoxParentData` | ✅ | `objects/meta_data.rs` |
+| `RenderFractionalTranslation` | `FractionalTranslation` | Single | `BoxParentData` | ✅ | `objects/fractional_translation.rs` |
+| `RenderFittedBox` | `FittedBox` | Single | `BoxParentData` | ✅ | `objects/fitted_box.rs` |
+
 ### Paint effects — outstanding
 
 | Render object | Widget(s) | Arity | Parent data | Status | Notes |
 |---|---|---|---|---|---|
 | `RenderDecoratedBox` | `DecoratedBox`, `Container.decoration` | Single | `BoxParentData` | ⬜ | needs `BoxDecoration` painting (Wave 3b) |
-| `RenderRepaintBoundary` | `RepaintBoundary` | Single | `BoxParentData` | ⬜ | needs layer integration |
-| `RenderBackdropFilter` | `BackdropFilter` | Single | `BoxParentData` | ⬜ | needs blur/filter pipeline |
-| `RenderShaderMask` | `ShaderMask` | Single | `BoxParentData` | ⬜ | needs shader pipeline |
-| `RenderCustomPaint` | `CustomPaint` | Single | `BoxParentData` | ⬜ | needs `CustomPainter` (gated) |
-| `RenderFittedBox` | `FittedBox` | Single | `BoxParentData` | ⬜ | uses `BoxFit` |
-| `RenderFractionalTranslation` | `FractionalTranslation` | Single | `BoxParentData` | ⬜ | |
-| `RenderOffstage` | `Offstage` | Single | `BoxParentData` | ⬜ | trivial |
-| `RenderAbsorbPointer` | `AbsorbPointer` | Single | `BoxParentData` | ⬜ | hit-test only |
-| `RenderIgnorePointer` | `IgnorePointer` | Single | `BoxParentData` | ⬜ | hit-test only |
-| `RenderMouseRegion` | `MouseRegion` | Single | `BoxParentData` | ⬜ | needs mouse tracker |
-| `RenderPointerListener` | `Listener` | Single | `BoxParentData` | ⬜ | |
-| `RenderMetaData` | `MetaData` | Single | `BoxParentData` | ⬜ | trivial |
+| `RenderRepaintBoundary` | `RepaintBoundary` | Single | `BoxParentData` | ⬜ | needs layer integration (Wave 3b) |
+| `RenderBackdropFilter` | `BackdropFilter` | Single | `BoxParentData` | ⬜ | needs blur/filter pipeline (Wave 9) |
+| `RenderShaderMask` | `ShaderMask` | Single | `BoxParentData` | ⬜ | needs shader pipeline (Wave 9) |
+| `RenderCustomPaint` | `CustomPaint` | Single | `BoxParentData` | ⬜ | needs `CustomPainter` (gated, Wave 9) |
+| `RenderMouseRegion` | `MouseRegion` | Single | `BoxParentData` | ⬜ | needs mouse tracker (Wave 4b) |
+| `RenderPointerListener` | `Listener` | Single | `BoxParentData` | ⬜ | needs pointer-event routing (Wave 4b) |
 
 ### Leaf renderers — outstanding
 
@@ -130,18 +136,18 @@ All four clip render objects share **one generic implementation** —
 
 ## Coverage summary
 
-* **Render objects implemented:** **16** (7 → 11 → 15 → 16 across
-  Wave 1 → Wave 3a → Wave 2a). The 4 clip variants share **one
-  generic implementation** — monomorphisable, no vtables in
-  paint/hit-test.
+* **Render objects implemented:** **22** (7 → 11 → 15 → 16 → 22
+  across Wave 1 → Wave 3a → Wave 2a → Wave 4). The 4 clip variants
+  share **one generic implementation** — monomorphisable, no vtables
+  in paint/hit-test.
 * **Render objects planned:** ~80 (Flutter's `rendering/` catalog).
-* **Coverage:** **~20%** of the planned catalog (was ~19%).
+* **Coverage:** **~27.5%** of the planned catalog (was ~20%).
 * **Core.1 vertical-slice unblocked widgets:** `ConstrainedBox`,
   `LimitedBox`, `AspectRatio`, `FractionallySizedBox`,
   `Container.constraints`, the full `ClipRect` / `ClipRRect` /
-  `ClipOval` / `ClipPath` family, and `Stack` + `Positioned`.
-  Stack is the foundation for overlays, dialogs, drawer, and any
-  composite-layout where children layer on top of each other.
+  `ClipOval` / `ClipPath` family, `Stack` + `Positioned`, plus
+  Wave 4: `Offstage`, `AbsorbPointer`, `IgnorePointer`,
+  `MetaData`, `FractionalTranslation`, `FittedBox`.
 
 ## Wave plan
 
@@ -157,7 +163,8 @@ tests.
 | 2b | Multi-child layout (remaining) | `RenderWrap`, `RenderTable`, `RenderListBody` |
 | **3a (done)** | Clip family (generic) | `RenderClip<S: ClipGeometry>` + `RenderClipRect` / `RRect` / `Oval` / `Path` aliases + `Oval` newtype |
 | 3b | Decoration + repaint boundary | `RenderDecoratedBox`, `RenderRepaintBoundary` |
-| 4 | Pointer / mouse + simple proxy | `RenderMouseRegion`, `RenderPointerListener`, `RenderAbsorbPointer`, `RenderIgnorePointer`, `RenderOffstage`, `RenderMetaData`, `RenderFittedBox`, `RenderFractionalTranslation` |
+| **4 (done)** | Pointer / visibility / transform proxy | `RenderOffstage`, `RenderAbsorbPointer`, `RenderIgnorePointer`, `RenderMetaData` (+ `MetaDataPayload`), `RenderFractionalTranslation` (+ `TranslationFraction`), `RenderFittedBox` |
+| 4b | Mouse / pointer events | `RenderMouseRegion`, `RenderPointerListener` (need mouse-tracker + pointer-event routing infra) |
 | 5 | Slivers (viewport baseline) | `RenderViewport`, `RenderSliverList`, `RenderSliverToBoxAdapter`, `RenderSliverPadding`, `RenderSliverFillViewport` |
 | 6 | Slivers (extended) | `RenderSliverGrid`, `RenderSliverFixedExtentList`, `RenderSliverFillRemaining`, `RenderSliverPersistentHeader` |
 | 7 | Text + image leaf | `RenderParagraph`, `RenderImage` (gates Core.1 vertical slice text/image needs) |

@@ -17,6 +17,18 @@
 //! - [`RenderFractionallySizedBox`] - Sizes child as fraction of parent (Core.2)
 //! - [`RenderClipRect`] / [`RenderClipRRect`] / [`RenderClipOval`] /
 //!   [`RenderClipPath`] — generic [`RenderClip<S>`] family (Core.2)
+//! - [`RenderOffstage`] - Hides subtree (zero-size layout, skip paint &
+//!   hit-test) (Core.2 Wave 4)
+//! - [`RenderAbsorbPointer`] - Catches pointers itself, blocks child
+//!   (Core.2 Wave 4)
+//! - [`RenderIgnorePointer`] - Pointers pass straight through subtree
+//!   (Core.2 Wave 4)
+//! - [`RenderMetaData`] - Attaches opaque metadata to hit-test entries
+//!   (Core.2 Wave 4)
+//! - [`RenderFractionalTranslation`] - Paint-time shift by fraction of
+//!   child size (Core.2 Wave 4)
+//! - [`RenderFittedBox`] - Scales child to fit via [`BoxFit`] +
+//!   [`Alignment`] (Core.2 Wave 4)
 //!
 //! ## Multi-Child Objects
 //! - [`RenderFlex`] - Lays out children in a row or column
@@ -35,20 +47,27 @@
 //! // Use with PipelineOwner for actual rendering
 //! ```
 
+mod absorb_pointer;
 mod aspect_ratio;
 mod center;
 mod clip;
 mod colored_box;
 mod constrained_box;
+mod fitted_box;
 mod flex;
+mod fractional_translation;
 mod fractionally_sized_box;
+mod ignore_pointer;
 mod limited_box;
+mod meta_data;
+mod offstage;
 mod opacity;
 mod padding;
 mod sized_box;
 mod stack;
 mod transform;
 
+pub use absorb_pointer::RenderAbsorbPointer;
 pub use aspect_ratio::{AspectRatio, RenderAspectRatio};
 pub use center::RenderCenter;
 pub use clip::{
@@ -57,9 +76,14 @@ pub use clip::{
 };
 pub use colored_box::RenderColoredBox;
 pub use constrained_box::RenderConstrainedBox;
+pub use fitted_box::RenderFittedBox;
 pub use flex::{CrossAxisAlignment, FlexDirection, MainAxisAlignment, RenderFlex};
+pub use fractional_translation::{RenderFractionalTranslation, TranslationFraction};
 pub use fractionally_sized_box::{FractionFactor, RenderFractionallySizedBox};
+pub use ignore_pointer::RenderIgnorePointer;
 pub use limited_box::RenderLimitedBox;
+pub use meta_data::{MetaDataPayload, RenderMetaData};
+pub use offstage::RenderOffstage;
 pub use opacity::RenderOpacity;
 pub use padding::RenderPadding;
 pub use sized_box::RenderSizedBox;
