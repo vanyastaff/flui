@@ -305,10 +305,27 @@ pub type PixelOffset = Offset<Pixels>;
 /// Offset in device (physical) pixel coordinates.
 pub type DeviceOffset = Offset<DevicePixels>;
 
-/// Backward-compatible alias for [`Edges<f32>`].
+/// Type alias for edge insets using typed `Pixels` units.
 ///
-/// Used by the rendering layer for padding/margin insets.
-pub type EdgeInsets = Edges<f32>;
+/// # U3 invariant — bare `f32` literals are rejected
+///
+/// After the U3 migration, `EdgeInsets` fields require `Pixels` values,
+/// not raw `f32`. Use the `px()` constructor for all literal values.
+///
+/// ```compile_fail
+/// use flui_geometry::EdgeInsets;
+/// // ERROR: expected `Pixels`, found `f32`
+/// let _ = EdgeInsets::all(10.0); // U3: must use px(10.0)
+/// ```
+///
+/// Correct usage:
+///
+/// ```
+/// use flui_geometry::{EdgeInsets, px};
+/// let insets = EdgeInsets::all(px(10.0));
+/// assert_eq!(insets.left, px(10.0));
+/// ```
+pub type EdgeInsets = Edges<Pixels>;
 
 // =============================================================================
 // TESTS

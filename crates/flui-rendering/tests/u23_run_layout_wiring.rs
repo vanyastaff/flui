@@ -39,7 +39,7 @@ use flui_types::{Size, geometry::px};
 #[test]
 fn u23_run_layout_uses_root_constraints_to_drive_first_frame() {
     let mut owner = PipelineOwner::new();
-    let padding_id = owner.insert(Box::new(RenderPadding::all(5.0))
+    let padding_id = owner.insert(Box::new(RenderPadding::all(px(5.0)))
         as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
     let _colored = owner
         .insert_child_render_object(padding_id, Box::new(RenderColoredBox::red(40.0, 40.0)))
@@ -91,7 +91,7 @@ fn u23_run_layout_uses_root_constraints_to_drive_first_frame() {
 #[test]
 fn u23_run_layout_uses_cached_constraints_on_frame_two() {
     let mut owner = PipelineOwner::new();
-    let padding_id = owner.insert(Box::new(RenderPadding::all(2.0))
+    let padding_id = owner.insert(Box::new(RenderPadding::all(px(2.0)))
         as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
     let _colored = owner
         .insert_child_render_object(padding_id, Box::new(RenderColoredBox::blue(60.0, 30.0)))
@@ -148,7 +148,7 @@ fn u23_run_layout_uses_cached_constraints_on_frame_two() {
 #[test]
 fn u23_run_layout_skips_dirty_entry_with_no_constraints() {
     let mut owner = PipelineOwner::new();
-    let padding_id = owner.insert(Box::new(RenderPadding::all(5.0))
+    let padding_id = owner.insert(Box::new(RenderPadding::all(px(5.0)))
         as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
     // Note: NOT set as root. NO root_constraints set.
     // Dirty queue has padding_id (from insert) but cached_or_root_constraints
@@ -200,7 +200,7 @@ fn u23_root_constraints_setter_round_trip() {
 #[test]
 fn u23_set_root_constraints_auto_marks_root_dirty() {
     let mut owner = PipelineOwner::new();
-    let padding_id = owner.insert(Box::new(RenderPadding::all(5.0))
+    let padding_id = owner.insert(Box::new(RenderPadding::all(px(5.0)))
         as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
     owner.set_root_id(Some(padding_id));
     owner.clear_all_dirty_nodes();
@@ -248,7 +248,7 @@ fn u23_set_root_constraints_auto_marks_root_dirty() {
 #[test]
 fn u23_run_layout_skips_already_cleaned_dirty_entries() {
     let mut owner = PipelineOwner::new();
-    let padding_id = owner.insert(Box::new(RenderPadding::all(5.0))
+    let padding_id = owner.insert(Box::new(RenderPadding::all(px(5.0)))
         as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
     let _child_id = owner
         .insert_child_render_object(padding_id, Box::new(RenderColoredBox::red(40.0, 40.0)))

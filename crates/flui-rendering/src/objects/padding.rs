@@ -1,7 +1,7 @@
 //! RenderPadding - adds padding around a single child.
 
 use flui_tree::Single;
-use flui_types::{EdgeInsets, Offset, Pixels, Point, Rect, Size, geometry::px};
+use flui_types::{EdgeInsets, Offset, Pixels, Point, Rect, Size};
 
 use crate::{
     constraints::BoxConstraints,
@@ -15,7 +15,8 @@ use crate::{
 /// # Example
 ///
 /// ```ignore
-/// let padding = RenderPadding::new(EdgeInsets::all(16.0));
+/// use flui_types::geometry::px;
+/// let padding = RenderPadding::new(EdgeInsets::all(px(16.0)));
 /// let mut wrapper = BoxWrapper::new(padding);
 /// // Add child, then layout...
 /// ```
@@ -43,12 +44,12 @@ impl RenderPadding {
     }
 
     /// Creates padding with all sides equal.
-    pub fn all(value: f32) -> Self {
+    pub fn all(value: Pixels) -> Self {
         Self::new(EdgeInsets::all(value))
     }
 
     /// Creates symmetric padding.
-    pub fn symmetric(horizontal: f32, vertical: f32) -> Self {
+    pub fn symmetric(horizontal: Pixels, vertical: Pixels) -> Self {
         Self::new(EdgeInsets::symmetric(vertical, horizontal))
     }
 
@@ -64,8 +65,8 @@ impl RenderPadding {
 
     /// Deflates constraints by padding amount.
     fn deflate_constraints(&self, constraints: &BoxConstraints) -> BoxConstraints {
-        let horizontal = px(self.padding.horizontal_total());
-        let vertical = px(self.padding.vertical_total());
+        let horizontal = self.padding.horizontal_total();
+        let vertical = self.padding.vertical_total();
 
         BoxConstraints::new(
             (constraints.min_width - horizontal).max(Pixels::ZERO),
@@ -92,20 +93,20 @@ impl RenderBox for RenderPadding {
             let child_size = ctx.layout_child(0, child_constraints);
 
             // Position child with top-left padding offset
-            self.child_offset = Offset::new(px(self.padding.left), px(self.padding.top));
+            self.child_offset = Offset::new(self.padding.left, self.padding.top);
             ctx.position_child(0, self.child_offset);
 
             // Our size is child size + padding
             self.size = Size::new(
-                child_size.width + px(self.padding.horizontal_total()),
-                child_size.height + px(self.padding.vertical_total()),
+                child_size.width + self.padding.horizontal_total(),
+                child_size.height + self.padding.vertical_total(),
             );
         } else {
             self.has_child = false;
             // No child - just the padding itself
             self.size = Size::new(
-                px(self.padding.horizontal_total()),
-                px(self.padding.vertical_total()),
+                self.padding.horizontal_total(),
+                self.padding.vertical_total(),
             );
         }
 
@@ -152,27 +153,27 @@ impl HotReloadCapability for RenderPadding {}
 mod tests {
     use super::*;
     use crate::constraints::BoxConstraints;
+    use flui_types::geometry::px;
 
     #[test]
     fn test_edge_insets() {
-        let insets = EdgeInsets::all(10.0);
-        assert_eq!(insets.horizontal_total(), 20.0);
-        assert_eq!(insets.vertical_total(), 20.0);
-        // EdgeInsets is Edges<f32>; top_left() is only on Edges<Pixels>,
-        // so construct the expected offset manually.
-        let top_left = Offset::new(px(insets.left), px(insets.top));
+        let insets = EdgeInsets::all(px(10.0));
+        assert_eq!(insets.horizontal_total(), px(20.0));
+        assert_eq!(insets.vertical_total(), px(20.0));
+        // EdgeInsets is now Edges<Pixels>; fields are already Pixels.
+        let top_left = Offset::new(insets.left, insets.top);
         assert_eq!(top_left, Offset::new(px(10.0), px(10.0)));
     }
 
     #[test]
     fn test_padding_creation() {
-        let padding = RenderPadding::all(16.0);
-        assert_eq!(padding.padding(), EdgeInsets::all(16.0));
+        let padding = RenderPadding::all(px(16.0));
+        assert_eq!(padding.padding(), EdgeInsets::all(px(16.0)));
     }
 
     #[test]
     fn test_deflate_constraints() {
-        let padding = RenderPadding::symmetric(20.0, 10.0);
+        let padding = RenderPadding::symmetric(px(20.0), px(10.0));
         let constraints = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(100.0));
         let deflated = padding.deflate_constraints(&constraints);
 
@@ -182,9 +183,9 @@ mod tests {
 
     #[test]
     fn test_edge_insets_symmetric() {
-        let insets = EdgeInsets::symmetric(10.0, 20.0);
-        // symmetric(vertical=10.0, horizontal=20.0)
-        assert_eq!(insets.horizontal_total(), 40.0); // left + right = 20.0 + 20.0
-        assert_eq!(insets.vertical_total(), 20.0); // top + bottom = 10.0 + 10.0
+        let insets = EdgeInsets::symmetric(px(10.0), px(20.0));
+        // symmetric(vertical=px(10.0), horizontal=px(20.0))
+        assert_eq!(insets.horizontal_total(), px(40.0)); // left + right = 20.0 + 20.0
+        assert_eq!(insets.vertical_total(), px(20.0)); // top + bottom = 10.0 + 10.0
     }
 }

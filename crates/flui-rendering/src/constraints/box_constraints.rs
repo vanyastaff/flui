@@ -332,8 +332,8 @@ impl BoxConstraints {
     #[inline]
     #[must_use]
     pub fn deflate(&self, insets: EdgeInsets) -> Self {
-        let horizontal = Pixels(insets.left + insets.right);
-        let vertical = Pixels(insets.top + insets.bottom);
+        let horizontal = insets.left + insets.right;
+        let vertical = insets.top + insets.bottom;
 
         Self {
             min_width: (self.min_width - horizontal).max(Pixels::ZERO),
@@ -349,8 +349,8 @@ impl BoxConstraints {
     #[inline]
     #[must_use]
     pub fn inflate(&self, insets: EdgeInsets) -> Self {
-        let horizontal = Pixels(insets.left + insets.right);
-        let vertical = Pixels(insets.top + insets.bottom);
+        let horizontal = insets.left + insets.right;
+        let vertical = insets.top + insets.bottom;
 
         Self {
             min_width: self.min_width + horizontal,

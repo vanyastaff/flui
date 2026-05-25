@@ -68,7 +68,7 @@ fn u20_two_level_padding_with_colored_box_child() {
     // Build tree: Padding(all=10) → ColoredBox(preferred 80×40).
     let padding_id = pipeline
         .render_tree_mut()
-        .insert_box(Box::new(RenderPadding::all(10.0)));
+        .insert_box(Box::new(RenderPadding::all(px(10.0))));
     let _colored_box_id = pipeline
         .render_tree_mut()
         .insert_box_child(padding_id, Box::new(RenderColoredBox::red(80.0, 40.0)))
@@ -119,7 +119,7 @@ fn u20_two_level_padding_with_colored_box_child() {
 /// # Math
 ///
 /// Parent constraints: 0..400 × 0..300.
-/// - `RenderPadding::all(20)` deflates to 0..360 × 0..260, passes to
+/// - `RenderPadding::all(px(20))` deflates to 0..360 × 0..260, passes to
 ///   `RenderCenter` (which is `Single` arity).
 /// - `RenderCenter::perform_layout` calls `ctx.layout_single_child_loose()`
 ///   — gives the child 0..360 × 0..260 (loose). Since `RenderColoredBox`
@@ -134,7 +134,7 @@ fn u20_three_level_padding_center_colored_box_grandchild_propagation() {
     // Build tree: Padding(20) → Center → ColoredBox(60×30).
     let padding_id = pipeline
         .render_tree_mut()
-        .insert_box(Box::new(RenderPadding::all(20.0)));
+        .insert_box(Box::new(RenderPadding::all(px(20.0))));
     let center_id = pipeline
         .render_tree_mut()
         .insert_box_child(padding_id, Box::new(RenderCenter::new()))
@@ -281,7 +281,7 @@ fn u20_double_layout_does_not_panic_on_frame_two() {
 
     let padding_id = pipeline
         .render_tree_mut()
-        .insert_box(Box::new(RenderPadding::all(5.0)));
+        .insert_box(Box::new(RenderPadding::all(px(5.0))));
     let _child_id = pipeline
         .render_tree_mut()
         .insert_box_child(padding_id, Box::new(RenderColoredBox::red(40.0, 40.0)))
@@ -435,7 +435,7 @@ fn u20_descendant_err_preserves_parent_needs_layout() {
     // stale id.
     let padding_id = pipeline
         .render_tree_mut()
-        .insert_box(Box::new(RenderPadding::all(5.0)));
+        .insert_box(Box::new(RenderPadding::all(px(5.0))));
     let child_id = pipeline
         .render_tree_mut()
         .insert_box_child(padding_id, Box::new(RenderColoredBox::red(20.0, 20.0)))
@@ -603,7 +603,7 @@ fn u20_subtree_borrows_worker_thread_pipeline_succeeds() {
     let mut pipeline = fresh_layout_pipeline();
     let padding_id = pipeline
         .render_tree_mut()
-        .insert_box(Box::new(RenderPadding::all(5.0)));
+        .insert_box(Box::new(RenderPadding::all(px(5.0))));
     let _child_id = pipeline
         .render_tree_mut()
         .insert_box_child(padding_id, Box::new(RenderColoredBox::red(40.0, 40.0)))
@@ -649,14 +649,14 @@ fn u20_1_four_level_padding_chain() {
 
     let outer = pipeline
         .render_tree_mut()
-        .insert_box(Box::new(RenderPadding::all(10.0)));
+        .insert_box(Box::new(RenderPadding::all(px(10.0))));
     let mid = pipeline
         .render_tree_mut()
-        .insert_box_child(outer, Box::new(RenderPadding::all(5.0)))
+        .insert_box_child(outer, Box::new(RenderPadding::all(px(5.0))))
         .expect("mid insert must succeed");
     let inner = pipeline
         .render_tree_mut()
-        .insert_box_child(mid, Box::new(RenderPadding::all(2.0)))
+        .insert_box_child(mid, Box::new(RenderPadding::all(px(2.0))))
         .expect("inner insert must succeed");
     let leaf = pipeline
         .render_tree_mut()

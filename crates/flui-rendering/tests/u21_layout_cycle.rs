@@ -52,7 +52,7 @@ fn u21_structural_cycle_on_leaf_path_does_not_trigger_guard() {
 
     let padding_id = pipeline
         .render_tree_mut()
-        .insert_box(Box::new(RenderPadding::all(5.0)));
+        .insert_box(Box::new(RenderPadding::all(px(5.0))));
     let child_id = pipeline
         .render_tree_mut()
         .insert_box_child(padding_id, Box::new(RenderColoredBox::red(20.0, 20.0)))
@@ -103,10 +103,10 @@ fn u21_callback_reentry_marks_parent_dirty_for_retry() {
     let mut pipeline = fresh_layout_pipeline();
     let p1 = pipeline
         .render_tree_mut()
-        .insert_box(Box::new(RenderPadding::all(5.0)));
+        .insert_box(Box::new(RenderPadding::all(px(5.0))));
     let p2 = pipeline
         .render_tree_mut()
-        .insert_box_child(p1, Box::new(RenderPadding::all(2.0)))
+        .insert_box_child(p1, Box::new(RenderPadding::all(px(2.0))))
         .expect("p2 insert");
     pipeline
         .render_tree_mut()
@@ -257,7 +257,7 @@ fn u21_sequential_calls_on_same_root_do_not_trigger_cycle() {
     let mut pipeline = fresh_layout_pipeline();
     let padding_id = pipeline
         .render_tree_mut()
-        .insert_box(Box::new(RenderPadding::all(5.0)));
+        .insert_box(Box::new(RenderPadding::all(px(5.0))));
     let _child_id = pipeline
         .render_tree_mut()
         .insert_box_child(padding_id, Box::new(RenderColoredBox::red(20.0, 20.0)))

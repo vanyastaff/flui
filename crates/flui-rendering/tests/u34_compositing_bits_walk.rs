@@ -36,7 +36,7 @@ use flui_types::geometry::px;
 #[test]
 fn u33_bootstrap_sets_is_repaint_boundary_flag_from_trait_answer() {
     let mut owner = PipelineOwner::new();
-    let padding_id = owner.insert(Box::new(RenderPadding::all(5.0))
+    let padding_id = owner.insert(Box::new(RenderPadding::all(px(5.0)))
         as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
 
     let padding_node = owner
@@ -61,7 +61,7 @@ fn u33_bootstrap_sets_is_repaint_boundary_flag_from_trait_answer() {
 #[test]
 fn u33_bootstrap_runs_on_insert_child_render_object_path() {
     let mut owner = PipelineOwner::new();
-    let padding_id = owner.insert(Box::new(RenderPadding::all(5.0))
+    let padding_id = owner.insert(Box::new(RenderPadding::all(px(5.0)))
         as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
     let child_id = owner
         .insert_child_render_object(padding_id, Box::new(RenderColoredBox::red(40.0, 40.0)))
@@ -85,7 +85,7 @@ fn u33_bootstrap_runs_on_insert_child_render_object_path() {
 #[test]
 fn u34_run_compositing_clears_needs_compositing_bits_update_flag() {
     let mut owner = PipelineOwner::new();
-    let padding_id = owner.insert(Box::new(RenderPadding::all(5.0))
+    let padding_id = owner.insert(Box::new(RenderPadding::all(px(5.0)))
         as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
 
     // Mark dirty for compositing-bits update.
@@ -134,7 +134,7 @@ fn u34_run_compositing_clears_needs_compositing_bits_update_flag() {
 #[test]
 fn u34_run_compositing_short_circuits_when_flag_cleared_after_enqueue() {
     let mut owner = PipelineOwner::new();
-    let padding_id = owner.insert(Box::new(RenderPadding::all(5.0))
+    let padding_id = owner.insert(Box::new(RenderPadding::all(px(5.0)))
         as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
     let depth = owner.render_tree().depth(padding_id).unwrap_or(0) as usize;
     owner.add_node_needing_compositing_bits_update(padding_id, depth);
@@ -187,7 +187,7 @@ fn u34_run_compositing_short_circuits_when_flag_cleared_after_enqueue() {
 #[test]
 fn u34_add_node_needing_compositing_bits_update_sets_flag_on_enqueue() {
     let mut owner = PipelineOwner::new();
-    let padding_id = owner.insert(Box::new(RenderPadding::all(5.0))
+    let padding_id = owner.insert(Box::new(RenderPadding::all(px(5.0)))
         as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
 
     // Pre-enqueue: clear any stale flag bits from insert / bootstrap.
@@ -238,7 +238,7 @@ fn u34_run_compositing_empty_queue_is_no_op() {
 #[test]
 fn u34_run_compositing_walks_parent_then_child() {
     let mut owner = PipelineOwner::new();
-    let padding_id = owner.insert(Box::new(RenderPadding::all(5.0))
+    let padding_id = owner.insert(Box::new(RenderPadding::all(px(5.0)))
         as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
     let child_id = owner
         .insert_child_render_object(padding_id, Box::new(RenderColoredBox::red(40.0, 40.0)))

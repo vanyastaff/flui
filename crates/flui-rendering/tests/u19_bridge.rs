@@ -112,7 +112,7 @@ fn u19_leaf_bridge_honours_loose_constraints() {
 /// when those are loose enough.
 #[test]
 fn u19_single_bridge_pads_child_and_returns_total_size() {
-    let mut obj = RenderPadding::all(10.0);
+    let mut obj = RenderPadding::all(px(10.0));
 
     // Parent gives us up to 200×100 of space. Padding deflates by
     // (left+right=20, top+bottom=20) → child gets up to 180×80. The
