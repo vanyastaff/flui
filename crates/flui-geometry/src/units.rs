@@ -1797,8 +1797,8 @@ impl std::str::FromStr for Radians {
 /// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
 ///
 /// let logical = px(100.0);
-/// let physical = scale.transform_scalar(logical);
-/// assert_eq!(physical.get(), 200.0);
+/// let physical = logical.to_device(scale);
+/// assert_eq!(physical.get(), 200);
 /// ```
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct ScaleFactor<Src: Unit, Dst: Unit> {
@@ -1820,15 +1820,6 @@ impl<Src: Unit, Dst: Unit> ScaleFactor<Src, Dst> {
     #[inline]
     pub const fn get(&self) -> f32 {
         self.factor
-    }
-
-    /// Transform a scalar value from source to destination units
-    #[inline]
-    pub fn transform_scalar<T>(&self, value: T) -> T
-    where
-        T: Mul<f32, Output = T>,
-    {
-        value * self.factor
     }
 
     /// Get the inverse scale factor (Dst -> Src)
