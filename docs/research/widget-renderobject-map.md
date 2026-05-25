@@ -1,8 +1,8 @@
 # Widget → Render-Object Mapping Checklist
 
 > **Status:** seeded by Core.2 Wave 1 (constraint family), extended
-> by Wave 3a (clip family). Subsequent waves extend this table.
-> Per `docs/ROADMAP.md` Core.0 exit criteria,
+> by Wave 3a (clip family) and Wave 2a (`RenderStack`). Subsequent
+> waves extend this table. Per `docs/ROADMAP.md` Core.0 exit criteria,
 > this document is the canonical mapping that gates Core.2 entry — once
 > every planned `flui-widgets` widget appears here with a green
 > render-object backing, Business.1 has no hidden bottleneck.
@@ -43,12 +43,18 @@ also tracks parent-data variants, arity, and current status.
 | `RenderTransform` | `Transform`, `RotatedBox` | Single | `BoxParentData` | ✅ | `objects/transform.rs` |
 | `RenderFlex` | `Row`, `Column`, `Flex` | Variable | `FlexParentData` | ✅ | `objects/flex.rs` |
 
+### Multi-child layout — Wave 2a (Core.2)
+
+| Render object | Widget(s) | Arity | Parent data | Status | File |
+|---|---|---|---|---|---|
+| `RenderStack` | `Stack`, `IndexedStack` | Variable | `StackParentData` | ✅ | `objects/stack.rs` |
+| `PositionedSpec` (helper) | typed view that `Positioned` widget builds | — | `StackParentData` reader | ✅ | `objects/stack.rs` |
+
 ### Box layout — outstanding (future Core.2 waves)
 
 | Render object | Widget(s) | Arity | Parent data | Status | Notes |
 |---|---|---|---|---|---|
-| `RenderStack` | `Stack`, `IndexedStack`, `Positioned` | Variable | `StackParentData` | ⬜ | parent-data is wired |
-| `RenderPositioned` | `Positioned` (within `Stack`) | n/a | `StackParentData` (decorator) | ⬜ | model as ParentDataWidget |
+| `RenderPositioned` | `Positioned` (within `Stack`) | n/a | `StackParentData` (decorator) | ⬜ | model as ParentDataWidget over `StackParentData`; `PositionedSpec` already provides the typed view |
 | `RenderWrap` | `Wrap` | Variable | `WrapParentData` (alias of `ContainerBoxParentData`) | ⬜ | |
 | `RenderFlow` | `Flow` | Variable | `FlowParentData` | ⬜ | requires `FlowDelegate` (gated) |
 | `RenderTable` | `Table` | Variable | `TableCellParentData` | ⬜ | |
@@ -124,16 +130,18 @@ All four clip render objects share **one generic implementation** —
 
 ## Coverage summary
 
-* **Render objects implemented:** **15** (7 → 11 → 15 across
-  Wave 1 → Wave 3a). The 4 clip variants share **one generic
-  implementation** — monomorphisable, no vtables in paint/hit-test.
+* **Render objects implemented:** **16** (7 → 11 → 15 → 16 across
+  Wave 1 → Wave 3a → Wave 2a). The 4 clip variants share **one
+  generic implementation** — monomorphisable, no vtables in
+  paint/hit-test.
 * **Render objects planned:** ~80 (Flutter's `rendering/` catalog).
-* **Coverage:** **~19%** of the planned catalog (was ~14%).
+* **Coverage:** **~20%** of the planned catalog (was ~19%).
 * **Core.1 vertical-slice unblocked widgets:** `ConstrainedBox`,
   `LimitedBox`, `AspectRatio`, `FractionallySizedBox`,
-  `Container.constraints`, and the full `ClipRect` / `ClipRRect` /
-  `ClipOval` / `ClipPath` family (any widget that asks for visual
-  clipping).
+  `Container.constraints`, the full `ClipRect` / `ClipRRect` /
+  `ClipOval` / `ClipPath` family, and `Stack` + `Positioned`.
+  Stack is the foundation for overlays, dialogs, drawer, and any
+  composite-layout where children layer on top of each other.
 
 ## Wave plan
 
@@ -145,7 +153,8 @@ tests.
 | Wave | Family | Render objects |
 |---|---|---|
 | **1 (done)** | Constraint modifiers | `RenderConstrainedBox`, `RenderLimitedBox`, `RenderAspectRatio`, `RenderFractionallySizedBox` |
-| 2 | Multi-child layout | `RenderStack`, `RenderWrap`, `RenderTable`, `RenderListBody` |
+| **2a (done)** | Multi-child overlay | `RenderStack` + `PositionedSpec` typed view |
+| 2b | Multi-child layout (remaining) | `RenderWrap`, `RenderTable`, `RenderListBody` |
 | **3a (done)** | Clip family (generic) | `RenderClip<S: ClipGeometry>` + `RenderClipRect` / `RRect` / `Oval` / `Path` aliases + `Oval` newtype |
 | 3b | Decoration + repaint boundary | `RenderDecoratedBox`, `RenderRepaintBoundary` |
 | 4 | Pointer / mouse + simple proxy | `RenderMouseRegion`, `RenderPointerListener`, `RenderAbsorbPointer`, `RenderIgnorePointer`, `RenderOffstage`, `RenderMetaData`, `RenderFittedBox`, `RenderFractionalTranslation` |

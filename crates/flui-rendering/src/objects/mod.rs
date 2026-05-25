@@ -20,6 +20,8 @@
 //!
 //! ## Multi-Child Objects
 //! - [`RenderFlex`] - Lays out children in a row or column
+//! - [`RenderStack`] - Overlays children with positioned + non-positioned
+//!   flows (Core.2 Wave 2a)
 //!
 //! # Example
 //!
@@ -44,6 +46,7 @@ mod limited_box;
 mod opacity;
 mod padding;
 mod sized_box;
+mod stack;
 mod transform;
 
 pub use aspect_ratio::{AspectRatio, RenderAspectRatio};
@@ -60,4 +63,5 @@ pub use limited_box::RenderLimitedBox;
 pub use opacity::RenderOpacity;
 pub use padding::RenderPadding;
 pub use sized_box::RenderSizedBox;
+pub use stack::{PositionedSpec, RenderStack, StackFit};
 pub use transform::RenderTransform;
