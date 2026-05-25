@@ -994,6 +994,70 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# Trigger 14 (N-geom polish-pass §U12) — unit-barrier regression guard.
+#
+# Rejects implementations that re-introduce cross-type ops or scalar
+# coercions on the `Pixels` / `DevicePixels` unit types after the
+# U1/U2/U3/U4/U6/U6.1/U9/U10 deletions landed. The unit barrier exists to
+# force boundary-crossing through `px()` / `ScaleFactor` rather than via
+# silent `.into()` / mixed arithmetic; reintroducing the deleted impls
+# would defeat the whole point of the polish pass.
+#
+# Patterns guarded (all within `crates/flui-geometry/src/`):
+#   - `impl From<f32 | f64 | i32 | u32 | usize> for Pixels`     (U1)
+#   - `impl PartialEq<f32 | f64> for Pixels | DevicePixels`     (U2)
+#   - `impl PartialOrd<f32 | f64> for Pixels | DevicePixels`    (U2)
+#   - `impl Add<f32 | f64> for Pixels | DevicePixels`           (U2)
+#   - `impl Sub<f32 | f64> for Pixels | DevicePixels`           (U2)
+#   - `impl AddAssign<f32 | f64> for Pixels | DevicePixels`     (U2)
+#   - `impl SubAssign<f32 | f64> for Pixels | DevicePixels`     (U2)
+#   - `impl Mul<Pixels> for Pixels`                             (U4 area=length bug)
+#   - `impl MulAssign<Pixels> for Pixels`                       (U9 area=length bug)
+#   - `impl DivAssign<Pixels> for Pixels`                       (U10 dimensionless=length bug)
+#   - `pub type Float(Point|Vec2|Size|Offset)`                  (U6 dead aliases)
+#   - `pub type Scaled(Pixels|Point|Vec2|Size|Offset)`          (U6.1 deletion)
+#   - `pub struct ScaledPixels`                                 (U6.1 deletion)
+#
+# Allowlist marker:
+#   <impl line>  // PORT-CHECK-OK-UNIT: <one-line justification + tracking issue>
+#
+# Use the marker only after auditing that the reintroduced shape is genuinely
+# required (e.g., a deliberate new unit conversion landing under a follow-up
+# spec) and link to the design doc that sanctions it.
+# -----------------------------------------------------------------------------
+unit_barrier_hits=$(rg --line-number --column \
+    -e '^\s*impl\s+From<\s*(f32|f64|i32|u32|usize)\s*>\s+for\s+Pixels\b' \
+    -e '^\s*impl\s+PartialEq<\s*(f32|f64)\s*>\s+for\s+(Pixels|DevicePixels)\b' \
+    -e '^\s*impl\s+PartialOrd<\s*(f32|f64)\s*>\s+for\s+(Pixels|DevicePixels)\b' \
+    -e '^\s*impl\s+Add<\s*(f32|f64)\s*>\s+for\s+(Pixels|DevicePixels)\b' \
+    -e '^\s*impl\s+Sub<\s*(f32|f64)\s*>\s+for\s+(Pixels|DevicePixels)\b' \
+    -e '^\s*impl\s+AddAssign<\s*(f32|f64)\s*>\s+for\s+(Pixels|DevicePixels)\b' \
+    -e '^\s*impl\s+SubAssign<\s*(f32|f64)\s*>\s+for\s+(Pixels|DevicePixels)\b' \
+    -e '^\s*impl\s+Mul<\s*Pixels\s*>\s+for\s+Pixels\b' \
+    -e '^\s*impl\s+MulAssign<\s*Pixels\s*>\s+for\s+Pixels\b' \
+    -e '^\s*impl\s+DivAssign<\s*Pixels\s*>\s+for\s+Pixels\b' \
+    -e '^\s*pub\s+type\s+Float(Point|Vec2|Size|Offset)\b' \
+    -e '^\s*pub\s+type\s+Scaled(Pixels|Point|Vec2|Size|Offset)\b' \
+    -e '^\s*pub\s+struct\s+ScaledPixels\b' \
+    --type rust \
+    crates/flui-geometry/src/ 2>/dev/null \
+  | grep -Ev ':\s*(//!|///|//)' \
+  | grep -Ev '//\s*PORT-CHECK-OK-UNIT:' \
+  || true)
+
+if [[ -n "${unit_barrier_hits}" ]]; then
+  echo 'VIOLATION 14: unit-barrier regression (N-geom polish-pass §U12)'
+  echo "see ${trigger_doc} (trigger 14) and docs/research/2026-05-24-flui-geometry-polish-pass-research.md §III U12"
+  echo "${unit_barrier_hits}"
+  echo ""
+  violations=$((violations + 1))
+else
+  if [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    14: unit-barrier regression guard"
+  fi
+fi
+
+# -----------------------------------------------------------------------------
 # Summary
 # -----------------------------------------------------------------------------
 if [[ "${violations}" -gt 0 ]]; then
@@ -1002,7 +1066,7 @@ if [[ "${violations}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "port-check: all 13 refusal triggers + FR-033 grep clean"
+echo "port-check: all 14 refusal triggers + FR-033 grep clean"
 
 # -----------------------------------------------------------------------------
 # Marker summary (verbose mode only). Non-blocking — markers are Phase B
