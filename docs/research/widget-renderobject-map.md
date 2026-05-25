@@ -1,7 +1,8 @@
 # Widget → Render-Object Mapping Checklist
 
-> **Status:** seeded by Core.2 Wave 1 (constraint family). Subsequent
-> waves extend this table. Per `docs/ROADMAP.md` Core.0 exit criteria,
+> **Status:** seeded by Core.2 Wave 1 (constraint family), extended
+> by Wave 3a (clip family). Subsequent waves extend this table.
+> Per `docs/ROADMAP.md` Core.0 exit criteria,
 > this document is the canonical mapping that gates Core.2 entry — once
 > every planned `flui-widgets` widget appears here with a green
 > render-object backing, Business.1 has no hidden bottleneck.
@@ -57,15 +58,24 @@ also tracks parent-data variants, arity, and current status.
 | `RenderIntrinsicHeight` | `IntrinsicHeight` | Single | `BoxParentData` | ⬜ | needs intrinsic plumbing |
 | `RenderShiftedBox` (base trait) | — | — | — | ⬜ | shared logic for `Padding`/`Align`/etc. — currently inlined per type |
 
+### Paint effects — clip family (Wave 3a, Core.2)
+
+All four clip render objects share **one generic implementation** —
+`RenderClip<S: ClipGeometry>` collapses Flutter's 4-class private
+`_RenderCustomClip<T>` hierarchy into a single monomorphisable type.
+
+| Render object | Widget(s) | Arity | Parent data | Status | File |
+|---|---|---|---|---|---|
+| `RenderClipRect` | `ClipRect`, `Card` (non-rounded) | Single | `BoxParentData` | ✅ | `objects/clip.rs` |
+| `RenderClipRRect` | `ClipRRect`, rounded `Card`, `Chip` | Single | `BoxParentData` | ✅ | `objects/clip.rs` |
+| `RenderClipOval` | `ClipOval`, `CircleAvatar` | Single | `BoxParentData` | ✅ | `objects/clip.rs` |
+| `RenderClipPath` | `ClipPath`, custom-shaped surfaces | Single | `BoxParentData` | ✅ | `objects/clip.rs` |
+
 ### Paint effects — outstanding
 
 | Render object | Widget(s) | Arity | Parent data | Status | Notes |
 |---|---|---|---|---|---|
-| `RenderClipRect` | `ClipRect` | Single | `BoxParentData` | ⬜ | candidate for generic `RenderClip<S: ClipShape>` |
-| `RenderClipRRect` | `ClipRRect`, rounded `Card` | Single | `BoxParentData` | ⬜ | as above |
-| `RenderClipOval` | `ClipOval` | Single | `BoxParentData` | ⬜ | as above |
-| `RenderClipPath` | `ClipPath` | Single | `BoxParentData` | ⬜ | as above |
-| `RenderDecoratedBox` | `DecoratedBox`, `Container.decoration` | Single | `BoxParentData` | ⬜ | needs `BoxDecoration` painting |
+| `RenderDecoratedBox` | `DecoratedBox`, `Container.decoration` | Single | `BoxParentData` | ⬜ | needs `BoxDecoration` painting (Wave 3b) |
 | `RenderRepaintBoundary` | `RepaintBoundary` | Single | `BoxParentData` | ⬜ | needs layer integration |
 | `RenderBackdropFilter` | `BackdropFilter` | Single | `BoxParentData` | ⬜ | needs blur/filter pipeline |
 | `RenderShaderMask` | `ShaderMask` | Single | `BoxParentData` | ⬜ | needs shader pipeline |
@@ -114,12 +124,16 @@ also tracks parent-data variants, arity, and current status.
 
 ## Coverage summary
 
-* **Render objects implemented:** 11 (was 7 before Wave 1, now 11)
-* **Render objects planned:** ~80 (Flutter's `rendering/` catalog)
-* **Coverage:** **~14%** of the planned catalog (was ~9%)
+* **Render objects implemented:** **15** (7 → 11 → 15 across
+  Wave 1 → Wave 3a). The 4 clip variants share **one generic
+  implementation** — monomorphisable, no vtables in paint/hit-test.
+* **Render objects planned:** ~80 (Flutter's `rendering/` catalog).
+* **Coverage:** **~19%** of the planned catalog (was ~14%).
 * **Core.1 vertical-slice unblocked widgets:** `ConstrainedBox`,
-  `LimitedBox`, `AspectRatio`, `FractionallySizedBox`, and
-  `Container.constraints` (the constraints leg).
+  `LimitedBox`, `AspectRatio`, `FractionallySizedBox`,
+  `Container.constraints`, and the full `ClipRect` / `ClipRRect` /
+  `ClipOval` / `ClipPath` family (any widget that asks for visual
+  clipping).
 
 ## Wave plan
 
@@ -132,7 +146,8 @@ tests.
 |---|---|---|
 | **1 (done)** | Constraint modifiers | `RenderConstrainedBox`, `RenderLimitedBox`, `RenderAspectRatio`, `RenderFractionallySizedBox` |
 | 2 | Multi-child layout | `RenderStack`, `RenderWrap`, `RenderTable`, `RenderListBody` |
-| 3 | Clip + decoration | `RenderClipRect`, `RenderClipRRect`, `RenderClipOval`, `RenderClipPath`, `RenderDecoratedBox`, `RenderRepaintBoundary` |
+| **3a (done)** | Clip family (generic) | `RenderClip<S: ClipGeometry>` + `RenderClipRect` / `RRect` / `Oval` / `Path` aliases + `Oval` newtype |
+| 3b | Decoration + repaint boundary | `RenderDecoratedBox`, `RenderRepaintBoundary` |
 | 4 | Pointer / mouse + simple proxy | `RenderMouseRegion`, `RenderPointerListener`, `RenderAbsorbPointer`, `RenderIgnorePointer`, `RenderOffstage`, `RenderMetaData`, `RenderFittedBox`, `RenderFractionalTranslation` |
 | 5 | Slivers (viewport baseline) | `RenderViewport`, `RenderSliverList`, `RenderSliverToBoxAdapter`, `RenderSliverPadding`, `RenderSliverFillViewport` |
 | 6 | Slivers (extended) | `RenderSliverGrid`, `RenderSliverFixedExtentList`, `RenderSliverFillRemaining`, `RenderSliverPersistentHeader` |
