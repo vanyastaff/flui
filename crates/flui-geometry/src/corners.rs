@@ -183,20 +183,6 @@ impl<T> Corners<T> {
 // Specialized implementations for Pixels
 // ============================================================================
 
-impl Corners<super::units::Pixels> {
-    /// Scales these corner values to scaled pixels.
-    #[inline]
-    #[must_use]
-    pub fn scale(&self, factor: f32) -> Corners<super::units::ScaledPixels> {
-        Corners {
-            top_left: self.top_left.scale(factor),
-            top_right: self.top_right.scale(factor),
-            bottom_right: self.bottom_right.scale(factor),
-            bottom_left: self.bottom_left.scale(factor),
-        }
-    }
-}
-
 // ============================================================================
 // Along trait - Axis-based access
 // ============================================================================

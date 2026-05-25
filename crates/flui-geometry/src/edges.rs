@@ -361,17 +361,6 @@ impl Edges<super::units::Pixels> {
     }
 
     /// Scales all edges by the given factor, converting to scaled pixels.
-    #[must_use]
-    #[inline]
-    pub fn scale(&self, factor: f32) -> Edges<super::units::ScaledPixels> {
-        Edges {
-            top: self.top.scale(factor),
-            right: self.right.scale(factor),
-            bottom: self.bottom.scale(factor),
-            left: self.left.scale(factor),
-        }
-    }
-
     /// Inflates a rectangle by these edge insets.
     ///
     /// Increases the rectangle's size by adding the insets to all sides.

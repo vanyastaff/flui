@@ -2,11 +2,11 @@
 //!
 //! Tests explicit conversion methods between unit types:
 //! - Pixels ↔ DevicePixels
-//! - Pixels ↔ ScaledPixels
+
 //! - Pixels ↔ Rems
 //! - Round-trip conversions
 
-use flui_types::geometry::{Pixels, device_px, px, rems, scaled_px};
+use flui_types::geometry::{Pixels, device_px, px, rems};
 
 // ============================================================================
 // T063: Pixels::to_device_pixels(scale)
@@ -253,50 +253,6 @@ fn test_round_trip_rems_pixels_fractional_base() {
 // ============================================================================
 // Scaled pixels conversions
 // ============================================================================
-
-#[test]
-fn test_pixels_scale_to_scaled_pixels() {
-    let logical = px(100.0);
-    let scaled = logical.scale(2.0);
-    assert_eq!(scaled, scaled_px(200.0));
-}
-
-#[test]
-fn test_scaled_pixels_to_device_pixels() {
-    let scaled = scaled_px(200.0);
-    let device = scaled.to_device_pixels();
-    // Should round to nearest integer
-    assert_eq!(device, device_px(200));
-}
-
-#[test]
-fn test_scaled_pixels_to_pixels() {
-    let scaled = scaled_px(200.0);
-    let logical = scaled.to_pixels(2.0);
-    assert_eq!(logical, px(100.0));
-}
-
-#[test]
-fn test_round_trip_pixels_scaled_device() {
-    let original = px(100.0);
-    let scale = 2.0;
-
-    // Pixels -> ScaledPixels -> DevicePixels
-    let scaled = original.scale(scale);
-    let device = scaled.to_device_pixels();
-
-    // DevicePixels -> Pixels
-    let back = device.to_pixels(scale);
-
-    assert_eq!(back, original);
-}
-
-#[test]
-fn test_pixels_from_scaled_pixels() {
-    let scaled = scaled_px(200.0);
-    let logical = Pixels::from_scaled_pixels(scaled, 2.0);
-    assert_eq!(logical, px(100.0));
-}
 
 #[test]
 fn test_pixels_from_device_pixels() {

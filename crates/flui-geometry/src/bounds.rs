@@ -595,34 +595,6 @@ impl<T: Unit + NumericUnit> From<Bounds<T>> for Rect<T> {
 // Specialized implementations for Pixels
 // ============================================================================
 
-impl Bounds<super::units::Pixels> {
-    /// Scales the bounds by a factor, converting to scaled pixels.
-    #[inline]
-    #[must_use]
-    pub fn scale(&self, factor: f32) -> Bounds<super::units::ScaledPixels> {
-        Bounds {
-            origin: self.origin.scale(factor),
-            size: self.size.scale(factor),
-        }
-    }
-}
-
-// ============================================================================
-// Specialized implementations for ScaledPixels
-// ============================================================================
-
-impl Bounds<super::units::ScaledPixels> {
-    /// Converts scaled pixel bounds to device pixels by rounding.
-    #[inline]
-    #[must_use]
-    pub fn to_device_pixels(&self) -> Bounds<super::units::DevicePixels> {
-        Bounds {
-            origin: self.origin.to_device_pixels(),
-            size: self.size.to_device_pixels(),
-        }
-    }
-}
-
 // ============================================================================
 // Trait Implementations
 // ============================================================================

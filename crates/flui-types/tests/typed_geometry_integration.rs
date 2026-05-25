@@ -58,17 +58,16 @@ fn test_gpu_conversion_pipeline() {
     let ui_pos = Point::<Pixels>::new(px(100.0), px(200.0));
     let _ui_size = Size::<Pixels>::new(px(400.0), px(300.0));
 
-    // Scale for 2x display
+    // Convert to device pixels using scale factor
     let scale_factor = 2.0;
-    let scaled = ui_pos.x.scale(scale_factor);
+    let device_x = ui_pos.x.to_device_pixels(scale_factor);
+    assert_eq!(device_x.0, 200);
 
-    // Convert to device pixels
-    let device = scaled.to_device_pixels();
-    assert_eq!(device.0, 200);
-
-    // Convert to GPU f32 - NOT SUPPORTED, use .get() instead
-    // let gpu_pos: Point<f32> = ui_pos.cast();
-    // Instead: [ui_pos.x.get(), ui_pos.y.get()]
+    // Convert to GPU f32 - use .get() to extract raw value
+    let gpu_x = ui_pos.x.get();
+    let gpu_y = ui_pos.y.get();
+    assert_eq!(gpu_x, 100.0);
+    assert_eq!(gpu_y, 200.0);
 }
 
 #[test]
@@ -225,7 +224,7 @@ fn test_coordinate_scaling_scenario() {
     assert_eq!(scaled.width.0, 750.0);
 
     // Convert to device pixels
-    let device_width = scaled.width.scale(1.0).to_device_pixels();
+    let device_width = scaled.width.to_device_pixels(1.0);
     assert_eq!(device_width.0, 750);
 }
 
@@ -276,14 +275,10 @@ fn test_complete_rendering_pipeline() {
         Size::new(px(100.0), px(50.0)),
     );
 
-    // 2. Scale for 2x display
+    // 2. Convert to device pixels for 2x display
     let scale_factor = 2.0;
-    let scaled_origin_x = ui_button.origin.x.scale(scale_factor);
-    let scaled_origin_y = ui_button.origin.y.scale(scale_factor);
-
-    // 3. Convert to device pixels
-    let device_x = scaled_origin_x.to_device_pixels();
-    let device_y = scaled_origin_y.to_device_pixels();
+    let device_x = ui_button.origin.x.to_device_pixels(scale_factor);
+    let device_y = ui_button.origin.y.to_device_pixels(scale_factor);
 
     assert_eq!(device_x.0, 20);
     assert_eq!(device_y.0, 40);
@@ -306,16 +301,13 @@ fn test_mixed_unit_operations() {
     // Different unit types in the same workflow
     let logical = Point::<Pixels>::new(px(100.0), px(200.0));
     let device = Point::<DevicePixels>::new(device_px(200), device_px(400));
-    let scaled = Point::<ScaledPixels>::new(scaled_px(150.0), scaled_px(300.0));
 
-    // Extract raw f32 values for comparison
+    // Extract raw values for comparison
     let logical_x = logical.x.0;
     let device_x = device.x.0 as f32;
-    let scaled_x = scaled.x.0;
 
     assert_eq!(logical_x, 100.0);
     assert_eq!(device_x, 200.0);
-    assert_eq!(scaled_x, 150.0);
 }
 
 // =============================================================================
@@ -351,19 +343,6 @@ fn test_device_pixel_arithmetic() {
     // Division yields ratio
     let ratio = a / b;
     assert_eq!(ratio, 1);
-}
-
-#[test]
-fn test_scaled_pixel_arithmetic() {
-    let a = scaled_px(200.0);
-    let b = scaled_px(100.0);
-
-    // Basic arithmetic
-    assert_eq!((a + b).0, 300.0);
-    assert_eq!((a - b).0, 100.0);
-    assert_eq!((a * 2.0).0, 400.0);
-    // Division by scalar may not be implemented for ScaledPixels
-    // assert_eq!((a / 2.0).0, 100.0);
 }
 
 // =============================================================================
@@ -461,11 +440,9 @@ fn test_rems_unit() {
 fn test_zero_values() {
     let zero_px = Pixels::ZERO;
     let zero_device = DevicePixels::ZERO;
-    let zero_scaled = ScaledPixels::ZERO;
 
     assert_eq!(zero_px.0, 0.0);
     assert_eq!(zero_device.0, 0);
-    assert_eq!(zero_scaled.0, 0.0);
 
     // Zero points
     let zero_point = Point::<Pixels>::new(px(0.0), px(0.0));

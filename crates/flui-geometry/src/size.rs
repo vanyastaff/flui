@@ -16,7 +16,6 @@ use super::{
 /// Generic over unit type `T`. Common usage:
 /// - `Size<Pixels>` - UI dimensions
 /// - `Size<DevicePixels>` - Screen dimensions
-/// - `Size<ScaledPixels>` - High-DPI scaled dimensions
 ///
 /// Display format: `{width}×{height}` (e.g. `800px×600px`).
 ///
@@ -989,55 +988,6 @@ where
 // ============================================================================
 // Specialized implementations for Pixels
 // ============================================================================
-
-impl Size<super::units::Pixels> {
-    /// Scales the size by a given factor, producing a `Size<ScaledPixels>`.
-    ///
-    /// This is typically used to convert logical pixel sizes to scaled
-    /// pixels for high-DPI displays.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_geometry::{Size, px};
-    ///
-    /// let size = Size::new(px(100.0), px(200.0));
-    /// let scaled = size.scale(2.0); // 2x Retina display
-    /// ```
-    #[inline]
-    #[must_use]
-    pub fn scale(self, factor: f32) -> Size<super::units::ScaledPixels> {
-        Size {
-            width: self.width.scale(factor),
-            height: self.height.scale(factor),
-        }
-    }
-}
-
-// ============================================================================
-// Specialized implementations for ScaledPixels
-// ============================================================================
-
-impl Size<super::units::ScaledPixels> {
-    /// Converts to device pixels by rounding both dimensions.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_geometry::{Size, scaled_px};
-    ///
-    /// let size = Size::new(scaled_px(199.7), scaled_px(299.3));
-    /// let device = size.to_device_pixels();
-    /// ```
-    #[inline]
-    #[must_use]
-    pub fn to_device_pixels(self) -> Size<super::units::DevicePixels> {
-        Size {
-            width: self.width.to_device_pixels(),
-            height: self.height.to_device_pixels(),
-        }
-    }
-}
 
 // ============================================================================
 // Tests

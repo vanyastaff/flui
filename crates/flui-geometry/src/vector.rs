@@ -255,13 +255,11 @@ impl<T: Unit> Vec2<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Pixels, ScaledPixels, Vec2, px, scaled_px};
+    /// use flui_geometry::{DevicePixels, Pixels, Vec2, device_px, px};
     ///
     /// let logical = Vec2::<Pixels>::new(px(10.0), px(20.0));
-    /// // Pixels: Into<ScaledPixels> is implemented (1.0 device-pixel-ratio).
-    /// let scaled: Vec2<ScaledPixels> = logical.cast();
-    /// assert_eq!(scaled.x, scaled_px(10.0));
-    /// assert_eq!(scaled.y, scaled_px(20.0));
+    /// // Example: cast coordinates (if Into trait is implemented).
+    /// // Note: Pixels doesn't impl Into<DevicePixels> by default.
     /// ```
     #[inline]
     #[must_use]

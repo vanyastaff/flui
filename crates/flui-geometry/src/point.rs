@@ -1076,27 +1076,6 @@ where
 // ============================================================================
 
 impl Point<super::units::Pixels> {
-    /// Scales the point by a given factor, producing a `Point<ScaledPixels>`.
-    ///
-    /// This is typically used to convert logical pixel coordinates to scaled
-    /// pixels for high-DPI displays.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_geometry::{Point, px};
-    ///
-    /// let p = Point::new(px(100.0), px(200.0));
-    /// let scaled = p.scale(2.0);  // 2x Retina display
-    #[inline]
-    #[must_use]
-    pub fn scale(self, factor: f32) -> Point<super::units::ScaledPixels> {
-        Point {
-            x: self.x.scale(factor),
-            y: self.y.scale(factor),
-        }
-    }
-
     /// Calculates the Euclidean distance from the origin (0, 0) to this point.
     ///
     /// # Examples
@@ -1110,30 +1089,6 @@ impl Point<super::units::Pixels> {
     #[must_use]
     pub fn magnitude(self) -> f32 {
         self.x.get().hypot(self.y.get())
-    }
-}
-
-// ============================================================================
-// Specialized implementations for ScaledPixels
-// ============================================================================
-
-impl Point<super::units::ScaledPixels> {
-    /// Converts to device pixels by rounding both coordinates.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_geometry::{Point, scaled_px};
-    ///
-    /// let p = Point::new(scaled_px(199.7), scaled_px(299.3));
-    /// let device = p.to_device_pixels();
-    #[inline]
-    #[must_use]
-    pub fn to_device_pixels(self) -> Point<super::units::DevicePixels> {
-        Point {
-            x: self.x.to_device_pixels(),
-            y: self.y.to_device_pixels(),
-        }
     }
 }
 
