@@ -1014,6 +1014,7 @@ fi
 #   - `impl Mul<Pixels> for Pixels`                             (U4 area=length bug)
 #   - `impl MulAssign<Pixels> for Pixels`                       (U9 area=length bug)
 #   - `impl DivAssign<Pixels> for Pixels`                       (U10 dimensionless=length bug)
+#   - `impl From<Pixels> for {i32, u32, usize}`                 (U11 lossy `as` cast hidden behind `From`)
 #   - `pub type Float(Point|Vec2|Size|Offset)`                  (U6 dead aliases)
 #   - `pub type Scaled(Pixels|Point|Vec2|Size|Offset)`          (U6.1 deletion)
 #   - `pub struct ScaledPixels`                                 (U6.1 deletion)
@@ -1036,6 +1037,7 @@ unit_barrier_hits=$(rg --line-number --column \
     -e '^\s*impl\s+Mul<\s*Pixels\s*>\s+for\s+Pixels\b' \
     -e '^\s*impl\s+MulAssign<\s*Pixels\s*>\s+for\s+Pixels\b' \
     -e '^\s*impl\s+DivAssign<\s*Pixels\s*>\s+for\s+Pixels\b' \
+    -e '^\s*impl\s+From<\s*Pixels\s*>\s+for\s+(i32|u32|usize)\b' \
     -e '^\s*pub\s+type\s+Float(Point|Vec2|Size|Offset)\b' \
     -e '^\s*pub\s+type\s+Scaled(Pixels|Point|Vec2|Size|Offset)\b' \
     -e '^\s*pub\s+struct\s+ScaledPixels\b' \

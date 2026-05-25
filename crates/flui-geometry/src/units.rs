@@ -137,6 +137,49 @@ use super::traits::{NumericUnit, Unit};
 /// let ratio: f32 = px(10.0) / px(2.0);
 /// assert_eq!(ratio, 5.0);
 /// ```
+///
+/// # U11 invariant — lossy `Pixels → {i32, u32, usize}` is rejected
+///
+/// `From<Pixels> for i32 / u32 / usize` was deleted because `as i32` /
+/// `as u32` / `as usize` casts truncate fractional pixels *and* wrap
+/// silently on overflow. `From` advertises infallible + lossless
+/// conversion; that contract was violated. Callers must opt in to a
+/// rounding/clamping policy via [`Pixels::to_i32_round`],
+/// [`Pixels::to_u32_round_clamped`], or [`Pixels::to_usize_round_clamped`].
+///
+/// `Pixels → i32` rejected:
+///
+/// ```compile_fail
+/// use flui_geometry::px;
+/// let _: i32 = px(10.0).into(); // U11: `From<Pixels> for i32` removed
+/// ```
+///
+/// `Pixels → u32` rejected (was silently wrapping negative values):
+///
+/// ```compile_fail
+/// use flui_geometry::px;
+/// let _: u32 = px(10.0).into(); // U11: `From<Pixels> for u32` removed
+/// ```
+///
+/// `Pixels → usize` rejected:
+///
+/// ```compile_fail
+/// use flui_geometry::px;
+/// let _: usize = px(10.0).into(); // U11: `From<Pixels> for usize` removed
+/// ```
+///
+/// Explicit replacement methods document the rounding policy at the call
+/// site:
+///
+/// ```
+/// use flui_geometry::px;
+/// assert_eq!(px(10.4).to_i32_round(), 10);
+/// assert_eq!(px(10.6).to_i32_round(), 11);
+/// assert_eq!(px(-5.0).to_u32_round_clamped(), 0); // negative clamps to 0
+/// assert_eq!(px(f32::NAN).to_i32_round(), 0); // NaN -> 0
+/// ```
+///
+/// `From<Pixels> for {f32, f64}` is retained: those *are* lossless.
 #[derive(Copy, Clone, Default, PartialEq)]
 #[repr(transparent)]
 pub struct Pixels(pub f32);
@@ -307,6 +350,80 @@ impl Pixels {
     #[inline]
     pub const fn from_i32(value: i32) -> Self {
         Self(value as f32)
+    }
+
+    /// Rounds the value to the nearest `i32`, saturating to `i32::MIN` /
+    /// `i32::MAX` on overflow and returning `0` for `NaN`.
+    ///
+    /// This is the explicit replacement for the deleted `From<Pixels> for i32`
+    /// impl (U11): callers must opt in to a rounding policy and accept that
+    /// the conversion is lossy, rather than getting silent `as i32`
+    /// truncation through `.into()`.
+    #[inline]
+    #[must_use]
+    pub fn to_i32_round(self) -> i32 {
+        if self.0.is_nan() {
+            0
+        } else {
+            // f32::round + saturating_cast: rounds half-away-from-zero, then
+            // clamps to the i32 range without UB on out-of-range f32 inputs.
+            let rounded = self.0.round();
+            if rounded >= i32::MAX as f32 {
+                i32::MAX
+            } else if rounded <= i32::MIN as f32 {
+                i32::MIN
+            } else {
+                rounded as i32
+            }
+        }
+    }
+
+    /// Rounds the value to the nearest `u32`, clamping negative values to
+    /// `0`, saturating to `u32::MAX` on overflow, and returning `0` for
+    /// `NaN`.
+    ///
+    /// Explicit replacement for the deleted `From<Pixels> for u32` impl
+    /// (U11): silent `as u32` wrapped negative pixels into huge values and
+    /// truncated overflow without warning.
+    #[inline]
+    #[must_use]
+    pub fn to_u32_round_clamped(self) -> u32 {
+        if self.0.is_nan() {
+            0
+        } else {
+            let rounded = self.0.round();
+            if rounded <= 0.0 {
+                0
+            } else if rounded >= u32::MAX as f32 {
+                u32::MAX
+            } else {
+                rounded as u32
+            }
+        }
+    }
+
+    /// Rounds the value to the nearest `usize`, clamping negative values to
+    /// `0`, saturating to `usize::MAX` on overflow, and returning `0` for
+    /// `NaN`.
+    ///
+    /// Explicit replacement for the deleted `From<Pixels> for usize` impl
+    /// (U11): same defect class as `From<Pixels> for u32` but additionally
+    /// platform-dependent for the upper bound (32-bit vs 64-bit targets).
+    #[inline]
+    #[must_use]
+    pub fn to_usize_round_clamped(self) -> usize {
+        if self.0.is_nan() {
+            0
+        } else {
+            let rounded = self.0.round();
+            if rounded <= 0.0 {
+                0
+            } else if rounded >= usize::MAX as f32 {
+                usize::MAX
+            } else {
+                rounded as usize
+            }
+        }
     }
 
     /// Converts logical pixels to device pixels using a raw scale factor.
@@ -564,26 +681,21 @@ impl From<Pixels> for f64 {
     }
 }
 
-impl From<Pixels> for i32 {
-    #[inline]
-    fn from(pixels: Pixels) -> Self {
-        pixels.0 as i32
-    }
-}
-
-impl From<Pixels> for u32 {
-    #[inline]
-    fn from(pixels: Pixels) -> Self {
-        pixels.0 as u32
-    }
-}
-
-impl From<Pixels> for usize {
-    #[inline]
-    fn from(pixels: Pixels) -> Self {
-        pixels.0 as usize
-    }
-}
+// `From<Pixels> for {i32, u32, usize}` deliberately omitted (U11):
+//
+// The previous `as i32` / `as u32` / `as usize` casts truncated the
+// fractional part *and* silently wrapped on overflow (`as u32` from a
+// negative `Pixels` produced a near-`u32::MAX` value rather than `0`).
+// `From` advertises infallible + lossless + semantically-unambiguous
+// conversion; this conversion is none of those, so callers must opt in
+// to a rounding policy via the explicit methods:
+//
+//   - `Pixels::to_i32_round`             — round half-away-from-zero, saturating
+//   - `Pixels::to_u32_round_clamped`     — round, clamp negative to 0, saturate at MAX
+//   - `Pixels::to_usize_round_clamped`   — round, clamp negative to 0, saturate at MAX
+//
+// `From<Pixels> for {f32, f64}` are retained: those *are* lossless
+// (`f32 → f32` identity; `f32 → f64` widening).
 
 // Formatting
 impl Display for Pixels {
