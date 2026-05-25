@@ -179,10 +179,10 @@ impl Path {
         // Top-right corner
         if tr_x > px(0.0) || tr_y > px(0.0) {
             let corner_rect = Rect::from_xywh(
-                rect.right() - tr_x * px(2.0),
+                rect.right() - tr_x * 2.0,
                 rect.top(),
-                tr_x * px(2.0),
-                tr_y * px(2.0),
+                tr_x * 2.0,
+                tr_y * 2.0,
             );
             path.add_arc(
                 corner_rect,
@@ -197,10 +197,10 @@ impl Path {
         // Bottom-right corner
         if br_x > px(0.0) || br_y > px(0.0) {
             let corner_rect = Rect::from_xywh(
-                rect.right() - br_x * px(2.0),
-                rect.bottom() - br_y * px(2.0),
-                br_x * px(2.0),
-                br_y * px(2.0),
+                rect.right() - br_x * 2.0,
+                rect.bottom() - br_y * 2.0,
+                br_x * 2.0,
+                br_y * 2.0,
             );
             path.add_arc(corner_rect, 0.0, std::f32::consts::FRAC_PI_2);
         }
@@ -212,9 +212,9 @@ impl Path {
         if bl_x > px(0.0) || bl_y > px(0.0) {
             let corner_rect = Rect::from_xywh(
                 rect.left(),
-                rect.bottom() - bl_y * px(2.0),
-                bl_x * px(2.0),
-                bl_y * px(2.0),
+                rect.bottom() - bl_y * 2.0,
+                bl_x * 2.0,
+                bl_y * 2.0,
             );
             path.add_arc(
                 corner_rect,
@@ -228,8 +228,7 @@ impl Path {
 
         // Top-left corner
         if tl_x > px(0.0) || tl_y > px(0.0) {
-            let corner_rect =
-                Rect::from_xywh(rect.left(), rect.top(), tl_x * px(2.0), tl_y * px(2.0));
+            let corner_rect = Rect::from_xywh(rect.left(), rect.top(), tl_x * 2.0, tl_y * 2.0);
             path.add_arc(
                 corner_rect,
                 std::f32::consts::PI,
@@ -593,7 +592,7 @@ impl Path {
     /// Returns > 0 for left, < 0 for right, 0 for on line.
     #[inline]
     fn is_left(p1: Point<Pixels>, p2: Point<Pixels>, point: Point<Pixels>) -> f32 {
-        ((p2.x - p1.x) * (point.y - p1.y) - (point.x - p1.x) * (p2.y - p1.y)).0
+        ((p2.x - p1.x).0 * (point.y - p1.y).0 - (point.x - p1.x).0 * (p2.y - p1.y).0)
     }
 
     /// Count crossings for quadratic bezier curve (approximated).

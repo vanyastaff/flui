@@ -562,7 +562,7 @@ impl Size<Pixels> {
     #[inline]
     #[must_use]
     pub fn perimeter(self) -> Pixels {
-        px(2.0) * (self.width + self.height)
+        2.0 * (self.width + self.height)
     }
 
     /// Computes the diagonal length (Pythagorean theorem).

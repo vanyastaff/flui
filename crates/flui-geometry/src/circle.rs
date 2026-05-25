@@ -413,7 +413,7 @@ impl Circle<Pixels> {
 
         let a = d.dot(d);
         let b = 2.0 * f.dot(d);
-        let c = f.dot(f) - (self.radius * self.radius).0;
+        let c = f.dot(f) - self.radius.0 * self.radius.0;
 
         let discriminant: f32 = b * b - 4.0 * a * c;
 

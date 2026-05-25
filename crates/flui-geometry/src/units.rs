@@ -99,6 +99,42 @@ use super::traits::{NumericUnit, Unit};
 /// use flui_geometry::Pixels;
 /// let _: Pixels = 10.0_f64.into(); // U1: `From<f64> for Pixels` removed (was lossy)
 /// ```
+///
+/// # U4/U9/U10 invariant — `Pixels × Pixels` is rejected (area ≠ length)
+///
+/// `Mul<Pixels> for Pixels` returned area typed as length — a semantic bug.
+/// `MulAssign<Pixels>` and `DivAssign<Pixels>` share the same defect class.
+///
+/// Multiplication rejected:
+///
+/// ```compile_fail
+/// use flui_geometry::px;
+/// let _: flui_geometry::Pixels = px(10.0) * px(2.0); // U4: area ≠ length
+/// ```
+///
+/// MulAssign rejected:
+///
+/// ```compile_fail
+/// use flui_geometry::px;
+/// let mut a = px(10.0);
+/// a *= px(2.0); // U9: same semantic bug as U4
+/// ```
+///
+/// DivAssign rejected:
+///
+/// ```compile_fail
+/// use flui_geometry::px;
+/// let mut a = px(10.0);
+/// a /= px(2.0); // U10: dimensionless result ≠ length
+/// ```
+///
+/// Division (dimensionless ratio) remains valid:
+///
+/// ```
+/// use flui_geometry::px;
+/// let ratio: f32 = px(10.0) / px(2.0);
+/// assert_eq!(ratio, 5.0);
+/// ```
 #[derive(Copy, Clone, Default, PartialEq)]
 #[repr(transparent)]
 pub struct Pixels(pub f32);
@@ -388,14 +424,6 @@ impl SubAssign for Pixels {
     }
 }
 
-impl Mul<Pixels> for Pixels {
-    type Output = Self;
-    #[inline]
-    fn mul(self, rhs: Pixels) -> Self::Output {
-        Self(self.0 * rhs.0)
-    }
-}
-
 impl Mul<Pixels> for f32 {
     type Output = Pixels;
     #[inline]
@@ -444,13 +472,6 @@ impl Mul<f32> for Pixels {
     }
 }
 
-impl MulAssign<Pixels> for Pixels {
-    #[inline]
-    fn mul_assign(&mut self, rhs: Pixels) {
-        self.0 *= rhs.0;
-    }
-}
-
 impl MulAssign<f32> for Pixels {
     #[inline]
     fn mul_assign(&mut self, rhs: f32) {
@@ -471,13 +492,6 @@ impl Div<f32> for Pixels {
     #[inline]
     fn div(self, rhs: f32) -> Self::Output {
         Self(self.0 / rhs)
-    }
-}
-
-impl DivAssign<Pixels> for Pixels {
-    #[inline]
-    fn div_assign(&mut self, rhs: Pixels) {
-        self.0 /= rhs.0;
     }
 }
 
