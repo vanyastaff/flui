@@ -47,7 +47,7 @@ use crate::constraints::BoxConstraints;
 ///             let x = center_x + self.radius * angle.cos() - child_size.width / 2.0;
 ///             let y = center_y + self.radius * angle.sin() - child_size.height / 2.0;
 ///
-///             let transform = Matrix4::from_translation(glam::vec3(x, y, 0.0));
+///             let transform = Matrix4::translation(x, y, 0.0);
 ///             context.paint_child(i, transform);
 ///         }
 ///     }

@@ -277,5 +277,43 @@ A: Zero. They're newtypes that compile to raw primitives (f32/i32). See benchmar
 **Q: Can I use this without the rest of FLUI?**  
 A: Yes! `flui_types` has minimal dependencies and can be used standalone for type-safe geometry and colors.
 
-**Q: Why not use glam or euclid?**  
-A: FLUI needs Flutter-compatible APIs (Rect::from_ltrb, Size::area) and unit type safety specific to UI layout.
+**Q: Why not use glam or euclid directly as the public surface?**
+A: FLUI needs **Flutter-compatible APIs** (`Rect::from_ltrb`, `Size::area`,
+column-major `Matrix4`, etc.) and **unit-type safety** specific to UI
+layout (`Pixels`, `DevicePixels`, `Rems`, `Radians`). Both raw glam and
+raw euclid would force every call site to either lose the typed barrier
+or hand-roll a wrapper.
+
+The chosen split as of U14 (Option D, post-2026-05-25 spike, recorded in
+[`docs/research/2026-05-25-u17-spike-report.md`](../../docs/research/2026-05-25-u17-spike-report.md)):
+
+- **flui owns unit-typed wrappers for polish discipline.** `Pixels`,
+  `DevicePixels`, `ScaleFactor<Src, Dst>`, `Matrix4`, `Vec2<T>`,
+  `Transform2D<T>`, `Rect<T>`, `EdgeInsets`, etc. live in
+  `flui-geometry` (re-exported through `flui_types::geometry`) and
+  carry the Flutter-parity API + the U1-U12 unit barriers (no
+  `From<f32> for Pixels`, no `Pixels * Pixels -> Pixels`, etc.).
+- **glam handles SIMD math underneath.** `Matrix4` is a
+  `#[repr(transparent)]` newtype around `glam::Mat4` (U14.1); the
+  hand-written SSE / NEON paths the framework used to maintain were
+  removed in favour of glam's portable-SIMD implementation.
+- **mint bridges to the wider math-library ecosystem.** `glam` is built
+  with the `mint` feature on, so any consumer that needs to hand a
+  `flui-geometry` type to `kurbo`, `nalgebra`, or `cgmath` can do it
+  through mint without taking a direct dep on those crates.
+- **Flutter compat surfaces ship as extension traits / typed
+  constructors** rather than `impl From<glam::Mat4>`-style implicit
+  conversions, so the unit barrier holds even where interop matters.
+
+The shorthand: **flui's public types stay Flutter-shaped; glam's hot
+math runs through them.** Neither raw `glam::Vec2` nor `euclid::Length`
+ever shows up at the framework boundary that an application code path
+sees.
+
+**Q: Why was the `simd` Cargo feature removed?**
+A: It used to gate hand-written SSE / NEON paths for `Matrix4`
+multiplication and `Color::lerp` / `Color::blend_over`. Once `Matrix4`
+delegates to glam (U14.1), glam's portable-SIMD path supersedes the
+matrix paths; the colour paths were u8-only and modern compilers
+auto-vectorise the scalar form at the call sites that matter. Keeping a
+feature that gated dead code would have been a maintenance trap.

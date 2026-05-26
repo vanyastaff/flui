@@ -328,5 +328,37 @@ pub type DeviceOffset = Offset<DevicePixels>;
 pub type EdgeInsets = Edges<Pixels>;
 
 // =============================================================================
+// RAW MATH BRIDGE — sanctioned access to the underlying glam/mint types
+// =============================================================================
+
+/// Re-exports of the underlying portable-SIMD math primitives that back the
+/// typed geometry wrappers.
+///
+/// Per the U14 (Option D) and U16 bridge policy, **direct `use glam::…`**
+/// outside `flui-geometry` and `flui-engine` is treated as a code smell:
+///
+/// - `flui-geometry` owns the typed wrappers (`Matrix4`, `Vec2<T>`,
+///   `Point<T>`, …) and is the only crate that should `use glam::…`
+///   internally.
+/// - `flui-engine` legitimately needs raw `glam` types at the wgpu /
+///   GPU-buffer boundary; that direct dependency is sanctioned.
+/// - **Every other crate** should reach for the typed wrappers (preferred)
+///   or, when a raw type is genuinely required, import via this module
+///   (e.g. `flui_geometry::raw::Vec2`) so the entry point is explicit and
+///   the bridge dependency stays auditable.
+///
+/// This module is intentionally tiny: it exposes only the glam primitives
+/// the wrappers actually delegate to. Anything more exotic should either
+/// land here behind a follow-up PR or stay inside `flui-engine`.
+pub mod raw {
+    pub use glam::{Mat4, Vec2, Vec3, Vec4};
+
+    /// `mint` re-export. Crates that hand a `flui-geometry` type to a
+    /// foreign math library (`kurbo`, `nalgebra`, `cgmath`, …) go
+    /// through `mint` so they don't pull a direct dep on the target.
+    pub use mint;
+}
+
+// =============================================================================
 // TESTS
 // =============================================================================
