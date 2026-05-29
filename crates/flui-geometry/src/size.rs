@@ -16,7 +16,6 @@ use super::{
 /// Generic over unit type `T`. Common usage:
 /// - `Size<Pixels>` - UI dimensions
 /// - `Size<DevicePixels>` - Screen dimensions
-/// - `Size<ScaledPixels>` - High-DPI scaled dimensions
 ///
 /// Display format: `{width}×{height}` (e.g. `800px×600px`).
 ///
@@ -994,10 +993,7 @@ where
 // ============================================================================
 
 impl Size<super::units::Pixels> {
-    /// Scales the size by a given factor, producing a `Size<ScaledPixels>`.
-    ///
-    /// This is typically used to convert logical pixel sizes to scaled
-    /// pixels for high-DPI displays.
+    /// Scales the size by a given factor.
     ///
     /// # Examples
     ///
@@ -1009,35 +1005,10 @@ impl Size<super::units::Pixels> {
     /// ```
     #[inline]
     #[must_use]
-    pub fn scale(self, factor: f32) -> Size<super::units::ScaledPixels> {
+    pub fn scale(self, factor: f32) -> Size<super::units::Pixels> {
         Size {
             width: self.width.scale(factor),
             height: self.height.scale(factor),
-        }
-    }
-}
-
-// ============================================================================
-// Specialized implementations for ScaledPixels
-// ============================================================================
-
-impl Size<super::units::ScaledPixels> {
-    /// Converts to device pixels by rounding both dimensions.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_geometry::{Size, scaled_px};
-    ///
-    /// let size = Size::new(scaled_px(199.7), scaled_px(299.3));
-    /// let device = size.to_device_pixels();
-    /// ```
-    #[inline]
-    #[must_use]
-    pub fn to_device_pixels(self) -> Size<super::units::DevicePixels> {
-        Size {
-            width: self.width.to_device_pixels(),
-            height: self.height.to_device_pixels(),
         }
     }
 }

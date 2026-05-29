@@ -261,13 +261,13 @@ impl<T: Unit> Vec2<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Pixels, ScaledPixels, Vec2, px, scaled_px};
+    /// use flui_geometry::{PixelDelta, Pixels, Vec2, delta_px, px};
     ///
     /// let logical = Vec2::<Pixels>::new(px(10.0), px(20.0));
-    /// // Pixels: Into<ScaledPixels> is implemented (1.0 device-pixel-ratio).
-    /// let scaled: Vec2<ScaledPixels> = logical.cast();
-    /// assert_eq!(scaled.x, scaled_px(10.0));
-    /// assert_eq!(scaled.y, scaled_px(20.0));
+    /// // Pixels: Into<PixelDelta> is implemented.
+    /// let delta: Vec2<PixelDelta> = logical.cast();
+    /// assert_eq!(delta.x, delta_px(10.0));
+    /// assert_eq!(delta.y, delta_px(20.0));
     /// ```
     #[inline]
     #[must_use]

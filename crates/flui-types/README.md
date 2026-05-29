@@ -113,7 +113,6 @@ cargo run --example color_blending
 ```rust
 pub struct Pixels(f32);
 pub struct DevicePixels(i32);
-pub struct ScaledPixels(f32);
 
 // Cannot accidentally mix units:
 let logical = px(100.0);

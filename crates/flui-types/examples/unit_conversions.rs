@@ -4,7 +4,6 @@
 //! conversions:
 //! - Pixels: Logical units used in layout (density-independent)
 //! - DevicePixels: Physical pixels on the screen (GPU coordinates)
-//! - ScaledPixels: Intermediate representation for scaling operations
 //!
 //! This showcases how FLUI handles different display densities (1x, 2x retina,
 //! 1.5x, etc.)
