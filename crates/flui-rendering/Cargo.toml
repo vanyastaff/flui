@@ -31,7 +31,7 @@ rustc-hash = { workspace = true }             # FxHashSet for layout cycle guard
 
 [dev-dependencies]
 criterion.workspace = true
-mockall = "0.13"
+mockall = "0.14"
 
 [features]
 default = []
