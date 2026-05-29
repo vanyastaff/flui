@@ -161,7 +161,9 @@ pub mod prelude {
     // Unit types
     // Constructor functions
     // Traits
-    pub use super::traits::{Along, Axis, GeometryOps, Half, IsZero, NumericUnit, Sign, Unit};
+    pub use super::traits::{
+        Along, Axis, FloatUnit, GeometryOps, Half, IsZero, NumericUnit, Sign, Unit,
+    };
     pub use super::{
         bounds::Bounds,
         circle::Circle,
@@ -242,7 +244,7 @@ pub use text_path::{
 // TRAITS
 // =============================================================================
 pub use traits::{
-    Along, ApproxEq, Axis, Double, GeometryOps, Half, IsZero, NumericUnit, Sign, Unit,
+    Along, ApproxEq, Axis, Double, FloatUnit, GeometryOps, Half, IsZero, NumericUnit, Sign, Unit,
 };
 pub use transform::Transform;
 pub use transform2d::Transform2D;
@@ -272,9 +274,6 @@ pub type DevicePoint = Point<DevicePixels>;
 /// Point in scaled pixel coordinates.
 pub type ScaledPoint = Point<ScaledPixels>;
 
-/// Point in raw float coordinates (GPU-ready).
-pub type FloatPoint = Point<Pixels>;
-
 /// Vector in logical pixel coordinates.
 pub type PixelVec2 = Vec2<Pixels>;
 
@@ -283,9 +282,6 @@ pub type DeviceVec2 = Vec2<DevicePixels>;
 
 /// Vector in scaled pixel coordinates.
 pub type ScaledVec2 = Vec2<ScaledPixels>;
-
-/// Vector in raw float coordinates (GPU-ready).
-pub type FloatVec2 = Vec2<Pixels>;
 
 /// Size in logical pixel coordinates.
 pub type PixelSize = Size<Pixels>;
@@ -296,22 +292,19 @@ pub type DeviceSize = Size<DevicePixels>;
 /// Size in scaled pixel coordinates.
 pub type ScaledSize = Size<ScaledPixels>;
 
-/// Size in raw float coordinates (GPU-ready).
-pub type FloatSize = Size<Pixels>;
-
 /// Offset in logical pixel coordinates.
 pub type PixelOffset = Offset<Pixels>;
 
 /// Offset in device (physical) pixel coordinates.
 pub type DeviceOffset = Offset<DevicePixels>;
 
-/// Offset in raw float coordinates (GPU-ready).
-pub type FloatOffset = Offset<Pixels>;
-
-/// Backward-compatible alias for [`Edges<f32>`].
+/// Padding/margin insets in logical pixels.
 ///
-/// Used by the rendering layer for padding/margin insets.
-pub type EdgeInsets = Edges<f32>;
+/// Used by the rendering layer for padding/margin insets. Backed by
+/// [`Edges<Pixels>`] so insets carry the same unit safety as every other
+/// layout quantity — build with [`Edges::all`], [`Edges::symmetric`],
+/// [`Edges::only_left`] (and siblings), or [`Edges::ZERO`].
+pub type EdgeInsets = Edges<Pixels>;
 
 // =============================================================================
 // TESTS

@@ -825,6 +825,66 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# Trigger 14 (N-geom polish pass §U12) — unit-barrier escape hatches in
+# flui-geometry.
+#
+# The `flui-geometry` polish pass (U1/U2/U4/U6) removed the implicit
+# conversions and cross-type operators that let an untyped scalar leak across
+# the unit boundary. This trigger keeps them gone — the next contributor who
+# adds "just one quick conversion" re-opens the bug class the pass closed.
+#
+# Patterns flagged (in crates/flui-geometry/src/ only):
+#   impl From<f32|f64> for <UnitWrapper>     (use px(..) / ::new(..) instead)
+#   impl PartialEq<f32>  for <UnitWrapper>   (compare against px(..))
+#   impl PartialOrd<f32> for <UnitWrapper>
+#   impl Add<f32> for <UnitWrapper>          (Mul/Div<f32> stay — scaling is ok)
+#   impl Sub<f32> for <UnitWrapper>
+#   pub type Float(Point|Vec2|Size|Offset)   (dead GPU-ready aliases)
+#
+# Allowlist marker grammar (±2 line window, as trigger #12):
+#   <decl>  // PORT-CHECK-OK-UNIT: <reason>
+# -----------------------------------------------------------------------------
+trigger14_raw=$(rg --line-number --no-heading \
+    -e '^\s*impl From<(f32|f64)> for ' \
+    -e '^\s*impl (PartialEq|PartialOrd|Add|Sub)<f32> for ' \
+    -e '^\s*pub type Float(Point|Vec2|Size|Offset)\b' \
+    --type rust \
+    --glob '!**/tests/**' \
+    --glob '!**/test*.rs' \
+    crates/flui-geometry/src/ 2>/dev/null \
+  | grep -Ev ':\s*(//!|///|//)' \
+  || true)
+
+trigger14_hits=""
+while IFS= read -r raw_line; do
+  [[ -z "${raw_line}" ]] && continue
+  file_part=$(echo "${raw_line}" | awk -F':' '{print $1}')
+  line_part=$(echo "${raw_line}" | awk -F':' '{print $2}')
+  file_norm=$(echo "${file_part}" | tr '\\' '/')
+  [[ -z "${file_norm}" || -z "${line_part}" ]] && continue
+  start=$(( line_part - 2 ))
+  [[ "${start}" -lt 1 ]] && start=1
+  end=$(( line_part + 2 ))
+  window=$(sed -n "${start},${end}p" "${file_norm}" 2>/dev/null || true)
+  if ! echo "${window}" | grep -q 'PORT-CHECK-OK-UNIT:'; then
+    trigger14_hits="${trigger14_hits}${raw_line}
+"
+  fi
+done <<< "${trigger14_raw}"
+
+if [[ -n "${trigger14_hits// /}" && -n "$(echo "${trigger14_hits}" | tr -d '[:space:]')" ]]; then
+  echo 'VIOLATION 14: U12 unit-barrier escape hatch in flui-geometry (From<scalar>/cross-type f32 op/Float* alias)'
+  echo "see ${trigger_doc} (trigger 14)"
+  echo "${trigger14_hits}"
+  echo ""
+  violations=$((violations + 1))
+else
+  if [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    14: U12 unit-barrier (flui-geometry)"
+  fi
+fi
+
+# -----------------------------------------------------------------------------
 # Trigger 9 (FR-036, Phase 3.1 §U30) — sanctioned `dyn`-boundary registry.
 #
 # Greps every `Box<dyn …>`, reference `dyn …` (in any of the four reference
@@ -1002,7 +1062,7 @@ if [[ "${violations}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "port-check: all 13 refusal triggers + FR-033 grep clean"
+echo "port-check: all 14 refusal triggers + FR-033 grep clean"
 
 # -----------------------------------------------------------------------------
 # Marker summary (verbose mode only). Non-blocking — markers are Phase B

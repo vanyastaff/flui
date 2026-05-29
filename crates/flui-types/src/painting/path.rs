@@ -6,7 +6,7 @@
 use smallvec::SmallVec;
 
 use crate::{
-    geometry::{NumericUnit, Offset, Pixels, Point, Rect, Vec2, px},
+    geometry::{FloatUnit, NumericUnit, Offset, Pixels, Point, Rect, Vec2, px},
     painting::PathFillType,
 };
 
@@ -179,10 +179,10 @@ impl Path {
         // Top-right corner
         if tr_x > px(0.0) || tr_y > px(0.0) {
             let corner_rect = Rect::from_xywh(
-                rect.right() - tr_x * px(2.0),
+                rect.right() - tr_x * 2.0,
                 rect.top(),
-                tr_x * px(2.0),
-                tr_y * px(2.0),
+                tr_x * 2.0,
+                tr_y * 2.0,
             );
             path.add_arc(
                 corner_rect,
@@ -197,10 +197,10 @@ impl Path {
         // Bottom-right corner
         if br_x > px(0.0) || br_y > px(0.0) {
             let corner_rect = Rect::from_xywh(
-                rect.right() - br_x * px(2.0),
-                rect.bottom() - br_y * px(2.0),
-                br_x * px(2.0),
-                br_y * px(2.0),
+                rect.right() - br_x * 2.0,
+                rect.bottom() - br_y * 2.0,
+                br_x * 2.0,
+                br_y * 2.0,
             );
             path.add_arc(corner_rect, 0.0, std::f32::consts::FRAC_PI_2);
         }
@@ -212,9 +212,9 @@ impl Path {
         if bl_x > px(0.0) || bl_y > px(0.0) {
             let corner_rect = Rect::from_xywh(
                 rect.left(),
-                rect.bottom() - bl_y * px(2.0),
-                bl_x * px(2.0),
-                bl_y * px(2.0),
+                rect.bottom() - bl_y * 2.0,
+                bl_x * 2.0,
+                bl_y * 2.0,
             );
             path.add_arc(
                 corner_rect,
@@ -228,8 +228,7 @@ impl Path {
 
         // Top-left corner
         if tl_x > px(0.0) || tl_y > px(0.0) {
-            let corner_rect =
-                Rect::from_xywh(rect.left(), rect.top(), tl_x * px(2.0), tl_y * px(2.0));
+            let corner_rect = Rect::from_xywh(rect.left(), rect.top(), tl_x * 2.0, tl_y * 2.0);
             path.add_arc(
                 corner_rect,
                 std::f32::consts::PI,
@@ -593,7 +592,7 @@ impl Path {
     /// Returns > 0 for left, < 0 for right, 0 for on line.
     #[inline]
     fn is_left(p1: Point<Pixels>, p2: Point<Pixels>, point: Point<Pixels>) -> f32 {
-        ((p2.x - p1.x) * (point.y - p1.y) - (point.x - p1.x) * (p2.y - p1.y)).0
+        (p2.x - p1.x).get() * (point.y - p1.y).get() - (point.x - p1.x).get() * (p2.y - p1.y).get()
     }
 
     /// Count crossings for quadratic bezier curve (approximated).
@@ -704,15 +703,15 @@ impl Path {
     #[inline]
     fn eval_quadratic<T>(p0: Point<T>, p1: Point<T>, p2: Point<T>, t: f32) -> Point<T>
     where
-        T: NumericUnit + Into<f32> + From<f32>,
+        T: NumericUnit + Into<f32> + FloatUnit,
     {
         let t2 = t * t;
         let mt = 1.0 - t;
         let mt2 = mt * mt;
 
         Point::new(
-            T::from(mt2 * p0.x.into() + 2.0 * mt * t * p1.x.into() + t2 * p2.x.into()),
-            T::from(mt2 * p0.y.into() + 2.0 * mt * t * p1.y.into() + t2 * p2.y.into()),
+            T::from_f32(mt2 * p0.x.into() + 2.0 * mt * t * p1.x.into() + t2 * p2.x.into()),
+            T::from_f32(mt2 * p0.y.into() + 2.0 * mt * t * p1.y.into() + t2 * p2.y.into()),
         )
     }
 
@@ -720,7 +719,7 @@ impl Path {
     #[inline]
     fn eval_cubic<T>(p0: Point<T>, p1: Point<T>, p2: Point<T>, p3: Point<T>, t: f32) -> Point<T>
     where
-        T: NumericUnit + Into<f32> + From<f32>,
+        T: NumericUnit + Into<f32> + FloatUnit,
     {
         let t2 = t * t;
         let t3 = t2 * t;
@@ -729,13 +728,13 @@ impl Path {
         let mt3 = mt2 * mt;
 
         Point::new(
-            T::from(
+            T::from_f32(
                 mt3 * p0.x.into()
                     + 3.0 * mt2 * t * p1.x.into()
                     + 3.0 * mt * t2 * p2.x.into()
                     + t3 * p3.x.into(),
             ),
-            T::from(
+            T::from_f32(
                 mt3 * p0.y.into()
                     + 3.0 * mt2 * t * p1.y.into()
                     + 3.0 * mt * t2 * p2.y.into()

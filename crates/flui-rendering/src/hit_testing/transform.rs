@@ -1,6 +1,6 @@
 //! Transform parts for hit test coordinate transformation.
 
-use flui_types::{Matrix4, Offset, geometry::px};
+use flui_types::{Matrix4, Offset, Pixels, geometry::px};
 
 /// A part of a transform that can be applied to or inverted for positions.
 ///
@@ -66,7 +66,7 @@ impl MatrixTransformPart {
     /// Returns true if this is an identity transform.
     pub fn is_identity(&self) -> bool {
         match self {
-            Self::Offset(offset) => offset.dx == 0.0 && offset.dy == 0.0,
+            Self::Offset(offset) => offset.dx == Pixels::ZERO && offset.dy == Pixels::ZERO,
             Self::Matrix(m) => *m == Matrix4::IDENTITY,
         }
     }
@@ -99,8 +99,8 @@ mod tests {
         let transform = MatrixTransformPart::offset(10.0, 20.0);
         let local = Offset::new(px(5.0), px(5.0));
         let global = transform.local_to_global(local);
-        assert_eq!(global.dx, 15.0);
-        assert_eq!(global.dy, 25.0);
+        assert_eq!(global.dx, px(15.0));
+        assert_eq!(global.dy, px(25.0));
     }
 
     #[test]
@@ -108,8 +108,8 @@ mod tests {
         let transform = MatrixTransformPart::offset(10.0, 20.0);
         let global = Offset::new(px(15.0), px(25.0));
         let local = transform.global_to_local(global).unwrap();
-        assert_eq!(local.dx, 5.0);
-        assert_eq!(local.dy, 5.0);
+        assert_eq!(local.dx, px(5.0));
+        assert_eq!(local.dy, px(5.0));
     }
 
     #[test]
@@ -161,8 +161,8 @@ mod tests {
         let transform: MatrixTransformPart = offset.into();
 
         if let MatrixTransformPart::Offset(o) = transform {
-            assert_eq!(o.dx, 10.0);
-            assert_eq!(o.dy, 20.0);
+            assert_eq!(o.dx, px(10.0));
+            assert_eq!(o.dy, px(20.0));
         } else {
             panic!("Expected Offset variant");
         }

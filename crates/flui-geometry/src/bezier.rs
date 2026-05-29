@@ -13,7 +13,7 @@ use std::fmt;
 
 use super::{
     Line, Pixels, Point, Rect, Vec2,
-    traits::{NumericUnit, Unit},
+    traits::{FloatUnit, NumericUnit, Unit},
 };
 
 // ============================================================================
@@ -85,7 +85,7 @@ impl<T: Unit> QuadBez<T> {
 
 impl<T: NumericUnit> QuadBez<T>
 where
-    T: Into<f32> + From<f32>,
+    T: Into<f32> + FloatUnit,
 {
     /// Evaluates the curve at parameter t ∈ [0, 1].
     #[inline]
@@ -103,8 +103,8 @@ where
         let p2y: f32 = self.p2.y.into();
 
         Point::new(
-            T::from(mt2 * p0x + 2.0 * mt * t * p1x + t2 * p2x),
-            T::from(mt2 * p0y + 2.0 * mt * t * p1y + t2 * p2y),
+            T::from_f32(mt2 * p0x + 2.0 * mt * t * p1x + t2 * p2x),
+            T::from_f32(mt2 * p0y + 2.0 * mt * t * p1y + t2 * p2y),
         )
     }
 
@@ -122,8 +122,8 @@ where
         let p2y: f32 = self.p2.y.into();
 
         Vec2::new(
-            T::from(2.0 * mt * (p1x - p0x) + 2.0 * t * (p2x - p1x)),
-            T::from(2.0 * mt * (p1y - p0y) + 2.0 * t * (p2y - p1y)),
+            T::from_f32(2.0 * mt * (p1x - p0x) + 2.0 * t * (p2x - p1x)),
+            T::from_f32(2.0 * mt * (p1y - p0y) + 2.0 * t * (p2y - p1y)),
         )
     }
 
@@ -345,7 +345,7 @@ impl<T: Unit> CubicBez<T> {
 
 impl<T: NumericUnit> CubicBez<T>
 where
-    T: Into<f32> + From<f32>,
+    T: Into<f32> + FloatUnit,
 {
     /// Evaluates the curve at parameter t ∈ [0, 1].
     #[inline]
@@ -367,8 +367,8 @@ where
         let p3y: f32 = self.p3.y.into();
 
         Point::new(
-            T::from(mt3 * p0x + 3.0 * mt2 * t * p1x + 3.0 * mt * t2 * p2x + t3 * p3x),
-            T::from(mt3 * p0y + 3.0 * mt2 * t * p1y + 3.0 * mt * t2 * p2y + t3 * p3y),
+            T::from_f32(mt3 * p0x + 3.0 * mt2 * t * p1x + 3.0 * mt * t2 * p2x + t3 * p3x),
+            T::from_f32(mt3 * p0y + 3.0 * mt2 * t * p1y + 3.0 * mt * t2 * p2y + t3 * p3y),
         )
     }
 
@@ -390,8 +390,12 @@ where
         let p3y: f32 = self.p3.y.into();
 
         Vec2::new(
-            T::from(3.0 * mt2 * (p1x - p0x) + 6.0 * mt * t * (p2x - p1x) + 3.0 * t2 * (p3x - p2x)),
-            T::from(3.0 * mt2 * (p1y - p0y) + 6.0 * mt * t * (p2y - p1y) + 3.0 * t2 * (p3y - p2y)),
+            T::from_f32(
+                3.0 * mt2 * (p1x - p0x) + 6.0 * mt * t * (p2x - p1x) + 3.0 * t2 * (p3x - p2x),
+            ),
+            T::from_f32(
+                3.0 * mt2 * (p1y - p0y) + 6.0 * mt * t * (p2y - p1y) + 3.0 * t2 * (p3y - p2y),
+            ),
         )
     }
 

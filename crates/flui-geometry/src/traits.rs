@@ -123,6 +123,37 @@ pub trait NumericUnit: Unit + Add<Output = Self> + Sub<Output = Self> {
 // Note: f32 impl removed - f32 cannot implement Unit due to Eq + Hash
 // requirements. Use wrapper types like Pixels, PixelDelta, etc. instead.
 
+/// A unit that can bridge to and from a raw `f32` for floating-point math.
+///
+/// Generic geometry routines (Bézier evaluation, line/segment math, shape
+/// scaling) need to drop into scalar arithmetic and lift the result back into
+/// the unit. [`FloatUnit::from_f32`] is the blessed constructor for that — it
+/// is a named method rather than `From<f32>` on purpose, so the public unit
+/// barrier stays closed: there is intentionally no implicit `f32 -> Pixels`
+/// coercion (`.into()`), yet generic math still has an explicit way back.
+///
+/// `Into<f32>` is a supertrait, giving the matching extraction direction.
+pub trait FloatUnit: Unit + Into<f32> {
+    /// Lifts a raw `f32` into this unit.
+    fn from_f32(value: f32) -> Self;
+}
+
+/// Implements [`FloatUnit`] for an `f32`-backed unit type.
+macro_rules! impl_float_unit {
+    ($($ty:ty),+) => {
+        $(
+            impl FloatUnit for $ty {
+                #[inline]
+                fn from_f32(value: f32) -> Self {
+                    Self(value)
+                }
+            }
+        )+
+    };
+}
+
+impl_float_unit!(Pixels, ScaledPixels, Radians, PixelDelta);
+
 // ============================================================================
 // ALONG - Axis-based value access
 // ============================================================================
