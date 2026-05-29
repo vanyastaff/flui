@@ -36,7 +36,7 @@ smallvec = { workspace = true }
 [dev-dependencies]
 criterion = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-proptest = "1.5"
+proptest = "1.11"
 trybuild = "1.0"
 
 [features]
