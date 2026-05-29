@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+// N-geom U5: target intentionally exercises the deprecated raw-scalar device conversions (to_device_pixels(f32)/from_device_pixels).
 //! Basic usage example for flui_types
 //!
 //! This example demonstrates the fundamental types used in FLUI:

@@ -19,7 +19,7 @@
 //! # Examples
 //!
 //! ```rust
-//! use flui_geometry::{DevicePixels, Pixels, device_px, px};
+//! use flui_geometry::{DevicePixels, Pixels, ScaleFactor, device_px, px};
 //!
 //! // Type-safe logical pixels
 //! let width = px(100.0);
@@ -29,8 +29,10 @@
 //! let scaled = width.scale(2.0);
 //! assert_eq!(scaled, px(200.0));
 //!
-//! // Convert to device pixels for a 2x Retina display
-//! let device = width.to_device_pixels(2.0);
+//! // Convert to device pixels for a 2x Retina display, with a typed scale
+//! // factor (compile-time DPI safety — the blessed path).
+//! let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
+//! let device = width.to_device(scale);
 //! assert_eq!(device, device_px(200));
 //! ```
 
@@ -267,6 +269,10 @@ impl Pixels {
     /// Prefer [`Pixels::to_device`] with a typed [`ScaleFactor`] for
     /// compile-time safety.
     #[must_use]
+    #[deprecated(
+        since = "0.1.0",
+        note = "raw-f32 scale factor is DPI-unsafe; use `Pixels::to_device(ScaleFactor<Pixels, DevicePixels>)` (N-geom U5)"
+    )]
     pub fn to_device_pixels(self, scale_factor: f32) -> DevicePixels {
         DevicePixels((self.0 * scale_factor).round() as i32)
     }
@@ -276,6 +282,10 @@ impl Pixels {
     /// Prefer [`DevicePixels::to_logical`] with a typed [`ScaleFactor`] for
     /// compile-time safety.
     #[must_use]
+    #[deprecated(
+        since = "0.1.0",
+        note = "raw-f32 scale factor is DPI-unsafe; use `DevicePixels::to_logical(ScaleFactor<Pixels, DevicePixels>)` (N-geom U5)"
+    )]
     pub fn from_device_pixels(device: DevicePixels, scale_factor: f32) -> Self {
         Pixels(device.0 as f32 / scale_factor)
     }

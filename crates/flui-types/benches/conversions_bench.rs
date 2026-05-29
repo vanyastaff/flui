@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+// N-geom U5: target intentionally exercises the deprecated raw-scalar device conversions (to_device_pixels(f32)/from_device_pixels).
 //! Unit conversion benchmarks
 //!
 //! Performance targets: Conversions should be zero-cost or near-zero-cost
