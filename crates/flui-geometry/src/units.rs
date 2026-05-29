@@ -302,6 +302,32 @@ impl Pixels {
         self.0.to_bits()
     }
 
+    /// Rounds to the nearest integer and returns it as `i32`.
+    ///
+    /// Explicit replacement for the removed lossy `From<Pixels> for i32` (U11):
+    /// rounding (rather than truncation) is the intended behaviour and is named
+    /// at the call site. Saturates to `i32::MIN`/`i32::MAX` for out-of-range or
+    /// non-finite values (`f32 as i32` is saturating since Rust 1.45).
+    #[inline]
+    #[must_use]
+    pub fn to_i32_round(self) -> i32 {
+        self.0.round() as i32
+    }
+
+    /// Rounds and clamps to the `u32` range (negatives become `0`).
+    #[inline]
+    #[must_use]
+    pub fn to_u32_round_clamped(self) -> u32 {
+        self.0.round().max(0.0) as u32
+    }
+
+    /// Rounds and clamps to the `usize` range (negatives become `0`).
+    #[inline]
+    #[must_use]
+    pub fn to_usize_round_clamped(self) -> usize {
+        self.0.round().max(0.0) as usize
+    }
+
     /// Positive infinity.
     pub const INFINITY: Pixels = Pixels(f32::INFINITY);
 
@@ -517,26 +543,9 @@ impl From<Pixels> for f64 {
     }
 }
 
-impl From<Pixels> for i32 {
-    #[inline]
-    fn from(pixels: Pixels) -> Self {
-        pixels.0 as i32
-    }
-}
-
-impl From<Pixels> for u32 {
-    #[inline]
-    fn from(pixels: Pixels) -> Self {
-        pixels.0 as u32
-    }
-}
-
-impl From<Pixels> for usize {
-    #[inline]
-    fn from(pixels: Pixels) -> Self {
-        pixels.0 as usize
-    }
-}
+// NOTE (U11): the lossy `From<Pixels> for i32/u32/usize` impls were removed.
+// `From`/`.into()` should be reserved for lossless conversions; rounding and
+// clamping must be explicit at the call site. Use the `to_*` methods below.
 
 // Formatting
 impl Display for Pixels {
