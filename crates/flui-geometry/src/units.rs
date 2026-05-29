@@ -51,11 +51,44 @@ use super::traits::{NumericUnit, Unit};
 ///
 /// This is the primary unit for UI layout calculations, independent of device
 /// pixel density.
+///
+/// # Unit barrier
+///
+/// `Pixels` deliberately rejects the operations that would let an untyped
+/// scalar leak across the unit boundary. There is no `From<f32>`, no
+/// `Pixels == f32`, no `Pixels + f32`, and no `Pixels * Pixels`. Construct
+/// with [`px`] / [`Pixels::new`] / [`Pixels::from_i32`] and drop back to a
+/// bare scalar with [`Pixels::get`]. Scaling by a dimensionless factor
+/// (`Pixels * f32`, `Pixels / f32`) stays legal.
+///
+/// The following are compile-time errors and stay that way (regression guard):
+///
+/// ```compile_fail
+/// use flui_geometry::Pixels;
+/// // No implicit scalar -> Pixels conversion (U1).
+/// let _: Pixels = 10.0_f32.into();
+/// ```
+///
+/// ```compile_fail
+/// use flui_geometry::px;
+/// // No cross-type comparison / arithmetic against bare f32 (U2).
+/// let _ = px(10.0) == 10.0;
+/// ```
+///
+/// ```compile_fail
+/// use flui_geometry::{px, Pixels};
+/// // px * px is area, not length, so it has no `Pixels` result (U4).
+/// let _: Pixels = px(10.0) * px(2.0);
+/// ```
 #[derive(Copy, Clone, Default, PartialEq)]
 #[repr(transparent)]
 pub struct Pixels(pub f32);
 
-/// Shorthand constructor for `Pixels`.
+/// Shorthand constructor for [`Pixels`].
+///
+/// This is the canonical `f32 -> Pixels` entry point — there is intentionally
+/// no `From<f32> for Pixels`, so `px` (or [`Pixels::new`]) is the only blessed
+/// way to cross the scalar boundary into a logical-pixel value.
 #[inline]
 pub const fn px(value: f32) -> Pixels {
     Pixels(value)
@@ -344,13 +377,9 @@ impl SubAssign for Pixels {
     }
 }
 
-impl Mul<Pixels> for Pixels {
-    type Output = Self;
-    #[inline]
-    fn mul(self, rhs: Pixels) -> Self::Output {
-        Self(self.0 * rhs.0)
-    }
-}
+// NOTE: `Mul<Pixels> for Pixels` is deliberately NOT implemented — `px * px`
+// is an area (`px²`), not a length, and returning `Pixels` would mislabel it.
+// Use `Size::area()` for the area path, or `.get()` to drop into raw `f32`.
 
 impl Mul<Pixels> for f32 {
     type Output = Pixels;
@@ -400,12 +429,8 @@ impl Mul<f32> for Pixels {
     }
 }
 
-impl MulAssign<Pixels> for Pixels {
-    #[inline]
-    fn mul_assign(&mut self, rhs: Pixels) {
-        self.0 *= rhs.0;
-    }
-}
+// NOTE: `MulAssign<Pixels> for Pixels` is deliberately NOT implemented — it
+// would land an area back into a length variable (same defect as `Mul<Pixels>`).
 
 impl MulAssign<f32> for Pixels {
     #[inline]
@@ -430,12 +455,9 @@ impl Div<f32> for Pixels {
     }
 }
 
-impl DivAssign<Pixels> for Pixels {
-    #[inline]
-    fn div_assign(&mut self, rhs: Pixels) {
-        self.0 /= rhs.0;
-    }
-}
+// NOTE: `DivAssign<Pixels> for Pixels` is deliberately NOT implemented.
+// `Div<Pixels> for Pixels` correctly yields a dimensionless `f32` ratio, so
+// `a /= b` would put that ratio back into a length variable. Use `let r = a / b`.
 
 impl DivAssign<f32> for Pixels {
     #[inline]
@@ -467,103 +489,19 @@ impl Neg for Pixels {
     }
 }
 
-// Cross-type comparisons with f32
-impl PartialEq<f32> for Pixels {
-    #[inline]
-    fn eq(&self, other: &f32) -> bool {
-        self.0 == *other
-    }
-}
-
-impl PartialEq<Pixels> for f32 {
-    #[inline]
-    fn eq(&self, other: &Pixels) -> bool {
-        *self == other.0
-    }
-}
-
-impl PartialOrd<f32> for Pixels {
-    #[inline]
-    fn partial_cmp(&self, other: &f32) -> Option<std::cmp::Ordering> {
-        self.0.partial_cmp(other)
-    }
-}
-
-impl PartialOrd<Pixels> for f32 {
-    #[inline]
-    fn partial_cmp(&self, other: &Pixels) -> Option<std::cmp::Ordering> {
-        self.partial_cmp(&other.0)
-    }
-}
-
-// Cross-type arithmetic with f32
-impl Add<f32> for Pixels {
-    type Output = Pixels;
-    #[inline]
-    fn add(self, rhs: f32) -> Self::Output {
-        Pixels(self.0 + rhs)
-    }
-}
-
-impl Add<Pixels> for f32 {
-    type Output = Pixels;
-    #[inline]
-    fn add(self, rhs: Pixels) -> Self::Output {
-        Pixels(self + rhs.0)
-    }
-}
-
-impl Sub<f32> for Pixels {
-    type Output = Pixels;
-    #[inline]
-    fn sub(self, rhs: f32) -> Self::Output {
-        Pixels(self.0 - rhs)
-    }
-}
-
-impl Sub<Pixels> for f32 {
-    type Output = Pixels;
-    #[inline]
-    fn sub(self, rhs: Pixels) -> Self::Output {
-        Pixels(self - rhs.0)
-    }
-}
+// NOTE: cross-type comparison (`PartialEq<f32>` / `PartialOrd<f32>`) and
+// cross-type arithmetic (`Add<f32>` / `Sub<f32>`) against bare `f32` are
+// deliberately NOT implemented. They are dimensionally ill-defined and let a
+// forgotten `.0` literal silently defeat the unit barrier. Use `px(literal)`
+// or `pixels.get()` at the boundary instead. Scaling (`Mul<f32>` / `Div<f32>`)
+// stays because multiplying a length by a dimensionless factor is valid.
+// Regression guard: see the `compile_fail` doctests on `Pixels`.
 
 // Conversions
-impl From<f32> for Pixels {
-    #[inline]
-    fn from(value: f32) -> Self {
-        Self(value)
-    }
-}
-
-impl From<f64> for Pixels {
-    #[inline]
-    fn from(value: f64) -> Self {
-        Self(value as f32)
-    }
-}
-
-impl From<i32> for Pixels {
-    #[inline]
-    fn from(value: i32) -> Self {
-        Self(value as f32)
-    }
-}
-
-impl From<u32> for Pixels {
-    #[inline]
-    fn from(value: u32) -> Self {
-        Self(value as f32)
-    }
-}
-
-impl From<usize> for Pixels {
-    #[inline]
-    fn from(value: usize) -> Self {
-        Self(value as f32)
-    }
-}
+// NOTE: `From<f32/f64/i32/u32/usize> for Pixels` is deliberately NOT
+// implemented. `px(value)` / `Pixels::new(value)` / `Pixels::from_i32(value)`
+// are the only blessed `scalar -> Pixels` paths, so an implicit `.into()` can
+// never silently inject an untyped scalar into a `Pixels` context.
 
 impl From<Pixels> for f32 {
     #[inline]
@@ -924,6 +862,10 @@ impl From<Pixels> for PixelDelta {
     }
 }
 
+// PixelDelta models a platform scroll/pointer delta — a measured input delta
+// (native f64 from the OS event stream), not a logical-pixel coordinate, so
+// explicit f64 construction here does not weaken the Pixels unit barrier.
+// PORT-CHECK-OK-UNIT: platform scroll/pointer delta, not a coordinate.
 impl From<f64> for PixelDelta {
     #[inline]
     fn from(value: f64) -> Self {
@@ -2126,8 +2068,8 @@ impl std::str::FromStr for Radians {
 /// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
 ///
 /// let logical = px(100.0);
-/// let physical = scale.transform_scalar(logical);
-/// assert_eq!(physical.get(), 200.0);
+/// let physical = logical.to_device(scale);
+/// assert_eq!(physical.get(), 200);
 /// ```
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct ScaleFactor<Src: Unit, Dst: Unit> {
@@ -2151,14 +2093,12 @@ impl<Src: Unit, Dst: Unit> ScaleFactor<Src, Dst> {
         self.factor
     }
 
-    /// Transform a scalar value from source to destination units
-    #[inline]
-    pub fn transform_scalar<T>(&self, value: T) -> T
-    where
-        T: Mul<f32, Output = T>,
-    {
-        value * self.factor
-    }
+    // NOTE: a generic `transform_scalar<T>(value: T) -> T` used to live here.
+    // It was removed: its signature ignored the `Src`/`Dst` phantoms (returning
+    // the same type it received), so it could not express a real unit change
+    // and its own doc-example contradicted the type-safety it implied. Use the
+    // typed conversions instead — `Pixels::to_device(ScaleFactor<Pixels,
+    // DevicePixels>)` and `DevicePixels::to_logical(..)`.
 
     /// Get the inverse scale factor (Dst -> Src)
     #[inline]

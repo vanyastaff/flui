@@ -8,7 +8,7 @@ use std::{
 
 use super::{
     Pixels, Point, Vec2, px,
-    traits::{Along, Axis, Half, IsZero, NumericUnit, Unit},
+    traits::{Along, Axis, FloatUnit, Half, IsZero, NumericUnit, Unit},
 };
 
 /// A 2D size with width and height.
@@ -151,7 +151,7 @@ impl<T: NumericUnit> Size<T> {
 
 impl<T: NumericUnit> Size<T>
 where
-    T: Into<f32> + From<f32>,
+    T: Into<f32> + FloatUnit,
 {
     /// Returns true if width or height is zero.
     ///
@@ -566,7 +566,7 @@ impl Size<Pixels> {
     #[inline]
     #[must_use]
     pub fn perimeter(self) -> Pixels {
-        px(2.0) * (self.width + self.height)
+        (self.width + self.height) * 2.0
     }
 
     /// Computes the diagonal length (Pythagorean theorem).

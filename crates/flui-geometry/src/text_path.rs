@@ -40,7 +40,7 @@ use std::f64::consts::{PI, TAU};
 use super::{Pixels, px};
 use crate::{
     Point,
-    traits::{NumericUnit, Unit},
+    traits::{FloatUnit, NumericUnit, Unit},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -115,21 +115,21 @@ pub fn grid_position<T>(
     char_height: f64,
 ) -> Point<T>
 where
-    T: NumericUnit + From<f32>,
+    T: NumericUnit + FloatUnit,
 {
     let row = char_index / chars_per_row.max(1);
     let col = char_index % chars_per_row.max(1);
 
     Point::new(
-        T::from((col as f64 * char_width) as f32),
-        T::from((row as f64 * char_height) as f32),
+        T::from_f32((col as f64 * char_width) as f32),
+        T::from_f32((row as f64 * char_height) as f32),
     )
 }
 
 #[inline]
 pub fn bezier_point<T>(t: f64, p0: Point<T>, p1: Point<T>, p2: Point<T>) -> Point<T>
 where
-    T: NumericUnit + Into<f32> + From<f32>,
+    T: NumericUnit + Into<f32> + FloatUnit,
 {
     let t = t.clamp(0.0, 1.0);
     let mt = 1.0 - t;
@@ -142,7 +142,7 @@ where
     let y =
         mt2 as f32 * p0.y.into() + 2.0 * (mt * t) as f32 * p1.y.into() + t2 as f32 * p2.y.into();
 
-    Point::new(T::from(x), T::from(y))
+    Point::new(T::from_f32(x), T::from_f32(y))
 }
 
 #[inline]

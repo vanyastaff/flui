@@ -43,7 +43,7 @@
 //!
 //! assert!(a.intersects(&b));
 //! let intersection = a.intersect(&b);
-//! assert_eq!(intersection.size.width, 5.0);
+//! assert_eq!(intersection.size.width.get(), 5.0);
 //! ```
 
 use std::{

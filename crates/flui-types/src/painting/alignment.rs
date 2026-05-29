@@ -108,8 +108,8 @@ impl Alignment {
         let cx = left + half_w;
         let cy = top + half_h;
         Offset::new(
-            Pixels::from(cx + self.x * half_w),
-            Pixels::from(cy + self.y * half_h),
+            Pixels::new(cx + self.x * half_w),
+            Pixels::new(cy + self.y * half_h),
         )
     }
 }
@@ -127,7 +127,7 @@ mod tests {
     use crate::geometry::{Pixels, Rect};
 
     fn px(v: f32) -> Pixels {
-        Pixels::from(v)
+        Pixels::new(v)
     }
 
     #[test]
