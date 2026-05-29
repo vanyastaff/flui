@@ -68,6 +68,10 @@ bytemuck = { version = "1", features = ["derive"] }
 # mint: zero-cost bridge layer (glam <-> kurbo) for the painting/curve seam.
 mint = { version = "0.5", optional = true }
 
+# kurbo: f64 Bézier/curve math for the painting layer. The bridge
+# (src/bridges/kurbo.rs) is gated behind `feature = "kurbo"` (PR 3, U8).
+kurbo = { version = "0.13", optional = true }
+
 [dev-dependencies]
 proptest = "1.5"
 
@@ -80,8 +84,11 @@ serde = ["dep:serde"]
 # mint interoperability (own-type <-> mint bridges)
 mint = ["dep:mint"]
 
+# kurbo interop bridge (flui-geometry/src/bridges/kurbo.rs) — gates Core.2.
+kurbo = ["dep:kurbo"]
+
 # Enable all features
-full = ["serde", "mint"]
+full = ["serde", "mint", "kurbo"]
 
 [package.metadata.docs.rs]
 all-features = true
