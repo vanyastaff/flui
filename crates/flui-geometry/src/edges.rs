@@ -360,10 +360,10 @@ impl Edges<super::units::Pixels> {
         }
     }
 
-    /// Scales all edges by the given factor, converting to scaled pixels.
+    /// Scales all edges by the given factor.
     #[must_use]
     #[inline]
-    pub fn scale(&self, factor: f32) -> Edges<super::units::ScaledPixels> {
+    pub fn scale(&self, factor: f32) -> Edges<super::units::Pixels> {
         Edges {
             top: self.top.scale(factor),
             right: self.right.scale(factor),

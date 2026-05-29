@@ -1,10 +1,11 @@
+#![allow(deprecated)]
+// N-geom U5: target intentionally exercises the deprecated raw-scalar device conversions (to_device_pixels(f32)/from_device_pixels).
 //! Unit conversion example for flui_types
 //!
 //! This example demonstrates the layout-to-render pipeline with unit
 //! conversions:
 //! - Pixels: Logical units used in layout (density-independent)
 //! - DevicePixels: Physical pixels on the screen (GPU coordinates)
-//! - ScaledPixels: Intermediate representation for scaling operations
 //!
 //! This showcases how FLUI handles different display densities (1x, 2x retina,
 //! 1.5x, etc.)

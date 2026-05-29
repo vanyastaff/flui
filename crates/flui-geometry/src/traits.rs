@@ -8,7 +8,7 @@ use std::{
     ops::{Add, Mul, Neg, Sub},
 };
 
-use super::{DevicePixels, PixelDelta, Pixels, Radians, Rems, ScaledPixels};
+use super::{DevicePixels, PixelDelta, Pixels, Radians, Rems};
 
 // ============================================================================
 // AXIS - 2D cartesian axes
@@ -152,7 +152,7 @@ macro_rules! impl_float_unit {
     };
 }
 
-impl_float_unit!(Pixels, ScaledPixels, Radians, PixelDelta);
+impl_float_unit!(Pixels, Radians, PixelDelta);
 
 // ============================================================================
 // ALONG - Axis-based value access
@@ -235,7 +235,7 @@ macro_rules! impl_half_f32_unit {
     };
 }
 
-impl_half_f32_unit!(Pixels, Rems, ScaledPixels, Radians, PixelDelta);
+impl_half_f32_unit!(Pixels, Rems, Radians, PixelDelta);
 
 impl Half for DevicePixels {
     #[inline]
@@ -294,7 +294,7 @@ macro_rules! impl_double_f32_unit {
     };
 }
 
-impl_double_f32_unit!(Pixels, Rems, ScaledPixels, Radians, PixelDelta);
+impl_double_f32_unit!(Pixels, Rems, Radians, PixelDelta);
 
 impl Double for DevicePixels {
     #[inline]
@@ -367,7 +367,7 @@ macro_rules! impl_is_zero_f32_unit {
     };
 }
 
-impl_is_zero_f32_unit!(Pixels, Rems, ScaledPixels, Radians, PixelDelta);
+impl_is_zero_f32_unit!(Pixels, Rems, Radians, PixelDelta);
 
 impl IsZero for DevicePixels {
     #[inline]
@@ -518,7 +518,7 @@ macro_rules! impl_sign_f32_unit {
     };
 }
 
-impl_sign_f32_unit!(Pixels, Rems, ScaledPixels, Radians, PixelDelta);
+impl_sign_f32_unit!(Pixels, Rems, Radians, PixelDelta);
 
 impl Sign for DevicePixels {
     #[inline]
@@ -604,7 +604,7 @@ macro_rules! impl_approx_eq_f32_unit {
     };
 }
 
-impl_approx_eq_f32_unit!(Pixels, Rems, ScaledPixels, Radians, PixelDelta);
+impl_approx_eq_f32_unit!(Pixels, Rems, Radians, PixelDelta);
 
 impl ApproxEq for DevicePixels {
     #[inline]

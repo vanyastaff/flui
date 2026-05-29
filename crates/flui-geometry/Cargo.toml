@@ -57,11 +57,20 @@ thiserror = { workspace = true }
 # Optional dependencies
 serde = { workspace = true, optional = true }
 
-# Direct glam integration (optional, for nalgebra/cgmath/kurbo interop downstream)
-glam = { version = "0.30", optional = true }
+# Linear-algebra backend (Option D, N-geom PR 2): glam provides SIMD-by-default
+# matrix/vector math + `bytemuck` Pod derives + the `mint` interop cascade.
+# Non-optional — Matrix4 (and, in later PR-2 steps, Vec2/Transform) delegate to it.
+glam = { version = "0.30", features = ["bytemuck", "mint"] }
 
-# mint: Zero-cost conversions with glam, nalgebra, cgmath, kurbo
+# Pod/Zeroable derives for zero-copy GPU upload (Matrix4 + future vertex structs).
+bytemuck = { version = "1", features = ["derive"] }
+
+# mint: zero-cost bridge layer (glam <-> kurbo) for the painting/curve seam.
 mint = { version = "0.5", optional = true }
+
+# kurbo: f64 Bézier/curve math for the painting layer. The bridge
+# (src/bridges/kurbo.rs) is gated behind `feature = "kurbo"` (PR 3, U8).
+kurbo = { version = "0.13", optional = true }
 
 [dev-dependencies]
 proptest = "1.5"
@@ -72,18 +81,14 @@ default = []
 # Serde support for all geometry types
 serde = ["dep:serde"]
 
-# Direct glam integration
-glam = ["dep:glam"]
-
-# mint interoperability
+# mint interoperability (own-type <-> mint bridges)
 mint = ["dep:mint"]
 
-# SIMD acceleration (auto-detects SSE/AVX on x86_64 or NEON on aarch64).
-# Gates SSE/NEON code paths in matrix4 multiplication; falls back to scalar.
-simd = []
+# kurbo interop bridge (flui-geometry/src/bridges/kurbo.rs) — gates Core.2.
+kurbo = ["dep:kurbo"]
 
 # Enable all features
-full = ["serde", "glam", "mint", "simd"]
+full = ["serde", "mint", "kurbo"]
 
 [package.metadata.docs.rs]
 all-features = true

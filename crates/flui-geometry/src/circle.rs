@@ -435,22 +435,6 @@ impl Circle<Pixels> {
 }
 
 // ============================================================================
-// Specialized implementations for Pixels
-// ============================================================================
-
-impl Circle<super::Pixels> {
-    /// Scales the circle to scaled pixels by the given factor.
-    #[inline]
-    #[must_use]
-    pub fn scale_to_scaled(&self, factor: f32) -> Circle<super::ScaledPixels> {
-        Circle {
-            center: self.center.scale(factor),
-            radius: super::ScaledPixels(self.radius.get() * factor),
-        }
-    }
-}
-
-// ============================================================================
 // Display
 // ============================================================================
 

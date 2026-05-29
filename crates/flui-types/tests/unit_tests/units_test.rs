@@ -3,7 +3,7 @@
 //! Tests the core Unit trait and its implementations (Pixels, DevicePixels, etc.)
 //! following the contracts defined in specs/001-flui-types/contracts/README.md
 
-use flui_types::geometry::{DevicePixels, Pixels, Radians, ScaledPixels};
+use flui_types::geometry::{DevicePixels, Pixels, Radians};
 use flui_types::geometry::traits::Unit;
 
 #[test]
@@ -42,25 +42,6 @@ fn test_device_pixels_one() {
 fn test_device_pixels_min_max() {
     assert_eq!(DevicePixels::MIN, DevicePixels(i32::MIN));
     assert_eq!(DevicePixels::MAX, DevicePixels(i32::MAX));
-}
-
-#[test]
-fn test_scaled_pixels_zero() {
-    let zero = ScaledPixels::zero();
-    assert_eq!(zero, ScaledPixels(0.0));
-    assert_eq!(zero, ScaledPixels::default());
-}
-
-#[test]
-fn test_scaled_pixels_one() {
-    let one = ScaledPixels::one();
-    assert_eq!(one, ScaledPixels(1.0));
-}
-
-#[test]
-fn test_scaled_pixels_min_max() {
-    assert_eq!(ScaledPixels::MIN, ScaledPixels(f32::MIN));
-    assert_eq!(ScaledPixels::MAX, ScaledPixels(f32::MAX));
 }
 
 #[test]
