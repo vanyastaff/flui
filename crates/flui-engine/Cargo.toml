@@ -57,7 +57,7 @@ ttf-parser = { workspace = true }
 lyon = "1.0.16"
 
 # Math for GPU rendering
-glam = { version = "0.30.9", features = ["serde", "bytemuck"] }
+glam = { version = "0.33.0", features = ["serde", "bytemuck"] }
 
 # === Utilities ===
 pollster = { workspace = true }
