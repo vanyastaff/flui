@@ -796,7 +796,10 @@ impl fmt::Display for DiagnosticsNode {
 pub trait Diagnosticable: fmt::Debug {
     /// Create a diagnostics node for this object.
     fn to_diagnostics_node(&self) -> DiagnosticsNode {
-        let type_name = std::any::type_name::<Self>();
+        // F27: strip the module path, keeping only the final type segment.
+        // "flui_rendering::objects::RenderPadding" -> "RenderPadding".
+        let full = std::any::type_name::<Self>();
+        let type_name = full.rsplit("::").next().unwrap_or(full);
         let mut node = DiagnosticsNode::new(type_name);
         let mut builder = DiagnosticsBuilder::new();
         self.debug_fill_properties(&mut builder);
@@ -1159,6 +1162,24 @@ mod tests {
         let prop = DiagnosticsProperty::new("children", "[..]")
             .with_kind(DiagnosticsPropertyKind::Iterable { count: 3 });
         assert_eq!(prop.kind, DiagnosticsPropertyKind::Iterable { count: 3 });
+    }
+
+    #[test]
+    fn to_diagnostics_node_uses_short_type_name() {
+        #[derive(Debug)]
+        struct MyWidget;
+        impl Diagnosticable for MyWidget {}
+
+        let node = MyWidget.to_diagnostics_node();
+        // `type_name::<MyWidget>()` includes the full module path
+        // (e.g. `flui_foundation::debug::tests::...::MyWidget`); after the
+        // F27 fix the node name must be stripped to just "MyWidget".
+        assert_eq!(
+            node.name(),
+            Some("MyWidget"),
+            "type_name should be short (no module path), got: {:?}",
+            node.name()
+        );
     }
 
     #[test]
