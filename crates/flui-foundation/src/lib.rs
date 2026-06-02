@@ -139,7 +139,6 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 // Core modules - fundamental types with minimal dependencies
-pub mod assert; // PORT-CHECK-OK-SP4: assert API surface; consumed via flui_foundation::assert! macro re-export
 pub mod binding;
 pub mod callbacks;
 pub mod consts;
@@ -266,10 +265,6 @@ pub mod prelude {
         ViewKey,
         VoidCallback,
         WithKey,
-    };
-    // Re-export assertion macros
-    pub use crate::{
-        debug_assert_finite, debug_assert_not_nan, debug_assert_range, debug_assert_valid,
     };
 }
 
