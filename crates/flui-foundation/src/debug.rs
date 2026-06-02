@@ -16,7 +16,7 @@ use std::{fmt, str::FromStr};
 ///
 /// let level = DiagnosticLevel::Info;
 /// assert!(level > DiagnosticLevel::Debug);
-/// println!("{}", level); // "info"
+/// assert_eq!(level.to_string(), "info");
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -143,7 +143,7 @@ impl std::error::Error for ParseDiagnosticLevelError {}
 /// use flui_foundation::DiagnosticsTreeStyle;
 ///
 /// let style = DiagnosticsTreeStyle::Sparse;
-/// println!("{}", style); // "sparse"
+/// assert_eq!(style.to_string(), "sparse");
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -248,7 +248,7 @@ impl std::error::Error for ParseDiagnosticsTreeStyleError {}
 /// let prop = DiagnosticsProperty::new("width", 100);
 /// assert_eq!(prop.name(), "width");
 /// assert_eq!(prop.value(), "100");
-/// println!("{}", prop); // "width: 100"
+/// assert_eq!(prop.to_string(), "width: 100");
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -429,7 +429,9 @@ impl fmt::Display for DiagnosticsProperty {
 ///
 /// let mut node = DiagnosticsNode::new("MyView");
 /// node.add_property(DiagnosticsProperty::new("width", 100));
-/// println!("{}", node);
+/// let rendered = node.to_string();
+/// assert!(rendered.contains("MyView"));
+/// assert!(rendered.contains("width"));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

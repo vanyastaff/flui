@@ -42,7 +42,7 @@
 //! // Observable values for reactive UI
 //! let mut notifier = ChangeNotifier::new();
 //! let listener_id = notifier.add_listener(Arc::new(|| {
-//!     println!("Value changed!");
+//!     // react to the change (e.g. mark a widget dirty)
 //! }));
 //!
 //! // Notify listeners of changes
@@ -88,14 +88,17 @@
 //!
 //! // Basic change notification
 //! let mut notifier = ChangeNotifier::new();
-//! let listener = notifier.add_listener(Arc::new(|| println!("Changed!")));
+//! let listener = notifier.add_listener(Arc::new(|| {
+//!     // react to the change
+//! }));
 //!
 //! // Value-holding notifier
 //! let mut value_notifier = ValueNotifier::new(42);
 //! let value_listener = value_notifier.add_listener(Arc::new(|| {
-//!     println!("Value changed!");
+//!     // react to the value change
 //! }));
 //! value_notifier.set_value(100);
+//! assert_eq!(*value_notifier.value(), 100);
 //! ```
 //!
 //! ### Diagnostics
@@ -107,7 +110,8 @@
 //!     .with_property(DiagnosticsProperty::new("width", 100.0))
 //!     .with_property(DiagnosticsProperty::new("height", 200.0));
 //!
-//! println!("{}", node.to_string());
+//! let rendered = node.to_string();
+//! assert!(rendered.contains("MyWidget"));
 //! ```
 //!
 //! ## Thread Safety

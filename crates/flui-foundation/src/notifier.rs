@@ -10,13 +10,21 @@
 //! # Example
 //!
 //! ```rust
-//! use std::sync::Arc;
+//! use std::sync::{
+//!     Arc,
+//!     atomic::{AtomicU32, Ordering},
+//! };
 //!
 //! use flui_foundation::notifier::{ChangeNotifier, Listenable};
 //!
 //! let notifier = ChangeNotifier::new();
-//! let id = notifier.add_listener(Arc::new(|| println!("Changed!")));
+//! let count = Arc::new(AtomicU32::new(0));
+//! let count2 = Arc::clone(&count);
+//! let _id = notifier.add_listener(Arc::new(move || {
+//!     count2.fetch_add(1, Ordering::Relaxed);
+//! }));
 //! notifier.notify_listeners();
+//! assert_eq!(count.load(Ordering::Relaxed), 1);
 //! ```
 //!
 //! # Note
@@ -61,13 +69,21 @@ pub type ListenerCallback = Arc<dyn Fn() + Send + Sync + 'static>;
 /// # Example
 ///
 /// ```rust
-/// use std::sync::Arc;
+/// use std::sync::{
+///     Arc,
+///     atomic::{AtomicU32, Ordering},
+/// };
 ///
 /// use flui_foundation::notifier::{ChangeNotifier, Listenable};
 ///
 /// let notifier = ChangeNotifier::new();
-/// let id = notifier.add_listener(Arc::new(|| println!("Changed!")));
+/// let count = Arc::new(AtomicU32::new(0));
+/// let count2 = Arc::clone(&count);
+/// let id = notifier.add_listener(Arc::new(move || {
+///     count2.fetch_add(1, Ordering::Relaxed);
+/// }));
 /// notifier.notify_listeners();
+/// assert_eq!(count.load(Ordering::Relaxed), 1);
 /// notifier.remove_listener(id);
 /// ```
 pub trait Listenable: Send + Sync {
@@ -95,14 +111,14 @@ pub trait Listenable: Send + Sync {
 ///
 /// use flui_foundation::notifier::{Listenable, ValueListenable, ValueNotifier};
 ///
-/// fn print_on_change<T: std::fmt::Debug + Clone + Send + Sync>(
+/// fn current<T: std::fmt::Debug + Clone + Send + Sync>(
 ///     listenable: &impl ValueListenable<T>,
-/// ) {
-///     println!("Current value: {:?}", listenable.value());
+/// ) -> String {
+///     format!("{:?}", listenable.value())
 /// }
 ///
 /// let notifier = ValueNotifier::new(42);
-/// print_on_change(&notifier);
+/// assert_eq!(current(&notifier), "42");
 /// ```
 pub trait ValueListenable<T>: Listenable {
     /// The current value of the object.
@@ -224,13 +240,25 @@ impl ChangeNotifier {
     #[inline]
     fn check_disposed(&self) -> bool {
         if self.is_disposed.load(Ordering::Acquire) {
-            debug_assert!(
-                false,
+            // F20: cfg-explicit layout. The previous `debug_assert!(false, ..)`
+            // + `tracing::warn!` in one block was misleading — in debug builds
+            // the assert diverges, so the warn! below it was dead; in release
+            // builds the assert compiled out and only the warn! ran. Splitting
+            // on `cfg(debug_assertions)` makes the intent unambiguous: debug
+            // panics immediately (hard contract violation), release degrades
+            // gracefully with a warning (Flutter parity).
+            #[cfg(debug_assertions)]
+            panic!(
                 "ChangeNotifier used after dispose: once dispose() has been \
                  called, the notifier can no longer be used"
             );
-            tracing::warn!("ChangeNotifier used after dispose");
-            return true;
+            // The release-only block is unreachable in debug builds because the
+            // `panic!` above diverges; `allow(unreachable_code)` documents that.
+            #[allow(unreachable_code)]
+            {
+                tracing::warn!("ChangeNotifier used after dispose");
+                return true;
+            }
         }
         false
     }
@@ -251,6 +279,10 @@ impl ChangeNotifier {
     ///   If a callback panics, the panic payload is logged via
     ///   `tracing::error!` and iteration continues with the next listener
     ///   (F6). One panicking listener does NOT abort the rest.
+    ///
+    /// Listeners fire in registration order (`ListenerId` ascending), matching
+    /// Flutter's array-order iteration; the backing `HashMap` does not preserve
+    /// insertion order, so the snapshot is sorted by id before firing.
     ///
     /// Post-snapshot *additions* are NOT fired in the current notify cycle
     /// (same as Flutter); only listeners present at snapshot time and still
@@ -274,12 +306,24 @@ impl ChangeNotifier {
         // ≥5 listeners spills to the heap. The snapshot now carries
         // `(ListenerId, ListenerCallback)` pairs so each entry can be
         // re-checked against the live registration before firing (F5).
-        let snapshot: smallvec::SmallVec<[(ListenerId, ListenerCallback); 4]> = self
+        //
+        // F16: `SmallVec` is chosen over `tinyvec::ArrayVec` deliberately.
+        // `ListenerCallback` is `Arc<dyn Fn() + Send + Sync>`, which does NOT
+        // implement `Default`; `tinyvec` requires `T: Default` for every
+        // element type, so it cannot store these callbacks. `SmallVec` imposes
+        // no `Default` bound, so it is the only inline-storage option here.
+        let mut snapshot: smallvec::SmallVec<[(ListenerId, ListenerCallback); 4]> = self
             .listeners
             .lock()
             .iter()
             .map(|(&id, cb)| (id, Arc::clone(cb)))
             .collect();
+        // Fire in registration order (Flutter parity). `ListenerId` is assigned
+        // monotonically by `next_id`, so sorting by id reproduces the order in
+        // which listeners were added — the backing `HashMap` does not preserve
+        // insertion order. This also makes the remove-during-notify contract
+        // (F5) observe a deterministic ordering rather than arbitrary hash order.
+        snapshot.sort_unstable_by_key(|(id, _)| *id);
 
         for (id, callback) in &snapshot {
             // F5: re-check registration before firing. Acquires the lock
