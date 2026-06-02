@@ -57,6 +57,11 @@ use std::{
 /// it into the sentinel state.
 static KEY_COUNTER: AtomicU64 = AtomicU64::new(1);
 
+/// Runtime counter backing [`UniqueKey::new`]. Same 1-based start and
+/// 0-is-exhausted-sentinel contract as [`KEY_COUNTER`]. Kept distinct so
+/// `Key` and `UniqueKey` issue independent id spaces.
+static UNIQUE_KEY_COUNTER: AtomicU64 = AtomicU64::new(1);
+
 /// View key with niche optimization
 ///
 /// Thanks to `NonZeroU64`, `Option<Key>` is only 8 bytes instead of 16.
@@ -536,10 +541,39 @@ impl UniqueKey {
     ///
     /// Audit I-5: `Default` is deliberately not implemented — each
     /// call returns a different value (atomic-counter bump).
+    ///
+    /// # Panics
+    ///
+    /// Panics if all `u64::MAX - 1` unique keys have been issued
+    /// (practically impossible). The counter then latches a permanent-
+    /// exhaustion sentinel so every subsequent call also panics, rather
+    /// than wrapping around to 0 and re-issuing a duplicate key.
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
-        static COUNTER: AtomicU64 = AtomicU64::new(1);
-        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        // F3 — same `fetch_update` sentinel state machine as `Key::new`.
+        //
+        // Invariants for `UNIQUE_KEY_COUNTER`:
+        //   * 1..=u64::MAX — live; the loaded value is the id just issued.
+        //   * 0            — PERMANENT EXHAUSTION SENTINEL; the closure
+        //                    refuses to advance, so every call thereafter
+        //                    panics. No wrap-around to a duplicate / zero id.
+        //
+        // `UniqueKey` holds a plain `u64` (no `NonZero` niche), so 0 is
+        // representable — which is exactly why the guard matters: without
+        // it the old `fetch_add` shape would hand out `id == 0` on wrap
+        // and then re-issue 1, 2, ... breaking the uniqueness contract.
+        let id = UNIQUE_KEY_COUNTER
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                if current == 0 {
+                    None
+                } else {
+                    Some(current.wrapping_add(1))
+                }
+            })
+            .expect("UniqueKey counter exhausted: all 2^64-1 ids issued");
+
+        // `id` is the pre-increment value, guaranteed in `1..=u64::MAX`
+        // on the success path.
         Self { id }
     }
 
@@ -547,6 +581,21 @@ impl UniqueKey {
     #[must_use]
     pub const fn id(&self) -> u64 {
         self.id
+    }
+
+    /// Force the runtime counter into the permanent-exhaustion sentinel
+    /// state (0) for testing the overflow path. Returns the prior value
+    /// so the caller can restore the shared static.
+    #[cfg(test)]
+    fn _test_force_exhausted_state() -> u64 {
+        UNIQUE_KEY_COUNTER.swap(0, Ordering::Relaxed)
+    }
+
+    /// Restore the runtime counter to a live value after an exhaustion
+    /// test, undoing [`UniqueKey::_test_force_exhausted_state`].
+    #[cfg(test)]
+    fn _test_restore_state(value: u64) {
+        UNIQUE_KEY_COUNTER.store(value, Ordering::Relaxed);
     }
 }
 
@@ -873,6 +922,37 @@ mod tests {
         let unique: HashSet<u64> = keys.iter().copied().collect();
         assert_eq!(unique.len(), keys.len(), "all Key::new() values distinct");
         assert!(!unique.contains(&0), "no key holds the 0 sentinel value");
+    }
+
+    /// F3 — `UniqueKey::new` must panic once its counter latches the
+    /// permanent-exhaustion sentinel (0), never wrapping to a 0-valued
+    /// or duplicate id. The old `fetch_add` shape had no guard at all.
+    #[test]
+    fn uniquekey_exhaustion_panics() {
+        use std::panic::catch_unwind;
+        let saved = UniqueKey::_test_force_exhausted_state();
+        let r1 = catch_unwind(UniqueKey::new);
+        let r2 = catch_unwind(UniqueKey::new);
+        UniqueKey::_test_restore_state(saved);
+
+        assert!(
+            r1.is_err(),
+            "UniqueKey::new must panic when counter is exhausted"
+        );
+        assert!(
+            r2.is_err(),
+            "UniqueKey::new must keep panicking after exhaustion"
+        );
+    }
+
+    /// F3 triangulation — a batch of `UniqueKey`s all carry distinct,
+    /// non-zero ids.
+    #[test]
+    fn uniquekey_uniqueness() {
+        let ids: Vec<u64> = (0..256).map(|_| UniqueKey::new().id()).collect();
+        let unique: HashSet<u64> = ids.iter().copied().collect();
+        assert_eq!(unique.len(), ids.len(), "all UniqueKey ids distinct");
+        assert!(!unique.contains(&0), "no UniqueKey holds the 0 sentinel id");
     }
 
     #[test]
