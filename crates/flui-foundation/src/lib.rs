@@ -181,7 +181,6 @@ pub use id::{
     // Generic ID system
     Id,
     Identifier,
-    Index,
     LayerId,
     // Listener/Observer IDs
     ListenerId,
@@ -238,7 +237,6 @@ pub mod prelude {
         // Generic ID system
         Id,
         Identifier,
-        Index,
         Key,
         KeyRef,
         Keyed,

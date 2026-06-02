@@ -35,7 +35,16 @@
 //! let maybe_id = ViewId::new_checked(0); // None
 //! let valid_id = ViewId::new_checked(1); // Some(ViewId(1))
 //! ```
-#![allow(unsafe_code)]
+// F9 — `#[expect]` over `#[allow]` (edition-2024 idiom): this module
+// still contains genuine `unsafe` (the `*_unchecked` zip/new
+// constructors wrap `NonZeroUsize::new_unchecked`, a documented
+// caller-guarantees-non-zero contract). The `expect` will fire an
+// "unfulfilled expectation" lint the day the last `unsafe` block is
+// removed, prompting deletion of this attribute.
+#![expect(
+    unsafe_code,
+    reason = "RawId/Id `*_unchecked` constructors use NonZeroUsize::new_unchecked"
+)]
 
 use core::{
     cmp::Ordering,
@@ -68,7 +77,7 @@ const _: () = {
 /// Index type for slab-based storage.
 ///
 /// This is the raw index value before being wrapped in `RawId`.
-pub type Index = usize;
+pub(crate) type Index = usize;
 
 // =========================================================================
 // RawId - The underlying representation
@@ -78,6 +87,12 @@ pub type Index = usize;
 ///
 /// Uses `NonZeroUsize` for niche optimization - `Option<RawId>` has the same
 /// size as `RawId` because the compiler uses 0 as the `None` representation.
+///
+/// `RawId` stays part of the public surface (F23 considered downgrading it to
+/// `pub(crate)` but kept it `pub`): U1/F1 made `Id::from_raw(raw: RawId)` a
+/// safe public constructor with a public doc-test, and downstream tests round-
+/// trip through `Id::into_raw() -> RawId` + `RawId::unzip`. The internal
+/// `Index` alias, which had no downstream consumers, is the part F23 narrows.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RawId(NonZeroUsize);
@@ -202,8 +217,15 @@ pub trait Marker: 'static + WasmNotSendSync + Debug {}
 /// assert_eq!(view.unzip(), element.unzip());
 /// // assert_eq!(view, element); // Would not compile!
 /// ```
+// F7 — the marker `T` appears only as a compile-time domain tag, never
+// behind a reference or owned by the id. `PhantomData<fn() -> T>` makes
+// `Id<T>` *invariant*-free over `T` while still requiring `T`, and —
+// crucially — keeps `Id<T>: Send + Sync` regardless of `T`'s own auto
+// traits (a `fn() -> T` pointer is always `Send + Sync`). A bare
+// `PhantomData<T>` would instead make `Id<T>` covariant in `T` and leak
+// `T`'s thread-safety, which is wrong for a zero-sized phantom tag.
 #[repr(transparent)]
-pub struct Id<T: Marker>(RawId, PhantomData<T>);
+pub struct Id<T: Marker>(RawId, PhantomData<fn() -> T>);
 
 impl<T: Marker> Id<T> {
     /// Creates an ID from a raw ID.
@@ -434,7 +456,7 @@ impl<T: Marker> From<Index> for Id<T> {
 /// use flui_foundation::{ElementId, Identifier, ViewId};
 ///
 /// fn process_id<I: Identifier>(id: I) -> usize {
-///     id.into()
+///     id.get()
 /// }
 ///
 /// assert_eq!(process_id(ElementId::zip(42)), 42);
@@ -450,7 +472,6 @@ pub trait Identifier:
     + Hash
     + Debug
     + Display
-    + Into<Index>
     + WasmNotSendSync
     + 'static
 {
