@@ -804,6 +804,43 @@ mod tests {
         assert_eq!(ViewId::new_checked(42).map(super::Id::get), Some(42));
     }
 
+    // F18 — boundary coverage at the top of the index range.
+    //
+    // `NonZeroUsize::new(usize::MAX)` is a valid non-zero value, so an `Id`
+    // must hold `usize::MAX` and round-trip losslessly through the public
+    // `into_raw()` / `from_raw()` accessors (F1 made `from_raw` safe, so no
+    // `unsafe` block is required here). This guards against an off-by-one or
+    // truncation regression in the raw bridge at the extreme end of the range.
+    #[test]
+    fn id_at_usize_max() {
+        let id = ElementId::new(usize::MAX);
+        assert_eq!(id.get(), usize::MAX);
+
+        let opt: Option<ElementId> = Some(id);
+        assert!(opt.is_some());
+
+        // Round-trip through the raw accessors (safe post-F1).
+        let raw = id.into_raw();
+        let id2 = ElementId::from_raw(raw);
+        assert_eq!(id, id2);
+        assert_eq!(id2.get(), usize::MAX);
+    }
+
+    // F18 triangulation — the `NonZeroUsize` niche must still optimise
+    // `Option<ElementId>` down to `ElementId` size *at the boundary value*:
+    // `Some(MAX)` is representable and `None` collapses onto the 0 niche.
+    #[test]
+    fn id_niche_at_usize_max() {
+        // Niche optimisation holds at the boundary (size parity).
+        assert_eq!(size_of::<ElementId>(), size_of::<Option<ElementId>>());
+
+        let some_max: Option<ElementId> = Some(ElementId::new(usize::MAX));
+        assert_eq!(some_max.map(ElementId::get), Some(usize::MAX));
+
+        let none: Option<ElementId> = None;
+        assert!(none.is_none());
+    }
+
     #[test]
     fn test_scheduler_id_types() {
         // Sanity-check the scheduler-consumer IDs survive the audit.
