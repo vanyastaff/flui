@@ -316,6 +316,71 @@ mod tests {
 
     impl_binding_singleton!(PanicBinding);
 
+    // F17 — document `OnceLock::get_or_init` retry-after-panic semantics.
+    //
+    // The contract on `OnceLock::get_or_init` is: "If this function panics,
+    // the cell is unchanged." That means a panic inside the init closure does
+    // NOT poison the cell (unlike `std::sync::Once::call_once`, and unlike a
+    // poisoned `Mutex`). A subsequent `get_or_init` therefore re-runs the
+    // closure and can succeed. This test pins that behaviour so a future std
+    // change (or a regression to a poisoning primitive) is caught here.
+    #[test]
+    fn instance_retries_after_panic() {
+        use std::sync::OnceLock;
+        use std::sync::atomic::AtomicU32;
+
+        static CALL_COUNT: AtomicU32 = AtomicU32::new(0);
+
+        struct RetryBinding;
+        impl BindingBase for RetryBinding {
+            fn init_instances(&mut self) {
+                let count = CALL_COUNT.fetch_add(1, Ordering::Relaxed);
+                // First init (count == 0) must fail; later inits succeed.
+                assert_ne!(count, 0, "simulated first-init failure");
+            }
+        }
+
+        static INSTANCE: OnceLock<RetryBinding> = OnceLock::new();
+
+        // First call panics inside the closure; the cell stays empty.
+        let result = std::panic::catch_unwind(|| {
+            INSTANCE.get_or_init(|| {
+                let mut b = RetryBinding;
+                b.init_instances();
+                b
+            })
+        });
+        assert!(result.is_err(), "first init must panic");
+        assert!(
+            INSTANCE.get().is_none(),
+            "OnceLock cell must stay empty after the init closure panics"
+        );
+
+        // Second call re-runs the closure and now succeeds (no poison state).
+        let instance = INSTANCE.get_or_init(|| {
+            let mut b = RetryBinding;
+            b.init_instances();
+            b
+        });
+        assert!(
+            std::ptr::eq(instance, INSTANCE.get().unwrap()),
+            "retried get_or_init must populate and return the stored value"
+        );
+    }
+
+    // F17 triangulation — `instance()` is idempotent: two calls return the
+    // very same `&'static` (pointer equality), confirming the singleton is
+    // created exactly once.
+    #[test]
+    fn binding_instance_idempotent() {
+        let a = TestBinding::instance();
+        let b = TestBinding::instance();
+        assert!(
+            std::ptr::eq(a, b),
+            "instance() must return the same singleton"
+        );
+    }
+
     #[test]
     fn init_panic_does_not_flip_initialized_flag() {
         // Sanity: not yet initialized.
