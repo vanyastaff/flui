@@ -369,18 +369,17 @@ pub trait TreeWriteNav<I: Identifier>: TreeWrite<I> + super::TreeNav<I> {
     fn move_children(&mut self, from: I, to: I) -> TreeResult<()>
     where
         Self: Sized,
-        I: Into<usize>,
     {
         if !self.contains(from) {
-            return Err(TreeError::not_found(from.into()));
+            return Err(TreeError::not_found(from.get()));
         }
         if !self.contains(to) {
-            return Err(TreeError::not_found(to.into()));
+            return Err(TreeError::not_found(to.get()));
         }
 
         // Check for cycles: 'to' can't be a descendant of 'from'
         if self.is_ancestor_of(from, to) {
-            return Err(TreeError::cycle_detected(to.into()));
+            return Err(TreeError::cycle_detected(to.get()));
         }
 
         // Collect children first (to avoid borrow issues)
@@ -410,10 +409,7 @@ pub trait TreeWriteNav<I: Identifier>: TreeWrite<I> + super::TreeNav<I> {
     /// # Errors
     ///
     /// - `NotFound` - Parent doesn't exist
-    fn insert_child(&mut self, node: Self::Node, parent: Option<I>) -> TreeResult<I>
-    where
-        I: Into<usize>,
-    {
+    fn insert_child(&mut self, node: Self::Node, parent: Option<I>) -> TreeResult<I> {
         let id = self.insert(node);
 
         if let Some(parent_id) = parent {
@@ -422,7 +418,7 @@ pub trait TreeWriteNav<I: Identifier>: TreeWrite<I> + super::TreeNav<I> {
                 // safe here because the node is freshly inserted and
                 // has no children yet — cascade vs shallow is moot.
                 self.remove_shallow(id);
-                return Err(TreeError::not_found(parent_id.into()));
+                return Err(TreeError::not_found(parent_id.get()));
             }
             self.set_parent(id, Some(parent_id))?;
         }
