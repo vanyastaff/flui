@@ -98,36 +98,40 @@ pub(crate) type Index = usize;
 pub struct RawId(NonZeroUsize);
 
 impl RawId {
-    /// Zip an index into a RawId.
+    /// Zip an index into a `RawId`.
     ///
     /// # Panics
     ///
     /// Panics if `index` is 0 (reserved for sentinel/None).
     #[inline]
     #[track_caller]
+    #[must_use]
     pub fn zip(index: Index) -> Self {
         Self(NonZeroUsize::new(index).expect("ID index must be non-zero"))
     }
 
-    /// Unzip a RawId back to its index.
+    /// Unzip a `RawId` back to its index.
     #[inline]
+    #[must_use]
     pub const fn unzip(self) -> Index {
         self.0.get()
     }
 
-    /// Creates a RawId without checking for zero.
+    /// Creates a `RawId` without checking for zero.
     ///
     /// # Safety
     ///
     /// The caller must ensure that `index` is not 0.
     #[inline]
+    #[must_use]
     pub const unsafe fn zip_unchecked(index: Index) -> Self {
         // SAFETY: Caller guarantees index is non-zero
         unsafe { Self(NonZeroUsize::new_unchecked(index)) }
     }
 
-    /// Creates a RawId, returning `None` if index is 0.
+    /// Creates a `RawId`, returning `None` if index is 0.
     #[inline]
+    #[must_use]
     pub const fn try_zip(index: Index) -> Option<Self> {
         match NonZeroUsize::new(index) {
             Some(nz) => Some(Self(nz)),
@@ -244,12 +248,14 @@ impl<T: Marker> Id<T> {
     /// let _id: ViewId = ViewId::from_raw(raw);
     /// ```
     #[inline]
+    #[must_use]
     pub const fn from_raw(raw: RawId) -> Self {
         Self(raw, PhantomData)
     }
 
     /// Coerce the identifier into its raw underlying representation.
     #[inline]
+    #[must_use]
     pub const fn into_raw(self) -> RawId {
         self.0
     }
@@ -261,12 +267,14 @@ impl<T: Marker> Id<T> {
     /// Panics if `index` is 0.
     #[inline]
     #[track_caller]
+    #[must_use]
     pub fn zip(index: Index) -> Self {
         Self(RawId::zip(index), PhantomData)
     }
 
     /// Unzip an Id back to its index.
     #[inline]
+    #[must_use]
     pub const fn unzip(self) -> Index {
         self.0.unzip()
     }
@@ -277,6 +285,7 @@ impl<T: Marker> Id<T> {
     ///
     /// The caller must ensure that `index` is not 0.
     #[inline]
+    #[must_use]
     pub const unsafe fn zip_unchecked(index: Index) -> Self {
         // SAFETY: Caller guarantees index is non-zero
         unsafe { Self(RawId::zip_unchecked(index), PhantomData) }
@@ -284,6 +293,7 @@ impl<T: Marker> Id<T> {
 
     /// Creates an ID, returning `None` if index is 0.
     #[inline]
+    #[must_use]
     pub const fn try_zip(index: Index) -> Option<Self> {
         match RawId::try_zip(index) {
             Some(raw) => Some(Self(raw, PhantomData)),
@@ -298,18 +308,21 @@ impl<T: Marker> Id<T> {
     /// Alias for `zip` - creates an ID from an index.
     #[inline]
     #[track_caller]
+    #[must_use]
     pub fn new(index: Index) -> Self {
         Self::zip(index)
     }
 
     /// Alias for `unzip` - returns the index.
     #[inline]
+    #[must_use]
     pub const fn get(self) -> Index {
         self.unzip()
     }
 
     /// Alias for `try_zip` - creates an ID if index is non-zero.
     #[inline]
+    #[must_use]
     pub const fn new_checked(index: Index) -> Option<Self> {
         Self::try_zip(index)
     }
@@ -320,6 +333,7 @@ impl<T: Marker> Id<T> {
     ///
     /// The caller must ensure that `index` is not 0.
     #[inline]
+    #[must_use]
     pub const unsafe fn new_unchecked(index: Index) -> Self {
         // SAFETY: Caller guarantees index is non-zero
         unsafe { Self::zip_unchecked(index) }
@@ -550,9 +564,9 @@ ids! {
     /// hold state between rebuilds, and coordinate updates.
     pub type ElementId Element;
 
-    /// Render ID - index into the RenderObject tree.
+    /// Render ID - index into the `RenderObject` tree.
     ///
-    /// RenderObjects handle layout and painting. They form a separate tree
+    /// `RenderObject`s handle layout and painting. They form a separate tree
     /// optimized for performance-critical operations.
     pub type RenderId Render;
 
@@ -564,7 +578,7 @@ ids! {
 
     /// Semantics ID - index into the Semantics tree.
     ///
-    /// SemanticsNodes provide accessibility information for screen readers
+    /// `SemanticsNode`s provide accessibility information for screen readers
     /// and other assistive technologies.
     pub type SemanticsId Semantics;
 

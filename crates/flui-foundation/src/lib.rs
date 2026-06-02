@@ -134,7 +134,8 @@
     missing_docs,
     missing_debug_implementations,
     rust_2018_idioms,
-    unreachable_pub
+    unreachable_pub,
+    clippy::pedantic
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 

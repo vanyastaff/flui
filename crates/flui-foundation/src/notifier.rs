@@ -4,8 +4,8 @@
 //! similar to Flutter's `ChangeNotifier` system in foundation.
 //!
 //! - **Listenable**: Base trait for objects that notify listeners
-//! - **ChangeNotifier**: Manages a list of listeners and notifies them
-//! - **ValueNotifier**: A ChangeNotifier that holds a single value
+//! - **`ChangeNotifier`**: Manages a list of listeners and notifies them
+//! - **`ValueNotifier`**: A `ChangeNotifier` that holds a single value
 //!
 //! # Example
 //!
@@ -140,7 +140,7 @@ pub trait ValueListenable<T>: Listenable {
 /// debug builds via `debug_assert!` and degrade to a `tracing::warn!` + no-op
 /// in release builds. Mirrors Flutter's `ChangeNotifier.dispose` and
 /// `_debugAssertNotDisposed` semantics
-/// (flutter/lib/src/foundation/change_notifier.dart:181, :376).
+/// (`flutter/lib/src/foundation/change_notifier.dart:181`, :376).
 ///
 /// `is_disposed` is shared across clones via `Arc<AtomicBool>` so that a
 /// listener-callback holding its own clone sees disposal performed elsewhere.

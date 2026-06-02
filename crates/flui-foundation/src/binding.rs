@@ -143,6 +143,7 @@ pub trait HasInstance: BindingBase {
     ///
     /// This is the preferred way to access a binding when you're not sure
     /// if it has been initialized yet.
+    #[must_use]
     fn ensure_initialized() -> &'static Self {
         Self::instance()
     }
@@ -232,6 +233,7 @@ macro_rules! impl_binding_singleton {
 /// ```rust,ignore
 /// let binding = check_instance::<GestureBinding>();
 /// ```
+#[must_use]
 pub fn check_instance<B: HasInstance>() -> &'static B {
     assert!(
         B::is_initialized(),
