@@ -507,12 +507,12 @@ impl<T: Clone + fmt::Debug> fmt::Debug for ValueNotifier<T> {
     }
 }
 
-impl<T: Clone + Default> Default for ValueNotifier<T> {
-    #[inline]
-    fn default() -> Self {
-        Self::new(T::default())
-    }
-}
+// F11: `Default for ValueNotifier<T>` removed intentionally. A defaulted
+// notifier would have a default-constructed value AND a fresh identity (no
+// listeners); two `ValueNotifier::<T>::default()` calls produce notifiers that
+// are `==` by value yet are observably distinct objects. This violates the
+// principle of least surprise, and Flutter's `ValueNotifier` likewise has no
+// default constructor. Construct explicitly via `ValueNotifier::new(value)`.
 
 impl<T: Clone + PartialEq> PartialEq for ValueNotifier<T> {
     #[inline]
@@ -684,9 +684,32 @@ mod tests {
     }
 
     #[test]
-    fn test_value_notifier_default() {
-        let notifier: ValueNotifier<i32> = ValueNotifier::default();
-        assert_eq!(*notifier, 0);
+    fn valuenotifier_new_creates_distinct_notifiers() {
+        // F11: `Default for ValueNotifier<T>` was removed. Construct
+        // explicitly with `new`. Two notifiers built from the same value are
+        // `==` by value but are observably distinct objects (independent
+        // listener registries) — the exact surprise the removed Default would
+        // have hidden.
+        let a = ValueNotifier::new(0u32);
+        let b = ValueNotifier::new(0u32);
+        assert_eq!(a, b, "equal by value");
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let counter_clone = Arc::clone(&counter);
+        let _ = a.add_listener(Arc::new(move || {
+            counter_clone.fetch_add(1, Ordering::SeqCst);
+        }));
+        // `a` has a listener; `b` must not — distinct identities.
+        assert_eq!(a.len(), 1);
+        assert_eq!(b.len(), 0);
+        a.notify();
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+        b.notify();
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            1,
+            "b is a distinct notifier; notifying it must not touch a's listener"
+        );
     }
 
     #[test]
