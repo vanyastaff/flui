@@ -196,16 +196,23 @@ macro_rules! impl_binding_singleton {
                 // `instance()` caller would then either re-panic or, on
                 // contention, observe incoherent state.
                 //
-                // Post-fix: the store happens only on the successful path
-                // *after* `OnceLock` has accepted the value. On steady-
-                // state callers the store is a single atomic write per
-                // call, which is the cost of moving the flip out of the
-                // panic-vulnerable init closure. If the per-call atomic
-                // store becomes measurable in a profile, replace with
-                // `INITIALIZED.compare_exchange(false, true, Release,
-                // Relaxed).ok();` — that converts the steady-state path
-                // to a single atomic load + conditional CAS.
-                Self::INITIALIZED.store(true, std::sync::atomic::Ordering::Release);
+                // The flip happens only on the successful path *after*
+                // `OnceLock` has accepted the value. The steady state is a
+                // single atomic CAS (false → true) that is a no-op on
+                // every call past the first (F4): on an already-initialized
+                // instance the `false` expectation fails and the CAS
+                // returns `Err` without performing the `Release` store, so
+                // the per-call cost on the hot path is one load + a failed
+                // CAS rather than an unconditional `Release` write to a
+                // shared cache line. The `let _ =` discards the result —
+                // both the first-call `Ok(false)` and steady-state
+                // `Err(true)` are expected and benign.
+                let _ = Self::INITIALIZED.compare_exchange(
+                    false,
+                    true,
+                    std::sync::atomic::Ordering::Release,
+                    std::sync::atomic::Ordering::Relaxed,
+                );
                 inst
             }
         }
