@@ -208,11 +208,21 @@ pub struct Id<T: Marker>(RawId, PhantomData<T>);
 impl<T: Marker> Id<T> {
     /// Creates an ID from a raw ID.
     ///
-    /// # Safety
+    /// This is a safe operation: every `RawId` already encodes a valid,
+    /// non-zero index, and the marker type `T` carries no runtime
+    /// invariant beyond compile-time domain tagging. Re-tagging a
+    /// `RawId` under a different marker is a logic concern, not a memory-
+    /// safety one, so no `unsafe` contract is required.
     ///
-    /// The caller must ensure the raw ID is valid for this marker type.
+    /// ```rust
+    /// use flui_foundation::{ViewId, RawId};
+    ///
+    /// // This must compile without an `unsafe` block.
+    /// let raw = RawId::zip(1);
+    /// let _id: ViewId = ViewId::from_raw(raw);
+    /// ```
     #[inline]
-    pub const unsafe fn from_raw(raw: RawId) -> Self {
+    pub const fn from_raw(raw: RawId) -> Self {
         Self(raw, PhantomData)
     }
 
@@ -609,8 +619,9 @@ mod serde_impl {
     impl<'de, T: Marker> Deserialize<'de> for Id<T> {
         fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
             let raw = RawId::deserialize(deserializer)?;
-            // SAFETY: We just validated the RawId is non-zero
-            Ok(unsafe { Self::from_raw(raw) })
+            // `from_raw` is infallible and safe: the deserialized
+            // `RawId` already upholds the non-zero niche invariant.
+            Ok(Self::from_raw(raw))
         }
     }
 }
@@ -742,7 +753,7 @@ mod tests {
         let raw = id.into_raw();
         assert_eq!(raw.unzip(), 42);
 
-        let recovered = unsafe { ViewId::from_raw(raw) };
+        let recovered = ViewId::from_raw(raw);
         assert_eq!(recovered, id);
     }
 
