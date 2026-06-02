@@ -194,7 +194,7 @@ pub trait TreeReadExt<I: Identifier>: TreeRead<I> {
     /// predicates that work with any lifetime.
     fn find_node_where<P>(&self, mut predicate: P) -> Option<I>
     where
-        P: for<'a> FnMut(&'a Self::Node) -> bool,
+        P: FnMut(&Self::Node) -> bool,
     {
         for id in self.node_ids() {
             if let Some(node) = self.get(id)
@@ -209,7 +209,7 @@ pub trait TreeReadExt<I: Identifier>: TreeRead<I> {
     /// Count nodes matching a predicate.
     fn count_nodes_where<P>(&self, mut predicate: P) -> usize
     where
-        P: for<'a> FnMut(&'a Self::Node) -> bool,
+        P: FnMut(&Self::Node) -> bool,
     {
         self.node_ids()
             .filter_map(|id| self.get(id))
@@ -220,7 +220,7 @@ pub trait TreeReadExt<I: Identifier>: TreeRead<I> {
     /// Collect nodes matching a predicate with capacity optimization.
     fn collect_nodes_where<P>(&self, mut predicate: P) -> Vec<I>
     where
-        P: for<'a> FnMut(&'a Self::Node) -> bool,
+        P: FnMut(&Self::Node) -> bool,
     {
         let mut result = Vec::with_capacity(Self::INLINE_THRESHOLD.min(self.len()));
 
@@ -238,7 +238,7 @@ pub trait TreeReadExt<I: Identifier>: TreeRead<I> {
     /// Execute a closure for each node using HRTB for maximum flexibility.
     fn for_each_node<F>(&self, mut f: F)
     where
-        F: for<'a> FnMut(I, &'a Self::Node),
+        F: FnMut(I, &Self::Node),
     {
         for id in self.node_ids() {
             if let Some(node) = self.get(id) {
@@ -396,8 +396,12 @@ impl<I: Identifier, T: TreeRead<I> + ?Sized> TreeRead<I> for Box<T> {
 /// This makes it easier to work with HRTB predicates in function signatures.
 pub type NodePredicate<Node> = dyn for<'a> Fn(&'a Node) -> bool;
 
-/// Type alias for higher-rank visitor functions.
-pub type NodeVisitor<I, Node> = dyn for<'a> FnMut(I, &'a Node);
+/// Type alias for node-visitor functions.
+///
+/// The `&Node` argument desugars to a higher-ranked `for<'a> &'a Node`
+/// binding under the `Fn`-trait sugar, so this is equivalent to the
+/// explicit `for<'a>` form without the over-stated HRTB.
+pub type NodeVisitor<I, Node> = dyn FnMut(I, &Node);
 
 /// Collect all nodes from a tree that match a predicate.
 ///
