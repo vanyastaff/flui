@@ -1,6 +1,5 @@
 //! View keys for element identity and reconciliation
-// Allow unsafe code in this module - it's required for NonZeroU64::new_unchecked
-#![allow(unsafe_code)]
+//!
 //! This module provides key types for view identity tracking:
 //!
 //! # Simple Keys (Copy, lightweight)
@@ -51,6 +50,12 @@ use std::{
     num::NonZeroU64,
     sync::atomic::{AtomicU64, Ordering},
 };
+
+/// Runtime counter backing [`Key::new`]. Starts at 1; the value 0 is the
+/// permanent-exhaustion sentinel (see `Key::new`). Module-scoped (not a
+/// function-local static) so the `cfg(test)` exhaustion helper can drive
+/// it into the sentinel state.
+static KEY_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 /// View key with niche optimization
 ///
@@ -104,10 +109,13 @@ impl Key {
     #[inline]
     pub const fn from_str(s: &str) -> Self {
         let hash = const_fnv1a_hash(s.as_bytes());
-        // Ensure non-zero (use 1 if hash is 0, which is extremely rare)
+        // Ensure non-zero (use 1 if hash is 0, which is extremely rare).
         let non_zero = if hash == 0 { 1 } else { hash };
-        // SAFETY: We just ensured non_zero != 0
-        Self(unsafe { NonZeroU64::new_unchecked(non_zero) })
+        // Safe const construction: the branch above guarantees
+        // `non_zero != 0`, so `expect` is statically unreachable and the
+        // documented "never panics" contract holds. `Option::expect` is
+        // const-stable, so this stays a `const fn` with no `unsafe`.
+        Self(NonZeroU64::new(non_zero).expect("from_str guarantees non-zero"))
     }
 
     /// Generate unique runtime key
@@ -132,9 +140,10 @@ impl Key {
     ///
     /// # Panics
     ///
-    /// Panics if `u64::MAX` keys have been created (practically impossible).
-    /// This prevents undefined behavior from `NonZeroU64::new_unchecked(0)`
-    /// after overflow.
+    /// Panics if all `u64::MAX - 1` keys have been issued (practically
+    /// impossible). The counter then latches a permanent-exhaustion
+    /// sentinel so every subsequent call also panics, rather than
+    /// wrapping around and re-issuing a duplicate key.
     // Audit I-5: `Key` deliberately does NOT implement `Default`.
     // Defaults must be deterministic; `Key::new()` bumps an atomic
     // counter so every call returns a different value. Construction
@@ -143,20 +152,58 @@ impl Key {
     #[allow(clippy::new_without_default)]
     #[inline]
     pub fn new() -> Self {
-        static COUNTER: AtomicU64 = AtomicU64::new(1);
-        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        // F2 — `fetch_update` sentinel state machine.
+        //
+        // Invariants for `KEY_COUNTER`:
+        //   * 1..=u64::MAX  — live: the loaded value is the key just
+        //     handed out; the next stored value is `value + 1`.
+        //   * 0             — PERMANENT EXHAUSTION SENTINEL: every key
+        //     in `1..=u64::MAX` has been issued. The closure refuses to
+        //     advance (returns `None`), so `fetch_update` yields
+        //     `Err(0)` on this and ALL subsequent calls — there is no
+        //     silent recovery, even across `catch_unwind` + retry.
+        //
+        // The plain `fetch_add` + unchecked-construction shape this
+        // replaces wrapped `u64::MAX -> 0` and then fabricated a duplicate
+        // (re-issuing 1, 2, ... after the panic was caught), breaking
+        // identity. `fetch_update` writes the sentinel atomically with
+        // the read, so the exhausted state is observable and sticky.
+        let id = KEY_COUNTER
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                // current == 0 -> exhausted: refuse, keep sentinel.
+                // current == u64::MAX -> hand it out, then wrap to the
+                // 0 sentinel so the *next* call is permanently exhausted.
+                if current == 0 {
+                    None
+                } else {
+                    Some(current.wrapping_add(1))
+                }
+            })
+            // On `Err`, the counter is at the 0 sentinel: the keyspace
+            // is exhausted. This panics on every call thereafter.
+            .expect("Key counter exhausted: all 2^64-1 keys issued");
 
-        // Always check for overflow, even in release mode
-        // UB is never acceptable, even in "impossible" cases
-        assert!(
-            id != u64::MAX,
-            "Key counter overflow! Created {} keys. \
-             This should never happen in practice, but UB is never acceptable.",
-            u64::MAX
-        );
+        // `id` is the pre-increment value, guaranteed in `1..=u64::MAX`
+        // on the success path. The `expect` here is a defensive net for
+        // that invariant — it can only fire if the sentinel logic above
+        // ever let a 0 through, which it cannot.
+        Self(NonZeroU64::new(id).expect("Key::new invariant: counter returned 0"))
+    }
 
-        // SAFETY: We just verified id != u64::MAX, and counter starts at 1
-        Self(unsafe { NonZeroU64::new_unchecked(id) })
+    /// Force the runtime counter into the permanent-exhaustion sentinel
+    /// state (0) for testing the overflow path without issuing 2^64-1
+    /// keys. Returns the prior value so the caller can restore the live
+    /// counter and avoid poisoning the shared static for sibling tests.
+    #[cfg(test)]
+    fn _test_force_exhausted_state() -> u64 {
+        KEY_COUNTER.swap(0, Ordering::Relaxed)
+    }
+
+    /// Restore the runtime counter to a live value after an exhaustion
+    /// test, undoing [`Key::_test_force_exhausted_state`].
+    #[cfg(test)]
+    fn _test_restore_state(value: u64) {
+        KEY_COUNTER.store(value, Ordering::Relaxed);
     }
 
     /// Create key from existing u64 ID
@@ -781,6 +828,51 @@ mod tests {
 
         // Runtime matches compile-time
         assert_eq!(K1, Key::from_str("test"));
+    }
+
+    /// F2 — once the runtime counter reaches the permanent-exhaustion
+    /// sentinel (0), `Key::new` must panic on EVERY subsequent call and
+    /// never fabricate a duplicate or zero-valued key. This is the
+    /// regression guard against the old `fetch_add` + unchecked-
+    /// construction shape, which wrapped `u64::MAX -> 0` and then
+    /// silently re-issued keys after a caught panic.
+    #[test]
+    fn key_counter_exhaustion() {
+        use std::panic::catch_unwind;
+        // Force counter into the permanent-exhaustion sentinel state (0),
+        // saving the live value so we can restore the shared static and
+        // not poison sibling tests that call `Key::new`.
+        let saved = Key::_test_force_exhausted_state();
+        // First call after exhaustion MUST panic.
+        let r1 = catch_unwind(Key::new);
+        // Second call must also panic — no silent recovery.
+        let r2 = catch_unwind(Key::new);
+        // Restore the live counter before asserting (assertions may
+        // unwind this test thread; the static is already restored).
+        Key::_test_restore_state(saved);
+
+        assert!(
+            r1.is_err(),
+            "Key::new must panic when counter is at sentinel 0"
+        );
+        assert!(
+            r2.is_err(),
+            "Key::new must keep panicking after exhaustion (permanent sentinel)"
+        );
+        // Neither result must be Ok(Key(0)) — confirm no zero-value key
+        // was produced.
+        assert!(r1.is_err());
+        assert!(r2.is_err());
+    }
+
+    /// F2 triangulation — a batch of freshly minted keys are all
+    /// distinct `u64` values (no duplicates from the counter path).
+    #[test]
+    fn key_uniqueness() {
+        let keys: Vec<u64> = (0..256).map(|_| Key::new().as_u64()).collect();
+        let unique: HashSet<u64> = keys.iter().copied().collect();
+        assert_eq!(unique.len(), keys.len(), "all Key::new() values distinct");
+        assert!(!unique.contains(&0), "no key holds the 0 sentinel value");
     }
 
     #[test]
