@@ -159,6 +159,12 @@ pub mod transform2d; // PORT-CHECK-OK-SP4: transform2d API surface; consumed via
 pub mod units;
 pub mod vector;
 
+/// Conversion bridges to foreign math libraries (feature-gated).
+///
+/// Enabled per-bridge: `--features kurbo` exposes [`bridges::kurbo`] (U8).
+#[cfg(feature = "kurbo")]
+pub mod bridges; // PORT-CHECK-OK-SP4: kurbo bridge (U8) — Core.2 render-object catalog is the consumer; feature-gated off by default, gates Core.2 entry
+
 // =============================================================================
 // PRELUDE - Convenient glob import for common usage
 // =============================================================================

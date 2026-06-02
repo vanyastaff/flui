@@ -67,6 +67,11 @@ glam = { version = "0.30", features = ["bytemuck", "mint"] }
 # without depending on glam transitively.
 mint = "0.5"
 
+# kurbo: optional 2D-curves bridge (U8). Off by default; Core.2 render-object
+# work (Bézier paths, curve flattening, hit-testing) enables `--features kurbo`.
+# `mint` feature keeps the conversion surface aligned with glam's mint bridge.
+kurbo = { version = "0.13", optional = true, features = ["mint"] }
+
 [dev-dependencies]
 proptest = "1.5"
 
@@ -76,9 +81,13 @@ default = []
 # Serde support for all geometry types
 serde = ["dep:serde"]
 
+# kurbo bridge (U8): From/TryFrom between flui typed geometry and kurbo's
+# f64 curve primitives. Gates Core.2 entry.
+kurbo = ["dep:kurbo"]
+
 # Enable all features (glam and mint are now mandatory dependencies per
-# U14 Option D, so the `full` set collapses to just `serde`).
-full = ["serde"]
+# U14 Option D, so the `full` set collapses to serde + the kurbo bridge).
+full = ["serde", "kurbo"]
 
 [package.metadata.docs.rs]
 all-features = true

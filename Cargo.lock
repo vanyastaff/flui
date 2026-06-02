@@ -1293,6 +1293,7 @@ name = "flui-geometry"
 version = "0.1.0"
 dependencies = [
  "glam",
+ "kurbo",
  "mint",
  "num-traits",
  "proptest",
@@ -2518,6 +2519,7 @@ checksum = "7564e90fe3c0d5771e1f0bc95322b21baaeaa0d9213fa6a0b61c99f8b17b3bfb"
 dependencies = [
  "arrayvec",
  "euclid",
+ "mint",
  "smallvec",
 ]
 

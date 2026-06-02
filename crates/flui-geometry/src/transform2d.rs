@@ -108,6 +108,48 @@ impl<T: Unit> Transform2D<T> {
         }
     }
 
+    /// Creates a transform from explicit 2×3 affine components.
+    ///
+    /// Components are row-major, matching the field layout:
+    ///
+    /// ```text
+    /// [ m11  m12  m31 ]   x' = m11·x + m12·y + m31
+    /// [ m21  m22  m32 ]   y' = m21·x + m22·y + m32
+    /// ```
+    ///
+    /// This is the inverse of reading the public `m11..m32` fields and is the
+    /// constructor used by the `kurbo` affine bridge (U8).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_geometry::{Pixels, Transform2D};
+    ///
+    /// let t = Transform2D::<Pixels>::from_components(2.0, 0.0, 0.0, 2.0, 5.0, 7.0);
+    /// assert_eq!(t.m11, 2.0);
+    /// assert_eq!(t.m31, 5.0);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn from_components(
+        m11: f32,
+        m12: f32,
+        m21: f32,
+        m22: f32,
+        m31: f32,
+        m32: f32,
+    ) -> Self {
+        Self {
+            m11,
+            m12,
+            m21,
+            m22,
+            m31,
+            m32,
+            _phantom: PhantomData,
+        }
+    }
+
     /// Creates a translation transform.
     ///
     /// # Examples
