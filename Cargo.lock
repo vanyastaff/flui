@@ -1492,6 +1492,7 @@ name = "flui-tree"
 version = "0.1.0"
 dependencies = [
  "ambassador",
+ "bon",
  "flui-foundation",
  "proptest",
  "serde",

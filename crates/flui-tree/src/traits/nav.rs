@@ -181,13 +181,15 @@ pub trait TreeNav<I: Identifier>: super::TreeRead<I> {
         let index = index?;
         let depth = Depth::new(self.depth(id));
 
-        Some(Slot::with_siblings(
-            parent,
-            index,
-            depth,
-            previous_sibling,
-            next_sibling,
-        ))
+        Some(
+            Slot::with_siblings()
+                .parent(parent)
+                .index(index)
+                .depth(depth)
+                .maybe_prev_sibling(previous_sibling)
+                .maybe_next_sibling(next_sibling)
+                .call(),
+        )
     }
 
     /// Returns the number of immediate children.
