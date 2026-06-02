@@ -174,7 +174,7 @@ pub use consts::{DEBUG_MODE, EPSILON, EPSILON_F32, IS_DESKTOP, IS_MOBILE, IS_WEB
 // Diagnostics
 pub use debug::{
     DiagnosticLevel, Diagnosticable, DiagnosticsBuilder, DiagnosticsNode, DiagnosticsProperty,
-    DiagnosticsTreeStyle,
+    DiagnosticsPropertyKind, DiagnosticsTreeStyle,
 };
 pub use id::{
     // Core tree IDs (5-tree architecture)

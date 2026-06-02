@@ -236,6 +236,71 @@ impl fmt::Display for ParseDiagnosticsTreeStyleError {
 
 impl std::error::Error for ParseDiagnosticsTreeStyleError {}
 
+/// The kind of a diagnostics property, determining how it is displayed.
+///
+/// Mirrors Flutter's typed `DiagnosticsProperty<T>` subclass hierarchy
+/// (`EnumProperty`, `FlagProperty`, `IterableProperty`, etc.) but as an
+/// enum variant instead of class inheritance.
+///
+/// The `Generic` variant is the fallback for all types not explicitly listed.
+///
+/// # Examples
+///
+/// ```rust
+/// use flui_foundation::DiagnosticsPropertyKind;
+///
+/// let kind = DiagnosticsPropertyKind::Iterable { count: 3 };
+/// assert_eq!(kind, DiagnosticsPropertyKind::Iterable { count: 3 });
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+pub enum DiagnosticsPropertyKind {
+    /// A generic property displayed as `{name}: {value:?}`.
+    Generic,
+    /// An enum property; `description` overrides the formatted value string.
+    Enum {
+        /// Optional human-readable description of the current enum variant.
+        description: Option<std::borrow::Cow<'static, str>>,
+    },
+    /// A boolean flag property; displayed as `{name}` (true) or omitted (false).
+    Flag,
+    /// An iterable property; `count` is the number of elements.
+    Iterable {
+        /// The number of elements in the iterable.
+        count: usize,
+    },
+    /// An optional reference; displayed as `{name}: <null>` when absent.
+    OptionalRef,
+    /// A stack of strings (e.g. stack traces).
+    Stack,
+    /// A double/float with an optional unit (e.g. `"dp"`, `"px"`).
+    Double {
+        /// Optional unit label appended to the formatted value.
+        unit: Option<std::borrow::Cow<'static, str>>,
+    },
+    /// An integer with an optional unit.
+    Int {
+        /// Optional unit label appended to the formatted value.
+        unit: Option<std::borrow::Cow<'static, str>>,
+    },
+    /// A color value (RGBA hex display).
+    Color,
+    /// An `Offset` / `Point2D` value.
+    Offset,
+    /// A `Rect` value.
+    Rect,
+    /// A `Size` value.
+    Size,
+}
+
+impl Default for DiagnosticsPropertyKind {
+    #[inline]
+    fn default() -> Self {
+        Self::Generic
+    }
+}
+
 /// A diagnostic property
 ///
 /// Similar to Flutter's `DiagnosticsProperty`.
@@ -257,6 +322,12 @@ pub struct DiagnosticsProperty {
     value: String,
     #[cfg_attr(feature = "serde", serde(default))]
     level: DiagnosticLevel,
+    /// The typed kind of this property, determining how it is displayed.
+    ///
+    /// Defaults to [`DiagnosticsPropertyKind::Generic`] for properties built
+    /// via [`DiagnosticsProperty::new`], preserving backwards compatibility.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub kind: DiagnosticsPropertyKind,
     #[cfg_attr(feature = "serde", serde(default = "default_true"))]
     show_name: bool,
     #[cfg_attr(feature = "serde", serde(default = "default_true"))]
@@ -289,6 +360,7 @@ impl DiagnosticsProperty {
             name: name.into(),
             value: value.to_string(),
             level: DiagnosticLevel::Info,
+            kind: DiagnosticsPropertyKind::Generic,
             show_name: true,
             show_separator: true,
             default_value: None,
@@ -343,6 +415,30 @@ impl DiagnosticsProperty {
     pub const fn with_level(mut self, level: DiagnosticLevel) -> Self {
         self.level = level;
         self
+    }
+
+    /// Set the typed property kind (builder pattern)
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use flui_foundation::{DiagnosticsProperty, DiagnosticsPropertyKind};
+    ///
+    /// let prop = DiagnosticsProperty::new("visible", "true")
+    ///     .with_kind(DiagnosticsPropertyKind::Flag);
+    /// assert_eq!(prop.kind, DiagnosticsPropertyKind::Flag);
+    /// ```
+    #[must_use]
+    pub fn with_kind(mut self, kind: DiagnosticsPropertyKind) -> Self {
+        self.kind = kind;
+        self
+    }
+
+    /// Returns the typed property kind
+    #[must_use]
+    #[inline]
+    pub const fn kind(&self) -> &DiagnosticsPropertyKind {
+        &self.kind
     }
 
     /// Hide the property name (builder pattern)
@@ -1043,6 +1139,26 @@ mod tests {
         assert_eq!(node.children().len(), 2);
         assert_eq!(node.children()[0].name().unwrap(), "Child1");
         assert_eq!(node.children()[1].name().unwrap(), "Child2");
+    }
+
+    #[test]
+    fn diagnostics_property_kind_field_exists() {
+        let prop = DiagnosticsProperty::new("width", "100.0");
+        assert_eq!(prop.kind, DiagnosticsPropertyKind::Generic);
+    }
+
+    #[test]
+    fn diagnostics_property_flag_kind() {
+        let prop =
+            DiagnosticsProperty::new("visible", "true").with_kind(DiagnosticsPropertyKind::Flag);
+        assert_eq!(prop.kind, DiagnosticsPropertyKind::Flag);
+    }
+
+    #[test]
+    fn diagnostics_property_iterable_kind() {
+        let prop = DiagnosticsProperty::new("children", "[..]")
+            .with_kind(DiagnosticsPropertyKind::Iterable { count: 3 });
+        assert_eq!(prop.kind, DiagnosticsPropertyKind::Iterable { count: 3 });
     }
 
     #[test]
