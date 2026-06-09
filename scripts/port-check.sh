@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 # scripts/port-check.sh
 #
-# Verifies the 13 refusal triggers (1-13, with #9 numbered for FR-036)
+# Verifies the 18 refusal triggers (1-18, with #9 numbered for FR-036)
 # documented in docs/PORT.md against the workspace, plus the FR-033
 # sanctioned-dyn-boundary check. Exits non-zero on the first violation
 # outside the whitelist; prints the offending file:line and the trigger
 # ID. Triggers #8/#10/#11/#12/#13 added in D-block PR-C-3 §U41-U45
-# (architecture-correction-plan SP-1/SP-3/SP-4/SP-6/SP-8).
+# (architecture-correction-plan SP-1/SP-3/SP-4/SP-6/SP-8). Trigger #14
+# added by the N-geom polish pass §U12 (unit-barrier escape-hatch guard).
+# Triggers #15/#16/#17/#18 added in core-0a adversarial-reaudit PR-4 §U5
+# (println!/eprintln!/dbg! ban, module-level allow(unsafe_code) ban,
+# reinvented debug_assert_* ban, key.rs new_unchecked ban).
 #
 # Additionally reports the inline port-marker budget (TODO(port),
 # PERF(port), PORT NOTE) — markers are deliberate Phase B deferrals, NOT
@@ -17,7 +21,7 @@
 # docs/PORT.md "## Verification" for usage and rationale.
 #
 # Usage:
-#   bash scripts/port-check.sh             # check all 13 triggers; silent on pass
+#   bash scripts/port-check.sh             # check all 17 triggers; silent on pass
 #   bash scripts/port-check.sh -v          # verbose: per-trigger pass + marker totals
 #   bash scripts/port-check.sh -b          # marker-budget mode (per-file breakdown)
 #   bash scripts/port-check.sh --verbose   # alias for -v
@@ -1054,6 +1058,143 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# Trigger 15 (core-0a adversarial-reaudit PR-4 §U5) — println!/eprintln!/dbg!
+# in foundation/tree/macros production source.
+#
+# Foundation, tree, and macros are the framework's low-level substrate;
+# they must route diagnostics through `tracing::{error,warn,info,debug,
+# trace}!`, never stdout/stderr macros. A stray `println!`/`eprintln!`/
+# `dbg!` in this layer leaks unstructured output into every downstream
+# binary and is invisible to the tracing subscriber.
+#
+# Exclusions:
+#   - doc comments (`//!`, `///`, `//`) — example code in docs is fine.
+#   - tests (`tests/`, `test*.rs`, in-file `#[cfg(test)]` is acceptable;
+#     the path globs drop dedicated test files — see note below).
+#
+# NOTE: in-file `#[cfg(test)]` modules are NOT post-filtered here (unlike
+# trigger 8). The three crates in scope keep their test output via
+# `assert!`/`tracing`, not `println!`, so the path-glob exclusion of
+# dedicated test files is sufficient; if a future `#[cfg(test)]` block
+# legitimately needs `println!`, append a `test*.rs`-style split or a
+# per-line allowlist marker in the same PR.
+# -----------------------------------------------------------------------------
+trigger15_hits=$(rg --line-number --column \
+    -e '\bprintln!\s*\(' \
+    -e '\beprintln!\s*\(' \
+    -e '\bdbg!\s*\(' \
+    --type rust \
+    --glob '!**/tests/**' \
+    --glob '!**/test*.rs' \
+    crates/flui-foundation/src \
+    crates/flui-tree/src \
+    crates/flui-macros/src 2>/dev/null \
+  | grep -Ev ':\s*(//!|///|//)' \
+  || true)
+
+if [[ -n "${trigger15_hits}" ]]; then
+  echo 'VIOLATION 15: println!/eprintln!/dbg! in foundation/tree/macros production source'
+  echo "see ${trigger_doc} (trigger 15)"
+  echo "${trigger15_hits}"
+  echo ""
+  violations=$((violations + 1))
+else
+  if [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    15: no println!/eprintln!/dbg! in foundation/tree/macros source"
+  fi
+fi
+
+# -----------------------------------------------------------------------------
+# Trigger 16 (core-0a adversarial-reaudit PR-4 §U5) — module-level
+# `#![allow(unsafe_code)]` in foundation/tree source.
+#
+# Edition-2024 idiom (F9): a module that genuinely needs `unsafe` must use
+# `#![expect(unsafe_code, reason = "...")]` so the lint fires the day the
+# last `unsafe` block is removed; a module with no `unsafe` must carry
+# neither attribute. A blanket `#![allow(unsafe_code)]` silently permits
+# any future unsafe and never self-cleans — it is forbidden in these two
+# crates. (`#![expect(unsafe_code, ...)]` is the sanctioned form and does
+# NOT match this pattern.)
+# -----------------------------------------------------------------------------
+trigger16_hits=$(rg --line-number --column \
+    '^\s*#!\[allow\(unsafe_code' \
+    --type rust \
+    crates/flui-foundation/src \
+    crates/flui-tree/src 2>/dev/null \
+  || true)
+
+if [[ -n "${trigger16_hits}" ]]; then
+  echo 'VIOLATION 16: module-level #![allow(unsafe_code)] in foundation/tree source (use #![expect(...)] or delete)'
+  echo "see ${trigger_doc} (trigger 16)"
+  echo "${trigger16_hits}"
+  echo ""
+  violations=$((violations + 1))
+else
+  if [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    16: no module-level #![allow(unsafe_code)] in foundation/tree source"
+  fi
+fi
+
+# -----------------------------------------------------------------------------
+# Trigger 17 (core-0a adversarial-reaudit PR-4 §U5) — reinvented
+# `debug_assert_*` macros in foundation source.
+#
+# F29 deleted `debug_assert_valid!` / `debug_assert_range!` /
+# `debug_assert_finite!` / `debug_assert_not_nan!` — they reinvented
+# stdlib `debug_assert!` with no added value. This trigger prevents their
+# reintroduction: any `macro_rules!` defining one of these four names in
+# foundation source is a regression. Stdlib `debug_assert!` is the
+# canonical form.
+# -----------------------------------------------------------------------------
+trigger17_hits=$(rg --line-number --column \
+    'macro_rules!\s+(debug_assert_valid|debug_assert_range|debug_assert_finite|debug_assert_not_nan)\b' \
+    --type rust \
+    crates/flui-foundation/src 2>/dev/null \
+  || true)
+
+if [[ -n "${trigger17_hits}" ]]; then
+  echo 'VIOLATION 17: reinvented debug_assert_* macro defined in foundation source (use stdlib debug_assert!)'
+  echo "see ${trigger_doc} (trigger 17)"
+  echo "${trigger17_hits}"
+  echo ""
+  violations=$((violations + 1))
+else
+  if [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    17: no reinvented debug_assert_* macros in foundation source"
+  fi
+fi
+
+# -----------------------------------------------------------------------------
+# Trigger 18 (core-0a adversarial-reaudit PR-4 §U5) — `new_unchecked` in
+# key.rs.
+#
+# F2 replaced `NonZeroU64::new_unchecked` in `Key::new` with the
+# `fetch_update` sentinel pattern, eliminating the UB-on-counter-wrap
+# hazard. This trigger guards against reintroducing any `new_unchecked`
+# call into `crates/flui-foundation/src/key.rs` — the key counter must
+# stay on the safe checked path. (`*_unchecked` constructors elsewhere,
+# e.g. id.rs, are out of scope and governed by their own `#![expect(
+# unsafe_code, ...)]`.)
+# -----------------------------------------------------------------------------
+trigger18_hits=$(rg --line-number --column \
+    '\bnew_unchecked\b' \
+    crates/flui-foundation/src/key.rs 2>/dev/null \
+  | grep -Ev ':\s*(//!|///|//)' \
+  || true)
+
+if [[ -n "${trigger18_hits}" ]]; then
+  echo 'VIOLATION 18: new_unchecked in key.rs (key counter must stay on the checked fetch_update path)'
+  echo "see ${trigger_doc} (trigger 18)"
+  echo "${trigger18_hits}"
+  echo ""
+  violations=$((violations + 1))
+else
+  if [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    18: no new_unchecked in key.rs"
+  fi
+fi
+
+# -----------------------------------------------------------------------------
 # Summary
 # -----------------------------------------------------------------------------
 if [[ "${violations}" -gt 0 ]]; then
@@ -1062,7 +1203,7 @@ if [[ "${violations}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "port-check: all 14 refusal triggers + FR-033 grep clean"
+echo "port-check: all 18 refusal triggers + FR-033 grep clean"
 
 # -----------------------------------------------------------------------------
 # Marker summary (verbose mode only). Non-blocking — markers are Phase B

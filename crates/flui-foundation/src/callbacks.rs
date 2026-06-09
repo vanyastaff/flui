@@ -11,22 +11,35 @@
 //! # Examples
 //!
 //! ```rust
-//! use std::sync::Arc;
+//! use std::sync::{
+//!     Arc,
+//!     atomic::{AtomicI32, Ordering},
+//! };
 //!
 //! use flui_foundation::{ValueChanged, ValueGetter, VoidCallback};
 //!
+//! let pressed = Arc::new(AtomicI32::new(0));
+//! let pressed2 = Arc::clone(&pressed);
 //! // Simple callback with no arguments
-//! let on_pressed: VoidCallback = Arc::new(|| {
-//!     println!("Button pressed!");
+//! let on_pressed: VoidCallback = Arc::new(move || {
+//!     pressed2.fetch_add(1, Ordering::Relaxed);
 //! });
 //!
+//! let last = Arc::new(AtomicI32::new(0));
+//! let last2 = Arc::clone(&last);
 //! // Callback that receives a value
-//! let on_changed: ValueChanged<i32> = Arc::new(|value| {
-//!     println!("Value changed to: {}", value);
+//! let on_changed: ValueChanged<i32> = Arc::new(move |value| {
+//!     last2.store(value, Ordering::Relaxed);
 //! });
 //!
 //! // Getter function
 //! let get_count: ValueGetter<i32> = Arc::new(|| 42);
+//!
+//! on_pressed();
+//! on_changed(7);
+//! assert_eq!(pressed.load(Ordering::Relaxed), 1);
+//! assert_eq!(last.load(Ordering::Relaxed), 7);
+//! assert_eq!(get_count(), 42);
 //! ```
 
 use std::sync::Arc;
@@ -39,14 +52,20 @@ use std::sync::Arc;
 /// # Examples
 ///
 /// ```rust
-/// use std::sync::Arc;
+/// use std::sync::{
+///     Arc,
+///     atomic::{AtomicBool, Ordering},
+/// };
 ///
 /// use flui_foundation::VoidCallback;
 ///
-/// let callback: VoidCallback = Arc::new(|| {
-///     println!("Callback invoked!");
+/// let invoked = Arc::new(AtomicBool::new(false));
+/// let invoked2 = Arc::clone(&invoked);
+/// let callback: VoidCallback = Arc::new(move || {
+///     invoked2.store(true, Ordering::Relaxed);
 /// });
 /// callback();
+/// assert!(invoked.load(Ordering::Relaxed));
 /// ```
 pub type VoidCallback = Arc<dyn Fn() + Send + Sync>;
 
@@ -58,14 +77,17 @@ pub type VoidCallback = Arc<dyn Fn() + Send + Sync>;
 /// # Examples
 ///
 /// ```rust
-/// use std::sync::Arc;
+/// use std::sync::{Arc, Mutex};
 ///
 /// use flui_foundation::ValueChanged;
 ///
-/// let on_changed: ValueChanged<String> = Arc::new(|value| {
-///     println!("New value: {}", value);
+/// let seen = Arc::new(Mutex::new(String::new()));
+/// let seen2 = Arc::clone(&seen);
+/// let on_changed: ValueChanged<String> = Arc::new(move |value| {
+///     *seen2.lock().unwrap() = value;
 /// });
 /// on_changed("Hello".to_string());
+/// assert_eq!(*seen.lock().unwrap(), "Hello");
 /// ```
 pub type ValueChanged<T> = Arc<dyn Fn(T) + Send + Sync>;
 

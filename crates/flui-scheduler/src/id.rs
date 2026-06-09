@@ -33,7 +33,7 @@ use std::{
 // =============================================================================
 
 pub use flui_foundation::{
-    FrameCallbackId, FrameId, Id, Identifier, Index, Marker, RawId, TaskId, TickerId, markers,
+    FrameCallbackId, FrameId, Id, Identifier, Marker, TaskId, TickerId, markers,
 };
 
 /// Scheduler callback ID - alias for `FrameCallbackId` from foundation.

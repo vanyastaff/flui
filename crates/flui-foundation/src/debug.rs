@@ -16,7 +16,7 @@ use std::{fmt, str::FromStr};
 ///
 /// let level = DiagnosticLevel::Info;
 /// assert!(level > DiagnosticLevel::Debug);
-/// println!("{}", level); // "info"
+/// assert_eq!(level.to_string(), "info");
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -143,7 +143,7 @@ impl std::error::Error for ParseDiagnosticLevelError {}
 /// use flui_foundation::DiagnosticsTreeStyle;
 ///
 /// let style = DiagnosticsTreeStyle::Sparse;
-/// println!("{}", style); // "sparse"
+/// assert_eq!(style.to_string(), "sparse");
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -236,6 +236,71 @@ impl fmt::Display for ParseDiagnosticsTreeStyleError {
 
 impl std::error::Error for ParseDiagnosticsTreeStyleError {}
 
+/// The kind of a diagnostics property, determining how it is displayed.
+///
+/// Mirrors Flutter's typed `DiagnosticsProperty<T>` subclass hierarchy
+/// (`EnumProperty`, `FlagProperty`, `IterableProperty`, etc.) but as an
+/// enum variant instead of class inheritance.
+///
+/// The `Generic` variant is the fallback for all types not explicitly listed.
+///
+/// # Examples
+///
+/// ```rust
+/// use flui_foundation::DiagnosticsPropertyKind;
+///
+/// let kind = DiagnosticsPropertyKind::Iterable { count: 3 };
+/// assert_eq!(kind, DiagnosticsPropertyKind::Iterable { count: 3 });
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+pub enum DiagnosticsPropertyKind {
+    /// A generic property displayed as `{name}: {value:?}`.
+    Generic,
+    /// An enum property; `description` overrides the formatted value string.
+    Enum {
+        /// Optional human-readable description of the current enum variant.
+        description: Option<std::borrow::Cow<'static, str>>,
+    },
+    /// A boolean flag property; displayed as `{name}` (true) or omitted (false).
+    Flag,
+    /// An iterable property; `count` is the number of elements.
+    Iterable {
+        /// The number of elements in the iterable.
+        count: usize,
+    },
+    /// An optional reference; displayed as `{name}: <null>` when absent.
+    OptionalRef,
+    /// A stack of strings (e.g. stack traces).
+    Stack,
+    /// A double/float with an optional unit (e.g. `"dp"`, `"px"`).
+    Double {
+        /// Optional unit label appended to the formatted value.
+        unit: Option<std::borrow::Cow<'static, str>>,
+    },
+    /// An integer with an optional unit.
+    Int {
+        /// Optional unit label appended to the formatted value.
+        unit: Option<std::borrow::Cow<'static, str>>,
+    },
+    /// A color value (RGBA hex display).
+    Color,
+    /// An `Offset` / `Point2D` value.
+    Offset,
+    /// A `Rect` value.
+    Rect,
+    /// A `Size` value.
+    Size,
+}
+
+impl Default for DiagnosticsPropertyKind {
+    #[inline]
+    fn default() -> Self {
+        Self::Generic
+    }
+}
+
 /// A diagnostic property
 ///
 /// Similar to Flutter's `DiagnosticsProperty`.
@@ -248,7 +313,7 @@ impl std::error::Error for ParseDiagnosticsTreeStyleError {}
 /// let prop = DiagnosticsProperty::new("width", 100);
 /// assert_eq!(prop.name(), "width");
 /// assert_eq!(prop.value(), "100");
-/// println!("{}", prop); // "width: 100"
+/// assert_eq!(prop.to_string(), "width: 100");
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -257,6 +322,12 @@ pub struct DiagnosticsProperty {
     value: String,
     #[cfg_attr(feature = "serde", serde(default))]
     level: DiagnosticLevel,
+    /// The typed kind of this property, determining how it is displayed.
+    ///
+    /// Defaults to [`DiagnosticsPropertyKind::Generic`] for properties built
+    /// via [`DiagnosticsProperty::new`], preserving backwards compatibility.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub kind: DiagnosticsPropertyKind,
     #[cfg_attr(feature = "serde", serde(default = "default_true"))]
     show_name: bool,
     #[cfg_attr(feature = "serde", serde(default = "default_true"))]
@@ -289,6 +360,7 @@ impl DiagnosticsProperty {
             name: name.into(),
             value: value.to_string(),
             level: DiagnosticLevel::Info,
+            kind: DiagnosticsPropertyKind::Generic,
             show_name: true,
             show_separator: true,
             default_value: None,
@@ -343,6 +415,30 @@ impl DiagnosticsProperty {
     pub const fn with_level(mut self, level: DiagnosticLevel) -> Self {
         self.level = level;
         self
+    }
+
+    /// Set the typed property kind (builder pattern)
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use flui_foundation::{DiagnosticsProperty, DiagnosticsPropertyKind};
+    ///
+    /// let prop = DiagnosticsProperty::new("visible", "true")
+    ///     .with_kind(DiagnosticsPropertyKind::Flag);
+    /// assert_eq!(prop.kind, DiagnosticsPropertyKind::Flag);
+    /// ```
+    #[must_use]
+    pub fn with_kind(mut self, kind: DiagnosticsPropertyKind) -> Self {
+        self.kind = kind;
+        self
+    }
+
+    /// Returns the typed property kind
+    #[must_use]
+    #[inline]
+    pub const fn kind(&self) -> &DiagnosticsPropertyKind {
+        &self.kind
     }
 
     /// Hide the property name (builder pattern)
@@ -429,7 +525,9 @@ impl fmt::Display for DiagnosticsProperty {
 ///
 /// let mut node = DiagnosticsNode::new("MyView");
 /// node.add_property(DiagnosticsProperty::new("width", 100));
-/// println!("{}", node);
+/// let rendered = node.to_string();
+/// assert!(rendered.contains("MyView"));
+/// assert!(rendered.contains("width"));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -698,7 +796,10 @@ impl fmt::Display for DiagnosticsNode {
 pub trait Diagnosticable: fmt::Debug {
     /// Create a diagnostics node for this object.
     fn to_diagnostics_node(&self) -> DiagnosticsNode {
-        let type_name = std::any::type_name::<Self>();
+        // F27: strip the module path, keeping only the final type segment.
+        // "flui_rendering::objects::RenderPadding" -> "RenderPadding".
+        let full = std::any::type_name::<Self>();
+        let type_name = full.rsplit("::").next().unwrap_or(full);
         let mut node = DiagnosticsNode::new(type_name);
         let mut builder = DiagnosticsBuilder::new();
         self.debug_fill_properties(&mut builder);
@@ -1041,6 +1142,44 @@ mod tests {
         assert_eq!(node.children().len(), 2);
         assert_eq!(node.children()[0].name().unwrap(), "Child1");
         assert_eq!(node.children()[1].name().unwrap(), "Child2");
+    }
+
+    #[test]
+    fn diagnostics_property_kind_field_exists() {
+        let prop = DiagnosticsProperty::new("width", "100.0");
+        assert_eq!(prop.kind, DiagnosticsPropertyKind::Generic);
+    }
+
+    #[test]
+    fn diagnostics_property_flag_kind() {
+        let prop =
+            DiagnosticsProperty::new("visible", "true").with_kind(DiagnosticsPropertyKind::Flag);
+        assert_eq!(prop.kind, DiagnosticsPropertyKind::Flag);
+    }
+
+    #[test]
+    fn diagnostics_property_iterable_kind() {
+        let prop = DiagnosticsProperty::new("children", "[..]")
+            .with_kind(DiagnosticsPropertyKind::Iterable { count: 3 });
+        assert_eq!(prop.kind, DiagnosticsPropertyKind::Iterable { count: 3 });
+    }
+
+    #[test]
+    fn to_diagnostics_node_uses_short_type_name() {
+        #[derive(Debug)]
+        struct MyWidget;
+        impl Diagnosticable for MyWidget {}
+
+        let node = MyWidget.to_diagnostics_node();
+        // `type_name::<MyWidget>()` includes the full module path
+        // (e.g. `flui_foundation::debug::tests::...::MyWidget`); after the
+        // F27 fix the node name must be stripped to just "MyWidget".
+        assert_eq!(
+            node.name(),
+            Some("MyWidget"),
+            "type_name should be short (no module path), got: {:?}",
+            node.name()
+        );
     }
 
     #[test]

@@ -4,19 +4,27 @@
 //! similar to Flutter's `ChangeNotifier` system in foundation.
 //!
 //! - **Listenable**: Base trait for objects that notify listeners
-//! - **ChangeNotifier**: Manages a list of listeners and notifies them
-//! - **ValueNotifier**: A ChangeNotifier that holds a single value
+//! - **`ChangeNotifier`**: Manages a list of listeners and notifies them
+//! - **`ValueNotifier`**: A `ChangeNotifier` that holds a single value
 //!
 //! # Example
 //!
 //! ```rust
-//! use std::sync::Arc;
+//! use std::sync::{
+//!     Arc,
+//!     atomic::{AtomicU32, Ordering},
+//! };
 //!
 //! use flui_foundation::notifier::{ChangeNotifier, Listenable};
 //!
 //! let notifier = ChangeNotifier::new();
-//! let id = notifier.add_listener(Arc::new(|| println!("Changed!")));
+//! let count = Arc::new(AtomicU32::new(0));
+//! let count2 = Arc::clone(&count);
+//! let _id = notifier.add_listener(Arc::new(move || {
+//!     count2.fetch_add(1, Ordering::Relaxed);
+//! }));
 //! notifier.notify_listeners();
+//! assert_eq!(count.load(Ordering::Relaxed), 1);
 //! ```
 //!
 //! # Note
@@ -29,6 +37,7 @@ use std::{
     collections::HashMap,
     fmt,
     ops::Deref,
+    panic::{AssertUnwindSafe, catch_unwind},
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -60,13 +69,21 @@ pub type ListenerCallback = Arc<dyn Fn() + Send + Sync + 'static>;
 /// # Example
 ///
 /// ```rust
-/// use std::sync::Arc;
+/// use std::sync::{
+///     Arc,
+///     atomic::{AtomicU32, Ordering},
+/// };
 ///
 /// use flui_foundation::notifier::{ChangeNotifier, Listenable};
 ///
 /// let notifier = ChangeNotifier::new();
-/// let id = notifier.add_listener(Arc::new(|| println!("Changed!")));
+/// let count = Arc::new(AtomicU32::new(0));
+/// let count2 = Arc::clone(&count);
+/// let id = notifier.add_listener(Arc::new(move || {
+///     count2.fetch_add(1, Ordering::Relaxed);
+/// }));
 /// notifier.notify_listeners();
+/// assert_eq!(count.load(Ordering::Relaxed), 1);
 /// notifier.remove_listener(id);
 /// ```
 pub trait Listenable: Send + Sync {
@@ -94,14 +111,14 @@ pub trait Listenable: Send + Sync {
 ///
 /// use flui_foundation::notifier::{Listenable, ValueListenable, ValueNotifier};
 ///
-/// fn print_on_change<T: std::fmt::Debug + Clone + Send + Sync>(
+/// fn current<T: std::fmt::Debug + Clone + Send + Sync>(
 ///     listenable: &impl ValueListenable<T>,
-/// ) {
-///     println!("Current value: {:?}", listenable.value());
+/// ) -> String {
+///     format!("{:?}", listenable.value())
 /// }
 ///
 /// let notifier = ValueNotifier::new(42);
-/// print_on_change(&notifier);
+/// assert_eq!(current(&notifier), "42");
 /// ```
 pub trait ValueListenable<T>: Listenable {
     /// The current value of the object.
@@ -123,7 +140,7 @@ pub trait ValueListenable<T>: Listenable {
 /// debug builds via `debug_assert!` and degrade to a `tracing::warn!` + no-op
 /// in release builds. Mirrors Flutter's `ChangeNotifier.dispose` and
 /// `_debugAssertNotDisposed` semantics
-/// (flutter/lib/src/foundation/change_notifier.dart:181, :376).
+/// (`flutter/lib/src/foundation/change_notifier.dart:181`, :376).
 ///
 /// `is_disposed` is shared across clones via `Arc<AtomicBool>` so that a
 /// listener-callback holding its own clone sees disposal performed elsewhere.
@@ -223,24 +240,53 @@ impl ChangeNotifier {
     #[inline]
     fn check_disposed(&self) -> bool {
         if self.is_disposed.load(Ordering::Acquire) {
-            debug_assert!(
-                false,
+            // F20: cfg-explicit layout. The previous `debug_assert!(false, ..)`
+            // + `tracing::warn!` in one block was misleading — in debug builds
+            // the assert diverges, so the warn! below it was dead; in release
+            // builds the assert compiled out and only the warn! ran. Splitting
+            // on `cfg(debug_assertions)` makes the intent unambiguous: debug
+            // panics immediately (hard contract violation), release degrades
+            // gracefully with a warning (Flutter parity).
+            #[cfg(debug_assertions)]
+            panic!(
                 "ChangeNotifier used after dispose: once dispose() has been \
                  called, the notifier can no longer be used"
             );
-            tracing::warn!("ChangeNotifier used after dispose");
-            return true;
+            // The release-only block is unreachable in debug builds because the
+            // `panic!` above diverges; `allow(unreachable_code)` documents that.
+            #[allow(unreachable_code)]
+            {
+                tracing::warn!("ChangeNotifier used after dispose");
+                return true;
+            }
         }
         false
     }
 
     /// Call all the registered listeners.
     ///
-    /// Callbacks are cloned (cheap `Arc` ref-count bump) and the lock is
-    /// released before any callback is invoked. This prevents deadlocks
-    /// when a callback calls `add_listener` or `remove_listener` on the
-    /// same notifier, matching Flutter's `ChangeNotifier.notifyListeners()`
-    /// re-entrancy semantics.
+    /// Snapshot semantics (Flutter parity, `ChangeNotifier.notifyListeners`):
+    ///
+    /// - A snapshot of `(id, callback)` pairs is taken under lock before any
+    ///   callback fires. The lock is released before iteration, preventing
+    ///   deadlocks when a callback calls `add_listener` or `remove_listener`
+    ///   on the same notifier (re-entrancy).
+    /// - Before each callback fires, the listener's registration is re-checked.
+    ///   If the listener was removed during notify (e.g. a previous callback
+    ///   called `remove_listener`), the callback is silently skipped (F5). A
+    ///   listener removed mid-iteration does NOT fire.
+    /// - Each callback is wrapped in `catch_unwind(AssertUnwindSafe(|| ...))`.
+    ///   If a callback panics, the panic payload is logged via
+    ///   `tracing::error!` and iteration continues with the next listener
+    ///   (F6). One panicking listener does NOT abort the rest.
+    ///
+    /// Listeners fire in registration order (`ListenerId` ascending), matching
+    /// Flutter's array-order iteration; the backing `HashMap` does not preserve
+    /// insertion order, so the snapshot is sorted by id before firing.
+    ///
+    /// Post-snapshot *additions* are NOT fired in the current notify cycle
+    /// (same as Flutter); only listeners present at snapshot time and still
+    /// registered when reached are invoked.
     ///
     /// # Disposal
     ///
@@ -254,19 +300,61 @@ impl ChangeNotifier {
         if self.check_disposed() {
             return;
         }
-        // Audit I-4: stack-allocate the snapshot for the common case
-        // (1-4 listeners). Pre-cycle `Vec::new() + .collect()` forced
-        // a heap allocation on every notify, which adds up at frame
-        // rate for hot-path notifiers (scroll position, animation
-        // tick, drag value). `SmallVec<[_; 4]>` keeps the inline
-        // storage capacity 4 — when there are ≤4 listeners the
-        // snapshot is purely stack memory; ≥5 listeners spills to
-        // the heap (same as the pre-cycle path, but only for the
-        // tail).
-        let callbacks: smallvec::SmallVec<[ListenerCallback; 4]> =
-            self.listeners.lock().values().cloned().collect();
-        for callback in &callbacks {
-            callback();
+        // Audit I-4 / F16: stack-allocate the snapshot for the common case
+        // (1-4 listeners). `SmallVec<[_; 4]>` keeps inline storage capacity 4 —
+        // when there are ≤4 listeners the snapshot is purely stack memory;
+        // ≥5 listeners spills to the heap. The snapshot now carries
+        // `(ListenerId, ListenerCallback)` pairs so each entry can be
+        // re-checked against the live registration before firing (F5).
+        //
+        // F16: `SmallVec` is chosen over `tinyvec::ArrayVec` deliberately.
+        // `ListenerCallback` is `Arc<dyn Fn() + Send + Sync>`, which does NOT
+        // implement `Default`; `tinyvec` requires `T: Default` for every
+        // element type, so it cannot store these callbacks. `SmallVec` imposes
+        // no `Default` bound, so it is the only inline-storage option here.
+        let mut snapshot: smallvec::SmallVec<[(ListenerId, ListenerCallback); 4]> = self
+            .listeners
+            .lock()
+            .iter()
+            .map(|(&id, cb)| (id, Arc::clone(cb)))
+            .collect();
+        // Fire in registration order (Flutter parity). `ListenerId` is assigned
+        // monotonically by `next_id`, so sorting by id reproduces the order in
+        // which listeners were added — the backing `HashMap` does not preserve
+        // insertion order. This also makes the remove-during-notify contract
+        // (F5) observe a deterministic ordering rather than arbitrary hash order.
+        snapshot.sort_unstable_by_key(|(id, _)| *id);
+
+        for (id, callback) in &snapshot {
+            // F5: re-check registration before firing. Acquires the lock
+            // briefly for the lookup and releases it before the callback runs,
+            // so a listener individually removed mid-notify (by an earlier
+            // callback's `remove_listener`) is skipped rather than invoked.
+            //
+            // Disposal is handled distinctly: `dispose()` clears the entire map
+            // (and sets `is_disposed`), but FLUI guarantees that a `dispose()`
+            // call made *mid-notify* by a listener does not abort the in-flight
+            // snapshot — the remaining snapshot listeners still fire (see the
+            // `dispose_during_notify_iteration_safe` reentrancy contract on
+            // [`dispose`](Self::dispose)). We therefore only consult the live
+            // map for the per-listener skip while the notifier is NOT disposed;
+            // once disposed mid-flight, the snapshot is honoured to completion.
+            if !self.is_disposed.load(Ordering::Acquire) && !self.listeners.lock().contains_key(id)
+            {
+                continue; // Individually removed during notify; skip.
+            }
+            // F6: isolate each callback's panic so one panicking listener does
+            // not abort the remaining listeners. `AssertUnwindSafe` is sound
+            // here: the callback is `Arc<dyn Fn() + Send + Sync>` invoked by
+            // shared reference, and on unwind no borrowed state crosses the
+            // boundary in a broken-invariant form — we only read the snapshot.
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| callback())) {
+                tracing::error!(
+                    listener_id = ?id,
+                    panic_payload = ?payload,
+                    "ChangeNotifier listener panicked; continuing with remaining listeners"
+                );
+            }
         }
     }
 
@@ -463,12 +551,12 @@ impl<T: Clone + fmt::Debug> fmt::Debug for ValueNotifier<T> {
     }
 }
 
-impl<T: Clone + Default> Default for ValueNotifier<T> {
-    #[inline]
-    fn default() -> Self {
-        Self::new(T::default())
-    }
-}
+// F11: `Default for ValueNotifier<T>` removed intentionally. A defaulted
+// notifier would have a default-constructed value AND a fresh identity (no
+// listeners); two `ValueNotifier::<T>::default()` calls produce notifiers that
+// are `==` by value yet are observably distinct objects. This violates the
+// principle of least surprise, and Flutter's `ValueNotifier` likewise has no
+// default constructor. Construct explicitly via `ValueNotifier::new(value)`.
 
 impl<T: Clone + PartialEq> PartialEq for ValueNotifier<T> {
     #[inline]
@@ -640,9 +728,32 @@ mod tests {
     }
 
     #[test]
-    fn test_value_notifier_default() {
-        let notifier: ValueNotifier<i32> = ValueNotifier::default();
-        assert_eq!(*notifier, 0);
+    fn valuenotifier_new_creates_distinct_notifiers() {
+        // F11: `Default for ValueNotifier<T>` was removed. Construct
+        // explicitly with `new`. Two notifiers built from the same value are
+        // `==` by value but are observably distinct objects (independent
+        // listener registries) — the exact surprise the removed Default would
+        // have hidden.
+        let a = ValueNotifier::new(0u32);
+        let b = ValueNotifier::new(0u32);
+        assert_eq!(a, b, "equal by value");
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let counter_clone = Arc::clone(&counter);
+        let _ = a.add_listener(Arc::new(move || {
+            counter_clone.fetch_add(1, Ordering::SeqCst);
+        }));
+        // `a` has a listener; `b` must not — distinct identities.
+        assert_eq!(a.len(), 1);
+        assert_eq!(b.len(), 0);
+        a.notify();
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+        b.notify();
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            1,
+            "b is a distinct notifier; notifying it must not touch a's listener"
+        );
     }
 
     #[test]
@@ -725,6 +836,116 @@ mod tests {
         notifier.update(|val| *val += 10);
         assert_eq!(*notifier.value(), 10);
         assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn removed_listener_does_not_fire_during_notify() {
+        // F5: a listener removed *during* iteration (by a previously-fired
+        // listener) must NOT fire. Given listeners A and B, where A removes B
+        // mid-notify, B must not fire (post-removal skip).
+        use std::sync::atomic::AtomicBool;
+
+        use parking_lot::Mutex;
+
+        let notifier = ChangeNotifier::new();
+        let fired_b = Arc::new(AtomicBool::new(false));
+        let fired_b_clone = Arc::clone(&fired_b);
+        let notifier_clone = notifier.clone();
+
+        let id_b_cell = Arc::new(Mutex::new(None::<ListenerId>));
+        let id_b_cell_clone = Arc::clone(&id_b_cell);
+
+        let id_a = notifier.add_listener(Arc::new(move || {
+            if let Some(id) = *id_b_cell_clone.lock() {
+                notifier_clone.remove_listener(id);
+            }
+        }));
+
+        let id_b = notifier.add_listener(Arc::new(move || {
+            fired_b_clone.store(true, Ordering::SeqCst);
+        }));
+        *id_b_cell.lock() = Some(id_b);
+
+        notifier.notify_listeners();
+        assert!(
+            !fired_b.load(Ordering::SeqCst),
+            "removed listener must not fire"
+        );
+        let _ = id_a;
+    }
+
+    #[test]
+    fn listener_fires_after_panic() {
+        // F6: a panicking listener must NOT abort the remaining listeners.
+        // Given 3 listeners: panic-1, listener-2, listener-3 — listener-2 and
+        // listener-3 must still fire despite listener-1 panicking.
+        use std::sync::atomic::AtomicBool;
+
+        let notifier = ChangeNotifier::new();
+        let fired_2 = Arc::new(AtomicBool::new(false));
+        let fired_3 = Arc::new(AtomicBool::new(false));
+        let (fired_2c, fired_3c) = (Arc::clone(&fired_2), Arc::clone(&fired_3));
+
+        let _ = notifier.add_listener(Arc::new(|| panic!("intentional test panic")));
+        let _ = notifier.add_listener(Arc::new(move || {
+            fired_2c.store(true, Ordering::SeqCst);
+        }));
+        let _ = notifier.add_listener(Arc::new(move || {
+            fired_3c.store(true, Ordering::SeqCst);
+        }));
+
+        notifier.notify_listeners(); // must not abort
+
+        assert!(
+            fired_2.load(Ordering::SeqCst),
+            "listener-2 must fire after listener-1 panics"
+        );
+        assert!(
+            fired_3.load(Ordering::SeqCst),
+            "listener-3 must fire after listener-1 panics"
+        );
+    }
+
+    #[test]
+    fn notify_listeners_fires_all_when_no_panic() {
+        // TRIANGULATE: 3 listeners, no panics, all 3 fire.
+        let notifier = ChangeNotifier::new();
+        let count = Arc::new(AtomicUsize::new(0));
+        for _ in 0..3 {
+            let c = Arc::clone(&count);
+            let _ = notifier.add_listener(Arc::new(move || {
+                c.fetch_add(1, Ordering::SeqCst);
+            }));
+        }
+        notifier.notify_listeners();
+        assert_eq!(count.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn notify_listeners_empty() {
+        // TRIANGULATE: no listeners registered; no panic, no-op.
+        let notifier = ChangeNotifier::new();
+        notifier.notify_listeners();
+        assert_eq!(notifier.len(), 0);
+    }
+
+    #[test]
+    fn notify_listeners_skips_all_removed() {
+        // TRIANGULATE: all listeners removed before notify; none fire.
+        let notifier = ChangeNotifier::new();
+        let count = Arc::new(AtomicUsize::new(0));
+        let mut ids = Vec::new();
+        for _ in 0..3 {
+            let c = Arc::clone(&count);
+            ids.push(notifier.add_listener(Arc::new(move || {
+                c.fetch_add(1, Ordering::SeqCst);
+            })));
+        }
+        for id in ids {
+            notifier.remove_listener(id);
+        }
+        notifier.notify_listeners();
+        assert_eq!(count.load(Ordering::SeqCst), 0);
     }
 
     #[test]

@@ -20,6 +20,9 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 smallvec = { workspace = true }
 
+# Typed builders (eliminates confusable positional args, F14)
+bon = { workspace = true }
+
 # Delegation support
 ambassador = { workspace = true }
 
