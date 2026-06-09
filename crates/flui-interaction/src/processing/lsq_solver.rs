@@ -131,7 +131,8 @@ impl PolynomialFit {
 ///
 /// `x`, `y`, and `w` are equal-length slices of data points (positions, values,
 /// weights); `degree` is the polynomial degree. Returns `None` if the data is
-/// insufficient (`degree > len`), linearly dependent, or numerically singular.
+/// insufficient (a degree-`d` fit needs `d + 1` points, i.e. `degree + 1 > len`),
+/// linearly dependent, or numerically singular.
 ///
 /// Single-RHS entry point — used by the solver's own tests. Production callers
 /// fit the x and y pointer coordinates together via [`solve_two`], which shares
@@ -164,7 +165,10 @@ fn factorize(
 ) -> Option<(usize, usize)> {
     let m = x.len();
     // No data / not enough points / degree too high / stack buffers too small.
-    if m == 0 || degree > m || degree > MAX_DEGREE || m > SCRATCH_M {
+    // A degree-`d` fit has `d + 1` coefficients and needs at least that many
+    // points, so `degree >= m` (equivalently `degree + 1 > m`) is underdetermined
+    // and rejected here rather than relying on a later singular-matrix failure.
+    if m == 0 || degree >= m || degree > MAX_DEGREE || m > SCRATCH_M {
         return None;
     }
     let n = degree + 1;
@@ -437,6 +441,28 @@ mod tests {
         let w: Vec<f64> = vec![];
         // No data → degree=0 is "more than 0 points", so still None.
         assert!(solve_one(&x, &y, &w, 0).is_none());
+    }
+
+    #[test]
+    fn underdetermined_degree_equals_points_returns_none() {
+        // A degree-2 fit has 3 coefficients and needs >= 3 points. Two points
+        // is underdetermined and must be rejected by the precondition, not by a
+        // downstream singular-matrix failure. Exactly-enough (3 points) fits.
+        let x = [0.0, 1.0];
+        let y = [0.0, 1.0];
+        let w = [1.0, 1.0];
+        assert!(
+            solve_one(&x, &y, &w, 2).is_none(),
+            "2 points cannot fit degree 2"
+        );
+
+        let x3 = [0.0, 1.0, 2.0];
+        let y3 = [0.0, 1.0, 2.0];
+        let w3 = [1.0, 1.0, 1.0];
+        assert!(
+            solve_one(&x3, &y3, &w3, 2).is_some(),
+            "3 points fit degree 2"
+        );
     }
 
     proptest::proptest! {
