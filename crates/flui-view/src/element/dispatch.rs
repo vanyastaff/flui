@@ -70,7 +70,7 @@ use crate::view::View;
 /// behavior implementation.
 pub(crate) fn dispatch_view_update<V, A>(core: &mut ElementCore<V, A>, new_view: &dyn View) -> bool
 where
-    V: Clone + Send + Sync + 'static,
+    V: View + Clone + Send + Sync + 'static,
     A: ElementArity,
 {
     // Use the CONCRETE runtime TypeId — `Any::type_id()` via
@@ -88,6 +88,26 @@ where
         // "different type → new element" semantics.
         return false;
     }
+
+    // Memoization equality-bail (Wave 3 `should_skip_rebuild`).
+    //
+    // Evaluate on a BORROW before the unconditional `clone_box` below —
+    // every skip must pay zero clone cost. The downcast_ref here is
+    // sanctioned: the `as_any().type_id() == TypeId::of::<V>()` guard
+    // above means the ref is guaranteed to succeed.
+    // Bound to a short `let` so the FR-033 marker stays on the same line as
+    // `downcast_ref` and survives rustfmt (the marker must be co-located).
+    let nv = new_view.as_any().downcast_ref::<V>(); // PORT-CHECK-OK-DOWNCAST: type-id guarded
+    if let Some(new_ref) = nv
+        && core.view().should_skip_rebuild(new_ref)
+    {
+        tracing::debug!(
+            view_type = ?TypeId::of::<V>(),
+            "dispatch_view_update: skip rebuild (configs equal)",
+        );
+        return true; // reuse element; skip clone + replace + rebuild
+    }
+
     // TypeId equality should guarantee the dynamic value is V.
     // `Downcast::into_any` + `Box::downcast::<V>` produces the
     // typed inner without `downcast_ref::<V>()` — the syntactic

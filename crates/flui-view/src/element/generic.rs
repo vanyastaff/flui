@@ -299,7 +299,10 @@ where
     ///
     /// `true` if update succeeded, `false` if the type mismatched
     /// (caller replaces the element).
-    pub fn update_view(&mut self, new_view: &dyn View) -> bool {
+    pub fn update_view(&mut self, new_view: &dyn View) -> bool
+    where
+        V: View,
+    {
         crate::element::dispatch::dispatch_view_update(self, new_view)
     }
 
