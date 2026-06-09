@@ -985,8 +985,8 @@ mod tests {
         use flui_types::geometry::px;
         let tween = SizeTween::new(Size::new(px(0.0), px(0.0)), Size::new(px(100.0), px(200.0)));
         let mid = tween.transform(0.5);
-        assert_eq!(mid.width, 50.0);
-        assert_eq!(mid.height, 100.0);
+        assert_eq!(mid.width, px(50.0));
+        assert_eq!(mid.height, px(100.0));
     }
 
     #[test]
@@ -997,8 +997,8 @@ mod tests {
         let tween = RectTween::new(begin, end);
 
         let mid = tween.transform(0.5);
-        assert_eq!(mid.left(), 50.0);
-        assert_eq!(mid.top(), 50.0);
+        assert_eq!(mid.left(), px(50.0));
+        assert_eq!(mid.top(), px(50.0));
     }
 
     #[test]
@@ -1006,8 +1006,8 @@ mod tests {
         use flui_types::geometry::px;
         let tween = OffsetTween::new(Offset::ZERO, Offset::new(px(100.0), px(200.0)));
         let mid = tween.transform(0.5);
-        assert_eq!(mid.dx, 50.0);
-        assert_eq!(mid.dy, 100.0);
+        assert_eq!(mid.dx, px(50.0));
+        assert_eq!(mid.dy, px(100.0));
     }
 
     #[test]
@@ -1038,7 +1038,7 @@ mod tests {
         let tween = BorderRadiusTween::new(begin, end);
 
         let mid = tween.transform(0.5);
-        assert_eq!(mid.top_left.x, 10.0);
+        assert_eq!(mid.top_left.x, px(10.0));
     }
 
     #[test]
