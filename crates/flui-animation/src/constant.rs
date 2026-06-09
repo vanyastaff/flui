@@ -275,7 +275,7 @@ mod tests {
     #[test]
     fn test_constant_animation_debug() {
         let animation = ConstantAnimation::new(0.5);
-        let debug_str = format!("{:?}", animation);
+        let debug_str = format!("{animation:?}");
         assert!(debug_str.contains("ConstantAnimation"));
         assert!(debug_str.contains("0.5"));
     }

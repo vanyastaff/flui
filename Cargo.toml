@@ -43,8 +43,8 @@ members = [
     # === Tools ===
     "tools/web-server", # Built-in web dev server (wasm-pack + HTTP serve)
 
-    # === Temporarily disabled ===
-    # "crates/flui-animation",
+    # === Animation Layer ===
+    "crates/flui-animation", # Animation system (ACTIVE)
     # "crates/flui-reactivity",
     # "crates/flui-devtools",
     # "crates/flui-cli",
@@ -69,6 +69,7 @@ default-members = [
     "crates/flui-rendering",
     "crates/flui-view",
     "crates/flui-app",
+    "crates/flui-animation",
 ]
 
 [workspace.package]

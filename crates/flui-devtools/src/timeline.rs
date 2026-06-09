@@ -82,6 +82,14 @@ impl EventCategory {
     }
 }
 
+/// Returns the current thread's [`ThreadId`].
+///
+/// Used as a serde `default` function for `TimelineEvent::thread_id`, which is
+/// skipped during serialization and reconstructed on deserialization.
+fn current_thread_id() -> std::thread::ThreadId {
+    std::thread::current().id()
+}
+
 /// A single timeline event
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimelineEvent {
@@ -94,7 +102,9 @@ pub struct TimelineEvent {
     /// Event category
     pub category: EventCategory,
     /// Thread ID (for multi-threaded applications)
-    #[serde(skip)]
+    ///
+    /// Not serialized; restored to the deserializing thread's ID on load.
+    #[serde(skip, default = "current_thread_id")]
     pub thread_id: std::thread::ThreadId,
 }
 

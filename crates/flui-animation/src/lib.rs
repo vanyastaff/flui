@@ -77,6 +77,9 @@
 
 #![warn(missing_docs)]
 #![warn(clippy::all)]
+// Curve endpoints (`t == 0.0` / `t == 1.0`) and tween math use exact float
+// equality against known sentinel values; tolerance comparison would be wrong here.
+#![allow(clippy::float_cmp)]
 
 // Core animation modules
 pub mod animation;
