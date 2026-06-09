@@ -148,10 +148,10 @@ mod tests {
         let size = Size::new(px(100.0), px(200.0));
         let clip = clipper.get_clip(size);
 
-        assert_eq!(clip.left(), 0.0);
-        assert_eq!(clip.top(), 0.0);
-        assert_eq!(clip.right(), 100.0);
-        assert_eq!(clip.bottom(), 200.0);
+        assert_eq!(clip.left(), px(0.0));
+        assert_eq!(clip.top(), px(0.0));
+        assert_eq!(clip.right(), px(100.0));
+        assert_eq!(clip.bottom(), px(200.0));
     }
 
     #[test]
@@ -160,10 +160,10 @@ mod tests {
         let size = Size::new(px(100.0), px(200.0));
         let clip = clipper.get_clip(size);
 
-        assert_eq!(clip.left(), 10.0);
-        assert_eq!(clip.top(), 10.0);
-        assert_eq!(clip.right(), 90.0);
-        assert_eq!(clip.bottom(), 190.0);
+        assert_eq!(clip.left(), px(10.0));
+        assert_eq!(clip.top(), px(10.0));
+        assert_eq!(clip.right(), px(90.0));
+        assert_eq!(clip.bottom(), px(190.0));
     }
 
     #[test]

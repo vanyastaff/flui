@@ -997,13 +997,16 @@ mod tests {
         assert_eq!(GpuCapabilities::vendor_name(0x106B), "Apple");
     }
 
-    #[tokio::test]
-    async fn test_offscreen_renderer() {
-        // This test may fail in CI without GPU
-        if let Ok(renderer) = Renderer::new_offscreen().await {
-            assert!(renderer.surface.is_none());
-            assert!(renderer.config.is_none());
-            assert!(!renderer.capabilities.adapter_name.is_empty());
-        }
+    #[test]
+    fn test_offscreen_renderer() {
+        // This test may fail in CI without GPU. Driven via `pollster` to match
+        // the rest of this crate's async tests (no tokio-macros dependency).
+        pollster::block_on(async {
+            if let Ok(renderer) = Renderer::new_offscreen().await {
+                assert!(renderer.surface.is_none());
+                assert!(renderer.config.is_none());
+                assert!(!renderer.capabilities.adapter_name.is_empty());
+            }
+        });
     }
 }
