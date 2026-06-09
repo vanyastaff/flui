@@ -11,7 +11,7 @@ use std::fmt;
 
 use super::{
     Pixels, Point, Vec2, px,
-    traits::{NumericUnit, Unit},
+    traits::{FloatUnit, NumericUnit, Unit},
 };
 
 /// A line segment defined by two endpoints with generic unit type.
@@ -89,7 +89,7 @@ impl<T: Unit> Line<T> {
 
 impl<T: NumericUnit> Line<T>
 where
-    T: Into<f32> + From<f32> + std::ops::Sub<Output = T>,
+    T: Into<f32> + FloatUnit + std::ops::Sub<Output = T>,
 {
     /// Returns the length of the line segment.
     #[inline]
@@ -143,7 +143,7 @@ where
 
 impl<T: NumericUnit> Line<T>
 where
-    T: Into<f32> + From<f32> + PartialEq + std::ops::Sub<Output = T> + Clone + fmt::Debug + Default,
+    T: Into<f32> + FloatUnit + PartialEq + std::ops::Sub<Output = T> + Clone + fmt::Debug + Default,
 {
     /// Returns true if the line segment has zero length (both points are
     /// equal).
@@ -236,7 +236,7 @@ where
 
 impl<T: NumericUnit> Line<T>
 where
-    T: Into<f32> + From<f32>,
+    T: Into<f32> + FloatUnit,
 {
     /// Translates the line segment by the given offset vector.
     #[inline]

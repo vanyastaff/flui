@@ -113,7 +113,6 @@ cargo run --example color_blending
 ```rust
 pub struct Pixels(f32);
 pub struct DevicePixels(i32);
-pub struct ScaledPixels(f32);
 
 // Cannot accidentally mix units:
 let logical = px(100.0);
@@ -278,4 +277,18 @@ A: Zero. They're newtypes that compile to raw primitives (f32/i32). See benchmar
 A: Yes! `flui_types` has minimal dependencies and can be used standalone for type-safe geometry and colors.
 
 **Q: Why not use glam or euclid?**  
-A: FLUI needs Flutter-compatible APIs (Rect::from_ltrb, Size::area) and unit type safety specific to UI layout.
+A: FLUI needs Flutter-compatible APIs (`Rect::from_ltrb`, `Size::area`) and unit type safety
+(`Pixels`/`DevicePixels`) specific to UI layout — neither glam (untyped `f32` vectors) nor euclid
+(its `Length<T, U>` ships an implicit `From<T>` that defeats the unit barrier) provides that surface
+directly. So the *public* geometry surface stays FLUI-owned, but each library is used in its native role
+underneath:
+
+- **glam** — backs `Matrix4` (`glam::Mat4`): SIMD-by-default 4×4 math + `bytemuck::Pod` for zero-copy GPU
+  upload. `Matrix4`'s public API (incl. the `m: [f32;16]` field) is unchanged. (N-geom PR 2, Option D.)
+- **kurbo** — opt-in (`feature = "kurbo"`) f64 Bézier/curve bridge for the painting layer / future Vello
+  backend, via explicit `From`/`TryFrom` at the `flui ↔ kurbo` boundary. (N-geom PR 3.)
+- **mint** — the cross-library interop lingua franca (enabled on glam), so glam ↔ kurbo bridges for free.
+
+The euclid-newtype alternative (Option C) was measured and rejected: it forces every geometry field access
+(`.width`, `.dx`, …) across ~2,379 sites into method calls. See
+[`docs/research/2026-05-29-u17-euclid-spike-report.md`](../../docs/research/2026-05-29-u17-euclid-spike-report.md).

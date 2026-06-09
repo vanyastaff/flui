@@ -1,15 +1,7 @@
-error[E0277]: cannot add `DevicePixels` to `flui_types::Pixels`
-  --> tests/compile_fail/mixed_units.rs:13:26
+error[E0308]: mismatched types
+  --> tests/compile_fail/mixed_units.rs:13:28
    |
 13 |     let _mixed = logical + device;
-   |                          ^ no implementation for `flui_types::Pixels + DevicePixels`
-   |
-   = help: the trait `Add<DevicePixels>` is not implemented for `flui_types::Pixels`
-help: the following other types implement trait `Add<Rhs>`
-  --> $WORKSPACE/crates/flui-geometry/src/units.rs
-   |
-   | impl Add for Pixels {
-   | ^^^^^^^^^^^^^^^^^^^ `flui_types::Pixels` implements `Add`
-...
-   | impl Add<f32> for Pixels {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^ `flui_types::Pixels` implements `Add<f32>`
+   |                  -------   ^^^^^^ expected `Pixels`, found `DevicePixels`
+   |                  |
+   |                  expected because this is `flui_types::Pixels`

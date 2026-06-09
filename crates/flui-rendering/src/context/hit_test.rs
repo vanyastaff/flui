@@ -227,7 +227,7 @@ where
     /// Checks if position is within a rectangle at origin with given size.
     pub fn is_within_size(&self, width: Pixels, height: Pixels) -> bool {
         let pos = self.inner.position();
-        pos.dx >= 0.0 && pos.dx < width && pos.dy >= 0.0 && pos.dy < height
+        pos.dx >= Pixels::ZERO && pos.dx < width && pos.dy >= Pixels::ZERO && pos.dy < height
     }
 
     /// Adds self as a hit target with the given ID.

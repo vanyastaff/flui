@@ -192,8 +192,8 @@ impl FollowerLayer {
         let leader_half_width = leader_width_px * 0.5;
         let leader_half_height = leader_height_px * 0.5;
         let leader_anchor_px = Offset::new(
-            Pixels::from(leader_half_width + self.leader_anchor.x * leader_half_width),
-            Pixels::from(leader_half_height + self.leader_anchor.y * leader_half_height),
+            Pixels::new(leader_half_width + self.leader_anchor.x * leader_half_width),
+            Pixels::new(leader_half_height + self.leader_anchor.y * leader_half_height),
         );
 
         // Pixel position of the anchor inside a follower-sized rect at origin.
@@ -202,8 +202,8 @@ impl FollowerLayer {
         let follower_half_width = follower_width_px * 0.5;
         let follower_half_height = follower_height_px * 0.5;
         let follower_anchor_px = Offset::new(
-            Pixels::from(follower_half_width + self.follower_anchor.x * follower_half_width),
-            Pixels::from(follower_half_height + self.follower_anchor.y * follower_half_height),
+            Pixels::new(follower_half_width + self.follower_anchor.x * follower_half_width),
+            Pixels::new(follower_half_height + self.follower_anchor.y * follower_half_height),
         );
 
         // Final position: leader_offset + leader anchor + target offset

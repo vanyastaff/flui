@@ -27,7 +27,6 @@
 //! |------|-------------|----------|
 //! | [`Pixels`] | Logical pixels | UI layout, design coordinates |
 //! | [`DevicePixels`] | Physical pixels (i32) | Framebuffer, pixel-perfect rendering |
-//! | [`ScaledPixels`] | DPI-scaled pixels | High-DPI displays |
 //! | [`Rems`] | Root em units | Font-relative sizing |
 //! | `f32` | Raw float | GPU operations, math |
 //!
@@ -103,7 +102,7 @@
 //! # Feature Modules
 //!
 //! - [`traits`] - Core traits (`Unit`, `NumericUnit`, `Along`, `Half`, etc.)
-//! - [`units`] - Unit types (`Pixels`, `DevicePixels`, `ScaledPixels`)
+//! - [`units`] - Unit types (`Pixels`, `DevicePixels`)
 //! - [`error`] - Error types for validation failures
 //! - [`transform`] - 2D transformations
 //! - [`bezier`] - Bézier curve types
@@ -114,6 +113,11 @@
 
 pub mod bezier;
 pub mod bounds;
+/// External-crate interop bridges. Gated per-bridge feature (`kurbo`), so the
+/// module is absent from default builds until a consumer opts in (lands ahead
+/// of its Core.2 consumer by design — N-geom PR 3, U8).
+#[cfg(feature = "kurbo")]
+pub mod bridges; // PORT-CHECK-OK-SP4: kurbo bridge intentionally precedes its Core.2 consumer (U8); feature-gated, not speculative.
 pub mod circle;
 pub mod corner;
 pub mod corners;
@@ -161,7 +165,9 @@ pub mod prelude {
     // Unit types
     // Constructor functions
     // Traits
-    pub use super::traits::{Along, Axis, GeometryOps, Half, IsZero, NumericUnit, Sign, Unit};
+    pub use super::traits::{
+        Along, Axis, FloatUnit, GeometryOps, Half, IsZero, NumericUnit, Sign, Unit,
+    };
     pub use super::{
         bounds::Bounds,
         circle::Circle,
@@ -173,9 +179,7 @@ pub mod prelude {
         rect::{Rect, rect},
         rrect::{RRect, Radius},
         size::{Size, size},
-        units::{
-            DevicePixels, PixelDelta, Pixels, ScaledPixels, delta_px, device_px, px, scaled_px,
-        },
+        units::{DevicePixels, PixelDelta, Pixels, delta_px, device_px, px},
         vector::{Vec2, vec2},
     };
 }
@@ -242,7 +246,7 @@ pub use text_path::{
 // TRAITS
 // =============================================================================
 pub use traits::{
-    Along, ApproxEq, Axis, Double, GeometryOps, Half, IsZero, NumericUnit, Sign, Unit,
+    Along, ApproxEq, Axis, Double, FloatUnit, GeometryOps, Half, IsZero, NumericUnit, Sign, Unit,
 };
 pub use transform::Transform;
 pub use transform2d::Transform2D;
@@ -250,8 +254,8 @@ pub use transform2d::Transform2D;
 // UNIT TYPES
 // =============================================================================
 pub use units::{
-    DevicePixels, ParseLengthError, PixelDelta, Pixels, Radians, ScaleFactor, ScaledPixels,
-    delta_px, device_px, px, radians, scaled_px,
+    DevicePixels, ParseLengthError, PixelDelta, Pixels, Radians, ScaleFactor, delta_px, device_px,
+    px, radians,
 };
 /// Generic 2D vector (displacement) with unit-safe coordinates.
 ///
@@ -269,23 +273,11 @@ pub type PixelPoint = Point<Pixels>;
 /// Point in device (physical) pixel coordinates.
 pub type DevicePoint = Point<DevicePixels>;
 
-/// Point in scaled pixel coordinates.
-pub type ScaledPoint = Point<ScaledPixels>;
-
-/// Point in raw float coordinates (GPU-ready).
-pub type FloatPoint = Point<Pixels>;
-
 /// Vector in logical pixel coordinates.
 pub type PixelVec2 = Vec2<Pixels>;
 
 /// Vector in device (physical) pixel coordinates.
 pub type DeviceVec2 = Vec2<DevicePixels>;
-
-/// Vector in scaled pixel coordinates.
-pub type ScaledVec2 = Vec2<ScaledPixels>;
-
-/// Vector in raw float coordinates (GPU-ready).
-pub type FloatVec2 = Vec2<Pixels>;
 
 /// Size in logical pixel coordinates.
 pub type PixelSize = Size<Pixels>;
@@ -293,25 +285,19 @@ pub type PixelSize = Size<Pixels>;
 /// Size in device (physical) pixel coordinates.
 pub type DeviceSize = Size<DevicePixels>;
 
-/// Size in scaled pixel coordinates.
-pub type ScaledSize = Size<ScaledPixels>;
-
-/// Size in raw float coordinates (GPU-ready).
-pub type FloatSize = Size<Pixels>;
-
 /// Offset in logical pixel coordinates.
 pub type PixelOffset = Offset<Pixels>;
 
 /// Offset in device (physical) pixel coordinates.
 pub type DeviceOffset = Offset<DevicePixels>;
 
-/// Offset in raw float coordinates (GPU-ready).
-pub type FloatOffset = Offset<Pixels>;
-
-/// Backward-compatible alias for [`Edges<f32>`].
+/// Padding/margin insets in logical pixels.
 ///
-/// Used by the rendering layer for padding/margin insets.
-pub type EdgeInsets = Edges<f32>;
+/// Used by the rendering layer for padding/margin insets. Backed by
+/// [`Edges<Pixels>`] so insets carry the same unit safety as every other
+/// layout quantity — build with [`Edges::all`], [`Edges::symmetric`],
+/// [`Edges::only_left`] (and siblings), or [`Edges::ZERO`].
+pub type EdgeInsets = Edges<Pixels>;
 
 // =============================================================================
 // TESTS

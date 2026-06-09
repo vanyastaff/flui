@@ -11,7 +11,7 @@ use std::fmt;
 
 use super::{
     Offset, Point, Size, Vec2,
-    traits::{NumericUnit, Unit},
+    traits::{FloatUnit, NumericUnit, Unit},
     units::Pixels,
 };
 
@@ -33,8 +33,8 @@ use super::{
 /// let rect = Rect::from_origin_size(point(0.0, 0.0), size(100.0, 50.0));
 ///
 /// // Query properties
-/// assert_eq!(rect.width(), 100.0);
-/// assert_eq!(rect.height(), 50.0);
+/// assert_eq!(rect.width().get(), 100.0);
+/// assert_eq!(rect.height().get(), 50.0);
 /// assert_eq!(rect.area(), 5000.0);
 ///
 /// // Hit testing
@@ -649,7 +649,7 @@ where
 
 impl<T: NumericUnit> Rect<T>
 where
-    T: Into<f32> + From<f32>,
+    T: Into<f32> + FloatUnit,
 {
     /// Scales the rectangle from origin.
     #[inline]
@@ -657,12 +657,12 @@ where
     pub fn scale_from_origin(&self, factor: f32) -> Self {
         Self {
             min: Point::new(
-                T::from(self.min.x.into() * factor),
-                T::from(self.min.y.into() * factor),
+                T::from_f32(self.min.x.into() * factor),
+                T::from_f32(self.min.y.into() * factor),
             ),
             max: Point::new(
-                T::from(self.max.x.into() * factor),
-                T::from(self.max.y.into() * factor),
+                T::from_f32(self.max.x.into() * factor),
+                T::from_f32(self.max.y.into() * factor),
             ),
         }
     }
@@ -773,7 +773,7 @@ impl Rect<Pixels> {
 
 impl<T: NumericUnit> Rect<T>
 where
-    T: Into<f32> + From<f32>,
+    T: Into<f32> + FloatUnit,
 {
     /// Linear interpolation between two rectangles.
     #[inline]

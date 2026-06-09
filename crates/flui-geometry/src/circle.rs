@@ -23,7 +23,7 @@ use std::fmt;
 
 use super::{
     Offset, Pixels, Point, Radians, Rect, Size, Vec2, px,
-    traits::{NumericUnit, Unit},
+    traits::{FloatUnit, NumericUnit, Unit},
 };
 
 /// A circle defined by a center point and radius.
@@ -135,14 +135,14 @@ impl Circle<Pixels> {
 
 impl<T: NumericUnit> Circle<T>
 where
-    T: Into<f32> + From<f32>,
+    T: Into<f32> + FloatUnit,
 {
     /// Returns the diameter of the circle (2 × radius).
     #[inline]
     #[must_use]
     pub fn diameter(&self) -> T {
         let r: f32 = self.radius.into();
-        T::from(r * 2.0)
+        T::from_f32(r * 2.0)
     }
 
     /// Returns the circumference of the circle (2πr).
@@ -180,7 +180,7 @@ where
 
 impl<T: NumericUnit> Circle<T>
 where
-    T: Into<f32> + From<f32> + PartialOrd,
+    T: Into<f32> + FloatUnit + PartialOrd,
 {
     /// Returns `true` if the circle has zero radius.
     #[inline]
@@ -262,13 +262,13 @@ where
         if point_f32 == center_f32 {
             // Any point on boundary is equally close
             let r: f32 = self.radius.into();
-            return Point::new(T::from(center_f32.x.0 + r), T::from(center_f32.y.0));
+            return Point::new(T::from_f32(center_f32.x.0 + r), T::from_f32(center_f32.y.0));
         }
 
         let dir = (point_f32 - center_f32).normalize_or(Vec2::ZERO);
         let r: f32 = self.radius.into();
         let result = center_f32 + dir * r;
-        Point::new(T::from(result.x.0), T::from(result.y.0))
+        Point::new(T::from_f32(result.x.0), T::from_f32(result.y.0))
     }
 
     /// Returns the point on the circle boundary at the given angle.
@@ -280,8 +280,8 @@ where
         let center_f32 = self.center.to_f32();
         let r: f32 = self.radius.into();
         Point::new(
-            T::from(center_f32.x.0 + r * angle.get().cos()),
-            T::from(center_f32.y.0 + r * angle.get().sin()),
+            T::from_f32(center_f32.x.0 + r * angle.get().cos()),
+            T::from_f32(center_f32.y.0 + r * angle.get().sin()),
         )
     }
 
@@ -303,7 +303,7 @@ where
 
 impl<T: NumericUnit> Circle<T>
 where
-    T: Into<f32> + From<f32>,
+    T: Into<f32> + FloatUnit,
 {
     /// Translates the circle by the given offset vector.
     #[inline]
@@ -321,7 +321,7 @@ where
     pub fn scale(&self, factor: f32) -> Self {
         Self {
             center: self.center,
-            radius: T::from(self.radius.into() * factor),
+            radius: T::from_f32(self.radius.into() * factor),
         }
     }
 
@@ -334,7 +334,7 @@ where
         let new_radius = (self.radius.into() + amount.into()).max(0.0);
         Self {
             center: self.center,
-            radius: T::from(new_radius),
+            radius: T::from_f32(new_radius),
         }
     }
 
@@ -358,7 +358,7 @@ where
         let r2: f32 = other.radius.into();
         Self {
             center: self.center.lerp(other.center, t),
-            radius: T::from(r1 + (r2 - r1) * t),
+            radius: T::from_f32(r1 + (r2 - r1) * t),
         }
     }
 }
@@ -418,7 +418,7 @@ impl Circle<Pixels> {
 
         let a = d.dot(d);
         let b = 2.0 * f.dot(d);
-        let c = f.dot(f) - (self.radius * self.radius).0;
+        let c = f.dot(f) - self.radius.get() * self.radius.get();
 
         let discriminant: f32 = b * b - 4.0 * a * c;
 
@@ -431,22 +431,6 @@ impl Circle<Pixels> {
         let t2 = (-b + sqrt_disc) / (2.0 * a);
 
         Some((line.eval(t1), line.eval(t2)))
-    }
-}
-
-// ============================================================================
-// Specialized implementations for Pixels
-// ============================================================================
-
-impl Circle<super::Pixels> {
-    /// Scales the circle to scaled pixels by the given factor.
-    #[inline]
-    #[must_use]
-    pub fn scale_to_scaled(&self, factor: f32) -> Circle<super::ScaledPixels> {
-        Circle {
-            center: self.center.scale(factor),
-            radius: super::ScaledPixels(self.radius.get() * factor),
-        }
     }
 }
 

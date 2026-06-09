@@ -1,21 +1,16 @@
 #!/usr/bin/env bash
 # scripts/port-check.sh
 #
-# Verifies the 17 refusal triggers (1-17, with #9 numbered for FR-036)
+# Verifies the 18 refusal triggers (1-18, with #9 numbered for FR-036)
 # documented in docs/PORT.md against the workspace, plus the FR-033
 # sanctioned-dyn-boundary check. Exits non-zero on the first violation
 # outside the whitelist; prints the offending file:line and the trigger
 # ID. Triggers #8/#10/#11/#12/#13 added in D-block PR-C-3 §U41-U45
-# (architecture-correction-plan SP-1/SP-3/SP-4/SP-6/SP-8). Triggers
-# #14/#15/#16/#17 added in core-0a adversarial-reaudit PR-4 §U5
+# (architecture-correction-plan SP-1/SP-3/SP-4/SP-6/SP-8). Trigger #14
+# added by the N-geom polish pass §U12 (unit-barrier escape-hatch guard).
+# Triggers #15/#16/#17/#18 added in core-0a adversarial-reaudit PR-4 §U5
 # (println!/eprintln!/dbg! ban, module-level allow(unsafe_code) ban,
 # reinvented debug_assert_* ban, key.rs new_unchecked ban).
-#
-# MERGE NOTE: a concurrent flui-geometry polish-pass PR also introduces a
-# trigger #14 (a "unit-barrier" guard). These two stacked branches will
-# collide on this file; the expected resolution at merge is to renumber
-# one set contiguously (this branch's gates may shift to #15-#18, etc.).
-# Resolve at merge — do not pre-renumber here.
 #
 # Additionally reports the inline port-marker budget (TODO(port),
 # PERF(port), PORT NOTE) — markers are deliberate Phase B deferrals, NOT
@@ -834,6 +829,66 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# Trigger 14 (N-geom polish pass §U12) — unit-barrier escape hatches in
+# flui-geometry.
+#
+# The `flui-geometry` polish pass (U1/U2/U4/U6) removed the implicit
+# conversions and cross-type operators that let an untyped scalar leak across
+# the unit boundary. This trigger keeps them gone — the next contributor who
+# adds "just one quick conversion" re-opens the bug class the pass closed.
+#
+# Patterns flagged (in crates/flui-geometry/src/ only):
+#   impl From<f32|f64> for <UnitWrapper>     (use px(..) / ::new(..) instead)
+#   impl PartialEq<f32>  for <UnitWrapper>   (compare against px(..))
+#   impl PartialOrd<f32> for <UnitWrapper>
+#   impl Add<f32> for <UnitWrapper>          (Mul/Div<f32> stay — scaling is ok)
+#   impl Sub<f32> for <UnitWrapper>
+#   pub type Float(Point|Vec2|Size|Offset)   (dead GPU-ready aliases)
+#
+# Allowlist marker grammar (±2 line window, as trigger #12):
+#   <decl>  // PORT-CHECK-OK-UNIT: <reason>
+# -----------------------------------------------------------------------------
+trigger14_raw=$(rg --line-number --no-heading \
+    -e '^\s*impl From<(f32|f64)> for ' \
+    -e '^\s*impl (PartialEq|PartialOrd|Add|Sub)<f32> for ' \
+    -e '^\s*pub type Float(Point|Vec2|Size|Offset)\b' \
+    --type rust \
+    --glob '!**/tests/**' \
+    --glob '!**/test*.rs' \
+    crates/flui-geometry/src/ 2>/dev/null \
+  | grep -Ev ':\s*(//!|///|//)' \
+  || true)
+
+trigger14_hits=""
+while IFS= read -r raw_line; do
+  [[ -z "${raw_line}" ]] && continue
+  file_part=$(echo "${raw_line}" | awk -F':' '{print $1}')
+  line_part=$(echo "${raw_line}" | awk -F':' '{print $2}')
+  file_norm=$(echo "${file_part}" | tr '\\' '/')
+  [[ -z "${file_norm}" || -z "${line_part}" ]] && continue
+  start=$(( line_part - 2 ))
+  [[ "${start}" -lt 1 ]] && start=1
+  end=$(( line_part + 2 ))
+  window=$(sed -n "${start},${end}p" "${file_norm}" 2>/dev/null || true)
+  if ! echo "${window}" | grep -q 'PORT-CHECK-OK-UNIT:'; then
+    trigger14_hits="${trigger14_hits}${raw_line}
+"
+  fi
+done <<< "${trigger14_raw}"
+
+if [[ -n "${trigger14_hits// /}" && -n "$(echo "${trigger14_hits}" | tr -d '[:space:]')" ]]; then
+  echo 'VIOLATION 14: U12 unit-barrier escape hatch in flui-geometry (From<scalar>/cross-type f32 op/Float* alias)'
+  echo "see ${trigger_doc} (trigger 14)"
+  echo "${trigger14_hits}"
+  echo ""
+  violations=$((violations + 1))
+else
+  if [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    14: U12 unit-barrier (flui-geometry)"
+  fi
+fi
+
+# -----------------------------------------------------------------------------
 # Trigger 9 (FR-036, Phase 3.1 §U30) — sanctioned `dyn`-boundary registry.
 #
 # Greps every `Box<dyn …>`, reference `dyn …` (in any of the four reference
@@ -1003,7 +1058,7 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# Trigger 14 (core-0a adversarial-reaudit PR-4 §U5) — println!/eprintln!/dbg!
+# Trigger 15 (core-0a adversarial-reaudit PR-4 §U5) — println!/eprintln!/dbg!
 # in foundation/tree/macros production source.
 #
 # Foundation, tree, and macros are the framework's low-level substrate;
@@ -1024,7 +1079,7 @@ fi
 # legitimately needs `println!`, append a `test*.rs`-style split or a
 # per-line allowlist marker in the same PR.
 # -----------------------------------------------------------------------------
-trigger14_hits=$(rg --line-number --column \
+trigger15_hits=$(rg --line-number --column \
     -e '\bprintln!\s*\(' \
     -e '\beprintln!\s*\(' \
     -e '\bdbg!\s*\(' \
@@ -1037,20 +1092,20 @@ trigger14_hits=$(rg --line-number --column \
   | grep -Ev ':\s*(//!|///|//)' \
   || true)
 
-if [[ -n "${trigger14_hits}" ]]; then
-  echo 'VIOLATION 14: println!/eprintln!/dbg! in foundation/tree/macros production source'
-  echo "see ${trigger_doc} (trigger 14)"
-  echo "${trigger14_hits}"
+if [[ -n "${trigger15_hits}" ]]; then
+  echo 'VIOLATION 15: println!/eprintln!/dbg! in foundation/tree/macros production source'
+  echo "see ${trigger_doc} (trigger 15)"
+  echo "${trigger15_hits}"
   echo ""
   violations=$((violations + 1))
 else
   if [[ "${verbose}" -eq 1 ]]; then
-    echo "ok    14: no println!/eprintln!/dbg! in foundation/tree/macros source"
+    echo "ok    15: no println!/eprintln!/dbg! in foundation/tree/macros source"
   fi
 fi
 
 # -----------------------------------------------------------------------------
-# Trigger 15 (core-0a adversarial-reaudit PR-4 §U5) — module-level
+# Trigger 16 (core-0a adversarial-reaudit PR-4 §U5) — module-level
 # `#![allow(unsafe_code)]` in foundation/tree source.
 #
 # Edition-2024 idiom (F9): a module that genuinely needs `unsafe` must use
@@ -1061,27 +1116,27 @@ fi
 # crates. (`#![expect(unsafe_code, ...)]` is the sanctioned form and does
 # NOT match this pattern.)
 # -----------------------------------------------------------------------------
-trigger15_hits=$(rg --line-number --column \
+trigger16_hits=$(rg --line-number --column \
     '^\s*#!\[allow\(unsafe_code' \
     --type rust \
     crates/flui-foundation/src \
     crates/flui-tree/src 2>/dev/null \
   || true)
 
-if [[ -n "${trigger15_hits}" ]]; then
-  echo 'VIOLATION 15: module-level #![allow(unsafe_code)] in foundation/tree source (use #![expect(...)] or delete)'
-  echo "see ${trigger_doc} (trigger 15)"
-  echo "${trigger15_hits}"
+if [[ -n "${trigger16_hits}" ]]; then
+  echo 'VIOLATION 16: module-level #![allow(unsafe_code)] in foundation/tree source (use #![expect(...)] or delete)'
+  echo "see ${trigger_doc} (trigger 16)"
+  echo "${trigger16_hits}"
   echo ""
   violations=$((violations + 1))
 else
   if [[ "${verbose}" -eq 1 ]]; then
-    echo "ok    15: no module-level #![allow(unsafe_code)] in foundation/tree source"
+    echo "ok    16: no module-level #![allow(unsafe_code)] in foundation/tree source"
   fi
 fi
 
 # -----------------------------------------------------------------------------
-# Trigger 16 (core-0a adversarial-reaudit PR-4 §U5) — reinvented
+# Trigger 17 (core-0a adversarial-reaudit PR-4 §U5) — reinvented
 # `debug_assert_*` macros in foundation source.
 #
 # F29 deleted `debug_assert_valid!` / `debug_assert_range!` /
@@ -1091,26 +1146,26 @@ fi
 # foundation source is a regression. Stdlib `debug_assert!` is the
 # canonical form.
 # -----------------------------------------------------------------------------
-trigger16_hits=$(rg --line-number --column \
+trigger17_hits=$(rg --line-number --column \
     'macro_rules!\s+(debug_assert_valid|debug_assert_range|debug_assert_finite|debug_assert_not_nan)\b' \
     --type rust \
     crates/flui-foundation/src 2>/dev/null \
   || true)
 
-if [[ -n "${trigger16_hits}" ]]; then
-  echo 'VIOLATION 16: reinvented debug_assert_* macro defined in foundation source (use stdlib debug_assert!)'
-  echo "see ${trigger_doc} (trigger 16)"
-  echo "${trigger16_hits}"
+if [[ -n "${trigger17_hits}" ]]; then
+  echo 'VIOLATION 17: reinvented debug_assert_* macro defined in foundation source (use stdlib debug_assert!)'
+  echo "see ${trigger_doc} (trigger 17)"
+  echo "${trigger17_hits}"
   echo ""
   violations=$((violations + 1))
 else
   if [[ "${verbose}" -eq 1 ]]; then
-    echo "ok    16: no reinvented debug_assert_* macros in foundation source"
+    echo "ok    17: no reinvented debug_assert_* macros in foundation source"
   fi
 fi
 
 # -----------------------------------------------------------------------------
-# Trigger 17 (core-0a adversarial-reaudit PR-4 §U5) — `new_unchecked` in
+# Trigger 18 (core-0a adversarial-reaudit PR-4 §U5) — `new_unchecked` in
 # key.rs.
 #
 # F2 replaced `NonZeroU64::new_unchecked` in `Key::new` with the
@@ -1121,21 +1176,21 @@ fi
 # e.g. id.rs, are out of scope and governed by their own `#![expect(
 # unsafe_code, ...)]`.)
 # -----------------------------------------------------------------------------
-trigger17_hits=$(rg --line-number --column \
+trigger18_hits=$(rg --line-number --column \
     '\bnew_unchecked\b' \
     crates/flui-foundation/src/key.rs 2>/dev/null \
   | grep -Ev ':\s*(//!|///|//)' \
   || true)
 
-if [[ -n "${trigger17_hits}" ]]; then
-  echo 'VIOLATION 17: new_unchecked in key.rs (key counter must stay on the checked fetch_update path)'
-  echo "see ${trigger_doc} (trigger 17)"
-  echo "${trigger17_hits}"
+if [[ -n "${trigger18_hits}" ]]; then
+  echo 'VIOLATION 18: new_unchecked in key.rs (key counter must stay on the checked fetch_update path)'
+  echo "see ${trigger_doc} (trigger 18)"
+  echo "${trigger18_hits}"
   echo ""
   violations=$((violations + 1))
 else
   if [[ "${verbose}" -eq 1 ]]; then
-    echo "ok    17: no new_unchecked in key.rs"
+    echo "ok    18: no new_unchecked in key.rs"
   fi
 fi
 
@@ -1148,7 +1203,7 @@ if [[ "${violations}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "port-check: all 17 refusal triggers + FR-033 grep clean"
+echo "port-check: all 18 refusal triggers + FR-033 grep clean"
 
 # -----------------------------------------------------------------------------
 # Marker summary (verbose mode only). Non-blocking — markers are Phase B

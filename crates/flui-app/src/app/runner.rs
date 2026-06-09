@@ -619,6 +619,7 @@ mod tests {
     use flui_view::{BuildContext, IntoView, View, ViewExt};
 
     use super::*;
+    use flui_types::geometry::px;
 
     // TODO: Will be used in future integration tests for run_app_impl
     #[allow(dead_code)]
@@ -645,6 +646,6 @@ mod tests {
         let config = AppConfig::new().with_title("Test").with_size(800, 600);
 
         assert_eq!(config.title, "Test");
-        assert_eq!(config.size.width, 800.0);
+        assert_eq!(config.size.width, px(800.0));
     }
 }
