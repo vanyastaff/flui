@@ -35,6 +35,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use parking_lot::RwLock;
+use smallvec::SmallVec;
 
 use crate::{events::PointerEvent, ids::PointerId};
 
@@ -230,8 +231,10 @@ impl PointerRouter {
     pub fn route(&self, event: &PointerEvent) {
         let pointer = get_pointer_id(event);
 
-        // Single read for per-pointer handlers — snapshot via clone.
-        let pointer_handlers: Vec<PointerRouteHandler> = self
+        // Snapshot per-pointer handlers (clone the `Arc`s) so the lock is
+        // released before dispatch — a handler may re-enter the router. A
+        // `SmallVec` keeps the common ≤4-handler case off the heap.
+        let pointer_handlers: SmallVec<[PointerRouteHandler; 4]> = self
             .routes
             .read()
             .get(&pointer)
@@ -243,8 +246,8 @@ impl PointerRouter {
             handler(event);
         }
 
-        // Single read for global handlers — snapshot via clone.
-        let global_handlers: Vec<GlobalPointerHandler> =
+        // Snapshot global handlers likewise.
+        let global_handlers: SmallVec<[GlobalPointerHandler; 4]> =
             self.global_handlers.read().iter().cloned().collect();
 
         // Global handlers after per-pointer.
