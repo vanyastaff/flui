@@ -624,6 +624,7 @@ mod tests {
         PointerId::new(n).expect("nonzero pointer id")
     }
 
+    // PORT-CHECK-OK-DYN: see MultiDragStartCallback — test fixture returning the per-pointer `dyn` handle.
     fn counting_handle(cancels: Arc<AtomicUsize>) -> Box<dyn MultiDragHandle> {
         Box::new(CountingHandle {
             updates: Arc::new(AtomicUsize::new(0)),
