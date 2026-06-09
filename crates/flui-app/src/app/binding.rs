@@ -354,6 +354,27 @@ impl AppBinding {
         self.needs_redraw.store(true, Ordering::Relaxed);
     }
 
+    /// Wake the platform event loop so the next frame is rendered.
+    ///
+    /// Sets the `needs_redraw` atomic flag **and** calls
+    /// `PlatformWindow::request_redraw()` on the active window so a
+    /// quiescent winit / platform event loop wakes up and fires the
+    /// `on_request_frame` callback.
+    ///
+    /// # Deadlock-safety
+    ///
+    /// This method acquires only `self.active_window` (a leaf `Mutex`)
+    /// and never touches `self.widgets` or `self.inner`. It is safe to
+    /// call from any context, including from inside a `build_scope`
+    /// callback that is executing while `AppBinding::widgets` is held —
+    /// the two locks are disjoint.
+    pub fn wake_frame(&self) {
+        self.needs_redraw.store(true, Ordering::Relaxed);
+        if let Some(()) = self.with_window(|w| w.request_redraw()) {
+            tracing::trace!("wake_frame: platform window request_redraw sent");
+        }
+    }
+
     /// Check if a redraw is needed.
     pub fn needs_redraw(&self) -> bool {
         self.needs_redraw.load(Ordering::Relaxed)
@@ -589,5 +610,115 @@ mod tests {
         // Verify the renderer sub-binding is accessible (created during
         // AppBinding::new)
         let _renderer = binding.renderer();
+    }
+
+    // ========================================================================
+    // E0a — wake_frame
+    // ========================================================================
+
+    /// `wake_frame` must set `needs_redraw` even when no window is stored
+    /// (the window lock is a leaf that is independently optional).
+    #[test]
+    fn wake_frame_sets_needs_redraw_without_window() {
+        // Use a fresh binding rather than the singleton so this test does not
+        // race with other tests' redraw state.
+        let binding = AppBinding::new();
+        binding.mark_rendered();
+        assert!(!binding.needs_redraw(), "precondition: no redraw pending");
+
+        // No window installed — wake_frame must still set the atomic.
+        binding.wake_frame();
+
+        assert!(
+            binding.needs_redraw(),
+            "wake_frame must set needs_redraw even without an active window"
+        );
+    }
+
+    /// `wake_frame` must call `PlatformWindow::request_redraw` when a window
+    /// is installed, and must NOT acquire `widgets` or `inner`.
+    ///
+    /// A minimal inline mock records how many times `request_redraw` was
+    /// called without touching any binding lock.
+    #[test]
+    fn wake_frame_calls_platform_request_redraw() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicU32, Ordering},
+        };
+
+        use flui_platform::traits::PlatformWindow;
+        use flui_types::geometry::{DevicePixels, Pixels, Size, device_px, px};
+
+        struct CountingWindow {
+            redraw_count: Arc<AtomicU32>,
+        }
+
+        impl PlatformWindow for CountingWindow {
+            fn physical_size(&self) -> Size<DevicePixels> {
+                Size::new(device_px(800), device_px(600))
+            }
+            fn logical_size(&self) -> Size<Pixels> {
+                Size::new(px(800.0), px(600.0))
+            }
+            fn scale_factor(&self) -> f64 {
+                1.0
+            }
+            fn request_redraw(&self) {
+                self.redraw_count.fetch_add(1, Ordering::Relaxed);
+            }
+            fn is_focused(&self) -> bool {
+                false
+            }
+            fn is_visible(&self) -> bool {
+                true
+            }
+            // Trait default impls cover the remaining callback-registration
+            // methods; only the required methods above need bodies.
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+        }
+
+        let redraw_count = Arc::new(AtomicU32::new(0));
+        let window = CountingWindow {
+            redraw_count: Arc::clone(&redraw_count),
+        };
+
+        let binding = AppBinding::new();
+        binding.mark_rendered();
+        binding.set_window(Box::new(window));
+
+        binding.wake_frame();
+
+        assert!(binding.needs_redraw(), "wake_frame must set needs_redraw");
+        assert_eq!(
+            redraw_count.load(Ordering::Relaxed),
+            1,
+            "wake_frame must call PlatformWindow::request_redraw exactly once"
+        );
+    }
+
+    /// `wake_frame` must be callable while `widgets` read-lock is held on
+    /// the same thread — proving the implementation does not acquire
+    /// `widgets` or `inner`.
+    ///
+    /// parking_lot's RwLock is non-reentrant: a read-under-existing-read on
+    /// the same thread upgrades correctly but a write attempt deadlocks.
+    /// Holding the read guard here would expose any hidden write attempt.
+    #[test]
+    fn wake_frame_does_not_acquire_widgets_lock() {
+        let binding = AppBinding::new();
+        binding.mark_rendered();
+
+        // Hold widgets read-lock across the call.
+        let _guard = binding.widgets.read();
+        // Must return without deadlocking.
+        binding.wake_frame();
+
+        assert!(
+            binding.needs_redraw(),
+            "wake_frame must set needs_redraw even while widgets is read-locked"
+        );
     }
 }

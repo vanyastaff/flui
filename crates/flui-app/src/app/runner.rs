@@ -100,6 +100,7 @@ where
         traits::{DispatchEventResult, LifecycleEvent, PlatformInput},
     };
     use flui_scheduler::Scheduler;
+    use flui_view::WidgetsBinding;
     use parking_lot::Mutex;
 
     use crate::embedder::PlatformWindowHandle;
@@ -131,6 +132,43 @@ where
 
     // 3. Mount root widget
     mount_root(&root, phys_size.width.0 as f32, phys_size.height.0 as f32);
+
+    // 3b. Wire the wake chain (E0a).
+    //
+    // `on_need_frame` fires whenever `handle_build_scheduled` determines a new
+    // frame is required (e.g. after setState).  The closure calls `wake_frame`
+    // which sets `needs_redraw` atomically AND calls `PlatformWindow::
+    // request_redraw()` so the winit event loop wakes from idle.
+    //
+    // Deadlock analysis:
+    // * `wake_frame` acquires only `active_window` (leaf Mutex).
+    // * The closure is called from `handle_build_scheduled`, which holds no
+    //   `inner`/`widgets` lock (see `WidgetsBinding::handle_build_scheduled`
+    //   doc).
+    // * `on_need_frame` itself is a separate `RwLock` on `WidgetsBinding`,
+    //   never held across any `inner` critical section.
+    // Therefore: no lock ordering conflict.
+    {
+        let widgets = AppBinding::instance().widgets();
+        widgets.set_on_need_frame(|| {
+            AppBinding::instance().wake_frame();
+        });
+    }
+
+    // Wire `on_build_scheduled` on the BuildOwner so that a dirty-element
+    // registration (e.g. from setState inside an element build) also triggers
+    // `handle_build_scheduled`.  We call it directly — it is already
+    // lock-free (reads only the `debug_building_dirty_elements` atomic and
+    // then takes `on_need_frame`'s leaf lock).
+    {
+        let widgets = AppBinding::instance().widgets();
+        widgets.with_build_owner_mut(|build_owner| {
+            build_owner.set_on_build_scheduled(|| {
+                let binding = WidgetsBinding::instance();
+                binding.handle_build_scheduled();
+            });
+        });
+    }
 
     // 4. Wrap renderer for callback sharing
     let renderer = Arc::new(Mutex::new(renderer));

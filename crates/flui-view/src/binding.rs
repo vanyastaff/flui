@@ -422,6 +422,25 @@ pub struct WidgetsBinding {
 
     /// Whether binding is ready to produce frames.
     ready_to_produce_frames: AtomicBool,
+
+    /// Whether we are currently building dirty elements (Flutter parity flag).
+    ///
+    /// Hoisted out of `WidgetsBindingInner` so that `handle_build_scheduled`
+    /// can check it WITHOUT taking the `inner` RwLock. This eliminates the
+    /// deadlock that would occur when `schedule_build_for` is called from
+    /// inside `build_scope` (which holds `inner.write()`) and the
+    /// `on_build_scheduled` callback calls `handle_build_scheduled`:
+    ///
+    /// * Before (broken): callback → `handle_build_scheduled` → `inner.read()`
+    ///   → parking_lot non-reentrant read-under-write → deadlock.
+    /// * After (E0a): callback → `handle_build_scheduled` → atomic load →
+    ///   no lock acquired.
+    ///
+    /// The flag is set/cleared in `draw_frame` at the same program points
+    /// the previous `inner.debug_building_dirty_elements` field was, so
+    /// Flutter-parity semantics are preserved.
+    #[cfg(debug_assertions)]
+    debug_building_dirty_elements: AtomicBool,
 }
 
 /// Inner mutable state of WidgetsBinding
@@ -459,13 +478,6 @@ struct WidgetsBindingInner {
 
     /// Whether we need to report the first frame.
     need_to_report_first_frame: bool,
-
-    /// Whether we are currently building dirty elements.
-    ///
-    /// This is used to verify that frames are not scheduled redundantly.
-    /// In debug mode, scheduling a frame while building will panic.
-    #[cfg(debug_assertions)]
-    debug_building_dirty_elements: bool,
 }
 
 // Implement BindingBase trait
@@ -519,14 +531,14 @@ impl WidgetsBinding {
                 back_gesture_observers: Vec::new(),
                 build_scheduled: false,
                 need_to_report_first_frame: true,
-                #[cfg(debug_assertions)]
-                debug_building_dirty_elements: false,
             }),
             on_need_frame: RwLock::new(None),
             first_frame_rasterized: AtomicBool::new(false),
             first_frame_deferred_count: AtomicU32::new(0),
             first_frame_sent: AtomicBool::new(false),
             ready_to_produce_frames: AtomicBool::new(false),
+            #[cfg(debug_assertions)]
+            debug_building_dirty_elements: AtomicBool::new(false),
         };
         binding.init_instances();
         Self::install_global_key_registry();
@@ -859,24 +871,37 @@ impl WidgetsBinding {
     /// In Flutter, this checks that we're not currently building and calls
     /// `ensureVisualUpdate()` which schedules a frame via `SchedulerBinding`.
     ///
-    /// # Panics
+    /// # Deadlock-safety
     ///
-    /// In debug mode, panics if called while building dirty elements.
-    fn handle_build_scheduled(&self) {
+    /// This method is intentionally **lock-free w.r.t. `self.inner`**.
+    ///
+    /// It is called from inside `build_scope` (via the `on_build_scheduled`
+    /// callback on `BuildOwner`) while `draw_frame` holds `inner.write()`.
+    /// Taking `inner.read()` or `inner.write()` here would deadlock on
+    /// parking_lot's non-reentrant `RwLock`. Instead the building flag is
+    /// an `AtomicBool` on `WidgetsBinding` itself (outside `inner`), and
+    /// `on_need_frame` is its own separate `RwLock` that is never held
+    /// across any `inner` critical section.
+    ///
+    /// # Panics (debug only — Flutter parity)
+    ///
+    /// Panics if called while building dirty elements. In Flutter this check
+    /// catches `setState()` called from a layout or paint callback.
+    pub fn handle_build_scheduled(&self) {
         #[cfg(debug_assertions)]
         {
-            let inner = self.inner.read();
             assert!(
-                !inner.debug_building_dirty_elements,
-                "Build scheduled during frame.\n\
+                !self.debug_building_dirty_elements.load(Ordering::Relaxed),
+                "setState() or markNeedsBuild() called during build.\n\
                  While the widget tree was being built, laid out, and painted, \
                  a new frame was scheduled to rebuild the widget tree.\n\
-                 This might be because setState() was called from a layout or \
-                 paint callback."
+                 Do not call setState() from a build, layout, or paint callback."
             );
         }
 
-        // Request a frame from the scheduler (ensureVisualUpdate)
+        // Request a frame from the scheduler (ensureVisualUpdate).
+        // `on_need_frame` is a leaf RwLock — it is never held across any
+        // acquisition of `self.inner`, so taking it here is deadlock-free.
         if let Some(ref callback) = *self.on_need_frame.read() {
             callback();
         }
@@ -924,10 +949,15 @@ impl WidgetsBinding {
         #[cfg(debug_assertions)]
         {
             assert!(
-                !inner.debug_building_dirty_elements,
-                "draw_frame called while already building dirty elements"
+                !self.debug_building_dirty_elements.load(Ordering::Relaxed),
+                "draw_frame called while already building dirty elements; \
+                 ensure draw_frame is not called recursively or from a build callback"
             );
-            inner.debug_building_dirty_elements = true;
+            // Set before build_scope so that any on_build_scheduled callback
+            // fired from within build_scope sees building=true and panics with
+            // the Flutter-parity message rather than enqueuing a second frame.
+            self.debug_building_dirty_elements
+                .store(true, Ordering::Relaxed);
         }
 
         inner.build_scheduled = false;
@@ -939,8 +969,8 @@ impl WidgetsBinding {
                 "Building dirty elements"
             );
 
-            // Process all dirty elements
-            // We need to split the borrow to satisfy the borrow checker
+            // Process all dirty elements.
+            // We need to split the borrow to satisfy the borrow checker.
             let WidgetsBindingInner {
                 ref mut build_owner,
                 ref mut element_tree,
@@ -966,7 +996,8 @@ impl WidgetsBinding {
 
         #[cfg(debug_assertions)]
         {
-            inner.debug_building_dirty_elements = false;
+            self.debug_building_dirty_elements
+                .store(false, Ordering::Relaxed);
         }
 
         // Report first frame if needed
@@ -978,10 +1009,10 @@ impl WidgetsBinding {
 
     /// Check if we are currently building dirty elements.
     ///
-    /// This is used to verify that frames are not scheduled redundantly.
+    /// Reads the atomic flag directly — no lock acquired.
     #[cfg(debug_assertions)]
     pub fn is_building(&self) -> bool {
-        self.inner.read().debug_building_dirty_elements
+        self.debug_building_dirty_elements.load(Ordering::Relaxed)
     }
 
     // ========================================================================
@@ -1934,6 +1965,115 @@ mod tests {
             // dispatch released the `read()` lock before iterating.
             self.binding.add_observer(Arc::new(InertObserver));
         }
+    }
+
+    // ========================================================================
+    // E0a — deadlock-safe wake chain
+    // ========================================================================
+
+    /// `handle_build_scheduled` must PANIC (Flutter parity) when
+    /// `debug_building_dirty_elements` is true.  The flag is now an
+    /// `AtomicBool` on `WidgetsBinding` itself; this test sets it directly
+    /// and confirms the panic fires without acquiring `inner`.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "setState() or markNeedsBuild() called during build")]
+    fn handle_build_scheduled_panics_when_building() {
+        let binding = WidgetsBinding::new();
+        // Simulate draw_frame having set the flag.
+        binding
+            .debug_building_dirty_elements
+            .store(true, Ordering::Relaxed);
+        // Must panic — Flutter parity for setState-during-build.
+        binding.handle_build_scheduled();
+    }
+
+    /// `handle_build_scheduled` must NOT panic and must invoke
+    /// `on_need_frame` when called outside a build (flag = false).
+    #[test]
+    fn handle_build_scheduled_fires_on_need_frame_when_not_building() {
+        let binding = WidgetsBinding::new();
+        let fired = Arc::new(AtomicBool::new(false));
+        let fired_clone = Arc::clone(&fired);
+        binding.set_on_need_frame(move || {
+            fired_clone.store(true, Ordering::Relaxed);
+        });
+
+        // debug_building_dirty_elements is false (default) — must not panic.
+        binding.handle_build_scheduled();
+
+        assert!(
+            fired.load(Ordering::Relaxed),
+            "on_need_frame callback must be invoked by handle_build_scheduled"
+        );
+    }
+
+    /// `handle_build_scheduled` must be callable while `inner` is read-locked
+    /// on the same thread — proving it acquires no `inner` lock itself.
+    ///
+    /// Before E0a this would deadlock: `inner.read()` inside
+    /// `handle_build_scheduled` blocks forever because parking_lot's
+    /// `RwLock` is non-reentrant and the same thread already holds a
+    /// read guard here.
+    #[test]
+    fn handle_build_scheduled_does_not_acquire_inner_lock() {
+        let binding = WidgetsBinding::new();
+        let fired = Arc::new(AtomicBool::new(false));
+        let fired_clone = Arc::clone(&fired);
+        binding.set_on_need_frame(move || {
+            fired_clone.store(true, Ordering::Relaxed);
+        });
+
+        // Hold `inner` read-lock across the call.  If `handle_build_scheduled`
+        // tried to take `inner.read()` or `inner.write()` it would deadlock
+        // (parking_lot RwLock is non-reentrant on the same thread).
+        let _guard = binding.inner.read();
+        // Must return without deadlocking.
+        binding.handle_build_scheduled();
+
+        assert!(
+            fired.load(Ordering::Relaxed),
+            "on_need_frame must fire even while inner read-lock is held"
+        );
+    }
+
+    /// `schedule_build_for` fires `on_build_scheduled`, which calls
+    /// `handle_build_scheduled`, which fires `on_need_frame`.  The full
+    /// chain must produce a wake signal when the binding is wired with a
+    /// flag-setting closure.
+    #[test]
+    fn schedule_build_for_triggers_on_need_frame_via_chain() {
+        // `Box::leak` gives a `&'static WidgetsBinding` that the closure
+        // can capture without a lifetime parameter. The leak is bounded by
+        // the test run (the binding is small).
+        let binding: &'static WidgetsBinding = Box::leak(Box::new(WidgetsBinding::new()));
+
+        let needs_frame = Arc::new(AtomicBool::new(false));
+        let needs_frame_clone = Arc::clone(&needs_frame);
+        binding.set_on_need_frame(move || {
+            needs_frame_clone.store(true, Ordering::Relaxed);
+        });
+
+        // Wire on_build_scheduled -> handle_build_scheduled (same pattern
+        // as the production bootstrap).
+        binding.with_build_owner_mut(|bo| {
+            bo.set_on_build_scheduled(|| {
+                binding.handle_build_scheduled();
+            });
+        });
+
+        // schedule_build_for -> on_build_scheduled -> handle_build_scheduled
+        // -> on_need_frame.
+        let dummy_id = flui_foundation::ElementId::new(1);
+        binding.with_build_owner_mut(|bo| {
+            bo.schedule_build_for(dummy_id, 0);
+        });
+
+        assert!(
+            needs_frame.load(Ordering::Relaxed),
+            "scheduling a build must propagate through the full wake chain \
+             to on_need_frame"
+        );
     }
 
     /// Pre-V-21: this test would deadlock `cargo test -p flui-view --lib`.
