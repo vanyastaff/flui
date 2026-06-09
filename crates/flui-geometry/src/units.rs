@@ -83,6 +83,7 @@ use super::traits::{NumericUnit, Unit};
 /// let _: Pixels = px(10.0) * px(2.0);
 /// ```
 #[derive(Copy, Clone, Default, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(transparent)]
 pub struct Pixels(pub f32);
 
@@ -610,6 +611,7 @@ impl<'a> Sum<&'a Pixels> for Pixels {
 /// Unlike [`Pixels`] which represents an absolute position or measurement,
 /// `PixelDelta` represents a signed change (offset, velocity, scroll distance).
 #[derive(Copy, Clone, Default, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(transparent)]
 pub struct PixelDelta(pub f32);
 
@@ -966,6 +968,7 @@ impl<'a> Sum<&'a PixelDelta> for PixelDelta {
 ///
 /// Uses i32 for precise integer pixel addressing on hardware.
 #[derive(Copy, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(transparent)]
 pub struct DevicePixels(pub i32);
 
@@ -1363,6 +1366,7 @@ impl std::str::FromStr for DevicePixels {
 /// Wraps an f32 value representing an angle in radians.
 /// Provides angular arithmetic, normalization, and degree conversions.
 #[derive(Copy, Clone, Default, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(transparent)]
 pub struct Radians(pub f32);
 
