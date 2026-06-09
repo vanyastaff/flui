@@ -67,7 +67,7 @@ compile-time-asserts the key types are `Send + Sync`.
 | `PointerEventResampler::inner` (`src/processing/resampler.rs:90`) | `Arc<parking_lot::Mutex<ResamplerInner>>` | Shared infrastructure | Single lock per resampler; the queue is bounded to 100 events (`MAX_BUFFERED_EVENTS`). |
 | `PointerEventResampler` is the only place with an `Arc<Mutex<...>>` in the `processing/` hot path — the `VelocityTracker` is `Send + Sync` via plain fields (no shared state) and is rebuilt per-pointer at the call site. |
 | `FocusManager::global()` (`src/routing/focus.rs`) | `static OnceLock<Arc<parking_lot::Mutex<FocusManager>>>` | Process-wide singleton | Off any hot path. |
-| `GestureTimerService` global (`src/timer.rs`) | `tokio::sync::Mutex` + `OnceLock` | Process-wide singleton | Async runtime. |
+| `GestureTimerService` global (`src/timer.rs`) | `parking_lot::Mutex` + `once_cell::sync::Lazy` | Process-wide singleton | Async timer scaffold; **unused by any recogniser** — deadlines are polled inline via `Instant::now()`. |
 | Static `AssertSendSync` impls (`src/lib.rs:341-372`) | None (compile-time trait bound) | Type-system guarantee | Compile-asserts `Send + Sync` for all public types listed in the block. |
 
 No `unsafe impl Send/Sync` in this crate. The sealed-trait pattern

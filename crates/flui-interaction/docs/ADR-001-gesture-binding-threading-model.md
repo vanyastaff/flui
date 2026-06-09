@@ -1,6 +1,14 @@
 # ADR-001: Gesture binding threading model
 
-Status: **Proposed** · Date: 2026-06-09 · Scope: `flui-interaction`, `flui-foundation`
+Status: **Proposed — superseded framing** · Date: 2026-06-09 · Scope: `flui-interaction`, `flui-foundation`
+
+> **Decision research (2026-06-09):** see
+> [`docs/research/2026-06-09-adr-001-gesture-binding-threading.md`](../../../docs/research/2026-06-09-adr-001-gesture-binding-threading.md).
+> It reframes this ADR on three points, verified against code:
+> (1) **latency is not the axis** — the gesture hot path is single-producer/uncontended, the threading model is not a beat-Flutter lever;
+> (2) the real decision is a single product question — **is "a loser cannot fire `on_*`" required to be a _compile error_ or only a _tested invariant_?** Runtime ⇒ Option A wins outright; compile-time ⇒ Option B is necessary-but-not-sufficient (also needs an arena-by-ID redesign, since the winner is matched by `Arc::ptr_eq` over aliased `Arc<dyn>`);
+> (3) load-bearing **fact #3 below is false** — the async-timer path is dead (zero production callers); recogniser `Send+Sync` is not actually exercised cross-thread today.
+> The research also surfaces two live bugs (dual-binding split-state; held-finger long-press never fires) to fix first, under the status quo.
 
 ## Context
 
@@ -13,8 +21,15 @@ load-bearing facts:
    (`arena/mod.rs`), so anything added must be `Send + Sync`.
 2. `GestureBinding::instance()` returns `&'static Self` via a `OnceLock`
    singleton (`flui-foundation`), so the binding type must be `Sync`.
-3. `GestureTimerService` offers an **optional** `tokio::spawn` mode
-   (`timer.rs`), so a deadline callback can fire on a worker thread.
+3. ~~`GestureTimerService` offers an **optional** `tokio::spawn` mode
+   (`timer.rs`), so a deadline callback can fire on a worker thread.~~
+   **Corrected (2026-06-09): this path is dead.** `run_async` /
+   `run_until_shutdown` / `check_timers` have zero production callers; no
+   recogniser uses `GestureTimerService` — deadlines are polled inline via
+   `Instant::now()`. So fact #3 does **not** justify cross-thread recogniser
+   access today; the `Send+Sync` bound is incidental (storage mechanics:
+   `OnceLock<T>: Sync` + the `BindingBase: Send+Sync` supertrait), not
+   exercised.
 
 Flutter's gesture pipeline is single-threaded; its recognisers are plain
 mutable objects on the platform thread. The FLUI port reproduces Flutter's
