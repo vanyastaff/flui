@@ -199,6 +199,9 @@ impl Key {
     /// state (0) for testing the overflow path without issuing 2^64-1
     /// keys. Returns the prior value so the caller can restore the live
     /// counter and avoid poisoning the shared static for sibling tests.
+    ///
+    /// Prefer [`ExhaustionGuard::new`] — it restores the counter on
+    /// `Drop`, so an unwind mid-test won't poison sibling tests.
     #[cfg(test)]
     fn _test_force_exhausted_state() -> u64 {
         KEY_COUNTER.swap(0, Ordering::Relaxed)
@@ -586,6 +589,9 @@ impl UniqueKey {
     /// Force the runtime counter into the permanent-exhaustion sentinel
     /// state (0) for testing the overflow path. Returns the prior value
     /// so the caller can restore the shared static.
+    ///
+    /// Prefer [`UniqueExhaustionGuard::new`] — it restores on `Drop`,
+    /// so a mid-test unwind won't poison sibling tests.
     #[cfg(test)]
     fn _test_force_exhausted_state() -> u64 {
         UNIQUE_KEY_COUNTER.swap(0, Ordering::Relaxed)
@@ -847,6 +853,55 @@ const fn const_fnv1a_hash(bytes: &[u8]) -> u64 {
     hash
 }
 
+// RAII guards for exhaustion tests. Placed at module level because
+// Rust does not allow `struct`/`impl` inside an `impl` block.
+// Drop-based restore ensures the global counter is restored even if
+// a test assertion unwinds, preventing sibling-test poisoning.
+
+/// RAII guard that forces `KEY_COUNTER` into the 0 sentinel and
+/// restores the prior live value on `Drop`.
+#[cfg(test)]
+struct ExhaustionGuard {
+    saved: u64,
+}
+
+#[cfg(test)]
+impl ExhaustionGuard {
+    fn new() -> Self {
+        let saved = KEY_COUNTER.swap(0, std::sync::atomic::Ordering::Relaxed);
+        Self { saved }
+    }
+}
+
+#[cfg(test)]
+impl Drop for ExhaustionGuard {
+    fn drop(&mut self) {
+        KEY_COUNTER.store(self.saved, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// RAII guard for `UNIQUE_KEY_COUNTER` — same pattern as
+/// [`ExhaustionGuard`].
+#[cfg(test)]
+struct UniqueExhaustionGuard {
+    saved: u64,
+}
+
+#[cfg(test)]
+impl UniqueExhaustionGuard {
+    fn new() -> Self {
+        let saved = UNIQUE_KEY_COUNTER.swap(0, std::sync::atomic::Ordering::Relaxed);
+        Self { saved }
+    }
+}
+
+#[cfg(test)]
+impl Drop for UniqueExhaustionGuard {
+    fn drop(&mut self) {
+        UNIQUE_KEY_COUNTER.store(self.saved, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{collections::HashSet, mem::size_of};
@@ -888,17 +943,13 @@ mod tests {
     #[test]
     fn key_counter_exhaustion() {
         use std::panic::catch_unwind;
-        // Force counter into the permanent-exhaustion sentinel state (0),
-        // saving the live value so we can restore the shared static and
-        // not poison sibling tests that call `Key::new`.
-        let saved = Key::_test_force_exhausted_state();
+        // ExhaustionGuard restores the counter on Drop, so even if an
+        // assertion unwinds mid-test, sibling tests stay healthy.
+        let _guard = ExhaustionGuard::new();
         // First call after exhaustion MUST panic.
         let r1 = catch_unwind(Key::new);
         // Second call must also panic — no silent recovery.
         let r2 = catch_unwind(Key::new);
-        // Restore the live counter before asserting (assertions may
-        // unwind this test thread; the static is already restored).
-        Key::_test_restore_state(saved);
 
         assert!(
             r1.is_err(),
@@ -930,10 +981,10 @@ mod tests {
     #[test]
     fn uniquekey_exhaustion_panics() {
         use std::panic::catch_unwind;
-        let saved = UniqueKey::_test_force_exhausted_state();
+        // UniqueExhaustionGuard restores on Drop — safe even if assert-unwinds.
+        let _guard = UniqueExhaustionGuard::new();
         let r1 = catch_unwind(UniqueKey::new);
         let r2 = catch_unwind(UniqueKey::new);
-        UniqueKey::_test_restore_state(saved);
 
         assert!(
             r1.is_err(),

@@ -122,6 +122,12 @@ impl RawId {
     /// # Safety
     ///
     /// The caller must ensure that `index` is not 0.
+    ///
+    /// Staging: zero workspace callers. This exists to unblock future
+    /// slab/arena hot paths that genuinely benefit from skipping the
+    /// zero-check. Until a call site lands, the unsafe surface surface
+    /// is dead code.
+    #[doc(hidden)]
     #[inline]
     #[must_use]
     pub const unsafe fn zip_unchecked(index: Index) -> Self {
@@ -284,6 +290,9 @@ impl<T: Marker> Id<T> {
     /// # Safety
     ///
     /// The caller must ensure that `index` is not 0.
+    ///
+    /// Staging: zero workspace callers. See [`RawId::zip_unchecked`].
+    #[doc(hidden)]
     #[inline]
     #[must_use]
     pub const unsafe fn zip_unchecked(index: Index) -> Self {
@@ -332,6 +341,9 @@ impl<T: Marker> Id<T> {
     /// # Safety
     ///
     /// The caller must ensure that `index` is not 0.
+    ///
+    /// Staging: zero workspace callers. See [`RawId::zip_unchecked`].
+    #[doc(hidden)]
     #[inline]
     #[must_use]
     pub const unsafe fn new_unchecked(index: Index) -> Self {
