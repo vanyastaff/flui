@@ -194,7 +194,7 @@ pub use owner::{BuildOwner, ElementOwner};
 pub use tree::{ElementNode, ElementTree, reconcile_children};
 pub use view::{
     BoxedElement, BoxedView, ElementBase, ElementExt, ErrorElement, ErrorView, ErrorViewBuilder,
-    FlutterError, InheritedElement, InheritedView, IntoElement, IntoView, ParentDataConfig,
+    FlutterError, InheritedElement, InheritedView, IntoElement, IntoView, Memo, ParentDataConfig,
     ParentDataElement, ParentDataView, ProxyElement, ProxyView, RenderElement, RenderView,
     RootRenderElement, RootRenderView, StatefulElement, StatefulView, StatelessElement,
     StatelessView, View, ViewExt, ViewState, clear_error_view_builder, set_error_view_builder,
@@ -242,7 +242,7 @@ pub mod prelude {
         owner::{BuildOwner, ElementOwner},
         tree::{ElementNode, ElementTree, reconcile_children},
         view::{
-            BoxedView, InheritedView, IntoView, ParentDataConfig, ParentDataView, ProxyView,
+            BoxedView, InheritedView, IntoView, Memo, ParentDataConfig, ParentDataView, ProxyView,
             RenderView, StatefulView, StatelessView, View, ViewExt, ViewState,
         },
     };

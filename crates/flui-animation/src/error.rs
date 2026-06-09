@@ -90,7 +90,7 @@ mod tests {
     #[test]
     fn test_error_debug() {
         let error = AnimationError::Disposed;
-        let debug_str = format!("{:?}", error);
+        let debug_str = format!("{error:?}");
         assert!(debug_str.contains("Disposed"));
     }
 }

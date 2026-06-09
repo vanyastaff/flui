@@ -1096,7 +1096,8 @@ impl PipelineOwner<Layout> {
     /// synchronous child layout through the RenderTree. The child is laid
     /// out immediately and returns its size.
     pub fn run_layout(&mut self) -> crate::error::RenderResult<()> {
-        tracing::debug!("run_layout: {} nodes", self.dirty.needs_layout.len());
+        let _span =
+            tracing::debug_span!("layout", dirty_nodes = self.dirty.needs_layout.len(),).entered();
 
         // Process own dirty nodes if any
         // Flutter pattern: while loop to handle nodes added during layout
@@ -1898,10 +1899,11 @@ impl PipelineOwner<Compositing> {
         if self.dirty.needs_compositing.is_empty() {
             return Ok(());
         }
-        tracing::debug!(
-            "run_compositing: {} nodes",
-            self.dirty.needs_compositing.len()
-        );
+        let _span = tracing::debug_span!(
+            "compositing",
+            dirty_nodes = self.dirty.needs_compositing.len(),
+        )
+        .entered();
 
         // Sort shallow-first per Flutter
         // `_nodesNeedingCompositingBitsUpdate.sort((a, b) => a.depth - b.depth)`.
@@ -2063,11 +2065,12 @@ impl PipelineOwner<PaintPhase> {
     /// Nodes are sorted by depth (deep first) so children are painted before
     /// their parents. This matches Flutter's `flushPaint` behavior.
     pub fn run_paint(&mut self) -> crate::error::RenderResult<()> {
-        tracing::debug!("run_paint: {} nodes", self.dirty.needs_paint.len());
-
         if self.dirty.needs_paint.is_empty() {
             return Ok(());
         }
+
+        let _span =
+            tracing::debug_span!("paint", dirty_nodes = self.dirty.needs_paint.len(),).entered();
 
         self.debug_doing_paint = true;
 

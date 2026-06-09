@@ -20,6 +20,7 @@ mod animated;
 mod error;
 mod inherited;
 mod into_view;
+pub mod memo;
 mod parent_data;
 mod proxy;
 mod render;
@@ -35,6 +36,7 @@ pub use error::{
 };
 pub use inherited::InheritedView;
 pub use into_view::{BoxedElement, BoxedView, ElementExt, IntoElement, IntoView, ViewExt};
+pub use memo::Memo;
 pub use parent_data::{ParentDataConfig, ParentDataElement, ParentDataView};
 pub use proxy::ProxyView;
 pub use render::RenderView;

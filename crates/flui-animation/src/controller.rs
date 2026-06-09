@@ -464,7 +464,6 @@ impl AnimationController {
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
     pub fn repeat(&self, reverse: bool) -> Result<(), AnimationError> {
-        eprintln!("[DEBUG] AnimationController::repeat called");
         let mut inner = self.inner.lock();
         Self::check_disposed(&inner)?;
 
@@ -481,7 +480,6 @@ impl AnimationController {
         inner.target_value = inner.upper_bound;
 
         if let Some(ticker) = &mut inner.ticker {
-            eprintln!("[DEBUG] AnimationController::repeat starting ticker");
             let controller = self.clone();
             // Restart-safe: stop if already Active (PR #95 review fix — Ticker::start
             // debug-asserts on Active state; AnimationController methods can be called
@@ -493,7 +491,10 @@ impl AnimationController {
                 controller.tick();
             });
         } else {
-            eprintln!("[WARN] AnimationController::repeat: no ticker!");
+            tracing::warn!(
+                "AnimationController::repeat called without a configured ticker; \
+                 the animation will not advance"
+            );
         }
 
         Self::notify_status_listeners(AnimationStatus::Forward, &inner);

@@ -105,6 +105,46 @@ pub trait View: Downcast + DynClone + Send + Sync + 'static {
         }
     }
 
+    /// Typed memoization short-circuit.
+    ///
+    /// Returns `true` if a same-type, same-position rebuild can be **skipped**
+    /// because `self` is interchangeable with `prev` — i.e. both views would
+    /// produce identical output if built.
+    ///
+    /// # Default
+    ///
+    /// `false` — always rebuild (Flutter parity). This is the safe default:
+    /// skipping a rebuild whose output *would* have differed silently loses
+    /// user-visible state, so the opt-in direction is the only safe one.
+    ///
+    /// # Opting in
+    ///
+    /// Override this method, or wrap your view in [`crate::Memo<V>`] which
+    /// provides a `PartialEq`-based implementation. The `PartialEq` bound
+    /// lives **only** on `Memo<V>` — there is no blanket bound on `View`
+    /// (the Druid trap). See `docs/FOUNDATIONS.md` C1.
+    ///
+    /// # Opposite polarity to `can_update`
+    ///
+    /// [`View::can_update`] is the Flutter *type + key matchability* gate:
+    /// can this element be *reused at all*? `should_skip_rebuild` is a
+    /// *content equality* short-circuit: given that the element **is**
+    /// being reused, can the rebuild be skipped? Do **not** merge them —
+    /// they answer different questions and operate at different points in
+    /// the dispatch pipeline.
+    ///
+    /// # Object-safety
+    ///
+    /// The `where Self: Sized` bound excludes this method from the `dyn View`
+    /// vtable, keeping `View` object-safe (Constitution C4).
+    fn should_skip_rebuild(&self, prev: &Self) -> bool
+    where
+        Self: Sized,
+    {
+        let _ = prev;
+        false
+    }
+
     /// Get the Key associated with this View, if any.
     ///
     /// Keys are used for:
@@ -293,6 +333,17 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     ///
     /// The Element will be rebuilt in the next build phase.
     fn mark_needs_build(&mut self);
+
+    /// Returns `true` if this element has been marked dirty and needs a
+    /// rebuild before the next frame.
+    ///
+    /// The default implementation returns `false`; the unified
+    /// `Element<V, A, B>` overrides it to forward to
+    /// `ElementCore::is_dirty`. Hand-rolled element impls (test
+    /// fixtures, future custom elements) may override as needed.
+    fn is_dirty(&self) -> bool {
+        false
+    }
 
     /// Rebuild this Element.
     ///

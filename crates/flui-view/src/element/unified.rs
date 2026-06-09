@@ -179,6 +179,10 @@ where
         self.core.mark_dirty();
     }
 
+    fn is_dirty(&self) -> bool {
+        self.core.is_dirty()
+    }
+
     fn visit_children(&self, _visitor: &mut dyn FnMut(ElementId)) {
         // Children are managed internally
     }

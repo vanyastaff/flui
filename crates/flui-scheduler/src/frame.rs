@@ -550,7 +550,18 @@ pub struct FrameTiming {
 
     /// Current phase
     pub phase: FramePhase,
+
+    /// Per-phase elapsed durations recorded by the pipeline driver.
+    ///
+    /// Indexed by [`FramePhase::as_index`]. Entries default to
+    /// [`Milliseconds::ZERO`] and are populated by
+    /// [`Self::record_phase_duration`] as each phase completes.
+    phase_durations: [Milliseconds; FRAME_PHASE_COUNT],
 }
+
+/// Number of [`FramePhase`] variants; derived from [`FramePhase::ALL`] so it
+/// stays in sync if a phase is ever added or reordered.
+const FRAME_PHASE_COUNT: usize = FramePhase::ALL.len();
 
 impl FrameTiming {
     /// Create a new frame timing
@@ -560,6 +571,7 @@ impl FrameTiming {
             start_time: Instant::now(),
             frame_duration: FrameDuration::try_from_fps(target_fps).expect("fps > 0"),
             phase: FramePhase::Idle,
+            phase_durations: [Milliseconds::ZERO; FRAME_PHASE_COUNT],
         }
     }
 
@@ -570,6 +582,7 @@ impl FrameTiming {
             start_time: Instant::now(),
             frame_duration,
             phase: FramePhase::Idle,
+            phase_durations: [Milliseconds::ZERO; FRAME_PHASE_COUNT],
         }
     }
 
@@ -660,6 +673,26 @@ impl FrameTiming {
     #[inline]
     pub fn target_fps(&self) -> u32 {
         self.frame_duration.fps() as u32
+    }
+
+    /// Return the recorded duration for `phase`.
+    ///
+    /// Returns [`Milliseconds::ZERO`] for phases that have not yet been
+    /// recorded this frame (i.e. before [`Self::record_phase_duration`] is
+    /// called for that phase).
+    #[inline]
+    pub fn phase_duration(&self, phase: FramePhase) -> Milliseconds {
+        self.phase_durations[phase.as_index()]
+    }
+
+    /// Record how long `phase` took to complete.
+    ///
+    /// Calling this more than once for the same phase overwrites the previous
+    /// value; the pipeline driver is responsible for calling it exactly once
+    /// per phase per frame.
+    #[inline]
+    pub fn record_phase_duration(&mut self, phase: FramePhase, duration: Milliseconds) {
+        self.phase_durations[phase.as_index()] = duration;
     }
 }
 
@@ -854,5 +887,58 @@ mod tests {
         assert_eq!(AppLifecycleState::ALL.len(), 5);
         assert!(AppLifecycleState::ALL.contains(&AppLifecycleState::Resumed));
         assert!(AppLifecycleState::ALL.contains(&AppLifecycleState::Detached));
+    }
+
+    // FrameTiming::phase_duration / record_phase_duration
+
+    #[test]
+    fn phase_duration_defaults_to_zero_before_recording() {
+        let timing = FrameTiming::new(60);
+        for phase in FramePhase::ALL {
+            assert_eq!(
+                timing.phase_duration(phase),
+                Milliseconds::ZERO,
+                "phase {phase} must default to zero before any recording",
+            );
+        }
+    }
+
+    #[test]
+    fn record_phase_duration_round_trips() {
+        let mut timing = FrameTiming::new(60);
+        let phases_and_durations = [
+            (FramePhase::Build, Milliseconds::new(2.0)),
+            (FramePhase::Layout, Milliseconds::new(3.5)),
+            (FramePhase::Paint, Milliseconds::new(4.1)),
+            (FramePhase::Composite, Milliseconds::new(1.2)),
+        ];
+        for (phase, duration) in phases_and_durations {
+            timing.record_phase_duration(phase, duration);
+        }
+        for (phase, expected) in phases_and_durations {
+            assert_eq!(
+                timing.phase_duration(phase),
+                expected,
+                "phase {phase} duration must round-trip through record/read",
+            );
+        }
+        // Idle was not recorded; must still be zero.
+        assert_eq!(
+            timing.phase_duration(FramePhase::Idle),
+            Milliseconds::ZERO,
+            "unrecorded Idle phase must remain zero",
+        );
+    }
+
+    #[test]
+    fn record_phase_duration_overwrites_previous_value() {
+        let mut timing = FrameTiming::new(60);
+        timing.record_phase_duration(FramePhase::Layout, Milliseconds::new(5.0));
+        timing.record_phase_duration(FramePhase::Layout, Milliseconds::new(7.0));
+        assert_eq!(
+            timing.phase_duration(FramePhase::Layout),
+            Milliseconds::new(7.0),
+            "second record_phase_duration call must overwrite the first",
+        );
     }
 }

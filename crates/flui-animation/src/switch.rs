@@ -443,7 +443,7 @@ mod tests {
 
         let switch = AnimationSwitch::new(controller.clone() as Arc<dyn Animation<f32>>, None);
 
-        let debug_str = format!("{:?}", switch);
+        let debug_str = format!("{switch:?}");
         assert!(debug_str.contains("AnimationSwitch"));
         assert!(debug_str.contains("0.5"));
 

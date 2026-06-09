@@ -846,7 +846,8 @@ where
 /// let curved = tween.with_curve(Curves::EaseIn);
 /// assert!(curved.transform(0.5) < 50.0);
 /// ```
-pub trait AnimatableExt<T>: Animatable<T> + Sized { // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
+pub trait AnimatableExt<T>: Animatable<T> + Sized {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Returns a reversed version of this animatable.
     ///
     /// The reversed animatable transforms `t` to `1.0 - t` before passing
@@ -981,29 +982,32 @@ mod tests {
 
     #[test]
     fn test_size_tween() {
-        let tween = SizeTween::new(Size::new(0.0, 0.0), Size::new(100.0, 200.0));
+        use flui_types::geometry::px;
+        let tween = SizeTween::new(Size::new(px(0.0), px(0.0)), Size::new(px(100.0), px(200.0)));
         let mid = tween.transform(0.5);
-        assert_eq!(mid.width, 50.0);
-        assert_eq!(mid.height, 100.0);
+        assert_eq!(mid.width, px(50.0));
+        assert_eq!(mid.height, px(100.0));
     }
 
     #[test]
     fn test_rect_tween() {
-        let begin = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
-        let end = Rect::from_xywh(100.0, 100.0, 200.0, 200.0);
+        use flui_types::geometry::px;
+        let begin = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let end = Rect::from_xywh(px(100.0), px(100.0), px(200.0), px(200.0));
         let tween = RectTween::new(begin, end);
 
         let mid = tween.transform(0.5);
-        assert_eq!(mid.left(), 50.0);
-        assert_eq!(mid.top(), 50.0);
+        assert_eq!(mid.left(), px(50.0));
+        assert_eq!(mid.top(), px(50.0));
     }
 
     #[test]
     fn test_offset_tween() {
-        let tween = OffsetTween::new(Offset::ZERO, Offset::new(100.0, 200.0));
+        use flui_types::geometry::px;
+        let tween = OffsetTween::new(Offset::ZERO, Offset::new(px(100.0), px(200.0)));
         let mid = tween.transform(0.5);
-        assert_eq!(mid.dx, 50.0);
-        assert_eq!(mid.dy, 100.0);
+        assert_eq!(mid.dx, px(50.0));
+        assert_eq!(mid.dy, px(100.0));
     }
 
     #[test]
@@ -1028,12 +1032,13 @@ mod tests {
 
     #[test]
     fn test_border_radius_tween() {
-        let begin = BorderRadius::circular(0.0);
-        let end = BorderRadius::circular(20.0);
+        use flui_types::geometry::px;
+        let begin = BorderRadius::circular(px(0.0));
+        let end = BorderRadius::circular(px(20.0));
         let tween = BorderRadiusTween::new(begin, end);
 
         let mid = tween.transform(0.5);
-        assert_eq!(mid.top_left.x, 10.0);
+        assert_eq!(mid.top_left.x, px(10.0));
     }
 
     #[test]

@@ -25,6 +25,7 @@ parking_lot.workspace = true
 # Utility
 thiserror.workspace = true
 smallvec.workspace = true
+tracing.workspace = true
 
 # Serialization (optional)
 serde = { workspace = true, optional = true }
