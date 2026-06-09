@@ -1035,7 +1035,7 @@ mod tests {
         let paint = Paint::fill(Color::RED);
 
         // Create an RRect with different radii per corner
-        let rrect = RRect::from_rect_and_corners(
+        let rounded_rect = RRect::from_rect_and_corners(
             rect,
             Radius::circular(px(5.0)),  // top-left: small
             Radius::circular(px(15.0)), // top-right: medium
@@ -1043,7 +1043,7 @@ mod tests {
             Radius::circular(px(10.0)), // bottom-left: moderate
         );
 
-        let result = tessellator.tessellate_rrect(rrect, &paint);
+        let result = tessellator.tessellate_rrect(rounded_rect, &paint);
         assert!(result.is_ok());
 
         let (vertices, indices) = result.expect("tessellation should succeed");

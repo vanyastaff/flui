@@ -85,7 +85,7 @@ mod tests {
         let sender = queue.sender();
 
         // Create a request
-        let (response_tx, response_rx) = std::sync::mpsc::sync_channel(1);
+        let (response_tx, _response_rx) = std::sync::mpsc::sync_channel(1);
         let options = WindowOptions {
             title: "Test Window".to_string(),
             size: Size::new(px(800.0), px(600.0)),

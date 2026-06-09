@@ -227,12 +227,12 @@ mod tests {
         assert!(context.laid_out.contains_key("body"));
 
         let header_pos = context.positions.get("header").unwrap();
-        assert_eq!(header_pos.dx, 0.0);
-        assert_eq!(header_pos.dy, 0.0);
+        assert_eq!(header_pos.dx, px(0.0));
+        assert_eq!(header_pos.dy, px(0.0));
 
         let body_pos = context.positions.get("body").unwrap();
-        assert_eq!(body_pos.dx, 0.0);
-        assert_eq!(body_pos.dy, 60.0); // 50 (header height) + 10 (padding)
+        assert_eq!(body_pos.dx, px(0.0));
+        assert_eq!(body_pos.dy, px(60.0)); // 50 (header height) + 10 (padding)
     }
 
     #[test]

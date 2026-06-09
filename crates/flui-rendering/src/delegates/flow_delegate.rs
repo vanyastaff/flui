@@ -270,8 +270,8 @@ mod tests {
         assert_eq!(size, Size::new(px(500.0), px(200.0)));
 
         let child_constraints = delegate.get_constraints_for_child(0, constraints);
-        assert_eq!(child_constraints.max_width, 100.0);
-        assert_eq!(child_constraints.max_height, 50.0);
+        assert_eq!(child_constraints.max_width, px(100.0));
+        assert_eq!(child_constraints.max_height, px(50.0));
     }
 
     #[test]

@@ -645,7 +645,13 @@ impl<T> Default for InstanceBatch<T> {
 // NOTE: Tests temporarily disabled - need update for Pixels/DevicePixels
 // migration
 #[cfg(all(test, feature = "disabled-tests"))]
+#[allow(
+    clippy::float_cmp,
+    reason = "tests assert exact expected values produced by exact arithmetic"
+)]
 mod tests {
+    use flui_types::geometry::px;
+
     use super::*;
 
     #[test]
@@ -690,7 +696,7 @@ mod tests {
 
         // Add first instance
         let should_flush = batch.add(RectInstance::rect(
-            Rect::from_ltrb(0.0, 0.0, 100.0, 50.0),
+            Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(50.0)),
             Color::RED,
         ));
         assert!(!should_flush);
@@ -698,7 +704,7 @@ mod tests {
 
         // Add second instance (reaches max)
         let should_flush = batch.add(RectInstance::rect(
-            Rect::from_ltrb(10.0, 10.0, 110.0, 60.0),
+            Rect::from_ltrb(px(10.0), px(10.0), px(110.0), px(60.0)),
             Color::BLUE,
         ));
         assert!(should_flush);
@@ -711,7 +717,10 @@ mod tests {
 
     #[test]
     fn test_color_conversion() {
-        let instance = RectInstance::rect(Rect::from_ltrb(0.0, 0.0, 100.0, 100.0), Color::RED);
+        let instance = RectInstance::rect(
+            Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0)),
+            Color::RED,
+        );
 
         // RED should be [1.0, 0.0, 0.0, 1.0] in normalized form
         assert_eq!(instance.color[0], 1.0); // R

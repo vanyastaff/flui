@@ -354,6 +354,8 @@ pub struct PoolStats {
 
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod tests {
+    use flui_types::geometry::px;
+
     use super::*;
 
     /// Helper: create a wgpu device for testing (headless)
@@ -366,14 +368,12 @@ mod tests {
         }))
         .expect("Failed to find a suitable GPU adapter for testing");
 
-        let (device, _queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
+        let (device, _queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("Test Device"),
                 ..Default::default()
-            },
-            None,
-        ))
-        .expect("Failed to create GPU device for testing");
+            }))
+            .expect("Failed to create GPU device for testing");
 
         Arc::new(device)
     }
@@ -391,7 +391,7 @@ mod tests {
 
     #[test]
     fn test_texture_desc_from_size() {
-        let size = Size::new(1920.0, 1080.0);
+        let size = Size::new(px(1920.0), px(1080.0));
         let desc = TextureDesc::from_size(size, wgpu::TextureFormat::Rgba8UnormSrgb);
         assert_eq!(desc.width, 1920);
         assert_eq!(desc.height, 1080);
