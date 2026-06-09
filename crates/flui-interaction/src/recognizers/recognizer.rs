@@ -57,7 +57,7 @@ pub trait GestureRecognizer: GestureArenaMember + Send + Sync {
 /// - Initial position tracking
 /// - Disposal
 ///
-/// Renamed from `GestureRecognizerState` in U5 to free that name for the
+/// Renamed from `GestureRecognizerState` to free that name for the
 /// canonical Flutter `GestureRecognizerState` FSM enum (see below).
 #[derive(Clone)]
 pub struct RecognizerBase {
@@ -136,7 +136,7 @@ impl RecognizerBase {
 
     /// Debug-assert that the recognizer has not been disposed.
     ///
-    /// Adopts the PR #84 `ChangeNotifier::dispose` lifecycle pattern at
+    /// Adopts the `ChangeNotifier::dispose` lifecycle pattern at
     /// [`crates/flui-foundation/src/notifier.rs`](../../crates/flui-foundation/src/notifier.rs)
     /// — use-after-dispose triggers a `debug_assert!` panic in debug
     /// builds + `tracing::warn!` + no-op semantics in release.

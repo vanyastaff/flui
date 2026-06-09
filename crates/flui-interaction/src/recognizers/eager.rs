@@ -37,7 +37,7 @@
 //! let recognizer = EagerGestureRecognizer::new(arena.clone());
 //!
 //! // The recogniser wins the arena immediately on `add_pointer` —
-//! // no event required. Useful for `AndroidView` / `UiKitView` (U10).
+//! // no event required. Useful for `AndroidView` / `UiKitView`.
 //! let pointer = PointerId::PRIMARY;
 //! let position = Offset::new(Pixels(50.0), Pixels(50.0));
 //! recognizer.add_pointer(pointer, position);
@@ -117,7 +117,7 @@ impl EagerGestureRecognizer {
 
 impl GestureRecognizer for EagerGestureRecognizer {
     fn add_pointer(&self, pointer: PointerId, position: Offset<Pixels>) {
-        // U11: per-impl span (trait fn disallows `#[instrument]`).
+        // per-impl span (trait fn disallows `#[instrument]`).
         let _span = tracing::info_span!(
             "eager.add_pointer",
             pointer = ?pointer,
@@ -143,13 +143,13 @@ impl GestureRecognizer for EagerGestureRecognizer {
     }
 
     fn handle_event(&self, event: &PointerEvent) {
-        // U11: per-impl span (trait fn disallows `#[instrument]`).
+        // per-impl span (trait fn disallows `#[instrument]`).
         let _span = tracing::info_span!(
             "eager.handle_event",
             kind = %crate::observability::pointer_event_kind(event),
             event = %crate::observability::GestureEvent::EventReceived,
         );
-        // Use-after-dispose guard (PR #84 lifecycle pattern).
+        // Use-after-dispose guard (lifecycle pattern).
         if !self.state.assert_not_disposed("handle_event") {
             return;
         }

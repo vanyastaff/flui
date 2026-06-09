@@ -634,7 +634,7 @@ impl GestureRecognizer for ScaleGestureRecognizer {
 }
 
 // =============================================================================
-// Canonical trait hierarchy adoption (U19)
+// Canonical trait hierarchy adoption
 // =============================================================================
 //
 // Flutter parity: `scale.dart:345 ScaleGestureRecognizer extends

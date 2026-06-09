@@ -3,7 +3,7 @@
 //! # `PointerId` re-export
 //!
 //! The canonical [`PointerId`] is **re-exported** from the `ui-events` crate
-//! (W3C-compliant pointer event types). Pre-U9 this crate carried a local
+//! (W3C-compliant pointer event types). This crate previously carried a local
 //! `PointerId(i32)` newtype which:
 //!
 //! - Used `0` as the "mouse / primary pointer" sentinel.
@@ -42,7 +42,7 @@
 //! ```rust,ignore
 //! use flui_interaction::ids::{PointerId, FocusNodeId};
 //!
-//! // Primary pointer (was: `PointerId::new(0)` pre-U9).
+//! // Primary pointer (was: `PointerId::new(0)`).
 //! let mouse = PointerId::PRIMARY;
 //! // Second pointer in a multi-touch gesture.
 //! let touch1 = PointerId::new(2).expect("nonzero pointer id");
@@ -62,7 +62,7 @@ use std::{fmt, num::NonZeroU64};
 /// Unique identifier for a pointer device (mouse, touch, stylus).
 ///
 /// Re-exported from [`ui_events::pointer::PointerId`]. See [the module
-/// documentation](self) for migration notes (the local pre-U9 `i32` newtype
+/// documentation](self) for migration notes (the local `i32` newtype
 /// was widened to this `NonZeroU64`-backed type).
 pub use ui_events::pointer::PointerId;
 
@@ -234,7 +234,7 @@ mod tests {
     fn pointer_id_primary_matches_ui_events_primary() {
         // The widened PointerId (re-exported from ui-events) carries
         // PointerId::PRIMARY as its canonical "mouse / primary pointer"
-        // sentinel — replacing the pre-U9 `PointerId(0)` convention.
+        // sentinel — replacing the legacy `PointerId(0)` convention.
         assert!(PointerId::PRIMARY.is_primary_pointer());
         // PRIMARY is NonZeroU64::MIN (= 1).
         assert_eq!(PointerId::PRIMARY.get_inner().get(), 1);
@@ -242,7 +242,7 @@ mod tests {
 
     #[test]
     fn pointer_id_new_distinct_from_primary() {
-        // New(2) — first non-primary pointer in the U9 mapping
+        // New(2) — first non-primary pointer in the widened mapping
         // (old `PointerId::new(1)` → new `PointerId::new(2)`).
         let p2 = PointerId::new(2).expect("nonzero pointer id");
         assert_ne!(p2, PointerId::PRIMARY);

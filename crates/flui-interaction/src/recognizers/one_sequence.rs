@@ -6,10 +6,10 @@
 //!
 //! Recognizers that implement this trait track per-pointer arena entries and
 //! resolve them on `accept` / `reject` / `dispose`. Concrete implementers (after
-//! the U16-U20 migration wave): Drag, Scale, ForcePress.
+//! the migration wave): Drag, Scale, ForcePress.
 //!
 //! Note: this trait was previously a 341-LOC scaffold with zero `impl ... for`
-//! blocks (deleted in U3 commit f10d21b5). U13 re-introduces it as a properly
+//! blocks (deleted in commit f10d21b5). It is re-introduced as a properly
 //! shaped, sealed canonical trait ready for the migration wave.
 
 use crate::{

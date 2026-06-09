@@ -320,7 +320,7 @@ impl TapAndDragGestureRecognizer {
 
 impl GestureRecognizer for TapAndDragGestureRecognizer {
     fn add_pointer(&self, pointer: PointerId, position: Offset<Pixels>) {
-        // U11: per-impl span (trait fn disallows `#[instrument]`).
+        // per-impl span (trait fn disallows `#[instrument]`).
         let _span = tracing::info_span!(
             "tap_and_drag.add_pointer",
             pointer = ?pointer,
@@ -345,7 +345,7 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
     }
 
     fn handle_event(&self, event: &PointerEvent) {
-        // U11: per-impl span (trait fn disallows `#[instrument]`).
+        // per-impl span (trait fn disallows `#[instrument]`).
         let _span = tracing::info_span!(
             "tap_and_drag.handle_event",
             kind = %crate::observability::pointer_event_kind(event),

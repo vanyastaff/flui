@@ -424,7 +424,7 @@ mod tests {
     #[test]
     fn test_per_pointer_before_global() {
         // Flutter parity: pointer_router.dart:124 dispatches per-pointer
-        // handlers first, then global handlers. Post-U25 (acab2929+) FLUI
+        // handlers first, then global handlers. FLUI (acab2929+)
         // matches this ordering — previously global fired first.
         let router = PointerRouter::new();
         let pointer = PointerId::PRIMARY; // PRIMARY pointer
@@ -605,10 +605,10 @@ mod tests {
         let event = make_event(0, Offset::new(Pixels(50.0), Pixels(50.0)));
         router.route(&event); // Should not deadlock
 
-        // Post-U25 semantics (snapshot-then-dispatch matching Flutter):
+        // Current semantics (snapshot-then-dispatch matching Flutter):
         // handler2 IS called because the dispatch snapshot was taken before
         // any handler fired. Removal takes effect on the next event.
-        // Old (pre-U25) FLUI checked still-registered per-handler at 2+N+M
+        // Previously FLUI checked still-registered per-handler at 2+N+M
         // lock count; that contract removed for perf parity with Flutter.
         assert_eq!(handler2_called.load(Ordering::Relaxed), 1);
 

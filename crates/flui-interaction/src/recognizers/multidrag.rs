@@ -54,7 +54,7 @@
 //! | Pointers tracked | one (primary) | many (per pointer) |
 //! | Callbacks | closure set on the recognizer | per-pointer closure returning a handle |
 //! | Arena entries | one | one per pointer |
-//! | Tap → drag use case | yes | no (use [`TapAndDragGestureRecognizer`](crate::recognizers::TapAndDragGestureRecognizer) — U7) |
+//! | Tap → drag use case | yes | no (use [`TapAndDragGestureRecognizer`](crate::recognizers::TapAndDragGestureRecognizer)) |
 
 use std::{
     collections::HashMap,
@@ -281,7 +281,7 @@ impl MultiDragGestureRecognizer {
     /// `GestureSettings` currently exposes one `pan_slop` knob that all
     /// pointer kinds share — Flutter's `computeHitSlop` per-device split
     /// (touch/mouse/pen/trackpad) is collapsed here until a per-device
-    /// slop field is added. Pre-existing settings shape (U26) is the
+    /// slop field is added. The pre-existing settings shape is the
     /// contract this method respects.
     fn slop_for(&self, _kind: PointerType) -> f32 {
         self.settings.lock().pan_slop()
@@ -476,7 +476,7 @@ impl MultiDragGestureRecognizer {
 
 impl GestureRecognizer for MultiDragGestureRecognizer {
     fn add_pointer(&self, pointer: PointerId, position: Offset<Pixels>) {
-        // U11: per-impl span (trait fn disallows `#[instrument]`).
+        // per-impl span (trait fn disallows `#[instrument]`).
         let _span = tracing::info_span!(
             "multidrag.add_pointer",
             pointer = ?pointer,
@@ -489,7 +489,7 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
     }
 
     fn handle_event(&self, event: &PointerEvent) {
-        // U11: per-impl span (trait fn disallows `#[instrument]`).
+        // per-impl span (trait fn disallows `#[instrument]`).
         let _span = tracing::info_span!(
             "multidrag.handle_event",
             kind = %crate::observability::pointer_event_kind(event),

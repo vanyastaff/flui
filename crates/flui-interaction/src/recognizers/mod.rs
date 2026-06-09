@@ -20,8 +20,8 @@
 //!
 //! Note: The canonical Flutter trait hierarchy
 //! `GestureRecognizer ← OneSequenceGestureRecognizer ← PrimaryPointerGestureRecognizer`
-//! is re-introduced as proper traits in U13 of the input-frame-loop-repair
-//! plan; the zero-consumer scaffolds previously living here were deleted in U3.
+//! is re-introduced as proper traits; the zero-consumer scaffolds previously
+//! living here were deleted.
 //!
 //! # Available Recognizers
 //!

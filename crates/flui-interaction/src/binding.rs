@@ -226,7 +226,7 @@ impl GestureBinding {
     }
 
     // ========================================================================
-    // Resampler Wiring (U4)
+    // Resampler Wiring
     // ========================================================================
 
     /// Enable per-pointer event resampling on [`Self::flush_pending_moves`].
@@ -814,7 +814,7 @@ mod tests {
     }
 
     // ========================================================================
-    // U4: Resampler wiring tests
+    // Resampler wiring tests
     // ========================================================================
 
     #[test]
@@ -941,7 +941,7 @@ mod tests {
 
     #[test]
     fn flush_pending_moves_with_resampling_off_dispatches_directly() {
-        // Pre-U4 behaviour: off-path moves dispatch on flush.
+        // Off-path moves dispatch on flush.
         let binding = GestureBinding::new();
         let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
         binding.handle_pointer_event(&down, |_| HitTestResult::new());

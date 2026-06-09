@@ -454,7 +454,7 @@ impl LongPressGestureRecognizer {
 
 impl GestureRecognizer for LongPressGestureRecognizer {
     fn add_pointer(&self, pointer: PointerId, position: Offset<Pixels>) {
-        // U11: per-impl span (trait fn disallows `#[instrument]`).
+        // per-impl span (trait fn disallows `#[instrument]`).
         let _span = tracing::info_span!(
             "long_press.add_pointer",
             pointer = ?pointer,
@@ -472,7 +472,7 @@ impl GestureRecognizer for LongPressGestureRecognizer {
     }
 
     fn handle_event(&self, event: &PointerEvent) {
-        // U11: per-impl span (trait fn disallows `#[instrument]`).
+        // per-impl span (trait fn disallows `#[instrument]`).
         let _span = tracing::info_span!(
             "long_press.handle_event",
             kind = %crate::observability::pointer_event_kind(event),
@@ -529,7 +529,7 @@ impl GestureRecognizer for LongPressGestureRecognizer {
 }
 
 // =============================================================================
-// Canonical trait hierarchy adoption (U17)
+// Canonical trait hierarchy adoption
 // =============================================================================
 //
 // Flutter parity: `long_press.dart:262 LongPressGestureRecognizer extends
@@ -770,10 +770,10 @@ mod tests {
     }
 
     // ========================================================================
-    // U9: deadline-hook + shared-timer-helper coverage.
+    // deadline-hook + shared-timer-helper coverage.
     // ========================================================================
 
-    /// U9: `PrimaryPointerGestureRecognizer::did_exceed_deadline` must
+    /// `PrimaryPointerGestureRecognizer::did_exceed_deadline` must
     /// fire `on_long_press_start` AND resolve the arena. Pre-fix the
     /// hook only resolved silently, leaving deadline-driven acceptance
     /// a no-op for callers.
@@ -803,7 +803,7 @@ mod tests {
         assert!(*started.lock());
     }
 
-    /// U9: `try_fire_timer` is the single source of truth for
+    /// `try_fire_timer` is the single source of truth for
     /// deadline-elapsed resolution — `check_timer`, the move-driven
     /// path, and `did_exceed_deadline` all funnel through it. Verify
     /// it returns `false` before the deadline and `true` after, and

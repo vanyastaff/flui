@@ -131,8 +131,8 @@ pub enum Event {
 // Compatibility PointerEventData struct (testing-only)
 // ============================================================================
 //
-// U29: PointerEventData + PointerEventKind + make_*_event helpers are
-// gated behind `#[cfg(any(test, feature = "testing"))]`. Pre-U29 they
+// PointerEventData + PointerEventKind + make_*_event helpers are
+// gated behind `#[cfg(any(test, feature = "testing"))]`. They previously
 // shipped in release binaries; only the testing/ submodule and the
 // in-crate test modules consume them. Gating eliminates the legacy
 // compat surface from release builds without forcing call-site
@@ -240,9 +240,9 @@ impl PointerEventData {
         };
 
         // Convert pointer ID into the legacy `device: i32` field.
-        // U9: ui_events PointerId carries `NonZeroU64`; clamp into the i32
+        // ui_events PointerId carries `NonZeroU64`; clamp into the i32
         // range used by the test-only `PointerEventData` compat surface.
-        // Primary pointer ⇒ 0 (preserves the pre-U9 mouse sentinel inside
+        // Primary pointer ⇒ 0 (preserves the legacy mouse sentinel inside
         // the testing layer); other pointers ⇒ low 31 bits of the
         // NonZeroU64. Saturates on overflow (no platform produces
         // pointer ids > i32::MAX in practice).
@@ -339,7 +339,7 @@ impl InputEvent {
                 // otherwise return the low 31 bits of the pointer id so
                 // that distinct pointers stay distinct DeviceIds.
                 //
-                // Pre-U9 this branch also folded `persistent_device_id`
+                // This branch previously also folded `persistent_device_id`
                 // via `DefaultHasher` to produce a distinct DeviceId per
                 // physical device — that allocator-hitting hash ran on
                 // every hot-path event. Since `PersistentDeviceId`'s
@@ -531,7 +531,7 @@ impl From<&PointerScrollEvent> for ScrollEventData {
 // Test helper functions — gated behind `testing` feature
 // ============================================================================
 //
-// U29: these `make_*_event` helpers + `PointerEventData` / `PointerEventKind`
+// These `make_*_event` helpers + `PointerEventData` / `PointerEventKind`
 // only compile in test builds or when the `testing` Cargo feature is
 // active. Removes ~480 LOC of legacy compat construction surface from
 // release binaries.
@@ -544,8 +544,8 @@ pub fn make_down_event(position: Offset<Pixels>, pointer_type: PointerType) -> P
 
 /// Create a PointerEvent::Down for testing with an explicit pointer id.
 ///
-/// Use this when constructing multi-pointer event streams (U6
-/// `MultiDragGestureRecognizer` per-pointer state) — the default
+/// Use this when constructing multi-pointer event streams
+/// (`MultiDragGestureRecognizer` per-pointer state) — the default
 /// `make_down_event` hard-codes `PointerId::PRIMARY`.
 #[cfg(any(test, feature = "testing"))]
 pub fn make_down_event_for_id(
@@ -691,7 +691,7 @@ pub fn make_cancel_event(pointer_type: PointerType) -> PointerEvent {
 #[cfg(any(test, feature = "testing"))]
 /// Create a PointerEvent::Down for testing with an explicit button.
 ///
-/// U8 secondary/tertiary button parity — defaults to
+/// Secondary/tertiary button parity — defaults to
 /// [`PointerButton::Primary`], pass [`PointerButton::Secondary`] for
 /// right-click and [`PointerButton::Auxiliary`] for middle-click
 /// (Flutter "tertiary" convention).
@@ -783,7 +783,7 @@ pub fn make_move_event_with_button(
     // `PointerEvent::Move` wraps `PointerUpdate` which carries no
     // `button` field — the active button is implicit in the
     // `state.buttons` mask (down buttons, not the press that triggered
-    // the move). The U8 move-event path is mostly a passthrough for
+    // the move). The move-event path is mostly a passthrough for
     // existing tests; we encode the requested button as a one-hot
     // active-mask bit so the recogniser sees the same payload shape
     // as the down/up variants.
@@ -865,7 +865,7 @@ pub fn make_scroll_event(position: Offset<Pixels>, delta: Offset<Pixels>) -> Poi
 /// uninitialised events). Used by event routing, pointer routing, and raw
 /// input modules as a single canonical extraction point.
 ///
-/// Pre-U9 this fn allocated a fresh `DefaultHasher` on every event to fold
+/// This fn previously allocated a fresh `DefaultHasher` on every event to fold
 /// the `NonZeroU64` id down into the local `PointerId(i32)`. After widening
 /// to `ui_events::pointer::PointerId` this is a zero-cost field load — the
 /// id is already in its canonical form.

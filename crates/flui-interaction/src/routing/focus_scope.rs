@@ -28,13 +28,13 @@
 //! - `hasFocus` = any descendant has focus, `hasPrimaryFocus` = this node has
 //!   focus
 //!
-//! # Singleton manager (U23 / I-4 closure)
+//! # Singleton manager (I-4 closure)
 //!
 //! Prior incarnations of this module held a `manager:
 //! RwLock<Option<Weak<FocusManagerInner>>>` reference on each
 //! [`FocusNode`], plus a private `FocusManagerInner` Arc-based dual
 //! state living alongside the public [`crate::FocusManager`] singleton.
-//! U23 collapses that into a single singleton: focus nodes reach the
+//! The current design collapses that into a single singleton: focus nodes reach the
 //! manager via [`crate::FocusManager::global`] without any weak-ref
 //! dance — the singleton is always live and globally reachable.
 //!
@@ -289,7 +289,7 @@ impl FocusNode {
     /// Reaches the [`crate::FocusManager`] singleton directly (no Weak
     /// upgrade dance) — singleton always live.
     ///
-    /// PR #97 review fix: gated on `is_attached()` so detached nodes
+    /// Gated on `is_attached()` so detached nodes
     /// (still holding a stale FocusManager.primary_focus ID после
     /// `detach_child`) don't lie about having focus.
     pub fn has_focus(&self) -> bool {
@@ -304,7 +304,7 @@ impl FocusNode {
 
     /// Returns whether this specific node has primary focus.
     ///
-    /// PR #97 review fix: same is_attached() gate as `has_focus` to
+    /// Same is_attached() gate as `has_focus` to
     /// avoid stale-focus reports for detached nodes.
     pub fn has_primary_focus(&self) -> bool {
         if !self.is_attached() {
@@ -445,7 +445,7 @@ impl FocusNode {
             // Clear parent
             *child.parent.write() = None;
 
-            // PR #97 review fix: detach recursively so the entire removed
+            // Detach recursively so the entire removed
             // subtree is marked detached, not just the direct child.
             // Without this, descendants kept `attached == true` despite
             // being unreachable from the root scope — making

@@ -525,7 +525,7 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
 }
 
 // =============================================================================
-// Canonical trait hierarchy adoption (U20)
+// Canonical trait hierarchy adoption
 // =============================================================================
 //
 // Flutter parity: `force_press.dart:117 ForcePressGestureRecognizer extends

@@ -674,7 +674,7 @@ impl GestureRecognizer for DragGestureRecognizer {
 }
 
 // =============================================================================
-// Canonical trait hierarchy adoption (U18)
+// Canonical trait hierarchy adoption
 // =============================================================================
 //
 // Flutter parity: `monodrag.dart:81 sealed class DragGestureRecognizer
@@ -795,7 +795,7 @@ mod tests {
     }
 
     // ========================================================================
-    // U5 — H/V/Pan split tests
+    // H/V/Pan split tests
     //
     // Verifies Flutter parity for:
     // - per-axis slop (Vertical/Horizontal pick their own slop, Free uses

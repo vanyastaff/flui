@@ -11,7 +11,7 @@
 //! > **Logging:** `tracing` only — never `println!`, `eprintln!`, or `dbg!`.
 //! > Use `#[tracing::instrument]` on hot paths and lifecycle methods.
 //!
-//! This module is the U11 (Observability-as-DoD) closure pass: hot paths
+//! This module is the Observability-as-DoD closure pass: hot paths
 //! in [`crate::recognizers::RecognizerBase`] and [`crate::arena::GestureArena`]
 //! are now annotated with `#[tracing::instrument]` (plus typed
 //! `event = GestureEvent::*` span fields), and the trait impls in
@@ -32,7 +32,7 @@
 //!
 //! # Why no metrics / devtools here
 //!
-//! Per the U11 scope decision, this crate emits structured observability
+//! Per the observability scope decision, this crate emits structured observability
 //! events but does not own a metrics layer or a devtools dump API. Those
 //! are app-level concerns — see `flui-app` for app-level integration.
 //!

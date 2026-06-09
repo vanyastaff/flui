@@ -62,7 +62,7 @@
 //! let recognizer = TapGestureRecognizer::new(arena)
 //!     .with_on_tap(|details| {
 //!         // The user callback fires only after the arena confirms
-//!         // this recogniser won (U8 `pending_up` deferral).
+//!         // this recogniser won (`pending_up` deferral).
 //!         let _pos = details.global_position;
 //!     });
 //! // `recognizer` is now ready to receive pointer events via
@@ -159,7 +159,7 @@ pub mod timer;
 pub mod processing;
 
 // ============================================================================
-// Testing utilities — gated behind `testing` Cargo feature (U29)
+// Testing utilities — gated behind `testing` Cargo feature
 // ============================================================================
 
 #[cfg(any(test, feature = "testing"))]
@@ -258,7 +258,7 @@ pub use settings::{
     DEFAULT_TOUCH_SLOP, GestureSettings,
 };
 // ============================================================================
-// Re-exports: Testing Utilities (U29 feature-gated)
+// Re-exports: Testing Utilities (feature-gated)
 // ============================================================================
 #[cfg(any(test, feature = "testing"))]
 pub use testing::{
@@ -306,7 +306,7 @@ pub mod prelude {
     };
     // Extension traits for custom types
     pub use crate::sealed::{CustomGestureRecognizer, CustomHitTestable};
-    // Testing (U29 feature-gated)
+    // Testing (feature-gated)
     #[cfg(any(test, feature = "testing"))]
     pub use crate::testing::{GestureBuilder, GesturePlayer, GestureRecorder};
     // Traits
@@ -364,7 +364,7 @@ mod static_assertions {
     impl AssertSendSync for ForcePressGestureRecognizer {}
     impl AssertSendSync for MultiDragGestureRecognizer {}
     impl AssertSendSync for TapAndDragGestureRecognizer {}
-    // U10: EagerGestureRecognizer is a `RecognizerBase` + `Arc<Mutex<GestureSettings>>`
+    // EagerGestureRecognizer is a `RecognizerBase` + `Arc<Mutex<GestureSettings>>`
     // — auto `Send + Sync` via the `Arc<Mutex<...>>` field pattern, so the static
     // assertion holds the same way as for Tap/LongPress/MultiDrag above.
     impl AssertSendSync for EagerGestureRecognizer {}

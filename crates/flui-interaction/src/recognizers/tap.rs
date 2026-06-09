@@ -11,7 +11,7 @@
 //!
 //! # Button support
 //!
-//! The recogniser is button-aware (U8): callers can register
+//! The recogniser is button-aware: callers can register
 //! separate callbacks for [`TapButton::Primary`],
 //! [`TapButton::Secondary`], and [`TapButton::Tertiary`] clicks. The
 //! primary path keeps the legacy `on_tap*` callbacks and fires when
@@ -41,7 +41,7 @@ use crate::{
 /// Tap button slot — matches Flutter's `kPrimaryButton` / `kSecondaryButton`
 /// / `kTertiaryButton` separation.
 ///
-/// U8 mapping:
+/// Button mapping:
 /// - [`TapButton::Primary`]   ↔ `ui_events::pointer::PointerButton::Primary`
 /// - [`TapButton::Secondary`] ↔ `ui_events::pointer::PointerButton::Secondary`
 /// - [`TapButton::Tertiary`]  ↔ `ui_events::pointer::PointerButton::Auxiliary`
@@ -112,11 +112,11 @@ pub struct TapDetails {
 ///
 /// let arena = GestureArena::new();
 /// // The recogniser is shared via `Arc`; clone the inner `Arc` to
-/// // register callbacks (U8 — `on_tap` fires on Primary button up).
+/// // register callbacks (`on_tap` fires on Primary button up).
 /// let recognizer = TapGestureRecognizer::new(arena)
 ///     .with_on_tap(|details| {
 ///         // The callback fires AFTER the arena confirms this
-///         // recogniser won; U8's `pending_up` deferral guarantees
+///         // recogniser won; the `pending_up` deferral guarantees
 ///         // only the arena winner receives the user callback.
 ///         let _pos = details.global_position;
 ///     });
@@ -144,7 +144,7 @@ pub struct TapGestureRecognizer {
 
     /// Pending tap-up details captured at handle_event Up; fired by
     /// handle_tap_up *after* arena resolution confirms acceptance.
-    /// PR #87 review finding — pre-fix code fired on_tap_up + on_tap
+    /// Pre-fix code fired on_tap_up + on_tap
     /// during handle_tap_up unconditionally, but `handle_event::Up` is
     /// dispatched to every arena member; only the eventual arena winner
     /// should fire user callbacks.
@@ -175,13 +175,13 @@ struct TapCallbacks {
     on_tap: Option<TapCallback>,
     on_tap_cancel: Option<TapCallback>,
 
-    // U8: secondary-button callbacks (right mouse).
+    // Secondary-button callbacks (right mouse).
     on_secondary_tap_down: Option<TapCallback>,
     on_secondary_tap_up: Option<TapCallback>,
     on_secondary_tap: Option<TapCallback>,
     on_secondary_tap_cancel: Option<TapCallback>,
 
-    // U8: tertiary-button callbacks (auxiliary / middle mouse).
+    // Tertiary-button callbacks (auxiliary / middle mouse).
     on_tertiary_tap_down: Option<TapCallback>,
     on_tertiary_tap_up: Option<TapCallback>,
     on_tertiary_tap: Option<TapCallback>,
@@ -237,7 +237,7 @@ enum TapState {
     Cancelled,
 }
 
-/// Per-pointer button tracking for the active tap sequence (U8).
+/// Per-pointer button tracking for the active tap sequence.
 ///
 /// Stored alongside the recogniser's `gesture_state` so a switch from
 /// primary to non-primary mid-sequence is observable. Reset on every
@@ -342,7 +342,7 @@ impl TapGestureRecognizer {
     }
 
     // ========================================================================
-    // U8: Secondary-button builders (right mouse).
+    // Secondary-button builders (right mouse).
     // ========================================================================
 
     /// Set the secondary-button tap-down callback.
@@ -382,7 +382,7 @@ impl TapGestureRecognizer {
     }
 
     // ========================================================================
-    // U8: Tertiary-button builders (auxiliary / middle mouse).
+    // Tertiary-button builders (auxiliary / middle mouse).
     // ========================================================================
 
     /// Set the tertiary-button tap-down callback.
@@ -426,7 +426,7 @@ impl TapGestureRecognizer {
     /// parity at `tap.dart::_BaseTapGestureRecognizer::_checkDown`, the
     /// callback fires only after arena accept (see [`Self::accept_gesture`]).
     ///
-    /// U8: `button` is locked at down-time; a primary-button down that
+    /// `button` is locked at down-time; a primary-button down that
     /// later receives a secondary up is treated as cancel (button
     /// mismatch), matching Flutter's `_route` rejection path.
     fn handle_tap_down(&self, position: Offset<Pixels>, kind: PointerType, button: TapButton) {
@@ -457,13 +457,13 @@ impl TapGestureRecognizer {
 
     /// Handle tap up event.
     ///
-    /// PR #87 review-driven restructure: records pending_up, initiates
+    /// Review-driven restructure: records pending_up, initiates
     /// arena resolution via `state.stop_tracking()`, then fires user
     /// callbacks ONLY if arena confirmed acceptance. Eliminates the prior
     /// assumption that pointer-up implies victory (some competing
     /// recognizers also receive Up events without winning).
     ///
-    /// U8: button mismatch (down was Primary, up is Secondary) cancels
+    /// Button mismatch (down was Primary, up is Secondary) cancels
     /// the tap rather than firing the secondary slot — Flutter
     /// `tap.dart::_checkUp` routes the up to whichever button stream
     /// initiated the down.
@@ -540,7 +540,7 @@ impl TapGestureRecognizer {
             *self.gesture_state.lock() = TapState::Cancelled;
 
             // Call per-button cancel callback for the button that initiated
-            // the down (U8).
+            // the down.
             let button = self.pending_down.lock().as_ref().map(|p| p.button);
             if let Some(btn) = button {
                 let cancel_cb = self.callbacks.lock().cancel(btn).cloned();
@@ -617,7 +617,7 @@ impl TapGestureRecognizer {
 
 impl GestureRecognizer for TapGestureRecognizer {
     fn add_pointer(&self, pointer: PointerId, position: Offset<Pixels>) {
-        // U11: per-impl span (trait fn disallows `#[instrument]`).
+        // per-impl span (trait fn disallows `#[instrument]`).
         let _span = tracing::info_span!(
             "tap.add_pointer",
             pointer = ?pointer,
@@ -626,9 +626,8 @@ impl GestureRecognizer for TapGestureRecognizer {
         if !self.state.assert_not_disposed("add_pointer") {
             return;
         }
-        // Reset accepted flag + pending_up for the new sequence (PR #87
-        // review fix — flags from a prior gesture must not bleed into
-        // the new one).
+        // Reset accepted flag + pending_up for the new sequence (flags
+        // from a prior gesture must not bleed into the new one).
         *self.accepted.lock() = None;
         *self.pending_up.lock() = None;
         // Start tracking this pointer
@@ -647,7 +646,7 @@ impl GestureRecognizer for TapGestureRecognizer {
     }
 
     fn handle_event(&self, event: &PointerEvent) {
-        // U11: per-impl span (trait fn disallows `#[instrument]`).
+        // per-impl span (trait fn disallows `#[instrument]`).
         let _span = tracing::info_span!(
             "tap.handle_event",
             kind = %crate::observability::pointer_event_kind(event),
@@ -713,7 +712,7 @@ impl GestureRecognizer for TapGestureRecognizer {
         callbacks.on_tap_up = None;
         callbacks.on_tap = None;
         callbacks.on_tap_cancel = None;
-        // U8: secondary / tertiary slots.
+        // Secondary / tertiary slots.
         callbacks.on_secondary_tap_down = None;
         callbacks.on_secondary_tap_up = None;
         callbacks.on_secondary_tap = None;
@@ -732,11 +731,11 @@ impl GestureRecognizer for TapGestureRecognizer {
 }
 
 // =============================================================================
-// Canonical trait hierarchy adoption (U16)
+// Canonical trait hierarchy adoption
 // =============================================================================
 //
 // Flutter parity: `tap.dart:202 BaseTapGestureRecognizer extends
-// PrimaryPointerGestureRecognizer`. The PR #85 / U13 trait infrastructure
+// PrimaryPointerGestureRecognizer`. The trait infrastructure
 // at one_sequence.rs + primary_pointer.rs is now implemented for Tap.
 
 impl crate::recognizers::OneSequenceGestureRecognizer for TapGestureRecognizer {
@@ -778,7 +777,7 @@ impl crate::recognizers::PrimaryPointerGestureRecognizer for TapGestureRecognize
 
 impl GestureArenaMember for TapGestureRecognizer {
     fn accept_gesture(&self, _pointer: PointerId) {
-        // PR #87 review fix (P1): do NOT invoke user callbacks here. The
+        // Do NOT invoke user callbacks here. The
         // arena holds its internal lock while dispatching accept_gesture
         // → calling user code from this site is a lock-during-callback
         // hazard (user callback may re-enter arena, panic, or block).
@@ -840,7 +839,7 @@ mod tests {
         assert_eq!(recognizer.primary_pointer(), None);
     }
 
-    /// U8 sanity: `TapButton::from_pointer_button` correctly routes
+    /// Sanity: `TapButton::from_pointer_button` correctly routes
     /// Primary / Secondary / Auxiliary to the three slots and returns
     /// `None` for X1 / X2.
     #[test]
@@ -861,7 +860,7 @@ mod tests {
     }
 
     /// Legacy primary path: down + up with the Primary button
-    /// fires `on_tap` (PR #87 review fix — `add_pointer` no longer
+    /// fires `on_tap` (`add_pointer` no longer
     /// pre-stages the down; the down event itself does).
     #[test]
     fn test_tap_recognizer_with_callback() {
@@ -971,7 +970,7 @@ mod tests {
     }
 
     // ========================================================================
-    // U8: secondary / tertiary button routing.
+    // Secondary / tertiary button routing.
     // ========================================================================
 
     /// Right-click down + up fires `on_secondary_tap`; primary slot
