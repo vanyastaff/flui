@@ -59,7 +59,7 @@ use std::time::{Duration, Instant};
 use flui_types::geometry::{Offset, Pixels};
 pub use flui_types::gestures::{PointerDeviceKind, Velocity, VelocityEstimate};
 
-use super::lsq_solver::{LeastSquaresSolver, MAX_SAMPLES};
+use super::lsq_solver::{MAX_SAMPLES, solve_two};
 
 // ============================================================================
 // Constants (Flutter parity — see velocity_tracker.dart lines 142-145)
@@ -304,9 +304,10 @@ impl VelocityTracker {
         }
 
         // Fit a quadratic in milliseconds; velocity in px/ms is the linear
-        // coefficient. Scale to px/s (× 1000).
-        let x_fit = LeastSquaresSolver::new(&ts[..n], &xs[..n], &ws[..n]).solve(POLYNOMIAL_DEGREE);
-        let y_fit = LeastSquaresSolver::new(&ts[..n], &ys[..n], &ws[..n]).solve(POLYNOMIAL_DEGREE);
+        // coefficient. Scale to px/s (× 1000). The x and y fits share the same
+        // sample times and weights, so `solve_two` computes the QR
+        // factorization once for both.
+        let (x_fit, y_fit) = solve_two(&ts[..n], &ws[..n], &xs[..n], &ys[..n], POLYNOMIAL_DEGREE);
 
         match (x_fit, y_fit) {
             (Some(xf), Some(yf)) => Some(VelocityEstimate::new(

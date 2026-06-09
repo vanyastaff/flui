@@ -45,35 +45,43 @@ fn linear_swipe(
 
 /// Benchmark `VelocityTracker::estimate` on a full 20-sample buffer.
 ///
-/// One iteration feeds 20 samples then calls `estimate()`. This is the
-/// realistic drag-end cost: the recogniser's `on_end` callback computes
-/// the fling velocity from the last ~100 ms of motion.
+/// The tracker is filled in the (untimed) `iter_batched` setup so the timed
+/// region is ONLY `estimate()` — the cost the bench name claims. (Per-move
+/// fill cost is measured separately by `bench_add_position`.)
 fn bench_estimate_lsq(c: &mut Criterion) {
     let samples = black_box(linear_swipe(20, 100, 1000.0));
     c.bench_function("VelocityTracker::estimate (LSQ, 20 samples)", |b| {
-        b.iter(|| {
-            let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
-            for (t, p) in &samples {
-                tracker.add_position(*t, *p);
-            }
-            black_box(tracker.estimate())
-        });
+        b.iter_batched(
+            || {
+                let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
+                for (t, p) in &samples {
+                    tracker.add_position(*t, *p);
+                }
+                tracker
+            },
+            |tracker| black_box(tracker.estimate()),
+            criterion::BatchSize::SmallInput,
+        );
     });
 }
 
-/// Benchmark the empty / 3-sample case — drag-end after a quick flick that
-/// did not accumulate 100 ms of history. `estimate()` must short-circuit
-/// early via `MIN_SAMPLE_SIZE` and report zero.
+/// Benchmark the 3-sample case — a quick flick that did not accumulate 100 ms
+/// of history. The fill happens in (untimed) setup so only `estimate()` is
+/// measured.
 fn bench_estimate_short(c: &mut Criterion) {
     let samples = black_box(linear_swipe(3, 30, 500.0));
     c.bench_function("VelocityTracker::estimate (LSQ, 3 samples)", |b| {
-        b.iter(|| {
-            let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
-            for (t, p) in &samples {
-                tracker.add_position(*t, *p);
-            }
-            black_box(tracker.estimate())
-        });
+        b.iter_batched(
+            || {
+                let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
+                for (t, p) in &samples {
+                    tracker.add_position(*t, *p);
+                }
+                tracker
+            },
+            |tracker| black_box(tracker.estimate()),
+            criterion::BatchSize::SmallInput,
+        );
     });
 }
 
@@ -100,13 +108,17 @@ fn bench_add_position(c: &mut Criterion) {
 fn bench_ios_estimate(c: &mut Criterion) {
     let samples = black_box(linear_swipe(20, 100, 1000.0));
     c.bench_function("IosFlingVelocityTracker::estimate (20 samples)", |b| {
-        b.iter(|| {
-            let mut tracker = IosFlingVelocityTracker::with_kind(PointerDeviceKind::Touch);
-            for (t, p) in &samples {
-                tracker.add_position(*t, *p);
-            }
-            black_box(tracker.estimate())
-        });
+        b.iter_batched(
+            || {
+                let mut tracker = IosFlingVelocityTracker::with_kind(PointerDeviceKind::Touch);
+                for (t, p) in &samples {
+                    tracker.add_position(*t, *p);
+                }
+                tracker
+            },
+            |tracker| black_box(tracker.estimate()),
+            criterion::BatchSize::SmallInput,
+        );
     });
 }
 

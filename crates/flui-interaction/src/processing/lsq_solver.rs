@@ -20,14 +20,14 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use flui_interaction::processing::lsq_solver::{LeastSquaresSolver, PolynomialFit};
+//! use crate::processing::lsq_solver::{PolynomialFit, solve_one};
 //!
 //! // Fit a quadratic (degree=2) to (t, y) with weights w.
 //! let x = vec![-100.0, -50.0, 0.0];       // time in ms
 //! let y = vec![0.0, 50.0, 100.0];         // position in px
 //! let w = vec![0.6, 0.8, 1.0];            // weights (recent = higher)
 //!
-//! let fit: Option<PolynomialFit> = LeastSquaresSolver::new(&x, &y, &w).solve(2);
+//! let fit: Option<PolynomialFit> = solve_one(&x, &y, &w, 2);
 //! if let Some(fit) = fit {
 //!     // Coefficients are [a₀, a₁, a₂] for y = a₀ + a₁·t + a₂·t².
 //!     // Velocity at t=0 is a₁.
@@ -124,192 +124,189 @@ impl PolynomialFit {
 }
 
 // ============================================================================
-// LeastSquaresSolver
+// Solve entry points
 // ============================================================================
 
-/// Weighted least-squares polynomial fitter.
+/// Weighted least-squares polynomial fit of a single right-hand side.
 ///
-/// The constructor takes slices of equal length representing `(x, y, w)`
-/// data points. Call [`solve`](Self::solve) with the desired polynomial
-/// degree to compute the fit.
+/// `x`, `y`, and `w` are equal-length slices of data points (positions, values,
+/// weights); `degree` is the polynomial degree. Returns `None` if the data is
+/// insufficient (`degree > len`), linearly dependent, or numerically singular.
 ///
-/// Returns `None` if the data is insufficient (degree > n), linearly
-/// dependent, or numerically singular.
-#[derive(Debug, Clone)]
-pub struct LeastSquaresSolver<'a> {
-    x: &'a [f64],
-    y: &'a [f64],
-    w: &'a [f64],
+/// Single-RHS entry point — used by the solver's own tests. Production callers
+/// fit the x and y pointer coordinates together via [`solve_two`], which shares
+/// the QR factorization.
+#[cfg(test)]
+pub(crate) fn solve_one(x: &[f64], y: &[f64], w: &[f64], degree: usize) -> Option<PolynomialFit> {
+    debug_assert_eq!(x.len(), y.len(), "x and y must have the same length");
+    debug_assert_eq!(x.len(), w.len(), "x and w must have the same length");
+    let mut q = [0.0_f64; SCRATCH_N * SCRATCH_M];
+    let mut r = [0.0_f64; SCRATCH_N * SCRATCH_N];
+    let (m, n) = factorize(x, w, degree, &mut q, &mut r)?;
+    solve_rhs(x, y, w, &q, &r, m, n)
 }
 
-impl<'a> LeastSquaresSolver<'a> {
-    /// Create a new solver from x/y/w slices. The slices must be of equal
-    /// length; debug builds assert this.
-    pub fn new(x: &'a [f64], y: &'a [f64], w: &'a [f64]) -> Self {
-        debug_assert_eq!(x.len(), y.len(), "x and y must have the same length");
-        debug_assert_eq!(x.len(), w.len(), "x and w must have the same length");
-        Self { x, y, w }
+/// Factorize the weighted Vandermonde design matrix built from sample positions
+/// `x` and weights `w` into its Gram-Schmidt QR form, writing `Q` (n×m) into `q`
+/// and `R` (n×n, upper-triangular) into `r`. Returns `(m, n)` on success, or
+/// `None` for insufficient or linearly-dependent data.
+///
+/// The factorization depends only on `(x, w, degree)`, not on the right-hand
+/// side, so it can be reused across multiple `y`-vectors — see [`solve_two`].
+/// Complexity: O(n²·m), and with n ≤ `MAX_DEGREE`+1 and m ≤ `MAX_SAMPLES` that is
+/// a small bounded constant.
+fn factorize(
+    x: &[f64],
+    w: &[f64],
+    degree: usize,
+    q: &mut [f64],
+    r: &mut [f64],
+) -> Option<(usize, usize)> {
+    let m = x.len();
+    // No data / not enough points / degree too high / stack buffers too small.
+    if m == 0 || degree > m || degree > MAX_DEGREE || m > SCRATCH_M {
+        return None;
+    }
+    let n = degree + 1;
+
+    // Step 1: weighted Vandermonde matrix A (n × m), row-major, on the stack
+    // (Vec has no SBO; these fixed buffers avoid heap allocation per fit).
+    let mut a = [0.0_f64; SCRATCH_N * SCRATCH_M];
+    for h in 0..m {
+        let wh = w[h];
+        a[h] = wh;
+        let mut x_pow = x[h];
+        for i in 1..n {
+            a[i * m + h] = wh * x_pow;
+            x_pow *= x[h];
+        }
     }
 
-    /// Fit a polynomial of the given degree to the data.
-    ///
-    /// Returns `None` if:
-    /// - `degree` exceeds the number of data points
-    /// - The data is linearly dependent (rank-deficient)
-    /// - All weights are zero (degenerate)
-    pub fn solve(&self, degree: usize) -> Option<PolynomialFit> {
-        let m = self.x.len();
-        if m == 0 {
-            // No data — can't fit a constant to zero points.
-            return None;
-        }
-        if degree > m {
-            // Not enough data to fit a curve.
-            return None;
-        }
-        if degree > MAX_DEGREE {
-            // Clamp to MAX_DEGREE — our velocity/predictor hot paths
-            // only ever need linear or quadratic fits. Higher-degree
-            // fits are numerically dangerous for ≤ MAX_SAMPLES samples.
-            return None;
-        }
-        if m > SCRATCH_M {
-            // Defensive bound check — stack buffers below assume m ≤ MAX_SAMPLES.
-            // Callers that need bigger fits should use a heap-backed path.
-            return None;
-        }
-
-        let mut result = PolynomialFit::new(degree)?;
-
-        // Shorthand matching Flutter's notation.
-        let n = degree + 1;
-
-        // Step 1: Build weighted Vandermonde matrix A (n × m), row-major.
-        // Element (i, h) lives at a[i * m + h]. Using stack-allocated
-        // fixed-size buffers (Vec has no SBO) to avoid 4 heap
-        // allocations on every velocity() call. m ≤ MAX_SAMPLES and
-        // n ≤ MAX_DEGREE+1 are enforced above.
-        let mut a = [0.0_f64; SCRATCH_N * SCRATCH_M];
+    // Step 2: Gram-Schmidt QR.
+    for j in 0..n {
         for h in 0..m {
-            let wh = self.w[h];
-            a[h] = wh;
-            let mut x_pow = self.x[h];
-            for i in 1..n {
-                a[i * m + h] = wh * x_pow;
-                x_pow *= self.x[h];
+            q[j * m + h] = a[j * m + h];
+        }
+        for i in 0..j {
+            let mut dot = 0.0_f64;
+            for h in 0..m {
+                dot += q[j * m + h] * q[i * m + h];
+            }
+            for h in 0..m {
+                q[j * m + h] -= dot * q[i * m + h];
             }
         }
-
-        // Step 2: Apply Gram-Schmidt to obtain QR decomposition.
-        // Q is n × m, R is n × n.
-        let mut q = [0.0_f64; SCRATCH_N * SCRATCH_M];
-        let mut r = [0.0_f64; SCRATCH_N * SCRATCH_N];
-        for j in 0..n {
-            // Copy row j of A into Q.
-            for h in 0..m {
-                q[j * m + h] = a[j * m + h];
-            }
-            // Orthogonalise Q row j against the previous Q rows for i < j.
-            for i in 0..j {
-                // dot = Q row j · Q row i
-                let mut dot = 0.0_f64;
-                for h in 0..m {
-                    dot += q[j * m + h] * q[i * m + h];
-                }
-                // Q row j -= dot · Q row i
-                for h in 0..m {
-                    q[j * m + h] -= dot * q[i * m + h];
-                }
-            }
-
-            // Compute Q row j norm.
-            let mut norm_sq = 0.0_f64;
-            for h in 0..m {
-                let qjh = q[j * m + h];
-                norm_sq += qjh * qjh;
-            }
-            let norm = norm_sq.sqrt();
-            if norm < PRECISION_ERROR_TOLERANCE {
-                // Linearly dependent — no unique solution.
-                return None;
-            }
-            let inv_norm = 1.0 / norm;
-            for h in 0..m {
-                q[j * m + h] *= inv_norm;
-            }
-            // R[j, i] = Q row j · A row i for i ≥ j (upper triangular).
-            for i in j..n {
-                let mut dot = 0.0_f64;
-                for h in 0..m {
-                    dot += q[j * m + h] * a[i * m + h];
-                }
-                r[j * n + i] = dot;
-            }
-        }
-
-        // Step 3: Solve R B = Qᵀ W Y for the coefficients B.
-        // Qᵀ W Y is computed inline as Q row i · (W * Y) for each row i.
-        // Back-substitute from bottom-right to top-left. w*y fits in a
-        // stack buffer alongside the result coefficients.
-        let mut wy = [0.0_f64; SCRATCH_M];
-        for (h, (&y, &w)) in self.y[..m].iter().zip(self.w[..m].iter()).enumerate() {
-            wy[h] = y * w;
-        }
-        for i in (0..n).rev() {
-            let mut sum = 0.0_f64;
-            for h in 0..m {
-                sum += q[i * m + h] * wy[h];
-            }
-            // Subtract contributions from already-solved higher coefficients.
-            for j in (i + 1)..n {
-                sum -= r[i * n + j] * result.coefficients[j];
-            }
-            let r_ii = r[i * n + i];
-            if r_ii.abs() < PRECISION_ERROR_TOLERANCE {
-                return None;
-            }
-            result.coefficients[i] = sum / r_ii;
-        }
-
-        // Step 4: Compute R² (confidence).
-        let y_mean: f64 = {
-            let mut s = 0.0_f64;
-            for h in 0..m {
-                s += self.y[h];
-            }
-            s / m as f64
-        };
-        let mut sum_squared_error = 0.0_f64;
-        let mut sum_squared_total = 0.0_f64;
+        let mut norm_sq = 0.0_f64;
         for h in 0..m {
-            // Polynomial evaluation: y ≈ Σ_{i=0..degree} cᵢ xⁱ
-            // Use only the active coefficient slice — the trailing
-            // `MAX_DEGREE - degree` slots in `result.coefficients` are
-            // zero padding and must not contribute.
-            let mut predicted = 0.0_f64;
-            let mut x_pow = 1.0_f64;
-            for c in result.coefficients_slice() {
-                predicted += c * x_pow;
-                x_pow *= self.x[h];
-            }
-            let err = self.y[h] - predicted;
-            // Flutter weights residuals by w² (line 193 of lsq_solver.dart).
-            let wh = self.w[h];
-            let wh_sq = wh * wh;
-            sum_squared_error += wh_sq * err * err;
-            let v = self.y[h] - y_mean;
-            sum_squared_total += wh_sq * v * v;
+            let qjh = q[j * m + h];
+            norm_sq += qjh * qjh;
         }
-        result.confidence = if sum_squared_total <= PRECISION_ERROR_TOLERANCE {
-            1.0
-        } else {
-            // R² = 1 - SSE/SST. Clamp to [0, 1]: floating-point rounding can
-            // produce a tiny negative when SSE ≈ SST, and a fit worse than the
-            // mean would give R² < 0 — neither is a meaningful "confidence".
-            (1.0 - (sum_squared_error / sum_squared_total)).clamp(0.0, 1.0)
-        };
+        let norm = norm_sq.sqrt();
+        if norm < PRECISION_ERROR_TOLERANCE {
+            // Linearly dependent — no unique solution.
+            return None;
+        }
+        let inv_norm = 1.0 / norm;
+        for h in 0..m {
+            q[j * m + h] *= inv_norm;
+        }
+        for i in j..n {
+            let mut dot = 0.0_f64;
+            for h in 0..m {
+                dot += q[j * m + h] * a[i * m + h];
+            }
+            r[j * n + i] = dot;
+        }
+    }
 
-        Some(result)
+    Some((m, n))
+}
+
+/// Solve for one right-hand side `y` against a precomputed `(q, r)`
+/// factorization from [`factorize`]. Back-substitutes `R B = Qᵀ W Y` and
+/// computes the R² confidence. `x`/`w` must be the slices that produced the
+/// factorization. Complexity: O(n·m).
+fn solve_rhs(
+    x: &[f64],
+    y: &[f64],
+    w: &[f64],
+    q: &[f64],
+    r: &[f64],
+    m: usize,
+    n: usize,
+) -> Option<PolynomialFit> {
+    let mut result = PolynomialFit::new(n - 1)?;
+
+    // Step 3: back-substitute R B = Qᵀ W Y from bottom-right to top-left.
+    let mut wy = [0.0_f64; SCRATCH_M];
+    for (h, (&yh, &wh)) in y[..m].iter().zip(w[..m].iter()).enumerate() {
+        wy[h] = yh * wh;
+    }
+    for i in (0..n).rev() {
+        let mut sum = 0.0_f64;
+        for h in 0..m {
+            sum += q[i * m + h] * wy[h];
+        }
+        for j in (i + 1)..n {
+            sum -= r[i * n + j] * result.coefficients[j];
+        }
+        let r_ii = r[i * n + i];
+        if r_ii.abs() < PRECISION_ERROR_TOLERANCE {
+            return None;
+        }
+        result.coefficients[i] = sum / r_ii;
+    }
+
+    // Step 4: R² confidence (only the active coefficient slice contributes; the
+    // trailing padding slots are zero).
+    let y_mean: f64 = y[..m].iter().sum::<f64>() / m as f64;
+    let mut sum_squared_error = 0.0_f64;
+    let mut sum_squared_total = 0.0_f64;
+    for h in 0..m {
+        let mut predicted = 0.0_f64;
+        let mut x_pow = 1.0_f64;
+        for c in result.coefficients_slice() {
+            predicted += c * x_pow;
+            x_pow *= x[h];
+        }
+        let err = y[h] - predicted;
+        // Flutter weights residuals by w² (lsq_solver.dart).
+        let wh_sq = w[h] * w[h];
+        sum_squared_error += wh_sq * err * err;
+        let v = y[h] - y_mean;
+        sum_squared_total += wh_sq * v * v;
+    }
+    result.confidence = if sum_squared_total <= PRECISION_ERROR_TOLERANCE {
+        1.0
+    } else {
+        // R² = 1 - SSE/SST. Clamp to [0, 1]: floating-point rounding can produce
+        // a tiny negative when SSE ≈ SST, and a fit worse than the mean would
+        // give R² < 0 — neither is a meaningful "confidence".
+        (1.0 - (sum_squared_error / sum_squared_total)).clamp(0.0, 1.0)
+    };
+
+    Some(result)
+}
+
+/// Fit two right-hand sides (e.g. the x and y pointer coordinates) that share
+/// the same sample times `x` and weights `w`. The QR factorization — the
+/// dominant O(n²·m) cost — is computed once and reused for both, halving the
+/// factorization work versus two independent [`solve_one`] calls.
+pub(crate) fn solve_two(
+    x: &[f64],
+    w: &[f64],
+    y1: &[f64],
+    y2: &[f64],
+    degree: usize,
+) -> (Option<PolynomialFit>, Option<PolynomialFit>) {
+    let mut q = [0.0_f64; SCRATCH_N * SCRATCH_M];
+    let mut r = [0.0_f64; SCRATCH_N * SCRATCH_N];
+    match factorize(x, w, degree, &mut q, &mut r) {
+        Some((m, n)) => (
+            solve_rhs(x, y1, w, &q, &r, m, n),
+            solve_rhs(x, y2, w, &q, &r, m, n),
+        ),
+        None => (None, None),
     }
 }
 
@@ -329,7 +326,7 @@ mod tests {
     fn linear_fit_perfect() {
         // y = 10 + 5t (a=10, b=5)
         let (x, y, w) = linear_samples(10.0, 5.0, 5, 10.0);
-        let fit = LeastSquaresSolver::new(&x, &y, &w).solve(1).expect("fits");
+        let fit = solve_one(&x, &y, &w, 1).expect("fits");
         assert!((fit.coefficients[0] - 10.0).abs() < 1e-6);
         assert!((fit.coefficients[1] - 5.0).abs() < 1e-6);
         // Perfect linear data → confidence is 1.0
@@ -342,7 +339,7 @@ mod tests {
         let xs = [-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0];
         let y: Vec<f64> = xs.iter().map(|&t| 1.0 + 2.0 * t + 3.0 * t * t).collect();
         let w = vec![1.0; xs.len()];
-        let fit = LeastSquaresSolver::new(&xs, &y, &w).solve(2).expect("fits");
+        let fit = solve_one(&xs, &y, &w, 2).expect("fits");
         assert!((fit.coefficients[0] - 1.0).abs() < 1e-6);
         assert!((fit.coefficients[1] - 2.0).abs() < 1e-6);
         assert!((fit.coefficients[2] - 3.0).abs() < 1e-6);
@@ -355,7 +352,7 @@ mod tests {
         let x = vec![-100.0, -75.0, -50.0, -25.0, 0.0];
         let y = vec![-10000.0, -7400.0, -5050.0, -2480.0, 50.0];
         let w = vec![1.0; x.len()];
-        let fit = LeastSquaresSolver::new(&x, &y, &w).solve(1).expect("fits");
+        let fit = solve_one(&x, &y, &w, 1).expect("fits");
         // Velocity ≈ 100 px/unit
         assert!(
             (fit.coefficients[1] - 100.0).abs() < 1.0,
@@ -372,7 +369,7 @@ mod tests {
         let x = vec![0.0, 1.0];
         let y = vec![0.0, 1.0];
         let w = vec![1.0, 1.0];
-        assert!(LeastSquaresSolver::new(&x, &y, &w).solve(2).is_none());
+        assert!(solve_one(&x, &y, &w, 2).is_none());
     }
 
     #[test]
@@ -381,7 +378,7 @@ mod tests {
         let x = vec![0.0, 1.0, 2.0, 3.0, 4.0];
         let y = vec![0.0, 1.0, 4.0, 9.0, 16.0];
         let w = vec![1.0; x.len()];
-        assert!(LeastSquaresSolver::new(&x, &y, &w).solve(3).is_none());
+        assert!(solve_one(&x, &y, &w, 3).is_none());
     }
 
     #[test]
@@ -390,7 +387,7 @@ mod tests {
         let x = vec![0.0, 1.0, 2.0];
         let y = vec![0.0, 1.0, 4.0];
         let w = vec![0.0, 0.0, 0.0];
-        assert!(LeastSquaresSolver::new(&x, &y, &w).solve(1).is_none());
+        assert!(solve_one(&x, &y, &w, 1).is_none());
     }
 
     #[test]
@@ -400,7 +397,7 @@ mod tests {
         let x = vec![-2.0, -1.0, 0.0, 1.0, 2.0];
         let y: Vec<f64> = x.iter().map(|&t| 5.0 * t + 2.0 * t * t).collect();
         let w = vec![1.0; x.len()];
-        let fit = LeastSquaresSolver::new(&x, &y, &w).solve(2).expect("fits");
+        let fit = solve_one(&x, &y, &w, 2).expect("fits");
         assert!((fit.coefficients[1] - 5.0).abs() < 1e-6);
     }
 
@@ -414,12 +411,8 @@ mod tests {
         let y = vec![50.0, 30.0, 70.0, 100.0];
         let w_uniform = vec![1.0, 1.0, 1.0, 1.0];
         let w_skewed = vec![0.01, 1.0, 1.0, 1.0];
-        let fit_u = LeastSquaresSolver::new(&x, &y, &w_uniform)
-            .solve(1)
-            .expect("fits");
-        let fit_s = LeastSquaresSolver::new(&x, &y, &w_skewed)
-            .solve(1)
-            .expect("fits");
+        let fit_u = solve_one(&x, &y, &w_uniform, 1).expect("fits");
+        let fit_s = solve_one(&x, &y, &w_skewed, 1).expect("fits");
         // Uniform: the (0, 50) outlier sits well above the y=10x trend, so the
         // fitted line has intercept > 0 and slope < 10 to accommodate it.
         assert!(
@@ -443,7 +436,7 @@ mod tests {
         let y: Vec<f64> = vec![];
         let w: Vec<f64> = vec![];
         // No data → degree=0 is "more than 0 points", so still None.
-        assert!(LeastSquaresSolver::new(&x, &y, &w).solve(0).is_none());
+        assert!(solve_one(&x, &y, &w, 0).is_none());
     }
 
     proptest::proptest! {
@@ -458,7 +451,7 @@ mod tests {
             let xs: Vec<f64> = data.iter().map(|p| p.0).collect();
             let ys: Vec<f64> = data.iter().map(|p| p.1).collect();
             let ws = vec![1.0; xs.len()];
-            if let Some(fit) = LeastSquaresSolver::new(&xs, &ys, &ws).solve(degree) {
+            if let Some(fit) = solve_one(&xs, &ys, &ws, degree) {
                 proptest::prop_assert!(
                     (0.0..=1.0).contains(&fit.confidence),
                     "confidence {} out of [0,1]",
