@@ -844,4 +844,33 @@ mod tests {
         let t = VelocityTracker::with_kind(PointerDeviceKind::Stylus);
         assert_eq!(t.kind(), PointerDeviceKind::Stylus);
     }
+
+    proptest::proptest! {
+        /// Finite positions at monotonic times never produce a non-finite
+        /// velocity, and the estimate's confidence stays in [0, 1].
+        #[test]
+        fn velocity_finite_and_confidence_bounded(
+            xs in proptest::collection::vec(-1e4f32..1e4, 2..=20),
+        ) {
+            let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
+            let start = Instant::now();
+            for (i, &x) in xs.iter().enumerate() {
+                tracker.add_position(
+                    start + Duration::from_millis(i as u64 * 8),
+                    Offset::new(Pixels(x), Pixels(0.0)),
+                );
+            }
+            proptest::prop_assert!(
+                tracker.get_velocity().magnitude().is_finite(),
+                "velocity must be finite for finite input"
+            );
+            if let Some(est) = tracker.get_velocity_estimate() {
+                proptest::prop_assert!(
+                    (0.0..=1.0).contains(&est.confidence),
+                    "confidence {} out of [0,1]",
+                    est.confidence
+                );
+            }
+        }
+    }
 }

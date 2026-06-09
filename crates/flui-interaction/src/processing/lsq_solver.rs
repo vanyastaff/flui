@@ -303,7 +303,10 @@ impl<'a> LeastSquaresSolver<'a> {
         result.confidence = if sum_squared_total <= PRECISION_ERROR_TOLERANCE {
             1.0
         } else {
-            1.0 - (sum_squared_error / sum_squared_total)
+            // R² = 1 - SSE/SST. Clamp to [0, 1]: floating-point rounding can
+            // produce a tiny negative when SSE ≈ SST, and a fit worse than the
+            // mean would give R² < 0 — neither is a meaningful "confidence".
+            (1.0 - (sum_squared_error / sum_squared_total)).clamp(0.0, 1.0)
         };
 
         Some(result)
@@ -441,5 +444,30 @@ mod tests {
         let w: Vec<f64> = vec![];
         // No data → degree=0 is "more than 0 points", so still None.
         assert!(LeastSquaresSolver::new(&x, &y, &w).solve(0).is_none());
+    }
+
+    proptest::proptest! {
+        /// For any finite data and degree, `solve` returns either `None` or a
+        /// fit whose confidence is in [0, 1] with finite coefficients — never
+        /// NaN/Inf poisoning downstream consumers.
+        #[test]
+        fn solve_confidence_bounded_and_finite(
+            data in proptest::collection::vec((-1e3f64..1e3, -1e3f64..1e3), 1..=20),
+            degree in 0usize..=3,
+        ) {
+            let xs: Vec<f64> = data.iter().map(|p| p.0).collect();
+            let ys: Vec<f64> = data.iter().map(|p| p.1).collect();
+            let ws = vec![1.0; xs.len()];
+            if let Some(fit) = LeastSquaresSolver::new(&xs, &ys, &ws).solve(degree) {
+                proptest::prop_assert!(
+                    (0.0..=1.0).contains(&fit.confidence),
+                    "confidence {} out of [0,1]",
+                    fit.confidence
+                );
+                for c in &fit.coefficients {
+                    proptest::prop_assert!(c.is_finite(), "coefficient not finite: {c}");
+                }
+            }
+        }
     }
 }
