@@ -43,23 +43,31 @@ fn test_ids_as_hash_keys() {
     assert_eq!(render_map.get(&render_id), Some(&"Render 3".to_string()));
 }
 
-/// Test ID arithmetic for tree navigation
+/// Test ElementId ordering and index extraction for tree navigation.
+///
+/// `ElementId` is a generational arena key — `Add`/`Sub` are not meaningful
+/// (packing a generation into the high 32 bits makes raw arithmetic wrong).
+/// Callers navigate by slot index; ordering by packed value is stable and
+/// suitable for sorted collections / BTreeMap keys.
 #[test]
-fn test_id_arithmetic_for_tree_navigation() {
-    let base_id = ElementId::new(100);
+fn test_id_ordering_for_tree_navigation() {
+    use std::num::NonZeroU32;
 
-    // Navigate to siblings using Add (returns ElementId)
-    let next_sibling = base_id + 1;
-    assert_eq!(next_sibling.get(), 101);
+    let gen1 = NonZeroU32::MIN;
 
-    // Sub returns usize (distance between IDs)
-    let distance = base_id - 1;
-    assert_eq!(distance, 99);
+    // Two ids at consecutive slots, same generation.
+    let id_99 = ElementId::new_gen(98, gen1); // slot 98 (0-based)
+    let id_100 = ElementId::new_gen(99, gen1); // slot 99 (0-based)
+    let id_101 = ElementId::new_gen(100, gen1); // slot 100 (0-based)
 
-    // Verify ordering for sorted collections
-    let prev_sibling = ElementId::new(99);
-    assert!(prev_sibling < base_id);
-    assert!(base_id < next_sibling);
+    assert_eq!(id_100.index(), 99);
+    assert_eq!(id_99.index(), 98);
+    assert_eq!(id_101.index(), 100);
+
+    // Ordering is by packed value (generation << 32 | index) — stable
+    // for same-generation ids sorted by slot position.
+    assert!(id_99 < id_100);
+    assert!(id_100 < id_101);
 }
 
 /// Test that Optional IDs are properly optimized
@@ -374,7 +382,8 @@ fn test_widget_state_management() {
 
     assert_eq!(*widget.state.value(), 3);
     assert_eq!(rebuild_count.load(Ordering::SeqCst), 3);
-    assert_eq!(widget.id.get(), 1);
+    // ElementId::new(1) is 1-based: index() == 0 (0-based slab slot).
+    assert_eq!(widget.id.index(), 0);
     assert_eq!(widget.listener_ids.len(), 1);
 }
 
@@ -398,30 +407,30 @@ fn test_tree_structure() {
             self.children.push(child);
         }
 
-        fn depth_first_ids(&self) -> Vec<usize> {
-            let mut ids = vec![self.id.get()];
+        fn depth_first_indices(&self) -> Vec<u32> {
+            let mut ids = vec![self.id.index()];
             for child in &self.children {
-                ids.extend(child.depth_first_ids());
+                ids.extend(child.depth_first_indices());
             }
             ids
         }
     }
 
-    // Build tree
-    let mut root = TreeNode::new(1);
+    // Build tree: ElementId::new(n) stores slot index n-1.
+    let mut root = TreeNode::new(1); // index 0
 
-    let mut child1 = TreeNode::new(2);
-    child1.add_child(TreeNode::new(4));
-    child1.add_child(TreeNode::new(5));
+    let mut child1 = TreeNode::new(2); // index 1
+    child1.add_child(TreeNode::new(4)); // index 3
+    child1.add_child(TreeNode::new(5)); // index 4
 
-    let child2 = TreeNode::new(3);
+    let child2 = TreeNode::new(3); // index 2
 
     root.add_child(child1);
     root.add_child(child2);
 
-    // Verify structure
-    let ids = root.depth_first_ids();
-    assert_eq!(ids, vec![1, 2, 4, 5, 3]);
+    // Verify depth-first slot-index order (0-based).
+    let ids = root.depth_first_indices();
+    assert_eq!(ids, vec![0, 1, 3, 4, 2]);
 }
 
 /// Test thread safety of foundation types
@@ -429,14 +438,15 @@ fn test_tree_structure() {
 fn test_thread_safety() {
     use std::thread;
 
-    // Test that ElementId can be sent between threads
+    // Test that ElementId can be sent between threads.
+    // ElementId::new(42) is 1-based: index() == 41.
     let id = ElementId::new(42);
     let handle = thread::spawn(move || {
-        assert_eq!(id.get(), 42);
+        assert_eq!(id.index(), 41);
         id
     });
     let returned_id = handle.join().unwrap();
-    assert_eq!(returned_id.get(), 42);
+    assert_eq!(returned_id.index(), 41);
 
     // Test that Key can be sent between threads
     let key = Key::from_str("test");

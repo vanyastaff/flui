@@ -255,7 +255,7 @@ fn covers_sc003_reparent_emits_single_reparent_event() {
     // production parent-id space — its u64 representation).
     assert_eq!(
         reparent.parent,
-        parent_b.get() as u64,
+        parent_b.as_u64(),
         "Reparent event parent must be the new owning parent's id",
     );
 

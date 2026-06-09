@@ -69,9 +69,14 @@
 //! ```rust
 //! use flui_foundation::{ElementId, Key};
 //!
-//! // Unique element identifier with O(1) operations
-//! let element_id = ElementId::new(42);
-//! assert_eq!(element_id.get(), 42);
+//! // Generational element identifier: packs slab index + generation into 8 bytes.
+//! let element_id = ElementId::new(42); // 1-based: index() == 41
+//! assert_eq!(element_id.index(), 41);
+//! // Option<ElementId> has the same size (niche optimisation, generation >= 1)
+//! assert_eq!(
+//!     std::mem::size_of::<ElementId>(),
+//!     std::mem::size_of::<Option<ElementId>>(),
+//! );
 //!
 //! // Keys for element matching during rebuilds
 //! let key1 = Key::new();
@@ -125,7 +130,7 @@
 //! ## Performance
 //!
 //! Foundation types are optimized for common UI patterns:
-//! - `ElementId` uses `NonZeroUsize` for niche optimization
+//! - `ElementId` uses a packed `NonZeroU64` (index + generation) for niche optimization
 //! - Keys use atomic counters for O(1) generation
 //! - Change notifiers use efficient listener storage
 //! - Atomic flags provide lock-free state management
@@ -195,6 +200,8 @@ pub use id::{
     SemanticsId,
     TaskId,
     TickerId,
+    // Minimal tree-generic bound (does not expose raw index; ElementId satisfies this)
+    TreeId,
     ViewId,
     // Marker types module
     markers,
@@ -254,6 +261,7 @@ pub mod prelude {
         RELEASE_MODE,
         RenderId,
         SemanticsId,
+        TreeId,
         UniqueKey,
         ValueChanged,
         ValueGetter,
@@ -275,8 +283,9 @@ mod tests {
 
     #[test]
     fn test_basic_types() {
+        // ElementId::new(n) is 1-based: new(1).index() == 0.
         let element_id = ElementId::new(1);
-        assert_eq!(element_id.get(), 1);
+        assert_eq!(element_id.index(), 0);
 
         let _key = Key::new();
 

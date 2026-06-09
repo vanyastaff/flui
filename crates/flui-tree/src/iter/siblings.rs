@@ -4,7 +4,7 @@
 //! - [`Siblings`]: Directional iteration (forward or backward from a node)
 //! - [`AllSiblings`]: All siblings of a node (excluding self)
 
-use flui_foundation::Identifier;
+use flui_foundation::TreeId;
 use smallvec::SmallVec;
 
 use crate::{depth::INLINE_TREE_DEPTH, traits::TreeNav};
@@ -40,12 +40,12 @@ pub enum SiblingsDirection {
 /// # impl T { fn ins(&mut self, p: Option<ElementId>) -> ElementId {
 /// #     let id = ElementId::new(self.0.len()+1);
 /// #     self.0.push(Some(N { parent: p, children: vec![] }));
-/// #     if let Some(pid) = p { self.0[pid.get()-1].as_mut().unwrap().children.push(id); }
+/// #     if let Some(pid) = p { self.0[pid.index() as usize].as_mut().unwrap().children.push(id); }
 /// #     id
 /// # }}
 /// # impl TreeRead<ElementId> for T {
 /// #     type Node = N;
-/// #     fn get(&self, id: ElementId) -> Option<&N> { self.0.get(id.get()-1)?.as_ref() }
+/// #     fn get(&self, id: ElementId) -> Option<&N> { self.0.get(id.index() as usize)?.as_ref() }
 /// #     fn len(&self) -> usize { self.0.iter().flatten().count() }
 /// #     fn node_ids(&self) -> impl Iterator<Item = ElementId> + '_ {
 /// #         (0..self.0.len()).filter_map(|i| if self.0[i].is_some() { Some(ElementId::new(i+1)) } else { None })
@@ -80,7 +80,7 @@ pub enum SiblingsDirection {
 /// assert_eq!(sibs, vec![c, b, a]);
 /// ```
 #[derive(Debug)]
-pub struct Siblings<'a, I: Identifier, T: TreeNav<I>> {
+pub struct Siblings<'a, I: TreeId, T: TreeNav<I>> {
     _tree: &'a T,
     /// Parent's children list (owned). Stack-allocated for typical
     /// sibling counts (audit T-20).
@@ -95,7 +95,7 @@ pub struct Siblings<'a, I: Identifier, T: TreeNav<I>> {
     include_self: bool,
 }
 
-impl<'a, I: Identifier, T: TreeNav<I>> Siblings<'a, I, T> {
+impl<'a, I: TreeId, T: TreeNav<I>> Siblings<'a, I, T> {
     /// Creates a new siblings iterator.
     ///
     /// # Arguments
@@ -138,7 +138,7 @@ impl<'a, I: Identifier, T: TreeNav<I>> Siblings<'a, I, T> {
     }
 }
 
-impl<I: Identifier, T: TreeNav<I>> Iterator for Siblings<'_, I, T> {
+impl<I: TreeId, T: TreeNav<I>> Iterator for Siblings<'_, I, T> {
     type Item = I;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -210,8 +210,8 @@ impl<I: Identifier, T: TreeNav<I>> Iterator for Siblings<'_, I, T> {
     }
 }
 
-impl<I: Identifier, T: TreeNav<I>> std::iter::FusedIterator for Siblings<'_, I, T> {}
-impl<I: Identifier, T: TreeNav<I>> std::iter::ExactSizeIterator for Siblings<'_, I, T> {}
+impl<I: TreeId, T: TreeNav<I>> std::iter::FusedIterator for Siblings<'_, I, T> {}
+impl<I: TreeId, T: TreeNav<I>> std::iter::ExactSizeIterator for Siblings<'_, I, T> {}
 
 // ============================================================================
 // ALL SIBLINGS ITERATOR
@@ -232,12 +232,12 @@ impl<I: Identifier, T: TreeNav<I>> std::iter::ExactSizeIterator for Siblings<'_,
 /// # impl T { fn ins(&mut self, p: Option<ElementId>) -> ElementId {
 /// #     let id = ElementId::new(self.0.len()+1);
 /// #     self.0.push(Some(N { parent: p, children: vec![] }));
-/// #     if let Some(pid) = p { self.0[pid.get()-1].as_mut().unwrap().children.push(id); }
+/// #     if let Some(pid) = p { self.0[pid.index() as usize].as_mut().unwrap().children.push(id); }
 /// #     id
 /// # }}
 /// # impl TreeRead<ElementId> for T {
 /// #     type Node = N;
-/// #     fn get(&self, id: ElementId) -> Option<&N> { self.0.get(id.get()-1)?.as_ref() }
+/// #     fn get(&self, id: ElementId) -> Option<&N> { self.0.get(id.index() as usize)?.as_ref() }
 /// #     fn len(&self) -> usize { self.0.iter().flatten().count() }
 /// #     fn node_ids(&self) -> impl Iterator<Item = ElementId> + '_ {
 /// #         (0..self.0.len()).filter_map(|i| if self.0[i].is_some() { Some(ElementId::new(i+1)) } else { None })
@@ -268,7 +268,7 @@ impl<I: Identifier, T: TreeNav<I>> std::iter::ExactSizeIterator for Siblings<'_,
 /// assert_eq!(siblings, vec![a, c, d]);
 /// ```
 #[derive(Debug)]
-pub struct AllSiblings<'a, I: Identifier, T: TreeNav<I>> {
+pub struct AllSiblings<'a, I: TreeId, T: TreeNav<I>> {
     _tree: &'a T,
     /// Parent's children list (owned). Stack-allocated (audit T-20).
     children: SiblingsChildren<I>,
@@ -278,7 +278,7 @@ pub struct AllSiblings<'a, I: Identifier, T: TreeNav<I>> {
     exclude_id: I,
 }
 
-impl<'a, I: Identifier, T: TreeNav<I>> AllSiblings<'a, I, T> {
+impl<'a, I: TreeId, T: TreeNav<I>> AllSiblings<'a, I, T> {
     /// Creates a new iterator over all siblings.
     ///
     /// # Arguments
@@ -301,7 +301,7 @@ impl<'a, I: Identifier, T: TreeNav<I>> AllSiblings<'a, I, T> {
     }
 }
 
-impl<I: Identifier, T: TreeNav<I>> Iterator for AllSiblings<'_, I, T> {
+impl<I: TreeId, T: TreeNav<I>> Iterator for AllSiblings<'_, I, T> {
     type Item = I;
 
     #[inline]
@@ -329,7 +329,7 @@ impl<I: Identifier, T: TreeNav<I>> Iterator for AllSiblings<'_, I, T> {
     }
 }
 
-impl<I: Identifier, T: TreeNav<I>> std::iter::FusedIterator for AllSiblings<'_, I, T> {}
+impl<I: TreeId, T: TreeNav<I>> std::iter::FusedIterator for AllSiblings<'_, I, T> {}
 
 // ============================================================================
 // TESTS
@@ -367,7 +367,7 @@ mod tests {
             }));
 
             if let Some(parent_id) = parent
-                && let Some(Some(p)) = self.nodes.get_mut(parent_id.get() - 1)
+                && let Some(Some(p)) = self.nodes.get_mut(parent_id.index() as usize)
             {
                 p.children.push(id);
             }
@@ -380,7 +380,7 @@ mod tests {
         type Node = TestNode;
 
         fn get(&self, id: ElementId) -> Option<&TestNode> {
-            self.nodes.get(id.get() - 1)?.as_ref()
+            self.nodes.get(id.index() as usize)?.as_ref()
         }
 
         fn len(&self) -> usize {

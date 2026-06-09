@@ -226,12 +226,12 @@ pub fn emit(event: &ReconcileEvent) {
         target: RECONCILE_TARGET,
         tracing::Level::TRACE,
         kind = u64::from(event.kind.as_u8()),
-        parent = event.parent.get() as u64,
+        parent = event.parent.as_u64(),
         child_key = event.child_key.unwrap_or(0),
         child_key_present = event.child_key.is_some(),
         slot = event.slot as u64,
         view_type_id = %view_type_id_str,
-        from_parent = event.from_parent.map_or(0_u64, |id| id.get() as u64),
+        from_parent = event.from_parent.map_or(0_u64, ElementId::as_u64),
         from_parent_present = event.from_parent.is_some(),
     );
 }

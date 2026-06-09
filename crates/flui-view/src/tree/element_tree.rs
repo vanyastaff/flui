@@ -3,6 +3,7 @@
 //! Elements are stored in a Slab for O(1) access by ElementId.
 //! This follows Flutter's approach where Elements form the retained tree.
 
+use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use flui_foundation::{ElementId, ViewKey};
@@ -170,6 +171,17 @@ impl std::fmt::Debug for ElementNode {
 pub struct ElementTree {
     /// Slab storage for element nodes.
     nodes: Slab<ElementNode>,
+    /// Per-slot generation counters, parallel to `nodes` by slab index.
+    ///
+    /// `generations[i]` is the generation currently *live* in slab slot `i`.
+    /// An [`ElementId`] minted against slot `i` carries this value; when the
+    /// slot is freed (eager remove / finalize) the counter is bumped, so any
+    /// straggler id that still carries the old generation fails the staleness
+    /// compare in [`ElementTree::resolve_index`] and resolves to `None`
+    /// instead of the unrelated element that later reuses the slot. This is
+    /// the use-after-free-by-id guard the old nested `Box` graph never needed
+    /// but the slab arena does (ABA safety — Codex E1 P1).
+    generations: Vec<NonZeroU32>,
     /// Root element ID.
     root: Option<ElementId>,
 }
@@ -185,6 +197,7 @@ impl ElementTree {
     pub fn new() -> Self {
         Self {
             nodes: Slab::new(),
+            generations: Vec::new(),
             root: None,
         }
     }
@@ -193,8 +206,82 @@ impl ElementTree {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             nodes: Slab::with_capacity(capacity),
+            generations: Vec::with_capacity(capacity),
             root: None,
         }
+    }
+
+    /// Mint an [`ElementId`] for a freshly-inserted slab slot, threading the
+    /// parallel generation counter.
+    ///
+    /// * Fresh slot (slab grew by one) → append a generation of `1`.
+    /// * Reused slot (Slab handed back a previously-freed index) → the slot's
+    ///   counter was already bumped at remove time, so reuse the current value.
+    ///   The minted id therefore differs from any id that addressed the slot's
+    ///   previous occupant.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `slab_index` exceeds `u32::MAX` — the element tree cannot hold
+    /// more than `u32::MAX` live slots because [`ElementId`] packs the index
+    /// into 32 bits. This is the index-cap bound (Codex E1 P2).
+    fn alloc_id(&mut self, slab_index: usize) -> ElementId {
+        let index = slab_index_to_u32(slab_index);
+        let generation = if let Some(&g) = self.generations.get(slab_index) {
+            // Reused slot: generation already bumped by the prior remove.
+            g
+        } else {
+            // Fresh slot: the slab grew by exactly one. Seed generation = 1.
+            debug_assert_eq!(
+                slab_index,
+                self.generations.len(),
+                "slab must grow by exactly one slot per insert"
+            );
+            self.generations.push(NonZeroU32::MIN);
+            NonZeroU32::MIN
+        };
+        ElementId::new_gen(index, generation)
+    }
+
+    /// Resolve an [`ElementId`] to its live slab index, applying the
+    /// generation-staleness compare.
+    ///
+    /// Returns `None` when the id is stale (its generation no longer matches
+    /// the slot's current counter — the slot was freed and possibly reused) or
+    /// when the slot is empty. This is the single chokepoint for staleness: all
+    /// public accessors route through it, so no call site outside this module
+    /// indexes the slab by a raw `id.index()`.
+    #[inline]
+    fn resolve_index(&self, id: ElementId) -> Option<usize> {
+        let index = id.index() as usize;
+        if self.generations.get(index).copied() == Some(id.generation())
+            && self.nodes.contains(index)
+        {
+            Some(index)
+        } else {
+            None
+        }
+    }
+
+    /// Bump a freed slot's generation so straggler ids that addressed its
+    /// previous occupant can never resolve to its next occupant.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the slot has been recycled `u32::MAX` times — at which point
+    /// the generation can no longer be advanced without wrapping to a value a
+    /// stale id might still hold. Retiring on overflow (panic) keeps the ABA
+    /// guarantee absolute rather than reintroducing a 1-in-2³² collision
+    /// window (Codex E1 P2 generation-overflow policy). `u32::MAX` recycles of
+    /// a single slot is unreachable in practice.
+    fn bump_generation(&mut self, index: usize) {
+        let g = &mut self.generations[index];
+        *g = g.checked_add(1).unwrap_or_else(|| {
+            panic!(
+                "ElementTree: slab slot {index} exhausted u32::MAX generations \
+                 (ABA-safety overflow — slot retired)"
+            )
+        });
     }
 
     /// Get the root element ID.
@@ -275,9 +362,10 @@ impl ElementTree {
         // crossing the typed-`V` boundary.
         node.set_key(view.key().map(ViewKey::clone_key));
 
-        // Slab is 0-indexed, ElementId is 1-indexed
         let slab_index = self.nodes.insert(node);
-        let id = ElementId::new(slab_index + 1);
+        // Mint the generational id from the slot's current generation
+        // (fresh slot → gen 1; reused slot → the bumped post-free value).
+        let id = self.alloc_id(slab_index);
 
         // Plan §U15: stamp the element with its own ElementId BEFORE
         // `mount` so the Variable-arity reconciler can read it back
@@ -349,7 +437,7 @@ impl ElementTree {
         node.set_key(view.key().map(ViewKey::clone_key));
 
         let slab_index = self.nodes.insert(node);
-        let id = ElementId::new(slab_index + 1);
+        let id = self.alloc_id(slab_index);
 
         // Plan §U15: same self-id stamping as mount_root.
         self.nodes[slab_index].element.set_self_id(id);
@@ -369,21 +457,27 @@ impl ElementTree {
     }
 
     /// Get an element node by ID.
+    ///
+    /// Returns `None` for a stale id (one that addressed a since-freed slot)
+    /// as well as for an absent id — see [`ElementTree::resolve_index`].
     pub fn get(&self, id: ElementId) -> Option<&ElementNode> {
-        let index = id.get() - 1; // Convert 1-based to 0-based
+        let index = self.resolve_index(id)?;
         self.nodes.get(index)
     }
 
     /// Get an element node mutably by ID.
+    ///
+    /// Returns `None` for a stale or absent id.
     pub fn get_mut(&mut self, id: ElementId) -> Option<&mut ElementNode> {
-        let index = id.get() - 1;
+        let index = self.resolve_index(id)?;
         self.nodes.get_mut(index)
     }
 
-    /// Check if an element exists.
+    /// Check if a *live* element with this exact id (index + generation) exists.
+    ///
+    /// A stale id whose slot was freed (and possibly reused) reports `false`.
     pub fn contains(&self, id: ElementId) -> bool {
-        let index = id.get() - 1;
-        self.nodes.contains(index)
+        self.resolve_index(id).is_some()
     }
 
     /// Remove an element from the tree.
@@ -420,11 +514,9 @@ impl ElementTree {
         id: ElementId,
         owner: &mut crate::ElementOwner<'_>,
     ) -> Option<ElementNode> {
-        let index = id.get() - 1;
-
-        if !self.nodes.contains(index) {
-            return None;
-        }
+        // Staleness-checked: a stale id (slot already freed/reused) resolves
+        // to `None` here rather than touching the slot's new occupant.
+        let index = self.resolve_index(id)?;
 
         // R14 soft-remove for keyed elements: push to inactive queue
         // without slab-removing. State stays intact for same-frame
@@ -458,6 +550,9 @@ impl ElementTree {
         self.nodes[index].element.unmount(owner);
 
         let node = self.nodes.remove(index);
+        // Slot freed → bump its generation so any straggler id that still
+        // names this slot can never resolve to its next occupant (ABA guard).
+        self.bump_generation(index);
 
         if self.root == Some(id) {
             self.root = None;
@@ -480,11 +575,8 @@ impl ElementTree {
         id: ElementId,
         owner: &mut crate::ElementOwner<'_>,
     ) -> Option<ElementNode> {
-        let index = id.get() - 1;
-
-        if !self.nodes.contains(index) {
-            return None;
-        }
+        // Staleness-checked entry (mirror of `remove`).
+        let index = self.resolve_index(id)?;
 
         // Unregister the GlobalKey if this element had one. We do it
         // BEFORE `unmount` so the registry doesn't briefly resolve to
@@ -499,6 +591,8 @@ impl ElementTree {
         self.nodes[index].element.unmount(owner);
 
         let node = self.nodes.remove(index);
+        // Slot freed → bump its generation (ABA guard, see `remove`).
+        self.bump_generation(index);
 
         if self.root == Some(id) {
             self.root = None;
@@ -546,20 +640,43 @@ impl ElementTree {
         }
     }
 
-    /// Iterate over all element IDs.
+    /// Iterate over all live element IDs.
+    ///
+    /// Each id is minted from the slot's *current* generation, so the yielded
+    /// ids round-trip through [`ElementTree::get`] (a `new(index+1)` shortcut
+    /// would carry generation 1 and fail the staleness compare on any reused
+    /// slot).
     pub fn iter(&self) -> impl Iterator<Item = ElementId> + '_ {
+        let generations = &self.generations;
         self.nodes
             .iter()
-            .map(|(index, _)| ElementId::new(index + 1))
+            .map(move |(index, _)| ElementId::new_gen(slab_index_to_u32(index), generations[index]))
     }
 
-    /// Iterate over all element nodes.
+    /// Iterate over all live element nodes.
     pub fn iter_nodes(&self) -> impl Iterator<Item = (ElementId, &ElementNode)> + '_ {
-        self.nodes.iter().map(|(index, node)| {
-            let id = ElementId::new(index + 1);
+        let generations = &self.generations;
+        self.nodes.iter().map(move |(index, node)| {
+            let id = ElementId::new_gen(slab_index_to_u32(index), generations[index]);
             (id, node)
         })
     }
+}
+
+/// Narrow a live slab index to the 32-bit field [`ElementId`] packs it into.
+///
+/// Every index reaching this helper names an occupied (or about-to-be-occupied)
+/// slot, and [`ElementTree::alloc_id`] is the sole minting path — it routes
+/// through here, so an index that exceeds `u32::MAX` fails *at insert time*
+/// rather than silently truncating later. The `expect` therefore states a real
+/// structural cap (the tree cannot hold more than `u32::MAX` live elements),
+/// not a "can't happen".
+#[inline]
+fn slab_index_to_u32(index: usize) -> u32 {
+    u32::try_from(index).expect(
+        "ElementTree: slab index exceeds u32::MAX live elements \
+         (ElementId packs the slot index into 32 bits)",
+    )
 }
 
 // ============================================================================
@@ -640,9 +757,11 @@ fn try_retake_inactive(
     owner.remove_inactive(candidate_id);
 
     let parent_depth = tree.get(new_parent).map_or(0, ElementNode::depth);
-    let index = candidate_id.get() - 1;
 
-    let node = tree.nodes.get_mut(index)?;
+    // Route through the staleness-checked accessor. The candidate came from the
+    // live GlobalKey registry and was soft-removed (slot kept, generation NOT
+    // bumped), so its generation still matches and this resolves.
+    let node = tree.get_mut(candidate_id)?;
     node.parent = Some(new_parent);
     node.slot = new_slot;
     node.depth = parent_depth + 1;
@@ -790,5 +909,139 @@ mod tests {
         assert!(removed.is_some());
         assert!(!tree.contains(id));
         assert!(tree.root().is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Generational staleness (ABA safety — Codex E1 P1)
+    // -----------------------------------------------------------------------
+
+    /// The core ABA guard: an id that addressed a since-freed slot must NOT
+    /// resolve to the unrelated element that later reuses the same slab slot.
+    #[test]
+    fn stale_id_after_slot_reuse_resolves_none() {
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+        let root = TestView {
+            name: "root".to_string(),
+        };
+        let root_id = tree.mount_root(&root, &mut owner.element_owner_mut());
+
+        // Insert child A, then eagerly remove it (un-keyed → slab slot freed,
+        // generation bumped).
+        let child_a = TestView {
+            name: "a".to_string(),
+        };
+        let id_a = tree.insert(&child_a, root_id, 0, &mut owner.element_owner_mut());
+        assert!(tree.remove(id_a, &mut owner.element_owner_mut()).is_some());
+
+        // Insert child B — the slab hands back the slot A just vacated.
+        let child_b = TestView {
+            name: "b".to_string(),
+        };
+        let id_b = tree.insert(&child_b, root_id, 0, &mut owner.element_owner_mut());
+
+        // Same slot, different generation → distinct ids.
+        assert_eq!(
+            id_a.index(),
+            id_b.index(),
+            "test precondition: slab must reuse the freed slot"
+        );
+        assert_ne!(id_a, id_b, "reused slot must mint a distinct generation");
+        assert_eq!(id_b.generation().get(), 2, "reused slot generation = 2");
+
+        // The stale id resolves to None; the live id resolves to B.
+        assert!(
+            tree.get(id_a).is_none(),
+            "stale id must NOT resolve to the slot's new occupant"
+        );
+        assert!(!tree.contains(id_a));
+        assert!(tree.get(id_b).is_some(), "live id must resolve");
+        assert!(tree.contains(id_b));
+        // A stale remove must be a no-op, not a removal of B.
+        assert!(tree.remove(id_a, &mut owner.element_owner_mut()).is_none());
+        assert!(tree.contains(id_b), "stale remove must not touch B");
+    }
+
+    /// Fresh slots seed generation 1; a reused slot advances to the bumped
+    /// value. White-box check on the parallel `generations` vec.
+    #[test]
+    fn reused_slot_increments_generation() {
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+        let root = TestView {
+            name: "root".to_string(),
+        };
+        let root_id = tree.mount_root(&root, &mut owner.element_owner_mut());
+        assert_eq!(tree.generations[0].get(), 1, "fresh root slot is gen 1");
+
+        let child = TestView {
+            name: "c".to_string(),
+        };
+        let id1 = tree.insert(&child, root_id, 0, &mut owner.element_owner_mut());
+        let slot = id1.index() as usize;
+        assert_eq!(tree.generations[slot].get(), 1);
+
+        tree.remove(id1, &mut owner.element_owner_mut());
+        assert_eq!(
+            tree.generations[slot].get(),
+            2,
+            "eager remove bumps the freed slot's generation"
+        );
+
+        let id2 = tree.insert(&child, root_id, 0, &mut owner.element_owner_mut());
+        assert_eq!(id2.index() as usize, slot, "slab reuses the slot");
+        assert_eq!(id2.generation().get(), 2, "reused id carries the bump");
+    }
+
+    /// Every id produced by `iter`/`iter_nodes` must round-trip through the
+    /// staleness-checked accessors — including ids for reused slots, which a
+    /// `new(index+1)` shortcut (generation 1) would have failed to resolve.
+    #[test]
+    fn iter_yields_round_trippable_ids_after_reuse() {
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+        let root = TestView {
+            name: "root".to_string(),
+        };
+        let root_id = tree.mount_root(&root, &mut owner.element_owner_mut());
+        let child = TestView {
+            name: "c".to_string(),
+        };
+        let id1 = tree.insert(&child, root_id, 0, &mut owner.element_owner_mut());
+        tree.remove(id1, &mut owner.element_owner_mut());
+        let _id2 = tree.insert(&child, root_id, 0, &mut owner.element_owner_mut());
+
+        let ids: Vec<_> = tree.iter().collect();
+        assert_eq!(ids.len(), tree.len());
+        for id in &ids {
+            assert!(
+                tree.get(*id).is_some(),
+                "iter id {id} must resolve — generation must match the live slot"
+            );
+        }
+        assert_eq!(tree.iter_nodes().count(), tree.len());
+    }
+
+    /// Generation-overflow policy (Codex E1 P2): a slot recycled `u32::MAX`
+    /// times retires by panic rather than wrapping to a value a stale id might
+    /// still hold. We drive the boundary directly by pinning the slot's
+    /// counter to `u32::MAX` and freeing it once more.
+    #[test]
+    #[should_panic(expected = "exhausted u32::MAX generations")]
+    fn generation_overflow_retires_slot_by_panic() {
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+        let root = TestView {
+            name: "root".to_string(),
+        };
+        let _root_id = tree.mount_root(&root, &mut owner.element_owner_mut());
+
+        // Pin slot 0 to the maximum generation and address it with a matching id.
+        tree.generations[0] = NonZeroU32::MAX;
+        let saturated = ElementId::new_gen(0, NonZeroU32::MAX);
+
+        // Eager remove resolves (generation matches) then attempts the bump,
+        // which overflows and panics.
+        let _ = tree.remove(saturated, &mut owner.element_owner_mut());
     }
 }

@@ -1,6 +1,6 @@
 //! Ancestor iterators.
 
-use flui_foundation::Identifier;
+use flui_foundation::TreeId;
 
 use crate::traits::TreeNav;
 
@@ -19,12 +19,12 @@ use crate::traits::TreeNav;
 /// # impl T { fn ins(&mut self, p: Option<ElementId>) -> ElementId {
 /// #     let id = ElementId::new(self.0.len()+1);
 /// #     self.0.push(Some(N { parent: p, children: vec![] }));
-/// #     if let Some(pid) = p { self.0[pid.get()-1].as_mut().unwrap().children.push(id); }
+/// #     if let Some(pid) = p { self.0[pid.index() as usize].as_mut().unwrap().children.push(id); }
 /// #     id
 /// # }}
 /// # impl TreeRead<ElementId> for T {
 /// #     type Node = N;
-/// #     fn get(&self, id: ElementId) -> Option<&N> { self.0.get(id.get()-1)?.as_ref() }
+/// #     fn get(&self, id: ElementId) -> Option<&N> { self.0.get(id.index() as usize)?.as_ref() }
 /// #     fn len(&self) -> usize { self.0.iter().flatten().count() }
 /// #     fn node_ids(&self) -> impl Iterator<Item = ElementId> + '_ {
 /// #         (0..self.0.len()).filter_map(|i| if self.0[i].is_some() { Some(ElementId::new(i+1)) } else { None })
@@ -52,7 +52,7 @@ use crate::traits::TreeNav;
 /// assert_eq!(ancestors, vec![child, parent, root]);
 /// ```
 #[derive(Debug, Clone)]
-pub struct Ancestors<'a, I: Identifier, T: TreeNav<I>> {
+pub struct Ancestors<'a, I: TreeId, T: TreeNav<I>> {
     tree: &'a T,
     current: Option<I>,
     /// Step counter for cycle detection (audit T-12). Bounded by the
@@ -62,7 +62,7 @@ pub struct Ancestors<'a, I: Identifier, T: TreeNav<I>> {
     steps: usize,
 }
 
-impl<'a, I: Identifier, T: TreeNav<I>> Ancestors<'a, I, T> {
+impl<'a, I: TreeId, T: TreeNav<I>> Ancestors<'a, I, T> {
     /// Creates a new ancestors iterator starting from the given node.
     #[inline]
     pub fn new(tree: &'a T, start: I) -> Self {
@@ -80,7 +80,7 @@ impl<'a, I: Identifier, T: TreeNav<I>> Ancestors<'a, I, T> {
     }
 }
 
-impl<I: Identifier, T: TreeNav<I>> Iterator for Ancestors<'_, I, T> {
+impl<I: TreeId, T: TreeNav<I>> Iterator for Ancestors<'_, I, T> {
     type Item = I;
 
     #[inline]
@@ -131,7 +131,7 @@ impl<I: Identifier, T: TreeNav<I>> Iterator for Ancestors<'_, I, T> {
     }
 }
 
-impl<I: Identifier, T: TreeNav<I>> std::iter::FusedIterator for Ancestors<'_, I, T> {}
+impl<I: TreeId, T: TreeNav<I>> std::iter::FusedIterator for Ancestors<'_, I, T> {}
 
 /// Iterator over ancestors with their depths.
 ///
@@ -148,12 +148,12 @@ impl<I: Identifier, T: TreeNav<I>> std::iter::FusedIterator for Ancestors<'_, I,
 /// # impl T { fn ins(&mut self, p: Option<ElementId>) -> ElementId {
 /// #     let id = ElementId::new(self.0.len()+1);
 /// #     self.0.push(Some(N { parent: p, children: vec![] }));
-/// #     if let Some(pid) = p { self.0[pid.get()-1].as_mut().unwrap().children.push(id); }
+/// #     if let Some(pid) = p { self.0[pid.index() as usize].as_mut().unwrap().children.push(id); }
 /// #     id
 /// # }}
 /// # impl TreeRead<ElementId> for T {
 /// #     type Node = N;
-/// #     fn get(&self, id: ElementId) -> Option<&N> { self.0.get(id.get()-1)?.as_ref() }
+/// #     fn get(&self, id: ElementId) -> Option<&N> { self.0.get(id.index() as usize)?.as_ref() }
 /// #     fn len(&self) -> usize { self.0.iter().flatten().count() }
 /// #     fn node_ids(&self) -> impl Iterator<Item = ElementId> + '_ {
 /// #         (0..self.0.len()).filter_map(|i| if self.0[i].is_some() { Some(ElementId::new(i+1)) } else { None })
@@ -186,12 +186,12 @@ impl<I: Identifier, T: TreeNav<I>> std::iter::FusedIterator for Ancestors<'_, I,
 /// ]);
 /// ```
 #[derive(Debug, Clone)]
-pub struct AncestorsWithDepth<'a, I: Identifier, T: TreeNav<I>> {
+pub struct AncestorsWithDepth<'a, I: TreeId, T: TreeNav<I>> {
     inner: Ancestors<'a, I, T>,
     depth: usize,
 }
 
-impl<'a, I: Identifier, T: TreeNav<I>> AncestorsWithDepth<'a, I, T> {
+impl<'a, I: TreeId, T: TreeNav<I>> AncestorsWithDepth<'a, I, T> {
     /// Creates a new ancestors-with-depth iterator.
     #[inline]
     pub fn new(tree: &'a T, start: I) -> Self {
@@ -202,7 +202,7 @@ impl<'a, I: Identifier, T: TreeNav<I>> AncestorsWithDepth<'a, I, T> {
     }
 }
 
-impl<I: Identifier, T: TreeNav<I>> Iterator for AncestorsWithDepth<'_, I, T> {
+impl<I: TreeId, T: TreeNav<I>> Iterator for AncestorsWithDepth<'_, I, T> {
     type Item = (I, usize);
 
     #[inline]
@@ -219,7 +219,7 @@ impl<I: Identifier, T: TreeNav<I>> Iterator for AncestorsWithDepth<'_, I, T> {
     }
 }
 
-impl<I: Identifier, T: TreeNav<I>> std::iter::FusedIterator for AncestorsWithDepth<'_, I, T> {}
+impl<I: TreeId, T: TreeNav<I>> std::iter::FusedIterator for AncestorsWithDepth<'_, I, T> {}
 
 // ============================================================================
 // TESTS
@@ -254,7 +254,7 @@ mod tests {
             }));
 
             if let Some(parent_id) = parent
-                && let Some(Some(p)) = self.nodes.get_mut(parent_id.get() - 1)
+                && let Some(Some(p)) = self.nodes.get_mut(parent_id.index() as usize)
             {
                 p.children.push(id);
             }
@@ -267,7 +267,7 @@ mod tests {
         type Node = TestNode;
 
         fn get(&self, id: ElementId) -> Option<&TestNode> {
-            self.nodes.get(id.get() - 1)?.as_ref()
+            self.nodes.get(id.index() as usize)?.as_ref()
         }
 
         fn len(&self) -> usize {

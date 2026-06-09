@@ -3,7 +3,7 @@
 //! This module provides the [`TreeRead`] trait for immutable access
 //! to tree nodes without navigation capabilities.
 
-use flui_foundation::Identifier;
+use flui_foundation::TreeId;
 
 /// Read-only access to tree nodes.
 ///
@@ -45,7 +45,7 @@ use flui_foundation::Identifier;
 ///     type Node = String;
 ///
 ///     fn get(&self, id: ElementId) -> Option<&Self::Node> {
-///         self.nodes.get(id.get() - 1)?.as_ref()
+///         self.nodes.get(id.index() as usize)?.as_ref()
 ///     }
 ///
 ///     fn len(&self) -> usize {
@@ -70,7 +70,7 @@ use flui_foundation::Identifier;
 /// assert_eq!(tree.get(ElementId::new(1)), Some(&"hello".to_string()));
 /// assert_eq!(tree.get(ElementId::new(2)), None);
 /// ```
-pub trait TreeRead<I: Identifier>: Send + Sync {
+pub trait TreeRead<I: TreeId>: Send + Sync {
     /// The node type stored in the tree.
     ///
     /// This associated type allows implementations to define their
@@ -187,7 +187,7 @@ pub trait TreeRead<I: Identifier>: Send + Sync {
 ///
 /// This trait provides higher-level operations built on top of
 /// the core `TreeRead` functionality using HRTB patterns.
-pub trait TreeReadExt<I: Identifier>: TreeRead<I> {
+pub trait TreeReadExt<I: TreeId>: TreeRead<I> {
     /// Find first node matching a predicate using HRTB.
     ///
     /// This method uses Higher-Rank Trait Bounds to accept
@@ -249,14 +249,14 @@ pub trait TreeReadExt<I: Identifier>: TreeRead<I> {
 }
 
 // Blanket implementation for all TreeRead types
-impl<I: Identifier, T: TreeRead<I>> TreeReadExt<I> for T {}
+impl<I: TreeId, T: TreeRead<I>> TreeReadExt<I> for T {}
 
 // ============================================================================
 // BLANKET IMPLEMENTATIONS
 // ============================================================================
 
 /// Blanket implementation for references to `TreeRead`.
-impl<I: Identifier, T: TreeRead<I> + ?Sized> TreeRead<I> for &T {
+impl<I: TreeId, T: TreeRead<I> + ?Sized> TreeRead<I> for &T {
     type Node = T::Node;
 
     const DEFAULT_CAPACITY: usize = T::DEFAULT_CAPACITY;
@@ -300,7 +300,7 @@ impl<I: Identifier, T: TreeRead<I> + ?Sized> TreeRead<I> for &T {
 }
 
 /// Blanket implementation for mutable references to `TreeRead`.
-impl<I: Identifier, T: TreeRead<I> + ?Sized> TreeRead<I> for &mut T {
+impl<I: TreeId, T: TreeRead<I> + ?Sized> TreeRead<I> for &mut T {
     type Node = T::Node;
 
     const DEFAULT_CAPACITY: usize = T::DEFAULT_CAPACITY;
@@ -344,7 +344,7 @@ impl<I: Identifier, T: TreeRead<I> + ?Sized> TreeRead<I> for &mut T {
 }
 
 /// Blanket implementation for `Box<dyn TreeRead>`.
-impl<I: Identifier, T: TreeRead<I> + ?Sized> TreeRead<I> for Box<T> {
+impl<I: TreeId, T: TreeRead<I> + ?Sized> TreeRead<I> for Box<T> {
     type Node = T::Node;
 
     const DEFAULT_CAPACITY: usize = T::DEFAULT_CAPACITY;
@@ -409,7 +409,7 @@ pub type NodeVisitor<I, Node> = dyn FnMut(I, &Node);
 /// constants for optimal memory allocation.
 pub fn collect_matching_nodes<I, T, P>(tree: &T, predicate: P) -> Vec<I>
 where
-    I: Identifier,
+    I: TreeId,
     T: TreeRead<I>,
     P: for<'a> Fn(&'a T::Node) -> bool,
 {
@@ -419,7 +419,7 @@ where
 /// Count nodes in a tree matching a predicate.
 pub fn count_matching_nodes<I, T, P>(tree: &T, predicate: P) -> usize
 where
-    I: Identifier,
+    I: TreeId,
     T: TreeRead<I>,
     P: for<'a> Fn(&'a T::Node) -> bool,
 {
@@ -460,12 +460,12 @@ mod tests {
         const INLINE_THRESHOLD: usize = 8;
 
         fn get(&self, id: ElementId) -> Option<&String> {
-            let index = id.get() - 1;
+            let index = id.index() as usize;
             self.nodes.get(index)?.as_ref()
         }
 
         fn contains(&self, id: ElementId) -> bool {
-            let index = id.get() - 1;
+            let index = id.index() as usize;
             self.nodes
                 .get(index)
                 .is_some_and(std::option::Option::is_some)
