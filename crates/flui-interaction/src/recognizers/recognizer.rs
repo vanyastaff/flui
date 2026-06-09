@@ -3,7 +3,7 @@
 //! Defines the core `GestureRecognizer` trait and common types used by all
 //! recognizers.
 
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use flui_types::{Offset, geometry::Pixels};
 use parking_lot::Mutex;
@@ -72,6 +72,15 @@ pub struct RecognizerBase {
 
     /// Whether recognizer has been disposed
     disposed: Arc<Mutex<bool>>,
+
+    /// Weak handle to the exact `Arc<dyn GestureArenaMember>` this recognizer
+    /// registered with the arena in [`start_tracking`](Self::start_tracking).
+    ///
+    /// The arena identifies winners by `Arc::ptr_eq`, so claiming a win
+    /// requires resolving with the *same* allocation that was added — not a
+    /// fresh `Arc::new(self.clone())`. A `Weak` (not `Arc`) avoids a
+    /// self-referential cycle that would leak the recognizer.
+    tracked_member: Arc<Mutex<Option<Weak<dyn GestureArenaMember>>>>,
 }
 
 impl RecognizerBase {
@@ -82,6 +91,7 @@ impl RecognizerBase {
             primary_pointer: Arc::new(Mutex::new(None)),
             initial_position: Arc::new(Mutex::new(None)),
             disposed: Arc::new(Mutex::new(false)),
+            tracked_member: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -179,8 +189,28 @@ impl RecognizerBase {
         self.set_primary_pointer(Some(pointer));
         self.set_initial_position(Some(position));
 
-        // Add to arena (clone Arc to satisfy trait bounds)
-        self.arena.add(pointer, recognizer.clone());
+        // Register with the arena and remember this exact allocation (as a
+        // `Weak`) so a later `accept_tracked()` can resolve with the same
+        // `Arc` identity the arena matches on via `Arc::ptr_eq`.
+        let member: Arc<dyn GestureArenaMember> = recognizer.clone();
+        *self.tracked_member.lock() = Some(Arc::downgrade(&member));
+        self.arena.add(pointer, member);
+    }
+
+    /// Claim the arena win for the currently-tracked pointer.
+    ///
+    /// Resolves the arena in favour of this recognizer using the stable member
+    /// identity captured in [`start_tracking`](Self::start_tracking), so
+    /// competing members receive `reject_gesture`. No-op when not tracking a
+    /// pointer or when the arena entry is already resolved or gone.
+    pub fn accept_tracked(&self) {
+        let Some(pointer) = self.primary_pointer() else {
+            return;
+        };
+        let Some(member) = self.tracked_member.lock().as_ref().and_then(Weak::upgrade) else {
+            return;
+        };
+        self.arena.resolve(pointer, Some(member));
     }
 
     /// Stop tracking (called on success or rejection)

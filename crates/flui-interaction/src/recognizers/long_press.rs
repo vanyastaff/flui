@@ -571,13 +571,10 @@ impl crate::recognizers::PrimaryPointerGestureRecognizer for LongPressGestureRec
     }
 
     fn did_exceed_deadline(&self) {
-        // LongPress accepts on deadline (opposite of default Reject) —
-        // Flutter parity at long_press.dart::didExceedDeadline calls
-        // resolve(GestureDisposition.accepted) AND fires the start
-        // callbacks. Pre-U9 fix: this hook only resolved the arena
-        // without firing `on_long_press_start`, leaving deadline-driven
-        // acceptance a silent no-op for the user. Now we resolve AND
-        // fire via the shared `try_fire_timer` path.
+        // The long-press deadline expiring IS acceptance: fire the start
+        // callbacks AND win the arena so competing recognizers (e.g. a tap on
+        // the same region) are rejected. Flutter parity:
+        // `long_press.dart::didExceedDeadline` -> `resolve(accepted)`.
         let position = self
             .gesture_state
             .lock()
@@ -585,8 +582,7 @@ impl crate::recognizers::PrimaryPointerGestureRecognizer for LongPressGestureRec
             .or_else(|| self.initial_position())
             .unwrap_or_else(|| Offset::new(Pixels(0.0), Pixels(0.0)));
         self.try_fire_timer(position);
-        use crate::recognizers::OneSequenceGestureRecognizer;
-        self.resolve(crate::arena::GestureDisposition::Accepted);
+        self.state.accept_tracked();
     }
 
     fn handle_primary_pointer(&self, event: &PointerEvent) {
@@ -634,6 +630,45 @@ mod tests {
         let recognizer = LongPressGestureRecognizer::new(arena);
 
         assert_eq!(recognizer.primary_pointer(), None);
+    }
+
+    #[test]
+    fn deadline_rejects_competing_arena_member() {
+        use crate::recognizers::PrimaryPointerGestureRecognizer;
+
+        struct Competitor {
+            rejected: Arc<Mutex<bool>>,
+        }
+        impl crate::sealed::arena_member::Sealed for Competitor {}
+        impl crate::arena::GestureArenaMember for Competitor {
+            fn accept_gesture(&self, _pointer: PointerId) {}
+            fn reject_gesture(&self, _pointer: PointerId) {
+                *self.rejected.lock() = true;
+            }
+        }
+
+        let arena = GestureArena::new();
+        let recognizer = LongPressGestureRecognizer::new(arena.clone());
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
+        recognizer.add_pointer(pointer, Offset::new(Pixels(10.0), Pixels(10.0)));
+
+        // A competing recognizer (e.g. a tap) contends for the same pointer.
+        let rejected = Arc::new(Mutex::new(false));
+        arena.add(
+            pointer,
+            Arc::new(Competitor {
+                rejected: rejected.clone(),
+            }),
+        );
+
+        // The deadline expiring must win the arena and reject the competitor
+        // (Flutter parity: `didExceedDeadline` -> `resolve(accepted)`).
+        recognizer.did_exceed_deadline();
+
+        assert!(
+            *rejected.lock(),
+            "competing member should be rejected when the long-press deadline fires"
+        );
     }
 
     #[test]

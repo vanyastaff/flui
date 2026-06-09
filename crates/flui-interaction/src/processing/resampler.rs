@@ -120,6 +120,19 @@ impl PointerEventResampler {
         }
     }
 
+    /// Marks the pointer as down and tracked WITHOUT queueing an event.
+    ///
+    /// The binding dispatches the `Down` event directly (synchronously, to
+    /// close the arena and cache the hit test), so the resampler must not also
+    /// re-emit it on the next `sample()`. This establishes the tracking state
+    /// that `sample()` requires (`is_tracked`) so subsequent moves are paced
+    /// instead of silently dropped.
+    pub fn start_tracking(&self) {
+        let mut inner = self.inner.lock();
+        inner.is_down = true;
+        inner.is_tracked = true;
+    }
+
     /// Adds a pointer event to the resampling queue
     ///
     /// Events are buffered and will be processed during the next `sample()`

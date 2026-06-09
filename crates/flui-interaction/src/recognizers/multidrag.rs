@@ -56,7 +56,11 @@
 //! | Arena entries | one | one per pointer |
 //! | Tap → drag use case | yes | no (use [`TapAndDragGestureRecognizer`](crate::recognizers::TapAndDragGestureRecognizer) — U7) |
 
-use std::{collections::HashMap, sync::Arc, time::Instant};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Weak},
+    time::Instant,
+};
 
 use flui_types::{
     Offset,
@@ -138,6 +142,11 @@ struct MultiDragPointerState {
     client: Option<Box<dyn MultiDragHandle>>, // PORT-CHECK-OK-DYN: see MultiDragStartCallback — per-pointer `dyn` handle storage.
     /// Velocity tracker fed while `pending` and after `accepted`.
     velocity_tracker: VelocityTracker,
+    /// Weak handle to the exact `Arc<dyn GestureArenaMember>` registered with
+    /// the arena for this pointer. The arena matches winners by `Arc::ptr_eq`,
+    /// so resolving in our favour on slop-cross requires this same allocation;
+    /// a `Weak` avoids a self-referential cycle that would leak the recogniser.
+    arena_member: Weak<dyn GestureArenaMember>,
 }
 
 impl MultiDragPointerState {
@@ -150,6 +159,7 @@ impl MultiDragPointerState {
             accepted: false,
             client: None,
             velocity_tracker: VelocityTracker::new(),
+            arena_member: Weak::<MultiDragGestureRecognizer>::new(),
         }
     }
 
@@ -295,8 +305,29 @@ impl MultiDragGestureRecognizer {
     /// Add a pointer — called from the binding's hit-test dispatch.
     fn add_pointer_impl(&self, pointer: PointerId, position: Offset<Pixels>, kind: PointerType) {
         let slop = self.slop_for(kind);
-        let state = MultiDragPointerState::new(position, slop);
+        let mut state = MultiDragPointerState::new(position, slop);
+
+        // Compete in the arena for this pointer with a stable member identity,
+        // and hold the entry open so a sole multi-drag member is not
+        // auto-resolved when the framework closes the arena before slop is
+        // crossed (Flutter `MultiDragGestureRecognizer` holds until accept/up).
+        let member: Arc<dyn GestureArenaMember> = Arc::new(self.clone());
+        state.arena_member = Arc::downgrade(&member);
+        self.state.arena().add(pointer, member);
+        self.state.arena().hold(pointer);
+
         self.pointers.lock().insert(pointer, state);
+    }
+
+    /// Withdraw this recogniser's hold and membership for a pointer that did
+    /// not become a drag, letting other arena members resolve. Idempotent:
+    /// safe to call for an already-resolved (accepted) pointer.
+    fn release_arena_member(&self, pointer: PointerId, member: &Weak<dyn GestureArenaMember>) {
+        let arena = self.state.arena();
+        if let Some(member) = member.upgrade() {
+            arena.reject(pointer, &member);
+        }
+        arena.release(pointer);
     }
 
     /// Remove a pointer's state. Returns the removed state (if any) for
@@ -351,7 +382,18 @@ impl MultiDragGestureRecognizer {
             // state and let the user callback own the drag from here.
             let pending = state.pending_delta;
             state.pending_delta = Offset::new(PixelDelta::ZERO, PixelDelta::ZERO);
-            drop(map); // Release lock before invoking the user callback.
+            let arena_member = state.arena_member.upgrade();
+            drop(map); // Release lock before arena resolution / user callback.
+
+            // Win the arena for this pointer so competing recognisers are
+            // rejected, then release our hold so the entry can be swept on up.
+            // `accept_gesture` is dispatched after the arena's own lock
+            // releases and re-locks `pointers` only for bookkeeping, which is
+            // safe now that `map` is dropped.
+            if let Some(member) = arena_member {
+                self.state.arena().resolve(pointer, Some(member));
+                self.state.arena().release(pointer);
+            }
 
             // Invoke user callback (outside the lock) to obtain a handle.
             if let Some(cb) = on_start {
@@ -394,32 +436,41 @@ impl MultiDragGestureRecognizer {
 
     /// Handle pointer up.
     fn handle_up(&self, pointer: PointerId, position: Offset<Pixels>, _kind: PointerType) {
-        let removed = self.remove_pointer(pointer);
-        if let Some(state) = removed
-            && state.accepted
-            && let Some(client) = state.client.as_ref()
-        {
-            let details = MultiDragEndDetails {
-                pointer_id: pointer,
-                global_position: position,
-                velocity: state.velocity_tracker.velocity(),
-                kind: state.kind,
-            };
-            client.end(details);
+        let Some(state) = self.remove_pointer(pointer) else {
+            return;
+        };
+        if state.accepted {
+            if let Some(client) = state.client.as_ref() {
+                let details = MultiDragEndDetails {
+                    pointer_id: pointer,
+                    global_position: position,
+                    velocity: state.velocity_tracker.velocity(),
+                    kind: state.kind,
+                };
+                client.end(details);
+            }
+            // Accepted drags already resolved + released the arena on
+            // slop-cross; nothing further to do.
+        } else {
+            // Up before slop: never became a drag. Withdraw from the arena so
+            // a competing recogniser can win this pointer.
+            self.release_arena_member(pointer, &state.arena_member);
         }
-        // Pre-acceptance up: drop state silently. The recogniser
-        // never produced a drag, so no callback is needed.
     }
 
     /// Handle pointer cancel.
     fn handle_cancel(&self, pointer: PointerId) {
-        let removed = self.remove_pointer(pointer);
-        if let Some(state) = removed
-            && state.accepted
+        let Some(state) = self.remove_pointer(pointer) else {
+            return;
+        };
+        if state.accepted
             && let Some(client) = state.client.as_ref()
         {
             client.cancel();
         }
+        // Withdraw from the arena (idempotent for an accepted pointer that
+        // already resolved on slop-cross).
+        self.release_arena_member(pointer, &state.arena_member);
     }
 }
 
@@ -448,6 +499,15 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
             return;
         }
         let pointer = crate::events::extract_pointer_id(event);
+
+        // `Cancel` carries no meaningful position; route it before the Move/Up
+        // position extraction below, whose `_ => return` arm would otherwise
+        // swallow it and leak the pointer's accepted drag state.
+        if matches!(event, PointerEvent::Cancel(_)) {
+            self.handle_cancel(pointer);
+            return;
+        }
+
         let (position, kind) = match event {
             PointerEvent::Move(e) => (e.current.position, e.pointer.pointer_type),
             PointerEvent::Up(e) => (e.state.position, e.pointer.pointer_type),
@@ -458,7 +518,6 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
         match event {
             PointerEvent::Move(_) => self.handle_move(pointer, position, kind, Instant::now()),
             PointerEvent::Up(_) => self.handle_up(pointer, position, kind),
-            PointerEvent::Cancel(_) => self.handle_cancel(pointer),
             _ => {}
         }
     }
@@ -521,7 +580,7 @@ impl GestureArenaMember for MultiDragGestureRecognizer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::{make_move_event_for_id, make_up_event_for_id};
+    use crate::events::{make_cancel_event, make_move_event_for_id, make_up_event_for_id};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Test handle that counts update/end/cancel invocations.
@@ -560,6 +619,95 @@ mod tests {
 
     fn pointer_id(n: u64) -> PointerId {
         PointerId::new(n).expect("nonzero pointer id")
+    }
+
+    fn counting_handle(cancels: Arc<AtomicUsize>) -> Box<dyn MultiDragHandle> {
+        Box::new(CountingHandle {
+            updates: Arc::new(AtomicUsize::new(0)),
+            ends: Arc::new(AtomicUsize::new(0)),
+            cancels,
+        })
+    }
+
+    /// Minimal competing arena member that records whether it was rejected.
+    struct RejectableMember {
+        rejected: Arc<Mutex<bool>>,
+    }
+    impl crate::sealed::arena_member::Sealed for RejectableMember {}
+    impl crate::arena::GestureArenaMember for RejectableMember {
+        fn accept_gesture(&self, _pointer: PointerId) {}
+        fn reject_gesture(&self, _pointer: PointerId) {
+            *self.rejected.lock() = true;
+        }
+    }
+
+    #[test]
+    fn cancel_event_routes_to_handle_cancel() {
+        // A Cancel event for a tracked pointer must reach `handle_cancel` (fire
+        // the cancel handle + clear the per-pointer state), not be swallowed by
+        // the Move/Up position-extraction match.
+        let arena = crate::arena::GestureArena::new();
+        let cancels = Arc::new(AtomicUsize::new(0));
+        let cancels_cb = cancels.clone();
+        let rec = MultiDragGestureRecognizer::new(arena, MultiDragAxis::Free).with_on_start(
+            Arc::new(move |_pointer, _pos| Some(counting_handle(cancels_cb.clone()))),
+        );
+
+        let p = PointerId::PRIMARY;
+        rec.add_pointer(p, Offset::new(Pixels(0.0), Pixels(0.0)));
+        // Cross slop so a client handle exists, then cancel.
+        rec.handle_event(&make_move_event_for_id(
+            p,
+            Offset::new(Pixels(100.0), Pixels(100.0)),
+            PointerType::Touch,
+        ));
+        rec.handle_event(&make_cancel_event(PointerType::Touch));
+
+        assert_eq!(
+            cancels.load(Ordering::SeqCst),
+            1,
+            "cancel handle should fire"
+        );
+        assert_eq!(
+            rec.tracked_pointer_count(),
+            0,
+            "pointer state should be cleared on cancel"
+        );
+    }
+
+    #[test]
+    fn slop_cross_rejects_competing_arena_member() {
+        // Multi-drag must really compete in the arena: crossing slop wins the
+        // pointer and rejects other members contending for it.
+        let arena = crate::arena::GestureArena::new();
+        let rec = MultiDragGestureRecognizer::new(arena.clone(), MultiDragAxis::Free)
+            .with_on_start(Arc::new(|_pointer, _pos| {
+                Some(counting_handle(Arc::new(AtomicUsize::new(0))))
+            }));
+
+        let p = pointer_id(9);
+        rec.add_pointer(p, Offset::new(Pixels(0.0), Pixels(0.0)));
+
+        // A competitor joins the same arena entry.
+        let rejected = Arc::new(Mutex::new(false));
+        arena.add(
+            p,
+            Arc::new(RejectableMember {
+                rejected: rejected.clone(),
+            }),
+        );
+
+        // Cross slop -> multi-drag wins -> competitor rejected.
+        rec.handle_event(&make_move_event_for_id(
+            p,
+            Offset::new(Pixels(100.0), Pixels(100.0)),
+            PointerType::Touch,
+        ));
+
+        assert!(
+            *rejected.lock(),
+            "competing member should be rejected when multi-drag wins the arena"
+        );
     }
 
     #[test]

@@ -624,11 +624,14 @@ impl GestureRecognizer for TapGestureRecognizer {
         let recognizer = Arc::new(self.clone());
         self.state.start_tracking(pointer, position, &recognizer);
 
-        // U8: button is determined by the first Down event (the pointer
-        // API surface takes only position). `handle_event`'s Down
-        // branch fires the actual `handle_tap_down` with the
-        // event-supplied button. Until then stay in Ready so a
-        // no-down-pointer flow cannot accidentally win the arena.
+        // Stage the down so the documented `add_pointer` = "pointer is down"
+        // contract holds: a subsequent up fires the tap even when no separate
+        // `Down` event is routed afterwards. The button/kind are provisional —
+        // the API surface carries only a position — and a real `Down` in
+        // `handle_event` refines them before any up. `handle_tap_down` only
+        // records pending state (it fires no callback), so this cannot
+        // accidentally win the arena or double-fire `on_tap_down`.
+        self.handle_tap_down(position, PointerType::Touch, TapButton::Primary);
     }
 
     fn handle_event(&self, event: &PointerEvent) {
@@ -866,6 +869,31 @@ mod tests {
         recognizer.handle_event(&primary_up(position));
 
         assert!(*tapped.lock());
+    }
+
+    #[test]
+    fn add_pointer_then_up_without_down_fires_tap() {
+        // `add_pointer` is the documented pointer-down entry point. A
+        // subsequent up with no separately-routed `Down` event must still fire
+        // the tap, because `add_pointer` pre-stages the provisional down.
+        let arena = GestureArena::new();
+        let tapped = Arc::new(Mutex::new(false));
+        let tapped_clone = tapped.clone();
+
+        let recognizer = TapGestureRecognizer::new(arena).with_on_tap(move |_details| {
+            *tapped_clone.lock() = true;
+        });
+
+        let pointer = PointerId::PRIMARY;
+        let position = pos(4.0, 4.0);
+
+        recognizer.add_pointer(pointer, position);
+        recognizer.handle_event(&primary_up(position));
+
+        assert!(
+            *tapped.lock(),
+            "tap should fire from add_pointer + up with no separate down event"
+        );
     }
 
     #[test]
