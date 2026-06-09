@@ -3,7 +3,10 @@
 //! Defines the core `GestureRecognizer` trait and common types used by all
 //! recognizers.
 
-use std::sync::{Arc, Weak};
+use std::sync::{
+    Arc, Weak,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+};
 
 use flui_types::{Offset, geometry::Pixels};
 use parking_lot::Mutex;
@@ -64,14 +67,19 @@ pub struct RecognizerBase {
     /// Gesture arena for conflict resolution
     arena: GestureArena,
 
-    /// Primary pointer ID being tracked
-    primary_pointer: Arc<Mutex<Option<PointerId>>>,
+    /// Primary pointer ID being tracked, as a raw `u64` (`0` == none).
+    ///
+    /// Read on every event (the per-pointer filter), so it is a lock-free
+    /// `AtomicU64` rather than `Mutex<Option<PointerId>>`. `PointerId` is
+    /// `NonZeroU64`-backed, so `0` is an unambiguous "none" sentinel.
+    primary_pointer: Arc<AtomicU64>,
 
     /// Initial position of primary pointer
     initial_position: Arc<Mutex<Option<Offset<Pixels>>>>,
 
-    /// Whether recognizer has been disposed
-    disposed: Arc<Mutex<bool>>,
+    /// Whether recognizer has been disposed. Checked on every event via
+    /// `assert_not_disposed`, so a lock-free `AtomicBool`.
+    disposed: Arc<AtomicBool>,
 
     /// Weak handle to the exact `Arc<dyn GestureArenaMember>` this recognizer
     /// registered with the arena in [`start_tracking`](Self::start_tracking).
@@ -88,9 +96,9 @@ impl RecognizerBase {
     pub fn new(arena: GestureArena) -> Self {
         Self {
             arena,
-            primary_pointer: Arc::new(Mutex::new(None)),
+            primary_pointer: Arc::new(AtomicU64::new(0)),
             initial_position: Arc::new(Mutex::new(None)),
-            disposed: Arc::new(Mutex::new(false)),
+            disposed: Arc::new(AtomicBool::new(false)),
             tracked_member: Arc::new(Mutex::new(None)),
         }
     }
@@ -104,12 +112,14 @@ impl RecognizerBase {
     /// Get the primary pointer ID (if tracking one)
     #[inline]
     pub fn primary_pointer(&self) -> Option<PointerId> {
-        *self.primary_pointer.lock()
+        // `PointerId::new` is `0 -> None`, so it round-trips the sentinel.
+        PointerId::new(self.primary_pointer.load(Ordering::Relaxed))
     }
 
     /// Set the primary pointer
     pub fn set_primary_pointer(&self, pointer: Option<PointerId>) {
-        *self.primary_pointer.lock() = pointer;
+        let raw = pointer.map_or(0, |id| id.get_inner().get());
+        self.primary_pointer.store(raw, Ordering::Relaxed);
     }
 
     /// Get the initial position of the primary pointer
@@ -126,12 +136,12 @@ impl RecognizerBase {
     /// Check if recognizer has been disposed
     #[inline]
     pub fn is_disposed(&self) -> bool {
-        *self.disposed.lock()
+        self.disposed.load(Ordering::Relaxed)
     }
 
     /// Mark as disposed
     pub fn mark_disposed(&self) {
-        *self.disposed.lock() = true;
+        self.disposed.store(true, Ordering::Relaxed);
     }
 
     /// Debug-assert that the recognizer has not been disposed.
