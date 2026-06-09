@@ -40,7 +40,7 @@ use flui_types::{
 /// );
 /// let layer = ClipRRectLayer::new(rrect, Clip::AntiAlias);
 ///
-/// assert_eq!(layer.clip_rrect().width(), 100.0);
+/// assert_eq!(layer.clip_rrect().width(), px(100.0));
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClipRRectLayer {

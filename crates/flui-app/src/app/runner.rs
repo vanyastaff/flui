@@ -616,10 +616,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use flui_types::geometry::px;
     use flui_view::{BuildContext, IntoView, View, ViewExt};
 
     use super::*;
-    use flui_types::geometry::px;
 
     // TODO: Will be used in future integration tests for run_app_impl
     #[allow(dead_code)]
