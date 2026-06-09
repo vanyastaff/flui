@@ -1171,6 +1171,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "flui-animation"
+version = "0.1.0"
+dependencies = [
+ "flui-foundation",
+ "flui-scheduler",
+ "flui-types",
+ "parking_lot",
+ "serde",
+ "smallvec",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "flui-app"
 version = "0.1.0"
 dependencies = [
