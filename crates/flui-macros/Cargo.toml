@@ -25,5 +25,14 @@ syn = { version = "2", features = ["full"] }
 [features]
 default = []
 
+# `flui-foundation` is a dev-dependency only: the `Diagnosticable` derive
+# emits absolute `::flui_foundation::…` paths into the *consuming* crate, so
+# the proc-macro crate itself never needs `flui-foundation` at build time.
+# The integration tests in `tests/` are a separate compilation unit that DOES
+# use the runtime trait, hence the dev-dep. This introduces no dependency
+# cycle: `flui-foundation` does not depend on `flui-macros`.
+[dev-dependencies]
+flui-foundation = { path = "../flui-foundation" }
+
 [lints]
 workspace = true

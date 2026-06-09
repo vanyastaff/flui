@@ -1355,6 +1355,7 @@ dependencies = [
 name = "flui-macros"
 version = "0.1.0"
 dependencies = [
+ "flui-foundation",
  "proc-macro2",
  "quote",
  "syn 2.0.111",
@@ -1494,6 +1495,7 @@ name = "flui-tree"
 version = "0.1.0"
 dependencies = [
  "ambassador",
+ "bon",
  "flui-foundation",
  "proptest",
  "serde",
