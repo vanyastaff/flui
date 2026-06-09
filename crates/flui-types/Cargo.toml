@@ -21,8 +21,12 @@ num-traits = "0.2"
 # Error handling
 thiserror = "2.0"
 
-# Serialization support (optional)
-serde = { workspace = true, optional = true }
+# Serialization support (optional).
+# `rc` enables `Serialize`/`Deserialize` for `Arc<T>` — needed by
+# `InlineSpan::Text(Arc<TextSpan>)`. Deserialization does not preserve Arc
+# sharing (each is rebuilt independently), which is fine: display-list
+# snapshots carry no cross-span aliasing to preserve.
+serde = { workspace = true, optional = true, features = ["rc"] }
 
 # Stack-allocated Vec for small collections (animation curves, color stops)
 smallvec = { workspace = true }
