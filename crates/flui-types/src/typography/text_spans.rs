@@ -48,9 +48,12 @@ pub trait InlineSpanTrait: std::fmt::Debug {
 pub enum InlineSpan {
     /// A run of styled text (with its own child spans).
     ///
-    /// Boxed because `TextSpan` is much larger than `PlaceholderSpan`; the
-    /// `Box` keeps `InlineSpan` small and sidesteps `clippy::large_enum_variant`.
-    Text(Box<TextSpan>),
+    /// `Arc`-wrapped so `InlineSpan::clone` is an O(1) refcount bump rather
+    /// than an O(N) deep copy of the span tree — display lists clone
+    /// `DrawCommand`s freely (compositing, `with_opacity`/transform ops), and
+    /// rich text can carry many child spans. The `Arc` indirection also keeps
+    /// the enum small (no `large_enum_variant`).
+    Text(Arc<TextSpan>),
     /// An inline placeholder reserving space for an embedded box.
     Placeholder(PlaceholderSpan),
 }
@@ -99,7 +102,7 @@ impl InlineSpan {
 impl From<TextSpan> for InlineSpan {
     #[inline]
     fn from(span: TextSpan) -> Self {
-        Self::Text(Box::new(span))
+        Self::Text(Arc::new(span))
     }
 }
 
