@@ -20,7 +20,7 @@
 //! and walk backwards from the newest sample, stopping when either the
 //! horizon (100 ms) is exceeded or the gap between consecutive samples
 //! exceeds 40 ms (the pointer is considered stationary). For the least-
-//! squares flavour, the surviving samples are fed to [`LeastSquaresSolver`]
+//! squares flavour, the surviving samples are fed to `LeastSquaresSolver`
 //! which fits a quadratic polynomial in time and reports its derivative at
 //! `t = 0` as the velocity.
 //!
@@ -84,7 +84,7 @@ const MIN_SAMPLE_SIZE: usize = 3;
 /// Number of samples to keep in the circular buffer.
 ///
 /// Flutter: `_historySize = 20`. We also use this as the upper bound for the
-/// shared [`LeastSquaresSolver`] scratch buffer.
+/// shared `LeastSquaresSolver` scratch buffer.
 const HISTORY_SIZE: usize = MAX_SAMPLES;
 
 /// Polynomial degree for the least-squares fit. Quadratic — same as Flutter.
@@ -114,7 +114,7 @@ struct PointAtTime {
 /// `PolynomialFitLeastSquaresVelocityTracker` strategy). Adding samples is
 /// O(1); computing a velocity is O(N) where N ≤ 20, with the inner loop
 /// running through fixed-size stack-allocated scratch buffers in
-/// [`LeastSquaresSolver`].
+/// `LeastSquaresSolver`.
 #[derive(Debug, Clone)]
 pub struct VelocityTracker {
     /// Pointer device kind. Recorded for parity with Flutter even though the

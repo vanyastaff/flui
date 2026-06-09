@@ -28,7 +28,9 @@ mod resampler;
 mod sampling_clock;
 mod velocity;
 
-pub use lsq_solver::{LeastSquaresSolver, MAX_DEGREE, MAX_SAMPLES, PolynomialFit};
+// `lsq_solver` (LeastSquaresSolver / PolynomialFit / MAX_*) is crate-internal
+// numerical machinery shared by the velocity tracker; it is intentionally NOT
+// re-exported, so the public API is not pinned to the solver's internals.
 pub use prediction::{InputPredictor, PredictedPosition, PredictionConfig};
 pub use raw_input::{InputMode, RawInputHandler, RawPointerEvent};
 pub use resampler::PointerEventResampler;

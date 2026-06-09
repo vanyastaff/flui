@@ -109,40 +109,17 @@ impl PolynomialFit {
         })
     }
 
-    /// Number of active coefficients (= `degree + 1`).
+    /// Number of active coefficients (= `degree + 1`). Crate-internal helper
+    /// for [`coefficients_slice`](Self::coefficients_slice).
     #[inline]
-    pub fn len(&self) -> usize {
+    fn len(&self) -> usize {
         self.degree as usize + 1
-    }
-
-    /// Always false — `PolynomialFit` always has at least one coefficient
-    /// (the constant term). Exists so callers can use `.is_empty()` for
-    /// genericity.
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        false
     }
 
     /// Iterate over the active coefficient slice.
     #[inline]
-    pub fn coefficients_slice(&self) -> &[f64] {
+    fn coefficients_slice(&self) -> &[f64] {
         &self.coefficients[..self.len()]
-    }
-
-    /// Return the first derivative at the given `x`, i.e. the
-    /// instantaneous velocity if `x` is time and the fit is on
-    /// position samples.
-    ///
-    /// For a quadratic `y = a + b·x + c·x²`, the derivative is
-    /// `b + 2c·x`. Evaluated at `x = 0` this is just `coefficients[1]`,
-    /// which is the velocity the Flutter velocity tracker returns.
-    pub fn derivative_at(&self, x: f64) -> f64 {
-        // d/dx Σ cᵢ xⁱ = Σ i·cᵢ xⁱ⁻¹, summed for i ≥ 1
-        let mut result = 0.0_f64;
-        for (i, c) in self.coefficients_slice().iter().enumerate().skip(1) {
-            result += (i as f64) * c * x.powi(i as i32 - 1);
-        }
-        result
     }
 }
 
@@ -172,18 +149,6 @@ impl<'a> LeastSquaresSolver<'a> {
         debug_assert_eq!(x.len(), y.len(), "x and y must have the same length");
         debug_assert_eq!(x.len(), w.len(), "x and w must have the same length");
         Self { x, y, w }
-    }
-
-    /// Number of data points.
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.x.len()
-    }
-
-    /// Returns true if no data points have been provided.
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.x.is_empty()
     }
 
     /// Fit a polynomial of the given degree to the data.
@@ -426,14 +391,14 @@ mod tests {
     }
 
     #[test]
-    fn derivative_at_zero() {
-        // Quadratic y = 0 + 5t + 2t². Velocity at t=0 is 5.
+    fn linear_coefficient_is_velocity() {
+        // Quadratic y = 0 + 5t + 2t². The fit's coefficients[1] is the
+        // velocity at t=0 (= 5), which is what the velocity tracker reads.
         let x = vec![-2.0, -1.0, 0.0, 1.0, 2.0];
         let y: Vec<f64> = x.iter().map(|&t| 5.0 * t + 2.0 * t * t).collect();
         let w = vec![1.0; x.len()];
         let fit = LeastSquaresSolver::new(&x, &y, &w).solve(2).expect("fits");
-        let v0 = fit.derivative_at(0.0);
-        assert!((v0 - 5.0).abs() < 1e-6);
+        assert!((fit.coefficients[1] - 5.0).abs() < 1e-6);
     }
 
     #[test]
