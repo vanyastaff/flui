@@ -444,7 +444,7 @@ impl MultiDragGestureRecognizer {
                 let details = MultiDragEndDetails {
                     pointer_id: pointer,
                     global_position: position,
-                    velocity: state.velocity_tracker.velocity(),
+                    velocity: state.velocity_tracker.get_velocity(),
                     kind: state.kind,
                 };
                 client.end(details);

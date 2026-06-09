@@ -14,7 +14,7 @@
 //!
 //! let mut tracker = VelocityTracker::new();
 //! tracker.add_position(now, position);
-//! let velocity = tracker.velocity();
+//! let velocity = tracker.get_velocity();
 //!
 //! let mut predictor = InputPredictor::new();
 //! predictor.add_sample(now, position);
@@ -34,6 +34,5 @@ pub use raw_input::{InputMode, RawInputHandler, RawPointerEvent};
 pub use resampler::PointerEventResampler;
 pub use sampling_clock::{DEFAULT_SAMPLE_PERIOD, SamplingClock};
 pub use velocity::{
-    IosFlingVelocityTracker, MacosFlingVelocityTracker, Velocity, VelocityEstimate,
-    VelocityEstimationStrategy, VelocityTracker,
+    IosFlingVelocityTracker, MacosFlingVelocityTracker, Velocity, VelocityEstimate, VelocityTracker,
 };

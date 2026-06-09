@@ -370,49 +370,10 @@ impl VelocityTracker {
         self.get_velocity_estimate()
     }
 
-    // ========================================================================
-    // Source-compat shims for the previous public API
-    // ========================================================================
-    //
-    // The previous version of this module exposed `velocity()` and
-    // `is_reliable()`. The new canonical names are [`Self::get_velocity`]
-    // and the `estimate.confidence > 0.5 && sample_count >= 3` test. These
-    // shims keep existing callers compiling and route through the new
-    // methods so there is only one implementation.
-
-    /// Source-compat alias for [`Self::get_velocity`].
-    #[inline]
-    pub fn velocity(&self) -> Velocity {
-        self.get_velocity()
-    }
-
-    /// Source-compat alias for the previous "is the estimate reliable?"
-    /// check. Returns `true` when the tracker has at least 3 samples and
-    /// the most recent estimate's confidence is above 0.5.
-    pub fn is_reliable(&self) -> bool {
-        match self.get_velocity_estimate() {
-            Some(est) => est.confidence > 0.5 && self.sample_count() >= 3,
-            None => false,
-        }
-    }
-
-    /// Source-compat constructor. The previous `new()` constructed a
-    /// touch-kind tracker with the default strategy; both parameters are
-    /// accepted for source-compat but the strategy is currently ignored —
-    /// see [`VelocityEstimationStrategy`].
+    /// Construct a touch-kind tracker. Equivalent to [`Self::default`].
     #[inline]
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Source-compat constructor with a strategy selector. The previous
-    /// API accepted `VelocityEstimationStrategy` to pick between L2S,
-    /// linear, and two-sample estimation; the L2S algorithm is strictly
-    /// better, so all three strategies now route to it.
-    #[inline]
-    #[must_use]
-    pub fn with_strategy(_strategy: VelocityEstimationStrategy) -> Self {
         Self::default()
     }
 
@@ -676,30 +637,6 @@ impl MacosFlingVelocityTracker {
     pub fn get_fling_velocity(&self, allow_slow: bool) -> Velocity {
         self.inner.get_fling_velocity(allow_slow)
     }
-}
-
-// ============================================================================
-// Legacy type aliases (kept for transition — see VelocityEstimationStrategy below)
-// ============================================================================
-
-/// Strategy selector for [`VelocityTracker`]. Flutter's API does not expose
-/// a strategy; the least-squares tracker is the only one in the canonical
-/// pipeline. This enum is preserved as a thin compatibility shim that maps
-/// to the underlying flavour: `LinearRegression` and `TwoSample` both fall
-/// back to the L2S tracker (the maths is strictly better), and
-/// `LeastSquaresPolynomial` is the default.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum VelocityEstimationStrategy {
-    /// Least-squares polynomial regression (the only strategy Flutter uses;
-    /// kept as the variant name for source-compat with the previous API).
-    #[default]
-    LeastSquaresPolynomial,
-    /// Linear regression — preserved for source compat; the L2S tracker
-    /// produces strictly better results for the same data, so the variant
-    /// is aliased to it.
-    LinearRegression,
-    /// Two-sample velocity — preserved for source compat; same reasoning.
-    TwoSample,
 }
 
 #[cfg(test)]

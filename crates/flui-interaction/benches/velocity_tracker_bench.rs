@@ -21,9 +21,7 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use flui_interaction::processing::{
-    IosFlingVelocityTracker, VelocityEstimationStrategy, VelocityTracker,
-};
+use flui_interaction::processing::{IosFlingVelocityTracker, VelocityTracker};
 use flui_types::geometry::{Offset, Pixels};
 use flui_types::gestures::PointerDeviceKind;
 
@@ -94,26 +92,6 @@ fn bench_add_position(c: &mut Criterion) {
     });
 }
 
-/// `with_strategy` constructor is the source-compat entry point used by
-/// callers that picked `VelocityEstimationStrategy` in the legacy API.
-/// All three variants route to the L2S tracker (the L2S algorithm is
-/// strictly better), so the cost should be allocation-free and ~identical
-/// across variants.
-fn bench_with_strategy(c: &mut Criterion) {
-    let mut group = c.benchmark_group("VelocityTracker::with_strategy");
-    for strategy in [
-        VelocityEstimationStrategy::LeastSquaresPolynomial,
-        VelocityEstimationStrategy::LinearRegression,
-        VelocityEstimationStrategy::TwoSample,
-    ] {
-        let label = format!("{strategy:?}");
-        group.bench_function(label, |b| {
-            b.iter(|| black_box(VelocityTracker::with_strategy(black_box(strategy))));
-        });
-    }
-    group.finish();
-}
-
 /// iOS-flavour tracker (weighted 2-point velocity). Same input workload
 /// as the LSQ case so the two benches are directly comparable. The iOS
 /// flavour should be faster than the LSQ fit (3 multiplies vs 20-sample
@@ -137,7 +115,6 @@ criterion_group!(
     bench_estimate_lsq,
     bench_estimate_short,
     bench_add_position,
-    bench_with_strategy,
     bench_ios_estimate,
 );
 criterion_main!(velocity_benches);

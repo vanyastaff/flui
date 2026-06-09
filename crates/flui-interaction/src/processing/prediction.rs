@@ -35,7 +35,7 @@ use std::time::{Duration, Instant};
 
 use flui_types::geometry::{Offset, Pixels};
 
-use super::velocity::{Velocity, VelocityEstimationStrategy, VelocityTracker};
+use super::velocity::{Velocity, VelocityTracker};
 
 // ============================================================================
 // Constants
@@ -64,8 +64,6 @@ pub struct PredictionConfig {
     /// Smoothing factor for predictions (0.0 = no smoothing, 1.0 = max
     /// smoothing).
     pub smoothing: f32,
-    /// Velocity estimation strategy.
-    pub velocity_strategy: VelocityEstimationStrategy,
 }
 
 impl Default for PredictionConfig {
@@ -74,7 +72,6 @@ impl Default for PredictionConfig {
             max_prediction_time: MAX_PREDICTION_TIME,
             use_acceleration: true,
             smoothing: 0.3,
-            velocity_strategy: VelocityEstimationStrategy::LeastSquaresPolynomial,
         }
     }
 }
@@ -86,7 +83,6 @@ impl PredictionConfig {
             max_prediction_time: Duration::from_millis(32),
             use_acceleration: true,
             smoothing: 0.1,
-            velocity_strategy: VelocityEstimationStrategy::LeastSquaresPolynomial,
         }
     }
 
@@ -97,7 +93,6 @@ impl PredictionConfig {
             max_prediction_time: Duration::from_millis(16),
             use_acceleration: false,
             smoothing: 0.5,
-            velocity_strategy: VelocityEstimationStrategy::LinearRegression,
         }
     }
 
@@ -107,7 +102,6 @@ impl PredictionConfig {
             max_prediction_time: Duration::ZERO,
             use_acceleration: false,
             smoothing: 0.0,
-            velocity_strategy: VelocityEstimationStrategy::TwoSample,
         }
     }
 }
@@ -202,7 +196,7 @@ impl InputPredictor {
     /// Create a predictor with custom configuration.
     pub fn with_config(config: PredictionConfig) -> Self {
         Self {
-            velocity_tracker: VelocityTracker::with_strategy(config.velocity_strategy),
+            velocity_tracker: VelocityTracker::new(),
             config,
             last_position: None,
             last_time: None,
@@ -226,7 +220,7 @@ impl InputPredictor {
     pub fn add_sample(&mut self, time: Instant, position: Offset<Pixels>) {
         // Store previous velocity for acceleration
         if self.velocity_tracker.has_sufficient_data() {
-            self.prev_velocity = Some(self.velocity_tracker.velocity());
+            self.prev_velocity = Some(self.velocity_tracker.get_velocity());
             self.prev_velocity_time = self.last_time;
         }
 
@@ -273,7 +267,7 @@ impl InputPredictor {
                 velocity: Velocity::ZERO,
             };
         };
-        let velocity = self.velocity_tracker.velocity();
+        let velocity = self.velocity_tracker.get_velocity();
 
         // Not enough data for prediction
         if !self.velocity_tracker.has_sufficient_data()
@@ -363,7 +357,7 @@ impl InputPredictor {
 
     /// Get the current velocity estimate.
     pub fn velocity(&self) -> Velocity {
-        self.velocity_tracker.velocity()
+        self.velocity_tracker.get_velocity()
     }
 
     /// Reset the predictor, clearing all history.

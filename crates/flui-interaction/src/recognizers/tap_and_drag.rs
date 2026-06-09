@@ -531,7 +531,7 @@ impl TapAndDragGestureRecognizer {
             }
             Phase::Dragging => {
                 // Drag ended at up: fire on_drag_end with final velocity.
-                let velocity = self.drag_state.lock().velocity_tracker.velocity();
+                let velocity = self.drag_state.lock().velocity_tracker.get_velocity();
                 let end_cb = self.callbacks.lock().on_drag_end.clone();
                 if let Some(cb) = end_cb {
                     cb(TapDragEndDetails {

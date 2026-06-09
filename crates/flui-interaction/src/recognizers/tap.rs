@@ -57,20 +57,32 @@ pub enum TapButton {
     Tertiary,
 }
 
-impl TapButton {
+impl TryFrom<PointerButton> for TapButton {
+    /// The unsupported button (outside the three Flutter-tracked slots).
+    type Error = PointerButton;
+
     /// Map a raw [`PointerButton`] event payload to a [`TapButton`] slot.
     ///
-    /// Returns `None` for buttons outside the three Flutter-tracked slots
+    /// Errors for buttons outside the three Flutter-tracked slots
     /// (X1/X2/pen-eraser/etc.) — those events are ignored by the tap
     /// recogniser entirely.
+    fn try_from(button: PointerButton) -> Result<Self, Self::Error> {
+        match button {
+            PointerButton::Primary => Ok(Self::Primary),
+            PointerButton::Secondary => Ok(Self::Secondary),
+            PointerButton::Auxiliary => Ok(Self::Tertiary),
+            other => Err(other),
+        }
+    }
+}
+
+impl TapButton {
+    /// Map a raw [`PointerButton`] to a [`TapButton`] slot, or `None` for the
+    /// untracked buttons. Convenience wrapper over the [`TryFrom`] impl for the
+    /// `Option`-combinator call sites.
     #[inline]
     pub fn from_pointer_button(button: PointerButton) -> Option<Self> {
-        match button {
-            PointerButton::Primary => Some(Self::Primary),
-            PointerButton::Secondary => Some(Self::Secondary),
-            PointerButton::Auxiliary => Some(Self::Tertiary),
-            _ => None,
-        }
+        Self::try_from(button).ok()
     }
 }
 

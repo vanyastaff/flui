@@ -152,19 +152,6 @@ pub mod arena;
 pub mod recognizers;
 pub mod timer;
 
-// Back-compat deprecation shims — `team` and `signal_resolver` were
-// crate-root modules before the arena/ directory refactor. External code
-// that does `use flui_interaction::team::*` or `use flui_interaction::signal_resolver::*`
-// continues to compile. New code should use `flui_interaction::arena::*`.
-#[deprecated(since = "0.2.0", note = "Use `flui_interaction::arena` instead")]
-pub mod team {
-    pub use crate::arena::{GestureArenaTeam, TeamEntry};
-}
-#[deprecated(since = "0.2.0", note = "Use `flui_interaction::arena` instead")]
-pub mod signal_resolver {
-    pub use crate::arena::{PointerSignalResolver, SignalPriority};
-}
-
 // ============================================================================
 // Input processing
 // ============================================================================
@@ -236,8 +223,7 @@ pub use routing::{CursorChangeCallback, MouseTracker, MouseTrackerAnnotation};
 // ============================================================================
 pub use processing::{
     InputMode, InputPredictor, PointerEventResampler, PredictedPosition, PredictionConfig,
-    RawInputHandler, RawPointerEvent, Velocity, VelocityEstimate, VelocityEstimationStrategy,
-    VelocityTracker,
+    RawInputHandler, RawPointerEvent, Velocity, VelocityEstimate, VelocityTracker,
 };
 pub use recognizers::{
     DoubleTapGestureRecognizer, DragGestureRecognizer, EagerGestureRecognizer,

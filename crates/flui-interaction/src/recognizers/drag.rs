@@ -531,7 +531,7 @@ impl DragGestureRecognizer {
 
         if state.state == DragPhase::Started {
             // Calculate final velocity
-            let velocity = state.velocity_tracker.velocity();
+            let velocity = state.velocity_tracker.get_velocity();
             let primary_velocity = self.calculate_primary_velocity(velocity.pixels_per_second);
 
             state.state = DragPhase::Ready;
@@ -787,7 +787,7 @@ mod tests {
             tracker.add_position(t, pos);
         }
 
-        let velocity = tracker.velocity();
+        let velocity = tracker.get_velocity();
 
         // Should be approximately 1000 px/s horizontally
         assert!(velocity.pixels_per_second.dx > Pixels(900.0));

@@ -401,7 +401,7 @@ impl ScaleGestureRecognizer {
                 // second)
                 let velocity = state
                     .scale_velocity_tracker
-                    .velocity()
+                    .get_velocity()
                     .pixels_per_second
                     .dx
                     .0;
