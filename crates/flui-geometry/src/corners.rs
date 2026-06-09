@@ -184,10 +184,10 @@ impl<T> Corners<T> {
 // ============================================================================
 
 impl Corners<super::units::Pixels> {
-    /// Scales these corner values to scaled pixels.
+    /// Scales these corner values by the given factor.
     #[inline]
     #[must_use]
-    pub fn scale(&self, factor: f32) -> Corners<super::units::ScaledPixels> {
+    pub fn scale(&self, factor: f32) -> Corners<super::units::Pixels> {
         Corners {
             top_left: self.top_left.scale(factor),
             top_right: self.top_right.scale(factor),

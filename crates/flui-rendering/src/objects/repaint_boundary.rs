@@ -101,8 +101,7 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderRepai
     ) -> crate::error::RenderResult<crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>>
     {
         // Bridge through the same BoxLayoutCtx path the blanket impl uses.
-        let typed_inner =
-            crate::protocol::BoxLayoutCtx::<Single, BoxParentData>::from_erased(ctx);
+        let typed_inner = crate::protocol::BoxLayoutCtx::<Single, BoxParentData>::from_erased(ctx);
         let mut layout_ctx = BoxLayoutContext::<Single, BoxParentData>::new(typed_inner);
 
         let constraints = *layout_ctx.constraints();

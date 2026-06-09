@@ -28,10 +28,8 @@ use flui_types::geometry::px;
 #[test]
 fn u35_repaint_boundary_bootstrap_sets_flag_true() {
     let mut owner = PipelineOwner::new();
-    let boundary_id = owner.insert(
-        Box::new(RenderRepaintBoundary::new())
-            as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>,
-    );
+    let boundary_id = owner.insert(Box::new(RenderRepaintBoundary::new())
+        as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
 
     let node = owner
         .render_tree()
@@ -62,10 +60,8 @@ fn u35_repaint_boundary_bootstrap_sets_flag_true() {
 #[test]
 fn u35_paint_clears_needs_paint_on_painted_nodes() {
     let mut owner = PipelineOwner::new();
-    let padding_id = owner.insert(
-        Box::new(RenderPadding::all(5.0))
-            as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>,
-    );
+    let padding_id = owner.insert(Box::new(RenderPadding::all(5.0))
+        as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
     let child_id = owner
         .insert_child_render_object(padding_id, Box::new(RenderColoredBox::red(40.0, 40.0)))
         .expect("child insert");
@@ -89,7 +85,10 @@ fn u35_paint_clears_needs_paint_on_painted_nodes() {
     owner.run_paint().expect("paint succeeds");
 
     // Both nodes must have needs_paint == false after paint.
-    let padding_node = owner.render_tree().get(padding_id).expect("padding in tree");
+    let padding_node = owner
+        .render_tree()
+        .get(padding_id)
+        .expect("padding in tree");
     assert!(
         !padding_node.needs_paint(),
         "root (Padding) needs_paint must be cleared after run_paint",
@@ -113,10 +112,8 @@ fn u35_paint_clears_needs_paint_on_painted_nodes() {
 #[test]
 fn u35_repaint_boundary_isolates_subtree_paint() {
     let mut owner = PipelineOwner::new();
-    let root_id = owner.insert(
-        Box::new(RenderPadding::all(5.0))
-            as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>,
-    );
+    let root_id = owner.insert(Box::new(RenderPadding::all(5.0))
+        as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
     let boundary_id = owner
         .insert_child_render_object(root_id, Box::new(RenderRepaintBoundary::new()))
         .expect("boundary insert");
@@ -157,11 +154,7 @@ fn u35_repaint_boundary_isolates_subtree_paint() {
     // Mark ONLY the leaf dirty for paint (simulate a re-paint request).
     let mut owner = owner.into_idle();
     let leaf_depth = owner.render_tree().depth(leaf_id).unwrap_or(0) as usize;
-    owner
-        .render_tree()
-        .get(leaf_id)
-        .unwrap()
-        .mark_paint_flag();
+    owner.render_tree().get(leaf_id).unwrap().mark_paint_flag();
     owner.add_node_needing_paint(leaf_id, leaf_depth);
 
     // Frame 2: run paint again (skip layout/compositing — only paint dirty).
@@ -204,10 +197,8 @@ fn u35_unpainted_unreached_nodes_still_clear_flag() {
     let mut owner = PipelineOwner::new();
 
     // Linear chain: root -> middle -> leaf.
-    let root_id = owner.insert(
-        Box::new(RenderPadding::all(3.0))
-            as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>,
-    );
+    let root_id = owner.insert(Box::new(RenderPadding::all(3.0))
+        as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
     let middle_id = owner
         .insert_child_render_object(root_id, Box::new(RenderPadding::all(2.0)))
         .expect("middle insert");
@@ -242,11 +233,7 @@ fn u35_unpainted_unreached_nodes_still_clear_flag() {
     // Mark ONLY the leaf dirty for paint.
     let mut owner = owner.into_idle();
     let leaf_depth = owner.render_tree().depth(leaf_id).unwrap_or(0) as usize;
-    owner
-        .render_tree()
-        .get(leaf_id)
-        .unwrap()
-        .mark_paint_flag();
+    owner.render_tree().get(leaf_id).unwrap().mark_paint_flag();
     owner.add_node_needing_paint(leaf_id, leaf_depth);
 
     // Frame 2: paint phase only (transition through required phases).

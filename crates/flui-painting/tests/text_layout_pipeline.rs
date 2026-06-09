@@ -182,7 +182,7 @@ fn text_painter_caret_and_hit_test_roundtrip() {
 
     // Get caret offset at position 5
     let caret = painter.get_offset_for_caret(TextPosition::upstream(5));
-    assert!(caret.dx >= px(0.0), "caret x should be non-negative");
+    assert!(caret.dx.get() >= 0.0, "caret x should be non-negative");
 
     // Hit test at that offset should return approximately position 5
     let hit = painter.get_position_for_offset(caret);
@@ -230,11 +230,11 @@ fn text_painter_selection_boxes() {
 
     let first = &boxes[0];
     assert!(
-        first.rect.width() > px(0.0),
+        first.rect.width().get() > 0.0,
         "selection box should have width"
     );
     assert!(
-        first.rect.height() > px(0.0),
+        first.rect.height().get() > 0.0,
         "selection box should have height"
     );
 }

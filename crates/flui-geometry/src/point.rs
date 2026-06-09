@@ -24,7 +24,7 @@ use super::{
     Pixels, Vec2,
     error::GeometryError,
     px,
-    traits::{NumericUnit, Unit},
+    traits::{FloatUnit, NumericUnit, Unit},
 };
 
 /// Absolute position in 2D space.
@@ -119,11 +119,13 @@ impl<T: Unit> Point<T> {
 }
 
 // ============================================================================
-// Safe Constructors (NumericUnit only — scalar bridge via
-// `NumericUnit::from_f32` / `to_f32`, no `T: From<f32>` plumbing per U1)
+// Safe Constructors (NumericUnit with Into<f32> + From<f32>)
 // ============================================================================
 
-impl<T: NumericUnit> Point<T> {
+impl<T: NumericUnit> Point<T>
+where
+    T: Into<f32> + FloatUnit,
+{
     /// Creates a point with validation, returning an error for invalid
     /// coordinates.
     #[inline]
@@ -131,8 +133,8 @@ impl<T: NumericUnit> Point<T> {
         let point = Self { x, y };
         if !point.is_valid() {
             return Err(GeometryError::InvalidCoordinates {
-                x: x.to_f32(),
-                y: y.to_f32(),
+                x: x.into(),
+                y: y.into(),
             });
         }
         Ok(point)
@@ -152,23 +154,26 @@ impl<T: NumericUnit> Point<T> {
         };
 
         Self {
-            x: T::from_f32(clamp_f32(x.to_f32())),
-            y: T::from_f32(clamp_f32(y.to_f32())),
+            x: T::from_f32(clamp_f32(x.into())),
+            y: T::from_f32(clamp_f32(y.into())),
         }
     }
 }
 
 // ============================================================================
-// Validation Methods (NumericUnit)
+// Validation Methods (NumericUnit with Into<f32>)
 // ============================================================================
 
-impl<T: NumericUnit> Point<T> {
+impl<T: NumericUnit> Point<T>
+where
+    T: Into<f32>,
+{
     /// Checks if coordinates are valid (finite, not NaN).
     #[inline]
     #[must_use]
     pub fn is_valid(&self) -> bool {
-        let x_f32 = self.x.to_f32();
-        let y_f32 = self.y.to_f32();
+        let x_f32: f32 = self.x.into();
+        let y_f32: f32 = self.y.into();
         x_f32.is_finite() && y_f32.is_finite()
     }
 
@@ -183,8 +188,8 @@ impl<T: NumericUnit> Point<T> {
     #[inline]
     #[must_use]
     pub fn is_nan(&self) -> bool {
-        let x_f32 = self.x.to_f32();
-        let y_f32 = self.y.to_f32();
+        let x_f32: f32 = self.x.into();
+        let y_f32: f32 = self.y.into();
         x_f32.is_nan() || y_f32.is_nan()
     }
 }
@@ -265,11 +270,13 @@ impl Point<Pixels> {
 }
 
 // ============================================================================
-// Geometric Operations (NumericUnit only — scalar bridge via
-// `NumericUnit::from_f32` / `to_f32`, no `T: From<f32>` plumbing per U1)
+// Geometric Operations (f32 only)
 // ============================================================================
 
-impl<T: NumericUnit> Point<T> {
+impl<T> Point<T>
+where
+    T: NumericUnit + Into<f32> + FloatUnit,
+{
     /// Euclidean distance to another point.
     ///
     /// # Examples
@@ -284,8 +291,8 @@ impl<T: NumericUnit> Point<T> {
     #[inline]
     #[must_use]
     pub fn distance(self, other: Self) -> f32 {
-        let dx = (other.x - self.x).to_f32();
-        let dy = (other.y - self.y).to_f32();
+        let dx: f32 = T::sub(other.x, self.x).into();
+        let dy: f32 = T::sub(other.y, self.y).into();
         dx.hypot(dy)
     }
 
@@ -295,8 +302,10 @@ impl<T: NumericUnit> Point<T> {
     #[inline]
     #[must_use]
     pub fn distance_squared(self, other: Self) -> f32 {
-        let dx_f32 = (other.x - self.x).to_f32();
-        let dy_f32 = (other.y - self.y).to_f32();
+        let dx = T::sub(other.x, self.x);
+        let dy = T::sub(other.y, self.y);
+        let dx_f32: f32 = dx.into();
+        let dy_f32: f32 = dy.into();
         dx_f32 * dx_f32 + dy_f32 * dy_f32
     }
 
@@ -314,11 +323,24 @@ impl<T: NumericUnit> Point<T> {
     #[inline]
     #[must_use]
     pub fn midpoint(self, other: Self) -> Self {
-        let sum_x_f32 = (self.x + other.x).to_f32();
-        let sum_y_f32 = (self.y + other.y).to_f32();
+        let sum_x = self.x + other.x;
+        let sum_y = self.y + other.y;
+        let sum_x_f32: f32 = sum_x.into();
+        let sum_y_f32: f32 = sum_y.into();
         Self::new(T::from_f32(sum_x_f32 / 2.0), T::from_f32(sum_y_f32 / 2.0))
     }
+}
 
+impl Point<Pixels> {}
+
+// ============================================================================
+// Interpolation (generic with NumericUnit)
+// ============================================================================
+
+impl<T> Point<T>
+where
+    T: NumericUnit + Into<f32> + FloatUnit,
+{
     /// Linear interpolation between two points.
     ///
     /// - `t = 0.0` returns `self`
@@ -327,10 +349,10 @@ impl<T: NumericUnit> Point<T> {
     #[inline]
     #[must_use]
     pub fn lerp(self, other: Self, t: f32) -> Self {
-        let x0 = self.x.to_f32();
-        let y0 = self.y.to_f32();
-        let x1 = other.x.to_f32();
-        let y1 = other.y.to_f32();
+        let x0: f32 = self.x.into();
+        let y0: f32 = self.y.into();
+        let x1: f32 = other.x.into();
+        let y1: f32 = other.y.into();
 
         Self::new(
             T::from_f32(x0 + (x1 - x0) * t),
@@ -640,10 +662,13 @@ where
 }
 
 // ============================================================================
-// Checked Arithmetic (NumericUnit — scalar bridge via `from_f32`/`to_f32`)
+// Checked Arithmetic (NumericUnit with validation)
 // ============================================================================
 
-impl<T: NumericUnit> Point<T> {
+impl<T: NumericUnit> Point<T>
+where
+    T: Into<f32> + FloatUnit,
+{
     /// Checked addition with a vector, returns None if result is invalid.
     ///
     /// # Examples
@@ -708,8 +733,8 @@ impl<T: NumericUnit> Point<T> {
     #[inline]
     #[must_use]
     pub fn checked_mul(self, scalar: f32) -> Option<Self> {
-        let x_f32 = self.x.to_f32();
-        let y_f32 = self.y.to_f32();
+        let x_f32: f32 = self.x.into();
+        let y_f32: f32 = self.y.into();
         let result = Self {
             x: T::from_f32(x_f32 * scalar),
             y: T::from_f32(y_f32 * scalar),
@@ -737,8 +762,8 @@ impl<T: NumericUnit> Point<T> {
     #[inline]
     #[must_use]
     pub fn saturating_mul(self, scalar: f32) -> Self {
-        let x_f32 = self.x.to_f32();
-        let y_f32 = self.y.to_f32();
+        let x_f32: f32 = self.x.into();
+        let y_f32: f32 = self.y.into();
         Self::new_clamped(T::from_f32(x_f32 * scalar), T::from_f32(y_f32 * scalar))
     }
 }
@@ -757,8 +782,8 @@ impl<T: Unit> Point<T> {
     ///
     /// let p = Point::<Pixels>::new(px(100.0), px(200.0));
     /// let p_f32: Point<Pixels> = p.cast();
-    /// assert_eq!(p_f32.x, px(100.0));
-    /// assert_eq!(p_f32.y, px(200.0));
+    /// assert_eq!(p_f32.x.get(), 100.0);
+    /// assert_eq!(p_f32.y.get(), 200.0);
     #[inline]
     #[must_use]
     pub fn cast<U>(self) -> Point<U>
@@ -1076,10 +1101,7 @@ where
 // ============================================================================
 
 impl Point<super::units::Pixels> {
-    /// Scales the point by a given factor, producing a `Point<ScaledPixels>`.
-    ///
-    /// This is typically used to convert logical pixel coordinates to scaled
-    /// pixels for high-DPI displays.
+    /// Scales the point by a given factor.
     ///
     /// # Examples
     ///
@@ -1090,7 +1112,7 @@ impl Point<super::units::Pixels> {
     /// let scaled = p.scale(2.0);  // 2x Retina display
     #[inline]
     #[must_use]
-    pub fn scale(self, factor: f32) -> Point<super::units::ScaledPixels> {
+    pub fn scale(self, factor: f32) -> Point<super::units::Pixels> {
         Point {
             x: self.x.scale(factor),
             y: self.y.scale(factor),
@@ -1110,30 +1132,6 @@ impl Point<super::units::Pixels> {
     #[must_use]
     pub fn magnitude(self) -> f32 {
         self.x.get().hypot(self.y.get())
-    }
-}
-
-// ============================================================================
-// Specialized implementations for ScaledPixels
-// ============================================================================
-
-impl Point<super::units::ScaledPixels> {
-    /// Converts to device pixels by rounding both coordinates.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_geometry::{Point, scaled_px};
-    ///
-    /// let p = Point::new(scaled_px(199.7), scaled_px(299.3));
-    /// let device = p.to_device_pixels();
-    #[inline]
-    #[must_use]
-    pub fn to_device_pixels(self) -> Point<super::units::DevicePixels> {
-        Point {
-            x: self.x.to_device_pixels(),
-            y: self.y.to_device_pixels(),
-        }
     }
 }
 

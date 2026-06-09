@@ -36,14 +36,14 @@
 //! # Examples
 //!
 //! ```
-//! use flui_geometry::{bounds, point, px, size};
+//! use flui_geometry::{bounds, point, size};
 //!
 //! let a = bounds(point(0.0, 0.0), size(10.0, 10.0));
 //! let b = bounds(point(5.0, 5.0), size(10.0, 10.0));
 //!
 //! assert!(a.intersects(&b));
 //! let intersection = a.intersect(&b);
-//! assert_eq!(intersection.size.width, px(5.0));
+//! assert_eq!(intersection.size.width.get(), 5.0);
 //! ```
 
 use std::{
@@ -596,29 +596,13 @@ impl<T: Unit + NumericUnit> From<Bounds<T>> for Rect<T> {
 // ============================================================================
 
 impl Bounds<super::units::Pixels> {
-    /// Scales the bounds by a factor, converting to scaled pixels.
+    /// Scales the bounds by a factor.
     #[inline]
     #[must_use]
-    pub fn scale(&self, factor: f32) -> Bounds<super::units::ScaledPixels> {
+    pub fn scale(&self, factor: f32) -> Bounds<super::units::Pixels> {
         Bounds {
             origin: self.origin.scale(factor),
             size: self.size.scale(factor),
-        }
-    }
-}
-
-// ============================================================================
-// Specialized implementations for ScaledPixels
-// ============================================================================
-
-impl Bounds<super::units::ScaledPixels> {
-    /// Converts scaled pixel bounds to device pixels by rounding.
-    #[inline]
-    #[must_use]
-    pub fn to_device_pixels(&self) -> Bounds<super::units::DevicePixels> {
-        Bounds {
-            origin: self.origin.to_device_pixels(),
-            size: self.size.to_device_pixels(),
         }
     }
 }

@@ -51,24 +51,19 @@ default = []
 serde = ["dep:serde", "flui-geometry/serde"]
 
 # === Performance ===
-# SIMD acceleration for math operations
-# Auto-detects SSE/AVX (x86_64) or NEON (ARM). Locally gates flui-types own
-# color.rs SIMD code paths AND forwards to flui-geometry/simd for the
-# Matrix4 SSE/NEON multiplication fast paths.
-simd = ["flui-geometry/simd"]
+# SIMD acceleration for flui-types' own color.rs SSE/NEON code paths.
+# (flui-geometry's matrix/vector SIMD now comes from glam, always-on — there is
+# no longer a flui-geometry `simd` feature to forward to. N-geom PR 2, Option D.)
+simd = []
 
 # === Interoperability ===
 # mint: Zero-cost conversions with glam, nalgebra, cgmath, kurbo.
 # Forwarded to flui-geometry/mint (impls live in flui-geometry post-split).
 mint = ["flui-geometry/mint"]
 
-# glam: Direct integration with glam math library.
-# Forwarded to flui-geometry/glam (impls live in flui-geometry post-split).
-glam = ["flui-geometry/glam"]
-
 # === Convenience ===
 # Enable all features
-full = ["serde", "simd", "mint", "glam"]
+full = ["serde", "simd", "mint"]
 
 # NOTE: Image and font loading moved to flui-assets crate.
 # flui_types only provides type definitions!

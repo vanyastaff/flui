@@ -241,7 +241,6 @@ mod tests {
         let config = ViewConfiguration::from_size(Size::new(px(1920.0), px(1080.0)), 2.0);
         let logical = Size::new(px(960.0), px(540.0));
         let physical = config.to_physical_size(logical);
-        // Epsilon comparison is unitless: drop `Pixels` at the boundary.
         assert!((physical.width.get() - 1920.0).abs() < 1e-6);
         assert!((physical.height.get() - 1080.0).abs() < 1e-6);
     }
@@ -251,7 +250,6 @@ mod tests {
         let config = ViewConfiguration::from_size(Size::new(px(1920.0), px(1080.0)), 2.0);
         let physical = Size::new(px(1920.0), px(1080.0));
         let logical = config.to_logical_size(physical);
-        // Epsilon comparison is unitless: drop `Pixels` at the boundary.
         assert!((logical.width.get() - 960.0).abs() < 1e-6);
         assert!((logical.height.get() - 540.0).abs() < 1e-6);
     }

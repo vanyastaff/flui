@@ -8,7 +8,7 @@ use std::{
 
 use super::{
     Pixels, Point, Vec2, px,
-    traits::{Along, Axis, Half, IsZero, NumericUnit, Unit},
+    traits::{Along, Axis, FloatUnit, Half, IsZero, NumericUnit, Unit},
 };
 
 /// A 2D size with width and height.
@@ -16,7 +16,6 @@ use super::{
 /// Generic over unit type `T`. Common usage:
 /// - `Size<Pixels>` - UI dimensions
 /// - `Size<DevicePixels>` - Screen dimensions
-/// - `Size<ScaledPixels>` - High-DPI scaled dimensions
 ///
 /// Display format: `{width}×{height}` (e.g. `800px×600px`).
 ///
@@ -149,7 +148,10 @@ impl<T: NumericUnit> Size<T> {
     }
 }
 
-impl<T: NumericUnit> Size<T> {
+impl<T: NumericUnit> Size<T>
+where
+    T: Into<f32> + FloatUnit,
+{
     /// Returns true if width or height is zero.
     ///
     /// # Examples
@@ -185,8 +187,8 @@ impl<T: NumericUnit> Size<T> {
     #[inline]
     #[must_use]
     pub fn area(self) -> f32 {
-        let w = self.width.to_f32();
-        let h = self.height.to_f32();
+        let w: f32 = self.width.into();
+        let h: f32 = self.height.into();
         w * h
     }
 
@@ -205,8 +207,8 @@ impl<T: NumericUnit> Size<T> {
     #[inline]
     #[must_use]
     pub fn aspect_ratio(self) -> f32 {
-        let w = self.width.to_f32();
-        let h = self.height.to_f32();
+        let w: f32 = self.width.into();
+        let h: f32 = self.height.into();
         if h == 0.0 { 0.0 } else { w / h }
     }
 
@@ -251,10 +253,10 @@ impl<T: NumericUnit> Size<T> {
     #[inline]
     #[must_use]
     pub fn contains(self, point: Point<T>) -> bool {
-        let w = self.width.to_f32();
-        let h = self.height.to_f32();
-        let x = point.x.to_f32();
-        let y = point.y.to_f32();
+        let w: f32 = self.width.into();
+        let h: f32 = self.height.into();
+        let x: f32 = point.x.into();
+        let y: f32 = point.y.into();
 
         x >= 0.0 && x <= w && y >= 0.0 && y <= h
     }
@@ -563,7 +565,7 @@ impl Size<Pixels> {
     #[inline]
     #[must_use]
     pub fn perimeter(self) -> Pixels {
-        px(2.0) * (self.width + self.height)
+        (self.width + self.height) * 2.0
     }
 
     /// Computes the diagonal length (Pythagorean theorem).
@@ -991,10 +993,7 @@ where
 // ============================================================================
 
 impl Size<super::units::Pixels> {
-    /// Scales the size by a given factor, producing a `Size<ScaledPixels>`.
-    ///
-    /// This is typically used to convert logical pixel sizes to scaled
-    /// pixels for high-DPI displays.
+    /// Scales the size by a given factor.
     ///
     /// # Examples
     ///
@@ -1006,35 +1005,10 @@ impl Size<super::units::Pixels> {
     /// ```
     #[inline]
     #[must_use]
-    pub fn scale(self, factor: f32) -> Size<super::units::ScaledPixels> {
+    pub fn scale(self, factor: f32) -> Size<super::units::Pixels> {
         Size {
             width: self.width.scale(factor),
             height: self.height.scale(factor),
-        }
-    }
-}
-
-// ============================================================================
-// Specialized implementations for ScaledPixels
-// ============================================================================
-
-impl Size<super::units::ScaledPixels> {
-    /// Converts to device pixels by rounding both dimensions.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_geometry::{Size, scaled_px};
-    ///
-    /// let size = Size::new(scaled_px(199.7), scaled_px(299.3));
-    /// let device = size.to_device_pixels();
-    /// ```
-    #[inline]
-    #[must_use]
-    pub fn to_device_pixels(self) -> Size<super::units::DevicePixels> {
-        Size {
-            width: self.width.to_device_pixels(),
-            height: self.height.to_device_pixels(),
         }
     }
 }

@@ -172,8 +172,8 @@ fn example_text_selection() {
 
     // Selection box should have positive dimensions
     if let Some(first) = selection_boxes.first() {
-        assert!(first.rect.width() > px(0.0));
-        assert!(first.rect.height() > px(0.0));
+        assert!(first.rect.width().get() > 0.0);
+        assert!(first.rect.height().get() > 0.0);
     }
 }
 

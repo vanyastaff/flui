@@ -101,8 +101,10 @@ use std::{
     ops::{Index, IndexMut, Mul, MulAssign},
 };
 
+use glam::Mat4;
+
 use super::Pixels;
-use crate::{Point, Rect};
+use crate::Rect;
 
 /// A 4x4 transformation matrix stored in column-major order.
 ///
@@ -119,13 +121,33 @@ use crate::{Point, Rect};
 /// | m2  m6  m10 m14 |
 /// | m3  m7  m11 m15 |
 /// ```
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
 pub struct Matrix4 {
     /// Matrix elements in column-major order (16 floats)
     pub m: [f32; 16],
 }
 
 impl Matrix4 {
+    /// Borrows the column-major storage as a `glam::Mat4` for delegated math.
+    ///
+    /// Both types are column-major, so this is a direct reinterpret of the 16
+    /// floats (Option D backend, N-geom PR 2).
+    #[inline]
+    #[must_use]
+    fn to_glam(self) -> Mat4 {
+        Mat4::from_cols_array(&self.m)
+    }
+
+    /// Wraps a `glam::Mat4` result back into the column-major storage.
+    #[inline]
+    #[must_use]
+    fn from_glam(m: Mat4) -> Self {
+        Self {
+            m: m.to_cols_array(),
+        }
+    }
+
     /// Identity matrix constant (no transformation).
     ///
     /// This is a compile-time constant that can be used anywhere a `Matrix4` is
@@ -397,148 +419,6 @@ impl Matrix4 {
         }
     }
 
-    /// Transforms multiple points using scalar operations.
-    /// Reserved for future batch transformation API.
-    #[allow(dead_code)]
-    #[inline]
-    fn transform_points_scalar(&self, points: &[Point<Pixels>]) -> Vec<Point<Pixels>> {
-        points
-            .iter()
-            .map(|p| {
-                let (x, y) = self.transform_point(p.x, p.y);
-                Point::new(x, y)
-            })
-            .collect()
-    }
-
-    /// Transforms multiple points using SSE SIMD operations.
-    /// Reserved for future batch transformation API.
-    #[allow(dead_code, unsafe_code)]
-    #[inline]
-    fn transform_points_simd_sse(&self, points: &[Point<Pixels>]) -> Vec<Point<Pixels>> {
-        #[cfg(target_feature = "sse")]
-        unsafe {
-            use std::arch::x86_64::*;
-
-            let mut result = Vec::with_capacity(points.len());
-
-            // Load matrix elements for transformation
-            let m00 = _mm_set1_ps(self.m[0]);
-            let m01 = _mm_set1_ps(self.m[1]);
-            let m10 = _mm_set1_ps(self.m[4]);
-            let m11 = _mm_set1_ps(self.m[5]);
-            let m30 = _mm_set1_ps(self.m[12]);
-            let m31 = _mm_set1_ps(self.m[13]);
-
-            // Process 4 points at a time
-            let chunks = points.chunks_exact(4);
-            let remainder = chunks.remainder();
-
-            for chunk in chunks {
-                // Extract f32 values from Pixels
-                let x_vec = _mm_set_ps(chunk[3].x.0, chunk[2].x.0, chunk[1].x.0, chunk[0].x.0);
-                let y_vec = _mm_set_ps(chunk[3].y.0, chunk[2].y.0, chunk[1].y.0, chunk[0].y.0);
-
-                // x_out = m00 * x + m10 * y + m30
-                let x_out = _mm_add_ps(
-                    _mm_add_ps(_mm_mul_ps(m00, x_vec), _mm_mul_ps(m10, y_vec)),
-                    m30,
-                );
-
-                // y_out = m01 * x + m11 * y + m31
-                let y_out = _mm_add_ps(
-                    _mm_add_ps(_mm_mul_ps(m01, x_vec), _mm_mul_ps(m11, y_vec)),
-                    m31,
-                );
-
-                // Store results
-                let mut x_array = [0.0f32; 4];
-                let mut y_array = [0.0f32; 4];
-                _mm_storeu_ps(x_array.as_mut_ptr(), x_out);
-                _mm_storeu_ps(y_array.as_mut_ptr(), y_out);
-
-                for i in 0..4 {
-                    result.push(Point::new(Pixels(x_array[i]), Pixels(y_array[i])));
-                }
-            }
-
-            // Handle remainder
-            for point in remainder {
-                let (x, y) = self.transform_point(point.x, point.y);
-                result.push(Point::new(x, y));
-            }
-
-            result
-        }
-
-        #[cfg(not(target_feature = "sse"))]
-        {
-            self.transform_points_scalar(points)
-        }
-    }
-
-    /// Transforms multiple points using NEON SIMD operations.
-    /// Reserved for future batch transformation API.
-    #[allow(dead_code, unsafe_code)]
-    #[inline]
-    fn transform_points_simd_neon(&self, points: &[Point<Pixels>]) -> Vec<Point<Pixels>> {
-        #[cfg(target_feature = "neon")]
-        unsafe {
-            use std::arch::aarch64::*;
-
-            let mut result = Vec::with_capacity(points.len());
-
-            // Load matrix elements
-            let m00 = vdupq_n_f32(self.m[0]);
-            let m01 = vdupq_n_f32(self.m[1]);
-            let m10 = vdupq_n_f32(self.m[4]);
-            let m11 = vdupq_n_f32(self.m[5]);
-            let m30 = vdupq_n_f32(self.m[12]);
-            let m31 = vdupq_n_f32(self.m[13]);
-
-            // Process 4 points at a time
-            let chunks = points.chunks_exact(4);
-            let remainder = chunks.remainder();
-
-            for chunk in chunks {
-                // Extract inner f32 from Pixels newtype
-                let x_vec =
-                    vld1q_f32([chunk[0].x.0, chunk[1].x.0, chunk[2].x.0, chunk[3].x.0].as_ptr());
-                let y_vec =
-                    vld1q_f32([chunk[0].y.0, chunk[1].y.0, chunk[2].y.0, chunk[3].y.0].as_ptr());
-
-                // x_out = m00 * x + m10 * y + m30
-                let x_out = vmlaq_f32(vmlaq_f32(m30, m00, x_vec), m10, y_vec);
-
-                // y_out = m01 * x + m11 * y + m31
-                let y_out = vmlaq_f32(vmlaq_f32(m31, m01, x_vec), m11, y_vec);
-
-                // Store results
-                let mut x_array = [0.0f32; 4];
-                let mut y_array = [0.0f32; 4];
-                vst1q_f32(x_array.as_mut_ptr(), x_out);
-                vst1q_f32(y_array.as_mut_ptr(), y_out);
-
-                for i in 0..4 {
-                    result.push(Point::new(Pixels(x_array[i]), Pixels(y_array[i])));
-                }
-            }
-
-            // Handle remainder
-            for point in remainder {
-                let (x, y) = self.transform_point(point.x, point.y);
-                result.push(Point::new(x, y));
-            }
-
-            result
-        }
-
-        #[cfg(not(target_feature = "neon"))]
-        {
-            self.transform_points_scalar(points)
-        }
-    }
-
     /// Transforms a rectangle by this matrix, returning the bounding box of the
     /// result.
     ///
@@ -643,56 +523,15 @@ impl Matrix4 {
     /// For simple transformations (translation, rotation, uniform scaling),
     /// consider using specialized inverse methods if available.
     pub fn try_inverse(&self) -> Option<Self> {
-        let mut result = *self;
-        let mut inv = Self::identity();
-
-        // Gauss-Jordan elimination with partial pivoting
-        for i in 0..4 {
-            // Find pivot
-            let mut max_row = i;
-            let mut max_val = result.m[i * 4 + i].abs();
-
-            for k in (i + 1)..4 {
-                let val = result.m[i * 4 + k].abs();
-                if val > max_val {
-                    max_val = val;
-                    max_row = k;
-                }
-            }
-
-            // Check for singular matrix
-            if max_val < f32::EPSILON {
-                return None;
-            }
-
-            // Swap rows if needed
-            if max_row != i {
-                for j in 0..4 {
-                    result.m.swap(j * 4 + i, j * 4 + max_row);
-                    inv.m.swap(j * 4 + i, j * 4 + max_row);
-                }
-            }
-
-            // Scale pivot row
-            let pivot = result.m[i * 4 + i];
-            for j in 0..4 {
-                result.m[j * 4 + i] /= pivot;
-                inv.m[j * 4 + i] /= pivot;
-            }
-
-            // Eliminate column
-            for k in 0..4 {
-                if k != i {
-                    let factor = result.m[i * 4 + k];
-                    for j in 0..4 {
-                        result.m[j * 4 + k] -= factor * result.m[j * 4 + i];
-                        inv.m[j * 4 + k] -= factor * inv.m[j * 4 + i];
-                    }
-                }
-            }
+        // Guard singularity explicitly: `glam::Mat4::inverse` returns a matrix
+        // of NaNs/inf for a non-invertible matrix rather than signalling, so we
+        // gate on the determinant to preserve the `Option` contract.
+        let g = self.to_glam();
+        if g.determinant().abs() < f32::EPSILON {
+            None
+        } else {
+            Some(Self::from_glam(g.inverse()))
         }
-
-        Some(inv)
     }
 
     /// Inverts this matrix in place.
@@ -709,26 +548,7 @@ impl Matrix4 {
 
     /// Returns the determinant of this matrix.
     pub fn determinant(&self) -> f32 {
-        // Cofactor expansion along first row
-        let m = &self.m;
-
-        let a0 = m[0]
-            * (m[5] * (m[10] * m[15] - m[11] * m[14]) - m[9] * (m[6] * m[15] - m[7] * m[14])
-                + m[13] * (m[6] * m[11] - m[7] * m[10]));
-
-        let a1 = m[4]
-            * (m[1] * (m[10] * m[15] - m[11] * m[14]) - m[9] * (m[2] * m[15] - m[3] * m[14])
-                + m[13] * (m[2] * m[11] - m[3] * m[10]));
-
-        let a2 = m[8]
-            * (m[1] * (m[6] * m[15] - m[7] * m[14]) - m[5] * (m[2] * m[15] - m[3] * m[14])
-                + m[13] * (m[2] * m[7] - m[3] * m[6]));
-
-        let a3 = m[12]
-            * (m[1] * (m[6] * m[11] - m[7] * m[10]) - m[5] * (m[2] * m[11] - m[3] * m[10])
-                + m[9] * (m[2] * m[7] - m[3] * m[6]));
-
-        a0 - a1 + a2 - a3
+        self.to_glam().determinant()
     }
 }
 
@@ -768,150 +588,19 @@ impl Matrix4 {
     pub fn approx_eq(&self, other: &Self) -> bool {
         self.approx_eq_eps(other, 1e-5)
     }
-
-    // ===== Private multiplication implementations =====
-
-    #[inline]
-    fn mul_scalar(self, rhs: Self) -> Self {
-        let mut result = [0.0; 16];
-
-        // Column-major matrix multiplication
-        // result[col][row] = sum of self[k][row] * rhs[col][k]
-        for col in 0..4 {
-            for row in 0..4 {
-                let mut sum = 0.0;
-                for k in 0..4 {
-                    // Column-major: m[col*4 + row]
-                    sum += self.m[k * 4 + row] * rhs.m[col * 4 + k];
-                }
-                result[col * 4 + row] = sum;
-            }
-        }
-
-        Self { m: result }
-    }
-
-    #[inline]
-    #[cfg(all(target_arch = "x86_64", not(target_family = "wasm")))]
-    #[allow(dead_code, unsafe_code)]
-    fn mul_simd_sse(self, rhs: Self) -> Self {
-        use std::arch::x86_64::*;
-
-        unsafe {
-            let mut result = [0.0f32; 16];
-
-            // Process each column of result
-            // result[col][row] = sum of self.m[k * 4 + row] * rhs.m[col * 4 + k]
-            for col in 0..4 {
-                // Load column 'col' from rhs (4 elements): rhs.m[col*4 + 0..3]
-                let _rhs_col = _mm_loadu_ps(&raw const rhs.m[col * 4]);
-
-                // For each row, calculate the dot product
-                // We need: self[0][row] * rhs[col][0] + self[1][row] * rhs[col][1] + ...
-                // Which is: self.m[0*4 + row] * rhs.m[col*4 + 0] + self.m[1*4 + row] *
-                // rhs.m[col*4 + 1] + ...
-
-                // Load rows from self as columns (since we need self.m[k*4 + row] for all rows
-                // at once)
-                let self_col0 = _mm_loadu_ps(&raw const self.m[0]); // self[0][0..3]
-                let self_col1 = _mm_loadu_ps(&raw const self.m[4]); // self[1][0..3]
-                let self_col2 = _mm_loadu_ps(&raw const self.m[8]); // self[2][0..3]
-                let self_col3 = _mm_loadu_ps(&raw const self.m[12]); // self[3][0..3]
-
-                // Broadcast each element of rhs column
-                let rhs_k0 = _mm_set1_ps(rhs.m[col * 4]);
-                let rhs_k1 = _mm_set1_ps(rhs.m[col * 4 + 1]);
-                let rhs_k2 = _mm_set1_ps(rhs.m[col * 4 + 2]);
-                let rhs_k3 = _mm_set1_ps(rhs.m[col * 4 + 3]);
-
-                // Multiply and accumulate
-                let mut res = _mm_mul_ps(self_col0, rhs_k0);
-                res = _mm_add_ps(res, _mm_mul_ps(self_col1, rhs_k1));
-                res = _mm_add_ps(res, _mm_mul_ps(self_col2, rhs_k2));
-                res = _mm_add_ps(res, _mm_mul_ps(self_col3, rhs_k3));
-
-                _mm_storeu_ps(&raw mut result[col * 4], res);
-            }
-
-            Self { m: result }
-        }
-    }
-
-    #[inline]
-    #[cfg(target_arch = "aarch64")]
-    #[allow(unsafe_code)]
-    fn mul_simd_neon(self, rhs: Self) -> Self {
-        use std::arch::aarch64::*;
-
-        unsafe {
-            let mut result = [0.0f32; 16];
-
-            // Load all columns from self
-            let self_col0 = vld1q_f32(&self.m[0]);
-            let self_col1 = vld1q_f32(&self.m[4]);
-            let self_col2 = vld1q_f32(&self.m[8]);
-            let self_col3 = vld1q_f32(&self.m[12]);
-
-            // Process each column of result
-            for col in 0..4 {
-                // Broadcast each element of rhs column
-                let rhs_k0 = vdupq_n_f32(rhs.m[col * 4]);
-                let rhs_k1 = vdupq_n_f32(rhs.m[col * 4 + 1]);
-                let rhs_k2 = vdupq_n_f32(rhs.m[col * 4 + 2]);
-                let rhs_k3 = vdupq_n_f32(rhs.m[col * 4 + 3]);
-
-                // Multiply and accumulate using NEON
-                let mut res = vmulq_f32(self_col0, rhs_k0);
-                res = vmlaq_f32(res, self_col1, rhs_k1);
-                res = vmlaq_f32(res, self_col2, rhs_k2);
-                res = vmlaq_f32(res, self_col3, rhs_k3);
-
-                vst1q_f32(&mut result[col * 4], res);
-            }
-
-            Self { m: result }
-        }
-    }
 }
 
-/// Matrix multiplication: C = A * B
+/// Matrix multiplication: `C = A * B`.
 ///
-/// Matrices are applied right-to-left: (A * B) transforms first by B, then by
-/// A.
-///
-/// Uses SIMD acceleration when the `simd` feature is enabled for 3-4x speedup.
+/// Matrices are applied right-to-left: `A * B` transforms first by `B`, then by
+/// `A`. Delegates to `glam::Mat4`'s SIMD-accelerated column-major product
+/// (Option D, N-geom PR 2 — replaces the hand-rolled scalar/SSE/NEON paths).
 impl Mul for Matrix4 {
     type Output = Self;
 
     #[inline]
     fn mul(self, rhs: Self) -> Self::Output {
-        #[cfg(all(feature = "simd", target_arch = "x86_64", target_feature = "sse"))]
-        {
-            // Use SSE-optimized implementation on x86_64
-            return self.mul_simd_sse(rhs);
-        }
-
-        #[cfg(all(feature = "simd", target_arch = "aarch64", target_feature = "neon"))]
-        {
-            // Use NEON-optimized implementation on ARM
-            return self.mul_simd_neon(rhs);
-        }
-
-        #[cfg(not(feature = "simd"))]
-        {
-            // Fallback scalar implementation
-            self.mul_scalar(rhs)
-        }
-
-        #[cfg(all(
-            feature = "simd",
-            not(all(target_arch = "x86_64", target_feature = "sse")),
-            not(all(target_arch = "aarch64", target_feature = "neon"))
-        ))]
-        {
-            // Fallback when SIMD feature is enabled but not available
-            self.mul_scalar(rhs)
-        }
+        Self::from_glam(self.to_glam() * rhs.to_glam())
     }
 }
 
@@ -1036,5 +725,50 @@ impl<'de> serde::Deserialize<'de> for Matrix4 {
     {
         let m = <[f32; 16]>::deserialize(deserializer)?;
         Ok(Self { m })
+    }
+}
+
+#[cfg(test)]
+mod glam_backend_tests {
+    use super::*;
+
+    #[test]
+    fn matrix4_is_pod_64_bytes() {
+        // The column-major [f32; 16] storage is Pod, so the engine can upload a
+        // Matrix4 to a wgpu buffer via `bytemuck::cast_slice` with no shim.
+        assert_eq!(std::mem::size_of::<Matrix4>(), 64);
+        assert_eq!(
+            std::mem::size_of::<Matrix4>(),
+            16 * std::mem::size_of::<f32>()
+        );
+        let m = Matrix4::translation(3.0, 4.0, 5.0);
+        let bytes: &[u8] = bytemuck::bytes_of(&m);
+        assert_eq!(bytes.len(), 64);
+    }
+
+    #[test]
+    fn glam_round_trip_is_identity() {
+        let m = Matrix4::rotation_z(0.7) * Matrix4::translation(10.0, -3.0, 0.0);
+        let round = Matrix4::from_glam(m.to_glam());
+        assert!(m.approx_eq(&round));
+    }
+
+    #[test]
+    fn mul_matches_manual_column_major_product() {
+        // Guards the glam-delegated `Mul` against the previous scalar product.
+        let a = Matrix4::scaling(2.0, 3.0, 1.0);
+        let b = Matrix4::translation(5.0, 7.0, 0.0);
+        let c = a * b; // apply b first, then a
+        let (x, y) = c.transform_point(Pixels(1.0), Pixels(1.0));
+        // b: (1,1)->(6,8); a: scale -> (12, 24)
+        assert!((x.0 - 12.0).abs() < 1e-5, "x={}", x.0);
+        assert!((y.0 - 24.0).abs() < 1e-5, "y={}", y.0);
+    }
+
+    #[test]
+    fn singular_matrix_has_no_inverse() {
+        let singular = Matrix4::scaling(0.0, 1.0, 1.0);
+        assert!(singular.try_inverse().is_none());
+        assert!(Matrix4::identity().try_inverse().is_some());
     }
 }

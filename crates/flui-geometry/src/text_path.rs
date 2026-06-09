@@ -40,7 +40,7 @@ use std::f64::consts::{PI, TAU};
 use super::{Pixels, px};
 use crate::{
     Point,
-    traits::{NumericUnit, Unit},
+    traits::{FloatUnit, NumericUnit, Unit},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -115,7 +115,7 @@ pub fn grid_position<T>(
     char_height: f64,
 ) -> Point<T>
 where
-    T: NumericUnit,
+    T: NumericUnit + FloatUnit,
 {
     let row = char_index / chars_per_row.max(1);
     let col = char_index % chars_per_row.max(1);
@@ -129,7 +129,7 @@ where
 #[inline]
 pub fn bezier_point<T>(t: f64, p0: Point<T>, p1: Point<T>, p2: Point<T>) -> Point<T>
 where
-    T: NumericUnit,
+    T: NumericUnit + Into<f32> + FloatUnit,
 {
     let t = t.clamp(0.0, 1.0);
     let mt = 1.0 - t;
@@ -137,12 +137,10 @@ where
     let t2 = t * t;
 
     // Convert to f32 for calculation, then back to T
-    let x = mt2 as f32 * p0.x.to_f32()
-        + 2.0 * (mt * t) as f32 * p1.x.to_f32()
-        + t2 as f32 * p2.x.to_f32();
-    let y = mt2 as f32 * p0.y.to_f32()
-        + 2.0 * (mt * t) as f32 * p1.y.to_f32()
-        + t2 as f32 * p2.y.to_f32();
+    let x =
+        mt2 as f32 * p0.x.into() + 2.0 * (mt * t) as f32 * p1.x.into() + t2 as f32 * p2.x.into();
+    let y =
+        mt2 as f32 * p0.y.into() + 2.0 * (mt * t) as f32 * p1.y.into() + t2 as f32 * p2.y.into();
 
     Point::new(T::from_f32(x), T::from_f32(y))
 }
@@ -150,18 +148,18 @@ where
 #[inline]
 pub fn bezier_tangent_rotation<T>(t: f64, p0: Point<T>, p1: Point<T>, p2: Point<T>) -> f64
 where
-    T: NumericUnit,
+    T: NumericUnit + Into<f32>,
 {
     let t = t.clamp(0.0, 1.0);
     let mt = 1.0 - t;
 
     // Convert to f64 for calculation
-    let p0x = p0.x.to_f32() as f64;
-    let p0y = p0.y.to_f32() as f64;
-    let p1x = p1.x.to_f32() as f64;
-    let p1y = p1.y.to_f32() as f64;
-    let p2x = p2.x.to_f32() as f64;
-    let p2y = p2.y.to_f32() as f64;
+    let p0x = Into::<f32>::into(p0.x) as f64;
+    let p0y = Into::<f32>::into(p0.y) as f64;
+    let p1x = Into::<f32>::into(p1.x) as f64;
+    let p1y = Into::<f32>::into(p1.y) as f64;
+    let p2x = Into::<f32>::into(p2.x) as f64;
+    let p2y = Into::<f32>::into(p2.y) as f64;
 
     // Derivative of quadratic Bezier
     let dx = 2.0 * mt * (p1x - p0x) + 2.0 * t * (p2x - p1x);

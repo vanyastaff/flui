@@ -173,10 +173,10 @@ fn test_bounds_after_append() {
     let bounds = parent_list.bounds();
 
     // Bounds should encompass both rectangles
-    assert!(bounds.left() <= px(0.0));
-    assert!(bounds.top() <= px(0.0));
-    assert!(bounds.right() >= px(200.0));
-    assert!(bounds.bottom() >= px(200.0));
+    assert!(bounds.left().get() <= 0.0);
+    assert!(bounds.top().get() <= 0.0);
+    assert!(bounds.right().get() >= 200.0);
+    assert!(bounds.bottom().get() >= 200.0);
 }
 
 #[test]

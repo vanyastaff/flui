@@ -11,7 +11,7 @@ use std::fmt;
 
 use super::{
     Pixels, Point, Vec2, px,
-    traits::{NumericUnit, Unit},
+    traits::{FloatUnit, NumericUnit, Unit},
 };
 
 /// A line segment defined by two endpoints with generic unit type.
@@ -84,10 +84,13 @@ impl<T: Unit> Line<T> {
 }
 
 // ============================================================================
-// Accessors (NumericUnit — scalar bridge via `from_f32`/`to_f32`)
+// Accessors (NumericUnit)
 // ============================================================================
 
-impl<T: NumericUnit> Line<T> {
+impl<T: NumericUnit> Line<T>
+where
+    T: Into<f32> + FloatUnit + std::ops::Sub<Output = T>,
+{
     /// Returns the length of the line segment.
     #[inline]
     #[must_use]
@@ -105,8 +108,18 @@ impl<T: NumericUnit> Line<T> {
     /// Converts the line segment to a direction vector.
     #[inline]
     #[must_use]
-    pub fn to_vec(&self) -> Vec2<T> {
+    pub fn to_vec(&self) -> Vec2<T>
+    where
+        T: std::ops::Sub<Output = T> + Copy,
+    {
         Vec2::new(self.p1.x - self.p0.x, self.p1.y - self.p0.y)
+    }
+
+    /// Returns the normalized direction vector of the line segment.
+    #[inline]
+    #[must_use]
+    pub fn direction(&self) -> Vec2<Pixels> {
+        self.to_vec().normalize_or(Vec2::ZERO)
     }
 
     /// Returns the midpoint of the line segment.
@@ -124,22 +137,14 @@ impl<T: NumericUnit> Line<T> {
     }
 }
 
-// `direction` returns a normalized `Vec2<Pixels>` because vector
-// normalization presumes `f32` semantics; keep it Pixels-specific.
-impl Line<Pixels> {
-    /// Returns the normalized direction vector of the line segment.
-    #[inline]
-    #[must_use]
-    pub fn direction(&self) -> Vec2<Pixels> {
-        self.to_vec().normalize_or(Vec2::ZERO)
-    }
-}
-
 // ============================================================================
-// Queries (NumericUnit — scalar bridge via `from_f32`/`to_f32`)
+// Queries (NumericUnit)
 // ============================================================================
 
-impl<T: NumericUnit> Line<T> {
+impl<T: NumericUnit> Line<T>
+where
+    T: Into<f32> + FloatUnit + PartialEq + std::ops::Sub<Output = T> + Clone + fmt::Debug + Default,
+{
     /// Returns true if the line segment has zero length (both points are
     /// equal).
     #[inline]
@@ -153,8 +158,8 @@ impl<T: NumericUnit> Line<T> {
     #[inline]
     #[must_use]
     pub fn is_horizontal(&self) -> bool {
-        let y0 = self.p0.y.to_f32();
-        let y1 = self.p1.y.to_f32();
+        let y0: f32 = self.p0.y.into();
+        let y1: f32 = self.p1.y.into();
         (y0 - y1).abs() < f32::EPSILON
     }
 
@@ -163,8 +168,8 @@ impl<T: NumericUnit> Line<T> {
     #[inline]
     #[must_use]
     pub fn is_vertical(&self) -> bool {
-        let x0 = self.p0.x.to_f32();
-        let x1 = self.p1.x.to_f32();
+        let x0: f32 = self.p0.x.into();
+        let x1: f32 = self.p1.x.into();
         (x0 - x1).abs() < f32::EPSILON
     }
 
@@ -174,14 +179,17 @@ impl<T: NumericUnit> Line<T> {
     /// endpoint.
     #[inline]
     #[must_use]
-    pub fn nearest_point(&self, point: Point<T>) -> Point<T> {
+    pub fn nearest_point(&self, point: Point<T>) -> Point<T>
+    where
+        T: Into<f32> + Copy,
+    {
         // Extract f32 values for calculation
-        let px = point.x.to_f32();
-        let py = point.y.to_f32();
-        let p0x = self.p0.x.to_f32();
-        let p0y = self.p0.y.to_f32();
-        let p1x = self.p1.x.to_f32();
-        let p1y = self.p1.y.to_f32();
+        let px: f32 = point.x.into();
+        let py: f32 = point.y.into();
+        let p0x: f32 = self.p0.x.into();
+        let p0y: f32 = self.p0.y.into();
+        let p1x: f32 = self.p1.x.into();
+        let p1y: f32 = self.p1.y.into();
 
         let dx = p1x - p0x;
         let dy = p1y - p0y;
@@ -223,10 +231,13 @@ impl<T: NumericUnit> Line<T> {
 }
 
 // ============================================================================
-// Transformations (NumericUnit — scalar bridge via `from_f32`/`to_f32`)
+// Transformations (NumericUnit)
 // ============================================================================
 
-impl<T: NumericUnit> Line<T> {
+impl<T: NumericUnit> Line<T>
+where
+    T: Into<f32> + FloatUnit,
+{
     /// Translates the line segment by the given offset vector.
     #[inline]
     #[must_use]

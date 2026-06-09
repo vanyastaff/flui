@@ -8,7 +8,7 @@ use std::{
     ops::{Add, Mul, Neg, Sub},
 };
 
-use super::{DevicePixels, PixelDelta, Pixels, Radians, Rems, ScaledPixels};
+use super::{DevicePixels, PixelDelta, Pixels, Radians, Rems};
 
 // ============================================================================
 // AXIS - 2D cartesian axes
@@ -109,16 +109,6 @@ pub trait Unit:
 /// and provides additional utility methods (`abs`, `min`, `max`) for common
 /// operations. Prefer using operators directly for clarity; utility methods are
 /// provided for generic programming contexts.
-///
-/// # U1 invariant — explicit-named scalar bridge
-///
-/// `from_f32` / `to_f32` are the **only** allowed bridge between raw scalars
-/// and unit types in generic geometry code. They replace the older
-/// `T: Into<f32> + From<f32>` plumbing that defeated the unit barrier by
-/// surfacing `<Pixels as From<f32>>::from(...)` as a silent `.into()` path.
-/// At every call site `T::from_f32(...)` and `value.to_f32()` are named
-/// methods that announce "raw f32 ↔ unit" intent, matching the explicit
-/// `Pixels::from_i32` shape already established for integer promotion.
 pub trait NumericUnit: Unit + Add<Output = Self> + Sub<Output = Self> {
     /// Returns the absolute value.
     fn abs(self) -> Self;
@@ -128,24 +118,41 @@ pub trait NumericUnit: Unit + Add<Output = Self> + Sub<Output = Self> {
 
     /// Returns the maximum of two values.
     fn max(self, other: Self) -> Self;
-
-    /// Constructs a unit value from a raw `f32`.
-    ///
-    /// This is the explicit-named replacement for `<Self as From<f32>>::from`
-    /// in generic geometry code. Integer-backed units (e.g. `DevicePixels`)
-    /// round and clamp; documented per-impl.
-    fn from_f32(value: f32) -> Self;
-
-    /// Extracts the raw `f32` magnitude of a unit value.
-    ///
-    /// This is the explicit-named replacement for `<Self as Into<f32>>::into`
-    /// in generic geometry code. Integer-backed units widen losslessly via
-    /// `as f32`.
-    fn to_f32(self) -> f32;
 }
 
 // Note: f32 impl removed - f32 cannot implement Unit due to Eq + Hash
 // requirements. Use wrapper types like Pixels, PixelDelta, etc. instead.
+
+/// A unit that can bridge to and from a raw `f32` for floating-point math.
+///
+/// Generic geometry routines (Bézier evaluation, line/segment math, shape
+/// scaling) need to drop into scalar arithmetic and lift the result back into
+/// the unit. [`FloatUnit::from_f32`] is the blessed constructor for that — it
+/// is a named method rather than `From<f32>` on purpose, so the public unit
+/// barrier stays closed: there is intentionally no implicit `f32 -> Pixels`
+/// coercion (`.into()`), yet generic math still has an explicit way back.
+///
+/// `Into<f32>` is a supertrait, giving the matching extraction direction.
+pub trait FloatUnit: Unit + Into<f32> {
+    /// Lifts a raw `f32` into this unit.
+    fn from_f32(value: f32) -> Self;
+}
+
+/// Implements [`FloatUnit`] for an `f32`-backed unit type.
+macro_rules! impl_float_unit {
+    ($($ty:ty),+) => {
+        $(
+            impl FloatUnit for $ty {
+                #[inline]
+                fn from_f32(value: f32) -> Self {
+                    Self(value)
+                }
+            }
+        )+
+    };
+}
+
+impl_float_unit!(Pixels, Radians, PixelDelta);
 
 // ============================================================================
 // ALONG - Axis-based value access
@@ -228,7 +235,7 @@ macro_rules! impl_half_f32_unit {
     };
 }
 
-impl_half_f32_unit!(Pixels, Rems, ScaledPixels, Radians, PixelDelta);
+impl_half_f32_unit!(Pixels, Rems, Radians, PixelDelta);
 
 impl Half for DevicePixels {
     #[inline]
@@ -287,7 +294,7 @@ macro_rules! impl_double_f32_unit {
     };
 }
 
-impl_double_f32_unit!(Pixels, Rems, ScaledPixels, Radians, PixelDelta);
+impl_double_f32_unit!(Pixels, Rems, Radians, PixelDelta);
 
 impl Double for DevicePixels {
     #[inline]
@@ -360,7 +367,7 @@ macro_rules! impl_is_zero_f32_unit {
     };
 }
 
-impl_is_zero_f32_unit!(Pixels, Rems, ScaledPixels, Radians, PixelDelta);
+impl_is_zero_f32_unit!(Pixels, Rems, Radians, PixelDelta);
 
 impl IsZero for DevicePixels {
     #[inline]
@@ -511,7 +518,7 @@ macro_rules! impl_sign_f32_unit {
     };
 }
 
-impl_sign_f32_unit!(Pixels, Rems, ScaledPixels, Radians, PixelDelta);
+impl_sign_f32_unit!(Pixels, Rems, Radians, PixelDelta);
 
 impl Sign for DevicePixels {
     #[inline]
@@ -597,7 +604,7 @@ macro_rules! impl_approx_eq_f32_unit {
     };
 }
 
-impl_approx_eq_f32_unit!(Pixels, Rems, ScaledPixels, Radians, PixelDelta);
+impl_approx_eq_f32_unit!(Pixels, Rems, Radians, PixelDelta);
 
 impl ApproxEq for DevicePixels {
     #[inline]
