@@ -115,7 +115,7 @@ pub enum MultiDragAxis {
 /// interactive region). When `Some(handle)` is returned, the recogniser calls
 /// `update`/`end`/`cancel` on that handle.
 pub type MultiDragStartCallback =
-    Arc<dyn Fn(PointerId, Offset<Pixels>) -> Option<Box<dyn MultiDragHandle>> + Send + Sync>;
+    Arc<dyn Fn(PointerId, Offset<Pixels>) -> Option<Box<dyn MultiDragHandle>> + Send + Sync>; // PORT-CHECK-OK-DYN: per-pointer handle trait; ≤3 workspace sites, marker preferred over allowlist promotion.
 
 /// Per-pointer state. Mirrors Flutter's `MultiDragPointerState`.
 ///
@@ -135,7 +135,7 @@ struct MultiDragPointerState {
     /// `true` once slop is crossed and arena is accepted.
     accepted: bool,
     /// User's handle, populated after `accepted`.
-    client: Option<Box<dyn MultiDragHandle>>,
+    client: Option<Box<dyn MultiDragHandle>>, // PORT-CHECK-OK-DYN: see MultiDragStartCallback — per-pointer `dyn` handle storage.
     /// Velocity tracker fed while `pending` and after `accepted`.
     velocity_tracker: VelocityTracker,
 }
@@ -471,7 +471,7 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
         // Collect Box<dyn> handles out of the map first; storing the
         // owned Box lets us release the map lock before invoking
         // cancel (which may re-enter user code).
-        let removed: Vec<Box<dyn MultiDragHandle>> = self
+        let removed: Vec<Box<dyn MultiDragHandle>> = self // PORT-CHECK-OK-DYN: see MultiDragStartCallback — drain-time owned handle collection.
             .pointers
             .lock()
             .drain()

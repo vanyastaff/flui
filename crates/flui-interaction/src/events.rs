@@ -106,6 +106,10 @@ pub use pointer::{
 };
 /// Scroll delta types.
 pub use ui_events::ScrollDelta;
+// `PointerPanZoomEvent` and the `from_w3c_event` / `convert_gesture` helpers
+// are re-exported from the crate root (`flui_interaction::PointerPanZoomEvent`)
+// so the events module stays a thin W3C re-export surface and recognizers
+// reach the Flutter-aligned trackpad type through the canonical path.
 
 /// Alias for KeyboardEvent for compatibility
 pub type KeyEvent = KeyboardEvent;

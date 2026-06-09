@@ -216,6 +216,11 @@ pub use binding::GestureBinding;
 pub use events::{CursorIcon, KeyboardEvent, PointerEvent};
 // Re-export observability surface — typed event names + span constants.
 pub use observability::{GestureEvent, SPAN_ARENA, SPAN_RECOGNIZER, pointer_event_kind};
+// Trackpad pan/zoom module — canonical public entry point for the
+// Flutter-aligned `PointerPanZoomEvent` type and its W3C conversion helpers
+// (`from_w3c_event`, `convert_gesture`). Re-exported at the crate root so
+// `use flui_interaction::PointerPanZoomEvent` is the single import path.
+pub use pan_zoom::{PointerPanZoomEvent, convert_gesture, from_w3c_event};
 // ============================================================================
 // Re-exports: Geometry from flui_types
 // ============================================================================
