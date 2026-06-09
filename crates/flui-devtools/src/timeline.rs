@@ -129,6 +129,7 @@ impl TimelineEvent {
 ///
 /// Automatically records the event duration when dropped.
 #[must_use = "EventGuard does nothing if not held"]
+#[derive(Debug)]
 pub struct EventGuard {
     timeline: Arc<Mutex<TimelineInner>>,
     event_index: usize,
@@ -144,6 +145,7 @@ impl Drop for EventGuard {
 }
 
 /// Internal timeline state
+#[derive(Debug)]
 struct TimelineInner {
     /// Timeline start time (for relative timestamps)
     start_time: Instant,
@@ -404,10 +406,7 @@ impl Timeline {
             std::collections::HashMap::new();
 
         for event in &events {
-            by_category
-                .entry(event.category)
-                .or_insert_with(Vec::new)
-                .push(event);
+            by_category.entry(event.category).or_default().push(event);
         }
 
         for (category, category_events) in by_category {
@@ -420,7 +419,7 @@ impl Timeline {
 
             // Show longest events
             let mut sorted = category_events.clone();
-            sorted.sort_by(|a, b| b.duration_micros.cmp(&a.duration_micros));
+            sorted.sort_by_key(|e| std::cmp::Reverse(e.duration_micros));
 
             println!("  Longest events:");
             for event in sorted.iter().take(3) {
