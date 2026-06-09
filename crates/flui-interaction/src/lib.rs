@@ -236,13 +236,12 @@ pub use processing::{
 };
 pub use recognizers::{
     DoubleTapGestureRecognizer, DragGestureRecognizer, EagerGestureRecognizer,
-    ForcePressGestureRecognizer,
-    GestureRecognizer, LongPressGestureRecognizer, MultiDragAxis, MultiDragEndDetails,
-    MultiDragGestureRecognizer, MultiDragHandle, MultiDragStartCallback, MultiDragUpdateDetails,
-    MultiTapGestureRecognizer, ScaleGestureRecognizer, TapAndDragGestureRecognizer,
-    TapDragDownCallback, TapDragDownDetails, TapDragEndCallback, TapDragEndDetails,
-    TapDragStartCallback, TapDragStartDetails, TapDragUpCallback, TapDragUpDetails,
-    TapDragUpdateCallback, TapDragUpdateDetails, TapGestureRecognizer,
+    ForcePressGestureRecognizer, GestureRecognizer, LongPressGestureRecognizer, MultiDragAxis,
+    MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle, MultiDragStartCallback,
+    MultiDragUpdateDetails, MultiTapGestureRecognizer, ScaleGestureRecognizer,
+    TapAndDragGestureRecognizer, TapDragDownCallback, TapDragDownDetails, TapDragEndCallback,
+    TapDragEndDetails, TapDragStartCallback, TapDragStartDetails, TapDragUpCallback,
+    TapDragUpDetails, TapDragUpdateCallback, TapDragUpdateDetails, TapGestureRecognizer,
 };
 // Re-exports for drag axis sub-recognisers (Flutter parity for
 // `VerticalDragGestureRecognizer` / `HorizontalDragGestureRecognizer` /
