@@ -81,13 +81,13 @@ pub fn build_deep(depth: usize) -> PipelineOwner<Layout> {
 
     let mut current = root_id;
 
-    // Add depth-1 intermediate padding nodes (levels 1..depth-1), then one
-    // ColoredBox leaf. When depth==1 the padding range is empty and we fall
-    // straight through to the leaf insert below.
+    // Add `depth - 1` intermediate padding nodes after the root padding, then
+    // one ColoredBox leaf — `depth` padding wrappers total. When depth==1 the
+    // range is empty and we fall straight through to the leaf insert below.
     //
     // Invariant: `current` is always a Padding node that was just inserted and
     // has no children yet, so every insert_child_render_object call succeeds.
-    for _ in 1..depth.saturating_sub(1) {
+    for _ in 1..depth {
         let next = owner
             .insert_child_render_object(current, Box::new(RenderPadding::all(0.0)))
             .expect(

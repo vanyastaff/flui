@@ -559,9 +559,9 @@ pub struct FrameTiming {
     phase_durations: [Milliseconds; FRAME_PHASE_COUNT],
 }
 
-/// Number of [`FramePhase`] variants; sized to cover `Idle` through
-/// `Composite` (indices 0–4 per the `#[repr(u8)]` declaration).
-const FRAME_PHASE_COUNT: usize = 5;
+/// Number of [`FramePhase`] variants; derived from [`FramePhase::ALL`] so it
+/// stays in sync if a phase is ever added or reordered.
+const FRAME_PHASE_COUNT: usize = FramePhase::ALL.len();
 
 impl FrameTiming {
     /// Create a new frame timing

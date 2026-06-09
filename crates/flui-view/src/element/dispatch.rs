@@ -99,7 +99,7 @@ where
     // `downcast_ref` and survives rustfmt (the marker must be co-located).
     let nv = new_view.as_any().downcast_ref::<V>(); // PORT-CHECK-OK-DOWNCAST: type-id guarded
     if let Some(new_ref) = nv
-        && core.view().should_skip_rebuild(new_ref)
+        && new_ref.should_skip_rebuild(core.view())
     {
         tracing::debug!(
             view_type = ?TypeId::of::<V>(),
