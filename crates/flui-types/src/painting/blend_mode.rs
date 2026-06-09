@@ -1,6 +1,7 @@
 //! Blend modes for compositing colors.
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum BlendMode {
     /// Drop both the source and the destination, leaving nothing.
     ///

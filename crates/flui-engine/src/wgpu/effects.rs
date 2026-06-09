@@ -370,6 +370,10 @@ impl ShadowInstance {
 // builder ceremony.
 
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
+#[allow(
+    clippy::float_cmp,
+    reason = "tests assert exact expected values produced by exact arithmetic"
+)]
 mod tests {
     use super::*;
 

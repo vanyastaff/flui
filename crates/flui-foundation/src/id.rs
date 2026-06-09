@@ -641,7 +641,7 @@ ids! {
 mod serde_impl {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-    use super::*;
+    use super::{Id, Index, Marker, RawId};
 
     impl Serialize for RawId {
         fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {

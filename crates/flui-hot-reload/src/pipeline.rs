@@ -114,8 +114,7 @@ impl PluginPipeline {
             let has_root = owner.root_id().is_some();
             let tree_len = owner.render_tree().len();
             log(&format!(
-                "mount complete: root_id={}, render_tree_len={}, size={}x{}",
-                has_root, tree_len, width, height
+                "mount complete: root_id={has_root}, render_tree_len={tree_len}, size={width}x{height}"
             ));
         }
 

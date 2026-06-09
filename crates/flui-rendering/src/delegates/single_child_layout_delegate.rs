@@ -208,13 +208,13 @@ mod tests {
         assert_eq!(size, Size::new(px(200.0), px(100.0)));
 
         let child_constraints = delegate.get_constraints_for_child(constraints);
-        assert_eq!(child_constraints.min_width, 0.0);
-        assert_eq!(child_constraints.min_height, 0.0);
+        assert_eq!(child_constraints.min_width, px(0.0));
+        assert_eq!(child_constraints.min_height, px(0.0));
 
         let child_size = Size::new(px(50.0), px(30.0));
         let position = delegate.get_position_for_child(size, child_size);
-        assert_eq!(position.dx, 75.0);
-        assert_eq!(position.dy, 35.0);
+        assert_eq!(position.dx, px(75.0));
+        assert_eq!(position.dy, px(35.0));
     }
 
     #[test]
@@ -223,8 +223,8 @@ mod tests {
         let constraints = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0));
 
         let size = delegate.get_size(constraints);
-        assert_eq!(size.width, 200.0);
-        assert_eq!(size.height, 100.0);
+        assert_eq!(size.width, px(200.0));
+        assert_eq!(size.height, px(100.0));
     }
 
     #[test]
@@ -233,8 +233,8 @@ mod tests {
         let constraints = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(50.0));
 
         let size = delegate.get_size(constraints);
-        assert_eq!(size.width, 100.0);
-        assert_eq!(size.height, 50.0);
+        assert_eq!(size.width, px(100.0));
+        assert_eq!(size.height, px(50.0));
     }
 
     #[test]

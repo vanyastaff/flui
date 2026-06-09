@@ -28,6 +28,7 @@ use super::{
 /// assert_eq!(ui_size.area(), 480_000.0);
 /// ```
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(C)]
 pub struct Size<T: Unit = Pixels> {
     /// Width dimension.

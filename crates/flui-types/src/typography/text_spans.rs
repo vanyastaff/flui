@@ -43,63 +43,70 @@ pub trait InlineSpanTrait: std::fmt::Debug {
 ///
 /// Allows storing different types of inline spans (text, placeholders)
 /// in a uniform container.
-#[derive(Debug, Clone)]
-pub struct InlineSpan {
-    inner: Arc<dyn InlineSpanTrait + Send + Sync>,
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum InlineSpan {
+    /// A run of styled text (with its own child spans).
+    ///
+    /// Boxed because `TextSpan` is much larger than `PlaceholderSpan`; the
+    /// `Box` keeps `InlineSpan` small and sidesteps `clippy::large_enum_variant`.
+    Text(Box<TextSpan>),
+    /// An inline placeholder reserving space for an embedded box.
+    Placeholder(PlaceholderSpan),
 }
 
 impl InlineSpan {
-    /// Creates a new inline span from any type implementing `InlineSpanTrait`.
+    /// Creates an inline span from any type convertible into one — i.e.
+    /// [`TextSpan`] or [`PlaceholderSpan`], the closed set of span kinds.
     #[must_use]
     #[inline]
-    pub fn new<T: InlineSpanTrait + Send + Sync + 'static>(span: T) -> Self {
-        Self {
-            inner: Arc::new(span),
-        }
+    pub fn new(span: impl Into<InlineSpan>) -> Self {
+        span.into()
     }
 
-    /// Returns a reference to the trait object.
+    /// Returns this span as its [`InlineSpanTrait`] object for shared behavior.
     #[must_use]
     #[inline]
     pub fn as_trait(&self) -> &(dyn InlineSpanTrait + Send + Sync) {
-        &*self.inner
+        match self {
+            Self::Text(span) => span.as_ref(),
+            Self::Placeholder(span) => span,
+        }
     }
 
     /// Returns the style for this span, if any.
     #[must_use]
     #[inline]
     pub fn style(&self) -> Option<&TextStyle> {
-        self.inner.style()
+        self.as_trait().style()
     }
 
     /// Returns the plain text content.
     #[must_use]
     #[inline]
     pub fn to_plain_text(&self) -> String {
-        self.inner.to_plain_text()
+        self.as_trait().to_plain_text()
     }
 
     /// Returns true if this span has semantic labels.
     #[must_use]
     #[inline]
     pub fn has_semantics(&self) -> bool {
-        self.inner.has_semantics()
-    }
-}
-
-impl PartialEq for InlineSpan {
-    #[inline]
-    fn eq(&self, other: &Self) -> bool {
-        // Compare by pointer equality for Arc (identity comparison)
-        // For deep comparison, use to_plain_text() or compare serialized forms
-        Arc::ptr_eq(&self.inner, &other.inner)
+        self.as_trait().has_semantics()
     }
 }
 
 impl From<TextSpan> for InlineSpan {
     #[inline]
     fn from(span: TextSpan) -> Self {
-        Self::new(span)
+        Self::Text(Box::new(span))
+    }
+}
+
+impl From<PlaceholderSpan> for InlineSpan {
+    #[inline]
+    fn from(span: PlaceholderSpan) -> Self {
+        Self::Placeholder(span)
     }
 }
 
@@ -108,7 +115,8 @@ impl From<TextSpan> for InlineSpan {
 /// Represents a portion of text with associated styling, child spans,
 /// and optional semantic labels and event handlers for accessibility
 /// and user interaction.
-#[derive(Default)]
+#[derive(Default, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextSpan {
     /// Text content.
     pub text: Option<String>,
@@ -121,6 +129,11 @@ pub struct TextSpan {
     /// Mouse cursor when hovering.
     pub mouse_cursor: Option<MouseCursor>,
     /// Tap callback handler.
+    ///
+    /// Skipped by serde: a live `Arc<dyn Fn>` callback cannot be serialized,
+    /// and a deserialized span legitimately carries no handler (it defaults to
+    /// `None`). This is the universal "callbacks don't survive serialization"
+    /// rule, not a loss of styling/text content.
     #[cfg_attr(feature = "serde", serde(skip))]
     pub on_tap: Option<Arc<dyn Fn() + Send + Sync>>,
 }

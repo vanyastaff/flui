@@ -3,6 +3,18 @@
 //! This module provides a comprehensive Color type with conversions between
 //! different color spaces (RGB, HSL, HSV), similar to Flutter's Color system.
 
+// `Color` is a plain RGBA quadruple of independent `u8` channels — every bit
+// pattern is a valid `Color`. The derived `Deserialize` therefore cannot
+// produce an instance that violates any invariant the `unsafe` SIMD helpers
+// rely on (they only read the four channels), so the lint's concern does not
+// apply here.
+#[cfg_attr(
+    feature = "serde",
+    allow(
+        clippy::unsafe_derive_deserialize,
+        reason = "Color has no field invariant; all u8 quadruples are valid"
+    )
+)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Color {
@@ -234,6 +246,10 @@ impl Color {
     }
 
     #[inline]
+    #[allow(
+        dead_code,
+        reason = "scalar fallback for `lerp`; unused when a SIMD path is compiled in (e.g. --features simd on x86_64), used on every other target"
+    )]
     fn lerp_scalar(a: Color, b: Color, t: f32) -> Color {
         let t = t.clamp(0.0, 1.0);
         let lerp_u8 = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t) as u8;
@@ -447,6 +463,10 @@ impl Color {
     }
 
     #[inline]
+    #[allow(
+        dead_code,
+        reason = "scalar fallback for `blend_over`; unused when a SIMD path is compiled in (e.g. --features simd on x86_64), used on every other target"
+    )]
     fn blend_over_scalar(&self, background: Color) -> Color {
         let alpha_src = self.a as f32 / 255.0;
         let alpha_dst = background.a as f32 / 255.0;

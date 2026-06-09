@@ -9,6 +9,7 @@ use super::{
 
 /// A radius value with separate horizontal and vertical components.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(C)]
 pub struct Radius<T: Unit> {
     /// Horizontal radius.
