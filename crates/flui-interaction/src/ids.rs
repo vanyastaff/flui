@@ -168,10 +168,20 @@ impl HandlerId {
     ///
     /// # Panics
     ///
-    /// Panics if `id` is 0.
+    /// Panics if `id` is 0. Use [`try_new`](Self::try_new) for fallible
+    /// construction from an untrusted source.
     #[inline]
     pub fn new(id: u64) -> Self {
         Self(NonZeroU64::new(id).expect("HandlerId cannot be 0"))
+    }
+
+    /// Creates a new handler ID, returning `None` if `id` is 0.
+    #[inline]
+    pub const fn try_new(id: u64) -> Option<Self> {
+        match NonZeroU64::new(id) {
+            Some(nz) => Some(Self(nz)),
+            None => None,
+        }
     }
 
     /// Returns the raw ID value.
@@ -261,6 +271,12 @@ mod tests {
         assert_eq!(id.get(), 123);
         assert_eq!(format!("{:?}", id), "FocusNodeId(123)");
         assert_eq!(format!("{}", id), "focus:123");
+    }
+
+    #[test]
+    fn handler_id_try_new_rejects_zero() {
+        assert!(HandlerId::try_new(0).is_none());
+        assert_eq!(HandlerId::try_new(7).map(HandlerId::get), Some(7));
     }
 
     #[test]

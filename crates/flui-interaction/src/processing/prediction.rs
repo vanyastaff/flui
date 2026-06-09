@@ -341,7 +341,9 @@ impl InputPredictor {
 
     /// Predict position for next frame at given frame rate.
     pub fn predict_next_frame(&mut self, fps: u32) -> PredictedPosition {
-        let frame_time = Duration::from_secs_f32(1.0 / fps as f32);
+        // Clamp to >= 1 fps so `fps == 0` cannot produce an infinite/NaN frame
+        // time (untrusted callers / config may pass 0).
+        let frame_time = Duration::from_secs_f32(1.0 / fps.max(1) as f32);
         self.predict(frame_time)
     }
 
@@ -507,5 +509,21 @@ mod tests {
 
         // 30fps should predict further than 60fps
         assert!(at_30fps.prediction_time > at_60fps.prediction_time);
+    }
+
+    #[test]
+    fn predict_next_frame_zero_fps_does_not_panic() {
+        let mut predictor = InputPredictor::new();
+        let start = Instant::now();
+        for i in 0..5 {
+            predictor.add_sample(
+                start + Duration::from_millis(i * 10),
+                Offset::new(Pixels(i as f32 * 10.0), Pixels(0.0)),
+            );
+        }
+        // `fps == 0` must clamp rather than divide by zero into a non-finite
+        // frame time.
+        let predicted = predictor.predict_next_frame(0);
+        assert!(predicted.prediction_time.as_secs_f32().is_finite());
     }
 }

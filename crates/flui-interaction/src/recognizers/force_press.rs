@@ -181,15 +181,10 @@ impl ForcePressGestureRecognizer {
     ///
     /// Default is 0.4 (40% of max pressure).
     pub fn with_start_pressure(mut self: Arc<Self>, pressure: f32) -> Arc<Self> {
-        // Precondition: this builder must be called immediately after
-        // `Arc::new` (the only API that yields an `Arc<Self>` with
-        // strong_count == 1). Document the contract; debug_assert fires
-        // in tests if a future caller violates it.
-        debug_assert!(
-            Arc::strong_count(&self) == 1,
-            "with_start_pressure must be called on a freshly-constructed Arc<Self>"
-        );
-        Arc::get_mut(&mut self).unwrap().start_pressure = pressure.clamp(0.0, 1.0);
+        // `make_mut` mutates in place when uniquely owned and otherwise clones
+        // first, so this is non-panicking even if the caller holds another
+        // reference (unlike `get_mut().unwrap()`, which panicked in release).
+        Arc::make_mut(&mut self).start_pressure = pressure.clamp(0.0, 1.0);
         self
     }
 
@@ -197,15 +192,10 @@ impl ForcePressGestureRecognizer {
     ///
     /// Default is 0.85 (85% of max pressure).
     pub fn with_peak_pressure(mut self: Arc<Self>, pressure: f32) -> Arc<Self> {
-        // Precondition: this builder must be called immediately after
-        // `Arc::new` (the only API that yields an `Arc<Self>` with
-        // strong_count == 1). Document the contract; debug_assert fires
-        // in tests if a future caller violates it.
-        debug_assert!(
-            Arc::strong_count(&self) == 1,
-            "with_peak_pressure must be called on a freshly-constructed Arc<Self>"
-        );
-        Arc::get_mut(&mut self).unwrap().peak_pressure = pressure.clamp(0.0, 1.0);
+        // `make_mut` mutates in place when uniquely owned and otherwise clones
+        // first, so this is non-panicking even if the caller holds another
+        // reference (unlike `get_mut().unwrap()`, which panicked in release).
+        Arc::make_mut(&mut self).peak_pressure = pressure.clamp(0.0, 1.0);
         self
     }
 

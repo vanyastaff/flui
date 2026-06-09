@@ -176,6 +176,12 @@ impl VelocityTracker {
     /// always reflects wall-clock time, regardless of how the caller
     /// generates the logical timestamps.
     pub fn add_position(&mut self, time: Instant, position: Offset<Pixels>) {
+        // Reject non-finite coordinates: NaN/Inf would poison the least-squares
+        // fit (NaN comparisons defeat the singular-matrix guard) and propagate
+        // into every downstream velocity. Pointer streams are untrusted input.
+        if !position.dx.0.is_finite() || !position.dy.0.is_finite() {
+            return;
+        }
         // Mark "now" as the latest activity. Used by get_velocity_estimate()
         // to short-circuit when the pointer has been still for >= 40 ms.
         // We use the real wall clock here, NOT the `time` argument, so a
@@ -687,6 +693,25 @@ mod tests {
         let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
         tracker.add_position(Instant::now(), Offset::new(Pixels(0.0), Pixels(0.0)));
         assert_eq!(tracker.get_velocity(), Velocity::ZERO);
+    }
+
+    #[test]
+    fn non_finite_position_is_rejected() {
+        // NaN/Inf coordinates (untrusted pointer input) must not poison the
+        // estimate. Feeding them is a no-op; a following valid swipe still
+        // produces a finite velocity.
+        let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
+        let start = Instant::now();
+        tracker.add_position(start, Offset::new(Pixels(f32::NAN), Pixels(0.0)));
+        tracker.add_position(start, Offset::new(Pixels(0.0), Pixels(f32::INFINITY)));
+        for i in 0..5 {
+            let t = start + Duration::from_millis(i * 10);
+            tracker.add_position(t, Offset::new(Pixels(i as f32 * 10.0), Pixels(0.0)));
+        }
+        assert!(
+            tracker.get_velocity().magnitude().is_finite(),
+            "velocity must stay finite after NaN/Inf input"
+        );
     }
 
     #[test]

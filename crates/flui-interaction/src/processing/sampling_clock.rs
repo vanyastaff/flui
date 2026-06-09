@@ -123,10 +123,10 @@ impl SamplingClock {
                     period
                 };
                 let now = Instant::now();
-                // `Instant::checked_add` saturates on overflow; for
-                // realistic sample periods (~ms) on a real-time wall
-                // clock, overflow is unreachable in practice.
-                let next = now.checked_add(period).unwrap_or(now);
+                // Propagate overflow as `None` (the caller falls back to direct
+                // dispatch) rather than returning an invalid `(now, now)` window
+                // that violates the documented `next > now` invariant.
+                let next = now.checked_add(period)?;
                 Some((now, next))
             }
             Self::Manual { .. } => None,
