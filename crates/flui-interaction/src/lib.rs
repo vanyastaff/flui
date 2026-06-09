@@ -49,20 +49,24 @@
 //! User code (Signal::update, callbacks, etc.)
 //! ```
 //!
-//! # Example: Basic Event Routing
+//! # Example: Construct a recogniser and register a tap callback
 //!
-//! ```rust,ignore
-//! use flui_interaction::{EventRouter, HitTestable};
-//! use crate::events::{Event, PointerEvent};
+//! ```rust
+//! use flui_interaction::arena::GestureArena;
+//! use flui_interaction::recognizers::TapGestureRecognizer;
 //!
-//! let mut router = EventRouter::new();
+//! // 1. The recogniser set lives behind a single shared `GestureArena`.
+//! let arena = GestureArena::new();
 //!
-//! // Register a layer with hit testing
-//! let layer = MyLayer { bounds: Rect::from_xywh(Pixels(0.0), Pixels(0.0), Pixels(100.0), Pixels(100.0)) };
-//!
-//! // Route pointer event
-//! let event = PointerEvent::Down { position: Offset::new(Pixels(50.0), Pixels(50.0)), ... };
-//! router.route_event(&mut layer, &Event::Pointer(event));
+//! // 2. Construct the recogniser; the builder returns an `Arc<Self>`.
+//! let recognizer = TapGestureRecognizer::new(arena)
+//!     .with_on_tap(|details| {
+//!         // The user callback fires only after the arena confirms
+//!         // this recogniser won (U8 `pending_up` deferral).
+//!         let _pos = details.global_position;
+//!     });
+//! // `recognizer` is now ready to receive pointer events via
+//! // `flui_interaction::GestureBinding` at runtime.
 //! ```
 //!
 //! # Example: Keyboard Focus
@@ -115,8 +119,8 @@
 //! - `testing` - Gesture recording/replay, event builders (requires `testing` feature)
 //!
 //! ## Other
-//! - [`mouse_tracker`] - Mouse enter/exit/hover tracking
-//! - [`signal_resolver`] - Pointer signal conflict resolution
+//! - [`MouseTracker`] — Mouse enter/exit/hover tracking
+//! - [`PointerSignalResolver`] — Pointer signal conflict resolution
 //!
 //! # Separation from Rendering
 //!
@@ -146,8 +150,20 @@ pub mod routing;
 
 pub mod arena;
 pub mod recognizers;
-pub mod team;
 pub mod timer;
+
+// Back-compat deprecation shims — `team` and `signal_resolver` were
+// crate-root modules before the arena/ directory refactor. External code
+// that does `use flui_interaction::team::*` or `use flui_interaction::signal_resolver::*`
+// continues to compile. New code should use `flui_interaction::arena::*`.
+#[deprecated(since = "0.2.0", note = "Use `flui_interaction::arena` instead")]
+pub mod team {
+    pub use crate::arena::{GestureArenaTeam, TeamEntry};
+}
+#[deprecated(since = "0.2.0", note = "Use `flui_interaction::arena` instead")]
+pub mod signal_resolver {
+    pub use crate::arena::{PointerSignalResolver, SignalPriority};
+}
 
 // ============================================================================
 // Input processing
@@ -173,9 +189,9 @@ pub mod events;
 // ============================================================================
 
 pub mod binding;
-pub mod mouse_tracker;
+pub mod observability;
+pub mod pan_zoom;
 pub mod settings;
-pub mod signal_resolver;
 
 // ============================================================================
 // Re-exports: IDs
@@ -186,7 +202,7 @@ pub mod signal_resolver;
 // ============================================================================
 pub use arena::{
     DEFAULT_DISAMBIGUATION_TIMEOUT, GestureArena, GestureArenaEntry, GestureArenaMember,
-    GestureDisposition,
+    GestureArenaTeam, GestureDisposition, PointerSignalResolver, SignalPriority, TeamEntry,
 };
 // ============================================================================
 // Re-exports: Other
@@ -198,12 +214,18 @@ pub use binding::GestureBinding;
 
 // Re-export commonly used event types at crate root
 pub use events::{CursorIcon, KeyboardEvent, PointerEvent};
+// Re-export observability surface — typed event names + span constants.
+pub use observability::{GestureEvent, SPAN_ARENA, SPAN_RECOGNIZER, pointer_event_kind};
 // ============================================================================
 // Re-exports: Geometry from flui_types
 // ============================================================================
 pub use flui_types::geometry::{Offset, Rect};
 pub use ids::{FocusNodeId, HandlerId, PointerId};
-pub use mouse_tracker::{CursorChangeCallback, MouseTracker, MouseTrackerAnnotation};
+// Back-compat re-exports — `MouseTracker` lives in `routing` now, but was at
+// the crate root before the move (PR 163). External crates (`flui-rendering`,
+// `flui-app`) import it via `flui_interaction::MouseTracker`; the routing
+// path remains the canonical one for new code.
+pub use routing::{CursorChangeCallback, MouseTracker, MouseTrackerAnnotation};
 // ============================================================================
 // Re-exports: Input Processing
 // ============================================================================
@@ -213,9 +235,21 @@ pub use processing::{
     VelocityTracker,
 };
 pub use recognizers::{
-    DoubleTapGestureRecognizer, DragGestureRecognizer, ForcePressGestureRecognizer,
-    GestureRecognizer, LongPressGestureRecognizer, MultiTapGestureRecognizer,
-    ScaleGestureRecognizer, TapGestureRecognizer,
+    DoubleTapGestureRecognizer, DragGestureRecognizer, EagerGestureRecognizer,
+    ForcePressGestureRecognizer,
+    GestureRecognizer, LongPressGestureRecognizer, MultiDragAxis, MultiDragEndDetails,
+    MultiDragGestureRecognizer, MultiDragHandle, MultiDragStartCallback, MultiDragUpdateDetails,
+    MultiTapGestureRecognizer, ScaleGestureRecognizer, TapAndDragGestureRecognizer,
+    TapDragDownCallback, TapDragDownDetails, TapDragEndCallback, TapDragEndDetails,
+    TapDragStartCallback, TapDragStartDetails, TapDragUpCallback, TapDragUpDetails,
+    TapDragUpdateCallback, TapDragUpdateDetails, TapGestureRecognizer,
+};
+// Re-exports for drag axis sub-recognisers (Flutter parity for
+// `VerticalDragGestureRecognizer` / `HorizontalDragGestureRecognizer` /
+// `PanGestureRecognizer`). Aliased to `DragGestureRecognizer` so a
+// recogniser's axis is fixed at the type level.
+pub use recognizers::drag_variants::{
+    HorizontalDragGestureRecognizer, PanGestureRecognizer, VerticalDragGestureRecognizer,
 };
 // ============================================================================
 // Re-exports: Event Routing
@@ -230,10 +264,9 @@ pub use sealed::{CustomGestureRecognizer, CustomHitTestable};
 pub use settings::{
     DEFAULT_DOUBLE_TAP_SLOP, DEFAULT_DOUBLE_TAP_TIMEOUT, DEFAULT_LONG_PRESS_TIMEOUT,
     DEFAULT_MAX_FLING_VELOCITY, DEFAULT_MIN_FLING_VELOCITY, DEFAULT_MOUSE_SLOP, DEFAULT_PAN_SLOP,
-    DEFAULT_PEN_SLOP, DEFAULT_SCALE_SLOP, DEFAULT_TOUCH_SLOP, GestureSettings,
+    DEFAULT_PAN_SLOP_HORIZONTAL, DEFAULT_PAN_SLOP_VERTICAL, DEFAULT_PEN_SLOP, DEFAULT_SCALE_SLOP,
+    DEFAULT_TOUCH_SLOP, GestureSettings,
 };
-pub use signal_resolver::{PointerSignalResolver, SignalPriority};
-pub use team::{GestureArenaTeam, TeamEntry};
 // ============================================================================
 // Re-exports: Testing Utilities (U29 feature-gated)
 // ============================================================================
@@ -273,7 +306,7 @@ pub mod prelude {
     // Events (W3C-compliant)
     pub use crate::events::{CursorIcon, KeyboardEvent, PointerEvent};
     // Advanced interaction
-    pub use crate::mouse_tracker::{MouseTracker, MouseTrackerAnnotation};
+    pub use crate::routing::{MouseTracker, MouseTrackerAnnotation};
     // Input processing
     pub use crate::processing::{InputPredictor, PointerEventResampler, Velocity, VelocityTracker};
     // Event routing
@@ -292,6 +325,7 @@ pub mod prelude {
         PointerEventExtTrait as PointerEventExt,
     };
     pub use crate::{
+        arena::{GestureArenaTeam, PointerSignalResolver, SignalPriority, TeamEntry},
         ids::{DeviceId, FocusNodeId, HandlerId, PointerId, RegionId},
         recognizers::{
             DoubleTapGestureRecognizer, DragGestureRecognizer, ForcePressGestureRecognizer,
@@ -299,7 +333,6 @@ pub mod prelude {
             TapGestureRecognizer, double_tap::*, drag::*, force_press::*, long_press::*,
             multi_tap::*, scale::*, tap::*,
         },
-        signal_resolver::{PointerSignalResolver, SignalPriority},
     };
 }
 
@@ -329,7 +362,7 @@ mod static_assertions {
     impl AssertSendSync for HitTestEntry {}
     impl AssertSendSync for PointerEventResampler {}
     impl AssertSendSync for PointerSignalResolver {}
-    impl AssertSendSync for MouseTracker {}
+    impl AssertSendSync for crate::routing::MouseTracker {}
 
     // Recognizers should be Send + Sync
     impl AssertSendSync for TapGestureRecognizer {}
@@ -339,4 +372,10 @@ mod static_assertions {
     impl AssertSendSync for DoubleTapGestureRecognizer {}
     impl AssertSendSync for MultiTapGestureRecognizer {}
     impl AssertSendSync for ForcePressGestureRecognizer {}
+    impl AssertSendSync for MultiDragGestureRecognizer {}
+    impl AssertSendSync for TapAndDragGestureRecognizer {}
+    // U10: EagerGestureRecognizer is a `RecognizerBase` + `Arc<Mutex<GestureSettings>>`
+    // — auto `Send + Sync` via the `Arc<Mutex<...>>` field pattern, so the static
+    // assertion holds the same way as for Tap/LongPress/MultiDrag above.
+    impl AssertSendSync for EagerGestureRecognizer {}
 }

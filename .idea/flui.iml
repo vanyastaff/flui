@@ -87,6 +87,10 @@
       <sourceFolder url="file://$MODULE_DIR$/examples/painting_demo/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/examples/web_demo/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/tools/web-server/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-geometry/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-macros/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-macros/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-view/benches" isTestSource="true" />
       <excludeFolder url="file://$MODULE_DIR$/demos/counter/target" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>

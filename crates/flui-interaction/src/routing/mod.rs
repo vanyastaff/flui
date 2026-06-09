@@ -24,6 +24,7 @@ pub(crate) mod event_router;
 mod focus;
 pub mod focus_scope;
 mod hit_test;
+pub(crate) mod mouse_tracker;
 mod pointer_router;
 
 pub use event_router::EventRouter;
@@ -36,4 +37,5 @@ pub use hit_test::{
     EventPropagation, HitTestBehavior, HitTestEntry, HitTestResult, HitTestable,
     PointerEventHandler, RenderId, ScrollEventHandler, TransformGuard,
 };
+pub use mouse_tracker::{CursorChangeCallback, MouseTracker, MouseTrackerAnnotation};
 pub use pointer_router::{GlobalPointerHandler, PointerRouteHandler, PointerRouter};

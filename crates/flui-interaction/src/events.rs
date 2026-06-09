@@ -535,6 +535,20 @@ impl From<&PointerScrollEvent> for ScrollEventData {
 /// Create a PointerEvent::Down for testing
 #[cfg(any(test, feature = "testing"))]
 pub fn make_down_event(position: Offset<Pixels>, pointer_type: PointerType) -> PointerEvent {
+    make_down_event_for_id(PointerId::PRIMARY, position, pointer_type)
+}
+
+/// Create a PointerEvent::Down for testing with an explicit pointer id.
+///
+/// Use this when constructing multi-pointer event streams (U6
+/// `MultiDragGestureRecognizer` per-pointer state) — the default
+/// `make_down_event` hard-codes `PointerId::PRIMARY`.
+#[cfg(any(test, feature = "testing"))]
+pub fn make_down_event_for_id(
+    pointer_id: PointerId,
+    position: Offset<Pixels>,
+    pointer_type: PointerType,
+) -> PointerEvent {
     use ui_events::pointer::{
         ContactGeometry, PointerButtonEvent, PointerOrientation, PointerState,
     };
@@ -542,7 +556,7 @@ pub fn make_down_event(position: Offset<Pixels>, pointer_type: PointerType) -> P
     PointerEvent::Down(PointerButtonEvent {
         button: Some(PointerButton::Primary),
         pointer: PointerInfo {
-            pointer_id: Some(PointerId::PRIMARY),
+            pointer_id: Some(pointer_id),
             pointer_type,
             persistent_device_id: None,
         },
@@ -570,6 +584,18 @@ pub fn make_down_event(position: Offset<Pixels>, pointer_type: PointerType) -> P
 #[cfg(any(test, feature = "testing"))]
 /// Create a PointerEvent::Up for testing
 pub fn make_up_event(position: Offset<Pixels>, pointer_type: PointerType) -> PointerEvent {
+    make_up_event_for_id(PointerId::PRIMARY, position, pointer_type)
+}
+
+#[cfg(any(test, feature = "testing"))]
+/// Create a PointerEvent::Up for testing with an explicit pointer id.
+///
+/// See [`make_down_event_for_id`] for rationale.
+pub fn make_up_event_for_id(
+    pointer_id: PointerId,
+    position: Offset<Pixels>,
+    pointer_type: PointerType,
+) -> PointerEvent {
     use ui_events::pointer::{
         ContactGeometry, PointerButtonEvent, PointerOrientation, PointerState,
     };
@@ -577,7 +603,7 @@ pub fn make_up_event(position: Offset<Pixels>, pointer_type: PointerType) -> Poi
     PointerEvent::Up(PointerButtonEvent {
         button: Some(PointerButton::Primary),
         pointer: PointerInfo {
-            pointer_id: Some(PointerId::PRIMARY),
+            pointer_id: Some(pointer_id),
             pointer_type,
             persistent_device_id: None,
         },
@@ -605,11 +631,23 @@ pub fn make_up_event(position: Offset<Pixels>, pointer_type: PointerType) -> Poi
 #[cfg(any(test, feature = "testing"))]
 /// Create a PointerEvent::Move for testing
 pub fn make_move_event(position: Offset<Pixels>, pointer_type: PointerType) -> PointerEvent {
+    make_move_event_for_id(PointerId::PRIMARY, position, pointer_type)
+}
+
+#[cfg(any(test, feature = "testing"))]
+/// Create a PointerEvent::Move for testing with an explicit pointer id.
+///
+/// See [`make_down_event_for_id`] for rationale.
+pub fn make_move_event_for_id(
+    pointer_id: PointerId,
+    position: Offset<Pixels>,
+    pointer_type: PointerType,
+) -> PointerEvent {
     use ui_events::pointer::{ContactGeometry, PointerOrientation, PointerState, PointerUpdate};
 
     PointerEvent::Move(PointerUpdate {
         pointer: PointerInfo {
-            pointer_id: Some(PointerId::PRIMARY),
+            pointer_id: Some(pointer_id),
             pointer_type,
             persistent_device_id: None,
         },
@@ -646,6 +684,135 @@ pub fn make_cancel_event(pointer_type: PointerType) -> PointerEvent {
     })
 }
 
+#[cfg(any(test, feature = "testing"))]
+/// Create a PointerEvent::Down for testing with an explicit button.
+///
+/// U8 secondary/tertiary button parity — defaults to
+/// [`PointerButton::Primary`], pass [`PointerButton::Secondary`] for
+/// right-click and [`PointerButton::Auxiliary`] for middle-click
+/// (Flutter "tertiary" convention).
+pub fn make_down_event_with_button(
+    position: Offset<Pixels>,
+    pointer_type: PointerType,
+    button: PointerButton,
+) -> PointerEvent {
+    use ui_events::pointer::{
+        ContactGeometry, PointerButtonEvent, PointerOrientation, PointerState,
+    };
+
+    PointerEvent::Down(PointerButtonEvent {
+        button: Some(button),
+        pointer: PointerInfo {
+            pointer_id: Some(PointerId::PRIMARY),
+            pointer_type,
+            persistent_device_id: None,
+        },
+        state: PointerState {
+            time: 0,
+            position: dpi::PhysicalPosition::new(
+                position.dx.get() as f64,
+                position.dy.get() as f64,
+            ),
+            buttons: PointerButtons::from(button),
+            modifiers: Modifiers::empty(),
+            count: 1,
+            contact_geometry: ContactGeometry {
+                width: 1.0,
+                height: 1.0,
+            },
+            orientation: PointerOrientation::default(),
+            pressure: 1.0,
+            tangential_pressure: 0.0,
+            scale_factor: 1.0,
+        },
+    })
+}
+
+#[cfg(any(test, feature = "testing"))]
+/// Create a PointerEvent::Up for testing with an explicit button.
+pub fn make_up_event_with_button(
+    position: Offset<Pixels>,
+    pointer_type: PointerType,
+    button: PointerButton,
+) -> PointerEvent {
+    use ui_events::pointer::{
+        ContactGeometry, PointerButtonEvent, PointerOrientation, PointerState,
+    };
+
+    PointerEvent::Up(PointerButtonEvent {
+        button: Some(button),
+        pointer: PointerInfo {
+            pointer_id: Some(PointerId::PRIMARY),
+            pointer_type,
+            persistent_device_id: None,
+        },
+        state: PointerState {
+            time: 0,
+            position: dpi::PhysicalPosition::new(
+                position.dx.get() as f64,
+                position.dy.get() as f64,
+            ),
+            buttons: PointerButtons::new(),
+            modifiers: Modifiers::empty(),
+            count: 1,
+            contact_geometry: ContactGeometry {
+                width: 1.0,
+                height: 1.0,
+            },
+            orientation: PointerOrientation::default(),
+            pressure: 0.0,
+            tangential_pressure: 0.0,
+            scale_factor: 1.0,
+        },
+    })
+}
+
+#[cfg(any(test, feature = "testing"))]
+/// Create a PointerEvent::Move for testing with an explicit button.
+pub fn make_move_event_with_button(
+    position: Offset<Pixels>,
+    pointer_type: PointerType,
+    button: PointerButton,
+) -> PointerEvent {
+    use ui_events::pointer::{ContactGeometry, PointerOrientation, PointerState, PointerUpdate};
+
+    // `PointerEvent::Move` wraps `PointerUpdate` which carries no
+    // `button` field — the active button is implicit in the
+    // `state.buttons` mask (down buttons, not the press that triggered
+    // the move). The U8 move-event path is mostly a passthrough for
+    // existing tests; we encode the requested button as a one-hot
+    // active-mask bit so the recogniser sees the same payload shape
+    // as the down/up variants.
+    PointerEvent::Move(PointerUpdate {
+        pointer: PointerInfo {
+            pointer_id: Some(PointerId::PRIMARY),
+            pointer_type,
+            persistent_device_id: None,
+        },
+        current: PointerState {
+            time: 0,
+            position: dpi::PhysicalPosition::new(
+                position.dx.get() as f64,
+                position.dy.get() as f64,
+            ),
+            buttons: PointerButtons::from(button),
+            modifiers: Modifiers::empty(),
+            count: 0,
+            contact_geometry: ContactGeometry {
+                width: 1.0,
+                height: 1.0,
+            },
+            orientation: PointerOrientation::default(),
+            pressure: 1.0,
+            tangential_pressure: 0.0,
+            scale_factor: 1.0,
+        },
+        coalesced: vec![],
+        predicted: vec![],
+    })
+}
+
+#[cfg(any(test, feature = "testing"))]
 /// Create a PointerEvent::Scroll for testing
 pub fn make_scroll_event(position: Offset<Pixels>, delta: Offset<Pixels>) -> PointerEvent {
     use ui_events::pointer::{

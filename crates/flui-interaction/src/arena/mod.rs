@@ -42,6 +42,14 @@
 //!
 //! Flutter reference: <https://api.flutter.dev/flutter/gestures/GestureArenaManager-class.html>
 
+// Submodules — these are part of the crate's public surface (they're
+// referenced from recognizer code) so they're `pub` rather than `pub(crate)`.
+pub mod signal_resolver;
+pub mod team;
+
+pub use signal_resolver::{PointerSignalResolver, SignalPriority};
+pub use team::{GestureArenaTeam, TeamEntry};
+
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -50,6 +58,7 @@ use std::{
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use smallvec::SmallVec;
+use tracing::instrument;
 
 use crate::ids::PointerId;
 
@@ -164,10 +173,26 @@ impl<T: crate::sealed::CustomGestureRecognizer> GestureArenaMember for T {
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// let entry = arena.add(pointer, recognizer.clone());
+/// ```rust
+/// use std::sync::Arc;
 ///
-/// // Later, when the recognizer decides:
+/// use flui_interaction::arena::{GestureArena, GestureDisposition};
+/// use flui_interaction::ids::PointerId;
+/// use flui_interaction::sealed::CustomGestureRecognizer;
+///
+/// struct R;
+/// impl CustomGestureRecognizer for R {
+///     fn on_arena_accept(&self, _: PointerId) {}
+///     fn on_arena_reject(&self, _: PointerId) {}
+/// }
+///
+/// let arena = GestureArena::new();
+/// let pointer = PointerId::PRIMARY;
+/// let recognizer: Arc<R> = Arc::new(R);
+///
+/// let entry = arena.add(pointer, recognizer);
+///
+/// // Later, when the recogniser decides:
 /// entry.resolve(GestureDisposition::Accepted);
 /// ```
 ///
@@ -472,21 +497,42 @@ impl ArenaEntryData {
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// use flui_interaction::arena::{GestureArena, GestureDisposition, PointerId};
+/// ```rust
+/// use std::sync::atomic::{AtomicUsize, Ordering};
+/// use std::sync::Arc;
+///
+/// use flui_interaction::arena::{GestureArena, GestureDisposition};
+/// use flui_interaction::ids::PointerId;
+/// use flui_interaction::sealed::CustomGestureRecognizer;
+///
+/// // A minimal recogniser that counts accepts/rejects. Use a real
+/// // `TapGestureRecognizer` / `DragGestureRecognizer` in production —
+/// // this is the minimum surface to participate in the arena.
+/// #[derive(Debug)]
+/// struct Counter(AtomicUsize, AtomicUsize);
+/// impl CustomGestureRecognizer for Counter {
+///     fn on_arena_accept(&self, _: PointerId) { self.0.fetch_add(1, Ordering::Relaxed); }
+///     fn on_arena_reject(&self, _: PointerId) { self.1.fetch_add(1, Ordering::Relaxed); }
+/// }
 ///
 /// let arena = GestureArena::new();
 /// let pointer = PointerId::PRIMARY;
+/// let tap = Arc::new(Counter(AtomicUsize::new(0), AtomicUsize::new(0)));
+/// let drag = Arc::new(Counter(AtomicUsize::new(0), AtomicUsize::new(0)));
 ///
-/// // Add recognizers to arena - returns entry handle
-/// let tap_entry = arena.add(pointer, tap_recognizer);
-/// let drag_entry = arena.add(pointer, drag_recognizer);
+/// // Add recognisers to the arena — returns an entry handle.
+/// let tap_entry = arena.add(pointer, tap.clone());
+/// let drag_entry = arena.add(pointer, drag.clone());
 ///
-/// // Close the arena after pointer down dispatch
+/// // Close the arena once pointer-down dispatch finishes.
 /// arena.close(pointer);
 ///
-/// // Later: recognizers resolve themselves via entry handle
+/// // Resolvers call the entry handle; the arena notifies members.
 /// tap_entry.resolve(GestureDisposition::Accepted);
+/// drag_entry.resolve(GestureDisposition::Rejected);
+///
+/// assert_eq!(tap.0.load(Ordering::Relaxed), 1);   // accepted
+/// assert_eq!(drag.1.load(Ordering::Relaxed), 1);  // rejected
 /// ```
 #[derive(Clone)]
 pub struct GestureArena {
@@ -520,21 +566,49 @@ impl GestureArena {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
-    /// let entry = arena.add(pointer, recognizer.clone());
-    /// // Store entry in recognizer, use later to resolve
+    /// ```rust
+    /// use std::sync::Arc;
+    ///
+    /// use flui_interaction::arena::{GestureArena, GestureDisposition};
+    /// use flui_interaction::ids::PointerId;
+    /// use flui_interaction::sealed::CustomGestureRecognizer;
+    ///
+    /// struct R;
+    /// impl CustomGestureRecognizer for R {
+    ///     fn on_arena_accept(&self, _: PointerId) {}
+    ///     fn on_arena_reject(&self, _: PointerId) {}
+    /// }
+    ///
+    /// let arena = GestureArena::new();
+    /// let pointer = PointerId::PRIMARY;
+    /// let recognizer: Arc<R> = Arc::new(R);
+    /// let entry = arena.add(pointer, recognizer);
+    /// // Resolve the gesture via the entry handle.
     /// entry.resolve(GestureDisposition::Accepted);
     /// ```
+    #[instrument(
+        name = "arena.add",
+        level = "debug",
+        skip(self, member),
+        fields(
+            pointer = ?pointer,
+            event = %crate::observability::GestureEvent::RecognizerAdded,
+        )
+    )]
     pub fn add(
         &self,
         pointer: PointerId,
         member: Arc<dyn GestureArenaMember>,
     ) -> GestureArenaEntry {
+        // Ensure the entry exists, then drop the DashMap guard before
+        // locking the inner Mutex to avoid holding two locks at once.
         self.entries
             .entry(pointer)
-            .or_insert_with(|| Mutex::new(ArenaEntryData::new()))
-            .lock()
-            .add(member.clone());
+            .or_insert_with(|| Mutex::new(ArenaEntryData::new()));
+
+        if let Some(entry_ref) = self.entries.get(&pointer) {
+            entry_ref.lock().add(member.clone());
+        }
 
         GestureArenaEntry::new(self.clone(), pointer, member)
     }
@@ -546,6 +620,15 @@ impl GestureArena {
     /// If there's an eager winner, they win immediately.
     /// If there's only one member, it wins automatically.
     /// Otherwise, waits for members to accept/reject.
+    #[instrument(
+        name = "arena.close",
+        level = "debug",
+        skip(self),
+        fields(
+            pointer = ?pointer,
+            event = %crate::observability::GestureEvent::ArenaClosed,
+        )
+    )]
     pub fn close(&self, pointer: PointerId) {
         if let Some(entry_ref) = self.entries.get(&pointer) {
             let mut entry = entry_ref.lock();
@@ -666,6 +749,16 @@ impl GestureArena {
     /// # Note
     ///
     /// Prefer using [`GestureArenaEntry::resolve`] instead of this method.
+    #[instrument(
+        name = "arena.resolve",
+        level = "debug",
+        skip(self, winner),
+        fields(
+            pointer = ?pointer,
+            has_winner = winner.is_some(),
+            event = %crate::observability::GestureEvent::ArenaResolved,
+        )
+    )]
     pub fn resolve(&self, pointer: PointerId, winner: Option<Arc<dyn GestureArenaMember>>) {
         if let Some(entry_ref) = self.entries.get(&pointer) {
             entry_ref.lock().resolve(winner, pointer);
@@ -695,6 +788,15 @@ impl GestureArena {
     /// Called when pointer is released to clean up.
     /// Forces resolution if arena is still open (first member wins).
     /// If arena is held, sweep is deferred until release().
+    #[instrument(
+        name = "arena.sweep",
+        level = "debug",
+        skip(self),
+        fields(
+            pointer = ?pointer,
+            event = %crate::observability::GestureEvent::ArenaSwept,
+        )
+    )]
     pub fn sweep(&self, pointer: PointerId) {
         // Check if held - if so, mark pending sweep
         if let Some(entry_ref) = self.entries.get(&pointer) {

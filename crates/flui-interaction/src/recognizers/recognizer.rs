@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use flui_types::{Offset, geometry::Pixels};
 use parking_lot::Mutex;
+use tracing::instrument;
 
 use crate::{
     arena::{GestureArena, GestureArenaMember},
@@ -132,6 +133,12 @@ impl RecognizerBase {
     ///
     /// Returns `true` if the recognizer is still live (call sites should
     /// proceed); `false` if disposed (call sites should early-return).
+    #[instrument(
+        name = "recognizer.assert_not_disposed",
+        level = "trace",
+        skip(self),
+        fields(op = %op, primary = ?self.primary_pointer())
+    )]
     #[inline]
     pub fn assert_not_disposed(&self, op: &'static str) -> bool {
         if self.is_disposed() {
@@ -149,6 +156,16 @@ impl RecognizerBase {
     ///
     /// Sets this as the primary pointer and stores initial position.
     /// Adds recognizer to gesture arena.
+    #[instrument(
+        name = "recognizer.start_tracking",
+        level = "debug",
+        skip(self, recognizer),
+        fields(
+            pointer = ?pointer,
+            position = ?position,
+            event = %crate::observability::GestureEvent::StartedTracking,
+        )
+    )]
     pub fn start_tracking<T: GestureArenaMember + Clone + 'static>(
         &self,
         pointer: PointerId,
@@ -167,6 +184,15 @@ impl RecognizerBase {
     }
 
     /// Stop tracking (called on success or rejection)
+    #[instrument(
+        name = "recognizer.stop_tracking",
+        level = "debug",
+        skip(self),
+        fields(
+            pointer = ?self.primary_pointer(),
+            event = %crate::observability::GestureEvent::StoppedTracking,
+        )
+    )]
     pub fn stop_tracking(&self) {
         if let Some(pointer) = self.primary_pointer() {
             self.arena.sweep(pointer);
@@ -176,6 +202,15 @@ impl RecognizerBase {
     }
 
     /// Accept this gesture (win the arena)
+    #[instrument(
+        name = "recognizer.accept",
+        level = "debug",
+        skip(self, recognizer),
+        fields(
+            pointer = ?self.primary_pointer(),
+            event = %crate::observability::GestureEvent::ArenaAccepted,
+        )
+    )]
     pub fn accept<T: GestureArenaMember + Clone + 'static>(&self, recognizer: &Arc<T>) {
         if let Some(pointer) = self.primary_pointer() {
             self.arena.resolve(pointer, Some(recognizer.clone()));
@@ -183,6 +218,15 @@ impl RecognizerBase {
     }
 
     /// Reject this gesture (lose the arena or explicit rejection)
+    #[instrument(
+        name = "recognizer.reject",
+        level = "debug",
+        skip(self),
+        fields(
+            pointer = ?self.primary_pointer(),
+            event = %crate::observability::GestureEvent::ArenaRejected,
+        )
+    )]
     pub fn reject(&self) {
         if let Some(pointer) = self.primary_pointer() {
             self.arena.resolve(pointer, None);

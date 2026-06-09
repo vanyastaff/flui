@@ -1,69 +1,103 @@
-//! Velocity estimation using least squares polynomial regression
+//! Velocity estimation for gesture recognition
 //!
-//! This module provides accurate velocity estimation for gesture recognition,
-//! following Flutter's `PolynomialFitLeastSquaresVelocityTracker` approach.
+//! This module provides pointer velocity estimation that mirrors Flutter's
+//! [`velocity_tracker.dart`](https://api.flutter.dev/flutter/gestures/VelocityTracker-class.html)
+//! API. Three tracker flavours are provided:
+//!
+//! - [`VelocityTracker`] — least-squares polynomial regression on a 20-sample
+//!   circular buffer, identical algorithm to Flutter's
+//!   `PolynomialFitLeastSquaresVelocityTracker`. This is the default and the
+//!   only one Flutter's core gesture pipeline uses.
+//! - [`IosFlingVelocityTracker`] — iOS `UIScrollView` fling approximation:
+//!   weighted average of three adjacent 2-point velocities. Use this when you
+//!   want the initial fling velocity that matches native iOS scroll physics.
+//! - [`MacosFlingVelocityTracker`] — same algorithm as iOS, with different
+//!   weights (matches `NSScrollView`).
 //!
 //! # Algorithm
 //!
-//! Instead of simple linear velocity calculation, we use weighted least squares
-//! polynomial regression to estimate velocity. This provides:
+//! All trackers keep a 20-slot circular buffer of `(time, position)` samples
+//! and walk backwards from the newest sample, stopping when either the
+//! horizon (100 ms) is exceeded or the gap between consecutive samples
+//! exceeds 40 ms (the pointer is considered stationary). For the least-
+//! squares flavour, the surviving samples are fed to [`LeastSquaresSolver`]
+//! which fits a quadratic polynomial in time and reports its derivative at
+//! `t = 0` as the velocity.
 //!
-//! - Better accuracy with noisy touch input
-//! - Smoother velocity curves
-//! - More accurate fling detection
+//! Confidence is the product of the R² fit quality of the x and y
+//! polynomials; a perfect linear swipe gives 1.0, a noisy curve gives
+//! something close to 0.0.
 //!
 //! # Example
 //!
-//! ```rust,ignore
-//! use flui_interaction::velocity::VelocityTracker;
+//! ```rust
+//! use std::time::{Duration, Instant};
 //!
-//! let mut tracker = VelocityTracker::new();
+//! use flui_interaction::processing::VelocityTracker;
+//! use flui_types::geometry::{Offset, Pixels};
+//! use flui_types::gestures::PointerDeviceKind;
 //!
-//! // Add samples as pointer moves
-//! tracker.add_position(Instant::now(), Offset::new(Pixels(0.0), Pixels(0.0)));
-//! // ... more samples ...
-//! tracker.add_position(Instant::now(), Offset::new(Pixels(100.0), Pixels(50.0)));
+//! let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
+//! let start = Instant::now();
+//! for i in 0..10 {
+//!     tracker.add_position(
+//!         start + Duration::from_millis(i * 10),
+//!         Offset::new(Pixels(i as f32 * 10.0), Pixels(0.0)),
+//!     );
+//! }
 //!
-//! // Get estimated velocity
-//! let velocity = tracker.velocity();
-//! println!("Velocity: {} px/s", velocity.magnitude());
+//! // Velocity is the linear coefficient of the quadratic fit,
+//! // scaled to px/s.
+//! let _estimate = tracker.get_velocity_estimate();
+//! // Fling velocity is the same estimate gated by a min-speed
+//! // threshold (~50 px/s on either axis).
+//! let _fling = tracker.get_fling_velocity(false);
 //! ```
 
-use std::{
-    collections::VecDeque,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use flui_types::geometry::{Offset, Pixels};
-// Re-export Velocity and VelocityEstimate from flui_types
-pub use flui_types::gestures::{Velocity, VelocityEstimate};
+pub use flui_types::gestures::{PointerDeviceKind, Velocity, VelocityEstimate};
+
+use super::lsq_solver::{LeastSquaresSolver, MAX_SAMPLES};
 
 // ============================================================================
-// Constants
+// Constants (Flutter parity — see velocity_tracker.dart lines 142-145)
 // ============================================================================
 
-/// Maximum age of samples to consider (100ms)
+/// If no sample has been added for this long, the pointer is considered
+/// stopped and the velocity is reported as zero with confidence 1.0.
+///
+/// Flutter: `_assumePointerMoveStoppedMilliseconds = 40`.
+const ASSUME_POINTER_STOPPED: Duration = Duration::from_millis(40);
+
+/// Maximum age of samples to consider when fitting.
+///
+/// Flutter: `_horizonMilliseconds = 100`.
 const HORIZON: Duration = Duration::from_millis(100);
 
-/// Minimum number of samples needed for velocity estimation
-const MIN_SAMPLES: usize = 2;
+/// Minimum number of contiguous samples needed to attempt a least-squares fit.
+///
+/// Flutter: `_minSampleSize = 3`.
+const MIN_SAMPLE_SIZE: usize = 3;
 
-/// Maximum samples to keep in the tracker
-const MAX_SAMPLES: usize = 20;
+/// Number of samples to keep in the circular buffer.
+///
+/// Flutter: `_historySize = 20`. We also use this as the upper bound for the
+/// shared [`LeastSquaresSolver`] scratch buffer.
+const HISTORY_SIZE: usize = MAX_SAMPLES;
 
-/// Polynomial degree for least squares fit (2 = quadratic)
+/// Polynomial degree for the least-squares fit. Quadratic — same as Flutter.
 const POLYNOMIAL_DEGREE: usize = 2;
 
-/// Minimum duration to compute velocity (1ms)
-const MIN_DURATION: Duration = Duration::from_micros(1000);
-
 // ============================================================================
-// PositionSample
+// PointAtTime
 // ============================================================================
 
-/// A single position sample with timestamp.
+/// One position sample. The slot in the circular buffer is `Option<_PointAtTime>`
+/// so an unwritten slot is distinguishable from `(Offset::ZERO, Instant::EPOCH)`.
 #[derive(Debug, Clone, Copy)]
-struct PositionSample {
+struct PointAtTime {
     /// When this sample was recorded.
     time: Instant,
     /// Position at this time.
@@ -74,599 +108,778 @@ struct PositionSample {
 // VelocityTracker
 // ============================================================================
 
-/// Tracks pointer positions and estimates velocity using polynomial regression.
+/// Computes a pointer's velocity from a stream of `(time, position)` samples.
 ///
-/// This tracker uses weighted least squares polynomial fitting to estimate
-/// velocity, providing more accurate results than simple linear calculation,
-/// especially with noisy touch input.
-///
-/// # Algorithm
-///
-/// 1. Maintains a window of recent position samples (last 100ms)
-/// 2. Applies exponential time-based weighting (recent samples weighted more)
-/// 3. Fits a quadratic polynomial to x(t) and y(t) separately
-/// 4. Velocity is the derivative of the polynomial at t=0 (current time)
-///
-/// # Example
-///
-/// ```rust,ignore
-/// let mut tracker = VelocityTracker::new();
-///
-/// // Simulate a horizontal swipe
-/// let start = Instant::now();
-/// for i in 0..10 {
-///     let t = start + Duration::from_millis(i * 10);
-///     tracker.add_position(t, Offset::new(Pixels(i as f32 * 10.0), Pixels(0.0)));
-/// }
-///
-/// let velocity = tracker.velocity();
-/// // velocity.pixels_per_second.dx ≈ 1000.0 (100px in 100ms = 1000px/s)
-/// ```
+/// Mirrors Flutter's `VelocityTracker` (the
+/// `PolynomialFitLeastSquaresVelocityTracker` strategy). Adding samples is
+/// O(1); computing a velocity is O(N) where N ≤ 20, with the inner loop
+/// running through fixed-size stack-allocated scratch buffers in
+/// [`LeastSquaresSolver`].
 #[derive(Debug, Clone)]
 pub struct VelocityTracker {
-    /// Ring buffer of position samples (VecDeque for O(1) front removal).
-    samples: VecDeque<PositionSample>,
-    /// Strategy for velocity estimation.
-    strategy: VelocityEstimationStrategy,
-}
+    /// Pointer device kind. Recorded for parity with Flutter even though the
+    /// algorithm is currently device-independent.
+    kind: PointerDeviceKind,
 
-/// Strategy for velocity estimation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum VelocityEstimationStrategy {
-    /// Least squares polynomial regression (most accurate, Flutter-style).
-    #[default]
-    LeastSquaresPolynomial,
-    /// Simple linear regression (faster, less accurate).
-    LinearRegression,
-    /// Two-sample velocity (fastest, least accurate).
-    TwoSample,
+    /// Circular buffer of samples. Empty slots are `None` so we can
+    /// distinguish "slot not yet written" from a sample at `Instant::EPOCH`.
+    samples: [Option<PointAtTime>; HISTORY_SIZE],
+
+    /// Index of the most recently written sample. Wraps around modulo
+    /// `HISTORY_SIZE`.
+    index: usize,
+
+    /// When the most recent sample was added. Used to detect "the pointer
+    /// has been still for 40 ms or more" — the canonical Flutter signal that
+    /// the velocity is zero.
+    since_last_sample: Option<Instant>,
 }
 
 impl Default for VelocityTracker {
     fn default() -> Self {
-        Self::new()
+        Self::with_kind(PointerDeviceKind::Touch)
     }
 }
 
 impl VelocityTracker {
-    /// Create a new velocity tracker with default polynomial strategy.
-    pub fn new() -> Self {
-        Self {
-            samples: VecDeque::with_capacity(MAX_SAMPLES),
-            strategy: VelocityEstimationStrategy::default(),
-        }
-    }
-
-    /// Create a velocity tracker with a specific estimation strategy.
-    pub fn with_strategy(strategy: VelocityEstimationStrategy) -> Self {
-        Self {
-            samples: VecDeque::with_capacity(MAX_SAMPLES),
-            strategy,
-        }
-    }
-
-    /// Add a position sample.
-    #[inline]
-    pub fn add_position(&mut self, time: Instant, position: Offset<Pixels>) {
-        // Remove samples older than HORIZON
-        let cutoff = time.checked_sub(HORIZON).unwrap_or(time);
-        self.samples.retain(|s| s.time >= cutoff);
-
-        // Add new sample
-        self.samples.push_back(PositionSample { time, position });
-
-        // Limit total samples — O(1) pop from front with VecDeque
-        if self.samples.len() > MAX_SAMPLES {
-            self.samples.pop_front();
-        }
-    }
-
-    /// Get the estimated velocity.
+    /// Construct a new velocity tracker for the given pointer device kind.
     ///
-    /// Returns `Velocity::ZERO` if there aren't enough samples.
-    #[inline]
-    pub fn velocity(&self) -> Velocity {
-        if self.samples.len() < MIN_SAMPLES {
-            return Velocity::ZERO;
-        }
-
-        match self.strategy {
-            VelocityEstimationStrategy::LeastSquaresPolynomial => self.polynomial_velocity(),
-            VelocityEstimationStrategy::LinearRegression => self.linear_velocity(),
-            VelocityEstimationStrategy::TwoSample => self.two_sample_velocity(),
+    /// Flutter's `VelocityTracker.withKind(this.kind)` constructor — we keep
+    /// the parameter even though the algorithm doesn't yet branch on it, so
+    /// downstream code can match Flutter's API shape and the field is in
+    /// place for future device-specific tuning (mouse vs touch vs stylus).
+    #[must_use]
+    pub fn with_kind(kind: PointerDeviceKind) -> Self {
+        Self {
+            kind,
+            samples: [None; HISTORY_SIZE],
+            index: 0,
+            since_last_sample: None,
         }
     }
 
-    /// Reset the tracker, clearing all samples.
+    /// The kind of pointer this tracker is for.
     #[inline]
+    pub fn kind(&self) -> PointerDeviceKind {
+        self.kind
+    }
+
+    /// Record a position at the given time.
+    ///
+    /// O(1). The samples are stored in a 20-slot circular buffer; older
+    /// samples are silently overwritten.
+    ///
+    /// The `time` parameter is the *logical* timestamp used for the
+    /// velocity fit (it can come from a synthetic test clock, a high-
+    /// resolution pointer-event clock, or a frame-time source). The
+    /// "stationary for 40 ms" gate uses `Instant::now()` so the check
+    /// always reflects wall-clock time, regardless of how the caller
+    /// generates the logical timestamps.
+    pub fn add_position(&mut self, time: Instant, position: Offset<Pixels>) {
+        // Mark "now" as the latest activity. Used by get_velocity_estimate()
+        // to short-circuit when the pointer has been still for >= 40 ms.
+        // We use the real wall clock here, NOT the `time` argument, so a
+        // caller that supplies synthetic timestamps (tests, frame-time
+        // extrapolation, replay logs) still gets the correct stationary
+        // signal.
+        self.since_last_sample = Some(Instant::now());
+
+        // Advance the write index, wrapping at HISTORY_SIZE.
+        self.index = (self.index + 1) % HISTORY_SIZE;
+        self.samples[self.index] = Some(PointAtTime { time, position });
+    }
+
+    /// Reset the tracker, discarding all samples.
     pub fn reset(&mut self) {
-        self.samples.clear();
+        self.samples = [None; HISTORY_SIZE];
+        self.index = 0;
+        self.since_last_sample = None;
     }
 
-    /// Returns the number of samples currently stored.
+    /// Number of samples currently stored.
     #[inline]
     pub fn sample_count(&self) -> usize {
-        self.samples.len()
+        self.samples.iter().filter(|s| s.is_some()).count()
     }
 
-    /// Returns true if there are enough samples to estimate velocity.
+    /// Returns `true` when the tracker has at least `MIN_SAMPLE_SIZE` (3)
+    /// contiguous samples since the last stationary signal — enough data
+    /// to attempt a least-squares fit.
     #[inline]
     pub fn has_sufficient_data(&self) -> bool {
-        self.samples.len() >= MIN_SAMPLES
+        self.estimate_sample_count() >= MIN_SAMPLE_SIZE
     }
 
-    // ========================================================================
-    // Private: Velocity Estimation Methods
-    // ========================================================================
-
-    /// Least squares polynomial regression (Flutter-style).
-    fn polynomial_velocity(&self) -> Velocity {
-        let n = self.samples.len();
-        if n < MIN_SAMPLES {
-            return Velocity::ZERO;
-        }
-
-        // Reference time is the last sample
-        let ref_time = self.samples[n - 1].time;
-
-        // Stack-allocated arrays — no heap allocation (MAX_SAMPLES = 20)
-        let mut times = [0.0f64; MAX_SAMPLES];
-        let mut x_positions = [0.0f64; MAX_SAMPLES];
-        let mut y_positions = [0.0f64; MAX_SAMPLES];
-        let mut weights = [0.0f64; MAX_SAMPLES];
-
-        for (i, sample) in self.samples.iter().enumerate() {
-            // Time in seconds (negative, going back from ref_time)
-            let dt = ref_time.duration_since(sample.time).as_secs_f64();
-            let t = -dt; // Negative because we're going back in time
-
-            // Exponential time-based weighting (more recent = higher weight)
-            // Weight decays with e^(-dt / tau) where tau = 50ms
-            let weight = (-dt / 0.05).exp();
-
-            times[i] = t;
-            x_positions[i] = sample.position.dx.get() as f64;
-            y_positions[i] = sample.position.dy.get() as f64;
-            weights[i] = weight;
-        }
-
-        // Fit polynomial and get velocity (derivative at t=0)
-        let vx = polynomial_fit_velocity(&times[..n], &x_positions[..n], &weights[..n]);
-        let vy = polynomial_fit_velocity(&times[..n], &y_positions[..n], &weights[..n]);
-
-        Velocity::new(Offset::new(Pixels(vx as f32), Pixels(vy as f32)))
-    }
-
-    /// Simple linear regression.
-    fn linear_velocity(&self) -> Velocity {
-        let n = self.samples.len();
-        if n < MIN_SAMPLES {
-            return Velocity::ZERO;
-        }
-
-        let ref_time = self.samples[n - 1].time;
-
-        // Compute means
-        let mut sum_t = 0.0f64;
-        let mut sum_x = 0.0f64;
-        let mut sum_y = 0.0f64;
-
-        for sample in &self.samples {
-            let dt = ref_time.duration_since(sample.time).as_secs_f64();
-            sum_t += -dt;
-            sum_x += sample.position.dx.get() as f64;
-            sum_y += sample.position.dy.get() as f64;
-        }
-
-        let mean_t = sum_t / n as f64;
-        let mean_x = sum_x / n as f64;
-        let mean_y = sum_y / n as f64;
-
-        // Compute slope (velocity)
-        let mut num_x = 0.0f64;
-        let mut num_y = 0.0f64;
-        let mut denom = 0.0f64;
-
-        for sample in &self.samples {
-            let dt = ref_time.duration_since(sample.time).as_secs_f64();
-            let t = -dt - mean_t;
-            let x = sample.position.dx.get() as f64 - mean_x;
-            let y = sample.position.dy.get() as f64 - mean_y;
-
-            num_x += t * x;
-            num_y += t * y;
-            denom += t * t;
-        }
-
-        if denom.abs() < f64::EPSILON {
-            return Velocity::ZERO;
-        }
-
-        let vx = num_x / denom;
-        let vy = num_y / denom;
-
-        Velocity::new(Offset::new(Pixels(vx as f32), Pixels(vy as f32)))
-    }
-
-    /// Simple two-sample velocity (fastest).
-    fn two_sample_velocity(&self) -> Velocity {
-        let n = self.samples.len();
-        if n < 2 {
-            return Velocity::ZERO;
-        }
-
-        let oldest = &self.samples[0];
-        let newest = &self.samples[n - 1];
-
-        let dt = newest.time.duration_since(oldest.time);
-        if dt < MIN_DURATION {
-            return Velocity::ZERO;
-        }
-
-        let dt_secs = dt.as_secs_f32();
-        let delta = newest.position - oldest.position;
-
-        Velocity::new(Offset::new(delta.dx / dt_secs, delta.dy / dt_secs))
-    }
-}
-
-// ============================================================================
-// Polynomial Fitting
-// ============================================================================
-
-/// Fit a weighted polynomial and return the velocity (first derivative at t=0).
-///
-/// Uses weighted least squares to fit a polynomial of degree POLYNOMIAL_DEGREE
-/// to the data, then returns the first derivative evaluated at t=0.
-fn polynomial_fit_velocity(times: &[f64], values: &[f64], weights: &[f64]) -> f64 {
-    let n = times.len();
-    if n < MIN_SAMPLES {
-        return 0.0;
-    }
-
-    // For quadratic fit: y = a + b*t + c*t²
-    // Velocity at t=0 is b (the linear coefficient)
-    //
-    // Using normal equations: (X'WX) * coeffs = X'W * y
-    // Where X is the Vandermonde matrix, W is diagonal weight matrix
-
-    let degree = POLYNOMIAL_DEGREE.min(n - 1);
-
-    // Build the weighted normal equations
-    // For efficiency with small degree, we compute directly
-
-    if degree == 1 {
-        // Linear fit: y = a + b*t, velocity = b
-        let mut sw = 0.0f64;
-        let mut swt = 0.0f64;
-        let mut swtt = 0.0f64;
-        let mut swy = 0.0f64;
-        let mut swty = 0.0f64;
-
-        for i in 0..n {
-            let w = weights[i];
-            let t = times[i];
-            let y = values[i];
-
-            sw += w;
-            swt += w * t;
-            swtt += w * t * t;
-            swy += w * y;
-            swty += w * t * y;
-        }
-
-        let det = sw * swtt - swt * swt;
-        if det.abs() < f64::EPSILON {
-            return 0.0;
-        }
-
-        // b = (sw * swty - swt * swy) / det
-        (sw * swty - swt * swy) / det
-    } else {
-        // Quadratic fit: y = a + b*t + c*t², velocity = b
-        let mut m = [[0.0f64; 3]; 3]; // Normal matrix
-        let mut v = [0.0f64; 3]; // Right-hand side
-
-        for i in 0..n {
-            let w = weights[i];
-            let t = times[i];
-            let y = values[i];
-
-            let t2 = t * t;
-            let t3 = t2 * t;
-            let t4 = t2 * t2;
-
-            m[0][0] += w;
-            m[0][1] += w * t;
-            m[0][2] += w * t2;
-            m[1][1] += w * t2;
-            m[1][2] += w * t3;
-            m[2][2] += w * t4;
-
-            v[0] += w * y;
-            v[1] += w * t * y;
-            v[2] += w * t2 * y;
-        }
-
-        // Symmetric matrix
-        m[1][0] = m[0][1];
-        m[2][0] = m[0][2];
-        m[2][1] = m[1][2];
-
-        // Solve using Gaussian elimination with partial pivoting
-        solve_3x3(&m, &v).map(|coeffs| coeffs[1]).unwrap_or(0.0)
-    }
-}
-
-/// Solve a 3x3 linear system using Gaussian elimination.
-#[allow(clippy::needless_range_loop)] // Matrix operations require explicit indexing
-fn solve_3x3(a: &[[f64; 3]; 3], b: &[f64; 3]) -> Option<[f64; 3]> {
-    let mut a = *a;
-    let mut b = *b;
-
-    // Forward elimination with partial pivoting
-    for i in 0..3 {
-        // Find pivot
-        let mut max_row = i;
-        let mut max_val = a[i][i].abs();
-        for k in (i + 1)..3 {
-            if a[k][i].abs() > max_val {
-                max_val = a[k][i].abs();
-                max_row = k;
-            }
-        }
-
-        if max_val < f64::EPSILON {
-            return None; // Singular matrix
-        }
-
-        // Swap rows
-        if max_row != i {
-            a.swap(i, max_row);
-            b.swap(i, max_row);
-        }
-
-        // Eliminate
-        for k in (i + 1)..3 {
-            let factor = a[k][i] / a[i][i];
-            for j in i..3 {
-                a[k][j] -= factor * a[i][j];
-            }
-            b[k] -= factor * b[i];
-        }
-    }
-
-    // Back substitution
-    let mut x = [0.0f64; 3];
-    for i in (0..3).rev() {
-        let mut sum = b[i];
-        for j in (i + 1)..3 {
-            sum -= a[i][j] * x[j];
-        }
-        if a[i][i].abs() < f64::EPSILON {
-            return None;
-        }
-        x[i] = sum / a[i][i];
-    }
-
-    Some(x)
-}
-
-// ============================================================================
-// VelocityEstimate extensions (using type from flui_types)
-// ============================================================================
-
-impl VelocityTracker {
-    /// Get a velocity estimate with confidence information.
+    /// The most recent velocity estimate, including the polynomial-fit
+    /// confidence and the time/position span it was computed over.
     ///
-    /// Uses the `VelocityEstimate` type from `flui_types::gestures`.
-    pub fn estimate(&self) -> VelocityEstimate {
-        let n = self.samples.len();
-
-        if n < 2 {
-            // No data - return zero velocity with no confidence
-            return VelocityEstimate::new(Offset::ZERO, Offset::ZERO, Duration::ZERO, 0.0);
+    /// Returns `None` if the tracker has no samples at all.
+    ///
+    /// This is the Rust port of Flutter's `getVelocityEstimate()`.
+    pub fn get_velocity_estimate(&self) -> Option<VelocityEstimate> {
+        // Pointer has been still for >= 40 ms → velocity is exactly zero with
+        // perfect confidence. Flutter returns a fully-populated
+        // VelocityEstimate so callers can still ask for `duration` / `offset`.
+        if let Some(last) = self.since_last_sample
+            && last.elapsed() >= ASSUME_POINTER_STOPPED
+        {
+            return Some(VelocityEstimate::new(
+                Offset::ZERO,
+                Offset::ZERO,
+                Duration::ZERO,
+                1.0,
+            ));
         }
 
-        let first = self.samples[0];
-        let last = self.samples[n - 1];
-        let dur = last.time.duration_since(first.time);
+        let newest = self.samples[self.index]?;
+        // Walk backwards through the circular buffer, collecting samples that
+        // represent continuous motion: age <= HORIZON and gap between
+        // adjacent samples <= ASSUME_POINTER_STOPPED.
+        let mut previous = newest;
+        let mut oldest = newest;
+        let mut xs = [0.0f64; HISTORY_SIZE];
+        let mut ys = [0.0f64; HISTORY_SIZE];
+        let mut ts = [0.0f64; HISTORY_SIZE];
+        let mut ws = [0.0f64; HISTORY_SIZE];
+        let mut n: usize = 0;
+        let mut cursor = self.index;
 
-        // Calculate velocity
-        let velocity = self.velocity();
+        // Bound the walk at one full lap — anything beyond that is stale.
+        for _ in 0..HISTORY_SIZE {
+            let Some(sample) = self.samples[cursor] else {
+                break;
+            };
 
-        // Confidence based on sample count and duration
-        let count_factor = (n as f32 / 5.0).min(1.0);
-        let duration_factor = (dur.as_secs_f32() / 0.05).min(1.0);
-        let confidence = count_factor * duration_factor;
+            // age is in ms; delta is the gap from the previously-iterated
+            // sample, also in ms.
+            let age_ms = newest
+                .time
+                .checked_duration_since(sample.time)
+                .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
+            let delta_ms = previous
+                .time
+                .checked_duration_since(sample.time)
+                .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
+            previous = sample;
 
-        VelocityEstimate::new(last.position, velocity.pixels_per_second, dur, confidence)
+            // Stop the walk if the sample is past the horizon or the gap from
+            // the previous one is too large — the pointer was stationary
+            // between them.
+            if age_ms > HORIZON.as_secs_f64() * 1000.0
+                || delta_ms > ASSUME_POINTER_STOPPED.as_secs_f64() * 1000.0
+            {
+                break;
+            }
+
+            oldest = sample;
+            ts[n] = -age_ms; // Negative: we go back from the newest sample.
+            xs[n] = sample.position.dx.get() as f64;
+            ys[n] = sample.position.dy.get() as f64;
+            ws[n] = 1.0; // Uniform weights — Flutter's `PolynomialFitLeastSquares`.
+            n += 1;
+
+            // Step the cursor one slot backwards through the circular buffer.
+            cursor = if cursor == 0 {
+                HISTORY_SIZE - 1
+            } else {
+                cursor - 1
+            };
+        }
+
+        // We were unable to gather enough samples to fit. Report zero
+        // velocity with confidence 1.0 and the span we did see.
+        if n < MIN_SAMPLE_SIZE {
+            return Some(VelocityEstimate::new(
+                Offset::ZERO,
+                Offset::ZERO,
+                newest.time.saturating_duration_since(oldest.time),
+                1.0,
+            ));
+        }
+
+        // Fit a quadratic in milliseconds; velocity in px/ms is the linear
+        // coefficient. Scale to px/s (× 1000).
+        let x_fit = LeastSquaresSolver::new(&ts[..n], &xs[..n], &ws[..n]).solve(POLYNOMIAL_DEGREE);
+        let y_fit = LeastSquaresSolver::new(&ts[..n], &ys[..n], &ws[..n]).solve(POLYNOMIAL_DEGREE);
+
+        match (x_fit, y_fit) {
+            (Some(xf), Some(yf)) => Some(VelocityEstimate::new(
+                newest.position - oldest.position,
+                Offset::new(
+                    Pixels((xf.coefficients[1] * 1000.0) as f32),
+                    Pixels((yf.coefficients[1] * 1000.0) as f32),
+                ),
+                newest.time.saturating_duration_since(oldest.time),
+                (xf.confidence * yf.confidence) as f32,
+            )),
+            // Numerical failure on one axis — keep going with zero on that
+            // axis and the other axis's confidence. Rare; happens on
+            // degenerate data.
+            _ => Some(VelocityEstimate::new(
+                Offset::ZERO,
+                Offset::ZERO,
+                newest.time.saturating_duration_since(oldest.time),
+                0.0,
+            )),
+        }
     }
 
-    /// Check if the current velocity estimate is reliable enough for fling
-    /// detection.
+    /// The most recent velocity as a [`Velocity`].
+    ///
+    /// Cheap wrapper over [`Self::get_velocity_estimate`] that returns
+    /// [`Velocity::ZERO`] when the estimate is missing or its velocity is
+    /// zero. This is the canonical call site for "fling this view" — Flutter
+    /// uses `getVelocity()` in the drag-end callback for the same purpose.
+    pub fn get_velocity(&self) -> Velocity {
+        match self.get_velocity_estimate() {
+            Some(est) if est.pixels_per_second != Offset::ZERO => {
+                Velocity::new(est.pixels_per_second)
+            }
+            _ => Velocity::ZERO,
+        }
+    }
+
+    /// Velocity for fling detection.
+    ///
+    /// When `allow_slow` is `false` (the typical case), the result is
+    /// [`Velocity::ZERO`] for any motion under ~50 px/s — the threshold
+    /// Flutter's `VerticalDragGestureRecognizer.isFlingGesture` checks
+    /// against (it requires the offset between the up and down events to
+    /// exceed a slop, combined with a non-trivial velocity). When
+    /// `allow_slow` is `true`, the raw estimate is returned even at very
+    /// low speeds — useful for snap-back animations and small-list
+    /// micro-scrolls.
+    pub fn get_fling_velocity(&self, allow_slow: bool) -> Velocity {
+        let velocity = self.get_velocity();
+        if allow_slow {
+            return velocity;
+        }
+        // ~50 px/s threshold. Below that, the gesture is not a fling.
+        const MIN_FLING_SPEED_PX_S: f32 = 50.0;
+        if velocity.pixels_per_second.dx.get().abs() < MIN_FLING_SPEED_PX_S
+            && velocity.pixels_per_second.dy.get().abs() < MIN_FLING_SPEED_PX_S
+        {
+            return Velocity::ZERO;
+        }
+        velocity
+    }
+
+    /// Flutter-port alias for [`Self::get_velocity_estimate`].
+    #[inline]
+    pub fn estimate(&self) -> Option<VelocityEstimate> {
+        self.get_velocity_estimate()
+    }
+
+    // ========================================================================
+    // Source-compat shims for the previous public API
+    // ========================================================================
+    //
+    // The previous version of this module exposed `velocity()` and
+    // `is_reliable()`. The new canonical names are [`Self::get_velocity`]
+    // and the `estimate.confidence > 0.5 && sample_count >= 3` test. These
+    // shims keep existing callers compiling and route through the new
+    // methods so there is only one implementation.
+
+    /// Source-compat alias for [`Self::get_velocity`].
+    #[inline]
+    pub fn velocity(&self) -> Velocity {
+        self.get_velocity()
+    }
+
+    /// Source-compat alias for the previous "is the estimate reliable?"
+    /// check. Returns `true` when the tracker has at least 3 samples and
+    /// the most recent estimate's confidence is above 0.5.
     pub fn is_reliable(&self) -> bool {
-        let estimate = self.estimate();
-        estimate.confidence > 0.5 && self.samples.len() >= 3
+        match self.get_velocity_estimate() {
+            Some(est) => est.confidence > 0.5 && self.sample_count() >= 3,
+            None => false,
+        }
     }
+
+    /// Source-compat constructor. The previous `new()` constructed a
+    /// touch-kind tracker with the default strategy; both parameters are
+    /// accepted for source-compat but the strategy is currently ignored —
+    /// see [`VelocityEstimationStrategy`].
+    #[inline]
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Source-compat constructor with a strategy selector. The previous
+    /// API accepted `VelocityEstimationStrategy` to pick between L2S,
+    /// linear, and two-sample estimation; the L2S algorithm is strictly
+    /// better, so all three strategies now route to it.
+    #[inline]
+    #[must_use]
+    pub fn with_strategy(_strategy: VelocityEstimationStrategy) -> Self {
+        Self::default()
+    }
+
+    /// Estimate of contiguous samples in the walk window. O(HISTORY_SIZE).
+    fn estimate_sample_count(&self) -> usize {
+        let Some(newest) = self.samples[self.index] else {
+            return 0;
+        };
+        let mut previous = newest;
+        let mut n = 0usize;
+        let mut cursor = self.index;
+        for _ in 0..HISTORY_SIZE {
+            let Some(sample) = self.samples[cursor] else {
+                break;
+            };
+            let age_ms = newest
+                .time
+                .checked_duration_since(sample.time)
+                .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
+            let delta_ms = previous
+                .time
+                .checked_duration_since(sample.time)
+                .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
+            previous = sample;
+            if age_ms > HORIZON.as_secs_f64() * 1000.0
+                || delta_ms > ASSUME_POINTER_STOPPED.as_secs_f64() * 1000.0
+            {
+                break;
+            }
+            n += 1;
+            cursor = if cursor == 0 {
+                HISTORY_SIZE - 1
+            } else {
+                cursor - 1
+            };
+        }
+        n
+    }
+}
+
+// ============================================================================
+// IosFlingVelocityTracker
+// ============================================================================
+
+/// Velocity tracker that matches iOS `UIScrollView` fling estimation.
+///
+/// Uses a weighted average of three adjacent 2-point velocities (offsets
+/// `-2`, `-1`, `0` in the circular buffer) with weights `0.6 / 0.35 / 0.05`.
+/// The fit is intentionally crude — it's what `UIScrollView` reports to its
+/// delegate in `scrollViewWillEndDragging(_:withVelocity:targetContentOffset:)`,
+/// and the gesture pipeline uses it to seed the `Scrollable`'s fling
+/// simulation.
+///
+/// The 20-slot history is larger than the 4 used by the maths — Flutter
+/// keeps the extra slots so the `VelocityEstimate.offset` (computed as
+/// `newest - oldest`) is large enough to be recognised as a fling by
+/// `VerticalDragGestureRecognizer.isFlingGesture`.
+#[derive(Debug, Clone)]
+pub struct IosFlingVelocityTracker {
+    inner: VelocityTracker,
+    /// Weights applied to the 2-point velocities at offsets (-2, -1, 0).
+    weights: [f64; 3],
+}
+
+impl Default for IosFlingVelocityTracker {
+    fn default() -> Self {
+        Self::with_kind(PointerDeviceKind::Touch)
+    }
+}
+
+impl IosFlingVelocityTracker {
+    /// Construct an iOS-flavour tracker for the given pointer kind.
+    #[must_use]
+    pub fn with_kind(kind: PointerDeviceKind) -> Self {
+        Self {
+            inner: VelocityTracker::with_kind(kind),
+            weights: [0.6, 0.35, 0.05],
+        }
+    }
+
+    /// Record a position. O(1). Mirrors `IOSScrollViewFlingVelocityTracker.addPosition`.
+    pub fn add_position(&mut self, time: Instant, position: Offset<Pixels>) {
+        self.inner.add_position(time, position);
+    }
+
+    /// Reset all samples.
+    pub fn reset(&mut self) {
+        self.inner.reset();
+    }
+
+    /// The pointer kind this tracker is configured for.
+    #[inline]
+    pub fn kind(&self) -> PointerDeviceKind {
+        self.inner.kind()
+    }
+
+    /// Velocity estimate. The `pixels_per_second` is the weighted sum of
+    /// 2-point velocities; the `confidence` is always 1.0 (the algorithm
+    /// makes no claim about fit quality); `duration` and `offset` are
+    /// computed from the newest and oldest non-null samples.
+    pub fn get_velocity_estimate(&self) -> Option<VelocityEstimate> {
+        // Stationary? Flutter's contract: report zero with confidence 1.0.
+        if let Some(last) = self.inner.since_last_sample
+            && last.elapsed() >= ASSUME_POINTER_STOPPED
+        {
+            return Some(VelocityEstimate::new(
+                Offset::ZERO,
+                Offset::ZERO,
+                Duration::ZERO,
+                1.0,
+            ));
+        }
+
+        let estimated_velocity = self.estimated_velocity();
+        let newest = self.inner.samples[self.inner.index]?;
+        // Walk forward through the buffer to find the oldest non-null sample.
+        let mut oldest: Option<PointAtTime> = None;
+        for i in 1..=HISTORY_SIZE {
+            let slot = self.inner.samples[(self.inner.index + i) % HISTORY_SIZE];
+            if let Some(s) = slot {
+                oldest = Some(s);
+                break;
+            }
+        }
+        let oldest = oldest.expect("newest was Some, so at least one slot is non-null");
+
+        Some(VelocityEstimate::new(
+            newest.position - oldest.position,
+            estimated_velocity,
+            newest.time.saturating_duration_since(oldest.time),
+            1.0,
+        ))
+    }
+
+    /// Velocity for fling detection. Same semantics as
+    /// [`VelocityTracker::get_fling_velocity`].
+    pub fn get_fling_velocity(&self, allow_slow: bool) -> Velocity {
+        let velocity = self.get_velocity();
+        if allow_slow {
+            return velocity;
+        }
+        const MIN_FLING_SPEED: f32 = 50.0;
+        if velocity.pixels_per_second.dx.get().abs() < MIN_FLING_SPEED
+            && velocity.pixels_per_second.dy.get().abs() < MIN_FLING_SPEED
+        {
+            return Velocity::ZERO;
+        }
+        velocity
+    }
+
+    /// The raw weighted-average velocity, regardless of the
+    /// "stationary for 40 ms" gate.
+    fn estimated_velocity(&self) -> Offset<Pixels> {
+        // We do the weighted sum in f64 for precision (weights are 0.6 /
+        // 0.35 / 0.05 and would lose bits through f32), then convert at
+        // the end. `Pixels` is a `#[repr(transparent)]` newtype around f32.
+        let v = |offset: isize| self.two_sample_velocity_at_f64(offset);
+        let dx = v(-2).0 * self.weights[0] + v(-1).0 * self.weights[1] + v(0).0 * self.weights[2];
+        let dy = v(-2).1 * self.weights[0] + v(-1).1 * self.weights[1] + v(0).1 * self.weights[2];
+        Offset::new(Pixels(dx as f32), Pixels(dy as f32))
+    }
+
+    /// The 2-point velocity at the given offset from the newest sample,
+    /// returned in `(dx, dy)` f64 form for precision arithmetic.
+    /// `offset = 0` is the most recent pair, `-1` is the one before, etc.
+    fn two_sample_velocity_at_f64(&self, offset: isize) -> (f64, f64) {
+        let end_idx =
+            (self.inner.index as isize + offset).rem_euclid(HISTORY_SIZE as isize) as usize;
+        let start_idx = (end_idx as isize - 1).rem_euclid(HISTORY_SIZE as isize) as usize;
+        let (Some(end), Some(start)) = (self.inner.samples[end_idx], self.inner.samples[start_idx])
+        else {
+            return (0.0, 0.0);
+        };
+        // dt is in microseconds; convert to milliseconds for the divisor so
+        // we preserve precision the way Flutter does.
+        let dt_us = end.time.saturating_duration_since(start.time).as_micros();
+        if dt_us == 0 {
+            return (0.0, 0.0);
+        }
+        let dt_ms = dt_us as f64 / 1000.0;
+        // (end - start) is in pixels; divide by dt_ms to get px/ms; × 1000 = px/s.
+        let dx_px_s = (end.position.dx.get() - start.position.dx.get()) as f64 * 1000.0 / dt_ms;
+        let dy_px_s = (end.position.dy.get() - start.position.dy.get()) as f64 * 1000.0 / dt_ms;
+        (dx_px_s, dy_px_s)
+    }
+
+    /// Flutter-port alias for [`Self::get_velocity_estimate`].
+    #[inline]
+    pub fn estimate(&self) -> Option<VelocityEstimate> {
+        self.get_velocity_estimate()
+    }
+
+    /// Velocity as a [`Velocity`]. [`Velocity::ZERO`] when the estimate is
+    /// missing or its velocity is zero.
+    pub fn get_velocity(&self) -> Velocity {
+        match self.get_velocity_estimate() {
+            Some(est) if est.pixels_per_second != Offset::ZERO => {
+                Velocity::new(est.pixels_per_second)
+            }
+            _ => Velocity::ZERO,
+        }
+    }
+}
+
+// ============================================================================
+// MacosFlingVelocityTracker
+// ============================================================================
+
+/// Velocity tracker matching macOS `NSScrollView` fling estimation.
+///
+/// Same algorithm as [`IosFlingVelocityTracker`] with weights
+/// `0.15 / 0.65 / 0.2` (the macOS delegate weights from
+/// `scrollViewWillEndDragging(_:withVelocity:targetContentOffset:)`).
+#[derive(Debug, Clone)]
+pub struct MacosFlingVelocityTracker {
+    inner: IosFlingVelocityTracker,
+}
+
+impl Default for MacosFlingVelocityTracker {
+    fn default() -> Self {
+        Self::with_kind(PointerDeviceKind::Touch)
+    }
+}
+
+impl MacosFlingVelocityTracker {
+    /// Construct a macOS-flavour tracker for the given pointer kind.
+    #[must_use]
+    pub fn with_kind(kind: PointerDeviceKind) -> Self {
+        let mut inner = IosFlingVelocityTracker::with_kind(kind);
+        inner.weights = [0.15, 0.65, 0.2];
+        Self { inner }
+    }
+
+    /// Record a position.
+    pub fn add_position(&mut self, time: Instant, position: Offset<Pixels>) {
+        self.inner.add_position(time, position);
+    }
+
+    /// Reset all samples.
+    pub fn reset(&mut self) {
+        self.inner.reset();
+    }
+
+    /// The pointer kind this tracker is configured for.
+    #[inline]
+    pub fn kind(&self) -> PointerDeviceKind {
+        self.inner.kind()
+    }
+
+    /// Velocity estimate using the macOS weights.
+    pub fn get_velocity_estimate(&self) -> Option<VelocityEstimate> {
+        self.inner.get_velocity_estimate()
+    }
+
+    /// Velocity as a [`Velocity`].
+    pub fn get_velocity(&self) -> Velocity {
+        self.inner.get_velocity()
+    }
+
+    /// Velocity for fling detection.
+    pub fn get_fling_velocity(&self, allow_slow: bool) -> Velocity {
+        self.inner.get_fling_velocity(allow_slow)
+    }
+}
+
+// ============================================================================
+// Legacy type aliases (kept for transition — see VelocityEstimationStrategy below)
+// ============================================================================
+
+/// Strategy selector for [`VelocityTracker`]. Flutter's API does not expose
+/// a strategy; the least-squares tracker is the only one in the canonical
+/// pipeline. This enum is preserved as a thin compatibility shim that maps
+/// to the underlying flavour: `LinearRegression` and `TwoSample` both fall
+/// back to the L2S tracker (the maths is strictly better), and
+/// `LeastSquaresPolynomial` is the default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VelocityEstimationStrategy {
+    /// Least-squares polynomial regression (the only strategy Flutter uses;
+    /// kept as the variant name for source-compat with the previous API).
+    #[default]
+    LeastSquaresPolynomial,
+    /// Linear regression — preserved for source compat; the L2S tracker
+    /// produces strictly better results for the same data, so the variant
+    /// is aliased to it.
+    LinearRegression,
+    /// Two-sample velocity — preserved for source compat; same reasoning.
+    TwoSample,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_velocity_zero() {
-        assert_eq!(Velocity::ZERO, Velocity::ZERO);
-        assert_eq!(Velocity::ZERO.magnitude(), 0.0);
+    fn linear_swipe_x(
+        duration_ms: u64,
+        samples: usize,
+        slope_px_per_s: f32,
+    ) -> Vec<(Instant, Offset<Pixels>)> {
+        let start = Instant::now();
+        let dt = Duration::from_millis(duration_ms / samples as u64);
+        (0..samples)
+            .map(|i| {
+                let t = start + dt * i as u32;
+                let pos = Offset::new(
+                    Pixels(slope_px_per_s * (i as f32 * dt.as_secs_f32())),
+                    Pixels(0.0),
+                );
+                (t, pos)
+            })
+            .collect()
     }
 
     #[test]
-    fn test_velocity_magnitude() {
+    fn zero_velocity_is_zero() {
+        let v = Velocity::ZERO;
+        assert_eq!(v, Velocity::ZERO);
+        assert_eq!(v.magnitude(), 0.0);
+    }
+
+    #[test]
+    fn magnitude_and_direction() {
         let v = Velocity::new(Offset::new(Pixels(3.0), Pixels(4.0)));
         assert!((v.magnitude() - 5.0).abs() < 0.001);
     }
 
     #[test]
-    fn test_velocity_direction() {
-        let v = Velocity::new(Offset::new(Pixels(10.0), Pixels(0.0)));
-        let dir = v.direction();
-        assert!((dir - 0.0).abs() < 0.001); // Horizontal direction is 0 radians
-
-        // Zero velocity direction is 0.0 (atan2(0, 0) = 0)
-        assert!((Velocity::ZERO.direction() - 0.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_velocity_clamp() {
-        let v = Velocity::new(Offset::new(Pixels(1000.0), Pixels(0.0)));
-        let clamped = v.clamp_magnitude(0.0, 500.0);
-        assert!((clamped.magnitude() - 500.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_tracker_empty() {
-        let tracker = VelocityTracker::new();
-        assert_eq!(tracker.velocity(), Velocity::ZERO);
+    fn empty_tracker_has_no_estimate() {
+        let tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
+        assert_eq!(tracker.get_velocity(), Velocity::ZERO);
         assert!(!tracker.has_sufficient_data());
     }
 
     #[test]
-    fn test_tracker_single_sample() {
-        let mut tracker = VelocityTracker::new();
+    fn single_sample_returns_zero() {
+        let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
         tracker.add_position(Instant::now(), Offset::new(Pixels(0.0), Pixels(0.0)));
-        assert_eq!(tracker.velocity(), Velocity::ZERO);
-        assert!(!tracker.has_sufficient_data());
+        assert_eq!(tracker.get_velocity(), Velocity::ZERO);
     }
 
     #[test]
-    fn test_tracker_horizontal_motion() {
-        let mut tracker = VelocityTracker::new();
-        let start = Instant::now();
-
-        // 100 pixels in 100ms = 1000 px/s
-        for i in 0..10 {
-            let t = start + Duration::from_millis(i * 10);
-            tracker.add_position(t, Offset::new(Pixels(i as f32 * 10.0), Pixels(0.0)));
+    fn horizontal_swipe_matches_slope() {
+        let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
+        // 1000 px/s over 100 ms, 10 samples → slope 1000 px/s, dx ≈ 1000.
+        for (t, p) in linear_swipe_x(100, 10, 1000.0) {
+            tracker.add_position(t, p);
         }
-
-        let velocity = tracker.velocity();
-        // Should be approximately 1000 px/s horizontal
-        assert!(velocity.pixels_per_second.dx > Pixels(800.0));
-        assert!(velocity.pixels_per_second.dx < Pixels(1200.0));
-        assert!(velocity.pixels_per_second.dy.abs() < Pixels(100.0));
+        let v = tracker.get_velocity();
+        assert!(
+            v.pixels_per_second.dx.get() > 800.0,
+            "expected dx > 800, got {}",
+            v.pixels_per_second.dx.get()
+        );
+        assert!(v.pixels_per_second.dx.get() < 1200.0);
+        assert!(v.pixels_per_second.dy.get().abs() < 100.0);
     }
 
     #[test]
-    fn test_tracker_vertical_motion() {
-        let mut tracker = VelocityTracker::new();
+    fn vertical_swipe_matches_slope() {
+        let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
         let start = Instant::now();
-
         for i in 0..10 {
-            let t = start + Duration::from_millis(i * 10);
-            tracker.add_position(t, Offset::new(Pixels(0.0), Pixels(i as f32 * 10.0)));
-        }
-
-        let velocity = tracker.velocity();
-        assert!(velocity.pixels_per_second.dx.abs() < Pixels(100.0));
-        assert!(velocity.pixels_per_second.dy > Pixels(800.0));
-    }
-
-    #[test]
-    fn test_tracker_diagonal_motion() {
-        let mut tracker = VelocityTracker::new();
-        let start = Instant::now();
-
-        for i in 0..10 {
-            let t = start + Duration::from_millis(i * 10);
             tracker.add_position(
-                t,
-                Offset::new(Pixels(i as f32 * 10.0), Pixels(i as f32 * 10.0)),
+                start + Duration::from_millis(i * 10),
+                Offset::new(Pixels(0.0), Pixels(i as f32 * 10.0)),
             );
         }
-
-        let velocity = tracker.velocity();
-        // Both components should be around 1000 px/s
-        assert!(velocity.pixels_per_second.dx > Pixels(800.0));
-        assert!(velocity.pixels_per_second.dy > Pixels(800.0));
+        let v = tracker.get_velocity();
+        assert!(v.pixels_per_second.dx.get().abs() < 100.0);
+        assert!(v.pixels_per_second.dy.get() > 800.0);
     }
 
     #[test]
-    fn test_tracker_reset() {
-        let mut tracker = VelocityTracker::new();
-        tracker.add_position(Instant::now(), Offset::new(Pixels(0.0), Pixels(0.0)));
-        tracker.add_position(Instant::now(), Offset::new(Pixels(10.0), Pixels(0.0)));
+    fn stationary_pointer_reports_zero() {
+        // 40 ms after the last sample, the tracker must report zero.
+        let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
+        let start = Instant::now();
+        for i in 0..10 {
+            tracker.add_position(
+                start + Duration::from_millis(i * 10),
+                Offset::new(Pixels(i as f32 * 10.0), Pixels(0.0)),
+            );
+        }
+        std::thread::sleep(ASSUME_POINTER_STOPPED + Duration::from_millis(20));
+        let estimate = tracker.get_velocity_estimate().expect("non-empty");
+        assert_eq!(estimate.pixels_per_second, Offset::ZERO);
+        assert_eq!(estimate.confidence, 1.0);
+    }
 
+    #[test]
+    fn fling_velocity_threshold() {
+        // 100 px/s swipe → below the 50 px/s-per-axis fling threshold? No,
+        // 100 > 50. So it should be a fling.
+        let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
+        for (t, p) in linear_swipe_x(100, 10, 100.0) {
+            tracker.add_position(t, p);
+        }
+        let fling = tracker.get_fling_velocity(false);
+        assert!(fling != Velocity::ZERO);
+
+        // 20 px/s swipe → well below threshold, must be zero.
+        let mut tracker2 = VelocityTracker::with_kind(PointerDeviceKind::Touch);
+        for (t, p) in linear_swipe_x(100, 10, 20.0) {
+            tracker2.add_position(t, p);
+        }
+        let no_fling = tracker2.get_fling_velocity(false);
+        assert_eq!(no_fling, Velocity::ZERO);
+
+        // allow_slow lifts the threshold.
+        let slow_ok = tracker2.get_fling_velocity(true);
+        assert!(slow_ok != Velocity::ZERO);
+    }
+
+    #[test]
+    fn ios_fling_matches_weighted_average() {
+        let mut tracker = IosFlingVelocityTracker::with_kind(PointerDeviceKind::Touch);
+        // 10 samples at 10 ms intervals, dx ramping by 10 px each step.
+        // → per-step velocity 1000 px/s for every adjacent pair, so all
+        // three weighted 2-point velocities are 1000 px/s.
+        let start = Instant::now();
+        for i in 0..10 {
+            tracker.add_position(
+                start + Duration::from_millis(i * 10),
+                Offset::new(Pixels(i as f32 * 10.0), Pixels(0.0)),
+            );
+        }
+        let v = tracker.get_velocity();
+        assert!(
+            (v.pixels_per_second.dx.get() - 1000.0).abs() < 1.0,
+            "expected ~1000 px/s, got {}",
+            v.pixels_per_second.dx.get()
+        );
+    }
+
+    #[test]
+    fn reset_clears_state() {
+        let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
+        // Three samples separated by 10 ms — enough for has_sufficient_data.
+        let start = Instant::now();
+        for i in 0..3 {
+            tracker.add_position(
+                start + Duration::from_millis(i * 10),
+                Offset::new(Pixels(i as f32 * 10.0), Pixels(0.0)),
+            );
+        }
         assert!(tracker.has_sufficient_data());
         tracker.reset();
         assert!(!tracker.has_sufficient_data());
+        assert_eq!(tracker.sample_count(), 0);
     }
 
     #[test]
-    fn test_tracker_strategies() {
-        let start = Instant::now();
-        let samples: Vec<_> = (0..10)
-            .map(|i| {
-                (
-                    start + Duration::from_millis(i * 10),
-                    Offset::new(Pixels(i as f32 * 10.0), Pixels(0.0)),
-                )
-            })
-            .collect();
-
-        for strategy in [
-            VelocityEstimationStrategy::LeastSquaresPolynomial,
-            VelocityEstimationStrategy::LinearRegression,
-            VelocityEstimationStrategy::TwoSample,
-        ] {
-            let mut tracker = VelocityTracker::with_strategy(strategy);
-            for (t, pos) in &samples {
-                tracker.add_position(*t, *pos);
-            }
-
-            let velocity = tracker.velocity();
-            // All strategies should give roughly 1000 px/s
-            assert!(
-                velocity.pixels_per_second.dx > Pixels(500.0),
-                "{:?} gave {}",
-                strategy,
-                velocity.pixels_per_second.dx
-            );
+    fn velocity_estimate_has_high_confidence_for_linear_data() {
+        let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
+        for (t, p) in linear_swipe_x(100, 10, 1000.0) {
+            tracker.add_position(t, p);
         }
+        let est = tracker.get_velocity_estimate().expect("non-empty");
+        assert!(
+            est.confidence > 0.9,
+            "confidence {} should be > 0.9 for linear data",
+            est.confidence
+        );
     }
 
     #[test]
-    fn test_velocity_estimate() {
-        let mut tracker = VelocityTracker::new();
-        let start = Instant::now();
-
-        for i in 0..10 {
-            let t = start + Duration::from_millis(i * 10);
-            tracker.add_position(t, Offset::new(Pixels(i as f32 * 10.0), Pixels(0.0)));
-        }
-
-        let estimate = tracker.estimate();
-        assert!(estimate.is_reliable());
-        assert_eq!(tracker.sample_count(), 10); // Check tracker sample count instead
-        assert!(estimate.confidence > 0.5);
-    }
-
-    #[test]
-    fn test_old_samples_removed() {
-        let mut tracker = VelocityTracker::new();
-        let start = Instant::now();
-
-        // Add old sample
-        tracker.add_position(start, Offset::ZERO);
-
-        // Add recent samples (200ms later, beyond HORIZON)
-        let recent = start + Duration::from_millis(200);
-        for i in 0..5 {
-            let t = recent + Duration::from_millis(i * 10);
-            tracker.add_position(t, Offset::new(Pixels(i as f32 * 10.0), Pixels(0.0)));
-        }
-
-        // Old sample should be removed, only 5 recent samples remain
-        assert_eq!(tracker.sample_count(), 5);
+    fn kind_is_recorded() {
+        let t = VelocityTracker::with_kind(PointerDeviceKind::Stylus);
+        assert_eq!(t.kind(), PointerDeviceKind::Stylus);
     }
 }

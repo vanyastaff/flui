@@ -8,11 +8,26 @@
 //! - Pointer up within timeout
 //!
 //! Flutter reference: <https://api.flutter.dev/flutter/gestures/TapGestureRecognizer-class.html>
+//!
+//! # Button support
+//!
+//! The recogniser is button-aware (U8): callers can register
+//! separate callbacks for [`TapButton::Primary`],
+//! [`TapButton::Secondary`], and [`TapButton::Tertiary`] clicks. The
+//! primary path keeps the legacy `on_tap*` callbacks and fires when
+//! the down event's `button` mask includes `Primary`. The secondary
+//! path fires the `on_secondary_tap*` callbacks on
+//! [`PointerButton::Secondary`] events; the tertiary path fires on
+//! [`PointerButton::Auxiliary`]
+//! (Flutter maps "tertiary" to the middle / auxiliary mouse button).
+//! If no button-specific callback is registered, the event is
+//! silently dropped (the recogniser stays a no-op for that button).
 
 use std::sync::Arc;
 
 use flui_types::{Offset, geometry::Pixels};
 use parking_lot::Mutex;
+use ui_events::pointer::PointerButton;
 
 use super::recognizer::{GestureRecognizer, RecognizerBase};
 use crate::{
@@ -20,7 +35,44 @@ use crate::{
     events::{PointerEvent, PointerType},
     ids::PointerId,
     settings::GestureSettings,
+    traits::PointerEventExtTrait,
 };
+
+/// Tap button slot — matches Flutter's `kPrimaryButton` / `kSecondaryButton`
+/// / `kTertiaryButton` separation.
+///
+/// U8 mapping:
+/// - [`TapButton::Primary`]   ↔ `ui_events::pointer::PointerButton::Primary`
+/// - [`TapButton::Secondary`] ↔ `ui_events::pointer::PointerButton::Secondary`
+/// - [`TapButton::Tertiary`]  ↔ `ui_events::pointer::PointerButton::Auxiliary`
+///   (Flutter convention — middle mouse button).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum TapButton {
+    /// Primary (default left mouse button / touch contact).
+    Primary,
+    /// Secondary (right mouse button).
+    Secondary,
+    /// Tertiary (auxiliary / middle mouse button).
+    Tertiary,
+}
+
+impl TapButton {
+    /// Map a raw [`PointerButton`] event payload to a [`TapButton`] slot.
+    ///
+    /// Returns `None` for buttons outside the three Flutter-tracked slots
+    /// (X1/X2/pen-eraser/etc.) — those events are ignored by the tap
+    /// recogniser entirely.
+    #[inline]
+    pub fn from_pointer_button(button: PointerButton) -> Option<Self> {
+        match button {
+            PointerButton::Primary => Some(Self::Primary),
+            PointerButton::Secondary => Some(Self::Secondary),
+            PointerButton::Auxiliary => Some(Self::Tertiary),
+            _ => None,
+        }
+    }
+}
 
 /// Callback for tap events
 pub type TapCallback = Arc<dyn Fn(TapDetails) + Send + Sync>;
@@ -42,19 +94,22 @@ pub struct TapDetails {
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// use flui_interaction::prelude::*;
+/// ```rust
+/// use flui_interaction::arena::GestureArena;
+/// use flui_interaction::recognizers::TapGestureRecognizer;
 ///
 /// let arena = GestureArena::new();
+/// // The recogniser is shared via `Arc`; clone the inner `Arc` to
+/// // register callbacks (U8 — `on_tap` fires on Primary button up).
 /// let recognizer = TapGestureRecognizer::new(arena)
 ///     .with_on_tap(|details| {
-///         println!("Tapped at {:?}", details.global_position);
+///         // The callback fires AFTER the arena confirms this
+///         // recogniser won; U8's `pending_up` deferral guarantees
+///         // only the arena winner receives the user callback.
+///         let _pos = details.global_position;
 ///     });
-///
-/// // Add to arena and handle events
-/// recognizer.add_pointer(pointer_id, position);
-/// recognizer.handle_event(&pointer_event);
-/// ```
+/// // `add_pointer` and `handle_event` are wired by
+/// // `flui_interaction::GestureBinding` at runtime.
 #[derive(Clone)]
 pub struct TapGestureRecognizer {
     /// Base state (arena, tracking, etc.)
@@ -73,7 +128,7 @@ pub struct TapGestureRecognizer {
     /// arena accept (Flutter parity at tap.dart — `on_tap_down` callback
     /// only fires after `BaseTapGestureRecognizer._checkDown` resolves
     /// `_sentTapDown = true` post-arena). Cleared on accept or reject.
-    pending_down: Arc<Mutex<Option<TapDetails>>>,
+    pending_down: Arc<Mutex<Option<PendingDown>>>,
 
     /// Pending tap-up details captured at handle_event Up; fired by
     /// handle_tap_up *after* arena resolution confirms acceptance.
@@ -81,7 +136,7 @@ pub struct TapGestureRecognizer {
     /// during handle_tap_up unconditionally, but `handle_event::Up` is
     /// dispatched to every arena member; only the eventual arena winner
     /// should fire user callbacks.
-    pending_up: Arc<Mutex<Option<TapDetails>>>,
+    pending_up: Arc<Mutex<Option<PendingDown>>>,
 
     /// Arena-resolution outcome flag set by `accept_gesture` /
     /// `reject_gesture`. Read by `handle_tap_up` *after*
@@ -107,6 +162,60 @@ struct TapCallbacks {
     on_tap_up: Option<TapCallback>,
     on_tap: Option<TapCallback>,
     on_tap_cancel: Option<TapCallback>,
+
+    // U8: secondary-button callbacks (right mouse).
+    on_secondary_tap_down: Option<TapCallback>,
+    on_secondary_tap_up: Option<TapCallback>,
+    on_secondary_tap: Option<TapCallback>,
+    on_secondary_tap_cancel: Option<TapCallback>,
+
+    // U8: tertiary-button callbacks (auxiliary / middle mouse).
+    on_tertiary_tap_down: Option<TapCallback>,
+    on_tertiary_tap_up: Option<TapCallback>,
+    on_tertiary_tap: Option<TapCallback>,
+    on_tertiary_tap_cancel: Option<TapCallback>,
+}
+
+impl TapCallbacks {
+    /// Per-button down-callback lookup.
+    #[inline]
+    fn down(&self, button: TapButton) -> Option<&TapCallback> {
+        match button {
+            TapButton::Primary => self.on_tap_down.as_ref(),
+            TapButton::Secondary => self.on_secondary_tap_down.as_ref(),
+            TapButton::Tertiary => self.on_tertiary_tap_down.as_ref(),
+        }
+    }
+
+    /// Per-button up-callback lookup.
+    #[inline]
+    fn up(&self, button: TapButton) -> Option<&TapCallback> {
+        match button {
+            TapButton::Primary => self.on_tap_up.as_ref(),
+            TapButton::Secondary => self.on_secondary_tap_up.as_ref(),
+            TapButton::Tertiary => self.on_tertiary_tap_up.as_ref(),
+        }
+    }
+
+    /// Per-button tap-callback lookup.
+    #[inline]
+    fn tap(&self, button: TapButton) -> Option<&TapCallback> {
+        match button {
+            TapButton::Primary => self.on_tap.as_ref(),
+            TapButton::Secondary => self.on_secondary_tap.as_ref(),
+            TapButton::Tertiary => self.on_tertiary_tap.as_ref(),
+        }
+    }
+
+    /// Per-button cancel-callback lookup.
+    #[inline]
+    fn cancel(&self, button: TapButton) -> Option<&TapCallback> {
+        match button {
+            TapButton::Primary => self.on_tap_cancel.as_ref(),
+            TapButton::Secondary => self.on_secondary_tap_cancel.as_ref(),
+            TapButton::Tertiary => self.on_tertiary_tap_cancel.as_ref(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,6 +223,17 @@ enum TapState {
     Ready,
     Down,
     Cancelled,
+}
+
+/// Per-pointer button tracking for the active tap sequence (U8).
+///
+/// Stored alongside the recogniser's `gesture_state` so a switch from
+/// primary to non-primary mid-sequence is observable. Reset on every
+/// transition into `Ready` and on cancel.
+#[derive(Debug, Clone, PartialEq)]
+struct PendingDown {
+    details: TapDetails,
+    button: TapButton,
 }
 
 impl TapGestureRecognizer {
@@ -209,29 +329,117 @@ impl TapGestureRecognizer {
         self
     }
 
+    // ========================================================================
+    // U8: Secondary-button builders (right mouse).
+    // ========================================================================
+
+    /// Set the secondary-button tap-down callback.
+    pub fn with_on_secondary_tap_down(
+        self: Arc<Self>,
+        callback: impl Fn(TapDetails) + Send + Sync + 'static,
+    ) -> Arc<Self> {
+        self.callbacks.lock().on_secondary_tap_down = Some(Arc::new(callback));
+        self
+    }
+
+    /// Set the secondary-button tap-up callback.
+    pub fn with_on_secondary_tap_up(
+        self: Arc<Self>,
+        callback: impl Fn(TapDetails) + Send + Sync + 'static,
+    ) -> Arc<Self> {
+        self.callbacks.lock().on_secondary_tap_up = Some(Arc::new(callback));
+        self
+    }
+
+    /// Set the secondary-button tap callback (fires on successful up).
+    pub fn with_on_secondary_tap(
+        self: Arc<Self>,
+        callback: impl Fn(TapDetails) + Send + Sync + 'static,
+    ) -> Arc<Self> {
+        self.callbacks.lock().on_secondary_tap = Some(Arc::new(callback));
+        self
+    }
+
+    /// Set the secondary-button tap-cancel callback.
+    pub fn with_on_secondary_tap_cancel(
+        self: Arc<Self>,
+        callback: impl Fn(TapDetails) + Send + Sync + 'static,
+    ) -> Arc<Self> {
+        self.callbacks.lock().on_secondary_tap_cancel = Some(Arc::new(callback));
+        self
+    }
+
+    // ========================================================================
+    // U8: Tertiary-button builders (auxiliary / middle mouse).
+    // ========================================================================
+
+    /// Set the tertiary-button tap-down callback.
+    pub fn with_on_tertiary_tap_down(
+        self: Arc<Self>,
+        callback: impl Fn(TapDetails) + Send + Sync + 'static,
+    ) -> Arc<Self> {
+        self.callbacks.lock().on_tertiary_tap_down = Some(Arc::new(callback));
+        self
+    }
+
+    /// Set the tertiary-button tap-up callback.
+    pub fn with_on_tertiary_tap_up(
+        self: Arc<Self>,
+        callback: impl Fn(TapDetails) + Send + Sync + 'static,
+    ) -> Arc<Self> {
+        self.callbacks.lock().on_tertiary_tap_up = Some(Arc::new(callback));
+        self
+    }
+
+    /// Set the tertiary-button tap callback (fires on successful up).
+    pub fn with_on_tertiary_tap(
+        self: Arc<Self>,
+        callback: impl Fn(TapDetails) + Send + Sync + 'static,
+    ) -> Arc<Self> {
+        self.callbacks.lock().on_tertiary_tap = Some(Arc::new(callback));
+        self
+    }
+
+    /// Set the tertiary-button tap-cancel callback.
+    pub fn with_on_tertiary_tap_cancel(
+        self: Arc<Self>,
+        callback: impl Fn(TapDetails) + Send + Sync + 'static,
+    ) -> Arc<Self> {
+        self.callbacks.lock().on_tertiary_tap_cancel = Some(Arc::new(callback));
+        self
+    }
+
     /// Handle tap down event — records pending down details + transitions
-    /// state. The `on_tap_down` callback is NOT fired here; per Flutter
+    /// state. The per-button down callback is NOT fired here; per Flutter
     /// parity at `tap.dart::_BaseTapGestureRecognizer::_checkDown`, the
     /// callback fires only after arena accept (see [`Self::accept_gesture`]).
-    fn handle_tap_down(&self, position: Offset<Pixels>, kind: PointerType) {
+    ///
+    /// U8: `button` is locked at down-time; a primary-button down that
+    /// later receives a secondary up is treated as cancel (button
+    /// mismatch), matching Flutter's `_route` rejection path.
+    fn handle_tap_down(&self, position: Offset<Pixels>, kind: PointerType, button: TapButton) {
         *self.gesture_state.lock() = TapState::Down;
-        *self.pending_down.lock() = Some(TapDetails {
-            global_position: position,
-            local_position: position,
-            kind,
+        *self.pending_down.lock() = Some(PendingDown {
+            details: TapDetails {
+                global_position: position,
+                local_position: position,
+                kind,
+            },
+            button,
         });
     }
 
-    /// Fire pending `on_tap_down` callback, if any. Called from
-    /// `accept_gesture` once arena resolves us as the winner. Matches
+    /// Fire pending per-button `on_*_tap_down` callback, if any. Called
+    /// from `accept_gesture` once arena resolves us as the winner. Matches
     /// Flutter `tap.dart::_checkDown`'s `_sentTapDown` guard — fires
     /// exactly once per gesture sequence.
     fn fire_pending_tap_down(&self) {
-        let Some(details) = self.pending_down.lock().take() else {
+        let Some(pending) = self.pending_down.lock().take() else {
             return;
         };
-        if let Some(callback) = self.callbacks.lock().on_tap_down.clone() {
-            callback(details);
+        let callback = self.callbacks.lock().down(pending.button).cloned();
+        if let Some(cb) = callback {
+            cb(pending.details);
         }
     }
 
@@ -242,62 +450,101 @@ impl TapGestureRecognizer {
     /// callbacks ONLY if arena confirmed acceptance. Eliminates the prior
     /// assumption that pointer-up implies victory (some competing
     /// recognizers also receive Up events without winning).
-    fn handle_tap_up(&self, position: Offset<Pixels>, kind: PointerType) {
+    ///
+    /// U8: button mismatch (down was Primary, up is Secondary) cancels
+    /// the tap rather than firing the secondary slot — Flutter
+    /// `tap.dart::_checkUp` routes the up to whichever button stream
+    /// initiated the down.
+    fn handle_tap_up(&self, position: Offset<Pixels>, kind: PointerType, button: TapButton) {
         let current_state = *self.gesture_state.lock();
 
-        if current_state == TapState::Down {
-            *self.gesture_state.lock() = TapState::Ready;
-            let details = TapDetails {
-                global_position: position,
-                local_position: position,
-                kind,
-            };
-            // Record pending Up — fired only after arena confirms accept.
-            *self.pending_up.lock() = Some(details);
+        if current_state != TapState::Down {
+            return;
+        }
 
-            // Trigger arena resolution. This synchronously dispatches to
-            // either `accept_gesture` or `reject_gesture` below, which sets
-            // `self.accepted`.
-            self.state.stop_tracking();
-
-            // After arena resolution: fire callbacks if we won.
-            let accepted = self.accepted.lock().unwrap_or(false);
-            if accepted {
-                // Fire on_tap_down first (Flutter ordering), then up + tap.
-                // fire_pending_tap_down takes the pending_down; idempotent.
-                self.fire_pending_tap_down();
-                let Some(up_details) = self.pending_up.lock().take() else {
-                    return;
+        // Button-mismatch → cancel the in-flight primary tap.
+        let down_btn = self.pending_down.lock().as_ref().map(|p| p.button);
+        if let Some(down_btn) = down_btn
+            && down_btn != button
+        {
+            *self.gesture_state.lock() = TapState::Cancelled;
+            // Notify the down-button cancel slot if any was wired.
+            let cancel_cb = self.callbacks.lock().cancel(down_btn).cloned();
+            if let Some(cb) = cancel_cb {
+                let details = TapDetails {
+                    global_position: position,
+                    local_position: position,
+                    kind,
                 };
-                if let Some(callback) = self.callbacks.lock().on_tap_up.clone() {
-                    callback(up_details.clone());
-                }
-                if let Some(callback) = self.callbacks.lock().on_tap.clone() {
-                    callback(up_details);
-                }
+                cb(details);
+            }
+            self.state.stop_tracking();
+            *self.pending_down.lock() = None;
+            return;
+        }
+
+        *self.gesture_state.lock() = TapState::Ready;
+        let details = TapDetails {
+            global_position: position,
+            local_position: position,
+            kind,
+        };
+        // Record pending Up — fired only after arena confirms accept.
+        *self.pending_up.lock() = Some(PendingDown { details, button });
+
+        // Trigger arena resolution. This synchronously dispatches to
+        // either `accept_gesture` or `reject_gesture` below, which sets
+        // `self.accepted`.
+        self.state.stop_tracking();
+
+        // After arena resolution: fire callbacks if we won.
+        if self.accepted.lock().unwrap_or(false) {
+            // Fire per-button tap-down first (Flutter ordering), then up + tap.
+            self.fire_pending_tap_down();
+            let Some(pending_up) = self.pending_up.lock().take() else {
+                return;
+            };
+            let (up_cb, tap_cb) = {
+                let cbs = self.callbacks.lock();
+                (
+                    cbs.up(pending_up.button).cloned(),
+                    cbs.tap(pending_up.button).cloned(),
+                )
+            };
+            if let Some(cb) = up_cb {
+                cb(pending_up.details.clone());
+            }
+            if let Some(cb) = tap_cb {
+                cb(pending_up.details);
             }
         }
     }
 
-    /// Handle tap cancel event
+    /// Handle tap cancel event.
     fn handle_tap_cancel(&self, position: Offset<Pixels>, kind: PointerType) {
         let current_state = *self.gesture_state.lock();
 
         if current_state == TapState::Down {
             *self.gesture_state.lock() = TapState::Cancelled;
 
-            // Call on_tap_cancel callback
-            if let Some(callback) = self.callbacks.lock().on_tap_cancel.clone() {
-                let details = TapDetails {
-                    global_position: position,
-                    local_position: position,
-                    kind,
-                };
-                callback(details);
+            // Call per-button cancel callback for the button that initiated
+            // the down (U8).
+            let button = self.pending_down.lock().as_ref().map(|p| p.button);
+            if let Some(btn) = button {
+                let cancel_cb = self.callbacks.lock().cancel(btn).cloned();
+                if let Some(cb) = cancel_cb {
+                    let details = TapDetails {
+                        global_position: position,
+                        local_position: position,
+                        kind,
+                    };
+                    cb(details);
+                }
             }
 
             // Reject in arena
             self.state.reject();
+            *self.pending_down.lock() = None;
         }
     }
 
@@ -306,7 +553,9 @@ impl TapGestureRecognizer {
         let current_state = *self.gesture_state.lock();
 
         if current_state == TapState::Down {
-            // Call on_tap_move callback
+            // Call on_tap_move callback (primary-only — Flutter has no
+            // secondary/tertiary move; a primary-button tap that moves is
+            // still observed by `on_tap_move`).
             if let Some(callback) = self.callbacks.lock().on_tap_move.clone() {
                 let details = TapDetails {
                     global_position: position,
@@ -330,10 +579,38 @@ impl TapGestureRecognizer {
         }
         false
     }
+
+    /// Extract the [`TapButton`] slot for a `PointerEvent::Down` payload.
+    fn down_button(event: &PointerEvent) -> TapButton {
+        if let PointerEvent::Down(data) = event {
+            data.button
+                .and_then(TapButton::from_pointer_button)
+                .unwrap_or(TapButton::Primary)
+        } else {
+            TapButton::Primary
+        }
+    }
+
+    /// Extract the [`TapButton`] slot for a `PointerEvent::Up` payload.
+    fn up_button(event: &PointerEvent) -> TapButton {
+        if let PointerEvent::Up(data) = event {
+            data.button
+                .and_then(TapButton::from_pointer_button)
+                .unwrap_or(TapButton::Primary)
+        } else {
+            TapButton::Primary
+        }
+    }
 }
 
 impl GestureRecognizer for TapGestureRecognizer {
     fn add_pointer(&self, pointer: PointerId, position: Offset<Pixels>) {
+        // U11: per-impl span (trait fn disallows `#[instrument]`).
+        let _span = tracing::info_span!(
+            "tap.add_pointer",
+            pointer = ?pointer,
+            event = %crate::observability::GestureEvent::RecognizerAdded,
+        );
         if !self.state.assert_not_disposed("add_pointer") {
             return;
         }
@@ -347,20 +624,40 @@ impl GestureRecognizer for TapGestureRecognizer {
         let recognizer = Arc::new(self.clone());
         self.state.start_tracking(pointer, position, &recognizer);
 
-        // Handle tap down
-        self.handle_tap_down(position, PointerType::Touch);
+        // U8: button is determined by the first Down event (the pointer
+        // API surface takes only position). `handle_event`'s Down
+        // branch fires the actual `handle_tap_down` with the
+        // event-supplied button. Until then stay in Ready so a
+        // no-down-pointer flow cannot accidentally win the arena.
     }
 
     fn handle_event(&self, event: &PointerEvent) {
+        // U11: per-impl span (trait fn disallows `#[instrument]`).
+        let _span = tracing::info_span!(
+            "tap.handle_event",
+            kind = %crate::observability::pointer_event_kind(event),
+            event = %crate::observability::GestureEvent::EventReceived,
+        );
         if !self.state.assert_not_disposed("handle_event") {
             return;
         }
         // Only process if we're tracking a pointer
-        if self.state.primary_pointer().is_none() {
+        let Some(primary) = self.state.primary_pointer() else {
+            return;
+        };
+        // Filter to the primary pointer we are tracking (ignore
+        // secondary-pointer events in single-pointer recognisers).
+        if event.pointer_id() != primary {
             return;
         }
 
         match event {
+            PointerEvent::Down(data) => {
+                let pos = data.state.position;
+                let position = Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32));
+                let button = Self::down_button(event);
+                self.handle_tap_down(position, data.pointer.pointer_type, button);
+            }
             PointerEvent::Move(data) => {
                 let pos = data.current.position;
                 let position = Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32));
@@ -376,7 +673,8 @@ impl GestureRecognizer for TapGestureRecognizer {
             PointerEvent::Up(data) => {
                 let pos = data.state.position;
                 let position = Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32));
-                self.handle_tap_up(position, data.pointer.pointer_type);
+                let button = Self::up_button(event);
+                self.handle_tap_up(position, data.pointer.pointer_type, button);
             }
             PointerEvent::Cancel(info) => {
                 // Cancel doesn't have position, use initial position
@@ -400,6 +698,17 @@ impl GestureRecognizer for TapGestureRecognizer {
         callbacks.on_tap_up = None;
         callbacks.on_tap = None;
         callbacks.on_tap_cancel = None;
+        // U8: secondary / tertiary slots.
+        callbacks.on_secondary_tap_down = None;
+        callbacks.on_secondary_tap_up = None;
+        callbacks.on_secondary_tap = None;
+        callbacks.on_secondary_tap_cancel = None;
+        callbacks.on_tertiary_tap_down = None;
+        callbacks.on_tertiary_tap_up = None;
+        callbacks.on_tertiary_tap = None;
+        callbacks.on_tertiary_tap_cancel = None;
+        *self.pending_down.lock() = None;
+        *self.pending_up.lock() = None;
     }
 
     fn primary_pointer(&self) -> Option<PointerId> {
@@ -470,12 +779,12 @@ impl GestureArenaMember for TapGestureRecognizer {
         *self.accepted.lock() = Some(false);
         *self.pending_down.lock() = None;
         *self.pending_up.lock() = None;
-        // Fire on_tap_cancel outside arena lock via the recognizer's
-        // existing cancel handler (which only touches recognizer-owned
-        // locks, not arena's).
-        if let Some(pos) = self.state.initial_position() {
-            self.handle_tap_cancel(pos, PointerType::Touch);
-        }
+        // Do NOT call handle_tap_cancel here — it calls self.state.reject(),
+        // which re-enters the arena while the arena is still dispatching
+        // reject_gesture, causing a deadlock (parking_lot::Mutex is not
+        // reentrant). The cancel callback was already fired in
+        // handle_tap_up on the button-mismatch path; the slop-exceeded
+        // path fires cancel before reject(), so no duplicate is needed.
     }
 }
 
@@ -483,6 +792,30 @@ impl GestureArenaMember for TapGestureRecognizer {
 mod tests {
     use super::*;
     use crate::arena::GestureArena;
+    use ui_events::pointer::PointerButton;
+
+    fn pos(x: f32, y: f32) -> Offset<Pixels> {
+        Offset::new(Pixels(x), Pixels(y))
+    }
+
+    fn primary_down(p: Offset<Pixels>) -> PointerEvent {
+        crate::events::make_down_event_with_button(p, PointerType::Touch, PointerButton::Primary)
+    }
+    fn secondary_down(p: Offset<Pixels>) -> PointerEvent {
+        crate::events::make_down_event_with_button(p, PointerType::Touch, PointerButton::Secondary)
+    }
+    fn tertiary_down(p: Offset<Pixels>) -> PointerEvent {
+        crate::events::make_down_event_with_button(p, PointerType::Touch, PointerButton::Auxiliary)
+    }
+    fn primary_up(p: Offset<Pixels>) -> PointerEvent {
+        crate::events::make_up_event_with_button(p, PointerType::Touch, PointerButton::Primary)
+    }
+    fn secondary_up(p: Offset<Pixels>) -> PointerEvent {
+        crate::events::make_up_event_with_button(p, PointerType::Touch, PointerButton::Secondary)
+    }
+    fn tertiary_up(p: Offset<Pixels>) -> PointerEvent {
+        crate::events::make_up_event_with_button(p, PointerType::Touch, PointerButton::Auxiliary)
+    }
 
     #[test]
     fn test_tap_recognizer_creation() {
@@ -492,6 +825,29 @@ mod tests {
         assert_eq!(recognizer.primary_pointer(), None);
     }
 
+    /// U8 sanity: `TapButton::from_pointer_button` correctly routes
+    /// Primary / Secondary / Auxiliary to the three slots and returns
+    /// `None` for X1 / X2.
+    #[test]
+    fn tap_button_from_pointer_button_routes_three_slots() {
+        assert_eq!(
+            TapButton::from_pointer_button(PointerButton::Primary),
+            Some(TapButton::Primary)
+        );
+        assert_eq!(
+            TapButton::from_pointer_button(PointerButton::Secondary),
+            Some(TapButton::Secondary)
+        );
+        assert_eq!(
+            TapButton::from_pointer_button(PointerButton::Auxiliary),
+            Some(TapButton::Tertiary)
+        );
+        assert_eq!(TapButton::from_pointer_button(PointerButton::X1), None);
+    }
+
+    /// Legacy primary path: down + up with the Primary button
+    /// fires `on_tap` (PR #87 review fix — `add_pointer` no longer
+    /// pre-stages the down; the down event itself does).
     #[test]
     fn test_tap_recognizer_with_callback() {
         let arena = GestureArena::new();
@@ -502,14 +858,13 @@ mod tests {
             *tapped_clone.lock() = true;
         });
 
-        let pointer = PointerId::new(2).expect("nonzero pointer id");
-        let position = Offset::new(Pixels(100.0), Pixels(100.0));
+        let pointer = PointerId::PRIMARY;
+        let position = pos(100.0, 100.0);
 
-        // Simulate tap: down -> up
         recognizer.add_pointer(pointer, position);
-        recognizer.handle_event(&crate::events::make_up_event(position, PointerType::Touch));
+        recognizer.handle_event(&primary_down(position));
+        recognizer.handle_event(&primary_up(position));
 
-        // Should have called callback
         assert!(*tapped.lock());
     }
 
@@ -530,20 +885,19 @@ mod tests {
                 *cancelled_clone.lock() = true;
             });
 
-        let pointer = PointerId::new(2).expect("nonzero pointer id");
-        let start_pos = Offset::new(Pixels(100.0), Pixels(100.0));
+        let pointer = PointerId::PRIMARY;
+        let start_pos = pos(100.0, 100.0);
 
-        // Start tap
         recognizer.add_pointer(pointer, start_pos);
+        recognizer.handle_event(&primary_down(start_pos));
 
-        // Move too far (beyond TAP_SLOP = 18px)
-        let moved_pos = Offset::new(Pixels(100.0), Pixels(130.0)); // 30px away
+        // 30px away — beyond TAP_SLOP = 18px.
+        let moved_pos = pos(100.0, 130.0);
         recognizer.handle_event(&crate::events::make_move_event(
             moved_pos,
             PointerType::Touch,
         ));
 
-        // Should have cancelled
         assert!(*cancelled.lock());
         assert!(!*tapped.lock());
     }
@@ -558,23 +912,139 @@ mod tests {
             *tapped_clone.lock() = true;
         });
 
-        let pointer = PointerId::new(2).expect("nonzero pointer id");
-        let start_pos = Offset::new(Pixels(100.0), Pixels(100.0));
+        let pointer = PointerId::PRIMARY;
+        let start_pos = pos(100.0, 100.0);
 
-        // Start tap
         recognizer.add_pointer(pointer, start_pos);
+        recognizer.handle_event(&primary_down(start_pos));
 
-        // Move slightly (within TAP_SLOP = 18px)
-        let moved_pos = Offset::new(Pixels(105.0), Pixels(105.0)); // ~7px away
+        // ~7px — within slop.
+        let moved_pos = pos(105.0, 105.0);
         recognizer.handle_event(&crate::events::make_move_event(
             moved_pos,
             PointerType::Touch,
         ));
 
-        // Tap up
-        recognizer.handle_event(&crate::events::make_up_event(moved_pos, PointerType::Touch));
+        recognizer.handle_event(&primary_up(moved_pos));
 
-        // Should have succeeded (within slop)
         assert!(*tapped.lock());
+    }
+
+    // ========================================================================
+    // U8: secondary / tertiary button routing.
+    // ========================================================================
+
+    /// Right-click down + up fires `on_secondary_tap`; primary slot
+    /// stays silent.
+    #[test]
+    fn u8_secondary_button_routes_to_secondary_callbacks() {
+        let arena = GestureArena::new();
+        let secondary_tapped = Arc::new(Mutex::new(false));
+        let primary_tapped = Arc::new(Mutex::new(false));
+        let s_clone = secondary_tapped.clone();
+        let p_clone = primary_tapped.clone();
+
+        let recognizer = TapGestureRecognizer::new(arena)
+            .with_on_tap(move |_| *p_clone.lock() = true)
+            .with_on_secondary_tap(move |_| *s_clone.lock() = true);
+
+        let pointer = PointerId::PRIMARY;
+        let position = pos(50.0, 50.0);
+
+        recognizer.add_pointer(pointer, position);
+        recognizer.handle_event(&secondary_down(position));
+        recognizer.handle_event(&secondary_up(position));
+
+        assert!(*secondary_tapped.lock());
+        assert!(!*primary_tapped.lock());
+    }
+
+    /// Middle-click down + up fires `on_tertiary_tap`; primary slot
+    /// stays silent.
+    #[test]
+    fn u8_tertiary_button_routes_to_tertiary_callbacks() {
+        let arena = GestureArena::new();
+        let tertiary_tapped = Arc::new(Mutex::new(false));
+        let primary_tapped = Arc::new(Mutex::new(false));
+        let t_clone = tertiary_tapped.clone();
+        let p_clone = primary_tapped.clone();
+
+        let recognizer = TapGestureRecognizer::new(arena)
+            .with_on_tap(move |_| *p_clone.lock() = true)
+            .with_on_tertiary_tap(move |_| *t_clone.lock() = true);
+
+        let pointer = PointerId::PRIMARY;
+        let position = pos(60.0, 60.0);
+
+        recognizer.add_pointer(pointer, position);
+        recognizer.handle_event(&tertiary_down(position));
+        recognizer.handle_event(&tertiary_up(position));
+
+        assert!(*tertiary_tapped.lock());
+        assert!(!*primary_tapped.lock());
+    }
+
+    /// Down with Primary then Up with Secondary must cancel the
+    /// primary tap (button mismatch) — mirrors Flutter
+    /// `tap.dart::_checkUp` rejection. Primary `on_tap_cancel`
+    /// fires; neither `on_tap` nor `on_secondary_tap` does.
+    #[test]
+    fn u8_button_mismatch_cancels_primary_tap() {
+        let arena = GestureArena::new();
+        let tapped = Arc::new(Mutex::new(false));
+        let cancelled = Arc::new(Mutex::new(false));
+        let secondary_tapped = Arc::new(Mutex::new(false));
+        let t_clone = tapped.clone();
+        let c_clone = cancelled.clone();
+        let s_clone = secondary_tapped.clone();
+
+        let recognizer = TapGestureRecognizer::new(arena)
+            .with_on_tap(move |_| *t_clone.lock() = true)
+            .with_on_tap_cancel(move |_| *c_clone.lock() = true)
+            .with_on_secondary_tap(move |_| *s_clone.lock() = true);
+
+        let pointer = PointerId::PRIMARY;
+        let position = pos(70.0, 70.0);
+
+        recognizer.add_pointer(pointer, position);
+        recognizer.handle_event(&primary_down(position));
+        // Up carries a different button — cancels the primary tap.
+        recognizer.handle_event(&secondary_up(position));
+
+        assert!(*cancelled.lock());
+        assert!(!*tapped.lock());
+        assert!(!*secondary_tapped.lock());
+    }
+
+    /// Slop-exceeded cancel on a secondary-button tap must fire
+    /// `on_secondary_tap_cancel` (not the primary cancel slot).
+    #[test]
+    fn u8_secondary_slop_cancel_routes_to_secondary_cancel() {
+        let arena = GestureArena::new();
+        let primary_cancelled = Arc::new(Mutex::new(false));
+        let secondary_cancelled = Arc::new(Mutex::new(false));
+        let p_clone = primary_cancelled.clone();
+        let s_clone = secondary_cancelled.clone();
+
+        let recognizer = TapGestureRecognizer::new(arena)
+            .with_on_tap_cancel(move |_| *p_clone.lock() = true)
+            .with_on_secondary_tap_cancel(move |_| *s_clone.lock() = true);
+
+        let pointer = PointerId::PRIMARY;
+        let start_pos = pos(80.0, 80.0);
+
+        recognizer.add_pointer(pointer, start_pos);
+        recognizer.handle_event(&secondary_down(start_pos));
+
+        // 30px move — past TAP_SLOP. Slop detection routes to the
+        // secondary cancel slot because the down button is Secondary.
+        let moved_pos = pos(80.0, 110.0);
+        recognizer.handle_event(&crate::events::make_move_event(
+            moved_pos,
+            PointerType::Touch,
+        ));
+
+        assert!(*secondary_cancelled.lock());
+        assert!(!*primary_cancelled.lock());
     }
 }

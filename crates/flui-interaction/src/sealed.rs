@@ -193,6 +193,9 @@ pub mod gesture_recognizer {
     impl Sealed for crate::recognizers::ScaleGestureRecognizer {}
     impl Sealed for crate::recognizers::MultiTapGestureRecognizer {}
     impl Sealed for crate::recognizers::ForcePressGestureRecognizer {}
+    impl Sealed for crate::recognizers::MultiDragGestureRecognizer {}
+    impl Sealed for crate::recognizers::TapAndDragGestureRecognizer {}
+    impl Sealed for crate::recognizers::EagerGestureRecognizer {}
 }
 
 /// Sealed trait for arena members.
@@ -213,6 +216,9 @@ pub mod arena_member {
     impl Sealed for crate::recognizers::ScaleGestureRecognizer {}
     impl Sealed for crate::recognizers::MultiTapGestureRecognizer {}
     impl Sealed for crate::recognizers::ForcePressGestureRecognizer {}
+    impl Sealed for crate::recognizers::MultiDragGestureRecognizer {}
+    impl Sealed for crate::recognizers::TapAndDragGestureRecognizer {}
+    impl Sealed for crate::recognizers::EagerGestureRecognizer {}
 }
 
 /// Sealed trait for focus nodes.

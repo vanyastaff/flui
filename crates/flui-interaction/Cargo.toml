@@ -40,6 +40,37 @@ tokio = { workspace = true, features = ["time", "sync", "macros", "rt"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
+# `tracing-subscriber` is a dev-only dependency — the U11 observability
+# tests install a `fmt::TestWriter` subscriber to exercise span emission
+# on hot paths. End users configure their subscriber at the app
+# boundary via `flui_foundation::log::Logger`, not via this crate.
+tracing-subscriber = { workspace = true }
+# Criterion 0.7 — hot-path regression guards for the U12 unit. Four
+# benches cover VelocityTracker (per-pointer-move), GestureArena
+# (per-pointer-up), TapGestureRecognizer (per-pointer-event), and
+# PointerEventResampler (per-raw-input). Each follows the workspace
+# benchmark template at
+# `rust-studio/.../templates/benchmark-report.md`.
+criterion = { workspace = true }
+# Bench fixtures use the `make_*_event` test helpers which are gated
+# behind the `testing` feature (they're not part of the release API).
+flui-interaction = { path = ".", features = ["testing"] }
+
+[[bench]]
+name = "velocity_tracker_bench"
+harness = false
+
+[[bench]]
+name = "gesture_arena_bench"
+harness = false
+
+[[bench]]
+name = "tap_detector_bench"
+harness = false
+
+[[bench]]
+name = "pointer_resampler_bench"
+harness = false
 
 [features]
 default = []

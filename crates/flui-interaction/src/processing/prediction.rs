@@ -248,8 +248,8 @@ impl InputPredictor {
         // Clamp prediction time
         let time_ahead = time_ahead.min(self.config.max_prediction_time);
 
-        // If disabled or no data, return last known position
-        if time_ahead.is_zero() || self.last_position.is_none() {
+        // If disabled or no data, return last known position (if any)
+        if time_ahead.is_zero() {
             return PredictedPosition {
                 position: self.last_position.unwrap_or(Offset::ZERO),
                 confidence: if self.last_position.is_some() {
@@ -262,7 +262,17 @@ impl InputPredictor {
             };
         }
 
-        let last_pos = self.last_position.unwrap();
+        // From here on, `last_pos` is the only way to access `self.last_position`;
+        // the `if let` guard makes the `None` case unrepresentable and removes
+        // the need for an `.unwrap()`.
+        let Some(last_pos) = self.last_position else {
+            return PredictedPosition {
+                position: Offset::ZERO,
+                confidence: 0.0,
+                prediction_time: Duration::ZERO,
+                velocity: Velocity::ZERO,
+            };
+        };
         let velocity = self.velocity_tracker.velocity();
 
         // Not enough data for prediction
@@ -317,8 +327,11 @@ impl InputPredictor {
         }
 
         // Calculate confidence based on velocity consistency and sample count
-        let estimate = self.velocity_tracker.estimate();
-        let base_confidence = estimate.confidence;
+        // (estimate() returns Option — a missing estimate is a confidence 0 signal).
+        let base_confidence = self
+            .velocity_tracker
+            .estimate()
+            .map_or(0.0, |e| e.confidence);
 
         // Reduce confidence for longer predictions
         let time_factor = 1.0 - (dt / self.config.max_prediction_time.as_secs_f32()).min(1.0);

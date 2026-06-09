@@ -21,12 +21,19 @@
 //! let predicted = predictor.predict(Duration::from_millis(16));
 //! ```
 
+mod lsq_solver;
 mod prediction;
 mod raw_input;
 mod resampler;
+mod sampling_clock;
 mod velocity;
 
+pub use lsq_solver::{LeastSquaresSolver, MAX_DEGREE, MAX_SAMPLES, PolynomialFit};
 pub use prediction::{InputPredictor, PredictedPosition, PredictionConfig};
 pub use raw_input::{InputMode, RawInputHandler, RawPointerEvent};
 pub use resampler::PointerEventResampler;
-pub use velocity::{Velocity, VelocityEstimate, VelocityEstimationStrategy, VelocityTracker};
+pub use sampling_clock::{DEFAULT_SAMPLE_PERIOD, SamplingClock};
+pub use velocity::{
+    IosFlingVelocityTracker, MacosFlingVelocityTracker, Velocity, VelocityEstimate,
+    VelocityEstimationStrategy, VelocityTracker,
+};
