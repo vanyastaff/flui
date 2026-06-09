@@ -6,6 +6,7 @@
 use flui_foundation::Identifier;
 
 use super::TreeRead;
+use crate::depth::INLINE_TREE_DEPTH;
 use crate::error::{TreeError, TreeResult};
 
 /// Mutable access to tree nodes and structure.
@@ -97,22 +98,24 @@ pub trait TreeWrite<I: Identifier>: TreeRead<I> {
     /// codified non-cascade as the default — i.e. orphans-in-storage —
     /// which the audit T-1 finding flagged as a footgun.
     ///
-    /// The default impl walks the subtree post-order **iteratively**:
-    /// 1. Pre-walk via a worklist stack collects every descendant
-    ///    (and the root itself) into a `Vec<I>` in pre-order (root,
-    ///    then children, then grandchildren, …).
-    /// 2. Drain that vec in reverse so each `remove_shallow` call
-    ///    sees children disposing before their parents — the engine
-    ///    listeners and lifecycle hooks (`LayerNode::Drop` from
-    ///    PR #100 U8) rely on this post-order guarantee.
+    /// This default delegates to [`try_remove`](Self::try_remove),
+    /// which walks the subtree post-order **iteratively** with
+    /// cycle-detection. On a corrupted (cyclic) slab `try_remove`
+    /// returns `Err(TreeError::CycleDetected)`; `remove` maps that to
+    /// `None` + a `tracing::warn!` (callers needing to distinguish a
+    /// cycle from "not found" should call `try_remove` directly).
+    ///
+    /// The post-order drain guarantees each `remove_shallow` call sees
+    /// children disposing before their parents — the engine listeners
+    /// and lifecycle hooks (`LayerNode::Drop` from PR #100 U8) rely on
+    /// it.
     ///
     /// PR #103 followup: the original draft of this default did a
     /// recursive `self.remove(child_id)` call per child, which
     /// consumed one stack frame per tree depth level and risked a
     /// stack overflow on tall trees (large generated view trees or
     /// nested scroll views can exceed the default thread stack).
-    /// The iterative shape uses heap allocation for the worklist
-    /// (one `Vec<I>` of size N where N is the subtree size) and
+    /// The iterative shape uses heap allocation for the worklist and
     /// keeps stack usage constant regardless of depth.
     ///
     /// Implementations MAY override for efficiency (e.g. a `Vec`-backed
@@ -131,33 +134,103 @@ pub trait TreeWrite<I: Identifier>: TreeRead<I> {
     where
         Self: super::TreeNav<I> + Sized,
     {
+        match self.try_remove(id) {
+            Ok(node) => node,
+            Err(e @ TreeError::CycleDetected(_)) => {
+                tracing::warn!(
+                    error = ?e,
+                    "TreeWrite::remove encountered a cycle; returning None. \
+                     Use try_remove() to handle this case explicitly."
+                );
+                None
+            }
+            Err(e) => {
+                tracing::error!(error = ?e, "TreeWrite::remove encountered an unexpected error");
+                None
+            }
+        }
+    }
+
+    /// Removes a node **and all its descendants** with cycle-detection.
+    ///
+    /// This is the semantic-carrying sibling of [`remove`](Self::remove):
+    /// it returns `Err(TreeError::CycleDetected)` if a corrupted cycle is
+    /// found during the cascade walk rather than hanging or OOM-ing on an
+    /// infinite traversal. [`remove`](Self::remove) delegates here and
+    /// maps the `Err` to `None` + `tracing::warn!`.
+    ///
+    /// Callers that need to distinguish a genuine "node not found"
+    /// (`Ok(None)`) from a cycle error (`Err(CycleDetected)`) should call
+    /// `try_remove` directly.
+    ///
+    /// # Cycle detection
+    ///
+    /// Uses a `HashSet<I>` visited set for O(1) per-node detection
+    /// (O(N) space). The `I: Hash + Eq` bound is already supplied by the
+    /// [`Identifier`] supertrait, so no extra bound is required here.
+    /// Under the normal public API (`add_child`, `set_parent`) cycle
+    /// creation is rejected at insertion time; this guard is
+    /// defense-in-depth against a corrupted slab.
+    ///
+    /// # Worklist allocation
+    ///
+    /// Both the to-visit stack and the collected worklist use
+    /// `SmallVec<[I; INLINE_TREE_DEPTH]>` (inline = 32 entries) to avoid
+    /// heap allocation for typical shallow subtrees; deeper subtrees
+    /// spill to the heap (closes audit F24, replacing the prior
+    /// heap-allocated vector worklist).
+    ///
+    /// # Post-order drain
+    ///
+    /// The worklist is drained in reverse so each `remove_shallow` call
+    /// sees children disposing before their parents — the engine
+    /// listeners and lifecycle hooks rely on this post-order guarantee.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TreeError::CycleDetected`] if a node is visited twice
+    /// during the pre-walk (i.e. the slab contains a cycle).
+    fn try_remove(&mut self, id: I) -> Result<Option<Self::Node>, TreeError>
+    where
+        Self: super::TreeNav<I> + Sized,
+    {
+        use std::collections::HashSet;
+
+        use smallvec::SmallVec;
+
         if !self.contains(id) {
-            return None;
+            return Ok(None);
         }
 
-        // Pre-order pre-walk: collect every node in the subtree
-        // (root + all descendants) into a worklist. The walk uses an
-        // explicit stack so deep trees cannot exhaust the native
-        // call stack. Worklist memory is O(subtree size).
-        let mut worklist: Vec<I> = Vec::new();
-        let mut to_visit: Vec<I> = Vec::with_capacity(8);
+        let mut worklist: SmallVec<[I; INLINE_TREE_DEPTH]> = SmallVec::new();
+        let mut to_visit: SmallVec<[I; INLINE_TREE_DEPTH]> = SmallVec::new();
+        let mut visited: HashSet<I> = HashSet::new();
+
         to_visit.push(id);
         while let Some(current) = to_visit.pop() {
+            if !visited.insert(current) {
+                // `current` was already visited: the slab contains a
+                // cycle. Abort rather than loop forever.
+                tracing::warn!(
+                    node_id = current.get(),
+                    "cycle detected in cascade removal; aborting traversal"
+                );
+                return Err(TreeError::cycle_detected(current.get()));
+            }
             worklist.push(current);
             // Push children for later processing. Since this is a
-            // pre-walk feeding a post-order drain (we'll reverse
-            // before disposal), child order in `worklist` doesn't
-            // matter — what matters is that every descendant appears
-            // *after* its parent in `worklist`, which the
-            // depth-first push guarantees.
+            // pre-walk feeding a post-order drain (reversed before
+            // disposal), child order doesn't matter — what matters is
+            // that every descendant appears *after* its parent in
+            // `worklist`, which the depth-first push guarantees.
             for child_id in self.children(current) {
                 to_visit.push(child_id);
             }
         }
 
         // Post-order drain: reverse so leaves dispose before their
-        // parents, then the root last. Capture the root node from
-        // its `remove_shallow` to return as the trait's contract.
+        // parents, then the root last. Capture the root node from its
+        // `remove_shallow` to return as the trait's contract.
         let mut root_node: Option<Self::Node> = None;
         for node_id in worklist.into_iter().rev() {
             let removed = self.remove_shallow(node_id);
@@ -165,7 +238,7 @@ pub trait TreeWrite<I: Identifier>: TreeRead<I> {
                 root_node = removed;
             }
         }
-        root_node
+        Ok(root_node)
     }
 
     /// Removes `id` and counts the resulting cascade size.
@@ -296,18 +369,17 @@ pub trait TreeWriteNav<I: Identifier>: TreeWrite<I> + super::TreeNav<I> {
     fn move_children(&mut self, from: I, to: I) -> TreeResult<()>
     where
         Self: Sized,
-        I: Into<usize>,
     {
         if !self.contains(from) {
-            return Err(TreeError::not_found(from.into()));
+            return Err(TreeError::not_found(from.get()));
         }
         if !self.contains(to) {
-            return Err(TreeError::not_found(to.into()));
+            return Err(TreeError::not_found(to.get()));
         }
 
         // Check for cycles: 'to' can't be a descendant of 'from'
         if self.is_ancestor_of(from, to) {
-            return Err(TreeError::cycle_detected(to.into()));
+            return Err(TreeError::cycle_detected(to.get()));
         }
 
         // Collect children first (to avoid borrow issues)
@@ -337,10 +409,7 @@ pub trait TreeWriteNav<I: Identifier>: TreeWrite<I> + super::TreeNav<I> {
     /// # Errors
     ///
     /// - `NotFound` - Parent doesn't exist
-    fn insert_child(&mut self, node: Self::Node, parent: Option<I>) -> TreeResult<I>
-    where
-        I: Into<usize>,
-    {
+    fn insert_child(&mut self, node: Self::Node, parent: Option<I>) -> TreeResult<I> {
         let id = self.insert(node);
 
         if let Some(parent_id) = parent {
@@ -349,7 +418,7 @@ pub trait TreeWriteNav<I: Identifier>: TreeWrite<I> + super::TreeNav<I> {
                 // safe here because the node is freshly inserted and
                 // has no children yet — cascade vs shallow is moot.
                 self.remove_shallow(id);
-                return Err(TreeError::not_found(parent_id.into()));
+                return Err(TreeError::not_found(parent_id.get()));
             }
             self.set_parent(id, Some(parent_id))?;
         }
@@ -431,7 +500,7 @@ mod tests {
     };
 
     // Test implementation
-    #[derive(Default)]
+    #[derive(Debug, Default)]
     struct TestNode {
         value: i32,
         parent: Option<ElementId>,
@@ -445,6 +514,24 @@ mod tests {
     impl TestTree {
         fn new() -> Self {
             Self { nodes: Vec::new() }
+        }
+
+        /// Test-only escape hatch: injects a child edge into the slab
+        /// **without** the public-API cycle check in `set_parent`.
+        ///
+        /// Used by `cascade_cycle_detection` to corrupt the tree into a
+        /// cyclic state that the cascade walk must defend against. Sets
+        /// the child's parent pointer and appends it to the parent's
+        /// child list directly.
+        fn corrupt_add_child(&mut self, parent: ElementId, child: ElementId) {
+            if let Some(Some(parent_node)) = self.nodes.get_mut(parent.get() - 1)
+                && !parent_node.children.contains(&child)
+            {
+                parent_node.children.push(child);
+            }
+            if let Some(Some(child_node)) = self.nodes.get_mut(child.get() - 1) {
+                child_node.parent = Some(parent);
+            }
         }
     }
 
@@ -745,6 +832,93 @@ mod tests {
     /// `self.remove(child_id)` shape consumed one stack frame per
     /// depth level and would stack-overflow on chains longer than
     /// roughly 1k nodes depending on platform default stack size.
+    /// F19 + F24: the cascade walk must detect a corrupted cycle and
+    /// return `Err(TreeError::CycleDetected)` instead of hanging or
+    /// OOM-ing on an infinite traversal. `remove()` must degrade to
+    /// `None` (with a `tracing::warn!`) on the same corruption.
+    #[test]
+    fn cascade_cycle_detection() {
+        let mut tree = TestTree::new();
+        let a = tree.insert(TestNode::default());
+        let b = tree.insert(TestNode::default());
+        let c = tree.insert(TestNode::default());
+        tree.add_child(a, b).unwrap();
+        tree.add_child(b, c).unwrap();
+
+        // Inject cycle: c's child list points back to a (bypasses the
+        // public-API cycle check in `set_parent`).
+        tree.corrupt_add_child(c, a);
+
+        // `try_remove` must detect the cycle and return Err, not hang/OOM.
+        let result = tree.try_remove(a);
+        assert!(
+            matches!(result, Err(TreeError::CycleDetected(_))),
+            "try_remove must detect the cycle and return Err, got {result:?}"
+        );
+
+        // `remove()` must return None with tracing::warn! (not panic/hang).
+        tree.corrupt_add_child(c, a); // re-inject cycle
+        let none_result = tree.remove(a);
+        assert!(
+            none_result.is_none(),
+            "remove() must return None on cycle, not panic"
+        );
+    }
+
+    /// F19 triangulation: normal subtree removal returns `Ok(Some(root))`.
+    #[test]
+    fn remove_subtree_no_cycle() {
+        let mut tree = TestTree::new();
+        let root = tree.insert(TestNode::default());
+        let child = tree.insert(TestNode::default());
+        let grandchild = tree.insert(TestNode::default());
+        tree.add_child(root, child).unwrap();
+        tree.add_child(child, grandchild).unwrap();
+
+        let result = tree.try_remove(root);
+        assert!(matches!(result, Ok(Some(_))));
+        assert_eq!(tree.len(), 0);
+    }
+
+    /// F19 triangulation: leaf removal walks no children.
+    #[test]
+    fn remove_leaf_node() {
+        let mut tree = TestTree::new();
+        let leaf = tree.insert(TestNode {
+            value: 7,
+            ..Default::default()
+        });
+
+        let result = tree.try_remove(leaf);
+        assert!(matches!(result, Ok(Some(node)) if node.value == 7));
+        assert_eq!(tree.len(), 0);
+    }
+
+    /// F19 triangulation: removing a missing node is `Ok(None)`.
+    #[test]
+    fn remove_nonexistent_node() {
+        let mut tree = TestTree::new();
+        let _real = tree.insert(TestNode::default());
+        let phantom = ElementId::new(999);
+        assert!(matches!(tree.try_remove(phantom), Ok(None)));
+        assert_eq!(tree.len(), 1);
+    }
+
+    /// F19 triangulation: `remove_shallow` is unaffected by `try_remove`.
+    #[test]
+    fn remove_shallow_still_available() {
+        let mut tree = TestTree::new();
+        let root = tree.insert(TestNode::default());
+        let child = tree.insert(TestNode::default());
+        tree.add_child(root, child).unwrap();
+
+        let removed = tree.remove_shallow(root);
+        assert!(removed.is_some());
+        // child orphaned, still in storage.
+        assert!(tree.contains(child));
+        assert_eq!(tree.len(), 1);
+    }
+
     #[test]
     fn remove_cascade_is_stack_safe_on_deep_chain() {
         // 2_000 nodes exceeds typical native-stack frame budgets for

@@ -35,7 +35,16 @@
 //! let maybe_id = ViewId::new_checked(0); // None
 //! let valid_id = ViewId::new_checked(1); // Some(ViewId(1))
 //! ```
-#![allow(unsafe_code)]
+// F9 — `#[expect]` over `#[allow]` (edition-2024 idiom): this module
+// still contains genuine `unsafe` (the `*_unchecked` zip/new
+// constructors wrap `NonZeroUsize::new_unchecked`, a documented
+// caller-guarantees-non-zero contract). The `expect` will fire an
+// "unfulfilled expectation" lint the day the last `unsafe` block is
+// removed, prompting deletion of this attribute.
+#![expect(
+    unsafe_code,
+    reason = "RawId/Id `*_unchecked` constructors use NonZeroUsize::new_unchecked"
+)]
 
 use core::{
     cmp::Ordering,
@@ -68,7 +77,7 @@ const _: () = {
 /// Index type for slab-based storage.
 ///
 /// This is the raw index value before being wrapped in `RawId`.
-pub type Index = usize;
+pub(crate) type Index = usize;
 
 // =========================================================================
 // RawId - The underlying representation
@@ -78,41 +87,51 @@ pub type Index = usize;
 ///
 /// Uses `NonZeroUsize` for niche optimization - `Option<RawId>` has the same
 /// size as `RawId` because the compiler uses 0 as the `None` representation.
+///
+/// `RawId` stays part of the public surface (F23 considered downgrading it to
+/// `pub(crate)` but kept it `pub`): U1/F1 made `Id::from_raw(raw: RawId)` a
+/// safe public constructor with a public doc-test, and downstream tests round-
+/// trip through `Id::into_raw() -> RawId` + `RawId::unzip`. The internal
+/// `Index` alias, which had no downstream consumers, is the part F23 narrows.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RawId(NonZeroUsize);
 
 impl RawId {
-    /// Zip an index into a RawId.
+    /// Zip an index into a `RawId`.
     ///
     /// # Panics
     ///
     /// Panics if `index` is 0 (reserved for sentinel/None).
     #[inline]
     #[track_caller]
+    #[must_use]
     pub fn zip(index: Index) -> Self {
         Self(NonZeroUsize::new(index).expect("ID index must be non-zero"))
     }
 
-    /// Unzip a RawId back to its index.
+    /// Unzip a `RawId` back to its index.
     #[inline]
+    #[must_use]
     pub const fn unzip(self) -> Index {
         self.0.get()
     }
 
-    /// Creates a RawId without checking for zero.
+    /// Creates a `RawId` without checking for zero.
     ///
     /// # Safety
     ///
     /// The caller must ensure that `index` is not 0.
     #[inline]
+    #[must_use]
     pub const unsafe fn zip_unchecked(index: Index) -> Self {
         // SAFETY: Caller guarantees index is non-zero
         unsafe { Self(NonZeroUsize::new_unchecked(index)) }
     }
 
-    /// Creates a RawId, returning `None` if index is 0.
+    /// Creates a `RawId`, returning `None` if index is 0.
     #[inline]
+    #[must_use]
     pub const fn try_zip(index: Index) -> Option<Self> {
         match NonZeroUsize::new(index) {
             Some(nz) => Some(Self(nz)),
@@ -202,22 +221,41 @@ pub trait Marker: 'static + WasmNotSendSync + Debug {}
 /// assert_eq!(view.unzip(), element.unzip());
 /// // assert_eq!(view, element); // Would not compile!
 /// ```
+// F7 — the marker `T` appears only as a compile-time domain tag, never
+// behind a reference or owned by the id. `PhantomData<fn() -> T>` makes
+// `Id<T>` *invariant*-free over `T` while still requiring `T`, and —
+// crucially — keeps `Id<T>: Send + Sync` regardless of `T`'s own auto
+// traits (a `fn() -> T` pointer is always `Send + Sync`). A bare
+// `PhantomData<T>` would instead make `Id<T>` covariant in `T` and leak
+// `T`'s thread-safety, which is wrong for a zero-sized phantom tag.
 #[repr(transparent)]
-pub struct Id<T: Marker>(RawId, PhantomData<T>);
+pub struct Id<T: Marker>(RawId, PhantomData<fn() -> T>);
 
 impl<T: Marker> Id<T> {
     /// Creates an ID from a raw ID.
     ///
-    /// # Safety
+    /// This is a safe operation: every `RawId` already encodes a valid,
+    /// non-zero index, and the marker type `T` carries no runtime
+    /// invariant beyond compile-time domain tagging. Re-tagging a
+    /// `RawId` under a different marker is a logic concern, not a memory-
+    /// safety one, so no `unsafe` contract is required.
     ///
-    /// The caller must ensure the raw ID is valid for this marker type.
+    /// ```rust
+    /// use flui_foundation::{ViewId, RawId};
+    ///
+    /// // This must compile without an `unsafe` block.
+    /// let raw = RawId::zip(1);
+    /// let _id: ViewId = ViewId::from_raw(raw);
+    /// ```
     #[inline]
-    pub const unsafe fn from_raw(raw: RawId) -> Self {
+    #[must_use]
+    pub const fn from_raw(raw: RawId) -> Self {
         Self(raw, PhantomData)
     }
 
     /// Coerce the identifier into its raw underlying representation.
     #[inline]
+    #[must_use]
     pub const fn into_raw(self) -> RawId {
         self.0
     }
@@ -229,12 +267,14 @@ impl<T: Marker> Id<T> {
     /// Panics if `index` is 0.
     #[inline]
     #[track_caller]
+    #[must_use]
     pub fn zip(index: Index) -> Self {
         Self(RawId::zip(index), PhantomData)
     }
 
     /// Unzip an Id back to its index.
     #[inline]
+    #[must_use]
     pub const fn unzip(self) -> Index {
         self.0.unzip()
     }
@@ -245,6 +285,7 @@ impl<T: Marker> Id<T> {
     ///
     /// The caller must ensure that `index` is not 0.
     #[inline]
+    #[must_use]
     pub const unsafe fn zip_unchecked(index: Index) -> Self {
         // SAFETY: Caller guarantees index is non-zero
         unsafe { Self(RawId::zip_unchecked(index), PhantomData) }
@@ -252,6 +293,7 @@ impl<T: Marker> Id<T> {
 
     /// Creates an ID, returning `None` if index is 0.
     #[inline]
+    #[must_use]
     pub const fn try_zip(index: Index) -> Option<Self> {
         match RawId::try_zip(index) {
             Some(raw) => Some(Self(raw, PhantomData)),
@@ -266,18 +308,21 @@ impl<T: Marker> Id<T> {
     /// Alias for `zip` - creates an ID from an index.
     #[inline]
     #[track_caller]
+    #[must_use]
     pub fn new(index: Index) -> Self {
         Self::zip(index)
     }
 
     /// Alias for `unzip` - returns the index.
     #[inline]
+    #[must_use]
     pub const fn get(self) -> Index {
         self.unzip()
     }
 
     /// Alias for `try_zip` - creates an ID if index is non-zero.
     #[inline]
+    #[must_use]
     pub const fn new_checked(index: Index) -> Option<Self> {
         Self::try_zip(index)
     }
@@ -288,6 +333,7 @@ impl<T: Marker> Id<T> {
     ///
     /// The caller must ensure that `index` is not 0.
     #[inline]
+    #[must_use]
     pub const unsafe fn new_unchecked(index: Index) -> Self {
         // SAFETY: Caller guarantees index is non-zero
         unsafe { Self::zip_unchecked(index) }
@@ -424,7 +470,7 @@ impl<T: Marker> From<Index> for Id<T> {
 /// use flui_foundation::{ElementId, Identifier, ViewId};
 ///
 /// fn process_id<I: Identifier>(id: I) -> usize {
-///     id.into()
+///     id.get()
 /// }
 ///
 /// assert_eq!(process_id(ElementId::zip(42)), 42);
@@ -440,7 +486,6 @@ pub trait Identifier:
     + Hash
     + Debug
     + Display
-    + Into<Index>
     + WasmNotSendSync
     + 'static
 {
@@ -519,9 +564,9 @@ ids! {
     /// hold state between rebuilds, and coordinate updates.
     pub type ElementId Element;
 
-    /// Render ID - index into the RenderObject tree.
+    /// Render ID - index into the `RenderObject` tree.
     ///
-    /// RenderObjects handle layout and painting. They form a separate tree
+    /// `RenderObject`s handle layout and painting. They form a separate tree
     /// optimized for performance-critical operations.
     pub type RenderId Render;
 
@@ -533,7 +578,7 @@ ids! {
 
     /// Semantics ID - index into the Semantics tree.
     ///
-    /// SemanticsNodes provide accessibility information for screen readers
+    /// `SemanticsNode`s provide accessibility information for screen readers
     /// and other assistive technologies.
     pub type SemanticsId Semantics;
 
@@ -609,8 +654,9 @@ mod serde_impl {
     impl<'de, T: Marker> Deserialize<'de> for Id<T> {
         fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
             let raw = RawId::deserialize(deserializer)?;
-            // SAFETY: We just validated the RawId is non-zero
-            Ok(unsafe { Self::from_raw(raw) })
+            // `from_raw` is infallible and safe: the deserialized
+            // `RawId` already upholds the non-zero niche invariant.
+            Ok(Self::from_raw(raw))
         }
     }
 }
@@ -742,7 +788,7 @@ mod tests {
         let raw = id.into_raw();
         assert_eq!(raw.unzip(), 42);
 
-        let recovered = unsafe { ViewId::from_raw(raw) };
+        let recovered = ViewId::from_raw(raw);
         assert_eq!(recovered, id);
     }
 
@@ -756,6 +802,43 @@ mod tests {
         // new_checked is alias for try_zip
         assert!(ViewId::new_checked(0).is_none());
         assert_eq!(ViewId::new_checked(42).map(super::Id::get), Some(42));
+    }
+
+    // F18 — boundary coverage at the top of the index range.
+    //
+    // `NonZeroUsize::new(usize::MAX)` is a valid non-zero value, so an `Id`
+    // must hold `usize::MAX` and round-trip losslessly through the public
+    // `into_raw()` / `from_raw()` accessors (F1 made `from_raw` safe, so no
+    // `unsafe` block is required here). This guards against an off-by-one or
+    // truncation regression in the raw bridge at the extreme end of the range.
+    #[test]
+    fn id_at_usize_max() {
+        let id = ElementId::new(usize::MAX);
+        assert_eq!(id.get(), usize::MAX);
+
+        let opt: Option<ElementId> = Some(id);
+        assert!(opt.is_some());
+
+        // Round-trip through the raw accessors (safe post-F1).
+        let raw = id.into_raw();
+        let id2 = ElementId::from_raw(raw);
+        assert_eq!(id, id2);
+        assert_eq!(id2.get(), usize::MAX);
+    }
+
+    // F18 triangulation — the `NonZeroUsize` niche must still optimise
+    // `Option<ElementId>` down to `ElementId` size *at the boundary value*:
+    // `Some(MAX)` is representable and `None` collapses onto the 0 niche.
+    #[test]
+    fn id_niche_at_usize_max() {
+        // Niche optimisation holds at the boundary (size parity).
+        assert_eq!(size_of::<ElementId>(), size_of::<Option<ElementId>>());
+
+        let some_max: Option<ElementId> = Some(ElementId::new(usize::MAX));
+        assert_eq!(some_max.map(ElementId::get), Some(usize::MAX));
+
+        let none: Option<ElementId> = None;
+        assert!(none.is_none());
     }
 
     #[test]

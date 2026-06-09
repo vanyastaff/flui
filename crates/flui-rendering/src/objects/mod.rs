@@ -17,6 +17,8 @@
 //! - [`RenderFractionallySizedBox`] - Sizes child as fraction of parent (Core.2)
 //! - [`RenderClipRect`] / [`RenderClipRRect`] / [`RenderClipOval`] /
 //!   [`RenderClipPath`] — generic [`RenderClip<S>`] family (Core.2)
+//! - [`RenderRepaintBoundary`] - Pure proxy that creates a repaint boundary
+//!   (Core.2)
 //! - [`RenderOffstage`] - Hides subtree (zero-size layout, skip paint &
 //!   hit-test) (Core.2 Wave 4)
 //! - [`RenderAbsorbPointer`] - Catches pointers itself, blocks child
@@ -75,6 +77,7 @@ mod meta_data;
 mod offstage;
 mod opacity;
 mod padding;
+mod repaint_boundary;
 mod sized_box;
 mod sliver_ignore_pointer;
 mod sliver_offstage;
@@ -102,6 +105,7 @@ pub use meta_data::{MetaDataPayload, RenderMetaData};
 pub use offstage::RenderOffstage;
 pub use opacity::RenderOpacity;
 pub use padding::RenderPadding;
+pub use repaint_boundary::RenderRepaintBoundary;
 pub use sized_box::RenderSizedBox;
 pub use sliver_ignore_pointer::RenderSliverIgnorePointer;
 pub use sliver_offstage::RenderSliverOffstage;

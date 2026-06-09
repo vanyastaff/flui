@@ -382,8 +382,9 @@ impl RRect {
         }
 
         let rect_area = self.rect.area();
-        let corner_cutout =
-            |r: Radius<Pixels>| -> Pixels { r.x * r.y * px(1.0 - std::f32::consts::FRAC_PI_4) };
+        let corner_cutout = |r: Radius<Pixels>| -> Pixels {
+            px(r.x.get() * r.y.get() * (1.0 - std::f32::consts::FRAC_PI_4))
+        };
 
         px(rect_area
             - corner_cutout(self.top_left).0

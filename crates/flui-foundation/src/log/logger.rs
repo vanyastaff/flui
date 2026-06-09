@@ -346,9 +346,14 @@ impl Logger {
 
     /// Try to initialize the logging system, returning an error on failure.
     ///
-    /// This is the non-panicking alternative to [`init`](Self::init). Returns
-    /// an error if the global tracing subscriber has already been set — useful
+    /// This is the non-panicking alternative to [`init`](Self::init). Useful
     /// in tests where multiple test cases may attempt initialization.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InitError`] if the global tracing subscriber has already been
+    /// set (i.e. a prior `init`/`try_init` call on any `Logger` already
+    /// installed a subscriber for the process).
     ///
     /// # Examples
     ///

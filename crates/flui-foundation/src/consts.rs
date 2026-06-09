@@ -9,7 +9,7 @@
 //! use flui_foundation::consts::{DEBUG_MODE, RELEASE_MODE};
 //!
 //! if DEBUG_MODE {
-//!     println!("Debug assertions enabled");
+//!     // run extra invariant checks only in debug builds
 //! }
 //!
 //! // This branch is eliminated in release builds

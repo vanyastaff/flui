@@ -450,7 +450,7 @@ mod tests {
         assert!(node1.config().is_button());
         assert_eq!(node1.config().is_enabled(), Some(true));
         // Rect should be union
-        assert_eq!(node1.rect().width(), 100.0);
+        assert_eq!(node1.rect().width(), px(100.0));
     }
 
     #[test]

@@ -1,13 +1,12 @@
 //! Unit types for type-safe coordinate systems.
 //!
 //! This module provides distinct types for different pixel coordinate systems
-//! to prevent mixing logical pixels, device pixels, and scaled pixels.
+//! to prevent mixing logical pixels and device pixels.
 //!
 //! # Unit Types
 //!
 //! - [`Pixels`] - Logical pixels used in layouts and measurements
 //! - [`DevicePixels`] - Physical pixels on the display device
-//! - [`ScaledPixels`] - Pixels scaled by display scaling factor
 //!
 //! # Design Philosophy
 //!
@@ -20,17 +19,20 @@
 //! # Examples
 //!
 //! ```rust
-//! use flui_geometry::{DevicePixels, Pixels, ScaledPixels, device_px, px};
+//! use flui_geometry::{DevicePixels, Pixels, ScaleFactor, device_px, px};
 //!
 //! // Type-safe logical pixels
 //! let width = px(100.0);
 //! let height = px(200.0);
 //!
-//! // Scale for high-DPI display (2x Retina)
+//! // Scale logical pixels by a factor
 //! let scaled = width.scale(2.0);
+//! assert_eq!(scaled, px(200.0));
 //!
-//! // Convert to device pixels
-//! let device = scaled.to_device_pixels();
+//! // Convert to device pixels for a 2x Retina display, with a typed scale
+//! // factor (compile-time DPI safety — the blessed path).
+//! let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
+//! let device = width.to_device(scale);
 //! assert_eq!(device, device_px(200));
 //! ```
 
@@ -51,11 +53,44 @@ use super::traits::{NumericUnit, Unit};
 ///
 /// This is the primary unit for UI layout calculations, independent of device
 /// pixel density.
+///
+/// # Unit barrier
+///
+/// `Pixels` deliberately rejects the operations that would let an untyped
+/// scalar leak across the unit boundary. There is no `From<f32>`, no
+/// `Pixels == f32`, no `Pixels + f32`, and no `Pixels * Pixels`. Construct
+/// with [`px`] / [`Pixels::new`] / [`Pixels::from_i32`] and drop back to a
+/// bare scalar with [`Pixels::get`]. Scaling by a dimensionless factor
+/// (`Pixels * f32`, `Pixels / f32`) stays legal.
+///
+/// The following are compile-time errors and stay that way (regression guard):
+///
+/// ```compile_fail
+/// use flui_geometry::Pixels;
+/// // No implicit scalar -> Pixels conversion (U1).
+/// let _: Pixels = 10.0_f32.into();
+/// ```
+///
+/// ```compile_fail
+/// use flui_geometry::px;
+/// // No cross-type comparison / arithmetic against bare f32 (U2).
+/// let _ = px(10.0) == 10.0;
+/// ```
+///
+/// ```compile_fail
+/// use flui_geometry::{px, Pixels};
+/// // px * px is area, not length, so it has no `Pixels` result (U4).
+/// let _: Pixels = px(10.0) * px(2.0);
+/// ```
 #[derive(Copy, Clone, Default, PartialEq)]
 #[repr(transparent)]
 pub struct Pixels(pub f32);
 
-/// Shorthand constructor for `Pixels`.
+/// Shorthand constructor for [`Pixels`].
+///
+/// This is the canonical `f32 -> Pixels` entry point — there is intentionally
+/// no `From<f32> for Pixels`, so `px` (or [`Pixels::new`]) is the only blessed
+/// way to cross the scalar boundary into a logical-pixel value.
 #[inline]
 pub const fn px(value: f32) -> Pixels {
     Pixels(value)
@@ -149,10 +184,10 @@ impl Pixels {
         Self(self.0.powf(exponent))
     }
 
-    /// Scales logical pixels by a factor, producing scaled pixels.
+    /// Scales logical pixels by a factor.
     #[must_use]
-    pub fn scale(self, factor: f32) -> ScaledPixels {
-        ScaledPixels(self.0 * factor)
+    pub fn scale(self, factor: f32) -> Pixels {
+        Pixels(self.0 * factor)
     }
 
     /// Returns true if the value is finite (not NaN or infinite).
@@ -234,6 +269,10 @@ impl Pixels {
     /// Prefer [`Pixels::to_device`] with a typed [`ScaleFactor`] for
     /// compile-time safety.
     #[must_use]
+    #[deprecated(
+        since = "0.1.0",
+        note = "raw-f32 scale factor is DPI-unsafe; use `Pixels::to_device(ScaleFactor<Pixels, DevicePixels>)` (N-geom U5)"
+    )]
     pub fn to_device_pixels(self, scale_factor: f32) -> DevicePixels {
         DevicePixels((self.0 * scale_factor).round() as i32)
     }
@@ -243,16 +282,12 @@ impl Pixels {
     /// Prefer [`DevicePixels::to_logical`] with a typed [`ScaleFactor`] for
     /// compile-time safety.
     #[must_use]
+    #[deprecated(
+        since = "0.1.0",
+        note = "raw-f32 scale factor is DPI-unsafe; use `DevicePixels::to_logical(ScaleFactor<Pixels, DevicePixels>)` (N-geom U5)"
+    )]
     pub fn from_device_pixels(device: DevicePixels, scale_factor: f32) -> Self {
         Pixels(device.0 as f32 / scale_factor)
-    }
-
-    /// Converts scaled pixels to logical pixels using a raw scale factor.
-    ///
-    /// Prefer [`ScaledPixels::to_logical`] for the equivalent operation.
-    #[must_use]
-    pub fn from_scaled_pixels(scaled: ScaledPixels, scale_factor: f32) -> Self {
-        Pixels(scaled.0 / scale_factor)
     }
 
     /// Applies a function to the underlying value.
@@ -267,6 +302,32 @@ impl Pixels {
     #[inline]
     pub fn to_bits(self) -> u32 {
         self.0.to_bits()
+    }
+
+    /// Rounds to the nearest integer and returns it as `i32`.
+    ///
+    /// Explicit replacement for the removed lossy `From<Pixels> for i32` (U11):
+    /// rounding (rather than truncation) is the intended behaviour and is named
+    /// at the call site. Saturates to `i32::MIN`/`i32::MAX` for out-of-range or
+    /// non-finite values (`f32 as i32` is saturating since Rust 1.45).
+    #[inline]
+    #[must_use]
+    pub fn to_i32_round(self) -> i32 {
+        self.0.round() as i32
+    }
+
+    /// Rounds and clamps to the `u32` range (negatives become `0`).
+    #[inline]
+    #[must_use]
+    pub fn to_u32_round_clamped(self) -> u32 {
+        self.0.round().max(0.0) as u32
+    }
+
+    /// Rounds and clamps to the `usize` range (negatives become `0`).
+    #[inline]
+    #[must_use]
+    pub fn to_usize_round_clamped(self) -> usize {
+        self.0.round().max(0.0) as usize
     }
 
     /// Positive infinity.
@@ -344,13 +405,9 @@ impl SubAssign for Pixels {
     }
 }
 
-impl Mul<Pixels> for Pixels {
-    type Output = Self;
-    #[inline]
-    fn mul(self, rhs: Pixels) -> Self::Output {
-        Self(self.0 * rhs.0)
-    }
-}
+// NOTE: `Mul<Pixels> for Pixels` is deliberately NOT implemented — `px * px`
+// is an area (`px²`), not a length, and returning `Pixels` would mislabel it.
+// Use `Size::area()` for the area path, or `.get()` to drop into raw `f32`.
 
 impl Mul<Pixels> for f32 {
     type Output = Pixels;
@@ -400,12 +457,8 @@ impl Mul<f32> for Pixels {
     }
 }
 
-impl MulAssign<Pixels> for Pixels {
-    #[inline]
-    fn mul_assign(&mut self, rhs: Pixels) {
-        self.0 *= rhs.0;
-    }
-}
+// NOTE: `MulAssign<Pixels> for Pixels` is deliberately NOT implemented — it
+// would land an area back into a length variable (same defect as `Mul<Pixels>`).
 
 impl MulAssign<f32> for Pixels {
     #[inline]
@@ -430,12 +483,9 @@ impl Div<f32> for Pixels {
     }
 }
 
-impl DivAssign<Pixels> for Pixels {
-    #[inline]
-    fn div_assign(&mut self, rhs: Pixels) {
-        self.0 /= rhs.0;
-    }
-}
+// NOTE: `DivAssign<Pixels> for Pixels` is deliberately NOT implemented.
+// `Div<Pixels> for Pixels` correctly yields a dimensionless `f32` ratio, so
+// `a /= b` would put that ratio back into a length variable. Use `let r = a / b`.
 
 impl DivAssign<f32> for Pixels {
     #[inline]
@@ -467,103 +517,19 @@ impl Neg for Pixels {
     }
 }
 
-// Cross-type comparisons with f32
-impl PartialEq<f32> for Pixels {
-    #[inline]
-    fn eq(&self, other: &f32) -> bool {
-        self.0 == *other
-    }
-}
-
-impl PartialEq<Pixels> for f32 {
-    #[inline]
-    fn eq(&self, other: &Pixels) -> bool {
-        *self == other.0
-    }
-}
-
-impl PartialOrd<f32> for Pixels {
-    #[inline]
-    fn partial_cmp(&self, other: &f32) -> Option<std::cmp::Ordering> {
-        self.0.partial_cmp(other)
-    }
-}
-
-impl PartialOrd<Pixels> for f32 {
-    #[inline]
-    fn partial_cmp(&self, other: &Pixels) -> Option<std::cmp::Ordering> {
-        self.partial_cmp(&other.0)
-    }
-}
-
-// Cross-type arithmetic with f32
-impl Add<f32> for Pixels {
-    type Output = Pixels;
-    #[inline]
-    fn add(self, rhs: f32) -> Self::Output {
-        Pixels(self.0 + rhs)
-    }
-}
-
-impl Add<Pixels> for f32 {
-    type Output = Pixels;
-    #[inline]
-    fn add(self, rhs: Pixels) -> Self::Output {
-        Pixels(self + rhs.0)
-    }
-}
-
-impl Sub<f32> for Pixels {
-    type Output = Pixels;
-    #[inline]
-    fn sub(self, rhs: f32) -> Self::Output {
-        Pixels(self.0 - rhs)
-    }
-}
-
-impl Sub<Pixels> for f32 {
-    type Output = Pixels;
-    #[inline]
-    fn sub(self, rhs: Pixels) -> Self::Output {
-        Pixels(self - rhs.0)
-    }
-}
+// NOTE: cross-type comparison (`PartialEq<f32>` / `PartialOrd<f32>`) and
+// cross-type arithmetic (`Add<f32>` / `Sub<f32>`) against bare `f32` are
+// deliberately NOT implemented. They are dimensionally ill-defined and let a
+// forgotten `.0` literal silently defeat the unit barrier. Use `px(literal)`
+// or `pixels.get()` at the boundary instead. Scaling (`Mul<f32>` / `Div<f32>`)
+// stays because multiplying a length by a dimensionless factor is valid.
+// Regression guard: see the `compile_fail` doctests on `Pixels`.
 
 // Conversions
-impl From<f32> for Pixels {
-    #[inline]
-    fn from(value: f32) -> Self {
-        Self(value)
-    }
-}
-
-impl From<f64> for Pixels {
-    #[inline]
-    fn from(value: f64) -> Self {
-        Self(value as f32)
-    }
-}
-
-impl From<i32> for Pixels {
-    #[inline]
-    fn from(value: i32) -> Self {
-        Self(value as f32)
-    }
-}
-
-impl From<u32> for Pixels {
-    #[inline]
-    fn from(value: u32) -> Self {
-        Self(value as f32)
-    }
-}
-
-impl From<usize> for Pixels {
-    #[inline]
-    fn from(value: usize) -> Self {
-        Self(value as f32)
-    }
-}
+// NOTE: `From<f32/f64/i32/u32/usize> for Pixels` is deliberately NOT
+// implemented. `px(value)` / `Pixels::new(value)` / `Pixels::from_i32(value)`
+// are the only blessed `scalar -> Pixels` paths, so an implicit `.into()` can
+// never silently inject an untyped scalar into a `Pixels` context.
 
 impl From<Pixels> for f32 {
     #[inline]
@@ -579,26 +545,9 @@ impl From<Pixels> for f64 {
     }
 }
 
-impl From<Pixels> for i32 {
-    #[inline]
-    fn from(pixels: Pixels) -> Self {
-        pixels.0 as i32
-    }
-}
-
-impl From<Pixels> for u32 {
-    #[inline]
-    fn from(pixels: Pixels) -> Self {
-        pixels.0 as u32
-    }
-}
-
-impl From<Pixels> for usize {
-    #[inline]
-    fn from(pixels: Pixels) -> Self {
-        pixels.0 as usize
-    }
-}
+// NOTE (U11): the lossy `From<Pixels> for i32/u32/usize` impls were removed.
+// `From`/`.into()` should be reserved for lossless conversions; rounding and
+// clamping must be explicit at the call site. Use the `to_*` methods below.
 
 // Formatting
 impl Display for Pixels {
@@ -924,6 +873,10 @@ impl From<Pixels> for PixelDelta {
     }
 }
 
+// PixelDelta models a platform scroll/pointer delta — a measured input delta
+// (native f64 from the OS event stream), not a logical-pixel coordinate, so
+// explicit f64 construction here does not weaken the Pixels unit barrier.
+// PORT-CHECK-OK-UNIT: platform scroll/pointer delta, not a coordinate.
 impl From<f64> for PixelDelta {
     #[inline]
     fn from(value: f64) -> Self {
@@ -1090,12 +1043,6 @@ impl DevicePixels {
     #[must_use]
     pub fn to_pixels(self, scale_factor: f32) -> Pixels {
         Pixels(self.0 as f32 / scale_factor)
-    }
-
-    /// Converts to scaled pixels.
-    #[must_use]
-    pub fn to_scaled_pixels(self) -> ScaledPixels {
-        ScaledPixels(self.0 as f32)
     }
 
     /// Applies a function to the underlying value.
@@ -1311,320 +1258,6 @@ impl<'a> Sum<&'a DevicePixels> for DevicePixels {
 }
 
 // ============================================================================
-// SCALED PIXELS - Display-scaled pixels
-// ============================================================================
-
-/// Pixels scaled by the display scale factor.
-///
-/// Intermediate representation between logical and device pixels.
-#[derive(Copy, Clone, Default, PartialEq)]
-#[repr(transparent)]
-pub struct ScaledPixels(pub f32);
-
-/// Shorthand constructor for `ScaledPixels`.
-#[inline]
-pub const fn scaled_px(value: f32) -> ScaledPixels {
-    ScaledPixels(value)
-}
-
-impl ScaledPixels {
-    /// Zero scaled pixels.
-    pub const ZERO: ScaledPixels = ScaledPixels(0.0);
-
-    /// Creates a new `ScaledPixels` value.
-    #[inline]
-    pub const fn new(value: f32) -> Self {
-        Self(value)
-    }
-
-    /// Gets the raw f32 value.
-    #[inline]
-    pub const fn get(self) -> f32 {
-        self.0
-    }
-
-    /// Rounds down to the nearest integer.
-    #[must_use]
-    pub fn floor(self) -> Self {
-        Self(self.0.floor())
-    }
-
-    /// Rounds to the nearest integer.
-    #[must_use]
-    pub fn round(self) -> Self {
-        Self(self.0.round())
-    }
-
-    /// Rounds up to the nearest integer.
-    #[must_use]
-    pub fn ceil(self) -> Self {
-        Self(self.0.ceil())
-    }
-
-    /// Truncates the fractional part.
-    #[must_use]
-    pub fn trunc(self) -> Self {
-        Self(self.0.trunc())
-    }
-
-    /// Returns the absolute value.
-    #[must_use]
-    pub fn abs(self) -> Self {
-        Self(self.0.abs())
-    }
-
-    /// Converts to device pixels by rounding.
-    #[must_use]
-    pub fn to_device_pixels(self) -> DevicePixels {
-        DevicePixels(self.0.round() as i32)
-    }
-
-    /// Returns true if the value is finite.
-    #[inline]
-    pub fn is_finite(self) -> bool {
-        self.0.is_finite()
-    }
-
-    /// Returns the minimum of two values.
-    #[must_use]
-    pub fn min(self, other: Self) -> Self {
-        Self(self.0.min(other.0))
-    }
-
-    /// Returns the maximum of two values.
-    #[must_use]
-    pub fn max(self, other: Self) -> Self {
-        Self(self.0.max(other.0))
-    }
-
-    /// Clamps the value between min and max.
-    #[must_use]
-    pub fn clamp(self, min: Self, max: Self) -> Self {
-        Self(self.0.clamp(min.0, max.0))
-    }
-
-    /// Returns the sign of the value.
-    #[inline]
-    pub fn signum(self) -> f32 {
-        self.0.signum()
-    }
-
-    /// Converts scaled pixels to logical pixels using a raw scale factor.
-    ///
-    /// Prefer [`ScaledPixels::to_logical`] for the equivalent operation.
-    #[must_use]
-    pub fn to_pixels(self, scale_factor: f32) -> Pixels {
-        Pixels(self.0 / scale_factor)
-    }
-
-    /// Applies a function to the underlying value.
-    #[must_use]
-    pub fn map(self, f: impl FnOnce(f32) -> f32) -> Self {
-        ScaledPixels(f(self.0))
-    }
-}
-
-// Ordering (using total_cmp for proper NaN handling)
-impl Eq for ScaledPixels {}
-
-impl PartialOrd for ScaledPixels {
-    #[inline]
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for ScaledPixels {
-    #[inline]
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.0.total_cmp(&other.0)
-    }
-}
-
-// Hashing (using to_bits for proper NaN handling)
-impl std::hash::Hash for ScaledPixels {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.to_bits().hash(state);
-    }
-}
-
-// Arithmetic operators
-impl Add for ScaledPixels {
-    type Output = Self;
-    #[inline]
-    fn add(self, rhs: Self) -> Self::Output {
-        Self(self.0 + rhs.0)
-    }
-}
-
-impl AddAssign for ScaledPixels {
-    #[inline]
-    fn add_assign(&mut self, rhs: Self) {
-        self.0 += rhs.0;
-    }
-}
-
-impl Sub for ScaledPixels {
-    type Output = Self;
-    #[inline]
-    fn sub(self, rhs: Self) -> Self::Output {
-        Self(self.0 - rhs.0)
-    }
-}
-
-impl SubAssign for ScaledPixels {
-    #[inline]
-    fn sub_assign(&mut self, rhs: Self) {
-        self.0 -= rhs.0;
-    }
-}
-
-impl Mul<f32> for ScaledPixels {
-    type Output = Self;
-    #[inline]
-    fn mul(self, rhs: f32) -> Self::Output {
-        Self(self.0 * rhs)
-    }
-}
-
-impl Mul<ScaledPixels> for f32 {
-    type Output = ScaledPixels;
-    #[inline]
-    fn mul(self, rhs: ScaledPixels) -> Self::Output {
-        ScaledPixels(self * rhs.0)
-    }
-}
-
-impl MulAssign<f32> for ScaledPixels {
-    #[inline]
-    fn mul_assign(&mut self, rhs: f32) {
-        self.0 *= rhs;
-    }
-}
-
-impl Div for ScaledPixels {
-    type Output = f32;
-    #[inline]
-    fn div(self, rhs: Self) -> Self::Output {
-        self.0 / rhs.0
-    }
-}
-
-impl Div<Pixels> for ScaledPixels {
-    type Output = Self;
-    #[inline]
-    fn div(self, rhs: Pixels) -> Self::Output {
-        Self(self.0 / rhs.0)
-    }
-}
-
-impl DivAssign<Pixels> for ScaledPixels {
-    #[inline]
-    fn div_assign(&mut self, rhs: Pixels) {
-        self.0 /= rhs.0;
-    }
-}
-
-impl Neg for ScaledPixels {
-    type Output = Self;
-    #[inline]
-    fn neg(self) -> Self::Output {
-        Self(-self.0)
-    }
-}
-
-impl Rem for ScaledPixels {
-    type Output = Self;
-    #[inline]
-    fn rem(self, rhs: Self) -> Self::Output {
-        Self(self.0 % rhs.0)
-    }
-}
-
-impl RemAssign for ScaledPixels {
-    #[inline]
-    fn rem_assign(&mut self, rhs: Self) {
-        self.0 %= rhs.0;
-    }
-}
-
-// ============================================================================
-// SCALED PIXELS - TRAIT IMPLEMENTATIONS
-// ============================================================================
-
-impl Unit for ScaledPixels {
-    type Scalar = f32;
-
-    #[inline]
-    fn one() -> Self {
-        ScaledPixels(1.0)
-    }
-
-    const MIN: Self = ScaledPixels(f32::MIN);
-    const MAX: Self = ScaledPixels(f32::MAX);
-}
-
-impl NumericUnit for ScaledPixels {
-    #[inline]
-    fn abs(self) -> Self {
-        Self(self.0.abs())
-    }
-
-    #[inline]
-    fn min(self, other: Self) -> Self {
-        Self(self.0.min(other.0))
-    }
-
-    #[inline]
-    fn max(self, other: Self) -> Self {
-        Self(self.0.max(other.0))
-    }
-}
-
-// Sum trait for iterator support
-impl Sum for ScaledPixels {
-    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.fold(ScaledPixels::ZERO, |acc, x| acc + x)
-    }
-}
-
-impl<'a> Sum<&'a ScaledPixels> for ScaledPixels {
-    fn sum<I: Iterator<Item = &'a Self>>(iter: I) -> Self {
-        iter.fold(ScaledPixels::ZERO, |acc, x| acc + *x)
-    }
-}
-
-// Conversions
-impl From<Pixels> for ScaledPixels {
-    #[inline]
-    fn from(value: Pixels) -> Self {
-        Self(value.0)
-    }
-}
-
-impl From<ScaledPixels> for f32 {
-    #[inline]
-    fn from(pixels: ScaledPixels) -> Self {
-        pixels.0
-    }
-}
-
-// Formatting
-impl Display for ScaledPixels {
-    #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}spx", self.0)
-    }
-}
-
-impl Debug for ScaledPixels {
-    #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} px (scaled)", self.0)
-    }
-}
-
-// ============================================================================
 // String parsing (FromStr)
 // ============================================================================
 
@@ -1717,41 +1350,6 @@ impl std::str::FromStr for DevicePixels {
             .map_err(|_| ParseLengthError {
                 input: s.to_string(),
                 expected: "an integer like '1920' or '1920dpx'",
-            })
-    }
-}
-
-impl std::str::FromStr for ScaledPixels {
-    type Err = ParseLengthError;
-
-    /// Parses a `ScaledPixels` value from a string.
-    ///
-    /// Supported formats:
-    /// - `"200"` - bare number
-    /// - `"200spx"` - with "spx" suffix
-    /// - `"200.5"` - decimal values
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_geometry::ScaledPixels;
-    ///
-    /// let sp: ScaledPixels = "200".parse().unwrap();
-    /// assert_eq!(sp.get(), 200.0);
-    ///
-    /// let sp: ScaledPixels = "200.5spx".parse().unwrap();
-    /// assert_eq!(sp.get(), 200.5);
-    /// ```
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let s = s.trim();
-        let num_str = s.strip_suffix("spx").unwrap_or(s).trim();
-
-        num_str
-            .parse::<f32>()
-            .map(ScaledPixels)
-            .map_err(|_| ParseLengthError {
-                input: s.to_string(),
-                expected: "a number like '200' or '200spx'",
             })
     }
 }
@@ -2126,8 +1724,8 @@ impl std::str::FromStr for Radians {
 /// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
 ///
 /// let logical = px(100.0);
-/// let physical = scale.transform_scalar(logical);
-/// assert_eq!(physical.get(), 200.0);
+/// let physical = logical.to_device(scale);
+/// assert_eq!(physical.get(), 200);
 /// ```
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct ScaleFactor<Src: Unit, Dst: Unit> {
@@ -2151,14 +1749,12 @@ impl<Src: Unit, Dst: Unit> ScaleFactor<Src, Dst> {
         self.factor
     }
 
-    /// Transform a scalar value from source to destination units
-    #[inline]
-    pub fn transform_scalar<T>(&self, value: T) -> T
-    where
-        T: Mul<f32, Output = T>,
-    {
-        value * self.factor
-    }
+    // NOTE: a generic `transform_scalar<T>(value: T) -> T` used to live here.
+    // It was removed: its signature ignored the `Src`/`Dst` phantoms (returning
+    // the same type it received), so it could not express a real unit change
+    // and its own doc-example contradicted the type-safety it implied. Use the
+    // typed conversions instead — `Pixels::to_device(ScaleFactor<Pixels,
+    // DevicePixels>)` and `DevicePixels::to_logical(..)`.
 
     /// Get the inverse scale factor (Dst -> Src)
     #[inline]
@@ -2200,12 +1796,6 @@ impl Pixels {
     pub fn to_device(self, scale: ScaleFactor<Pixels, DevicePixels>) -> DevicePixels {
         DevicePixels((self.0 * scale.get()).round() as i32)
     }
-
-    /// Convert to scaled pixels using a scale factor
-    #[inline]
-    pub fn to_scaled(self, scale: f32) -> ScaledPixels {
-        ScaledPixels(self.0 * scale)
-    }
 }
 
 impl DevicePixels {
@@ -2213,14 +1803,6 @@ impl DevicePixels {
     #[inline]
     pub fn to_logical(self, scale: ScaleFactor<Pixels, DevicePixels>) -> Pixels {
         Pixels(self.0 as f32 / scale.get())
-    }
-}
-
-impl ScaledPixels {
-    /// Convert to logical pixels
-    #[inline]
-    pub fn to_logical(self, scale: f32) -> Pixels {
-        Pixels(self.0 / scale)
     }
 }
 
@@ -2257,8 +1839,8 @@ mod tests {
 
     #[test]
     fn test_scale_factor_composition() {
-        let scale1 = ScaleFactor::<Pixels, ScaledPixels>::new(2.0);
-        let scale2 = ScaleFactor::<ScaledPixels, DevicePixels>::new(1.5);
+        let scale1 = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
+        let scale2 = ScaleFactor::<DevicePixels, Pixels>::new(1.5);
         let composed = scale1.then(scale2);
         assert_eq!(composed.get(), 3.0);
     }
@@ -2300,20 +1882,6 @@ mod tests {
         let device = DevicePixels(200);
         let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
         let logical = device.to_logical(scale);
-        assert_eq!(logical.get(), 100.0);
-    }
-
-    #[test]
-    fn test_pixels_to_scaled() {
-        let logical = px(100.0);
-        let scaled = logical.to_scaled(1.5);
-        assert_eq!(scaled.get(), 150.0);
-    }
-
-    #[test]
-    fn test_scaled_to_logical() {
-        let scaled = ScaledPixels(150.0);
-        let logical = scaled.to_logical(1.5);
         assert_eq!(logical.get(), 100.0);
     }
 
@@ -2393,7 +1961,6 @@ mod tests {
     fn test_unit_type_safety() {
         // This test verifies that different units cannot be mixed at compile time
         let logical = px(100.0);
-        let _ = ScaledPixels(150.0);
 
         // These would fail to compile (type mismatch):
         // let _ = logical + scaled; // ❌
@@ -2411,10 +1978,6 @@ mod tests {
         assert_eq!(
             std::mem::size_of::<DevicePixels>(),
             std::mem::size_of::<i32>()
-        );
-        assert_eq!(
-            std::mem::size_of::<ScaledPixels>(),
-            std::mem::size_of::<f32>()
         );
 
         // ScaleFactor should be just f32 (PhantomData is zero-sized)

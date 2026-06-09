@@ -37,6 +37,7 @@
 
 #![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
 
+mod derive_diagnosticable;
 mod derive_stateful;
 mod derive_stateless;
 
@@ -143,6 +144,82 @@ pub fn derive_stateless_view(input: TokenStream) -> TokenStream {
 pub fn derive_stateful_view(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     derive_stateful::expand(&input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// Emit `impl Diagnosticable` for a named-field struct.
+///
+/// Generates the `debug_fill_properties` method that pushes one diagnostic
+/// property per field (formatted via `{:?}`). The `Diagnosticable` trait's
+/// default `to_diagnostics_node` then builds the node from those properties
+/// using the short (module-path-stripped) type name, so the derive deliberately
+/// generates *only* `debug_fill_properties` — overriding `to_diagnostics_node`
+/// would duplicate the trait default and risk drift.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use flui_foundation::Diagnosticable;
+/// use flui_macros::Diagnosticable;
+///
+/// #[derive(Debug, Diagnosticable)]
+/// struct Padding {
+///     inset: f32,
+///     #[diagnostic(skip)]
+///     cache_key: u64,
+/// }
+/// ```
+///
+/// # Field attributes
+///
+/// `#[diagnostic(skip)]` omits a field from the diagnostics output. Any other
+/// `diagnostic(...)` sub-attribute is a hard error. Non-`diagnostic` attributes
+/// are ignored.
+///
+/// # Generics
+///
+/// Generic parameters and where-clauses are forwarded verbatim; the derive adds
+/// a `Self: Debug` bound (the trait supertrait) plus a `Debug` bound per included
+/// field type, so a non-`Debug` field surfaces a clear error at the derive site.
+///
+/// # Supported shapes
+///
+/// Only structs with named fields are supported. The derive rejects enums,
+/// unions, tuple structs and unit structs with a compile-time diagnostic:
+///
+/// ```rust,compile_fail
+/// use flui_macros::Diagnosticable;
+///
+/// #[derive(Debug, Diagnosticable)]
+/// enum NotSupported {
+///     A,
+///     B,
+/// }
+/// ```
+///
+/// ```rust,compile_fail
+/// use flui_macros::Diagnosticable;
+///
+/// #[derive(Debug, Diagnosticable)]
+/// struct AlsoNotSupported(u32, u32);
+/// ```
+///
+/// An unknown `diagnostic(...)` sub-attribute is likewise a hard error:
+///
+/// ```rust,compile_fail
+/// use flui_macros::Diagnosticable;
+///
+/// #[derive(Debug, Diagnosticable)]
+/// struct Bad {
+///     #[diagnostic(nonsense)]
+///     field: u32,
+/// }
+/// ```
+#[proc_macro_derive(Diagnosticable, attributes(diagnostic))]
+pub fn derive_diagnosticable(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    derive_diagnosticable::expand(&input)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }

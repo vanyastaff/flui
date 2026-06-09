@@ -24,7 +24,7 @@ use super::{
     Pixels, Vec2,
     error::GeometryError,
     px,
-    traits::{NumericUnit, Unit},
+    traits::{FloatUnit, NumericUnit, Unit},
 };
 
 /// Absolute position in 2D space.
@@ -124,7 +124,7 @@ impl<T: Unit> Point<T> {
 
 impl<T: NumericUnit> Point<T>
 where
-    T: Into<f32> + From<f32>,
+    T: Into<f32> + FloatUnit,
 {
     /// Creates a point with validation, returning an error for invalid
     /// coordinates.
@@ -154,8 +154,8 @@ where
         };
 
         Self {
-            x: T::from(clamp_f32(x.into())),
-            y: T::from(clamp_f32(y.into())),
+            x: T::from_f32(clamp_f32(x.into())),
+            y: T::from_f32(clamp_f32(y.into())),
         }
     }
 }
@@ -275,7 +275,7 @@ impl Point<Pixels> {
 
 impl<T> Point<T>
 where
-    T: NumericUnit + Into<f32> + From<f32>,
+    T: NumericUnit + Into<f32> + FloatUnit,
 {
     /// Euclidean distance to another point.
     ///
@@ -327,7 +327,7 @@ where
         let sum_y = self.y + other.y;
         let sum_x_f32: f32 = sum_x.into();
         let sum_y_f32: f32 = sum_y.into();
-        Self::new(T::from(sum_x_f32 / 2.0), T::from(sum_y_f32 / 2.0))
+        Self::new(T::from_f32(sum_x_f32 / 2.0), T::from_f32(sum_y_f32 / 2.0))
     }
 }
 
@@ -339,7 +339,7 @@ impl Point<Pixels> {}
 
 impl<T> Point<T>
 where
-    T: NumericUnit + Into<f32> + From<f32>,
+    T: NumericUnit + Into<f32> + FloatUnit,
 {
     /// Linear interpolation between two points.
     ///
@@ -354,7 +354,10 @@ where
         let x1: f32 = other.x.into();
         let y1: f32 = other.y.into();
 
-        Self::new(T::from(x0 + (x1 - x0) * t), T::from(y0 + (y1 - y0) * t))
+        Self::new(
+            T::from_f32(x0 + (x1 - x0) * t),
+            T::from_f32(y0 + (y1 - y0) * t),
+        )
     }
 }
 
@@ -664,7 +667,7 @@ where
 
 impl<T: NumericUnit> Point<T>
 where
-    T: Into<f32> + From<f32>,
+    T: Into<f32> + FloatUnit,
 {
     /// Checked addition with a vector, returns None if result is invalid.
     ///
@@ -733,8 +736,8 @@ where
         let x_f32: f32 = self.x.into();
         let y_f32: f32 = self.y.into();
         let result = Self {
-            x: T::from(x_f32 * scalar),
-            y: T::from(y_f32 * scalar),
+            x: T::from_f32(x_f32 * scalar),
+            y: T::from_f32(y_f32 * scalar),
         };
 
         if result.is_valid() {
@@ -761,7 +764,7 @@ where
     pub fn saturating_mul(self, scalar: f32) -> Self {
         let x_f32: f32 = self.x.into();
         let y_f32: f32 = self.y.into();
-        Self::new_clamped(T::from(x_f32 * scalar), T::from(y_f32 * scalar))
+        Self::new_clamped(T::from_f32(x_f32 * scalar), T::from_f32(y_f32 * scalar))
     }
 }
 
@@ -779,8 +782,8 @@ impl<T: Unit> Point<T> {
     ///
     /// let p = Point::<Pixels>::new(px(100.0), px(200.0));
     /// let p_f32: Point<Pixels> = p.cast();
-    /// assert_eq!(p_f32.x, 100.0);
-    /// assert_eq!(p_f32.y, 200.0);
+    /// assert_eq!(p_f32.x.get(), 100.0);
+    /// assert_eq!(p_f32.y.get(), 200.0);
     #[inline]
     #[must_use]
     pub fn cast<U>(self) -> Point<U>
@@ -1098,10 +1101,7 @@ where
 // ============================================================================
 
 impl Point<super::units::Pixels> {
-    /// Scales the point by a given factor, producing a `Point<ScaledPixels>`.
-    ///
-    /// This is typically used to convert logical pixel coordinates to scaled
-    /// pixels for high-DPI displays.
+    /// Scales the point by a given factor.
     ///
     /// # Examples
     ///
@@ -1112,7 +1112,7 @@ impl Point<super::units::Pixels> {
     /// let scaled = p.scale(2.0);  // 2x Retina display
     #[inline]
     #[must_use]
-    pub fn scale(self, factor: f32) -> Point<super::units::ScaledPixels> {
+    pub fn scale(self, factor: f32) -> Point<super::units::Pixels> {
         Point {
             x: self.x.scale(factor),
             y: self.y.scale(factor),
@@ -1132,30 +1132,6 @@ impl Point<super::units::Pixels> {
     #[must_use]
     pub fn magnitude(self) -> f32 {
         self.x.get().hypot(self.y.get())
-    }
-}
-
-// ============================================================================
-// Specialized implementations for ScaledPixels
-// ============================================================================
-
-impl Point<super::units::ScaledPixels> {
-    /// Converts to device pixels by rounding both coordinates.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_geometry::{Point, scaled_px};
-    ///
-    /// let p = Point::new(scaled_px(199.7), scaled_px(299.3));
-    /// let device = p.to_device_pixels();
-    #[inline]
-    #[must_use]
-    pub fn to_device_pixels(self) -> Point<super::units::DevicePixels> {
-        Point {
-            x: self.x.to_device_pixels(),
-            y: self.y.to_device_pixels(),
-        }
     }
 }
 

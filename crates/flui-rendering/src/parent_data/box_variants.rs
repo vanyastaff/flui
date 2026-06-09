@@ -515,7 +515,7 @@ mod tests {
     fn test_container_box_parent_data() {
         let data = ContainerBoxParentData::zero().with_offset(Offset::new(px(10.0), px(20.0)));
 
-        assert_eq!(data.offset.dx, 10.0);
+        assert_eq!(data.offset.dx, px(10.0));
         assert!(!data.is_zero());
     }
 

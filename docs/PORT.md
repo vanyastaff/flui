@@ -22,7 +22,7 @@ The translation manual draws inspiration from Bun's [oven-sh/bun#PORTING.md](htt
 
 **Governance layer** (write-time refusal rules, lock-decision matrix, per-crate documentation shape):
 
-- [§Refusal triggers](#refusal-triggers) — 7 anti-patterns the maintainer refuses to introduce, with grep regexes
+- [§Refusal triggers](#refusal-triggers) — 14 anti-patterns the maintainer refuses to introduce, with grep regexes
 - [§Lock decisions](#lock-decisions) — allowed vs forbidden `RwLock`/`Mutex` placements
 - [§Mapping rules](#mapping-rules) — Flutter behaviour primacy + binding-deletion carve-out + compile-time-over-runtime + sync-hot-path
 - [§Per-crate `ARCHITECTURE.md` template](#per-crate-architecturemd-template) — required and optional sections per crate
@@ -184,6 +184,22 @@ Re-exports (`pub use foo::Bar`) do not trip the trigger — only literal `pub <k
 **Allowlist marker:** `// PORT-CHECK-OK-SP8: <reason>` on the same line as the panic.
 
 **Back-references:** [architecture-correction-plan §SP-8](research/2026-05-22-architecture-correction-plan.md), [D-block plan §U45](plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md).
+
+### 14. Unit-barrier escape hatches in `flui-geometry`
+
+**U12 — implicit scalar conversions and cross-type `f32` operators on the logical-pixel unit wrappers.** The `flui-geometry` polish pass (N-geom §U1/U2/U4/U6) removed the operations that let an untyped scalar silently cross the unit boundary. This trigger keeps them gone: the next contributor who adds "just one quick conversion" re-opens exactly the coordinate-mixing bug class the pass closed (the class Dart's `double`-everywhere policy cannot type out).
+
+**Forbidden in `crates/flui-geometry/src/`:**
+
+- `impl From<f32>` / `impl From<f64>` for a unit wrapper — use `px(..)` / `::new(..)` / `FloatUnit::from_f32(..)` (the named, explicit bridge for generic float-domain math) instead.
+- `impl PartialEq<f32>` / `impl PartialOrd<f32>` / `impl Add<f32>` / `impl Sub<f32>` for a unit wrapper — compare/add against `px(..)`, or drop to a scalar with `.get()`.
+- `pub type FloatPoint` / `FloatVec2` / `FloatSize` / `FloatOffset` — dead "GPU-ready" aliases (GPU wants `[f32; 2]` via `.to_array()`, not a `Point<T>`).
+
+**Allowed:** `Mul<f32>` / `Div<f32>` (scaling a length by a dimensionless factor is well-defined); `From<unit> for f32`/`f64` (lossless extraction); the `FloatUnit` trait's explicit `from_f32`.
+
+**Allowlist marker:** `// PORT-CHECK-OK-UNIT: <reason>` within ±2 lines of the declaration (e.g. `PixelDelta`'s `From<f64>`, which carries a platform scroll delta rather than a coordinate).
+
+**Back-references:** [N-geom polish-pass research §III U1–U12](research/2026-05-24-flui-geometry-polish-pass-research.md), [ROADMAP-TRACKER N-geom block](ROADMAP-TRACKER.md).
 
 ### Reactive lint promotion
 

@@ -26,7 +26,7 @@
 //! type, not behind a generic typestate.
 
 #![warn(rust_2018_idioms, clippy::all, clippy::pedantic)]
-#![allow(clippy::module_name_repetitions, clippy::too_many_lines)]
+#![allow(clippy::module_name_repetitions)]
 
 // ============================================================================
 // MODULES

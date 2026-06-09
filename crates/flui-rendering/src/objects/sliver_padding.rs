@@ -36,7 +36,7 @@
 //!   remain test-friendly.
 
 use flui_tree::Single;
-use flui_types::{Axis, EdgeInsets, Offset, Pixels, Rect};
+use flui_types::{Axis, EdgeInsets, Offset, Pixels, Rect, geometry::px};
 
 use crate::{
     constraints::{SliverConstraints, SliverGeometry},
@@ -82,7 +82,7 @@ impl RenderSliverPadding {
     /// Creates a sliver-padding render object with all sides equal.
     #[must_use]
     pub fn all(value: f32) -> Self {
-        Self::new(EdgeInsets::all(value))
+        Self::new(EdgeInsets::all(px(value)))
     }
 
     /// Creates a sliver-padding render object with symmetric horizontal /
@@ -94,7 +94,7 @@ impl RenderSliverPadding {
     /// `(vertical, horizontal)`.
     #[must_use]
     pub fn symmetric(horizontal: f32, vertical: f32) -> Self {
-        Self::new(EdgeInsets::symmetric(vertical, horizontal))
+        Self::new(EdgeInsets::symmetric(px(vertical), px(horizontal)))
     }
 
     /// Returns the current padding.
@@ -128,16 +128,16 @@ impl RenderSliverPadding {
     fn resolve(&self, axis: Axis) -> (f32, f32, f32, f32) {
         match axis {
             Axis::Vertical => (
-                self.padding.top,
-                self.padding.bottom,
-                self.padding.vertical_total(),
-                self.padding.horizontal_total(),
+                self.padding.top.get(),
+                self.padding.bottom.get(),
+                self.padding.vertical_total().get(),
+                self.padding.horizontal_total().get(),
             ),
             Axis::Horizontal => (
-                self.padding.left,
-                self.padding.right,
-                self.padding.horizontal_total(),
-                self.padding.vertical_total(),
+                self.padding.left.get(),
+                self.padding.right.get(),
+                self.padding.horizontal_total().get(),
+                self.padding.vertical_total().get(),
             ),
         }
     }
@@ -286,8 +286,8 @@ impl RenderSliverPadding {
         // scroll (cross axis is vertical), left for vertical scroll
         // (cross axis is horizontal).
         let cross_before = match axis {
-            Axis::Horizontal => self.padding.top,
-            Axis::Vertical => self.padding.left,
+            Axis::Horizontal => self.padding.top.get(),
+            Axis::Vertical => self.padding.left.get(),
         };
         let paint_offset = match axis {
             Axis::Horizontal => {
@@ -303,7 +303,7 @@ impl RenderSliverPadding {
 impl Default for RenderSliverPadding {
     /// Defaults to zero padding — equivalent to a transparent passthrough.
     fn default() -> Self {
-        Self::new(EdgeInsets::all(0.0))
+        Self::new(EdgeInsets::ZERO)
     }
 }
 
@@ -509,9 +509,9 @@ mod tests {
     #[test]
     fn all_constructor_sets_uniform_padding() {
         let p = RenderSliverPadding::all(8.0);
-        assert_eq!(p.padding(), EdgeInsets::all(8.0));
-        assert_eq!(p.padding().horizontal_total(), 16.0);
-        assert_eq!(p.padding().vertical_total(), 16.0);
+        assert_eq!(p.padding(), EdgeInsets::all(px(8.0)));
+        assert_eq!(p.padding().horizontal_total(), px(16.0));
+        assert_eq!(p.padding().vertical_total(), px(16.0));
     }
 
     #[test]
@@ -520,22 +520,22 @@ mod tests {
         // left+right = 40 (matches EdgeInsets::symmetric(vertical=10,
         // horizontal=20)).
         let p = RenderSliverPadding::symmetric(20.0, 10.0);
-        assert_eq!(p.padding().horizontal_total(), 40.0);
-        assert_eq!(p.padding().vertical_total(), 20.0);
+        assert_eq!(p.padding().horizontal_total(), px(40.0));
+        assert_eq!(p.padding().vertical_total(), px(20.0));
     }
 
     #[test]
     fn default_is_zero_padding() {
         let p = RenderSliverPadding::default();
-        assert_eq!(p.padding(), EdgeInsets::all(0.0));
+        assert_eq!(p.padding(), EdgeInsets::all(px(0.0)));
     }
 
     #[test]
     fn set_padding_returns_change_flag() {
         let mut p = RenderSliverPadding::all(4.0);
-        assert!(!p.set_padding(EdgeInsets::all(4.0))); // no-op
-        assert!(p.set_padding(EdgeInsets::all(5.0)));
-        assert_eq!(p.padding(), EdgeInsets::all(5.0));
+        assert!(!p.set_padding(EdgeInsets::all(px(4.0)))); // no-op
+        assert!(p.set_padding(EdgeInsets::all(px(5.0))));
+        assert_eq!(p.padding(), EdgeInsets::all(px(5.0)));
     }
 
     // ────────────────────────────────────────────────────────────────────────
@@ -563,10 +563,10 @@ mod tests {
     #[test]
     fn resolve_picks_per_axis_padding_correctly() {
         let p = RenderSliverPadding::new(EdgeInsets {
-            top: 10.0,
-            right: 5.0,
-            bottom: 20.0,
-            left: 3.0,
+            top: px(10.0),
+            right: px(5.0),
+            bottom: px(20.0),
+            left: px(3.0),
         });
 
         // Vertical scroll: main = top+bottom = 30, cross = left+right = 8.
@@ -600,10 +600,10 @@ mod tests {
     #[test]
     fn child_constraints_deflate_cross_axis_and_extend_preceding() {
         let p = RenderSliverPadding::new(EdgeInsets {
-            top: 10.0,
-            right: 5.0,
-            bottom: 20.0,
-            left: 3.0,
+            top: px(10.0),
+            right: px(5.0),
+            bottom: px(20.0),
+            left: px(3.0),
         });
         let parent = vertical_constraints(0.0, 200.0, 200.0, 300.0);
         let cc = p.child_constraints(&parent);
@@ -644,10 +644,10 @@ mod tests {
     #[test]
     fn padded_geometry_matches_flutter_formula() {
         let p = RenderSliverPadding::new(EdgeInsets {
-            top: 10.0,
-            right: 0.0,
-            bottom: 20.0,
-            left: 0.0,
+            top: px(10.0),
+            right: px(0.0),
+            bottom: px(20.0),
+            left: px(0.0),
         });
         let parent = vertical_constraints(0.0, 200.0, 200.0, 300.0);
         let child = child_geom(100.0, 80.0, 80.0, 80.0);
@@ -684,10 +684,10 @@ mod tests {
 
         // Horizontal scroll → cross axis is vertical → cross-before = top.
         let p = RenderSliverPadding::new(EdgeInsets {
-            top: 7.0,
-            right: 20.0,
-            bottom: 0.0,
-            left: 10.0,
+            top: px(7.0),
+            right: px(20.0),
+            bottom: px(0.0),
+            left: px(10.0),
         });
         let parent = SliverConstraints::new(
             AxisDirection::LeftToRight,

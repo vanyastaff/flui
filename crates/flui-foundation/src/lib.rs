@@ -42,7 +42,7 @@
 //! // Observable values for reactive UI
 //! let mut notifier = ChangeNotifier::new();
 //! let listener_id = notifier.add_listener(Arc::new(|| {
-//!     println!("Value changed!");
+//!     // react to the change (e.g. mark a widget dirty)
 //! }));
 //!
 //! // Notify listeners of changes
@@ -88,14 +88,17 @@
 //!
 //! // Basic change notification
 //! let mut notifier = ChangeNotifier::new();
-//! let listener = notifier.add_listener(Arc::new(|| println!("Changed!")));
+//! let listener = notifier.add_listener(Arc::new(|| {
+//!     // react to the change
+//! }));
 //!
 //! // Value-holding notifier
 //! let mut value_notifier = ValueNotifier::new(42);
 //! let value_listener = value_notifier.add_listener(Arc::new(|| {
-//!     println!("Value changed!");
+//!     // react to the value change
 //! }));
 //! value_notifier.set_value(100);
+//! assert_eq!(*value_notifier.value(), 100);
 //! ```
 //!
 //! ### Diagnostics
@@ -107,7 +110,8 @@
 //!     .with_property(DiagnosticsProperty::new("width", 100.0))
 //!     .with_property(DiagnosticsProperty::new("height", 200.0));
 //!
-//! println!("{}", node.to_string());
+//! let rendered = node.to_string();
+//! assert!(rendered.contains("MyWidget"));
 //! ```
 //!
 //! ## Thread Safety
@@ -130,12 +134,12 @@
     missing_docs,
     missing_debug_implementations,
     rust_2018_idioms,
-    unreachable_pub
+    unreachable_pub,
+    clippy::pedantic
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 // Core modules - fundamental types with minimal dependencies
-pub mod assert; // PORT-CHECK-OK-SP4: assert API surface; consumed via flui_foundation::assert! macro re-export
 pub mod binding;
 pub mod callbacks;
 pub mod consts;
@@ -170,7 +174,7 @@ pub use consts::{DEBUG_MODE, EPSILON, EPSILON_F32, IS_DESKTOP, IS_MOBILE, IS_WEB
 // Diagnostics
 pub use debug::{
     DiagnosticLevel, Diagnosticable, DiagnosticsBuilder, DiagnosticsNode, DiagnosticsProperty,
-    DiagnosticsTreeStyle,
+    DiagnosticsPropertyKind, DiagnosticsTreeStyle,
 };
 pub use id::{
     // Core tree IDs (5-tree architecture)
@@ -181,7 +185,6 @@ pub use id::{
     // Generic ID system
     Id,
     Identifier,
-    Index,
     LayerId,
     // Listener/Observer IDs
     ListenerId,
@@ -238,7 +241,6 @@ pub mod prelude {
         // Generic ID system
         Id,
         Identifier,
-        Index,
         Key,
         KeyRef,
         Keyed,
@@ -264,10 +266,6 @@ pub mod prelude {
         ViewKey,
         VoidCallback,
         WithKey,
-    };
-    // Re-export assertion macros
-    pub use crate::{
-        debug_assert_finite, debug_assert_not_nan, debug_assert_range, debug_assert_valid,
     };
 }
 

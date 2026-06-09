@@ -181,13 +181,15 @@ pub trait TreeNav<I: Identifier>: super::TreeRead<I> {
         let index = index?;
         let depth = Depth::new(self.depth(id));
 
-        Some(Slot::with_siblings(
-            parent,
-            index,
-            depth,
-            previous_sibling,
-            next_sibling,
-        ))
+        Some(
+            Slot::with_siblings()
+                .parent(parent)
+                .index(index)
+                .depth(depth)
+                .maybe_prev_sibling(previous_sibling)
+                .maybe_next_sibling(next_sibling)
+                .call(),
+        )
     }
 
     /// Returns the number of immediate children.
@@ -319,7 +321,7 @@ pub trait TreeNavExt<I: Identifier>: TreeNav<I> {
     /// First matching child ID, or `None` if no match found.
     fn find_child_where<P>(&self, parent: I, mut predicate: P) -> Option<I>
     where
-        P: for<'a> FnMut(&'a Self::Node) -> bool,
+        P: FnMut(&Self::Node) -> bool,
     {
         for child_id in self.children(parent) {
             if let Some(child_node) = self.get(child_id)
@@ -336,7 +338,7 @@ pub trait TreeNavExt<I: Identifier>: TreeNav<I> {
     /// Performs depth-first search with early termination.
     fn find_descendant_where<P>(&self, root: I, mut predicate: P) -> Option<I>
     where
-        P: for<'a> FnMut(&'a Self::Node) -> bool,
+        P: FnMut(&Self::Node) -> bool,
     {
         for (id, _depth) in self.descendants(root) {
             if let Some(node) = self.get(id)
@@ -356,7 +358,7 @@ pub trait TreeNavExt<I: Identifier>: TreeNav<I> {
     /// * `visitor` - HRTB closure called for each node
     fn visit_subtree<F>(&self, root: I, mut visitor: F)
     where
-        F: for<'a> FnMut(I, &'a Self::Node, usize),
+        F: FnMut(I, &Self::Node, usize),
     {
         for (id, depth) in self.descendants(root) {
             if let Some(node) = self.get(id) {
@@ -368,7 +370,7 @@ pub trait TreeNavExt<I: Identifier>: TreeNav<I> {
     /// Count descendants matching a predicate.
     fn count_descendants_where<P>(&self, root: I, mut predicate: P) -> usize
     where
-        P: for<'a> FnMut(&'a Self::Node) -> bool,
+        P: FnMut(&Self::Node) -> bool,
     {
         self.descendants(root)
             .filter_map(|(id, _)| self.get(id))
