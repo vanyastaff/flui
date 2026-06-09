@@ -97,6 +97,14 @@ use crate::{
 /// range. Used at the W3C→flui boundary where upstream carries `f64`
 /// physical pixels and our `Offset<Pixels>` stores `f32`.
 ///
+/// Upper bound on simultaneously-tracked pointers.
+///
+/// Per-pointer state (hit tests, resamplers, arena entries, recogniser maps)
+/// grows with active pointers; an untrusted event source could open unbounded
+/// pointers to exhaust memory. Real hardware tops out around 10–16 touches, so
+/// this generous cap never rejects a legitimate gesture.
+const MAX_SIMULTANEOUS_POINTERS: usize = 32;
+
 /// Local mirror of the helper in `events.rs` / `pan_zoom.rs` —
 /// duplicated here to keep the binding module's hot path free of
 /// cross-module indirection.
@@ -338,6 +346,22 @@ impl GestureBinding {
         match event {
             PointerEvent::Down(e) => {
                 let pointer_id = self.extract_pointer_id(event);
+
+                // Bound per-pointer state growth (memory-DoS guard). A re-down of
+                // an already-tracked pointer replaces rather than grows, so it is
+                // always allowed; only a genuinely new pointer beyond the cap is
+                // dropped.
+                if self.hit_tests.len() >= MAX_SIMULTANEOUS_POINTERS
+                    && !self.hit_tests.contains_key(&pointer_id)
+                {
+                    tracing::warn!(
+                        ?pointer_id,
+                        active = self.hit_tests.len(),
+                        "dropping Down: simultaneous-pointer cap reached"
+                    );
+                    return;
+                }
+
                 let position = Offset::new(px_f32(e.state.position.x), px_f32(e.state.position.y));
 
                 // Perform hit test
@@ -854,6 +878,27 @@ mod tests {
         binding.handle_pointer_event(&down, |_| HitTestResult::new());
         // 1 active resampler for the primary pointer.
         assert_eq!(binding.active_resampler_count(), 1);
+    }
+
+    #[test]
+    fn down_beyond_pointer_cap_is_dropped() {
+        let binding = GestureBinding::new();
+        // Fill to the cap with distinct synthetic pointers (ids 2..) so the
+        // primary id (1) is a genuinely new pointer below.
+        for i in 0..MAX_SIMULTANEOUS_POINTERS {
+            let id = PointerId::new(i as u64 + 2).expect("nonzero pointer id");
+            binding.hit_tests.insert(id, HitTestResult::new());
+        }
+        assert_eq!(binding.active_pointer_count(), MAX_SIMULTANEOUS_POINTERS);
+
+        // A brand-new pointer beyond the cap must be refused, not tracked.
+        let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Touch);
+        binding.handle_pointer_event(&down, |_| HitTestResult::new());
+        assert_eq!(
+            binding.active_pointer_count(),
+            MAX_SIMULTANEOUS_POINTERS,
+            "a Down beyond the simultaneous-pointer cap must not be tracked"
+        );
     }
 
     #[test]
