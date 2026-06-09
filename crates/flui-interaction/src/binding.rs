@@ -79,6 +79,7 @@
 use dashmap::DashMap;
 use flui_foundation::{BindingBase, impl_binding_singleton};
 use flui_types::geometry::{Offset, Pixels};
+use smallvec::SmallVec;
 use ui_events::pointer::{PointerEvent, PointerType};
 
 use crate::{
@@ -573,17 +574,34 @@ impl GestureBinding {
             }
         }
 
-        // Direct dispatch path: take all pending moves and dispatch
-        // each to the cached hit test result.
-        let pending: Vec<_> = self
-            .pending_moves
-            .iter()
-            .map(|entry| (*entry.key(), entry.value().clone()))
-            .collect();
+        // Direct dispatch path: drain every coalesced move, then
+        // dispatch each to the cached hit test result.
+        //
+        // Draining happens up front, before any handler runs, for two
+        // reasons. First, `dispatch_event` re-enters the binding through
+        // its handlers; holding a `DashMap` shard guard across that call
+        // would deadlock on the shard-per-key design, so every guard must
+        // be released first. Second, removing all entries before dispatch
+        // preserves coalescing semantics: a re-entrant insert during
+        // dispatch lands in the *next* frame, never this one.
+        //
+        // `remove` returns the owned event, so each move is *moved* out of
+        // the map rather than cloned (`PointerEvent` is 152 bytes). The
+        // key snapshot and the drained buffer stay inline for the common
+        // case (a handful of simultaneous pointers; the hard cap is
+        // `MAX_SIMULTANEOUS_POINTERS`), spilling to the heap only under
+        // heavy multitouch.
+        let pointers: SmallVec<[PointerId; 4]> =
+            self.pending_moves.iter().map(|entry| *entry.key()).collect();
+        let mut drained: SmallVec<[(PointerId, PointerEvent); 4]> =
+            SmallVec::with_capacity(pointers.len());
+        for pointer_id in pointers {
+            if let Some(entry) = self.pending_moves.remove(&pointer_id) {
+                drained.push(entry);
+            }
+        }
 
-        self.pending_moves.clear();
-
-        for (pointer_id, event) in pending {
+        for (pointer_id, event) in drained {
             // Use cached hit test result
             if let Some(result) = self.hit_tests.get(&pointer_id) {
                 self.dispatch_event(&event, &result);
