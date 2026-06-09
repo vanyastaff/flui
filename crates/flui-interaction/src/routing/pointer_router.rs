@@ -427,8 +427,8 @@ mod tests {
     #[test]
     fn test_per_pointer_before_global() {
         // Flutter parity: pointer_router.dart:124 dispatches per-pointer
-        // handlers first, then global handlers. FLUI (acab2929+)
-        // matches this ordering — previously global fired first.
+        // handlers first, then global handlers. This router matches that
+        // ordering.
         let router = PointerRouter::new();
         let pointer = PointerId::PRIMARY; // PRIMARY pointer
 

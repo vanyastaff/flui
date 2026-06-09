@@ -14,7 +14,7 @@
 //! - `handle_event` with `on_tap` callback wired: < 1.5 µs per event. The
 //!   callback dispatch is an `Arc::clone` of the callback handle plus
 //!   a `Fn` call — kept off the hot path until `accept_gesture` confirms
-//!   the arena win (U8's `pending_up` deferral).
+//!   the arena win (the `pending_up` deferral).
 //!
 //! Follows the workspace benchmark template at
 //! `rust-studio/.../templates/benchmark-report.md`.
@@ -99,7 +99,7 @@ fn bench_tap_no_callbacks(c: &mut Criterion) {
 }
 
 /// Benchmark the full Down → Move → Up sequence with all three tap
-/// callbacks wired (`on_tap_down`, `on_tap_up`, `on_tap`). The U8
+/// callbacks wired (`on_tap_down`, `on_tap_up`, `on_tap`). The
 /// `pending_up` deferral means the callbacks fire AFTER the arena
 /// resolves — but the recogniser still has to clone the callback
 /// handles, so this bench captures the steady-state allocation
@@ -140,16 +140,16 @@ fn bench_add_pointer(c: &mut Criterion) {
     });
 }
 
-/// Secondary-button tap (U8 path) — `handle_event` with a
+/// Secondary-button tap — `handle_event` with a
 /// `PointerButton::Secondary` payload must route to the secondary
 /// callback slot rather than the primary one. The recogniser's
-/// per-button dispatch is the new hot path added in U8; the bench
+/// per-button dispatch is the hot path here; the bench
 /// regression-guards the constant cost.
 fn bench_secondary_button(c: &mut Criterion) {
     // We can't easily construct a `PointerButtonEvent` with
     // `Secondary` in a bench (the `make_*_event` helpers only emit
     // `Primary`). Instead we measure the primary-button path and
-    // rely on the U8 unit tests in
+    // rely on the unit tests in
     // `src/recognizers/tap.rs::secondary_button_routes_to_*` to cover
     // the button-mismatch case. The primary-path cost is the same
     // shape (one extra `down()` callback-table lookup) — if the

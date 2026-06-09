@@ -12,8 +12,8 @@
 //! - `sweep` of a single-member arena: < 1 µs (1 Mutex lock + 1 DashMap
 //!   remove).
 //! - Conflict resolution (eager + competitor) should not regress the hot
-//!   path beyond a constant factor (the L2S regression in U1 actually
-//!   made arena dispatch cheaper by sharing math primitives; we
+//!   path beyond a constant factor (sharing the least-squares math
+//!   primitives across recognisers made arena dispatch cheaper; we
 //!   regression-guard against losing that win).
 //!
 //! Follows the workspace benchmark template at

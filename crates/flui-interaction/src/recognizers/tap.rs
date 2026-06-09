@@ -976,7 +976,7 @@ mod tests {
     /// Right-click down + up fires `on_secondary_tap`; primary slot
     /// stays silent.
     #[test]
-    fn u8_secondary_button_routes_to_secondary_callbacks() {
+    fn secondary_button_routes_to_secondary_callbacks() {
         let arena = GestureArena::new();
         let secondary_tapped = Arc::new(Mutex::new(false));
         let primary_tapped = Arc::new(Mutex::new(false));
@@ -1001,7 +1001,7 @@ mod tests {
     /// Middle-click down + up fires `on_tertiary_tap`; primary slot
     /// stays silent.
     #[test]
-    fn u8_tertiary_button_routes_to_tertiary_callbacks() {
+    fn tertiary_button_routes_to_tertiary_callbacks() {
         let arena = GestureArena::new();
         let tertiary_tapped = Arc::new(Mutex::new(false));
         let primary_tapped = Arc::new(Mutex::new(false));
@@ -1028,7 +1028,7 @@ mod tests {
     /// `tap.dart::_checkUp` rejection. Primary `on_tap_cancel`
     /// fires; neither `on_tap` nor `on_secondary_tap` does.
     #[test]
-    fn u8_button_mismatch_cancels_primary_tap() {
+    fn button_mismatch_cancels_primary_tap() {
         let arena = GestureArena::new();
         let tapped = Arc::new(Mutex::new(false));
         let cancelled = Arc::new(Mutex::new(false));
@@ -1058,7 +1058,7 @@ mod tests {
     /// Slop-exceeded cancel on a secondary-button tap must fire
     /// `on_secondary_tap_cancel` (not the primary cancel slot).
     #[test]
-    fn u8_secondary_slop_cancel_routes_to_secondary_cancel() {
+    fn secondary_slop_cancel_routes_to_secondary_cancel() {
         let arena = GestureArena::new();
         let primary_cancelled = Arc::new(Mutex::new(false));
         let secondary_cancelled = Arc::new(Mutex::new(false));

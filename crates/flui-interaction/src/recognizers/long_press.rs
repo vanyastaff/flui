@@ -778,7 +778,7 @@ mod tests {
     /// hook only resolved silently, leaving deadline-driven acceptance
     /// a no-op for callers.
     #[test]
-    fn u9_did_exceed_deadline_fires_start_callbacks() {
+    fn did_exceed_deadline_fires_start_callbacks() {
         use crate::recognizers::PrimaryPointerGestureRecognizer;
         use std::time::Duration;
 
@@ -809,7 +809,7 @@ mod tests {
     /// it returns `false` before the deadline and `true` after, and
     /// does not refire once `Started` is reached.
     #[test]
-    fn u9_try_fire_timer_is_idempotent() {
+    fn try_fire_timer_is_idempotent() {
         use std::time::Duration;
 
         let arena = GestureArena::new();
