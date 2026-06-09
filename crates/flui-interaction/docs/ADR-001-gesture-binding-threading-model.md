@@ -1,7 +1,11 @@
 # ADR-001: Gesture binding threading model
 
-Status: **Proposed — superseded framing** · Date: 2026-06-09 · Scope: `flui-interaction`, `flui-foundation`
+Status: **Superseded by [ADR-0002](../../../docs/adr/ADR-0002-engine-wide-threading-architecture.md)** · Date: 2026-06-09 · Scope: `flui-interaction`, `flui-foundation`
 
+> **Superseded (2026-06-09):** the threading decision is now made engine-wide in
+> [`docs/adr/ADR-0002-engine-wide-threading-architecture.md`](../../../docs/adr/ADR-0002-engine-wide-threading-architecture.md),
+> which draws the Send boundary below the bindings: the **control plane (gestures, build, scheduler, events) goes `!Send`/thread-affine** and the data plane stays `Send`-ready. Gestures are a *consequence* of that boundary, not a separate decision. ADR-0002 preserves this ADR's conclusion (the `!Send` flip is necessary-but-not-sufficient for a compile-time gesture-safety typestate; the aliasing blocker remains a separate arena-by-ID redesign).
+>
 > **Decision research (2026-06-09):** see
 > [`docs/research/2026-06-09-adr-001-gesture-binding-threading.md`](../../../docs/research/2026-06-09-adr-001-gesture-binding-threading.md).
 > It reframes this ADR on three points, verified against code:
