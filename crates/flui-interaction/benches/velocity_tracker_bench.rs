@@ -59,7 +59,7 @@ fn bench_estimate_lsq(c: &mut Criterion) {
                 }
                 tracker
             },
-            |tracker| black_box(tracker.estimate()),
+            |mut tracker| black_box(tracker.estimate()),
             criterion::BatchSize::SmallInput,
         );
     });
@@ -79,7 +79,37 @@ fn bench_estimate_short(c: &mut Criterion) {
                 }
                 tracker
             },
-            |tracker| black_box(tracker.estimate()),
+            |mut tracker| black_box(tracker.estimate()),
+            criterion::BatchSize::SmallInput,
+        );
+    });
+}
+
+/// Benchmark repeated `estimate()` queries on an unchanged buffer — the
+/// pattern on the drag-end / prediction path, where a single frame asks for
+/// the velocity and the estimate (and any future code may re-query). With the
+/// estimate memoized, only the first call per unchanged buffer runs the O(N)
+/// QR solve; the rest are cache hits. The fill happens in (untimed) setup, so
+/// the timed region is four back-to-back `estimate()` calls with no
+/// intervening `add_position`.
+fn bench_estimate_repeated(c: &mut Criterion) {
+    let samples = black_box(linear_swipe(20, 100, 1000.0));
+    c.bench_function("VelocityTracker::estimate (LSQ, 4 repeated queries)", |b| {
+        b.iter_batched(
+            || {
+                let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
+                for (t, p) in &samples {
+                    tracker.add_position(*t, *p);
+                }
+                tracker
+            },
+            |mut tracker| {
+                // Four queries against the same buffer: 1 solve + 3 cache hits.
+                black_box(tracker.estimate());
+                black_box(tracker.estimate());
+                black_box(tracker.estimate());
+                black_box(tracker.estimate())
+            },
             criterion::BatchSize::SmallInput,
         );
     });
@@ -126,6 +156,7 @@ criterion_group!(
     velocity_benches,
     bench_estimate_lsq,
     bench_estimate_short,
+    bench_estimate_repeated,
     bench_add_position,
     bench_ios_estimate,
 );

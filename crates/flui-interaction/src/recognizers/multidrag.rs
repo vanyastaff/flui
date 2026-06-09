@@ -436,15 +436,18 @@ impl MultiDragGestureRecognizer {
 
     /// Handle pointer up.
     fn handle_up(&self, pointer: PointerId, position: Offset<Pixels>, _kind: PointerType) {
-        let Some(state) = self.remove_pointer(pointer) else {
+        let Some(mut state) = self.remove_pointer(pointer) else {
             return;
         };
         if state.accepted {
+            // Read the velocity first (it borrows the tracker mutably to
+            // memoize) before taking the shared borrow of `state.client`.
+            let velocity = state.velocity_tracker.get_velocity();
             if let Some(client) = state.client.as_ref() {
                 let details = MultiDragEndDetails {
                     pointer_id: pointer,
                     global_position: position,
-                    velocity: state.velocity_tracker.get_velocity(),
+                    velocity,
                     kind: state.kind,
                 };
                 client.end(details);

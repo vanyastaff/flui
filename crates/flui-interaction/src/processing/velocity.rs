@@ -133,6 +133,18 @@ pub struct VelocityTracker {
     /// has been still for 40 ms or more" — the canonical Flutter signal that
     /// the velocity is zero.
     since_last_sample: Option<Instant>,
+
+    /// Memoized result of the buffer-pure part of [`Self::get_velocity_estimate`]
+    /// (the backward walk plus the least-squares fit). Invalidated whenever
+    /// the sample buffer changes ([`Self::add_position`] / [`Self::reset`]).
+    ///
+    /// Only the buffer-pure computation is cached; the time-dependent
+    /// "stationary for 40 ms" gate is re-evaluated on every call, so a cached
+    /// fit is returned only while the pointer is still moving. This collapses
+    /// the repeated queries on the drag-end path — most visibly
+    /// [`super::InputPredictor::predict`], which asks for both the velocity
+    /// and the estimate in one call — from two O(N) QR solves to one.
+    cached_estimate: Option<VelocityEstimate>,
 }
 
 impl Default for VelocityTracker {
@@ -155,6 +167,7 @@ impl VelocityTracker {
             samples: [None; HISTORY_SIZE],
             index: 0,
             since_last_sample: None,
+            cached_estimate: None,
         }
     }
 
@@ -190,6 +203,9 @@ impl VelocityTracker {
         // signal.
         self.since_last_sample = Some(Instant::now());
 
+        // The sample buffer is about to change, so any memoized fit is stale.
+        self.cached_estimate = None;
+
         // Advance the write index, wrapping at HISTORY_SIZE.
         self.index = (self.index + 1) % HISTORY_SIZE;
         self.samples[self.index] = Some(PointAtTime { time, position });
@@ -200,6 +216,7 @@ impl VelocityTracker {
         self.samples = [None; HISTORY_SIZE];
         self.index = 0;
         self.since_last_sample = None;
+        self.cached_estimate = None;
     }
 
     /// Number of samples currently stored.
@@ -222,10 +239,17 @@ impl VelocityTracker {
     /// Returns `None` if the tracker has no samples at all.
     ///
     /// This is the Rust port of Flutter's `getVelocityEstimate()`.
-    pub fn get_velocity_estimate(&self) -> Option<VelocityEstimate> {
+    ///
+    /// Takes `&mut self` because the buffer-pure part of the result is
+    /// memoized (see the private `compute_estimate`); the cache is reused until
+    /// the next [`Self::add_position`] / [`Self::reset`]. The "stationary for
+    /// 40 ms" gate below is time-dependent and re-checked every call, so a
+    /// cached fit is only ever returned while the pointer is still moving.
+    pub fn get_velocity_estimate(&mut self) -> Option<VelocityEstimate> {
         // Pointer has been still for >= 40 ms → velocity is exactly zero with
         // perfect confidence. Flutter returns a fully-populated
         // VelocityEstimate so callers can still ask for `duration` / `offset`.
+        // Time-dependent, so never cached.
         if let Some(last) = self.since_last_sample
             && last.elapsed() >= ASSUME_POINTER_STOPPED
         {
@@ -237,6 +261,26 @@ impl VelocityTracker {
             ));
         }
 
+        // Reuse the memoized fit if the sample buffer hasn't changed since it
+        // was computed. `VelocityEstimate` is `Copy`, so this is a cheap read.
+        if let Some(cached) = self.cached_estimate {
+            return Some(cached);
+        }
+
+        let estimate = self.compute_estimate()?;
+        self.cached_estimate = Some(estimate);
+        Some(estimate)
+    }
+
+    /// Compute the buffer-pure part of the velocity estimate: walk the
+    /// circular buffer back from the newest sample and run the least-squares
+    /// fit. Returns `None` only when the buffer is empty.
+    ///
+    /// This is a pure function of the sample buffer — it does not consult the
+    /// time-dependent stationary gate, nor the memo cache — which is exactly
+    /// what makes the cache in [`Self::get_velocity_estimate`] sound. O(N)
+    /// where N ≤ `HISTORY_SIZE` (the buffer is bounded at 20 samples).
+    fn compute_estimate(&self) -> Option<VelocityEstimate> {
         let newest = self.samples[self.index]?;
         // Walk backwards through the circular buffer, collecting samples that
         // represent continuous motion: age <= HORIZON and gap between
@@ -337,7 +381,10 @@ impl VelocityTracker {
     /// [`Velocity::ZERO`] when the estimate is missing or its velocity is
     /// zero. This is the canonical call site for "fling this view" — Flutter
     /// uses `getVelocity()` in the drag-end callback for the same purpose.
-    pub fn get_velocity(&self) -> Velocity {
+    ///
+    /// `&mut self` for the same memoization reason as
+    /// [`Self::get_velocity_estimate`], which this delegates to.
+    pub fn get_velocity(&mut self) -> Velocity {
         match self.get_velocity_estimate() {
             Some(est) if est.pixels_per_second != Offset::ZERO => {
                 Velocity::new(est.pixels_per_second)
@@ -356,7 +403,9 @@ impl VelocityTracker {
     /// `allow_slow` is `true`, the raw estimate is returned even at very
     /// low speeds — useful for snap-back animations and small-list
     /// micro-scrolls.
-    pub fn get_fling_velocity(&self, allow_slow: bool) -> Velocity {
+    ///
+    /// `&mut self` for the same memoization reason as [`Self::get_velocity`].
+    pub fn get_fling_velocity(&mut self, allow_slow: bool) -> Velocity {
         let velocity = self.get_velocity();
         if allow_slow {
             return velocity;
@@ -372,8 +421,11 @@ impl VelocityTracker {
     }
 
     /// Flutter-port alias for [`Self::get_velocity_estimate`].
+    ///
+    /// `&mut self` for the same memoization reason as
+    /// [`Self::get_velocity_estimate`], which this delegates to.
     #[inline]
-    pub fn estimate(&self) -> Option<VelocityEstimate> {
+    pub fn estimate(&mut self) -> Option<VelocityEstimate> {
         self.get_velocity_estimate()
     }
 
@@ -684,7 +736,7 @@ mod tests {
 
     #[test]
     fn empty_tracker_has_no_estimate() {
-        let tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
+        let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
         assert_eq!(tracker.get_velocity(), Velocity::ZERO);
         assert!(!tracker.has_sufficient_data());
     }
@@ -844,6 +896,71 @@ mod tests {
     fn kind_is_recorded() {
         let t = VelocityTracker::with_kind(PointerDeviceKind::Stylus);
         assert_eq!(t.kind(), PointerDeviceKind::Stylus);
+    }
+
+    #[test]
+    fn estimate_cache_is_populated_then_invalidated() {
+        // White-box check of the memoization contract: the cache is empty
+        // until the first query, populated by it, and invalidated by any
+        // sample-buffer mutation (add_position / reset).
+        let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
+        let start = Instant::now();
+        for i in 0..5 {
+            tracker.add_position(
+                start + Duration::from_millis(i * 10),
+                Offset::new(Pixels(i as f32 * 10.0), Pixels(0.0)),
+            );
+        }
+        assert!(
+            tracker.cached_estimate.is_none(),
+            "cache must be empty before the first query"
+        );
+        let _ = tracker.get_velocity_estimate();
+        assert!(
+            tracker.cached_estimate.is_some(),
+            "first query must populate the cache"
+        );
+        tracker.add_position(
+            start + Duration::from_millis(50),
+            Offset::new(Pixels(50.0), Pixels(0.0)),
+        );
+        assert!(
+            tracker.cached_estimate.is_none(),
+            "a new sample must invalidate the cache"
+        );
+        let _ = tracker.get_velocity_estimate();
+        tracker.reset();
+        assert!(
+            tracker.cached_estimate.is_none(),
+            "reset must invalidate the cache"
+        );
+    }
+
+    #[test]
+    fn estimate_reflects_new_samples_not_stale_cache() {
+        // Behavioral guard: a memoized estimate must never be served once the
+        // buffer changes. A rightward swipe reads +dx; after reset + a
+        // leftward swipe the sign must flip — a stale cache would still read +.
+        let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
+        let start = Instant::now();
+        for i in 0..8 {
+            tracker.add_position(
+                start + Duration::from_millis(i * 5),
+                Offset::new(Pixels(i as f32 * 20.0), Pixels(0.0)),
+            );
+        }
+        let right = tracker.get_velocity().pixels_per_second.dx.get();
+        assert!(right > 0.0, "rightward swipe should be +dx, got {right}");
+
+        tracker.reset();
+        for i in 0..8 {
+            tracker.add_position(
+                start + Duration::from_millis(i * 5),
+                Offset::new(Pixels(-(i as f32) * 20.0), Pixels(0.0)),
+            );
+        }
+        let left = tracker.get_velocity().pixels_per_second.dx.get();
+        assert!(left < 0.0, "leftward swipe should be -dx, got {left}");
     }
 
     proptest::proptest! {

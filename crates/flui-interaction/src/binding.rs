@@ -591,8 +591,11 @@ impl GestureBinding {
         // case (a handful of simultaneous pointers; the hard cap is
         // `MAX_SIMULTANEOUS_POINTERS`), spilling to the heap only under
         // heavy multitouch.
-        let pointers: SmallVec<[PointerId; 4]> =
-            self.pending_moves.iter().map(|entry| *entry.key()).collect();
+        let pointers: SmallVec<[PointerId; 4]> = self
+            .pending_moves
+            .iter()
+            .map(|entry| *entry.key())
+            .collect();
         let mut drained: SmallVec<[(PointerId, PointerEvent); 4]> =
             SmallVec::with_capacity(pointers.len());
         for pointer_id in pointers {

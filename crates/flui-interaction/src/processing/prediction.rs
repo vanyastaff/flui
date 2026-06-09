@@ -358,7 +358,10 @@ impl InputPredictor {
     }
 
     /// Get the current velocity estimate.
-    pub fn velocity(&self) -> Velocity {
+    ///
+    /// `&mut self` because the underlying [`VelocityTracker`] memoizes its
+    /// estimate on query (the cache is invalidated by the next sample).
+    pub fn velocity(&mut self) -> Velocity {
         self.velocity_tracker.get_velocity()
     }
 
