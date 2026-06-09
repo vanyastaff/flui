@@ -678,6 +678,34 @@ impl WidgetsBinding {
     where
         V: View + Clone + Send + Sync + 'static,
     {
+        self.attach_root_widget_with_size(view, DEFAULT_ROOT_VIEW_SIZE.0, DEFAULT_ROOT_VIEW_SIZE.1)
+    }
+
+    /// Attach a root widget sizing the root [`RenderView`] to an explicit
+    /// logical `width` × `height` (e.g. the platform window's surface size)
+    /// instead of [`DEFAULT_ROOT_VIEW_SIZE`].
+    ///
+    /// This is the entry point the platform runner uses so the root view is
+    /// born at the real window size rather than the 800×600 fallback. Per-frame
+    /// layout constraints are still supplied by `draw_frame`; this only sets the
+    /// root view object's intrinsic size at bootstrap. See [`attach_root_widget`]
+    /// for the full bootstrap contract.
+    ///
+    /// [`attach_root_widget`]: Self::attach_root_widget
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AttachError::AlreadyAttached`] if a root widget is already
+    /// attached.
+    pub fn attach_root_widget_with_size<V>(
+        &self,
+        view: &V,
+        width: f32,
+        height: f32,
+    ) -> Result<(), AttachError>
+    where
+        V: View + Clone + Send + Sync + 'static,
+    {
         let mut inner = self.inner.write();
 
         if inner.root_element.is_some() {
@@ -704,11 +732,7 @@ impl WidgetsBinding {
         // restriction in practice — every concrete `View` in this
         // codebase already satisfies it (see `Element<V, A, B>`'s
         // own bound).
-        let root_render_view = RootRenderView::new(
-            view.clone(),
-            DEFAULT_ROOT_VIEW_SIZE.0,
-            DEFAULT_ROOT_VIEW_SIZE.1,
-        );
+        let root_render_view = RootRenderView::new(view.clone(), width, height);
 
         // Mount the `RootRenderView` as the element-tree root with the
         // PipelineOwner. This ensures `RootRenderElement` (and the
@@ -1589,6 +1613,38 @@ mod tests {
         assert!(
             pipeline_owner.read().root_id().is_some(),
             "PipelineOwner's root node is wired to the RenderView"
+        );
+    }
+
+    /// V-7 / E2: the runner's sized bootstrap path
+    /// (`attach_root_widget_with_size`) mounts the root render tree at an
+    /// explicit window size, identically to the default-size attach — proving
+    /// the size param threads through without disturbing the bootstrap.
+    #[test]
+    fn test_attach_root_widget_with_size_bootstraps_render_tree() {
+        let binding = WidgetsBinding::new();
+        let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
+        binding.set_pipeline_owner(Arc::clone(&pipeline_owner));
+
+        binding
+            .attach_root_widget_with_size(&LeafView, 1024.0, 768.0)
+            .expect("sized attach succeeds");
+
+        let root_id = binding.root_element().expect("root element is set");
+        binding.with_element_tree(|tree| {
+            let element = tree.get(root_id).expect("root node").element();
+            let root_render_element = element
+                .as_any()
+                .downcast_ref::<RootRenderElement<LeafView>>()
+                .expect("root is RootRenderElement");
+            assert!(
+                root_render_element.render_id().is_some(),
+                "sized attach bootstrapped a RenderView (render_id set)"
+            );
+        });
+        assert!(
+            pipeline_owner.read().root_id().is_some(),
+            "PipelineOwner root node wired under the sized bootstrap path"
         );
     }
 

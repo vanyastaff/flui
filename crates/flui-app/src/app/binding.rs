@@ -38,7 +38,7 @@ use flui_platform::traits::{PlatformInput, PlatformWindow};
 use flui_rendering::constraints::BoxConstraints;
 use flui_scheduler::Scheduler;
 use flui_types::{Size, geometry::px};
-use flui_view::{ElementBase, View, WidgetsBinding};
+use flui_view::{View, WidgetsBinding};
 use parking_lot::{Mutex, RwLock};
 
 use crate::{
@@ -98,10 +98,6 @@ pub struct AppBinding {
 
     /// Active platform window (set during run_desktop).
     active_window: Mutex<Option<Box<dyn PlatformWindow>>>,
-
-    /// Root element stored for rebuild support.
-    /// This is set by `set_root_element()` and rebuilt by `rebuild_root()`.
-    root_element: Mutex<Option<Box<dyn ElementBase>>>,
 }
 
 impl AppBinding {
@@ -132,7 +128,6 @@ impl AppBinding {
             shared_pipeline_owner,
             lifecycle: Mutex::new(DefaultLifecycle::new()),
             active_window: Mutex::new(None),
-            root_element: Mutex::new(None),
         }
     }
 
@@ -199,6 +194,35 @@ impl AppBinding {
         Ok(())
     }
 
+    /// Attach a root widget sizing the root view to an explicit logical
+    /// `width` × `height` — the platform window's surface size.
+    ///
+    /// Identical to [`attach_root_widget`](Self::attach_root_widget) except the
+    /// root [`RenderView`](flui_rendering::view::RenderView) is born at the real
+    /// window size instead of the 800×600 fallback. This is the runner's
+    /// bootstrap entry point.
+    ///
+    /// # Errors
+    ///
+    /// Forwards every [`AttachError`](flui_view::AttachError) from
+    /// [`WidgetsBinding::attach_root_widget_with_size`].
+    pub fn attach_root_widget_with_size<V>(
+        &self,
+        view: &V,
+        width: f32,
+        height: f32,
+    ) -> Result<(), flui_view::AttachError>
+    where
+        V: View + Clone + Send + Sync + 'static,
+    {
+        let widgets = self.widgets.write();
+        widgets.attach_root_widget_with_size(view, width, height)?;
+        self.initialized.store(true, Ordering::Relaxed);
+        self.request_redraw();
+        tracing::debug!(width, height, "Root widget attached (sized)");
+        Ok(())
+    }
+
     /// Get read access to WidgetsBinding.
     pub fn widgets(&self) -> parking_lot::RwLockReadGuard<'_, WidgetsBinding> {
         // PORT-CHECK-OK-SP6: AppBinding widgets accessor; pre-existing SP-6
@@ -209,53 +233,6 @@ impl AppBinding {
     pub fn widgets_mut(&self) -> parking_lot::RwLockWriteGuard<'_, WidgetsBinding> {
         // PORT-CHECK-OK-SP6: AppBinding widgets_mut accessor; pre-existing SP-6
         self.widgets.write()
-    }
-
-    // ========================================================================
-    // Root Element Management
-    // ========================================================================
-
-    /// Store a root element for rebuild support.
-    ///
-    /// This should be called by the app runner after creating the root element.
-    /// The stored element will be rebuilt when `rebuild_root()` is called.
-    pub fn set_root_element(&self, element: Box<dyn ElementBase>) {
-        let mut root = self.root_element.lock();
-        *root = Some(element);
-        tracing::debug!("Root element stored in AppBinding");
-    }
-
-    /// Take the root element out of storage.
-    ///
-    /// Returns the stored root element, leaving None in its place.
-    pub fn take_root_element(&self) -> Option<Box<dyn ElementBase>> {
-        self.root_element.lock().take()
-    }
-
-    /// Rebuild the stored root element.
-    ///
-    /// This triggers `perform_build()` on the root element which will
-    /// recursively rebuild the entire widget tree. Acquires an
-    /// [`ElementOwner`](flui_view::ElementOwner) split-borrow handle
-    /// from `WidgetsBinding`'s `BuildOwner` for the duration of the
-    /// build so descendants can register `GlobalKey`s / schedule
-    /// rebuilds (plan §U8).
-    pub fn rebuild_root(&self) {
-        tracing::trace!("rebuild_root: acquiring lock");
-        let mut root = self.root_element.lock();
-        tracing::trace!("rebuild_root: lock acquired");
-        if let Some(ref mut element) = *root {
-            element.mark_needs_build();
-            tracing::trace!("rebuild_root: calling perform_build");
-            let widgets = self.widgets();
-            widgets.with_build_owner_mut(|build_owner| {
-                element.perform_build(&mut build_owner.element_owner_mut());
-            });
-            tracing::debug!("Root element rebuilt");
-        } else {
-            tracing::warn!("rebuild_root called but no root element stored");
-        }
-        tracing::trace!("rebuild_root: complete");
     }
 
     // ========================================================================
