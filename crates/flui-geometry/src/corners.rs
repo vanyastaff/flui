@@ -8,6 +8,7 @@
 ///
 /// Generic over type `T` to support various value types.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Corners<T = f32> {
     /// The top-left corner value.
     pub top_left: T,

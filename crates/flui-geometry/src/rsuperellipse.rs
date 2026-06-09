@@ -15,6 +15,7 @@ use super::{Pixels, Radius, Rect, px};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RSuperellipse {
     /// The bounding rectangle.
     rect: Rect<Pixels>,

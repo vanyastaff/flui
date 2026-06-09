@@ -43,6 +43,7 @@ use super::{
 /// let normalized = Point::<Pixels>::new(px(0.5), px(0.75));
 /// ```
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Point<T: Unit = Pixels> {
     /// The x coordinate (horizontal position).
     pub x: T,

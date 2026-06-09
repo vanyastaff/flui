@@ -121,7 +121,10 @@ pub struct TextSpan {
     /// Mouse cursor when hovering.
     pub mouse_cursor: Option<MouseCursor>,
     /// Tap callback handler.
-    #[cfg_attr(feature = "serde", serde(skip))]
+    ///
+    /// `TextSpan` is intentionally not part of the serde surface (its
+    /// `TextStyle` is not serializable), so this callback carries no
+    /// `serde(skip)` attribute — there is no derive for it to attach to.
     pub on_tap: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 

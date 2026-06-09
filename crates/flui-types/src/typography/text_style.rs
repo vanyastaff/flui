@@ -196,6 +196,7 @@ impl StrutStyle {
 }
 
 #[derive(Default, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextStyle {
     /// Text color.
     pub color: Option<Color>,
