@@ -45,6 +45,9 @@ use notify::{
 };
 use parking_lot::RwLock;
 
+/// Callback invoked with the changed path when a watched file changes.
+type OnChangeCallback = Box<dyn Fn(&Path) + Send + Sync>;
+
 /// Hot reloader for watching file changes
 ///
 /// Monitors specified directories for file changes and triggers callbacks.
@@ -53,7 +56,7 @@ pub struct HotReloader {
     /// Paths being watched
     watched_paths: Arc<RwLock<Vec<PathBuf>>>,
     /// Callback function for file changes
-    on_change_callback: Arc<RwLock<Option<Box<dyn Fn(&Path) + Send + Sync>>>>,
+    on_change_callback: Arc<RwLock<Option<OnChangeCallback>>>,
     /// File watcher
     watcher: Arc<RwLock<Option<RecommendedWatcher>>>,
     /// Debounce duration (to avoid triggering multiple times)
