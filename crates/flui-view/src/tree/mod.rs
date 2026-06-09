@@ -7,6 +7,7 @@
 //!   reconciler (plan §U13 / FR-035)
 
 mod element_tree;
+mod id_reconcile;
 pub mod reconcile_event;
 mod reconciliation;
 

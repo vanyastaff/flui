@@ -54,6 +54,25 @@ pub struct ElementNode {
     ///     because our `View` value is owned by `ElementCore` and not
     ///     available at the dispatch boundary used for finalization.
     pub(crate) registered_global_key_hash: Option<u64>,
+    /// Parallel, slab-id-based child list.
+    ///
+    /// This is the id-addressable counterpart to the nested
+    /// `Box<dyn ElementBase>` child storage that production currently
+    /// runs ([`ElementChildStorage`](crate::element::ElementChildStorage)).
+    /// It is written **only** by the parallel id-based reconciler
+    /// [`reconcile_children_by_id`](super::id_reconcile::reconcile_children_by_id)
+    /// and read back by its tests; it is deliberately NOT populated from
+    /// the production build / reconcile path, so the two child models
+    /// stay independent until the eventual atomic swap collapses them
+    /// onto this list.
+    ///
+    /// Ordering is meaningful: entry `i` is the element occupying child
+    /// slot `i` after the most recent id-reconcile, matching the new
+    /// view order.
+    // Read only by the not-yet-wired id-based reconciler and its tests;
+    // dead in a non-test build until the id-graph swap lands.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) child_ids: Vec<ElementId>,
 }
 
 impl ElementNode {
@@ -75,6 +94,7 @@ impl ElementNode {
             slot,
             key: None,
             registered_global_key_hash: None,
+            child_ids: Vec::new(),
         }
     }
 
@@ -136,6 +156,32 @@ impl ElementNode {
     /// Hash of the `GlobalKey` registered for this element (if any).
     pub fn registered_global_key_hash(&self) -> Option<u64> {
         self.registered_global_key_hash
+    }
+
+    /// Borrow this node's parallel, id-based child list.
+    ///
+    /// The slice is ordered by child slot (entry `i` is slot `i`). It is
+    /// the read side of the id-based child model maintained by
+    /// [`reconcile_children_by_id`](super::id_reconcile::reconcile_children_by_id);
+    /// the production box-graph child storage is unaffected by it.
+    // Consumed only by the not-yet-wired id reconciler + its tests.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn child_ids(&self) -> &[ElementId] {
+        &self.child_ids
+    }
+
+    /// Replace this node's parallel, id-based child list.
+    ///
+    /// Called by [`reconcile_children_by_id`](super::id_reconcile::reconcile_children_by_id)
+    /// at the end of a reconcile pass with the freshly computed child
+    /// order (one id per new view, in new-view order). Overwrites any
+    /// previous list wholesale — the caller is responsible for having
+    /// already inserted / removed the corresponding slab nodes so the
+    /// stored ids all resolve.
+    // Called only by the not-yet-wired id reconciler + its tests.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn set_child_ids(&mut self, ids: Vec<ElementId>) {
+        self.child_ids = ids;
     }
 }
 
