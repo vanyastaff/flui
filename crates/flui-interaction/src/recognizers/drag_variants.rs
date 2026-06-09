@@ -3,9 +3,11 @@
 //! Flutter parity: `gestures/monodrag.dart` exposes
 //! `VerticalDragGestureRecognizer`, `HorizontalDragGestureRecognizer`, and
 //! `PanGestureRecognizer` as thin subclasses of `DragGestureRecognizer` that
-//! hard-code the axis. We expose the same three as type aliases over
-//! [`DragGestureRecognizer`] so a recogniser's axis is statically fixed at
-//! the type level (no runtime axis mismatch, no extra newtype overhead).
+//! hard-code the axis. We expose the same three names as type aliases over
+//! [`DragGestureRecognizer`] for call-site readability, paired with the
+//! [`vertical_drag`] / [`horizontal_drag`] / [`pan`] constructors that set the
+//! axis. Note: aliases are the *same* type — they do NOT enforce the axis at
+//! compile time; the axis is a runtime field set by the constructor.
 //!
 //! Because a type alias shares the underlying type's methods, the
 //! constructors and per-axis builders all live on
@@ -22,7 +24,7 @@
 //! use flui_interaction::recognizers::drag::DragGestureRecognizer;
 //!
 //! let arena = GestureArena::new();
-//! // Free fn — axis fixed at Free via the type.
+//! // Free fn — sets the Free axis at construction.
 //! let recognizer: PanGestureRecognizer = pan(arena);
 //! // Standard builders on the underlying recogniser remain reachable.
 //! let _ = recognizer.clone()
@@ -40,9 +42,9 @@ use super::drag::{
 /// A drag recogniser constrained to the vertical axis.
 ///
 /// Mirrors Flutter's `VerticalDragGestureRecognizer` (which itself extends
-/// `DragGestureRecognizer`). Internally a [`DragGestureRecognizer`] with
-/// [`DragAxis::Vertical`]; the axis is fixed at the type level for
-/// clarity at the call site.
+/// `DragGestureRecognizer`). Construct via [`vertical_drag`] to bind
+/// [`DragAxis::Vertical`]; the alias is for call-site readability, not
+/// compile-time axis enforcement.
 pub type VerticalDragGestureRecognizer = DragGestureRecognizer;
 
 /// A drag recogniser constrained to the horizontal axis.

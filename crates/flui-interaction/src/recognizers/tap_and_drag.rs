@@ -165,6 +165,10 @@ struct DragState {
     last: Option<Offset<Pixels>>,
     /// Velocity tracker for end-of-drag velocity.
     velocity_tracker: VelocityTracker,
+    /// `true` while a tap outcome is still possible. Set `false` once the
+    /// pointer wanders past tap slop (but not yet drag slop) — Flutter parity:
+    /// such a move voids the tap so a later up fires nothing.
+    tap_viable: bool,
 }
 
 impl Default for DragState {
@@ -173,6 +177,7 @@ impl Default for DragState {
             initial: None,
             last: None,
             velocity_tracker: VelocityTracker::new(),
+            tap_viable: true,
         }
     }
 }
@@ -306,6 +311,7 @@ impl TapAndDragGestureRecognizer {
         let mut ds = self.drag_state.lock();
         ds.initial = None;
         ds.last = None;
+        ds.tap_viable = true;
         ds.velocity_tracker.reset();
     }
 
@@ -337,6 +343,7 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
             let mut ds = self.drag_state.lock();
             ds.initial = Some(position);
             ds.last = Some(position);
+            ds.tap_viable = true;
             ds.velocity_tracker.reset();
             ds.velocity_tracker
                 .add_position(std::time::Instant::now(), position);
@@ -469,7 +476,10 @@ impl TapAndDragGestureRecognizer {
                         });
                     }
                 } else if distance > self.tap_slop() {
-                    // Within tap slop; nothing to do.
+                    // Past tap slop but not drag slop: the pointer wandered too
+                    // far to still count as a tap (Flutter parity). Void the tap
+                    // so a later up does not fire `on_tap_*`.
+                    self.drag_state.lock().tap_viable = false;
                 }
                 // Always update last so subsequent distance checks are
                 // relative to the most recent move.
@@ -506,24 +516,31 @@ impl TapAndDragGestureRecognizer {
         let phase = *self.phase.lock();
         match phase {
             Phase::Down => {
-                // Tap resolved: fire on_tap_down + on_tap_up.
-                if let Some(initial) = self.drag_state.lock().initial {
-                    let down_cb = self.callbacks.lock().on_tap_down.clone();
-                    if let Some(cb) = down_cb {
-                        cb(TapDragDownDetails {
-                            global_position: initial,
-                            local_position: initial,
+                let (initial, tap_viable) = {
+                    let ds = self.drag_state.lock();
+                    (ds.initial, ds.tap_viable)
+                };
+                // Only fire the tap if it is still viable; a move past tap slop
+                // voids it (see `handle_move`), so the up resolves to nothing.
+                if tap_viable {
+                    if let Some(initial) = initial {
+                        let down_cb = self.callbacks.lock().on_tap_down.clone();
+                        if let Some(cb) = down_cb {
+                            cb(TapDragDownDetails {
+                                global_position: initial,
+                                local_position: initial,
+                                kind,
+                            });
+                        }
+                    }
+                    let up_cb = self.callbacks.lock().on_tap_up.clone();
+                    if let Some(cb) = up_cb {
+                        cb(TapDragUpDetails {
+                            global_position: position,
+                            local_position: position,
                             kind,
                         });
                     }
-                }
-                let up_cb = self.callbacks.lock().on_tap_up.clone();
-                if let Some(cb) = up_cb {
-                    cb(TapDragUpDetails {
-                        global_position: position,
-                        local_position: position,
-                        kind,
-                    });
                 }
                 *self.phase.lock() = Phase::Finished;
                 self.state.stop_tracking();
@@ -627,6 +644,53 @@ mod tests {
         arena::GestureArena,
         events::{make_move_event, make_up_event},
     };
+
+    #[test]
+    fn move_past_tap_slop_voids_the_tap() {
+        // With touch_slop < pan_slop, a move past tap slop (but under drag slop)
+        // voids the tap: a later up must fire neither on_tap_* nor a drag.
+        let arena = GestureArena::new();
+        let settings = GestureSettings::default()
+            .with_touch_slop(10.0)
+            .with_pan_slop(30.0);
+        let tap_down = Arc::new(Mutex::new(false));
+        let tap_up = Arc::new(Mutex::new(false));
+        let drag_start = Arc::new(Mutex::new(false));
+
+        let rec = TapAndDragGestureRecognizer::with_settings(arena, settings)
+            .with_on_tap_down({
+                let tap_down = tap_down.clone();
+                move |_| *tap_down.lock() = true
+            })
+            .with_on_tap_up({
+                let tap_up = tap_up.clone();
+                move |_| *tap_up.lock() = true
+            })
+            .with_on_drag_start({
+                let drag_start = drag_start.clone();
+                move |_| *drag_start.lock() = true
+            });
+
+        let pointer = PointerId::PRIMARY;
+        rec.add_pointer(pointer, Offset::new(Pixels(0.0), Pixels(0.0)));
+
+        // Move 20px: past tap slop (10) but under drag slop (30) — voids the tap.
+        rec.handle_event(&make_move_event(
+            Offset::new(Pixels(20.0), Pixels(0.0)),
+            PointerType::Touch,
+        ));
+        rec.handle_event(&make_up_event(
+            Offset::new(Pixels(20.0), Pixels(0.0)),
+            PointerType::Touch,
+        ));
+
+        assert!(!*tap_down.lock(), "voided tap must not fire on_tap_down");
+        assert!(!*tap_up.lock(), "voided tap must not fire on_tap_up");
+        assert!(
+            !*drag_start.lock(),
+            "under drag slop: on_drag_start must not fire"
+        );
+    }
 
     #[test]
     fn down_then_up_within_tap_slop_fires_tap() {
