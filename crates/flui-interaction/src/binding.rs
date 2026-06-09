@@ -731,6 +731,18 @@ impl GestureBinding {
         self.arena.resolve_default_timed_out_arenas()
     }
 
+    /// Advance time-based recognizer deadlines (e.g. long-press hold).
+    ///
+    /// Call once per frame on the UI thread, beside [`Self::flush_pending_moves`].
+    /// A recognizer deadline is otherwise only advanced opportunistically on the
+    /// next pointer event, so a stationary held pointer past its deadline would
+    /// never fire (e.g. long-press on a finger held perfectly still). This is
+    /// distinct from [`Self::resolve_timed_out_arenas`], which handles arena
+    /// disambiguation timeouts, not per-recognizer deadlines.
+    pub fn tick_deadlines(&self) {
+        self.arena.poll_deadlines();
+    }
+
     // ========================================================================
     // Internal Methods
     // ========================================================================

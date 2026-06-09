@@ -39,7 +39,7 @@ use std::{
 };
 
 use flui_foundation::{BindingBase, HasInstance, impl_binding_singleton};
-use flui_interaction::{MouseTracker, binding::GestureBinding};
+use flui_interaction::MouseTracker;
 use flui_painting::PaintingBinding;
 use flui_rendering::{
     binding::RendererBinding,
@@ -266,13 +266,6 @@ impl RenderingFlutterBinding {
     // Binding Accessors
     // ========================================================================
 
-    /// Get the GestureBinding singleton.
-    ///
-    /// Equivalent to Flutter's `GestureBinding.instance`.
-    pub fn gestures() -> &'static GestureBinding {
-        GestureBinding::instance()
-    }
-
     /// Get the Scheduler singleton.
     ///
     /// Equivalent to Flutter's `SchedulerBinding.instance`.
@@ -313,9 +306,11 @@ impl RenderingFlutterBinding {
 
 impl BindingBase for RenderingFlutterBinding {
     fn init_instances(&mut self) {
-        // Initialize GestureBinding first (provides hit testing)
-        let _ = GestureBinding::instance();
-        tracing::debug!("GestureBinding initialized via RenderingFlutterBinding");
+        // The gesture binding is owned by `AppBinding` (a plain field), which is
+        // the single authoritative instance driving input and hit testing. We
+        // deliberately do not touch `GestureBinding::instance()` here — a second
+        // lazily-initialized global would be a distinct allocation with its own
+        // arena that never receives the real pointer registrations.
 
         // Initialize scheduler
         let _ = Scheduler::instance();

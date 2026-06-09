@@ -141,6 +141,16 @@ pub trait GestureArenaMember: crate::sealed::arena_member::Sealed + Send + Sync 
     /// Called when another recognizer wins the arena, or this recognizer
     /// explicitly rejects the gesture.
     fn reject_gesture(&self, pointer: PointerId);
+
+    /// Advance any time-based deadline this member owns (e.g. a long-press
+    /// hold timer).
+    ///
+    /// Called once per frame by the binding's deadline tick so a deadline can
+    /// elapse while the pointer is held still — without a further pointer event
+    /// to drive it. The default is a no-op; only deadline-driven recognizers
+    /// (long press) override it. Implementations must be idempotent across
+    /// frames (firing at most once per deadline).
+    fn poll_deadline(&self) {}
 }
 
 // ============================================================================
@@ -899,6 +909,27 @@ impl GestureArena {
         Self::dispatch_pending(pending, pointer);
 
         self.entries.remove(&pointer);
+    }
+
+    /// Poll every active member's time-based deadline (e.g. long-press hold).
+    ///
+    /// Call once per frame from the UI thread. Members are snapshotted out of
+    /// the per-entry locks *before* polling, because a deadline hook may fire
+    /// user callbacks and re-enter the arena to resolve — invoking it under the
+    /// entry lock would re-introduce the arena re-entrancy deadlock. A member
+    /// that tracks several pointers is polled once per pointer; `poll_deadline`
+    /// is contractually idempotent, so the duplicate polls are harmless.
+    ///
+    /// Complexity: O(P + M) where P is the number of open arenas and M the
+    /// total active members — both bounded by the simultaneous-pointer cap.
+    pub fn poll_deadlines(&self) {
+        let mut members: SmallVec<[Arc<dyn GestureArenaMember>; 8]> = SmallVec::new();
+        for entry in self.entries.iter() {
+            members.extend(entry.value().lock().members.iter().cloned());
+        }
+        for member in members {
+            member.poll_deadline();
+        }
     }
 
     /// Get the number of active arenas.

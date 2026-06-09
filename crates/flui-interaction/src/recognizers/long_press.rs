@@ -596,6 +596,14 @@ impl GestureArenaMember for LongPressGestureRecognizer {
         // Callbacks will be called when timer elapses or pointer moves/up
     }
 
+    fn poll_deadline(&self) {
+        // Frame-driven deadline check: fires `on_long_press_start` once the
+        // hold deadline elapses even if the finger is held still (no further
+        // pointer event arrives to drive it). `check_timer` is idempotent, so
+        // polling every frame fires at most once.
+        self.check_timer();
+    }
+
     fn reject_gesture(&self, _pointer: PointerId) {
         // We lost the arena - cancel the gesture
         if let Some(pos) = self.state.initial_position() {
@@ -840,5 +848,43 @@ mod tests {
         // Second tick — must not refire (phase is now `Started`).
         assert!(!recognizer.check_timer());
         assert_eq!(*started_count.lock(), 1);
+    }
+
+    #[test]
+    fn held_pointer_fires_long_press_via_arena_poll() {
+        use std::time::Duration;
+
+        // A finger held perfectly still past the deadline must fire
+        // `on_long_press_start` when the binding polls deadlines once per frame,
+        // with NO intervening pointer event to drive it. This exercises the real
+        // wiring `GestureArena::poll_deadlines` -> `poll_deadline` ->
+        // `check_timer` -> fire, not the recognizer's deadline hook directly.
+        let arena = GestureArena::new();
+        let started = Arc::new(Mutex::new(false));
+        let s_clone = started.clone();
+
+        let recognizer = LongPressGestureRecognizer::with_settings(
+            arena.clone(),
+            GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(60)),
+        )
+        .with_on_long_press_start(move |_| *s_clone.lock() = true);
+
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
+        recognizer.add_pointer(pointer, Offset::new(Pixels(100.0), Pixels(100.0)));
+
+        // No moves. Polling before the deadline elapses fires nothing.
+        arena.poll_deadlines();
+        assert!(
+            !*started.lock(),
+            "must not fire before the deadline elapses"
+        );
+
+        // Hold still past the deadline; only the per-frame poll can drive it.
+        std::thread::sleep(Duration::from_millis(90));
+        arena.poll_deadlines();
+        assert!(
+            *started.lock(),
+            "a held-still pointer past the long-press deadline must fire on the deadline poll"
+        );
     }
 }
