@@ -110,6 +110,23 @@ impl AppBinding {
         let shared_pipeline_owner =
             Arc::new(RwLock::new(flui_rendering::pipeline::PipelineOwner::new()));
 
+        // Idle-wake wiring: a dirty mark (mark_needs_layout /
+        // add_node_needing_paint) fires this callback so a quiescent
+        // event loop produces the frame — without it, work scheduled
+        // while the app is idle (an async image decode, a timer-driven
+        // setState) would sit in the dirty queues until some unrelated
+        // input forced a redraw.
+        //
+        // Lock order is safe: the callback fires while the CALLER holds
+        // the pipeline-owner lock, and `wake_frame` acquires only the
+        // `active_window` leaf Mutex — never the owner, never `widgets`.
+        // `AppBinding::instance()` is resolved lazily at fire time, not
+        // captured, so this closure cannot re-enter `new()` during
+        // singleton construction (dirty marks only happen after init).
+        shared_pipeline_owner
+            .write()
+            .set_on_need_visual_update(|| AppBinding::instance().wake_frame());
+
         // Create RendererBinding sharing the SAME PipelineOwner
         let renderer =
             RenderingFlutterBinding::new_with_pipeline(Arc::clone(&shared_pipeline_owner));
@@ -566,6 +583,34 @@ mod tests {
         let binding1 = AppBinding::instance();
         let binding2 = AppBinding::instance();
         assert!(std::ptr::eq(binding1, binding2));
+    }
+
+    /// Idle-wake wiring smoke test: a dirty mark on the shared
+    /// pipeline owner must reach `AppBinding::wake_frame` through the
+    /// visual-update notifier set in `AppBinding::new`, flipping
+    /// `needs_redraw` so the platform loop produces a frame.
+    #[test]
+    fn dirty_mark_fires_wake_via_notifier() {
+        let binding = AppBinding::instance();
+
+        let id = binding.shared_pipeline_owner.write().insert(Box::new(
+            flui_rendering::objects::RenderColoredBox::red(10.0, 10.0),
+        )
+            as Box<
+                dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>,
+            >);
+        binding
+            .shared_pipeline_owner
+            .write()
+            .clear_all_dirty_nodes();
+        binding.mark_rendered();
+
+        binding.shared_pipeline_owner.write().mark_needs_layout(id);
+        assert!(
+            binding.needs_redraw(),
+            "an owner dirty mark must wake the binding via the \
+             visual-update notifier wired in AppBinding::new",
+        );
     }
 
     #[test]

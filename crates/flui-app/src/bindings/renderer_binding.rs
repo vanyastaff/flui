@@ -122,10 +122,6 @@ impl std::fmt::Debug for RenderingFlutterBinding {
     }
 }
 
-// Safety: All fields are thread-safe
-unsafe impl Send for RenderingFlutterBinding {}
-unsafe impl Sync for RenderingFlutterBinding {}
-
 impl Default for RenderingFlutterBinding {
     fn default() -> Self {
         Self::new()
@@ -414,18 +410,13 @@ impl RendererBinding for RenderingFlutterBinding {
         }
     }
 
-    fn draw_frame(&self) {
-        // Mythos Step 7 finalization (2026-05-20): use mem::take +
-        // run_frame to consume the owner through the typestate
-        // transitions. The four `flush_*` calls collapse to one
-        // `run_frame()` orchestration; semantics now runs inside
-        // run_frame regardless of `send_frames_to_engine`, so the only
-        // gated work below is the per-view composite handoff.
-        //
-        // Mythos Step 12 (2026-05-20): `run_frame` returns
-        // `(PipelineOwner<Idle>, RenderResult<Option<LayerTree>>)`. The
-        // owner is always restored; on error the frame is dropped and
-        // logged via tracing.
+    fn draw_frame(&self) -> Option<flui_layer::LayerTree> {
+        // Single authoritative frame path: run_frame produces the
+        // layer tree; the caller (platform binding / embedder) wraps
+        // it in a Scene and submits it to the renderer. The previous
+        // shape dropped the tree here while a divergent
+        // `composite_frame()` loop computed per-view metadata that
+        // never reached a compositor — both dead ends are gone.
         let root_owner = self.root_pipeline_owner();
         let layer_tree = {
             let mut guard = root_owner.write();
@@ -441,23 +432,15 @@ impl RendererBinding for RenderingFlutterBinding {
             }
         };
 
-        // Phase 6: Composite frames (only if sending frames)
         if self.send_frames_to_engine() {
-            // Composite each render view
-            for (_, view) in self.render_views.read().iter() {
-                let view_guard = view.read();
-                let _result = view_guard.composite_frame();
-                // In a real implementation, send to GPU here
-            }
-
-            // Mark first frame sent
+            // First non-deferred frame marks the gate open.
             self.first_frame_sent.store(true, Ordering::Relaxed);
+            layer_tree
+        } else {
+            // Deferred-first-frame: pipeline work ran (warm-up), the
+            // output is withheld until the deferral count drains.
+            None
         }
-
-        // The produced layer tree is the responsibility of the
-        // concrete compositor wiring; today this binding does not own
-        // one, so we drop the value here intentionally.
-        let _ = layer_tree;
     }
 
     fn perform_semantics_action(
@@ -546,6 +529,53 @@ mod tests {
         // Allow first frame
         binding.allow_first_frame();
         assert!(binding.send_frames_to_engine());
+    }
+
+    /// The authoritative frame path: `draw_frame` returns the layer
+    /// tree the pipeline produced (for the caller to wrap in a Scene
+    /// and hand to the renderer), and withholds it while the first
+    /// frame is deferred. Uses an isolated (non-singleton) binding so
+    /// no other test's pipeline state can interfere.
+    #[test]
+    fn draw_frame_returns_layer_tree_and_defers_when_gated() {
+        use flui_rendering::{constraints::BoxConstraints, objects::RenderColoredBox};
+        use flui_types::{Size, geometry::px};
+
+        let owner = Arc::new(RwLock::new(PipelineOwner::new()));
+        let root_id = {
+            let mut o = owner.write();
+            let id = o.insert(Box::new(RenderColoredBox::red(40.0, 40.0))
+                as Box<
+                    dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>,
+                >);
+            o.set_root_id(Some(id));
+            o.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(100.0), px(100.0)))));
+            id
+        };
+        let binding = RenderingFlutterBinding::new_with_pipeline(owner);
+
+        // Deferred: the pipeline still runs (warm-up) but the output
+        // is withheld.
+        binding.defer_first_frame();
+        assert!(
+            binding.draw_frame().is_none(),
+            "deferred first frame must withhold the layer tree",
+        );
+        binding.allow_first_frame();
+
+        // The deferred pass consumed the dirty work — re-mark so the
+        // next frame paints again.
+        binding
+            .root_pipeline_owner()
+            .write()
+            .mark_needs_layout(root_id);
+        let tree = binding
+            .draw_frame()
+            .expect("non-deferred frame with dirty work must return the layer tree");
+        assert!(
+            !tree.is_empty(),
+            "the produced layer tree must contain the painted root",
+        );
     }
 
     #[test]

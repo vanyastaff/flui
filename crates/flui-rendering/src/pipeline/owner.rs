@@ -806,6 +806,11 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             return;
         }
         target.push(DirtyNode::new(node_id, depth));
+        // New work was scheduled — wake the platform so an idle event
+        // loop produces the frame (Flutter parity: markNeedsLayout →
+        // owner.requestVisualUpdate()). Fired only on a NEW queue entry:
+        // an existing entry means a frame is already scheduled.
+        self.notifier.fire_need_visual_update();
     }
 
     /// Marks a node as needing layout, propagating the `NEEDS_LAYOUT` flag
@@ -884,6 +889,12 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 // had drained the dirty queue but not cleared the flag.
                 if !self.dirty.needs_layout.iter().any(|d| d.id == current) {
                     self.dirty.needs_layout.push(DirtyNode::new(current, depth));
+                    // Wake the platform: an idle event loop must produce
+                    // a frame for this invalidation (Flutter parity:
+                    // markNeedsLayout → owner.requestVisualUpdate()).
+                    // Fired only on a NEW boundary entry — an existing
+                    // entry means a frame is already scheduled.
+                    self.notifier.fire_need_visual_update();
                 }
                 return;
             }
@@ -917,6 +928,11 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             return;
         }
         target.push(DirtyNode::new(node_id, depth));
+        // Wake the platform for the (next) frame. Mid-paint marks are
+        // drained into next-frame work at the end of run_paint — without
+        // this wake an idle app would never paint them (the "GIF frozen
+        // until you scroll" failure mode).
+        self.notifier.fire_need_visual_update();
     }
 
     /// Adds a node to the compositing bits dirty list.
@@ -1229,6 +1245,15 @@ impl PipelineOwner<Layout> {
                     self.drain_mid_layout_marks();
                     return Err(e);
                 }
+
+                // Flutter parity (object.dart: `RenderObject.layout`
+                // unconditionally ends with `markNeedsPaint()`): a
+                // subtree that re-laid out must repaint, otherwise a
+                // pure-layout invalidation (setState moving a child)
+                // leaves stale pixels on screen. One entry per dirty
+                // root suffices — run_paint walks the whole tree from
+                // the root, so triggering the phase is what matters.
+                self.add_node_needing_paint(dirty_node.id, dirty_node.depth);
             }
 
             self.debug_doing_layout = false;
@@ -2734,6 +2759,83 @@ mod tests {
 
         owner.request_visual_update();
         assert_eq!(counter.load(Ordering::Relaxed), 2);
+    }
+
+    /// Idle-wake contract: scheduling NEW dirty work fires the
+    /// visual-update callback exactly once per new queue entry, so a
+    /// quiescent platform loop wakes for the frame — and duplicate
+    /// marks (a frame is already scheduled) don't spam wakes.
+    #[test]
+    fn dirty_marks_fire_visual_update_once_per_new_entry() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let counter_clone = counter.clone();
+        let mut owner = PipelineOwner::with_callbacks(
+            Some(move || {
+                counter_clone.fetch_add(1, Ordering::Relaxed);
+            }),
+            None::<fn()>,
+            None::<fn()>,
+        );
+
+        owner.add_node_needing_layout(RenderId::new(1), 0);
+        assert_eq!(
+            counter.load(Ordering::Relaxed),
+            1,
+            "a new layout entry must wake the platform",
+        );
+        owner.add_node_needing_layout(RenderId::new(1), 0);
+        assert_eq!(
+            counter.load(Ordering::Relaxed),
+            1,
+            "a duplicate entry means a frame is already scheduled — no second wake",
+        );
+
+        owner.add_node_needing_paint(RenderId::new(2), 1);
+        assert_eq!(
+            counter.load(Ordering::Relaxed),
+            2,
+            "a new paint entry must wake the platform",
+        );
+        owner.add_node_needing_paint(RenderId::new(2), 1);
+        assert_eq!(counter.load(Ordering::Relaxed), 2);
+    }
+
+    /// The boundary-walking `mark_needs_layout` fires the wake when it
+    /// enqueues the boundary, and stays silent when the boundary is
+    /// already queued.
+    #[test]
+    fn mark_needs_layout_fires_visual_update_on_boundary_enqueue() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let counter_clone = counter.clone();
+        let mut owner = PipelineOwner::with_callbacks(
+            Some(move || {
+                counter_clone.fetch_add(1, Ordering::Relaxed);
+            }),
+            None::<fn()>,
+            None::<fn()>,
+        );
+
+        let id = owner.insert(Box::new(crate::objects::RenderColoredBox::red(10.0, 10.0))
+            as Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>);
+        owner.clear_all_dirty_nodes();
+        let base = counter.load(Ordering::Relaxed);
+
+        owner.mark_needs_layout(id);
+        assert_eq!(
+            counter.load(Ordering::Relaxed),
+            base + 1,
+            "enqueueing the relayout boundary must wake the platform",
+        );
+        owner.mark_needs_layout(id);
+        assert_eq!(
+            counter.load(Ordering::Relaxed),
+            base + 1,
+            "boundary already queued — no extra wake",
+        );
     }
 
     // ========================================================================
