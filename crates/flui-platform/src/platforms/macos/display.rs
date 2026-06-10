@@ -3,11 +3,11 @@
 use std::sync::Arc;
 
 use cocoa::{
-    appkit::NSScreen,
     base::{id, nil},
-    foundation::{NSArray, NSRect},
+    foundation::NSRect,
 };
 use flui_types::geometry::{Bounds, DevicePixels, Point, Size};
+use objc::{class, msg_send, sel, sel_impl};
 
 use crate::traits::{DisplayId, PlatformDisplay};
 
@@ -23,7 +23,15 @@ pub struct MacOSDisplay {
 
 impl MacOSDisplay {
     /// Create a MacOSDisplay from NSScreen
-    pub fn new(screen: id, is_primary: bool) -> Self {
+    ///
+    /// # Safety
+    ///
+    /// `screen` must be a valid, live `NSScreen*` for the duration of the
+    /// call.
+    pub unsafe fn new(screen: id, is_primary: bool) -> Self {
+        // SAFETY: caller guarantees `screen` is a live NSScreen*; all
+        // messages are documented NSScreen getters, and `deviceDescription`
+        // values are read before the autorelease pool drains.
         unsafe {
             // Get screen frame (full bounds including menu bar)
             let frame: NSRect = msg_send![screen, frame];
@@ -37,30 +45,30 @@ impl MacOSDisplay {
             // Get device description for display ID
             let description: id = msg_send![screen, deviceDescription];
             let display_id_key: id =
-                msg_send![class!(NSString), stringWithUTF8String: "NSScreenNumber".as_ptr()];
+                msg_send![class!(NSString), stringWithUTF8String: c"NSScreenNumber".as_ptr()];
             let display_id_value: id = msg_send![description, objectForKey: display_id_key];
             let display_id: u64 = msg_send![display_id_value, unsignedLongLongValue];
 
             // macOS coordinates are bottom-left origin, convert to top-left
             let bounds = Bounds {
                 origin: Point::new(
-                    flui_types::geometry::device_px(frame.origin.x as f32),
-                    flui_types::geometry::device_px(frame.origin.y as f32),
+                    flui_types::geometry::device_px(frame.origin.x.round() as i32),
+                    flui_types::geometry::device_px(frame.origin.y.round() as i32),
                 ),
                 size: Size::new(
-                    flui_types::geometry::device_px(frame.size.width as f32),
-                    flui_types::geometry::device_px(frame.size.height as f32),
+                    flui_types::geometry::device_px(frame.size.width.round() as i32),
+                    flui_types::geometry::device_px(frame.size.height.round() as i32),
                 ),
             };
 
             let usable_bounds = Bounds {
                 origin: Point::new(
-                    flui_types::geometry::device_px(visible_frame.origin.x as f32),
-                    flui_types::geometry::device_px(visible_frame.origin.y as f32),
+                    flui_types::geometry::device_px(visible_frame.origin.x.round() as i32),
+                    flui_types::geometry::device_px(visible_frame.origin.y.round() as i32),
                 ),
                 size: Size::new(
-                    flui_types::geometry::device_px(visible_frame.size.width as f32),
-                    flui_types::geometry::device_px(visible_frame.size.height as f32),
+                    flui_types::geometry::device_px(visible_frame.size.width.round() as i32),
+                    flui_types::geometry::device_px(visible_frame.size.height.round() as i32),
                 ),
             };
 
@@ -104,6 +112,8 @@ impl PlatformDisplay for MacOSDisplay {
 
 /// Enumerate all displays using NSScreen
 pub fn enumerate_displays() -> Vec<Arc<dyn PlatformDisplay>> {
+    // SAFETY: `+[NSScreen screens]` returns an autoreleased NSArray of live
+    // NSScreen objects; all elements are consumed before the pool drains.
     unsafe {
         let screens: id = msg_send![class!(NSScreen), screens];
         if screens == nil {

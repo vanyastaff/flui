@@ -32,8 +32,10 @@
 //! }));
 //! ```
 
-#[macro_use]
-extern crate objc;
+// cocoa 0.26 deprecates its entire API surface in favor of the objc2 family;
+// this backend deliberately stays on the single cocoa/objc stack until a
+// dedicated objc2 migration replaces it wholesale.
+#![allow(deprecated)]
 
 mod clipboard;
 mod display;
