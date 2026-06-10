@@ -39,6 +39,13 @@ pub enum MainAxisAlignment {
     SpaceEvenly,
 }
 
+/// Re-export of the canonical [`flui_types::layout::MainAxisSize`]:
+/// `Max` (Flutter default) fills the incoming max main extent when it
+/// is bounded - without it, alignment is dead under loose constraints
+/// (the container shrink-wraps, so there is never free space to
+/// distribute).
+pub use flui_types::layout::MainAxisSize;
+
 /// How children are aligned along the cross axis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CrossAxisAlignment {
@@ -76,6 +83,8 @@ pub struct RenderFlex {
     direction: FlexDirection,
     /// Main axis alignment.
     main_axis_alignment: MainAxisAlignment,
+    /// How much main-axis space the container claims.
+    main_axis_size: MainAxisSize,
     /// Cross axis alignment.
     cross_axis_alignment: CrossAxisAlignment,
     /// Spacing between children.
@@ -91,6 +100,7 @@ impl Default for RenderFlex {
         Self {
             direction: FlexDirection::Horizontal,
             main_axis_alignment: MainAxisAlignment::Start,
+            main_axis_size: MainAxisSize::Max,
             cross_axis_alignment: CrossAxisAlignment::Start,
             spacing: 0.0,
             size: Size::ZERO,
@@ -124,6 +134,12 @@ impl RenderFlex {
     /// Sets the main axis alignment.
     pub fn with_main_axis_alignment(mut self, alignment: MainAxisAlignment) -> Self {
         self.main_axis_alignment = alignment;
+        self
+    }
+
+    /// Builder: set the main-axis size policy.
+    pub fn with_main_axis_size(mut self, size: MainAxisSize) -> Self {
+        self.main_axis_size = size;
         self
     }
 
@@ -225,17 +241,34 @@ impl RenderBox for RenderFlex {
             flex_fits.push(fit);
         }
 
-        // Non-flex child constraints: unbounded on main axis
+        // Cross-axis policy (Flutter flex.dart:889-898): non-stretch
+        // children get a LOOSE cross (an incoming tight cross must not
+        // force every child to the container height); Stretch tightens
+        // cross to the max when it is bounded - pre-fix, Stretch only
+        // changed the cross OFFSET and children never actually
+        // stretched.
+        let stretch = self.cross_axis_alignment == CrossAxisAlignment::Stretch;
+        let cross_max = match self.direction {
+            FlexDirection::Horizontal => constraints.max_height,
+            FlexDirection::Vertical => constraints.max_width,
+        };
+        let (child_cross_min, child_cross_max) = if stretch && cross_max.is_finite() {
+            (cross_max, cross_max)
+        } else {
+            (Pixels::ZERO, cross_max)
+        };
+
+        // Non-flex child constraints: unbounded on main axis.
         let non_flex_constraints = match self.direction {
             FlexDirection::Horizontal => BoxConstraints::new(
                 Pixels::ZERO,
                 Pixels::INFINITY,
-                constraints.min_height,
-                constraints.max_height,
+                child_cross_min,
+                child_cross_max,
             ),
             FlexDirection::Vertical => BoxConstraints::new(
-                constraints.min_width,
-                constraints.max_width,
+                child_cross_min,
+                child_cross_max,
                 Pixels::ZERO,
                 Pixels::INFINITY,
             ),
@@ -259,21 +292,37 @@ impl RenderBox for RenderFlex {
         let total_spacing = px(self.spacing * (child_count - 1) as f32);
         inflexible_main += total_spacing;
 
-        // Calculate available main-axis extent
+        // Calculate available main-axis extent.
         let max_main = match self.direction {
             FlexDirection::Horizontal => constraints.max_width,
             FlexDirection::Vertical => constraints.max_height,
         };
 
-        // Remaining space for flex children
-        let remaining = if max_main.is_finite() {
+        // Flutter flex.dart:1232 - flex factors only mean something
+        // when the main axis is bounded. Under an unbounded main, flex
+        // children are DEMOTED to inflexible (pre-fix they received
+        // zero-size allocations: a Tight fit collapsed them to 0x0).
+        let can_flex = max_main.is_finite();
+        if !can_flex && total_flex > 0 {
+            for i in 0..child_count {
+                if matches!(flex_factors[i], Some(f) if f > 0) {
+                    let child_size = ctx.layout_child(i, non_flex_constraints);
+                    child_sizes[i] = Some(child_size);
+                    inflexible_main += self.main_size(child_size);
+                    max_cross = max_cross.max(self.cross_size(child_size));
+                }
+            }
+        }
+
+        // Remaining space for flex children.
+        let remaining = if can_flex {
             (max_main - inflexible_main).max(Pixels::ZERO)
         } else {
             Pixels::ZERO
         };
 
         // Pass 2: Layout flex children, distributing remaining space
-        if total_flex > 0 {
+        if can_flex && total_flex > 0 {
             for i in 0..child_count {
                 if let Some(flex) = flex_factors[i]
                     && flex > 0
@@ -284,24 +333,24 @@ impl RenderBox for RenderFlex {
                         (FlexDirection::Horizontal, FlexFit::Tight) => BoxConstraints::new(
                             allocated,
                             allocated,
-                            constraints.min_height,
-                            constraints.max_height,
+                            child_cross_min,
+                            child_cross_max,
                         ),
                         (FlexDirection::Horizontal, FlexFit::Loose) => BoxConstraints::new(
                             Pixels::ZERO,
                             allocated,
-                            constraints.min_height,
-                            constraints.max_height,
+                            child_cross_min,
+                            child_cross_max,
                         ),
                         (FlexDirection::Vertical, FlexFit::Tight) => BoxConstraints::new(
-                            constraints.min_width,
-                            constraints.max_width,
+                            child_cross_min,
+                            child_cross_max,
                             allocated,
                             allocated,
                         ),
                         (FlexDirection::Vertical, FlexFit::Loose) => BoxConstraints::new(
-                            constraints.min_width,
-                            constraints.max_width,
+                            child_cross_min,
+                            child_cross_max,
                             Pixels::ZERO,
                             allocated,
                         ),
@@ -321,10 +370,18 @@ impl RenderBox for RenderFlex {
         }
         total_main += total_spacing;
 
-        // Calculate our size
+        // Calculate our size. Flutter flex.dart:1298 - MainAxisSize::Max
+        // claims the full bounded main extent (pre-fix the container
+        // always shrink-wrapped, so Center/End/Space* alignment had no
+        // free space to distribute under loose constraints).
+        let ideal_main = if can_flex && self.main_axis_size == MainAxisSize::Max {
+            max_main
+        } else {
+            total_main
+        };
         let main_extent = match self.direction {
-            FlexDirection::Horizontal => constraints.constrain_width(total_main),
-            FlexDirection::Vertical => constraints.constrain_height(total_main),
+            FlexDirection::Horizontal => constraints.constrain_width(ideal_main),
+            FlexDirection::Vertical => constraints.constrain_height(ideal_main),
         };
         let cross_extent = match self.direction {
             FlexDirection::Horizontal => constraints.constrain_height(max_cross),
@@ -333,8 +390,9 @@ impl RenderBox for RenderFlex {
 
         self.size = self.size_from_main_cross(main_extent, cross_extent);
 
-        // Calculate starting position based on main axis alignment
-        let free_space = main_extent - total_main;
+        // Flutter flex.dart:1339 - clamp: an overflowing row must not
+        // shift children by NEGATIVE space under End/Center/Space*.
+        let free_space = (main_extent - total_main).max(Pixels::ZERO);
         let (mut main_offset, between_space) = match self.main_axis_alignment {
             MainAxisAlignment::Start => (Pixels::ZERO, Pixels::ZERO),
             MainAxisAlignment::End => (free_space, Pixels::ZERO),
