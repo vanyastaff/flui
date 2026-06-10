@@ -26,9 +26,9 @@
 //! ```
 
 use crate::curve::Curve;
-use flui_types::geometry::{Edges, Lerp, Offset, Pixels, Rect, Size};
+use flui_types::geometry::{Edges, Lerp, Matrix4, Offset, Pixels, Rect, Size};
 use flui_types::layout::Alignment;
-use flui_types::styling::{BorderRadius, BorderRadiusExt, Color};
+use flui_types::styling::{BorderRadius, Color};
 
 /// A value that can be animated.
 ///
@@ -246,34 +246,13 @@ pub type AlignmentTween = Tween<Alignment>;
 /// Tween between two edge insets. Alias for `Tween<Edges<Pixels>>`.
 pub type EdgeInsetsTween = Tween<Edges<Pixels>>;
 
-/// A tween that linearly interpolates between two border radii.
-///
-/// Similar to Flutter's `BorderRadiusTween`.
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct BorderRadiusTween {
-    /// The beginning border radius.
-    pub begin: BorderRadius,
-    /// The ending border radius.
-    pub end: BorderRadius,
-}
+/// Tween between two border radii. Alias for `Tween<BorderRadius>` (now that
+/// `Lerp for Corners<T>` lives in flui-geometry).
+pub type BorderRadiusTween = Tween<BorderRadius>;
 
-impl BorderRadiusTween {
-    /// Creates a new border radius tween.
-    #[must_use]
-    pub const fn new(begin: BorderRadius, end: BorderRadius) -> Self {
-        Self { begin, end }
-    }
-}
-
-impl Animatable<BorderRadius> for BorderRadiusTween {
-    fn transform(&self, t: f32) -> BorderRadius {
-        // Kept as a dedicated struct: BorderRadius is flui_geometry::Corners<Radius>,
-        // so a `Lerp for Corners<T>` blanket (collapsing this into `Tween<V>`)
-        // belongs in flui-geometry and lands with the matrix Lerp work.
-        BorderRadius::lerp(self.begin, self.end, t.clamp(0.0, 1.0))
-    }
-}
+/// Tween between two affine transforms. Alias for `Tween<Matrix4>`; interpolates
+/// by decompose -> slerp (see `Matrix4::lerp`), so rotation animates correctly.
+pub type Matrix4Tween = Tween<Matrix4>;
 
 // ============================================================================
 // Complex Tweens
@@ -646,6 +625,9 @@ impl<C: Curve> CurveExt for C {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    // `BorderRadius::circular` is a `BorderRadiusExt` method; the production code
+    // no longer needs the trait (Lerp handles interpolation), only the tests do.
+    use flui_types::styling::BorderRadiusExt;
     use crate::curve::Curves;
 
     #[test]

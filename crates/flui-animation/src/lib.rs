@@ -130,8 +130,8 @@ pub use status::{AnimationBehavior, AnimationStatus};
 pub use tween_types::{
     AlignmentTween, Animatable, AnimatableExt as TweenAnimatableExt, BorderRadiusTween,
     ChainedTween, ColorTween, ConstantTween, CurveExt, CurveTween, EdgeInsetsTween, FloatTween,
-    IntTween, OffsetTween, RectTween, ReverseTween, SizeTween, StepTween, Tween, TweenSequence,
-    TweenSequenceItem,
+    IntTween, Matrix4Tween, OffsetTween, RectTween, ReverseTween, SizeTween, StepTween, Tween,
+    TweenSequence, TweenSequenceItem,
 };
 
 // Re-export scheduler types for convenience.

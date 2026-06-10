@@ -10,7 +10,7 @@
 //! clamp `t`. Overshoot is a feature: bouncy, elastic, and spring curves emit
 //! `t > 1` (or `t < 0`), and clamping would silently flatten that motion.
 
-use crate::{Edges, Offset, Pixels, Rect, Size};
+use crate::{Corners, Edges, Matrix4, Offset, Pixels, Radius, Rect, Size};
 
 /// Linear interpolation between two values of the same type.
 ///
@@ -89,6 +89,39 @@ impl Lerp for Edges<Pixels> {
     }
 }
 
+impl Lerp for Radius<Pixels> {
+    #[inline]
+    fn lerp_to(&self, other: &Self, t: f32) -> Self {
+        Radius::new(
+            self.x + (other.x - self.x) * t,
+            self.y + (other.y - self.y) * t,
+        )
+    }
+}
+
+/// Interpolates each corner independently. With `Radius<Pixels>: Lerp` this
+/// makes `BorderRadius` (= `Corners<Radius<Pixels>>`) animatable, collapsing
+/// the bespoke border-radius tween into the generic `Tween<V>`.
+impl<T: Lerp> Lerp for Corners<T> {
+    #[inline]
+    fn lerp_to(&self, other: &Self, t: f32) -> Self {
+        Corners {
+            top_left: self.top_left.lerp_to(&other.top_left, t),
+            top_right: self.top_right.lerp_to(&other.top_right, t),
+            bottom_right: self.bottom_right.lerp_to(&other.bottom_right, t),
+            bottom_left: self.bottom_left.lerp_to(&other.bottom_left, t),
+        }
+    }
+}
+
+impl Lerp for Matrix4 {
+    #[inline]
+    fn lerp_to(&self, other: &Self, t: f32) -> Self {
+        // Decompose -> slerp rotation -> recompose; see `Matrix4::lerp`.
+        Matrix4::lerp(*self, *other, t)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,5 +172,43 @@ mod tests {
     #[test]
     fn maybe_lerp_blankets_lerp() {
         assert_eq!(f32::maybe_lerp(&0.0, &10.0, 0.25), Some(2.5));
+    }
+
+    #[test]
+    fn corners_lerp_each_corner() {
+        let a = Corners::new(0.0_f32, 0.0, 0.0, 0.0);
+        let b = Corners::new(4.0_f32, 8.0, 12.0, 16.0);
+        let mid = a.lerp_to(&b, 0.5);
+        assert_eq!(mid.top_left, 2.0);
+        assert_eq!(mid.top_right, 4.0);
+        assert_eq!(mid.bottom_right, 6.0);
+        assert_eq!(mid.bottom_left, 8.0);
+    }
+
+    #[test]
+    fn matrix4_lerp_translation_midpoint() {
+        let mid = Matrix4::IDENTITY.lerp_to(&Matrix4::translation(10.0, 20.0, 0.0), 0.5);
+        let (x, y, z) = mid.translation_component();
+        assert!((x - 5.0).abs() < 1e-4, "x={x}");
+        assert!((y - 10.0).abs() < 1e-4, "y={y}");
+        assert!(z.abs() < 1e-4, "z={z}");
+    }
+
+    #[test]
+    fn matrix4_lerp_rotation_slerps_not_collapses() {
+        // A naive element-wise lerp of a rotation passes through a degenerate
+        // (non-orthonormal, det < 1) matrix at t = 0.5; decompose+slerp keeps it
+        // a proper rotation. Same-axis slerp is exact angle interpolation, so the
+        // half-way point equals the half-angle rotation.
+        let mid = Matrix4::rotation_z(0.0).lerp_to(&Matrix4::rotation_z(0.6), 0.5);
+        let expected = Matrix4::rotation_z(0.3);
+        for i in 0..16 {
+            assert!(
+                (mid.m[i] - expected.m[i]).abs() < 1e-3,
+                "element {i}: {} vs expected {}",
+                mid.m[i],
+                expected.m[i],
+            );
+        }
     }
 }
