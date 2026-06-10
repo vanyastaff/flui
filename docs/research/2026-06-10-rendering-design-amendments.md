@@ -175,15 +175,69 @@ trait method are the duplication.
 - **Selection state home** decided before TextPainter split freezes
   (render-object-owned, Flutter-style), even if implementation defers.
 
+## D9 — Cycle A′ reshape (adversarial review, post-D2)
+
+A second harsh-critic pass over the concrete A′ plan, verified against
+code, forced four corrections. Recorded so we don't relitigate:
+
+1. **D5.1 was fiction in code.** `RenderState::set_offset` had zero
+   production callers (offset.rs:112 — tests only); layout wrote
+   `position_child` offsets into a transient `Vec<ChildState>` dropped at
+   the end of the walk (owner.rs:1735/1822), and `child_offset(i)`
+   defaults to `Offset::ZERO` with no Flex/Stack override. Paint reading
+   `RenderState.offset` would have stacked every child at the origin.
+   **Fix: A′-U0 prerequisite unit — commit `ChildState.offset` into each
+   child's `RenderState.offset` at layout completion.** Only then is the
+   offset authoritative.
+2. **No retained per-boundary fragments in A′.** LayerTree is a flat
+   `slab::Slab<LayerNode>` with `children: Vec<LayerId>` — no structural
+   sharing substrate — and the engine re-walks/re-uploads the whole tree
+   per frame (renderer.rs:576/806). A node-owned retained handle would
+   cache nothing. A′ produces a fresh full LayerTree per frame; cross-
+   frame retention stays the gated item D2 already declared.
+3. **FragmentBuilder needs a typed scope-guard, not prose.** "Flush on
+   push_*/paint_child" without structure is `is_recording` renamed. The
+   builder's open-picture/layer-stack discipline is enforced by a scope
+   guard whose `Drop` seals the open buffer, plus a snapshot test
+   asserting parent-foreground-after-inline-clipped-child z-order.
+   Coordinate model stated explicitly: **inline children bake
+   accumulated absolute coords into the parent's picture (no extra
+   layer); boundary children get an `OffsetLayer`** — record-time bounds
+   are computed in accumulated space, not local.
+4. **Single authoritative frame path.** `draw_frame` currently drops the
+   pipeline's LayerTree (renderer_binding.rs:460) while a divergent
+   `composite_frame()` path renders nothing real. A′-U5 wires
+   `run_frame → LayerTree → Scene → Renderer::render_scene` and deletes
+   the orphan path.
+
+Also resolved: A′-U1/U2/U3 are ONE atomic PR (no compiling intermediate
+exists — deleting the no-op blanket forces the owner switch; SP-3
+forbids parallel context types), self-proven by the headless
+DisplayList snapshot test landing inside the same PR. The
+"parallel-encode falls out of D1" claim is downgraded: the encode
+recurses live over `&PipelineOwner` (sound single-threaded, not `Send`);
+per-boundary parallelism requires a subtree snapshot type — later, with
+the retention work. A′'s wake wiring is the minimal sync version that
+D4's `RepaintHandle` subsumes in C′ (documented to avoid building it
+twice). Engine-side risk retired by inspection: `PictureLayer(DisplayList)`
+renders identically to `CanvasLayer` (layer_render.rs:159-167), and
+nothing in production constructs `CanvasLayer` — its deletion is clean.
+
 ## Revised sequencing
 
 ```
-D2 generational RenderId (prereq #0, mechanical)
-  → Cycle A′: PaintCx DisplayList builder (D1) + three-way paint_child
-              + needs_compositing wiring + damage/wake fixes (flui-app)
-              + transform-symmetry test (D8) + profiling spans (D6)
-              Exit: colored box через настоящий View→DisplayList→wgpu,
-              снапшот-тест без GPU.
+D2 generational RenderId (prereq #0, mechanical) — SHIPPED ae48ff1b
+  → A′-U0: offset commit at layout completion (D9.1) — small PR
+  → A′-U1/2/3 (ONE atomic PR): PaintCx fragment builder + scope guard
+              (D9.3) + paint_erased vtable bridge + owner paint walk
+              rewrite (three-way paint_child, WAS_REPAINT_BOUNDARY
+              pre-paint, no-redirty debug check, no retention D9.2)
+              + headless DisplayList snapshot test in the same PR
+  → A′-U4: needs_compositing honored in push_clip_* (no hardcoded true)
+  → A′-U5: authoritative frame path run_frame→Scene→render_scene (D9.4)
+              + minimal wake wiring (subsumed by D4 in C′)
+  → A′-U6: transform-symmetry test (D8) + profiling spans (D6)
+  → A′-U7: GPU e2e colored box on a real window (exit gate)
   → Cycle B′: D3 dispose inversion + lifecycle + D5 ParentData split
               + flex fixes (clamped free_space, Stretch, unbounded-main,
               MainAxisSize — NOT the refuted spacing change) + caches.
