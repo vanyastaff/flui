@@ -223,6 +223,26 @@ twice). Engine-side risk retired by inspection: `PictureLayer(DisplayList)`
 renders identically to `CanvasLayer` (layer_render.rs:159-167), and
 nothing in production constructs `CanvasLayer` — its deletion is clean.
 
+## D10 — Clip-lowering (A′-U4): measured NO-GO
+
+The composer-side lowering of non-composited clip layers into canvas
+clips inside the merged picture is **closed as NO-GO** on measurement
+and vocabulary grounds, not deferred-by-default:
+
+1. `DrawCommand` has no plain Save/Restore pair (only
+   `SaveLayer`/`RestoreLayer`, which allocate an offscreen — strictly
+   more expensive than the clip layer being "optimized away"). Scoped
+   un-clipping inside one picture is unrepresentable without an
+   engine-side command-pair + stateful dispatch feature.
+2. Pipeline paint cost is already 242 ns/node (criterion
+   `paint/paint_flat/1000` = 242 µs post-fragment-model); the
+   clip-layer overhead lives engine-side (`render_scene` traversal)
+   and no current bench measures it. Optimizing it blind violates the
+   bench-fidelity rule.
+3. Correctness is identical either way (documented on the composer's
+   `clip_layer()`); revisit only WITH an engine-side traversal bench
+   showing clip-layer push/pop on the profile.
+
 ## Revised sequencing
 
 ```
@@ -233,7 +253,7 @@ D2 generational RenderId (prereq #0, mechanical) — SHIPPED ae48ff1b
               rewrite (three-way paint_child, WAS_REPAINT_BOUNDARY
               pre-paint, no-redirty debug check, no retention D9.2)
               + headless DisplayList snapshot test in the same PR
-  → A′-U4: needs_compositing honored in push_clip_* (no hardcoded true)
+  → A′-U4: clip lowering — closed NO-GO per D10 (measured)
   → A′-U5: authoritative frame path run_frame→Scene→render_scene (D9.4)
               + minimal wake wiring (subsumed by D4 in C′)
   → A′-U6: transform-symmetry test (D8) + profiling spans (D6)
