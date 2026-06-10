@@ -51,7 +51,7 @@ The user wants flui to be **more multithreaded, faster, and safer than Flutter �
 
 ### Constraints / prior art
 
-- **Edition 2024, Rust 1.95.** `PhantomData<*const ()>` is the canonical zero-cost `!Send`/`!Sync` marker (rust-lang/rust#95985); `rayon::scope` (not `join`) is required for non-`'static` arena borrows; `crossbeam-channel` `bounded(1)` is the SPSC backbone with natural backpressure.
+- **Edition 2024, Rust 1.96.** `PhantomData<*const ()>` is the canonical zero-cost `!Send`/`!Sync` marker (rust-lang/rust#95985); `rayon::scope` (not `join`) is required for non-`'static` arena borrows; `crossbeam-channel` `bounded(1)` is the SPSC backbone with natural backpressure.
 - **Ecosystem convergence:** every production retained-mode Rust GUI is `!Send`-by-default for its app/event context — GPUI (`App: !Send`, `Rc`/`RefCell`, run-to-completion effect queue), Druid/Xilem, Floem, iced, Dioxus. **egui is the lone `Send + Sync` outlier and its issue #1379 is structurally identical to flui's C3 arena re-entrancy bug.** GPUI/Servo split foreground (control, `!Send`) from background (data, `Send + 'static`) at the executor API. **No production Rust GUI parallelizes layout** — only Servo (a browser engine) does, and Servo's 2023 verdict abandoned mandatory fine-grained parallelism as "difficult to observe."
 - **Flutter cannot follow:** Dart isolates have independent heaps; the render tree is root-isolate-owned mutable state that cannot cross isolate boundaries without an O(N) deep copy. Flutter is *moving the other way* — merging Platform+UI runners (3.29+) for native-interop simplicity, reducing parallelism.
 

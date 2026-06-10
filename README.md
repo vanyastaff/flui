@@ -15,7 +15,7 @@ See [`docs/crates.md`](docs/crates.md) for the full layered map and per-crate st
 
 ## Quick Start
 
-Prerequisites: Rust 1.95 (edition 2024). The repository is a Cargo workspace, not yet published to crates.io. A `rust-toolchain.toml` is committed, so `rustup` will install and select the correct toolchain automatically.
+Prerequisites: Rust 1.96 (edition 2024). The repository is a Cargo workspace, not yet published to crates.io. A `rust-toolchain.toml` is committed, so `rustup` will install and select the correct toolchain automatically.
 
 ```bash
 git clone https://github.com/vanyastaff/flui

@@ -36,7 +36,7 @@ The translation manual draws inspiration from Bun's [oven-sh/bun#PORTING.md](htt
 - [§Strings discipline](#strings-discipline) — 8-row decision tree (UI text / message fields / static IDs / Cow / interned / external bytes / paths / widget keys)
 - [§Error mapping canonical shape](#error-mapping-canonical-shape) — `thiserror` + `#[non_exhaustive]` + `Box<str>` + `anyhow` at app-edge only
 - [§Inline port markers tier](#inline-port-markers-tier) — `TODO(port)` / `PERF(port)` / `PORT NOTE` / `SAFETY` grammar + `port-check.sh` integration
-- [§Ecosystem-first principle](#ecosystem-first-principle) — adopted-crates table + version policy + Rust 1.95 stabilizations folded into the port
+- [§Ecosystem-first principle](#ecosystem-first-principle) — adopted-crates table + version policy + Rust 1.95/1.96 stabilizations folded into the port
 - [§Don't translate](#dont-translate) — source-level dropped + binding-deletion precedents
 
 ---
@@ -713,7 +713,7 @@ When a need arises that the table does not cover, the order of operations is:
 ### Version policy
 
 - **Rust toolchain**: `channel = "stable"` per [`rust-toolchain.toml`](../rust-toolchain.toml). Tracks the latest stable release.
-- **MSRV** (`rust-version` in [`Cargo.toml`](../Cargo.toml)): bumped **no later than 6 weeks** after a new stable release. Rust ships every 6 weeks (current: **1.95**, released 2026-04-16; next: **1.96** ~2026-05-28). The MSRV bump PR is mechanical — bump the field, update the CI matrix, ship.
+- **MSRV** (`rust-version` in [`Cargo.toml`](../Cargo.toml)): bumped **no later than 6 weeks** after a new stable release. Rust ships every 6 weeks (current: **1.96**, released ~2026-05-28; next: **1.97** ~2026-07-09). The MSRV bump PR is mechanical — bump the field, update the CI matrix, ship.
 - **Workspace dependencies**: caret-pinned (`"1.43"`, not `"=1.43.2"`). Patch bumps automatic via `cargo update`. Minor bumps batched monthly; major bumps reviewed individually.
 - **Pinned exceptions**: documented inline in `Cargo.toml` (current: `wgpu = "25.0"` due to `codespan-reporting` bug in 26.x/27.x; `image` `webp` feature disabled per `image-webp` issue #102).
 
@@ -729,7 +729,7 @@ Rust 1.95 (2026-04-16) introduced features directly relevant to this port:
 | `Vec::push_mut` / `insert_mut`, `VecDeque::push_front_mut` / `push_back_mut`, `LinkedList::push_front_mut` / `push_back_mut` | Returns `&mut T` to the inserted slot — useful for chained init like `vec.push_mut(Node::new()).attach(parent_id);`. `LinkedList::insert_mut` was **not** stabilized in 1.95. |
 | `Layout::dangling_ptr` / `repeat` / `repeat_packed` / `extend_packed` | Allocator primitives. Phase B hot-path candidates if/when flui adopts an arena allocator beyond `bumpalo` (currently not a workspace dep). |
 
-Rust 1.96 will be tracked in this section on release.
+Rust 1.96 (~2026-05-28) stabilizations relevant to this port will be added here as they are confirmed and applied. Rust 1.97 will be tracked in this section on release.
 
 ---
 
