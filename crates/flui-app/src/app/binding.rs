@@ -485,9 +485,15 @@ impl AppBinding {
         //     timeout (e.g. long press) fires without a further input event.
         self.gestures.tick_deadlines();
 
-        // 2. Draw frame (build + layout + paint → Scene)
+        // 2. Draw frame (build + layout + paint → Scene). The surface
+        // reports PHYSICAL pixels; the framework lays out in LOGICAL
+        // pixels — the paint root's DPR transform bridges back. A
+        // physical-sized layout at DPR 2 would paint everything double
+        // size (the "red box covers a quarter of the window" bug).
         let (width, height) = renderer.size();
-        let constraints = BoxConstraints::tight(Size::new(px(width as f32), px(height as f32)));
+        let dpr = self.shared_pipeline_owner.read().device_pixel_ratio();
+        let constraints =
+            BoxConstraints::tight(Size::new(px(width as f32 / dpr), px(height as f32 / dpr)));
         let scene = self.draw_frame(constraints);
 
         // 3. Render scene to GPU

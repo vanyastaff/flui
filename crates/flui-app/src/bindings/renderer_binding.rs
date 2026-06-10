@@ -361,7 +361,14 @@ impl RendererBinding for RenderingFlutterBinding {
         // are bare metric holders with no children, so testing them
         // produced no targets. Leaf-first entries come back from the
         // owner's hit-test walk (RenderState.offset-aware).
-        self.root_pipeline_owner.read().hit_test(position, result);
+        //
+        // Platform pointer positions are PHYSICAL window pixels; the
+        // tree lives in LOGICAL pixels — divide by the DPR the paint
+        // root multiplies by, or every hit drifts by the scale factor.
+        let owner = self.root_pipeline_owner.read();
+        let dpr = owner.device_pixel_ratio();
+        let logical = Offset::new(position.dx / dpr, position.dy / dpr);
+        owner.hit_test(logical, result);
     }
 
     // ---- RendererBinding proper ----

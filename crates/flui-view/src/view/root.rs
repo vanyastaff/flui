@@ -191,11 +191,18 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
         // build in `BuildOwner::build_scope` is not skipped by its dirty guard.
         self.needs_build = true;
 
-        // Create RenderView and insert into RenderTree
+        // Create RenderView and insert into RenderTree. The attach
+        // size is LOGICAL; the DPR comes from the pipeline owner (set
+        // by the runner from the window's scale factor BEFORE attach)
+        // so the configuration and the paint root's scale agree.
         let (width, height) = self.view.size;
         let mut render_view = RenderViewObject::new();
-        let physical_size = Size::new(px(width), px(height));
-        let config = ViewConfiguration::from_size(physical_size, 1.0);
+        let logical_size = Size::new(px(width), px(height));
+        let dpr = self
+            .pipeline_owner
+            .as_ref()
+            .map_or(1.0, |owner| owner.read().device_pixel_ratio());
+        let config = ViewConfiguration::from_size(logical_size, dpr);
         render_view.set_configuration(config);
         // Bootstrap the root transform + root layer. Without this,
         // RenderView::perform_layout asserts on the missing transform

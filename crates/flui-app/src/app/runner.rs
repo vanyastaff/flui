@@ -133,11 +133,19 @@ where
     };
     renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
 
-    // 3. Mount root widget
+    // 3. Mount root widget at the LOGICAL size; the framework lays out
+    // in logical pixels and the paint root's DPR transform maps to the
+    // physical surface. Set the DPR BEFORE attach so the RenderView
+    // configuration and the first frame agree on the scale.
+    let scale_factor = window.scale_factor() as f32;
+    AppBinding::instance()
+        .render_pipeline_mut()
+        .set_device_pixel_ratio(scale_factor);
+    let logical = window.logical_size();
     if let Err(e) = AppBinding::instance().attach_root_widget_with_size(
         &root,
-        phys_size.width.0 as f32,
-        phys_size.height.0 as f32,
+        logical.width.0 as f32,
+        logical.height.0 as f32,
     ) {
         tracing::error!("Root widget attach failed: {:?}", e);
         return;
@@ -227,6 +235,11 @@ where
         let w = (size.width.0 * scale_factor) as u32;
         let h = (size.height.0 * scale_factor) as u32;
         renderer_resize.lock().resize(w, h);
+        // A monitor change can change the DPR — keep the paint root's
+        // scale in sync with the surface.
+        AppBinding::instance()
+            .render_pipeline_mut()
+            .set_device_pixel_ratio(scale_factor);
         AppBinding::instance().request_redraw();
     }));
 
@@ -399,11 +412,17 @@ where
     };
     renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
 
-    // 3. Mount root widget (used when no plugin is active)
+    // 3. Mount root widget (used when no plugin is active) at the
+    // LOGICAL size; the paint root's DPR transform maps to physical.
+    let scale_factor = window.scale_factor() as f32;
+    AppBinding::instance()
+        .render_pipeline_mut()
+        .set_device_pixel_ratio(scale_factor);
+    let logical = window.logical_size();
     if let Err(e) = AppBinding::instance().attach_root_widget_with_size(
         &root,
-        phys_size.width.0 as f32,
-        phys_size.height.0 as f32,
+        logical.width.0 as f32,
+        logical.height.0 as f32,
     ) {
         tracing::error!("Root widget attach failed: {:?}", e);
         return;
@@ -465,6 +484,11 @@ where
         let w = (size.width.0 * scale_factor) as u32;
         let h = (size.height.0 * scale_factor) as u32;
         renderer_resize.lock().resize(w, h);
+        // A monitor change can change the DPR — keep the paint root's
+        // scale in sync with the surface.
+        AppBinding::instance()
+            .render_pipeline_mut()
+            .set_device_pixel_ratio(scale_factor as f32);
         AppBinding::instance().request_redraw();
     }));
 
@@ -569,12 +593,17 @@ where
         tracing::info!("WebGPU renderer initialized");
     });
 
-    // 3. Mount root widget
-    let phys_size = window.physical_size();
+    // 3. Mount root widget at the LOGICAL size; the paint root's DPR
+    // transform maps to the physical canvas.
+    let scale_factor = window.scale_factor() as f32;
+    AppBinding::instance()
+        .render_pipeline_mut()
+        .set_device_pixel_ratio(scale_factor);
+    let logical = window.logical_size();
     if let Err(e) = AppBinding::instance().attach_root_widget_with_size(
         &root,
-        phys_size.width.0 as f32,
-        phys_size.height.0 as f32,
+        logical.width.0 as f32,
+        logical.height.0 as f32,
     ) {
         tracing::error!("Root widget attach failed: {:?}", e);
         return;

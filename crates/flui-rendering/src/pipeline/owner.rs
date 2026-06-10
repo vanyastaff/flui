@@ -2326,7 +2326,7 @@ impl PipelineOwner<PaintPhase> {
         if let Some(root_id) = self.root_id
             && self.render_tree.get(root_id).is_some()
         {
-            let mut composer = FragmentComposer::new();
+            let mut composer = FragmentComposer::new(self.device_pixel_ratio);
             match self.paint_subtree(&mut composer, root_id, Offset::ZERO) {
                 Ok(()) => {
                     let layer_tree = composer.finish();
@@ -2526,9 +2526,22 @@ struct FragmentComposer {
 }
 
 impl FragmentComposer {
-    fn new() -> Self {
+    /// `device_pixel_ratio` becomes the root layer's scale: the
+    /// framework paints in LOGICAL pixels, the engine rasterizes in
+    /// physical surface pixels — the root transform is the single
+    /// place the two meet (Flutter's RenderView root transform).
+    fn new(device_pixel_ratio: f32) -> Self {
         let mut tree = LayerTree::new();
-        let root = tree.insert(Layer::Offset(OffsetLayer::zero()));
+        let root_layer = if (device_pixel_ratio - 1.0).abs() < f32::EPSILON {
+            Layer::Offset(OffsetLayer::zero())
+        } else {
+            Layer::Transform(TransformLayer::new(flui_types::Matrix4::scaling(
+                device_pixel_ratio,
+                device_pixel_ratio,
+                1.0,
+            )))
+        };
+        let root = tree.insert(root_layer);
         tree.set_root(Some(root));
         Self {
             tree,
