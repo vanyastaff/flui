@@ -60,7 +60,8 @@ pub struct GpuCapabilities {
     /// Supports compute shaders
     pub supports_compute: bool,
 
-    /// Supports push constants (not available on all mobile GPUs)
+    /// Supports immediates / push constants (not available on all mobile GPUs).
+    /// Mapped from `wgpu::Features::IMMEDIATES` (renamed from PUSH_CONSTANTS in wgpu 28).
     pub supports_push_constants: bool,
 
     /// Supports BC texture compression (DX)
@@ -87,7 +88,7 @@ impl GpuCapabilities {
             max_texture_size: limits.max_texture_dimension_2d,
             supports_hdr: Self::check_hdr_support(info.backend),
             supports_compute: true, // Compute shaders are supported by default in wgpu
-            supports_push_constants: features.contains(wgpu::Features::PUSH_CONSTANTS),
+            supports_push_constants: features.contains(wgpu::Features::IMMEDIATES),
             supports_bc_compression: features.contains(wgpu::Features::TEXTURE_COMPRESSION_BC),
             supports_astc_compression: features.contains(wgpu::Features::TEXTURE_COMPRESSION_ASTC),
             supports_etc2_compression: features.contains(wgpu::Features::TEXTURE_COMPRESSION_ETC2),
@@ -182,10 +183,10 @@ impl Renderer {
 
         tracing::info!("Creating wgpu instance with backends: {:?}", backends);
 
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends,
             flags: wgpu::InstanceFlags::default(),
-            ..Default::default()
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
 
         // Create surface — requires unsafe: wgpu surface creation from raw window
@@ -200,8 +201,12 @@ impl Renderer {
         // here once for the combined block.
         #[allow(unsafe_code)]
         let surface = unsafe {
+            // wgpu 29.x: HandleError does not implement std::error::Error, so we
+            // cannot pass `e` directly to `surface_creation`. Wrap via
+            // `std::io::Error::other` to preserve the Display message while
+            // satisfying the `Box<dyn Error + Send + Sync>` bound.
             let surface_target = wgpu::SurfaceTargetUnsafe::from_window(window)
-                .map_err(EngineError::surface_creation)?;
+                .map_err(|e| EngineError::surface_creation(std::io::Error::other(e.to_string())))?;
             instance
                 .create_surface_unsafe(surface_target)
                 .map_err(EngineError::surface_creation)?
@@ -234,7 +239,8 @@ impl Renderer {
                 required_features: Self::required_features(&capabilities),
                 required_limits: Self::required_limits(&capabilities),
                 memory_hints: wgpu::MemoryHints::default(),
-                trace: wgpu::Trace::default(),
+                experimental_features: wgpu::ExperimentalFeatures::disabled(),
+                trace: wgpu::Trace::Off,
             })
             .await
             .map_err(EngineError::device_creation)?;
@@ -311,9 +317,9 @@ impl Renderer {
     pub async fn new_offscreen() -> EngineResult<Self> {
         let backends = Self::select_backend();
 
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends,
-            ..Default::default()
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
 
         let adapter = instance
@@ -333,7 +339,8 @@ impl Renderer {
                 required_features: Self::required_features(&capabilities),
                 required_limits: Self::required_limits(&capabilities),
                 memory_hints: wgpu::MemoryHints::default(),
-                trace: wgpu::Trace::default(),
+                experimental_features: wgpu::ExperimentalFeatures::disabled(),
+                trace: wgpu::Trace::Off,
             })
             .await
             .map_err(EngineError::device_creation)?;
@@ -413,10 +420,10 @@ impl Renderer {
         // Always enable texture adapter-specific formats
         features |= wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
 
-        // Push constants: only request if adapter supports them.
+        // Immediates (formerly push constants): only request if adapter supports them.
         // Some mobile GPUs (especially older Android devices) don't support this.
         if capabilities.supports_push_constants {
-            features |= wgpu::Features::PUSH_CONSTANTS;
+            features |= wgpu::Features::IMMEDIATES;
         }
 
         features
@@ -429,9 +436,9 @@ impl Renderer {
             ..wgpu::Limits::default()
         };
 
-        // Push constant size — only set if adapter supports push constants
+        // Immediate data size — only set if adapter supports immediates
         if capabilities.supports_push_constants {
-            limits.max_push_constant_size = 128;
+            limits.max_immediate_size = 128;
         }
 
         limits
@@ -551,9 +558,9 @@ impl Renderer {
 
     /// Reconfigure the surface after loss or outdated error.
     ///
-    /// This is called automatically by `render_scene()` when a
-    /// `SurfaceError::Lost` or `SurfaceError::Outdated` is encountered,
-    /// but can also be called manually if needed.
+    /// This is called automatically by `render_scene()` when
+    /// `CurrentSurfaceTexture::Outdated` or `CurrentSurfaceTexture::Lost`
+    /// is encountered, but can also be called manually if needed.
     pub fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
         if let (Some(config), Some(surface)) = (&self.config, &self.surface) {
             surface.configure(&self.device, config);
@@ -591,28 +598,27 @@ impl Renderer {
 
         let surface = self.surface.as_ref().ok_or(EngineError::SurfaceLost)?;
 
+        // wgpu 28+: get_current_texture() returns CurrentSurfaceTexture enum
+        // instead of Result<SurfaceTexture, SurfaceError>.
         let output = match surface.get_current_texture() {
-            Ok(output) => output,
-            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                // Auto-reconfigure and retry once
+            wgpu::CurrentSurfaceTexture::Success(frame) => frame,
+            wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
+                // Suboptimal is still renderable; schedule a reconfigure next frame.
+                tracing::debug!("Surface suboptimal; will reconfigure on next resize");
+                frame
+            }
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                // Auto-reconfigure and retry once.
                 self.reconfigure_surface()?;
                 let surface = self.surface.as_ref().ok_or(EngineError::SurfaceLost)?;
-                surface.get_current_texture().map_err(|e| match e {
-                    wgpu::SurfaceError::Lost | wgpu::SurfaceError::Other => {
-                        EngineError::SurfaceLost
-                    }
-                    wgpu::SurfaceError::OutOfMemory => EngineError::OutOfMemory,
-                    wgpu::SurfaceError::Outdated => EngineError::SurfaceOutdated,
-                    wgpu::SurfaceError::Timeout => EngineError::Timeout,
-                })?
+                match surface.get_current_texture() {
+                    wgpu::CurrentSurfaceTexture::Success(frame)
+                    | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+                    _ => return Err(EngineError::SurfaceLost),
+                }
             }
-            Err(e) => {
-                return Err(match e {
-                    wgpu::SurfaceError::OutOfMemory => EngineError::OutOfMemory,
-                    wgpu::SurfaceError::Timeout => EngineError::Timeout,
-                    _ => EngineError::SurfaceLost,
-                });
-            }
+            wgpu::CurrentSurfaceTexture::Timeout => return Err(EngineError::Timeout),
+            _ => return Err(EngineError::SurfaceLost),
         };
 
         let view = output
@@ -633,6 +639,7 @@ impl Renderer {
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: &view,
                         resolve_target: None,
+                        depth_slice: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
                             store: wgpu::StoreOp::Store,
@@ -641,6 +648,7 @@ impl Renderer {
                     depth_stencil_attachment: None,
                     timestamp_writes: None,
                     occlusion_query_set: None,
+                    multiview_mask: None,
                 });
             }
             self.queue.submit(std::iter::once(clear_encoder.finish()));

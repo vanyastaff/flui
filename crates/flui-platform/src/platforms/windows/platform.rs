@@ -218,7 +218,7 @@ impl WindowsPlatform {
 
                     let atom = RegisterClassW(&wc);
                     if atom == 0 {
-                        return Err(windows::core::Error::from_win32().into());
+                        return Err(windows::core::Error::from_thread().into());
                     }
 
                     tracing::info!("Registered Windows window class");
@@ -1211,7 +1211,7 @@ impl Platform for WindowsPlatform {
             let mut buffer = [0u16; 260]; // MAX_PATH, stack-allocated
             let len = GetModuleFileNameW(None, &mut buffer);
             if len == 0 {
-                return Err(windows::core::Error::from_win32().into());
+                return Err(windows::core::Error::from_thread().into());
             }
             Ok(std::path::PathBuf::from(String::from_utf16_lossy(
                 &buffer[..len as usize],

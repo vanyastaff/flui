@@ -75,13 +75,13 @@ default-members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.95"
+rust-version = "1.96"
 license = "MIT OR Apache-2.0"
 authors = ["Flui Contributors"]
 repository = "https://github.com/vanyastaff/flui"
 
 [workspace.dependencies]
-# ASYNC RUNTIME (Stable: 1.43 LTS - March 2026)
+# ASYNC RUNTIME — tokio 1.43 = LTS floor (lock resolves latest 1.x)
 tokio = { version = "1.43" }
 futures = "0.3"
 pin-project-lite = "0.2"
@@ -119,12 +119,10 @@ tracing-forest = { version = "0.3", features = ["smallvec"] }
 
 # === Shared GPU/Window dependencies ===
 # Used by flui-engine, flui-app, and root examples
-# GPU RENDERING (WGPU BACKEND) - Version 25.x (stable)
-# Note: wgpu 26.0+ and 27.0.x have compilation issues with codespan-reporting
-# The bug is in codespan library itself (feature-flag incompatibility)
-# See: https://github.com/gfx-rs/wgpu/issues/7915
-# Staying on wgpu 25.x until upstream fix
-wgpu = { version = "25.0", default-features = false, features = ["wgsl"] }
+# GPU RENDERING (WGPU BACKEND) - Track latest stable (29.x).
+# Update policy: bump within the same minor on security/bug fixes; bump major after
+# verifying API migration on a dedicated branch (see docs/adr/ADR-0002).
+wgpu = { version = "29.0", default-features = false, features = ["wgsl"] }
 winit = "0.30.12"
 raw-window-handle = "0.6"
 pollster = "0.4"
@@ -133,8 +131,7 @@ pollster = "0.4"
 arboard = "3.4"
 
 # IMAGE PROCESSING - Used by flui-assets and flui-engine
-# TODO: Re-enable "webp" feature when image-webp is fixed for Rust 1.91+
-# See: https://github.com/image-rs/image-webp/issues/102
+# TODO: Re-enable "webp" feature when image-rs/image-webp#102 is fixed upstream
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
 
 # FONT PARSING - Used by flui-assets and flui-engine

@@ -51,7 +51,7 @@ impl GpuState {
             window: window.clone(),
         };
 
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
 
         // Safety: PlatformWindow outlives the surface (held in Arc)
         #[allow(unsafe_code)]
@@ -123,15 +123,17 @@ impl GpuState {
         self.frame_count += 1;
 
         let output = match self.surface.get_current_texture() {
-            Ok(output) => output,
-            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+            wgpu::CurrentSurfaceTexture::Success(frame)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 self.surface.configure(&self.device, &self.config);
                 return;
             }
-            Err(e) => {
-                tracing::error!("Surface error: {:?}", e);
+            wgpu::CurrentSurfaceTexture::Timeout => {
+                tracing::error!("Surface timeout");
                 return;
             }
+            _ => return,
         };
 
         let view = output
@@ -159,6 +161,7 @@ impl GpuState {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
+                    depth_slice: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(clear_color),
                         store: wgpu::StoreOp::Store,
@@ -167,6 +170,7 @@ impl GpuState {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
         }
 

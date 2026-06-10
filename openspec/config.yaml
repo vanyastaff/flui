@@ -2,14 +2,14 @@ strict_tdd: true
 context: |
   FLUI is a modular, Flutter-inspired declarative UI framework for Rust with a
   three-tree architecture (View → Element → Render) and a wgpu-backed GPU
-  rendering engine. Pure Rust workspace (edition 2024, rust 1.95).
+  rendering engine. Pure Rust workspace (edition 2024, rust 1.96).
   See AGENTS.md, docs/FOUNDATIONS.md, and docs/ROADMAP.md.
 
   Vendored references (DO NOT treat as project source):
     .flutter/  — Flutter source for architectural reference (read-only)
     .gpui/     — GPUI source for Rust platform-pattern reference (read-only)
 
-  Stack: Rust 1.95 + Cargo workspace, tokio, wgpu 25.x (pinned),
+  Stack: Rust 1.96 + Cargo workspace, tokio, wgpu 29.x,
   lyon, glyphon, cosmic-text, glam, tracing.
 rules:
   proposal:

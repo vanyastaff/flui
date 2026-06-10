@@ -28,4 +28,4 @@ flui-painting = { path = "../../crates/flui-painting" }
 flui-engine = { path = "../../crates/flui-engine", features = ["wgpu-backend", "webgpu"] }
 flui-types = { path = "../../crates/flui-types" }
 flui-layer = { path = "../../crates/flui-layer" }
-glam = "0.30"
+glam = "0.33"

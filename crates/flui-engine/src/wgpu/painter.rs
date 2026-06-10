@@ -508,8 +508,8 @@ impl WgpuPainter {
         let instanced_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Instanced Rect Pipeline Layout"),
-                bind_group_layouts: &[pipeline_cache.viewport_bind_group_layout()],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(pipeline_cache.viewport_bind_group_layout())],
+                immediate_size: 0,
             });
 
         let instanced_rect_pipeline =
@@ -556,7 +556,7 @@ impl WgpuPainter {
                     mask: !0,
                     alpha_to_coverage_enabled: false,
                 },
-                multiview: None,
+                multiview_mask: None,
                 cache: None,
             });
 
@@ -642,7 +642,7 @@ impl WgpuPainter {
                     mask: !0,
                     alpha_to_coverage_enabled: false,
                 },
-                multiview: None,
+                multiview_mask: None,
                 cache: None,
             });
 
@@ -701,7 +701,7 @@ impl WgpuPainter {
                     mask: !0,
                     alpha_to_coverage_enabled: false,
                 },
-                multiview: None,
+                multiview_mask: None,
                 cache: None,
             });
 
@@ -743,7 +743,7 @@ impl WgpuPainter {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
             lod_min_clamp: 0.0,
             lod_max_clamp: 100.0,
             compare: None,
@@ -762,10 +762,10 @@ impl WgpuPainter {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Instanced Texture Pipeline Layout"),
                 bind_group_layouts: &[
-                    pipeline_cache.viewport_bind_group_layout(),
-                    &texture_bind_group_layout,
+                    Some(pipeline_cache.viewport_bind_group_layout()),
+                    Some(&texture_bind_group_layout),
                 ],
-                push_constant_ranges: &[],
+                immediate_size: 0,
             });
 
         // Create instanced texture pipeline
@@ -813,7 +813,7 @@ impl WgpuPainter {
                     mask: !0,
                     alpha_to_coverage_enabled: false,
                 },
-                multiview: None,
+                multiview_mask: None,
                 cache: None,
             });
 
@@ -1160,6 +1160,7 @@ impl WgpuPainter {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: offscreen_view,
                     resolve_target: None,
+                    depth_slice: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                         store: wgpu::StoreOp::Store,
@@ -1168,6 +1169,7 @@ impl WgpuPainter {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             // Pass dropped immediately — just clearing
         }
@@ -1258,6 +1260,7 @@ impl WgpuPainter {
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view,
                 resolve_target: None,
+                depth_slice: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Load,
                     store: wgpu::StoreOp::Store,
@@ -1266,6 +1269,7 @@ impl WgpuPainter {
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
 
         render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
@@ -1653,6 +1657,7 @@ impl WgpuPainter {
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view,
                 resolve_target: None,
+                depth_slice: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Load,
                     store: wgpu::StoreOp::Store,
@@ -1661,6 +1666,7 @@ impl WgpuPainter {
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
 
         // Set shared resources (geometry, bind groups)
@@ -1843,6 +1849,7 @@ impl WgpuPainter {
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view,
                 resolve_target: None,
+                depth_slice: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Load,
                     store: wgpu::StoreOp::Store,
@@ -1851,6 +1858,7 @@ impl WgpuPainter {
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
 
         // Set shared resources
@@ -2003,6 +2011,7 @@ impl WgpuPainter {
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view,
                 resolve_target: None,
+                depth_slice: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Load, // Don't clear - render on top
                     store: wgpu::StoreOp::Store,
@@ -2011,6 +2020,7 @@ impl WgpuPainter {
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
 
         // Set pipeline and buffers

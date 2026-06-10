@@ -13,11 +13,7 @@ updates:
       # bumps still surface as individual PRs for review.
       patch-and-minor:
         update-types: ["minor", "patch"]
-    # wgpu is pinned at 25.x (26.0+ broken per CLAUDE.md, GitHub issue
-    # gfx-rs/wgpu#7915). Block dependabot from suggesting 26.x bumps.
-    ignore:
-      - dependency-name: "wgpu"
-        versions: [">=26.0.0"]
+    ignore: []
 
   # GitHub Actions used in .github/workflows/.
   - package-ecosystem: "github-actions"
