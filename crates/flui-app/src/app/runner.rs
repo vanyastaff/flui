@@ -268,7 +268,7 @@ where
     }));
 }
 
-/// Register the hit-test root [`RenderView`] with the [`RendererBinding`]
+/// Register the hit-test root `RenderView` with the `RendererBinding`
 /// (`view_id = 0`).
 ///
 /// `WidgetsBinding::attach_root_widget` bootstraps the *paint* render tree

@@ -54,24 +54,19 @@ pub struct ElementNode {
     ///     because our `View` value is owned by `ElementCore` and not
     ///     available at the dispatch boundary used for finalization.
     pub(crate) registered_global_key_hash: Option<u64>,
-    /// Parallel, slab-id-based child list.
+    /// This node's slab-id-based child list — the single, authoritative
+    /// element child graph (E3 — atomic box→arena swap).
     ///
-    /// This is the id-addressable counterpart to the nested
-    /// `Box<dyn ElementBase>` child storage that production currently
-    /// runs ([`ElementChildStorage`](crate::element::ElementChildStorage)).
-    /// It is written **only** by the parallel id-based reconciler
-    /// [`reconcile_children_by_id`](super::id_reconcile::reconcile_children_by_id)
-    /// and read back by its tests; it is deliberately NOT populated from
-    /// the production build / reconcile path, so the two child models
-    /// stay independent until the eventual atomic swap collapses them
-    /// onto this list.
+    /// Written by the production id-based reconciler
+    /// [`reconcile_children_by_id`](super::id_reconcile::reconcile_children_by_id),
+    /// which `build_scope` drives once per dirty element; read by every
+    /// child traversal in the framework (build, mount, unmount,
+    /// dirty-collection). The old per-element `Box<dyn ElementBase>` child
+    /// storage is gone — elements no longer own children.
     ///
     /// Ordering is meaningful: entry `i` is the element occupying child
     /// slot `i` after the most recent id-reconcile, matching the new
     /// view order.
-    // Read only by the not-yet-wired id-based reconciler and its tests;
-    // dead in a non-test build until the id-graph swap lands.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) child_ids: Vec<ElementId>,
 }
 
@@ -163,9 +158,7 @@ impl ElementNode {
     /// The slice is ordered by child slot (entry `i` is slot `i`). It is
     /// the read side of the id-based child model maintained by
     /// [`reconcile_children_by_id`](super::id_reconcile::reconcile_children_by_id);
-    /// the production box-graph child storage is unaffected by it.
-    // Consumed only by the not-yet-wired id reconciler + its tests.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// the single element graph (E3 — atomic box→arena swap).
     pub(crate) fn child_ids(&self) -> &[ElementId] {
         &self.child_ids
     }
@@ -178,8 +171,6 @@ impl ElementNode {
     /// previous list wholesale — the caller is responsible for having
     /// already inserted / removed the corresponding slab nodes so the
     /// stored ids all resolve.
-    // Called only by the not-yet-wired id reconciler + its tests.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn set_child_ids(&mut self, ids: Vec<ElementId>) {
         self.child_ids = ids;
     }
@@ -472,10 +463,33 @@ impl ElementTree {
             return retaken_id;
         }
 
-        let element = view.create_element();
+        let mut element = view.create_element();
 
-        // Get parent depth for calculating child depth
-        let parent_depth = self.get(parent).map_or(0, |n| n.depth);
+        // Read the parent's render-tree propagation context in ONE fresh,
+        // immediately-dropped `&ElementTree` borrow, then apply it to the
+        // freshly-created child BEFORE mount.
+        //
+        // E3 (atomic box→arena swap): the old box graph propagated the
+        // `PipelineOwner` + parent `RenderId` to children inside
+        // `update_or_create_child(ren)`, *before* `mount_children`, because
+        // `RenderBehavior::on_mount` creates its `RenderObject` only when a
+        // `PipelineOwner` is already in scope. Children are now
+        // slab-resident, so that propagate-before-mount ordering moves
+        // here: read `pipeline_owner_any()` / `child_render_id()` off the
+        // parent node, hand them to the child, then mount.
+        let (parent_depth, parent_owner, child_parent_render_id) = match self.get(parent) {
+            Some(node) => (
+                node.depth,
+                node.element().pipeline_owner_any(),
+                node.element().child_render_id(),
+            ),
+            None => (0, None, None),
+        };
+
+        if let Some(owner_any) = parent_owner {
+            element.set_pipeline_owner_any(owner_any);
+        }
+        element.set_parent_render_id(child_parent_render_id);
 
         let mut node = ElementNode::new(element, Some(parent), slot);
         node.depth = parent_depth + 1;
@@ -488,7 +502,8 @@ impl ElementTree {
         // Plan §U15: same self-id stamping as mount_root.
         self.nodes[slab_index].element.set_self_id(id);
 
-        // Mount the element
+        // Mount the element (PipelineOwner + parent RenderId already set,
+        // so `RenderBehavior::on_mount` can create its RenderObject).
         self.nodes[slab_index]
             .element
             .mount(Some(parent), slot, owner);
@@ -505,7 +520,8 @@ impl ElementTree {
     /// Get an element node by ID.
     ///
     /// Returns `None` for a stale id (one that addressed a since-freed slot)
-    /// as well as for an absent id — see [`ElementTree::resolve_index`].
+    /// as well as for an absent id — the generational `resolve_index`
+    /// staleness check rejects both.
     pub fn get(&self, id: ElementId) -> Option<&ElementNode> {
         let index = self.resolve_index(id)?;
         self.nodes.get(index)

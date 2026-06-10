@@ -78,9 +78,9 @@ impl ElementBase for TestLeafElement {
 
     fn mark_needs_build(&mut self) {}
 
-    fn perform_build(&mut self, _owner: &mut ElementOwner<'_>) {}
-
-    fn visit_children(&self, _visitor: &mut dyn FnMut(ElementId)) {}
+    fn build_into_views(&mut self, _owner: &mut ElementOwner<'_>) -> Vec<Box<dyn View>> {
+        Vec::new()
+    }
 }
 
 // ============================================================================

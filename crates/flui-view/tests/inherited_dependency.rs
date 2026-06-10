@@ -504,9 +504,9 @@ mod did_change_dependencies_on_inherited_update {
 
         fn mark_needs_build(&mut self) {}
 
-        fn perform_build(&mut self, _owner: &mut ElementOwner<'_>) {}
-
-        fn visit_children(&self, _visitor: &mut dyn FnMut(ElementId)) {}
+        fn build_into_views(&mut self, _owner: &mut ElementOwner<'_>) -> Vec<Box<dyn View>> {
+            Vec::new()
+        }
     }
 
     // ========================================================================
@@ -727,6 +727,75 @@ mod did_change_dependencies_on_inherited_update {
                 .element_owner_mut()
                 .has_pending_dependency_change(dep_id),
             "pending_dependency_changes must be cleared after build_scope dispatches the hook"
+        );
+    }
+
+    /// E3 regression: a dependent that has ALREADY built once (and is
+    /// therefore clean) still rebuilds when its inherited dependency
+    /// changes.
+    ///
+    /// `InheritedBehavior::on_view_updated` schedules the dependent and
+    /// records a pending dependency change, but it cannot set the
+    /// dependent's own dirty flag (it has no slab access). `build_scope`'s
+    /// dirty guard skips any popped entry whose `is_dirty()` is false, so
+    /// without the guard promoting a pending dependency change to a dirty
+    /// mark, a clean dependent would be popped, skipped, and never observe
+    /// the change. The sibling `fires_typed_hook_exactly_once_before_rebuild`
+    /// does NOT catch this: there the dependent is dirty-from-birth (it has
+    /// never built), so the guard passes regardless.
+    #[test]
+    fn clean_dependent_rebuilds_on_dependency_change() {
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+        let probe: std::sync::Arc<Probe> = std::sync::Arc::new(Mutex::new(Vec::new()));
+
+        let dependent_view = ProbeDependent {
+            probe: probe.clone(),
+        };
+
+        let (provider_id, dep_id) = mount_provider_and_record_dependency(
+            &mut tree,
+            &mut owner,
+            0x00FF_0000,
+            &dependent_view,
+        );
+
+        // Build #1: drive the dependent's first build so it transitions
+        // from dirty-from-birth to CLEAN. (Insert does not schedule, so the
+        // dependent must be scheduled explicitly here — production schedules
+        // it from the parent's reconcile.)
+        owner.schedule_build_for(dep_id, 1);
+        owner.build_scope(&mut tree);
+        assert_eq!(
+            probe.lock().unwrap().clone(),
+            vec!["build".to_string()],
+            "first build runs once (no dependency change pending yet, so no dcd)",
+        );
+        probe.lock().unwrap().clear();
+
+        // Now change the inherited value. The dependent is clean (its dirty
+        // flag was cleared by build #1), so this is exactly the bug
+        // condition: scheduled + pending-change, but not self-dirty.
+        let provider_v2 = super::ThemeProvider {
+            theme: MyTheme { color: 0x0000_FF00 },
+            child: DummyChild,
+        };
+        tree.update(provider_id, &provider_v2, &mut owner.element_owner_mut());
+        assert!(
+            owner
+                .element_owner_mut()
+                .has_pending_dependency_change(dep_id),
+            "the dependency change marks the clean dependent for a typed-hook dispatch",
+        );
+
+        // Build #2: the clean dependent MUST rebuild — dcd:1 then build.
+        owner.build_scope(&mut tree);
+        let events = probe.lock().unwrap().clone();
+        assert_eq!(
+            events,
+            vec!["dcd:1".to_string(), "build".to_string()],
+            "a clean dependent must observe the dependency change: \
+             expected [dcd:1, build], got {events:?}",
         );
     }
 

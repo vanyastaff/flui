@@ -1,4 +1,4 @@
-//! O(N) keyed child reconciliation for the live box-vec element model.
+//! O(N) keyed child reconciliation over a bare `Vec<Box<dyn ElementBase>>`.
 //!
 //! Flutter insight: "Contrary to popular belief, Flutter does not employ
 //! a tree-diffing algorithm." Child reconciliation is a single linear
@@ -6,36 +6,41 @@
 //! children) or by position (un-keyed children), reusing element state
 //! wherever a match is found.
 //!
+//! # Status (E3 — atomic box→arena swap)
+//!
+//! This is the original box-vec reconciler. After E3 the production
+//! element graph is the slab-resident
+//! [`ElementTree`](super::ElementTree), reconciled by
+//! [`reconcile_children_by_id`](super::id_reconcile::reconcile_children_by_id);
+//! this function is **no longer wired into the production build path**, and
+//! the whole module is gated behind `cfg(test)` / `feature = "test-utils"`
+//! so it is **absent from the production public API** (no prelude /
+//! crate-root export). It is retained only as the standalone keyed-reconcile
+//! algorithm + `ReconcileEvent` emission reference — the emission disposition
+//! logic KTD-9 will port into the slab reconciler — exercised by its own
+//! in-crate tests plus the `test-utils`-gated `reconcile_keyed_permutations`
+//! / `reconciliation_tests` corpora, which assert the matching semantics
+//! and emission the id-reconciler mirrors.
+//!
 //! # What this operates on
 //!
-//! [`reconcile_children`] mutates the live
-//! `Vec<Box<dyn ElementBase>>` that [`VariableChildStorage`] owns — the
-//! structure production actually runs. It does NOT operate on a by-id
-//! `ElementTree`; the box-vec is the live element tree. Old child
-//! elements are matched against new `&dyn View` configurations and
-//! either reused in place (preserving their state — origin requirement
-//! R12: keyed `Hero` / `Reorderable` / `GlobalKey` moves), updated, or
-//! unmounted.
-//!
-//! [`VariableChildStorage`]: crate::element::VariableChildStorage
+//! [`reconcile_children`] mutates a caller-owned `Vec<Box<dyn ElementBase>>`.
+//! Old child elements are matched against new `&dyn View` configurations
+//! and either reused in place (preserving their state — origin
+//! requirement R12: keyed `Hero` / `Reorderable` / `GlobalKey` moves),
+//! updated, or unmounted.
 //!
 //! # Lifecycle boundary — created children are left unmounted
 //!
-//! Mounting a child runs `Element::mount`, and a `RenderObjectElement`'s
-//! `on_mount` needs the parent's `PipelineOwner` already in scope to
-//! create its `RenderObject`. That owner lives one layer up, in
-//! `ElementCore` — *above* the bare box-vec this function operates on.
-//! So `reconcile_children` deliberately stops at the structural diff:
-//! it matches, updates reused elements, unmounts dropped ones, and
-//! *creates* new elements in [`Lifecycle::Initial`] — but does NOT
-//! mount or build them. The caller
-//! ([`VariableChildStorage::update_with_views`]) finishes the lifecycle
-//! by propagating the owner, mounting the still-`Initial` children, and
-//! rebuilding the subtree. This keeps the propagate-before-mount
-//! ordering `RenderBehavior::on_mount` depends on.
+//! `reconcile_children` deliberately stops at the structural diff: it
+//! matches, updates reused elements, unmounts dropped ones, and *creates*
+//! new elements in [`Lifecycle::Initial`] — but does NOT mount or build
+//! them. (The id-reconciler's production path mounts each inserted child
+//! via [`ElementTree::insert`](super::ElementTree), which propagates the
+//! `PipelineOwner` before mount so `RenderBehavior::on_mount` can create
+//! its `RenderObject`.)
 //!
 //! [`Lifecycle::Initial`]: crate::element::Lifecycle
-//! [`VariableChildStorage::update_with_views`]: crate::element::VariableChildStorage
 //!
 //! # Flutter parity
 //!
@@ -601,9 +606,9 @@ mod tests {
 
         fn mark_needs_build(&mut self) {}
 
-        fn perform_build(&mut self, _owner: &mut ElementOwner<'_>) {}
-
-        fn visit_children(&self, _visitor: &mut dyn FnMut(flui_foundation::ElementId)) {}
+        fn build_into_views(&mut self, _owner: &mut ElementOwner<'_>) -> Vec<Box<dyn View>> {
+            Vec::new()
+        }
     }
 
     fn mount_one(view: &dyn View, slot: usize, owner: &mut BuildOwner) -> Box<dyn ElementBase> {
@@ -809,8 +814,9 @@ mod tests {
         }
 
         fn mark_needs_build(&mut self) {}
-        fn perform_build(&mut self, _owner: &mut ElementOwner<'_>) {}
-        fn visit_children(&self, _visitor: &mut dyn FnMut(flui_foundation::ElementId)) {}
+        fn build_into_views(&mut self, _owner: &mut ElementOwner<'_>) -> Vec<Box<dyn View>> {
+            Vec::new()
+        }
     }
 
     /// View with an optional dynamic key.

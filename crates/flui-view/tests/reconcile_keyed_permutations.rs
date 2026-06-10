@@ -134,8 +134,12 @@ impl ElementBase for TaggedElement {
         }
     }
     fn mark_needs_build(&mut self) {}
-    fn perform_build(&mut self, _owner: &mut flui_view::ElementOwner<'_>) {}
-    fn visit_children(&self, _visitor: &mut dyn FnMut(ElementId)) {}
+    fn build_into_views(
+        &mut self,
+        _owner: &mut flui_view::ElementOwner<'_>,
+    ) -> Vec<Box<dyn flui_view::View>> {
+        Vec::new()
+    }
 }
 
 fn as_tagged(child: &dyn ElementBase) -> &TaggedElement {

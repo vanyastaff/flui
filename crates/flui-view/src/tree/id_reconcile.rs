@@ -1,19 +1,21 @@
 //! Id-based keyed child reconciliation over the slab-resident
-//! [`ElementTree`].
+//! [`ElementTree`] — the **production** child reconciler.
 //!
 //! # Relationship to the box-graph reconciler
 //!
-//! [`reconcile_children`](super::reconciliation::reconcile_children) is
-//! the reconciler production runs today: it permutes a parent's live
-//! `Vec<Box<dyn ElementBase>>`. This module is its slab-id-based twin —
-//! it permutes a parent's [`ElementNode::child_ids`](super::ElementNode)
-//! list, reusing / inserting / removing real slab nodes through the
-//! [`ElementTree`] accessors. It is the de-risking step before the box
-//! graph and the slab graph are unified onto a single id-addressed
-//! model: it exists, is exercised by its own tests, and is proven
-//! aliasing-clean under Miri, but it is **not wired into the production
-//! build / reconcile path**. Nothing outside this module's tests calls
-//! [`reconcile_children_by_id`].
+//! This is the reconciler the production build path runs after the E3
+//! atomic box→arena swap: [`BuildOwner::build_scope`](crate::BuildOwner)
+//! feeds each dirty element's freshly-built child views to
+//! [`reconcile_children_by_id`], which permutes the parent's
+//! [`ElementNode::child_ids`](super::ElementNode) list, reusing /
+//! inserting / removing real slab nodes through the [`ElementTree`]
+//! accessors. The single element graph is the slab.
+//!
+//! The original box-vec `reconcile_children` (permuting a caller-owned
+//! `Vec<Box<dyn ElementBase>>`) is now dead in production and retained
+//! only as a `cfg(test)` / `feature = "test-utils"`-gated keyed-match +
+//! `ReconcileEvent` emission reference; this module mirrors its matching
+//! semantics over the slab.
 //!
 //! # The borrow discipline this module proves out
 //!
@@ -52,14 +54,6 @@
 //! reconciler applies through `can_update_element`; here it is expressed
 //! over the type-erased [`ElementBase`] accessors plus the typed
 //! [`View`] surface.
-
-// This reconciler is deliberately not yet wired into the production
-// build path — it is the proving ground for the borrow discipline the
-// eventual id-graph swap depends on, and only its own `#[cfg(test)]`
-// tests call it. Outside a test build every item here is therefore dead;
-// suppress the dead-code lint for non-test builds only, so test builds
-// still get full unused-code coverage.
-#![cfg_attr(not(test), allow(dead_code))]
 
 use std::collections::HashMap;
 
@@ -241,14 +235,35 @@ pub(crate) fn reconcile_children_by_id(
          a phase dropped or duplicated a slot"
     );
 
-    // ── Stamp each surviving child's `slot` field to its final position.
+    // ── Stamp each surviving child's `slot` field to its final position
+    // and schedule it for build.
+    //
     // A reused child keeps the slot it was first inserted at unless we
     // refresh it here; after a reorder that would leave `node.slot()`
-    // disagreeing with the child's actual index in `child_ids`. Each
-    // `set_child_slot` takes a fresh, immediately-dropped `&mut tree`
-    // borrow, so the extract-then-apply discipline still holds.
+    // disagreeing with the child's actual index in `child_ids`.
+    //
+    // Scheduling (E3 — atomic box→arena swap): in the slab/drain model
+    // each child rebuilds as its OWN `build_scope` drain entry, not via a
+    // recursive `perform_build` call from this parent. So every child that
+    // still needs a build is pushed onto the dirty heap here — a freshly
+    // inserted child (dirty by construction) and a reused child whose
+    // `update` re-set its dirty flag both qualify; a reused child left
+    // clean by an idempotent update is skipped (`schedule_build_for`
+    // dedups, and `build_scope`'s `can_build` guard would no-op it
+    // anyway). The child's own depth (`parent_depth + 1`, stamped by
+    // `insert`) orders the heap so parents drain before children.
+    //
+    // Each `set_child_slot` / read takes a fresh, immediately-dropped
+    // `&mut tree` borrow, so the extract-then-apply discipline still
+    // holds.
     for (slot, &id) in result.iter().enumerate() {
         set_child_slot(tree, id, slot);
+        if let Some(node) = tree.get(id)
+            && node.element().is_dirty()
+        {
+            let depth = node.depth();
+            owner.schedule_build_for(id, depth);
+        }
     }
 
     // ── Step 3: re-borrow the parent exactly once to store the result.
@@ -372,11 +387,76 @@ fn update_child(
     tree.update(id, new, owner);
 }
 
-/// Remove the slab child `id` through a fresh `&mut tree` borrow that
-/// ends with this call. Stale / absent ids are a no-op inside
-/// [`ElementTree::remove`].
+/// Remove the slab child `id` AND its whole subtree.
+///
+/// E3 (atomic box→arena swap): the slab is the single element graph, so
+/// [`ElementTree::remove`] frees ONLY `id`'s own slot — it does not
+/// recurse children. A bare `tree.remove(id)` would therefore orphan
+/// every descendant: leaked in the slab with its `on_unmount` (GlobalKey
+/// deregistration, dependent cleanup, render-object detach) never run and
+/// its `parent` edge left dangling at a freed slot.
+///
+/// Two cases, branched on the top node's keyed-ness via `remove`'s return:
+/// - **Keyed top** → `remove` soft-removes it into the inactive queue and
+///   leaves the subtree intact in the slab.
+///   [`BuildOwner::finalize_tree`](crate::BuildOwner::finalize_tree) later
+///   re-collects that subtree and tears it down deepest-first, preserving
+///   the same-frame GlobalKey retake window. Nothing more to do here.
+/// - **Unkeyed top** → `remove` eager-unmounts + frees only the top,
+///   returning the node. Its descendants are now orphaned, so they are
+///   freed here deepest-first via
+///   [`ElementTree::remove_finalized`](crate::tree::ElementTree::remove_finalized),
+///   mirroring `finalize_tree`'s reverse-pre-order drain so no parent slot
+///   is freed before its children.
+///
+/// A keyed *descendant* of an unkeyed top is freed (not soft-removed) — it
+/// loses its retake window because its ancestor is already gone. That
+/// cross-parent reparent is the GlobalKey-reparent case deferred to E3.x;
+/// E3's contract is only that every descendant unmounts exactly once.
+///
+/// Stale / absent ids are a no-op inside `remove` / `remove_finalized`.
 fn remove_child(tree: &mut ElementTree, id: ElementId, owner: &mut crate::ElementOwner<'_>) {
-    tree.remove(id, owner);
+    // Snapshot the subtree pre-order (parent before children) BEFORE
+    // touching the top, while every `child_ids` list is still intact.
+    // Owned `Vec` → no slab borrow is held across the removals
+    // (extract-then-apply).
+    let mut subtree = Vec::new();
+    collect_subtree_preorder(tree, id, &mut subtree);
+
+    // Remove the top. `Some` ⇒ eager (unkeyed) free; `None` ⇒ soft-removed
+    // (keyed) and parked for `finalize_tree`.
+    let removed_eagerly = tree.remove(id, owner).is_some();
+
+    if removed_eagerly {
+        // Free the orphaned descendants deepest-first. `subtree[0]` is the
+        // top (already removed); reverse of pre-order visits every parent
+        // after all of its descendants.
+        for &descendant in subtree[1..].iter().rev() {
+            tree.remove_finalized(descendant, owner);
+        }
+    }
+}
+
+/// Collect `id` and its whole subtree in pre-order (parent before
+/// children) through fresh, immediately-dropped `&ElementTree` borrows.
+///
+/// The caller removes the collected ids in REVERSE (deepest-first) so no
+/// parent slot is freed before its children — mirrors
+/// [`BuildOwner::finalize_tree`](crate::BuildOwner::finalize_tree) +
+/// `collect_elements_to_unmount`.
+///
+/// Complexity: O(n) over the subtree size n (each node visited once); the
+/// recursion depth equals the subtree height.
+fn collect_subtree_preorder(tree: &ElementTree, id: ElementId, out: &mut Vec<ElementId>) {
+    out.push(id);
+    // Owned snapshot so no slab borrow is held across the recursive call.
+    let children: Vec<ElementId> = match tree.get(id) {
+        Some(node) => node.child_ids().to_vec(),
+        None => return,
+    };
+    for child in children {
+        collect_subtree_preorder(tree, child, out);
+    }
 }
 
 /// Refresh the `slot` metadata of the surviving child `id` to `slot`
@@ -453,6 +533,69 @@ mod tests {
     }
 
     impl View for KeyedView {
+        fn create_element(&self) -> Box<dyn ElementBase> {
+            use crate::element::StatelessBehavior;
+            Box::new(StatelessElement::new(self, StatelessBehavior))
+        }
+
+        fn key(&self) -> Option<&dyn ViewKey> {
+            Some(&self.key)
+        }
+    }
+
+    /// A hostile key that hashes EVERY instance to the same `u64` but
+    /// compares by inner `tag` — exercises the production collision
+    /// defense: two distinct `ColliderKey`s land in one hash bucket, and
+    /// only the semantic `key_eq` (consulted on a hash hit) tells them
+    /// apart. Mirrors the box reconciler's `ColliderKey` reference.
+    #[derive(Clone)]
+    struct ColliderKey {
+        tag: u64,
+    }
+
+    impl ViewKey for ColliderKey {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn key_eq(&self, other: &dyn ViewKey) -> bool {
+            other
+                .as_any()
+                .downcast_ref::<Self>()
+                .is_some_and(|o| self.tag == o.tag)
+        }
+        fn key_hash(&self) -> u64 {
+            // Deliberate collision — every ColliderKey hashes to 0xDEAD.
+            0xDEAD
+        }
+        fn clone_key(&self) -> Box<dyn ViewKey> {
+            Box::new(self.clone())
+        }
+        fn debug_fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "ColliderKey({})", self.tag)
+        }
+    }
+
+    /// A keyed stateless view carrying a [`ColliderKey`].
+    #[derive(Clone)]
+    struct ColliderView {
+        key: ColliderKey,
+    }
+
+    impl ColliderView {
+        fn new(tag: u64) -> Self {
+            Self {
+                key: ColliderKey { tag },
+            }
+        }
+    }
+
+    impl StatelessView for ColliderView {
+        fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+            self.clone().boxed()
+        }
+    }
+
+    impl View for ColliderView {
         fn create_element(&self) -> Box<dyn ElementBase> {
             use crate::element::StatelessBehavior;
             Box::new(StatelessElement::new(self, StatelessBehavior))
@@ -776,6 +919,137 @@ mod tests {
             assert!(tree.get(id).is_none(), "every old child must be removed");
         }
         assert_eq!(tree.len(), 1, "only the root remains");
+    }
+
+    /// E3 regression: dropping an (un)keyed child whose top takes the
+    /// eager removal path tears down its ENTIRE subtree, not just the top.
+    ///
+    /// A bare `tree.remove(top)` frees only the top slot and orphans every
+    /// descendant — leaked in the slab, `on_unmount` never run, `parent`
+    /// edge dangling at a freed slot. The teardown walk in `remove_child`
+    /// closes that. `tree.len() == 1` afterwards is the leak assertion:
+    /// the buggy single-node remove would leave the chain resident
+    /// (`len == 4`) with `a1` / `a1a` still resolving.
+    #[test]
+    fn eager_remove_tears_down_whole_subtree() {
+        let (mut tree, mut owner, root) = fixture();
+
+        // Build root → a → a1 → a1a one level at a time: the reconciler
+        // inserts a parent's DIRECT children only (it schedules, it does
+        // not recurse), so each generation is seeded explicitly.
+        reconcile_children_by_id(
+            &mut tree,
+            root,
+            &plain_views(&[1]),
+            &mut owner.element_owner_mut(),
+        );
+        let a = tree.get(root).unwrap().child_ids()[0];
+        reconcile_children_by_id(
+            &mut tree,
+            a,
+            &plain_views(&[2]),
+            &mut owner.element_owner_mut(),
+        );
+        let a1 = tree.get(a).unwrap().child_ids()[0];
+        reconcile_children_by_id(
+            &mut tree,
+            a1,
+            &plain_views(&[3]),
+            &mut owner.element_owner_mut(),
+        );
+        let a1a = tree.get(a1).unwrap().child_ids()[0];
+        assert_eq!(tree.len(), 4, "root + a + a1 + a1a");
+
+        // Drop `a` from the root's children → `remove_child(a)` must free
+        // a, a1 and a1a together.
+        reconcile_children_by_id(&mut tree, root, &[], &mut owner.element_owner_mut());
+
+        assert!(tree.get(a).is_none(), "removed subtree top is gone");
+        assert!(tree.get(a1).is_none(), "mid descendant is not orphaned");
+        assert!(tree.get(a1a).is_none(), "leaf descendant is not orphaned");
+        assert_eq!(tree.len(), 1, "only the root remains — no slab leak");
+    }
+
+    /// Production FR-024(c) collision defense, false-positive case: a new
+    /// keyed view whose key HASH collides with the old child but whose
+    /// `key_eq` disagrees must NOT reuse the old element. `can_update_by_id`
+    /// rejects the hash hit (top scan AND the Phase-4 bucket walk return
+    /// no match), so the new view mints a fresh slab id and the old child
+    /// is removed.
+    #[test]
+    fn keyed_hash_collision_falls_through_to_fresh_id() {
+        let (mut tree, mut owner, root) = fixture();
+
+        reconcile_children_by_id(
+            &mut tree,
+            root,
+            &[Box::new(ColliderView::new(1)) as Box<dyn View>],
+            &mut owner.element_owner_mut(),
+        );
+        let old_id = tree.get(root).unwrap().child_ids()[0];
+
+        // Same hash (0xDEAD), different tag → the semantic `key_eq` rejects.
+        reconcile_children_by_id(
+            &mut tree,
+            root,
+            &[Box::new(ColliderView::new(2)) as Box<dyn View>],
+            &mut owner.element_owner_mut(),
+        );
+        let new_id = tree.get(root).unwrap().child_ids()[0];
+
+        assert_ne!(
+            new_id, old_id,
+            "a hash collision must not fool the reconciler into reusing the old \
+             element — can_update_by_id's key_eq stage rejects it and a fresh id is minted",
+        );
+    }
+
+    /// Production FR-024(c) collision defense, symmetric case: two old
+    /// children whose distinct keys collide on hash, plus a new view that
+    /// `key_eq`s the SECOND. The Phase-4 bucket walk
+    /// ([`match_old_for_new`]) must walk both colliding candidates and
+    /// reuse the one `key_eq` accepts — not the first in the bucket, and
+    /// not a fresh element. A trailing keyless view keeps the match in the
+    /// middle so the bottom scan cannot shortcut the bucket walk.
+    #[test]
+    fn keyed_hash_collision_bucket_walk_reuses_correct_old() {
+        let (mut tree, mut owner, root) = fixture();
+
+        reconcile_children_by_id(
+            &mut tree,
+            root,
+            &[
+                Box::new(ColliderView::new(1)) as Box<dyn View>,
+                Box::new(ColliderView::new(2)) as Box<dyn View>,
+            ],
+            &mut owner.element_owner_mut(),
+        );
+        let ids = tree.get(root).unwrap().child_ids().to_vec();
+        let (id_c1, id_c2) = (ids[0], ids[1]);
+
+        // [c1, c2] → [c2', keyless]: c2' matches the SECOND old through the
+        // bucket walk; the trailing keyless view blocks a bottom-scan match
+        // so the claim is forced through Phase 4.
+        reconcile_children_by_id(
+            &mut tree,
+            root,
+            &[
+                Box::new(ColliderView::new(2)) as Box<dyn View>,
+                Box::new(TestView::new(9)) as Box<dyn View>,
+            ],
+            &mut owner.element_owner_mut(),
+        );
+        let after = tree.get(root).unwrap().child_ids().to_vec();
+
+        assert_eq!(
+            after[0], id_c2,
+            "the bucket walk must reuse the tag=2 old (matched by key_eq), not the \
+             hash-colliding tag=1 old and not a fresh element",
+        );
+        assert!(
+            !after.contains(&id_c1),
+            "the unmatched tag=1 collider must be removed, not silently reused",
+        );
     }
 
     /// A stale / absent parent id is a no-op, not a panic.

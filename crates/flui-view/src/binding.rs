@@ -681,9 +681,9 @@ impl WidgetsBinding {
         self.attach_root_widget_with_size(view, DEFAULT_ROOT_VIEW_SIZE.0, DEFAULT_ROOT_VIEW_SIZE.1)
     }
 
-    /// Attach a root widget sizing the root [`RenderView`] to an explicit
+    /// Attach a root widget sizing the root `RenderView` to an explicit
     /// logical `width` × `height` (e.g. the platform window's surface size)
-    /// instead of [`DEFAULT_ROOT_VIEW_SIZE`].
+    /// instead of the crate-internal default root view size.
     ///
     /// This is the entry point the platform runner uses so the root view is
     /// born at the real window size rather than the 800×600 fallback. Per-frame
@@ -825,7 +825,7 @@ impl WidgetsBinding {
 
     /// Iteratively collect every `(ElementId, depth)` pair reachable from
     /// `id`, in pre-order DFS order (parent before its children, children
-    /// in `visit_children` order).
+    /// in `ElementNode::child_ids` slot order).
     ///
     /// Plan §U12 / R15 — audit V-16. The earlier recursive shape did
     /// `result.extend(recursive_call(child))` once per child, so each
@@ -844,9 +844,9 @@ impl WidgetsBinding {
     /// **Ordering contract.** The previous recursive shape pushed the
     /// current node first, then for each child appended that child's
     /// entire pre-order subtree before moving to the next child — i.e.
-    /// classic pre-order DFS in `visit_children` order. To preserve that
+    /// classic pre-order DFS in `child_ids` slot order. To preserve that
     /// ordering on a LIFO work-stack we visit each node when popped and
-    /// then push its children **in reverse `visit_children` order**, so
+    /// then push its children **in reverse `child_ids` order**, so
     /// the leftmost child is on top of the stack and popped next. The
     /// per-element pop / visit / push-children sequence is identical to
     /// the recursive function call sequence.
@@ -872,14 +872,14 @@ impl WidgetsBinding {
                 continue;
             };
 
-            // `visit_children` walks forward; we collect into a scratch
-            // buffer so we can push the children back onto the LIFO stack
-            // in reverse, preserving the recursive shape's pre-order
-            // visit order.
+            // E3 (atomic box→arena swap): children come from the slab
+            // node's `child_ids` list — the single element graph. They
+            // are already in forward slot order; we collect into a scratch
+            // buffer so we can push them back onto the LIFO stack in
+            // reverse, preserving the recursive shape's pre-order visit
+            // order.
             child_buf.clear();
-            node.element().visit_children(&mut |child_id| {
-                child_buf.push(child_id);
-            });
+            child_buf.extend_from_slice(node.child_ids());
             for child_id in child_buf.iter().rev() {
                 stack.push((*child_id, depth + 1));
             }
@@ -1460,12 +1460,9 @@ mod tests {
 
         fn mark_needs_build(&mut self) {}
 
-        fn perform_build(&mut self, _owner: &mut crate::ElementOwner<'_>) {
-            // Leaf - no children to build
-        }
-
-        fn visit_children(&self, _visitor: &mut dyn FnMut(flui_foundation::ElementId)) {
-            // No children
+        fn build_into_views(&mut self, _owner: &mut crate::ElementOwner<'_>) -> Vec<Box<dyn View>> {
+            // Leaf - no child views.
+            Vec::new()
         }
     }
 
@@ -1691,6 +1688,64 @@ mod tests {
         });
     }
 
+    /// E3 regression: after `draw_frame`, the root's child subtree is
+    /// actually slab-resident.
+    ///
+    /// `attach_root_widget` schedules the root via `schedule_build_for`
+    /// WITHOUT a `mark_needs_build`. If `RootRenderElement::is_dirty()`
+    /// did not report its own dirty bit, `build_scope`'s dirty guard would
+    /// pop the root, skip it, and never reconcile its child — the app
+    /// would render nothing. The sibling
+    /// `test_attach_root_widget_with_child_subtree` does NOT catch this
+    /// because it only inspects the root node itself, never `child_ids`.
+    /// This asserts the child (and the grandchild reached via the
+    /// reconciler's build scheduling) materialized.
+    #[test]
+    fn regression_root_reconciles_child_subtree_after_draw_frame() {
+        let binding = WidgetsBinding::new();
+
+        // `ParentView` builds a `LeafView` child each build.
+        binding
+            .attach_root_widget(&ParentView)
+            .expect("attach succeeds");
+        binding.draw_frame();
+
+        let root_id = binding.root_element().expect("root element is set");
+        binding.with_element_tree(|tree| {
+            let root_children = tree.get(root_id).expect("root node").child_ids().to_vec();
+            assert_eq!(
+                root_children.len(),
+                1,
+                "the root must reconcile its single child into the slab on the first frame",
+            );
+
+            let parent_child = root_children[0];
+            let parent_node = tree
+                .get(parent_child)
+                .expect("the root's child must resolve in the slab");
+            assert_eq!(
+                parent_node.parent(),
+                Some(root_id),
+                "the reconciled child's parent edge points back at the root",
+            );
+
+            // The reconciler scheduled the freshly-inserted ParentView
+            // element, so the same `build_scope` drain reached it and
+            // reconciled ITS LeafView child too — the recursive build
+            // pipeline works end to end.
+            let grandchildren = parent_node.child_ids().to_vec();
+            assert_eq!(
+                grandchildren.len(),
+                1,
+                "the scheduled child must itself build + reconcile its LeafView grandchild",
+            );
+            assert!(
+                tree.get(grandchildren[0]).is_some(),
+                "the grandchild element resolves in the slab",
+            );
+        });
+    }
+
     #[test]
     fn test_draw_frame() {
         let binding = WidgetsBinding::new();
@@ -1742,22 +1797,21 @@ mod tests {
     //    `root_depth` (i.e. the root's recorded depth equals
     //    `root_depth`, each child recorded depth equals `root_depth + 1`,
     //    and so on).
-    // 2. The traversal is pre-order DFS in the order yielded by each
-    //    element's `visit_children` — parent first, then each child's
-    //    entire subtree before moving on to the next sibling.
+    // 2. The traversal is pre-order DFS in each element's `child_ids`
+    //    slot order — parent first, then each child's entire subtree
+    //    before moving on to the next sibling.
     // 3. Order is deterministic across runs.
     // 4. Deep linear chains do not exhaust the stack (the walk is
     //    iterative).
 
-    /// Test fixture element whose `visit_children` returns the IDs in
-    /// `children`. The element is configured manually after insertion via
-    /// `set_children` so the test can wire up arbitrary tree shapes
-    /// without relying on a full `View::build` round-trip.
+    /// Test fixture element with no view-children of its own. Tests wire
+    /// arbitrary tree shapes by writing the slab node's `child_ids`
+    /// directly via `set_children_for` after insertion, without relying on
+    /// a full `View::build` round-trip.
     #[derive(Default)]
     struct MultiNodeElement {
         depth: usize,
         lifecycle: crate::Lifecycle,
-        children: Vec<flui_foundation::ElementId>,
     }
 
     impl MultiNodeElement {
@@ -1765,7 +1819,6 @@ mod tests {
             Self {
                 depth: 0,
                 lifecycle: crate::Lifecycle::Initial,
-                children: Vec::new(),
             }
         }
     }
@@ -1809,12 +1862,11 @@ mod tests {
 
         fn mark_needs_build(&mut self) {}
 
-        fn perform_build(&mut self, _owner: &mut crate::ElementOwner<'_>) {}
-
-        fn visit_children(&self, visitor: &mut dyn FnMut(flui_foundation::ElementId)) {
-            for &child_id in &self.children {
-                visitor(child_id);
-            }
+        fn build_into_views(&mut self, _owner: &mut crate::ElementOwner<'_>) -> Vec<Box<dyn View>> {
+            // Fixture: children are wired directly onto the slab node's
+            // `child_ids` (see `set_children_for`), so this leaf-style
+            // build contributes no view children.
+            Vec::new()
         }
     }
 
@@ -1839,19 +1891,18 @@ mod tests {
         tree.insert(&view, parent, slot, &mut build_owner.element_owner_mut())
     }
 
-    /// Helper: configure the children list on the element backing `id`.
+    /// Helper: configure the children list on the slab node backing `id`.
+    ///
+    /// E3 (atomic box→arena swap): the element child graph is the slab
+    /// node's `child_ids` list, so this writes there directly — the
+    /// `collect_all_elements` walk reads the same field.
     fn set_children_for(
         tree: &mut crate::tree::ElementTree,
         id: flui_foundation::ElementId,
         children: Vec<flui_foundation::ElementId>,
     ) {
         let node = tree.get_mut(id).expect("node exists");
-        let element = node
-            .element_mut()
-            .as_any_mut()
-            .downcast_mut::<MultiNodeElement>()
-            .expect("element is MultiNodeElement");
-        element.children = children;
+        node.set_child_ids(children);
     }
 
     /// Happy path: a tree of `root → [a, b], a → [a1]`. The walk visits
@@ -1874,7 +1925,7 @@ mod tests {
         assert_eq!(
             walk,
             vec![(root_id, 0), (alpha, 1), (alpha_child, 2), (bravo, 1)],
-            "pre-order DFS: parent before children, children in visit_children order"
+            "pre-order DFS: parent before children, children in child_ids slot order"
         );
     }
 
@@ -1909,7 +1960,7 @@ mod tests {
     }
 
     /// Edge case: a wide shallow tree (root → 64 leaf children). The
-    /// walk must visit the root then every child in `visit_children`
+    /// walk must visit the root then every child in `child_ids` slot
     /// order.
     #[test]
     fn test_collect_all_elements_wide_tree() {

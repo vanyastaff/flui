@@ -191,7 +191,13 @@ pub use test_only_global_key_registry::{
 };
 // Tree management
 pub use owner::{BuildOwner, ElementOwner};
-pub use tree::{ElementNode, ElementTree, reconcile_children};
+pub use tree::{ElementNode, ElementTree};
+// `reconcile_children` is the dead box-vec reconciler (the slab
+// `reconcile_children_by_id` is the production path after the E3 box→arena
+// swap). It is surfaced only under test / `test-utils` as the keyed-match +
+// emission reference for its corpora — never on the production public API.
+#[cfg(any(test, feature = "test-utils"))]
+pub use tree::reconcile_children;
 pub use view::{
     BoxedElement, BoxedView, ElementBase, ElementExt, ErrorElement, ErrorView, ErrorViewBuilder,
     FlutterError, InheritedElement, InheritedView, IntoElement, IntoView, Memo, ParentDataConfig,
@@ -240,7 +246,7 @@ pub mod prelude {
         },
         key::{GlobalKey, GlobalKeyId, ObjectKey, ValueKey},
         owner::{BuildOwner, ElementOwner},
-        tree::{ElementNode, ElementTree, reconcile_children},
+        tree::{ElementNode, ElementTree},
         view::{
             BoxedView, InheritedView, IntoView, Memo, ParentDataConfig, ParentDataView, ProxyView,
             RenderView, StatefulView, StatelessView, View, ViewExt, ViewState,
