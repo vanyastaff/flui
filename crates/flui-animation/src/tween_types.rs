@@ -216,6 +216,60 @@ impl<T, A: Animatable<T>> Animatable<T> for ReverseTween<T, A> {
 /// Tween between two colors. Alias for `Tween<Color>`.
 pub type ColorTween = Tween<Color>;
 
+/// A color tween that interpolates through Oklab space (perceptually
+/// uniform) instead of componentwise sRGB.
+///
+/// Flutter has no equivalent: `Color.lerp` averages gamma-encoded channels,
+/// so cross-hue transitions pass through dark, gray midpoints (blue→yellow
+/// goes through mud). Interpolating in Oklab keeps perceived lightness and
+/// chroma steady across the whole transition.
+///
+/// Costs two color-space conversions per `transform` (`powf`/`cbrt` per
+/// channel); prefer [`ColorTween`] for near-identical endpoints or very hot
+/// paths. `t` is clamped to `[0, 1]` — extrapolating outside the segment in
+/// Oklab leaves the sRGB gamut almost immediately.
+///
+/// # Examples
+///
+/// ```
+/// use flui_animation::{Animatable, OklabColorTween};
+/// use flui_types::Color;
+///
+/// let tween = OklabColorTween::new(Color::rgb(0, 0, 255), Color::rgb(255, 255, 0));
+/// let perceptual_mid = tween.transform(0.5);
+/// let srgb_mid = Color::lerp(Color::rgb(0, 0, 255), Color::rgb(255, 255, 0), 0.5);
+/// // The perceptual path differs from the muddy componentwise-sRGB midpoint.
+/// assert_ne!(perceptual_mid, srgb_mid);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct OklabColorTween {
+    /// The color at the start of the animation.
+    pub begin: Color,
+    /// The color at the end of the animation.
+    pub end: Color,
+}
+
+impl OklabColorTween {
+    /// Creates a new perceptual color tween between `begin` and `end`.
+    #[must_use]
+    pub const fn new(begin: Color, end: Color) -> Self {
+        Self { begin, end }
+    }
+}
+
+impl Animatable<Color> for OklabColorTween {
+    fn transform(&self, t: f32) -> Color {
+        if t == 0.0 {
+            return self.begin;
+        }
+        if t == 1.0 {
+            return self.end;
+        }
+        Color::lerp_oklab(self.begin, self.end, t)
+    }
+}
+
 /// A tween that linearly interpolates between two sizes.
 ///
 /// Similar to Flutter's `SizeTween`.

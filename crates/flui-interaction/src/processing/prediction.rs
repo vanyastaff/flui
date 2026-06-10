@@ -41,8 +41,13 @@ use super::velocity::{Velocity, VelocityTracker};
 // Constants
 // ============================================================================
 
-/// Maximum prediction time (50ms)
-const MAX_PREDICTION_TIME: Duration = Duration::from_millis(50);
+/// Maximum prediction time.
+///
+/// 25 ms is Chromium's empirically validated ceiling
+/// (`ui/base/prediction/input_predictor.h` `kMaxPredictionTime`): beyond it,
+/// prediction visibly overshoots on direction changes and jitters on noisy
+/// trajectories. Was 50 ms here before being aligned with that evidence.
+const MAX_PREDICTION_TIME: Duration = Duration::from_millis(25);
 
 /// Default prediction time (16ms - one frame at 60fps)
 const DEFAULT_PREDICTION_TIME: Duration = Duration::from_millis(16);
@@ -80,7 +85,9 @@ impl PredictionConfig {
     /// Create a config optimized for games (lower latency, less smoothing).
     pub fn for_games() -> Self {
         Self {
-            max_prediction_time: Duration::from_millis(32),
+            // Capped at the Chromium-validated 25 ms ceiling (was 32 ms):
+            // longer horizons overshoot on direction changes.
+            max_prediction_time: MAX_PREDICTION_TIME,
             use_acceleration: true,
             smoothing: 0.1,
         }

@@ -93,6 +93,7 @@ pub mod ext;
 pub mod proxy;
 pub mod reverse;
 pub mod simulation;
+pub mod smoothing;
 pub mod spring;
 pub mod switch;
 pub mod tween;
@@ -117,6 +118,7 @@ pub use simulation::{
     BoundedFrictionSimulation, ClampedSimulation, FrictionSimulation, GravitySimulation,
     ScrollSpringSimulation, Simulation, SpringDescription, SpringSimulation, SpringType, Tolerance,
 };
+pub use smoothing::{SmoothDamp, Smoothed, exp_decay, exp_decay_half_life};
 pub use spring::{AnimatedValue, TwoWayConverter};
 // `#[derive(Animatable)]` generates a `TwoWayConverter` impl. It shares the name
 // `Animatable` with the trait above but lives in the macro namespace (the serde
@@ -137,8 +139,8 @@ pub use status::{AnimationBehavior, AnimationStatus};
 pub use tween_types::{
     AlignmentTween, Animatable, AnimatableExt as TweenAnimatableExt, BorderRadiusTween,
     ChainedTween, ColorTween, ConstantTween, CurveExt, CurveTween, EdgeInsetsTween, FloatTween,
-    IntTween, Matrix4Tween, OffsetTween, RectTween, ReverseTween, SizeTween, StepTween, Tween,
-    TweenSequence, TweenSequenceItem,
+    IntTween, Matrix4Tween, OffsetTween, OklabColorTween, RectTween, ReverseTween, SizeTween,
+    StepTween, Tween, TweenSequence, TweenSequenceItem,
 };
 
 // Re-export scheduler types for convenience.
