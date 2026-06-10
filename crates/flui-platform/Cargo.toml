@@ -147,9 +147,7 @@ x11 = []
 [lints.rust]
 # objc 0.2 macros expand `cfg(feature = "cargo-clippy")` probes (macOS backend);
 # declare the value so `unexpected_cfgs` stays quiet under the clippy driver.
-unexpected_cfgs = { level = "warn", check-cfg = [
-    'cfg(feature, values("cargo-clippy"))',
-] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
 
 [dev-dependencies]
 tracing-subscriber = { workspace = true }
