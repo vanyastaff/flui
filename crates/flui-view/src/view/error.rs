@@ -278,8 +278,9 @@ impl ElementBase for ErrorElement {
         // ErrorElement is a leaf - nothing to rebuild
     }
 
-    fn perform_build(&mut self, _owner: &mut crate::ElementOwner<'_>) {
-        // ErrorElement is a leaf - nothing to build
+    fn build_into_views(&mut self, _owner: &mut crate::ElementOwner<'_>) -> Vec<Box<dyn View>> {
+        // ErrorElement is a leaf — no child views.
+        Vec::new()
     }
 
     fn mount(
@@ -301,10 +302,6 @@ impl ElementBase for ErrorElement {
 
     fn unmount(&mut self, _owner: &mut crate::ElementOwner<'_>) {
         self.lifecycle = Lifecycle::Defunct;
-    }
-
-    fn visit_children(&self, _visitor: &mut dyn FnMut(ElementId)) {
-        // No children
     }
 }
 

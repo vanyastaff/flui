@@ -15,7 +15,7 @@ use std::{
 use flui_foundation::ElementId;
 use parking_lot::RwLock;
 
-use crate::tree::ElementTree;
+use crate::{tree::ElementTree, view::View};
 
 /// Entry in the dirty elements heap.
 ///
@@ -330,46 +330,102 @@ impl BuildOwner {
             self.scope_depth += 1;
         }
 
-        // Process dirty elements in depth order.
+        // Process dirty elements in depth order, extract-then-apply
+        // (E3 — atomic box→arena swap).
         //
-        // Each iteration pops one entry, then builds it with a fresh
-        // split-borrow handle. We cannot pre-build the handle once
-        // across the whole loop because `pop()` mutates
-        // `self.dirty_elements` (one of the fields the handle aliases);
-        // popping each iteration's entry first releases that aliasing
-        // before the handle is reborrowed.
+        // The hard problem: the old loop held `&mut tree.get_mut(id).element`
+        // while calling `perform_build`, so `perform_build` could not also
+        // take `&mut ElementTree` to reconcile slab-resident children —
+        // the exact double-borrow that cost the render-tree PRs. The fix
+        // is the same extract-then-apply discipline E2.5 proves out, lifted
+        // to the build seam:
+        //
+        //   1. Take a `&mut element` borrowed FROM the tree, run the
+        //      behavior's build half (`build_into_views`), capture the
+        //      OWNED child views, and DROP the element borrow.
+        //   2. With a FRESH `&mut tree` borrow, feed those views to the
+        //      id-reconciler, which inserts / updates / removes the
+        //      slab-resident child nodes.
+        //
+        // No `&mut` into the slab is ever live across a second slab access.
+        //
+        // Each iteration pops one entry first so `pop()`'s mutation of
+        // `self.dirty_elements` (a field the split-borrow handle aliases)
+        // is released before the handle is reborrowed.
         while let Some(Reverse(dirty)) = self.dirty_elements.pop() {
-            self.dirty_set.remove(&dirty.id());
+            let id = dirty.id();
+            self.dirty_set.remove(&id);
 
-            // Skip if element no longer exists
-            if let Some(node) = tree.get_mut(dirty.id()) {
-                // Only rebuild if still active
-                if node.element().lifecycle().can_build() {
-                    // Flutter parity (`framework.dart:5977-5982`): if this
-                    // dependent received an inherited-dependency change
-                    // since its last build, fire
-                    // `ViewState::did_change_dependencies` BEFORE the
-                    // actual `perform_build`. The flag is set by
-                    // `InheritedBehavior::on_view_updated` when
-                    // `update_should_notify` returns true; we consume it
-                    // here so the typed hook runs exactly once per
-                    // dependency-change-then-rebuild cycle. See plan §U14.
-                    let needs_did_change = self.pending_dependency_changes.remove(&dirty.id());
+            // Flutter parity (`framework.dart:5977-5982`): if this
+            // dependent received an inherited-dependency change since its
+            // last build, fire `ViewState::did_change_dependencies` BEFORE
+            // the build. Consumed here so the typed hook runs exactly once
+            // per dependency-change-then-rebuild cycle.
+            let needs_did_change = self.pending_dependency_changes.remove(&id);
 
-                    let mut element_owner = super::ElementOwner {
-                        global_keys: &mut self.global_keys,
-                        dirty_elements: &mut self.dirty_elements,
-                        dirty_set: &mut self.dirty_set,
-                        inactive_elements: &mut self.inactive_elements,
-                        pending_dependency_changes: &mut self.pending_dependency_changes,
-                        on_build_scheduled: self.on_build_scheduled.as_deref(),
-                    };
-                    if needs_did_change {
-                        node.element_mut().notify_dependency_change();
-                    }
-                    node.element_mut().perform_build(&mut element_owner);
+            // ── Phase 1: extract. Borrow the element from the slab, run
+            // its build half, capture owned child views, drop the borrow.
+            let new_views: Vec<Box<dyn View>> = {
+                let Some(node) = tree.get_mut(id) else {
+                    // Stale / removed id — nothing to build.
+                    continue;
+                };
+                // An inherited-dependency change marks the dependent dirty
+                // even when its own state is clean: the inherited value it
+                // reads changed, so its build MUST re-run.
+                // `InheritedBehavior::on_view_updated` cannot set the flag
+                // itself — it only has the dependent's id, not slab access —
+                // so the dirty mark is applied here, BEFORE the dirty guard,
+                // keyed off the `pending_dependency_changes` entry. Without
+                // this a clean dependent (dirty flag false after its first
+                // build) would be skipped by the guard below and never
+                // observe the change.
+                if needs_did_change {
+                    node.element_mut().mark_needs_build();
                 }
-            }
+                // Skip unless the element is both buildable (lifecycle) AND
+                // actually dirty. A clean element's build half would return
+                // an empty view list, and the phase-2 reconcile would then
+                // wrongly REMOVE all its slab-resident children — so a clean
+                // entry must never reach the reconcile. A scheduled child is
+                // always dirty (`tree.update` / fresh insert set the flag),
+                // so this guard does not starve legitimate rebuilds.
+                if !node.element().lifecycle().can_build() || !node.element().is_dirty() {
+                    continue;
+                }
+
+                let mut element_owner = super::ElementOwner {
+                    global_keys: &mut self.global_keys,
+                    dirty_elements: &mut self.dirty_elements,
+                    dirty_set: &mut self.dirty_set,
+                    inactive_elements: &mut self.inactive_elements,
+                    pending_dependency_changes: &mut self.pending_dependency_changes,
+                    on_build_scheduled: self.on_build_scheduled.as_deref(),
+                };
+                if needs_did_change {
+                    node.element_mut().notify_dependency_change();
+                }
+                node.element_mut().build_into_views(&mut element_owner)
+            }; // ← element borrow ENDS here.
+
+            // ── Phase 2: apply. Reconcile the returned views against the
+            // node's slab-resident children with a fresh `&mut tree`.
+            // Newly inserted children are scheduled for build inside the
+            // reconciler so this same drain loop reaches them.
+            let mut element_owner = super::ElementOwner {
+                global_keys: &mut self.global_keys,
+                dirty_elements: &mut self.dirty_elements,
+                dirty_set: &mut self.dirty_set,
+                inactive_elements: &mut self.inactive_elements,
+                pending_dependency_changes: &mut self.pending_dependency_changes,
+                on_build_scheduled: self.on_build_scheduled.as_deref(),
+            };
+            crate::tree::id_reconcile::reconcile_children_by_id(
+                tree,
+                id,
+                &new_views,
+                &mut element_owner,
+            );
         }
 
         #[cfg(debug_assertions)]
@@ -465,18 +521,22 @@ impl BuildOwner {
         tracing::debug!("Finalize tree complete");
     }
 
-    /// Recursively collect all element IDs to unmount (breadth-first).
+    /// Recursively collect all element IDs to unmount, parent before
+    /// children (pre-order).
+    ///
+    /// E3: children come from the slab-resident
+    /// [`ElementNode::child_ids`](crate::tree::ElementNode) list — the
+    /// single element graph — read through a fresh, immediately-dropped
+    /// `&ElementTree` borrow. `finalize_tree` reverses the collected order
+    /// so `remove_finalized` runs deepest-first.
     fn collect_elements_to_unmount(tree: &ElementTree, id: ElementId, result: &mut Vec<ElementId>) {
         // Add this element
         result.push(id);
 
-        // Collect children
+        // Collect children (owned snapshot so no slab borrow is held
+        // across the recursive call).
         if let Some(node) = tree.get(id) {
-            let mut children = Vec::new();
-            node.element().visit_children(&mut |child_id| {
-                children.push(child_id);
-            });
-
+            let children: Vec<ElementId> = node.child_ids().to_vec();
             for child_id in children {
                 Self::collect_elements_to_unmount(tree, child_id, result);
             }
@@ -647,12 +707,12 @@ mod tests {
 
         fn mark_needs_build(&mut self) {}
 
-        fn perform_build(&mut self, _owner: &mut super::super::ElementOwner<'_>) {
-            // Leaf - no children to build
-        }
-
-        fn visit_children(&self, _visitor: &mut dyn FnMut(ElementId)) {
-            // No children
+        fn build_into_views(
+            &mut self,
+            _owner: &mut super::super::ElementOwner<'_>,
+        ) -> Vec<Box<dyn View>> {
+            // Leaf - no child views.
+            Vec::new()
         }
     }
 

@@ -38,7 +38,7 @@ use flui_platform::traits::{PlatformInput, PlatformWindow};
 use flui_rendering::constraints::BoxConstraints;
 use flui_scheduler::Scheduler;
 use flui_types::{Size, geometry::px};
-use flui_view::{ElementBase, View, WidgetsBinding};
+use flui_view::{View, WidgetsBinding};
 use parking_lot::{Mutex, RwLock};
 
 use crate::{
@@ -98,10 +98,6 @@ pub struct AppBinding {
 
     /// Active platform window (set during run_desktop).
     active_window: Mutex<Option<Box<dyn PlatformWindow>>>,
-
-    /// Root element stored for rebuild support.
-    /// This is set by `set_root_element()` and rebuilt by `rebuild_root()`.
-    root_element: Mutex<Option<Box<dyn ElementBase>>>,
 }
 
 impl AppBinding {
@@ -118,8 +114,13 @@ impl AppBinding {
         let renderer =
             RenderingFlutterBinding::new_with_pipeline(Arc::clone(&shared_pipeline_owner));
 
-        // Create WidgetsBinding
+        // Create WidgetsBinding and hand it the SAME PipelineOwner the
+        // renderer shares. `attach_root_widget*` bootstraps the root render
+        // tree through `mount_root_with_pipeline_owner`; without the owner in
+        // scope the root element mounts with no PipelineOwner and never
+        // creates its RenderView — the window renders nothing.
         let widgets = WidgetsBinding::new();
+        widgets.set_pipeline_owner(Arc::clone(&shared_pipeline_owner));
 
         Self {
             renderer: RwLock::new(renderer),
@@ -132,7 +133,6 @@ impl AppBinding {
             shared_pipeline_owner,
             lifecycle: Mutex::new(DefaultLifecycle::new()),
             active_window: Mutex::new(None),
-            root_element: Mutex::new(None),
         }
     }
 
@@ -199,6 +199,35 @@ impl AppBinding {
         Ok(())
     }
 
+    /// Attach a root widget sizing the root view to an explicit logical
+    /// `width` × `height` — the platform window's surface size.
+    ///
+    /// Identical to [`attach_root_widget`](Self::attach_root_widget) except the
+    /// root [`RenderView`](flui_rendering::view::RenderView) is born at the real
+    /// window size instead of the 800×600 fallback. This is the runner's
+    /// bootstrap entry point.
+    ///
+    /// # Errors
+    ///
+    /// Forwards every [`AttachError`](flui_view::AttachError) from
+    /// [`WidgetsBinding::attach_root_widget_with_size`].
+    pub fn attach_root_widget_with_size<V>(
+        &self,
+        view: &V,
+        width: f32,
+        height: f32,
+    ) -> Result<(), flui_view::AttachError>
+    where
+        V: View + Clone + Send + Sync + 'static,
+    {
+        let widgets = self.widgets.write();
+        widgets.attach_root_widget_with_size(view, width, height)?;
+        self.initialized.store(true, Ordering::Relaxed);
+        self.request_redraw();
+        tracing::debug!(width, height, "Root widget attached (sized)");
+        Ok(())
+    }
+
     /// Get read access to WidgetsBinding.
     pub fn widgets(&self) -> parking_lot::RwLockReadGuard<'_, WidgetsBinding> {
         // PORT-CHECK-OK-SP6: AppBinding widgets accessor; pre-existing SP-6
@@ -209,53 +238,6 @@ impl AppBinding {
     pub fn widgets_mut(&self) -> parking_lot::RwLockWriteGuard<'_, WidgetsBinding> {
         // PORT-CHECK-OK-SP6: AppBinding widgets_mut accessor; pre-existing SP-6
         self.widgets.write()
-    }
-
-    // ========================================================================
-    // Root Element Management
-    // ========================================================================
-
-    /// Store a root element for rebuild support.
-    ///
-    /// This should be called by the app runner after creating the root element.
-    /// The stored element will be rebuilt when `rebuild_root()` is called.
-    pub fn set_root_element(&self, element: Box<dyn ElementBase>) {
-        let mut root = self.root_element.lock();
-        *root = Some(element);
-        tracing::debug!("Root element stored in AppBinding");
-    }
-
-    /// Take the root element out of storage.
-    ///
-    /// Returns the stored root element, leaving None in its place.
-    pub fn take_root_element(&self) -> Option<Box<dyn ElementBase>> {
-        self.root_element.lock().take()
-    }
-
-    /// Rebuild the stored root element.
-    ///
-    /// This triggers `perform_build()` on the root element which will
-    /// recursively rebuild the entire widget tree. Acquires an
-    /// [`ElementOwner`](flui_view::ElementOwner) split-borrow handle
-    /// from `WidgetsBinding`'s `BuildOwner` for the duration of the
-    /// build so descendants can register `GlobalKey`s / schedule
-    /// rebuilds (plan §U8).
-    pub fn rebuild_root(&self) {
-        tracing::trace!("rebuild_root: acquiring lock");
-        let mut root = self.root_element.lock();
-        tracing::trace!("rebuild_root: lock acquired");
-        if let Some(ref mut element) = *root {
-            element.mark_needs_build();
-            tracing::trace!("rebuild_root: calling perform_build");
-            let widgets = self.widgets();
-            widgets.with_build_owner_mut(|build_owner| {
-                element.perform_build(&mut build_owner.element_owner_mut());
-            });
-            tracing::debug!("Root element rebuilt");
-        } else {
-            tracing::warn!("rebuild_root called but no root element stored");
-        }
-        tracing::trace!("rebuild_root: complete");
     }
 
     // ========================================================================
@@ -352,6 +334,27 @@ impl AppBinding {
     /// Request a redraw.
     pub fn request_redraw(&self) {
         self.needs_redraw.store(true, Ordering::Relaxed);
+    }
+
+    /// Wake the platform event loop so the next frame is rendered.
+    ///
+    /// Sets the `needs_redraw` atomic flag **and** calls
+    /// `PlatformWindow::request_redraw()` on the active window so a
+    /// quiescent winit / platform event loop wakes up and fires the
+    /// `on_request_frame` callback.
+    ///
+    /// # Deadlock-safety
+    ///
+    /// This method acquires only `self.active_window` (a leaf `Mutex`)
+    /// and never touches `self.widgets` or `self.inner`. It is safe to
+    /// call from any context, including from inside a `build_scope`
+    /// callback that is executing while `AppBinding::widgets` is held —
+    /// the two locks are disjoint.
+    pub fn wake_frame(&self) {
+        self.needs_redraw.store(true, Ordering::Relaxed);
+        if let Some(()) = self.with_window(|w| w.request_redraw()) {
+            tracing::trace!("wake_frame: platform window request_redraw sent");
+        }
     }
 
     /// Check if a redraw is needed.
@@ -585,6 +588,186 @@ mod tests {
         // Verify the renderer sub-binding is accessible (created during
         // AppBinding::new)
         let _renderer = binding.renderer();
+    }
+
+    /// Minimal leaf view/element so a headless `attach_root_widget` has
+    /// something to mount without pulling in a widget crate.
+    #[derive(Clone)]
+    struct LeafView;
+
+    impl View for LeafView {
+        fn create_element(&self) -> Box<dyn flui_view::ElementBase> {
+            Box::new(LeafElement {
+                lifecycle: flui_view::element::Lifecycle::Initial,
+            })
+        }
+    }
+
+    struct LeafElement {
+        lifecycle: flui_view::element::Lifecycle,
+    }
+
+    impl flui_view::ElementBase for LeafElement {
+        fn view_type_id(&self) -> std::any::TypeId {
+            std::any::TypeId::of::<LeafView>()
+        }
+        fn depth(&self) -> usize {
+            0
+        }
+        fn lifecycle(&self) -> flui_view::element::Lifecycle {
+            self.lifecycle
+        }
+        fn mount(
+            &mut self,
+            _parent: Option<flui_foundation::ElementId>,
+            _slot: usize,
+            _owner: &mut flui_view::ElementOwner<'_>,
+        ) {
+            self.lifecycle = flui_view::element::Lifecycle::Active;
+        }
+        fn unmount(&mut self, _owner: &mut flui_view::ElementOwner<'_>) {
+            self.lifecycle = flui_view::element::Lifecycle::Defunct;
+        }
+        fn activate(&mut self) {
+            self.lifecycle = flui_view::element::Lifecycle::Active;
+        }
+        fn deactivate(&mut self) {
+            self.lifecycle = flui_view::element::Lifecycle::Inactive;
+        }
+        fn update(&mut self, _new: &dyn View, _owner: &mut flui_view::ElementOwner<'_>) {}
+        fn mark_needs_build(&mut self) {}
+        fn build_into_views(
+            &mut self,
+            _owner: &mut flui_view::ElementOwner<'_>,
+        ) -> Vec<Box<dyn View>> {
+            Vec::new()
+        }
+    }
+
+    /// E2/E3 regression: `AppBinding` hands its shared `PipelineOwner` to the
+    /// `WidgetsBinding` it owns, so `attach_root_widget` actually bootstraps
+    /// the root render tree. Without that wiring the root mounts with no
+    /// PipelineOwner, no `RenderView` is created, and the window renders
+    /// nothing — the shared owner's root id stays `None`.
+    #[test]
+    fn attach_root_widget_bootstraps_shared_render_tree() {
+        let app = AppBinding::new();
+        app.attach_root_widget(&LeafView).expect("attach succeeds");
+        assert!(
+            app.shared_pipeline_owner.read().root_id().is_some(),
+            "AppBinding must pass its PipelineOwner to the widgets binding so the \
+             root render tree bootstraps; without it the window renders nothing",
+        );
+    }
+
+    // ========================================================================
+    // E0a — wake_frame
+    // ========================================================================
+
+    /// `wake_frame` must set `needs_redraw` even when no window is stored
+    /// (the window lock is a leaf that is independently optional).
+    #[test]
+    fn wake_frame_sets_needs_redraw_without_window() {
+        // Use a fresh binding rather than the singleton so this test does not
+        // race with other tests' redraw state.
+        let binding = AppBinding::new();
+        binding.mark_rendered();
+        assert!(!binding.needs_redraw(), "precondition: no redraw pending");
+
+        // No window installed — wake_frame must still set the atomic.
+        binding.wake_frame();
+
+        assert!(
+            binding.needs_redraw(),
+            "wake_frame must set needs_redraw even without an active window"
+        );
+    }
+
+    /// `wake_frame` must call `PlatformWindow::request_redraw` when a window
+    /// is installed, and must NOT acquire `widgets` or `inner`.
+    ///
+    /// A minimal inline mock records how many times `request_redraw` was
+    /// called without touching any binding lock.
+    #[test]
+    fn wake_frame_calls_platform_request_redraw() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicU32, Ordering},
+        };
+
+        use flui_platform::traits::PlatformWindow;
+        use flui_types::geometry::{DevicePixels, Pixels, Size, device_px, px};
+
+        struct CountingWindow {
+            redraw_count: Arc<AtomicU32>,
+        }
+
+        impl PlatformWindow for CountingWindow {
+            fn physical_size(&self) -> Size<DevicePixels> {
+                Size::new(device_px(800), device_px(600))
+            }
+            fn logical_size(&self) -> Size<Pixels> {
+                Size::new(px(800.0), px(600.0))
+            }
+            fn scale_factor(&self) -> f64 {
+                1.0
+            }
+            fn request_redraw(&self) {
+                self.redraw_count.fetch_add(1, Ordering::Relaxed);
+            }
+            fn is_focused(&self) -> bool {
+                false
+            }
+            fn is_visible(&self) -> bool {
+                true
+            }
+            // Trait default impls cover the remaining callback-registration
+            // methods; only the required methods above need bodies.
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+        }
+
+        let redraw_count = Arc::new(AtomicU32::new(0));
+        let window = CountingWindow {
+            redraw_count: Arc::clone(&redraw_count),
+        };
+
+        let binding = AppBinding::new();
+        binding.mark_rendered();
+        binding.set_window(Box::new(window));
+
+        binding.wake_frame();
+
+        assert!(binding.needs_redraw(), "wake_frame must set needs_redraw");
+        assert_eq!(
+            redraw_count.load(Ordering::Relaxed),
+            1,
+            "wake_frame must call PlatformWindow::request_redraw exactly once"
+        );
+    }
+
+    /// `wake_frame` must be callable while `widgets` read-lock is held on
+    /// the same thread — proving the implementation does not acquire
+    /// `widgets` or `inner`.
+    ///
+    /// parking_lot's RwLock is non-reentrant: a read-under-existing-read on
+    /// the same thread upgrades correctly but a write attempt deadlocks.
+    /// Holding the read guard here would expose any hidden write attempt.
+    #[test]
+    fn wake_frame_does_not_acquire_widgets_lock() {
+        let binding = AppBinding::new();
+        binding.mark_rendered();
+
+        // Hold widgets read-lock across the call.
+        let _guard = binding.widgets.read();
+        // Must return without deadlocking.
+        binding.wake_frame();
+
+        assert!(
+            binding.needs_redraw(),
+            "wake_frame must set needs_redraw even while widgets is read-locked"
+        );
     }
 
     #[test]

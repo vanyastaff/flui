@@ -179,8 +179,6 @@ pub struct ParentDataElement<V: ParentDataView> {
     lifecycle: Lifecycle,
     /// Depth in tree.
     depth: usize,
-    /// Child element.
-    child: Option<Box<dyn ElementBase>>,
     /// Whether we need to rebuild.
     dirty: bool,
     /// Cached parent data.
@@ -197,20 +195,9 @@ where
             view: view.clone(),
             lifecycle: Lifecycle::Initial,
             depth: 0,
-            child: None,
             dirty: true,
             parent_data: None,
         }
-    }
-
-    /// Get a reference to the child element.
-    pub fn child(&self) -> Option<&dyn ElementBase> {
-        self.child.as_deref()
-    }
-
-    /// Get a mutable reference to the child element.
-    pub fn child_mut(&mut self) -> Option<&mut dyn ElementBase> {
-        self.child.as_deref_mut()
     }
 
     /// Get the current parent data.
@@ -241,7 +228,6 @@ impl<V: ParentDataView + Clone> std::fmt::Debug for ParentDataElement<V> {
             .field("lifecycle", &self.lifecycle)
             .field("depth", &self.depth)
             .field("dirty", &self.dirty)
-            .field("has_child", &self.child.is_some())
             .field("parent_data_type", &std::any::type_name::<V::ParentData>())
             .finish_non_exhaustive()
     }
@@ -270,14 +256,27 @@ impl<V: ParentDataView + Clone> ElementBase for ParentDataElement<V> {
         self.dirty = true;
     }
 
-    fn perform_build(&mut self, _owner: &mut crate::ElementOwner<'_>) {
+    fn is_dirty(&self) -> bool {
+        // `build_into_views` gates on `self.dirty`; the build_scope dirty
+        // guard reads `is_dirty()`. Without this override the trait default
+        // (`false`) would make the guard skip a genuinely-dirty ParentData
+        // element before its build ever ran, so its wrapped child would
+        // never reconcile.
+        self.dirty
+    }
+
+    fn build_into_views(&mut self, _owner: &mut crate::ElementOwner<'_>) -> Vec<Box<dyn View>> {
         if !self.dirty || !self.lifecycle.can_build() {
-            return;
+            return Vec::new();
         }
 
-        // Apply parent data when building
+        // Apply (cache) parent data when building.
         self.apply_parent_data_to_child();
         self.dirty = false;
+
+        // ParentDataView is single-child proxy-style: return the wrapped
+        // child view for the slab id-reconciler to reconcile.
+        vec![dyn_clone::clone_box(self.view.child())]
     }
 
     fn mount(
@@ -291,31 +290,18 @@ impl<V: ParentDataView + Clone> ElementBase for ParentDataElement<V> {
     }
 
     fn deactivate(&mut self) {
+        // E3: the child is a slab-resident node; the slab cascades
+        // activation / deactivation, so no box-child recursion here.
         self.lifecycle = Lifecycle::Inactive;
-        if let Some(child) = &mut self.child {
-            child.deactivate();
-        }
     }
 
     fn activate(&mut self) {
         self.lifecycle = Lifecycle::Active;
-        if let Some(child) = &mut self.child {
-            child.activate();
-        }
     }
 
-    fn unmount(&mut self, owner: &mut crate::ElementOwner<'_>) {
+    fn unmount(&mut self, _owner: &mut crate::ElementOwner<'_>) {
         self.lifecycle = Lifecycle::Defunct;
-        if let Some(child) = &mut self.child {
-            child.unmount(owner);
-        }
-        self.child = None;
         self.parent_data = None;
-    }
-
-    fn visit_children(&self, visitor: &mut dyn FnMut(ElementId)) {
-        // In a full implementation, we'd track child ElementIds
-        let _ = visitor;
     }
 
     fn depth(&self) -> usize {
@@ -357,12 +343,13 @@ mod tests {
         }
         fn update(&mut self, _: &dyn View, _: &mut crate::ElementOwner<'_>) {}
         fn mark_needs_build(&mut self) {}
-        fn perform_build(&mut self, _: &mut crate::ElementOwner<'_>) {}
+        fn build_into_views(&mut self, _: &mut crate::ElementOwner<'_>) -> Vec<Box<dyn View>> {
+            Vec::new()
+        }
         fn mount(&mut self, _: Option<ElementId>, _: usize, _: &mut crate::ElementOwner<'_>) {}
         fn deactivate(&mut self) {}
         fn activate(&mut self) {}
         fn unmount(&mut self, _: &mut crate::ElementOwner<'_>) {}
-        fn visit_children(&self, _: &mut dyn FnMut(ElementId)) {}
         fn depth(&self) -> usize {
             0
         }
@@ -423,7 +410,7 @@ mod tests {
         {
             let mut handle = owner.element_owner_mut();
             element.mount(None, 0, &mut handle);
-            element.perform_build(&mut handle);
+            let _ = element.build_into_views(&mut handle);
         }
 
         assert_eq!(element.lifecycle(), Lifecycle::Active);
@@ -447,7 +434,7 @@ mod tests {
         {
             let mut handle = owner.element_owner_mut();
             element.mount(None, 0, &mut handle);
-            element.perform_build(&mut handle);
+            let _ = element.build_into_views(&mut handle);
         }
 
         let new_view = TestFlexible {
@@ -461,6 +448,54 @@ mod tests {
         let data = element.parent_data().unwrap();
         assert!((data.flex - 3.0).abs() < f64::EPSILON);
         assert!(data.fit);
+    }
+
+    /// E3 regression: a ParentData element scheduled in the tree actually
+    /// reconciles its wrapped child through `build_scope`.
+    ///
+    /// `build_into_views` gates on `self.dirty`, but `build_scope`'s dirty
+    /// guard reads `is_dirty()`. Before the `is_dirty()` override existed,
+    /// the trait default (`false`) made the guard skip a genuinely-dirty
+    /// ParentData element before its build ran, so its child never
+    /// reconciled. `test_parent_data_element_mount_and_build` does not
+    /// catch this — it calls `build_into_views` directly, bypassing the
+    /// guard.
+    #[test]
+    fn regression_parent_data_reconciles_child_through_build_scope() {
+        let view = TestFlexible {
+            flex: 2.0,
+            fit: true,
+            child: DummyChild,
+        };
+
+        let mut tree = crate::ElementTree::new();
+        let mut owner = crate::BuildOwner::new();
+        let root = tree.mount_root(&view, &mut owner.element_owner_mut());
+
+        // Mount leaves the element dirty; the guard must observe that.
+        assert!(
+            tree.get(root).unwrap().element().is_dirty(),
+            "a freshly-mounted ParentData element reports is_dirty() == true",
+        );
+
+        owner.schedule_build_for(root, 0);
+        owner.build_scope(&mut tree);
+
+        let child_ids = tree.get(root).unwrap().child_ids().to_vec();
+        assert_eq!(
+            child_ids.len(),
+            1,
+            "build_scope must let the dirty ParentData element reconcile its wrapped child",
+        );
+        assert!(
+            tree.get(child_ids[0]).is_some(),
+            "the reconciled child resolves in the slab",
+        );
+        // The build cleared the flag, so a no-op rebuild won't re-fire.
+        assert!(
+            !tree.get(root).unwrap().element().is_dirty(),
+            "is_dirty() is false after the build hands the child off",
+        );
     }
 
     #[test]

@@ -102,9 +102,9 @@ impl ElementBase for LeafElement {
 
     fn mark_needs_build(&mut self) {}
 
-    fn perform_build(&mut self, _owner: &mut ElementOwner<'_>) {}
-
-    fn visit_children(&self, _visitor: &mut dyn FnMut(ElementId)) {}
+    fn build_into_views(&mut self, _owner: &mut ElementOwner<'_>) -> Vec<Box<dyn View>> {
+        Vec::new()
+    }
 }
 
 #[derive(Clone)]
@@ -191,8 +191,8 @@ fn test_stateless_element_mark_needs_build() {
     let mut owner = BuildOwner::new();
     element.mount(None, 0, &mut owner.element_owner_mut());
 
-    // perform_build clears dirty flag
-    element.perform_build(&mut owner.element_owner_mut());
+    // build_into_views runs the build half (clears the dirty flag).
+    let _ = element.build_into_views(&mut owner.element_owner_mut());
 
     // mark_needs_build sets it again
     element.mark_needs_build();

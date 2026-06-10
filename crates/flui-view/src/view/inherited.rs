@@ -156,12 +156,13 @@ mod tests {
         }
         fn update(&mut self, _: &dyn View, _: &mut crate::ElementOwner<'_>) {}
         fn mark_needs_build(&mut self) {}
-        fn perform_build(&mut self, _: &mut crate::ElementOwner<'_>) {}
+        fn build_into_views(&mut self, _: &mut crate::ElementOwner<'_>) -> Vec<Box<dyn View>> {
+            Vec::new()
+        }
         fn mount(&mut self, _: Option<ElementId>, _: usize, _: &mut crate::ElementOwner<'_>) {}
         fn deactivate(&mut self) {}
         fn activate(&mut self) {}
         fn unmount(&mut self, _: &mut crate::ElementOwner<'_>) {}
-        fn visit_children(&self, _: &mut dyn FnMut(ElementId)) {}
         fn depth(&self) -> usize {
             0
         }

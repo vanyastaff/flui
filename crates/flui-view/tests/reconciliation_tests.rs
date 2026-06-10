@@ -12,6 +12,13 @@
 //! a *recreated* element gets a fresh `create_state()` call and a new
 //! generation. Comparing generations before/after a rebuild proves
 //! whether an element was moved or rebuilt-by-index.
+//!
+//! Gated on `feature = "test-utils"`: after the E3 box→arena swap the
+//! box-vec `reconcile_children` this corpus exercises is no longer on the
+//! production public API (it is the test-only keyed-match reference), so it
+//! is only reachable under the same `test-utils` gate as the
+//! `ReconcileEventCollector` and the §U18/§U19 corpora.
+#![cfg(feature = "test-utils")]
 
 use std::{
     any::TypeId,
@@ -180,12 +187,10 @@ impl ElementBase for LeafElement {
 
     fn mark_needs_build(&mut self) {}
 
-    fn perform_build(&mut self, _: &mut ElementOwner<'_>) {
-        // Leaf — no children to build. This is what terminates the
-        // recursive build chain.
+    fn build_into_views(&mut self, _: &mut ElementOwner<'_>) -> Vec<Box<dyn View>> {
+        // Leaf — no child views.
+        Vec::new()
     }
-
-    fn visit_children(&self, _visitor: &mut dyn FnMut(flui_foundation::ElementId)) {}
 }
 
 // ----------------------------------------------------------------------------
@@ -202,7 +207,7 @@ fn mount_children(views: &[KeyedView], owner: &mut BuildOwner) -> Vec<Box<dyn El
         .map(|(slot, v)| {
             let mut element = v.create_element();
             element.mount(None, slot, &mut owner.element_owner_mut());
-            element.perform_build(&mut owner.element_owner_mut());
+            let _ = element.build_into_views(&mut owner.element_owner_mut());
             element
         })
         .collect()
@@ -562,7 +567,7 @@ fn type_change_at_position_replaces_element() {
         let view = KeyedView::unkeyed(1);
         let mut el = view.create_element();
         el.mount(None, 0, &mut owner.element_owner_mut());
-        el.perform_build(&mut owner.element_owner_mut());
+        let _ = el.build_into_views(&mut owner.element_owner_mut());
         vec![el]
     };
     assert!(

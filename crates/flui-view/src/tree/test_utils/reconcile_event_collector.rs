@@ -65,7 +65,7 @@ use super::super::reconcile_event::{RECONCILE_TARGET, ReconcileEventKind};
 pub struct CollectedEvent {
     /// Parsed disposition.
     pub kind: ReconcileEventKind,
-    /// Owning parent's `ElementId.get()` (1-based `usize`).
+    /// Owning parent's packed `u64` (`ElementId::as_u64()`).
     pub parent: u64,
     /// `Some(hash)` when the child carries a key.
     pub child_key: Option<u64>,
@@ -319,7 +319,7 @@ mod tests {
         assert_eq!(events.len(), 1);
         let e = &events[0];
         assert_eq!(e.kind, ReconcileEventKind::Mount);
-        assert_eq!(e.parent, 7);
+        assert_eq!(e.parent, ElementId::new(7).as_u64());
         assert_eq!(e.slot, 3);
         assert_eq!(e.child_key, Some(0xDEAD));
         assert_eq!(e.from_parent, None);
@@ -353,7 +353,8 @@ mod tests {
             "all five variants must round-trip through the wire",
         );
         // Reparent is the only variant carrying from_parent.
-        assert_eq!(events[4].from_parent, Some(2));
+        // donor = ElementId::new(2); as_u64() encodes the packed generational id.
+        assert_eq!(events[4].from_parent, Some(ElementId::new(2).as_u64()));
         for non_reparent in &events[..4] {
             assert!(non_reparent.from_parent.is_none());
         }

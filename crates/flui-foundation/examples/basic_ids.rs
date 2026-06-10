@@ -22,7 +22,9 @@ fn main() {
 
     println!("   Created elements: {elem1}, {elem2}, {elem3}");
     println!("   elem1 < elem2: {}", elem1 < elem2);
-    println!("   elem1 + 10 = {}", elem1 + 10);
+    // ElementId is a generational arena key — arithmetic on the packed
+    // value is not meaningful. Use .index() to get the 0-based slab slot.
+    println!("   elem1 index (0-based): {}", elem1.index());
 
     // IDs can be used as HashMap keys
     let mut element_names: HashMap<ElementId, &str> = HashMap::new();

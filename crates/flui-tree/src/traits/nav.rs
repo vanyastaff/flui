@@ -3,7 +3,7 @@
 //! This module provides the [`TreeNav`] trait for tree navigation
 //! operations using advanced Rust type system features.
 
-use flui_foundation::Identifier;
+use flui_foundation::TreeId;
 
 use smallvec::SmallVec;
 
@@ -36,7 +36,7 @@ use crate::{
 ///
 /// Navigation operations should be O(1) for parent/children access.
 /// Iterator operations use associated constants for optimal memory usage.
-pub trait TreeNav<I: Identifier>: super::TreeRead<I> {
+pub trait TreeNav<I: TreeId>: super::TreeRead<I> {
     /// Maximum expected tree depth for stack allocation optimization.
     ///
     /// Iterators can use this to size internal buffers appropriately.
@@ -308,7 +308,7 @@ pub trait TreeNav<I: Identifier>: super::TreeRead<I> {
 ///
 /// This trait provides higher-level operations using Higher-Rank Trait Bounds
 /// for maximum flexibility with predicates and visitors.
-pub trait TreeNavExt<I: Identifier>: TreeNav<I> {
+pub trait TreeNavExt<I: TreeId>: TreeNav<I> {
     /// Find first child matching a predicate using HRTB.
     ///
     /// # Arguments
@@ -417,13 +417,13 @@ pub trait TreeNavExt<I: Identifier>: TreeNav<I> {
 }
 
 // Blanket implementation for all TreeNav types
-impl<I: Identifier, T: TreeNav<I>> TreeNavExt<I> for T {}
+impl<I: TreeId, T: TreeNav<I>> TreeNavExt<I> for T {}
 
 // ============================================================================
 // BLANKET IMPLEMENTATIONS
 // ============================================================================
 
-impl<I: Identifier, T: TreeNav<I> + ?Sized> TreeNav<I> for &T {
+impl<I: TreeId, T: TreeNav<I> + ?Sized> TreeNav<I> for &T {
     const MAX_DEPTH: usize = T::MAX_DEPTH;
     const AVG_CHILDREN: usize = T::AVG_CHILDREN;
 
@@ -458,7 +458,7 @@ impl<I: Identifier, T: TreeNav<I> + ?Sized> TreeNav<I> for &T {
     }
 }
 
-impl<I: Identifier, T: TreeNav<I> + ?Sized> TreeNav<I> for &mut T {
+impl<I: TreeId, T: TreeNav<I> + ?Sized> TreeNav<I> for &mut T {
     const MAX_DEPTH: usize = T::MAX_DEPTH;
     const AVG_CHILDREN: usize = T::AVG_CHILDREN;
 
@@ -493,7 +493,7 @@ impl<I: Identifier, T: TreeNav<I> + ?Sized> TreeNav<I> for &mut T {
     }
 }
 
-impl<I: Identifier, T: TreeNav<I> + ?Sized> TreeNav<I> for Box<T> {
+impl<I: TreeId, T: TreeNav<I> + ?Sized> TreeNav<I> for Box<T> {
     const MAX_DEPTH: usize = T::MAX_DEPTH;
     const AVG_CHILDREN: usize = T::AVG_CHILDREN;
 

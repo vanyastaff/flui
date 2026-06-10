@@ -436,8 +436,9 @@ fn test_element_id_is_nonzero() {
 
     let id = tree.mount_root(&view, &mut owner.element_owner_mut());
 
-    // ElementId should be 1-based (NonZeroUsize)
-    assert!(id.get() >= 1);
+    // ElementId is a generational key; index() is the 0-based slab slot.
+    // A freshly minted id always has a valid (non-wrapped) slot index.
+    assert_eq!(id.index(), 0);
 }
 
 #[test]

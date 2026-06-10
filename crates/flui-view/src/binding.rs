@@ -422,6 +422,25 @@ pub struct WidgetsBinding {
 
     /// Whether binding is ready to produce frames.
     ready_to_produce_frames: AtomicBool,
+
+    /// Whether we are currently building dirty elements (Flutter parity flag).
+    ///
+    /// Hoisted out of `WidgetsBindingInner` so that `handle_build_scheduled`
+    /// can check it WITHOUT taking the `inner` RwLock. This eliminates the
+    /// deadlock that would occur when `schedule_build_for` is called from
+    /// inside `build_scope` (which holds `inner.write()`) and the
+    /// `on_build_scheduled` callback calls `handle_build_scheduled`:
+    ///
+    /// * Before (broken): callback → `handle_build_scheduled` → `inner.read()`
+    ///   → parking_lot non-reentrant read-under-write → deadlock.
+    /// * After (E0a): callback → `handle_build_scheduled` → atomic load →
+    ///   no lock acquired.
+    ///
+    /// The flag is set/cleared in `draw_frame` at the same program points
+    /// the previous `inner.debug_building_dirty_elements` field was, so
+    /// Flutter-parity semantics are preserved.
+    #[cfg(debug_assertions)]
+    debug_building_dirty_elements: AtomicBool,
 }
 
 /// Inner mutable state of WidgetsBinding
@@ -459,13 +478,6 @@ struct WidgetsBindingInner {
 
     /// Whether we need to report the first frame.
     need_to_report_first_frame: bool,
-
-    /// Whether we are currently building dirty elements.
-    ///
-    /// This is used to verify that frames are not scheduled redundantly.
-    /// In debug mode, scheduling a frame while building will panic.
-    #[cfg(debug_assertions)]
-    debug_building_dirty_elements: bool,
 }
 
 // Implement BindingBase trait
@@ -519,14 +531,14 @@ impl WidgetsBinding {
                 back_gesture_observers: Vec::new(),
                 build_scheduled: false,
                 need_to_report_first_frame: true,
-                #[cfg(debug_assertions)]
-                debug_building_dirty_elements: false,
             }),
             on_need_frame: RwLock::new(None),
             first_frame_rasterized: AtomicBool::new(false),
             first_frame_deferred_count: AtomicU32::new(0),
             first_frame_sent: AtomicBool::new(false),
             ready_to_produce_frames: AtomicBool::new(false),
+            #[cfg(debug_assertions)]
+            debug_building_dirty_elements: AtomicBool::new(false),
         };
         binding.init_instances();
         Self::install_global_key_registry();
@@ -666,6 +678,34 @@ impl WidgetsBinding {
     where
         V: View + Clone + Send + Sync + 'static,
     {
+        self.attach_root_widget_with_size(view, DEFAULT_ROOT_VIEW_SIZE.0, DEFAULT_ROOT_VIEW_SIZE.1)
+    }
+
+    /// Attach a root widget sizing the root `RenderView` to an explicit
+    /// logical `width` × `height` (e.g. the platform window's surface size)
+    /// instead of the crate-internal default root view size.
+    ///
+    /// This is the entry point the platform runner uses so the root view is
+    /// born at the real window size rather than the 800×600 fallback. Per-frame
+    /// layout constraints are still supplied by `draw_frame`; this only sets the
+    /// root view object's intrinsic size at bootstrap. See [`attach_root_widget`]
+    /// for the full bootstrap contract.
+    ///
+    /// [`attach_root_widget`]: Self::attach_root_widget
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AttachError::AlreadyAttached`] if a root widget is already
+    /// attached.
+    pub fn attach_root_widget_with_size<V>(
+        &self,
+        view: &V,
+        width: f32,
+        height: f32,
+    ) -> Result<(), AttachError>
+    where
+        V: View + Clone + Send + Sync + 'static,
+    {
         let mut inner = self.inner.write();
 
         if inner.root_element.is_some() {
@@ -692,11 +732,7 @@ impl WidgetsBinding {
         // restriction in practice — every concrete `View` in this
         // codebase already satisfies it (see `Element<V, A, B>`'s
         // own bound).
-        let root_render_view = RootRenderView::new(
-            view.clone(),
-            DEFAULT_ROOT_VIEW_SIZE.0,
-            DEFAULT_ROOT_VIEW_SIZE.1,
-        );
+        let root_render_view = RootRenderView::new(view.clone(), width, height);
 
         // Mount the `RootRenderView` as the element-tree root with the
         // PipelineOwner. This ensures `RootRenderElement` (and the
@@ -789,7 +825,7 @@ impl WidgetsBinding {
 
     /// Iteratively collect every `(ElementId, depth)` pair reachable from
     /// `id`, in pre-order DFS order (parent before its children, children
-    /// in `visit_children` order).
+    /// in `ElementNode::child_ids` slot order).
     ///
     /// Plan §U12 / R15 — audit V-16. The earlier recursive shape did
     /// `result.extend(recursive_call(child))` once per child, so each
@@ -808,9 +844,9 @@ impl WidgetsBinding {
     /// **Ordering contract.** The previous recursive shape pushed the
     /// current node first, then for each child appended that child's
     /// entire pre-order subtree before moving to the next child — i.e.
-    /// classic pre-order DFS in `visit_children` order. To preserve that
+    /// classic pre-order DFS in `child_ids` slot order. To preserve that
     /// ordering on a LIFO work-stack we visit each node when popped and
-    /// then push its children **in reverse `visit_children` order**, so
+    /// then push its children **in reverse `child_ids` order**, so
     /// the leftmost child is on top of the stack and popped next. The
     /// per-element pop / visit / push-children sequence is identical to
     /// the recursive function call sequence.
@@ -836,14 +872,14 @@ impl WidgetsBinding {
                 continue;
             };
 
-            // `visit_children` walks forward; we collect into a scratch
-            // buffer so we can push the children back onto the LIFO stack
-            // in reverse, preserving the recursive shape's pre-order
-            // visit order.
+            // E3 (atomic box→arena swap): children come from the slab
+            // node's `child_ids` list — the single element graph. They
+            // are already in forward slot order; we collect into a scratch
+            // buffer so we can push them back onto the LIFO stack in
+            // reverse, preserving the recursive shape's pre-order visit
+            // order.
             child_buf.clear();
-            node.element().visit_children(&mut |child_id| {
-                child_buf.push(child_id);
-            });
+            child_buf.extend_from_slice(node.child_ids());
             for child_id in child_buf.iter().rev() {
                 stack.push((*child_id, depth + 1));
             }
@@ -859,24 +895,37 @@ impl WidgetsBinding {
     /// In Flutter, this checks that we're not currently building and calls
     /// `ensureVisualUpdate()` which schedules a frame via `SchedulerBinding`.
     ///
-    /// # Panics
+    /// # Deadlock-safety
     ///
-    /// In debug mode, panics if called while building dirty elements.
-    fn handle_build_scheduled(&self) {
+    /// This method is intentionally **lock-free w.r.t. `self.inner`**.
+    ///
+    /// It is called from inside `build_scope` (via the `on_build_scheduled`
+    /// callback on `BuildOwner`) while `draw_frame` holds `inner.write()`.
+    /// Taking `inner.read()` or `inner.write()` here would deadlock on
+    /// parking_lot's non-reentrant `RwLock`. Instead the building flag is
+    /// an `AtomicBool` on `WidgetsBinding` itself (outside `inner`), and
+    /// `on_need_frame` is its own separate `RwLock` that is never held
+    /// across any `inner` critical section.
+    ///
+    /// # Panics (debug only — Flutter parity)
+    ///
+    /// Panics if called while building dirty elements. In Flutter this check
+    /// catches `setState()` called from a layout or paint callback.
+    pub fn handle_build_scheduled(&self) {
         #[cfg(debug_assertions)]
         {
-            let inner = self.inner.read();
             assert!(
-                !inner.debug_building_dirty_elements,
-                "Build scheduled during frame.\n\
+                !self.debug_building_dirty_elements.load(Ordering::Relaxed),
+                "setState() or markNeedsBuild() called during build.\n\
                  While the widget tree was being built, laid out, and painted, \
                  a new frame was scheduled to rebuild the widget tree.\n\
-                 This might be because setState() was called from a layout or \
-                 paint callback."
+                 Do not call setState() from a build, layout, or paint callback."
             );
         }
 
-        // Request a frame from the scheduler (ensureVisualUpdate)
+        // Request a frame from the scheduler (ensureVisualUpdate).
+        // `on_need_frame` is a leaf RwLock — it is never held across any
+        // acquisition of `self.inner`, so taking it here is deadlock-free.
         if let Some(ref callback) = *self.on_need_frame.read() {
             callback();
         }
@@ -924,10 +973,15 @@ impl WidgetsBinding {
         #[cfg(debug_assertions)]
         {
             assert!(
-                !inner.debug_building_dirty_elements,
-                "draw_frame called while already building dirty elements"
+                !self.debug_building_dirty_elements.load(Ordering::Relaxed),
+                "draw_frame called while already building dirty elements; \
+                 ensure draw_frame is not called recursively or from a build callback"
             );
-            inner.debug_building_dirty_elements = true;
+            // Set before build_scope so that any on_build_scheduled callback
+            // fired from within build_scope sees building=true and panics with
+            // the Flutter-parity message rather than enqueuing a second frame.
+            self.debug_building_dirty_elements
+                .store(true, Ordering::Relaxed);
         }
 
         inner.build_scheduled = false;
@@ -939,8 +993,8 @@ impl WidgetsBinding {
                 "Building dirty elements"
             );
 
-            // Process all dirty elements
-            // We need to split the borrow to satisfy the borrow checker
+            // Process all dirty elements.
+            // We need to split the borrow to satisfy the borrow checker.
             let WidgetsBindingInner {
                 ref mut build_owner,
                 ref mut element_tree,
@@ -966,7 +1020,8 @@ impl WidgetsBinding {
 
         #[cfg(debug_assertions)]
         {
-            inner.debug_building_dirty_elements = false;
+            self.debug_building_dirty_elements
+                .store(false, Ordering::Relaxed);
         }
 
         // Report first frame if needed
@@ -978,10 +1033,10 @@ impl WidgetsBinding {
 
     /// Check if we are currently building dirty elements.
     ///
-    /// This is used to verify that frames are not scheduled redundantly.
+    /// Reads the atomic flag directly — no lock acquired.
     #[cfg(debug_assertions)]
     pub fn is_building(&self) -> bool {
-        self.inner.read().debug_building_dirty_elements
+        self.debug_building_dirty_elements.load(Ordering::Relaxed)
     }
 
     // ========================================================================
@@ -1405,12 +1460,9 @@ mod tests {
 
         fn mark_needs_build(&mut self) {}
 
-        fn perform_build(&mut self, _owner: &mut crate::ElementOwner<'_>) {
-            // Leaf - no children to build
-        }
-
-        fn visit_children(&self, _visitor: &mut dyn FnMut(flui_foundation::ElementId)) {
-            // No children
+        fn build_into_views(&mut self, _owner: &mut crate::ElementOwner<'_>) -> Vec<Box<dyn View>> {
+            // Leaf - no child views.
+            Vec::new()
         }
     }
 
@@ -1561,6 +1613,38 @@ mod tests {
         );
     }
 
+    /// V-7 / E2: the runner's sized bootstrap path
+    /// (`attach_root_widget_with_size`) mounts the root render tree at an
+    /// explicit window size, identically to the default-size attach — proving
+    /// the size param threads through without disturbing the bootstrap.
+    #[test]
+    fn test_attach_root_widget_with_size_bootstraps_render_tree() {
+        let binding = WidgetsBinding::new();
+        let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
+        binding.set_pipeline_owner(Arc::clone(&pipeline_owner));
+
+        binding
+            .attach_root_widget_with_size(&LeafView, 1024.0, 768.0)
+            .expect("sized attach succeeds");
+
+        let root_id = binding.root_element().expect("root element is set");
+        binding.with_element_tree(|tree| {
+            let element = tree.get(root_id).expect("root node").element();
+            let root_render_element = element
+                .as_any()
+                .downcast_ref::<RootRenderElement<LeafView>>()
+                .expect("root is RootRenderElement");
+            assert!(
+                root_render_element.render_id().is_some(),
+                "sized attach bootstrapped a RenderView (render_id set)"
+            );
+        });
+        assert!(
+            pipeline_owner.read().root_id().is_some(),
+            "PipelineOwner root node wired under the sized bootstrap path"
+        );
+    }
+
     /// U6 edge case: a root view with zero children bootstraps
     /// correctly through `RootRenderView`.
     #[test]
@@ -1601,6 +1685,64 @@ mod tests {
                 "root with a child subtree still routes through RootRenderView"
             );
             assert_eq!(element.lifecycle(), crate::Lifecycle::Active);
+        });
+    }
+
+    /// E3 regression: after `draw_frame`, the root's child subtree is
+    /// actually slab-resident.
+    ///
+    /// `attach_root_widget` schedules the root via `schedule_build_for`
+    /// WITHOUT a `mark_needs_build`. If `RootRenderElement::is_dirty()`
+    /// did not report its own dirty bit, `build_scope`'s dirty guard would
+    /// pop the root, skip it, and never reconcile its child — the app
+    /// would render nothing. The sibling
+    /// `test_attach_root_widget_with_child_subtree` does NOT catch this
+    /// because it only inspects the root node itself, never `child_ids`.
+    /// This asserts the child (and the grandchild reached via the
+    /// reconciler's build scheduling) materialized.
+    #[test]
+    fn regression_root_reconciles_child_subtree_after_draw_frame() {
+        let binding = WidgetsBinding::new();
+
+        // `ParentView` builds a `LeafView` child each build.
+        binding
+            .attach_root_widget(&ParentView)
+            .expect("attach succeeds");
+        binding.draw_frame();
+
+        let root_id = binding.root_element().expect("root element is set");
+        binding.with_element_tree(|tree| {
+            let root_children = tree.get(root_id).expect("root node").child_ids().to_vec();
+            assert_eq!(
+                root_children.len(),
+                1,
+                "the root must reconcile its single child into the slab on the first frame",
+            );
+
+            let parent_child = root_children[0];
+            let parent_node = tree
+                .get(parent_child)
+                .expect("the root's child must resolve in the slab");
+            assert_eq!(
+                parent_node.parent(),
+                Some(root_id),
+                "the reconciled child's parent edge points back at the root",
+            );
+
+            // The reconciler scheduled the freshly-inserted ParentView
+            // element, so the same `build_scope` drain reached it and
+            // reconciled ITS LeafView child too — the recursive build
+            // pipeline works end to end.
+            let grandchildren = parent_node.child_ids().to_vec();
+            assert_eq!(
+                grandchildren.len(),
+                1,
+                "the scheduled child must itself build + reconcile its LeafView grandchild",
+            );
+            assert!(
+                tree.get(grandchildren[0]).is_some(),
+                "the grandchild element resolves in the slab",
+            );
         });
     }
 
@@ -1655,22 +1797,21 @@ mod tests {
     //    `root_depth` (i.e. the root's recorded depth equals
     //    `root_depth`, each child recorded depth equals `root_depth + 1`,
     //    and so on).
-    // 2. The traversal is pre-order DFS in the order yielded by each
-    //    element's `visit_children` — parent first, then each child's
-    //    entire subtree before moving on to the next sibling.
+    // 2. The traversal is pre-order DFS in each element's `child_ids`
+    //    slot order — parent first, then each child's entire subtree
+    //    before moving on to the next sibling.
     // 3. Order is deterministic across runs.
     // 4. Deep linear chains do not exhaust the stack (the walk is
     //    iterative).
 
-    /// Test fixture element whose `visit_children` returns the IDs in
-    /// `children`. The element is configured manually after insertion via
-    /// `set_children` so the test can wire up arbitrary tree shapes
-    /// without relying on a full `View::build` round-trip.
+    /// Test fixture element with no view-children of its own. Tests wire
+    /// arbitrary tree shapes by writing the slab node's `child_ids`
+    /// directly via `set_children_for` after insertion, without relying on
+    /// a full `View::build` round-trip.
     #[derive(Default)]
     struct MultiNodeElement {
         depth: usize,
         lifecycle: crate::Lifecycle,
-        children: Vec<flui_foundation::ElementId>,
     }
 
     impl MultiNodeElement {
@@ -1678,7 +1819,6 @@ mod tests {
             Self {
                 depth: 0,
                 lifecycle: crate::Lifecycle::Initial,
-                children: Vec::new(),
             }
         }
     }
@@ -1722,12 +1862,11 @@ mod tests {
 
         fn mark_needs_build(&mut self) {}
 
-        fn perform_build(&mut self, _owner: &mut crate::ElementOwner<'_>) {}
-
-        fn visit_children(&self, visitor: &mut dyn FnMut(flui_foundation::ElementId)) {
-            for &child_id in &self.children {
-                visitor(child_id);
-            }
+        fn build_into_views(&mut self, _owner: &mut crate::ElementOwner<'_>) -> Vec<Box<dyn View>> {
+            // Fixture: children are wired directly onto the slab node's
+            // `child_ids` (see `set_children_for`), so this leaf-style
+            // build contributes no view children.
+            Vec::new()
         }
     }
 
@@ -1752,19 +1891,18 @@ mod tests {
         tree.insert(&view, parent, slot, &mut build_owner.element_owner_mut())
     }
 
-    /// Helper: configure the children list on the element backing `id`.
+    /// Helper: configure the children list on the slab node backing `id`.
+    ///
+    /// E3 (atomic box→arena swap): the element child graph is the slab
+    /// node's `child_ids` list, so this writes there directly — the
+    /// `collect_all_elements` walk reads the same field.
     fn set_children_for(
         tree: &mut crate::tree::ElementTree,
         id: flui_foundation::ElementId,
         children: Vec<flui_foundation::ElementId>,
     ) {
         let node = tree.get_mut(id).expect("node exists");
-        let element = node
-            .element_mut()
-            .as_any_mut()
-            .downcast_mut::<MultiNodeElement>()
-            .expect("element is MultiNodeElement");
-        element.children = children;
+        node.set_child_ids(children);
     }
 
     /// Happy path: a tree of `root → [a, b], a → [a1]`. The walk visits
@@ -1787,7 +1925,7 @@ mod tests {
         assert_eq!(
             walk,
             vec![(root_id, 0), (alpha, 1), (alpha_child, 2), (bravo, 1)],
-            "pre-order DFS: parent before children, children in visit_children order"
+            "pre-order DFS: parent before children, children in child_ids slot order"
         );
     }
 
@@ -1822,7 +1960,7 @@ mod tests {
     }
 
     /// Edge case: a wide shallow tree (root → 64 leaf children). The
-    /// walk must visit the root then every child in `visit_children`
+    /// walk must visit the root then every child in `child_ids` slot
     /// order.
     #[test]
     fn test_collect_all_elements_wide_tree() {
@@ -1934,6 +2072,115 @@ mod tests {
             // dispatch released the `read()` lock before iterating.
             self.binding.add_observer(Arc::new(InertObserver));
         }
+    }
+
+    // ========================================================================
+    // E0a — deadlock-safe wake chain
+    // ========================================================================
+
+    /// `handle_build_scheduled` must PANIC (Flutter parity) when
+    /// `debug_building_dirty_elements` is true.  The flag is now an
+    /// `AtomicBool` on `WidgetsBinding` itself; this test sets it directly
+    /// and confirms the panic fires without acquiring `inner`.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "setState() or markNeedsBuild() called during build")]
+    fn handle_build_scheduled_panics_when_building() {
+        let binding = WidgetsBinding::new();
+        // Simulate draw_frame having set the flag.
+        binding
+            .debug_building_dirty_elements
+            .store(true, Ordering::Relaxed);
+        // Must panic — Flutter parity for setState-during-build.
+        binding.handle_build_scheduled();
+    }
+
+    /// `handle_build_scheduled` must NOT panic and must invoke
+    /// `on_need_frame` when called outside a build (flag = false).
+    #[test]
+    fn handle_build_scheduled_fires_on_need_frame_when_not_building() {
+        let binding = WidgetsBinding::new();
+        let fired = Arc::new(AtomicBool::new(false));
+        let fired_clone = Arc::clone(&fired);
+        binding.set_on_need_frame(move || {
+            fired_clone.store(true, Ordering::Relaxed);
+        });
+
+        // debug_building_dirty_elements is false (default) — must not panic.
+        binding.handle_build_scheduled();
+
+        assert!(
+            fired.load(Ordering::Relaxed),
+            "on_need_frame callback must be invoked by handle_build_scheduled"
+        );
+    }
+
+    /// `handle_build_scheduled` must be callable while `inner` is read-locked
+    /// on the same thread — proving it acquires no `inner` lock itself.
+    ///
+    /// Before E0a this would deadlock: `inner.read()` inside
+    /// `handle_build_scheduled` blocks forever because parking_lot's
+    /// `RwLock` is non-reentrant and the same thread already holds a
+    /// read guard here.
+    #[test]
+    fn handle_build_scheduled_does_not_acquire_inner_lock() {
+        let binding = WidgetsBinding::new();
+        let fired = Arc::new(AtomicBool::new(false));
+        let fired_clone = Arc::clone(&fired);
+        binding.set_on_need_frame(move || {
+            fired_clone.store(true, Ordering::Relaxed);
+        });
+
+        // Hold `inner` read-lock across the call.  If `handle_build_scheduled`
+        // tried to take `inner.read()` or `inner.write()` it would deadlock
+        // (parking_lot RwLock is non-reentrant on the same thread).
+        let _guard = binding.inner.read();
+        // Must return without deadlocking.
+        binding.handle_build_scheduled();
+
+        assert!(
+            fired.load(Ordering::Relaxed),
+            "on_need_frame must fire even while inner read-lock is held"
+        );
+    }
+
+    /// `schedule_build_for` fires `on_build_scheduled`, which calls
+    /// `handle_build_scheduled`, which fires `on_need_frame`.  The full
+    /// chain must produce a wake signal when the binding is wired with a
+    /// flag-setting closure.
+    #[test]
+    fn schedule_build_for_triggers_on_need_frame_via_chain() {
+        // `Box::leak` gives a `&'static WidgetsBinding` that the closure
+        // can capture without a lifetime parameter. The leak is bounded by
+        // the test run (the binding is small).
+        let binding: &'static WidgetsBinding = Box::leak(Box::new(WidgetsBinding::new()));
+
+        let needs_frame = Arc::new(AtomicBool::new(false));
+        let needs_frame_clone = Arc::clone(&needs_frame);
+        binding.set_on_need_frame(move || {
+            needs_frame_clone.store(true, Ordering::Relaxed);
+        });
+
+        // Wire on_build_scheduled -> handle_build_scheduled (same pattern
+        // as the production bootstrap).
+        binding.with_build_owner_mut(|bo| {
+            bo.set_on_build_scheduled(|| {
+                binding.handle_build_scheduled();
+            });
+        });
+
+        // schedule_build_for -> on_build_scheduled -> handle_build_scheduled
+        // -> on_need_frame.
+        let dummy_id = flui_foundation::ElementId::new(1);
+        binding.with_build_owner_mut(|bo| {
+            bo.schedule_build_for(dummy_id, 0);
+        });
+
+        assert!(
+            needs_frame.load(Ordering::Relaxed),
+            "scheduling a build must propagate through the full wake chain \
+             to on_need_frame"
+        );
     }
 
     /// Pre-V-21: this test would deadlock `cargo test -p flui-view --lib`.

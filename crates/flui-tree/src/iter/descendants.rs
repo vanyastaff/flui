@@ -1,6 +1,6 @@
 //! Descendant iterators.
 
-use flui_foundation::Identifier;
+use flui_foundation::TreeId;
 use smallvec::SmallVec;
 
 use crate::traits::TreeNav;
@@ -26,12 +26,12 @@ type DescendantStack<Id> = SmallVec<[Id; 32]>;
 /// # impl T { fn ins(&mut self, p: Option<ElementId>) -> ElementId {
 /// #     let id = ElementId::new(self.0.len()+1);
 /// #     self.0.push(Some(N { parent: p, children: vec![] }));
-/// #     if let Some(pid) = p { self.0[pid.get()-1].as_mut().unwrap().children.push(id); }
+/// #     if let Some(pid) = p { self.0[pid.index() as usize].as_mut().unwrap().children.push(id); }
 /// #     id
 /// # }}
 /// # impl TreeRead<ElementId> for T {
 /// #     type Node = N;
-/// #     fn get(&self, id: ElementId) -> Option<&N> { self.0.get(id.get()-1)?.as_ref() }
+/// #     fn get(&self, id: ElementId) -> Option<&N> { self.0.get(id.index() as usize)?.as_ref() }
 /// #     fn len(&self) -> usize { self.0.iter().flatten().count() }
 /// #     fn node_ids(&self) -> impl Iterator<Item = ElementId> + '_ {
 /// #         (0..self.0.len()).filter_map(|i| if self.0[i].is_some() { Some(ElementId::new(i+1)) } else { None })
@@ -65,12 +65,12 @@ type DescendantStack<Id> = SmallVec<[Id; 32]>;
 /// Uses `SmallVec` with inline storage for 32 elements. This avoids heap
 /// allocation for typical UI trees where traversal depth rarely exceeds 32.
 #[derive(Debug)]
-pub struct Descendants<'a, I: Identifier, T: TreeNav<I>> {
+pub struct Descendants<'a, I: TreeId, T: TreeNav<I>> {
     tree: &'a T,
     stack: DescendantStack<I>,
 }
 
-impl<'a, I: Identifier, T: TreeNav<I>> Descendants<'a, I, T> {
+impl<'a, I: TreeId, T: TreeNav<I>> Descendants<'a, I, T> {
     /// Creates a new descendants iterator starting from the given root.
     #[inline]
     pub fn new(tree: &'a T, root: I) -> Self {
@@ -93,7 +93,7 @@ impl<'a, I: Identifier, T: TreeNav<I>> Descendants<'a, I, T> {
     }
 }
 
-impl<I: Identifier, T: TreeNav<I>> Iterator for Descendants<'_, I, T> {
+impl<I: TreeId, T: TreeNav<I>> Iterator for Descendants<'_, I, T> {
     type Item = I;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -126,7 +126,7 @@ impl<I: Identifier, T: TreeNav<I>> Iterator for Descendants<'_, I, T> {
     }
 }
 
-impl<I: Identifier, T: TreeNav<I>> std::iter::FusedIterator for Descendants<'_, I, T> {}
+impl<I: TreeId, T: TreeNav<I>> std::iter::FusedIterator for Descendants<'_, I, T> {}
 
 /// Stack type for descendants-with-depth iterator.
 type DescendantDepthStack<Id> = SmallVec<[(Id, usize); 32]>;
@@ -136,12 +136,12 @@ type DescendantDepthStack<Id> = SmallVec<[(Id, usize); 32]>;
 /// Yields `(Id, usize)` tuples where depth is relative to
 /// the starting root (root has depth 0).
 #[derive(Debug)]
-pub struct DescendantsWithDepth<'a, I: Identifier, T: TreeNav<I>> {
+pub struct DescendantsWithDepth<'a, I: TreeId, T: TreeNav<I>> {
     tree: &'a T,
     stack: DescendantDepthStack<I>,
 }
 
-impl<'a, I: Identifier, T: TreeNav<I>> DescendantsWithDepth<'a, I, T> {
+impl<'a, I: TreeId, T: TreeNav<I>> DescendantsWithDepth<'a, I, T> {
     /// Creates a new descendants-with-depth iterator.
     #[inline]
     pub fn new(tree: &'a T, root: I) -> Self {
@@ -152,7 +152,7 @@ impl<'a, I: Identifier, T: TreeNav<I>> DescendantsWithDepth<'a, I, T> {
     }
 }
 
-impl<I: Identifier, T: TreeNav<I>> Iterator for DescendantsWithDepth<'_, I, T> {
+impl<I: TreeId, T: TreeNav<I>> Iterator for DescendantsWithDepth<'_, I, T> {
     type Item = (I, usize);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -181,7 +181,7 @@ impl<I: Identifier, T: TreeNav<I>> Iterator for DescendantsWithDepth<'_, I, T> {
     }
 }
 
-impl<I: Identifier, T: TreeNav<I>> std::iter::FusedIterator for DescendantsWithDepth<'_, I, T> {}
+impl<I: TreeId, T: TreeNav<I>> std::iter::FusedIterator for DescendantsWithDepth<'_, I, T> {}
 
 // ============================================================================
 // TESTS
@@ -216,7 +216,7 @@ mod tests {
             }));
 
             if let Some(parent_id) = parent
-                && let Some(Some(p)) = self.nodes.get_mut(parent_id.get() - 1)
+                && let Some(Some(p)) = self.nodes.get_mut(parent_id.index() as usize)
             {
                 p.children.push(id);
             }
@@ -229,7 +229,7 @@ mod tests {
         type Node = TestNode;
 
         fn get(&self, id: ElementId) -> Option<&TestNode> {
-            self.nodes.get(id.get() - 1)?.as_ref()
+            self.nodes.get(id.index() as usize)?.as_ref()
         }
 
         fn len(&self) -> usize {

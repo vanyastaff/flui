@@ -31,7 +31,7 @@
 
 use std::fmt;
 
-use flui_foundation::Identifier;
+use flui_foundation::TreeId;
 
 use crate::depth::Depth;
 
@@ -68,7 +68,7 @@ use crate::depth::Depth;
 ///   - next_sibling: Option<I> = 8 bytes
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Slot<I: Identifier> {
+pub struct Slot<I: TreeId> {
     /// Parent node ID.
     parent: I,
     /// Position within parent's children (0-based).
@@ -82,7 +82,7 @@ pub struct Slot<I: Identifier> {
 }
 
 #[bon::bon]
-impl<I: Identifier> Slot<I> {
+impl<I: TreeId> Slot<I> {
     // === CONSTRUCTORS ===
 
     /// Creates new slot with minimal data.
@@ -323,7 +323,7 @@ impl<I: Identifier> Slot<I> {
     }
 }
 
-impl<I: Identifier> fmt::Display for Slot<I> {
+impl<I: TreeId> fmt::Display for Slot<I> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -356,7 +356,7 @@ impl<I: Identifier> fmt::Display for Slot<I> {
 /// assert_eq!(slot.next_sibling(), Some(ElementId::new(7)));
 /// ```
 #[derive(Debug, Clone)]
-pub struct SlotBuilder<I: Identifier> {
+pub struct SlotBuilder<I: TreeId> {
     parent: I,
     index: usize,
     depth: Depth,
@@ -364,7 +364,7 @@ pub struct SlotBuilder<I: Identifier> {
     next_sibling: Option<I>,
 }
 
-impl<I: Identifier> SlotBuilder<I> {
+impl<I: TreeId> SlotBuilder<I> {
     /// Creates a new builder.
     #[inline]
     #[must_use]
@@ -448,14 +448,14 @@ impl<I: Identifier> SlotBuilder<I> {
 /// assert_eq!(slot.previous(), Some(child1_id));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct IndexedSlot<I: Identifier> {
+pub struct IndexedSlot<I: TreeId> {
     /// Position index (0-based).
     index: usize,
     /// Previous sibling for O(1) insertion.
     previous: Option<I>,
 }
 
-impl<I: Identifier> IndexedSlot<I> {
+impl<I: TreeId> IndexedSlot<I> {
     /// Creates new indexed slot.
     #[inline]
     #[must_use]
@@ -536,13 +536,13 @@ impl<I: Identifier> IndexedSlot<I> {
     }
 }
 
-impl<I: Identifier> Default for IndexedSlot<I> {
+impl<I: TreeId> Default for IndexedSlot<I> {
     fn default() -> Self {
         Self::first()
     }
 }
 
-impl<I: Identifier> fmt::Display for IndexedSlot<I> {
+impl<I: TreeId> fmt::Display for IndexedSlot<I> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.previous {
             Some(prev) => write!(f, "IndexedSlot({}, after {})", self.index, prev),
@@ -551,7 +551,7 @@ impl<I: Identifier> fmt::Display for IndexedSlot<I> {
     }
 }
 
-impl<I: Identifier> From<usize> for IndexedSlot<I> {
+impl<I: TreeId> From<usize> for IndexedSlot<I> {
     fn from(index: usize) -> Self {
         Self::new(index, None)
     }
@@ -587,11 +587,11 @@ impl<I: Identifier> From<usize> for IndexedSlot<I> {
 /// assert_eq!(slots.current().previous(), Some(ElementId::new(3)));
 /// ```
 #[derive(Debug, Clone)]
-pub struct SlotIter<I: Identifier> {
+pub struct SlotIter<I: TreeId> {
     current: IndexedSlot<I>,
 }
 
-impl<I: Identifier> SlotIter<I> {
+impl<I: TreeId> SlotIter<I> {
     /// Creates a new slot iterator starting at index 0.
     #[inline]
     #[must_use]
@@ -641,7 +641,7 @@ impl<I: Identifier> SlotIter<I> {
     }
 }
 
-impl<I: Identifier> Default for SlotIter<I> {
+impl<I: TreeId> Default for SlotIter<I> {
     fn default() -> Self {
         Self::new()
     }
@@ -879,14 +879,23 @@ mod tests {
 
     #[test]
     fn test_indexed_slot_display() {
+        // ElementId::new(5) is 1-based: index()=4, Display="Element(4:1)".
         let slot = IndexedSlot::new(2, Some(ElementId::new(5)));
         let display = format!("{slot}");
-        assert!(display.contains('2'));
-        assert!(display.contains('5'));
+        // Slot position index must appear.
+        assert!(display.contains('2'), "slot index 2 not in {display:?}");
+        // ElementId's Display embeds its 0-based slot index (4 for new(5)).
+        assert!(
+            display.contains('4'),
+            "ElementId index 4 (from new(5)) not in {display:?}"
+        );
 
         let first = IndexedSlot::<ElementId>::first();
         let display = format!("{first}");
-        assert!(display.contains('0'));
+        assert!(
+            display.contains('0'),
+            "first slot display missing 0: {display:?}"
+        );
     }
 
     // === SLOT ITER TESTS ===

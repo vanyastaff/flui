@@ -24,57 +24,41 @@
 // Re-export arity types from flui-tree for consistency with RenderObject system
 pub use flui_tree::{Arity, Leaf, Optional, Single, Variable};
 
-use super::child_storage::{
-    ElementChildStorage, NoChildStorage, OptionalChildStorage, SingleChildStorage,
-    VariableChildStorage,
-};
-
-/// Element-specific arity trait linking arity types to child storage.
+/// Element-specific arity marker trait.
 ///
-/// This trait extends the base `Arity` trait from `flui-tree` to associate
-/// each arity type with a concrete `ElementChildStorage` implementation.
+/// E3 (atomic box→arena swap): this used to carry a `type Storage:
+/// ElementChildStorage` associated type that owned the per-element box
+/// child graph. The slab-resident [`ElementTree`](crate::tree::ElementTree)
+/// is now the single element graph, so there is no per-element storage to
+/// associate. The trait remains as the compile-time child-count constraint
+/// (`Leaf` = 0, `Single` = 1, `Optional` = 0..=1, `Variable` = N) layered
+/// over `flui_tree::Arity`; it simply no longer carries storage.
 ///
-/// # Design Pattern
-///
-/// This follows the same pattern as `RenderObject` arity in `flui_rendering`,
-/// providing compile-time guarantees about child count while enabling
-/// generic code to work with any arity.
-pub trait ElementArity: Arity {
-    /// The storage type for managing children of this arity.
-    ///
-    /// This associated type determines how child elements are stored
-    /// and managed based on the arity constraint.
-    type Storage: ElementChildStorage;
-}
+/// This mirrors `RenderObject` arity in `flui_rendering`, providing
+/// compile-time guarantees about child count while letting generic code
+/// work with any arity.
+pub trait ElementArity: Arity {}
 
 /// Leaf arity - no children allowed.
 ///
 /// Used for elements that cannot have children (terminal nodes in the tree).
-impl ElementArity for Leaf {
-    type Storage = NoChildStorage;
-}
+impl ElementArity for Leaf {}
 
 /// Single arity - exactly one child required.
 ///
 /// Used for elements that wrap a single child (e.g., StatelessElement,
 /// ProxyElement).
-impl ElementArity for Single {
-    type Storage = SingleChildStorage;
-}
+impl ElementArity for Single {}
 
 /// Optional arity - zero or one child allowed.
 ///
 /// Used for elements that may or may not have a child.
-impl ElementArity for Optional {
-    type Storage = OptionalChildStorage;
-}
+impl ElementArity for Optional {}
 
 /// Variable arity - N children allowed.
 ///
 /// Used for elements that can have multiple children (e.g., RenderElement).
-impl ElementArity for Variable {
-    type Storage = VariableChildStorage;
-}
+impl ElementArity for Variable {}
 
 #[cfg(test)]
 mod tests {

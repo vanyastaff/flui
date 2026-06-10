@@ -491,7 +491,7 @@ impl<I: Identifier, T: TreeWrite<I> + ?Sized> TreeWrite<I> for Box<T> {
 
 #[cfg(test)]
 mod tests {
-    use flui_foundation::ElementId;
+    use flui_foundation::ViewId;
 
     use super::*;
     use crate::{
@@ -503,8 +503,8 @@ mod tests {
     #[derive(Debug, Default)]
     struct TestNode {
         value: i32,
-        parent: Option<ElementId>,
-        children: Vec<ElementId>,
+        parent: Option<ViewId>,
+        children: Vec<ViewId>,
     }
 
     struct TestTree {
@@ -523,7 +523,7 @@ mod tests {
         /// cyclic state that the cascade walk must defend against. Sets
         /// the child's parent pointer and appends it to the parent's
         /// child list directly.
-        fn corrupt_add_child(&mut self, parent: ElementId, child: ElementId) {
+        fn corrupt_add_child(&mut self, parent: ViewId, child: ViewId) {
             if let Some(Some(parent_node)) = self.nodes.get_mut(parent.get() - 1)
                 && !parent_node.children.contains(&child)
             {
@@ -535,10 +535,10 @@ mod tests {
         }
     }
 
-    impl TreeRead<ElementId> for TestTree {
+    impl TreeRead<ViewId> for TestTree {
         type Node = TestNode;
 
-        fn get(&self, id: ElementId) -> Option<&TestNode> {
+        fn get(&self, id: ViewId) -> Option<&TestNode> {
             self.nodes.get(id.get() - 1)?.as_ref()
         }
 
@@ -546,10 +546,10 @@ mod tests {
             self.nodes.iter().filter(|n| n.is_some()).count()
         }
 
-        fn node_ids(&self) -> impl Iterator<Item = ElementId> + '_ {
+        fn node_ids(&self) -> impl Iterator<Item = ViewId> + '_ {
             (0..self.nodes.len()).filter_map(|i| {
                 if self.nodes[i].is_some() {
-                    Some(ElementId::new(i + 1))
+                    Some(ViewId::new(i + 1))
                 } else {
                     None
                 }
@@ -557,27 +557,27 @@ mod tests {
         }
     }
 
-    impl TreeNav<ElementId> for TestTree {
-        fn parent(&self, id: ElementId) -> Option<ElementId> {
+    impl TreeNav<ViewId> for TestTree {
+        fn parent(&self, id: ViewId) -> Option<ViewId> {
             self.get(id)?.parent
         }
 
-        fn children(&self, id: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+        fn children(&self, id: ViewId) -> impl Iterator<Item = ViewId> + '_ {
             self.get(id)
                 .map(|node| node.children.iter().copied())
                 .into_iter()
                 .flatten()
         }
 
-        fn ancestors(&self, start: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+        fn ancestors(&self, start: ViewId) -> impl Iterator<Item = ViewId> + '_ {
             Ancestors::new(self, start)
         }
 
-        fn descendants(&self, root: ElementId) -> impl Iterator<Item = (ElementId, usize)> + '_ {
+        fn descendants(&self, root: ViewId) -> impl Iterator<Item = (ViewId, usize)> + '_ {
             DescendantsWithDepth::new(self, root)
         }
 
-        fn siblings(&self, id: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+        fn siblings(&self, id: ViewId) -> impl Iterator<Item = ViewId> + '_ {
             let parent_id = self.parent(id);
             parent_id
                 .into_iter()
@@ -585,18 +585,18 @@ mod tests {
         }
     }
 
-    impl TreeWrite<ElementId> for TestTree {
-        fn get_mut(&mut self, id: ElementId) -> Option<&mut TestNode> {
+    impl TreeWrite<ViewId> for TestTree {
+        fn get_mut(&mut self, id: ViewId) -> Option<&mut TestNode> {
             self.nodes.get_mut(id.get() - 1)?.as_mut()
         }
 
-        fn insert(&mut self, node: TestNode) -> ElementId {
-            let id = ElementId::new(self.nodes.len() + 1);
+        fn insert(&mut self, node: TestNode) -> ViewId {
+            let id = ViewId::new(self.nodes.len() + 1);
             self.nodes.push(Some(node));
             id
         }
 
-        fn remove_shallow(&mut self, id: ElementId) -> Option<TestNode> {
+        fn remove_shallow(&mut self, id: ViewId) -> Option<TestNode> {
             let index = id.get() - 1;
 
             // Remove from parent's children
@@ -619,12 +619,8 @@ mod tests {
         }
     }
 
-    impl TreeWriteNav<ElementId> for TestTree {
-        fn set_parent(
-            &mut self,
-            child: ElementId,
-            new_parent: Option<ElementId>,
-        ) -> TreeResult<ElementId> {
+    impl TreeWriteNav<ViewId> for TestTree {
+        fn set_parent(&mut self, child: ViewId, new_parent: Option<ViewId>) -> TreeResult<ViewId> {
             // Check child exists
             if !self.contains(child) {
                 return Err(TreeError::not_found(child.get()));
@@ -821,7 +817,7 @@ mod tests {
     fn remove_of_missing_id_is_a_no_op() {
         let mut tree = TestTree::new();
         let _real = tree.insert(TestNode::default());
-        let phantom = ElementId::new(999);
+        let phantom = ViewId::new(999);
         assert!(tree.remove(phantom).is_none());
         assert_eq!(tree.len(), 1);
     }
@@ -899,7 +895,7 @@ mod tests {
     fn remove_nonexistent_node() {
         let mut tree = TestTree::new();
         let _real = tree.insert(TestNode::default());
-        let phantom = ElementId::new(999);
+        let phantom = ViewId::new(999);
         assert!(matches!(tree.try_remove(phantom), Ok(None)));
         assert_eq!(tree.len(), 1);
     }
