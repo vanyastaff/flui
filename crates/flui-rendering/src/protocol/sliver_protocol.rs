@@ -41,6 +41,10 @@ impl Protocol for SliverProtocol {
     // PORT-CHECK-OK-DYN: protocol-layout-erasure (D-block PR-A1b U19, memo D5)
     type LayoutCtxErased<'ctx> = dyn SliverLayoutCtxErased + 'ctx;
 
+    // No sliver layout cache yet: no sliver object exposes intrinsic
+    // queries, so invalidation never needs the cache-driven escalation.
+    type LayoutCache = ();
+
     fn name() -> &'static str {
         "sliver"
     }

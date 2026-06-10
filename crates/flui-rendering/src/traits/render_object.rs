@@ -38,7 +38,7 @@ use flui_foundation::Diagnosticable;
 use flui_types::Rect;
 
 use crate::{
-    protocol::{Protocol, ProtocolGeometry, ProtocolPosition},
+    protocol::{Protocol, ProtocolConstraints, ProtocolGeometry, ProtocolPosition},
     semantics::SemanticsConfiguration,
 };
 
@@ -241,6 +241,77 @@ pub trait RenderObject<P: Protocol>:
         child_count: usize,
         hit_child: &mut (dyn FnMut(usize, Option<ProtocolPosition<P>>) -> bool + Send + Sync),
     ) -> bool;
+
+    // ========================================================================
+    // Intrinsic / Dry Queries
+    // ========================================================================
+
+    /// Computes one intrinsic dimension with raw protocol types.
+    ///
+    /// Called by the pipeline's memoizing intrinsics walk
+    /// (`PipelineOwner::box_intrinsic_dimension`); results are cached
+    /// per node in `RenderState`'s layout cache, never here.
+    /// `child_query` answers the same question for a tree child — the
+    /// driver memoizes each level, so a child probed twice with the
+    /// same extent computes once.
+    ///
+    /// **Users don't implement this directly.** Protocol traits provide
+    /// blanket implementations that wrap `child_query` in a typed
+    /// context and call the protocol-level `compute_*` methods (e.g.
+    /// [`RenderBox::compute_min_intrinsic_width`](crate::traits::RenderBox::compute_min_intrinsic_width)).
+    ///
+    /// Default: `0.0` — Flutter's `RenderBox` default for every
+    /// intrinsic dimension; protocols without intrinsic sizing (sliver)
+    /// keep it.
+    fn intrinsic_raw(
+        &self,
+        _dimension: crate::storage::IntrinsicDimension,
+        _extent: f32,
+        _child_count: usize,
+        _child_query: &mut (
+                 dyn FnMut(usize, crate::storage::IntrinsicDimension, f32) -> f32 + Send + Sync
+             ),
+    ) -> f32 {
+        0.0
+    }
+
+    /// Computes the dry-layout geometry for `constraints` — the
+    /// geometry `perform_layout` WOULD produce, with no side effects.
+    ///
+    /// Same driver/memoization contract as
+    /// [`intrinsic_raw`](Self::intrinsic_raw); `child_dry` answers the
+    /// dry-layout question for a tree child.
+    ///
+    /// Default: the protocol's default geometry (Flutter's `RenderBox`
+    /// debug-throws here; a wrong dry size is loud in layout tests
+    /// without poisoning release builds).
+    fn dry_layout_raw(
+        &self,
+        _constraints: ProtocolConstraints<P>,
+        _child_count: usize,
+        _child_dry: &mut (
+                 dyn FnMut(usize, ProtocolConstraints<P>) -> ProtocolGeometry<P> + Send + Sync
+             ),
+    ) -> ProtocolGeometry<P> {
+        P::default_geometry()
+    }
+
+    /// Computes the dry baseline for `constraints` — where the first
+    /// baseline of the given kind WOULD sit after a layout with these
+    /// constraints. `None` means "this box has no baseline".
+    ///
+    /// Container objects that derive their baseline from a child need a
+    /// child-query channel like the other walks; none of the current
+    /// box objects report baselines yet, so the channel is added
+    /// together with the first text-bearing render object rather than
+    /// speculatively here.
+    fn dry_baseline_raw(
+        &self,
+        _constraints: ProtocolConstraints<P>,
+        _baseline: crate::traits::TextBaseline,
+    ) -> Option<f32> {
+        None
+    }
 
     // ========================================================================
     // Optimization Boundaries

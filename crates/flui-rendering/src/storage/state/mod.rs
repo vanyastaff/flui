@@ -101,8 +101,11 @@ use crate::storage::flags::{AtomicRenderFlags, RenderFlags};
 mod constraints;
 mod flags;
 mod geometry;
+mod layout_cache;
 mod offset;
 mod propagation;
+
+pub use layout_cache::{BoxLayoutCache, IntrinsicDimension, ProtocolLayoutCache};
 
 #[cfg(test)]
 mod tests;
@@ -201,6 +204,12 @@ pub struct RenderState<P: Protocol> {
     /// Set by parent during layout, read during paint and hit testing.
     offset: AtomicOffset,
 
+    /// Per-node layout calculation cache (Flutter `_LayoutCacheStorage`):
+    /// memoized intrinsic dimensions / dry layout / dry baselines.
+    /// Cleared by `mark_needs_layout`; a non-empty clear escalates the
+    /// invalidation past relayout boundaries (box.dart:2840).
+    layout_cache: P::LayoutCache,
+
     /// Protocol marker (zero-sized).
     _phantom: PhantomData<P>,
 }
@@ -231,6 +240,7 @@ impl<P: Protocol> RenderState<P> {
             geometry: None,
             constraints: None,
             offset: AtomicOffset::new(flui_types::Offset::ZERO),
+            layout_cache: P::LayoutCache::default(),
             _phantom: PhantomData,
         }
     }
@@ -253,8 +263,38 @@ impl<P: Protocol> RenderState<P> {
             geometry: None,
             constraints: None,
             offset: AtomicOffset::new(flui_types::Offset::ZERO),
+            layout_cache: P::LayoutCache::default(),
             _phantom: PhantomData,
         }
+    }
+}
+
+// ============================================================================
+// LAYOUT CACHE ACCESS
+// ============================================================================
+
+impl<P: Protocol> RenderState<P> {
+    /// Read access to the layout calculation cache (peek path of the
+    /// pipeline's memoizing walks).
+    pub fn layout_cache(&self) -> &P::LayoutCache {
+        &self.layout_cache
+    }
+
+    /// Mutable access to the layout calculation cache. The pipeline
+    /// memoizes intrinsic/dry-layout queries here; render objects never
+    /// touch it.
+    pub fn layout_cache_mut(&mut self) -> &mut P::LayoutCache {
+        &mut self.layout_cache
+    }
+
+    /// Clears the layout cache, returning whether anything WAS cached.
+    ///
+    /// `true` means an ancestor's layout consumed this node's
+    /// intrinsics/baseline, so the caller must escalate the invalidation
+    /// to the parent even across a relayout boundary
+    /// (Flutter `RenderBox.markNeedsLayout`, box.dart:2840).
+    pub fn clear_layout_cache(&mut self) -> bool {
+        self.layout_cache.clear()
     }
 }
 
@@ -275,6 +315,8 @@ where
             geometry: self.geometry.clone(),
             constraints: self.constraints.clone(),
             offset: AtomicOffset::new(self.offset.load()),
+            // Memoized results are node-local; a cloned state starts cold.
+            layout_cache: P::LayoutCache::default(),
             _phantom: PhantomData,
         }
     }

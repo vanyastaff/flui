@@ -206,6 +206,17 @@ impl RenderFractionallySizedBox {
 
     /// Computes the tight constraints to pass to the child for these
     /// incoming constraints.
+    /// Width factor as a bare multiplier, `1.0` when unset (Flutter's
+    /// `_widthFactor ?? 1.0` in the intrinsic formulas).
+    fn width_factor_or_one(&self) -> f32 {
+        self.width_factor.map_or(1.0, |f| f.value())
+    }
+
+    /// Height factor as a bare multiplier, `1.0` when unset.
+    fn height_factor_or_one(&self) -> f32 {
+        self.height_factor.map_or(1.0, |f| f.value())
+    }
+
     fn child_constraints(&self, incoming: BoxConstraints) -> BoxConstraints {
         // Width axis.
         let (min_w, max_w) = match self.width_factor {
@@ -329,9 +340,90 @@ impl RenderBox for RenderFractionallySizedBox {
         Rect::from_origin_size(Point::ZERO, self.size)
     }
 
-    fn compute_dry_layout(&self, constraints: BoxConstraints) -> Size {
+    fn compute_dry_layout(
+        &self,
+        constraints: BoxConstraints,
+        ctx: &mut crate::context::BoxDryLayoutCtx<'_>,
+    ) -> Size {
         let computed = self.child_constraints(constraints);
-        constraints.constrain(Size::new(computed.min_width, computed.min_height))
+        if ctx.child_count() > 0 {
+            constraints.constrain(ctx.child_dry_layout(0, computed))
+        } else {
+            constraints.constrain(Size::new(computed.min_width, computed.min_height))
+        }
+    }
+
+    // Flutter parity: shifted_box.dart `RenderFractionallySizedOverflowBox`
+    // — the child is probed at the OTHER axis's scaled extent (infinity
+    // absorption keeps an unbounded extent unbounded), and the answer is
+    // divided back by this axis's factor.
+
+    fn compute_min_intrinsic_width(
+        &self,
+        height: f32,
+        ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
+        let result = if ctx.child_count() > 0 {
+            ctx.child_min_intrinsic_width(0, height * self.height_factor_or_one())
+        } else {
+            0.0
+        };
+        debug_assert!(
+            result.is_finite(),
+            "child min intrinsic width must be finite"
+        );
+        result / self.width_factor_or_one()
+    }
+
+    fn compute_max_intrinsic_width(
+        &self,
+        height: f32,
+        ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
+        let result = if ctx.child_count() > 0 {
+            ctx.child_max_intrinsic_width(0, height * self.height_factor_or_one())
+        } else {
+            0.0
+        };
+        debug_assert!(
+            result.is_finite(),
+            "child max intrinsic width must be finite"
+        );
+        result / self.width_factor_or_one()
+    }
+
+    fn compute_min_intrinsic_height(
+        &self,
+        width: f32,
+        ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
+        let result = if ctx.child_count() > 0 {
+            ctx.child_min_intrinsic_height(0, width * self.width_factor_or_one())
+        } else {
+            0.0
+        };
+        debug_assert!(
+            result.is_finite(),
+            "child min intrinsic height must be finite"
+        );
+        result / self.height_factor_or_one()
+    }
+
+    fn compute_max_intrinsic_height(
+        &self,
+        width: f32,
+        ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
+        let result = if ctx.child_count() > 0 {
+            ctx.child_max_intrinsic_height(0, width * self.width_factor_or_one())
+        } else {
+            0.0
+        };
+        debug_assert!(
+            result.is_finite(),
+            "child max intrinsic height must be finite"
+        );
+        result / self.height_factor_or_one()
     }
 }
 
@@ -465,14 +557,18 @@ mod tests {
         let node = RenderFractionallySizedBox::new()
             .with_width_factor(FractionFactor::FULL)
             .with_height_factor(FractionFactor::FULL);
-        let size = node.compute_dry_layout(bc(0.0, 200.0, 0.0, 100.0));
+        let size = crate::context::intrinsics_test_support::leaf_dry_layout(|ctx| {
+            node.compute_dry_layout(bc(0.0, 200.0, 0.0, 100.0), ctx)
+        });
         assert_eq!(size, Size::new(px(200.0), px(100.0)));
     }
 
     #[test]
     fn dry_layout_zero_factor_collapses_axis() {
         let node = RenderFractionallySizedBox::new().with_width_factor(FractionFactor::ZERO);
-        let size = node.compute_dry_layout(bc(0.0, 200.0, 0.0, 100.0));
+        let size = crate::context::intrinsics_test_support::leaf_dry_layout(|ctx| {
+            node.compute_dry_layout(bc(0.0, 200.0, 0.0, 100.0), ctx)
+        });
         assert_eq!(size.width, px(0.0));
     }
 

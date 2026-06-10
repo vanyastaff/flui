@@ -50,11 +50,15 @@
 //! ```
 
 mod hit_test;
+mod intrinsics;
 mod layout;
 mod paint_cx;
 
 pub use flui_painting::{Canvas, DisplayList, Paint, PaintStyle};
 pub use hit_test::HitTestContext;
+#[cfg(test)]
+pub(crate) use intrinsics::test_support as intrinsics_test_support;
+pub use intrinsics::{BoxDryLayoutCtx, BoxIntrinsicsCtx};
 pub use layout::LayoutContext;
 pub(crate) use paint_cx::{FragmentClip, FragmentOp};
 pub use paint_cx::{FragmentRecorder, PaintCx, PaintFragment};

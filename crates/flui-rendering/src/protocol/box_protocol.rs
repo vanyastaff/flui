@@ -94,6 +94,8 @@ impl Protocol for BoxProtocol {
     // PORT-CHECK-OK-DYN: protocol-layout-erasure (D-block PR-A1b U19, memo D5)
     type LayoutCtxErased<'ctx> = dyn BoxLayoutCtxErased + 'ctx;
 
+    type LayoutCache = crate::storage::BoxLayoutCache;
+
     fn name() -> &'static str {
         "box"
     }

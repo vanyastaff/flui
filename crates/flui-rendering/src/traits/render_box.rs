@@ -190,44 +190,54 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     // ========================================================================
     // Intrinsic Dimensions
     // ========================================================================
-
-    /// Returns the minimum intrinsic width for a given height.
-    fn get_min_intrinsic_width(&self, height: f32) -> f32 {
-        self.compute_min_intrinsic_width(height)
-    }
-
-    /// Returns the maximum intrinsic width for a given height.
-    fn get_max_intrinsic_width(&self, height: f32) -> f32 {
-        self.compute_max_intrinsic_width(height)
-    }
-
-    /// Returns the minimum intrinsic height for a given width.
-    fn get_min_intrinsic_height(&self, width: f32) -> f32 {
-        self.compute_min_intrinsic_height(width)
-    }
-
-    /// Returns the maximum intrinsic height for a given width.
-    fn get_max_intrinsic_height(&self, width: f32) -> f32 {
-        self.compute_max_intrinsic_height(width)
-    }
+    //
+    // Pure functions of the object's configuration plus the SAME
+    // queries on children (through the ctx — objects hold no child
+    // pointers). Callers go through the pipeline
+    // (`PipelineOwner::box_intrinsic_dimension`), which memoizes every
+    // level in the per-node layout cache and clears it on
+    // `mark_needs_layout` with boundary-crossing escalation
+    // (Flutter `_LayoutCacheStorage`, box.dart:2840). The Flutter
+    // `getMinIntrinsicWidth` wrapper layer IS the pipeline here; there
+    // is deliberately no uncached `get_*` mirror on the trait.
 
     /// Computes the minimum intrinsic width for a given height.
-    fn compute_min_intrinsic_width(&self, _height: f32) -> f32 {
+    ///
+    /// Default: `0.0` (Flutter parity — `RenderBox` itself reports no
+    /// intrinsic extent; containers override and fold their children's
+    /// answers via `ctx`).
+    fn compute_min_intrinsic_width(
+        &self,
+        _height: f32,
+        _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
         0.0
     }
 
     /// Computes the maximum intrinsic width for a given height.
-    fn compute_max_intrinsic_width(&self, _height: f32) -> f32 {
+    fn compute_max_intrinsic_width(
+        &self,
+        _height: f32,
+        _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
         0.0
     }
 
     /// Computes the minimum intrinsic height for a given width.
-    fn compute_min_intrinsic_height(&self, _width: f32) -> f32 {
+    fn compute_min_intrinsic_height(
+        &self,
+        _width: f32,
+        _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
         0.0
     }
 
     /// Computes the maximum intrinsic height for a given width.
-    fn compute_max_intrinsic_height(&self, _width: f32) -> f32 {
+    fn compute_max_intrinsic_height(
+        &self,
+        _width: f32,
+        _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
         0.0
     }
 
@@ -235,14 +245,15 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     // Dry Layout
     // ========================================================================
 
-    /// Returns the size this box would like to be given the constraints.
-    fn get_dry_layout(&self, constraints: BoxConstraints) -> Size {
-        self.compute_dry_layout(constraints)
-    }
-
     /// Computes the size this box would have given the constraints,
-    /// without actually laying out.
-    fn compute_dry_layout(&self, _constraints: BoxConstraints) -> Size {
+    /// without laying out — a pure mirror of `perform_layout`'s sizing
+    /// logic. Children are probed through `ctx` (memoized by the
+    /// pipeline). Queried via `PipelineOwner::box_dry_layout`.
+    fn compute_dry_layout(
+        &self,
+        _constraints: BoxConstraints,
+        _ctx: &mut crate::context::BoxDryLayoutCtx<'_>,
+    ) -> Size {
         Size::ZERO
     }
 
@@ -255,18 +266,16 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         self.compute_distance_to_actual_baseline(baseline)
     }
 
-    /// Returns the distance from the top of the box to its first baseline
-    /// for the given constraints (dry layout).
-    fn get_dry_baseline(&self, constraints: BoxConstraints, baseline: TextBaseline) -> Option<f32> {
-        self.compute_dry_baseline(constraints, baseline)
-    }
-
     /// Computes the distance from the top of the box to its first baseline.
     fn compute_distance_to_actual_baseline(&self, _baseline: TextBaseline) -> Option<f32> {
         None
     }
 
-    /// Computes the dry baseline for the given constraints.
+    /// Computes the dry baseline for the given constraints — where the
+    /// first baseline WOULD sit after a layout with these constraints.
+    /// Memoized per `(constraints, baseline)` by the pipeline
+    /// (`PipelineOwner::box_dry_baseline`); the cached entry includes a
+    /// computed `None`.
     fn compute_dry_baseline(
         &self,
         _constraints: BoxConstraints,
@@ -468,6 +477,54 @@ where
         );
         let mut ctx = crate::context::BoxHitTestContext::new(inner);
         T::hit_test(self, &mut ctx)
+    }
+
+    fn intrinsic_raw(
+        &self,
+        dimension: crate::storage::IntrinsicDimension,
+        extent: f32,
+        child_count: usize,
+        child_query: &mut (
+                 dyn FnMut(usize, crate::storage::IntrinsicDimension, f32) -> f32 + Send + Sync
+             ),
+    ) -> f32 {
+        // The intrinsics bridge: wrap the driver's memoizing child
+        // recursion in the typed ctx and dispatch the dimension to the
+        // matching typed compute_* — same shape as the paint/hit
+        // bridges, no GAT erasure needed.
+        use crate::storage::IntrinsicDimension as Dim;
+        let mut ctx = crate::context::BoxIntrinsicsCtx::new(child_count, child_query);
+        match dimension {
+            Dim::MinWidth => T::compute_min_intrinsic_width(self, extent, &mut ctx),
+            Dim::MaxWidth => T::compute_max_intrinsic_width(self, extent, &mut ctx),
+            Dim::MinHeight => T::compute_min_intrinsic_height(self, extent, &mut ctx),
+            Dim::MaxHeight => T::compute_max_intrinsic_height(self, extent, &mut ctx),
+        }
+    }
+
+    fn dry_layout_raw(
+        &self,
+        constraints: crate::protocol::ProtocolConstraints<BoxProtocol>,
+        child_count: usize,
+        child_dry: &mut (
+                 dyn FnMut(
+            usize,
+            crate::protocol::ProtocolConstraints<BoxProtocol>,
+        ) -> crate::protocol::ProtocolGeometry<BoxProtocol>
+                     + Send
+                     + Sync
+             ),
+    ) -> crate::protocol::ProtocolGeometry<BoxProtocol> {
+        let mut ctx = crate::context::BoxDryLayoutCtx::new(child_count, child_dry);
+        T::compute_dry_layout(self, constraints, &mut ctx)
+    }
+
+    fn dry_baseline_raw(
+        &self,
+        constraints: crate::protocol::ProtocolConstraints<BoxProtocol>,
+        baseline: crate::traits::TextBaseline,
+    ) -> Option<f32> {
+        T::compute_dry_baseline(self, constraints, baseline)
     }
 
     fn geometry(&self) -> &crate::protocol::ProtocolGeometry<BoxProtocol> {

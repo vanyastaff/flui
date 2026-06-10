@@ -306,6 +306,22 @@ impl RenderNode {
         }
     }
 
+    /// Clears this node's layout calculation cache (memoized intrinsics /
+    /// dry layout / dry baselines), returning whether anything WAS cached.
+    ///
+    /// `true` means an ancestor's layout consumed this node's intrinsic
+    /// queries: the invalidation walk must escalate to the parent even
+    /// across a relayout boundary (Flutter `RenderBox.markNeedsLayout`,
+    /// box.dart:2840). Sliver nodes carry no cache yet and always return
+    /// `false`.
+    #[inline]
+    pub fn clear_layout_cache(&mut self) -> bool {
+        match self {
+            Self::Box(entry) => entry.state_mut().clear_layout_cache(),
+            Self::Sliver(entry) => entry.state_mut().clear_layout_cache(),
+        }
+    }
+
     /// Sets the `NEEDS_PAINT` flag on this node's state — flag-only,
     /// no propagation.
     ///
