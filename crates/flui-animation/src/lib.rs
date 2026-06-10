@@ -114,8 +114,8 @@ pub use ext::{AnimatableExt, AnimationExt};
 pub use proxy::ProxyAnimation;
 pub use reverse::ReverseAnimation;
 pub use simulation::{
-    FrictionSimulation, GravitySimulation, Simulation, SpringDescription, SpringSimulation,
-    SpringType, Tolerance,
+    BoundedFrictionSimulation, ClampedSimulation, FrictionSimulation, GravitySimulation,
+    ScrollSpringSimulation, Simulation, SpringDescription, SpringSimulation, SpringType, Tolerance,
 };
 pub use spring::{AnimatedValue, TwoWayConverter};
 pub use switch::AnimationSwitch;
