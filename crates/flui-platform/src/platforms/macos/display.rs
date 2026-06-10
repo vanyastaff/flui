@@ -49,26 +49,25 @@ impl MacOSDisplay {
             let display_id_value: id = msg_send![description, objectForKey: display_id_key];
             let display_id: u64 = msg_send![display_id_value, unsignedLongLongValue];
 
-            // macOS coordinates are bottom-left origin, convert to top-left
+            // NSScreen frames are in points (logical units, bottom-left
+            // origin); the PlatformDisplay contract wants device pixels, so
+            // scale by backingScaleFactor before converting.
+            let to_device =
+                |points: f64| flui_types::geometry::device_px((points * scale).round() as i32);
+
             let bounds = Bounds {
-                origin: Point::new(
-                    flui_types::geometry::device_px(frame.origin.x.round() as i32),
-                    flui_types::geometry::device_px(frame.origin.y.round() as i32),
-                ),
-                size: Size::new(
-                    flui_types::geometry::device_px(frame.size.width.round() as i32),
-                    flui_types::geometry::device_px(frame.size.height.round() as i32),
-                ),
+                origin: Point::new(to_device(frame.origin.x), to_device(frame.origin.y)),
+                size: Size::new(to_device(frame.size.width), to_device(frame.size.height)),
             };
 
             let usable_bounds = Bounds {
                 origin: Point::new(
-                    flui_types::geometry::device_px(visible_frame.origin.x.round() as i32),
-                    flui_types::geometry::device_px(visible_frame.origin.y.round() as i32),
+                    to_device(visible_frame.origin.x),
+                    to_device(visible_frame.origin.y),
                 ),
                 size: Size::new(
-                    flui_types::geometry::device_px(visible_frame.size.width.round() as i32),
-                    flui_types::geometry::device_px(visible_frame.size.height.round() as i32),
+                    to_device(visible_frame.size.width),
+                    to_device(visible_frame.size.height),
                 ),
             };
 

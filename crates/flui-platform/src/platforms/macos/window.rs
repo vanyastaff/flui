@@ -329,12 +329,12 @@ impl PlatformWindow for MacOSWindow {
     fn resize(&self, size: Size<Pixels>) {
         // SAFETY: `ns_window` is alive for the lifetime of `self`.
         unsafe {
-            let frame: NSRect = msg_send![self.ns_window, frame];
-            let new_frame = NSRect::new(
-                frame.origin,
-                cocoa::foundation::NSSize::new(size.width.0 as f64, size.height.0 as f64),
-            );
-            let _: () = msg_send![self.ns_window, setFrame: new_frame display: YES];
+            // The stored size tracks the *content* area (see `handle_resize`
+            // using `contentRectForFrameRect:`), so resize the content, not
+            // the frame — on decorated windows a frame-sized `setFrame:`
+            // would shrink the content by the titlebar height.
+            let ns_size = cocoa::foundation::NSSize::new(size.width.0 as f64, size.height.0 as f64);
+            let _: () = msg_send![self.ns_window, setContentSize: ns_size];
 
             // Update state
             let mut state = self.state.lock();
