@@ -4,12 +4,17 @@ Internal architecture of `flui_animation`.
 
 ## System Overview
 
+`flui_animation` is the framework-agnostic animation **engine**. The widget
+layer that consumes it (`AnimatedFoo`, `AnimatedBuilder`, implicit animations,
+`TickerProvider` ownership) is **planned, not yet implemented** — shown dashed
+below.
+
 ```
-┌─────────────────────────────────────────────────────────┐
-│                   flui_widgets                          │
-│  AnimatedWidget, AnimatedBuilder, ImplicitAnimations    │
-└──────────────────────┬──────────────────────────────────┘
-                       │ uses
+┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐
+   widget layer (planned, not yet built)
+│  AnimatedFoo, AnimatedBuilder, ImplicitAnimations        │
+└ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┬ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+                       │ will use
 ┌──────────────────────▼──────────────────────────────────┐
 │                 flui_animation                          │
 │  ┌────────────────────────────────────────────────────┐ │
@@ -154,18 +159,24 @@ struct AnimationControllerInner {
     lower_bound: f32,
     upper_bound: f32,
     
-    // Animation state
-    animation_start_time: Option<Instant>,
+    // Animation state. Time comes from the ticker's elapsed seconds (scaled by
+    // time_dilation), not wall-clock Instants: `run_epoch_secs` marks where the
+    // current run/repeat-cycle began on the ticker timeline.
+    run_epoch_secs: f64,
+    run_duration: Option<Duration>, // per-run override (animate_to), never clobbers `duration`
     start_value: f32,
     target_value: f32,
     
     // Physics
-    active_simulation: Option<Box<dyn Simulation>>,
-    simulation_start_time: Option<Instant>,
+    simulation: Option<Box<dyn Simulation>>,
     
     // Repeat
     is_repeating: bool,
     repeat_reverse: bool,
+    repeat_min: f32,
+    repeat_max: f32,
+    repeat_period: Option<Duration>,
+    repeat_count: Option<u32>,
     
     // Ticker
     ticker: Option<ScheduledTicker>,

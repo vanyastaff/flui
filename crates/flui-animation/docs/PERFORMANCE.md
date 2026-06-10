@@ -2,6 +2,37 @@
 
 Performance characteristics of `flui_animation`.
 
+## Measured benchmarks
+
+These are **measured** by the committed Criterion bench
+(`benches/animation_bench.rs`); run `cargo bench -p flui-animation` to reproduce.
+Absolute numbers are machine-relative (the figures below are from one
+development machine); treat them as orders of magnitude and as a regression
+baseline, not as a hardware promise.
+
+| Hot path (per call) | Median |
+|---------------------|--------|
+| `Tween<f32>::transform` (Lerp) | ~0.64 ns |
+| `Tween<Offset>::transform` | ~0.66 ns |
+| `Tween<Color>::transform` | ~5.9 ns |
+| `Curves::Linear` | ~0.42 ns |
+| `Curves::ElasticOut` | ~7.4 ns |
+| `Curves::EaseInOut` (Cubic, 8-iter solve) | ~54 ns |
+| `SpringSimulation` x + dx | ~19 ns |
+| `AnimatedValue<Color>` advance + value (4 component springs) | ~97 ns |
+| `AnimationController::tick_at` (frame advance) | ~8.8 ns |
+| `CurvedAnimation::value` (1 `Arc<dyn>` hop + cubic) | ~59 ns |
+
+The cubic-curve solve (`EaseInOut` and friends) is the dominant per-curve cost —
+it runs a fixed Newton/bisection solve every frame. A compile-time lookup table
+for the const presets is the planned optimization; until then, prefer cheaper
+curves on very hot paths.
+
+> The tables below this point are illustrative structure/complexity notes, not
+> measured timings. Earlier hand-estimated nanosecond figures have been removed
+> in favour of the measured table above; the remaining size/complexity notes are
+> derived from the types and may drift — verify against the code.
+
 ## Memory Layout
 
 ### Type Sizes
@@ -46,11 +77,12 @@ Performance characteristics of `flui_animation`.
 
 ### parking_lot vs std
 
-| Operation | std::sync | parking_lot | Improvement |
-|-----------|-----------|-------------|-------------|
-| Uncontended Mutex lock | ~25ns | ~10ns | 2.5× |
-| Contended Mutex lock | ~100ns | ~40ns | 2.5× |
-| RwLock read | ~30ns | ~12ns | 2.5× |
+The controller uses `parking_lot::Mutex`, which is smaller and faster than
+`std::sync::Mutex` under both contention and no contention. These are *reference*
+figures from parking_lot's own published benchmarks (order-of-magnitude
+single-digit-to-tens-of-nanoseconds for an uncontended lock), not measured in
+this crate — the per-frame `tick_at` figure in the [Measured benchmarks](#measured-benchmarks)
+table (~8.8 ns, lock included) is the number that actually matters here.
 
 ### Controller Lock Strategy
 
@@ -156,17 +188,22 @@ Trade-off: Generics increase binary size and compile time.
 
 ## Curve Evaluation Cost
 
-| Curve | Operations | Cost |
-|-------|------------|------|
-| `Linear` | 1 clamp | ~1ns |
-| `EaseIn/Out` | 2-3 muls | ~2ns |
-| `Cubic` | 8 iterations binary search | ~50ns |
-| `EaseInOutSine` | 1 trig | ~10ns |
-| `ElasticIn/Out` | pow + sin | ~20ns |
-| `BounceOut` | 3-4 branches + muls | ~5ns |
-| `CatmullRomCurve` | Spline interpolation | ~30ns |
+Relative cost by the work each curve does (measured figures for `Linear`,
+`EaseInOut`, and `ElasticOut` are in the [Measured benchmarks](#measured-benchmarks)
+table above):
 
-All curves are fast enough for 60fps (~16ms frame budget).
+| Curve | Operations | Relative cost |
+|-------|------------|---------------|
+| `Linear` | 1 clamp | trivial |
+| `EaseIn/Out` (`Cubic`) | fixed Newton/bisection bézier solve | highest |
+| `EaseInOutSine` | 1 trig | low |
+| `ElasticIn/Out` | pow + sin | low-moderate |
+| `BounceOut` | 3-4 branches + muls | low |
+| `CatmullRomCurve` | spline interpolation | moderate |
+
+All curves are comfortably within a 60fps (~16ms) frame budget. The `Cubic`
+solve dominates; a const lookup table for the preset cubics is the planned
+optimization.
 
 ---
 
