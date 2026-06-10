@@ -167,6 +167,48 @@ impl SpringDescription {
         }
     }
 
+    /// Build a spring from Apple's perceptual parameters: `response` is the
+    /// natural period in seconds (the time for one undamped oscillation) and
+    /// `damping_fraction` is the damping ratio (`1.0` = critically damped / no
+    /// overshoot, `< 1.0` = bouncy, `> 1.0` = sluggish).
+    ///
+    /// This is the parameterization designers reason about and the recommended
+    /// way to configure a UI spring — far more intuitive than raw
+    /// mass/stiffness/damping. Mirrors SwiftUI's
+    /// `spring(response:dampingFraction:)`.
+    #[must_use]
+    pub fn with_response_and_damping(response: f32, damping_fraction: f32) -> Self {
+        const MASS: f32 = 1.0;
+        debug_assert!(response > 0.0, "response (natural period) must be positive");
+        // ω = 2π/response ; k = ω²·m ; c = 2·ζ·√(k·m)
+        let omega = 2.0 * PI / response;
+        let stiffness = omega * omega * MASS;
+        let damping = 2.0 * damping_fraction * (stiffness * MASS).sqrt();
+        Self {
+            mass: MASS,
+            stiffness,
+            damping,
+        }
+    }
+
+    /// Apple `smooth` preset: a gentle spring with no bounce (response 0.5s).
+    #[must_use]
+    pub fn smooth() -> Self {
+        Self::with_duration_and_bounce(0.5, 0.0)
+    }
+
+    /// Apple `snappy` preset: quick with a slight bounce (response 0.5s).
+    #[must_use]
+    pub fn snappy() -> Self {
+        Self::with_duration_and_bounce(0.5, 0.15)
+    }
+
+    /// Apple `bouncy` preset: a lively spring with noticeable bounce (response 0.5s).
+    #[must_use]
+    pub fn bouncy() -> Self {
+        Self::with_duration_and_bounce(0.5, 0.3)
+    }
+
     /// Returns the damping ratio of this spring.
     ///
     /// - `1.0`: critically damped

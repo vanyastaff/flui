@@ -93,6 +93,7 @@ pub mod ext;
 pub mod proxy;
 pub mod reverse;
 pub mod simulation;
+pub mod spring;
 pub mod switch;
 pub mod tween;
 
@@ -116,6 +117,7 @@ pub use simulation::{
     FrictionSimulation, GravitySimulation, Simulation, SpringDescription, SpringSimulation,
     SpringType, Tolerance,
 };
+pub use spring::{AnimatedValue, TwoWayConverter};
 pub use switch::AnimationSwitch;
 pub use tween::{TweenAnimation, animate};
 
