@@ -1286,6 +1286,16 @@ impl PipelineOwner<Layout> {
     ///    dirty queue's shallow-first ordering ensures parents are
     ///    processed before children).
     fn cached_or_root_constraints(&self, id: RenderId) -> Option<BoxConstraints> {
+        // The binding-set root constraints are AUTHORITATIVE for the
+        // root: on resize, set_root_constraints updates them and marks
+        // the root dirty — if the stale cached constraints won here,
+        // the resize relayout would run at the OLD window size and the
+        // newly exposed area would stay unpainted.
+        if self.root_id == Some(id)
+            && let Some(root) = self.root_constraints
+        {
+            return Some(root);
+        }
         if let Some(node) = self.render_tree.get(id)
             && let Some(entry) = node.as_box()
             && let Some(cached) = entry.state().constraints()

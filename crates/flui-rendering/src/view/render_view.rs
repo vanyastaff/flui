@@ -493,15 +493,13 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
         ctx: &mut <crate::protocol::BoxProtocol as crate::protocol::Protocol>::LayoutCtxErased<'_>,
     ) -> crate::error::RenderResult<crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>>
     {
-        // The root sizes itself from its configuration (Flutter parity,
-        // `.flutter/.../view.dart`) — but it MUST still drive its
-        // children: a child the root never `layout_child`s has no
-        // constraints, so run_layout drops its dirty entry and the
-        // window stays blank. Children get the view's own size as
-        // tight constraints and sit at the origin.
-        self.view.perform_layout();
-        let size = self.view.size();
-
+        // The INCOMING constraints are authoritative — they carry the
+        // live window size from the binding (set_root_constraints every
+        // frame). The mount-time ViewConfiguration is a snapshot that
+        // goes stale on the first resize; sizing from it left every
+        // newly exposed pixel unpainted. The root fills whatever the
+        // window gives it (Flutter parity: tight root constraints), and
+        // children get that size as tight constraints at the origin.
         let typed_inner = crate::protocol::BoxLayoutCtx::<
             flui_tree::Variable,
             crate::parent_data::BoxParentData,
@@ -510,6 +508,15 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
             flui_tree::Variable,
             crate::parent_data::BoxParentData,
         >::new(typed_inner);
+
+        let constraints = *layout_ctx.constraints();
+        let size = constraints.biggest();
+        debug_assert!(
+            size.is_finite(),
+            "root constraints must be bounded (the window has a size); got {constraints:?}",
+        );
+        self.view.size = size;
+
         let child_constraints = crate::constraints::BoxConstraints::tight(size);
         for i in 0..layout_ctx.child_count() {
             let _ = layout_ctx.layout_child(i, child_constraints);
