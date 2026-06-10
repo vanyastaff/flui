@@ -558,9 +558,9 @@ impl Renderer {
 
     /// Reconfigure the surface after loss or outdated error.
     ///
-    /// This is called automatically by `render_scene()` when a
-    /// `SurfaceError::Lost` or `SurfaceError::Outdated` is encountered,
-    /// but can also be called manually if needed.
+    /// This is called automatically by `render_scene()` when
+    /// `CurrentSurfaceTexture::Outdated` or `CurrentSurfaceTexture::Lost`
+    /// is encountered, but can also be called manually if needed.
     pub fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
         if let (Some(config), Some(surface)) = (&self.config, &self.surface) {
             surface.configure(&self.device, config);

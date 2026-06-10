@@ -129,7 +129,7 @@ The cost of leaving the divergence: the workspace ships an `RSuperellipse` API t
 
 - **`SuperellipseKey` is already Hash + Eq.** The existing struct at [crates/flui-engine/src/wgpu/layer_render.rs:27](../../crates/flui-engine/src/wgpu/layer_render.rs) derives `Hash, PartialEq, Eq` with f32-to-bits representation. Works as a HashMap key under the new bounded cache.
 
-- **wgpu 25.x is workspace-pinned** per CLAUDE.md ("Stay on 25.x, 26.0+ broken"). WGSL syntax targets 25.x; if a later wgpu adds a syntax change, this plan stays compatible. SDF shader is plain WGSL with no version-specific features.
+- **wgpu version** — at brainstorm time the workspace was pinned to 25.x; the pin has since been lifted (workspace now tracks the latest stable major, 29.x as of 2026-06). SDF shader is plain WGSL with no version-specific features, so the plan stays compatible.
 
 - **`Painter::current_rrect_clip` and `rrect_clip_stack` patterns are the model for superellipse clip storage.** Verified at brainstorm time — Painter exposes both `current_rrect_clip: [f32; 8]` and `rrect_clip_stack: Vec<[f32; 8]>`. The superellipse equivalents follow the same shape with a wider tuple (rect + per-corner radii + exponent).
 
