@@ -65,13 +65,6 @@ pub enum EngineError {
     #[error("Surface was lost")]
     SurfaceLost,
 
-    /// Surface is outdated and needs reconfiguration
-    ///
-    /// This happens when the surface size doesn't match the window size,
-    /// typically after a resize event.
-    #[error("Surface is outdated")]
-    SurfaceOutdated,
-
     /// Surface acquisition timed out
     ///
     /// The GPU took too long to provide a new frame buffer.
@@ -82,13 +75,6 @@ pub enum EngineError {
     // ========================================================================
     // Resource errors
     // ========================================================================
-    /// Out of GPU memory
-    ///
-    /// The GPU ran out of memory. This is a serious error that may require
-    /// releasing resources or reducing rendering quality.
-    #[error("Out of GPU memory")]
-    OutOfMemory,
-
     /// Failed to create a required resource
     ///
     /// Generic resource creation failure with description.
@@ -122,7 +108,7 @@ pub enum EngineError {
     /// No suitable GPU adapter found (sentinel; carries no underlying error).
     ///
     /// Use this variant when `request_adapter` returns no underlying error
-    /// (e.g. the future resolved to `None` semantically). For wgpu 25.x+
+    /// (e.g. the future resolved to `None` semantically). For wgpu 29.x
     /// `Result<Adapter, RequestAdapterError>` returns prefer
     /// [`EngineError::AdapterRequest`] which preserves the wgpu diagnostic
     /// (`NotFound { active_backends, requested_backends, supported_backends,
@@ -271,10 +257,7 @@ impl EngineError {
     /// Check if this error is recoverable (will likely succeed on retry)
     #[must_use]
     pub fn is_recoverable(&self) -> bool {
-        matches!(
-            self,
-            EngineError::SurfaceLost | EngineError::SurfaceOutdated | EngineError::Timeout
-        )
+        matches!(self, EngineError::SurfaceLost | EngineError::Timeout)
     }
 
     /// Check if this error is fatal (requires restart or resource cleanup)
@@ -282,8 +265,7 @@ impl EngineError {
     pub fn is_fatal(&self) -> bool {
         matches!(
             self,
-            EngineError::OutOfMemory
-                | EngineError::NoAdapter
+            EngineError::NoAdapter
                 | EngineError::AdapterRequest(_)
                 | EngineError::DeviceCreation(_)
                 | EngineError::SurfaceCreation(_)
@@ -337,15 +319,13 @@ mod tests {
     #[test]
     fn test_is_recoverable() {
         assert!(EngineError::SurfaceLost.is_recoverable());
-        assert!(EngineError::SurfaceOutdated.is_recoverable());
         assert!(EngineError::Timeout.is_recoverable());
-        assert!(!EngineError::OutOfMemory.is_recoverable());
         assert!(!EngineError::NoAdapter.is_recoverable());
+        assert!(!EngineError::surface_creation(std::io::Error::other("test")).is_recoverable());
     }
 
     #[test]
     fn test_is_fatal() {
-        assert!(EngineError::OutOfMemory.is_fatal());
         assert!(EngineError::NoAdapter.is_fatal());
         assert!(EngineError::NotInitialized.is_fatal());
         assert!(EngineError::surface_creation(std::io::Error::other("test")).is_fatal());

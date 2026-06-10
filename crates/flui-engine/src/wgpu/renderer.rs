@@ -201,9 +201,12 @@ impl Renderer {
         // here once for the combined block.
         #[allow(unsafe_code)]
         let surface = unsafe {
-            let surface_target = wgpu::SurfaceTargetUnsafe::from_window(window).map_err(|e| {
-                EngineError::surface_creation(std::io::Error::other(format!("{e}")))
-            })?;
+            // wgpu 29.x: HandleError does not implement std::error::Error, so we
+            // cannot pass `e` directly to `surface_creation`. Wrap via
+            // `std::io::Error::other` to preserve the Display message while
+            // satisfying the `Box<dyn Error + Send + Sync>` bound.
+            let surface_target = wgpu::SurfaceTargetUnsafe::from_window(window)
+                .map_err(|e| EngineError::surface_creation(std::io::Error::other(e.to_string())))?;
             instance
                 .create_surface_unsafe(surface_target)
                 .map_err(EngineError::surface_creation)?
