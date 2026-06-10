@@ -360,8 +360,12 @@ mod tests {
 
     #[test]
     fn test_compound_animation_status() {
-        let controller1 = create_controller(0.5);
-        let controller2 = create_controller(0.3);
+        // Controllers start at the lower bound so their status is genuinely
+        // Dismissed (a mid-range set_value now reports Forward per Flutter's
+        // _internalSetValue), letting this test assert the Dismissed->Forward
+        // transition.
+        let controller1 = create_controller(0.0);
+        let controller2 = create_controller(0.0);
 
         let compound = CompoundAnimation::add(
             controller1.clone() as Arc<dyn Animation<f32>>,

@@ -204,3 +204,34 @@ This is **high-ROI, always-on, low-risk.** It captures essentially all the real 
 - Superseded: `crates/flui-interaction/docs/ADR-001-gesture-binding-threading-model.md`; research `docs/research/2026-06-09-adr-001-gesture-binding-threading.md`
 - External: Servo parallel layout (arXiv 2002.03850; Layout Engines Report; pcwalton 2014); Meyerovich WWW2010 (~15% pipeline, ~80x microbench ceiling); GPUI ownership (zed.dev/blog/gpui-ownership, zed-decoded-async-rust); Bevy pipelined rendering + issue #17517; WebRender PR #2362/#2998 + Bugzilla #1595767; gendignoux-2024 Rayon profiling; rust-lang/rust#95985 (`PhantomData<*const ()>`)
 - Project research: beat-Flutter plan (`docs/research/2026-06-08-beat-flutter-*`) — GC-free #1, sparse-strip defensible, compute-beats-Skia not defensible
+
+---
+
+## Amendments
+
+### 2026-06-09 — `flui-animation` controller: scoped `Send + Sync` exception
+
+The `flui-animation` redesign (`docs/research/2026-06-09-flui-animation-redesign.md`)
+keeps `AnimationController` and `Animation<T>` `Send + Sync` (`Arc<Mutex<…>>`) as a
+**recorded, scoped exception** to the control-plane `!Send` boundary, rather than
+flipping them as part of that work.
+
+**Why deferred, not flipped now:** the controller drives off `flui_scheduler::Ticker`,
+whose callback contract is `Send`-bound at the source — `TickerCallback = Box<dyn FnMut(f64) + Send>`
+(`crates/flui-scheduler/src/ticker.rs:80`), `Ticker::start<F: FnMut(f64) + Send + 'static>`
+(`:355`), `TickerProvider: Send + Sync` (`:96`). A `!Send` `Rc<RefCell>` controller cannot
+drive that without flipping the scheduler's threading — which *is* the Phase-1 `!Send`
+work decided above. Bundling it into the animation correctness rescue would risk a partial
+landing that strands the crate.
+
+**Conditions to retire the exception (do the flip):** when the Phase-1 `!Send` migration
+relaxes `Ticker`/`TickerProvider`'s `Send` bound (UI-thread vsync needs no cross-thread
+callback), migrate the controller to `Rc<RefCell>`/`Cell`. The redesign keeps this
+mechanical by holding all controller mutation behind one lock boundary, using RAII `Drop`
+subscriptions (work in both models), and keeping the new `Lerp` data trait
+**data-plane-neutral** (no `Send + Sync` bound, so it does not over-constrain `Copy`
+geometry primitives).
+
+**Meanwhile:** the cost is one uncontended `parking_lot` lock per `value()`/`status()`
+read. Status listeners are fired only after the inner lock is released, so a re-entrant
+status callback cannot deadlock.
