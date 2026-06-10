@@ -1,10 +1,9 @@
 //! `CurvedAnimation` - applies easing curves to animations.
 
-use crate::animation::{Animation, StatusCallback};
+use crate::animation::{Animation, ParentSubscription, StatusCallback, link_parent};
 use crate::curve::Curve;
 use crate::status::AnimationStatus;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
-use parking_lot::Mutex;
 use std::fmt;
 use std::sync::Arc;
 
@@ -37,8 +36,8 @@ pub struct CurvedAnimation<C: Curve + Clone + Send + Sync> {
     curve: C,
     reverse_curve: Option<C>,
     notifier: Arc<ChangeNotifier>,
-    /// Cached listener ID for parent notifications
-    _parent_listener_id: Arc<Mutex<Option<ListenerId>>>,
+    /// Re-emits parent value changes to our listeners; removed on last drop.
+    _parent_sub: Arc<ParentSubscription>,
 }
 
 impl<C: Curve + Clone + Send + Sync> CurvedAnimation<C> {
@@ -51,13 +50,14 @@ impl<C: Curve + Clone + Send + Sync> CurvedAnimation<C> {
     #[must_use]
     pub fn new(parent: Arc<dyn Animation<f32>>, curve: C) -> Self {
         let notifier = Arc::new(ChangeNotifier::new());
+        let parent_sub = link_parent(&parent, &notifier);
 
         Self {
             parent,
             curve,
             reverse_curve: None,
             notifier,
-            _parent_listener_id: Arc::new(Mutex::new(None)),
+            _parent_sub: parent_sub,
         }
     }
 
@@ -174,6 +174,70 @@ mod tests {
         let _ = controller.forward();
         assert_eq!(curved.status(), AnimationStatus::Forward);
 
+        controller.dispose();
+    }
+
+    #[test]
+    fn curved_reemits_parent_value_changes() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // B2 regression: a listener on a CurvedAnimation must fire when the
+        // parent's value changes. Previously the combinator never subscribed to
+        // its parent, so AnimatedBuilder-on-a-curve silently never rebuilt.
+        let scheduler = Arc::new(Scheduler::new());
+        let controller = Arc::new(AnimationController::new(
+            Duration::from_millis(100),
+            scheduler,
+        ));
+        let curved = CurvedAnimation::new(
+            controller.clone() as Arc<dyn Animation<f32>>,
+            Curves::Linear,
+        );
+
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits2 = Arc::clone(&hits);
+        let _id = curved.add_listener(Arc::new(move || {
+            hits2.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        controller.set_value(0.5);
+        controller.set_value(0.7);
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            2,
+            "curved listener must re-emit each parent change"
+        );
+
+        controller.dispose();
+    }
+
+    #[test]
+    fn dropping_curved_removes_parent_subscription() {
+        // The shared ParentSubscription must remove its listener from the parent
+        // when the last clone drops, so a long-lived controller does not
+        // accumulate dead callbacks.
+        let scheduler = Arc::new(Scheduler::new());
+        let controller = Arc::new(AnimationController::new(
+            Duration::from_millis(100),
+            scheduler,
+        ));
+        let before = controller.debug_value_listener_count();
+        {
+            let _curved = CurvedAnimation::new(
+                controller.clone() as Arc<dyn Animation<f32>>,
+                Curves::Linear,
+            );
+            assert_eq!(
+                controller.debug_value_listener_count(),
+                before + 1,
+                "constructing a combinator subscribes once to the parent"
+            );
+        }
+        assert_eq!(
+            controller.debug_value_listener_count(),
+            before,
+            "dropping the combinator removes its parent subscription"
+        );
         controller.dispose();
     }
 }

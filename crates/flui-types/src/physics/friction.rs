@@ -136,6 +136,7 @@ impl Simulation for FrictionSimulation {
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BoundedFrictionSimulation {
+    // PORT-CHECK-OK-SP3: parallel to flui-animation::simulation::BoundedFrictionSimulation; the two physics layers use distinct Simulation traits (position/velocity here vs x/dx + Send+Sync there). Consolidation tracked.
     /// The underlying friction simulation
     friction: FrictionSimulation,
 

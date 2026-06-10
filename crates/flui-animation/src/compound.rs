@@ -1,9 +1,8 @@
 //! `CompoundAnimation` - combines multiple animations with operators.
 
-use crate::animation::{Animation, StatusCallback};
+use crate::animation::{Animation, ParentSubscription, StatusCallback, link_parent};
 use crate::status::AnimationStatus;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
-use parking_lot::Mutex;
 use std::fmt;
 use std::sync::Arc;
 
@@ -75,8 +74,9 @@ pub struct CompoundAnimation {
     next: Arc<dyn Animation<f32>>,
     operator: AnimationOperator,
     notifier: Arc<ChangeNotifier>,
-    _first_listener_id: Arc<Mutex<Option<ListenerId>>>,
-    _next_listener_id: Arc<Mutex<Option<ListenerId>>>,
+    /// Re-emit both children's value changes to our listeners; removed on last drop.
+    _first_sub: Arc<ParentSubscription>,
+    _next_sub: Arc<ParentSubscription>,
 }
 
 impl CompoundAnimation {
@@ -94,14 +94,16 @@ impl CompoundAnimation {
         operator: AnimationOperator,
     ) -> Self {
         let notifier = Arc::new(ChangeNotifier::new());
+        let first_sub = link_parent(&first, &notifier);
+        let next_sub = link_parent(&next, &notifier);
 
         Self {
             first,
             next,
             operator,
             notifier,
-            _first_listener_id: Arc::new(Mutex::new(None)),
-            _next_listener_id: Arc::new(Mutex::new(None)),
+            _first_sub: first_sub,
+            _next_sub: next_sub,
         }
     }
 
@@ -360,8 +362,12 @@ mod tests {
 
     #[test]
     fn test_compound_animation_status() {
-        let controller1 = create_controller(0.5);
-        let controller2 = create_controller(0.3);
+        // Controllers start at the lower bound so their status is genuinely
+        // Dismissed (a mid-range set_value now reports Forward per Flutter's
+        // _internalSetValue), letting this test assert the Dismissed->Forward
+        // transition.
+        let controller1 = create_controller(0.0);
+        let controller2 = create_controller(0.0);
 
         let compound = CompoundAnimation::add(
             controller1.clone() as Arc<dyn Animation<f32>>,

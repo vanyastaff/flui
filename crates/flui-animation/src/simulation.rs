@@ -167,6 +167,48 @@ impl SpringDescription {
         }
     }
 
+    /// Build a spring from Apple's perceptual parameters: `response` is the
+    /// natural period in seconds (the time for one undamped oscillation) and
+    /// `damping_fraction` is the damping ratio (`1.0` = critically damped / no
+    /// overshoot, `< 1.0` = bouncy, `> 1.0` = sluggish).
+    ///
+    /// This is the parameterization designers reason about and the recommended
+    /// way to configure a UI spring — far more intuitive than raw
+    /// mass/stiffness/damping. Mirrors SwiftUI's
+    /// `spring(response:dampingFraction:)`.
+    #[must_use]
+    pub fn with_response_and_damping(response: f32, damping_fraction: f32) -> Self {
+        const MASS: f32 = 1.0;
+        debug_assert!(response > 0.0, "response (natural period) must be positive");
+        // ω = 2π/response ; k = ω²·m ; c = 2·ζ·√(k·m)
+        let omega = 2.0 * PI / response;
+        let stiffness = omega * omega * MASS;
+        let damping = 2.0 * damping_fraction * (stiffness * MASS).sqrt();
+        Self {
+            mass: MASS,
+            stiffness,
+            damping,
+        }
+    }
+
+    /// Apple `smooth` preset: a gentle spring with no bounce (response 0.5s).
+    #[must_use]
+    pub fn smooth() -> Self {
+        Self::with_duration_and_bounce(0.5, 0.0)
+    }
+
+    /// Apple `snappy` preset: quick with a slight bounce (response 0.5s).
+    #[must_use]
+    pub fn snappy() -> Self {
+        Self::with_duration_and_bounce(0.5, 0.15)
+    }
+
+    /// Apple `bouncy` preset: a lively spring with noticeable bounce (response 0.5s).
+    #[must_use]
+    pub fn bouncy() -> Self {
+        Self::with_duration_and_bounce(0.5, 0.3)
+    }
+
     /// Returns the damping ratio of this spring.
     ///
     /// - `1.0`: critically damped
@@ -476,18 +518,20 @@ impl FrictionSimulation {
     /// Creates a new friction simulation.
     ///
     /// # Arguments
-    /// * `drag` - Drag coefficient (must be > 0 and != 1.0, typically around 0.01-0.1)
+    /// * `drag` - Drag coefficient, in the open range `(0, 1)` (typically ~0.01-0.2)
     /// * `position` - Initial position
     /// * `velocity` - Initial velocity
     ///
     /// # Panics
-    /// Panics if drag is not positive or if drag equals 1.0 (which would cause division by zero).
+    /// Panics if `drag` is not in `(0, 1)`. A drag of exactly 1.0 divides by
+    /// `ln(1) = 0`; a drag `>= 1` makes the object *accelerate* (`v·drag^t`
+    /// grows), so the simulation would never come to rest — a hang, not a slow
+    /// stop.
     #[must_use]
     pub fn new(drag: f32, position: f32, velocity: f32) -> Self {
-        assert!(drag > 0.0, "Drag must be positive");
         assert!(
-            (drag - 1.0).abs() > 1e-6,
-            "Drag cannot be 1.0 (causes division by zero)"
+            drag > 0.0 && drag < 1.0,
+            "friction drag must be in (0, 1), got {drag}: drag >= 1 never decelerates"
         );
         Self {
             drag,
@@ -501,13 +545,12 @@ impl FrictionSimulation {
     /// Creates a friction simulation with custom tolerance.
     ///
     /// # Panics
-    /// Panics if drag is not positive or if drag equals 1.0.
+    /// Panics if `drag` is not in `(0, 1)` (see [`new`](Self::new)).
     #[must_use]
     pub fn with_tolerance(drag: f32, position: f32, velocity: f32, tolerance: Tolerance) -> Self {
-        assert!(drag > 0.0, "Drag must be positive");
         assert!(
-            (drag - 1.0).abs() > 1e-6,
-            "Drag cannot be 1.0 (causes division by zero)"
+            drag > 0.0 && drag < 1.0,
+            "friction drag must be in (0, 1), got {drag}: drag >= 1 never decelerates"
         );
         Self {
             drag,
@@ -530,9 +573,49 @@ impl FrictionSimulation {
         if (x - self.initial_position).abs() < 1e-6 {
             0.0
         } else {
-            ((self.drag_log * (self.initial_position - x) / self.initial_velocity) + 1.0).ln()
+            // Solve x(t) = x for t. From `x(t) = x0 + v·(drag^t - 1)/ln(drag)`,
+            //   drag^t = ln(drag)·(x - x0)/v + 1, so t = ln(that) / ln(drag).
+            // (Previously used `(x0 - x)`, the wrong sign, which returned
+            // negative times for forward motion; `time_at_x(final_x)` is `+inf`,
+            // the asymptote.)
+            ((self.drag_log * (x - self.initial_position) / self.initial_velocity) + 1.0).ln()
                 / self.drag_log
         }
+    }
+
+    /// Creates a friction simulation that travels from `start_position` to
+    /// `end_position`, decelerating from `start_velocity` down to
+    /// `end_velocity`.
+    ///
+    /// This is how scrollables fling to a *specific* resting point (e.g. snapping
+    /// to a page boundary): the drag is solved so the object arrives at
+    /// `end_position` with `end_velocity`, and the tolerance is set so the
+    /// simulation reports done at that velocity. Mirrors Flutter's
+    /// `FrictionSimulation.through`.
+    ///
+    /// # Panics
+    /// Panics if the solved drag is not in `(0, 1)` — which happens only for
+    /// physically impossible requests (e.g. asking to *speed up* over the span,
+    /// or to move opposite the velocity).
+    #[must_use]
+    pub fn through(
+        start_position: f32,
+        end_position: f32,
+        start_velocity: f32,
+        end_velocity: f32,
+    ) -> Self {
+        // drag = e^((vStart - vEnd) / (xStart - xEnd))  (Flutter's `_dragFor`).
+        let drag = std::f32::consts::E
+            .powf((start_velocity - end_velocity) / (start_position - end_position));
+        Self::with_tolerance(
+            drag,
+            start_position,
+            start_velocity,
+            Tolerance {
+                velocity: end_velocity.abs(),
+                ..Tolerance::DEFAULT
+            },
+        )
     }
 }
 
@@ -628,9 +711,259 @@ impl Simulation for GravitySimulation {
     }
 }
 
+/// A spring tuned for scroll overscroll: identical to [`SpringSimulation`] but
+/// it never snaps to the end, so the spring's natural overshoot is visible —
+/// that is exactly the bounce a scrollable shows when dragged past its edge.
+/// Mirrors Flutter's `ScrollSpringSimulation`.
+#[derive(Debug, Clone)]
+pub struct ScrollSpringSimulation {
+    spring: SpringSimulation,
+}
+
+impl ScrollSpringSimulation {
+    /// Creates a scroll spring from `start` toward `end` with an initial `velocity`.
+    #[must_use]
+    pub fn new(spring: SpringDescription, start: f32, end: f32, velocity: f32) -> Self {
+        // `with_snap_to_end` is left at its default (false): overscroll bounce
+        // requires the un-snapped value.
+        Self {
+            spring: SpringSimulation::new(spring, start, end, velocity),
+        }
+    }
+}
+
+impl Simulation for ScrollSpringSimulation {
+    fn x(&self, time: f32) -> f32 {
+        self.spring.x(time)
+    }
+    fn dx(&self, time: f32) -> f32 {
+        self.spring.dx(time)
+    }
+    fn is_done(&self, time: f32) -> bool {
+        self.spring.is_done(time)
+    }
+    fn tolerance(&self) -> Tolerance {
+        self.spring.tolerance()
+    }
+}
+
+/// Wraps another simulation, clamping its position to `[x_min, x_max]` and its
+/// velocity to `[dx_min, dx_max]`. Mirrors Flutter's `ClampedSimulation`.
+pub struct ClampedSimulation {
+    // PORT-CHECK-OK-SP3: parallel to flui-types::physics::ClampedSimulation, which wraps the value-physics Simulation (position/velocity, no Send+Sync); this wraps animation's Simulation (x/dx + Send+Sync). Distinct trait contracts; consolidation tracked.
+    inner: Box<dyn Simulation>,
+    x_min: f32,
+    x_max: f32,
+    dx_min: f32,
+    dx_max: f32,
+}
+
+impl ClampedSimulation {
+    /// Wraps `inner`, clamping position to `[x_min, x_max]` and velocity to
+    /// `[dx_min, dx_max]`.
+    #[must_use]
+    pub fn new(
+        inner: Box<dyn Simulation>,
+        x_min: f32,
+        x_max: f32,
+        dx_min: f32,
+        dx_max: f32,
+    ) -> Self {
+        Self {
+            inner,
+            x_min,
+            x_max,
+            dx_min,
+            dx_max,
+        }
+    }
+}
+
+impl std::fmt::Debug for ClampedSimulation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClampedSimulation")
+            .field("x_min", &self.x_min)
+            .field("x_max", &self.x_max)
+            .field("dx_min", &self.dx_min)
+            .field("dx_max", &self.dx_max)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Simulation for ClampedSimulation {
+    fn x(&self, time: f32) -> f32 {
+        self.inner.x(time).clamp(self.x_min, self.x_max)
+    }
+    fn dx(&self, time: f32) -> f32 {
+        self.inner.dx(time).clamp(self.dx_min, self.dx_max)
+    }
+    fn is_done(&self, time: f32) -> bool {
+        self.inner.is_done(time)
+    }
+    fn tolerance(&self) -> Tolerance {
+        self.inner.tolerance()
+    }
+}
+
+/// A [`FrictionSimulation`] clamped to a position range, finishing when the
+/// friction settles *or* the object reaches a bound. Mirrors Flutter's
+/// `BoundedFrictionSimulation` — used by scrollables so a fling that overshoots
+/// the content extent stops cleanly at the edge.
+#[derive(Debug, Clone)]
+pub struct BoundedFrictionSimulation {
+    // PORT-CHECK-OK-SP3: parallel to flui-types::physics::BoundedFrictionSimulation; that one wraps the value-physics Simulation (position/velocity), this wraps animation's Simulation (x/dx + Send+Sync). Distinct trait contracts; consolidation tracked.
+    friction: FrictionSimulation,
+    min_x: f32,
+    max_x: f32,
+    /// Travel direction at construction: a fling with positive velocity heads
+    /// toward `max_x` and finishes once the unclamped friction position reaches
+    /// that bound; a negative one heads toward `min_x`.
+    positive_direction: bool,
+}
+
+impl BoundedFrictionSimulation {
+    /// Creates a bounded friction simulation confined to `[min_x, max_x]`.
+    ///
+    /// # Panics
+    /// Panics if `drag` is not in `(0, 1)` (see [`FrictionSimulation::new`]).
+    #[must_use]
+    pub fn new(drag: f32, position: f32, velocity: f32, min_x: f32, max_x: f32) -> Self {
+        Self {
+            friction: FrictionSimulation::new(drag, position, velocity),
+            min_x,
+            max_x,
+            positive_direction: velocity > 0.0,
+        }
+    }
+}
+
+impl Simulation for BoundedFrictionSimulation {
+    fn x(&self, time: f32) -> f32 {
+        self.friction.x(time).clamp(self.min_x, self.max_x)
+    }
+    fn dx(&self, time: f32) -> f32 {
+        // Once pinned at the bound the object is at rest, so report zero velocity
+        // — matching the clamped position — instead of the still-decaying
+        // friction velocity a controller would otherwise keep sampling.
+        if self.is_done(time) {
+            0.0
+        } else {
+            self.friction.dx(time)
+        }
+    }
+    fn is_done(&self, time: f32) -> bool {
+        // Done when the friction settles OR the fling reaches the bound it is
+        // travelling toward. The previous code tested whether the *clamped*
+        // position was within tolerance of the exact bound, which a fast fling
+        // skips entirely: its unclamped position can jump from inside the range
+        // to far past the bound between frames, leaving the simulation "active"
+        // (and the controller ticking) while x() is already pinned at the edge.
+        if self.friction.is_done(time) {
+            return true;
+        }
+        let fx = self.friction.x(time);
+        if self.positive_direction {
+            fx >= self.max_x
+        } else {
+            fx <= self.min_x
+        }
+    }
+    fn tolerance(&self) -> Tolerance {
+        self.friction.tolerance()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[should_panic(expected = "drag >= 1 never decelerates")]
+    fn friction_drag_ge_one_panics_instead_of_hanging() {
+        // drag >= 1 would make dx grow forever; construction must reject it.
+        let _ = FrictionSimulation::new(1.5, 0.0, 100.0);
+    }
+
+    #[test]
+    fn friction_settles_with_valid_drag() {
+        let sim = FrictionSimulation::new(0.135, 0.0, 1000.0);
+        // dx decays toward zero, so is_done eventually holds.
+        assert!(sim.is_done(100.0), "friction with drag<1 must come to rest");
+    }
+
+    #[test]
+    fn friction_through_lands_at_target() {
+        // Fling from x=0 (v=800) to rest (v=0) at x=500: the resting (asymptotic)
+        // position must be the requested 500.
+        let sim = FrictionSimulation::through(0.0, 500.0, 800.0, 0.0);
+        assert!(
+            (sim.final_x() - 500.0).abs() < 0.5,
+            "final_x={}",
+            sim.final_x()
+        );
+        // It approaches 500 over time and the (fixed) time_at_x of an
+        // intermediate point is positive and finite.
+        assert!(
+            (sim.x(100.0) - 500.0).abs() < 1.0,
+            "x(100)={}",
+            sim.x(100.0)
+        );
+        let t_mid = sim.time_at_x(250.0);
+        assert!(t_mid.is_finite() && t_mid > 0.0, "t_mid={t_mid}");
+    }
+
+    #[test]
+    fn clamped_simulation_bounds_position_and_velocity() {
+        let inner = Box::new(FrictionSimulation::new(0.135, 0.0, 5000.0));
+        let clamped = ClampedSimulation::new(inner, -10.0, 100.0, -50.0, 50.0);
+        // At t=0: position 0 is within [-10, 100]; velocity 5000 clamps to 50.
+        assert_eq!(clamped.x(0.0), 0.0);
+        assert_eq!(clamped.dx(0.0), 50.0);
+        // Later, the friction position would exceed 100 but stays clamped.
+        assert!(clamped.x(10.0) <= 100.0 && clamped.x(10.0) >= -10.0);
+    }
+
+    #[test]
+    fn bounded_friction_stops_at_bound() {
+        // A fast fling that would overshoot 100 must report done at the bound.
+        let sim = BoundedFrictionSimulation::new(0.135, 0.0, 5000.0, -10.0, 100.0);
+        assert!(sim.x(10.0) <= 100.0, "clamped to max bound");
+        assert!(sim.is_done(10.0), "done once the bound is reached");
+    }
+
+    #[test]
+    fn bounded_friction_done_after_jumping_past_bound() {
+        // A very fast fling whose unclamped friction position leaps from inside
+        // the range to hundreds of px past max_x between frames. Friction is
+        // nowhere near settled (velocity still ~thousands), and the position is
+        // nowhere near the exact bound, so the old near-bound tolerance test kept
+        // the sim active; the crossing-based test finishes it.
+        let sim = BoundedFrictionSimulation::new(0.135, 0.0, 8000.0, -10.0, 50.0);
+        assert!(
+            sim.is_done(0.2),
+            "done once the bound is crossed, not only when near it"
+        );
+        assert_eq!(sim.x(0.2), 50.0, "x pinned at max bound");
+        assert_eq!(sim.dx(0.2), 0.0, "zero velocity once pinned at the bound");
+    }
+
+    #[test]
+    fn bounded_friction_negative_fling_stops_at_min() {
+        // Symmetric: a negative fling finishes at min_x, not max_x.
+        let sim = BoundedFrictionSimulation::new(0.135, 0.0, -8000.0, -50.0, 10.0);
+        assert!(sim.is_done(0.2), "done once min bound is crossed");
+        assert_eq!(sim.x(0.2), -50.0, "x pinned at min bound");
+    }
+
+    #[test]
+    fn scroll_spring_does_not_snap() {
+        // An underdamped scroll spring overshoots its target (bounce), unlike a
+        // snap-to-end spring which would clamp at the end.
+        let spring = SpringDescription::with_damping_ratio(1.0, 200.0, 0.4);
+        let sim = ScrollSpringSimulation::new(spring, 0.0, 100.0, 0.0);
+        let overshot = (0..200).any(|i| sim.x(i as f32 / 60.0) > 100.5);
+        assert!(overshot, "underdamped scroll spring should overshoot");
+    }
 
     #[test]
     fn test_tolerance_default() {

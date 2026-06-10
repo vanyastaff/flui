@@ -1174,7 +1174,9 @@ dependencies = [
 name = "flui-animation"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "flui-foundation",
+ "flui-macros",
  "flui-scheduler",
  "flui-types",
  "parking_lot",

@@ -1,6 +1,6 @@
 //! `ProxyAnimation` - wraps another animation, allowing hot-swapping.
 
-use crate::animation::{Animation, StatusCallback};
+use crate::animation::{Animation, ParentSubscription, StatusCallback, link_parent};
 use crate::status::AnimationStatus;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 use parking_lot::RwLock;
@@ -43,6 +43,9 @@ where
 {
     parent: Arc<RwLock<Arc<dyn Animation<T>>>>,
     notifier: Arc<ChangeNotifier>,
+    /// Re-emits the current parent's value changes; swapped (old removed) on
+    /// `set_parent`, removed entirely on the last clone's drop.
+    parent_sub: Arc<RwLock<Arc<ParentSubscription>>>,
 }
 
 impl<T> ProxyAnimation<T>
@@ -56,9 +59,12 @@ where
     /// * `parent` - The initial parent animation
     #[must_use]
     pub fn new(parent: Arc<dyn Animation<T>>) -> Self {
+        let notifier = Arc::new(ChangeNotifier::new());
+        let parent_sub = link_parent(&parent, &notifier);
         Self {
             parent: Arc::new(RwLock::new(parent)),
-            notifier: Arc::new(ChangeNotifier::new()),
+            notifier,
+            parent_sub: Arc::new(RwLock::new(parent_sub)),
         }
     }
 
@@ -73,7 +79,12 @@ where
     ///
     /// This will cause all listeners to be notified of the change.
     pub fn set_parent(&self, new_parent: Arc<dyn Animation<T>>) {
+        // Subscribe to the new parent first, then swap; replacing the stored
+        // subscription drops the old one, which removes its listener from the
+        // previous parent.
+        let new_sub = link_parent(&new_parent, &self.notifier);
         *self.parent.write() = new_parent;
+        *self.parent_sub.write() = new_sub;
         self.notifier.notify_listeners();
     }
 }

@@ -1,7 +1,7 @@
 //! Core animation trait and types.
 
 use crate::status::AnimationStatus;
-use flui_foundation::{Listenable, ListenerId};
+use flui_foundation::{ChangeNotifier, Listenable, ListenerId};
 use std::fmt;
 use std::sync::Arc;
 
@@ -114,26 +114,63 @@ where
     }
 }
 
-/// Type-erased animation trait object.
+/// A shared handle that removes a combinator's value-subscription from its
+/// parent animation when the **last** clone of the combinator is dropped.
 ///
-/// This allows storing animations of different types in collections.
-///
-/// # Examples
-///
-/// ```
-/// use flui_animation::DynAnimation;
-/// use std::sync::Arc;
-///
-/// let animations: Vec<Arc<dyn DynAnimation<f32>>> = vec![];
-/// ```
-pub trait DynAnimation<T: Clone + Send + Sync + 'static>: Animation<T> + Listenable {}
+/// Combinators (`CurvedAnimation`, `ReverseAnimation`, ...) re-emit their
+/// parent's value changes to their own listeners by subscribing to the parent.
+/// Because combinators derive `Clone` and share one `notifier` across clones,
+/// the subscription is reference-counted here and torn down exactly once, on the
+/// final drop — never while a sibling clone is still alive.
+pub(crate) struct ParentSubscription {
+    // `Mutex<Option<…>>` makes the `Send`-only teardown closure `Sync` so the
+    // enclosing combinator stays `Send + Sync`; the closure runs once, on drop.
+    teardown: parking_lot::Mutex<Option<Box<dyn FnMut() + Send>>>,
+}
 
-// Blanket implementation for all types that implement Animation
-impl<T, A> DynAnimation<T> for A
+impl ParentSubscription {
+    fn new(teardown: impl FnMut() + Send + 'static) -> Arc<Self> {
+        Arc::new(Self {
+            teardown: parking_lot::Mutex::new(Some(Box::new(teardown))),
+        })
+    }
+}
+
+impl fmt::Debug for ParentSubscription {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ParentSubscription").finish_non_exhaustive()
+    }
+}
+
+impl Drop for ParentSubscription {
+    fn drop(&mut self) {
+        if let Some(mut teardown) = self.teardown.lock().take() {
+            teardown();
+        }
+    }
+}
+
+/// Subscribe `notifier` to re-emit whenever `parent`'s value changes, returning
+/// a shared [`ParentSubscription`] that removes the subscription on the last
+/// combinator clone's drop.
+///
+/// The parent's callback holds only a `Weak` reference to `notifier`, so the
+/// subscription never keeps the combinator's notifier alive on its own.
+pub(crate) fn link_parent<T>(
+    parent: &Arc<dyn Animation<T>>,
+    notifier: &Arc<ChangeNotifier>,
+) -> Arc<ParentSubscription>
 where
     T: Clone + Send + Sync + 'static,
-    A: Animation<T> + Listenable + ?Sized,
 {
+    let weak = Arc::downgrade(notifier);
+    let id = parent.add_listener(Arc::new(move || {
+        if let Some(notifier) = weak.upgrade() {
+            notifier.notify_listeners();
+        }
+    }));
+    let parent = Arc::clone(parent);
+    ParentSubscription::new(move || parent.remove_listener(id))
 }
 
 #[cfg(test)]

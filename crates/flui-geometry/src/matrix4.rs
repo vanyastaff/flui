@@ -148,6 +148,31 @@ impl Matrix4 {
         }
     }
 
+    /// Interpolates toward `other` by decomposing both matrices into
+    /// scale / rotation / translation, lerping the scale and translation and
+    /// **slerping** the rotation, then recomposing.
+    ///
+    /// This is the correct way to interpolate an affine transform: a naive
+    /// component-wise lerp of the 16 elements shears and distorts rotation
+    /// (a 90° rotation lerped element-wise collapses through a degenerate
+    /// matrix at `t = 0.5`). Matches Flutter's `Matrix4Tween`, which likewise
+    /// decomposes. `t` is not clamped, so it extrapolates.
+    ///
+    /// Decomposition assumes an SRT-composable matrix (the common UI case:
+    /// translate/rotate/scale); skew and perspective components are not
+    /// preserved, exactly as in Flutter.
+    #[inline]
+    #[must_use]
+    pub fn lerp(self, other: Self, t: f32) -> Self {
+        let (scale_a, rot_a, trans_a) = self.to_glam().to_scale_rotation_translation();
+        let (scale_b, rot_b, trans_b) = other.to_glam().to_scale_rotation_translation();
+        Self::from_glam(Mat4::from_scale_rotation_translation(
+            scale_a.lerp(scale_b, t),
+            rot_a.slerp(rot_b, t),
+            trans_a.lerp(trans_b, t),
+        ))
+    }
+
     /// Identity matrix constant (no transformation).
     ///
     /// This is a compile-time constant that can be used anywhere a `Matrix4` is

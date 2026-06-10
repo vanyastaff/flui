@@ -267,31 +267,65 @@ fn evaluate_cubic(t: f32, p0: f32, p1: f32, p2: f32, p3: f32) -> f32 {
     one_minus_t3 * p0 + 3.0 * one_minus_t2 * t * p1 + 3.0 * one_minus_t * t2 * p2 + t3 * p3
 }
 
+/// Derivative with respect to `t` of [`evaluate_cubic`].
+#[inline]
+fn evaluate_cubic_derivative(t: f32, p0: f32, p1: f32, p2: f32, p3: f32) -> f32 {
+    let one_minus_t = 1.0 - t;
+    3.0 * (one_minus_t * one_minus_t * (p1 - p0)
+        + 2.0 * one_minus_t * t * (p2 - p1)
+        + t * t * (p3 - p2))
+}
+
+/// Absolute solver tolerance for the cubic-bezier x-inversion.
+const CUBIC_SOLVE_EPSILON: f32 = 1e-6;
+
+impl Cubic {
+    /// Solves `x(s) = x` for the bezier parameter `s` over `[0, 1]`.
+    ///
+    /// Uses Newton-Raphson (quadratic convergence — typically 2-4 iterations),
+    /// falling back to bisection where the curve is too flat for Newton to make
+    /// progress. This is the standard WebKit `UnitBezier` solver and replaces a
+    /// plain 8-iteration bisection: same result within tolerance, fewer
+    /// iterations on the dominant per-frame curve path.
+    fn solve_x(&self, x: f32) -> f32 {
+        // Newton-Raphson from `x` as the initial guess (good because x(s) ≈ s).
+        let mut s = x;
+        for _ in 0..8 {
+            let error = evaluate_cubic(s, 0.0, self.a, self.c, 1.0) - x;
+            if error.abs() < CUBIC_SOLVE_EPSILON {
+                return s;
+            }
+            let slope = evaluate_cubic_derivative(s, 0.0, self.a, self.c, 1.0);
+            if slope.abs() < CUBIC_SOLVE_EPSILON {
+                break; // too flat: Newton stalls, hand off to bisection
+            }
+            s -= error / slope;
+        }
+
+        // Bounded bisection fallback (worst case for near-flat segments).
+        let (mut lo, mut hi) = (0.0_f32, 1.0_f32);
+        let mut s = x.clamp(lo, hi);
+        for _ in 0..32 {
+            let estimate = evaluate_cubic(s, 0.0, self.a, self.c, 1.0);
+            if (estimate - x).abs() < CUBIC_SOLVE_EPSILON {
+                return s;
+            }
+            if estimate < x {
+                lo = s;
+            } else {
+                hi = s;
+            }
+            s = f32::midpoint(lo, hi);
+        }
+        s
+    }
+}
+
 impl Curve for Cubic {
     fn transform(&self, t: f32) -> f32 {
         let t = t.clamp(0.0, 1.0);
-
-        // Binary search to find t value that gives us the desired x
-        let mut start = 0.0;
-        let mut end = 1.0;
-
-        for _ in 0..8 {
-            let mid = f32::midpoint(start, end);
-            let x = evaluate_cubic(mid, 0.0, self.a, self.c, 1.0);
-
-            if (x - t).abs() < 1e-6 {
-                return evaluate_cubic(mid, 0.0, self.b, self.d, 1.0);
-            }
-
-            if x < t {
-                start = mid;
-            } else {
-                end = mid;
-            }
-        }
-
-        let mid = f32::midpoint(start, end);
-        evaluate_cubic(mid, 0.0, self.b, self.d, 1.0)
+        let s = self.solve_x(t);
+        evaluate_cubic(s, 0.0, self.b, self.d, 1.0)
     }
 }
 
@@ -827,6 +861,70 @@ impl Curves {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Reference solver: the plain 8-iteration bisection the Newton solver
+    /// replaces. Used to prove the new `transform` matches the old behavior.
+    fn reference_bisection_transform(cubic: &Cubic, t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        let (mut start, mut end) = (0.0_f32, 1.0_f32);
+        for _ in 0..8 {
+            let mid = f32::midpoint(start, end);
+            let x = evaluate_cubic(mid, 0.0, cubic.a, cubic.c, 1.0);
+            if (x - t).abs() < 1e-6 {
+                return evaluate_cubic(mid, 0.0, cubic.b, cubic.d, 1.0);
+            }
+            if x < t {
+                start = mid;
+            } else {
+                end = mid;
+            }
+        }
+        evaluate_cubic(f32::midpoint(start, end), 0.0, cubic.b, cubic.d, 1.0)
+    }
+
+    #[test]
+    fn cubic_solver_inverts_x() {
+        // solve_x must invert bezier_x: bezier_x(solve_x(t)) ≈ t everywhere.
+        for cubic in [
+            Cubic::new(0.42, 0.0, 0.58, 1.0), // EaseInOut
+            Cubic::new(0.25, 0.1, 0.25, 1.0), // Ease
+            Cubic::new(0.42, 0.0, 1.0, 1.0),  // EaseIn
+            Cubic::new(0.0, 0.0, 0.58, 1.0),  // EaseOut
+        ] {
+            for i in 0..=1000 {
+                let t = i as f32 / 1000.0;
+                let s = cubic.solve_x(t);
+                let x = evaluate_cubic(s, 0.0, cubic.a, cubic.c, 1.0);
+                assert!((x - t).abs() < 1e-3, "x({s})={x} != t={t}");
+            }
+        }
+    }
+
+    #[test]
+    fn cubic_newton_matches_reference_bisection() {
+        // The Newton solver produces the same curve as the old pure-bisection
+        // one, only MORE precisely: the old stopped after 8 bisection steps
+        // (parameter bracket 1/256), so its output carried up to ~0.5e-2 error
+        // on steep segments, while Newton converges to 1e-6. The bound here is
+        // that residual old imprecision — `cubic_solver_inverts_x` is the real
+        // accuracy gate; this only proves there is no gross divergence.
+        let cubic = Cubic::new(0.42, 0.0, 0.58, 1.0); // EaseInOut
+        for i in 0..=1000 {
+            let t = i as f32 / 1000.0;
+            let new = cubic.transform(t);
+            let old = reference_bisection_transform(&cubic, t);
+            assert!((new - old).abs() < 1e-2, "t={t}: new={new} old={old}");
+        }
+    }
+
+    #[test]
+    fn cubic_endpoints_and_symmetry() {
+        let ease_in_out = Cubic::new(0.42, 0.0, 0.58, 1.0);
+        assert!((ease_in_out.transform(0.0)).abs() < 1e-4);
+        assert!((ease_in_out.transform(1.0) - 1.0).abs() < 1e-4);
+        // EaseInOut is symmetric about (0.5, 0.5).
+        assert!((ease_in_out.transform(0.5) - 0.5).abs() < 1e-3);
+    }
 
     #[test]
     fn test_linear_curve() {

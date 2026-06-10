@@ -93,6 +93,7 @@ pub mod ext;
 pub mod proxy;
 pub mod reverse;
 pub mod simulation;
+pub mod spring;
 pub mod switch;
 pub mod tween;
 
@@ -102,7 +103,7 @@ pub mod status;
 pub mod tween_types;
 
 // Re-exports from animation modules
-pub use animation::{Animation, AnimationDirection, DynAnimation, StatusCallback};
+pub use animation::{Animation, AnimationDirection, StatusCallback};
 pub use builder::AnimationControllerBuilder;
 pub use compound::{AnimationOperator, CompoundAnimation};
 pub use constant::{ALWAYS_COMPLETE, ALWAYS_DISMISSED, ConstantAnimation};
@@ -113,9 +114,15 @@ pub use ext::{AnimatableExt, AnimationExt};
 pub use proxy::ProxyAnimation;
 pub use reverse::ReverseAnimation;
 pub use simulation::{
-    FrictionSimulation, GravitySimulation, Simulation, SpringDescription, SpringSimulation,
-    SpringType, Tolerance,
+    BoundedFrictionSimulation, ClampedSimulation, FrictionSimulation, GravitySimulation,
+    ScrollSpringSimulation, Simulation, SpringDescription, SpringSimulation, SpringType, Tolerance,
 };
+pub use spring::{AnimatedValue, TwoWayConverter};
+// `#[derive(Animatable)]` generates a `TwoWayConverter` impl. It shares the name
+// `Animatable` with the trait above but lives in the macro namespace (the serde
+// `Serialize` trait+derive pattern), so a single `use flui_animation::Animatable`
+// brings in both.
+pub use flui_macros::Animatable;
 pub use switch::AnimationSwitch;
 pub use tween::{TweenAnimation, animate};
 
@@ -130,8 +137,8 @@ pub use status::{AnimationBehavior, AnimationStatus};
 pub use tween_types::{
     AlignmentTween, Animatable, AnimatableExt as TweenAnimatableExt, BorderRadiusTween,
     ChainedTween, ColorTween, ConstantTween, CurveExt, CurveTween, EdgeInsetsTween, FloatTween,
-    IntTween, OffsetTween, RectTween, ReverseTween, SizeTween, StepTween, Tween, TweenSequence,
-    TweenSequenceItem,
+    IntTween, Matrix4Tween, OffsetTween, RectTween, ReverseTween, SizeTween, StepTween, Tween,
+    TweenSequence, TweenSequenceItem,
 };
 
 // Re-export scheduler types for convenience.

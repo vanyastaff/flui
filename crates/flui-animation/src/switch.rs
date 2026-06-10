@@ -411,7 +411,9 @@ mod tests {
     #[test]
     fn test_animation_switch_status() {
         let scheduler = Arc::new(Scheduler::new());
-        let controller = create_controller(&scheduler, 0.5);
+        // Start at the lower bound so status is genuinely Dismissed: a mid-range
+        // set_value now reports Forward per Flutter's _internalSetValue.
+        let controller = create_controller(&scheduler, 0.0);
 
         let switch = AnimationSwitch::new(controller.clone() as Arc<dyn Animation<f32>>, None);
 
