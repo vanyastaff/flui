@@ -154,7 +154,6 @@
 //! # Feature Flags
 //!
 //! - `images` - Enable image loading (PNG, JPEG, GIF, WebP)
-//! - `serde` - Enable serde serialization (bundles, manifests)
 //! - `network` - Enable HTTP/HTTPS asset loading
 //! - `full` - Enable all stable features
 //!

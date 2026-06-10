@@ -63,10 +63,7 @@ full = [
 ]
 
 [dev-dependencies]
-criterion = { workspace = true }
 
 # [[bench]]
 # name = "profiler_bench"
 # harness = false
-
-flui-engine = { path = "../flui-engine" }

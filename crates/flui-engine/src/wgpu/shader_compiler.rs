@@ -239,15 +239,11 @@ impl ShaderCache {
 
     /// Clear the shader cache.
     ///
-    /// Cycle 4 E-7: gated behind `#[cfg(feature = "devtools")]`.
-    /// The method has zero production callsites; its only legitimate
-    /// consumer is a devtools hot-reload / debug flush flow. Pre-
-    /// cycle the method shipped unconditionally under a module-level
-    /// `#[allow(dead_code)]` mask -- the cfg-gate replaces the
-    /// blanket lint suppression with a feature flag a devtools
-    /// build can opt into. The `devtools` feature is declared in
-    /// `Cargo.toml`; default builds skip the method entirely.
-    #[cfg(feature = "devtools")]
+    /// Zero production call sites; reserved for devtools hot-reload / debug
+    /// flush flows. Suppressed from dead-code lint: the `devtools` feature
+    /// integration is deferred; re-enable this method when a concrete consumer
+    /// lands in `flui-devtools`.
+    #[allow(dead_code)]
     pub fn clear(&self) {
         let mut cache = self.cache.write();
         cache.clear();

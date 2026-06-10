@@ -27,9 +27,6 @@ flui-painting = { path = "../flui-painting" }
 # Slab storage for O(1) access
 slab = "0.4"
 
-# Thread-safe primitives
-parking_lot = "0.12"
-
 # Tracing for diagnostics
 tracing = "0.1"
 
