@@ -375,12 +375,17 @@ where
 
     fn hit_test_raw(
         &self,
-        _result: &mut crate::protocol::ProtocolHitResult<SliverProtocol>,
         _position: crate::protocol::ProtocolPosition<SliverProtocol>,
+        _child_count: usize,
+        _hit_child: &mut (
+                 dyn FnMut(usize, Option<crate::protocol::ProtocolPosition<SliverProtocol>>) -> bool
+                     + Send
+                     + Sync
+             ),
     ) -> bool {
-        // Protocol bridge only - returns false.
-        // Real hit testing flows through RenderSliver::hit_test() with
-        // SliverHitTestContext.
+        // Sliver hit testing lands with the sliver layout walk
+        // (Core.2); until then a sliver subtree reports a miss rather
+        // than a false hit.
         false
     }
 

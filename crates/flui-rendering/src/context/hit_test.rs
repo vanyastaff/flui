@@ -127,6 +127,14 @@ where
         self.inner.hit_test_child(index, position)
     }
 
+    /// Tests a child at its laid-out position (`RenderState.offset`)
+    /// — the parent supplies no offset, the driver resolves it. THE
+    /// way to hit-test children positioned during layout; parents no
+    /// longer mirror offsets in their own fields.
+    pub fn hit_test_child_at_layout_offset(&mut self, index: usize) -> bool {
+        self.inner.hit_test_child_at_layout_offset(index)
+    }
+
     // ════════════════════════════════════════════════════════════════════════
     // TRANSFORM MANAGEMENT
     // ════════════════════════════════════════════════════════════════════════

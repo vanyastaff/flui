@@ -84,8 +84,6 @@ pub struct RenderFlex {
     size: Size,
     /// Number of children (tracked for hit testing).
     child_count: usize,
-    /// Child offsets (tracked for hit testing).
-    child_offsets: Vec<Offset>,
 }
 
 impl Default for RenderFlex {
@@ -97,7 +95,6 @@ impl Default for RenderFlex {
             spacing: 0.0,
             size: Size::ZERO,
             child_count: 0,
-            child_offsets: Vec::new(),
         }
     }
 }
@@ -203,7 +200,6 @@ impl RenderBox for RenderFlex {
         if child_count == 0 {
             // No children - use minimum size
             self.size = constraints.smallest();
-            self.child_offsets.clear();
             ctx.complete_with_size(self.size);
             return;
         }
@@ -361,8 +357,6 @@ impl RenderBox for RenderFlex {
         };
 
         // Position each child and track offsets
-        self.child_offsets.clear();
-        self.child_offsets.reserve(child_count);
 
         for (i, slot) in child_sizes.iter().enumerate().take(child_count) {
             let child_size = slot.unwrap_or(Size::ZERO);
@@ -376,7 +370,6 @@ impl RenderBox for RenderFlex {
             };
 
             let offset = self.offset(main_offset, cross_offset);
-            self.child_offsets.push(offset);
             ctx.position_child(i, offset);
 
             main_offset += self.main_size(child_size) + px(self.spacing) + between_space;
@@ -402,9 +395,7 @@ impl RenderBox for RenderFlex {
 
         // Test children in reverse order (top-most first)
         for i in (0..self.child_count).rev() {
-            if let Some(&offset) = self.child_offsets.get(i)
-                && ctx.hit_test_child_at_offset(i, offset)
-            {
+            if ctx.hit_test_child_at_layout_offset(i) {
                 return true;
             }
         }

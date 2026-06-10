@@ -35,10 +35,10 @@
 
 use downcast_rs::{DowncastSync, impl_downcast};
 use flui_foundation::Diagnosticable;
-use flui_types::{Offset, Rect};
+use flui_types::Rect;
 
 use crate::{
-    protocol::{Protocol, ProtocolGeometry, ProtocolHitResult, ProtocolPosition},
+    protocol::{Protocol, ProtocolGeometry, ProtocolPosition},
     semantics::SemanticsConfiguration,
 };
 
@@ -224,15 +224,22 @@ pub trait RenderObject<P: Protocol>:
 
     /// Hit tests this render object with raw protocol types.
     ///
-    /// Called by the hit testing pipeline. Returns true if the position hits
-    /// this render object or any of its children.
+    /// Called by the hit-test walk. `position` is in this node's local
+    /// space; `child_count` is the number of tree children; `hit_child`
+    /// recurses into a child subtree — `Some(p)` at an exact position
+    /// (the caller already transformed it), `None` at the child's
+    /// laid-out position (`RenderState.offset`, resolved by the
+    /// driver). Returns whether the position hits this node or any
+    /// child. Hit entries are recorded by the driver, leaf-first.
     ///
     /// **Users don't implement this directly.** Protocol traits provide
-    /// blanket implementations that create typed contexts.
+    /// blanket implementations that create typed contexts and call the
+    /// protocol-level `hit_test` (e.g. `RenderBox::hit_test`).
     fn hit_test_raw(
         &self,
-        result: &mut ProtocolHitResult<P>,
         position: ProtocolPosition<P>,
+        child_count: usize,
+        hit_child: &mut (dyn FnMut(usize, Option<ProtocolPosition<P>>) -> bool + Send + Sync),
     ) -> bool;
 
     // ========================================================================
@@ -334,17 +341,6 @@ pub trait RenderObject<P: Protocol>:
     /// Default: 0 (leaf nodes)
     fn child_count(&self) -> usize {
         0
-    }
-
-    /// Returns the paint offset for the child at the given index.
-    ///
-    /// Called during painting to position children. The offset is relative
-    /// to this node's origin and is typically set during layout via
-    /// position_child().
-    ///
-    /// Default: Offset::ZERO
-    fn child_offset(&self, _index: usize) -> Offset {
-        Offset::ZERO
     }
 
     // ========================================================================

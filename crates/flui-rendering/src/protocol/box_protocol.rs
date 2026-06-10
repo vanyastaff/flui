@@ -903,9 +903,28 @@ impl BoxHitTestEntry {
 /// (one full re-fold over the now-shorter stack). Per-call cost
 /// drops from O(stack_depth) to O(1) for queries, and pops stay
 /// O(stack_depth) but amortize across the matched push.
+/// Driver-supplied child recursion for the box hit-test walk.
+///
+/// `(index, position_override)`: `Some(p)` tests the child at the
+/// exact position `p` (the parent already transformed it — clip /
+/// transform objects); `None` tests at the child's laid-out position
+/// (the driver subtracts the child's `RenderState.offset`). Returns
+/// whether the child subtree was hit.
+// `Send + Sync` mechanically required by `HitTestContextApi`'s bounds
+// (inherited like `LayoutChildCallback`'s — see U19); the walk itself
+// is control-plane single-threaded.
+pub type HitTestChildCallback<'a> =
+    &'a mut (dyn FnMut(usize, Option<Offset>) -> bool + Send + Sync);
+
+/// Box-protocol hit-test context: local-space position, the entry
+/// path under construction, the live child recursion supplied by the
+/// pipeline driver, and the transform stack (R-24 cached composition).
 pub struct BoxHitTestCtx<'ctx, A: Arity, P: ParentData> {
     position: Offset,
     result: BoxHitTestResult,
+    /// Live recursion into the pipeline's hit-test walk. `None` in
+    /// leaf test fixtures — child tests then report a miss.
+    child_callback: Option<HitTestChildCallback<'ctx>>,
     transform_stack: Vec<Matrix4>,
     /// Cached composition of `transform_stack` in push-order. Kept in
     /// sync with the stack via `push_transform` (multiply in) and
@@ -920,6 +939,21 @@ impl<'ctx, A: Arity, P: ParentData> BoxHitTestCtx<'ctx, A, P> {
         Self {
             position,
             result: BoxHitTestResult::new(),
+            child_callback: None,
+            transform_stack: Vec::new(),
+            composed_transform: Matrix4::IDENTITY,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    /// Creates a context wired to the pipeline driver's child
+    /// recursion — the production constructor (the `new` form is for
+    /// leaf-only test fixtures).
+    pub fn with_child_callback(position: Offset, callback: HitTestChildCallback<'ctx>) -> Self {
+        Self {
+            position,
+            result: BoxHitTestResult::new(),
+            child_callback: Some(callback),
             transform_stack: Vec::new(),
             composed_transform: Matrix4::IDENTITY,
             _phantom: std::marker::PhantomData,
@@ -976,8 +1010,18 @@ impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, BoxHitTest, A, P>
         bounds.contains(Point::new(self.position.dx, self.position.dy))
     }
 
-    fn hit_test_child(&mut self, _index: usize, _position: Offset) -> bool {
-        false // Override in actual implementation
+    fn hit_test_child(&mut self, index: usize, position: Offset) -> bool {
+        match self.child_callback.as_mut() {
+            Some(callback) => callback(index, Some(position)),
+            None => false,
+        }
+    }
+
+    fn hit_test_child_at_layout_offset(&mut self, index: usize) -> bool {
+        match self.child_callback.as_mut() {
+            Some(callback) => callback(index, None),
+            None => false,
+        }
     }
 
     fn push_transform(&mut self, transform: Matrix4) {

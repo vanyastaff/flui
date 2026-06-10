@@ -169,6 +169,15 @@ pub trait HitTestContextApi<'ctx, H: HitTestCapability + ?Sized, A: Arity, P: Pa
     /// Tests a child for hits with position transformation.
     fn hit_test_child(&mut self, index: usize, position: H::Position) -> bool;
 
+    /// Tests a child at its laid-out position (`RenderState.offset`),
+    /// resolved by the pipeline driver — the parent supplies no offset.
+    ///
+    /// Default `false` for contexts without driver plumbing (leaf test
+    /// fixtures, the sliver surface until its hit-test walk lands).
+    fn hit_test_child_at_layout_offset(&mut self, _index: usize) -> bool {
+        false
+    }
+
     /// Adds a transform to the hit test path.
     fn push_transform(&mut self, transform: flui_types::Matrix4);
 

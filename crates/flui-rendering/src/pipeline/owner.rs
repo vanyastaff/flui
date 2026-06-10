@@ -544,6 +544,76 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         self.device_pixel_ratio
     }
 
+    /// Hit-tests the render tree at `position` (root-local
+    /// coordinates), appending leaf-first entries to `result`.
+    ///
+    /// The walk mirrors the paint walk's shape: per node, the
+    /// protocol blanket wraps a driver-supplied child-recursion
+    /// callback in the typed, arity-gated hit-test context and calls
+    /// the object's `hit_test`. `None` child overrides resolve to the
+    /// child's laid-out `RenderState.offset` — parents no longer
+    /// mirror offsets in their own fields to hit-test children.
+    ///
+    /// Returns whether anything was hit. O(visited nodes) average;
+    /// worst case O(tree) when nothing claims the position.
+    pub fn hit_test(&self, position: Offset, result: &mut crate::hit_testing::HitTestResult) -> bool
+    where
+        // The child-recursion callback must be Send + Sync (ctx trait
+        // bounds, U19 inheritance); it captures &self, so the phase
+        // marker must be Sync. Every phase is a ZST — always satisfied
+        // at call sites, spelled out for the generic impl.
+        Phase: Sync,
+    {
+        let Some(root_id) = self.root_id else {
+            return false;
+        };
+        self.hit_test_subtree(root_id, position, result)
+    }
+
+    fn hit_test_subtree(
+        &self,
+        id: RenderId,
+        position: Offset,
+        result: &mut crate::hit_testing::HitTestResult,
+    ) -> bool
+    where
+        Phase: Sync,
+    {
+        let Some(node) = self.render_tree.get(id) else {
+            return false;
+        };
+        let Some(entry) = node.as_box() else {
+            // Sliver hit testing lands with the sliver walk (Core.2).
+            return false;
+        };
+        let children: Vec<RenderId> = node.children().to_vec();
+        let render_object = entry.render_object();
+
+        let mut hit_child = |index: usize, override_pos: Option<Offset>| -> bool {
+            let Some(&child_id) = children.get(index) else {
+                return false;
+            };
+            let child_position = override_pos.unwrap_or_else(|| {
+                let offset = self
+                    .render_tree
+                    .get(child_id)
+                    .and_then(|n| n.as_box())
+                    .map(|e| e.state().offset())
+                    .unwrap_or(Offset::ZERO);
+                position - offset
+            });
+            self.hit_test_subtree(child_id, child_position, result)
+        };
+
+        let hit = render_object.hit_test_raw(position, children.len(), &mut hit_child);
+        if hit {
+            // Leaf-first path: children pushed their entries during
+            // the callback above; the ancestor follows.
+            result.add(crate::hit_testing::HitTestEntry::new(id));
+        }
+        hit
+    }
+
     /// Sets the device pixel ratio for subsequent paint passes.
     ///
     /// Called by the platform binding on surface creation and DPI
@@ -2900,8 +2970,16 @@ mod tests {
 
         fn hit_test_raw(
             &self,
-            _result: &mut crate::protocol::ProtocolHitResult<crate::protocol::BoxProtocol>,
             _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
+            _child_count: usize,
+            _hit_child: &mut (
+                     dyn FnMut(
+                usize,
+                Option<crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>>,
+            ) -> bool
+                         + Send
+                         + Sync
+                 ),
         ) -> bool {
             false
         }
@@ -2969,8 +3047,16 @@ mod tests {
 
         fn hit_test_raw(
             &self,
-            _result: &mut crate::protocol::ProtocolHitResult<crate::protocol::BoxProtocol>,
             _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
+            _child_count: usize,
+            _hit_child: &mut (
+                     dyn FnMut(
+                usize,
+                Option<crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>>,
+            ) -> bool
+                         + Send
+                         + Sync
+                 ),
         ) -> bool {
             false
         }

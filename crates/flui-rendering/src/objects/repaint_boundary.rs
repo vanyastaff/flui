@@ -135,11 +135,21 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderRepai
 
     fn hit_test_raw(
         &self,
-        _result: &mut crate::protocol::ProtocolHitResult<crate::protocol::BoxProtocol>,
         _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
+        child_count: usize,
+        hit_child: &mut (
+                 dyn FnMut(
+            usize,
+            Option<crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>>,
+        ) -> bool
+                     + Send
+                     + Sync
+             ),
     ) -> bool {
-        // Protocol bridge — real hit testing flows through the pipeline.
-        false
+        // Transparent to hits — the boundary affects repaint
+        // scheduling only. Forward to the child at its laid-out
+        // position.
+        child_count > 0 && hit_child(0, None)
     }
 
     // === Optimization boundaries (the KEY overrides) ========================

@@ -355,12 +355,13 @@ impl RendererBinding for RenderingFlutterBinding {
 
     // ---- formerly ViewHitTestable ----
 
-    fn hit_test_in_view(&self, result: &mut HitTestResult, position: Offset, view_id: u64) {
-        let views = self.render_views.read();
-        if let Some(view) = views.get(&view_id) {
-            let view_guard = view.read();
-            view_guard.hit_test(result, position);
-        }
+    fn hit_test_in_view(&self, result: &mut HitTestResult, position: Offset, _view_id: u64) {
+        // Hits route through the REAL render tree (the pipeline
+        // owner's), not the per-view registry — the registry views
+        // are bare metric holders with no children, so testing them
+        // produced no targets. Leaf-first entries come back from the
+        // owner's hit-test walk (RenderState.offset-aware).
+        self.root_pipeline_owner.read().hit_test(position, result);
     }
 
     // ---- RendererBinding proper ----

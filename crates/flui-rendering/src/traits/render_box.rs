@@ -451,12 +451,23 @@ where
 
     fn hit_test_raw(
         &self,
-        _result: &mut crate::protocol::ProtocolHitResult<BoxProtocol>,
-        _position: crate::protocol::ProtocolPosition<BoxProtocol>,
+        position: crate::protocol::ProtocolPosition<BoxProtocol>,
+        _child_count: usize,
+        hit_child: &mut (
+                 dyn FnMut(usize, Option<crate::protocol::ProtocolPosition<BoxProtocol>>) -> bool
+                     + Send
+                     + Sync
+             ),
     ) -> bool {
-        // Protocol bridge only - returns false.
-        // Real hit testing flows through RenderBox::hit_test() with BoxHitTestContext.
-        false
+        // The hit-test bridge: wrap the driver's child recursion in
+        // the typed, arity-gated BoxHitTestContext and call the user's
+        // RenderBox::hit_test. Same shape as the paint bridge — no GAT
+        // erasure needed, the position/callback types are concrete.
+        let inner = crate::protocol::BoxHitTestCtx::<T::Arity, T::ParentData>::with_child_callback(
+            position, hit_child,
+        );
+        let mut ctx = crate::context::BoxHitTestContext::new(inner);
+        T::hit_test(self, &mut ctx)
     }
 
     fn geometry(&self) -> &crate::protocol::ProtocolGeometry<BoxProtocol> {

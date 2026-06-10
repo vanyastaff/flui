@@ -535,11 +535,27 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
 
     fn hit_test_raw(
         &self,
-        _result: &mut crate::protocol::ProtocolHitResult<crate::protocol::BoxProtocol>,
         _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
+        child_count: usize,
+        hit_child: &mut (
+                 dyn FnMut(
+            usize,
+            Option<crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>>,
+        ) -> bool
+                     + Send
+                     + Sync
+             ),
     ) -> bool {
-        // RenderView always hits (it's the root)
-        true
+        // Root pass-through: test children topmost-first (later
+        // siblings paint on top). The view itself claims no hit — an
+        // empty window region reports a miss instead of a phantom
+        // root target.
+        for index in (0..child_count).rev() {
+            if hit_child(index, None) {
+                return true;
+            }
+        }
+        false
     }
 
     fn is_repaint_boundary(&self) -> bool {
