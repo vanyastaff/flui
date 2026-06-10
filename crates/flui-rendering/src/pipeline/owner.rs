@@ -1735,6 +1735,28 @@ unsafe fn layout_subtree_borrowed<'tree>(
     let mut child_states: Vec<ChildState<BoxParentData>> =
         child_ids.iter().map(|&cid| ChildState::new(cid)).collect();
 
+    // Seed each ChildState.offset from the child's persisted
+    // RenderState.offset. A parent that does not re-position a child
+    // during this walk must preserve the child's prior offset
+    // (Flutter parity: BoxParentData.offset persists until
+    // positionChild overwrites it) — without the seed, the
+    // post-layout commit below would silently reset unpositioned
+    // children to Offset::ZERO.
+    for cs in &mut child_states {
+        if let Some(child_ptr) = borrows.get(cs.id) {
+            // SAFETY: shared reborrow of a DISTINCT child slot
+            // (parent ≠ child by tree acyclicity). No `&mut` to this
+            // slot is live: the recursive layout callback has not run
+            // yet, and `node_ref` covers only the parent's slot.
+            // Distinct slot reborrows have independent tags under
+            // Stacked / Tree Borrows.
+            let child_node: &RenderNode = unsafe { &*child_ptr.0 };
+            if let Some(child_entry) = child_node.as_box() {
+                cs.offset = child_entry.state().offset();
+            }
+        }
+    }
+
     // Descendant-error tracking flag. Closure flips to `true` on any
     // descendant `RenderError`; stage 6 below skips `clear_needs_layout`
     // when set so the parent stays dirty for next-frame retry. Shared
@@ -1821,6 +1843,31 @@ unsafe fn layout_subtree_borrowed<'tree>(
     // NEEDS_LAYOUT stays set for next-frame retry.
     entry.state_mut().set_geometry(geometry);
     entry.state_mut().set_constraints(constraints);
+
+    // Commit the offsets perform_layout wrote via `position_child`
+    // into each child's persisted `RenderState.offset`. The
+    // `ChildState` vec is a per-walk transient — without this commit
+    // every positioned offset dies with the stack frame and paint /
+    // hit-test (which read `RenderState.offset` as the authoritative
+    // child position) would place all children at the parent origin.
+    // Runs only on the parent-success path: on the Err / panic paths
+    // above, state stays unmodified so NEEDS_LAYOUT retry semantics
+    // hold. A descendant error does NOT skip the commit — the
+    // parent's perform_layout returned Ok, so its positioning
+    // decisions are valid regardless of a failed grandchild.
+    for cs in &child_states {
+        if let Some(child_ptr) = borrows.get(cs.id) {
+            // SAFETY: shared reborrow of a DISTINCT child slot
+            // (parent ≠ child by tree acyclicity). All recursive
+            // child borrows ended when perform_layout_raw returned;
+            // `entry`/`node_ref` cover only the parent's slot.
+            // `set_offset` is an atomic store through `&self`.
+            let child_node: &RenderNode = unsafe { &*child_ptr.0 };
+            if let Some(child_entry) = child_node.as_box() {
+                child_entry.state().set_offset(cs.offset);
+            }
+        }
+    }
 
     // Bootstrap relayout boundary (U17). BoxProtocol runs the Flutter
     // formula; SliverProtocol would be a no-op (not reachable on this
