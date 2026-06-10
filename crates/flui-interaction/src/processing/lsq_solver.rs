@@ -295,7 +295,8 @@ fn solve_rhs(
 /// Fit two right-hand sides (e.g. the x and y pointer coordinates) that share
 /// the same sample times `x` and weights `w`. The QR factorization — the
 /// dominant O(n²·m) cost — is computed once and reused for both, halving the
-/// factorization work versus two independent [`solve_one`] calls.
+/// factorization work versus two independent `solve_one` calls. (`solve_one`
+/// is `#[cfg(test)]`, so it is not an intra-doc link here.)
 pub(crate) fn solve_two(
     x: &[f64],
     w: &[f64],
