@@ -1,4 +1,4 @@
-//! macOS event conversion utilities
+//! macOS event conversion to W3C ui-events (0.3 API)
 //!
 //! Converts NSEvent to platform-agnostic ui-events types.
 //!
@@ -11,30 +11,56 @@
 //!     ↓
 //! PlatformInput (ui-events wrapper)
 //!     ↓
-//! Platform handlers
+//! WindowCallbacks::dispatch_input
 //! ```
 //!
 //! # Key Mappings
 //!
-//! - NSEvent.characters → keyboard_types::Key
+//! - NSEvent.characters / keyCode → keyboard_types::Key
 //! - NSEventModifierFlags → keyboard_types::Modifiers
 //! - NSEventType → PointerEvent / KeyboardEvent
-//! - NSPoint → logical pixels (converted via backingScaleFactor)
+//! - NSPoint → logical pixels (NSEvent coordinates are already logical;
+//!   the Y axis is flipped from bottom-left to top-left origin)
+
+use std::{sync::LazyLock, time::Instant};
 
 use cocoa::{
-    appkit::{NSEvent, NSEventModifierFlags, NSEventType},
+    appkit::{NSEventModifierFlags, NSEventType},
     base::id,
     foundation::NSPoint,
 };
-use flui_types::geometry::{Offset, Pixels};
-use keyboard_types::{Key, Modifiers};
-use objc::{runtime::Object, *};
+use dpi::{PhysicalPosition, PhysicalSize};
+use keyboard_types::{Key, Modifiers, NamedKey};
+use objc::{class, msg_send, sel, sel_impl};
 use ui_events::{
+    ScrollDelta,
     keyboard::{Code, KeyState, KeyboardEvent, Location},
-    pointer::{PointerButton, PointerButtons, PointerEvent, PointerId, PointerType},
+    pointer::{
+        PointerButton, PointerButtonEvent, PointerButtons, PointerEvent, PointerId, PointerInfo,
+        PointerScrollEvent, PointerState, PointerType, PointerUpdate,
+    },
 };
 
-use crate::traits::input::PlatformInput;
+use crate::traits::PlatformInput;
+
+/// Process-start epoch for monotonic event timestamps.
+static PROCESS_START: LazyLock<Instant> = LazyLock::new(Instant::now);
+
+/// Get monotonic timestamp in milliseconds since process start.
+#[inline]
+fn event_timestamp_ms() -> u64 {
+    PROCESS_START.elapsed().as_millis() as u64
+}
+
+/// Create a `PointerInfo` for the primary mouse pointer.
+#[inline]
+fn primary_mouse_info() -> PointerInfo {
+    PointerInfo {
+        pointer_id: Some(PointerId::PRIMARY),
+        pointer_type: PointerType::Mouse,
+        persistent_device_id: None,
+    }
+}
 
 // ============================================================================
 // NSEvent Conversion
@@ -42,8 +68,21 @@ use crate::traits::input::PlatformInput;
 
 /// Convert NSEvent to PlatformInput
 ///
+/// `view_height` is the receiving view's logical height, used to flip the
+/// Y axis from macOS bottom-left origin to the framework's top-left origin.
+///
 /// Returns None if the event type is not supported (e.g., gesture events)
-pub fn convert_ns_event(ns_event: id, scale_factor: f64) -> Option<PlatformInput> {
+///
+/// # Safety
+///
+/// `ns_event` must be a valid, live `NSEvent*` for the duration of the call.
+pub unsafe fn convert_ns_event(
+    ns_event: id,
+    scale_factor: f64,
+    view_height: f64,
+) -> Option<PlatformInput> {
+    // SAFETY: caller guarantees `ns_event` is a valid NSEvent*; all messages
+    // sent below are documented NSEvent selectors.
     unsafe {
         let event_type: NSEventType = msg_send![ns_event, type];
 
@@ -81,43 +120,74 @@ pub fn convert_ns_event(ns_event: id, scale_factor: f64) -> Option<PlatformInput
             }
 
             // Mouse button events
-            NSEventType::NSLeftMouseDown => {
-                convert_mouse_event(ns_event, scale_factor, PointerButton::Primary, true)
-            }
+            NSEventType::NSLeftMouseDown => convert_mouse_button(
+                ns_event,
+                scale_factor,
+                view_height,
+                PointerButton::Primary,
+                true,
+            ),
 
-            NSEventType::NSLeftMouseUp => {
-                convert_mouse_event(ns_event, scale_factor, PointerButton::Primary, false)
-            }
+            NSEventType::NSLeftMouseUp => convert_mouse_button(
+                ns_event,
+                scale_factor,
+                view_height,
+                PointerButton::Primary,
+                false,
+            ),
 
-            NSEventType::NSRightMouseDown => {
-                convert_mouse_event(ns_event, scale_factor, PointerButton::Secondary, true)
-            }
+            NSEventType::NSRightMouseDown => convert_mouse_button(
+                ns_event,
+                scale_factor,
+                view_height,
+                PointerButton::Secondary,
+                true,
+            ),
 
-            NSEventType::NSRightMouseUp => {
-                convert_mouse_event(ns_event, scale_factor, PointerButton::Secondary, false)
-            }
+            NSEventType::NSRightMouseUp => convert_mouse_button(
+                ns_event,
+                scale_factor,
+                view_height,
+                PointerButton::Secondary,
+                false,
+            ),
 
-            NSEventType::NSOtherMouseDown => {
-                convert_mouse_event(ns_event, scale_factor, PointerButton::Auxiliary, true)
-            }
+            NSEventType::NSOtherMouseDown => convert_mouse_button(
+                ns_event,
+                scale_factor,
+                view_height,
+                PointerButton::Auxiliary,
+                true,
+            ),
 
-            NSEventType::NSOtherMouseUp => {
-                convert_mouse_event(ns_event, scale_factor, PointerButton::Auxiliary, false)
-            }
+            NSEventType::NSOtherMouseUp => convert_mouse_button(
+                ns_event,
+                scale_factor,
+                view_height,
+                PointerButton::Auxiliary,
+                false,
+            ),
 
             // Mouse movement events
             NSEventType::NSMouseMoved
             | NSEventType::NSLeftMouseDragged
             | NSEventType::NSRightMouseDragged
-            | NSEventType::NSOtherMouseDragged => convert_mouse_move(ns_event, scale_factor),
+            | NSEventType::NSOtherMouseDragged => {
+                convert_mouse_move(ns_event, scale_factor, view_height)
+            }
 
             // Scroll events
-            NSEventType::NSScrollWheel => convert_scroll_event(ns_event, scale_factor),
+            NSEventType::NSScrollWheel => convert_scroll_event(ns_event, scale_factor, view_height),
 
-            // Mouse enter/exit
-            NSEventType::NSMouseEntered => convert_mouse_enter_exit(ns_event, scale_factor, true),
+            // Mouse enter/exit carry no useful position payload in the W3C
+            // model — Enter/Leave only identify the pointer.
+            NSEventType::NSMouseEntered => Some(PlatformInput::Pointer(PointerEvent::Enter(
+                primary_mouse_info(),
+            ))),
 
-            NSEventType::NSMouseExited => convert_mouse_enter_exit(ns_event, scale_factor, false),
+            NSEventType::NSMouseExited => Some(PlatformInput::Pointer(PointerEvent::Leave(
+                primary_mouse_info(),
+            ))),
 
             // Unsupported events
             _ => None,
@@ -131,246 +201,282 @@ pub fn convert_ns_event(ns_event: id, scale_factor: f64) -> Option<PlatformInput
 
 /// Extract key from NSEvent
 ///
-/// Uses NSEvent.characters to get the Unicode character
+/// Uses NSEvent.keyCode for special keys, NSEvent.characters otherwise
+///
+/// # Safety
+///
+/// `ns_event` must be a valid, live `NSEvent*` of a keyboard event.
 unsafe fn extract_key(ns_event: id) -> Key {
-    // Get characters string
-    let chars: id = msg_send![ns_event, characters];
-    if chars.is_null() {
-        return Key::Unidentified;
+    // SAFETY: caller guarantees `ns_event` is a valid NSEvent*; `characters`
+    // returns an autoreleased NSString whose UTF8String buffer is valid while
+    // the event is alive (we copy it into an owned String before returning).
+    unsafe {
+        // Check for special keys via key code first
+        let key_code: u16 = msg_send![ns_event, keyCode];
+        if let Some(special_key) = key_code_to_key(key_code) {
+            return special_key;
+        }
+
+        // Get characters string
+        let chars: id = msg_send![ns_event, characters];
+        if chars.is_null() {
+            return Key::Named(NamedKey::Unidentified);
+        }
+
+        // Convert NSString to Rust string
+        let chars_ptr: *const i8 = msg_send![chars, UTF8String];
+        if chars_ptr.is_null() {
+            return Key::Named(NamedKey::Unidentified);
+        }
+
+        let chars_str = std::ffi::CStr::from_ptr(chars_ptr as *const _)
+            .to_str()
+            .unwrap_or("");
+
+        if chars_str.is_empty() {
+            return Key::Named(NamedKey::Unidentified);
+        }
+
+        // Regular character key
+        Key::Character(chars_str.to_string())
     }
-
-    // Convert NSString to Rust string
-    let chars_ptr: *const i8 = msg_send![chars, UTF8String];
-    if chars_ptr.is_null() {
-        return Key::Unidentified;
-    }
-
-    let chars_str = std::ffi::CStr::from_ptr(chars_ptr as *const _)
-        .to_str()
-        .unwrap_or("");
-
-    if chars_str.is_empty() {
-        return Key::Unidentified;
-    }
-
-    // Check for special keys via key code
-    let key_code: u16 = msg_send![ns_event, keyCode];
-    if let Some(special_key) = key_code_to_key(key_code) {
-        return special_key;
-    }
-
-    // Regular character key
-    Key::Character(chars_str.to_string())
 }
 
 /// Extract modifiers from NSEvent
+///
+/// # Safety
+///
+/// `ns_event` must be a valid, live `NSEvent*`.
 unsafe fn extract_modifiers(ns_event: id) -> Modifiers {
-    let flags: NSEventModifierFlags = msg_send![ns_event, modifierFlags];
+    // SAFETY: caller guarantees `ns_event` is a valid NSEvent*;
+    // `modifierFlags` is a plain NSUInteger getter.
+    unsafe {
+        let flags: NSEventModifierFlags = msg_send![ns_event, modifierFlags];
 
-    let mut modifiers = Modifiers::empty();
+        let mut modifiers = Modifiers::empty();
 
-    if flags.contains(NSEventModifierFlags::NSShiftKeyMask) {
-        modifiers.insert(Modifiers::SHIFT);
-    }
-    if flags.contains(NSEventModifierFlags::NSControlKeyMask) {
-        modifiers.insert(Modifiers::CONTROL);
-    }
-    if flags.contains(NSEventModifierFlags::NSAlternateKeyMask) {
-        modifiers.insert(Modifiers::ALT);
-    }
-    if flags.contains(NSEventModifierFlags::NSCommandKeyMask) {
-        modifiers.insert(Modifiers::META); // Command = Meta
-    }
+        if flags.contains(NSEventModifierFlags::NSShiftKeyMask) {
+            modifiers.insert(Modifiers::SHIFT);
+        }
+        if flags.contains(NSEventModifierFlags::NSControlKeyMask) {
+            modifiers.insert(Modifiers::CONTROL);
+        }
+        if flags.contains(NSEventModifierFlags::NSAlternateKeyMask) {
+            modifiers.insert(Modifiers::ALT);
+        }
+        if flags.contains(NSEventModifierFlags::NSCommandKeyMask) {
+            modifiers.insert(Modifiers::META); // Command = Meta
+        }
 
-    modifiers
+        modifiers
+    }
 }
 
 /// Convert macOS key code to Key
 ///
 /// Reference: https://developer.apple.com/documentation/appkit/nsevent/1534513-keycode
 fn key_code_to_key(key_code: u16) -> Option<Key> {
-    match key_code {
+    let named = match key_code {
         // Arrow keys
-        123 => Some(Key::ArrowLeft),
-        124 => Some(Key::ArrowRight),
-        125 => Some(Key::ArrowDown),
-        126 => Some(Key::ArrowUp),
+        123 => NamedKey::ArrowLeft,
+        124 => NamedKey::ArrowRight,
+        125 => NamedKey::ArrowDown,
+        126 => NamedKey::ArrowUp,
 
         // Function keys
-        122 => Some(Key::F1),
-        120 => Some(Key::F2),
-        99 => Some(Key::F3),
-        118 => Some(Key::F4),
-        96 => Some(Key::F5),
-        97 => Some(Key::F6),
-        98 => Some(Key::F7),
-        100 => Some(Key::F8),
-        101 => Some(Key::F9),
-        109 => Some(Key::F10),
-        103 => Some(Key::F11),
-        111 => Some(Key::F12),
+        122 => NamedKey::F1,
+        120 => NamedKey::F2,
+        99 => NamedKey::F3,
+        118 => NamedKey::F4,
+        96 => NamedKey::F5,
+        97 => NamedKey::F6,
+        98 => NamedKey::F7,
+        100 => NamedKey::F8,
+        101 => NamedKey::F9,
+        109 => NamedKey::F10,
+        103 => NamedKey::F11,
+        111 => NamedKey::F12,
 
         // Special keys
-        36 => Some(Key::Enter),
-        48 => Some(Key::Tab),
-        51 => Some(Key::Backspace),
-        53 => Some(Key::Escape),
-        117 => Some(Key::Delete),
-        115 => Some(Key::Home),
-        119 => Some(Key::End),
-        116 => Some(Key::PageUp),
-        121 => Some(Key::PageDown),
+        36 => NamedKey::Enter,
+        48 => NamedKey::Tab,
+        51 => NamedKey::Backspace,
+        53 => NamedKey::Escape,
+        117 => NamedKey::Delete,
+        115 => NamedKey::Home,
+        119 => NamedKey::End,
+        116 => NamedKey::PageUp,
+        121 => NamedKey::PageDown,
 
         // Space
-        49 => Some(Key::Character(" ".to_string())),
+        49 => return Some(Key::Character(" ".to_string())),
 
-        _ => None,
-    }
+        _ => return None,
+    };
+    Some(Key::Named(named))
 }
 
 // ============================================================================
 // Mouse Event Conversion
 // ============================================================================
 
+/// Build a `PointerState` from an NSEvent's window-relative location.
+///
+/// # Safety
+///
+/// `ns_event` must be a valid, live `NSEvent*` of a mouse event.
+unsafe fn pointer_state(ns_event: id, scale_factor: f64, view_height: f64) -> PointerState {
+    // SAFETY: caller guarantees `ns_event` is a valid NSEvent*;
+    // `locationInWindow` is a plain NSPoint getter.
+    unsafe {
+        // NSEvent.locationInWindow is already in logical coordinates with a
+        // bottom-left origin; flip Y to the framework's top-left origin.
+        let location: NSPoint = msg_send![ns_event, locationInWindow];
+        let modifiers = extract_modifiers(ns_event);
+        let buttons = extract_mouse_buttons();
+
+        PointerState {
+            time: event_timestamp_ms(),
+            position: PhysicalPosition::new(location.x, view_height - location.y),
+            buttons,
+            modifiers,
+            count: 1,
+            contact_geometry: PhysicalSize::new(1.0, 1.0),
+            orientation: Default::default(),
+            pressure: 0.0,
+            tangential_pressure: 0.0,
+            scale_factor,
+        }
+    }
+}
+
 /// Convert mouse button event
-unsafe fn convert_mouse_event(
+///
+/// # Safety
+///
+/// `ns_event` must be a valid, live `NSEvent*` of a mouse-button event.
+unsafe fn convert_mouse_button(
     ns_event: id,
     scale_factor: f64,
+    view_height: f64,
     button: PointerButton,
     is_down: bool,
 ) -> Option<PlatformInput> {
-    let position = extract_mouse_position(ns_event, scale_factor);
-    let buttons = extract_mouse_buttons(ns_event);
-    let modifiers = extract_modifiers(ns_event);
+    // SAFETY: caller guarantees `ns_event` validity; forwarded to
+    // `pointer_state` under the same contract.
+    unsafe {
+        let mut state = pointer_state(ns_event, scale_factor, view_height);
+        state.pressure = if is_down { 0.5 } else { 0.0 };
 
-    let update = if is_down {
-        ui_events::pointer::PointerUpdate::Down { button }
-    } else {
-        ui_events::pointer::PointerUpdate::Up { button }
-    };
+        let button_event = PointerButtonEvent {
+            pointer: primary_mouse_info(),
+            state,
+            button: Some(button),
+        };
 
-    Some(PlatformInput::Pointer(PointerEvent {
-        pointer_id: PointerId(0), // macOS doesn't have multi-pointer tracking
-        pointer_type: PointerType::Mouse,
-        position,
-        buttons,
-        modifiers,
-        update,
-    }))
+        let event = if is_down {
+            PointerEvent::Down(button_event)
+        } else {
+            PointerEvent::Up(button_event)
+        };
+
+        Some(PlatformInput::Pointer(event))
+    }
 }
 
 /// Convert mouse movement event
-unsafe fn convert_mouse_move(ns_event: id, scale_factor: f64) -> Option<PlatformInput> {
-    let position = extract_mouse_position(ns_event, scale_factor);
-    let buttons = extract_mouse_buttons(ns_event);
-    let modifiers = extract_modifiers(ns_event);
+///
+/// # Safety
+///
+/// `ns_event` must be a valid, live `NSEvent*` of a mouse-move event.
+unsafe fn convert_mouse_move(
+    ns_event: id,
+    scale_factor: f64,
+    view_height: f64,
+) -> Option<PlatformInput> {
+    // SAFETY: caller guarantees `ns_event` validity; forwarded to
+    // `pointer_state` under the same contract.
+    unsafe {
+        let state = pointer_state(ns_event, scale_factor, view_height);
 
-    Some(PlatformInput::Pointer(PointerEvent {
-        pointer_id: PointerId(0),
-        pointer_type: PointerType::Mouse,
-        position,
-        buttons,
-        modifiers,
-        update: ui_events::pointer::PointerUpdate::Moved,
-    }))
+        Some(PlatformInput::Pointer(PointerEvent::Move(PointerUpdate {
+            pointer: primary_mouse_info(),
+            current: state,
+            coalesced: Vec::new(),
+            predicted: Vec::new(),
+        })))
+    }
 }
 
 /// Convert scroll wheel event
-unsafe fn convert_scroll_event(ns_event: id, scale_factor: f64) -> Option<PlatformInput> {
-    let position = extract_mouse_position(ns_event, scale_factor);
-    let buttons = extract_mouse_buttons(ns_event);
-    let modifiers = extract_modifiers(ns_event);
-
-    // Get scroll delta
-    let delta_x: f64 = msg_send![ns_event, scrollingDeltaX];
-    let delta_y: f64 = msg_send![ns_event, scrollingDeltaY];
-
-    // Check if precise scrolling (trackpad) or line scrolling (mouse wheel)
-    let has_precise_delta: bool = msg_send![ns_event, hasPreciseScrollingDeltas];
-
-    let delta = if has_precise_delta {
-        // Trackpad: use pixel delta
-        ui_events::ScrollDelta::Pixels {
-            x: delta_x as f32,
-            y: delta_y as f32,
-        }
-    } else {
-        // Mouse wheel: use line delta
-        ui_events::ScrollDelta::Lines {
-            x: delta_x as f32,
-            y: delta_y as f32,
-        }
-    };
-
-    Some(PlatformInput::Pointer(PointerEvent {
-        pointer_id: PointerId(0),
-        pointer_type: PointerType::Mouse,
-        position,
-        buttons,
-        modifiers,
-        update: ui_events::pointer::PointerUpdate::Scroll { delta },
-    }))
-}
-
-/// Convert mouse enter/exit event
-unsafe fn convert_mouse_enter_exit(
+///
+/// # Safety
+///
+/// `ns_event` must be a valid, live `NSEvent*` of a scroll-wheel event.
+unsafe fn convert_scroll_event(
     ns_event: id,
     scale_factor: f64,
-    is_enter: bool,
+    view_height: f64,
 ) -> Option<PlatformInput> {
-    let position = extract_mouse_position(ns_event, scale_factor);
-    let buttons = extract_mouse_buttons(ns_event);
-    let modifiers = extract_modifiers(ns_event);
+    // SAFETY: caller guarantees `ns_event` validity; `scrollingDeltaX/Y` and
+    // `hasPreciseScrollingDeltas` are documented NSEvent getters.
+    unsafe {
+        let state = pointer_state(ns_event, scale_factor, view_height);
 
-    let update = if is_enter {
-        ui_events::pointer::PointerUpdate::Entered
-    } else {
-        ui_events::pointer::PointerUpdate::Exited
-    };
+        // Get scroll delta
+        let delta_x: f64 = msg_send![ns_event, scrollingDeltaX];
+        let delta_y: f64 = msg_send![ns_event, scrollingDeltaY];
 
-    Some(PlatformInput::Pointer(PointerEvent {
-        pointer_id: PointerId(0),
-        pointer_type: PointerType::Mouse,
-        position,
-        buttons,
-        modifiers,
-        update,
-    }))
+        // Check if precise scrolling (trackpad) or line scrolling (mouse wheel)
+        let has_precise_delta: bool = msg_send![ns_event, hasPreciseScrollingDeltas];
+
+        let delta = if has_precise_delta {
+            // Trackpad: use pixel delta
+            ScrollDelta::PixelDelta(PhysicalPosition::new(delta_x, delta_y))
+        } else {
+            // Mouse wheel: use line delta
+            ScrollDelta::LineDelta(delta_x as f32, delta_y as f32)
+        };
+
+        Some(PlatformInput::Pointer(PointerEvent::Scroll(
+            PointerScrollEvent {
+                pointer: primary_mouse_info(),
+                state,
+                delta,
+            },
+        )))
+    }
 }
 
 // ============================================================================
 // Helper Functions
 // ============================================================================
 
-/// Extract mouse position from NSEvent and convert to logical pixels
+/// Extract global mouse button state via `NSEvent.pressedMouseButtons`
 ///
-/// macOS coordinates are bottom-left origin, need to flip Y
-unsafe fn extract_mouse_position(ns_event: id, scale_factor: f64) -> Offset<Pixels> {
-    // Get location in window
-    let location: NSPoint = msg_send![ns_event, locationInWindow];
+/// # Safety
+///
+/// Must be called with AppKit loaded (any process that created an NSEvent).
+unsafe fn extract_mouse_buttons() -> PointerButtons {
+    // SAFETY: `+[NSEvent pressedMouseButtons]` is a class method returning a
+    // plain NSUInteger bitmask; no object lifetime is involved.
+    unsafe {
+        let buttons_mask: u64 = msg_send![class!(NSEvent), pressedMouseButtons];
 
-    // Convert to logical pixels (NSPoint is already in logical coordinates)
-    // Note: Y coordinate is bottom-up in macOS, will be flipped by window context
-    Offset::new(Pixels(location.x as f32), Pixels(location.y as f32))
-}
+        let mut buttons = PointerButtons::default();
 
-/// Extract mouse button state from NSEvent
-unsafe fn extract_mouse_buttons(ns_event: id) -> PointerButtons {
-    let buttons_mask: i64 = msg_send![class!(NSEvent), pressedMouseButtons];
+        if (buttons_mask & 0x1) != 0 {
+            buttons.insert(PointerButton::Primary);
+        }
+        if (buttons_mask & 0x2) != 0 {
+            buttons.insert(PointerButton::Secondary);
+        }
+        if (buttons_mask & 0x4) != 0 {
+            buttons.insert(PointerButton::Auxiliary);
+        }
 
-    let mut buttons = PointerButtons::default();
-
-    if (buttons_mask & 0x1) != 0 {
-        buttons.insert(PointerButton::Primary);
+        buttons
     }
-    if (buttons_mask & 0x2) != 0 {
-        buttons.insert(PointerButton::Secondary);
-    }
-    if (buttons_mask & 0x4) != 0 {
-        buttons.insert(PointerButton::Auxiliary);
-    }
-
-    buttons
 }
 
 // ============================================================================
@@ -384,37 +490,25 @@ mod tests {
     #[test]
     fn test_key_code_mappings() {
         // Arrow keys
-        assert_eq!(key_code_to_key(123), Some(Key::ArrowLeft));
-        assert_eq!(key_code_to_key(124), Some(Key::ArrowRight));
-        assert_eq!(key_code_to_key(125), Some(Key::ArrowDown));
-        assert_eq!(key_code_to_key(126), Some(Key::ArrowUp));
+        assert_eq!(key_code_to_key(123), Some(Key::Named(NamedKey::ArrowLeft)));
+        assert_eq!(key_code_to_key(124), Some(Key::Named(NamedKey::ArrowRight)));
+        assert_eq!(key_code_to_key(125), Some(Key::Named(NamedKey::ArrowDown)));
+        assert_eq!(key_code_to_key(126), Some(Key::Named(NamedKey::ArrowUp)));
 
         // Function keys
-        assert_eq!(key_code_to_key(122), Some(Key::F1));
-        assert_eq!(key_code_to_key(111), Some(Key::F12));
+        assert_eq!(key_code_to_key(122), Some(Key::Named(NamedKey::F1)));
+        assert_eq!(key_code_to_key(111), Some(Key::Named(NamedKey::F12)));
 
         // Special keys
-        assert_eq!(key_code_to_key(36), Some(Key::Enter));
-        assert_eq!(key_code_to_key(48), Some(Key::Tab));
-        assert_eq!(key_code_to_key(51), Some(Key::Backspace));
-        assert_eq!(key_code_to_key(53), Some(Key::Escape));
+        assert_eq!(key_code_to_key(36), Some(Key::Named(NamedKey::Enter)));
+        assert_eq!(key_code_to_key(48), Some(Key::Named(NamedKey::Tab)));
+        assert_eq!(key_code_to_key(51), Some(Key::Named(NamedKey::Backspace)));
+        assert_eq!(key_code_to_key(53), Some(Key::Named(NamedKey::Escape)));
+
+        // Space maps to a character key
+        assert_eq!(key_code_to_key(49), Some(Key::Character(" ".to_string())));
 
         // Unknown key
         assert_eq!(key_code_to_key(999), None);
-    }
-
-    #[test]
-    fn test_position_conversion() {
-        // Position conversion is already in logical pixels in NSEvent
-        // This test just documents the expected behavior
-        let scale_1x = 1.0;
-        let scale_2x = 2.0;
-
-        // At 1x scale, coordinates are 1:1
-        // At 2x scale (Retina), NSEvent.locationInWindow is still in logical pixels
-        // No conversion needed (macOS does this automatically)
-
-        assert_eq!(scale_1x, 1.0);
-        assert_eq!(scale_2x, 2.0);
     }
 }

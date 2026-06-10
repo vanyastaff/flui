@@ -288,8 +288,15 @@ impl Color {
 
     #[inline]
     #[cfg(all(target_arch = "x86_64", not(target_family = "wasm")))]
-    #[allow(dead_code, unsafe_code)]
+    #[allow(
+        dead_code,
+        unsafe_code,
+        reason = "SIMD twin of `lerp_scalar`: compiled on every x86_64 build but only called when the `simd` feature selects it in `lerp`; SSE2 intrinsics require unsafe"
+    )]
     fn lerp_simd_sse(a: Color, b: Color, t: f32) -> Color {
+        // SAFETY: gated on `target_feature = "sse2"`, so the intrinsics are
+        // available; `_mm_storeu_ps` is an unaligned store into a live 4-f32
+        // stack array, in bounds by construction.
         #[cfg(target_feature = "sse2")]
         unsafe {
             use std::arch::x86_64::*;
@@ -321,7 +328,15 @@ impl Color {
 
     #[inline]
     #[cfg(all(target_arch = "aarch64", not(target_family = "wasm")))]
+    #[allow(
+        dead_code,
+        unsafe_code,
+        reason = "SIMD twin of `lerp_scalar`: compiled on every aarch64 build but only called when the `simd` feature selects it in `lerp`; NEON intrinsics require unsafe"
+    )]
     fn lerp_simd_neon(a: Color, b: Color, t: f32) -> Color {
+        // SAFETY: gated on `target_feature = "neon"`, so the intrinsics are
+        // available; `vld1q_f32`/`vst1q_f32` load/store 4 f32s from/into live
+        // f32-aligned stack arrays, in bounds by construction.
         #[cfg(target_feature = "neon")]
         unsafe {
             use std::arch::aarch64::*;
@@ -513,8 +528,15 @@ impl Color {
 
     #[inline]
     #[cfg(all(target_arch = "x86_64", not(target_family = "wasm")))]
-    #[allow(dead_code, unsafe_code)]
+    #[allow(
+        dead_code,
+        unsafe_code,
+        reason = "SIMD twin of `blend_over_scalar`: compiled on every x86_64 build but only called when the `simd` feature selects it in `blend_over`; SSE2 intrinsics require unsafe"
+    )]
     fn blend_over_simd_sse(&self, background: Color) -> Color {
+        // SAFETY: gated on `target_feature = "sse2"`, so the intrinsics are
+        // available; `_mm_storeu_ps` is an unaligned store into a live 4-f32
+        // stack array, in bounds by construction.
         #[cfg(target_feature = "sse2")]
         unsafe {
             use std::arch::x86_64::*;
@@ -567,7 +589,15 @@ impl Color {
 
     #[inline]
     #[cfg(all(target_arch = "aarch64", not(target_family = "wasm")))]
+    #[allow(
+        dead_code,
+        unsafe_code,
+        reason = "SIMD twin of `blend_over_scalar`: compiled on every aarch64 build but only called when the `simd` feature selects it in `blend_over`; NEON intrinsics require unsafe"
+    )]
     fn blend_over_simd_neon(&self, background: Color) -> Color {
+        // SAFETY: gated on `target_feature = "neon"`, so the intrinsics are
+        // available; `vld1q_f32`/`vst1q_f32` load/store 4 f32s from/into live
+        // f32-aligned stack arrays, in bounds by construction.
         #[cfg(target_feature = "neon")]
         unsafe {
             use std::arch::aarch64::*;

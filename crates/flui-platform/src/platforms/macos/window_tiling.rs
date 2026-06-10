@@ -115,25 +115,25 @@ impl TilingConfiguration {
 
         match self.layout {
             TilingLayout::SideBySide => {
-                let split_x = width * Pixels(self.split_ratio);
+                let split_x = width * self.split_ratio;
 
                 let (primary, secondary) = match self.primary_position {
                     TilePosition::Left => (
-                        Rect::from_origin_and_size(
+                        Rect::from_origin_size(
                             flui_types::geometry::Point::new(Pixels(0.0), Pixels(0.0)),
                             Size::new(split_x, height),
                         ),
-                        Rect::from_origin_and_size(
+                        Rect::from_origin_size(
                             flui_types::geometry::Point::new(split_x, Pixels(0.0)),
                             Size::new(width - split_x, height),
                         ),
                     ),
                     TilePosition::Right => (
-                        Rect::from_origin_and_size(
+                        Rect::from_origin_size(
                             flui_types::geometry::Point::new(width - split_x, Pixels(0.0)),
                             Size::new(split_x, height),
                         ),
-                        Rect::from_origin_and_size(
+                        Rect::from_origin_size(
                             flui_types::geometry::Point::new(Pixels(0.0), Pixels(0.0)),
                             Size::new(width - split_x, height),
                         ),
@@ -145,25 +145,25 @@ impl TilingConfiguration {
             }
 
             TilingLayout::TopBottom => {
-                let split_y = height * Pixels(self.split_ratio);
+                let split_y = height * self.split_ratio;
 
                 let (primary, secondary) = match self.primary_position {
                     TilePosition::Top => (
-                        Rect::from_origin_and_size(
+                        Rect::from_origin_size(
                             flui_types::geometry::Point::new(Pixels(0.0), Pixels(0.0)),
                             Size::new(width, split_y),
                         ),
-                        Rect::from_origin_and_size(
+                        Rect::from_origin_size(
                             flui_types::geometry::Point::new(Pixels(0.0), split_y),
                             Size::new(width, height - split_y),
                         ),
                     ),
                     TilePosition::Bottom => (
-                        Rect::from_origin_and_size(
+                        Rect::from_origin_size(
                             flui_types::geometry::Point::new(Pixels(0.0), height - split_y),
                             Size::new(width, split_y),
                         ),
-                        Rect::from_origin_and_size(
+                        Rect::from_origin_size(
                             flui_types::geometry::Point::new(Pixels(0.0), Pixels(0.0)),
                             Size::new(width, height - split_y),
                         ),
@@ -176,23 +176,23 @@ impl TilingConfiguration {
 
             TilingLayout::Quarters => {
                 // Split screen into 4 equal quadrants
-                let half_width = width * Pixels(0.5);
-                let half_height = height * Pixels(0.5);
+                let half_width = width * 0.5;
+                let half_height = height * 0.5;
 
                 let primary = match self.primary_position {
-                    TilePosition::TopLeft => Rect::from_origin_and_size(
+                    TilePosition::TopLeft => Rect::from_origin_size(
                         flui_types::geometry::Point::new(Pixels(0.0), Pixels(0.0)),
                         Size::new(half_width, half_height),
                     ),
-                    TilePosition::TopRight => Rect::from_origin_and_size(
+                    TilePosition::TopRight => Rect::from_origin_size(
                         flui_types::geometry::Point::new(half_width, Pixels(0.0)),
                         Size::new(half_width, half_height),
                     ),
-                    TilePosition::BottomLeft => Rect::from_origin_and_size(
+                    TilePosition::BottomLeft => Rect::from_origin_size(
                         flui_types::geometry::Point::new(Pixels(0.0), half_height),
                         Size::new(half_width, half_height),
                     ),
-                    TilePosition::BottomRight => Rect::from_origin_and_size(
+                    TilePosition::BottomRight => Rect::from_origin_size(
                         flui_types::geometry::Point::new(half_width, half_height),
                         Size::new(half_width, half_height),
                     ),
@@ -200,7 +200,7 @@ impl TilingConfiguration {
                 };
 
                 // Secondary takes the rest (3 quadrants)
-                let secondary = Rect::from_origin_and_size(
+                let secondary = Rect::from_origin_size(
                     flui_types::geometry::Point::new(Pixels(0.0), Pixels(0.0)),
                     screen_size,
                 );

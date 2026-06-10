@@ -162,7 +162,7 @@ impl WindowManager {
     /// Calculate cascade position for a new window.
     ///
     /// Cascades windows in a staggered pattern (like macOS does by default).
-    pub fn calculate_cascade_position(&self, window_size: Size<Pixels>) -> Point<Pixels> {
+    pub fn calculate_cascade_position(&self, _window_size: Size<Pixels>) -> Point<Pixels> {
         let count = self.window_count();
         let cascade_offset = 28.0; // Standard macOS cascade offset
 
@@ -202,14 +202,13 @@ impl WindowManager {
 
     /// Remove window from its group.
     pub fn remove_from_group(&mut self, window_id: WindowId) -> bool {
-        if let Some(info) = self.windows.get_mut(&window_id) {
-            if let Some(group_id) = info.group {
-                if let Some(group) = self.groups.get_mut(&group_id) {
-                    group.retain(|&id| id != window_id);
-                    info.group = None;
-                    return true;
-                }
-            }
+        if let Some(info) = self.windows.get_mut(&window_id)
+            && let Some(group_id) = info.group
+            && let Some(group) = self.groups.get_mut(&group_id)
+        {
+            group.retain(|&id| id != window_id);
+            info.group = None;
+            return true;
         }
         false
     }
