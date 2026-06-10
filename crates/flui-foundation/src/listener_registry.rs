@@ -1,5 +1,5 @@
 //! `ListenerRegistry<S>` — unified value + status listener registry with lazy
-//! first/last edge hooks and RAII [`Subscription`] teardown.
+//! first/last edge hooks and RAII [`ListenerSubscription`] teardown.
 //!
 //! Collapses Flutter's four-mixin listener lattice (`AnimationLazyListenerMixin`
 //! XOR `AnimationEagerListenerMixin`, plus `AnimationLocalListenersMixin` and
@@ -33,7 +33,7 @@ use crate::id::ListenerId;
 use crate::notifier::{ChangeNotifier, Listenable};
 use crate::notifier_generic::{ArgCallback, Notifier};
 
-/// Which channel a [`Subscription`] belongs to.
+/// Which channel a [`ListenerSubscription`] belongs to.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Channel {
     Value,
@@ -73,7 +73,7 @@ impl<S> RegistryInner<S> {
     }
 }
 
-/// Object-safe removal hook so a non-generic [`Subscription`] can tear itself
+/// Object-safe removal hook so a non-generic [`ListenerSubscription`] can tear itself
 /// down without naming `S`.
 trait RemoveFrom: Send + Sync {
     fn remove(&self, channel: Channel, id: ListenerId);
@@ -174,25 +174,25 @@ impl<S> ListenerRegistry<S> {
 }
 
 impl<S: Send + Sync + 'static> ListenerRegistry<S> {
-    /// Register a value listener (zero-arg). Returns a RAII [`Subscription`]
+    /// Register a value listener (zero-arg). Returns a RAII [`ListenerSubscription`]
     /// that removes the listener — and may fire `on_last_listener` — on drop.
-    #[must_use = "dropping the Subscription immediately removes the listener"]
-    pub fn add_value_listener(&self, cb: Arc<dyn Fn() + Send + Sync + 'static>) -> Subscription {
+    #[must_use = "dropping the ListenerSubscription immediately removes the listener"]
+    pub fn add_value_listener(&self, cb: Arc<dyn Fn() + Send + Sync + 'static>) -> ListenerSubscription {
         let id = self.inner.value.add_listener(cb);
         self.inner.after_add();
-        Subscription {
+        ListenerSubscription {
             registry: Arc::downgrade(&self.inner) as Weak<dyn RemoveFrom>,
             channel: Channel::Value,
             id,
         }
     }
 
-    /// Register a status listener (receives `S`). Returns a RAII [`Subscription`].
-    #[must_use = "dropping the Subscription immediately removes the listener"]
-    pub fn add_status_listener(&self, cb: ArgCallback<S>) -> Subscription {
+    /// Register a status listener (receives `S`). Returns a RAII [`ListenerSubscription`].
+    #[must_use = "dropping the ListenerSubscription immediately removes the listener"]
+    pub fn add_status_listener(&self, cb: ArgCallback<S>) -> ListenerSubscription {
         let id = self.inner.status.add(cb);
         self.inner.after_add();
-        Subscription {
+        ListenerSubscription {
             registry: Arc::downgrade(&self.inner) as Weak<dyn RemoveFrom>,
             channel: Channel::Status,
             id,
@@ -210,16 +210,16 @@ impl<S: Clone> ListenerRegistry<S> {
 /// RAII handle returned by the `add_*_listener` methods. Dropping it removes the
 /// listener and updates the shared count, firing `on_last_listener` at the
 /// 1 → 0 edge. Holds a [`Weak`] so a dropped registry is never resurrected.
-#[must_use = "dropping the Subscription immediately removes the listener"]
-pub struct Subscription {
+#[must_use = "dropping the ListenerSubscription immediately removes the listener"]
+pub struct ListenerSubscription {
     registry: Weak<dyn RemoveFrom>,
     channel: Channel,
     id: ListenerId,
 }
 
-impl std::fmt::Debug for Subscription {
+impl std::fmt::Debug for ListenerSubscription {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Subscription")
+        f.debug_struct("ListenerSubscription")
             .field("channel", &self.channel)
             .field("id", &self.id)
             .field("alive", &(self.registry.strong_count() > 0))
@@ -227,7 +227,7 @@ impl std::fmt::Debug for Subscription {
     }
 }
 
-impl Drop for Subscription {
+impl Drop for ListenerSubscription {
     fn drop(&mut self) {
         if let Some(reg) = self.registry.upgrade() {
             reg.remove(self.channel, self.id);
@@ -339,7 +339,7 @@ mod tests {
         let s = {
             let reg: ListenerRegistry<u8> = ListenerRegistry::new();
             reg.add_value_listener(Arc::new(|| {}))
-            // reg dropped here; Subscription holds only a Weak.
+            // reg dropped here; ListenerSubscription holds only a Weak.
         };
         drop(s); // upgrade() returns None — must not panic / use-after-free.
     }

@@ -207,7 +207,7 @@ pub use key::{Key, KeyRef, Keyed, UniqueKey, ValueKey, ViewKey, WithKey};
 // Change notification (Listenable pattern)
 pub use notifier::{ChangeNotifier, Listenable, ListenerCallback, ValueListenable, ValueNotifier};
 // Generic typed channel + unified listener registry
-pub use listener_registry::{ListenerRegistry, Subscription};
+pub use listener_registry::{ListenerRegistry, ListenerSubscription};
 pub use notifier_generic::{ArgCallback, Notifier};
 // WASM compatibility
 pub use wasm::WasmNotSendSync;

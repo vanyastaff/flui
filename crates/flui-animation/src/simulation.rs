@@ -750,6 +750,7 @@ impl Simulation for ScrollSpringSimulation {
 /// Wraps another simulation, clamping its position to `[x_min, x_max]` and its
 /// velocity to `[dx_min, dx_max]`. Mirrors Flutter's `ClampedSimulation`.
 pub struct ClampedSimulation {
+    // PORT-CHECK-OK-SP3: parallel to flui-types::physics::ClampedSimulation, which wraps the value-physics Simulation (position/velocity, no Send+Sync); this wraps animation's Simulation (x/dx + Send+Sync). Distinct trait contracts; consolidation tracked.
     inner: Box<dyn Simulation>,
     x_min: f32,
     x_max: f32,
@@ -810,6 +811,7 @@ impl Simulation for ClampedSimulation {
 /// the content extent stops cleanly at the edge.
 #[derive(Debug, Clone)]
 pub struct BoundedFrictionSimulation {
+    // PORT-CHECK-OK-SP3: parallel to flui-types::physics::BoundedFrictionSimulation; that one wraps the value-physics Simulation (position/velocity), this wraps animation's Simulation (x/dx + Send+Sync). Distinct trait contracts; consolidation tracked.
     friction: FrictionSimulation,
     min_x: f32,
     max_x: f32,

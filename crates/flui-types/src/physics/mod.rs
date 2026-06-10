@@ -59,6 +59,7 @@ pub trait Simulation {
 
 #[derive(Debug, Clone)]
 pub struct ClampedSimulation<S: Simulation> {
+    // PORT-CHECK-OK-SP3: parallel to flui-animation::simulation::ClampedSimulation; the two physics layers use distinct Simulation traits (position/velocity here vs x/dx + Send+Sync there). Consolidation tracked.
     /// The underlying simulation
     pub simulation: S,
 
