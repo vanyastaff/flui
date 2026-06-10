@@ -365,6 +365,15 @@ impl ThreePointCubic {
     ///
     /// The two implied end points `(0,0)` and `(1,1)` are fixed and not
     /// passed. See Flutter's `ThreePointCubic` for the geometry.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `midpoint` does not lie strictly inside the unit square:
+    /// both segment widths (`midpoint.0`, `1 - midpoint.0`) and heights
+    /// (`midpoint.1`, `1 - midpoint.1`) are used as divisors in
+    /// [`Curve::transform`], so a midpoint on the boundary (or NaN) would
+    /// silently evaluate to NaN/inf. For `const` constructions the panic is
+    /// a compile error.
     #[must_use]
     pub const fn new(
         a1: (f32, f32),
@@ -373,6 +382,11 @@ impl ThreePointCubic {
         a2: (f32, f32),
         b2: (f32, f32),
     ) -> Self {
+        assert!(
+            midpoint.0 > 0.0 && midpoint.0 < 1.0 && midpoint.1 > 0.0 && midpoint.1 < 1.0,
+            "ThreePointCubic midpoint must lie strictly inside the unit square: \
+             both segments are rescaled by its distance to each edge"
+        );
         Self {
             a1,
             b1,

@@ -65,6 +65,7 @@ impl<C: Curve + Clone + Send + Sync> CurvedAnimation<C> {
 
         let curve_direction = Arc::new(Mutex::new(None));
         let weak_direction = Arc::downgrade(&curve_direction);
+        let weak_parent = Arc::downgrade(&parent);
         let status_id = parent.add_status_listener(Arc::new(move |status| {
             if let Some(direction) = weak_direction.upgrade() {
                 let mut direction = direction.lock();
@@ -73,7 +74,16 @@ impl<C: Curve + Clone + Send + Sync> CurvedAnimation<C> {
                     AnimationStatus::Dismissed | AnimationStatus::Completed => *direction = None,
                     // First running transition wins; mid-run flips keep it.
                     AnimationStatus::Forward | AnimationStatus::Reverse => {
-                        direction.get_or_insert(status);
+                        // Only capture from a LIVE run: a stopped controller's
+                        // set_value at an interior value also reports a
+                        // directional status (Flutter `_internalSetValue`),
+                        // and caching that would pin the wrong curve for the
+                        // next real run (e.g. position at 0.5, then
+                        // reverse()).
+                        let running = weak_parent.upgrade().is_some_and(|p| p.is_animating());
+                        if running {
+                            direction.get_or_insert(status);
+                        }
                     }
                 }
             }
@@ -293,6 +303,38 @@ mod tests {
         assert!(
             (reverse_run - expected).abs() < 1e-3,
             "a run entered in Reverse must use the reverse curve ({reverse_run} vs {expected})"
+        );
+
+        controller.dispose();
+    }
+
+    #[test]
+    fn interior_set_value_does_not_pin_curve_direction() {
+        // A stopped controller positioned mid-range reports a directional
+        // status (Flutter `_internalSetValue`); that must NOT be captured as
+        // the run direction, or a subsequent reverse() would run on the
+        // forward curve.
+        let scheduler = Arc::new(Scheduler::new());
+        let controller = Arc::new(AnimationController::new(
+            Duration::from_millis(100),
+            scheduler,
+        ));
+        let curved = CurvedAnimation::new(
+            controller.clone() as Arc<dyn Animation<f32>>,
+            Cubic::new(0.0, 0.0, 1.0, 1.0), // y(x) = x
+        )
+        .with_reverse_curve(Curves::EaseInQuint);
+
+        // Position while stopped: fires a Forward status with no live run.
+        controller.set_value(0.5);
+        // Now genuinely start in reverse: the reverse curve must apply.
+        let _ = controller.reverse();
+        let value = curved.value();
+        let expected = Curves::EaseInQuint.transform(0.5);
+        assert!(
+            (value - expected).abs() < 1e-3,
+            "a run entered in Reverse after an interior set_value must use \
+             the reverse curve ({value} vs {expected})"
         );
 
         controller.dispose();
