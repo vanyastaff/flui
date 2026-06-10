@@ -1,6 +1,6 @@
 # Flutter 3.41.9 Semantic / A11y — Reference Corpus (2026-06-09)
 
-Caveman file:line map of Flutter 3.41.9 in `.flutter/flutter-master/`. This is the contract source flui ports against. Companion to [[2026-06-09-flui-semantic-current-state]] (flui side) and [[2026-06-09-flui-semantic-a11y-a11y-audit]] (synthesis).
+Caveman file:line map of Flutter 3.41.9 in `.flutter/flutter-master/`. This is the contract source flui ports against. Companion to [[2026-06-09-flui-semantic-current-state]] (flui side) and [[2026-06-09-flui-semantic-a11y-audit]] (synthesis).
 
 ## Where it lives
 
