@@ -84,6 +84,8 @@ pub use box_protocol::{
     // Per-child layout state (moved here from the deleted
     // children_access.rs in Mythos Step 5b)
     ChildState,
+    ErasedBoxLayoutCtx,
+    ErasedChildState,
 };
 // Erased layout-context trait (D-block PR-A1b U19 / memo D5).
 //

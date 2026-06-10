@@ -24,9 +24,8 @@ use rustc_hash::FxHashSet;
 use crate::{
     constraints::BoxConstraints,
     context::{FragmentClip, FragmentOp, FragmentRecorder},
-    parent_data::BoxParentData,
     protocol::{
-        BoxLayoutCtx, BoxProtocol, ChildState, Protocol,
+        BoxProtocol, Protocol,
         box_protocol::{BoxLayoutCtxErased, LayoutChildCallback},
     },
     storage::{RenderEntry, RenderNode, RenderTree},
@@ -1382,7 +1381,7 @@ impl PipelineOwner<Layout> {
     ///
     /// Lays out the subtree rooted at `id` with the supplied
     /// `constraints`, running `RenderObject::perform_layout_raw` against a
-    /// typed [`BoxLayoutCtx`] populated with the parent's direct children
+    /// typed [`crate::protocol::BoxLayoutCtx`] populated with the parent's direct children
     /// (companion memo D1). Returns the parent's computed `Size` on
     /// success.
     ///
@@ -1412,7 +1411,7 @@ impl PipelineOwner<Layout> {
     ///    reborrow at each call level. The leaf path delegates to
     ///    [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only).
     ///    The non-leaf path constructs a Direct-storage `BoxLayoutCtx`
-    ///    via [`BoxLayoutCtx::with_layout_callback`] with a closure
+    ///    via the erased driver context ([`crate::protocol::ErasedBoxLayoutCtx`]) with a closure
     ///    that captures `&SubtreeBorrows` (Sync via `NodePtr`'s
     ///    `unsafe impl`) and re-enters `layout_subtree_borrowed` for
     ///    each child. The bridge in `traits/render_box.rs` reconstructs
@@ -1481,7 +1480,7 @@ impl PipelineOwner<Layout> {
     /// # ParentData scope (current limitation)
     ///
     /// The pipeline-side Direct `BoxLayoutCtx` is parameterised over
-    /// [`BoxParentData`], so widgets whose `T::ParentData` is the default
+    /// [`crate::parent_data::BoxParentData`], so widgets whose `T::ParentData` is the default
     /// (`RenderPadding`, `RenderCenter`, `RenderColoredBox`,
     /// `RenderOpacity`, `RenderTransform`, `RenderSizedBox`) drive
     /// through correctly. Non-default parent-data types (e.g.,
@@ -1873,8 +1872,10 @@ unsafe fn layout_subtree_borrowed<'tree>(
     // flag + recursive callback. Same shape as the prior U20 version,
     // but the callback recurses into `layout_subtree_borrowed` which
     // uses pre-acquired NodePtrs instead of fresh tree reborrows.
-    let mut child_states: Vec<ChildState<BoxParentData>> =
-        child_ids.iter().map(|&cid| ChildState::new(cid)).collect();
+    let mut child_states: Vec<crate::protocol::ErasedChildState> = child_ids
+        .iter()
+        .map(|&cid| crate::protocol::ErasedChildState::new(cid))
+        .collect();
 
     // Seed each ChildState.offset from the child's persisted
     // RenderState.offset. A parent that does not re-position a child
@@ -1938,11 +1939,15 @@ unsafe fn layout_subtree_borrowed<'tree>(
     };
     let cb_ref: LayoutChildCallback<'_> = &cb_owned;
 
-    // Construct pipeline-side Direct BoxLayoutCtx (Variable arity is
-    // most permissive — Proxy bridge picks T::Arity from the user's
-    // RenderBox impl regardless; BoxParentData per ParentData scope
-    // limitation on `layout_dirty_root`).
-    let mut ctx = BoxLayoutCtx::<flui_tree::Variable, BoxParentData>::with_layout_callback(
+    // Construct the driver-side PARENT-DATA-ERASED context. The walk
+    // cannot name the parent's ParentData type (it holds dyn nodes);
+    // the typed blanket bridge reconstructs BoxLayoutCtx<T::Arity,
+    // T::ParentData> per node and lazily creates each child's
+    // parent-data slot with T::ParentData::default() — Flex/Stack and
+    // every other non-BoxParentData parent now lay out in production
+    // (the former ChildState<BoxParentData> hardcode panicked them in
+    // from_erased).
+    let mut ctx = crate::protocol::ErasedBoxLayoutCtx::new(
         constraints,
         &mut child_states,
         &child_ids,

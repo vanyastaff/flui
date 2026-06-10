@@ -714,17 +714,19 @@ fn u20_render_view_adapter_layout_smoke() {
     let adapter: Box<dyn RenderObject<BoxProtocol>> = Box::new(RenderViewAdapter::new(view));
     let view_id = pipeline.render_tree_mut().insert_box(adapter);
 
-    // Sentinel constraints — RenderViewAdapter ignores them and drives
-    // layout from its configuration (logical 320×240).
-    let sentinel = BoxConstraints::tight(Size::new(px(999.0), px(999.0)));
+    // The incoming constraints are authoritative (live window size via
+    // set_root_constraints); the mount-time configuration is a stale
+    // snapshot after the first resize. Pinned end-to-end by
+    // tests/root_resize_repaint.rs.
+    let incoming = BoxConstraints::tight(Size::new(px(999.0), px(999.0)));
     let size = pipeline
-        .layout_dirty_root(view_id, sentinel)
+        .layout_dirty_root(view_id, incoming)
         .expect("RenderViewAdapter layout_dirty_root must succeed");
 
     assert_eq!(
         size,
-        Size::new(px(320.0), px(240.0)),
-        "RenderViewAdapter must lay out from its embedded configuration, \
-         not from the sentinel constraints",
+        Size::new(px(999.0), px(999.0)),
+        "RenderViewAdapter must size from the INCOMING root constraints \
+         (live window size), not from its mount-time configuration snapshot",
     );
 }

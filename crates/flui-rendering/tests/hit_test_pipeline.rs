@@ -15,7 +15,7 @@ use flui_rendering::{
     constraints::BoxConstraints,
     context::{BoxHitTestContext, BoxLayoutContext},
     hit_testing::HitTestResult,
-    objects::{RenderColoredBox, RenderPadding, RenderTransform},
+    objects::{RenderColoredBox, RenderFlex, RenderPadding, RenderTransform},
     parent_data::BoxParentData,
     pipeline::PipelineOwner,
     traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
@@ -194,5 +194,50 @@ fn transform_child_hits_through_inverse_matrix() {
     assert!(
         hits(&owner, 90.0, 90.0).is_empty(),
         "outside the inverse-mapped child bounds → miss",
+    );
+}
+
+// ============================================================================
+// 4. RenderFlex itself — FlexParentData through the erased driver
+// ============================================================================
+
+/// The production walk's parent-data storage is erased; the typed
+/// bridge creates FlexParentData slots lazily. Before that, this exact
+/// tree PANICKED in from_erased (the walk hardcoded BoxParentData) —
+/// Flex/Stack were impossible in production layout.
+#[test]
+fn flex_lays_out_and_hits_children_at_layout_offsets() {
+    let mut owner = PipelineOwner::new();
+    let flex_id = owner.insert(Box::new(RenderFlex::row()) as BoxedRenderObject);
+    let first = owner
+        .insert_child_render_object(flex_id, Box::new(RenderColoredBox::red(40.0, 40.0)))
+        .expect("child 0");
+    let second = owner
+        .insert_child_render_object(flex_id, Box::new(RenderColoredBox::blue(40.0, 40.0)))
+        .expect("child 1");
+    let owner = laid_out(owner, flex_id);
+
+    // Layout committed real offsets: the second child sits at x=40.
+    let second_offset = owner
+        .render_tree()
+        .get(second)
+        .and_then(|n| n.as_box())
+        .map(|e| e.state().offset())
+        .expect("child 1 state");
+    assert_eq!(
+        second_offset,
+        Offset::new(px(40.0), px(0.0)),
+        "row layout must commit the second child's offset to RenderState",
+    );
+
+    assert_eq!(
+        hits(&owner, 10.0, 10.0).first().copied(),
+        Some(first),
+        "(10,10) lands in the first flex child",
+    );
+    assert_eq!(
+        hits(&owner, 50.0, 10.0).first().copied(),
+        Some(second),
+        "(50,10) lands in the second flex child at its laid-out offset",
     );
 }
