@@ -38,7 +38,7 @@ bitflags = "2.6"
 
 # Windows platform
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.59", features = [
+windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
@@ -60,7 +60,7 @@ windows = { version = "0.59", features = [
 cocoa = "0.26.0"
 cocoa-foundation = "0.2.0"
 core-foundation = "0.10.0"
-core-graphics = "0.24"
+core-graphics = "0.25"
 objc = "0.2"
 foreign-types = "0.5"
 block = "0.1"
@@ -76,7 +76,7 @@ log = "0.4"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
 num_cpus = "1.16"
-flume = "0.11"                                                               # Better MPSC channels for UI thread communication
+flume = "0.12"                                                               # Better MPSC channels for UI thread communication
 waker-fn = "1.2"                                                             # Simplified async waker creation
 
 # Web/WASM platform

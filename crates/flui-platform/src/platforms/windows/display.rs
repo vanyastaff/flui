@@ -4,6 +4,8 @@ use std::sync::Arc;
 
 use flui_types::geometry::{Bounds, DevicePixels, Point, Size};
 use windows::Win32::{Foundation::*, Graphics::Gdi::*, UI::HiDpi::*};
+// BOOL moved from Win32::Foundation to windows_core in windows 0.62
+use windows::core::BOOL;
 
 use crate::traits::{DisplayId, PlatformDisplay};
 
@@ -20,6 +22,11 @@ pub struct WindowsDisplay {
 impl WindowsDisplay {
     /// Create a new WindowsDisplay from MONITORINFOEXW
     pub fn new(hmonitor: HMONITOR, is_primary: bool) -> Self {
+        // SAFETY: `hmonitor` is a valid monitor handle supplied by the OS via
+        // `EnumDisplayMonitors` or the `new` call path from `enumerate_displays`.
+        // `MONITORINFOEXW` is zeroed then its `cbSize` is set before passing to
+        // `GetMonitorInfoW`, satisfying that API's contract. `GetDpiForMonitor`
+        // requires a valid HMONITOR and valid out-pointers, both of which hold here.
         unsafe {
             let mut monitor_info: MONITORINFOEXW = std::mem::zeroed();
             monitor_info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
@@ -108,16 +115,32 @@ impl PlatformDisplay for WindowsDisplay {
 
 /// Enumerate all displays
 pub fn enumerate_displays() -> Vec<Arc<dyn PlatformDisplay>> {
+    // SAFETY: `EnumDisplayMonitors` calls `enum_proc` on the same thread before
+    // returning, so `displays` is live and exclusively accessible during all
+    // callbacks. We pass a raw pointer to it via `LPARAM` and recover the unique
+    // reference inside the callback; no aliasing occurs because only this thread
+    // drives the enumeration.
     unsafe {
         let mut displays: Vec<Arc<dyn PlatformDisplay>> = Vec::new();
 
-        // Callback for EnumDisplayMonitors
+        // Callback for EnumDisplayMonitors.
+        //
+        // # Safety
+        // The caller (`EnumDisplayMonitors`) guarantees: `hmonitor` is a valid
+        // monitor handle, `lparam` carries the pointer we passed in (a `*mut
+        // Vec<Arc<dyn PlatformDisplay>>` that is live and unaliased for the
+        // duration of the enumeration).
         unsafe extern "system" fn enum_proc(
             hmonitor: HMONITOR,
             _hdc: HDC,
             _rect: *mut RECT,
             lparam: LPARAM,
         ) -> BOOL {
+            // SAFETY: `lparam.0` is the address of `displays` cast to `isize`
+            // in `enumerate_displays`. The vector is live on the caller's stack
+            // for the entire duration of `EnumDisplayMonitors`, which blocks
+            // until all callbacks return, so the pointer is valid and no other
+            // reference to `displays` exists concurrently.
             unsafe {
                 let displays = &mut *(lparam.0 as *mut Vec<Arc<dyn PlatformDisplay>>);
 
