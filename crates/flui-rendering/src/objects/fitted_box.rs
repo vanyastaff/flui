@@ -122,6 +122,20 @@ impl RenderFittedBox {
         self.align_offset
     }
 
+    /// The composed translate-then-scale matrix this box applies to
+    /// its child.
+    ///
+    /// THE single transform accessor: `paint_transform` hands exactly
+    /// this matrix to the pipeline, and `hit_test` walks through its
+    /// inverse — paint and hit-test can never disagree about where the
+    /// child is. Identity when nothing is cached (pre-layout /
+    /// unit-scale defaults).
+    pub fn effective_transform(&self) -> Matrix4 {
+        let t = Matrix4::translation(self.align_offset.dx.get(), self.align_offset.dy.get(), 0.0);
+        let s = Matrix4::scaling(self.scale_x, self.scale_y, 1.0);
+        t * s
+    }
+
     /// Builder: set the fit mode.
     #[must_use]
     pub const fn with_fit(mut self, fit: BoxFit) -> Self {
@@ -300,12 +314,19 @@ impl RenderBox for RenderFittedBox {
         // only `self.size`). The early-return above already filters
         // those; nothing to add here.
         //
-        // Forward to child shifting by the alignment offset. Scale
-        // factors are not applied (per the wave-4 spec: scale-aware
-        // hit-testing is a future-wave enhancement). The result is
-        // accurate for `BoxFit::Fill` / `Contain` when scale == 1.0
-        // and a strict approximation for non-unit scale.
-        ctx.hit_test_child_at_offset(0, self.align_offset)
+        // Transform symmetry: hit-test through the INVERSE of the same
+        // matrix `paint_transform` hands the pipeline (one accessor,
+        // both directions), so scaled children receive the correct
+        // local point. (The pre-fix shape shifted by align_offset only
+        // — any non-unit scale mis-targeted the child.)
+        let Some(inverse) = self.effective_transform().try_inverse() else {
+            // Degenerate scale (zero area) — nothing is visually
+            // hittable under a non-invertible transform.
+            return false;
+        };
+        let pos = ctx.offset();
+        let (tx, ty) = inverse.transform_point(pos.dx, pos.dy);
+        ctx.hit_test_child(0, Offset::new(tx, ty))
     }
 
     fn box_paint_bounds(&self) -> Rect {
@@ -327,9 +348,7 @@ impl PaintEffectsCapability for RenderFittedBox {
         if self.scale_x == 1.0 && self.scale_y == 1.0 && self.align_offset == Offset::ZERO {
             return None;
         }
-        let t = Matrix4::translation(self.align_offset.dx.get(), self.align_offset.dy.get(), 0.0);
-        let s = Matrix4::scaling(self.scale_x, self.scale_y, 1.0);
-        Some(t * s)
+        Some(self.effective_transform())
     }
 }
 
@@ -390,6 +409,36 @@ mod tests {
     #[test]
     fn align_axis_maps_plus_one_to_full_free() {
         assert_eq!(RenderFittedBox::align_axis(1.0, 100.0), 100.0);
+    }
+
+    /// Transform symmetry: `paint_transform` IS `effective_transform`,
+    /// and the inverse maps a visual point back to the child-local
+    /// point — paint and hit-test cannot disagree.
+    #[test]
+    fn paint_and_hit_test_share_one_transform() {
+        let node = RenderFittedBox {
+            has_child: true,
+            scale_x: 2.0,
+            scale_y: 2.0,
+            align_offset: Offset::new(px(10.0), px(0.0)),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            node.paint_transform(),
+            Some(node.effective_transform()),
+            "paint must hand the pipeline the SAME matrix hit-test inverts",
+        );
+
+        let inverse = node
+            .effective_transform()
+            .try_inverse()
+            .expect("translate*scale(2,2) is invertible");
+        // Visual (70, 40) under translate(10,0)*scale(2,2) came from
+        // child-local ((70-10)/2, 40/2) = (30, 20).
+        let (tx, ty) = inverse.transform_point(px(70.0), px(40.0));
+        assert!((tx.get() - 30.0).abs() < 1e-4, "tx = {tx:?}");
+        assert!((ty.get() - 20.0).abs() < 1e-4, "ty = {ty:?}");
     }
 
     #[test]

@@ -218,8 +218,13 @@ impl RenderBox for RenderTransform {
             }
 
             if self.has_child {
-                // Create transformed context for child hit testing
-                ctx.hit_test_child_at_offset(0, Offset::ZERO)
+                // Transform symmetry: the child sees the SAME point the
+                // paint matrix mapped — forward the inverse-transformed
+                // position, not the original one. (The pre-fix shape
+                // passed the untransformed position; the inverse was
+                // used only for the bounds gate, so any scaled/rotated
+                // child hit-tested at the wrong local point.)
+                ctx.hit_test_child(0, Offset::new(tx, ty))
             } else {
                 false
             }
@@ -282,6 +287,28 @@ impl HotReloadCapability for RenderTransform {}
 
 #[cfg(test)]
 mod tests {
+
+    /// Transform symmetry: `paint_transform` hands the pipeline the
+    /// SAME matrix hit-test inverts (`effective_transform` both ways),
+    /// and the inverse maps a visual point to the child-local point.
+    #[test]
+    fn paint_and_hit_test_share_one_transform() {
+        let mut node = RenderTransform::scale(2.0, 2.0);
+        node.has_child = true;
+        assert_eq!(node.paint_transform(), Some(node.effective_transform()));
+
+        let inverse = node
+            .effective_transform()
+            .try_inverse()
+            .expect("scale(2,2) is invertible");
+        let (tx, ty) = inverse.transform_point(
+            flui_types::geometry::px(80.0),
+            flui_types::geometry::px(60.0),
+        );
+        assert!((tx.get() - 40.0).abs() < 1e-4, "tx = {tx:?}");
+        assert!((ty.get() - 30.0).abs() < 1e-4, "ty = {ty:?}");
+    }
+
     use std::f32::consts::PI;
 
     use flui_types::geometry::px;
