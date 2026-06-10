@@ -71,6 +71,25 @@ slab = "0.4"
 image = { workspace = true, optional = true }
 
 
+# === Per-platform default GPU backends ===
+# wgpu compiles only the backends named in its Cargo features. These
+# target-scoped entries are feature-unified with the base `wgpu` dependency
+# above, so every consumer of flui-engine gets the native backend for the
+# compile target without opting in. The mapping mirrors
+# `Renderer::select_backend()`; the named features above (`vulkan`, `metal`,
+# `dx12`, `webgpu`, `gles`) remain available to enable additional backends.
+[target.'cfg(target_os = "windows")'.dependencies]
+wgpu = { workspace = true, default-features = false, features = ["dx12"], optional = true }
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+wgpu = { workspace = true, default-features = false, features = ["metal"], optional = true }
+
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+wgpu = { workspace = true, default-features = false, features = ["vulkan"], optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { workspace = true, default-features = false, features = ["webgpu", "gles"], optional = true }
+
 [dev-dependencies]
 pollster = { workspace = true }
 env_logger = "0.11.8"

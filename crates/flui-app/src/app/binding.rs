@@ -482,7 +482,7 @@ impl AppBinding {
                 }
                 Err(EngineError::SurfaceLost) => {
                     self.frames_dropped.fetch_add(1, Ordering::Relaxed);
-                    tracing::debug!("Surface lost/outdated, will retry next frame");
+                    tracing::debug!("Surface lost, will retry next frame");
                 }
                 Err(e) => {
                     self.frames_dropped.fetch_add(1, Ordering::Relaxed);
