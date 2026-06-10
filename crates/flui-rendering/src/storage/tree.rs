@@ -76,6 +76,55 @@ pub struct RenderTree {
     owner: Option<Arc<RwLock<PipelineOwner>>>,
 }
 
+/// Materialises disjoint `&mut RenderNode` borrows for the given slab
+/// `indices`, in input order, from a **single** `iter_mut` pass.
+///
+/// Safe split-borrow: `slab::IterMut` yields each occupied slot's
+/// `&mut RenderNode` exactly once out of one traversal, so the returned
+/// references are disjoint by construction and no `unsafe` is needed.
+/// (The previous implementation derived each element through a fresh
+/// `(*raw_slab).get_mut(idx)` — every such deref re-tags the whole slab
+/// allocation as `Unique` and invalidates the references produced by
+/// the earlier iterations: Stacked Borrows UB, reported by miri.)
+///
+/// Returns `None` if `indices` contains duplicates or any index has no
+/// occupied slot.
+///
+/// # Complexity
+///
+/// O(slab len + N) average and worst case — one traversal with an
+/// early break once all N slots are found, plus an O(N) `HashMap`
+/// build for the index→position lookup.
+fn collect_disjoint_mut<'a>(
+    nodes: &'a mut slab::Slab<RenderNode>,
+    indices: &[usize],
+) -> Option<Vec<&'a mut RenderNode>> {
+    // slab index → output position. Duplicate indices collapse the map;
+    // report them as `None` (the caller's id-uniqueness contract).
+    let want: std::collections::HashMap<usize, usize> = indices.iter().copied().zip(0..).collect();
+    if want.len() != indices.len() {
+        return None;
+    }
+
+    let mut slots: Vec<Option<&'a mut RenderNode>> = Vec::with_capacity(indices.len());
+    slots.resize_with(indices.len(), || None);
+
+    let mut remaining = indices.len();
+    for (idx, node) in nodes.iter_mut() {
+        if remaining == 0 {
+            break;
+        }
+        if let Some(&pos) = want.get(&idx) {
+            slots[pos] = Some(node);
+            remaining -= 1;
+        }
+    }
+
+    // A missing index leaves its slot `None`, which collapses the
+    // whole collect to `None`.
+    slots.into_iter().collect()
+}
+
 impl Default for RenderTree {
     fn default() -> Self {
         Self::new()
@@ -275,27 +324,16 @@ impl RenderTree {
     /// on each child's `&mut RenderNode`. Returns `None` if either id is
     /// missing.
     ///
+    /// Implemented over [`collect_disjoint_mut`] — a single safe
+    /// `iter_mut` split-borrow pass, no raw pointers. (The previous
+    /// per-index `(*raw_slab).get_mut(..)` derivation re-tagged the
+    /// whole slab allocation per element and invalidated the earlier
+    /// reference — Stacked Borrows UB, caught by miri.)
+    ///
     /// # Panics
     ///
     /// Panics in debug builds if `a == b`. In release builds, returns
-    /// `None` (treated as "second id is missing" after the first borrow
-    /// claims it).
-    ///
-    /// # Safety
-    ///
-    /// The single `unsafe` block here forms `&mut T` from a `*mut T`. The
-    /// safety invariant is "disjoint indices yield disjoint memory":
-    ///   1. The assert / equality check above guarantees `a_idx !=
-    ///      b_idx`.
-    ///   2. `Slab::get_mut(idx)` returns a pointer-into-the-slab-vector
-    ///      whose validity is bounded by `&mut self`. Holding `&mut self`
-    ///      for the duration of this function call (via the receiver
-    ///      `&mut self`) keeps the slab borrow alive.
-    ///   3. The two `&mut RenderNode` references we hand out alias to
-    ///      different elements of the underlying vector storage, so no
-    ///      mutable-aliasing rule is violated.
-    ///
-    /// Mythos Step 10 (2026-05-20).
+    /// `None`.
     pub fn get_two_mut(
         &mut self,
         a: RenderId,
@@ -309,17 +347,10 @@ impl RenderTree {
         let a_idx = self.resolve(a)?;
         let b_idx = self.resolve(b)?;
 
-        // SAFETY: see method-level comment. a_idx and b_idx are distinct
-        // (checked above) and both valid (checked above). Re-borrowing
-        // through `*mut Slab<RenderNode>` to materialize two `&mut
-        // RenderNode` references to disjoint elements is sound under
-        // Rust's aliasing model.
-        let nodes_ptr: *mut slab::Slab<RenderNode> = &mut self.nodes;
-        unsafe {
-            let a_ref = (*nodes_ptr).get_mut(a_idx)?;
-            let b_ref = (*nodes_ptr).get_mut(b_idx)?;
-            Some((a_ref, b_ref))
-        }
+        let mut nodes = collect_disjoint_mut(&mut self.nodes, &[a_idx, b_idx])?;
+        let b_ref = nodes.pop()?;
+        let a_ref = nodes.pop()?;
+        Some((a_ref, b_ref))
     }
 
     /// Returns mutable references to a parent + every child in the given
@@ -327,54 +358,25 @@ impl RenderTree {
     ///
     /// Used by variable-arity layout where a parent's `perform_layout`
     /// must read its own fields while writing into each child's slot.
-    /// Returns `None` if any id is missing or any pair of ids collide.
-    ///
-    /// # Safety
-    ///
-    /// Same invariant as [`get_two_mut`](Self::get_two_mut), extended to
-    /// N+1 indices: the function checks `parent_id` is distinct from
-    /// every entry in `child_ids` and that no two entries in `child_ids`
-    /// are equal, then materializes N+1 `&mut RenderNode` references to
-    /// the disjoint slab slots.
-    ///
-    /// Mythos Step 10 (2026-05-20).
+    /// Returns `None` if any id is missing or any pair of ids collide
+    /// (duplicate ids resolve to duplicate slab slots, which
+    /// [`collect_disjoint_mut`] rejects — two distinct live ids can
+    /// never share a slot because each slot stores one generation).
     pub fn get_parent_and_children_mut<'a>(
         &'a mut self,
         parent_id: RenderId,
         child_ids: &[RenderId],
     ) -> Option<(&'a mut RenderNode, Vec<&'a mut RenderNode>)> {
-        // Verify uniqueness: parent ≠ each child, and child ids are pairwise
-        // unique. O(N²) for small N is fine; typical render trees have small
-        // child counts.
-        for (i, &c) in child_ids.iter().enumerate() {
-            if c == parent_id {
-                return None;
-            }
-            for &later in &child_ids[i + 1..] {
-                if later == c {
-                    return None;
-                }
-            }
+        let mut indices = Vec::with_capacity(child_ids.len() + 1);
+        indices.push(self.resolve(parent_id)?);
+        for &c in child_ids {
+            indices.push(self.resolve(c)?);
         }
 
-        let parent_idx = self.resolve(parent_id)?;
-        let child_indices: Vec<usize> = child_ids
-            .iter()
-            .map(|&c| self.resolve(c))
-            .collect::<Option<Vec<_>>>()?;
-
-        // SAFETY: see method-level comment. Uniqueness verified above; all
-        // indices are valid; the receiver `&mut self` keeps the slab borrow
-        // alive for the lifetime of the returned references.
-        let nodes_ptr: *mut slab::Slab<RenderNode> = &mut self.nodes;
-        unsafe {
-            let parent_ref = (*nodes_ptr).get_mut(parent_idx)?;
-            let mut children = Vec::with_capacity(child_indices.len());
-            for idx in child_indices {
-                children.push((*nodes_ptr).get_mut(idx)?);
-            }
-            Some((parent_ref, children))
-        }
+        let mut nodes = collect_disjoint_mut(&mut self.nodes, &indices)?;
+        let children = nodes.split_off(1);
+        let parent_ref = nodes.pop()?;
+        Some((parent_ref, children))
     }
 
     /// Returns mutable references to **every** node id in the given list,
@@ -404,58 +406,24 @@ impl RenderTree {
     /// N disjoint `&mut RenderNode` borrows on distinct slots are
     /// returned, no nested reborrow.
     ///
-    /// # Safety
-    ///
-    /// Same invariant as [`get_two_mut`](Self::get_two_mut) and
-    /// [`get_parent_and_children_mut`](Self::get_parent_and_children_mut),
-    /// extended to arbitrary N: caller passes pairwise-distinct ids
-    /// (checked at function entry, returns `None` on collision); all
-    /// ids must be present in the slab (checked, returns `None`
-    /// otherwise); the returned `&mut RenderNode` references alias
-    /// disjoint slots in the underlying `Vec<Entry<RenderNode>>` and
-    /// therefore do not violate Rust's aliasing rules. Receiver
-    /// `&mut self` keeps the slab borrow alive for the returned
-    /// references' lifetime.
+    /// Duplicate ids and stale/missing ids both return `None` (a
+    /// duplicate id resolves to a duplicate slab slot, which
+    /// [`collect_disjoint_mut`] rejects).
     ///
     /// # Complexity
     ///
-    /// O(N²) uniqueness check for small N (typical render-tree subtrees
-    /// are 10–100 nodes). O(N) slab presence check. O(N) borrow
-    /// materialisation. Switch to a HashSet-based duplicate check if a
-    /// subtree of >1000 nodes ever becomes hot — the inner loop's `==`
-    /// compare on `NonZeroUsize` is dominant under typical N.
+    /// O(slab len + N) average and worst case — one `iter_mut`
+    /// traversal with an early break once all N slots are found, plus
+    /// an O(N) resolve pass. Called once per dirty layout root, not
+    /// per node.
     pub fn get_subtree_mut<'a>(&'a mut self, ids: &[RenderId]) -> Option<Vec<&'a mut RenderNode>> {
-        // Verify pairwise uniqueness. O(N²) acceptable for small N.
-        for (i, &a) in ids.iter().enumerate() {
-            for &b in &ids[i + 1..] {
-                if a == b {
-                    return None;
-                }
-            }
-        }
-
-        // Verify all ids present in slab (and not stale).
+        // Resolve every id (generation-checked) before borrowing.
         let indices: Vec<usize> = ids
             .iter()
             .map(|&id| self.resolve(id))
             .collect::<Option<Vec<_>>>()?;
 
-        // SAFETY: see method-level safety doc. Uniqueness verified above;
-        // all indices are valid; the receiver `&mut self` keeps the slab
-        // borrow alive for the lifetime of the returned references. The
-        // N disjoint `&mut RenderNode` references alias distinct
-        // `Vec<Entry<RenderNode>>` cells which the slab's internal Vec
-        // resolves via independent pointer offsets — sound under Rust's
-        // aliasing model (mirrors the proven get_two_mut /
-        // get_parent_and_children_mut pattern, extended to arbitrary N).
-        let nodes_ptr: *mut slab::Slab<RenderNode> = &mut self.nodes;
-        unsafe {
-            let mut refs = Vec::with_capacity(indices.len());
-            for idx in indices {
-                refs.push((*nodes_ptr).get_mut(idx)?);
-            }
-            Some(refs)
-        }
+        collect_disjoint_mut(&mut self.nodes, &indices)
     }
 
     /// Inserts a Box protocol render object into the tree (no parent).
