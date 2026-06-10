@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`Scheduler::set_on_frame_scheduled`** — platform wake hook fired on the
+  `frame_scheduled` false→true transition (Flutter parity:
+  `SchedulerBinding.scheduleFrame` → `platformDispatcher.scheduleFrame`).
+  `request_frame`, `schedule_frame` and `schedule_frame_callback` now route
+  through the transition so registering an animation ticker actually wakes an
+  idle event loop; previously they only set an atomic flag nobody read while
+  the platform slept, and animations starved after the first frame.
 - **Safe conversion methods**:
   - `SchedulerPhase::try_from_u8()` - fallible conversion from u8
   - `AppLifecycleState::try_from_u8()` - fallible conversion from u8
