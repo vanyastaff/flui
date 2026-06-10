@@ -97,6 +97,53 @@ extern "C" fn handle_input_event(this: &Object, _sel: Sel, event: id) {
     }
 }
 
+/// Dispatch a hover status change through the per-window callbacks.
+fn dispatch_hover_change(this: &Object, is_hovered: bool) {
+    // SAFETY: `this` is a live FLUIContentView (AppKit only invokes methods on
+    // live objects); `get_context`'s ivar contract holds for views created by
+    // `create_content_view`.
+    unsafe {
+        if let Some(ctx) = get_context(this)
+            && let Some(callbacks) = ctx.callbacks.upgrade()
+        {
+            callbacks.dispatch_hover_status_change(is_hovered);
+        }
+    }
+}
+
+/// mouseEntered: — report hover gained, then forward the pointer event.
+extern "C" fn mouse_entered(this: &Object, sel: Sel, event: id) {
+    dispatch_hover_change(this, true);
+    handle_input_event(this, sel, event);
+}
+
+/// mouseExited: — report hover lost, then forward the pointer event.
+extern "C" fn mouse_exited(this: &Object, sel: Sel, event: id) {
+    dispatch_hover_change(this, false);
+    handle_input_event(this, sel, event);
+}
+
+/// drawRect: — the platform asks for content; forward as a frame request.
+///
+/// `request_redraw()` marks the view dirty via `setNeedsDisplay:`; AppKit then
+/// calls this method on the next display pass, which is where the
+/// per-window `on_request_frame` contract fires (the macOS analogue of the
+/// Windows backend's WM_PAINT dispatch).
+extern "C" fn draw_rect(this: &Object, _sel: Sel, dirty_rect: NSRect) {
+    // SAFETY: `this` is a live FLUIContentView; the super `drawRect:` message
+    // is the documented NSView teardown of the dirty region.
+    unsafe {
+        if let Some(ctx) = get_context(this)
+            && let Some(callbacks) = ctx.callbacks.upgrade()
+        {
+            callbacks.dispatch_request_frame();
+        }
+
+        let superclass = class!(NSView);
+        let _: () = msg_send![super(this, superclass), drawRect: dirty_rect];
+    }
+}
+
 /// Get or create the FLUIContentView class
 fn get_or_create_view_class() -> &'static Class {
     use std::sync::Once;
@@ -252,20 +299,26 @@ fn get_or_create_view_class() -> &'static Class {
                 handle_input_event as extern "C" fn(&Object, Sel, id),
             );
 
-            // Mouse enter/exit
+            // Mouse enter/exit (hover status + pointer event)
             decl.add_method(
                 sel!(mouseEntered:),
-                handle_input_event as extern "C" fn(&Object, Sel, id),
+                mouse_entered as extern "C" fn(&Object, Sel, id),
             );
             decl.add_method(
                 sel!(mouseExited:),
-                handle_input_event as extern "C" fn(&Object, Sel, id),
+                mouse_exited as extern "C" fn(&Object, Sel, id),
             );
 
             // Scroll
             decl.add_method(
                 sel!(scrollWheel:),
                 handle_input_event as extern "C" fn(&Object, Sel, id),
+            );
+
+            // Drawing — drawRect: drives the on_request_frame contract
+            decl.add_method(
+                sel!(drawRect:),
+                draw_rect as extern "C" fn(&Object, Sel, NSRect),
             );
 
             // Lifecycle
