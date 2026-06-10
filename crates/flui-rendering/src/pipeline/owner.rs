@@ -543,6 +543,47 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         self.device_pixel_ratio
     }
 
+    /// Removes the subtree rooted at `id` — THE dispose site.
+    ///
+    /// Removal is where owner-side state dies (the inversion of the
+    /// "Drop will handle it" idea): a `Drop` impl has no
+    /// `&PipelineOwner`, so it cannot evict dirty-queue entries — only
+    /// this method can. Order:
+    ///
+    /// 1. collect the subtree's ids;
+    /// 2. evict every id from ALL dirty queues (live + mid-phase) so
+    ///    no phase walks a freed slot's stale entry;
+    /// 3. cascade-remove the nodes (each freed slot's generation bumps
+    ///    — outstanding ids go stale, D2);
+    /// 4. clear `root_id` when the root itself was removed.
+    ///
+    /// `Drop` on render objects remains strictly node-local (decoded
+    /// images, shaped text, GPU handles).
+    ///
+    /// Returns the number of nodes removed. Must not run mid-phase —
+    /// the layout/paint walks hold raw borrows into the slab.
+    pub fn remove_render_object(&mut self, id: RenderId) -> usize {
+        debug_assert!(
+            !self.debug_doing_layout && !self.debug_doing_paint,
+            "remove_render_object during an active layout/paint phase —              the walks hold borrows into the slab; defer removal to              between-frame work",
+        );
+
+        let subtree = self.render_tree.collect_subtree_ids(id);
+        if subtree.is_empty() {
+            return 0;
+        }
+        let removed: FxHashSet<RenderId> = subtree.iter().copied().collect();
+        self.dirty.evict(&removed);
+        self.mid_layout_marks.evict(&removed);
+
+        let count = self.render_tree.remove_recursive(id);
+        if self.root_id == Some(id) {
+            self.root_id = None;
+        }
+        tracing::debug!(?id, count, "remove_render_object: subtree disposed");
+        count
+    }
+
     /// Hit-tests the render tree at `position` (root-local
     /// coordinates), appending leaf-first entries to `result`.
     ///

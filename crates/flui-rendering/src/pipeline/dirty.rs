@@ -77,6 +77,21 @@ impl DirtySets {
         Self::default()
     }
 
+    /// Evicts every entry whose id is in `removed` from all four
+    /// queues.
+    ///
+    /// The dispose half of node removal: a freed slot's queue entries
+    /// must die WITH the node, or the next phase walks ids whose
+    /// generation no longer resolves (the residue scan would warn on
+    /// every removal). O(queue lengths) per call, average and worst
+    /// case — removal batches are rare relative to frames.
+    pub fn evict(&mut self, removed: &rustc_hash::FxHashSet<flui_foundation::RenderId>) {
+        self.needs_layout.retain(|d| !removed.contains(&d.id));
+        self.needs_compositing.retain(|d| !removed.contains(&d.id));
+        self.needs_paint.retain(|d| !removed.contains(&d.id));
+        self.needs_semantics.retain(|d| !removed.contains(&d.id));
+    }
+
     /// Returns the total number of dirty entries across all four sets.
     #[inline]
     pub fn total(&self) -> usize {

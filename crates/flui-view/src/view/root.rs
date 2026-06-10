@@ -240,10 +240,13 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
             // RenderTree subtree down with the root element. The
             // pre-cycle non-cascade `remove` (now `remove_shallow`)
             // would have orphaned descendants in the slab.
-            use flui_tree::TreeWrite;
+
             let mut owner = pipeline_owner.write();
             owner.set_root_id(None);
-            owner.render_tree_mut().remove(render_id);
+            // Dispose protocol: the owner evicts the subtree's dirty
+            // entries before freeing the slots (a Drop impl cannot —
+            // it has no &PipelineOwner).
+            owner.remove_render_object(render_id);
         }
         self.render_id = None;
 
