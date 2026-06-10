@@ -1154,6 +1154,7 @@ name = "flui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "flui-animation",
  "flui-app",
  "flui-engine",
  "flui-foundation",
@@ -1162,6 +1163,7 @@ dependencies = [
  "flui-painting",
  "flui-platform",
  "flui-rendering",
+ "flui-scheduler",
  "flui-types",
  "flui-view",
  "pollster",

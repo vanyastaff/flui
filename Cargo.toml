@@ -236,8 +236,8 @@ flui-rendering = { path = "crates/flui-rendering" }
 flui-view = { path = "crates/flui-view" }
 
 # === Reactive Layer ===
-# flui-scheduler = { path = "crates/flui-scheduler" }
-# flui-animation = { path = "crates/flui-animation" }
+flui-scheduler = { path = "crates/flui-scheduler" }
+flui-animation = { path = "crates/flui-animation" }
 # flui-reactivity = { path = "crates/flui-reactivity" }
 
 # === Application Layer ===

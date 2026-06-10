@@ -48,9 +48,25 @@ impl RenderColoredBox {
         self.color
     }
 
+    /// Sets the fill color (RGBA, each channel `0.0..=1.0`).
+    ///
+    /// The caller is responsible for marking the node for repaint; the
+    /// render object does not reach back into the pipeline.
+    pub fn set_color(&mut self, color: [f32; 4]) {
+        self.color = color;
+    }
+
     /// Returns the preferred size.
     pub fn preferred_size(&self) -> Size {
         self.preferred_size
+    }
+
+    /// Sets the preferred size.
+    ///
+    /// Takes effect on the next layout; the caller is responsible for
+    /// marking the node layout-dirty.
+    pub fn set_preferred_size(&mut self, size: Size) {
+        self.preferred_size = size;
     }
 }
 
