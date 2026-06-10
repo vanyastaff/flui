@@ -25,7 +25,7 @@ use flui_tree::Single;
 use flui_types::{Offset, Point, Rect, Size, geometry::px};
 
 use crate::{
-    context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext},
+    context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
     traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
 };
@@ -191,14 +191,13 @@ impl RenderBox for RenderFractionalTranslation {
         &mut self.size
     }
 
-    fn paint(&self, ctx: &mut BoxPaintContext<'_, Single, BoxParentData>) {
+    fn paint(&self, ctx: &mut crate::context::PaintCx<'_, Single>) {
         if !self.has_child {
             return;
         }
-        // The single-arity `paint_child_at(offset)` helper takes an
-        // additional offset relative to the child's recorded position
-        // (origin in our case), so the pixel translation lands exactly
-        // where we want it.
+        // `paint_child_at` REPLACES the child's laid-out offset; the
+        // child is laid out at the origin here, so the override IS the
+        // pixel translation.
         ctx.paint_child_at(self.pixel_offset());
     }
 

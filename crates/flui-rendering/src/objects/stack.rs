@@ -41,14 +41,11 @@
 
 use flui_tree::Variable;
 pub use flui_types::layout::StackFit;
-use flui_types::{
-    Alignment, Offset, Pixels, Point, Rect, Size,
-    painting::{Clip, ClipOp},
-};
+use flui_types::{Alignment, Offset, Pixels, Point, Rect, Size, painting::Clip};
 
 use crate::{
     constraints::BoxConstraints,
-    context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext},
+    context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::StackParentData,
     traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
 };
@@ -457,25 +454,19 @@ impl RenderBox for RenderStack {
         &mut self.size
     }
 
-    fn paint(&self, ctx: &mut BoxPaintContext<'_, Variable, StackParentData>) {
+    fn paint(&self, ctx: &mut crate::context::PaintCx<'_, Variable>) {
         // Clip when overflow happens AND the user asked for clipping.
-        let count = ctx.child_count();
+        // The clip must cover the CHILDREN, so it goes through a clip
+        // layer scope (canvas clips are run-local and never extend
+        // across child markers).
         if self.has_visual_overflow && self.clip_behavior != Clip::None {
-            let bounds =
-                Rect::from_origin_size(Point::ZERO, self.size).translate_offset(ctx.offset());
-            let clip_behavior = self.clip_behavior;
-            ctx.with_save(|ctx| {
-                ctx.canvas()
-                    .clip_rect_ext(bounds, ClipOp::Intersect, clip_behavior);
+            let bounds = Rect::from_origin_size(Point::ZERO, self.size);
+            ctx.with_clip_rect(bounds, self.clip_behavior, |ctx| {
                 // Paint all children in order (bottom-up = first to last).
-                for i in 0..count {
-                    ctx.paint_child(i);
-                }
+                ctx.paint_children();
             });
         } else {
-            for i in 0..count {
-                ctx.paint_child(i);
-            }
+            ctx.paint_children();
         }
     }
 

@@ -21,7 +21,7 @@ use flui_types::{Offset, Point, Rect, Size};
 
 use crate::{
     constraints::BoxConstraints,
-    context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext},
+    context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
     traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
 };
@@ -133,9 +133,9 @@ impl RenderBox for RenderOffstage {
         &mut self.size
     }
 
-    fn paint(&self, ctx: &mut BoxPaintContext<'_, Single, BoxParentData>) {
+    fn paint(&self, ctx: &mut crate::context::PaintCx<'_, Single>) {
         if self.offstage {
-            // No-op: the subtree is hidden.
+            // Recording no child marker hides the subtree.
             return;
         }
         ctx.paint_child();

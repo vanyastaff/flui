@@ -11,7 +11,6 @@ use parking_lot::RwLock;
 use super::ViewConfiguration;
 use crate::{
     constraints::BoxConstraints,
-    context::CanvasContext,
     // Cycle 4 U-4: `HitTestResult` is re-exported from
     // `flui_interaction::routing` via `hit_testing::mod`; the import
     // path stays the same but the underlying type is now the
@@ -374,11 +373,6 @@ impl RenderView {
     // Painting
     // ========================================================================
 
-    /// Paints this render view.
-    pub fn paint_view(&self, _context: &mut CanvasContext, _offset: Offset) {
-        // No children to paint currently
-    }
-
     /// Returns the paint bounds for this render view (in physical pixels).
     pub fn physical_paint_bounds(&self) -> Rect {
         let config = self.configuration();
@@ -519,8 +513,11 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
         Ok(self.view.size())
     }
 
-    fn paint(&self, context: &mut CanvasContext, offset: Offset) {
-        self.view.paint_view(context, offset);
+    fn paint_raw(&self, recorder: &mut crate::context::FragmentRecorder, child_count: usize) {
+        // Root pass-through: the view draws nothing itself and splices
+        // every child subtree in order.
+        let mut cx = crate::context::PaintCx::<flui_tree::Variable>::new(recorder, child_count);
+        cx.paint_children();
     }
 
     fn hit_test_raw(

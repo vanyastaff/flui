@@ -304,7 +304,7 @@ impl RenderTree {
     ///
     /// Returns `None` for vacant slots AND for stale ids whose slot was
     /// freed (and possibly reused) — the generation check in
-    /// [`Self::resolve`].
+    /// `Self::resolve`.
     #[inline]
     pub fn get(&self, id: RenderId) -> Option<&RenderNode> {
         self.nodes.get(self.resolve(id)?)
@@ -324,7 +324,7 @@ impl RenderTree {
     /// on each child's `&mut RenderNode`. Returns `None` if either id is
     /// missing.
     ///
-    /// Implemented over [`collect_disjoint_mut`] — a single safe
+    /// Implemented over `collect_disjoint_mut` — a single safe
     /// `iter_mut` split-borrow pass, no raw pointers. (The previous
     /// per-index `(*raw_slab).get_mut(..)` derivation re-tagged the
     /// whole slab allocation per element and invalidated the earlier
@@ -360,7 +360,7 @@ impl RenderTree {
     /// must read its own fields while writing into each child's slot.
     /// Returns `None` if any id is missing or any pair of ids collide
     /// (duplicate ids resolve to duplicate slab slots, which
-    /// [`collect_disjoint_mut`] rejects — two distinct live ids can
+    /// `collect_disjoint_mut` rejects — two distinct live ids can
     /// never share a slot because each slot stores one generation).
     pub fn get_parent_and_children_mut<'a>(
         &'a mut self,
@@ -408,7 +408,7 @@ impl RenderTree {
     ///
     /// Duplicate ids and stale/missing ids both return `None` (a
     /// duplicate id resolves to a duplicate slab slot, which
-    /// [`collect_disjoint_mut`] rejects).
+    /// `collect_disjoint_mut` rejects).
     ///
     /// # Complexity
     ///

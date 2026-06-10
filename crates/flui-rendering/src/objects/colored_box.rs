@@ -5,7 +5,7 @@ use flui_tree::Leaf;
 use flui_types::{Color, Point, Rect, Size, geometry::px};
 
 use crate::{
-    context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext},
+    context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
     traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
 };
@@ -77,19 +77,12 @@ impl RenderBox for RenderColoredBox {
         &mut self.size
     }
 
-    fn paint(&self, ctx: &mut BoxPaintContext<'_, Leaf, BoxParentData>) {
-        let offset = ctx.offset();
-        let rect = Rect::from_origin_size(Point::new(offset.dx, offset.dy), self.size);
-        tracing::debug!(
-            "RenderColoredBox::paint: offset=({}, {}), size={:?}, rect={:?}",
-            offset.dx,
-            offset.dy,
-            self.size,
-            rect
-        );
+    fn paint(&self, ctx: &mut crate::context::PaintCx<'_, Leaf>) {
+        // Local coordinates — the recorder pre-translates to this
+        // node's origin.
+        let rect = Rect::from_origin_size(Point::ZERO, self.size);
         let color = Color::from_rgba_f32_array(self.color);
-        let paint = Paint::fill(color);
-        ctx.canvas().draw_rect(rect, &paint);
+        ctx.canvas().draw_rect(rect, &Paint::fill(color));
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Leaf, BoxParentData>) -> bool {

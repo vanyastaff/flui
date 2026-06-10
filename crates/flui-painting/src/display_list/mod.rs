@@ -219,7 +219,13 @@ impl DisplayList {
     }
 
     /// Appends all commands from another DisplayList (zero-copy
-    /// move).
+    /// move), unioning the cached bounds.
+    ///
+    /// Commands are self-contained (each carries its own transform),
+    /// so concatenation preserves replay semantics. The
+    /// fragment-composition paint walk uses this to merge adjacent
+    /// inline paint runs into one picture instead of emitting a
+    /// `PictureLayer` per render object.
     ///
     /// # Performance
     ///
@@ -230,7 +236,7 @@ impl DisplayList {
         parent_len = self.commands.len(),
         child_len = other.commands.len(),
     ))]
-    pub(crate) fn append(&mut self, mut other: DisplayList) {
+    pub fn append(&mut self, mut other: DisplayList) {
         if self.commands.is_empty() {
             tracing::trace!("Using fast path: vector swap (O(1))");
             std::mem::swap(&mut self.commands, &mut other.commands);

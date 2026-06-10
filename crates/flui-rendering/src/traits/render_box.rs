@@ -1,11 +1,11 @@
 //! RenderBox trait for 2D box layout with Arity-based child management.
 
 use flui_tree::Arity;
-use flui_types::{Offset, Point, Rect, Size};
+use flui_types::{Point, Rect, Size};
 
 use crate::{
     constraints::BoxConstraints,
-    context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext, CanvasContext},
+    context::{BoxHitTestContext, BoxLayoutContext},
     hit_testing::HitTestBehavior,
     parent_data::ParentData,
     protocol::BoxProtocol,
@@ -294,30 +294,39 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     // Painting
     // ========================================================================
 
-    /// Paints this render object and its children.
+    /// Records this render object's paint fragment.
     ///
     /// The context provides:
-    /// - Current offset via `ctx.offset()`
-    /// - Canvas for drawing via `ctx.canvas()`
-    /// - Child painting via `ctx.paint_child()` (arity-specific)
+    /// - A recording canvas pre-translated to this node's origin via
+    ///   `ctx.canvas()` — **draw in local coordinates**, no offset
+    ///   arithmetic
+    /// - Child splicing via `ctx.paint_child()` (arity-gated: `Leaf`
+    ///   has no child methods at compile time)
+    /// - Clip scopes that cover children via `ctx.with_clip_rect()`
+    ///   and friends
+    ///
+    /// Paint is a sans-IO encoder pass: the recorded fragment is
+    /// replayed into the layer tree by the pipeline; this method never
+    /// touches the live render tree.
     ///
     /// # Example
     ///
     /// ```ignore
-    /// fn paint(&self, ctx: &mut BoxPaintContext<'_, Single, BoxParentData>) {
-    ///     // Draw background
-    ///     let rect = Rect::from_size(self.size).translate(ctx.offset());
-    ///     ctx.canvas().draw_rect(rect, &Paint::fill(self.color));
-    ///
-    ///     // Paint child
+    /// fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    ///     // Draw background in local coordinates.
+    ///     ctx.canvas()
+    ///         .draw_rect(Rect::from_origin_size(Point::ZERO, self.size), &paint);
+    ///     // Splice the child at its laid-out offset.
     ///     ctx.paint_child();
     /// }
     /// ```
     ///
-    /// Default implementation paints children only (for containers that
-    /// don't draw themselves).
-    fn paint(&self, _ctx: &mut BoxPaintContext<'_, Self::Arity, Self::ParentData>) {
-        // Default: no-op - pipeline handles child painting if not overridden
+    /// The default implementation splices all children in tree order
+    /// (Flutter's `RenderProxyBox.paint` parity) — pass-through
+    /// containers need no override. An override that does NOT call any
+    /// child-painting method hides its subtree (offstage semantics).
+    fn paint(&self, ctx: &mut crate::context::PaintCx<'_, Self::Arity>) {
+        ctx.paint_children_in_order();
     }
 
     // ========================================================================
@@ -367,9 +376,9 @@ pub enum TextBaseline {
 ///
 /// `hit_test_raw` is still a placeholder — hit testing flows through
 /// `RenderBox::hit_test()` with `BoxHitTestContext` and is wired
-/// separately by the hit-test pipeline. The painting flow is also still
-/// out-of-band: the pipeline constructs `BoxPaintContext` and calls
-/// `RenderBox::paint()` directly.
+/// separately by the hit-test pipeline. `paint_raw` is the live paint
+/// bridge: it wraps the pipeline's `FragmentRecorder` in the typed
+/// `PaintCx<T::Arity>` and calls `RenderBox::paint`.
 ///
 /// Note: This requires T to also implement Diagnosticable since `RenderObject<P>`
 /// requires it.
@@ -430,12 +439,14 @@ where
         })
     }
 
-    fn paint(&self, _context: &mut CanvasContext, _offset: Offset) {
-        // Protocol bridge only - no-op.
-        // Real painting flows through RenderBox::paint() with BoxPaintContext,
-        // which provides children access and paint_child() callbacks.
-        // The pipeline creates the proper context and calls RenderBox::paint()
-        // directly.
+    fn paint_raw(&self, recorder: &mut crate::context::FragmentRecorder, child_count: usize) {
+        // The paint bridge: wrap the recorder in the typed, arity-gated
+        // PaintCx and call the user's RenderBox::paint. Unlike the
+        // layout bridge there is no GAT erasure — the recorder is a
+        // concrete type (no ParentData in the paint surface), so the
+        // re-typing is a zero-cost PhantomData re-tag.
+        let mut cx = crate::context::PaintCx::<T::Arity>::new(recorder, child_count);
+        T::paint(self, &mut cx);
     }
 
     fn hit_test_raw(

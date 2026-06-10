@@ -207,13 +207,20 @@ pub trait RenderObject<P: Protocol>:
         ctx: &mut <P as Protocol>::LayoutCtxErased<'_>,
     ) -> crate::error::RenderResult<ProtocolGeometry<P>>;
 
-    /// Paints this render object.
+    /// Records this render object's paint fragment.
     ///
-    /// Called by the painting pipeline after layout. The offset is this node's
-    /// position relative to the parent's origin.
+    /// Called by the paint walk after layout. The recorder is
+    /// pre-positioned at this node's origin in the current layer
+    /// space; `child_count` is the number of tree children.
     ///
-    /// Protocol traits may provide typed paint methods with better APIs.
-    fn paint(&self, context: &mut crate::pipeline::CanvasContext, offset: Offset);
+    /// **Users don't implement this directly.** Protocol traits provide
+    /// blanket implementations that wrap the recorder in the typed,
+    /// arity-gated [`PaintCx`](crate::context::PaintCx) and call the
+    /// protocol-level `paint` (e.g.
+    /// [`RenderBox::paint`](crate::traits::RenderBox::paint)). The
+    /// recorded fragment is replayed into the layer tree by the
+    /// pipeline owner — paint never touches the live tree (sans-IO).
+    fn paint_raw(&self, recorder: &mut crate::context::FragmentRecorder, child_count: usize);
 
     /// Hit tests this render object with raw protocol types.
     ///

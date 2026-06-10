@@ -60,7 +60,7 @@ use flui_types::{
 };
 
 use crate::{
-    context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext},
+    context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
     traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
 };
@@ -146,14 +146,20 @@ pub trait ClipGeometry: sealed::Sealed + Clone + fmt::Debug + Send + Sync + 'sta
     /// shape is unreachable.
     fn contains(&self, position: Point<Pixels>) -> bool;
 
-    /// Pushes the clip onto the canvas. The generic `RenderClip<S>`
-    /// body calls this once per `paint()`, sandwiched between a
-    /// `canvas.save()` and `canvas.restore()`.
-    fn apply_to_canvas(
+    /// Opens this clip as a layer scope on the paint context — the
+    /// clip covers everything recorded inside `f`, child subtrees
+    /// included. The shape is given in local coordinates (the paint
+    /// context's canvas space).
+    ///
+    /// A layer scope (not a canvas clip) because canvas state is
+    /// run-local in the fragment paint model: it never extends across
+    /// child markers, and the entire point of `RenderClip` is clipping
+    /// the child.
+    fn with_clip_scope(
         &self,
-        canvas: &mut flui_painting::Canvas,
-        offset: Offset,
+        ctx: &mut crate::context::PaintCx<'_, Single>,
         clip_behavior: Clip,
+        f: impl FnOnce(&mut crate::context::PaintCx<'_, Single>),
     );
 }
 
@@ -168,18 +174,13 @@ impl ClipGeometry for Rect<Pixels> {
         Rect::contains(self, position)
     }
 
-    fn apply_to_canvas(
+    fn with_clip_scope(
         &self,
-        canvas: &mut flui_painting::Canvas,
-        offset: Offset,
+        ctx: &mut crate::context::PaintCx<'_, Single>,
         clip_behavior: Clip,
+        f: impl FnOnce(&mut crate::context::PaintCx<'_, Single>),
     ) {
-        let shifted = self.translate_offset(offset);
-        canvas.clip_rect_ext(
-            shifted,
-            flui_types::painting::ClipOp::Intersect,
-            clip_behavior,
-        );
+        ctx.with_clip_rect(*self, clip_behavior, f);
     }
 }
 
@@ -252,26 +253,13 @@ impl ClipGeometry for RRect {
         true
     }
 
-    fn apply_to_canvas(
+    fn with_clip_scope(
         &self,
-        canvas: &mut flui_painting::Canvas,
-        offset: Offset,
+        ctx: &mut crate::context::PaintCx<'_, Single>,
         clip_behavior: Clip,
+        f: impl FnOnce(&mut crate::context::PaintCx<'_, Single>),
     ) {
-        // Shift the rounded rect by `offset`.
-        let shifted_rect = self.bounding_rect().translate_offset(offset);
-        let shifted = RRect::new(
-            shifted_rect,
-            self.top_left,
-            self.top_right,
-            self.bottom_right,
-            self.bottom_left,
-        );
-        canvas.clip_rrect_ext(
-            shifted,
-            flui_types::painting::ClipOp::Intersect,
-            clip_behavior,
-        );
+        ctx.with_clip_rrect(*self, clip_behavior, f);
     }
 }
 
@@ -286,25 +274,20 @@ impl ClipGeometry for Oval {
         Oval::contains(self, position)
     }
 
-    fn apply_to_canvas(
+    fn with_clip_scope(
         &self,
-        canvas: &mut flui_painting::Canvas,
-        offset: Offset,
+        ctx: &mut crate::context::PaintCx<'_, Single>,
         clip_behavior: Clip,
+        f: impl FnOnce(&mut crate::context::PaintCx<'_, Single>),
     ) {
         // Approximate the oval with an RRect whose corner radii equal half
         // the bounding-rect dimensions — a perfect inscribed ellipse.
         // (The engine may specialise this in a future backend; the
         // approximation is exact for the inscribed-ellipse case.)
-        let shifted = self.bounds.translate_offset(offset);
-        let rx = shifted.width() * 0.5;
-        let ry = shifted.height() * 0.5;
-        let rrect = RRect::from_rect_elliptical(shifted, rx, ry);
-        canvas.clip_rrect_ext(
-            rrect,
-            flui_types::painting::ClipOp::Intersect,
-            clip_behavior,
-        );
+        let rx = self.bounds.width() * 0.5;
+        let ry = self.bounds.height() * 0.5;
+        let rrect = RRect::from_rect_elliptical(self.bounds, rx, ry);
+        ctx.with_clip_rrect(rrect, clip_behavior, f);
     }
 }
 
@@ -329,21 +312,13 @@ impl ClipGeometry for Path {
         true
     }
 
-    fn apply_to_canvas(
+    fn with_clip_scope(
         &self,
-        canvas: &mut flui_painting::Canvas,
-        offset: Offset,
+        ctx: &mut crate::context::PaintCx<'_, Single>,
         clip_behavior: Clip,
+        f: impl FnOnce(&mut crate::context::PaintCx<'_, Single>),
     ) {
-        // `Path::translate` returns a new Path (immutable). The painting
-        // layer takes the path by reference, so we keep the shifted copy
-        // local to this call.
-        let shifted = self.translate(offset);
-        canvas.clip_path_ext(
-            &shifted,
-            flui_types::painting::ClipOp::Intersect,
-            clip_behavior,
-        );
+        ctx.with_clip_path(self.clone(), clip_behavior, f);
     }
 }
 
@@ -533,13 +508,12 @@ impl<S: ClipGeometry> RenderBox for RenderClip<S> {
         &mut self.size
     }
 
-    fn paint(&self, ctx: &mut BoxPaintContext<'_, Single, BoxParentData>) {
-        let clip = self.resolve_clip();
-        let offset = ctx.offset();
-        ctx.with_save(|ctx| {
-            clip.apply_to_canvas(ctx.canvas(), offset, self.clip_behavior);
-            ctx.paint_child();
-        });
+    fn paint(&self, ctx: &mut crate::context::PaintCx<'_, Single>) {
+        // The clip is a LAYER scope so it covers the child subtree —
+        // canvas clips are run-local in the fragment paint model and
+        // would never reach the child's commands.
+        self.resolve_clip()
+            .with_clip_scope(ctx, self.clip_behavior, |ctx| ctx.paint_child());
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {

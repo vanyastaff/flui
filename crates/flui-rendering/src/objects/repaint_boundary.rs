@@ -9,7 +9,7 @@
 //! [`is_repaint_boundary`]: crate::traits::RenderObject::is_repaint_boundary
 
 use flui_tree::Single;
-use flui_types::{Offset, Point, Rect, Size};
+use flui_types::{Point, Rect, Size};
 
 use crate::{
     context::BoxLayoutContext,
@@ -125,9 +125,12 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderRepai
         })
     }
 
-    fn paint(&self, _context: &mut crate::pipeline::CanvasContext, _offset: Offset) {
-        // No-op — repaint boundary applies no visual effect.
-        // Child painting is handled by the pipeline.
+    fn paint_raw(&self, recorder: &mut crate::context::FragmentRecorder, child_count: usize) {
+        // No visual effect of its own — splice the child in order. The
+        // boundary split (OffsetLayer + rebase to ZERO) is the paint
+        // walk's job, keyed off `is_repaint_boundary()`.
+        let mut cx = crate::context::PaintCx::<Single>::new(recorder, child_count);
+        cx.paint_child();
     }
 
     fn hit_test_raw(
