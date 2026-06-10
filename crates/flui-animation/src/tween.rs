@@ -1,10 +1,9 @@
 //! `TweenAnimation` - maps f32 animations to any type T.
 
-use crate::animation::{Animation, StatusCallback};
+use crate::animation::{Animation, ParentSubscription, StatusCallback, link_parent};
 use crate::status::AnimationStatus;
 use crate::tween_types::Animatable;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
-use parking_lot::Mutex;
 use std::fmt;
 use std::sync::Arc;
 
@@ -48,7 +47,8 @@ where
     tween: A,
     parent: Arc<dyn Animation<f32>>,
     notifier: Arc<ChangeNotifier>,
-    _parent_listener_id: Arc<Mutex<Option<ListenerId>>>,
+    /// Re-emits parent value changes to our listeners; removed on last drop.
+    _parent_sub: Arc<ParentSubscription>,
     _phantom: std::marker::PhantomData<T>,
 }
 
@@ -66,12 +66,13 @@ where
     #[must_use]
     pub fn new(tween: A, parent: Arc<dyn Animation<f32>>) -> Self {
         let notifier = Arc::new(ChangeNotifier::new());
+        let parent_sub = link_parent(&parent, &notifier);
 
         Self {
             tween,
             parent,
             notifier,
-            _parent_listener_id: Arc::new(Mutex::new(None)),
+            _parent_sub: parent_sub,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -206,6 +207,66 @@ mod tests {
         controller.forward().unwrap();
         assert_eq!(animation.status(), AnimationStatus::Forward);
 
+        controller.dispose();
+    }
+
+    #[test]
+    fn tween_reemits_parent_value_changes() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // Same class of regression as CurvedAnimation B2: a listener on a
+        // TweenAnimation must fire when the parent's value changes; previously
+        // the combinator never subscribed to its parent, so tween-driven
+        // rebuilds silently never happened.
+        let scheduler = Arc::new(Scheduler::new());
+        let controller = Arc::new(AnimationController::new(
+            Duration::from_millis(100),
+            scheduler,
+        ));
+        let tween = FloatTween::new(0.0, 100.0);
+        let animation = TweenAnimation::new(tween, controller.clone() as Arc<dyn Animation<f32>>);
+
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits2 = Arc::clone(&hits);
+        let _id = animation.add_listener(Arc::new(move || {
+            hits2.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        controller.set_value(0.5);
+        controller.set_value(0.7);
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            2,
+            "tween listener must re-emit each parent change"
+        );
+
+        controller.dispose();
+    }
+
+    #[test]
+    fn dropping_tween_removes_parent_subscription() {
+        let scheduler = Arc::new(Scheduler::new());
+        let controller = Arc::new(AnimationController::new(
+            Duration::from_millis(100),
+            scheduler,
+        ));
+        let before = controller.debug_value_listener_count();
+        {
+            let _animation = TweenAnimation::new(
+                FloatTween::new(0.0, 1.0),
+                controller.clone() as Arc<dyn Animation<f32>>,
+            );
+            assert_eq!(
+                controller.debug_value_listener_count(),
+                before + 1,
+                "constructing a tween combinator subscribes once to the parent"
+            );
+        }
+        assert_eq!(
+            controller.debug_value_listener_count(),
+            before,
+            "dropping the tween combinator removes its parent subscription"
+        );
         controller.dispose();
     }
 

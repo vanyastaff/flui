@@ -22,6 +22,7 @@
 use std::time::Duration;
 
 use flui_types::geometry::Pixels;
+use flui_types::platform::TargetPlatform;
 use ui_events::pointer::PointerType;
 
 /// Default touch slop for touch devices (18 logical pixels).
@@ -207,6 +208,97 @@ impl GestureSettings {
             long_press_timeout: DEFAULT_LONG_PRESS_TIMEOUT,
             min_fling_velocity: DEFAULT_MIN_FLING_VELOCITY,
             max_fling_velocity: DEFAULT_MAX_FLING_VELOCITY,
+        }
+    }
+
+    /// Platform-faithful settings for a **runtime** [`TargetPlatform`].
+    ///
+    /// This is the primary platform-adaptation entry point, mirroring
+    /// Flutter's `defaultTargetPlatform`: the platform is a *value*, not a
+    /// compile-time fact, because the compile target alone is wrong in
+    /// several real configurations —
+    ///
+    /// - **web/wasm**: one binary serves iOS Safari and Android Chrome; the
+    ///   feel must be chosen from the user agent at runtime;
+    /// - **tests**: widget tests exercise Android and iOS behavior on a
+    ///   desktop host (Flutter's `debugDefaultTargetPlatformOverride`);
+    /// - **ChromeOS / iPad-on-macOS**: the app's nominal platform and the
+    ///   input hardware disagree.
+    ///
+    /// Use [`Self::native`] when the compile target *is* the right answer
+    /// (a plain mobile/desktop build).
+    ///
+    /// Mapping: `Android`/`Fuchsia` → [`Self::android_defaults`] (Flutter
+    /// also treats Fuchsia as Android-like); `iOS` →
+    /// [`Self::ios_defaults`]; desktop and `Unknown` →
+    /// [`Self::touch_defaults`] (the universal Flutter `kTouchSlop = 18`
+    /// baseline — per-device precision is layered on top via
+    /// [`Self::for_device`]).
+    #[must_use]
+    pub fn for_platform(platform: TargetPlatform) -> Self {
+        match platform {
+            TargetPlatform::Android | TargetPlatform::Fuchsia => Self::android_defaults(),
+            TargetPlatform::iOS => Self::ios_defaults(),
+            // Desktop, Unknown, and any future `#[non_exhaustive]` variant:
+            // the universal Flutter baseline is the safe feel.
+            _ => Self::touch_defaults(),
+        }
+    }
+
+    /// Settings for the compile-time platform
+    /// ([`TargetPlatform::current()`], `cfg(target_os)`-seeded).
+    ///
+    /// Convenience over [`Self::for_platform`] for plain native builds.
+    /// Anything that can host more than one platform feel (web, tests,
+    /// embedders with platform override) must resolve a runtime
+    /// [`TargetPlatform`] and call [`Self::for_platform`] instead.
+    #[must_use]
+    pub fn native() -> Self {
+        Self::for_platform(TargetPlatform::current())
+    }
+
+    /// Native Android feel: values from AOSP `ViewConfiguration`
+    /// (`frameworks/base/core/java/android/view/ViewConfiguration.java`),
+    /// in dp ≡ logical px.
+    ///
+    /// Differences from [`Self::touch_defaults`] (which mirrors Flutter's
+    /// `kTouchSlop = 18`): Android's native scroll-disambiguation slop is
+    /// **8 dp** — noticeably more eager to scroll — and the double-tap
+    /// window is 300 ms. Pan slop uses `PAGING_TOUCH_SLOP` (2× touch slop).
+    pub fn android_defaults() -> Self {
+        Self {
+            touch_slop: 8.0,
+            pan_slop: 16.0,
+            pan_slop_vertical: 16.0,
+            pan_slop_horizontal: 16.0,
+            scale_slop: DEFAULT_SCALE_SLOP,
+            double_tap_slop: 100.0,
+            double_tap_timeout: Duration::from_millis(300),
+            long_press_timeout: Duration::from_millis(400),
+            min_fling_velocity: 50.0,
+            max_fling_velocity: 8000.0,
+        }
+    }
+
+    /// Native iOS feel.
+    ///
+    /// `touch_slop` is `UIGestureRecognizer.allowableMovement`'s 10 pt
+    /// default — the only value Apple publishes. The remaining values are
+    /// extrapolated (Apple does not document `UIScrollView` internals):
+    /// pan slop 2× touch slop, Android-equivalent double-tap window, and the
+    /// conventional 500 ms long-press.
+    pub fn ios_defaults() -> Self {
+        Self {
+            touch_slop: 10.0,
+            pan_slop: 20.0,
+            pan_slop_vertical: 20.0,
+            pan_slop_horizontal: 20.0,
+            scale_slop: DEFAULT_SCALE_SLOP,
+            double_tap_slop: 100.0,
+            double_tap_timeout: Duration::from_millis(300),
+            long_press_timeout: Duration::from_millis(500),
+            min_fling_velocity: 50.0,
+            max_fling_velocity: 8000.0,
         }
     }
 
@@ -443,6 +535,50 @@ mod tests {
         let default = GestureSettings::default();
         let touch = GestureSettings::touch_defaults();
         assert_eq!(default, touch);
+    }
+
+    #[test]
+    fn for_platform_maps_every_variant() {
+        // Android-family feel.
+        assert_eq!(
+            GestureSettings::for_platform(TargetPlatform::Android),
+            GestureSettings::android_defaults()
+        );
+        assert_eq!(
+            GestureSettings::for_platform(TargetPlatform::Fuchsia),
+            GestureSettings::android_defaults()
+        );
+        // iOS feel.
+        assert_eq!(
+            GestureSettings::for_platform(TargetPlatform::iOS),
+            GestureSettings::ios_defaults()
+        );
+        // Desktop + Unknown fall back to the universal Flutter baseline.
+        for p in [
+            TargetPlatform::Linux,
+            TargetPlatform::MacOS,
+            TargetPlatform::Windows,
+            TargetPlatform::Unknown,
+        ] {
+            assert_eq!(
+                GestureSettings::for_platform(p),
+                GestureSettings::touch_defaults()
+            );
+        }
+        // The platform presets are actually distinct (8 dp vs 10 pt vs 18 px).
+        assert_eq!(GestureSettings::android_defaults().touch_slop(), 8.0);
+        assert_eq!(GestureSettings::ios_defaults().touch_slop(), 10.0);
+        assert_eq!(GestureSettings::touch_defaults().touch_slop(), 18.0);
+    }
+
+    #[test]
+    fn native_matches_compile_target() {
+        // `native()` is the cfg-seeded convenience: it must agree with the
+        // runtime dispatch for the compile-time platform.
+        assert_eq!(
+            GestureSettings::native(),
+            GestureSettings::for_platform(TargetPlatform::current())
+        );
     }
 
     #[test]

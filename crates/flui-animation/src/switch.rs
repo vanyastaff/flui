@@ -85,6 +85,15 @@ struct AnimationSwitchInner {
     current_listener_id: Option<ListenerId>,
     next_listener_id: Option<ListenerId>,
     current_status_listener_id: Option<ListenerId>,
+    /// Switch-owned status listeners.
+    ///
+    /// Owned here (not delegated to `current`) because `current` changes on
+    /// a train-hop: an id minted by the old current would be removed against
+    /// the new one and orphan the callback on the retired animation. The
+    /// internal per-current forwarder fans out to this registry instead.
+    status_listeners: Vec<(ListenerId, StatusCallback)>,
+    /// Next id for `status_listeners` (starts at 1 so 0 never collides).
+    next_status_listener_id: usize,
 }
 
 impl AnimationSwitch {
@@ -142,6 +151,8 @@ impl AnimationSwitch {
             current_listener_id: None,
             next_listener_id: None,
             current_status_listener_id: None,
+            status_listeners: Vec::new(),
+            next_status_listener_id: 1,
         };
 
         let this = Self {
@@ -176,10 +187,42 @@ impl AnimationSwitch {
         self.inner.lock().current.clone()
     }
 
+    /// Builds the status forwarder that re-emits the current animation's
+    /// status transitions through our notifier.
+    fn make_status_callback(
+        inner_weak: &std::sync::Weak<Mutex<AnimationSwitchInner>>,
+        notifier: &Arc<ChangeNotifier>,
+    ) -> StatusCallback {
+        let inner_weak = inner_weak.clone();
+        let notifier = Arc::clone(notifier);
+        Arc::new(move |status| {
+            if let Some(inner_arc) = inner_weak.upgrade() {
+                let mut inner = inner_arc.lock();
+                if inner.last_status != Some(status) {
+                    inner.last_status = Some(status);
+                    // Snapshot-then-fire: user callbacks run without the
+                    // inner lock held (they may re-enter the switch).
+                    let callbacks: Vec<StatusCallback> = inner
+                        .status_listeners
+                        .iter()
+                        .map(|(_, cb)| Arc::clone(cb))
+                        .collect();
+                    drop(inner);
+                    notifier.notify_listeners();
+                    for callback in callbacks {
+                        callback(status);
+                    }
+                }
+            }
+        })
+    }
+
     /// Sets up listeners on the current and next animations.
     fn setup_listeners(&self) {
         let inner_weak = Arc::downgrade(&self.inner);
         let notifier = Arc::clone(&self.notifier);
+        let status_callback = Self::make_status_callback(&inner_weak, &notifier);
+        let status_callback_for_handler = Arc::clone(&status_callback);
 
         let value_handler = move || {
             if let Some(inner_arc) = inner_weak.upgrade() {
@@ -198,20 +241,40 @@ impl AnimationSwitch {
                     false
                 };
 
-                if should_switch {
-                    // Switch animations
-                    if let Some(next) = inner.next.take() {
-                        inner.current = next;
-                        inner.mode = None;
+                // On switch, rebind all listener bookkeeping so the ids stored
+                // in `inner` always describe live registrations on `current`:
+                //  - the old current's value + status listeners are removed
+                //    (it may be externally alive long after the hop);
+                //  - the promoted next's value listener becomes the current one;
+                //  - a fresh status listener is attached to the new current.
+                let mut callback = None;
+                let mut rebind = None;
+                if should_switch && let Some(next) = inner.next.take() {
+                    let old_current = std::mem::replace(&mut inner.current, Arc::clone(&next));
+                    inner.mode = None;
+                    let old_value_id = inner.current_listener_id.take();
+                    let old_status_id = inner.current_status_listener_id.take();
+                    inner.current_listener_id = inner.next_listener_id.take();
+                    callback.clone_from(&inner.on_switched);
+                    rebind = Some((old_current, old_value_id, old_status_id, next));
+                }
+                // Release the lock before touching other animations' listener
+                // registries or running user callbacks.
+                drop(inner);
 
-                        // Call on_switched callback
-                        if let Some(ref callback) = inner.on_switched {
-                            let callback = Arc::clone(callback);
-                            // Release lock before calling callback
-                            drop(inner);
-                            callback();
-                        }
+                if let Some((old_current, old_value_id, old_status_id, new_current)) = rebind {
+                    if let Some(id) = old_value_id {
+                        old_current.remove_listener(id);
                     }
+                    if let Some(id) = old_status_id {
+                        old_current.remove_status_listener(id);
+                    }
+                    let status_id =
+                        new_current.add_status_listener(Arc::clone(&status_callback_for_handler));
+                    inner_arc.lock().current_status_listener_id = Some(status_id);
+                }
+                if let Some(callback) = callback {
+                    callback();
                 }
 
                 // Notify listeners of value change
@@ -232,18 +295,6 @@ impl AnimationSwitch {
         }
 
         // Add status listener to current
-        let inner_weak = Arc::downgrade(&self.inner);
-        let notifier = Arc::clone(&self.notifier);
-        let status_callback: StatusCallback = Arc::new(move |status| {
-            if let Some(inner_arc) = inner_weak.upgrade() {
-                let mut inner = inner_arc.lock();
-                if inner.last_status != Some(status) {
-                    inner.last_status = Some(status);
-                    drop(inner);
-                    notifier.notify_listeners();
-                }
-            }
-        });
         inner.current_status_listener_id = Some(inner.current.add_status_listener(status_callback));
     }
 
@@ -284,12 +335,23 @@ impl Animation<f32> for AnimationSwitch {
         self.inner.lock().current.status()
     }
 
+    /// Registers on the switch's own registry (NOT the current animation):
+    /// `current` changes on a train-hop, so a delegated id would later be
+    /// removed against the wrong animation. The internal per-current
+    /// forwarder re-emits the active animation's transitions here.
     fn add_status_listener(&self, callback: StatusCallback) -> ListenerId {
-        self.inner.lock().current.add_status_listener(callback)
+        let mut inner = self.inner.lock();
+        let id = ListenerId::new(inner.next_status_listener_id);
+        inner.next_status_listener_id += 1;
+        inner.status_listeners.push((id, callback));
+        id
     }
 
     fn remove_status_listener(&self, id: ListenerId) {
-        self.inner.lock().current.remove_status_listener(id);
+        self.inner
+            .lock()
+            .status_listeners
+            .retain(|(listener_id, _)| *listener_id != id);
     }
 }
 
@@ -360,6 +422,115 @@ mod tests {
 
         // Initially uses controller1
         assert_eq!(switch.value(), 0.8);
+
+        controller1.dispose();
+        controller2.dispose();
+    }
+
+    #[test]
+    fn switch_rebinds_listeners_to_new_current() {
+        use std::sync::atomic::AtomicUsize;
+
+        let scheduler = Arc::new(Scheduler::new());
+        let controller1 = create_controller(&scheduler, 0.8);
+        let controller2 = create_controller(&scheduler, 0.3);
+
+        let before1 = controller1.debug_value_listener_count();
+        let before2 = controller2.debug_value_listener_count();
+
+        let switch = AnimationSwitch::new(
+            controller1.clone() as Arc<dyn Animation<f32>>,
+            Some(controller2.clone() as Arc<dyn Animation<f32>>),
+        );
+        assert_eq!(controller1.debug_value_listener_count(), before1 + 1);
+        assert_eq!(controller2.debug_value_listener_count(), before2 + 1);
+
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits2 = Arc::clone(&hits);
+        let _id = switch.add_listener(Arc::new(move || {
+            hits2.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        // Drive controller1 below controller2's value -> hop to controller2.
+        controller1.set_value(0.2);
+        assert_eq!(switch.value(), 0.3, "switch must hop to next");
+
+        // The retired animation's listeners must be removed: further changes
+        // on controller1 must not re-notify the switch.
+        assert_eq!(
+            controller1.debug_value_listener_count(),
+            before1,
+            "old current's value listener must be removed after the hop"
+        );
+        let after_hop = hits.load(Ordering::SeqCst);
+        controller1.set_value(0.9);
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            after_hop,
+            "retired animation must not notify the switch"
+        );
+
+        // The new current still drives the switch.
+        controller2.set_value(0.6);
+        assert!(hits.load(Ordering::SeqCst) > after_hop);
+
+        // dispose() removes the (rebound) listeners from the new current.
+        switch.dispose();
+        assert_eq!(
+            controller2.debug_value_listener_count(),
+            before2,
+            "dispose must remove the rebound listener from the new current"
+        );
+
+        controller1.dispose();
+        controller2.dispose();
+    }
+
+    #[test]
+    fn status_listeners_survive_the_hop() {
+        use std::sync::atomic::AtomicUsize;
+
+        // Status listener ids are minted by the switch itself; they must
+        // keep firing after a train-hop and stay removable by the same id
+        // (previously they were delegated to the pre-hop `current`).
+        let scheduler = Arc::new(Scheduler::new());
+        let controller1 = create_controller(&scheduler, 0.8);
+        let controller2 = create_controller(&scheduler, 0.3);
+
+        let switch = AnimationSwitch::new(
+            controller1.clone() as Arc<dyn Animation<f32>>,
+            Some(controller2.clone() as Arc<dyn Animation<f32>>),
+        );
+
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits2 = Arc::clone(&hits);
+        let id = switch.add_status_listener(Arc::new(move |_status| {
+            hits2.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        // Hop to controller2.
+        controller1.set_value(0.2);
+        assert_eq!(switch.value(), 0.3);
+
+        // A status transition on the NEW current must reach the listener.
+        // (set_value(1.0) -> Completed is guaranteed to differ from the
+        // interior Forward status, so the duplicate filter cannot eat it.)
+        let before = hits.load(Ordering::SeqCst);
+        controller2.set_value(1.0);
+        assert!(
+            hits.load(Ordering::SeqCst) > before,
+            "status listener must follow the switch to the new current"
+        );
+
+        // Removal by the switch-minted id must work after the hop.
+        switch.remove_status_listener(id);
+        let after_remove = hits.load(Ordering::SeqCst);
+        controller2.set_value(0.0); // Completed -> Dismissed transition
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            after_remove,
+            "removed status listener must not fire"
+        );
 
         controller1.dispose();
         controller2.dispose();

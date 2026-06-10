@@ -698,6 +698,225 @@ impl MacosFlingVelocityTracker {
     }
 }
 
+// ============================================================================
+// ImpulseVelocityTracker
+// ============================================================================
+
+/// Velocity tracker using Android's impulse strategy — the platform default
+/// since Android 8.1 (`ImpulseVelocityTrackerStrategy` in AOSP
+/// `frameworks/native/libs/input/VelocityTracker.cpp`).
+///
+/// Flutter does not ship this strategy at all; its pipeline is least-squares
+/// only. The impulse model treats the touch surface as a physical object the
+/// finger does work on, and recovers the release velocity from the
+/// accumulated kinetic energy:
+///
+/// ```text
+/// w   += (v_i − v(w)) · |v_i|        per sample interval, first interval ×0.5
+/// v(w) = sign(w) · √(2·|w|)
+/// ```
+///
+/// Compared to the quadratic least-squares fit, each interval's contribution
+/// is weighted by the velocity *change* it represents, so a sharp
+/// deceleration right before lift-off discounts older samples instead of
+/// being averaged away — flings track the finger's final intent, which is
+/// why AOSP made it the default. Use this tracker for Android-feel scroll
+/// and fling; use [`VelocityTracker`] (least-squares) for Flutter parity.
+///
+/// Sample window and stationary gates are shared with the other trackers
+/// (100 ms horizon, 40 ms assume-stopped).
+#[derive(Debug, Clone)]
+pub struct ImpulseVelocityTracker {
+    inner: VelocityTracker,
+}
+
+impl Default for ImpulseVelocityTracker {
+    fn default() -> Self {
+        Self::with_kind(PointerDeviceKind::Touch)
+    }
+}
+
+impl ImpulseVelocityTracker {
+    /// Construct an impulse tracker for the given pointer kind.
+    #[must_use]
+    pub fn with_kind(kind: PointerDeviceKind) -> Self {
+        Self {
+            inner: VelocityTracker::with_kind(kind),
+        }
+    }
+
+    /// Record a position.
+    pub fn add_position(&mut self, time: Instant, position: Offset<Pixels>) {
+        self.inner.add_position(time, position);
+    }
+
+    /// Reset all samples.
+    pub fn reset(&mut self) {
+        self.inner.reset();
+    }
+
+    /// The pointer kind this tracker is configured for.
+    #[inline]
+    pub fn kind(&self) -> PointerDeviceKind {
+        self.inner.kind()
+    }
+
+    /// AOSP: kinetic energy back to velocity, preserving direction.
+    /// `v = sign(w) · √2 · √|w|` (mass cancels).
+    #[inline]
+    fn kinetic_energy_to_velocity(work: f32) -> f32 {
+        core::f32::consts::SQRT_2 * work.abs().sqrt() * work.signum()
+    }
+
+    /// Impulse velocity over one axis. `positions`/`times` are chronological
+    /// (oldest first); both slices have the same length ≥ 2 and strictly
+    /// increasing times (enforced by the caller's sample walk).
+    fn impulse_axis(positions: &[f32], dts: &[f32]) -> f32 {
+        let mut work = 0.0_f32;
+        for i in 0..positions.len() - 1 {
+            let v_prev = Self::kinetic_energy_to_velocity(work);
+            let v_curr = (positions[i + 1] - positions[i]) / dts[i];
+            work += (v_curr - v_prev) * v_curr.abs();
+            if i == 0 {
+                // Boundary condition (AOSP "approach 2"): with no information
+                // before the window, assume the finger started from rest —
+                // halve the first interval's contribution.
+                work *= 0.5;
+            }
+        }
+        Self::kinetic_energy_to_velocity(work)
+    }
+
+    /// Velocity estimate via the impulse strategy.
+    ///
+    /// Returns `None` when no samples have been recorded; a zero estimate
+    /// when the pointer is stationary (40 ms without a sample) or fewer than
+    /// two samples fall inside the window.
+    pub fn get_velocity_estimate(&self) -> Option<VelocityEstimate> {
+        // Stationary gate, same contract as the other trackers.
+        if let Some(last) = self.inner.since_last_sample
+            && last.elapsed() >= ASSUME_POINTER_STOPPED
+        {
+            return Some(VelocityEstimate::new(
+                Offset::ZERO,
+                Offset::ZERO,
+                Duration::ZERO,
+                1.0,
+            ));
+        }
+
+        let newest = self.inner.samples[self.inner.index]?;
+
+        // Walk backwards through the window (100 ms horizon / 40 ms gap),
+        // collecting chronological samples for the impulse integration.
+        let mut chron: [Option<PointAtTime>; HISTORY_SIZE] = [None; HISTORY_SIZE];
+        let mut n = 0usize;
+        let mut cursor = self.inner.index;
+        let mut previous = newest;
+        for _ in 0..HISTORY_SIZE {
+            let Some(sample) = self.inner.samples[cursor] else {
+                break;
+            };
+            let age = newest.time.saturating_duration_since(sample.time);
+            let delta = previous.time.saturating_duration_since(sample.time);
+            if age > HORIZON || delta > ASSUME_POINTER_STOPPED {
+                break;
+            }
+            previous = sample;
+            chron[n] = Some(sample);
+            n += 1;
+            cursor = if cursor == 0 {
+                HISTORY_SIZE - 1
+            } else {
+                cursor - 1
+            };
+        }
+
+        let oldest = chron[n.saturating_sub(1)].unwrap_or(newest);
+        if n < 2 {
+            return Some(VelocityEstimate::new(
+                Offset::ZERO,
+                Offset::ZERO,
+                Duration::ZERO,
+                1.0,
+            ));
+        }
+
+        // Reverse into chronological order and strip zero-dt duplicates
+        // (the walk guarantees monotone times, but identical timestamps can
+        // occur on coarse clocks and would divide by zero).
+        let mut xs: [f32; HISTORY_SIZE] = [0.0; HISTORY_SIZE];
+        let mut ys: [f32; HISTORY_SIZE] = [0.0; HISTORY_SIZE];
+        let mut dts: [f32; HISTORY_SIZE] = [0.0; HISTORY_SIZE];
+        let mut m = 0usize;
+        let mut last_time: Option<Instant> = None;
+        for i in (0..n).rev() {
+            // Invariant: slots 0..n were written by the walk above.
+            let s = chron[i].expect("walk wrote chron[0..n]; i < n");
+            if let Some(prev_time) = last_time {
+                let dt = s.time.saturating_duration_since(prev_time).as_secs_f32();
+                if dt <= 0.0 {
+                    // Same-timestamp duplicate: keep the newer position only.
+                    xs[m - 1] = s.position.dx.get();
+                    ys[m - 1] = s.position.dy.get();
+                    continue;
+                }
+                dts[m - 1] = dt;
+            }
+            xs[m] = s.position.dx.get();
+            ys[m] = s.position.dy.get();
+            last_time = Some(s.time);
+            m += 1;
+        }
+        if m < 2 {
+            return Some(VelocityEstimate::new(
+                Offset::ZERO,
+                Offset::ZERO,
+                Duration::ZERO,
+                1.0,
+            ));
+        }
+
+        let vx = Self::impulse_axis(&xs[..m], &dts[..m - 1]);
+        let vy = Self::impulse_axis(&ys[..m], &dts[..m - 1]);
+
+        Some(VelocityEstimate::new(
+            newest.position - oldest.position,
+            Offset::new(Pixels(vx), Pixels(vy)),
+            newest.time.saturating_duration_since(oldest.time),
+            // The impulse model makes no fit-quality claim (AOSP reports the
+            // value unconditionally).
+            1.0,
+        ))
+    }
+
+    /// Velocity as a [`Velocity`].
+    pub fn get_velocity(&self) -> Velocity {
+        match self.get_velocity_estimate() {
+            Some(est) if est.pixels_per_second != Offset::ZERO => {
+                Velocity::new(est.pixels_per_second)
+            }
+            _ => Velocity::ZERO,
+        }
+    }
+
+    /// Velocity for fling detection. Same semantics as
+    /// [`VelocityTracker::get_fling_velocity`].
+    pub fn get_fling_velocity(&self, allow_slow: bool) -> Velocity {
+        let velocity = self.get_velocity();
+        if allow_slow {
+            return velocity;
+        }
+        const MIN_FLING_SPEED: f32 = 50.0;
+        if velocity.pixels_per_second.dx.get().abs() < MIN_FLING_SPEED
+            && velocity.pixels_per_second.dy.get().abs() < MIN_FLING_SPEED
+        {
+            return Velocity::ZERO;
+        }
+        velocity
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -719,6 +938,74 @@ mod tests {
                 (t, pos)
             })
             .collect()
+    }
+
+    #[test]
+    fn impulse_recovers_constant_velocity_exactly() {
+        // For uniform motion the impulse model is exact: the first interval
+        // contributes w = ½v², every later interval contributes zero, and
+        // v = √(2w) returns the original speed.
+        let mut tracker = ImpulseVelocityTracker::with_kind(PointerDeviceKind::Touch);
+        for (t, p) in linear_swipe_x(90, 10, 1000.0) {
+            tracker.add_position(t, p);
+        }
+        let v = tracker.get_velocity().pixels_per_second.dx.get();
+        assert!(
+            (v - 1000.0).abs() < 10.0,
+            "constant 1000 px/s must be recovered exactly, got {v}"
+        );
+    }
+
+    #[test]
+    fn impulse_preserves_direction() {
+        let mut tracker = ImpulseVelocityTracker::with_kind(PointerDeviceKind::Touch);
+        for (t, p) in linear_swipe_x(90, 10, -800.0) {
+            tracker.add_position(t, p);
+        }
+        let v = tracker.get_velocity().pixels_per_second.dx.get();
+        assert!(
+            (v + 800.0).abs() < 10.0,
+            "negative motion must produce negative velocity, got {v}"
+        );
+    }
+
+    #[test]
+    fn impulse_needs_two_samples() {
+        let tracker = ImpulseVelocityTracker::with_kind(PointerDeviceKind::Touch);
+        assert!(tracker.get_velocity_estimate().is_none());
+
+        let mut tracker = ImpulseVelocityTracker::with_kind(PointerDeviceKind::Touch);
+        tracker.add_position(Instant::now(), Offset::new(Pixels(5.0), Pixels(5.0)));
+        assert_eq!(tracker.get_velocity(), Velocity::ZERO);
+    }
+
+    #[test]
+    fn impulse_discounts_history_on_deceleration() {
+        // Fast motion followed by sharp deceleration: the estimate must land
+        // strictly below the initial speed (old samples are discounted by
+        // the energy bookkeeping), unlike a plain window average.
+        let mut tracker = ImpulseVelocityTracker::with_kind(PointerDeviceKind::Touch);
+        let start = Instant::now();
+        let mut x = 0.0_f32;
+        let mut t = start;
+        // 4 intervals at 2000 px/s.
+        for _ in 0..4 {
+            tracker.add_position(t, Offset::new(Pixels(x), Pixels(0.0)));
+            x += 20.0; // 20 px / 10 ms
+            t += Duration::from_millis(10);
+        }
+        // 5 intervals at 200 px/s.
+        for _ in 0..6 {
+            tracker.add_position(t, Offset::new(Pixels(x), Pixels(0.0)));
+            x += 2.0; // 2 px / 10 ms
+            t += Duration::from_millis(10);
+        }
+        let v = tracker.get_velocity().pixels_per_second.dx.get();
+        assert!(
+            v < 1900.0 && v > 200.0,
+            "deceleration must pull the estimate below the initial 2000 px/s \
+             and keep it above the terminal 200 px/s, got {v}"
+        );
     }
 
     #[test]

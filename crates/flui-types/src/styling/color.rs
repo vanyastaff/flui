@@ -28,6 +28,26 @@ pub struct Color {
     pub a: u8,
 }
 
+/// A color in the Oklab perceptually uniform color space.
+///
+/// Produced by [`Color::to_oklab`]; consumed by [`Color::from_oklab`] and
+/// [`Color::lerp_oklab`]. `L` is perceived lightness in roughly `[0, 1]`;
+/// `a`/`b` are the green–red and blue–yellow opponent axes (small values,
+/// typically within `[-0.4, 0.4]` for sRGB colors).
+///
+/// Reference: Björn Ottosson, "A perceptual color space for image
+/// processing" (2020), <https://bottosson.github.io/posts/oklab/>.
+#[derive(Copy, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Oklab {
+    /// Perceived lightness.
+    pub l: f32,
+    /// Green–red opponent axis.
+    pub a: f32,
+    /// Blue–yellow opponent axis.
+    pub b: f32,
+}
+
 impl Color {
     // ===== Constructors =====
 
@@ -665,6 +685,105 @@ impl Color {
         }
     }
 
+    // ===== Perceptual (Oklab) interpolation =====
+
+    /// Convert to Oklab (perceptually uniform, Björn Ottosson 2020).
+    ///
+    /// Pipeline: sRGB → linear → LMS (M1) → cube root → Lab (M2). Exact
+    /// matrices from <https://bottosson.github.io/posts/oklab/>. Alpha is not
+    /// part of Oklab and is carried separately by the caller.
+    #[must_use]
+    pub fn to_oklab(self) -> Oklab {
+        #[inline]
+        fn srgb_to_linear(c: f32) -> f32 {
+            if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        }
+        let r = srgb_to_linear(f32::from(self.r) / 255.0);
+        let g = srgb_to_linear(f32::from(self.g) / 255.0);
+        let b = srgb_to_linear(f32::from(self.b) / 255.0);
+
+        let l = 0.412_221_47 * r + 0.536_332_54 * g + 0.051_445_995 * b;
+        let m = 0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b;
+        let s = 0.088_302_46 * r + 0.281_718_85 * g + 0.629_978_7 * b;
+
+        let l_ = l.cbrt();
+        let m_ = m.cbrt();
+        let s_ = s.cbrt();
+
+        Oklab {
+            l: 0.210_454_26 * l_ + 0.793_617_8 * m_ - 0.004_072_047 * s_,
+            a: 1.977_998_5 * l_ - 2.428_592_2 * m_ + 0.450_593_7 * s_,
+            b: 0.025_904_037 * l_ + 0.782_771_77 * m_ - 0.808_675_77 * s_,
+        }
+    }
+
+    /// Convert from Oklab back to sRGB, with the given alpha channel.
+    ///
+    /// Out-of-gamut results are clamped per channel (sufficient for
+    /// interpolation between two in-gamut endpoints; the Oklab segment
+    /// between two sRGB colors leaves the gamut only marginally).
+    #[must_use]
+    pub fn from_oklab(lab: Oklab, alpha: u8) -> Color {
+        #[inline]
+        fn linear_to_srgb(c: f32) -> f32 {
+            if c <= 0.003_130_8 {
+                12.92 * c
+            } else {
+                1.055 * c.powf(1.0 / 2.4) - 0.055
+            }
+        }
+        // `.round() as u8` saturates: clamping out-of-gamut channels.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // saturating by design
+        #[inline]
+        fn to_channel(c: f32) -> u8 {
+            (linear_to_srgb(c).clamp(0.0, 1.0) * 255.0).round() as u8
+        }
+
+        let l_ = lab.l + 0.396_337_78 * lab.a + 0.215_803_76 * lab.b;
+        let m_ = lab.l - 0.105_561_346 * lab.a - 0.063_854_17 * lab.b;
+        let s_ = lab.l - 0.089_484_18 * lab.a - 1.291_485_5 * lab.b;
+
+        let l = l_ * l_ * l_;
+        let m = m_ * m_ * m_;
+        let s = s_ * s_ * s_;
+
+        let r = 4.076_741_7 * l - 3.307_711_6 * m + 0.230_969_94 * s;
+        let g = -1.268_438 * l + 2.609_757_4 * m - 0.341_319_38 * s;
+        let b = -0.004_196_086_3 * l - 0.703_418_6 * m + 1.707_614_7 * s;
+
+        Color::rgba(to_channel(r), to_channel(g), to_channel(b), alpha)
+    }
+
+    /// Perceptually uniform interpolation through Oklab space.
+    ///
+    /// Componentwise sRGB lerp (what [`Color::lerp`] and Flutter's
+    /// `Color.lerp` compute) averages gamma-encoded values, so midpoints go
+    /// dark and gray — blue→yellow passes through mud. Interpolating L/a/b
+    /// linearly keeps lightness and chroma perceptually steady. Costs two
+    /// conversions per call (`powf`/`cbrt`); use [`Color::lerp`] when the
+    /// endpoints are close or the budget is tight.
+    ///
+    /// Alpha interpolates linearly, matching [`Color::lerp`].
+    #[must_use]
+    pub fn lerp_oklab(a: Color, b: Color, t: f32) -> Color {
+        let t = t.clamp(0.0, 1.0);
+        let la = a.to_oklab();
+        let lb = b.to_oklab();
+        let mixed = Oklab {
+            l: la.l + (lb.l - la.l) * t,
+            a: la.a + (lb.a - la.a) * t,
+            b: la.b + (lb.b - la.b) * t,
+        };
+        // Alpha is linear, same rounding contract as `lerp_scalar`.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // saturating by design
+        let alpha = (f32::from(a.a) + (f32::from(b.a) - f32::from(a.a)) * t).round() as u8;
+        Color::from_oklab(mixed, alpha)
+    }
+
     #[must_use]
     #[inline]
     pub fn lerp_multi_stop(stops: &[(Color, f32)], t: f32) -> Color {
@@ -879,6 +998,70 @@ mod tests {
         assert!(c1.approx_eq(&c2));
         assert!(c1.approx_eq(&c3));
         assert!(c1.approx_eq(&c4));
+    }
+
+    #[test]
+    fn oklab_roundtrip_preserves_color() {
+        // sRGB -> Oklab -> sRGB must come back within 1 channel unit
+        // (cbrt/powf rounding) for representative colors.
+        for color in [
+            Color::rgb(0, 0, 0),
+            Color::rgb(255, 255, 255),
+            Color::rgb(255, 0, 0),
+            Color::rgb(0, 255, 0),
+            Color::rgb(0, 0, 255),
+            Color::rgb(128, 64, 200),
+            Color::rgb(13, 250, 99),
+        ] {
+            let back = Color::from_oklab(color.to_oklab(), color.a);
+            assert!(
+                (i16::from(back.r) - i16::from(color.r)).abs() <= 1
+                    && (i16::from(back.g) - i16::from(color.g)).abs() <= 1
+                    && (i16::from(back.b) - i16::from(color.b)).abs() <= 1,
+                "roundtrip {color:?} -> {back:?} drifted more than 1 unit"
+            );
+        }
+    }
+
+    #[test]
+    fn oklab_white_has_unit_lightness() {
+        // Ottosson reference values: white = (L=1, a≈0, b≈0), black = (0,0,0).
+        let white = Color::rgb(255, 255, 255).to_oklab();
+        assert!((white.l - 1.0).abs() < 1e-2, "white L = {}", white.l);
+        assert!(white.a.abs() < 1e-2 && white.b.abs() < 1e-2);
+
+        let black = Color::rgb(0, 0, 0).to_oklab();
+        assert!(black.l.abs() < 1e-3);
+    }
+
+    #[test]
+    fn oklab_lerp_endpoints_and_midpoint() {
+        let blue = Color::rgb(0, 0, 255);
+        let yellow = Color::rgb(255, 255, 0);
+
+        // Endpoints round-trip through the conversion.
+        let at0 = Color::lerp_oklab(blue, yellow, 0.0);
+        let at1 = Color::lerp_oklab(blue, yellow, 1.0);
+        assert!((i16::from(at0.b) - 255).abs() <= 1 && i16::from(at0.r) <= 1);
+        assert!((i16::from(at1.r) - 255).abs() <= 1 && i16::from(at1.b) <= 1);
+
+        // The perceptual midpoint must be brighter than the muddy sRGB
+        // midpoint (128,128,128): Oklab preserves perceived lightness.
+        let mid = Color::lerp_oklab(blue, yellow, 0.5);
+        let srgb_mid = Color::lerp(blue, yellow, 0.5);
+        let sum = u16::from(mid.r) + u16::from(mid.g) + u16::from(mid.b);
+        let srgb_sum = u16::from(srgb_mid.r) + u16::from(srgb_mid.g) + u16::from(srgb_mid.b);
+        assert!(
+            sum > srgb_sum,
+            "Oklab midpoint {mid:?} must be brighter than sRGB midpoint {srgb_mid:?}"
+        );
+    }
+
+    #[test]
+    fn oklab_lerp_interpolates_alpha_linearly() {
+        let a = Color::rgba(255, 0, 0, 0);
+        let b = Color::rgba(255, 0, 0, 200);
+        assert_eq!(Color::lerp_oklab(a, b, 0.5).a, 100);
     }
 
     #[test]

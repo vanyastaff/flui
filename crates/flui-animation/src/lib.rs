@@ -12,7 +12,15 @@
 //! - [`AnimationController`] - Primary animation driver (generates 0.0..1.0)
 //! - [`CurvedAnimation`] - Applies easing curves to animations
 //! - [`Curve`] - Easing curve trait with predefined curves in [`Curves`]
-//! - [`Tween`] - Maps animation values to any type T
+//!   (full Penner catalog, M3 [`ThreePointCubic`] emphasized set, [`Split`])
+//! - [`Tween`] - Maps animation values to any type T;
+//!   [`OklabColorTween`] interpolates colors perceptually (Oklab) instead of
+//!   componentwise sRGB
+//! - [`smoothing`] - Frame-rate-independent followers beyond Flutter:
+//!   [`exp_decay`]/[`Smoothed`] (half-life exponential decay) and
+//!   [`SmoothDamp`] (critically damped, max-speed-clamped)
+//! - [`AnimatedValue`] - Interruptible spring value with velocity-preserving
+//!   retargeting (`#[derive(Animatable)]` for custom types)
 //! - [`AnimationError`] - Error type for animation operations
 //!
 //! ## Persistent Object Pattern
@@ -93,6 +101,7 @@ pub mod ext;
 pub mod proxy;
 pub mod reverse;
 pub mod simulation;
+pub mod smoothing;
 pub mod spring;
 pub mod switch;
 pub mod tween;
@@ -117,6 +126,7 @@ pub use simulation::{
     BoundedFrictionSimulation, ClampedSimulation, FrictionSimulation, GravitySimulation,
     ScrollSpringSimulation, Simulation, SpringDescription, SpringSimulation, SpringType, Tolerance,
 };
+pub use smoothing::{SmoothDamp, Smoothed, exp_decay, exp_decay_half_life};
 pub use spring::{AnimatedValue, TwoWayConverter};
 // `#[derive(Animatable)]` generates a `TwoWayConverter` impl. It shares the name
 // `Animatable` with the trait above but lives in the macro namespace (the serde
@@ -131,14 +141,14 @@ pub use curve::{
     BounceInCurve, BounceInOutCurve, BounceOutCurve, CatmullRomCurve, CatmullRomSpline, Cubic,
     Curve, Curve2D, Curve2DSample, Curves, DecelerateCurve, ElasticInCurve, ElasticInOutCurve,
     ElasticOutCurve, FlippedCurve, Interval, Linear, ParametricCurve, ReverseCurve, SawTooth,
-    Threshold,
+    Split, ThreePointCubic, Threshold,
 };
 pub use status::{AnimationBehavior, AnimationStatus};
 pub use tween_types::{
     AlignmentTween, Animatable, AnimatableExt as TweenAnimatableExt, BorderRadiusTween,
     ChainedTween, ColorTween, ConstantTween, CurveExt, CurveTween, EdgeInsetsTween, FloatTween,
-    IntTween, Matrix4Tween, OffsetTween, RectTween, ReverseTween, SizeTween, StepTween, Tween,
-    TweenSequence, TweenSequenceItem,
+    IntTween, Matrix4Tween, OffsetTween, OklabColorTween, RectTween, ReverseTween, SizeTween,
+    StepTween, Tween, TweenSequence, TweenSequenceItem,
 };
 
 // Re-export scheduler types for convenience.

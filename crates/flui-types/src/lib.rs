@@ -107,7 +107,7 @@ pub mod typography;
 // Re-exports for convenience - Most commonly used types
 pub use geometry::{EdgeInsets, Edges, Matrix4, Offset, Pixels, Point, RRect, Rect, Size};
 pub use layout::{Alignment, Axis};
-pub use styling::{Color, Color32};
+pub use styling::{Color, Color32, Oklab};
 
 /// Prelude module for convenient glob imports
 ///

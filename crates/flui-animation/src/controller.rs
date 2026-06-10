@@ -798,7 +798,9 @@ impl AnimationController {
             return;
         }
 
-        // Cycle complete.
+        // Cycle complete. Provisional: this is the end of the *first* spanned
+        // cycle; the repeat-exhaustion branch below overwrites it with the
+        // last cycle's endpoint when several cycles retire in one frame.
         inner.value = inner.target_value;
 
         if inner.is_repeating {
@@ -896,8 +898,20 @@ impl AnimationController {
     }
 
     /// Set the value directly without animating; recomputes status and notifies.
+    ///
+    /// A `NaN` input is canonicalized to the lower bound: Rust's `clamp`
+    /// propagates `NaN`, which would otherwise poison every downstream
+    /// curve/tween evaluation for the rest of the controller's life.
     pub fn set_value(&self, value: f32) {
         let mut inner = self.inner.lock();
+        let value = if value.is_nan() {
+            tracing::warn!(
+                "set_value(NaN) canonicalized to lower bound; drive the controller with finite values"
+            );
+            inner.lower_bound
+        } else {
+            value
+        };
         inner.value = value.clamp(inner.lower_bound, inner.upper_bound);
         let status = inner.settled_status_keep_direction();
         inner.status = status;
@@ -1107,6 +1121,23 @@ impl Animation<f32> for AnimationController {
             .status_listeners
             .retain(|(listener_id, _)| *listener_id != id);
     }
+
+    /// Whether the controller is currently driving a run.
+    ///
+    /// Flutter parity: `AnimationController.isAnimating` is ticker-based
+    /// (`_ticker!.isActive`), not status-based. `set_value` at an interior
+    /// value reports a directional status (per `_internalSetValue`) while the
+    /// controller is stopped, so the trait's status-derived default would
+    /// wrongly report `true` there. A muted ticker still counts as animating,
+    /// matching `Ticker.isActive`.
+    #[inline]
+    fn is_animating(&self) -> bool {
+        self.inner
+            .lock()
+            .ticker
+            .as_ref()
+            .is_some_and(Ticker::is_running)
+    }
 }
 
 impl Listenable for AnimationController {
@@ -1173,6 +1204,40 @@ mod tests {
         let c = controller(100);
         c.forward().unwrap();
         assert_eq!(c.status(), AnimationStatus::Forward);
+        c.dispose();
+    }
+
+    #[test]
+    fn is_animating_is_ticker_based_not_status_based() {
+        let _serial = serial();
+        let c = controller(100);
+        // Flutter `_internalSetValue` parity: an interior set_value reports a
+        // directional status, but a stopped controller must not claim to be
+        // animating (Flutter's isAnimating is ticker-based).
+        c.set_value(0.5);
+        assert_eq!(c.status(), AnimationStatus::Forward);
+        assert!(!c.is_animating(), "stopped controller must not animate");
+
+        c.forward().unwrap();
+        assert!(c.is_animating(), "running controller must animate");
+
+        c.stop().unwrap();
+        assert!(!c.is_animating(), "stop() must end animating");
+        c.dispose();
+    }
+
+    #[test]
+    fn set_value_nan_is_canonicalized() {
+        let _serial = serial();
+        let c = controller(100);
+        c.set_value(0.5);
+        c.set_value(f32::NAN);
+        assert_eq!(
+            c.value(),
+            0.0,
+            "NaN must canonicalize to the lower bound, not poison the value"
+        );
+        assert_eq!(c.status(), AnimationStatus::Dismissed);
         c.dispose();
     }
 

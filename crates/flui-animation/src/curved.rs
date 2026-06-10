@@ -4,6 +4,7 @@ use crate::animation::{Animation, ParentSubscription, StatusCallback, link_paren
 use crate::curve::Curve;
 use crate::status::AnimationStatus;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
+use parking_lot::Mutex;
 use std::fmt;
 use std::sync::Arc;
 
@@ -36,8 +37,18 @@ pub struct CurvedAnimation<C: Curve + Clone + Send + Sync> {
     curve: C,
     reverse_curve: Option<C>,
     notifier: Arc<ChangeNotifier>,
+    /// The running direction captured at run start; `None` at rest.
+    ///
+    /// Flutter parity (`CurvedAnimation._curveDirection`): the active curve is
+    /// locked to the direction the run *entered* with, so flipping direction
+    /// mid-run does not swap curves underneath the value and cause a visual
+    /// discontinuity.
+    curve_direction: Arc<Mutex<Option<AnimationStatus>>>,
     /// Re-emits parent value changes to our listeners; removed on last drop.
     _parent_sub: Arc<ParentSubscription>,
+    /// Keeps `curve_direction` in sync with the parent's status transitions;
+    /// removed on last drop.
+    _status_sub: Arc<ParentSubscription>,
 }
 
 impl<C: Curve + Clone + Send + Sync> CurvedAnimation<C> {
@@ -52,12 +63,44 @@ impl<C: Curve + Clone + Send + Sync> CurvedAnimation<C> {
         let notifier = Arc::new(ChangeNotifier::new());
         let parent_sub = link_parent(&parent, &notifier);
 
+        let curve_direction = Arc::new(Mutex::new(None));
+        let weak_direction = Arc::downgrade(&curve_direction);
+        let weak_parent = Arc::downgrade(&parent);
+        let status_id = parent.add_status_listener(Arc::new(move |status| {
+            if let Some(direction) = weak_direction.upgrade() {
+                let mut direction = direction.lock();
+                match status {
+                    // At rest the lock is released; the next run re-captures.
+                    AnimationStatus::Dismissed | AnimationStatus::Completed => *direction = None,
+                    // First running transition wins; mid-run flips keep it.
+                    AnimationStatus::Forward | AnimationStatus::Reverse => {
+                        // Only capture from a LIVE run: a stopped controller's
+                        // set_value at an interior value also reports a
+                        // directional status (Flutter `_internalSetValue`),
+                        // and caching that would pin the wrong curve for the
+                        // next real run (e.g. position at 0.5, then
+                        // reverse()).
+                        let running = weak_parent.upgrade().is_some_and(|p| p.is_animating());
+                        if running {
+                            direction.get_or_insert(status);
+                        }
+                    }
+                }
+            }
+        }));
+        let status_parent = Arc::clone(&parent);
+        let status_sub = ParentSubscription::new(move || {
+            status_parent.remove_status_listener(status_id);
+        });
+
         Self {
             parent,
             curve,
             reverse_curve: None,
             notifier,
+            curve_direction,
             _parent_sub: parent_sub,
+            _status_sub: status_sub,
         }
     }
 
@@ -69,9 +112,15 @@ impl<C: Curve + Clone + Send + Sync> CurvedAnimation<C> {
     }
 
     /// Get the current curve being used (respects reverse).
+    ///
+    /// Uses the direction captured at run start when running (so a mid-run
+    /// direction flip keeps the entry curve), falling back to the parent's
+    /// instantaneous status at rest — Flutter's `_useForwardCurve`.
     #[inline]
     fn current_curve(&self) -> &C {
-        match self.parent.status() {
+        let captured: Option<AnimationStatus> = *self.curve_direction.lock();
+        let effective = captured.unwrap_or_else(|| self.parent.status());
+        match effective {
             AnimationStatus::Reverse => self.reverse_curve.as_ref().unwrap_or(&self.curve),
             _ => &self.curve,
         }
@@ -130,7 +179,7 @@ impl<C: Curve + Clone + Send + Sync + fmt::Debug + 'static> fmt::Debug for Curve
 mod tests {
     use super::*;
     use crate::AnimationController;
-    use crate::curve::Curves;
+    use crate::curve::{Cubic, Curves};
     use flui_scheduler::Scheduler;
     use std::time::Duration;
 
@@ -206,6 +255,86 @@ mod tests {
             hits.load(Ordering::SeqCst),
             2,
             "curved listener must re-emit each parent change"
+        );
+
+        controller.dispose();
+    }
+
+    #[test]
+    fn reverse_curve_locked_to_run_entry_direction() {
+        // Flutter `_curveDirection` parity: a run that entered Forward keeps
+        // the forward curve even if the parent's status flips to Reverse
+        // mid-run; the reverse curve only applies to a run entered in
+        // Reverse. Without the lock, a mid-run `reverse()` would swap curves
+        // underneath the value and cause a visual jump.
+        let scheduler = Arc::new(Scheduler::new());
+        let controller = Arc::new(AnimationController::new(
+            Duration::from_millis(100),
+            scheduler,
+        ));
+        // Forward curve is the identity cubic; the reverse curve is strongly
+        // sub-linear at t=0.5, so any curve swap is observable there.
+        let curved = CurvedAnimation::new(
+            controller.clone() as Arc<dyn Animation<f32>>,
+            Cubic::new(0.0, 0.0, 1.0, 1.0), // y(x) = x
+        )
+        .with_reverse_curve(Curves::EaseInQuint);
+
+        controller.set_value(0.5);
+        let _ = controller.forward();
+        let during_forward = curved.value();
+
+        // Flip direction mid-run: the captured Forward direction must keep
+        // the (≈linear) forward curve active.
+        let _ = controller.reverse();
+        let during_flip = curved.value();
+        assert!(
+            (during_forward - during_flip).abs() < 1e-3,
+            "mid-run direction flip must not swap curves (forward {during_forward} vs flipped {during_flip})"
+        );
+
+        // Settle the run, then start a fresh run in Reverse: now the reverse
+        // curve applies from the start.
+        controller.set_value(1.0); // Completed -> direction lock cleared
+        let _ = controller.reverse();
+        controller.set_value(0.5);
+        let reverse_run = curved.value();
+        let expected = Curves::EaseInQuint.transform(0.5);
+        assert!(
+            (reverse_run - expected).abs() < 1e-3,
+            "a run entered in Reverse must use the reverse curve ({reverse_run} vs {expected})"
+        );
+
+        controller.dispose();
+    }
+
+    #[test]
+    fn interior_set_value_does_not_pin_curve_direction() {
+        // A stopped controller positioned mid-range reports a directional
+        // status (Flutter `_internalSetValue`); that must NOT be captured as
+        // the run direction, or a subsequent reverse() would run on the
+        // forward curve.
+        let scheduler = Arc::new(Scheduler::new());
+        let controller = Arc::new(AnimationController::new(
+            Duration::from_millis(100),
+            scheduler,
+        ));
+        let curved = CurvedAnimation::new(
+            controller.clone() as Arc<dyn Animation<f32>>,
+            Cubic::new(0.0, 0.0, 1.0, 1.0), // y(x) = x
+        )
+        .with_reverse_curve(Curves::EaseInQuint);
+
+        // Position while stopped: fires a Forward status with no live run.
+        controller.set_value(0.5);
+        // Now genuinely start in reverse: the reverse curve must apply.
+        let _ = controller.reverse();
+        let value = curved.value();
+        let expected = Curves::EaseInQuint.transform(0.5);
+        assert!(
+            (value - expected).abs() < 1e-3,
+            "a run entered in Reverse after an interior set_value must use \
+             the reverse curve ({value} vs {expected})"
         );
 
         controller.dispose();

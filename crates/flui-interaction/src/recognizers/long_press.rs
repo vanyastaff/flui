@@ -334,8 +334,13 @@ impl LongPressGestureRecognizer {
 
         match state.phase {
             LongPressPhase::Possible => {
-                // Pointer up before timer elapsed - just cancel silently
+                // Pointer up before timer elapsed - just cancel silently.
                 state.phase = LongPressPhase::Ready;
+                // Release the lock first: stop_tracking() sweeps the arena,
+                // which can synchronously reject THIS recognizer, and
+                // reject_gesture -> handle_cancel re-locks gesture_state
+                // (parking_lot is non-reentrant -> deadlock).
+                drop(state);
                 self.state.stop_tracking();
             }
             LongPressPhase::Started => {
@@ -677,6 +682,36 @@ mod tests {
             *rejected.lock(),
             "competing member should be rejected when the long-press deadline fires"
         );
+    }
+
+    #[test]
+    fn up_before_deadline_with_competitor_does_not_deadlock() {
+        // Regression: handle_up's Possible branch used to hold the
+        // gesture_state lock across stop_tracking(). stop_tracking sweeps the
+        // arena; when the sweep resolves in favor of an earlier member, THIS
+        // recognizer is rejected synchronously and handle_cancel re-locks
+        // gesture_state -> guaranteed self-deadlock on any lift-before-
+        // deadline interaction with a competitor.
+        struct Competitor;
+        impl crate::sealed::arena_member::Sealed for Competitor {}
+        impl crate::arena::GestureArenaMember for Competitor {
+            fn accept_gesture(&self, _pointer: PointerId) {}
+            fn reject_gesture(&self, _pointer: PointerId) {}
+        }
+
+        let arena = GestureArena::new();
+        let pointer = PointerId::new(3).expect("nonzero pointer id");
+        // Competitor joins FIRST so the sweep accepts it and rejects the
+        // long press.
+        arena.add(pointer, Arc::new(Competitor));
+
+        let recognizer = LongPressGestureRecognizer::new(arena.clone());
+        let position = Offset::new(Pixels(10.0), Pixels(10.0));
+        recognizer.add_pointer(pointer, position);
+
+        // Lift before the deadline: must complete without deadlocking.
+        recognizer.handle_up(position, PointerType::Touch);
+        assert_eq!(recognizer.primary_pointer(), None);
     }
 
     #[test]

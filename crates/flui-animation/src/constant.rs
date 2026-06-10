@@ -7,6 +7,11 @@ use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Counter for generating unique listener IDs (starts at 1, not 0).
+///
+/// These ids live in `ConstantAnimation`'s own namespace: they are only ever
+/// handed back to [`ConstantAnimation::remove_listener`]-style no-ops and are
+/// never valid for any `ChangeNotifier`-backed animation (which mints ids
+/// from its own counter).
 static LISTENER_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
 /// An animation that always returns the same value.

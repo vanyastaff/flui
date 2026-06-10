@@ -15,9 +15,10 @@ use std::time::Duration;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 
+use flui_animation::smoothing::{SmoothDamp, exp_decay_half_life};
 use flui_animation::{
     Animatable, AnimatedValue, Animation, AnimationController, ColorTween, Curve, CurvedAnimation,
-    Curves, FloatTween, Simulation, SpringDescription, SpringSimulation, Tween,
+    Curves, FloatTween, OklabColorTween, Simulation, SpringDescription, SpringSimulation, Tween,
 };
 use flui_scheduler::Scheduler;
 use flui_types::geometry::{Offset, px};
@@ -34,6 +35,13 @@ fn tween_transform(c: &mut Criterion) {
     let col = ColorTween::new(Color::rgba(0, 0, 0, 255), Color::rgba(255, 128, 0, 255));
     group.bench_function("color", |b| {
         b.iter(|| black_box(col.transform(black_box(0.37))));
+    });
+
+    // Perceptual color path: prices the two Oklab conversions (powf/cbrt per
+    // channel) against the componentwise sRGB lerp above.
+    let oklab = OklabColorTween::new(Color::rgba(0, 0, 255, 255), Color::rgba(255, 255, 0, 255));
+    group.bench_function("color_oklab", |b| {
+        b.iter(|| black_box(oklab.transform(black_box(0.37))));
     });
 
     let off = Tween::new(
@@ -58,6 +66,36 @@ fn curve_eval(c: &mut Criterion) {
     });
     group.bench_function("elastic_out", |b| {
         b.iter(|| black_box(Curves::ElasticOut.transform(black_box(0.37))));
+    });
+    // Two cubic segments + rescale arithmetic: the M3 emphasized default.
+    group.bench_function("three_point_cubic_emphasized", |b| {
+        b.iter(|| black_box(Curves::EaseInOutCubicEmphasized.transform(black_box(0.37))));
+    });
+
+    group.finish();
+}
+
+fn smoothing_step(c: &mut Criterion) {
+    let mut group = c.benchmark_group("smoothing");
+
+    group.bench_function("exp_decay_half_life", |b| {
+        b.iter(|| {
+            black_box(exp_decay_half_life(
+                black_box(10.0),
+                black_box(100.0),
+                black_box(0.25),
+                black_box(1.0 / 120.0),
+            ))
+        });
+    });
+
+    let mut damp = SmoothDamp::new(0.2);
+    let mut pos = 0.0_f32;
+    group.bench_function("smooth_damp_step", |b| {
+        b.iter(|| {
+            pos = damp.step(black_box(pos), black_box(100.0), black_box(1.0 / 120.0));
+            black_box(pos)
+        });
     });
 
     group.finish();
@@ -121,6 +159,7 @@ criterion_group!(
     benches,
     tween_transform,
     curve_eval,
+    smoothing_step,
     spring_step,
     controller_tick
 );

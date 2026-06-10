@@ -277,10 +277,14 @@ impl DoubleTapGestureRecognizer {
                     callback(details);
                 }
 
-                // Reset and stop tracking
-                self.gesture_state.lock().phase = DoubleTapPhase::Ready;
-                self.gesture_state.lock().first_tap_position = None;
-                self.gesture_state.lock().first_tap_time = None;
+                // Reset and stop tracking (single lock scope: three separate
+                // lock() calls would let another thread observe partial state)
+                {
+                    let mut state = self.gesture_state.lock();
+                    state.phase = DoubleTapPhase::Ready;
+                    state.first_tap_position = None;
+                    state.first_tap_time = None;
+                }
                 self.state.stop_tracking();
             }
             _ => {}
@@ -332,10 +336,24 @@ impl DoubleTapGestureRecognizer {
         {
             let elapsed = Instant::now().duration_since(first_time);
             if elapsed > self.double_tap_timeout() {
-                // Timeout - reset to ready
+                // Timeout - reset to ready and cancel. Flutter parity:
+                // `DoubleTapGestureRecognizer` fires `onDoubleTapCancel` and
+                // releases its arena hold when the inter-tap window expires
+                // (`_reset` -> `_checkCancel`).
+                let position = state.first_tap_position.take().unwrap_or(Offset::ZERO);
+                let kind = state.device_kind.unwrap_or(PointerType::Touch);
                 state.phase = DoubleTapPhase::Ready;
-                state.first_tap_position = None;
                 state.first_tap_time = None;
+                drop(state); // Release lock before callback + arena release
+
+                if let Some(callback) = self.callbacks.lock().on_double_tap_cancel.clone() {
+                    callback(DoubleTapDetails {
+                        global_position: position,
+                        local_position: position,
+                        kind,
+                    });
+                }
+                self.state.reject();
                 return true;
             }
         }
@@ -487,6 +505,54 @@ mod tests {
 
         // Should have called callback
         assert!(*tapped.lock());
+    }
+
+    #[test]
+    fn timeout_fires_double_tap_cancel() {
+        // Flutter parity: when the inter-tap window expires after a completed
+        // first tap, `onDoubleTapCancel` must fire (previously the state was
+        // silently reset and the callback never ran).
+        let arena = GestureArena::new();
+        let cancelled = Arc::new(Mutex::new(false));
+        let cancelled_clone = cancelled.clone();
+
+        // Zero inter-tap window so check_timeout() expires immediately.
+        let settings = GestureSettings::new(
+            18.0,
+            36.0,
+            0.05,
+            100.0,
+            Duration::ZERO,
+            Duration::from_millis(500),
+            50.0,
+            8000.0,
+        );
+        let recognizer = DoubleTapGestureRecognizer::with_settings(arena, settings)
+            .with_on_double_tap_cancel(move |_details| {
+                *cancelled_clone.lock() = true;
+            });
+
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
+        let position = Offset::new(px(100.0), px(100.0));
+
+        // Complete the first tap.
+        recognizer.add_pointer(pointer, position);
+        let up_event = make_up_event(position, PointerType::Touch);
+        recognizer.handle_event(&up_event);
+        assert_eq!(
+            recognizer.gesture_state.lock().phase,
+            DoubleTapPhase::WaitingForSecond
+        );
+
+        // Zero timeout: the window expires as soon as measurable time passes
+        // (the comparison is strict, so let the clock tick once).
+        std::thread::sleep(Duration::from_millis(5));
+        assert!(recognizer.check_timeout(), "timeout must be reported");
+        assert!(
+            *cancelled.lock(),
+            "on_double_tap_cancel must fire when the inter-tap window expires"
+        );
+        assert_eq!(recognizer.gesture_state.lock().phase, DoubleTapPhase::Ready);
     }
 
     #[test]

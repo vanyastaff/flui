@@ -398,3 +398,19 @@ All types are `Send + Sync`:
 - [docs/HIT_TESTING.md](docs/HIT_TESTING.md) — Hit testing guide
 - [docs/GESTURES.md](docs/GESTURES.md) — Gesture recognition details
 - [docs/INTEGRATION.md](docs/INTEGRATION.md) — Integration with other crates
+
+---
+
+## Beyond Flutter
+
+Input-processing capabilities Flutter does not ship, each implemented from
+the canonical published source:
+
+| Capability | Source | API |
+|---|---|---|
+| Impulse fling velocity (Android's default strategy since 8.1) | AOSP `VelocityTracker.cpp` | `processing::ImpulseVelocityTracker` |
+| Speed-adaptive pointer smoothing | 1€ filter, Casiez et al., CHI 2012 | `processing::OneEuroFilter`, `OneEuroFilter2D` |
+| Platform-faithful gesture presets with runtime dispatch | AOSP `ViewConfiguration` / `UIGestureRecognizer` | `GestureSettings::for_platform`, `native`, `android_defaults`, `ios_defaults` |
+| Evidence-capped pointer prediction (25 ms) | Chromium `input_predictor.h` | `processing::InputPredictor` |
+
+See `examples/pointer_filtering.rs`.

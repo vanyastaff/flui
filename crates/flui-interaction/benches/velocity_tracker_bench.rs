@@ -21,7 +21,9 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use flui_interaction::processing::{IosFlingVelocityTracker, VelocityTracker};
+use flui_interaction::processing::{
+    ImpulseVelocityTracker, IosFlingVelocityTracker, OneEuroFilter2D, VelocityTracker,
+};
 use flui_types::geometry::{Offset, Pixels};
 use flui_types::gestures::PointerDeviceKind;
 
@@ -152,6 +154,42 @@ fn bench_ios_estimate(c: &mut Criterion) {
     });
 }
 
+/// Benchmark the AOSP impulse strategy on the same full 20-sample buffer as
+/// the LSQ bench, so the two strategies price against each other directly.
+fn bench_estimate_impulse(c: &mut Criterion) {
+    let samples = black_box(linear_swipe(20, 100, 1000.0));
+    c.bench_function("ImpulseVelocityTracker::estimate (20 samples)", |b| {
+        b.iter_batched(
+            || {
+                let mut tracker = ImpulseVelocityTracker::with_kind(PointerDeviceKind::Touch);
+                for (t, p) in &samples {
+                    tracker.add_position(*t, *p);
+                }
+                tracker
+            },
+            |tracker| black_box(tracker.get_velocity_estimate()),
+            criterion::BatchSize::SmallInput,
+        );
+    });
+}
+
+/// Benchmark one One-Euro filter step — the per-pointer-move cost when the
+/// filter sits in the input path (must be well under the 100 ns slot-write
+/// budget class, it is pure arithmetic).
+fn bench_one_euro_step(c: &mut Criterion) {
+    let start = Instant::now();
+    let mut filter = OneEuroFilter2D::default();
+    let mut i = 0u32;
+    c.bench_function("OneEuroFilter2D::filter (per move)", |b| {
+        b.iter(|| {
+            i = i.wrapping_add(1);
+            let t = start + Duration::from_millis(8) * i;
+            let p = Offset::new(Pixels(i as f32 * 0.5), Pixels(50.0));
+            black_box(filter.filter(black_box(t), black_box(p)))
+        });
+    });
+}
+
 criterion_group!(
     velocity_benches,
     bench_estimate_lsq,
@@ -159,5 +197,7 @@ criterion_group!(
     bench_estimate_repeated,
     bench_add_position,
     bench_ios_estimate,
+    bench_estimate_impulse,
+    bench_one_euro_step,
 );
 criterion_main!(velocity_benches);

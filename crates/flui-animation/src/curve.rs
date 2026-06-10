@@ -323,9 +323,185 @@ impl Cubic {
 
 impl Curve for Cubic {
     fn transform(&self, t: f32) -> f32 {
+        // Rust's `clamp` propagates NaN, which would silently NaN both the
+        // Newton loop and the bisection fallback; canonicalize to the left
+        // endpoint instead of poisoning every downstream animation value.
+        if t.is_nan() {
+            return 0.0;
+        }
         let t = t.clamp(0.0, 1.0);
         let s = self.solve_x(t);
         evaluate_cubic(s, 0.0, self.b, self.d, 1.0)
+    }
+}
+
+/// Two cubic bezier segments joined at a shared `midpoint`.
+///
+/// The curve passes through `(0,0)`, `midpoint`, and `(1,1)`; each half is a
+/// [`Cubic`] rescaled into its sub-rectangle. This is the building block for
+/// the Material 3 emphasized easing set.
+///
+/// Similar to Flutter's `ThreePointCubic`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ThreePointCubic {
+    /// First control point of the first segment (tangent at `(0, 0)`).
+    pub a1: (f32, f32),
+    /// Second control point of the first segment (tangent into `midpoint`).
+    pub b1: (f32, f32),
+    /// The shared point both segments pass through.
+    ///
+    /// `midpoint.0` must lie strictly inside `(0, 1)` — both segment widths
+    /// are used as divisors.
+    pub midpoint: (f32, f32),
+    /// First control point of the second segment (tangent out of `midpoint`).
+    pub a2: (f32, f32),
+    /// Second control point of the second segment (tangent at `(1, 1)`).
+    pub b2: (f32, f32),
+}
+
+impl ThreePointCubic {
+    /// Creates a three-point cubic from the control points of both segments.
+    ///
+    /// The two implied end points `(0,0)` and `(1,1)` are fixed and not
+    /// passed. See Flutter's `ThreePointCubic` for the geometry.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `midpoint` does not lie strictly inside the unit square:
+    /// both segment widths (`midpoint.0`, `1 - midpoint.0`) and heights
+    /// (`midpoint.1`, `1 - midpoint.1`) are used as divisors in
+    /// [`Curve::transform`], so a midpoint on the boundary (or NaN) would
+    /// silently evaluate to NaN/inf. For `const` constructions the panic is
+    /// a compile error.
+    #[must_use]
+    pub const fn new(
+        a1: (f32, f32),
+        b1: (f32, f32),
+        midpoint: (f32, f32),
+        a2: (f32, f32),
+        b2: (f32, f32),
+    ) -> Self {
+        assert!(
+            midpoint.0 > 0.0 && midpoint.0 < 1.0 && midpoint.1 > 0.0 && midpoint.1 < 1.0,
+            "ThreePointCubic midpoint must lie strictly inside the unit square: \
+             both segments are rescaled by its distance to each edge"
+        );
+        Self {
+            a1,
+            b1,
+            midpoint,
+            a2,
+            b2,
+        }
+    }
+}
+
+impl Curve for ThreePointCubic {
+    fn transform(&self, t: f32) -> f32 {
+        // NaN canonicalization mirrors `Cubic::transform`.
+        if t.is_nan() {
+            return 0.0;
+        }
+        let t = t.clamp(0.0, 1.0);
+        let (mx, my) = self.midpoint;
+        let first = t < mx;
+        let scale_x = if first { mx } else { 1.0 - mx };
+        let scale_y = if first { my } else { 1.0 - my };
+        let scaled_t = (t - if first { 0.0 } else { mx }) / scale_x;
+        if first {
+            Cubic::new(
+                self.a1.0 / scale_x,
+                self.a1.1 / scale_y,
+                self.b1.0 / scale_x,
+                self.b1.1 / scale_y,
+            )
+            .transform(scaled_t)
+                * scale_y
+        } else {
+            Cubic::new(
+                (self.a2.0 - mx) / scale_x,
+                (self.a2.1 - my) / scale_y,
+                (self.b2.0 - mx) / scale_x,
+                (self.b2.1 - my) / scale_y,
+            )
+            .transform(scaled_t)
+                * scale_y
+                + my
+        }
+    }
+}
+
+// ============================================================================
+// Split Curve
+// ============================================================================
+
+/// A curve that progresses according to `begin_curve` until `split`, then
+/// according to `end_curve`.
+///
+/// Useful when a widget must track the user's finger (linear) and then be
+/// flung with an easing curve after release: `split` is the animation
+/// progress at the moment of release.
+///
+/// Similar to Flutter's `Split`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Split<B: Curve = Linear, E: Curve = Cubic> {
+    /// The progress value separating the two curves. In `[0, 1]`.
+    pub split: f32,
+    /// The curve used before `split`.
+    pub begin_curve: B,
+    /// The curve used at and after `split`.
+    pub end_curve: E,
+}
+
+impl Split<Linear, Cubic> {
+    /// Creates a split curve with Flutter's defaults: linear before `split`,
+    /// `Curves::EaseOutCubic` after.
+    #[must_use]
+    pub fn new(split: f32) -> Self {
+        Self::with_curves(split, Linear, Curves::EaseOutCubic)
+    }
+}
+
+impl<B: Curve, E: Curve> Split<B, E> {
+    /// Creates a split curve with explicit segment curves.
+    #[must_use]
+    pub fn with_curves(split: f32, begin_curve: B, end_curve: E) -> Self {
+        assert!(
+            (0.0..=1.0).contains(&split),
+            "split must be in range [0.0, 1.0]"
+        );
+        Self {
+            split,
+            begin_curve,
+            end_curve,
+        }
+    }
+}
+
+impl<B: Curve, E: Curve> Curve for Split<B, E> {
+    #[allow(clippy::float_cmp)] // Intentional exact comparisons per the Flutter contract
+    fn transform(&self, t: f32) -> f32 {
+        if t.is_nan() {
+            return 0.0;
+        }
+        let t = t.clamp(0.0, 1.0);
+        if t == 0.0 || t == 1.0 {
+            return t;
+        }
+        if t == self.split {
+            return self.split;
+        }
+        if t < self.split {
+            // `t < split` implies `split > 0`, so the division is safe.
+            let progress = t / self.split;
+            self.split * self.begin_curve.transform(progress)
+        } else {
+            // `t > split` implies `split < 1`, so the division is safe.
+            let progress = (t - self.split) / (1.0 - self.split);
+            self.split + (1.0 - self.split) * self.end_curve.transform(progress)
+        }
     }
 }
 
@@ -856,6 +1032,74 @@ impl Curves {
 
     /// A curve where the rate of change starts fast and then decelerates.
     pub const Decelerate: DecelerateCurve = DecelerateCurve;
+
+    /// The CSS `ease` function: speeds up quickly, ends slowly.
+    pub const Ease: Cubic = Cubic::new(0.25, 0.1, 0.25, 1.0);
+
+    /// A quadratic ease-in (Penner `easeInQuad`).
+    pub const EaseInQuad: Cubic = Cubic::new(0.55, 0.085, 0.68, 0.53);
+
+    /// A cubic ease-in (Penner `easeInCubic`).
+    pub const EaseInCubic: Cubic = Cubic::new(0.55, 0.055, 0.675, 0.19);
+
+    /// A quartic ease-in (Penner `easeInQuart`).
+    pub const EaseInQuart: Cubic = Cubic::new(0.895, 0.03, 0.685, 0.22);
+
+    /// A quintic ease-in (Penner `easeInQuint`).
+    pub const EaseInQuint: Cubic = Cubic::new(0.755, 0.05, 0.855, 0.06);
+
+    /// A quadratic ease-out (Penner `easeOutQuad`).
+    pub const EaseOutQuad: Cubic = Cubic::new(0.25, 0.46, 0.45, 0.94);
+
+    /// A cubic ease-out (Penner `easeOutCubic`).
+    pub const EaseOutCubic: Cubic = Cubic::new(0.215, 0.61, 0.355, 1.0);
+
+    /// A quartic ease-out (Penner `easeOutQuart`).
+    pub const EaseOutQuart: Cubic = Cubic::new(0.165, 0.84, 0.44, 1.0);
+
+    /// A quintic ease-out (Penner `easeOutQuint`).
+    pub const EaseOutQuint: Cubic = Cubic::new(0.23, 1.0, 0.32, 1.0);
+
+    /// A quadratic ease-in-out (Penner `easeInOutQuad`).
+    pub const EaseInOutQuad: Cubic = Cubic::new(0.455, 0.03, 0.515, 0.955);
+
+    /// A quartic ease-in-out (Penner `easeInOutQuart`).
+    pub const EaseInOutQuart: Cubic = Cubic::new(0.77, 0.0, 0.175, 1.0);
+
+    /// A quintic ease-in-out (Penner `easeInOutQuint`).
+    pub const EaseInOutQuint: Cubic = Cubic::new(0.86, 0.0, 0.07, 1.0);
+
+    /// Starts nearly linear and ends with a strong ease-in; pairs with
+    /// `LinearToEaseOut` for enter/exit transitions.
+    pub const FastLinearToSlowEaseIn: Cubic = Cubic::new(0.18, 1.0, 0.04, 1.0);
+
+    /// Starts nearly linear and ends with an ease-out; the exit counterpart
+    /// of `FastLinearToSlowEaseIn`.
+    pub const LinearToEaseOut: Cubic = Cubic::new(0.35, 0.91, 0.33, 0.97);
+
+    /// Starts with an ease-in and ends nearly linear.
+    pub const EaseInToLinear: Cubic = Cubic::new(0.67, 0.03, 0.65, 0.09);
+
+    /// Fast at the edges, slow through the middle.
+    pub const SlowMiddle: Cubic = Cubic::new(0.15, 0.85, 0.85, 0.15);
+
+    /// Material 3 emphasized easing: the default M3 motion curve.
+    pub const EaseInOutCubicEmphasized: ThreePointCubic = ThreePointCubic::new(
+        (0.05, 0.0),
+        (0.133_333, 0.06),
+        (0.166_666, 0.4),
+        (0.208_333, 0.82),
+        (0.25, 1.0),
+    );
+
+    /// A strong ease-in followed by a long, gentle ease-out.
+    pub const FastEaseInToSlowEaseOut: ThreePointCubic = ThreePointCubic::new(
+        (0.056, 0.024),
+        (0.108, 0.308_5),
+        (0.198, 0.541),
+        (0.365_5, 1.0),
+        (0.546_5, 0.989),
+    );
 }
 
 #[cfg(test)]
@@ -1015,6 +1259,76 @@ mod tests {
         assert_eq!(Curves::Linear.transform(0.5), 0.5);
         assert!(Curves::EaseIn.transform(0.5) < 0.5);
         assert!(Curves::EaseOut.transform(0.5) > 0.5);
+    }
+
+    #[test]
+    fn cubic_nan_input_is_canonicalized() {
+        // Rust's clamp propagates NaN; the solver must not.
+        let c = Curves::EaseInOut;
+        assert_eq!(c.transform(f32::NAN), 0.0);
+        let tp = Curves::EaseInOutCubicEmphasized;
+        assert_eq!(tp.transform(f32::NAN), 0.0);
+        let split = Split::new(0.5);
+        assert_eq!(split.transform(f32::NAN), 0.0);
+    }
+
+    #[test]
+    fn penner_catalog_endpoints() {
+        // Every new cubic catalog entry must satisfy the Curve contract at
+        // the endpoints.
+        for c in [
+            Curves::Ease,
+            Curves::EaseInQuad,
+            Curves::EaseInCubic,
+            Curves::EaseInQuart,
+            Curves::EaseInQuint,
+            Curves::EaseOutQuad,
+            Curves::EaseOutCubic,
+            Curves::EaseOutQuart,
+            Curves::EaseOutQuint,
+            Curves::EaseInOutQuad,
+            Curves::EaseInOutQuart,
+            Curves::EaseInOutQuint,
+            Curves::FastLinearToSlowEaseIn,
+            Curves::LinearToEaseOut,
+            Curves::EaseInToLinear,
+            Curves::SlowMiddle,
+        ] {
+            assert!(c.transform(0.0).abs() < 1e-4, "{c:?} must start at 0");
+            assert!((c.transform(1.0) - 1.0).abs() < 1e-4, "{c:?} must end at 1");
+        }
+    }
+
+    #[test]
+    fn three_point_cubic_passes_through_midpoint() {
+        let c = Curves::EaseInOutCubicEmphasized;
+        assert!(c.transform(0.0).abs() < 1e-4);
+        assert!((c.transform(1.0) - 1.0).abs() < 1e-4);
+        // The curve must pass through its midpoint (M3 spec: (1/6, 0.4)).
+        assert!((c.transform(0.166_666) - 0.4).abs() < 1e-2);
+
+        let f = Curves::FastEaseInToSlowEaseOut;
+        assert!(f.transform(0.0).abs() < 1e-4);
+        assert!((f.transform(1.0) - 1.0).abs() < 1e-4);
+        assert!((f.transform(0.198) - 0.541).abs() < 1e-2);
+    }
+
+    #[test]
+    fn split_curve_contract() {
+        let split = Split::new(0.5);
+        // Endpoints and the split point itself are exact per the contract.
+        assert_eq!(split.transform(0.0), 0.0);
+        assert_eq!(split.transform(1.0), 1.0);
+        assert_eq!(split.transform(0.5), 0.5);
+        // Before the split the default begin curve is linear.
+        assert!((split.transform(0.25) - 0.25).abs() < 1e-6);
+        // After the split the ease-out segment runs ahead of linear.
+        assert!(split.transform(0.75) > 0.75);
+
+        // A custom begin curve is rescaled into [0, split].
+        let custom = Split::with_curves(0.5, Threshold::new(0.5), Linear);
+        assert_eq!(custom.transform(0.2), 0.0); // threshold not yet reached
+        assert_eq!(custom.transform(0.3), 0.5); // threshold crossed -> split*1.0
     }
 
     #[test]
