@@ -83,16 +83,11 @@ repository = "https://github.com/vanyastaff/flui"
 [workspace.dependencies]
 # ASYNC RUNTIME — tokio 1.43 = LTS floor (lock resolves latest 1.x)
 tokio = { version = "1.43" }
-futures = "0.3"
-pin-project-lite = "0.2"
-any_spawner = "0.1"
-send_wrapper = "0.6"
 
 # SYNCHRONIZATION - Used by multiple crates
 parking_lot = "0.12"
 once_cell = "1.20"
 dashmap = "6.1"
-crossbeam = "0.8"
 
 # COLLECTIONS - Used by multiple crates
 smallvec = { version = "1.13", features = ["serde", "union", "const_generics"] }
@@ -103,9 +98,6 @@ serde_json = "1.0"
 
 # BUILDER UTILITIES - Used by widgets
 bon = "3.8"
-
-# DELEGATION - Used by flui-tree and flui-rendering
-ambassador = "0.4.2"
 
 # WORKSPACE PROC-MACROS
 flui-macros = { path = "crates/flui-macros" }
@@ -134,9 +126,6 @@ arboard = "3.4"
 # TODO: Re-enable "webp" feature when image-rs/image-webp#102 is fixed upstream
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
 
-# FONT PARSING - Used by flui-assets and flui-engine
-ttf-parser = "0.25"
-
 # === Engine-specific dependencies (NOT in workspace) ===
 # These are ONLY used in flui-engine:
 # - glam (GPU math)
@@ -153,16 +142,12 @@ reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"] }
 
 # UI EVENTS - Cross-platform input event abstraction (W3C compliant)
 ui-events = "0.3"
-ui-events-winit = "0.3"
 cursor-icon = "1.2"
 
 # UTILITIES - Used by multiple crates
-ahash = "0.8"
 bitflags = "2.10"
 dyn-clone = "1.0"
 downcast-rs = "2.0.2"
-which = "5.0"         # Command discovery - Used by flui-build
-indicatif = "0.17"    # Progress bars - Used by flui-build
 
 # FAST HASHING - Used by flui-rendering (FxHashSet for layout cycle guard
 # per D-block U21; deterministic + faster than std SipHash for small keys
@@ -172,16 +157,8 @@ rustc-hash = "2.1"
 # STRING INTERNING - Used by flui-assets
 lasso = { version = "0.7", features = ["multi-threaded"] }
 
-# OPTIMIZED SMART POINTERS - Used by flui-assets
-triomphe = "0.1"
-
-# TESTING
-tempfile = "3.15"
-
 # PERFORMANCE & PROFILING
 criterion = "0.7"
-tracing-tracy = "0.11"
-puffin_http = "0.16"
 
 # Workspace-wide lints for consistent code quality (Rust 1.74+)
 [workspace.lints.rust]
@@ -214,28 +191,15 @@ description = "Flutter-inspired declarative UI framework with wgpu rendering"
 keywords = ["gui", "ui", "wgpu", "flutter", "reactive"]
 
 [dependencies]
+
+[dev-dependencies]
 # === Foundation Layer ===
 flui-types = { path = "crates/flui-types" }
-flui-foundation = { path = "crates/flui-foundation" }
 # flui-tree = { path = "crates/flui-tree" }
 
 # === Core Layer ===
 flui-layer = { path = "crates/flui-layer" }
 flui-painting = { path = "crates/flui-painting" }
-# flui-semantics = { path = "crates/flui-semantics" }
-# flui-interaction = { path = "crates/flui-interaction" }
-
-# === Rendering Layer ===
-# flui-rendering = { path = "crates/flui-rendering" }
-# flui-engine = { path = "crates/flui-engine" }  # GPU backend - enable when needed
-
-# === View Layer ===
-# flui-view = { path = "crates/flui-view" }
-
-# === Reactive Layer ===
-# flui-scheduler = { path = "crates/flui-scheduler" }
-# flui-animation = { path = "crates/flui-animation" }
-# flui-reactivity = { path = "crates/flui-reactivity" }
 
 # === Application Layer ===
 flui-app = { path = "crates/flui-app" }
@@ -258,10 +222,6 @@ anyhow.workspace = true
 # === Logging ===
 tracing.workspace = true
 tracing-subscriber.workspace = true
-tracing-forest.workspace = true
-
-[dev-dependencies]
-# criterion only needed in individual crates for benchmarks, not in root
 
 [features]
 default = []
