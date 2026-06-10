@@ -26,7 +26,7 @@
 //! ```
 
 use crate::curve::Curve;
-use flui_types::geometry::{Edges, Offset, Pixels, Rect, Size};
+use flui_types::geometry::{Edges, Lerp, Offset, Pixels, Rect, Size};
 use flui_types::layout::Alignment;
 use flui_types::styling::{BorderRadius, BorderRadiusExt, Color};
 
@@ -38,18 +38,41 @@ pub trait Animatable<T> {
     fn transform(&self, t: f32) -> T;
 }
 
-/// A tween that linearly interpolates between a beginning and ending value.
+/// A tween that linearly interpolates between a `begin` and `end` value of any
+/// [`Lerp`] type. One generic struct replaces Flutter's per-type tween classes
+/// (`ColorTween`, `SizeTween`, ...), which exist only because Dart dispatches
+/// `begin + (end - begin) * t` dynamically.
 ///
-/// Similar to Flutter's `Tween<T>`.
-pub trait Tween<T>: Animatable<T> {
-    /// The value this tween has at the beginning of the animation.
-    fn begin(&self) -> &T;
+/// `transform` does **not** clamp `t`: bouncy/elastic/spring curves emit
+/// `t > 1` (or `t < 0`) and the overshoot must reach the value. The exact
+/// endpoints (`t == 0`, `t == 1`) are returned verbatim without interpolation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Tween<V> {
+    /// The value at the start of the animation.
+    pub begin: V,
+    /// The value at the end of the animation.
+    pub end: V,
+}
 
-    /// The value this tween has at the end of the animation.
-    fn end(&self) -> &T;
+impl<V> Tween<V> {
+    /// Creates a new tween between `begin` and `end`.
+    #[must_use]
+    pub const fn new(begin: V, end: V) -> Self {
+        Self { begin, end }
+    }
+}
 
-    /// Returns the interpolated value for the current value of the given animation.
-    fn lerp(&self, t: f32) -> T;
+impl<V: Lerp> Animatable<V> for Tween<V> {
+    fn transform(&self, t: f32) -> V {
+        if t == 0.0 {
+            return self.begin.clone();
+        }
+        if t == 1.0 {
+            return self.end.clone();
+        }
+        self.begin.lerp_to(&self.end, t)
+    }
 }
 
 // ============================================================================
@@ -70,42 +93,8 @@ pub trait Tween<T>: Animatable<T> {
 /// assert_eq!(tween.transform(0.5), 50.0);
 /// assert_eq!(tween.transform(1.0), 100.0);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct FloatTween {
-    /// The beginning value.
-    pub begin: f32,
-    /// The ending value.
-    pub end: f32,
-}
-
-impl FloatTween {
-    /// Creates a new float tween.
-    #[must_use]
-    pub const fn new(begin: f32, end: f32) -> Self {
-        Self { begin, end }
-    }
-}
-
-impl Animatable<f32> for FloatTween {
-    fn transform(&self, t: f32) -> f32 {
-        self.lerp(t)
-    }
-}
-
-impl Tween<f32> for FloatTween {
-    fn begin(&self) -> &f32 {
-        &self.begin
-    }
-
-    fn end(&self) -> &f32 {
-        &self.end
-    }
-
-    fn lerp(&self, t: f32) -> f32 {
-        self.begin + (self.end - self.begin) * t.clamp(0.0, 1.0)
-    }
-}
+/// Tween between two floats. Alias for `Tween<f32>`.
+pub type FloatTween = Tween<f32>;
 
 /// A tween that linearly interpolates between two integers, rounding to the
 /// nearest integer.
@@ -129,22 +118,8 @@ impl IntTween {
 }
 
 impl Animatable<i32> for IntTween {
+    #[allow(clippy::cast_possible_truncation)] // rounded f32->i32, saturating cast
     fn transform(&self, t: f32) -> i32 {
-        self.lerp(t)
-    }
-}
-
-impl Tween<i32> for IntTween {
-    fn begin(&self) -> &i32 {
-        &self.begin
-    }
-
-    fn end(&self) -> &i32 {
-        &self.end
-    }
-
-    #[allow(clippy::cast_possible_truncation)]
-    fn lerp(&self, t: f32) -> i32 {
         let t = t.clamp(0.0, 1.0);
         (self.begin as f32 + (self.end - self.begin) as f32 * t).round() as i32
     }
@@ -172,22 +147,8 @@ impl StepTween {
 }
 
 impl Animatable<i32> for StepTween {
+    #[allow(clippy::cast_possible_truncation)] // floored f32->i32, saturating cast
     fn transform(&self, t: f32) -> i32 {
-        self.lerp(t)
-    }
-}
-
-impl Tween<i32> for StepTween {
-    fn begin(&self) -> &i32 {
-        &self.begin
-    }
-
-    fn end(&self) -> &i32 {
-        &self.end
-    }
-
-    #[allow(clippy::cast_possible_truncation)]
-    fn lerp(&self, t: f32) -> i32 {
         let t = t.clamp(0.0, 1.0);
         (self.begin as f32 + (self.end - self.begin) as f32 * t).floor() as i32
     }
@@ -217,20 +178,6 @@ impl<T: Clone> Animatable<T> for ConstantTween<T> {
     }
 }
 
-impl<T: Clone> Tween<T> for ConstantTween<T> {
-    fn begin(&self) -> &T {
-        &self.value
-    }
-
-    fn end(&self) -> &T {
-        &self.value
-    }
-
-    fn lerp(&self, _t: f32) -> T {
-        self.value.clone()
-    }
-}
-
 /// A tween that reverses another tween.
 ///
 /// The reversed tween starts at the end value and goes to the begin value.
@@ -255,7 +202,7 @@ impl<T, A: Animatable<T>> ReverseTween<T, A> {
 
 impl<T, A: Animatable<T>> Animatable<T> for ReverseTween<T, A> {
     fn transform(&self, t: f32) -> T {
-        self.tween.transform(1.0 - t.clamp(0.0, 1.0))
+        self.tween.transform(1.0 - t)
     }
 }
 
@@ -266,257 +213,38 @@ impl<T, A: Animatable<T>> Animatable<T> for ReverseTween<T, A> {
 /// A tween that linearly interpolates between two colors.
 ///
 /// Similar to Flutter's `ColorTween`.
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct ColorTween {
-    /// The beginning color.
-    pub begin: Color,
-    /// The ending color.
-    pub end: Color,
-}
-
-impl ColorTween {
-    /// Creates a new color tween.
-    #[must_use]
-    pub const fn new(begin: Color, end: Color) -> Self {
-        Self { begin, end }
-    }
-}
-
-impl Animatable<Color> for ColorTween {
-    fn transform(&self, t: f32) -> Color {
-        self.lerp(t)
-    }
-}
-
-impl Tween<Color> for ColorTween {
-    fn begin(&self) -> &Color {
-        &self.begin
-    }
-
-    fn end(&self) -> &Color {
-        &self.end
-    }
-
-    fn lerp(&self, t: f32) -> Color {
-        Color::lerp(self.begin, self.end, t.clamp(0.0, 1.0))
-    }
-}
+/// Tween between two colors. Alias for `Tween<Color>`.
+pub type ColorTween = Tween<Color>;
 
 /// A tween that linearly interpolates between two sizes.
 ///
 /// Similar to Flutter's `SizeTween`.
-#[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct SizeTween {
-    /// The beginning size.
-    pub begin: Size<Pixels>,
-    /// The ending size.
-    pub end: Size<Pixels>,
-}
-
-impl SizeTween {
-    /// Creates a new size tween.
-    #[must_use]
-    pub const fn new(begin: Size<Pixels>, end: Size<Pixels>) -> Self {
-        Self { begin, end }
-    }
-}
-
-impl Animatable<Size<Pixels>> for SizeTween {
-    fn transform(&self, t: f32) -> Size<Pixels> {
-        self.lerp(t)
-    }
-}
-
-impl Tween<Size<Pixels>> for SizeTween {
-    fn begin(&self) -> &Size<Pixels> {
-        &self.begin
-    }
-
-    fn end(&self) -> &Size<Pixels> {
-        &self.end
-    }
-
-    fn lerp(&self, t: f32) -> Size<Pixels> {
-        let t = t.clamp(0.0, 1.0);
-        Size::new(
-            self.begin.width + (self.end.width - self.begin.width) * t,
-            self.begin.height + (self.end.height - self.begin.height) * t,
-        )
-    }
-}
+/// Tween between two sizes. Alias for `Tween<Size<Pixels>>`.
+pub type SizeTween = Tween<Size<Pixels>>;
 
 /// A tween that linearly interpolates between two rectangles.
 ///
 /// Similar to Flutter's `RectTween`.
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct RectTween {
-    /// The beginning rectangle.
-    pub begin: Rect<Pixels>,
-    /// The ending rectangle.
-    pub end: Rect<Pixels>,
-}
-
-impl RectTween {
-    /// Creates a new rectangle tween.
-    #[must_use]
-    pub const fn new(begin: Rect<Pixels>, end: Rect<Pixels>) -> Self {
-        Self { begin, end }
-    }
-}
-
-impl Animatable<Rect<Pixels>> for RectTween {
-    fn transform(&self, t: f32) -> Rect<Pixels> {
-        self.lerp(t)
-    }
-}
-
-impl Tween<Rect<Pixels>> for RectTween {
-    fn begin(&self) -> &Rect<Pixels> {
-        &self.begin
-    }
-
-    fn end(&self) -> &Rect<Pixels> {
-        &self.end
-    }
-
-    fn lerp(&self, t: f32) -> Rect<Pixels> {
-        let t = t.clamp(0.0, 1.0);
-        let min_x = self.begin.left() + (self.end.left() - self.begin.left()) * t;
-        let min_y = self.begin.top() + (self.end.top() - self.begin.top()) * t;
-        let width = self.begin.width() + (self.end.width() - self.begin.width()) * t;
-        let height = self.begin.height() + (self.end.height() - self.begin.height()) * t;
-        Rect::from_xywh(min_x, min_y, width, height)
-    }
-}
+/// Tween between two rectangles. Alias for `Tween<Rect<Pixels>>`.
+pub type RectTween = Tween<Rect<Pixels>>;
 
 /// A tween that linearly interpolates between two offsets.
 ///
 /// Similar to Flutter's `OffsetTween` (but `Offset::lerp` is used directly in Flutter).
-#[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct OffsetTween {
-    /// The beginning offset.
-    pub begin: Offset<Pixels>,
-    /// The ending offset.
-    pub end: Offset<Pixels>,
-}
-
-impl OffsetTween {
-    /// Creates a new offset tween.
-    #[must_use]
-    pub const fn new(begin: Offset<Pixels>, end: Offset<Pixels>) -> Self {
-        Self { begin, end }
-    }
-}
-
-impl Animatable<Offset<Pixels>> for OffsetTween {
-    fn transform(&self, t: f32) -> Offset<Pixels> {
-        self.lerp(t)
-    }
-}
-
-impl Tween<Offset<Pixels>> for OffsetTween {
-    fn begin(&self) -> &Offset<Pixels> {
-        &self.begin
-    }
-
-    fn end(&self) -> &Offset<Pixels> {
-        &self.end
-    }
-
-    fn lerp(&self, t: f32) -> Offset<Pixels> {
-        Offset::lerp(self.begin, self.end, t.clamp(0.0, 1.0))
-    }
-}
+/// Tween between two offsets. Alias for `Tween<Offset<Pixels>>`.
+pub type OffsetTween = Tween<Offset<Pixels>>;
 
 /// A tween that linearly interpolates between two alignments.
 ///
 /// Similar to Flutter's `AlignmentTween`.
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct AlignmentTween {
-    /// The beginning alignment.
-    pub begin: Alignment,
-    /// The ending alignment.
-    pub end: Alignment,
-}
-
-impl AlignmentTween {
-    /// Creates a new alignment tween.
-    #[must_use]
-    pub const fn new(begin: Alignment, end: Alignment) -> Self {
-        Self { begin, end }
-    }
-}
-
-impl Animatable<Alignment> for AlignmentTween {
-    fn transform(&self, t: f32) -> Alignment {
-        self.lerp(t)
-    }
-}
-
-impl Tween<Alignment> for AlignmentTween {
-    fn begin(&self) -> &Alignment {
-        &self.begin
-    }
-
-    fn end(&self) -> &Alignment {
-        &self.end
-    }
-
-    fn lerp(&self, t: f32) -> Alignment {
-        Alignment::lerp(self.begin, self.end, t.clamp(0.0, 1.0))
-    }
-}
+/// Tween between two alignments. Alias for `Tween<Alignment>`.
+pub type AlignmentTween = Tween<Alignment>;
 
 /// A tween that linearly interpolates between two edge insets.
 ///
 /// Similar to Flutter's `EdgeInsetsTween`.
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct EdgeInsetsTween {
-    /// The beginning edge insets.
-    pub begin: Edges<Pixels>,
-    /// The ending edge insets.
-    pub end: Edges<Pixels>,
-}
-
-impl EdgeInsetsTween {
-    /// Creates a new edge insets tween.
-    #[must_use]
-    pub const fn new(begin: Edges<Pixels>, end: Edges<Pixels>) -> Self {
-        Self { begin, end }
-    }
-}
-
-impl Animatable<Edges<Pixels>> for EdgeInsetsTween {
-    fn transform(&self, t: f32) -> Edges<Pixels> {
-        self.lerp(t)
-    }
-}
-
-impl Tween<Edges<Pixels>> for EdgeInsetsTween {
-    fn begin(&self) -> &Edges<Pixels> {
-        &self.begin
-    }
-
-    fn end(&self) -> &Edges<Pixels> {
-        &self.end
-    }
-
-    fn lerp(&self, t: f32) -> Edges<Pixels> {
-        let t = t.clamp(0.0, 1.0);
-        Edges::new(
-            self.begin.left + (self.end.left - self.begin.left) * t,
-            self.begin.top + (self.end.top - self.begin.top) * t,
-            self.begin.right + (self.end.right - self.begin.right) * t,
-            self.begin.bottom + (self.end.bottom - self.begin.bottom) * t,
-        )
-    }
-}
+/// Tween between two edge insets. Alias for `Tween<Edges<Pixels>>`.
+pub type EdgeInsetsTween = Tween<Edges<Pixels>>;
 
 /// A tween that linearly interpolates between two border radii.
 ///
@@ -540,20 +268,9 @@ impl BorderRadiusTween {
 
 impl Animatable<BorderRadius> for BorderRadiusTween {
     fn transform(&self, t: f32) -> BorderRadius {
-        self.lerp(t)
-    }
-}
-
-impl Tween<BorderRadius> for BorderRadiusTween {
-    fn begin(&self) -> &BorderRadius {
-        &self.begin
-    }
-
-    fn end(&self) -> &BorderRadius {
-        &self.end
-    }
-
-    fn lerp(&self, t: f32) -> BorderRadius {
+        // Kept as a dedicated struct: BorderRadius is flui_geometry::Corners<Radius>,
+        // so a `Lerp for Corners<T>` blanket (collapsing this into `Tween<V>`)
+        // belongs in flui-geometry and lands with the matrix Lerp work.
         BorderRadius::lerp(self.begin, self.end, t.clamp(0.0, 1.0))
     }
 }
@@ -976,8 +693,21 @@ mod tests {
     fn test_color_tween() {
         let tween = ColorTween::new(Color::RED, Color::BLUE);
         let mid = tween.transform(0.5);
-        assert_eq!(mid.r, 127);
-        assert_eq!(mid.b, 127);
+        // 255 * 0.5 = 127.5 -> rounds to 128 (the old code truncated to 127).
+        assert_eq!(mid.r, 128);
+        assert_eq!(mid.b, 128);
+    }
+
+    #[test]
+    fn tween_extrapolates_overshoot() {
+        // B3 regression: the generic Tween must NOT clamp t, so spring/elastic
+        // overshoot (t > 1, t < 0) reaches the value.
+        let tween = FloatTween::new(0.0, 10.0);
+        assert_eq!(tween.transform(1.5), 15.0, "overshoot above end");
+        assert_eq!(tween.transform(-0.5), -5.0, "overshoot below begin");
+        // Exact endpoints are returned verbatim.
+        assert_eq!(tween.transform(0.0), 0.0);
+        assert_eq!(tween.transform(1.0), 10.0);
     }
 
     #[test]

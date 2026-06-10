@@ -92,6 +92,9 @@ pub use flui_geometry as geometry;
 
 pub mod gestures;
 pub mod layout;
+// `Lerp` impls for Color/Alignment/BorderRadius (trait impls are globally
+// visible; the module needs no public surface).
+mod lerp_impls;
 pub mod painting;
 pub mod physics; // PORT-CHECK-OK-SP4: physics types API surface; future consumer in flui-animation per ROADMAP
 pub mod platform; // PORT-CHECK-OK-SP4: platform types API surface; future consumer in flui-platform per ROADMAP

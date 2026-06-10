@@ -125,6 +125,7 @@ pub mod edges;
 /// Error types for geometry operations.
 pub mod error;
 pub mod length;
+pub mod lerp;
 pub mod line;
 pub mod matrix4;
 pub mod offset;
@@ -208,6 +209,7 @@ pub use error::GeometryError;
 // LENGTH TYPES
 // =============================================================================
 pub use length::{AbsoluteLength, DefiniteLength, Length, Percentage, Rems, auto, relative, rems};
+pub use lerp::{Lerp, MaybeLerp};
 pub use line::Line;
 // =============================================================================
 // TRANSFORMATION TYPES

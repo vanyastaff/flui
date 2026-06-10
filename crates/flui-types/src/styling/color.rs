@@ -252,7 +252,11 @@ impl Color {
     )]
     fn lerp_scalar(a: Color, b: Color, t: f32) -> Color {
         let t = t.clamp(0.0, 1.0);
-        let lerp_u8 = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t) as u8;
+        // Round, not truncate: `x as u8` truncates toward zero, biasing every
+        // interpolated channel down by up to ~1 and producing a visibly darker
+        // mid-tween. `.round()` matches Flutter's `Color.lerp` (and the `as u8`
+        // cast still saturates out-of-range values to [0, 255]).
+        let lerp_u8 = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t).round() as u8;
 
         Color::rgba(
             lerp_u8(a.r, b.r),
