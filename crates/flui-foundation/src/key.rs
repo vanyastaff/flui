@@ -52,9 +52,10 @@ use std::{
 };
 
 /// Runtime counter backing [`Key::new`]. Starts at 1; the value 0 is the
-/// permanent-exhaustion sentinel (see `Key::new`). Module-scoped (not a
-/// function-local static) so the `cfg(test)` exhaustion helper can drive
-/// it into the sentinel state.
+/// permanent-exhaustion sentinel (see `Key::new`). Exhaustion tests drive a
+/// *local* `AtomicU64` through [`Key::new_with_counter`] rather than mutating
+/// this shared static, so no test ever resets it to the sentinel — keeping
+/// the counter monotonic and `Key::new` race-free across parallel tests.
 static KEY_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 /// Runtime counter backing [`UniqueKey::new`]. Same 1-based start and
@@ -157,23 +158,35 @@ impl Key {
     #[allow(clippy::new_without_default)]
     #[inline]
     pub fn new() -> Self {
-        // F2 — `fetch_update` sentinel state machine.
-        //
-        // Invariants for `KEY_COUNTER`:
-        //   * 1..=u64::MAX  — live: the loaded value is the key just
-        //     handed out; the next stored value is `value + 1`.
-        //   * 0             — PERMANENT EXHAUSTION SENTINEL: every key
-        //     in `1..=u64::MAX` has been issued. The closure refuses to
-        //     advance (returns `None`), so `fetch_update` yields
-        //     `Err(0)` on this and ALL subsequent calls — there is no
-        //     silent recovery, even across `catch_unwind` + retry.
-        //
-        // The plain `fetch_add` + unchecked-construction shape this
-        // replaces wrapped `u64::MAX -> 0` and then fabricated a duplicate
-        // (re-issuing 1, 2, ... after the panic was caught), breaking
-        // identity. `fetch_update` writes the sentinel atomically with
-        // the read, so the exhausted state is observable and sticky.
-        let id = KEY_COUNTER
+        Self::new_with_counter(&KEY_COUNTER)
+    }
+
+    /// Shared implementation of [`Key::new`], parameterized over the
+    /// backing counter. Production routes through the shared `KEY_COUNTER`
+    /// static; exhaustion tests pass a *local* `AtomicU64` pre-set to the
+    /// sentinel so they exercise the overflow path without mutating the
+    /// shared counter (which would race sibling tests calling `Key::new`).
+    ///
+    /// F2 — `fetch_update` sentinel state machine.
+    ///
+    /// Invariants for `counter`:
+    ///
+    /// * `1..=u64::MAX` — live: the loaded value is the key just handed
+    ///   out; the next stored value is `value + 1`.
+    /// * `0` — PERMANENT EXHAUSTION SENTINEL: every key in `1..=u64::MAX`
+    ///   has been issued. The closure refuses to advance (returns `None`),
+    ///   so `fetch_update` yields `Err(0)` on this and ALL subsequent
+    ///   calls — there is no silent recovery, even across `catch_unwind`
+    ///   + retry.
+    ///
+    /// The plain `fetch_add` + unchecked-construction shape this replaces
+    /// wrapped `u64::MAX -> 0` and then fabricated a duplicate (re-issuing
+    /// 1, 2, ... after the panic was caught), breaking identity.
+    /// `fetch_update` writes the sentinel atomically with the read, so the
+    /// exhausted state is observable and sticky.
+    #[inline]
+    fn new_with_counter(counter: &AtomicU64) -> Self {
+        let id = counter
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 // current == 0 -> exhausted: refuse, keep sentinel.
                 // current == u64::MAX -> hand it out, then wrap to the
@@ -193,25 +206,6 @@ impl Key {
         // that invariant — it can only fire if the sentinel logic above
         // ever let a 0 through, which it cannot.
         Self(NonZeroU64::new(id).expect("Key::new invariant: counter returned 0"))
-    }
-
-    /// Force the runtime counter into the permanent-exhaustion sentinel
-    /// state (0) for testing the overflow path without issuing 2^64-1
-    /// keys. Returns the prior value so the caller can restore the live
-    /// counter and avoid poisoning the shared static for sibling tests.
-    ///
-    /// Prefer [`ExhaustionGuard::new`] — it restores the counter on
-    /// `Drop`, so an unwind mid-test won't poison sibling tests.
-    #[cfg(test)]
-    fn _test_force_exhausted_state() -> u64 {
-        KEY_COUNTER.swap(0, Ordering::Relaxed)
-    }
-
-    /// Restore the runtime counter to a live value after an exhaustion
-    /// test, undoing [`Key::_test_force_exhausted_state`].
-    #[cfg(test)]
-    fn _test_restore_state(value: u64) {
-        KEY_COUNTER.store(value, Ordering::Relaxed);
     }
 
     /// Create key from existing u64 ID
@@ -551,21 +545,36 @@ impl UniqueKey {
     /// (practically impossible). The counter then latches a permanent-
     /// exhaustion sentinel so every subsequent call also panics, rather
     /// than wrapping around to 0 and re-issuing a duplicate key.
+    // `Key::new` gets `#[must_use]` from the `Key` type's attribute;
+    // `UniqueKey` has no type-level attribute, so mark the constructor
+    // directly — a discarded freshly-minted key only burns counter space.
     #[allow(clippy::new_without_default)]
+    #[must_use = "keys should be used for widget identification"]
     pub fn new() -> Self {
-        // F3 — same `fetch_update` sentinel state machine as `Key::new`.
-        //
-        // Invariants for `UNIQUE_KEY_COUNTER`:
-        //   * 1..=u64::MAX — live; the loaded value is the id just issued.
-        //   * 0            — PERMANENT EXHAUSTION SENTINEL; the closure
-        //                    refuses to advance, so every call thereafter
-        //                    panics. No wrap-around to a duplicate / zero id.
-        //
-        // `UniqueKey` holds a plain `u64` (no `NonZero` niche), so 0 is
-        // representable — which is exactly why the guard matters: without
-        // it the old `fetch_add` shape would hand out `id == 0` on wrap
-        // and then re-issue 1, 2, ... breaking the uniqueness contract.
-        let id = UNIQUE_KEY_COUNTER
+        Self::new_with_counter(&UNIQUE_KEY_COUNTER)
+    }
+
+    /// Shared implementation of [`UniqueKey::new`], parameterized over the
+    /// backing counter. Production routes through `UNIQUE_KEY_COUNTER`;
+    /// exhaustion tests pass a *local* `AtomicU64` pre-set to the sentinel
+    /// so they exercise the overflow path without mutating the shared
+    /// counter (which would race sibling tests calling `UniqueKey::new`).
+    ///
+    /// F3 — same `fetch_update` sentinel state machine as `Key::new`.
+    ///
+    /// Invariants for `counter`:
+    ///
+    /// * `1..=u64::MAX` — live; the loaded value is the id just issued.
+    /// * `0` — PERMANENT EXHAUSTION SENTINEL; the closure refuses to
+    ///   advance, so every call thereafter panics. No wrap-around to a
+    ///   duplicate / zero id.
+    ///
+    /// `UniqueKey` holds a plain `u64` (no `NonZero` niche), so 0 is
+    /// representable — which is exactly why the guard matters: without it
+    /// the old `fetch_add` shape would hand out `id == 0` on wrap and then
+    /// re-issue 1, 2, ... breaking the uniqueness contract.
+    fn new_with_counter(counter: &AtomicU64) -> Self {
+        let id = counter
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 if current == 0 {
                     None
@@ -584,24 +593,6 @@ impl UniqueKey {
     #[must_use]
     pub const fn id(&self) -> u64 {
         self.id
-    }
-
-    /// Force the runtime counter into the permanent-exhaustion sentinel
-    /// state (0) for testing the overflow path. Returns the prior value
-    /// so the caller can restore the shared static.
-    ///
-    /// Prefer [`UniqueExhaustionGuard::new`] — it restores on `Drop`,
-    /// so a mid-test unwind won't poison sibling tests.
-    #[cfg(test)]
-    fn _test_force_exhausted_state() -> u64 {
-        UNIQUE_KEY_COUNTER.swap(0, Ordering::Relaxed)
-    }
-
-    /// Restore the runtime counter to a live value after an exhaustion
-    /// test, undoing [`UniqueKey::_test_force_exhausted_state`].
-    #[cfg(test)]
-    fn _test_restore_state(value: u64) {
-        UNIQUE_KEY_COUNTER.store(value, Ordering::Relaxed);
     }
 }
 
@@ -853,55 +844,6 @@ const fn const_fnv1a_hash(bytes: &[u8]) -> u64 {
     hash
 }
 
-// RAII guards for exhaustion tests. Placed at module level because
-// Rust does not allow `struct`/`impl` inside an `impl` block.
-// Drop-based restore ensures the global counter is restored even if
-// a test assertion unwinds, preventing sibling-test poisoning.
-
-/// RAII guard that forces `KEY_COUNTER` into the 0 sentinel and
-/// restores the prior live value on `Drop`.
-#[cfg(test)]
-struct ExhaustionGuard {
-    saved: u64,
-}
-
-#[cfg(test)]
-impl ExhaustionGuard {
-    fn new() -> Self {
-        let saved = KEY_COUNTER.swap(0, std::sync::atomic::Ordering::Relaxed);
-        Self { saved }
-    }
-}
-
-#[cfg(test)]
-impl Drop for ExhaustionGuard {
-    fn drop(&mut self) {
-        KEY_COUNTER.store(self.saved, std::sync::atomic::Ordering::Relaxed);
-    }
-}
-
-/// RAII guard for `UNIQUE_KEY_COUNTER` — same pattern as
-/// [`ExhaustionGuard`].
-#[cfg(test)]
-struct UniqueExhaustionGuard {
-    saved: u64,
-}
-
-#[cfg(test)]
-impl UniqueExhaustionGuard {
-    fn new() -> Self {
-        let saved = UNIQUE_KEY_COUNTER.swap(0, std::sync::atomic::Ordering::Relaxed);
-        Self { saved }
-    }
-}
-
-#[cfg(test)]
-impl Drop for UniqueExhaustionGuard {
-    fn drop(&mut self) {
-        UNIQUE_KEY_COUNTER.store(self.saved, std::sync::atomic::Ordering::Relaxed);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::{collections::HashSet, mem::size_of};
@@ -942,14 +884,16 @@ mod tests {
     /// silently re-issued keys after a caught panic.
     #[test]
     fn key_counter_exhaustion() {
-        use std::panic::catch_unwind;
-        // ExhaustionGuard restores the counter on Drop, so even if an
-        // assertion unwinds mid-test, sibling tests stay healthy.
-        let _guard = ExhaustionGuard::new();
-        // First call after exhaustion MUST panic.
-        let r1 = catch_unwind(Key::new);
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+        // Drive a LOCAL counter pre-set to the sentinel, not the shared
+        // `KEY_COUNTER`. This keeps the global static monotonic, so this
+        // test cannot race sibling tests that call `Key::new` in parallel
+        // (the prior `swap(0)`-on-the-global approach was flaky).
+        let counter = AtomicU64::new(0);
+        // First call against the sentinel MUST panic.
+        let r1 = catch_unwind(AssertUnwindSafe(|| Key::new_with_counter(&counter)));
         // Second call must also panic — no silent recovery.
-        let r2 = catch_unwind(Key::new);
+        let r2 = catch_unwind(AssertUnwindSafe(|| Key::new_with_counter(&counter)));
 
         assert!(
             r1.is_err(),
@@ -959,10 +903,13 @@ mod tests {
             r2.is_err(),
             "Key::new must keep panicking after exhaustion (permanent sentinel)"
         );
-        // Neither result must be Ok(Key(0)) — confirm no zero-value key
-        // was produced.
-        assert!(r1.is_err());
-        assert!(r2.is_err());
+        // The counter must remain latched at the sentinel — no wrap-around
+        // re-issued a live id behind the panics.
+        assert_eq!(
+            counter.load(Ordering::Relaxed),
+            0,
+            "exhausted counter must stay latched at the 0 sentinel"
+        );
     }
 
     /// F2 triangulation — a batch of freshly minted keys are all
@@ -980,11 +927,13 @@ mod tests {
     /// or duplicate id. The old `fetch_add` shape had no guard at all.
     #[test]
     fn uniquekey_exhaustion_panics() {
-        use std::panic::catch_unwind;
-        // UniqueExhaustionGuard restores on Drop — safe even if assert-unwinds.
-        let _guard = UniqueExhaustionGuard::new();
-        let r1 = catch_unwind(UniqueKey::new);
-        let r2 = catch_unwind(UniqueKey::new);
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+        // Drive a LOCAL counter at the sentinel rather than mutating the
+        // shared `UNIQUE_KEY_COUNTER`, so this test never races a parallel
+        // sibling calling `UniqueKey::new`.
+        let counter = AtomicU64::new(0);
+        let r1 = catch_unwind(AssertUnwindSafe(|| UniqueKey::new_with_counter(&counter)));
+        let r2 = catch_unwind(AssertUnwindSafe(|| UniqueKey::new_with_counter(&counter)));
 
         assert!(
             r1.is_err(),
@@ -993,6 +942,11 @@ mod tests {
         assert!(
             r2.is_err(),
             "UniqueKey::new must keep panicking after exhaustion"
+        );
+        assert_eq!(
+            counter.load(Ordering::Relaxed),
+            0,
+            "exhausted counter must stay latched at the 0 sentinel"
         );
     }
 
