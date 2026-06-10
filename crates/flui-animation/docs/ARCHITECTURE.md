@@ -179,7 +179,7 @@ struct AnimationControllerInner {
     repeat_count: Option<u32>,
     
     // Ticker
-    ticker: Option<ScheduledTicker>,
+    ticker: Option<Ticker>,
     
     // Listeners
     status_listeners: Vec<(ListenerId, StatusCallback)>,
@@ -217,7 +217,7 @@ struct AnimationControllerInner {
 
 ### Tick Cycle
 
-Each frame (via ScheduledTicker):
+Each frame (via the scheduler-driven `Ticker`):
 
 1. Lock `inner`
 2. Calculate elapsed time

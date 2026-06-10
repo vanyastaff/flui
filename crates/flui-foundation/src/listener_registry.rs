@@ -81,9 +81,23 @@ trait RemoveFrom: Send + Sync {
 
 impl<S: Send + Sync + 'static> RemoveFrom for RegistryInner<S> {
     fn remove(&self, channel: Channel, id: ListenerId) {
+        // After `dispose()` both channels have already cleared their listeners
+        // and a further `remove` would debug-panic (use-after-dispose). A live
+        // `ListenerSubscription` dropped after the registry is disposed must stay
+        // safe — otherwise disposing while a subscription is alive aborts on its
+        // drop — so skip the now-redundant channel removal once disposed, while
+        // still decrementing the shared count to keep the 1 → 0 edge exact.
         match channel {
-            Channel::Value => self.value.remove_listener(id),
-            Channel::Status => self.status.remove(id),
+            Channel::Value => {
+                if !self.value.is_disposed() {
+                    self.value.remove_listener(id);
+                }
+            }
+            Channel::Status => {
+                if !self.status.is_disposed() {
+                    self.status.remove(id);
+                }
+            }
         }
         self.after_remove();
     }
@@ -177,7 +191,10 @@ impl<S: Send + Sync + 'static> ListenerRegistry<S> {
     /// Register a value listener (zero-arg). Returns a RAII [`ListenerSubscription`]
     /// that removes the listener — and may fire `on_last_listener` — on drop.
     #[must_use = "dropping the ListenerSubscription immediately removes the listener"]
-    pub fn add_value_listener(&self, cb: Arc<dyn Fn() + Send + Sync + 'static>) -> ListenerSubscription {
+    pub fn add_value_listener(
+        &self,
+        cb: Arc<dyn Fn() + Send + Sync + 'static>,
+    ) -> ListenerSubscription {
         let id = self.inner.value.add_listener(cb);
         self.inner.after_add();
         ListenerSubscription {
@@ -342,5 +359,21 @@ mod tests {
             // reg dropped here; ListenerSubscription holds only a Weak.
         };
         drop(s); // upgrade() returns None — must not panic / use-after-free.
+    }
+
+    #[test]
+    fn dropping_subscription_after_dispose_does_not_panic() {
+        // Disposing the registry clears both channels; dropping a still-live
+        // subscription afterwards must not debug-panic on the now-disposed
+        // channel (that would abort if the drop ran during unwinding). The
+        // shared count is still decremented.
+        let reg: ListenerRegistry<u8> = ListenerRegistry::new();
+        let v = reg.add_value_listener(Arc::new(|| {}));
+        let s = reg.add_status_listener(Arc::new(|_s: u8| {}));
+        assert_eq!(reg.listener_count(), 2);
+        reg.dispose();
+        drop(v); // value channel disposed — removal must be skipped, not panic.
+        drop(s); // status channel disposed — same.
+        assert_eq!(reg.listener_count(), 0, "count still reaches zero");
     }
 }

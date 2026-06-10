@@ -25,6 +25,15 @@ fn narrow_f32(x: f64) -> f32 {
     x as f32
 }
 
+/// Floor a non-negative cycle ratio to a whole repeat-cycle count. Used by the
+/// repeat tick to retire every cycle a long frame elapsed; `as u32` saturates a
+/// pathological ratio to `u32::MAX` rather than wrapping.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[inline]
+fn whole_cycles(ratio: f64) -> u32 {
+    ratio.floor() as u32
+}
+
 /// Default spring for fling animations.
 fn default_fling_spring() -> SpringDescription {
     SpringDescription::with_damping_ratio(1.0, 500.0, 1.0)
@@ -445,6 +454,27 @@ impl AnimationController {
         } else {
             AnimationDirection::Reverse
         };
+
+        // No-op fast path: already at the target. Starting the ticker would run
+        // for the full duration, re-notifying value listeners every frame while
+        // the value never changes, so settle immediately with a single
+        // notification instead.
+        if (target - inner.value).abs() < BOUND_EPSILON {
+            inner.value = target;
+            if let Some(ticker) = &mut inner.ticker
+                && ticker.state().can_tick()
+            {
+                ticker.stop();
+            }
+            let status = inner.settled_status_directed();
+            inner.status = status;
+            let callbacks = Self::snapshot_status_listeners(&inner);
+            drop(inner);
+            self.notifier.notify_listeners();
+            Self::fire_status(&callbacks, status);
+            return Ok(());
+        }
+
         inner.status = inner.direction.running_status();
         // Per-run override only — never clobber `inner.duration`.
         inner.run_duration = duration;
@@ -488,8 +518,22 @@ impl AnimationController {
         let mut inner = self.inner.lock();
         Self::check_disposed(&inner)?;
 
-        let lo = min.unwrap_or(inner.lower_bound);
-        let hi = max.unwrap_or(inner.upper_bound);
+        // Clamp the repeat range into the controller's bounds and reject an
+        // empty/inverted range, so a repeat run can never start `value` (or its
+        // ticks) outside `[lower_bound, upper_bound]` — consistent with
+        // [`with_bounds`]'s `InvalidBounds` contract.
+        let lo = min
+            .unwrap_or(inner.lower_bound)
+            .clamp(inner.lower_bound, inner.upper_bound);
+        let hi = max
+            .unwrap_or(inner.upper_bound)
+            .clamp(inner.lower_bound, inner.upper_bound);
+        if lo >= hi {
+            return Err(AnimationError::InvalidBounds(format!(
+                "repeat min ({lo}) must be less than max ({hi}) within bounds [{}, {}]",
+                inner.lower_bound, inner.upper_bound
+            )));
+        }
         inner.is_repeating = true;
         inner.repeat_reverse = reverse;
         inner.repeat_min = lo;
@@ -756,11 +800,51 @@ impl AnimationController {
         inner.value = inner.target_value;
 
         if inner.is_repeating {
-            inner.repeat_done += 1;
+            let period = duration.as_secs_f64();
+            // Retire every whole cycle this frame spanned, not just one. A long
+            // frame (dt > period, e.g. after a dropped frame) elapses several
+            // cycles at once; advancing count/epoch by a single cycle would leave
+            // a finite repeat active an extra frame and an infinite repeat
+            // permanently out of phase. `cycle >= period` here (t reached 1.0),
+            // so `spanned >= 1`. Cost is O(1): the count is arithmetic and the
+            // cycle transition is applied by parity, never looped.
+            let spanned = if period > 0.0 {
+                whole_cycles(cycle / period).max(1)
+            } else {
+                // Zero-period repeat: a finite count exhausts at once; an
+                // infinite one would be unbounded, so retire one cycle per tick.
+                inner
+                    .repeat_count
+                    .map_or(1, |count| count.saturating_sub(inner.repeat_done))
+                    .max(1)
+            };
+            let cycles = match inner.repeat_count {
+                Some(count) => spanned.min(count - inner.repeat_done),
+                None => spanned,
+            };
+            inner.repeat_done += cycles;
+
             let exhausted = inner
                 .repeat_count
                 .is_some_and(|count| inner.repeat_done >= count);
             if exhausted {
+                // Land on the end of the final (count-th) retired cycle. In
+                // restart mode every cycle ends at `repeat_max`; in bounce mode
+                // the end alternates, so for a multi-cycle frame it depends on
+                // the parity of how many cycles were retired (the value set above
+                // is only the first cycle's target). This also drives the settled
+                // status below, so it must be correct before that read.
+                inner.value = if inner.repeat_reverse {
+                    let entry_forward = inner.direction == AnimationDirection::Forward;
+                    let last_forward = entry_forward == (cycles % 2 == 1);
+                    if last_forward {
+                        inner.repeat_max
+                    } else {
+                        inner.repeat_min
+                    }
+                } else {
+                    inner.repeat_max
+                };
                 if let Some(ticker) = &mut inner.ticker {
                     ticker.stop();
                 }
@@ -774,12 +858,19 @@ impl AnimationController {
                 return;
             }
 
-            // Advance the epoch by exactly one cycle (phase-preserving — carries
-            // any overshoot past the boundary into the next cycle rather than
-            // snapping to `dilated`).
-            inner.run_epoch_secs += duration.as_secs_f64();
+            // Advance the epoch past every retired cycle (phase-preserving — the
+            // remainder within the new cycle is interpolated on the next tick).
+            inner.run_epoch_secs += f64::from(cycles) * period;
             let _ = dilated; // boundary time available if a future modulo path needs it
-            let status_changed = inner.begin_next_repeat_cycle();
+            // `begin_next_repeat_cycle` is an idempotent reset in restart mode
+            // and a pure direction flip in bounce mode, so only the parity of the
+            // retired-cycle count matters — collapse N cycles to at most one
+            // transition rather than looping.
+            let status_changed = if inner.repeat_reverse {
+                cycles % 2 == 1 && inner.begin_next_repeat_cycle()
+            } else {
+                inner.begin_next_repeat_cycle()
+            };
             let status = inner.status;
             let callbacks = status_changed.then(|| Self::snapshot_status_listeners(&inner));
             drop(inner);
@@ -1219,6 +1310,73 @@ mod tests {
         let v = c.value();
         c.tick_at(0.030);
         assert_eq!(c.value(), v);
+        c.dispose();
+    }
+
+    #[test]
+    fn repeat_consumes_all_cycles_in_one_long_frame() {
+        let _serial = serial();
+        let c = controller(100);
+        // count = 4, period = 10ms. A single 45ms frame (a dropped-frame
+        // catch-up) spans 4 whole cycles, so the repeat must already be
+        // exhausted — not still Forward as the old one-cycle-per-tick path left
+        // it after the first boundary.
+        c.repeat_with(None, None, false, Some(Duration::from_millis(10)), Some(4))
+            .unwrap();
+        assert_eq!(c.status(), AnimationStatus::Forward);
+        c.tick_at(0.045); // 4.5 cycles elapsed in one frame
+        assert_eq!(
+            c.status(),
+            AnimationStatus::Completed,
+            "all four cycles retired in one long frame -> exhausted"
+        );
+        c.dispose();
+    }
+
+    #[test]
+    fn animate_to_current_value_settles_immediately() {
+        let _serial = serial();
+        let c = controller(100);
+        c.set_value(0.5);
+        // Animating to the value we are already at must settle at once instead
+        // of running the ticker for `duration` re-notifying an unchanged value.
+        c.animate_to(0.5, Some(Duration::from_millis(100))).unwrap();
+        assert_eq!(c.status(), AnimationStatus::Completed);
+        assert!((c.value() - 0.5).abs() < 1e-6, "value={}", c.value());
+        c.dispose();
+    }
+
+    #[test]
+    fn repeat_with_rejects_inverted_range() {
+        let _serial = serial();
+        let c = controller(100);
+        // min >= max (within bounds) is rejected like `with_bounds` does.
+        let r = c.repeat_with(Some(0.8), Some(0.2), false, None, None);
+        assert!(matches!(r, Err(AnimationError::InvalidBounds(_))));
+        c.dispose();
+    }
+
+    #[test]
+    fn repeat_with_clamps_range_into_bounds() {
+        let _serial = serial();
+        let c = controller(100);
+        // Out-of-bounds min/max are clamped into [0, 1]; the run starts at the
+        // clamped min and never leaves the controller bounds.
+        c.repeat_with(
+            Some(-5.0),
+            Some(5.0),
+            false,
+            Some(Duration::from_millis(10)),
+            None,
+        )
+        .unwrap();
+        assert_eq!(c.value(), 0.0, "clamped min = lower_bound");
+        c.tick_at(0.005); // mid-cycle
+        assert!(
+            c.value() >= 0.0 && c.value() <= 1.0,
+            "stays within bounds: {}",
+            c.value()
+        );
         c.dispose();
     }
 

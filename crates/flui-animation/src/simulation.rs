@@ -815,6 +815,10 @@ pub struct BoundedFrictionSimulation {
     friction: FrictionSimulation,
     min_x: f32,
     max_x: f32,
+    /// Travel direction at construction: a fling with positive velocity heads
+    /// toward `max_x` and finishes once the unclamped friction position reaches
+    /// that bound; a negative one heads toward `min_x`.
+    positive_direction: bool,
 }
 
 impl BoundedFrictionSimulation {
@@ -828,6 +832,7 @@ impl BoundedFrictionSimulation {
             friction: FrictionSimulation::new(drag, position, velocity),
             min_x,
             max_x,
+            positive_direction: velocity > 0.0,
         }
     }
 }
@@ -837,13 +842,31 @@ impl Simulation for BoundedFrictionSimulation {
         self.friction.x(time).clamp(self.min_x, self.max_x)
     }
     fn dx(&self, time: f32) -> f32 {
-        self.friction.dx(time)
+        // Once pinned at the bound the object is at rest, so report zero velocity
+        // — matching the clamped position — instead of the still-decaying
+        // friction velocity a controller would otherwise keep sampling.
+        if self.is_done(time) {
+            0.0
+        } else {
+            self.friction.dx(time)
+        }
     }
     fn is_done(&self, time: f32) -> bool {
-        let distance = self.friction.tolerance().distance;
-        self.friction.is_done(time)
-            || near_zero(self.friction.x(time) - self.min_x, distance)
-            || near_zero(self.friction.x(time) - self.max_x, distance)
+        // Done when the friction settles OR the fling reaches the bound it is
+        // travelling toward. The previous code tested whether the *clamped*
+        // position was within tolerance of the exact bound, which a fast fling
+        // skips entirely: its unclamped position can jump from inside the range
+        // to far past the bound between frames, leaving the simulation "active"
+        // (and the controller ticking) while x() is already pinned at the edge.
+        if self.friction.is_done(time) {
+            return true;
+        }
+        let fx = self.friction.x(time);
+        if self.positive_direction {
+            fx >= self.max_x
+        } else {
+            fx <= self.min_x
+        }
     }
     fn tolerance(&self) -> Tolerance {
         self.friction.tolerance()
@@ -906,6 +929,30 @@ mod tests {
         let sim = BoundedFrictionSimulation::new(0.135, 0.0, 5000.0, -10.0, 100.0);
         assert!(sim.x(10.0) <= 100.0, "clamped to max bound");
         assert!(sim.is_done(10.0), "done once the bound is reached");
+    }
+
+    #[test]
+    fn bounded_friction_done_after_jumping_past_bound() {
+        // A very fast fling whose unclamped friction position leaps from inside
+        // the range to hundreds of px past max_x between frames. Friction is
+        // nowhere near settled (velocity still ~thousands), and the position is
+        // nowhere near the exact bound, so the old near-bound tolerance test kept
+        // the sim active; the crossing-based test finishes it.
+        let sim = BoundedFrictionSimulation::new(0.135, 0.0, 8000.0, -10.0, 50.0);
+        assert!(
+            sim.is_done(0.2),
+            "done once the bound is crossed, not only when near it"
+        );
+        assert_eq!(sim.x(0.2), 50.0, "x pinned at max bound");
+        assert_eq!(sim.dx(0.2), 0.0, "zero velocity once pinned at the bound");
+    }
+
+    #[test]
+    fn bounded_friction_negative_fling_stops_at_min() {
+        // Symmetric: a negative fling finishes at min_x, not max_x.
+        let sim = BoundedFrictionSimulation::new(0.135, 0.0, -8000.0, -50.0, 10.0);
+        assert!(sim.is_done(0.2), "done once min bound is crossed");
+        assert_eq!(sim.x(0.2), -50.0, "x pinned at min bound");
     }
 
     #[test]
