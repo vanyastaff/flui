@@ -7,16 +7,26 @@
 #      cargo deny check licenses
 #      cargo deny check sources
 #
-# Schema: cargo-deny 0.19 (updated from 0.16 — removed deprecated advisory
-# severity fields; bans.deny entries now use `crate` key, not `name`).
+# Schema: cargo-deny 0.19 (updated from 0.16):
+#   - bans.deny entries now use `crate` key, not `name`.
+#   - [advisories] no longer accepts `vulnerability` / severity keys: in
+#     cargo-deny 0.19 all vulnerability advisories are ALWAYS hard errors
+#     (not configurable). The gate did NOT weaken — vulnerabilities are
+#     strictly enforced by the tool itself.
+#   - `unmaintained` and `unsound` take a scope value ("all" | "workspace"
+#     | "external") rather than a severity string.
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Advisories - Security vulnerability database checks
 # ═══════════════════════════════════════════════════════════════════════════════
 [advisories]
-# Warn on yanked crates
+# Warn on yanked crates (scope: all published versions)
 yanked = "warn"
-# Ignore specific advisories (add IDs here if needed)
+# Flag unmaintained crates across the full dependency graph
+unmaintained = "all"
+# Flag crates with known unsound APIs
+unsound = "all"
+# Ignore specific advisories (add RUSTSEC IDs here if needed)
 ignore = []
 
 # ═══════════════════════════════════════════════════════════════════════════════
