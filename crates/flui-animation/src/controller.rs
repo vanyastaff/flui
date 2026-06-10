@@ -140,8 +140,9 @@ struct AnimationControllerInner {
     /// repeat cycle began. `cycle_elapsed = dilated_elapsed - run_epoch_secs`.
     run_epoch_secs: f64,
 
-    /// Most recent raw (pre-dilation) elapsed seconds seen by [`tick_at`], so
-    /// `velocity()` can report the in-progress rate without a fresh tick.
+    /// Most recent raw (pre-dilation) elapsed seconds seen by
+    /// [`AnimationController::tick_at`], so `velocity()` can report the
+    /// in-progress rate without a fresh tick.
     last_raw_elapsed_secs: f64,
 
     /// Per-run duration override (used by `animate_to`/`animate_back`); does NOT
@@ -439,8 +440,9 @@ impl AnimationController {
         self.drive_to(target, duration.or(fallback))
     }
 
-    /// Shared driver for [`animate_to`]/[`animate_back`]: linearly interpolate
-    /// from the current value to `target`, picking direction from their order.
+    /// Shared driver for [`animate_to`](Self::animate_to)/[`animate_back`](Self::animate_back):
+    /// linearly interpolate from the current value to `target`, picking
+    /// direction from their order.
     fn drive_to(&self, target: f32, duration: Option<Duration>) -> Result<(), AnimationError> {
         let mut inner = self.inner.lock();
         Self::check_disposed(&inner)?;
@@ -742,7 +744,7 @@ impl AnimationController {
         }
     }
 
-    /// Simulation branch of [`tick_at`].
+    /// Simulation branch of [`tick_at`](Self::tick_at).
     fn tick_simulation(
         &self,
         mut inner: parking_lot::MutexGuard<'_, AnimationControllerInner>,
@@ -774,7 +776,7 @@ impl AnimationController {
         }
     }
 
-    /// Time-based (tween) branch of [`tick_at`].
+    /// Time-based (tween) branch of [`tick_at`](Self::tick_at).
     fn tick_time_based(
         &self,
         mut inner: parking_lot::MutexGuard<'_, AnimationControllerInner>,
