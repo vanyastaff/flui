@@ -102,15 +102,9 @@ mod constraints;
 mod flags;
 mod geometry;
 mod offset;
-mod propagation;
 
 #[cfg(test)]
 mod tests;
-
-// The `propagation` submodule is intentionally body-less after cycle 4 R-5
-// (see its module-level docstring). No re-export is needed; the file is kept
-// as a placeholder so a future viewport-invalidation hook lands in a known
-// location.
 
 use offset::AtomicOffset;
 
