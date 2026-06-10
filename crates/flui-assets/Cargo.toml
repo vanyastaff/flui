@@ -31,10 +31,6 @@ once_cell = { workspace = true }
 # Error handling
 thiserror = { workspace = true }
 
-# Serialization (for bundles feature)
-serde = { workspace = true, optional = true }
-serde_json = { workspace = true, optional = true }
-
 # Image loading
 image = { workspace = true, optional = true }
 
@@ -43,7 +39,6 @@ reqwest = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-criterion = { workspace = true }
 
 [features]
 default = []
@@ -51,9 +46,6 @@ default = []
 ## Core Features
 ##
 ## Enable specific asset types and loading capabilities:
-
-# Enable serde serialization/deserialization (bundles, manifests)
-serde = ["dep:serde", "dep:serde_json"]
 
 # Enable image loading (PNG, JPEG, GIF, WebP, etc.)
 images = ["dep:image"]
@@ -77,4 +69,4 @@ network = ["dep:reqwest"]
 ## Convenience Feature Sets
 
 # Enable all stable features (recommended for applications)
-full = ["serde", "images", "network"]
+full = ["images", "network"]

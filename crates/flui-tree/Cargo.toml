@@ -23,21 +23,14 @@ smallvec = { workspace = true }
 # Typed builders (eliminates confusable positional args, F14)
 bon = { workspace = true }
 
-# Delegation support
-ambassador = { workspace = true }
-
-# Optional: serde support
-serde = { workspace = true, optional = true }
-
 [dev-dependencies]
-# Testing utilities
-proptest = "1.4"
 
 [features]
 default = []
 
-# Serialization support for tree types
-serde = ["dep:serde", "flui-foundation/serde"]
+# Serialization support for tree types — no direct serde derives in this crate;
+# forwards to flui-foundation/serde so foundation types get Serialize/Deserialize.
+serde = ["flui-foundation/serde"]
 
 [package.metadata.docs.rs]
 all-features = true

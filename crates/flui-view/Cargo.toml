@@ -15,10 +15,8 @@ flui-macros = { workspace = true }
 flui-tree = { path = "../flui-tree" }
 flui-types = { path = "../flui-types" }
 flui-rendering = { path = "../flui-rendering" }
-flui-interaction = { path = "../flui-interaction" }
 
 # Core dependencies
-bitflags.workspace = true
 parking_lot.workspace = true
 slab = "0.4"
 thiserror.workspace = true
@@ -72,6 +70,12 @@ test-utils = ["dep:tracing-subscriber"]
 # (FR-021): the pre-FR-021 inline `downcast_ref::<V>()` body inside
 # `ElementCore::update_view` is gone — `dispatch_view_update`
 # (TypeId-keyed `Box::downcast::<V>`) is the only path now.
+
+# cargo-shear: suppress false positive for the trybuild compile-fail test input.
+# `tests/ui/column_17_compile_error.rs` is driven by `trybuild_ui.rs` via
+# trybuild; it is not directly `mod`-ed so shear cannot see the reference.
+[package.metadata.cargo-shear]
+ignored-paths = ["tests/ui/*.rs"]
 
 [[bench]]
 name = "s1_key_storage"

@@ -22,14 +22,9 @@ cursor-icon = { workspace = true }
 parking_lot = { workspace = true }
 once_cell = { workspace = true }
 dashmap = { workspace = true }
-crossbeam = { workspace = true }
 
 # Collections (optimized for small sizes)
 smallvec = { workspace = true }
-bitflags = { workspace = true }
-
-# Async utilities
-futures = { workspace = true }
 
 # Logging
 tracing = { workspace = true }
