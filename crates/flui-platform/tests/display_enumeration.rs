@@ -366,7 +366,7 @@ fn test_macos_nsscreen_enumeration() {
 
     // macOS should detect at least the primary display
     assert!(
-        displays.len() >= 1,
+        !displays.is_empty(),
         "macOS should have at least one display"
     );
 

@@ -5,23 +5,24 @@ use std::{collections::HashMap, sync::Arc};
 use anyhow::{Context, Result};
 use cocoa::{
     appkit::{NSApp, NSApplication, NSApplicationActivationPolicyRegular},
-    base::{id, nil},
+    base::{YES, id, nil},
 };
-use objc::runtime::Object;
+use objc::{class, msg_send, sel, sel_impl};
 use parking_lot::Mutex;
 
+use super::{display, window::MacOSWindow};
 use crate::{
     config::WindowConfiguration,
     executor::{BackgroundExecutor, ForegroundExecutor},
     shared::PlatformHandlers,
-    traits::*,
+    traits::{
+        Clipboard, DesktopCapabilities, Platform, PlatformCapabilities, PlatformDisplay,
+        PlatformExecutor, PlatformWindow, WindowEvent, WindowId, WindowOptions,
+    },
 };
 
-mod display;
-mod window;
-
-pub use display::MacOSDisplay;
-pub use window::MacOSWindow;
+/// Capabilities descriptor shared by all macOS platform instances.
+static MACOS_CAPABILITIES: DesktopCapabilities = DesktopCapabilities;
 
 /// macOS platform state
 pub struct MacOSPlatform {
@@ -44,7 +45,13 @@ pub struct MacOSPlatform {
     config: WindowConfiguration,
 }
 
+// SAFETY: the NSApplication pointer is a process-wide singleton only messaged
+// from the main thread (AppKit convention); all other fields are
+// `Arc`/`Mutex`-protected. `Platform: Send + Sync` requires the wrapper to be
+// shareable.
 unsafe impl Send for MacOSPlatform {}
+// SAFETY: see `Send` above — interior mutability is Mutex-guarded and the raw
+// pointer is main-thread-affine by AppKit convention.
 unsafe impl Sync for MacOSPlatform {}
 
 impl MacOSPlatform {
@@ -55,6 +62,9 @@ impl MacOSPlatform {
 
     /// Create a new macOS platform with custom configuration
     pub fn with_config(config: WindowConfiguration) -> Result<Self> {
+        // SAFETY: must run on the main thread (the platform owns the event
+        // loop); `NSApp()` returns the shared application singleton which is
+        // nil-checked before use.
         unsafe {
             // Initialize NSApplication
             let app = NSApp();
@@ -98,25 +108,25 @@ impl Platform for MacOSPlatform {
     }
 
     fn run(self: Box<Self>, on_finish_launching: Box<dyn FnOnce()>) {
+        // SAFETY: runs on the main thread; `self.app` is the live
+        // NSApplication singleton.
         unsafe {
             // Call the launch callback
             on_finish_launching();
 
             // Activate the app (bring to foreground)
-            self.app.activateIgnoringOtherApps_(true);
+            self.app.activateIgnoringOtherApps_(YES);
 
-            // Set up event handling (custom sendEvent to intercept input)
-            // Note: For now, we rely on NSWindowDelegate for window events
-            // Input events can be handled via NSResponder chain or custom NSApplication
-            // subclass
-
-            // Run the NSApplication event loop
+            // Run the NSApplication event loop. Window lifecycle events are
+            // delivered via NSWindowDelegate; input events via the content
+            // view's NSResponder chain.
             tracing::info!("Starting NSApplication event loop");
             self.app.run();
         }
     }
 
     fn quit(&self) {
+        // SAFETY: `self.app` is the live NSApplication singleton.
         unsafe {
             tracing::info!("Requesting application quit");
             let _: () = msg_send![self.app, terminate: nil];
@@ -124,17 +134,14 @@ impl Platform for MacOSPlatform {
     }
 
     fn open_window(&self, options: WindowOptions) -> Result<Box<dyn PlatformWindow>> {
-        let window = MacOSWindow::new(
-            options,
-            Arc::clone(&self.windows),
-            Arc::clone(&self.handlers),
-            self.config.clone(),
-        )?;
+        let window = MacOSWindow::new(options, Arc::clone(&self.windows), self.config.clone())?;
 
         Ok(Box::new(window))
     }
 
     fn active_window(&self) -> Option<WindowId> {
+        // SAFETY: `self.app` is the live NSApplication singleton; `keyWindow`
+        // returns nil or a live NSWindow whose pointer value is used as an id.
         unsafe {
             let key_window: id = msg_send![self.app, keyWindow];
             if key_window != nil {
@@ -157,12 +164,11 @@ impl Platform for MacOSPlatform {
     }
 
     fn clipboard(&self) -> Arc<dyn Clipboard> {
-        Arc::new(crate::platforms::macos::MacOSClipboard::new())
+        Arc::new(super::MacOSClipboard::new())
     }
 
     fn capabilities(&self) -> &dyn PlatformCapabilities {
-        // TODO: Return macOS capabilities
-        unimplemented!("macOS capabilities not yet implemented") // PORT-CHECK-OK-STUB: macOS platform-init deferred to Core.0 → Core.1 native-platform track (ROADMAP.md)
+        &MACOS_CAPABILITIES
     }
 
     fn name(&self) -> &'static str {
@@ -180,9 +186,10 @@ impl Platform for MacOSPlatform {
     }
 
     fn app_path(&self) -> Result<std::path::PathBuf> {
+        // SAFETY: `mainBundle` returns the shared NSBundle singleton; both it
+        // and `bundlePath` are nil-checked, and the UTF8String buffer is
+        // copied into an owned PathBuf before the autorelease pool drains.
         unsafe {
-            use cocoa::foundation::NSBundle;
-
             let bundle: id = msg_send![class!(NSBundle), mainBundle];
             if bundle == nil {
                 return Err(anyhow::anyhow!("Failed to get main bundle"));
@@ -193,8 +200,10 @@ impl Platform for MacOSPlatform {
                 return Err(anyhow::anyhow!("Failed to get bundle path"));
             }
 
-            use cocoa::foundation::NSString;
-            let c_str = NSString::UTF8String(path);
+            let c_str: *const i8 = msg_send![path, UTF8String];
+            if c_str.is_null() {
+                return Err(anyhow::anyhow!("Bundle path has no UTF-8 representation"));
+            }
             let rust_str = std::ffi::CStr::from_ptr(c_str)
                 .to_str()
                 .context("Invalid UTF-8 in bundle path")?;

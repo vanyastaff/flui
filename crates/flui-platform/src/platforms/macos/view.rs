@@ -18,26 +18,25 @@
 //!     ↓
 //! convert_ns_event()
 //!     ↓
-//! dispatch_input_event()
-//!     ↓
-//! PlatformHandlers.on_input
+//! WindowCallbacks::dispatch_input
 //! ```
 
-use std::sync::{Arc, Weak};
+use std::sync::Weak;
 
 use cocoa::{
-    appkit::{NSEvent, NSView},
-    base::{BOOL, NO, YES, id, nil},
+    base::{BOOL, YES, id, nil},
     foundation::NSRect,
 };
 use objc::{
+    class,
     declare::ClassDecl,
+    msg_send,
     runtime::{Class, Object, Sel},
+    sel, sel_impl,
 };
-use parking_lot::Mutex;
 
 use super::events::convert_ns_event;
-use crate::{shared::PlatformHandlers, traits::input::PlatformInput};
+use crate::shared::WindowCallbacks;
 
 // ============================================================================
 // FLUIContentView Creation
@@ -50,17 +49,20 @@ use crate::{shared::PlatformHandlers, traits::input::PlatformInput};
 pub fn create_content_view(
     frame: NSRect,
     scale_factor: f64,
-    handlers: Weak<Mutex<PlatformHandlers>>,
+    callbacks: Weak<WindowCallbacks>,
 ) -> id {
+    // SAFETY: FLUIContentView is registered before alloc/init; the boxed
+    // ViewContext pointer is stored in the view's ivar and released in
+    // `dealloc`, so it lives exactly as long as the view.
     unsafe {
         let class = get_or_create_view_class();
         let view: id = msg_send![class, alloc];
         let view: id = msg_send![view, initWithFrame: frame];
 
-        // Store context (scale factor + handlers)
+        // Store context (scale factor + callbacks)
         let context = Box::into_raw(Box::new(ViewContext {
             scale_factor,
-            handlers,
+            callbacks,
         })) as *mut std::ffi::c_void;
         (*view).set_ivar("context_ptr", context);
 
@@ -71,12 +73,76 @@ pub fn create_content_view(
 /// Context stored in NSView ivar
 struct ViewContext {
     scale_factor: f64,
-    handlers: Weak<Mutex<PlatformHandlers>>,
+    callbacks: Weak<WindowCallbacks>,
 }
 
 // ============================================================================
 // NSView Class Definition
 // ============================================================================
+
+/// Handle an input NSEvent arriving at a FLUIContentView method.
+///
+/// Converts the event and dispatches it through the per-window callbacks.
+extern "C" fn handle_input_event(this: &Object, _sel: Sel, event: id) {
+    // SAFETY: `this` is a live FLUIContentView (AppKit only invokes methods on
+    // live objects); `event` is a valid NSEvent* for the duration of the call;
+    // `bounds` is a plain NSRect getter.
+    unsafe {
+        if let Some(ctx) = get_context(this) {
+            let bounds: NSRect = msg_send![this, bounds];
+            if let Some(input) = convert_ns_event(event, ctx.scale_factor, bounds.size.height) {
+                dispatch_input_event(ctx, input);
+            }
+        }
+    }
+}
+
+/// Dispatch a hover status change through the per-window callbacks.
+fn dispatch_hover_change(this: &Object, is_hovered: bool) {
+    // SAFETY: `this` is a live FLUIContentView (AppKit only invokes methods on
+    // live objects); `get_context`'s ivar contract holds for views created by
+    // `create_content_view`.
+    unsafe {
+        if let Some(ctx) = get_context(this)
+            && let Some(callbacks) = ctx.callbacks.upgrade()
+        {
+            callbacks.dispatch_hover_status_change(is_hovered);
+        }
+    }
+}
+
+/// mouseEntered: — report hover gained, then forward the pointer event.
+extern "C" fn mouse_entered(this: &Object, sel: Sel, event: id) {
+    dispatch_hover_change(this, true);
+    handle_input_event(this, sel, event);
+}
+
+/// mouseExited: — report hover lost, then forward the pointer event.
+extern "C" fn mouse_exited(this: &Object, sel: Sel, event: id) {
+    dispatch_hover_change(this, false);
+    handle_input_event(this, sel, event);
+}
+
+/// drawRect: — the platform asks for content; forward as a frame request.
+///
+/// `request_redraw()` marks the view dirty via `setNeedsDisplay:`; AppKit then
+/// calls this method on the next display pass, which is where the
+/// per-window `on_request_frame` contract fires (the macOS analogue of the
+/// Windows backend's WM_PAINT dispatch).
+extern "C" fn draw_rect(this: &Object, _sel: Sel, dirty_rect: NSRect) {
+    // SAFETY: `this` is a live FLUIContentView; the super `drawRect:` message
+    // is the documented NSView teardown of the dirty region.
+    unsafe {
+        if let Some(ctx) = get_context(this)
+            && let Some(callbacks) = ctx.callbacks.upgrade()
+        {
+            callbacks.dispatch_request_frame();
+        }
+
+        let superclass = class!(NSView);
+        let _: () = msg_send![super(this, superclass), drawRect: dirty_rect];
+    }
+}
 
 /// Get or create the FLUIContentView class
 fn get_or_create_view_class() -> &'static Class {
@@ -85,7 +151,8 @@ fn get_or_create_view_class() -> &'static Class {
 
     INIT.call_once(|| {
         let superclass = class!(NSView);
-        let mut decl = ClassDecl::new("FLUIContentView", superclass).unwrap();
+        let mut decl = ClassDecl::new("FLUIContentView", superclass)
+            .expect("FLUIContentView must be registered exactly once (guarded by Once)");
 
         // Add ivar to store context
         decl.add_ivar::<*mut std::ffi::c_void>("context_ptr");
@@ -95,191 +162,58 @@ fn get_or_create_view_class() -> &'static Class {
         // =================================================================
 
         // acceptsFirstResponder - Allow view to become first responder
-        unsafe extern "C" fn accepts_first_responder(_this: &Object, _sel: Sel) -> BOOL {
+        extern "C" fn accepts_first_responder(_this: &Object, _sel: Sel) -> BOOL {
             YES
         }
 
         // becomeFirstResponder
-        unsafe extern "C" fn become_first_responder(this: &Object, _sel: Sel) -> BOOL {
+        extern "C" fn become_first_responder(_this: &Object, _sel: Sel) -> BOOL {
             tracing::debug!("FLUIContentView became first responder");
             YES
         }
 
         // resignFirstResponder
-        unsafe extern "C" fn resign_first_responder(this: &Object, _sel: Sel) -> BOOL {
+        extern "C" fn resign_first_responder(_this: &Object, _sel: Sel) -> BOOL {
             tracing::debug!("FLUIContentView resigned first responder");
             YES
         }
 
-        // =================================================================
-        // Keyboard Events
-        // =================================================================
-
-        unsafe extern "C" fn key_down(this: &Object, _sel: Sel, event: id) {
-            if let Some(ctx) = get_context(this) {
-                if let Some(input) = convert_ns_event(event, ctx.scale_factor) {
-                    dispatch_input_event(&ctx, input);
-                }
-            }
-        }
-
-        unsafe extern "C" fn key_up(this: &Object, _sel: Sel, event: id) {
-            if let Some(ctx) = get_context(this) {
-                if let Some(input) = convert_ns_event(event, ctx.scale_factor) {
-                    dispatch_input_event(&ctx, input);
-                }
-            }
-        }
-
-        unsafe extern "C" fn flags_changed(this: &Object, _sel: Sel, event: id) {
-            // Modifier keys (Shift, Control, Alt, Command) changed
-            // For now, we handle modifiers in key events themselves
+        // flagsChanged: — modifier keys (Shift, Control, Alt, Command).
+        // Modifier state is carried on every converted event, so flag-only
+        // transitions are observed but not dispatched separately.
+        extern "C" fn flags_changed(_this: &Object, _sel: Sel, _event: id) {
             tracing::trace!("Modifier flags changed");
-        }
-
-        // =================================================================
-        // Mouse Events
-        // =================================================================
-
-        // Left mouse button
-        unsafe extern "C" fn mouse_down(this: &Object, _sel: Sel, event: id) {
-            if let Some(ctx) = get_context(this) {
-                if let Some(input) = convert_ns_event(event, ctx.scale_factor) {
-                    dispatch_input_event(&ctx, input);
-                }
-            }
-        }
-
-        unsafe extern "C" fn mouse_up(this: &Object, _sel: Sel, event: id) {
-            if let Some(ctx) = get_context(this) {
-                if let Some(input) = convert_ns_event(event, ctx.scale_factor) {
-                    dispatch_input_event(&ctx, input);
-                }
-            }
-        }
-
-        unsafe extern "C" fn mouse_moved(this: &Object, _sel: Sel, event: id) {
-            if let Some(ctx) = get_context(this) {
-                if let Some(input) = convert_ns_event(event, ctx.scale_factor) {
-                    dispatch_input_event(&ctx, input);
-                }
-            }
-        }
-
-        unsafe extern "C" fn mouse_dragged(this: &Object, _sel: Sel, event: id) {
-            if let Some(ctx) = get_context(this) {
-                if let Some(input) = convert_ns_event(event, ctx.scale_factor) {
-                    dispatch_input_event(&ctx, input);
-                }
-            }
-        }
-
-        // Right mouse button
-        unsafe extern "C" fn right_mouse_down(this: &Object, _sel: Sel, event: id) {
-            if let Some(ctx) = get_context(this) {
-                if let Some(input) = convert_ns_event(event, ctx.scale_factor) {
-                    dispatch_input_event(&ctx, input);
-                }
-            }
-        }
-
-        unsafe extern "C" fn right_mouse_up(this: &Object, _sel: Sel, event: id) {
-            if let Some(ctx) = get_context(this) {
-                if let Some(input) = convert_ns_event(event, ctx.scale_factor) {
-                    dispatch_input_event(&ctx, input);
-                }
-            }
-        }
-
-        unsafe extern "C" fn right_mouse_dragged(this: &Object, _sel: Sel, event: id) {
-            if let Some(ctx) = get_context(this) {
-                if let Some(input) = convert_ns_event(event, ctx.scale_factor) {
-                    dispatch_input_event(&ctx, input);
-                }
-            }
-        }
-
-        // Other mouse button (middle, etc.)
-        unsafe extern "C" fn other_mouse_down(this: &Object, _sel: Sel, event: id) {
-            if let Some(ctx) = get_context(this) {
-                if let Some(input) = convert_ns_event(event, ctx.scale_factor) {
-                    dispatch_input_event(&ctx, input);
-                }
-            }
-        }
-
-        unsafe extern "C" fn other_mouse_up(this: &Object, _sel: Sel, event: id) {
-            if let Some(ctx) = get_context(this) {
-                if let Some(input) = convert_ns_event(event, ctx.scale_factor) {
-                    dispatch_input_event(&ctx, input);
-                }
-            }
-        }
-
-        unsafe extern "C" fn other_mouse_dragged(this: &Object, _sel: Sel, event: id) {
-            if let Some(ctx) = get_context(this) {
-                if let Some(input) = convert_ns_event(event, ctx.scale_factor) {
-                    dispatch_input_event(&ctx, input);
-                }
-            }
-        }
-
-        // Mouse enter/exit
-        unsafe extern "C" fn mouse_entered(this: &Object, _sel: Sel, event: id) {
-            if let Some(ctx) = get_context(this) {
-                if let Some(input) = convert_ns_event(event, ctx.scale_factor) {
-                    dispatch_input_event(&ctx, input);
-                }
-            }
-        }
-
-        unsafe extern "C" fn mouse_exited(this: &Object, _sel: Sel, event: id) {
-            if let Some(ctx) = get_context(this) {
-                if let Some(input) = convert_ns_event(event, ctx.scale_factor) {
-                    dispatch_input_event(&ctx, input);
-                }
-            }
-        }
-
-        // =================================================================
-        // Scroll Events
-        // =================================================================
-
-        unsafe extern "C" fn scroll_wheel(this: &Object, _sel: Sel, event: id) {
-            if let Some(ctx) = get_context(this) {
-                if let Some(input) = convert_ns_event(event, ctx.scale_factor) {
-                    dispatch_input_event(&ctx, input);
-                }
-            }
         }
 
         // =================================================================
         // View Lifecycle
         // =================================================================
 
-        unsafe extern "C" fn dealloc(this: &Object, _sel: Sel) {
-            // Clean up context
-            let context_ptr: *mut std::ffi::c_void = *this.get_ivar("context_ptr");
-            if !context_ptr.is_null() {
-                let _context = Box::from_raw(context_ptr as *mut ViewContext);
-                // Drop context
-            }
+        extern "C" fn dealloc(this: &Object, _sel: Sel) {
+            // SAFETY: the ivar holds either null or a Box<ViewContext> leaked
+            // in `create_content_view`; reclaiming it here (exactly once, on
+            // dealloc) is the matching release. The super dealloc message is
+            // the mandatory NSObject teardown.
+            unsafe {
+                let context_ptr: *mut std::ffi::c_void = *this.get_ivar("context_ptr");
+                if !context_ptr.is_null() {
+                    drop(Box::from_raw(context_ptr as *mut ViewContext));
+                }
 
-            // Call super dealloc
-            let superclass = class!(NSView);
-            let dealloc: extern "C" fn(&Object, Sel) =
-                std::mem::transmute(msg_send![super(this, superclass), dealloc]);
+                let superclass = class!(NSView);
+                let _: () = msg_send![super(this, superclass), dealloc];
+            }
         }
 
         // =================================================================
         // View Drawing (Optional)
         // =================================================================
 
-        unsafe extern "C" fn is_opaque(_this: &Object, _sel: Sel) -> BOOL {
+        extern "C" fn is_opaque(_this: &Object, _sel: Sel) -> BOOL {
             YES // Our view is fully opaque
         }
 
-        unsafe extern "C" fn accepts_touch_events(_this: &Object, _sel: Sel) -> BOOL {
+        extern "C" fn accepts_touch_events(_this: &Object, _sel: Sel) -> BOOL {
             YES // Accept touch events for future trackpad gestures
         }
 
@@ -287,6 +221,9 @@ fn get_or_create_view_class() -> &'static Class {
         // Add Methods to Class
         // =================================================================
 
+        // SAFETY: every registered function pointer matches the Objective-C
+        // method signature of its selector (`&Object, Sel` plus the declared
+        // argument/return types), as required by `ClassDecl::add_method`.
         unsafe {
             // First responder
             decl.add_method(
@@ -303,8 +240,14 @@ fn get_or_create_view_class() -> &'static Class {
             );
 
             // Keyboard events
-            decl.add_method(sel!(keyDown:), key_down as extern "C" fn(&Object, Sel, id));
-            decl.add_method(sel!(keyUp:), key_up as extern "C" fn(&Object, Sel, id));
+            decl.add_method(
+                sel!(keyDown:),
+                handle_input_event as extern "C" fn(&Object, Sel, id),
+            );
+            decl.add_method(
+                sel!(keyUp:),
+                handle_input_event as extern "C" fn(&Object, Sel, id),
+            );
             decl.add_method(
                 sel!(flagsChanged:),
                 flags_changed as extern "C" fn(&Object, Sel, id),
@@ -313,47 +256,50 @@ fn get_or_create_view_class() -> &'static Class {
             // Left mouse
             decl.add_method(
                 sel!(mouseDown:),
-                mouse_down as extern "C" fn(&Object, Sel, id),
+                handle_input_event as extern "C" fn(&Object, Sel, id),
             );
-            decl.add_method(sel!(mouseUp:), mouse_up as extern "C" fn(&Object, Sel, id));
+            decl.add_method(
+                sel!(mouseUp:),
+                handle_input_event as extern "C" fn(&Object, Sel, id),
+            );
             decl.add_method(
                 sel!(mouseMoved:),
-                mouse_moved as extern "C" fn(&Object, Sel, id),
+                handle_input_event as extern "C" fn(&Object, Sel, id),
             );
             decl.add_method(
                 sel!(mouseDragged:),
-                mouse_dragged as extern "C" fn(&Object, Sel, id),
+                handle_input_event as extern "C" fn(&Object, Sel, id),
             );
 
             // Right mouse
             decl.add_method(
                 sel!(rightMouseDown:),
-                right_mouse_down as extern "C" fn(&Object, Sel, id),
+                handle_input_event as extern "C" fn(&Object, Sel, id),
             );
             decl.add_method(
                 sel!(rightMouseUp:),
-                right_mouse_up as extern "C" fn(&Object, Sel, id),
+                handle_input_event as extern "C" fn(&Object, Sel, id),
             );
             decl.add_method(
                 sel!(rightMouseDragged:),
-                right_mouse_dragged as extern "C" fn(&Object, Sel, id),
+                handle_input_event as extern "C" fn(&Object, Sel, id),
             );
 
             // Other mouse
             decl.add_method(
                 sel!(otherMouseDown:),
-                other_mouse_down as extern "C" fn(&Object, Sel, id),
+                handle_input_event as extern "C" fn(&Object, Sel, id),
             );
             decl.add_method(
                 sel!(otherMouseUp:),
-                other_mouse_up as extern "C" fn(&Object, Sel, id),
+                handle_input_event as extern "C" fn(&Object, Sel, id),
             );
             decl.add_method(
                 sel!(otherMouseDragged:),
-                other_mouse_dragged as extern "C" fn(&Object, Sel, id),
+                handle_input_event as extern "C" fn(&Object, Sel, id),
             );
 
-            // Mouse enter/exit
+            // Mouse enter/exit (hover status + pointer event)
             decl.add_method(
                 sel!(mouseEntered:),
                 mouse_entered as extern "C" fn(&Object, Sel, id),
@@ -366,7 +312,13 @@ fn get_or_create_view_class() -> &'static Class {
             // Scroll
             decl.add_method(
                 sel!(scrollWheel:),
-                scroll_wheel as extern "C" fn(&Object, Sel, id),
+                handle_input_event as extern "C" fn(&Object, Sel, id),
+            );
+
+            // Drawing — drawRect: drives the on_request_frame contract
+            decl.add_method(
+                sel!(drawRect:),
+                draw_rect as extern "C" fn(&Object, Sel, NSRect),
             );
 
             // Lifecycle
@@ -386,7 +338,7 @@ fn get_or_create_view_class() -> &'static Class {
         decl.register();
     });
 
-    Class::get("FLUIContentView").unwrap()
+    Class::get("FLUIContentView").expect("FLUIContentView was registered by the Once block above")
 }
 
 // ============================================================================
@@ -394,23 +346,30 @@ fn get_or_create_view_class() -> &'static Class {
 // ============================================================================
 
 /// Get view context from ivar
+///
+/// # Safety
+///
+/// `view` must be a live FLUIContentView whose `context_ptr` ivar is either
+/// null or points to a `ViewContext` owned by that view.
 unsafe fn get_context(view: &Object) -> Option<&ViewContext> {
-    let context_ptr: *mut std::ffi::c_void = *view.get_ivar("context_ptr");
-    if context_ptr.is_null() {
-        return None;
+    // SAFETY: per the function contract the ivar is null or a valid
+    // Box<ViewContext> pointer owned by the view; the returned shared
+    // reference cannot outlive the view method invocation that holds `view`.
+    unsafe {
+        let context_ptr: *mut std::ffi::c_void = *view.get_ivar("context_ptr");
+        if context_ptr.is_null() {
+            return None;
+        }
+        Some(&*(context_ptr as *const ViewContext))
     }
-    Some(&*(context_ptr as *const ViewContext))
 }
 
-/// Dispatch input event to platform handlers
-fn dispatch_input_event(ctx: &ViewContext, input: PlatformInput) {
-    if let Some(handlers) = ctx.handlers.upgrade() {
-        let handlers = handlers.lock();
-        if let Some(handler) = &handlers.on_input {
-            handler(input);
-        } else {
-            tracing::trace!("Input event received but no handler set: {:?}", input);
-        }
+/// Dispatch input event to the window's callbacks
+fn dispatch_input_event(ctx: &ViewContext, input: crate::traits::PlatformInput) {
+    if let Some(callbacks) = ctx.callbacks.upgrade() {
+        let _result = callbacks.dispatch_input(input);
+    } else {
+        tracing::trace!("Input event received after window callbacks were dropped");
     }
 }
 
@@ -420,8 +379,11 @@ fn dispatch_input_event(ctx: &ViewContext, input: PlatformInput) {
 
 /// Update view scale factor (called when window moves to different display)
 pub fn update_view_scale_factor(view: id, new_scale_factor: f64) {
+    // SAFETY: `view` is a live FLUIContentView (callers pass the window's
+    // content view); its ivar is null or a valid ViewContext owned by the
+    // view, and the mutation is confined to the main thread (AppKit calls).
     unsafe {
-        let context_ptr: *mut std::ffi::c_void = (*view).get_ivar("context_ptr");
+        let context_ptr: *mut std::ffi::c_void = *(*view).get_ivar("context_ptr");
         if !context_ptr.is_null() {
             let context = &mut *(context_ptr as *mut ViewContext);
             context.scale_factor = new_scale_factor;
@@ -430,19 +392,31 @@ pub fn update_view_scale_factor(view: id, new_scale_factor: f64) {
     }
 }
 
+/// `NSTrackingArea` option bits (cocoa 0.26 does not bind NSTrackingArea).
+///
+/// Raw values per AppKit's `NSTrackingAreaOptions`.
+mod tracking_area_options {
+    pub const MOUSE_ENTERED_AND_EXITED: u64 = 0x01;
+    pub const MOUSE_MOVED: u64 = 0x02;
+    pub const ACTIVE_IN_KEY_WINDOW: u64 = 0x20;
+    pub const IN_VISIBLE_RECT: u64 = 0x200;
+}
+
 /// Enable mouse tracking for mouse moved events
 pub fn enable_mouse_tracking(view: id) {
+    // SAFETY: `view` is a live NSView; NSTrackingArea is looked up via the
+    // runtime (the class always exists in AppKit), and `addTrackingArea:`
+    // retains the tracking area, so releasing our reference is handled by
+    // the view's lifetime.
     unsafe {
-        use cocoa::{appkit::NSTrackingArea, foundation::NSRect};
-
         // Get view bounds
         let bounds: NSRect = msg_send![view, bounds];
 
         // Create tracking area options
-        let options = cocoa::appkit::NSTrackingAreaOptions::NSTrackingMouseMoved
-            | cocoa::appkit::NSTrackingAreaOptions::NSTrackingActiveInKeyWindow
-            | cocoa::appkit::NSTrackingAreaOptions::NSTrackingMouseEnteredAndExited
-            | cocoa::appkit::NSTrackingAreaOptions::NSTrackingInVisibleRect;
+        let options: u64 = tracking_area_options::MOUSE_MOVED
+            | tracking_area_options::ACTIVE_IN_KEY_WINDOW
+            | tracking_area_options::MOUSE_ENTERED_AND_EXITED
+            | tracking_area_options::IN_VISIBLE_RECT;
 
         // Create tracking area
         let tracking_area: id = msg_send![class!(NSTrackingArea), alloc];
