@@ -12,7 +12,15 @@
 //! - [`AnimationController`] - Primary animation driver (generates 0.0..1.0)
 //! - [`CurvedAnimation`] - Applies easing curves to animations
 //! - [`Curve`] - Easing curve trait with predefined curves in [`Curves`]
-//! - [`Tween`] - Maps animation values to any type T
+//!   (full Penner catalog, M3 [`ThreePointCubic`] emphasized set, [`Split`])
+//! - [`Tween`] - Maps animation values to any type T;
+//!   [`OklabColorTween`] interpolates colors perceptually (Oklab) instead of
+//!   componentwise sRGB
+//! - [`smoothing`] - Frame-rate-independent followers beyond Flutter:
+//!   [`exp_decay`]/[`Smoothed`] (half-life exponential decay) and
+//!   [`SmoothDamp`] (critically damped, max-speed-clamped)
+//! - [`AnimatedValue`] - Interruptible spring value with velocity-preserving
+//!   retargeting (`#[derive(Animatable)]` for custom types)
 //! - [`AnimationError`] - Error type for animation operations
 //!
 //! ## Persistent Object Pattern

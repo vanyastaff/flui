@@ -534,3 +534,20 @@ Constructors validate parameters and panic on invalid input:
 | `TweenSequenceItem::new` | weight ≤ 0, weight is infinite |
 | `Interval::new` | begin/end outside [0,1], end < begin |
 | `Threshold::new` | threshold outside [0,1] |
+
+---
+
+## Beyond Flutter
+
+Capabilities this crate ships that Flutter's animation library does not, each
+implemented from the canonical published source:
+
+| Capability | Source | API |
+|---|---|---|
+| Frame-rate-independent smoothing (half-life exponential decay) | Holmér, "lerp smoothing is broken" | `smoothing::exp_decay`, `Smoothed` |
+| Critically damped follower with max-speed clamp | Unity `SmoothDamp` / Game Programming Gems 4 ch. 1.10 | `smoothing::SmoothDamp` |
+| Perceptually uniform color interpolation | Ottosson, Oklab (2020) | `OklabColorTween`, `Color::lerp_oklab` |
+| M3 emphasized easing + full Penner catalog | Material 3 / Penner | `Curves::EaseInOutCubicEmphasized`, `ThreePointCubic`, `Split` |
+| Interruptible springs with velocity-preserving retarget | analytic closed forms | `AnimatedValue`, `#[derive(Animatable)]` |
+
+See `examples/smoothing_follow.rs` and `examples/oklab_gradient.rs`.
