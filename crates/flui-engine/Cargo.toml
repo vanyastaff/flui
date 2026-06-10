@@ -81,9 +81,14 @@ wgpu = { workspace = true, default-features = false, features = ["metal"], optio
 wgpu = { workspace = true, default-features = false, features = ["vulkan"], optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+# fragile-send-sync-non-atomic-wasm: wgpu types are Rc/RefCell-based on the
+# WebGPU backend and therefore !Send; this feature marks them Send+Sync, which
+# is sound only while the wasm build has no threads (no atomics target
+# features). Required by flui-app's Send-bounded frame callbacks.
 wgpu = { workspace = true, default-features = false, features = [
     "webgpu",
     "gles",
+    "fragile-send-sync-non-atomic-wasm",
 ], optional = true }
 
 [dev-dependencies]
