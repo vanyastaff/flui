@@ -37,6 +37,7 @@
 
 #![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
 
+mod derive_animatable;
 mod derive_diagnosticable;
 mod derive_stateful;
 mod derive_stateless;
@@ -222,4 +223,28 @@ pub fn derive_diagnosticable(input: TokenStream) -> TokenStream {
     derive_diagnosticable::expand(&input)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
+}
+
+/// Emit `impl ::flui_animation::TwoWayConverter` for a struct of `f32` fields,
+/// so the type can be spring-animated by `flui_animation::AnimatedValue`.
+///
+/// Every field must be `f32`; a non-`f32` field is a compile error. The type
+/// must also be `Clone` (the trait's supertrait).
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use flui_animation::Animatable;
+///
+/// #[derive(Clone, Animatable)]
+/// struct Translation {
+///     x: f32,
+///     y: f32,
+///     z: f32,
+/// }
+/// ```
+#[proc_macro_derive(Animatable)]
+pub fn derive_animatable(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    derive_animatable::expand(&input).into()
 }

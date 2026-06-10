@@ -118,6 +118,11 @@ pub use simulation::{
     ScrollSpringSimulation, Simulation, SpringDescription, SpringSimulation, SpringType, Tolerance,
 };
 pub use spring::{AnimatedValue, TwoWayConverter};
+// `#[derive(Animatable)]` generates a `TwoWayConverter` impl. It shares the name
+// `Animatable` with the trait above but lives in the macro namespace (the serde
+// `Serialize` trait+derive pattern), so a single `use flui_animation::Animatable`
+// brings in both.
+pub use flui_macros::Animatable;
 pub use switch::AnimationSwitch;
 pub use tween::{TweenAnimation, animate};
 
