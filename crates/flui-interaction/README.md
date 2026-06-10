@@ -338,7 +338,7 @@ the `ui-events` crate (W3C-compliant `NonZeroU64`); `FocusNodeId` and
 ```rust
 use flui_interaction::{PointerId, FocusNodeId, HandlerId};
 
-// Primary pointer convention (was: `PointerId::new(0)` pre-U9).
+// Primary pointer convention.
 let pointer = PointerId::PRIMARY;
 let focus = FocusNodeId::new(42);
 

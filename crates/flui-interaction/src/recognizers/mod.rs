@@ -20,8 +20,8 @@
 //!
 //! Note: The canonical Flutter trait hierarchy
 //! `GestureRecognizer ← OneSequenceGestureRecognizer ← PrimaryPointerGestureRecognizer`
-//! is re-introduced as proper traits in U13 of the input-frame-loop-repair
-//! plan; the zero-consumer scaffolds previously living here were deleted in U3.
+//! is re-introduced as proper traits; the zero-consumer scaffolds previously
+//! living here were deleted.
 //!
 //! # Available Recognizers
 //!
@@ -48,23 +48,37 @@
 // Concrete recognizers
 pub mod double_tap;
 pub mod drag;
+pub mod drag_variants;
+pub mod eager;
 pub mod force_press;
 pub mod long_press;
 pub mod multi_tap;
+pub mod multidrag;
 pub mod one_sequence;
 pub mod primary_pointer;
 pub mod recognizer;
 pub mod scale;
 pub mod tap;
+pub mod tap_and_drag;
 
 // Re-export concrete recognizers
 pub use double_tap::DoubleTapGestureRecognizer;
 pub use drag::DragGestureRecognizer;
+pub use eager::EagerGestureRecognizer;
 pub use force_press::ForcePressGestureRecognizer;
 pub use long_press::LongPressGestureRecognizer;
 pub use multi_tap::MultiTapGestureRecognizer;
+pub use multidrag::{
+    MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle,
+    MultiDragStartCallback, MultiDragUpdateDetails,
+};
 pub use one_sequence::OneSequenceGestureRecognizer;
 pub use primary_pointer::PrimaryPointerGestureRecognizer;
 pub use recognizer::{GestureRecognizer, GestureRecognizerState, RecognizerBase, constants};
 pub use scale::ScaleGestureRecognizer;
 pub use tap::TapGestureRecognizer;
+pub use tap_and_drag::{
+    TapAndDragGestureRecognizer, TapDragDownCallback, TapDragDownDetails, TapDragEndCallback,
+    TapDragEndDetails, TapDragStartCallback, TapDragStartDetails, TapDragUpCallback,
+    TapDragUpDetails, TapDragUpdateCallback, TapDragUpdateDetails,
+};

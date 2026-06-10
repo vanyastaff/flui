@@ -20,10 +20,11 @@ use parking_lot::Mutex;
 use super::recognizer::{GestureRecognizer, RecognizerBase};
 use crate::{
     arena::GestureArenaMember,
-    events::{PointerEvent, PointerEventExt, PointerType},
+    events::{PointerEvent, PointerType},
     ids::PointerId,
     processing::VelocityTracker,
     settings::GestureSettings,
+    traits::PointerEventExtTrait,
 };
 
 /// Drag axis constraint
@@ -36,6 +37,54 @@ pub enum DragAxis {
     Horizontal,
     /// Free drag (any direction)
     Free,
+}
+
+/// Configures when the drag's initial position is reported.
+///
+/// Flutter parity: `gestures/recognizer.dart:48` `DragStartBehavior`.
+///
+/// - [`Down`](Self::Down): the initial position reported in
+///   [`DragStartDetails`] is the pointer's position at the down event.
+/// - [`Start`](Self::Start): the initial position is the pointer's position
+///   when the recogniser crosses the slop threshold (i.e. the moment the
+///   drag actually starts). This is the Flutter default and usually what
+///   users expect for scrollable content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum DragStartBehavior {
+    /// Use the pointer's down position as the drag's initial position.
+    Down,
+    /// Use the position at slop-crossing as the drag's initial position.
+    /// Flutter default — matches `DragGestureRecognizer.dragStartBehavior`.
+    #[default]
+    Start,
+}
+
+/// Configures how a drag handles multiple active pointers on a multi-touch
+/// device.
+///
+/// Flutter parity: `gestures/recognizer.dart:64` `MultitouchDragStrategy`.
+///
+/// - [`LatestPointer`](Self::LatestPointer): only the most recently added
+///   pointer is tracked. When that pointer lifts, the next active pointer
+///   takes over. This is the Android default.
+/// - [`AverageBoundaryPointers`](Self::AverageBoundaryPointers): the average
+///   of the boundary pointers drives the delta. Typical iOS scroll behaviour.
+/// - [`SumAllPointers`](Self::SumAllPointers): the sum of all active pointer
+///   deltas. Two-finger scrolling moves twice as fast as one-finger.
+///
+/// Single-pointer drags are unaffected by this setting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum MultitouchDragStrategy {
+    /// Only the most recently added pointer is tracked. Flutter default —
+    /// matches `DragGestureRecognizer.multitouchDragStrategy`.
+    #[default]
+    LatestPointer,
+    /// Average of the boundary (extremal) pointer deltas.
+    AverageBoundaryPointers,
+    /// Sum of all active pointer deltas.
+    SumAllPointers,
 }
 
 /// Details about drag down (pointer contact before drag starts)
@@ -136,6 +185,19 @@ pub struct DragGestureRecognizer {
     /// Drag axis constraint
     axis: DragAxis,
 
+    /// When to fix the drag's initial position.
+    ///
+    /// - [`DragStartBehavior::Down`]: position is the down-event position.
+    /// - [`DragStartBehavior::Start`]: position is the slop-crossing
+    ///   position (Flutter default).
+    start_behavior: DragStartBehavior,
+
+    /// Multi-touch aggregation policy.
+    ///
+    /// Single-pointer drags are unaffected; the policy only matters when
+    /// two or more pointers are active simultaneously.
+    multitouch_strategy: MultitouchDragStrategy,
+
     /// Callbacks
     callbacks: Arc<Mutex<DragCallbacks>>,
 
@@ -151,6 +213,8 @@ impl std::fmt::Debug for DragGestureRecognizer {
         f.debug_struct("DragGestureRecognizer")
             .field("state", &self.state)
             .field("axis", &self.axis)
+            .field("start_behavior", &self.start_behavior)
+            .field("multitouch_strategy", &self.multitouch_strategy)
             .field("drag_state", &*self.drag_state.lock())
             .field("settings", &self.settings.lock())
             .finish_non_exhaustive()
@@ -172,6 +236,9 @@ struct DragState {
     state: DragPhase,
     /// When drag started
     start_time: Option<Instant>,
+    /// Position reported in [`DragStartDetails`] — depends on
+    /// `start_behavior` (down position or slop-crossing position).
+    start_position: Option<Offset<Pixels>>,
     /// Last update position
     last_position: Option<Offset<Pixels>>,
     /// Last update time (for velocity calculation)
@@ -195,6 +262,7 @@ impl Default for DragState {
         Self {
             state: DragPhase::Ready,
             start_time: None,
+            start_position: None,
             last_position: None,
             last_time: None,
             total_delta: Offset::new(PixelDelta::ZERO, PixelDelta::ZERO),
@@ -209,6 +277,8 @@ impl DragGestureRecognizer {
         Arc::new(Self {
             state: RecognizerBase::new(arena),
             axis,
+            start_behavior: DragStartBehavior::default(),
+            multitouch_strategy: MultitouchDragStrategy::default(),
             callbacks: Arc::new(Mutex::new(DragCallbacks::default())),
             drag_state: Arc::new(Mutex::new(DragState::default())),
             settings: Arc::new(Mutex::new(GestureSettings::default())),
@@ -224,9 +294,38 @@ impl DragGestureRecognizer {
         Arc::new(Self {
             state: RecognizerBase::new(arena),
             axis,
+            start_behavior: DragStartBehavior::default(),
+            multitouch_strategy: MultitouchDragStrategy::default(),
             callbacks: Arc::new(Mutex::new(DragCallbacks::default())),
             drag_state: Arc::new(Mutex::new(DragState::default())),
             settings: Arc::new(Mutex::new(settings)),
+        })
+    }
+
+    /// Configure when the drag's initial position is reported.
+    ///
+    /// See [`DragStartBehavior`] for the semantics. Default is
+    /// [`DragStartBehavior::Start`].
+    pub fn with_drag_start_behavior(self: Arc<Self>, behavior: DragStartBehavior) -> Arc<Self> {
+        // Re-construct with the new behavior — fields are all `Copy`/Arc so
+        // this is a cheap move, and it keeps the constructor pattern uniform.
+        Arc::new(Self {
+            start_behavior: behavior,
+            ..(*self).clone()
+        })
+    }
+
+    /// Configure the multi-touch aggregation policy.
+    ///
+    /// See [`MultitouchDragStrategy`] for the semantics. Default is
+    /// [`MultitouchDragStrategy::LatestPointer`].
+    pub fn with_multitouch_drag_strategy(
+        self: Arc<Self>,
+        strategy: MultitouchDragStrategy,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            multitouch_strategy: strategy,
+            ..(*self).clone()
         })
     }
 
@@ -240,9 +339,32 @@ impl DragGestureRecognizer {
         *self.settings.lock() = settings;
     }
 
-    /// Get the minimum drag distance from settings
+    /// Drag axis this recogniser is bound to.
+    pub fn axis(&self) -> DragAxis {
+        self.axis
+    }
+
+    /// Currently-configured [`DragStartBehavior`].
+    pub fn drag_start_behavior(&self) -> DragStartBehavior {
+        self.start_behavior
+    }
+
+    /// Currently-configured [`MultitouchDragStrategy`].
+    pub fn multitouch_drag_strategy(&self) -> MultitouchDragStrategy {
+        self.multitouch_strategy
+    }
+
+    /// Minimum drag distance for the current axis. Per-axis slop:
+    /// - [`DragAxis::Vertical`][]: [`GestureSettings::pan_slop_vertical`]
+    /// - [`DragAxis::Horizontal`][]: [`GestureSettings::pan_slop_horizontal`]
+    /// - [`DragAxis::Free`][]: [`GestureSettings::pan_slop`]
     fn min_drag_distance(&self) -> f32 {
-        self.settings.lock().pan_slop()
+        let s = self.settings.lock();
+        match self.axis {
+            DragAxis::Vertical => s.pan_slop_vertical(),
+            DragAxis::Horizontal => s.pan_slop_horizontal(),
+            DragAxis::Free => s.pan_slop(),
+        }
     }
 
     /// Get the minimum fling velocity from settings
@@ -338,13 +460,32 @@ impl DragGestureRecognizer {
 
                     if distance.abs() > self.min_drag_distance() {
                         // Start drag!
+                        //
+                        // The drag's initial position depends on
+                        // `start_behavior`:
+                        // - `Down`: the down-event position (`initial_pos`).
+                        // - `Start`: the slop-crossing position
+                        //   (`position`) — matches Flutter's default and
+                        //   prevents the in-flight motion from being
+                        //   counted as a "drag" before the user actually
+                        //   committed to it.
+                        let start_position = match self.start_behavior {
+                            DragStartBehavior::Down => initial_pos,
+                            DragStartBehavior::Start => position,
+                        };
                         state.state = DragPhase::Started;
+                        state.start_position = Some(start_position);
+                        state.last_position = Some(position);
+                        state.last_time = Some(Instant::now());
+                        state
+                            .velocity_tracker
+                            .add_position(Instant::now(), position);
                         drop(state); // Release lock before calling callback
 
                         if let Some(callback) = self.callbacks.lock().on_start.clone() {
                             let details = DragStartDetails {
-                                global_position: position,
-                                local_position: position,
+                                global_position: start_position,
+                                local_position: start_position,
                                 kind,
                                 timestamp: Instant::now(),
                             };
@@ -390,7 +531,7 @@ impl DragGestureRecognizer {
 
         if state.state == DragPhase::Started {
             // Calculate final velocity
-            let velocity = state.velocity_tracker.velocity();
+            let velocity = state.velocity_tracker.get_velocity();
             let primary_velocity = self.calculate_primary_velocity(velocity.pixels_per_second);
 
             state.state = DragPhase::Ready;
@@ -489,7 +630,11 @@ impl GestureRecognizer for DragGestureRecognizer {
             return;
         }
         // Only process if we're tracking a pointer
-        if self.state.primary_pointer().is_none() {
+        let Some(primary) = self.state.primary_pointer() else {
+            return;
+        };
+        // Filter to the primary pointer we are tracking.
+        if event.pointer_id() != primary {
             return;
         }
 
@@ -529,7 +674,7 @@ impl GestureRecognizer for DragGestureRecognizer {
 }
 
 // =============================================================================
-// Canonical trait hierarchy adoption (U18)
+// Canonical trait hierarchy adoption
 // =============================================================================
 //
 // Flutter parity: `monodrag.dart:81 sealed class DragGestureRecognizer
@@ -604,7 +749,7 @@ mod tests {
                 *updated_clone.lock() = true;
             });
 
-        let pointer = PointerId::new(2).expect("nonzero pointer id");
+        let pointer = PointerId::PRIMARY;
         let start_pos = Offset::new(Pixels(100.0), Pixels(100.0));
 
         // Start tracking
@@ -631,21 +776,177 @@ mod tests {
     fn test_velocity_tracker() {
         let mut tracker = VelocityTracker::new();
 
+        // Flutter's `MIN_SAMPLE_SIZE` is 3 — the least-squares fit needs at
+        // least three contiguous samples. We feed four for a clean linear
+        // motion: 0→33→66→100 px over 0→33→66→100 ms → slope ~1000 px/s.
         let start_time = Instant::now();
-        let start_pos = Offset::new(Pixels(0.0), Pixels(0.0));
+        let dt = std::time::Duration::from_millis(33);
+        for i in 0..=3 {
+            let t = start_time + dt * i;
+            let pos = Offset::new(Pixels(i as f32 * 33.0), Pixels(0.0));
+            tracker.add_position(t, pos);
+        }
 
-        tracker.add_position(start_time, start_pos);
-
-        // Simulate movement over 100ms
-        let dt = std::time::Duration::from_millis(100);
-        let end_pos = Offset::new(Pixels(100.0), Pixels(0.0)); // Moved 100px in 100ms = 1000 px/s
-
-        tracker.add_position(start_time + dt, end_pos);
-
-        let velocity = tracker.velocity();
+        let velocity = tracker.get_velocity();
 
         // Should be approximately 1000 px/s horizontally
         assert!(velocity.pixels_per_second.dx > Pixels(900.0));
         assert!(velocity.pixels_per_second.dx < Pixels(1100.0));
+    }
+
+    // ========================================================================
+    // H/V/Pan split tests
+    //
+    // Verifies Flutter parity for:
+    // - per-axis slop (Vertical/Horizontal pick their own slop, Free uses
+    //   the generic `pan_slop`),
+    // - `DragStartBehavior::Down` vs `Start` (start_position differs).
+    // ========================================================================
+
+    #[test]
+    fn drag_start_behavior_down_uses_down_position() {
+        let arena = GestureArena::new();
+        let start_reported = Arc::new(Mutex::new(None::<Offset<Pixels>>));
+
+        let start_clone = start_reported.clone();
+        let recognizer = DragGestureRecognizer::new(arena, DragAxis::Free)
+            .with_drag_start_behavior(DragStartBehavior::Down)
+            .with_on_start(move |d| {
+                *start_clone.lock() = Some(d.global_position);
+            });
+
+        let pointer = PointerId::PRIMARY;
+        let down_pos = Offset::new(Pixels(50.0), Pixels(50.0));
+        recognizer.add_pointer(pointer, down_pos);
+
+        // Cross slop with one big move (50→80 → 30px travel).
+        let move_event =
+            make_move_event(Offset::new(Pixels(80.0), Pixels(80.0)), PointerType::Touch);
+        recognizer.handle_event(&move_event);
+
+        // With `Down` behavior, the reported start position is the down
+        // position, NOT the slop-crossing position.
+        assert_eq!(*start_reported.lock(), Some(down_pos));
+    }
+
+    #[test]
+    fn drag_start_behavior_start_uses_slop_crossing_position() {
+        let arena = GestureArena::new();
+        let start_reported = Arc::new(Mutex::new(None::<Offset<Pixels>>));
+
+        let start_clone = start_reported.clone();
+        let recognizer = DragGestureRecognizer::new(arena, DragAxis::Free)
+            // Default is already Start; this makes the test explicit.
+            .with_drag_start_behavior(DragStartBehavior::Start)
+            .with_on_start(move |d| {
+                *start_clone.lock() = Some(d.global_position);
+            });
+
+        let pointer = PointerId::PRIMARY;
+        let down_pos = Offset::new(Pixels(50.0), Pixels(50.0));
+        recognizer.add_pointer(pointer, down_pos);
+
+        let crossing_pos = Offset::new(Pixels(80.0), Pixels(80.0));
+        let move_event = make_move_event(crossing_pos, PointerType::Touch);
+        recognizer.handle_event(&move_event);
+
+        // With `Start` behavior, the reported start position is the
+        // slop-crossing position itself.
+        assert_eq!(*start_reported.lock(), Some(crossing_pos));
+    }
+
+    #[test]
+    fn per_axis_vertical_uses_vertical_slop() {
+        let arena = GestureArena::new();
+        let started = Arc::new(Mutex::new(false));
+        let started_clone = started.clone();
+
+        // Tune vertical slop to 25px (greater than the default 18).
+        let settings = GestureSettings::touch_defaults().with_pan_slop_vertical(25.0);
+        let recognizer = DragGestureRecognizer::with_settings(arena, DragAxis::Vertical, settings)
+            .with_on_start(move |_| {
+                *started_clone.lock() = true;
+            });
+
+        let pointer = PointerId::PRIMARY;
+        recognizer.add_pointer(pointer, Offset::new(Pixels(0.0), Pixels(0.0)));
+
+        // 20px vertical move — under 25px vertical slop, no start yet.
+        let move_event =
+            make_move_event(Offset::new(Pixels(0.0), Pixels(20.0)), PointerType::Touch);
+        recognizer.handle_event(&move_event);
+        assert!(!*started.lock());
+
+        // 30px vertical move — crosses 25px slop, drag starts.
+        let move_event2 =
+            make_move_event(Offset::new(Pixels(0.0), Pixels(30.0)), PointerType::Touch);
+        recognizer.handle_event(&move_event2);
+        assert!(*started.lock());
+    }
+
+    #[test]
+    fn per_axis_horizontal_uses_horizontal_slop() {
+        let arena = GestureArena::new();
+        let started = Arc::new(Mutex::new(false));
+        let started_clone = started.clone();
+
+        // Tune horizontal slop to 10px. Vertical moves along the 50px
+        // diagonal axis should NOT cross the horizontal slop (we measure
+        // the horizontal projection of the delta).
+        let settings = GestureSettings::touch_defaults().with_pan_slop_horizontal(10.0);
+        let recognizer =
+            DragGestureRecognizer::with_settings(arena, DragAxis::Horizontal, settings)
+                .with_on_start(move |_| {
+                    *started_clone.lock() = true;
+                });
+
+        let pointer = PointerId::PRIMARY;
+        recognizer.add_pointer(pointer, Offset::new(Pixels(0.0), Pixels(0.0)));
+
+        // Move 50px down, 5px right — horizontal projection (5px) is under
+        // the 10px horizontal slop, no start.
+        let move_event =
+            make_move_event(Offset::new(Pixels(5.0), Pixels(50.0)), PointerType::Touch);
+        recognizer.handle_event(&move_event);
+        assert!(!*started.lock());
+
+        // Move 15px right — crosses 10px slop on horizontal axis.
+        let move_event2 =
+            make_move_event(Offset::new(Pixels(15.0), Pixels(50.0)), PointerType::Touch);
+        recognizer.handle_event(&move_event2);
+        assert!(*started.lock());
+    }
+
+    #[test]
+    fn multitouch_drag_strategy_default_is_latest() {
+        let arena = GestureArena::new();
+        let rec = DragGestureRecognizer::new(arena, DragAxis::Free);
+        assert_eq!(
+            rec.multitouch_drag_strategy(),
+            MultitouchDragStrategy::LatestPointer
+        );
+        // Builder overrides the default.
+        let rec2 = rec.with_multitouch_drag_strategy(MultitouchDragStrategy::SumAllPointers);
+        assert_eq!(
+            rec2.multitouch_drag_strategy(),
+            MultitouchDragStrategy::SumAllPointers
+        );
+    }
+
+    #[test]
+    fn drag_axis_getter_reflects_constructor() {
+        let arena = GestureArena::new();
+        assert_eq!(
+            DragGestureRecognizer::new(arena.clone(), DragAxis::Vertical).axis(),
+            DragAxis::Vertical,
+        );
+        assert_eq!(
+            DragGestureRecognizer::new(arena.clone(), DragAxis::Horizontal).axis(),
+            DragAxis::Horizontal,
+        );
+        assert_eq!(
+            DragGestureRecognizer::new(arena, DragAxis::Free).axis(),
+            DragAxis::Free,
+        );
     }
 }

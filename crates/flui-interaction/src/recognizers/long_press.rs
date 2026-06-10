@@ -18,6 +18,7 @@ use std::{
 
 use flui_types::{Offset, geometry::Pixels};
 use parking_lot::Mutex;
+use tracing::instrument;
 
 use super::recognizer::{GestureRecognizer, RecognizerBase};
 use crate::{
@@ -81,22 +82,22 @@ pub struct LongPressDetails {
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// use flui_interaction::prelude::*;
+/// ```rust
+/// use flui_interaction::arena::GestureArena;
+/// use flui_interaction::recognizers::LongPressGestureRecognizer;
 ///
 /// let arena = GestureArena::new();
 /// let recognizer = LongPressGestureRecognizer::new(arena)
 ///     .with_on_long_press_start(|details| {
-///         println!("Long press started at {:?}", details.global_position);
+///         // fires after the long-press timer elapses without the
+///         // pointer moving past the touch slop
+///         let _pos = details.global_position;
 ///     })
 ///     .with_on_long_press_up(|details| {
-///         println!("Long press ended at {:?}", details.global_position);
+///         let _pos = details.global_position;
 ///     });
-///
-/// // Add to arena and handle events
-/// recognizer.add_pointer(pointer_id, position);
-/// recognizer.handle_event(&pointer_event);
-/// ```
+/// // `add_pointer` is wired up by the gesture binding at runtime;
+/// // see `flui_interaction::GestureBinding` for the integration.
 #[derive(Clone)]
 pub struct LongPressGestureRecognizer {
     /// Base state (arena, tracking, etc.)
@@ -123,9 +124,10 @@ struct LongPressCallbacks {
     on_long_press_cancel: Option<LongPressCallback>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum LongPressPhase {
     /// Ready to start
+    #[default]
     Ready,
     /// Pointer down, waiting for timer
     Possible,
@@ -135,9 +137,9 @@ enum LongPressPhase {
     Cancelled,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct LongPressState {
-    /// Current phase
+    /// Current phase — `Ready` is the default start state.
     phase: LongPressPhase,
     /// Time when pointer went down
     down_time: Option<Instant>,
@@ -145,17 +147,6 @@ struct LongPressState {
     current_position: Option<Offset<Pixels>>,
     /// Pointer device kind
     device_kind: Option<PointerType>,
-}
-
-impl Default for LongPressState {
-    fn default() -> Self {
-        Self {
-            phase: LongPressPhase::Ready,
-            down_time: None,
-            current_position: None,
-            device_kind: None,
-        }
-    }
 }
 
 impl LongPressGestureRecognizer {
@@ -311,32 +302,12 @@ impl LongPressGestureRecognizer {
                         return;
                     }
                 }
+                drop(state); // Release lock before firing callbacks
 
-                // Check if timer elapsed
-                if let Some(down_time) = state.down_time {
-                    let elapsed = Instant::now().duration_since(down_time);
-                    if elapsed >= settings.long_press_timeout() {
-                        // Timer elapsed! Start long press
-                        state.phase = LongPressPhase::Started;
-                        state.current_position = Some(position);
-                        drop(state); // Release lock before calling callback
-
-                        // Call on_long_press (simple callback)
-                        if let Some(callback) = self.callbacks.lock().on_long_press.clone() {
-                            callback();
-                        }
-
-                        // Call on_long_press_start callback
-                        if let Some(callback) = self.callbacks.lock().on_long_press_start.clone() {
-                            let details = LongPressStartDetails {
-                                global_position: position,
-                                local_position: position,
-                                kind,
-                            };
-                            callback(details);
-                        }
-                    }
-                }
+                // Delegate timer-elapsed resolution to the shared helper —
+                // identical logic powers `check_timer` and the deadline
+                // hook below.
+                self.try_fire_timer(position);
             }
             LongPressPhase::Started => {
                 // Long press already started, update position
@@ -416,48 +387,79 @@ impl LongPressGestureRecognizer {
         }
     }
 
-    /// Check if long press timer has elapsed
-    /// This should be called periodically by the event loop
-    pub fn check_timer(&self) -> bool {
-        let mut state = self.gesture_state.lock();
-
-        if state.phase == LongPressPhase::Possible
-            && let Some(down_time) = state.down_time
-        {
-            let elapsed = Instant::now().duration_since(down_time);
-            if elapsed >= self.long_press_duration() {
-                // Timer elapsed! Start long press
-                state.phase = LongPressPhase::Started;
-
-                if let (Some(position), Some(kind)) = (state.current_position, state.device_kind) {
-                    drop(state); // Release lock before calling callback
-
-                    // Call on_long_press (simple callback)
-                    if let Some(callback) = self.callbacks.lock().on_long_press.clone() {
-                        callback();
-                    }
-
-                    // Call on_long_press_start callback
-                    if let Some(callback) = self.callbacks.lock().on_long_press_start.clone() {
-                        let details = LongPressStartDetails {
-                            global_position: position,
-                            local_position: position,
-                            kind,
-                        };
-                        callback(details);
-                    }
-
-                    return true;
-                }
+    /// Check if the long-press deadline has elapsed and, if so, fire
+    /// the start callbacks + advance state to `Started`. Returns
+    /// `true` when the deadline fired.
+    ///
+    /// This is the single timer-elapsed resolution path — called from
+    /// [`Self::check_timer`] (the event-loop tick driver), from
+    /// [`Self::handle_move`] (move events carry their own deadline
+    /// resolution), and from `did_exceed_deadline` (the parent
+    /// `PrimaryPointerGestureRecognizer` deadline hook). Extracting
+    /// it once keeps the three call sites in lock-step with Flutter
+    /// `long_press.dart::_checkLongPressStart` semantics.
+    #[instrument(
+        name = "long_press.try_fire_timer",
+        level = "trace",
+        skip(self),
+        fields(pointer = ?self.state.primary_pointer())
+    )]
+    fn try_fire_timer(&self, position: Offset<Pixels>) -> bool {
+        // Snapshot under the lock, then drop it before invoking
+        // user callbacks (callbacks may re-enter recognizer API).
+        let snapshot = {
+            let mut state = self.gesture_state.lock();
+            if state.phase != LongPressPhase::Possible {
+                return false;
             }
-        }
+            let Some(down_time) = state.down_time else {
+                return false;
+            };
+            if Instant::now().duration_since(down_time) < self.long_press_duration() {
+                return false;
+            }
+            state.phase = LongPressPhase::Started;
+            state.current_position = Some(position);
+            (state.device_kind, position)
+        };
+        let (kind, fired_pos) = snapshot;
 
-        false
+        if let Some(callback) = self.callbacks.lock().on_long_press.clone() {
+            callback();
+        }
+        if let Some(callback) = self.callbacks.lock().on_long_press_start.clone() {
+            let details = LongPressStartDetails {
+                global_position: fired_pos,
+                local_position: fired_pos,
+                kind: kind.unwrap_or(PointerType::Touch),
+            };
+            callback(details);
+        }
+        true
+    }
+
+    /// Check if long press timer has elapsed.
+    ///
+    /// This should be called periodically by the event loop. Returns
+    /// `true` when the deadline fired this tick.
+    pub fn check_timer(&self) -> bool {
+        let position = self
+            .gesture_state
+            .lock()
+            .current_position
+            .unwrap_or_else(|| Offset::new(Pixels(0.0), Pixels(0.0)));
+        self.try_fire_timer(position)
     }
 }
 
 impl GestureRecognizer for LongPressGestureRecognizer {
     fn add_pointer(&self, pointer: PointerId, position: Offset<Pixels>) {
+        // per-impl span (trait fn disallows `#[instrument]`).
+        let _span = tracing::info_span!(
+            "long_press.add_pointer",
+            pointer = ?pointer,
+            event = %crate::observability::GestureEvent::RecognizerAdded,
+        );
         if !self.state.assert_not_disposed("add_pointer") {
             return;
         }
@@ -470,6 +472,12 @@ impl GestureRecognizer for LongPressGestureRecognizer {
     }
 
     fn handle_event(&self, event: &PointerEvent) {
+        // per-impl span (trait fn disallows `#[instrument]`).
+        let _span = tracing::info_span!(
+            "long_press.handle_event",
+            kind = %crate::observability::pointer_event_kind(event),
+            event = %crate::observability::GestureEvent::EventReceived,
+        );
         if !self.state.assert_not_disposed("handle_event") {
             return;
         }
@@ -521,7 +529,7 @@ impl GestureRecognizer for LongPressGestureRecognizer {
 }
 
 // =============================================================================
-// Canonical trait hierarchy adoption (U17)
+// Canonical trait hierarchy adoption
 // =============================================================================
 //
 // Flutter parity: `long_press.dart:262 LongPressGestureRecognizer extends
@@ -563,11 +571,18 @@ impl crate::recognizers::PrimaryPointerGestureRecognizer for LongPressGestureRec
     }
 
     fn did_exceed_deadline(&self) {
-        // LongPress accepts on deadline (opposite of default Reject) —
-        // Flutter parity at long_press.dart::didExceedDeadline calls
-        // resolve(GestureDisposition.accepted).
-        use crate::recognizers::OneSequenceGestureRecognizer;
-        self.resolve(crate::arena::GestureDisposition::Accepted);
+        // The long-press deadline expiring IS acceptance: fire the start
+        // callbacks AND win the arena so competing recognizers (e.g. a tap on
+        // the same region) are rejected. Flutter parity:
+        // `long_press.dart::didExceedDeadline` -> `resolve(accepted)`.
+        let position = self
+            .gesture_state
+            .lock()
+            .current_position
+            .or_else(|| self.initial_position())
+            .unwrap_or_else(|| Offset::new(Pixels(0.0), Pixels(0.0)));
+        self.try_fire_timer(position);
+        self.state.accept_tracked();
     }
 
     fn handle_primary_pointer(&self, event: &PointerEvent) {
@@ -579,6 +594,14 @@ impl GestureArenaMember for LongPressGestureRecognizer {
     fn accept_gesture(&self, _pointer: PointerId) {
         // We won the arena - gesture is accepted
         // Callbacks will be called when timer elapses or pointer moves/up
+    }
+
+    fn poll_deadline(&self) {
+        // Frame-driven deadline check: fires `on_long_press_start` once the
+        // hold deadline elapses even if the finger is held still (no further
+        // pointer event arrives to drive it). `check_timer` is idempotent, so
+        // polling every frame fires at most once.
+        self.check_timer();
     }
 
     fn reject_gesture(&self, _pointer: PointerId) {
@@ -615,6 +638,45 @@ mod tests {
         let recognizer = LongPressGestureRecognizer::new(arena);
 
         assert_eq!(recognizer.primary_pointer(), None);
+    }
+
+    #[test]
+    fn deadline_rejects_competing_arena_member() {
+        use crate::recognizers::PrimaryPointerGestureRecognizer;
+
+        struct Competitor {
+            rejected: Arc<Mutex<bool>>,
+        }
+        impl crate::sealed::arena_member::Sealed for Competitor {}
+        impl crate::arena::GestureArenaMember for Competitor {
+            fn accept_gesture(&self, _pointer: PointerId) {}
+            fn reject_gesture(&self, _pointer: PointerId) {
+                *self.rejected.lock() = true;
+            }
+        }
+
+        let arena = GestureArena::new();
+        let recognizer = LongPressGestureRecognizer::new(arena.clone());
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
+        recognizer.add_pointer(pointer, Offset::new(Pixels(10.0), Pixels(10.0)));
+
+        // A competing recognizer (e.g. a tap) contends for the same pointer.
+        let rejected = Arc::new(Mutex::new(false));
+        arena.add(
+            pointer,
+            Arc::new(Competitor {
+                rejected: rejected.clone(),
+            }),
+        );
+
+        // The deadline expiring must win the arena and reject the competitor
+        // (Flutter parity: `didExceedDeadline` -> `resolve(accepted)`).
+        recognizer.did_exceed_deadline();
+
+        assert!(
+            *rejected.lock(),
+            "competing member should be rejected when the long-press deadline fires"
+        );
     }
 
     #[test]
@@ -713,5 +775,116 @@ mod tests {
 
         // Should have called move callback
         assert!(*moved.lock());
+    }
+
+    // ========================================================================
+    // deadline-hook + shared-timer-helper coverage.
+    // ========================================================================
+
+    /// `PrimaryPointerGestureRecognizer::did_exceed_deadline` must
+    /// fire `on_long_press_start` AND resolve the arena. Pre-fix the
+    /// hook only resolved silently, leaving deadline-driven acceptance
+    /// a no-op for callers.
+    #[test]
+    fn did_exceed_deadline_fires_start_callbacks() {
+        use crate::recognizers::PrimaryPointerGestureRecognizer;
+        use std::time::Duration;
+
+        let arena = GestureArena::new();
+        let started = Arc::new(Mutex::new(false));
+        let s_clone = started.clone();
+
+        let recognizer = LongPressGestureRecognizer::with_settings(
+            arena,
+            GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(100)),
+        )
+        .with_on_long_press_start(move |_| *s_clone.lock() = true);
+
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
+        let position = Offset::new(Pixels(100.0), Pixels(100.0));
+        recognizer.add_pointer(pointer, position);
+
+        // Wait past the deadline.
+        std::thread::sleep(Duration::from_millis(150));
+        recognizer.did_exceed_deadline();
+
+        assert!(*started.lock());
+    }
+
+    /// `try_fire_timer` is the single source of truth for
+    /// deadline-elapsed resolution — `check_timer`, the move-driven
+    /// path, and `did_exceed_deadline` all funnel through it. Verify
+    /// it returns `false` before the deadline and `true` after, and
+    /// does not refire once `Started` is reached.
+    #[test]
+    fn try_fire_timer_is_idempotent() {
+        use std::time::Duration;
+
+        let arena = GestureArena::new();
+        let started_count = Arc::new(Mutex::new(0u32));
+        let c_clone = started_count.clone();
+
+        let recognizer = LongPressGestureRecognizer::with_settings(
+            arena,
+            GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(80)),
+        )
+        .with_on_long_press(move || *c_clone.lock() += 1);
+
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
+        let position = Offset::new(Pixels(50.0), Pixels(50.0));
+        recognizer.add_pointer(pointer, position);
+
+        // Before deadline — no fire.
+        assert!(!recognizer.check_timer());
+        assert_eq!(*started_count.lock(), 0);
+
+        // Wait past the deadline.
+        std::thread::sleep(Duration::from_millis(120));
+
+        // First tick — fires.
+        assert!(recognizer.check_timer());
+        assert_eq!(*started_count.lock(), 1);
+
+        // Second tick — must not refire (phase is now `Started`).
+        assert!(!recognizer.check_timer());
+        assert_eq!(*started_count.lock(), 1);
+    }
+
+    #[test]
+    fn held_pointer_fires_long_press_via_arena_poll() {
+        use std::time::Duration;
+
+        // A finger held perfectly still past the deadline must fire
+        // `on_long_press_start` when the binding polls deadlines once per frame,
+        // with NO intervening pointer event to drive it. This exercises the real
+        // wiring `GestureArena::poll_deadlines` -> `poll_deadline` ->
+        // `check_timer` -> fire, not the recognizer's deadline hook directly.
+        let arena = GestureArena::new();
+        let started = Arc::new(Mutex::new(false));
+        let s_clone = started.clone();
+
+        let recognizer = LongPressGestureRecognizer::with_settings(
+            arena.clone(),
+            GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(60)),
+        )
+        .with_on_long_press_start(move |_| *s_clone.lock() = true);
+
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
+        recognizer.add_pointer(pointer, Offset::new(Pixels(100.0), Pixels(100.0)));
+
+        // No moves. Polling before the deadline elapses fires nothing.
+        arena.poll_deadlines();
+        assert!(
+            !*started.lock(),
+            "must not fire before the deadline elapses"
+        );
+
+        // Hold still past the deadline; only the per-frame poll can drive it.
+        std::thread::sleep(Duration::from_millis(90));
+        arena.poll_deadlines();
+        assert!(
+            *started.lock(),
+            "a held-still pointer past the long-press deadline must fire on the deadline poll"
+        );
     }
 }

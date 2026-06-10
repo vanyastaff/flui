@@ -1,406 +1,142 @@
-# Architecture
-
-Internal design of `flui_interaction`.
-
-## Module Structure
-
-```
-src/
-├── lib.rs              # Public API, re-exports, prelude
-│
-├── ids.rs              # Type-safe identifiers (PointerId, FocusNodeId, etc.)
-├── sealed.rs           # Sealed trait infrastructure
-├── traits.rs           # Core traits (Disposable, GestureCallback, etc.)
-├── typestate.rs        # Typestate pattern implementations
-│
-├── routing/            # Event routing
-│   ├── mod.rs
-│   ├── event_router.rs # Main event dispatcher
-│   ├── hit_test.rs     # HitTestResult, HitTestEntry, HitTestable
-│   ├── focus.rs        # FocusManager, FocusNode
-│   ├── focus_scope.rs  # Focus scopes for modal dialogs
-│   └── pointer_router.rs # Pointer event routing
-│
-├── recognizers/        # Gesture recognizers
-│   ├── mod.rs
-│   ├── recognizer.rs   # GestureRecognizer trait
-│   ├── tap.rs          # TapGestureRecognizer
-│   ├── double_tap.rs   # DoubleTapGestureRecognizer
-│   ├── long_press.rs   # LongPressGestureRecognizer
-│   ├── drag.rs         # DragGestureRecognizer
-│   ├── scale.rs        # ScaleGestureRecognizer
-│   ├── force_press.rs  # ForcePressGestureRecognizer
-│   ├── multi_tap.rs    # MultiTapGestureRecognizer
-│   ├── one_sequence.rs # OneSequenceGestureRecognizer base
-│   └── primary_pointer.rs # PrimaryPointerGestureRecognizer base
-│
-├── arena.rs            # GestureArena for conflict resolution
-├── team.rs             # GestureArenaTeam for cooperative recognizers
-├── timer.rs            # Gesture timer service
-│
-├── processing/         # Input processing
-│   ├── mod.rs
-│   ├── velocity.rs     # VelocityTracker
-│   ├── resampler.rs    # PointerEventResampler
-│   ├── prediction.rs   # InputPredictor
-│   └── raw_input.rs    # RawInputHandler
-│
-├── testing/            # Testing utilities
-│   ├── mod.rs
-│   ├── recorder.rs     # GestureRecorder
-│   ├── player.rs       # GesturePlayer
-│   └── builder.rs      # GestureBuilder, ModifiersBuilder
-│
-├── events.rs           # W3C event type re-exports
-├── binding.rs          # GestureBinding for app integration
-├── mouse_tracker.rs    # Mouse enter/exit/hover tracking
-├── signal_resolver.rs  # Pointer signal conflict resolution
-└── settings.rs         # GestureSettings, defaults
-```
-
-## Core Abstractions
-
-### HitTestable Trait
-
-Sealed trait for hit testing:
-
-```rust
-pub trait HitTestable: sealed::Sealed {
-    fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool;
-    fn hit_test_behavior(&self) -> HitTestBehavior;
-}
-```
-
-Sealed because:
-- API evolution without breaking changes
-- Controlled implementation for correctness
-- Extension via `CustomHitTestable` helper trait
-
-### GestureRecognizer Trait
-
-Base trait for all recognizers:
-
-```rust
-pub trait GestureRecognizer: GestureArenaMember + Send + Sync {
-    fn add_pointer(&self, pointer: PointerId, event: &PointerEvent);
-    fn handle_event(&self, event: &PointerEvent);
-    fn reject_gesture(&self, pointer: PointerId);
-    fn dispose(&self);
-    
-    fn is_pointer_allowed(&self, event: &PointerEvent) -> bool;
-    fn gesture_settings(&self) -> &GestureSettings;
-}
-```
-
-### GestureArenaMember Trait
-
-For arena participation:
-
-```rust
-pub trait GestureArenaMember: sealed::Sealed {
-    fn accept_gesture(&self, pointer: PointerId);
-    fn reject_gesture(&self, pointer: PointerId);
-}
-```
-
-## Hit Testing
-
-### Transform Stack
-
-Manages coordinate transformations:
-
-```rust
-pub struct HitTestResult {
-    entries: Vec<HitTestEntry>,
-    transform_stack: Vec<Matrix4>,
-    current_transform: Matrix4,
-}
-
-impl HitTestResult {
-    pub fn push_offset(&mut self, offset: Offset);
-    pub fn push_transform(&mut self, transform: Matrix4);
-    pub fn pop_transform(&mut self);
-    
-    pub fn add(&mut self, entry: HitTestEntry);
-}
-```
-
-### Entry Storage
-
-Entries stored front-to-back (leaf first):
-
-```rust
-pub fn add(&mut self, entry: HitTestEntry) {
-    let mut entry = entry;
-    entry.transform = self.current_transform;
-    self.entries.insert(0, entry);  // Leaf first
-}
-```
-
-Dispatch order: leaf → root (most specific handler first).
-
-### Event Dispatch
-
-```rust
-pub fn dispatch(&self, event: &PointerEvent) -> EventPropagation {
-    for entry in &self.entries {
-        // Transform event to local coordinates
-        let local_event = entry.transform_event(event);
-        
-        // Call handler
-        if let Some(handler) = &entry.handler {
-            match handler(&local_event) {
-                EventPropagation::Stop => return EventPropagation::Stop,
-                EventPropagation::Continue => continue,
-            }
-        }
-    }
-    EventPropagation::Continue
-}
-```
-
-## Focus Management
-
-### FocusManager
-
-Global singleton for keyboard focus. Owns the focus-tree root and all
-focus invariants (primary focus, listeners, key handlers, active
-scope). U23 collapsed the prior dual-state design (singleton + private
-`FocusManagerInner`) into this single source of truth:
-
-```rust
-pub struct FocusManager {
-    root_scope: Arc<FocusScopeNode>,                  // Flutter parity
-    primary_focus: RwLock<Option<FocusNodeId>>,
-    listeners: RwLock<Vec<FocusChangeCallback>>,
-    key_handlers: RwLock<HashMap<FocusNodeId, KeyEventCallback>>,
-    global_key_handlers: RwLock<Vec<KeyEventCallback>>,
-    active_scope: RwLock<Option<Arc<FocusScopeNode>>>, // override; defaults to root
-}
-
-impl FocusManager {
-    pub fn global() -> &'static FocusManager;
-    pub fn root_scope(&self) -> &Arc<FocusScopeNode>;
-    pub fn active_scope(&self) -> Arc<FocusScopeNode>;
-
-    pub fn request_focus(&self, node: FocusNodeId);
-    pub fn unfocus(&self);
-    pub fn has_focus(&self, node: FocusNodeId) -> bool;
-
-    pub fn focus_next(&self) -> bool;      // Tab
-    pub fn focus_previous(&self) -> bool;  // Shift+Tab
-}
-```
-
-### Focus Scopes
-
-Isolate focus within regions:
-
-```rust
-pub struct FocusScopeNode {
-    id: FocusScopeId,
-    first_focus: Option<FocusNodeId>,
-    trap_focus: bool,  // Modal behavior
-}
-```
-
-### Traversal Policies
-
-```rust
-pub trait FocusTraversalPolicy: Send + Sync + std::fmt::Debug {
-    fn find_first(&self, nodes: &[Arc<FocusNode>]) -> Option<FocusNodeId>;
-    fn find_last(&self, nodes: &[Arc<FocusNode>]) -> Option<FocusNodeId>;
-    fn find_next(&self, current: FocusNodeId, nodes: &[Arc<FocusNode>])
-        -> Option<FocusNodeId>;
-    fn find_previous(&self, current: FocusNodeId, nodes: &[Arc<FocusNode>])
-        -> Option<FocusNodeId>;
-}
-
-// Built-in policies
-pub struct ReadingOrderPolicy;       // Top-left to bottom-right (default)
-```
-
-## Gesture Arena
-
-### Conflict Resolution
-
-When multiple recognizers compete:
-
-```rust
-pub struct GestureArena {
-    entries: Mutex<HashMap<PointerId, Vec<GestureArenaEntry>>>,
-    disambiguation_timeout: Duration,
-}
-
-impl GestureArena {
-    pub fn add(&self, pointer: PointerId, member: Arc<dyn GestureArenaMember>);
-    
-    pub fn accept(&self, pointer: PointerId, member: &dyn GestureArenaMember);
-    pub fn reject(&self, pointer: PointerId, member: &dyn GestureArenaMember);
-    
-    pub fn sweep(&self, pointer: PointerId);  // Force resolution
-}
-```
-
-### Resolution Rules
-
-1. First to `accept()` wins
-2. Last remaining after others `reject()` wins
-3. After timeout, first entry wins (default: 100ms)
-
-### GestureArenaTeam
-
-Cooperative recognizers that share victory:
-
-```rust
-pub struct GestureArenaTeam {
-    members: Vec<Arc<dyn GestureArenaMember>>,
-    captain: Option<Arc<dyn GestureArenaMember>>,
-}
-
-// All members win together
-team.accept(pointer_id);
-```
-
-## Recognizer State Machines
-
-### TapGestureRecognizer
-
-```
-Idle → Down → (movement < slop && time < timeout) → Up → Tap!
-        ↓
-    (movement > slop) → Rejected
-        ↓
-    (time > timeout) → Rejected
-```
-
-### DragGestureRecognizer
-
-```
-Idle → Possible → (movement > slop) → Accepted → Dragging → End
-         ↓
-    (pointer up) → Rejected
-```
-
-### LongPressGestureRecognizer
-
-```
-Idle → Possible → (time > timeout) → Accepted → LongPressing → End
-         ↓                              ↓
-    (pointer up) → Rejected      (movement > slop) → End
-```
-
-### ScaleGestureRecognizer
-
-```
-Idle → OnePointer → TwoPointers → Scaling → End
-           ↓             ↓
-       (pointer up)  (pointer up) → OnePointer or End
-```
-
-## Input Processing
-
-### VelocityTracker
-
-Estimates velocity from position samples:
-
-```rust
-pub struct VelocityTracker {
-    samples: VecDeque<Sample>,  // Ring buffer
-    strategy: VelocityEstimationStrategy,
-}
-
-impl VelocityTracker {
-    pub fn add_position(&mut self, time: Duration, position: Offset);
-    pub fn velocity(&self) -> Velocity;
-}
-```
-
-Strategies:
-- **LSQ2**: Least squares quadratic fit (default)
-- **LSQ3**: Least squares cubic fit
-- **Impulse**: For discrete input
-
-### PointerEventResampler
-
-Synchronizes events with vsync:
-
-```rust
-pub struct PointerEventResampler {
-    events: VecDeque<TimestampedEvent>,
-    last_sample: Option<(Duration, Offset)>,
-}
-
-impl PointerEventResampler {
-    pub fn add_event(&mut self, event: PointerEvent);
-    pub fn sample(&mut self, frame_time: Duration) -> Option<PointerEvent>;
-}
-```
-
-### InputPredictor
-
-Reduces perceived latency:
-
-```rust
-pub struct InputPredictor {
-    history: VecDeque<(Duration, Offset)>,
-    config: PredictionConfig,
-}
-
-impl InputPredictor {
-    pub fn predict(&self, target_time: Duration) -> Option<PredictedPosition>;
-}
-```
-
-## Thread Safety
-
-| Component | Synchronization |
-|-----------|-----------------|
-| FocusManager | `RwLock` (read-heavy) |
-| GestureArena | `Mutex` (write-heavy) |
-| HitTestResult | Not shared (per-event) |
-| Recognizers | Internal `Mutex` |
-| VelocityTracker | Not thread-safe (owned per pointer) |
-
-All types exposed in public API are `Send + Sync`.
-
-## Type Safety
-
-### Sealed Traits
-
-Prevent external implementation:
-
-```rust
-mod sealed {
-    pub trait Sealed {}
-}
-
-pub trait HitTestable: sealed::Sealed { /* ... */ }
-
-// External crates use helper trait
-pub trait CustomHitTestable {
-    fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool;
-}
-
-impl<T: CustomHitTestable> sealed::Sealed for T {}
-impl<T: CustomHitTestable> HitTestable for T { /* delegate */ }
-```
-
-### Newtype IDs
-
-Compile-time type safety:
-
-```rust
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct PointerId(NonZeroU64);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct FocusNodeId(NonZeroU64);
-
-// Cannot mix: fn process(id: PointerId) cannot accept FocusNodeId
-```
-
-Benefits:
-- `Option<PointerId>` same size as `PointerId` (niche optimization)
-- Type-level documentation of intent
-- Compile errors instead of runtime bugs
+# Architecture: flui-interaction
+
+Crate-level design notes for `flui_interaction`. Per the [`docs/PORT.md`](../docs/PORT.md) per-crate `ARCHITECTURE.md` template (line 770) and the workspace `## Thread safety` precedent at this crate (line 778).
+
+## Flutter source mapping
+
+This crate ports the gesture + event subsystem of Flutter
+(`packages/flutter/lib/src/gestures/`). The mapping is a near 1:1 file
+correspondence; the renamed `arena/` directory bundles the formerly
+crate-root `team.rs` and `signal_resolver.rs` (the back-compat shims at
+`crate::team` / `crate::signal_resolver` re-export them).
+
+| Dart (`flutter/lib/src/gestures/`)              | Rust (`crates/flui-interaction/src/`) |
+|-------------------------------------------------|--------------------------------------|
+| `arena.dart` (GestureArenaManager)              | `arena/mod.rs`                       |
+| `team.dart`                                     | `arena/team.rs`                      |
+| `events.dart` (PointerEvents re-export)         | `events.rs`                          |
+| `tap.dart`                                      | `recognizers/tap.rs`                 |
+| `double_tap.dart`                               | `recognizers/double_tap.rs`          |
+| `long_press.dart`                               | `recognizers/long_press.rs`          |
+| `drag.dart`, `horizontal_drag.dart`, `vertical_drag.dart`, `panning.dart` | `recognizers/drag.rs`, `recognizers/drag_variants.rs` |
+| `scale.dart`                                    | `recognizers/scale.rs`               |
+| `force_press.dart`                              | `recognizers/force_press.rs`         |
+| `multi_tap.dart`                                | `recognizers/multi_tap.rs`           |
+| `eager.dart`                                    | `recognizers/eager.rs`               |
+| `multidrag.dart`                                | `recognizers/multidrag.rs`           |
+| `tap_and_drag.dart`                             | `recognizers/tap_and_drag.rs`        |
+| `pointer_router.dart`, `event_router.dart`      | `routing/`                           |
+| `focus_manager.dart`                            | `routing/focus.rs`                   |
+| `mouse_tracker.dart`                            | `routing/mouse_tracker.rs`           |
+| `binding.dart` (GestureBinding)                 | `binding.rs`                         |
+| `velocity_tracker.dart`                         | `processing/velocity.rs`             |
+| `pointer_event_resampler.dart`                  | `processing/resampler.rs`            |
+| `sampling_clock.dart`                           | `processing/sampling_clock.rs`       |
+| `input_predictor.dart`                          | `processing/prediction.rs`           |
+| `gesture_settings.dart`                         | `settings.rs`                        |
+| `gesture_timer.dart`                            | `timer.rs`                           |
+
+## Subsystems
+
+| Subsystem | One-paragraph description |
+|---|---|
+| `arena` | Conflict resolution between competing recognisers. Tracks per-pointer `SmallVec<[Arc<dyn GestureArenaMember>; 4]>` (inline for ≤ 4 members — the common case), `DashMap<PointerId, Mutex<ArenaEntryData>>` for concurrent access, and a lifecycle (Open → Held → Closed → Resolved). Eager acceptors win when the arena closes; teams enable multi-winner resolution. |
+| `recognizers` | The 11+ recogniser types. Each implements `GestureRecognizer` (the `add_pointer` / `handle_event` / `dispose` lifecycle) and gets `GestureArenaMember` for free via the `CustomGestureRecognizer` blanket impl. State machines are kept inline per file (TapState, LongPressPhase, etc.) — no shared trait-object dispatch. |
+| `processing` | Per-pointer derived data: `VelocityTracker` (LSQ fit on 20-sample circular buffer, 100 ms horizon, 40 ms stationary gate), `PointerEventResampler` (frame-rate adaptation with 100-event cap and 1 ms minimum sample interval), `InputPredictor` (kalman-style pointer extrapolation), `RawInputHandler` (low-level stream adapter), and the shared `lsq_solver` + `sampling_clock` helpers. |
+| `routing` | Event dispatch infrastructure: `EventRouter`, `PointerRouter`, `FocusManager` (global singleton), `MouseTracker` (enter/exit/hover), hit testing, and the `TransformGuard` stack-RAII for the transform stack. Off the per-pointer hot path. |
+| `binding` | `GestureBinding` — the top-level glue that hosts the `GestureArena` and dispatches `PointerEvent`s from the platform layer to the recogniser set. Re-exports the W3C `PointerEvent` type from `ui-events`. |
+| `timer` | `GestureTimer` / `GestureTimerService` — async timer for the long-press 500 ms deadline and similar gesture-timed waits. `global_timer_service()` is the crate-level singleton; the tokio runtime backs the async side. |
+| `observability` | Observability substrate. `GestureEvent` is a typed `Display` enum of recogniser / arena event names; `SPAN_RECOGNIZER` and `SPAN_ARENA` are span-name constants; `pointer_event_kind` summarises a `PointerEvent` to a short string for span fields. `#[tracing::instrument]` is applied on `RecognizerBase` start_tracking / stop_tracking and on every public `GestureArena` method. |
+
+## Thread safety
+
+`flui-interaction` runs in the event-dispatch layer; per strategy
+clause "sync hot path", the per-pointer event loop is single-threaded.
+Sync primitives in this crate are limited to per-recogniser `Mutex`
+fields and the shared `GestureArena`'s `DashMap` + inner `Mutex`. No
+primitive sits inside `handle_event` on a per-event basis. The static
+`AssertSendSync` block at the bottom of `src/lib.rs:341-372`
+compile-time-asserts the key types are `Send + Sync`.
+
+| Site | Primitive | Category | Notes |
+|---|---|---|---|
+| `GestureArena::entries` (`src/arena/mod.rs:503`) | `Arc<DashMap<PointerId, Mutex<ArenaEntryData>>>` | Shared infrastructure | DashMap for lock-free concurrent insert/lookup; inner `parking_lot::Mutex` for the per-pointer state mutation. Allowed per [`docs/PORT.md` lock-decision table](../docs/PORT.md). |
+| `RecognizerBase::primary_pointer`, `initial_position`, `disposed` (`src/recognizers/recognizer.rs:68-74`) | `Arc<parking_lot::Mutex<...>>` | Per-recogniser state | Each recogniser's mutable state is independently locked. `parking_lot::Mutex` chosen over std for the no-poison semantics. |
+| `TapGestureRecognizer::callbacks`, `gesture_state`, `pending_down`, `pending_up`, `accepted` (`src/recognizers/tap.rs:117-144`) | `Arc<parking_lot::Mutex<...>>` | Per-recogniser state | Deferred-callback state. Five independent mutexes to keep lock contention local. |
+| `LongPressGestureRecognizer::callbacks`, `gesture_state` (`src/recognizers/long_press.rs:107-110`) | `Arc<parking_lot::Mutex<...>>` | Per-recogniser state | `try_fire_timer` runs under `gesture_state` lock. |
+| `PointerEventResampler::inner` (`src/processing/resampler.rs:90`) | `Arc<parking_lot::Mutex<ResamplerInner>>` | Shared infrastructure | Single lock per resampler; the queue is bounded to 100 events (`MAX_BUFFERED_EVENTS`). |
+| `PointerEventResampler` is the only place with an `Arc<Mutex<...>>` in the `processing/` hot path — the `VelocityTracker` is `Send + Sync` via plain fields (no shared state) and is rebuilt per-pointer at the call site. |
+| `FocusManager::global()` (`src/routing/focus.rs`) | `static OnceLock<Arc<parking_lot::Mutex<FocusManager>>>` | Process-wide singleton | Off any hot path. |
+| `GestureTimerService` global (`src/timer.rs`) | `parking_lot::Mutex` + `once_cell::sync::Lazy` | Process-wide singleton | Async timer scaffold; **unused by any recogniser** — deadlines are polled inline via `Instant::now()`. |
+| Static `AssertSendSync` impls (`src/lib.rs:341-372`) | None (compile-time trait bound) | Type-system guarantee | Compile-asserts `Send + Sync` for all public types listed in the block. |
+
+No `unsafe impl Send/Sync` in this crate. The sealed-trait pattern
+(`sealed::arena_member::Sealed` supertrait on `GestureArenaMember`)
+prevents downstream implementations from accidentally breaking the
+`Send + Sync` invariant.
+
+## Mapping decisions
+
+Where the Rust shape diverges from the Dart shape and why. Each entry
+names the conflict, the choice, and the reference (a strategy clause,
+a refusal trigger, or a precedent plan).
+
+- **Recogniser duplication-via-`Arc` vs Dart's `ChangeNotifier` mixin.** Flutter's `TapGestureRecognizer extends ChangeNotifier` — a single class is the recogniser, the listener hub, and the lifecycle owner. In Rust the recogniser is a `Clone` struct and the lifecycle is on `RecognizerBase` (so multiple consumers can hold `Arc<Self>` cheaply). The trade-off: Dart users mutate recogniser fields directly; Rust users get a stable struct API but cannot observe field changes without an explicit notifier (deferred — Flutter's `ChangeNotifier` is in `flui-foundation::Notifier`).
+- **Pointer event types are W3C `ui-events`, not a local re-implementation.** The Dart `pointer_event.dart` types are mirrored by `ui_events::pointer::*` (W3C-compliant). The mapping is type-to-type with a `DeviceId = i32` shim at the `InputEvent` enum layer. Reduces divergence from the platform layer's event types and is sanctioned by [`docs/PORT.md` ecosystem table](../docs/PORT.md) (line 700).
+- **`TapButton` enum vs Dart's `kPrimaryButton` constants.** Flutter has `kPrimaryButton` / `kSecondaryButton` / `kTertiaryButton` as top-level `int` constants. Rust uses a typed `TapButton` enum (`src/recognizers/tap.rs:51-59`) with explicit `from_pointer_button` mapping — type-system enforcement vs runtime constants. The trade-off: the `TapButton` enum is `#[non_exhaustive]` so a future fourth button slot can be added without breaking downstream.
+- **`ArenaEntryData` is `pub(crate)` struct vs Dart's `_GestureArenaEntry` private class.** Flutter keeps the per-pointer state as private fields on `_GestureArenaManager`; Rust uses a `pub(crate)` `SmallVec<[Arc<dyn GestureArenaMember>; 4]>` to keep the hot path alloc-free for ≤ 4 members (the typical tap + drag + long-press + double-tap case). The inline-4 capacity is justified by the bench: the `add_busy` case in `benches/gesture_arena_bench.rs` measures the heap-fallback cost separately.
+- **Sealed traits vs Dart's `implements` mixin.** `GestureArenaMember` and `HitTestable` are sealed (supertrait `sealed::Sealed`). The blanket impl via `CustomGestureRecognizer` / `CustomHitTestable` is the only sanctioned extension point. The rationale is the same as the flui-foundation `sealed::Sealed` precedent: API evolution without breaking changes.
+- **`pending_up` deferral for `on_tap_up`.** Before the fix, `handle_tap_up` fired `on_tap_up` and `on_tap` unconditionally on pointer up, even though every arena member receives Up events. The fix stores a `pending_up` until `accept_gesture` confirms arena victory; only the eventual winner fires the user callback. The same pattern was extended to per-button slots.
+- **`try_fire_timer` runs under `gesture_state` lock.** Pre-fix `did_exceed_deadline` resolved Accepted without firing the long-press start callback. The fix calls `try_fire_timer` (which acquires `gesture_state`) before resolving. The `try_fire_timer_is_idempotent` unit test in `recognizers/long_press.rs` guards against double-fire if the timer fires twice.
+- **`processing::lsq_solver` is crate-internal.** Shared by `VelocityTracker` and `PointerEventResampler`; both were duplicating the matrix setup.
+- **Observability is crate-public.** `pub mod observability` exports `GestureEvent`, `SPAN_RECOGNIZER`, `SPAN_ARENA`, `pointer_event_kind`. Downstream `flui-app` configures the subscriber and surfaces these to the devtools; the recognisers / arena emit them unconditionally.
+
+## Testing strategy
+
+| Command | Purpose |
+|---|---|
+| `cargo test -p flui-interaction --lib` | 339 unit tests across arena / recognisers / processing / routing / timer (the +2 over the prior 337 baseline are long-press regression tests). |
+| `cargo test --doc -p flui-interaction` | 11 runnable doc-tests. 72 `rust,ignore` doc-tests remain — these are illustrative; the next doc-test sweep should target `processing::InputPredictor`, `routing::FocusManager`, and the `testing` module builders. |
+| `cargo bench -p flui-interaction` | 4 Criterion benches. All use `black_box` on inputs and outputs. Hot-path regression guards; baseline numbers to be captured in the next release. |
+| `cargo clippy -p flui-interaction --lib --tests --benches -- -D warnings` | Lint gate — zero warnings. |
+| `cargo fmt -p flui-interaction --check` | Format gate. |
+
+## Observability
+
+The observability substrate lives at [`crate::observability`](src/observability.rs) (re-exported at
+the crate root as `flui_interaction::observability::*` and the three
+`GestureEvent` / `SPAN_RECOGNIZER` / `SPAN_ARENA` / `pointer_event_kind`
+items). The hot paths (`RecognizerBase::start_tracking`,
+`RecognizerBase::stop_tracking`, `GestureArena::add` / `close` /
+`resolve` / `sweep`) carry `#[tracing::instrument]` with a typed
+`event = %GestureEvent::*` span field. Configure your subscriber at
+the app boundary; the crate does not install one. Filter via
+`RUST_LOG=flui_interaction::arena=debug,flui_interaction::recognizers=trace`.
+
+## Friction log
+
+- **`#[allow(deprecated)]` on `team` / `signal_resolver` back-compat shims** (`src/lib.rs:155-162`). Kept through 0.2.0+ to avoid rippling through `flui-rendering` and `flui-app`. Removal is the 1.0 milestone.
+- **`docs/ARCHITECTURE.md` (this file) is the template-driven version;** the pre-template `crates/flui-interaction/docs/ARCHITECTURE.md` body (gesture state-machine diagrams, hit testing walk) lives as a companion. Per [`docs/PORT.md` line 798](../docs/PORT.md), relocation to crate root is deferred to the doc-tidying PR.
+- **`is_resolved(pointer)` returns `bool` not `Result`.** Arena resolution can't fail in this design (the worst case is a `parking_lot::Mutex` poison — the `Deref` impl swallows it for ergonomics, and the arena entry is dropped). If you need poison-detection, wrap the call site in `catch_unwind` rather than changing the API.
+- **`make_*_event` test helpers are `#[cfg(any(test, feature = "testing"))]`.** The benches depend on the `testing` feature being enabled in `dev-dependencies`. Documented at `Cargo.toml`; the gates will surface any missing opt-in.
+
+## Outstanding refactors
+
+- **Doc-test sweep: convert the remaining 72 `rust,ignore` to runnable.** The `processing::InputPredictor` and `routing::FocusManager` doc-tests are the next highest-value targets. The `testing` module builders (`GestureBuilder`, `ModifiersBuilder`, `GestureRecorder`) are the third tier. Land as a follow-up PR.
+- **Property tests for the gesture arena** (deferred). `proptest` over a sequence of `add` / `close` / `sweep` operations, asserting: every reachable pointer has a state, no arena has two winners, `is_resolved` ⇔ `winner_count >= 1` after `close`. Bench time + property-cost justifies a separate `flui-interaction/tests/proptest_arena.rs` file.
+- **Loom test coverage for the arena's DashMap + Mutex pairing** (deferred). `loom` over a small parallel `add` / `resolve` workload. Same precedent as `flui-rendering` — needs a `#[cfg(loom)]` gate.
+- **Bench fidelity pass: realistic workloads.** Current benches use synthetic events; the next pass should replay recorded gesture traces from `flui-app` (TBD where they live). The `testing::recording` module is the substrate.
+- **Re-export the `pub mod observability` at `crate::prelude`** once the devtools substrate is stable — currently only the `GestureEvent` / `SPAN_*` items are re-exported at the crate root.
+
+## Index of in-crate companion documents
+
+These live alongside this templated `ARCHITECTURE.md` and are
+referenced from it. They predate the template and remain as
+subsystem-level deep-dives (per [`docs/PORT.md` line 134](../docs/PORT.md)):
+
+- [`docs/GESTURES.md`](docs/GESTURES.md) — gesture catalogue.
+- [`docs/HIT_TESTING.md`](docs/HIT_TESTING.md) — hit-test walk.
+- [`docs/INTEGRATION.md`](docs/INTEGRATION.md) — `GestureBinding`
+  integration guide for downstream crates.
+- [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) — performance notes
+  (60 fps / 16 ms / 0 alloc on hot path).

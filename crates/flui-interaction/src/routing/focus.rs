@@ -5,7 +5,7 @@
 //! primary-focused node, notifies focus-change listeners, and routes
 //! key events through the registered handlers.
 //!
-//! Audit Finding I-4 closure (U23): prior dual structure (`FocusManager`
+//! Audit Finding I-4 closure: prior dual structure (`FocusManager`
 //! singleton + private `FocusManagerInner` `Arc<inner>` co-existing with
 //! independent `primary_focus` + listener state) collapsed into a single
 //! singleton owning every focus invariant. [`FocusNode`] / [`FocusScopeNode`]

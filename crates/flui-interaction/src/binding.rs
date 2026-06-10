@@ -79,14 +79,42 @@
 use dashmap::DashMap;
 use flui_foundation::{BindingBase, impl_binding_singleton};
 use flui_types::geometry::{Offset, Pixels};
+use smallvec::SmallVec;
 use ui_events::pointer::{PointerEvent, PointerType};
 
 use crate::{
     arena::GestureArena,
     ids::PointerId,
+    processing::{PointerEventResampler, SamplingClock},
     routing::{HitTestResult, PointerRouter},
     settings::GestureSettings,
 };
+
+/// Truncate a `f64` to `f32` for pointer position conversion.
+///
+/// Lossless for any screen-pixel coordinate: a `f32` mantissa rounds
+/// at ~7 decimal digits and physical pointer positions are reported
+/// in device pixels (≤ 2^23 ≈ 8M), so `f64 → f32` is exact in that
+/// range. Used at the W3C→flui boundary where upstream carries `f64`
+/// physical pixels and our `Offset<Pixels>` stores `f32`.
+///
+/// Upper bound on simultaneously-tracked pointers.
+///
+/// Per-pointer state (hit tests, resamplers, arena entries, recogniser maps)
+/// grows with active pointers; an untrusted event source could open unbounded
+/// pointers to exhaust memory. Real hardware tops out around 10–16 touches, so
+/// this generous cap never rejects a legitimate gesture.
+const MAX_SIMULTANEOUS_POINTERS: usize = 32;
+
+/// Local mirror of the helper in `events.rs` / `pan_zoom.rs` —
+/// duplicated here to keep the binding module's hot path free of
+/// cross-module indirection.
+#[inline]
+const fn px_f32(v: f64) -> Pixels {
+    // f64 → f32 is intentionally lossy at extreme values; for
+    // pointer coordinates the dynamic range fits in `f32` exactly.
+    Pixels(v as f32)
+}
 
 /// Central coordinator for gesture event handling (singleton).
 ///
@@ -127,6 +155,22 @@ pub struct GestureBinding {
     /// Only the latest move per pointer is kept.
     pending_moves: DashMap<PointerId, PointerEvent>,
 
+    /// Per-pointer event resamplers. One per active pointer; created
+    /// lazily on first [`Self::handle_pointer_event`] and dropped on
+    /// Up/Cancel. The resamplers are *opt-in*: only used when
+    /// [`Self::set_resampling_enabled`] has been called with `true`.
+    /// Off by default to preserve the pre-resampler dispatch path
+    /// for callers that don't need frame-paced sampling.
+    resamplers: DashMap<PointerId, PointerEventResampler>,
+
+    /// Whether the per-pointer resamplers are consulted on
+    /// [`Self::flush_pending_moves`]. Off by default.
+    resampling_enabled: std::sync::atomic::AtomicBool,
+
+    /// Frame-paced clock that produces `(now, next)` pairs for the
+    /// resamplers. Only consulted when `resampling_enabled` is true.
+    sampling_clock: parking_lot::RwLock<SamplingClock>,
+
     /// Routes pointer events to registered handlers.
     pointer_router: PointerRouter,
 
@@ -163,6 +207,9 @@ impl GestureBinding {
         let mut binding = Self {
             hit_tests: DashMap::new(),
             pending_moves: DashMap::new(),
+            resamplers: DashMap::new(),
+            resampling_enabled: std::sync::atomic::AtomicBool::new(false),
+            sampling_clock: parking_lot::RwLock::new(SamplingClock::default()),
             pointer_router: PointerRouter::new(),
             arena: GestureArena::new(),
             default_settings: GestureSettings::default(),
@@ -176,12 +223,71 @@ impl GestureBinding {
         let mut binding = Self {
             hit_tests: DashMap::new(),
             pending_moves: DashMap::new(),
+            resamplers: DashMap::new(),
+            resampling_enabled: std::sync::atomic::AtomicBool::new(false),
+            sampling_clock: parking_lot::RwLock::new(SamplingClock::default()),
             pointer_router: PointerRouter::new(),
             arena: GestureArena::new(),
             default_settings: settings,
         };
         binding.init_instances();
         binding
+    }
+
+    // ========================================================================
+    // Resampler Wiring
+    // ========================================================================
+
+    /// Enable per-pointer event resampling on [`Self::flush_pending_moves`].
+    ///
+    /// Off by default. When on, every pointer that emits a `Move` event
+    /// gets its own [`PointerEventResampler`] (one per `PointerId`),
+    /// paced by the configured [`SamplingClock`]. On
+    /// [`Self::flush_pending_moves`], each resampler is sampled once
+    /// per frame and the resampled events are dispatched through the
+    /// same routing path as direct events.
+    ///
+    /// Idempotent. Disabling mid-stream clears per-pointer resamplers
+    /// so the binding returns to the direct dispatch path on the next
+    /// frame.
+    pub fn set_resampling_enabled(&self, enabled: bool) {
+        use std::sync::atomic::Ordering;
+        self.resampling_enabled.store(enabled, Ordering::Release);
+        if !enabled {
+            self.resamplers.clear();
+        }
+    }
+
+    /// Returns whether per-pointer resampling is enabled.
+    #[inline]
+    #[must_use]
+    pub fn is_resampling_enabled(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        self.resampling_enabled.load(Ordering::Acquire)
+    }
+
+    /// Replace the sampling clock used to pace resamplers.
+    ///
+    /// Existing per-pointer resamplers are **not** reset — they pick
+    /// up the new cadence on their next `sample()` call. Caller is
+    /// responsible for ensuring the new clock's period is sensible
+    /// for the input devices currently being tracked.
+    pub fn set_sampling_clock(&self, clock: SamplingClock) {
+        *self.sampling_clock.write() = clock;
+    }
+
+    /// Returns a copy of the active sampling clock.
+    #[inline]
+    #[must_use]
+    pub fn sampling_clock(&self) -> SamplingClock {
+        *self.sampling_clock.read()
+    }
+
+    /// Number of active per-pointer resamplers.
+    #[inline]
+    #[must_use]
+    pub fn active_resampler_count(&self) -> usize {
+        self.resamplers.len()
     }
 
     // ========================================================================
@@ -241,16 +347,48 @@ impl GestureBinding {
         match event {
             PointerEvent::Down(e) => {
                 let pointer_id = self.extract_pointer_id(event);
-                let position = Offset::new(
-                    Pixels(e.state.position.x as f32),
-                    Pixels(e.state.position.y as f32),
-                );
+
+                // Bound per-pointer state growth (memory-DoS guard). A re-down of
+                // an already-tracked pointer replaces rather than grows, so it is
+                // always allowed; only a genuinely new pointer beyond the cap is
+                // dropped.
+                if self.hit_tests.len() >= MAX_SIMULTANEOUS_POINTERS
+                    && !self.hit_tests.contains_key(&pointer_id)
+                {
+                    tracing::warn!(
+                        ?pointer_id,
+                        active = self.hit_tests.len(),
+                        "dropping Down: simultaneous-pointer cap reached"
+                    );
+                    return;
+                }
+
+                let position = Offset::new(px_f32(e.state.position.x), px_f32(e.state.position.y));
 
                 // Perform hit test
                 let result = hit_test_fn(position);
 
                 // Cache the result
                 self.hit_tests.insert(pointer_id, result.clone());
+
+                // Lazy-create the per-pointer resampler AND mark it tracked.
+                // The resampler only paces moves once it is tracked; without
+                // this, `sample()` early-returns while `!is_tracked` and
+                // `flush_pending_moves` then clears the coalesced queue,
+                // silently dropping every move when resampling is enabled. We
+                // use `start_tracking()` (not `add_event`) because the Down is
+                // dispatched directly below — queueing it would double-dispatch
+                // it on the next sample. The DashMap guard is scoped so it is
+                // released before dispatch.
+                {
+                    let resampler = self
+                        .resamplers
+                        .entry(pointer_id)
+                        .or_insert_with(|| PointerEventResampler::new(pointer_id));
+                    if self.is_resampling_enabled() {
+                        resampler.start_tracking();
+                    }
+                }
 
                 // Dispatch to targets
                 self.dispatch_event(event, &result);
@@ -264,6 +402,14 @@ impl GestureBinding {
 
                 // Coalesce move events - store only the latest, process on flush
                 self.pending_moves.insert(pointer_id, event.clone());
+
+                // Mirror to the resampler's per-pointer queue so the
+                // resampler can pace the event on the next sample().
+                if self.is_resampling_enabled()
+                    && let Some(r) = self.resamplers.get(&pointer_id)
+                {
+                    r.add_event(event.clone());
+                }
             }
 
             PointerEvent::Up(_) | PointerEvent::Cancel(_) => {
@@ -276,6 +422,11 @@ impl GestureBinding {
 
                 // Sweep the arena
                 self.arena.sweep(pointer_id);
+
+                // Drop the resampler for this pointer. `remove` returns
+                // the owned value, so the resampler's Arc drops with
+                // last reference.
+                self.resamplers.remove(&pointer_id);
             }
 
             PointerEvent::Enter(_) | PointerEvent::Leave(_) => {
@@ -295,10 +446,8 @@ impl GestureBinding {
                 if let Some(result) = self.hit_tests.get(&pointer_id) {
                     self.dispatch_event(event, &result);
                 } else {
-                    let position = Offset::new(
-                        Pixels(e.state.position.x as f32),
-                        Pixels(e.state.position.y as f32),
-                    );
+                    let position =
+                        Offset::new(px_f32(e.state.position.x), px_f32(e.state.position.y));
                     let result = hit_test_fn(position);
                     self.dispatch_event(event, &result);
                 }
@@ -363,16 +512,99 @@ impl GestureBinding {
     pub fn flush_pending_moves(&self) -> usize {
         let mut count = 0;
 
-        // Take all pending moves
-        let pending: Vec<_> = self
+        // If resampling is enabled, sample every per-pointer resampler
+        // *first* and dispatch the resampled events through the same
+        // routing path. The resampler's own event queue was fed in
+        // `handle_pointer_event` (Move branch). When resampling is
+        // off, we fall through to the direct dispatch path below.
+        if self.is_resampling_enabled() && !self.resamplers.is_empty() {
+            // Compute `(now, next)` from the configured clock once per
+            // frame. For a `Fixed` clock this is one `Instant::now()`
+            // call; for `Manual` it's the matching branch (returns
+            // `None` ⇒ we cannot pace the resamplers, so skip the
+            // resampling pass and fall back to direct dispatch).
+            let clock = *self.sampling_clock.read();
+            if let Some((now, next)) = clock.tick() {
+                // Collect the per-pointer resamplers into a Vec so we
+                // can release the DashMap shard before dispatching —
+                // dispatch calls back into the binding through
+                // handlers, which would re-acquire the same shard and
+                // deadlock under DashMap's shard-per-key design.
+                let pointers: Vec<PointerId> =
+                    self.resamplers.iter().map(|entry| *entry.key()).collect();
+                for pointer_id in pointers {
+                    // Bail early if the pointer's hit test was
+                    // removed (Up/Cancel landed between the collect
+                    // and the per-pointer sample).
+                    if !self.hit_tests.contains_key(&pointer_id) {
+                        continue;
+                    }
+                    let Some(resampler) = self.resamplers.get(&pointer_id) else {
+                        continue;
+                    };
+                    resampler.sample(now, next, |resampled| {
+                        // Re-fetch the hit test result for each
+                        // resampled event. The DashMap entry was
+                        // acquired above; this re-read is cheap and
+                        // always finds a value (caller removed the
+                        // entry on Up/Cancel, so we are inside the
+                        // active-pointer window).
+                        if let Some(r) = self.hit_tests.get(&pointer_id) {
+                            self.dispatch_event(&resampled, &r);
+                            count += 1;
+                        }
+                    });
+                }
+                // Resampling consumed the resampler's view of the
+                // pending move stream — clear the coalesced queue so
+                // direct dispatch doesn't replay the same events.
+                self.pending_moves.clear();
+                return count;
+            }
+            // `Manual` clock with no tick source: caller is using the
+            // binding off-line and the resampling pass is unusable.
+            // Fall through to the direct path. We do *not* clear
+            // `pending_moves` so the user can still see the events, but we DO
+            // clear the resampler queues — they were fed in the Move branch
+            // and would otherwise grow unbounded to `MAX_BUFFERED_EVENTS` and
+            // emit drop warnings every frame, since this path never drains
+            // them via `sample()`.
+            for resampler in self.resamplers.iter() {
+                resampler.clear();
+            }
+        }
+
+        // Direct dispatch path: drain every coalesced move, then
+        // dispatch each to the cached hit test result.
+        //
+        // Draining happens up front, before any handler runs, for two
+        // reasons. First, `dispatch_event` re-enters the binding through
+        // its handlers; holding a `DashMap` shard guard across that call
+        // would deadlock on the shard-per-key design, so every guard must
+        // be released first. Second, removing all entries before dispatch
+        // preserves coalescing semantics: a re-entrant insert during
+        // dispatch lands in the *next* frame, never this one.
+        //
+        // `remove` returns the owned event, so each move is *moved* out of
+        // the map rather than cloned (`PointerEvent` is 152 bytes). The
+        // key snapshot and the drained buffer stay inline for the common
+        // case (a handful of simultaneous pointers; the hard cap is
+        // `MAX_SIMULTANEOUS_POINTERS`), spilling to the heap only under
+        // heavy multitouch.
+        let pointers: SmallVec<[PointerId; 4]> = self
             .pending_moves
             .iter()
-            .map(|entry| (*entry.key(), entry.value().clone()))
+            .map(|entry| *entry.key())
             .collect();
+        let mut drained: SmallVec<[(PointerId, PointerEvent); 4]> =
+            SmallVec::with_capacity(pointers.len());
+        for pointer_id in pointers {
+            if let Some(entry) = self.pending_moves.remove(&pointer_id) {
+                drained.push(entry);
+            }
+        }
 
-        self.pending_moves.clear();
-
-        for (pointer_id, event) in pending {
+        for (pointer_id, event) in drained {
             // Use cached hit test result
             if let Some(result) = self.hit_tests.get(&pointer_id) {
                 self.dispatch_event(&event, &result);
@@ -442,6 +674,29 @@ impl GestureBinding {
             );
             self.hit_tests.clear();
         }
+        // Resamplers reference the same pointers as the hit test
+        // cache. Drop them too — the resampled event queue is keyed
+        // by pointer id and a stale resampler would consume the next
+        // Move on the same id post-resume.
+        if !self.resamplers.is_empty() {
+            let cleared = self.resamplers.len();
+            self.resamplers.clear();
+            tracing::debug!(
+                cleared,
+                "GestureBinding draining resamplers on lifecycle pause"
+            );
+        }
+        // Pending moves are coalesced by pointer id; clearing the
+        // hit test cache leaves them orphaned (their dispatch would
+        // skip the routing path entirely). Drop them alongside.
+        if !self.pending_moves.is_empty() {
+            let cleared = self.pending_moves.len();
+            self.pending_moves.clear();
+            tracing::debug!(
+                cleared,
+                "GestureBinding draining pending_moves on lifecycle pause"
+            );
+        }
     }
 
     /// Get the number of active pointers (with cached hit tests).
@@ -474,6 +729,18 @@ impl GestureBinding {
     /// timeouts.
     pub fn resolve_timed_out_arenas(&self) -> usize {
         self.arena.resolve_default_timed_out_arenas()
+    }
+
+    /// Advance time-based recognizer deadlines (e.g. long-press hold).
+    ///
+    /// Call once per frame on the UI thread, beside [`Self::flush_pending_moves`].
+    /// A recognizer deadline is otherwise only advanced opportunistically on the
+    /// next pointer event, so a stationary held pointer past its deadline would
+    /// never fire (e.g. long-press on a finger held perfectly still). This is
+    /// distinct from [`Self::resolve_timed_out_arenas`], which handles arena
+    /// disambiguation timeouts, not per-recognizer deadlines.
+    pub fn tick_deadlines(&self) {
+        self.arena.poll_deadlines();
     }
 
     // ========================================================================
@@ -512,9 +779,12 @@ impl std::fmt::Debug for GestureBinding {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use flui_foundation::HasInstance;
 
     use super::*;
+    use crate::events::{make_down_event, make_move_event, make_up_event};
 
     #[test]
     fn test_binding_singleton() {
@@ -598,5 +868,231 @@ mod tests {
 
         // Touch should have larger slop than mouse
         assert!(touch_settings.touch_slop() > mouse_settings.touch_slop());
+    }
+
+    // ========================================================================
+    // Resampler wiring tests
+    // ========================================================================
+
+    #[test]
+    fn resampling_disabled_by_default() {
+        let binding = GestureBinding::new();
+        assert!(!binding.is_resampling_enabled());
+        assert_eq!(binding.active_resampler_count(), 0);
+    }
+
+    #[test]
+    fn set_resampling_enabled_toggles_flag() {
+        let binding = GestureBinding::new();
+        binding.set_resampling_enabled(true);
+        assert!(binding.is_resampling_enabled());
+        binding.set_resampling_enabled(false);
+        assert!(!binding.is_resampling_enabled());
+    }
+
+    #[test]
+    fn set_resampling_enabled_false_clears_resamplers() {
+        let binding = GestureBinding::new();
+        binding.set_resampling_enabled(true);
+        // Seed a resampler via the Down path so the DashMap is non-empty.
+        let down = make_down_event(Offset::new(Pixels(10.0), Pixels(20.0)), PointerType::Mouse);
+        binding.handle_pointer_event(&down, |_| HitTestResult::new());
+        assert!(binding.active_resampler_count() >= 1);
+
+        binding.set_resampling_enabled(false);
+        assert_eq!(binding.active_resampler_count(), 0);
+    }
+
+    #[test]
+    fn down_creates_per_pointer_resampler() {
+        let binding = GestureBinding::new();
+        binding.set_resampling_enabled(true);
+        let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+        binding.handle_pointer_event(&down, |_| HitTestResult::new());
+        // 1 active resampler for the primary pointer.
+        assert_eq!(binding.active_resampler_count(), 1);
+    }
+
+    #[test]
+    fn down_beyond_pointer_cap_is_dropped() {
+        let binding = GestureBinding::new();
+        // Fill to the cap with distinct synthetic pointers (ids 2..) so the
+        // primary id (1) is a genuinely new pointer below.
+        for i in 0..MAX_SIMULTANEOUS_POINTERS {
+            let id = PointerId::new(i as u64 + 2).expect("nonzero pointer id");
+            binding.hit_tests.insert(id, HitTestResult::new());
+        }
+        assert_eq!(binding.active_pointer_count(), MAX_SIMULTANEOUS_POINTERS);
+
+        // A brand-new pointer beyond the cap must be refused, not tracked.
+        let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Touch);
+        binding.handle_pointer_event(&down, |_| HitTestResult::new());
+        assert_eq!(
+            binding.active_pointer_count(),
+            MAX_SIMULTANEOUS_POINTERS,
+            "a Down beyond the simultaneous-pointer cap must not be tracked"
+        );
+    }
+
+    #[test]
+    fn up_removes_per_pointer_resampler() {
+        let binding = GestureBinding::new();
+        binding.set_resampling_enabled(true);
+        let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+        binding.handle_pointer_event(&down, |_| HitTestResult::new());
+        let up = make_up_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+        binding.handle_pointer_event(&up, |_| HitTestResult::new());
+        assert_eq!(binding.active_resampler_count(), 0);
+    }
+
+    #[test]
+    fn move_with_resampling_off_uses_coalescing_path() {
+        // Resampling off (default): move events go into pending_moves
+        // and are *not* mirrored to the resampler (the resampler
+        // already exists but stays empty for this move). On flush
+        // the direct dispatch path drains the queue.
+        let binding = GestureBinding::new();
+        let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+        binding.handle_pointer_event(&down, |_| HitTestResult::new());
+
+        let mv = make_move_event(Offset::new(Pixels(10.0), Pixels(20.0)), PointerType::Mouse);
+        binding.handle_pointer_event(&mv, |_| HitTestResult::new());
+
+        // Coalesced queue has the move; resampler exists but is
+        // untouched on the off path.
+        assert!(binding.has_pending_moves());
+        assert_eq!(binding.pending_move_count(), 1);
+        // The resampler is created on Down but no Move is fed to it
+        // when resampling is off.
+        assert!(
+            !binding
+                .resamplers
+                .iter()
+                .any(|r| r.value().has_pending_events())
+        );
+    }
+
+    #[test]
+    fn move_with_resampling_on_feeds_resampler() {
+        // Resampling on: move events are mirrored to the resampler in
+        // addition to the coalesced queue.
+        let binding = GestureBinding::new();
+        binding.set_resampling_enabled(true);
+        let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+        binding.handle_pointer_event(&down, |_| HitTestResult::new());
+
+        let mv = make_move_event(Offset::new(Pixels(10.0), Pixels(20.0)), PointerType::Mouse);
+        binding.handle_pointer_event(&mv, |_| HitTestResult::new());
+
+        assert_eq!(binding.active_resampler_count(), 1);
+        assert!(binding.has_pending_moves());
+    }
+
+    #[test]
+    fn sampling_clock_round_trip() {
+        let binding = GestureBinding::new();
+        let clock = SamplingClock::Fixed {
+            period: Duration::from_millis(8),
+        };
+        binding.set_sampling_clock(clock);
+        let read = binding.sampling_clock();
+        assert_eq!(read.period(), Duration::from_millis(8));
+    }
+
+    #[test]
+    fn lifecycle_pause_clears_resamplers_and_pending_moves() {
+        let binding = GestureBinding::new();
+        binding.set_resampling_enabled(true);
+        let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+        binding.handle_pointer_event(&down, |_| HitTestResult::new());
+        let mv = make_move_event(Offset::new(Pixels(10.0), Pixels(20.0)), PointerType::Mouse);
+        binding.handle_pointer_event(&mv, |_| HitTestResult::new());
+
+        assert!(binding.active_resampler_count() >= 1);
+        assert!(binding.has_pending_moves());
+
+        binding.handle_lifecycle_pause();
+
+        assert_eq!(binding.active_resampler_count(), 0);
+        assert_eq!(binding.pending_move_count(), 0);
+    }
+
+    #[test]
+    fn flush_pending_moves_with_resampling_off_dispatches_directly() {
+        // Off-path moves dispatch on flush.
+        let binding = GestureBinding::new();
+        let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+        binding.handle_pointer_event(&down, |_| HitTestResult::new());
+
+        let mv = make_move_event(Offset::new(Pixels(10.0), Pixels(20.0)), PointerType::Mouse);
+        binding.handle_pointer_event(&mv, |_| HitTestResult::new());
+
+        let processed = binding.flush_pending_moves();
+        // Direct path emits 1 dispatch per pending move.
+        assert_eq!(processed, 1);
+        assert!(!binding.has_pending_moves());
+    }
+
+    #[test]
+    fn flush_pending_moves_with_resampling_on_uses_resamplers() {
+        // With resampling on, the resampler absorbs the move and
+        // either dispatches it through the resampled path or holds
+        // it for the next sample window. The contract is that
+        // `pending_moves` is drained (so the direct path does not
+        // replay the same event).
+        let binding = GestureBinding::new();
+        binding.set_resampling_enabled(true);
+        let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+        binding.handle_pointer_event(&down, |_| HitTestResult::new());
+
+        let mv = make_move_event(Offset::new(Pixels(10.0), Pixels(20.0)), PointerType::Mouse);
+        binding.handle_pointer_event(&mv, |_| HitTestResult::new());
+
+        let _ = binding.flush_pending_moves();
+        // After flush, the coalesced queue is drained (the resampler
+        // owns the move-stream view from now on).
+        assert!(!binding.has_pending_moves());
+        // Resampler still alive (pointer is still down).
+        assert_eq!(binding.active_resampler_count(), 1);
+    }
+
+    #[test]
+    fn down_marks_resampler_tracked() {
+        // The resampler created on Down must be marked tracked so `sample()`
+        // does not early-return; otherwise every coalesced move is dropped on
+        // flush when resampling is enabled.
+        let binding = GestureBinding::new();
+        binding.set_resampling_enabled(true);
+        let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+        binding.handle_pointer_event(&down, |_| HitTestResult::new());
+
+        let tracked = binding
+            .resamplers
+            .get(&PointerId::PRIMARY)
+            .map(|r| r.is_tracked())
+            .unwrap_or(false);
+        assert!(tracked, "resampler must be tracked after the Down");
+    }
+
+    #[test]
+    fn flush_with_resampling_on_dispatches_move_not_drops_it() {
+        // Regression: with resampling on, a move must reach dispatch (be
+        // resampled), not be silently dropped because the resampler was never
+        // tracked.
+        let binding = GestureBinding::new();
+        binding.set_resampling_enabled(true);
+        binding.set_sampling_clock(SamplingClock::Fixed {
+            period: Duration::from_millis(8),
+        });
+        let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+        binding.handle_pointer_event(&down, |_| HitTestResult::new());
+        let mv = make_move_event(Offset::new(Pixels(10.0), Pixels(20.0)), PointerType::Mouse);
+        binding.handle_pointer_event(&mv, |_| HitTestResult::new());
+
+        let dispatched = binding.flush_pending_moves();
+        assert!(
+            dispatched >= 1,
+            "resampled move must be dispatched, not dropped (got {dispatched})"
+        );
     }
 }

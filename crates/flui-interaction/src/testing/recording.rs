@@ -125,7 +125,7 @@ impl RecordedEvent {
             position: self.position,
             local_position: self.position,
             device_kind: self.device_kind,
-            // U9: PointerEventData carries the legacy `device: i32` field;
+            // PointerEventData carries the legacy `device: i32` field;
             // map PointerId (NonZeroU64) into the low 31 bits — primary
             // pointer (PointerId(1)) lands on `1`, matching the test
             // expectation that distinct pointer ids stay distinct devices.

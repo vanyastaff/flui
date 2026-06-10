@@ -181,8 +181,10 @@ impl ForcePressGestureRecognizer {
     ///
     /// Default is 0.4 (40% of max pressure).
     pub fn with_start_pressure(mut self: Arc<Self>, pressure: f32) -> Arc<Self> {
-        // Safe because Arc::new just created this and we have the only reference
-        Arc::get_mut(&mut self).unwrap().start_pressure = pressure.clamp(0.0, 1.0);
+        // `make_mut` mutates in place when uniquely owned and otherwise clones
+        // first, so this is non-panicking even if the caller holds another
+        // reference (unlike `get_mut().unwrap()`, which panicked in release).
+        Arc::make_mut(&mut self).start_pressure = pressure.clamp(0.0, 1.0);
         self
     }
 
@@ -190,7 +192,10 @@ impl ForcePressGestureRecognizer {
     ///
     /// Default is 0.85 (85% of max pressure).
     pub fn with_peak_pressure(mut self: Arc<Self>, pressure: f32) -> Arc<Self> {
-        Arc::get_mut(&mut self).unwrap().peak_pressure = pressure.clamp(0.0, 1.0);
+        // `make_mut` mutates in place when uniquely owned and otherwise clones
+        // first, so this is non-panicking even if the caller holds another
+        // reference (unlike `get_mut().unwrap()`, which panicked in release).
+        Arc::make_mut(&mut self).peak_pressure = pressure.clamp(0.0, 1.0);
         self
     }
 
@@ -510,7 +515,7 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
 }
 
 // =============================================================================
-// Canonical trait hierarchy adoption (U20)
+// Canonical trait hierarchy adoption
 // =============================================================================
 //
 // Flutter parity: `force_press.dart:117 ForcePressGestureRecognizer extends

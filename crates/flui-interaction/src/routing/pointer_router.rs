@@ -35,6 +35,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use parking_lot::RwLock;
+use smallvec::SmallVec;
 
 use crate::{events::PointerEvent, ids::PointerId};
 
@@ -230,8 +231,10 @@ impl PointerRouter {
     pub fn route(&self, event: &PointerEvent) {
         let pointer = get_pointer_id(event);
 
-        // Single read for per-pointer handlers — snapshot via clone.
-        let pointer_handlers: Vec<PointerRouteHandler> = self
+        // Snapshot per-pointer handlers (clone the `Arc`s) so the lock is
+        // released before dispatch — a handler may re-enter the router. A
+        // `SmallVec` keeps the common ≤4-handler case off the heap.
+        let pointer_handlers: SmallVec<[PointerRouteHandler; 4]> = self
             .routes
             .read()
             .get(&pointer)
@@ -243,8 +246,8 @@ impl PointerRouter {
             handler(event);
         }
 
-        // Single read for global handlers — snapshot via clone.
-        let global_handlers: Vec<GlobalPointerHandler> =
+        // Snapshot global handlers likewise.
+        let global_handlers: SmallVec<[GlobalPointerHandler; 4]> =
             self.global_handlers.read().iter().cloned().collect();
 
         // Global handlers after per-pointer.
@@ -424,8 +427,8 @@ mod tests {
     #[test]
     fn test_per_pointer_before_global() {
         // Flutter parity: pointer_router.dart:124 dispatches per-pointer
-        // handlers first, then global handlers. Post-U25 (acab2929+) FLUI
-        // matches this ordering — previously global fired first.
+        // handlers first, then global handlers. This router matches that
+        // ordering.
         let router = PointerRouter::new();
         let pointer = PointerId::PRIMARY; // PRIMARY pointer
 
@@ -605,10 +608,10 @@ mod tests {
         let event = make_event(0, Offset::new(Pixels(50.0), Pixels(50.0)));
         router.route(&event); // Should not deadlock
 
-        // Post-U25 semantics (snapshot-then-dispatch matching Flutter):
+        // Current semantics (snapshot-then-dispatch matching Flutter):
         // handler2 IS called because the dispatch snapshot was taken before
         // any handler fired. Removal takes effect on the next event.
-        // Old (pre-U25) FLUI checked still-registered per-handler at 2+N+M
+        // Previously FLUI checked still-registered per-handler at 2+N+M
         // lock count; that contract removed for perf parity with Flutter.
         assert_eq!(handler2_called.load(Ordering::Relaxed), 1);
 
