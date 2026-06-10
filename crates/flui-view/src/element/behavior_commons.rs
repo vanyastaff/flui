@@ -33,7 +33,7 @@ use std::panic::AssertUnwindSafe;
 
 use flui_foundation::RenderId;
 
-use super::{arity::ElementArity, child_storage::ElementChildStorage, generic::ElementCore};
+use super::{arity::ElementArity, generic::ElementCore};
 use crate::view::{FlutterError, IntoView, View};
 
 // ============================================================================
@@ -81,32 +81,31 @@ where
 /// captures just the immutable build inputs (`&V` / `&V::State` /
 /// `&BuildContext`) — wrapped in [`AssertUnwindSafe`] because a user
 /// `build()` is logically pure and a half-finished one leaks no shared
-/// state into `core`. The child-update helper
-/// [`finish_single_child_build`] runs strictly *after* this function
-/// returns, so a panic can never be observed mid-`update_or_create_child`
-/// (which would leave `core` half-mutated).
+/// state into `core`. The child reconcile — the id-reconciler the
+/// surrounding `BuildOwner::build_scope` drives once `build_into_views`
+/// has returned — runs strictly *after* this function, so a panic can
+/// never be observed mid-reconcile (which would leave `core` half-mutated).
 ///
 /// `AssertUnwindSafe` is safe code — this crate is
 /// `#![forbid(unsafe_code)]` and the assertion does not change that.
 ///
-/// # Teardown on a caught panic
+/// # Recovery on a caught panic
 ///
-/// The element under construction is in an indeterminate state after a
-/// panic, so the whole child subtree is torn down
-/// ([`ElementChildStorage::unmount_children`] — unmounts every descendant
-/// and clears the storage) *before* the error view is returned. The
-/// caller then hands the returned `ErrorView` box to
-/// [`finish_single_child_build`], which sees an empty storage and
-/// creates a fresh `ErrorElement` — leaving no dangling render-tree node
-/// and no stale child. This is the Rust-native shape of Flutter's
+/// E3 (atomic box→arena swap): the element no longer owns a child graph,
+/// so there is no half-built child subtree to tear down here. On a caught
+/// panic this returns the substituted `ErrorView` box; the caller
+/// (`build_into_views`) returns it as the single child view, and the slab
+/// id-reconciler in `build_scope` replaces the prior child element with a
+/// fresh `ErrorElement`. That id-reconcile (type mismatch → remove old +
+/// insert new) is the Rust-native, slab-resident shape of Flutter's
 /// `_child?.deactivate()` + `updateChild(null, errorWidget, slot)`
 /// force-from-null rebuild (`framework.dart:5854-5858`).
 ///
-/// `context` names what was building (e.g. `"building StatelessElement"`)
-/// for the `FlutterError` breadcrumb.
+/// `behavior_name` names what was building (e.g. `"building
+/// StatelessElement"`) for the `FlutterError` breadcrumb.
 pub(crate) fn build_or_recover<V, A, F>(
     core: &mut ElementCore<V, A>,
-    owner: &mut crate::ElementOwner<'_>,
+    _owner: &mut crate::ElementOwner<'_>,
     behavior_name: &'static str,
     build: F,
 ) -> Box<dyn View>
@@ -116,32 +115,22 @@ where
     F: FnOnce() -> Box<dyn View>,
 {
     // Only `build()` is inside the catch — see the panic-safety note.
-    // Phase 3 §U22 keeps the closure return as `Box<dyn View>` rather
-    // than `impl IntoView`: the typed `impl IntoView` from
-    // `StatelessView::build` / `ViewState::build` captures the
-    // closure-local `&view`/`&ctx` borrows by Rust 2024 RPITIT
-    // default, so returning the opaque value across the closure
-    // boundary trips E0515 ("returns a value referencing data owned
-    // by the current function"). The fix lives at the call site (see
-    // `behavior.rs`): the closure body itself consumes the opaque
-    // value via `IntoView::into_view()` + `Box::new`, producing an
-    // owned `Box<dyn View>` with no escaping borrows. The trait stays
-    // capture-default, authors do not need `+ use<…>` annotations on
-    // their `build()` impls.
+    // The typed `impl IntoView` from `StatelessView::build` /
+    // `ViewState::build` captures the closure-local `&view`/`&ctx`
+    // borrows by Rust 2024 RPITIT default, so returning the opaque value
+    // across the closure boundary would trip E0515. The fix lives at the
+    // call site (see `behavior.rs`): the closure body itself consumes the
+    // opaque value via `IntoView::into_view()` + `Box::new`, producing an
+    // owned `Box<dyn View>` with no escaping borrows. Authors need no
+    // `+ use<…>` annotations on their `build()` impls.
+    let _ = core; // `core` kept on the signature for symmetry / future hooks.
     match std::panic::catch_unwind(AssertUnwindSafe(build)) {
         Ok(child_view) => child_view,
         Err(payload) => {
-            // Indeterminate state: tear the whole child subtree down so
-            // the substituted error view is mounted fresh, not merged
-            // onto a half-built descendant. `unmount_children` clears
-            // the storage, so `finish_single_child_build` will go down
-            // the create-from-empty branch.
-            core.children_mut().unmount_children(owner);
-
             let error =
                 FlutterError::from_panic(payload.as_ref(), format!("building {behavior_name}"));
             tracing::error!(
-                "{}::perform_build caught a panic, substituting ErrorView: {}",
+                "{}::build_into_views caught a panic, substituting ErrorView: {}",
                 behavior_name,
                 error.message
             );
@@ -150,43 +139,43 @@ where
     }
 }
 
-/// Shared tail for any behavior whose `perform_build` produces exactly
-/// one `child_view`: hand the view to the core, clear the dirty flag,
-/// emit the `completed` trace.
+/// Shared tail for any behavior whose build half produces exactly one
+/// child view: normalize it to a boxed `View`, clear the dirty flag, emit
+/// the `completed` trace, and return it as a single-element `Vec`.
 ///
 /// Used by `StatelessBehavior`, `StatefulBehavior`, `ProxyBehavior`,
-/// `InheritedBehavior`. `RenderBehavior` keeps its `perform_build` body
-/// inline so the tracing strings can interpolate the active `RenderId`.
+/// `InheritedBehavior`. `RenderBehavior` keeps its `build_into_views`
+/// body inline so the tracing strings can interpolate the active
+/// `RenderId`.
+///
+/// E3 (atomic box→arena swap): this no longer reconciles a child into box
+/// storage — it just hands the owned child view back. The reconcile
+/// against the slab runs in `BuildOwner::build_scope`. `core` is cleared
+/// of its dirty flag here because the build half is complete (the seam
+/// that used to clear it after `update_or_create_child`).
 //
-// Phase 3 §U22 (FR-007): accepts `impl IntoView` from authoring-side
-// callers and normalizes via `IntoView::into_view` inside the helper.
-// `BoxedView` (the canonical erased path) and concrete `View`-impl
-// types both satisfy the bound; the temporary `IntoView for Box<dyn View>`
-// shim (`view/into_view.rs`) keeps legacy `Box<dyn View>` call sites
-// compiling during the §U22→§U28 sweep. The `Box<dyn View>` ownership
-// transfer to `update_or_create_child` is still intentional — the
-// helper boxes the normalized value at the boundary so the inner
-// pipeline keeps its existing contract. The generic `R` parameter (no
-// longer `Box<dyn View>` on its own line) sidesteps `port-check.sh`
-// trigger 6's struct-field pattern, so the previous `#[rustfmt::skip]`
-// workaround that kept the signature on one line is no longer needed.
-pub(crate) fn finish_single_child_build<V, A, R>(
+// FR-007: accepts `impl IntoView` from authoring-side callers and
+// normalizes via `IntoView::into_view` inside the helper. The generic
+// `R` parameter (not `Box<dyn View>` on its own line) sidesteps
+// `port-check.sh` trigger 6's struct-field pattern.
+#[must_use]
+pub(crate) fn single_child_views<V, A, R>(
     core: &mut ElementCore<V, A>,
     child_view: R,
     behavior_name: &'static str,
-    owner: &mut crate::ElementOwner<'_>,
-) where
+) -> Vec<Box<dyn View>>
+where
     V: Clone + Send + Sync + 'static,
     A: ElementArity,
     R: IntoView,
 {
     let boxed: Box<dyn View> = Box::new(child_view.into_view());
-    core.update_or_create_child(boxed, owner);
     core.clear_dirty();
-    tracing::debug!("{}::perform_build completed", behavior_name);
+    tracing::debug!("{}::build_into_views completed", behavior_name);
+    vec![boxed]
 }
 
-/// Full `perform_build` body for behaviors that delegate to a `child()`
+/// Full `build_into_views` body for behaviors that delegate to a `child()`
 /// accessor on the view — i.e. `ProxyBehavior` and `InheritedBehavior`.
 ///
 /// `get_child` abstracts over `ProxyView::child` vs
@@ -195,24 +184,30 @@ pub(crate) fn finish_single_child_build<V, A, R>(
 /// identical otherwise:
 ///
 /// ```text
-///   guard → view.child() → clone_box → update_or_create_child → clear
+///   guard → view.child() → clone_box → clear dirty → vec![child]
 /// ```
-pub(crate) fn build_proxy_style<V, A, F>(
+///
+/// Returns `vec![]` when the guard short-circuits (clean element /
+/// non-buildable lifecycle), so `build_scope` reconciles to the same
+/// child list the prior frame produced only when a real build ran — a
+/// clean proxy contributes no view churn.
+#[must_use]
+pub(crate) fn proxy_style_views<V, A, F>(
     core: &mut ElementCore<V, A>,
     behavior_name: &'static str,
-    owner: &mut crate::ElementOwner<'_>,
     get_child: F,
-) where
+) -> Vec<Box<dyn View>>
+where
     V: Clone + Send + Sync + 'static,
     A: ElementArity,
     F: FnOnce(&V) -> &dyn View,
 {
     if !should_build_with_trace(core, behavior_name) {
-        return;
+        return Vec::new();
     }
     let child_view = get_child(core.view());
     let child_view_boxed = dyn_clone::clone_box(child_view);
-    finish_single_child_build(core, child_view_boxed, behavior_name, owner);
+    single_child_views(core, child_view_boxed, behavior_name)
 }
 
 // ============================================================================
@@ -372,9 +367,10 @@ mod tests {
             0
         }
         fn mark_needs_build(&mut self) {}
-        fn visit_children(&self, _visitor: &mut dyn FnMut(ElementId)) {}
         fn update(&mut self, _new_view: &dyn View, _owner: &mut crate::ElementOwner<'_>) {}
-        fn perform_build(&mut self, _owner: &mut crate::ElementOwner<'_>) {}
+        fn build_into_views(&mut self, _owner: &mut crate::ElementOwner<'_>) -> Vec<Box<dyn View>> {
+            Vec::new()
+        }
         fn mount(
             &mut self,
             _parent: Option<ElementId>,
@@ -453,7 +449,7 @@ mod tests {
     }
 
     #[test]
-    fn finish_single_child_build_clears_dirty_via_stateless_path() {
+    fn build_into_views_clears_dirty_via_stateless_path() {
         let mut core = ElementCore::<CountingView, Single>::new(CountingView);
         let mut build_owner = BuildOwner::new();
         core.mount(None, 0, &mut build_owner.element_owner_mut());
@@ -461,18 +457,23 @@ mod tests {
 
         let mut behavior = StatelessBehavior;
         let mut owner = build_owner.element_owner_mut();
-        <StatelessBehavior as ElementBehavior<CountingView, Single>>::perform_build(
+        let views = <StatelessBehavior as ElementBehavior<CountingView, Single>>::build_into_views(
             &mut behavior,
             &mut core,
             &mut owner,
         );
 
-        assert!(!core.is_dirty(), "perform_build must clear dirty");
+        assert!(!core.is_dirty(), "build_into_views must clear dirty");
         assert_eq!(core.lifecycle(), Lifecycle::Active);
+        assert_eq!(
+            views.len(),
+            1,
+            "stateless build yields exactly one child view"
+        );
     }
 
     #[test]
-    fn finish_single_child_build_direct_helper_call_clears_dirty() {
+    fn single_child_views_direct_helper_call_clears_dirty() {
         // Drive the helper directly with a hand-rolled child to lock
         // down its contract independent of any caller.
         let mut core = ElementCore::<TestView, Single>::new(TestView);
@@ -481,44 +482,43 @@ mod tests {
         assert!(core.is_dirty());
 
         let child: Box<dyn View> = Box::new(TestView);
-        let mut owner = build_owner.element_owner_mut();
-        finish_single_child_build(&mut core, child, "TestBehavior", &mut owner);
+        let views = single_child_views(&mut core, child, "TestBehavior");
 
         assert!(!core.is_dirty(), "helper must clear the dirty flag");
+        assert_eq!(views.len(), 1, "helper returns the single child view");
     }
 
     // ------------------------------------------------------------------
-    // build_proxy_style
+    // proxy_style_views
     // ------------------------------------------------------------------
 
     #[test]
-    fn build_proxy_style_clears_dirty_after_running() {
+    fn proxy_style_views_clears_dirty_and_returns_child() {
         let mut core = ElementCore::<WrapperView, Single>::new(WrapperView { child: TestView });
         let mut build_owner = BuildOwner::new();
         core.mount(None, 0, &mut build_owner.element_owner_mut());
         assert!(core.is_dirty());
 
-        let mut owner = build_owner.element_owner_mut();
-        build_proxy_style(&mut core, "TestBehavior", &mut owner, WrapperView::child);
+        let views = proxy_style_views(&mut core, "TestBehavior", WrapperView::child);
 
         assert!(!core.is_dirty(), "proxy-style build must clear dirty");
+        assert_eq!(views.len(), 1, "proxy build yields the wrapped child view");
     }
 
     #[test]
-    fn build_proxy_style_skips_when_lifecycle_blocks_build() {
+    fn proxy_style_views_skips_when_lifecycle_blocks_build() {
         // Lifecycle::Initial blocks builds. The helper's
-        // `should_build_with_trace` guard must short-circuit and the
-        // dirty flag should remain set (we never reached the tail).
+        // `should_build_with_trace` guard must short-circuit, leave the
+        // dirty flag set, and return no views (we never reached the tail).
         let mut core = ElementCore::<WrapperView, Single>::new(WrapperView { child: TestView });
-        let mut build_owner = BuildOwner::new();
 
         assert_eq!(core.lifecycle(), Lifecycle::Initial);
         let was_dirty = core.is_dirty();
 
-        let mut owner = build_owner.element_owner_mut();
-        build_proxy_style(&mut core, "TestBehavior", &mut owner, WrapperView::child);
+        let views = proxy_style_views(&mut core, "TestBehavior", WrapperView::child);
 
         assert_eq!(core.is_dirty(), was_dirty);
+        assert!(views.is_empty(), "blocked build contributes no view churn");
         // `clone_box` proves the get_child closure is wired:
         let _ = clone_box(WrapperView { child: TestView }.child());
     }

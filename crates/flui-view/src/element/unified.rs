@@ -183,12 +183,28 @@ where
         self.core.is_dirty()
     }
 
-    fn visit_children(&self, _visitor: &mut dyn FnMut(ElementId)) {
-        // Children are managed internally
-    }
-
     fn set_pipeline_owner_any(&mut self, owner: Arc<dyn Any + Send + Sync>) {
         self.core.set_pipeline_owner_any(owner);
+    }
+
+    fn pipeline_owner_any(&self) -> Option<Arc<dyn Any + Send + Sync>> {
+        // Hand the core's `PipelineOwner` to the slab `insert` path so it
+        // can propagate it to a freshly-inserted child before mount.
+        self.core
+            .pipeline_owner()
+            .map(|po| Arc::clone(po) as Arc<dyn Any + Send + Sync>)
+    }
+
+    fn child_render_id(&self) -> Option<RenderId> {
+        // A `RenderObjectElement` (`RenderBehavior`) returns its own
+        // `render_id` — its children attach their `RenderObject`s under
+        // it. Every other behavior returns `None` for `render_id`, so the
+        // `or_else` falls through to the pass-through `parent_render_id`
+        // this element itself received (the nearest ancestor render
+        // object). This is the E3 propagation target for child inserts.
+        self.behavior
+            .render_id()
+            .or_else(|| self.core.child_parent_render_id())
     }
 
     fn set_parent_render_id(&mut self, parent_id: Option<RenderId>) {
@@ -288,8 +304,8 @@ where
         }
     }
 
-    fn perform_build(&mut self, owner: &mut crate::ElementOwner<'_>) {
-        self.behavior.perform_build(&mut self.core, owner);
+    fn build_into_views(&mut self, owner: &mut crate::ElementOwner<'_>) -> Vec<Box<dyn View>> {
+        self.behavior.build_into_views(&mut self.core, owner)
     }
 
     fn mount(
@@ -456,13 +472,45 @@ where
         &mut self.behavior.state
     }
 
-    /// Mark as needing rebuild (like Flutter's setState).
+    /// Mark as needing rebuild (like Flutter's `setState`), flipping only
+    /// the dirty flag.
+    ///
+    /// E3 (atomic box→arena swap): marking dirty alone is necessary but
+    /// not sufficient in the slab/drain model — `BuildOwner::build_scope`
+    /// only rebuilds elements that are ALSO on the dirty heap. Use
+    /// [`Self::set_state_scheduled`] when an [`ElementOwner`](crate::ElementOwner)
+    /// is in scope so the element is both marked dirty AND pushed onto the heap (the
+    /// path that actually reaches `build_scope`). This bare variant
+    /// remains for direct-API / test callers that drive a rebuild
+    /// explicitly.
     pub fn set_state<F>(&mut self, f: F)
     where
         F: FnOnce(&mut V::State),
     {
         f(&mut self.behavior.state);
         self.core.mark_dirty();
+    }
+
+    /// `setState` that also schedules this element for rebuild through the
+    /// split-borrow `owner` — the slab/drain-model path that actually
+    /// reaches [`BuildOwner::build_scope`](crate::BuildOwner).
+    ///
+    /// Flips the dirty flag, then pushes `(self_id, depth)` onto the dirty
+    /// heap via [`ElementOwner::schedule_build_for`](crate::ElementOwner::schedule_build_for).
+    /// `self_id` was stamped
+    /// at mount (`ElementTree::insert` / `mount_root_*` call `set_self_id`
+    /// before `mount`); if it is somehow unset (a hand-rolled element that
+    /// bypassed the slab) only the dirty flag flips, matching the bare
+    /// [`Self::set_state`] — a `debug_assert!` flags the missing id in
+    /// tests so the framework-invariant violation is loud where it
+    /// matters.
+    pub fn set_state_scheduled<F>(&mut self, f: F, owner: &mut crate::ElementOwner<'_>)
+    where
+        F: FnOnce(&mut V::State),
+    {
+        f(&mut self.behavior.state);
+        self.core.mark_dirty();
+        self.core.schedule_self_build(owner);
     }
 }
 

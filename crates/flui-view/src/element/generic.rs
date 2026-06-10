@@ -55,11 +55,8 @@ use flui_foundation::{ElementId, ListenerCallback, RenderId};
 use flui_rendering::pipeline::PipelineOwner;
 use parking_lot::RwLock;
 
-use super::{arity::ElementArity, child_storage::ElementChildStorage};
-use crate::{
-    element::Lifecycle,
-    view::{ElementBase, View},
-};
+use super::arity::ElementArity;
+use crate::{element::Lifecycle, view::View};
 
 /// Generic element core with arity-based child management.
 ///
@@ -108,15 +105,15 @@ where
     /// Used for build order and z-index calculations.
     depth: usize,
 
-    /// Arity-specific child storage.
-    ///
-    /// The concrete type is determined by A::Storage:
-    /// - Leaf → NoChildStorage
-    /// - Single → SingleChildStorage
-    /// - Optional → OptionalChildStorage
-    /// - Variable → VariableChildStorage
-    children: A::Storage,
-
+    // E3 (atomic box→arena swap): the per-element `children: A::Storage`
+    // box graph is gone. Children are slab-resident nodes addressed by
+    // `ElementId` in the single [`ElementTree`](crate::tree::ElementTree);
+    // a node's child list is its
+    // [`ElementNode::child_ids`](crate::tree::ElementNode). `A: ElementArity`
+    // still enforces the child-count constraint at the type level — it
+    // simply no longer carries storage. The build half returns OWNED child
+    // views (`build_into_views`); the reconcile half runs against the slab
+    // in `BuildOwner::build_scope`.
     /// Whether this element needs to rebuild.
     ///
     /// Uses `Arc<AtomicBool>` for interior mutability, allowing listener
@@ -138,14 +135,13 @@ where
 
     /// This element's own `ElementId` in the surrounding `ElementTree`.
     ///
-    /// Plan §U15: populated by `ElementTree::insert` /
-    /// `mount_root_with_pipeline_owner` immediately after slab
-    /// insertion (via [`ElementBase::set_self_id`] → forwarded to
-    /// [`Self::set_self_id`]) so that
-    /// [`Self::update_or_create_children`] (Variable arity) can stamp
-    /// the real parent `ElementId` onto every emitted
-    /// [`ReconcileEvent`](crate::tree::ReconcileEvent) — replacing
-    /// the §U13 placeholder.
+    /// Plan §U15: stamped by `ElementTree::insert` /
+    /// `mount_root_with_pipeline_owner` immediately after slab insertion
+    /// (via [`ElementBase::set_self_id`](crate::ElementBase::set_self_id),
+    /// forwarded to [`Self::set_self_id`]) so the element can schedule its
+    /// OWN rebuild: the element's `set_state_scheduled` pushes
+    /// `(self_id, depth)` onto the dirty heap that
+    /// [`BuildOwner::build_scope`](crate::BuildOwner) drains.
     self_id: Option<ElementId>,
 
     /// Phantom data for generic parameter A.
@@ -171,7 +167,6 @@ where
             view,
             lifecycle: Lifecycle::Initial,
             depth: 0,
-            children: A::Storage::default(),
             dirty: Arc::new(AtomicBool::new(true)),
             pipeline_owner: None,
             parent_render_id: None,
@@ -185,6 +180,30 @@ where
     /// via [`crate::view::ElementBase::set_self_id`]. Plan §U15.
     pub(crate) fn set_self_id(&mut self, id: ElementId) {
         self.self_id = Some(id);
+    }
+
+    /// Push this element onto the dirty heap so
+    /// [`BuildOwner::build_scope`](crate::BuildOwner) reaches it.
+    ///
+    /// E3 (atomic box→arena swap): the slab/drain model rebuilds only
+    /// elements on the heap, so `setState` flips dirty AND schedules via
+    /// this. Uses the element's own stamped `self_id` + `depth`. If
+    /// `self_id` is unset — a hand-rolled element that bypassed
+    /// `ElementTree::insert` / `mount_root_*` — scheduling is skipped (the
+    /// element is not slab-addressable, so `build_scope` could not reach
+    /// it anyway); a `debug_assert!` makes that framework-invariant
+    /// violation loud in tests.
+    pub(crate) fn schedule_self_build(&self, owner: &mut crate::ElementOwner<'_>) {
+        debug_assert!(
+            self.self_id.is_some(),
+            "ElementCore::schedule_self_build called before set_self_id: \
+             a slab-resident element must be stamped with its ElementId at \
+             mount (ElementTree::insert / mount_root_* do this) before any \
+             setState can schedule it."
+        );
+        if let Some(id) = self.self_id {
+            owner.schedule_build_for(id, self.depth);
+        }
     }
 
     // NOTE: `self_id` is read directly via `self.self_id` inside
@@ -232,12 +251,15 @@ where
 
     /// Unmount this element (permanently removed).
     ///
-    /// Sets lifecycle to Defunct and unmounts all children. Threads
-    /// the split-borrow `owner` handle into child unmounts so any
-    /// descendant `GlobalKey` deregistration / dependent-set cleanup
-    /// (U9, U14) can take effect.
-    pub fn unmount(&mut self, owner: &mut crate::ElementOwner<'_>) {
-        self.children.unmount_children(owner);
+    /// Sets lifecycle to Defunct. E3: children are slab-resident nodes —
+    /// the [`ElementTree`](crate::tree::ElementTree) drives the
+    /// deepest-first id-unmount of descendants (via
+    /// `BuildOwner::finalize_tree` / `collect_elements_to_unmount`), so
+    /// this element no longer frees a child subtree implicitly. The
+    /// split-borrow `owner` handle is kept on the signature so behavior
+    /// `on_unmount` hooks (GlobalKey deregistration, dependent-set
+    /// cleanup) still run through the unified `Element::unmount`.
+    pub fn unmount(&mut self, _owner: &mut crate::ElementOwner<'_>) {
         self.lifecycle = Lifecycle::Defunct;
 
         tracing::debug!(
@@ -249,10 +271,11 @@ where
 
     /// Activate this element (re-inserted into tree).
     ///
-    /// Sets lifecycle to Active and activates all children.
+    /// Sets lifecycle to Active. E3: child activation is the slab's job
+    /// (descendants are independent nodes), not a recursive walk from
+    /// here.
     pub fn activate(&mut self) {
         self.lifecycle = Lifecycle::Active;
-        self.children.activate_children();
 
         tracing::debug!(
             "ElementCore::activate lifecycle={:?} view_type={:?}",
@@ -263,10 +286,11 @@ where
 
     /// Deactivate this element (temporarily removed from tree).
     ///
-    /// Sets lifecycle to Inactive and deactivates all children.
+    /// Sets lifecycle to Inactive. E3: child deactivation is the slab's
+    /// job (descendants are independent nodes), not a recursive walk from
+    /// here.
     pub fn deactivate(&mut self) {
         self.lifecycle = Lifecycle::Inactive;
-        self.children.deactivate_children();
 
         tracing::debug!(
             "ElementCore::deactivate lifecycle={:?} view_type={:?}",
@@ -331,172 +355,17 @@ where
         self.dirty.store(true, Ordering::Relaxed);
     }
 
-    // ========================================================================
-    // Child Management (eliminates child management boilerplate ~30 lines)
-    // ========================================================================
-
-    /// Update or create the child element with a new view.
-    ///
-    /// For Single/Optional arity, this updates the existing child or creates
-    /// new. For Variable arity, use `update_or_create_children` instead.
-    ///
-    /// # Arguments
-    ///
-    /// * `child_view` - The new child View
-    /// * `owner` - Split-borrow handle threaded through child
-    ///   mount/unmount/update calls (plan §U8).
-    // `Box<dyn View>` ownership transfer is intentional for API consistency.
-    // Single-line signature avoids `port-check.sh` trigger 6's struct-field
-    // pattern matching a `child_view: Box<dyn View>,` parameter on its own
-    // line (the trigger comment notes the trailing-comma anchor was meant to
-    // exclude function parameters but in practice does not).
-    #[rustfmt::skip]
-    #[allow(clippy::needless_pass_by_value)]
-    pub fn update_or_create_child(&mut self, child_view: Box<dyn View>, owner: &mut crate::ElementOwner<'_>) {
-        if self.children.is_empty() {
-            // First build - create child element
-            self.children.create_from_view(child_view.as_ref());
-
-            // Propagate owner if we have one
-            if let Some(ref pipeline_owner) = self.pipeline_owner {
-                self.children
-                    .propagate_owner(Arc::clone(pipeline_owner), self.parent_render_id);
-            }
-
-            // Mount child
-            self.children.mount_children(None, self.depth + 1, owner);
-
-            // Build child's children
-            self.children.perform_build_children(owner);
-
-            tracing::debug!("ElementCore::update_or_create_child created new child");
-        } else {
-            // Update existing child
-            let had_child = !self.children.is_empty();
-            self.children.update_with_view(child_view.as_ref(), owner);
-
-            // If a new child was created (previously was empty), mount it
-            if !had_child && !self.children.is_empty() {
-                self.children.mount_children(None, self.depth + 1, owner);
-
-                // Propagate owner if we have one
-                if let Some(ref pipeline_owner) = self.pipeline_owner {
-                    self.children
-                        .propagate_owner(Arc::clone(pipeline_owner), self.parent_render_id);
-                }
-            }
-
-            self.children.perform_build_children(owner);
-
-            tracing::debug!("ElementCore::update_or_create_child updated existing child");
-        }
-    }
-
-    /// Update or create multiple child elements (Variable arity only).
-    ///
-    /// For Single/Optional arity, use `update_or_create_child` instead.
-    ///
-    /// # Arguments
-    ///
-    /// * `child_views` - The new child Views
-    /// * `owner` - Split-borrow handle threaded through child
-    ///   mount/unmount/update calls.
-    // `Vec<Box<dyn View>>` ownership transfer is intentional for API
-    // consistency. Single-line signature avoids `port-check.sh` trigger 6 —
-    // see `update_or_create_child` for rationale.
-    #[rustfmt::skip]
-    #[allow(clippy::needless_pass_by_value)]
-    pub fn update_or_create_children(&mut self, child_views: Vec<Box<dyn View>>, owner: &mut crate::ElementOwner<'_>) {
-        if self.children.is_empty() {
-            // First build - create children
-            self.children.create_from_views(&child_views);
-
-            // Propagate owner if we have one
-            if let Some(ref pipeline_owner) = self.pipeline_owner {
-                self.children
-                    .propagate_owner(Arc::clone(pipeline_owner), self.parent_render_id);
-            }
-
-            // Mount children
-            self.children.mount_children(None, self.depth + 1, owner);
-
-            // Build children's children
-            self.children.perform_build_children(owner);
-
-            tracing::debug!(
-                "ElementCore::update_or_create_children created {} children",
-                child_views.len()
-            );
-        } else {
-            // Update existing children via keyed reconciliation (plan
-            // §U5). `update_with_views` matches old child elements to
-            // new Views by `Key`, updating reused ones and unmounting
-            // dropped ones — but leaves any *freshly created* children
-            // in `Lifecycle::Initial`, unmounted (it cannot reach the
-            // `PipelineOwner` from the bare box-vec).
-            // Plan §U15: thread this element's own ElementId as the
-            // reconciler's `parent_id`, replacing the §U13 placeholder.
-            // `self_id` is `None` only when this element has never been
-            // mounted (perform_build before mount is a framework-invariant
-            // violation: `ElementTree::insert` / `mount_root_*` always
-            // call `set_self_id` BEFORE `mount`, and `mount` precedes
-            // `perform_build` in the lifecycle FSM).
-            //
-            // Debug-build trip-wire: if the invariant ever breaks (a
-            // hand-rolled element bypassing `ElementTree::insert`, a
-            // future framework refactor that decouples mount from
-            // self-id stamping), this assertion fires during testing.
-            // Production retains the defensive fallback to the §U13
-            // placeholder so the frame still completes — but the
-            // emitted ReconcileEvents will silently correlate to the
-            // root, masking the real culprit. The debug_assert makes
-            // the violation loud where it matters.
-            debug_assert!(
-                self.self_id.is_some(),
-                "§U15 invariant violated: ElementCore::update_or_create_children \
-                 called before set_self_id. `ElementTree::insert` / \
-                 `mount_root_with_pipeline_owner` must stamp self_id \
-                 before any reconciliation runs."
-            );
-            let parent_id = self
-                .self_id
-                .unwrap_or_else(|| flui_foundation::ElementId::new(1));
-            self.children
-                .update_with_views(parent_id, &child_views, owner);
-
-            // Finish the lifecycle of those new children. The count
-            // alone is no longer a reliable "did anything get created?"
-            // signal — a keyed swap (one removed, one added) leaves the
-            // count unchanged — so always run the propagate→mount sweep.
-            // Both steps are idempotent for the reused children:
-            // `propagate_owner` just re-sets the owner, and
-            // `mount_children` skips elements that are already `Active`.
-            //
-            // Order matters: the owner must be propagated *before*
-            // `mount_children`, because `RenderBehavior::on_mount`
-            // creates its `RenderObject` only when a `PipelineOwner` is
-            // already in scope.
-            if let Some(ref pipeline_owner) = self.pipeline_owner {
-                self.children
-                    .propagate_owner(Arc::clone(pipeline_owner), self.parent_render_id);
-            }
-            self.children.mount_children(None, self.depth + 1, owner);
-
-            self.children.perform_build_children(owner);
-
-            tracing::debug!(
-                "ElementCore::update_or_create_children updated to {} children",
-                child_views.len()
-            );
-        }
-    }
-
-    /// Rebuild all children.
-    ///
-    /// Calls perform_build() on all child elements.
-    pub fn rebuild_children(&mut self, owner: &mut crate::ElementOwner<'_>) {
-        self.children.perform_build_children(owner);
-    }
+    // E3 (atomic box→arena swap): the child-management methods
+    // (`update_or_create_child` / `update_or_create_children` /
+    // `rebuild_children`) are gone. They reconciled and recursively built
+    // a box-owned child graph in place. The element now only PRODUCES its
+    // child views (`build_into_views`, on the behavior); the reconcile +
+    // recursive build runs against the slab-resident
+    // [`ElementTree`](crate::tree::ElementTree) in
+    // [`BuildOwner::build_scope`](crate::BuildOwner) via
+    // [`reconcile_children_by_id`](crate::tree::id_reconcile), which
+    // schedules each child as its own drain entry. No element ever holds a
+    // `&mut` into the slab across a second slab mutation.
 
     // ========================================================================
     // Pipeline Owner (eliminates propagation boilerplate ~15 lines)
@@ -540,14 +409,19 @@ where
         );
     }
 
-    /// Propagate PipelineOwner to children.
+    /// The `RenderId` that this element's *children* should attach their
+    /// `RenderObject`s under.
     ///
-    /// Should be called after children are created.
-    pub fn propagate_owner_to_children(&mut self) {
-        if let Some(ref owner) = self.pipeline_owner {
-            self.children
-                .propagate_owner(Arc::clone(owner), self.parent_render_id);
-        }
+    /// E3 propagation contract: when the slab inserts a child below this
+    /// element, the child's `set_parent_render_id` receives this value.
+    /// For a component element (Stateless/Stateful/Proxy/Inherited) it is
+    /// the `parent_render_id` this element itself received — the nearest
+    /// ancestor `RenderObject` is passed straight through. A
+    /// `RenderObjectElement` overrides the effective value at the
+    /// `ElementBase` layer (it returns its own `render_id`), since its
+    /// children attach under *it*. Defaults here to the pass-through.
+    pub fn child_parent_render_id(&self) -> Option<RenderId> {
+        self.parent_render_id
     }
 
     // ========================================================================
@@ -620,16 +494,6 @@ where
         })
     }
 
-    /// Check if this element has children.
-    pub fn has_children(&self) -> bool {
-        !self.children.is_empty()
-    }
-
-    /// Get the number of children.
-    pub fn child_count(&self) -> usize {
-        self.children.len()
-    }
-
     /// Get the PipelineOwner, if set.
     pub fn pipeline_owner(&self) -> Option<&Arc<RwLock<PipelineOwner>>> {
         // PORT-CHECK-OK-SP6: ElementCore pipeline_owner accessor; pre-existing SP-6
@@ -641,37 +505,24 @@ where
         self.parent_render_id
     }
 
-    /// Visit all children with a closure.
-    pub fn visit_children<F>(&self, mut visitor: F)
-    where
-        F: FnMut(&dyn ElementBase),
-    {
-        self.children.visit_children(&mut visitor);
-    }
-
-    /// Get immutable access to the child storage.
-    pub fn children(&self) -> &A::Storage {
-        &self.children
-    }
-
-    /// Get mutable access to the child storage.
-    pub fn children_mut(&mut self) -> &mut A::Storage {
-        &mut self.children
-    }
+    // E3 (atomic box→arena swap): `visit_children` / `children` /
+    // `children_mut` / `has_children` / `child_count` are gone —
+    // `ElementCore` no longer owns a child graph. Children are
+    // slab-resident; traverse them via
+    // `tree.get(id).child_ids()` on the single
+    // [`ElementTree`](crate::tree::ElementTree).
 }
 
 impl<V, A> std::fmt::Debug for ElementCore<V, A>
 where
     V: Clone + Send + Sync + 'static,
     A: ElementArity,
-    A::Storage: std::fmt::Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ElementCore")
             .field("view_type", &TypeId::of::<V>())
             .field("lifecycle", &self.lifecycle)
             .field("depth", &self.depth)
-            .field("children", &self.children)
             .field("dirty", &self.dirty.load(Ordering::Relaxed))
             .field("has_pipeline_owner", &self.pipeline_owner.is_some())
             .field("parent_render_id", &self.parent_render_id)
@@ -698,7 +549,6 @@ mod tests {
         assert_eq!(core.lifecycle(), Lifecycle::Initial);
         assert_eq!(core.depth(), 0);
         assert!(core.is_dirty());
-        assert!(!core.has_children());
     }
 
     #[test]
@@ -758,8 +608,8 @@ mod tests {
         let view = TestView { value: 42 };
         let core = ElementCore::<TestView, Leaf>::new(view);
 
-        assert!(!core.has_children());
-        assert_eq!(core.child_count(), 0);
+        // E3: child-count lives on the slab node now, not the core.
+        assert_eq!(core.lifecycle(), Lifecycle::Initial);
     }
 
     #[test]
@@ -767,8 +617,7 @@ mod tests {
         let view = TestView { value: 42 };
         let core = ElementCore::<TestView, Single>::new(view);
 
-        assert!(!core.has_children());
-        assert_eq!(core.child_count(), 0);
+        assert_eq!(core.lifecycle(), Lifecycle::Initial);
     }
 
     #[test]
@@ -776,7 +625,6 @@ mod tests {
         let view = TestView { value: 42 };
         let core = ElementCore::<TestView, Variable>::new(view);
 
-        assert!(!core.has_children());
-        assert_eq!(core.child_count(), 0);
+        assert_eq!(core.lifecycle(), Lifecycle::Initial);
     }
 }

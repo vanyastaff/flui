@@ -66,7 +66,7 @@ pub use error::{TreeError, TreeResult};
 // ============================================================================
 // RE-EXPORTS - Foundation Types
 // ============================================================================
-pub use flui_foundation::{ElementId, Identifier};
+pub use flui_foundation::{ElementId, Identifier, TreeId};
 // ============================================================================
 // RE-EXPORTS - Iterators (ancestor / descendant / sibling only)
 // ============================================================================
@@ -119,6 +119,7 @@ pub mod prelude {
         SlotBuilder,
         // Tree traits
         TreeError,
+        TreeId,
         TreeNav,
         // Extension traits
         TreeNavExt,

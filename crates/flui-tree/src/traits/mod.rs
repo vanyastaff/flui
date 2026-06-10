@@ -6,7 +6,7 @@
 //! - **Minimal**: Each trait has a single responsibility
 //! - **Composable**: Traits can be combined for richer functionality
 //! - **Thread-Safe**: All traits require `Send + Sync`
-//! - **Generic over ID**: All traits use `I: Identifier` generic parameter
+//! - **Generic over ID**: All traits use `I: TreeId` generic parameter
 //!
 //! # Trait Hierarchy
 //!
@@ -31,7 +31,7 @@
 //!
 //! # Generic ID Parameter
 //!
-//! All traits use `I: Identifier` as a generic parameter, allowing:
+//! All traits use `I: TreeId` as a generic parameter, allowing:
 //! - Clean trait bounds: `T: TreeNav<ElementId>`
 //! - Composable traits: `trait DirtyTracking<I>: TreeNav<I>`
 //! - Different ID types for different tree implementations

@@ -47,12 +47,12 @@
 //! # impl T { fn ins(&mut self, p: Option<ElementId>) -> ElementId {
 //! #     let id = ElementId::new(self.0.len()+1);
 //! #     self.0.push(Some(N { parent: p, children: vec![] }));
-//! #     if let Some(pid) = p { self.0[pid.get()-1].as_mut().unwrap().children.push(id); }
+//! #     if let Some(pid) = p { self.0[pid.index() as usize].as_mut().unwrap().children.push(id); }
 //! #     id
 //! # }}
 //! # impl TreeRead<ElementId> for T {
 //! #     type Node = N;
-//! #     fn get(&self, id: ElementId) -> Option<&N> { self.0.get(id.get()-1)?.as_ref() }
+//! #     fn get(&self, id: ElementId) -> Option<&N> { self.0.get(id.index() as usize)?.as_ref() }
 //! #     fn len(&self) -> usize { self.0.iter().flatten().count() }
 //! #     fn node_ids(&self) -> impl Iterator<Item = ElementId> + '_ {
 //! #         (0..self.0.len()).filter_map(|i| if self.0[i].is_some() { Some(ElementId::new(i+1)) } else { None })

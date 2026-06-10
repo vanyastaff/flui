@@ -134,8 +134,12 @@ impl ElementBase for TaggedElement {
         }
     }
     fn mark_needs_build(&mut self) {}
-    fn perform_build(&mut self, _owner: &mut flui_view::ElementOwner<'_>) {}
-    fn visit_children(&self, _visitor: &mut dyn FnMut(ElementId)) {}
+    fn build_into_views(
+        &mut self,
+        _owner: &mut flui_view::ElementOwner<'_>,
+    ) -> Vec<Box<dyn flui_view::View>> {
+        Vec::new()
+    }
 }
 
 fn as_tagged(child: &dyn ElementBase) -> &TaggedElement {
@@ -274,7 +278,7 @@ fn assert_event_multiset(
     // Every event MUST carry the real parent id stamped by §U15
     // (parent_id() == ElementId::new(1) here because the test uses
     // a synthetic parent without going through ElementTree).
-    let expected_parent = parent_id().get() as u64;
+    let expected_parent = parent_id().as_u64();
     for e in events {
         assert_eq!(
             e.parent, expected_parent,

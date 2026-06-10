@@ -184,14 +184,13 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     /// Hash of the `Key` carried by the View this element currently
     /// holds, or `None` if that View is keyless.
     ///
-    /// Keyed child reconciliation
-    /// ([`reconcile_children`](crate::reconcile_children)) operates on
-    /// the live `Vec<Box<dyn ElementBase>>` and must answer "what key
-    /// does this old child element match on?" without naming the
-    /// concrete `View` type — `ElementBase` is object-safe and erases
-    /// `V`. The unified `Element<V, A, B>` overrides this to forward to
-    /// `View::key().map(ViewKey::key_hash)`; every other implementor
-    /// keeps the keyless default.
+    /// Keyed child reconciliation (`reconcile_children_by_id`) walks the
+    /// parent's slab-resident [`ElementNode::child_ids`](crate::tree::ElementNode)
+    /// and must answer "what key does this old child element match on?"
+    /// without naming the concrete `View` type — `ElementBase` is
+    /// object-safe and erases `V`. The unified `Element<V, A, B>` overrides
+    /// this to forward to `View::key().map(ViewKey::key_hash)`; every other
+    /// implementor keeps the keyless default.
     ///
     /// Flutter parity: `framework.dart:4125` `Element.updateChildren`
     /// reads `oldChild.widget.key` directly because Dart elements carry
@@ -345,24 +344,34 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
         false
     }
 
-    /// Rebuild this Element.
+    /// Run this element's build half and return its OWNED child view(s).
     ///
-    /// Called by the framework when this Element is dirty.
-    /// Calls `perform_build()` if needed.
-    fn rebuild(&mut self, force: bool, owner: &mut crate::ElementOwner<'_>) {
-        if force || self.lifecycle() == crate::element::Lifecycle::Active {
-            self.perform_build(owner);
-        }
-    }
-
-    /// Perform the actual build phase.
+    /// E3 (atomic box→arena swap): this replaces the old
+    /// `perform_build(&mut self, owner)` that reconciled children against
+    /// box storage in place. The build seam is now cut so that
+    /// `build_into_views` runs the behavior's `build()` (today's
+    /// `build_or_recover` / `build_proxy_style` half) and returns the
+    /// owned child views WITHOUT touching any child storage — there is no
+    /// child storage on the element any more. The reconcile half is
+    /// hoisted out to [`BuildOwner::build_scope`](crate::BuildOwner),
+    /// which feeds the returned views to `reconcile_children_by_id` against
+    /// the slab-resident [`ElementTree`](crate::tree::ElementTree) with a
+    /// fresh `&mut tree` borrow. No `&mut element` is ever live across a
+    /// `&mut tree` child mutation — see the E3 design.
     ///
-    /// Subclasses override this to rebuild their children. The
-    /// split-borrow `owner` handle is threaded through so newly-mounted
-    /// child elements created during this build can register
-    /// `GlobalKey`s or schedule downstream rebuilds without re-borrowing
-    /// the [`BuildOwner`](crate::BuildOwner). Plan §U8.
-    fn perform_build(&mut self, owner: &mut crate::ElementOwner<'_>);
+    /// Return contract by behavior:
+    /// - Stateless / Stateful → `vec![child_view]` (single child).
+    /// - Proxy / Inherited → `vec![child_view]` (the proxied child).
+    /// - Leaf / a render element with no view-children → `vec![]`.
+    /// - RenderObject → the child view(s) the render element owns; the
+    ///   RenderObject-attach side-effects stay inside `build_into_views`
+    ///   (they touch the pipeline owner / render tree, not the element
+    ///   slab, so they cannot double-borrow the element arena).
+    ///
+    /// The split-borrow `owner` handle is threaded through so the build
+    /// half can still register `GlobalKey`s or schedule downstream
+    /// rebuilds without re-borrowing the [`BuildOwner`](crate::BuildOwner).
+    fn build_into_views(&mut self, owner: &mut crate::ElementOwner<'_>) -> Vec<Box<dyn View>>;
 
     // ========================================================================
     // Dependency Notifications
@@ -407,19 +416,16 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     // Child Management
     // ========================================================================
 
-    /// Visit all child Elements.
-    fn visit_children(&self, visitor: &mut dyn FnMut(flui_foundation::ElementId));
-
-    /// Get the first child Element, if any.
-    fn first_child(&self) -> Option<flui_foundation::ElementId> {
-        let mut first = None;
-        self.visit_children(&mut |id| {
-            if first.is_none() {
-                first = Some(id);
-            }
-        });
-        first
-    }
+    // E3 (atomic box→arena swap): `visit_children` is deleted. Elements
+    // no longer own a child graph — the slab-resident
+    // [`ElementTree`](crate::tree::ElementTree) is the single element
+    // graph, and a node's children are its
+    // [`ElementNode::child_ids`](crate::tree::ElementNode) list. All
+    // child traversal goes through `tree.get(id).child_ids()`, where both
+    // the id and a `&ElementTree` are in scope. The old per-element
+    // `visit_children` was a no-op on every unified `Element<V, A, B>`
+    // anyway (children lived inside `ElementCore`, invisible to the slab
+    // walk), which is exactly why production `setState` was inert.
 
     /// Deactivate a child Element.
     ///
@@ -528,6 +534,38 @@ pub trait ElementBase: Downcast + Send + Sync + 'static {
     ///   `PipelineOwner` type
     fn set_pipeline_owner_any(&mut self, _owner: std::sync::Arc<dyn std::any::Any + Send + Sync>) {
         // Default: no-op
+    }
+
+    /// Hand out this element's `PipelineOwner` as `Arc<dyn Any>` so the
+    /// slab `insert` path can propagate it to a freshly-inserted child
+    /// BEFORE the child mounts.
+    ///
+    /// E3 (atomic box→arena swap): in the old box graph the parent
+    /// propagated the owner to its children inside
+    /// `update_or_create_child(ren)`. Children are now slab-resident, so
+    /// [`ElementTree::insert`](crate::tree::ElementTree) reads this from
+    /// the parent and threads it (plus [`Self::child_render_id`]) into the
+    /// child's `set_pipeline_owner_any` / `set_parent_render_id` before
+    /// `mount`, preserving the propagate-before-mount ordering
+    /// `RenderBehavior::on_mount` depends on (it creates its
+    /// `RenderObject` only when a `PipelineOwner` is already in scope).
+    ///
+    /// Default returns `None`; the unified `Element<V, A, B>` overrides it
+    /// to hand out its `ElementCore`'s owner.
+    fn pipeline_owner_any(&self) -> Option<std::sync::Arc<dyn std::any::Any + Send + Sync>> {
+        None
+    }
+
+    /// The `RenderId` that this element's *children* should attach their
+    /// `RenderObject`s under.
+    ///
+    /// E3 propagation contract (companion to [`Self::pipeline_owner_any`]):
+    /// for a `RenderObjectElement` this is its own `render_id` (children
+    /// attach under it); for a component element it is the
+    /// `parent_render_id` the element itself received (the nearest
+    /// ancestor render object passes straight through). Default `None`.
+    fn child_render_id(&self) -> Option<flui_foundation::RenderId> {
+        None
     }
 
     /// Set the parent's RenderId for tree structure.

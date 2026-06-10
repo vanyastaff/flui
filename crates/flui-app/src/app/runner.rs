@@ -3,7 +3,7 @@
 //! This module provides platform-agnostic entry points that delegate
 //! to platform-specific implementations via flui-platform.
 
-use flui_view::{RootRenderView, StatelessView, View};
+use flui_view::{StatelessView, View};
 
 use super::{AppBinding, AppConfig};
 
@@ -130,7 +130,58 @@ where
     renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
 
     // 3. Mount root widget
-    mount_root(&root, phys_size.width.0 as f32, phys_size.height.0 as f32);
+    if let Err(e) = AppBinding::instance().attach_root_widget_with_size(
+        &root,
+        phys_size.width.0 as f32,
+        phys_size.height.0 as f32,
+    ) {
+        tracing::error!("Root widget attach failed: {:?}", e);
+        return;
+    }
+    register_hit_test_render_view();
+
+    // 3b. Wire the wake chain (E0a).
+    //
+    // `on_need_frame` fires whenever `handle_build_scheduled` determines a new
+    // frame is required (e.g. after setState).  The closure calls `wake_frame`
+    // which sets `needs_redraw` atomically AND calls `PlatformWindow::
+    // request_redraw()` so the winit event loop wakes from idle.
+    //
+    // Deadlock analysis:
+    // * `wake_frame` acquires only `active_window` (leaf Mutex).
+    // * The closure is called from `handle_build_scheduled`, which holds no
+    //   `inner`/`widgets` lock (see `WidgetsBinding::handle_build_scheduled`
+    //   doc).
+    // * `on_need_frame` itself is a separate `RwLock` on `WidgetsBinding`,
+    //   never held across any `inner` critical section.
+    // Therefore: no lock ordering conflict.
+    {
+        let widgets = AppBinding::instance().widgets();
+        widgets.set_on_need_frame(|| {
+            AppBinding::instance().wake_frame();
+        });
+    }
+
+    // Wire `on_build_scheduled` on the BuildOwner so a dirty-element
+    // registration (e.g. from setState inside an element build) wakes the
+    // platform loop. The callback fires from inside `schedule_build_for`,
+    // which runs during a build while the AppBinding `widgets` write lock is
+    // held — so it must NOT re-lock `widgets`. It calls `wake_frame`
+    // directly (the same effect as the `on_need_frame` callback above),
+    // which touches only the `active_window` leaf lock. Routing instead
+    // through `WidgetsBinding::instance().handle_build_scheduled()` would be
+    // doubly wrong: that global singleton is a different binding from the
+    // AppBinding-owned one whose `on_need_frame` was just registered (so the
+    // wake silently never fires), and reaching the owned binding via
+    // `widgets()` would deadlock on the held write lock.
+    {
+        let widgets = AppBinding::instance().widgets();
+        widgets.with_build_owner_mut(|build_owner| {
+            build_owner.set_on_build_scheduled(|| {
+                AppBinding::instance().wake_frame();
+            });
+        });
+    }
 
     // 4. Wrap renderer for callback sharing
     let renderer = Arc::new(Mutex::new(renderer));
@@ -222,71 +273,23 @@ where
     }));
 }
 
-/// Mount the root widget tree.
+/// Register the hit-test root `RenderView` with the `RendererBinding`
+/// (`view_id = 0`).
 ///
-/// Creates a `RootRenderView` wrapping the user's root widget,
-/// creates the root element, and mounts it into AppBinding.
-fn mount_root<V>(root: &V, width: f32, height: f32)
-where
-    V: View + StatelessView + Clone + Send + Sync + 'static,
-{
-    use flui_view::RootRenderElement;
+/// `WidgetsBinding::attach_root_widget` bootstraps the *paint* render tree
+/// (`RootRenderElement` → `PipelineOwner`), but hit testing routes through the
+/// `RendererBinding`'s own per-view registry. V-7 keeps these two `RenderView`s
+/// mapped independently: the paint root lives in the `PipelineOwner`; the
+/// hit-test root is registered here by the runner after attach.
+fn register_hit_test_render_view() {
+    use std::sync::Arc;
 
-    let binding = AppBinding::instance();
+    use flui_rendering::{binding::RendererBinding, view::RenderView};
 
-    // Wrap user widget in RootRenderView
-    let root_view = RootRenderView::new(root.clone(), width, height);
-
-    // Create the root element
-    let mut root_element = root_view.create_element();
-
-    // Set the PipelineOwner on RootRenderElement before mounting
-    if let Some(root_render_element) = root_element
-        .as_any_mut()
-        .downcast_mut::<RootRenderElement<V>>()
-    {
-        root_render_element.set_pipeline_owner(binding.render_pipeline_arc());
-    }
-
-    // Mount the element (this creates RenderViewObject and inserts into
-    // RenderTree). Acquire a transient ElementOwner split-borrow handle
-    // from the WidgetsBinding's BuildOwner; the recursive mount path threads
-    // the same handle through every descendant lifecycle call (plan §U8).
-    {
-        let widgets = binding.widgets();
-        widgets.with_build_owner_mut(|build_owner| {
-            root_element.mount(None, 0, &mut build_owner.element_owner_mut());
-        });
-    }
-
-    // Verify mounting succeeded
-    if let Some(root_render_element) = root_element.as_any().downcast_ref::<RootRenderElement<V>>()
-    {
-        if let Some(render_id) = root_render_element.render_id() {
-            tracing::info!(
-                "mount_root: RootRenderElement mounted with render_id={:?}",
-                render_id
-            );
-        } else {
-            tracing::error!("mount_root: RootRenderElement has no render_id after mount");
-        }
-    }
-
-    // Register RenderView with RenderingFlutterBinding for hit testing
-    {
-        use std::sync::Arc;
-
-        use flui_rendering::{binding::RendererBinding, view::RenderView};
-
-        let renderer = binding.renderer();
-        let view = Arc::new(parking_lot::RwLock::new(RenderView::new()));
-        renderer.add_render_view_with_config(0, view);
-        tracing::info!("RenderView registered for hit testing (view_id=0)");
-    }
-
-    // Store root element in AppBinding for rebuild support
-    binding.set_root_element(root_element);
-    tracing::info!("Root element mounted and stored in AppBinding");
+    let renderer = AppBinding::instance().renderer();
+    let view = Arc::new(parking_lot::RwLock::new(RenderView::new()));
+    renderer.add_render_view_with_config(0, view);
+    tracing::info!("RenderView registered for hit testing (view_id=0)");
 }
 
 // ============================================================================
@@ -393,7 +396,15 @@ where
     renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
 
     // 3. Mount root widget (used when no plugin is active)
-    mount_root(&root, phys_size.width.0 as f32, phys_size.height.0 as f32);
+    if let Err(e) = AppBinding::instance().attach_root_widget_with_size(
+        &root,
+        phys_size.width.0 as f32,
+        phys_size.height.0 as f32,
+    ) {
+        tracing::error!("Root widget attach failed: {:?}", e);
+        return;
+    }
+    register_hit_test_render_view();
 
     // 4. Wrap renderer for callback sharing
     let renderer = Arc::new(Mutex::new(renderer));
@@ -556,7 +567,15 @@ where
 
     // 3. Mount root widget
     let phys_size = window.physical_size();
-    mount_root(&root, phys_size.width.0 as f32, phys_size.height.0 as f32);
+    if let Err(e) = AppBinding::instance().attach_root_widget_with_size(
+        &root,
+        phys_size.width.0 as f32,
+        phys_size.height.0 as f32,
+    ) {
+        tracing::error!("Root widget attach failed: {:?}", e);
+        return;
+    }
+    register_hit_test_render_view();
 
     // 4. Register input callback
     window.on_input(Box::new(move |input: PlatformInput| {

@@ -17,7 +17,6 @@ mod root;
 pub mod arity;
 pub mod behavior;
 pub(crate) mod behavior_commons;
-pub mod child_storage;
 // `dispatch` is the only View-update routing path post-§U27. The
 // pre-FR-021 `feature = "legacy-downcast"` gate (Phase 1 §U8 /
 // KTD-4) is gone: `ElementCore::update_view` unconditionally
@@ -42,10 +41,6 @@ pub use arity::{ElementArity, Leaf, Optional, Single, Variable};
 pub use behavior::{
     AnimatedBehavior, ElementBehavior, InheritedBehavior, ProxyBehavior, RenderBehavior,
     StatefulBehavior, StatelessBehavior,
-};
-pub use child_storage::{
-    ElementChildStorage, NoChildStorage, OptionalChildStorage, SingleChildStorage,
-    VariableChildStorage,
 };
 pub use generic::ElementCore;
 pub use inherited_access::InheritedElementAccess;

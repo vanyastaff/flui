@@ -35,12 +35,25 @@ where
     V: Clone + Send + Sync + 'static,
     A: ElementArity,
 {
-    /// Perform the build operation for this view type.
+    /// Run this view type's build half and return its OWNED child view(s).
     ///
-    /// The split-borrow `owner` handle is threaded through so child
-    /// elements created during this build can register `GlobalKey`s,
-    /// schedule rebuilds, etc. (plan §U8).
-    fn perform_build(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>);
+    /// E3 (atomic box→arena swap): this replaces the old
+    /// `perform_build(&mut core, owner)` that reconciled the box-owned
+    /// children in place. Now it runs only the build half (today's
+    /// `build_or_recover` / `build_proxy_style` producer) and returns the
+    /// owned child views; the reconcile half is hoisted to
+    /// [`BuildOwner::build_scope`](crate::BuildOwner), which feeds the
+    /// returned views to the slab id-reconciler with a fresh `&mut tree`.
+    /// The element holds no child storage, so this method never touches a
+    /// child graph and there is no double-borrow with the slab.
+    ///
+    /// The split-borrow `owner` handle is threaded through so the build
+    /// half can register `GlobalKey`s, schedule rebuilds, etc.
+    fn build_into_views(
+        &mut self,
+        core: &mut ElementCore<V, A>,
+        owner: &mut crate::ElementOwner<'_>,
+    ) -> Vec<Box<dyn View>>;
 
     /// Called after mount to perform behavior-specific setup.
     ///
@@ -235,9 +248,13 @@ where
         "StatelessElement"
     }
 
-    fn perform_build(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
+    fn build_into_views(
+        &mut self,
+        core: &mut ElementCore<V, A>,
+        owner: &mut crate::ElementOwner<'_>,
+    ) -> Vec<Box<dyn View>> {
         if !super::behavior_commons::should_build_with_trace(core, "StatelessBehavior") {
-            return;
+            return Vec::new();
         }
         let ctx = ElementBuildContext::new_minimal(core.depth());
         // The user `build()` is wrapped in `catch_unwind`: a panicking
@@ -249,24 +266,17 @@ where
         let view = core.view().clone();
         let child_view =
             super::behavior_commons::build_or_recover(core, owner, "StatelessElement", move || {
-                // Phase 3 §U22 boundary: `view.build(&ctx)` returns
-                // `impl IntoView` that may capture closure-local
-                // borrows of `view`/`ctx` (Rust 2024 RPITIT default).
-                // We consume the opaque value through
-                // `IntoView::into_view()` inside the closure body —
-                // the resulting `<R as IntoView>::View` is `'static`
-                // (View: 'static), and boxing it produces an owned
-                // `Box<dyn View>` with no escaping borrows for
-                // `catch_unwind` to return.
+                // `view.build(&ctx)` returns `impl IntoView` that may
+                // capture closure-local borrows of `view`/`ctx` (Rust 2024
+                // RPITIT default). We consume the opaque value through
+                // `IntoView::into_view()` inside the closure body — the
+                // resulting `<R as IntoView>::View` is `'static`, and
+                // boxing it produces an owned `Box<dyn View>` with no
+                // escaping borrows for `catch_unwind` to return.
                 let opaque = view.build(&ctx);
                 Box::new(IntoView::into_view(opaque)) as Box<dyn View>
             });
-        super::behavior_commons::finish_single_child_build(
-            core,
-            child_view,
-            "StatelessBehavior",
-            owner,
-        );
+        super::behavior_commons::single_child_views(core, child_view, "StatelessBehavior")
     }
 }
 
@@ -302,8 +312,12 @@ where
         "ProxyElement"
     }
 
-    fn perform_build(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
-        super::behavior_commons::build_proxy_style(core, "ProxyBehavior", owner, V::child);
+    fn build_into_views(
+        &mut self,
+        core: &mut ElementCore<V, A>,
+        _owner: &mut crate::ElementOwner<'_>,
+    ) -> Vec<Box<dyn View>> {
+        super::behavior_commons::proxy_style_views(core, "ProxyBehavior", V::child)
     }
 }
 
@@ -361,7 +375,11 @@ where
         Some(&self.state as &dyn std::any::Any)
     }
 
-    fn perform_build(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
+    fn build_into_views(
+        &mut self,
+        core: &mut ElementCore<V, A>,
+        owner: &mut crate::ElementOwner<'_>,
+    ) -> Vec<Box<dyn View>> {
         let ctx = ElementBuildContext::new_minimal(core.depth());
 
         // Initialize state on first build — must run before the
@@ -373,32 +391,26 @@ where
         }
 
         if !super::behavior_commons::should_build_with_trace(core, "StatefulBehavior") {
-            return;
+            return Vec::new();
         }
         // The user `ViewState::build` is wrapped in `catch_unwind`: a
         // panicking build is caught and substituted with the registered
         // `ErrorView`. The catch covers ONLY the build expression — the
-        // `view` borrow is moved into the closure (cloned, so `core`
-        // stays free for the teardown branch) and `state` is captured by
-        // reference, independent of `core` (Flutter parity:
+        // `view` borrow is moved into the closure (cloned) and `state` is
+        // captured by reference, independent of `core` (Flutter parity:
         // `ComponentElement.performRebuild`, `framework.dart:5810`).
         let view = core.view().clone();
         let state = &self.state;
         let child_view =
             super::behavior_commons::build_or_recover(core, owner, "StatefulElement", move || {
-                // See `StatelessBehavior::perform_build` for the
-                // RPITIT-capture rationale — we consume the opaque
-                // `impl IntoView` inside the closure body to box an
-                // owned `Box<dyn View>` for the `catch_unwind` return.
+                // See `StatelessBehavior::build_into_views` for the
+                // RPITIT-capture rationale — consume the opaque
+                // `impl IntoView` inside the closure body to box an owned
+                // `Box<dyn View>` for the `catch_unwind` return.
                 let opaque = state.build(&view, &ctx);
                 Box::new(IntoView::into_view(opaque)) as Box<dyn View>
             });
-        super::behavior_commons::finish_single_child_build(
-            core,
-            child_view,
-            "StatefulBehavior",
-            owner,
-        );
+        super::behavior_commons::single_child_views(core, child_view, "StatefulBehavior")
     }
 
     fn on_unmount(&mut self, _core: &mut ElementCore<V, A>, _owner: &mut crate::ElementOwner<'_>) {
@@ -543,37 +555,45 @@ where
         self.render_id
     }
 
-    fn perform_build(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
+    fn build_into_views(
+        &mut self,
+        core: &mut ElementCore<V, A>,
+        _owner: &mut crate::ElementOwner<'_>,
+    ) -> Vec<Box<dyn View>> {
         if !core.should_build() {
             tracing::trace!(
-                "RenderBehavior::perform_build skipped render_id={:?}",
+                "RenderBehavior::build_into_views skipped render_id={:?}",
                 self.render_id
             );
-            return;
+            return Vec::new();
         }
 
         tracing::info!(
-            "RenderBehavior::perform_build START render_id={:?}",
+            "RenderBehavior::build_into_views START render_id={:?}",
             self.render_id
         );
 
-        let has_children = core.view().has_children();
-
-        if has_children {
-            let mut child_views: Vec<Box<dyn View>> = Vec::new();
+        // Collect the render element's OWNED child views. The
+        // RenderObject-attach side-effects already ran in `on_mount`
+        // (they touch the pipeline owner / render tree, not the element
+        // slab); here we only surface the element-child views for the
+        // slab id-reconciler to reconcile in `build_scope`.
+        let mut child_views: Vec<Box<dyn View>> = Vec::new();
+        if core.view().has_children() {
             core.view().visit_child_views(&mut |child_view| {
                 child_views.push(dyn_clone::clone_box(child_view));
             });
-
-            core.update_or_create_children(child_views, owner);
         }
 
         core.clear_dirty();
 
         tracing::debug!(
-            "RenderBehavior::perform_build completed render_id={:?}",
-            self.render_id
+            "RenderBehavior::build_into_views completed render_id={:?} children={}",
+            self.render_id,
+            child_views.len()
         );
+
+        child_views
     }
 
     fn on_mount(&mut self, core: &mut ElementCore<V, A>, _owner: &mut crate::ElementOwner<'_>) {
@@ -760,9 +780,13 @@ where
         Some(self)
     }
 
-    fn perform_build(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
+    fn build_into_views(
+        &mut self,
+        core: &mut ElementCore<V, A>,
+        _owner: &mut crate::ElementOwner<'_>,
+    ) -> Vec<Box<dyn View>> {
         // Like ProxyView, InheritedView just returns the child directly.
-        super::behavior_commons::build_proxy_style(core, "InheritedBehavior", owner, V::child);
+        super::behavior_commons::proxy_style_views(core, "InheritedBehavior", V::child)
     }
 
     fn on_view_updated(
@@ -925,9 +949,13 @@ where
         <StatefulBehavior<V> as ElementBehavior<V, A>>::state_as_any(&self.stateful)
     }
 
-    fn perform_build(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
+    fn build_into_views(
+        &mut self,
+        core: &mut ElementCore<V, A>,
+        owner: &mut crate::ElementOwner<'_>,
+    ) -> Vec<Box<dyn View>> {
         // Delegate to StatefulBehavior
-        self.stateful.perform_build(core, owner);
+        self.stateful.build_into_views(core, owner)
     }
 
     fn on_mount(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {

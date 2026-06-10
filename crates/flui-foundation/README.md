@@ -36,8 +36,8 @@ Basic usage:
 use flui_foundation::{ElementId, Key, ChangeNotifier, Listenable};
 use std::sync::Arc;
 
-// Create unique identifiers (1-based index)
-let element_id = ElementId::zip(0); // index 0 → ID with value 1
+// Create a generational element-tree key (1-based ctor → 0-based slab index)
+let element_id = ElementId::new(1); // .index() == 0, .generation() == 1
 
 // Observable values for reactive UI
 let notifier = ChangeNotifier::new();
@@ -57,25 +57,38 @@ IDs use marker traits for type safety, similar to wgpu's resource ID system:
 
 ```rust
 use flui_foundation::{
-    Id, RawId, Marker, Identifier,
+    Id, RawId, Marker, Identifier, TreeId,
     ViewId, ElementId, RenderId, LayerId, SemanticsId
 };
 
-// Each tree level has its own ID type via marker traits
+// The `Id<T: Marker>` family (ViewId/RenderId/LayerId/SemanticsId) are
+// `NonZeroUsize`-backed indices into a Slab. They implement `Identifier`.
 let view_id = ViewId::zip(0);      // index 0 → ID 1
-let element_id = ElementId::zip(1); // index 1 → ID 2
 let render_id = RenderId::zip(2);   // index 2 → ID 3
 
-// Extract index from ID (for Slab access)
-let index = element_id.unzip(); // ID 2 → index 1
+// Extract index from an Id<T> (for Slab access)
+let index = render_id.unzip(); // ID 3 → index 2
 
-// IDs use NonZeroUsize for niche optimization
+// `ElementId` is a DISTINCT generational arena key: it packs a 32-bit slab
+// index + a 32-bit non-zero generation into a `NonZeroU64`. It does NOT
+// implement `Identifier` (no bare `.get()` that would strip the generation);
+// use `.index()` / `.generation()` instead.
+let element_id = ElementId::new(1);           // 1-based ctor → index 0, generation 1
+assert_eq!(element_id.index(), 0);
+let explicit = ElementId::new_gen(5, std::num::NonZeroU32::new(2).unwrap());
+assert_eq!((explicit.index(), explicit.generation().get()), (5, 2));
+
+// All IDs keep their niche: Option<Id> is the same size as Id.
 assert_eq!(std::mem::size_of::<Option<ElementId>>(), std::mem::size_of::<ElementId>());
 
-// Generic ID operations via Identifier trait
+// Generic operations over the index family use the `Identifier` trait;
+// generic operations over any tree id (including `ElementId`) use `TreeId`.
 fn process<I: Identifier>(id: I) {
     let index = id.get();
     println!("Processing index: {}", index);
+}
+fn any_tree_id<I: TreeId>(id: I) {
+    println!("Tree id: {id}"); // Display/Eq/Hash, but no bare index accessor
 }
 ```
 
@@ -245,17 +258,23 @@ pub trait Identifier {
 
 ### Index Offset Convention
 
-**CRITICAL**: Slab uses 0-based indices, IDs use 1-based values (NonZeroUsize):
+**CRITICAL**: for the `Id<T>` family (`ViewId`/`RenderId`/`LayerId`/`SemanticsId`)
+the Slab uses 0-based indices while IDs use 1-based `NonZeroUsize` values:
 
 ```rust
 // Inserting into Slab:
 let slab_index = slab.insert(node);      // 0, 1, 2, ...
-let id = ElementId::zip(slab_index);      // 1, 2, 3, ... (index + 1)
+let id = RenderId::zip(slab_index);       // 1, 2, 3, ... (index + 1)
 
 // Accessing from Slab:
-let index = element_id.unzip();           // ID → index (value - 1)
+let index = id.unzip();                   // ID → index (value - 1)
 let node = slab.get(index);
 ```
+
+`ElementId` does **not** follow this 1-based `zip`/`unzip` convention — it is a
+generational key. Mint it with `ElementId::new_gen(slab_index, generation)` and
+read the slab slot with `.index()`; the generation guards against stale ids
+addressing a reused slot.
 
 ## Architecture
 

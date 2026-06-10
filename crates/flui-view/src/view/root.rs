@@ -97,14 +97,25 @@ pub struct RootRenderElement<V: View + Clone> {
     render_id: Option<RenderId>,
     /// PipelineOwner for this render tree
     pipeline_owner: Option<Arc<RwLock<PipelineOwner>>>,
-    /// Child element
-    child_element: Option<Box<dyn ElementBase>>,
     /// Lifecycle state
     lifecycle: Lifecycle,
     /// Depth (always 0 for root)
     depth: usize,
     /// Current slot
     slot: RenderSlot,
+    /// Whether this element needs a rebuild (its child reconcile must run).
+    ///
+    /// E3 (atomic box→arena swap): the root's single child is a
+    /// slab-resident node reconciled by `BuildOwner::build_scope`, which
+    /// SKIPS any popped dirty entry whose `is_dirty()` is false (a clean
+    /// element's empty build would otherwise make the reconcile wrongly
+    /// remove its children). `attach_root_widget` schedules the root via
+    /// `schedule_build_for` WITHOUT a `mark_needs_build`, so without an
+    /// honest dirty flag the root would be popped, skipped, and its child
+    /// never reconciled — the app would render nothing. This flag is the
+    /// root's dirty bit: `true` at construction + mount, cleared once
+    /// `build_into_views` has handed the child to the reconciler.
+    needs_build: bool,
 }
 
 impl<V: View + Clone + Send + Sync + 'static> RootRenderElement<V> {
@@ -114,10 +125,10 @@ impl<V: View + Clone + Send + Sync + 'static> RootRenderElement<V> {
             view: view.clone(),
             render_id: None,
             pipeline_owner: None,
-            child_element: None,
             lifecycle: Lifecycle::Initial,
             depth: 0,
             slot: RenderSlot::Single,
+            needs_build: true,
         }
     }
 
@@ -145,7 +156,6 @@ impl<V: View + Clone + Send + Sync + 'static> std::fmt::Debug for RootRenderElem
             .field("depth", &self.depth)
             .field("render_id", &self.render_id)
             .field("has_pipeline_owner", &self.pipeline_owner.is_some())
-            .field("has_child", &self.child_element.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -171,12 +181,15 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
         &mut self,
         parent: Option<ElementId>,
         _slot: usize,
-        element_owner: &mut crate::ElementOwner<'_>,
+        _element_owner: &mut crate::ElementOwner<'_>,
     ) {
         // Root elements must have no parent
         debug_assert!(parent.is_none(), "RootRenderElement cannot have a parent");
 
         self.lifecycle = Lifecycle::Active;
+        // The child reconcile has not run yet — stay dirty so the scheduled
+        // build in `BuildOwner::build_scope` is not skipped by its dirty guard.
+        self.needs_build = true;
 
         // Create RenderView and insert into RenderTree
         let (width, height) = self.view.size;
@@ -207,11 +220,14 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
             );
         }
 
-        // Build child
-        self.perform_build(element_owner);
+        // E3 (atomic box→arena swap): the child is NOT built here. It is a
+        // slab-resident node now — `build_into_views` returns the child
+        // view and the slab id-reconciler in `BuildOwner::build_scope`
+        // creates / updates it (and schedules it for its own build). The
+        // RenderObject bootstrap above is the only mount-time work.
     }
 
-    fn unmount(&mut self, element_owner: &mut crate::ElementOwner<'_>) {
+    fn unmount(&mut self, _element_owner: &mut crate::ElementOwner<'_>) {
         // Detach from PipelineOwner's RenderTree
         if let (Some(pipeline_owner), Some(render_id)) = (&self.pipeline_owner, self.render_id) {
             // Cycle 3 T-1: cascade-by-default `remove` brings the whole
@@ -225,32 +241,26 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
         }
         self.render_id = None;
 
-        // Unmount child
-        if let Some(child) = &mut self.child_element {
-            child.unmount(element_owner);
-        }
-        self.child_element = None;
-
+        // E3: the child is a slab-resident node; the
+        // [`ElementTree`](crate::tree::ElementTree) unmounts it
+        // deepest-first via `child_ids`, so the root does not recurse into
+        // a box child here.
         self.lifecycle = Lifecycle::Defunct;
     }
 
     fn activate(&mut self) {
         self.lifecycle = Lifecycle::Active;
-        if let Some(child) = &mut self.child_element {
-            child.activate();
-        }
     }
 
     fn deactivate(&mut self) {
         self.lifecycle = Lifecycle::Inactive;
-        if let Some(child) = &mut self.child_element {
-            child.deactivate();
-        }
     }
 
     fn update(&mut self, new_view: &dyn View, _element_owner: &mut crate::ElementOwner<'_>) {
         if let Some(v) = new_view.as_any().downcast_ref::<RootRenderView<V>>() {
             self.view = v.clone();
+            // The child config may have changed — re-reconcile next build.
+            self.needs_build = true;
             // Update configuration if size changed
             if let (Some(pipeline_owner), Some(render_id)) = (&self.pipeline_owner, self.render_id)
             {
@@ -277,83 +287,43 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
         }
     }
 
+    fn is_dirty(&self) -> bool {
+        self.needs_build
+    }
+
     fn mark_needs_build(&mut self) {
-        // Schedule rebuild
+        self.needs_build = true;
     }
 
-    fn perform_build(&mut self, element_owner: &mut crate::ElementOwner<'_>) {
-        // Create child element from child View
-        if self.child_element.is_none() {
-            // First build - create child element
-            let mut child_element = self.view.child.create_element();
-
-            // Pass PipelineOwner and parent RenderId to child via trait methods
-            // Child needs these to insert its RenderObject into the RenderTree
-            if let Some(pipeline_owner) = &self.pipeline_owner {
-                // Use ElementBase trait methods for pipeline propagation
-                // This works for any element type that implements the trait
-                let owner_any: Arc<dyn std::any::Any + Send + Sync> =
-                    Arc::clone(pipeline_owner) as Arc<dyn std::any::Any + Send + Sync>;
-                child_element.set_pipeline_owner_any(owner_any);
-                child_element.set_parent_render_id(self.render_id);
-
-                tracing::debug!(
-                    "RootRenderElement::perform_build propagated PipelineOwner and parent_id={:?} to child",
-                    self.render_id
-                );
-            }
-
-            // Child's depth is 1 (root is 0). Thread the split-borrow
-            // owner handle into the recursive mount + perform_build
-            // calls per plan §U8.
-            child_element.mount(None, 1, &mut *element_owner);
-
-            // Child element needs to build its children too
-            child_element.perform_build(&mut *element_owner);
-
-            // Attach child's RenderObject to RenderTree as child of RenderView
-            // Get child's RenderId and establish parent-child relationship
-            if let (Some(pipeline_owner), Some(parent_id)) = (&self.pipeline_owner, self.render_id)
-                && let Some(child_render_id) = child_element
-                    .render_object_any()
-                    .and_then(|any| any.downcast_ref::<RenderId>().copied())
-            {
-                let mut owner = pipeline_owner.write();
-                let render_tree = owner.render_tree_mut();
-
-                // Set parent on child node
-                if let Some(child_node) = render_tree.get_mut(child_render_id) {
-                    child_node.set_parent(Some(parent_id));
-                }
-
-                // Add child to parent's children list
-                if let Some(parent_node) = render_tree.get_mut(parent_id) {
-                    parent_node.add_child(child_render_id);
-                    // Parent-child relationships are fully managed by NodeLinks
-                    // No need to notify render objects directly
-                }
-
-                tracing::debug!(
-                    "RootRenderElement::perform_build attached child render_id={:?} to parent render_id={:?}",
-                    child_render_id,
-                    parent_id
-                );
-            }
-
-            self.child_element = Some(child_element);
-        } else {
-            // Rebuild - update child element
-            if let Some(child) = &mut self.child_element {
-                let child_view: &dyn View = &self.view.child;
-                child.update(child_view, &mut *element_owner);
-                child.perform_build(&mut *element_owner);
-            }
-        }
+    fn build_into_views(
+        &mut self,
+        _element_owner: &mut crate::ElementOwner<'_>,
+    ) -> Vec<Box<dyn View>> {
+        // E3 (atomic box→arena swap): the root's single child is now a
+        // slab-resident node. Return the child view; the slab
+        // id-reconciler in `BuildOwner::build_scope` creates / updates the
+        // child element under this root (propagating this element's
+        // `PipelineOwner` + `render_id` via `ElementTree::insert`, so the
+        // child's `on_mount` attaches its `RenderObject` under the
+        // RenderView) and schedules it for its own build. The old inline
+        // mount + recursive build + manual render-attach is gone.
+        //
+        // `build_scope` only calls this when `is_dirty()` is true, so the
+        // returned child is always the one to reconcile; clear the flag now
+        // that it has been handed off.
+        self.needs_build = false;
+        vec![dyn_clone::clone_box(&self.view.child as &dyn View)]
     }
 
-    fn visit_children(&self, visitor: &mut dyn FnMut(ElementId)) {
-        // In a full implementation, we'd have the child's ElementId
-        let _ = visitor;
+    fn pipeline_owner_any(&self) -> Option<Arc<dyn Any + Send + Sync>> {
+        self.pipeline_owner
+            .as_ref()
+            .map(|po| Arc::clone(po) as Arc<dyn Any + Send + Sync>)
+    }
+
+    fn child_render_id(&self) -> Option<RenderId> {
+        // The root's child attaches its RenderObject under the RenderView.
+        self.render_id
     }
 
     fn set_pipeline_owner_any(&mut self, owner: Arc<dyn Any + Send + Sync>) {
@@ -546,8 +516,9 @@ mod tests {
         fn deactivate(&mut self) {}
         fn update(&mut self, _new_view: &dyn View, _owner: &mut crate::ElementOwner<'_>) {}
         fn mark_needs_build(&mut self) {}
-        fn perform_build(&mut self, _owner: &mut crate::ElementOwner<'_>) {}
-        fn visit_children(&self, _visitor: &mut dyn FnMut(ElementId)) {}
+        fn build_into_views(&mut self, _owner: &mut crate::ElementOwner<'_>) -> Vec<Box<dyn View>> {
+            Vec::new()
+        }
     }
 
     #[test]

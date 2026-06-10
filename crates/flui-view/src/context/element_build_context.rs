@@ -576,9 +576,13 @@ impl BuildContext for ElementBuildContext {
             );
         }
 
+        // E3 (atomic box→arena swap): a node's children are its
+        // slab-resident `child_ids` list — the single element graph.
         let tree = self.tree.read();
         if let Some(node) = tree.get(self.element_id) {
-            node.element().visit_children(visitor);
+            for child_id in node.child_ids() {
+                visitor(*child_id);
+            }
         }
     }
 
