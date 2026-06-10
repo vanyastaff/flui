@@ -114,8 +114,13 @@ impl AppBinding {
         let renderer =
             RenderingFlutterBinding::new_with_pipeline(Arc::clone(&shared_pipeline_owner));
 
-        // Create WidgetsBinding
+        // Create WidgetsBinding and hand it the SAME PipelineOwner the
+        // renderer shares. `attach_root_widget*` bootstraps the root render
+        // tree through `mount_root_with_pipeline_owner`; without the owner in
+        // scope the root element mounts with no PipelineOwner and never
+        // creates its RenderView — the window renders nothing.
         let widgets = WidgetsBinding::new();
+        widgets.set_pipeline_owner(Arc::clone(&shared_pipeline_owner));
 
         Self {
             renderer: RwLock::new(renderer),
@@ -583,6 +588,76 @@ mod tests {
         // Verify the renderer sub-binding is accessible (created during
         // AppBinding::new)
         let _renderer = binding.renderer();
+    }
+
+    /// Minimal leaf view/element so a headless `attach_root_widget` has
+    /// something to mount without pulling in a widget crate.
+    #[derive(Clone)]
+    struct LeafView;
+
+    impl View for LeafView {
+        fn create_element(&self) -> Box<dyn flui_view::ElementBase> {
+            Box::new(LeafElement {
+                lifecycle: flui_view::element::Lifecycle::Initial,
+            })
+        }
+    }
+
+    struct LeafElement {
+        lifecycle: flui_view::element::Lifecycle,
+    }
+
+    impl flui_view::ElementBase for LeafElement {
+        fn view_type_id(&self) -> std::any::TypeId {
+            std::any::TypeId::of::<LeafView>()
+        }
+        fn depth(&self) -> usize {
+            0
+        }
+        fn lifecycle(&self) -> flui_view::element::Lifecycle {
+            self.lifecycle
+        }
+        fn mount(
+            &mut self,
+            _parent: Option<flui_foundation::ElementId>,
+            _slot: usize,
+            _owner: &mut flui_view::ElementOwner<'_>,
+        ) {
+            self.lifecycle = flui_view::element::Lifecycle::Active;
+        }
+        fn unmount(&mut self, _owner: &mut flui_view::ElementOwner<'_>) {
+            self.lifecycle = flui_view::element::Lifecycle::Defunct;
+        }
+        fn activate(&mut self) {
+            self.lifecycle = flui_view::element::Lifecycle::Active;
+        }
+        fn deactivate(&mut self) {
+            self.lifecycle = flui_view::element::Lifecycle::Inactive;
+        }
+        fn update(&mut self, _new: &dyn View, _owner: &mut flui_view::ElementOwner<'_>) {}
+        fn mark_needs_build(&mut self) {}
+        fn build_into_views(
+            &mut self,
+            _owner: &mut flui_view::ElementOwner<'_>,
+        ) -> Vec<Box<dyn View>> {
+            Vec::new()
+        }
+    }
+
+    /// E2/E3 regression: `AppBinding` hands its shared `PipelineOwner` to the
+    /// `WidgetsBinding` it owns, so `attach_root_widget` actually bootstraps
+    /// the root render tree. Without that wiring the root mounts with no
+    /// PipelineOwner, no `RenderView` is created, and the window renders
+    /// nothing — the shared owner's root id stays `None`.
+    #[test]
+    fn attach_root_widget_bootstraps_shared_render_tree() {
+        let app = AppBinding::new();
+        app.attach_root_widget(&LeafView).expect("attach succeeds");
+        assert!(
+            app.shared_pipeline_owner.read().root_id().is_some(),
+            "AppBinding must pass its PipelineOwner to the widgets binding so the \
+             root render tree bootstraps; without it the window renders nothing",
+        );
     }
 
     // ========================================================================

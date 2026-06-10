@@ -100,7 +100,6 @@ where
         traits::{DispatchEventResult, LifecycleEvent, PlatformInput},
     };
     use flui_scheduler::Scheduler;
-    use flui_view::WidgetsBinding;
     use parking_lot::Mutex;
 
     use crate::embedder::PlatformWindowHandle;
@@ -163,17 +162,23 @@ where
         });
     }
 
-    // Wire `on_build_scheduled` on the BuildOwner so that a dirty-element
-    // registration (e.g. from setState inside an element build) also triggers
-    // `handle_build_scheduled`.  We call it directly — it is already
-    // lock-free (reads only the `debug_building_dirty_elements` atomic and
-    // then takes `on_need_frame`'s leaf lock).
+    // Wire `on_build_scheduled` on the BuildOwner so a dirty-element
+    // registration (e.g. from setState inside an element build) wakes the
+    // platform loop. The callback fires from inside `schedule_build_for`,
+    // which runs during a build while the AppBinding `widgets` write lock is
+    // held — so it must NOT re-lock `widgets`. It calls `wake_frame`
+    // directly (the same effect as the `on_need_frame` callback above),
+    // which touches only the `active_window` leaf lock. Routing instead
+    // through `WidgetsBinding::instance().handle_build_scheduled()` would be
+    // doubly wrong: that global singleton is a different binding from the
+    // AppBinding-owned one whose `on_need_frame` was just registered (so the
+    // wake silently never fires), and reaching the owned binding via
+    // `widgets()` would deadlock on the held write lock.
     {
         let widgets = AppBinding::instance().widgets();
         widgets.with_build_owner_mut(|build_owner| {
             build_owner.set_on_build_scheduled(|| {
-                let binding = WidgetsBinding::instance();
-                binding.handle_build_scheduled();
+                AppBinding::instance().wake_frame();
             });
         });
     }
