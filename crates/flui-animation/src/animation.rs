@@ -129,7 +129,7 @@ pub(crate) struct ParentSubscription {
 }
 
 impl ParentSubscription {
-    fn new(teardown: impl FnMut() + Send + 'static) -> Arc<Self> {
+    pub(crate) fn new(teardown: impl FnMut() + Send + 'static) -> Arc<Self> {
         Arc::new(Self {
             teardown: parking_lot::Mutex::new(Some(Box::new(teardown))),
         })

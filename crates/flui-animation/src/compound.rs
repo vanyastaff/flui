@@ -205,10 +205,13 @@ impl Animation<f32> for CompoundAnimation {
         self.apply_operator(first_value, next_value)
     }
 
+    /// The status of the **first** operand, regardless of operator.
+    ///
+    /// Intentional (Flutter `CompoundAnimation` parity): even when `Min`/`Max`
+    /// currently selects the second operand's value, `first` drives both
+    /// `status()` and the status listeners.
     #[inline]
     fn status(&self) -> AnimationStatus {
-        // Return the status of the first animation
-        // (both animations might have different statuses)
         self.first.status()
     }
 

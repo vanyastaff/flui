@@ -604,6 +604,14 @@ impl FrictionSimulation {
         start_velocity: f32,
         end_velocity: f32,
     ) -> Self {
+        // Zero travel distance puts a 0 (or ±0-signed) denominator under the
+        // exponent and produces drag = e^±inf / NaN; fail with the physical
+        // constraint instead of the downstream "drag must be in (0,1)" panic.
+        assert!(
+            (start_position - end_position).abs() > f32::EPSILON,
+            "FrictionSimulation::through requires start_position != end_position: \
+             zero travel distance has no finite drag solution"
+        );
         // drag = e^((vStart - vEnd) / (xStart - xEnd))  (Flutter's `_dragFor`).
         let drag = std::f32::consts::E
             .powf((start_velocity - end_velocity) / (start_position - end_position));

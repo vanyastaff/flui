@@ -351,6 +351,10 @@ impl<T, A: Animatable<T>> TweenSequence<T, A> {
 }
 
 impl<T, A: Animatable<T>> Animatable<T> for TweenSequence<T, A> {
+    /// Unlike a plain [`Tween`], a sequence **clamps** `t` to `[0, 1]`:
+    /// overshoot (elastic/spring `t` outside the unit range) saturates at the
+    /// first/last item's endpoint rather than extrapolating, because there is
+    /// no meaningful item to attribute out-of-range progress to.
     fn transform(&self, t: f32) -> T {
         let t = t.clamp(0.0, 1.0);
 
