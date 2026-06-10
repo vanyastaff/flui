@@ -627,8 +627,8 @@ mod tests {
     use super::*;
     // `BorderRadius::circular` is a `BorderRadiusExt` method; the production code
     // no longer needs the trait (Lerp handles interpolation), only the tests do.
-    use flui_types::styling::BorderRadiusExt;
     use crate::curve::Curves;
+    use flui_types::styling::BorderRadiusExt;
 
     #[test]
     fn test_float_tween() {

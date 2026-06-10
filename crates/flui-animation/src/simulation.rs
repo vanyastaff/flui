@@ -871,10 +871,18 @@ mod tests {
         // Fling from x=0 (v=800) to rest (v=0) at x=500: the resting (asymptotic)
         // position must be the requested 500.
         let sim = FrictionSimulation::through(0.0, 500.0, 800.0, 0.0);
-        assert!((sim.final_x() - 500.0).abs() < 0.5, "final_x={}", sim.final_x());
+        assert!(
+            (sim.final_x() - 500.0).abs() < 0.5,
+            "final_x={}",
+            sim.final_x()
+        );
         // It approaches 500 over time and the (fixed) time_at_x of an
         // intermediate point is positive and finite.
-        assert!((sim.x(100.0) - 500.0).abs() < 1.0, "x(100)={}", sim.x(100.0));
+        assert!(
+            (sim.x(100.0) - 500.0).abs() < 1.0,
+            "x(100)={}",
+            sim.x(100.0)
+        );
         let t_mid = sim.time_at_x(250.0);
         assert!(t_mid.is_finite() && t_mid > 0.0, "t_mid={t_mid}");
     }

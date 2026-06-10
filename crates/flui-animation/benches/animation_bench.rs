@@ -36,7 +36,10 @@ fn tween_transform(c: &mut Criterion) {
         b.iter(|| black_box(col.transform(black_box(0.37))));
     });
 
-    let off = Tween::new(Offset::new(px(0.0), px(0.0)), Offset::new(px(100.0), px(200.0)));
+    let off = Tween::new(
+        Offset::new(px(0.0), px(0.0)),
+        Offset::new(px(100.0), px(200.0)),
+    );
     group.bench_function("offset", |b| {
         b.iter(|| black_box(off.transform(black_box(0.37))));
     });
