@@ -87,8 +87,7 @@ external-default-features = "allow"
 # Deny specific crates (unmaintained, insecure, or problematic)
 deny = [
     # Unmaintained crates with better alternatives
-    { crate = "atty", wrappers = ["is-terminal"] }, # Use is-terminal
-    { crate = "instant", wrappers = ["web-time"] }, # Use web-time
+    { crate = "atty" }, # Use is-terminal
 
     # Security concerns
     { crate = "openssl" },    # Prefer rustls
