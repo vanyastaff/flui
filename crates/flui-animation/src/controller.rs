@@ -293,6 +293,14 @@ impl AnimationController {
     ///
     /// If `from` is `None`, starts from the current value.
     ///
+    /// The run covers the REMAINING distance at the full-range velocity:
+    /// its duration is the forward duration scaled by
+    /// `(upper_bound - value) / (upper_bound - lower_bound)` (Flutter
+    /// parity — `AnimationController._animateToInternal` scales the
+    /// simulation duration by the remaining fraction). Starting at the
+    /// upper bound settles immediately with
+    /// [`AnimationStatus::Completed`].
+    ///
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
@@ -306,9 +314,15 @@ impl AnimationController {
 
         inner.clear_run_modes();
         inner.direction = AnimationDirection::Forward;
-        inner.status = AnimationStatus::Forward;
         inner.start_value = inner.value;
         inner.target_value = inner.upper_bound;
+        if (inner.target_value - inner.value).abs() < BOUND_EPSILON {
+            self.settle_at_target(inner);
+            return Ok(());
+        }
+
+        inner.status = AnimationStatus::Forward;
+        inner.run_duration = Some(inner.scaled_run_duration(inner.duration));
         self.restart_ticker(&mut inner);
 
         Self::emit_status_after_unlock(inner, AnimationStatus::Forward);
@@ -328,6 +342,13 @@ impl AnimationController {
     ///
     /// If `from` is `None`, starts from the current value.
     ///
+    /// The run covers the REMAINING distance at the full-range velocity:
+    /// its duration is the reverse duration (falling back to the forward
+    /// duration) scaled by `(value - lower_bound) / (upper_bound -
+    /// lower_bound)` (Flutter parity — see [`forward_from`](Self::forward_from)).
+    /// Starting at the lower bound settles immediately with
+    /// [`AnimationStatus::Dismissed`].
+    ///
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
@@ -341,9 +362,16 @@ impl AnimationController {
 
         inner.clear_run_modes();
         inner.direction = AnimationDirection::Reverse;
-        inner.status = AnimationStatus::Reverse;
         inner.start_value = inner.value;
         inner.target_value = inner.lower_bound;
+        if (inner.target_value - inner.value).abs() < BOUND_EPSILON {
+            self.settle_at_target(inner);
+            return Ok(());
+        }
+
+        inner.status = AnimationStatus::Reverse;
+        let base = inner.reverse_duration.unwrap_or(inner.duration);
+        inner.run_duration = Some(inner.scaled_run_duration(base));
         self.restart_ticker(&mut inner);
 
         Self::emit_status_after_unlock(inner, AnimationStatus::Reverse);
@@ -402,10 +430,12 @@ impl AnimationController {
     }
 
     /// Animate to a specific value over `duration` (or the controller's forward
-    /// duration when `None`).
+    /// duration when `None`, scaled by the remaining fraction of the range —
+    /// see [`forward_from`](Self::forward_from)).
     ///
     /// The per-run `duration` override applies to **this run only** and does not
-    /// modify the controller's base duration.
+    /// modify the controller's base duration. An explicit `duration` is used
+    /// as-is, without remaining-fraction scaling.
     ///
     /// # Arguments
     ///
@@ -420,13 +450,14 @@ impl AnimationController {
         target: f32,
         duration: Option<Duration>,
     ) -> Result<(), AnimationError> {
-        self.drive_to(target, duration)
+        self.drive_to(target, duration, false)
     }
 
     /// Animate back to a specific value, defaulting to the reverse duration.
     ///
     /// Like [`animate_to`](Self::animate_to) but, when `duration` is `None`,
-    /// defaults to the configured reverse duration (then the base duration).
+    /// defaults to the configured reverse duration (then the base duration),
+    /// scaled by the remaining fraction of the range.
     ///
     /// # Errors
     ///
@@ -436,14 +467,20 @@ impl AnimationController {
         target: f32,
         duration: Option<Duration>,
     ) -> Result<(), AnimationError> {
-        let fallback = self.inner.lock().reverse_duration;
-        self.drive_to(target, duration.or(fallback))
+        self.drive_to(target, duration, true)
     }
 
     /// Shared driver for [`animate_to`](Self::animate_to)/[`animate_back`](Self::animate_back):
     /// linearly interpolate from the current value to `target`, picking
-    /// direction from their order.
-    fn drive_to(&self, target: f32, duration: Option<Duration>) -> Result<(), AnimationError> {
+    /// direction from their order. `prefer_reverse_duration` makes the
+    /// `None`-duration default the reverse duration regardless of the run's
+    /// direction (the `animate_back` contract).
+    fn drive_to(
+        &self,
+        target: f32,
+        duration: Option<Duration>,
+        prefer_reverse_duration: bool,
+    ) -> Result<(), AnimationError> {
         let mut inner = self.inner.lock();
         Self::check_disposed(&inner)?;
 
@@ -462,29 +499,48 @@ impl AnimationController {
         // the value never changes, so settle immediately with a single
         // notification instead.
         if (target - inner.value).abs() < BOUND_EPSILON {
-            inner.value = target;
-            if let Some(ticker) = &mut inner.ticker
-                && ticker.state().can_tick()
-            {
-                ticker.stop();
-            }
-            let status = inner.settled_status_directed();
-            inner.status = status;
-            let callbacks = Self::snapshot_status_listeners(&inner);
-            drop(inner);
-            self.notifier.notify_listeners();
-            Self::fire_status(&callbacks, status);
+            self.settle_at_target(inner);
             return Ok(());
         }
 
         inner.status = inner.direction.running_status();
-        // Per-run override only — never clobber `inner.duration`.
-        inner.run_duration = duration;
+        // Per-run override only — never clobber `inner.duration`. Without an
+        // explicit duration, the direction's base duration is scaled by the
+        // remaining fraction so partial runs keep the full-range velocity.
+        inner.run_duration = Some(duration.unwrap_or_else(|| {
+            let base = if prefer_reverse_duration {
+                inner.reverse_duration.unwrap_or(inner.duration)
+            } else {
+                match inner.direction {
+                    AnimationDirection::Forward => inner.duration,
+                    AnimationDirection::Reverse => inner.reverse_duration.unwrap_or(inner.duration),
+                }
+            };
+            inner.scaled_run_duration(base)
+        }));
         self.restart_ticker(&mut inner);
 
         let status = inner.status;
         Self::emit_status_after_unlock(inner, status);
         Ok(())
+    }
+
+    /// Settle a run whose start value already sits at its target: snap the
+    /// value, stop the ticker, and report the settled status with a single
+    /// notification — no transient running status, no full-duration no-op run.
+    fn settle_at_target(&self, mut inner: parking_lot::MutexGuard<'_, AnimationControllerInner>) {
+        inner.value = inner.target_value;
+        if let Some(ticker) = &mut inner.ticker
+            && ticker.state().can_tick()
+        {
+            ticker.stop();
+        }
+        let status = inner.settled_status_directed();
+        inner.status = status;
+        let callbacks = Self::snapshot_status_listeners(&inner);
+        drop(inner);
+        self.notifier.notify_listeners();
+        Self::fire_status(&callbacks, status);
     }
 
     /// Repeat the animation, bouncing if `reverse` is true. Repeats forever.
@@ -1025,6 +1081,28 @@ impl AnimationControllerInner {
         }
     }
 
+    /// Duration for a run covering `|target_value - start_value|` of the
+    /// range at the full-range velocity implied by `base`.
+    ///
+    /// Flutter parity: `AnimationController._animateToInternal` scales the
+    /// simulation duration by the remaining fraction, so a mid-flight
+    /// `forward()`/`reverse()` keeps constant velocity instead of stretching
+    /// the leftover distance over the full duration. Degenerate ranges
+    /// (zero, non-finite) fall back to the unscaled base, like Flutter's
+    /// `range.isFinite ? ... : 1.0`.
+    fn scaled_run_duration(&self, base: Duration) -> Duration {
+        let range = self.upper_bound - self.lower_bound;
+        if !range.is_finite() || range <= 0.0 {
+            return base;
+        }
+        let fraction =
+            f64::from(((self.target_value - self.start_value).abs() / range).clamp(0.0, 1.0));
+        if !fraction.is_finite() {
+            return base;
+        }
+        base.mul_f64(fraction)
+    }
+
     /// Dilated elapsed within the current cycle, from the last observed tick.
     fn cycle_elapsed_secs(&self) -> f64 {
         let dilated = self.last_raw_elapsed_secs / time_dilation().max(f64::MIN_POSITIVE);
@@ -1195,6 +1273,95 @@ mod tests {
         let c = controller(100);
         assert_eq!(c.value(), 0.0);
         assert_eq!(c.status(), AnimationStatus::Dismissed);
+        c.dispose();
+    }
+
+    // ---- remaining-fraction duration scaling (Flutter `_animateToInternal`) ----
+
+    #[test]
+    fn reverse_mid_flight_keeps_full_range_velocity() {
+        let _serial = serial();
+        let c = controller(1000);
+        c.forward().unwrap();
+        c.tick_at(0.6);
+        assert!((c.value() - 0.6).abs() < 1e-4);
+
+        // reverse() restarts the ticker (elapsed re-zeroes) and the leg
+        // covers 0.6 of the range in 0.6s — NOT the full second. Pre-fix
+        // the lerp ran start->target over the full duration, so the same
+        // distance took longer and velocity dropped at the turn.
+        c.reverse().unwrap();
+        c.tick_at(0.3);
+        assert!(
+            (c.value() - 0.3).abs() < 1e-3,
+            "0.3s into the 0.6s reverse leg must sit at 0.3, got {}",
+            c.value()
+        );
+        // Past the scaled leg's end (0.6s + float headroom) → dismissed.
+        c.tick_at(0.7);
+        assert_eq!(c.status(), AnimationStatus::Dismissed);
+        c.dispose();
+    }
+
+    #[test]
+    fn forward_from_mid_scales_run_duration() {
+        let _serial = serial();
+        let c = controller(100);
+        c.forward_from(Some(0.5)).unwrap();
+        // Half the range remains -> 50ms run. 25ms in = halfway -> 0.75.
+        c.tick_at(0.025);
+        assert!(
+            (c.value() - 0.75).abs() < 1e-3,
+            "constant velocity from 0.5: got {}",
+            c.value()
+        );
+        c.tick_at(0.05);
+        assert_eq!(c.status(), AnimationStatus::Completed);
+        c.dispose();
+    }
+
+    #[test]
+    fn forward_at_upper_bound_settles_immediately() {
+        let _serial = serial();
+        let c = controller(100);
+        let statuses = Arc::new(Mutex::new(Vec::new()));
+        let s2 = Arc::clone(&statuses);
+        let _id = c.add_status_listener(Arc::new(move |s| s2.lock().push(s)));
+
+        c.forward_from(Some(1.0)).unwrap();
+        assert_eq!(c.status(), AnimationStatus::Completed);
+        assert!(!c.is_animating(), "no ticker run for a zero-distance leg");
+        assert_eq!(
+            statuses.lock().as_slice(),
+            &[AnimationStatus::Completed],
+            "settles with the final status only — no transient Forward",
+        );
+        c.dispose();
+    }
+
+    #[test]
+    fn reverse_at_lower_bound_settles_immediately() {
+        let _serial = serial();
+        let c = controller(100);
+        c.reverse().unwrap();
+        assert_eq!(c.status(), AnimationStatus::Dismissed);
+        assert!(!c.is_animating());
+        c.dispose();
+    }
+
+    #[test]
+    fn explicit_animate_to_duration_is_not_scaled() {
+        let _serial = serial();
+        let c = controller(100);
+        c.set_value(0.5);
+        // Explicit 100ms run from 0.5 -> 1.0: 50ms in = halfway -> 0.75.
+        c.animate_to(1.0, Some(Duration::from_millis(100))).unwrap();
+        c.tick_at(0.05);
+        assert!(
+            (c.value() - 0.75).abs() < 1e-3,
+            "an explicit per-run duration is used as-is, got {}",
+            c.value()
+        );
         c.dispose();
     }
 
