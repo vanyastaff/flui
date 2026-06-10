@@ -43,6 +43,10 @@ harness = false
 [dev-dependencies]
 criterion.workspace = true
 mockall = "0.13"
+# Animation -> render-pipeline integration scenarios (tests only; no
+# production dependency between the layers).
+flui-animation = { path = "../flui-animation" }
+flui-scheduler = { path = "../flui-scheduler" }
 
 [features]
 default = []
