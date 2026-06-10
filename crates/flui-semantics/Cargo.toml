@@ -36,7 +36,7 @@ tracing = "0.1"
 
 # Platform accessibility - integrates with OS accessibility APIs
 # (Windows UI Automation, macOS NSAccessibility, Linux AT-SPI)
-accesskit = "0.21"
+accesskit = "0.24"
 
 # Small-string optimization - O(1) clone for label/hint/value
 smol_str = "0.3"
