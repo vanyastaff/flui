@@ -192,6 +192,12 @@ pub struct TapAndDragGestureRecognizer {
     drag_state: Arc<Mutex<DragState>>,
     callbacks: Arc<Mutex<TapDragCallbacks>>,
     settings: Arc<Mutex<GestureSettings>>,
+    /// Arena verdict for the in-flight sequence: `None` until resolved,
+    /// `Some(true)` once this recogniser wins, `Some(false)` once it loses.
+    /// Tap callbacks fire only on `Some(true)` so a losing tap-and-drag never
+    /// emits `on_tap_*` to user code (a competing recogniser added earlier can
+    /// take the pointer on the resolving sweep).
+    accepted: Arc<Mutex<Option<bool>>>,
 }
 
 impl std::fmt::Debug for TapAndDragGestureRecognizer {
@@ -214,6 +220,7 @@ impl TapAndDragGestureRecognizer {
             drag_state: Arc::new(Mutex::new(DragState::default())),
             callbacks: Arc::new(Mutex::new(TapDragCallbacks::default())),
             settings: Arc::new(Mutex::new(GestureSettings::default())),
+            accepted: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -228,6 +235,7 @@ impl TapAndDragGestureRecognizer {
             drag_state: Arc::new(Mutex::new(DragState::default())),
             callbacks: Arc::new(Mutex::new(TapDragCallbacks::default())),
             settings: Arc::new(Mutex::new(settings)),
+            accepted: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -308,6 +316,7 @@ impl TapAndDragGestureRecognizer {
     /// tap-up, drag-end, or cancel.
     fn reset(&self) {
         *self.phase.lock() = Phase::Ready;
+        *self.accepted.lock() = None;
         let mut ds = self.drag_state.lock();
         ds.initial = None;
         ds.last = None;
@@ -520,9 +529,20 @@ impl TapAndDragGestureRecognizer {
                     let ds = self.drag_state.lock();
                     (ds.initial, ds.tap_viable)
                 };
-                // Only fire the tap if it is still viable; a move past tap slop
-                // voids it (see `handle_move`), so the up resolves to nothing.
-                if tap_viable {
+                *self.phase.lock() = Phase::Finished;
+
+                // Resolve the arena BEFORE firing any tap callback. `stop_tracking`
+                // synchronously sweeps and dispatches `accept_gesture` /
+                // `reject_gesture`, which records the verdict in `self.accepted`.
+                // A tap-and-drag competing with an earlier-added recogniser can
+                // lose this sweep, so firing before resolution would let a loser
+                // emit `on_tap_*` (mirrors the `TapGestureRecognizer` pending-up
+                // pattern).
+                self.state.stop_tracking();
+
+                // Fire only if the tap stayed viable (no move past tap slop, see
+                // `handle_move`) AND the arena confirmed our win.
+                if tap_viable && self.accepted.lock().unwrap_or(false) {
                     if let Some(initial) = initial {
                         let down_cb = self.callbacks.lock().on_tap_down.clone();
                         if let Some(cb) = down_cb {
@@ -542,8 +562,6 @@ impl TapAndDragGestureRecognizer {
                         });
                     }
                 }
-                *self.phase.lock() = Phase::Finished;
-                self.state.stop_tracking();
                 self.reset();
             }
             Phase::Dragging => {
@@ -593,18 +611,20 @@ impl crate::recognizers::OneSequenceGestureRecognizer for TapAndDragGestureRecog
     fn resolve_pointer(&self, _pointer: PointerId, disposition: crate::arena::GestureDisposition) {
         match disposition {
             crate::arena::GestureDisposition::Accepted => {
-                // No-op: this recogniser fires its own callbacks from
-                // handle_move/handle_up based on FSM phase. The arena
-                // accept only matters for ordering relative to competing
-                // recognisers; tap/down callbacks fire either way.
+                // Record the win; `handle_up` reads `self.accepted` after the
+                // resolving sweep and fires the deferred tap callbacks only
+                // then. Firing here is a lock-during-callback hazard.
+                *self.accepted.lock() = Some(true);
             }
             crate::arena::GestureDisposition::Rejected => {
+                // Record the loss so the deferred tap callbacks never fire.
                 // Reentrancy guard: don't call `self.state.reject()` from
                 // here. The arena is already inside a synchronous
                 // `entry.lock()` while dispatching to us; calling
                 // `arena.resolve` again would re-lock the same entry and
                 // deadlock. The handle_* paths (handle_cancel, dispose)
                 // own the actual `state.reject()` call.
+                *self.accepted.lock() = Some(false);
                 *self.phase.lock() = Phase::Ready;
             }
         }
@@ -617,10 +637,17 @@ impl crate::recognizers::OneSequenceGestureRecognizer for TapAndDragGestureRecog
 
 impl GestureArenaMember for TapAndDragGestureRecognizer {
     fn accept_gesture(&self, _pointer: PointerId) {
-        // No-op: see `resolve_pointer` above.
+        // Record the arena win; `handle_up` reads this after the resolving
+        // sweep and fires the deferred tap callbacks. Do NOT invoke user
+        // callbacks here — the arena holds its entry lock while dispatching
+        // and user code may re-enter it (lock-during-callback hazard).
+        *self.accepted.lock() = Some(true);
     }
 
     fn reject_gesture(&self, _pointer: PointerId) {
+        // Record the loss so the deferred tap callbacks never fire.
+        *self.accepted.lock() = Some(false);
+
         // The arena is already holding its entry-lock while dispatching
         // `reject_gesture`; calling `self.state.reject()` here would
         // re-enter `arena.resolve` on the same pointer and try to take
@@ -906,5 +933,52 @@ mod tests {
         drop(rec);
     }
 
-    // Build event helper (re-exported for test scope).
+    #[test]
+    fn losing_tap_and_drag_does_not_fire_tap() {
+        // A competitor is added to the arena BEFORE the tap-and-drag. On the
+        // resolving sweep with neither having explicitly accepted, the arena
+        // picks the earlier member (`members[0]`) and rejects the tap-and-drag.
+        // The losing recogniser must therefore NOT emit on_tap_down/on_tap_up.
+        let arena = GestureArena::new();
+
+        struct Competitor;
+        impl crate::sealed::arena_member::Sealed for Competitor {}
+        impl crate::arena::GestureArenaMember for Competitor {
+            fn accept_gesture(&self, _pointer: PointerId) {}
+            fn reject_gesture(&self, _pointer: PointerId) {}
+        }
+
+        let pointer = PointerId::PRIMARY;
+        let competitor: Arc<dyn crate::arena::GestureArenaMember> = Arc::new(Competitor);
+        let _entry = arena.add(pointer, competitor); // earlier member → wins sweep
+
+        let tap_down = Arc::new(Mutex::new(false));
+        let tap_up = Arc::new(Mutex::new(false));
+        let rec = TapAndDragGestureRecognizer::new(arena.clone())
+            .with_on_tap_down({
+                let f = tap_down.clone();
+                move |_| *f.lock() = true
+            })
+            .with_on_tap_up({
+                let f = tap_up.clone();
+                move |_| *f.lock() = true
+            });
+
+        rec.add_pointer(pointer, Offset::new(Pixels(0.0), Pixels(0.0))); // later member
+        // Plain tap (no move past slop): the up resolves the arena, and the
+        // earlier competitor — not this recogniser — wins.
+        rec.handle_event(&make_up_event(
+            Offset::new(Pixels(0.0), Pixels(0.0)),
+            PointerType::Touch,
+        ));
+
+        assert!(
+            !*tap_down.lock(),
+            "a tap-and-drag that lost the arena must not fire on_tap_down"
+        );
+        assert!(
+            !*tap_up.lock(),
+            "a tap-and-drag that lost the arena must not fire on_tap_up"
+        );
+    }
 }
