@@ -84,6 +84,7 @@ pub fn measure_text(
     let mut max_line_width = 0.0f32;
     let mut line_count = 0usize;
     let mut first_baseline = 0.0f32;
+    let mut first_descent_edge = 0.0f32;
 
     for run in buffer.layout_runs() {
         line_count += 1;
@@ -91,14 +92,18 @@ pub fn measure_text(
         total_height = total_height.max(run.line_top + run.line_height);
 
         if line_count == 1 {
-            first_baseline = run.line_top + run.line_height * 0.8;
+            // Shaper-derived: `line_y` IS the alphabetic baseline.
+            first_baseline = run.line_y;
+            first_descent_edge = run.line_top + run.line_height;
         }
     }
 
     if line_count == 0 {
+        // Empty text: nothing was shaped, synthesize from the line box.
         line_count = 1;
         total_height = line_height;
         first_baseline = line_height * 0.8;
+        first_descent_edge = line_height;
     }
 
     TextLayoutResult {
@@ -107,6 +112,8 @@ pub fn measure_text(
         line_count,
         max_line_width,
         alphabetic_baseline: first_baseline,
+        ideographic_baseline: first_descent_edge,
+        truncated: false,
     }
 }
 

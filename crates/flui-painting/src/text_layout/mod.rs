@@ -45,6 +45,15 @@ pub struct TextLayoutResult {
     pub max_line_width: f32,
     /// Distance to alphabetic baseline from top.
     pub alphabetic_baseline: f32,
+    /// Distance to the ideographic baseline from top.
+    ///
+    /// Derived from the first line's descent edge (`line_top +
+    /// line_height`) — the closest shaper-derived bound until per-font
+    /// ideographic metrics are plumbed (cosmic-text does not expose
+    /// them per run).
+    pub ideographic_baseline: f32,
+    /// Whether the layout was truncated to a maximum line count.
+    pub truncated: bool,
 }
 
 impl TextLayoutResult {

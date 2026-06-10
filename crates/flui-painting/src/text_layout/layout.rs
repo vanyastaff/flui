@@ -75,10 +75,12 @@ pub struct TextLayout {
     line_height: f32,
     /// Text direction.
     direction: TextDirection,
+    /// Whether `with_overflow` truncated the text to a max line count.
+    truncated: bool,
 }
 
 impl TextLayout {
-    /// Creates a new text layout.
+    /// Creates a new text layout with no line-count limit.
     pub fn new(
         text: &str,
         style: Option<&TextStyle>,
@@ -86,6 +88,44 @@ impl TextLayout {
         max_width: Option<f32>,
         line_height: Option<f32>,
         direction: TextDirection,
+    ) -> Self {
+        Self::with_overflow(
+            text,
+            style,
+            font_size,
+            max_width,
+            line_height,
+            direction,
+            None,
+            None,
+        )
+    }
+
+    /// Creates a text layout enforcing an optional maximum visual line
+    /// count.
+    ///
+    /// When the shaped text exceeds `max_lines`, the buffer is RE-SHAPED
+    /// on the truncated prefix so the layout's size, line metrics, and
+    /// paint output all agree — lines beyond the limit do not exist,
+    /// they are not merely skipped at paint. With an `ellipsis`, glyphs
+    /// are dropped from the last kept line until the ellipsis fits the
+    /// width constraint, then it is appended (Flutter
+    /// `ParagraphStyle.maxLines` + `ellipsis` semantics); without one,
+    /// the text is cut at the last kept line's end (clip semantics).
+    ///
+    /// Worst case the fit loop re-shapes once per dropped glyph on the
+    /// last line — bounded by that line's glyph count; typical case is
+    /// one extra shape.
+    #[allow(clippy::too_many_arguments)] // mirrors the shaping input surface; callers are the two crate-internal wrappers
+    pub fn with_overflow(
+        text: &str,
+        style: Option<&TextStyle>,
+        font_size: f32,
+        max_width: Option<f32>,
+        line_height: Option<f32>,
+        direction: TextDirection,
+        max_lines: Option<usize>,
+        ellipsis: Option<&str>,
     ) -> Self {
         debug_assert!(
             font_size > 0.0 && font_size.is_finite(),
@@ -97,28 +137,113 @@ impl TextLayout {
         let line_height = line_height.unwrap_or(font_size * 1.2);
         let metrics = Metrics::new(font_size, line_height);
 
+        let attrs = style_to_attrs(style);
         let mut buffer = Buffer::new(&mut font_system, metrics);
         buffer.set_size(&mut font_system, max_width, None);
-
-        let attrs = style_to_attrs(style);
         buffer.set_text(&mut font_system, text, attrs, Shaping::Advanced);
         buffer.shape_until_scroll(&mut font_system, false);
 
-        Self {
+        let mut this = Self {
             buffer,
             text: text.to_string(),
             font_size,
             line_height,
             direction,
+            truncated: false,
+        };
+
+        if let Some(max_lines) = max_lines
+            && max_lines > 0
+        {
+            this.enforce_max_lines(&mut font_system, max_lines, ellipsis, max_width, &attrs);
+        }
+
+        this
+    }
+
+    /// Truncates the shaped buffer to `max_lines` visual lines,
+    /// optionally appending `ellipsis` to the last kept line.
+    fn enforce_max_lines(
+        &mut self,
+        font_system: &mut FontSystem,
+        max_lines: usize,
+        ellipsis: Option<&str>,
+        max_width: Option<f32>,
+        attrs: &cosmic_text::Attrs<'_>,
+    ) {
+        // Visual-line end positions as byte offsets into the ORIGINAL
+        // text. Glyph offsets are relative to their source line, so the
+        // per-line base offsets are reconstructed from the same '\n'
+        // split cosmic uses for buffer lines.
+        let line_bases: Vec<usize> = {
+            let mut bases = vec![0usize];
+            for (i, b) in self.text.bytes().enumerate() {
+                if b == b'\n' {
+                    bases.push(i + 1);
+                }
+            }
+            bases
+        };
+        let run_ends: Vec<usize> = self
+            .buffer
+            .layout_runs()
+            .map(|run| {
+                let base = line_bases.get(run.line_i).copied().unwrap_or(0);
+                base + run.glyphs.last().map_or(0, |g| g.end)
+            })
+            .collect();
+        if run_ends.len() <= max_lines {
+            return;
+        }
+        self.truncated = true;
+
+        let mut cut = run_ends[max_lines - 1];
+        loop {
+            let mut candidate = self.text[..cut].to_string();
+            if let Some(ellipsis) = ellipsis {
+                candidate.push_str(ellipsis);
+            }
+            self.buffer
+                .set_text(font_system, &candidate, *attrs, Shaping::Advanced);
+            self.buffer.shape_until_scroll(font_system, false);
+
+            let lines = self.buffer.layout_runs().count();
+            let last_width = self
+                .buffer
+                .layout_runs()
+                .last()
+                .map_or(0.0, |run| run.line_w);
+            let fits_width = max_width.is_none_or(|w| last_width <= w);
+            if lines <= max_lines && fits_width {
+                self.text = candidate;
+                return;
+            }
+
+            // Drop one more character (never splitting a codepoint) and
+            // retry; an empty prefix terminates the loop with just the
+            // ellipsis (or the empty string) shaped.
+            let Some((prev, _)) = self.text[..cut].char_indices().next_back() else {
+                self.text = candidate;
+                return;
+            };
+            cut = prev;
         }
     }
 
     /// Returns the computed metrics for this layout.
+    ///
+    /// Baselines come from the shaper: cosmic-text's `LayoutRun::line_y`
+    /// IS the alphabetic baseline of the line; the ideographic baseline
+    /// is bounded by the first line's descent edge (cosmic exposes no
+    /// per-font ideographic metric). The old `height * 0.8` / `× 1.125`
+    /// approximations survive ONLY in the empty-text branch, where no
+    /// shaped run exists to ask.
     pub fn metrics(&self) -> TextLayoutResult {
         let mut total_height = 0.0f32;
         let mut max_line_width = 0.0f32;
         let mut line_count = 0usize;
         let mut first_baseline = 0.0f32;
+        let mut first_descent_edge = 0.0f32;
 
         for run in self.buffer.layout_runs() {
             line_count += 1;
@@ -126,14 +251,18 @@ impl TextLayout {
             total_height = total_height.max(run.line_top + run.line_height);
 
             if line_count == 1 {
-                first_baseline = run.line_top + run.line_height * 0.8;
+                first_baseline = run.line_y;
+                first_descent_edge = run.line_top + run.line_height;
             }
         }
 
         if line_count == 0 {
+            // Empty text: nothing was shaped, synthesize from the line
+            // box. The only consumer is empty-string measurement.
             line_count = 1;
             total_height = self.line_height;
             first_baseline = self.line_height * 0.8;
+            first_descent_edge = self.line_height;
         }
 
         TextLayoutResult {
@@ -142,7 +271,15 @@ impl TextLayout {
             line_count,
             max_line_width,
             alphabetic_baseline: first_baseline,
+            ideographic_baseline: first_descent_edge,
+            truncated: self.truncated,
         }
+    }
+
+    /// Whether `with_overflow` truncated the text to its max line count.
+    #[must_use]
+    pub fn was_truncated(&self) -> bool {
+        self.truncated
     }
 
     /// Returns the screen offset for a caret at the given text
@@ -239,8 +376,10 @@ impl TextLayout {
         let mut metrics = Vec::new();
 
         for (line_number, run) in self.buffer.layout_runs().enumerate() {
-            let ascent = self.font_size * 0.8;
-            let descent = self.font_size * 0.2;
+            // Shaper-derived: `line_y` is the baseline, so ascent/descent
+            // are exact line-box distances, not font-size guesses.
+            let ascent = run.line_y - run.line_top;
+            let descent = (run.line_top + run.line_height) - run.line_y;
 
             let start_index = run.glyphs.first().map_or(0, |g| g.start);
             let end_index = run.glyphs.last().map_or(start_index, |g| g.end);
@@ -253,7 +392,7 @@ impl TextLayout {
                 run.line_height as f64,
                 run.line_w as f64,
                 0.0,
-                run.line_top as f64 + ascent as f64,
+                run.line_y as f64,
                 line_number,
                 start_index,
                 end_index,

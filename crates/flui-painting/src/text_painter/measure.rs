@@ -88,24 +88,30 @@ impl TextPainter {
         };
 
         let plain_text = text.to_plain_text();
-        let layout = TextLayout::new(
+        // max_lines/ellipsis are ENFORCED by the shaper-level truncation:
+        // size, line metrics, and painted glyphs all agree on the kept
+        // lines (pre-fix the painter only *detected* the overflow and
+        // painted every line anyway).
+        let layout = TextLayout::with_overflow(
             &plain_text,
             text.style(),
             scaled_font_size,
             max_width_opt,
             None,
             direction,
+            self.max_lines.map(|n| n as usize),
+            self.ellipsis.as_deref(),
         );
 
         let layout_result = layout.metrics();
 
-        #[allow(clippy::cast_possible_truncation)]
-        let line_count = layout_result.line_count as u32;
-        let did_exceed_max_lines = self.max_lines.is_some_and(|max| line_count > max);
+        let did_exceed_max_lines = layout_result.truncated;
 
         let width = layout_result.width.max(min_width);
 
-        let ideographic_baseline = layout_result.alphabetic_baseline * 1.125;
+        // Shaper-derived (descent edge of the first line); the old value
+        // was `alphabetic × 1.125`, a constant with no font behind it.
+        let ideographic_baseline = layout_result.ideographic_baseline;
 
         let paint_offset = self.compute_paint_offset(width, max_width);
 
