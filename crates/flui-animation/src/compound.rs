@@ -1,9 +1,8 @@
 //! `CompoundAnimation` - combines multiple animations with operators.
 
-use crate::animation::{Animation, StatusCallback};
+use crate::animation::{Animation, ParentSubscription, StatusCallback, link_parent};
 use crate::status::AnimationStatus;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
-use parking_lot::Mutex;
 use std::fmt;
 use std::sync::Arc;
 
@@ -75,8 +74,9 @@ pub struct CompoundAnimation {
     next: Arc<dyn Animation<f32>>,
     operator: AnimationOperator,
     notifier: Arc<ChangeNotifier>,
-    _first_listener_id: Arc<Mutex<Option<ListenerId>>>,
-    _next_listener_id: Arc<Mutex<Option<ListenerId>>>,
+    /// Re-emit both children's value changes to our listeners; removed on last drop.
+    _first_sub: Arc<ParentSubscription>,
+    _next_sub: Arc<ParentSubscription>,
 }
 
 impl CompoundAnimation {
@@ -94,14 +94,16 @@ impl CompoundAnimation {
         operator: AnimationOperator,
     ) -> Self {
         let notifier = Arc::new(ChangeNotifier::new());
+        let first_sub = link_parent(&first, &notifier);
+        let next_sub = link_parent(&next, &notifier);
 
         Self {
             first,
             next,
             operator,
             notifier,
-            _first_listener_id: Arc::new(Mutex::new(None)),
-            _next_listener_id: Arc::new(Mutex::new(None)),
+            _first_sub: first_sub,
+            _next_sub: next_sub,
         }
     }
 

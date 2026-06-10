@@ -837,6 +837,13 @@ impl AnimationController {
         }
     }
 
+    /// Number of registered value listeners. Test-only: lets combinator tests
+    /// assert that a parent subscription is added on construct and removed on drop.
+    #[cfg(test)]
+    pub(crate) fn debug_value_listener_count(&self) -> usize {
+        self.notifier.len()
+    }
+
     /// Reset run state and (re)start the ticker for a fresh run from epoch 0.
     fn restart_ticker(&self, inner: &mut AnimationControllerInner) {
         inner.run_epoch_secs = 0.0;

@@ -102,7 +102,7 @@ pub mod status;
 pub mod tween_types;
 
 // Re-exports from animation modules
-pub use animation::{Animation, AnimationDirection, DynAnimation, StatusCallback};
+pub use animation::{Animation, AnimationDirection, StatusCallback};
 pub use builder::AnimationControllerBuilder;
 pub use compound::{AnimationOperator, CompoundAnimation};
 pub use constant::{ALWAYS_COMPLETE, ALWAYS_DISMISSED, ConstantAnimation};

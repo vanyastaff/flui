@@ -1,9 +1,8 @@
 //! `ReverseAnimation` - inverts another animation's values.
 
-use crate::animation::{Animation, StatusCallback};
+use crate::animation::{Animation, ParentSubscription, StatusCallback, link_parent};
 use crate::status::AnimationStatus;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
-use parking_lot::Mutex;
 use std::fmt;
 use std::sync::Arc;
 
@@ -43,7 +42,8 @@ use std::sync::Arc;
 pub struct ReverseAnimation {
     parent: Arc<dyn Animation<f32>>,
     notifier: Arc<ChangeNotifier>,
-    _parent_listener_id: Arc<Mutex<Option<ListenerId>>>,
+    /// Re-emits parent value changes to our listeners; removed on last drop.
+    _parent_sub: Arc<ParentSubscription>,
 }
 
 impl ReverseAnimation {
@@ -55,11 +55,12 @@ impl ReverseAnimation {
     #[must_use]
     pub fn new(parent: Arc<dyn Animation<f32>>) -> Self {
         let notifier = Arc::new(ChangeNotifier::new());
+        let parent_sub = link_parent(&parent, &notifier);
 
         Self {
             parent,
             notifier,
-            _parent_listener_id: Arc::new(Mutex::new(None)),
+            _parent_sub: parent_sub,
         }
     }
 
