@@ -154,6 +154,10 @@ pub mod log;
 // Reactive programming - change notification and observables
 pub mod notifier;
 
+// Generic typed notification channel + unified listener registry
+pub mod listener_registry;
+pub mod notifier_generic;
+
 // Diagnostics and debugging
 pub mod debug;
 
@@ -202,6 +206,9 @@ pub use id::{
 pub use key::{Key, KeyRef, Keyed, UniqueKey, ValueKey, ViewKey, WithKey};
 // Change notification (Listenable pattern)
 pub use notifier::{ChangeNotifier, Listenable, ListenerCallback, ValueListenable, ValueNotifier};
+// Generic typed channel + unified listener registry
+pub use listener_registry::{ListenerRegistry, Subscription};
+pub use notifier_generic::{ArgCallback, Notifier};
 // WASM compatibility
 pub use wasm::WasmNotSendSync;
 
