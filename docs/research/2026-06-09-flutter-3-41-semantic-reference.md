@@ -26,7 +26,7 @@ Caveman file:line map of Flutter 3.41.9 in `.flutter/flutter-master/`. This is t
 | `class SemanticsProperties extends DiagnosticableTree` | :1634 | |
 | **`class SemanticsNode with DiagnosticableTreeMixin`** | **:2773** | **definition**. 16-bit ID space (framework 0..2^16-1, engine gets upper 32 bits) |
 | `class SemanticsOwner extends ChangeNotifier` | :4842 | |
-| **`class SemanticsConfiguration`** | **:5196** | builder, flags, actions, absort, role, inputType, etc. |
+| **`class SemanticsConfiguration`** | **:5196** | builder, flags, actions, absorb, role, inputType, etc. |
 | `abstract class SemanticsSortKey` | :7004 | |
 | `class CustomSemanticsAction` | :736 | |
 
