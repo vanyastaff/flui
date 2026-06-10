@@ -205,8 +205,8 @@ impl OffscreenRenderer {
                 self.device
                     .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                         label: Some(&format!("{} Pipeline Layout", shader_type.label())),
-                        bind_group_layouts: &[&self.bind_group_layout],
-                        push_constant_ranges: &[],
+                        bind_group_layouts: &[Some(&self.bind_group_layout)],
+                        immediate_size: 0,
                     });
 
             // Create render pipeline
@@ -268,7 +268,7 @@ impl OffscreenRenderer {
                         mask: !0,
                         alpha_to_coverage_enabled: false,
                     },
-                    multiview: None,
+                    multiview_mask: None,
                     cache: None,
                 });
 
@@ -359,7 +359,7 @@ impl OffscreenRenderer {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
 
@@ -406,6 +406,7 @@ impl OffscreenRenderer {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: output_view,
                     resolve_target: None,
+                    depth_slice: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                         store: wgpu::StoreOp::Store,
@@ -414,6 +415,7 @@ impl OffscreenRenderer {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
 
             // Set pipeline and bind group
@@ -496,8 +498,8 @@ impl OffscreenRenderer {
                 self.device
                     .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                         label: Some("Blur Pipeline Layout"),
-                        bind_group_layouts: &[&self.blur_bind_group_layout],
-                        push_constant_ranges: &[],
+                        bind_group_layouts: &[Some(&self.blur_bind_group_layout)],
+                        immediate_size: 0,
                     });
 
             let vertex_buffer_layout = wgpu::VertexBufferLayout {
@@ -564,7 +566,7 @@ impl OffscreenRenderer {
                             mask: !0,
                             alpha_to_coverage_enabled: false,
                         },
-                        multiview: None,
+                        multiview_mask: None,
                         cache: None,
                     });
 
@@ -613,7 +615,7 @@ impl OffscreenRenderer {
                             mask: !0,
                             alpha_to_coverage_enabled: false,
                         },
-                        multiview: None,
+                        multiview_mask: None,
                         cache: None,
                     });
 
@@ -706,7 +708,7 @@ impl OffscreenRenderer {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
 
@@ -786,6 +788,7 @@ impl OffscreenRenderer {
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: dst_view,
                         resolve_target: None,
+                        depth_slice: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                             store: wgpu::StoreOp::Store,
@@ -794,6 +797,7 @@ impl OffscreenRenderer {
                     depth_stencil_attachment: None,
                     timestamp_writes: None,
                     occlusion_query_set: None,
+                    multiview_mask: None,
                 });
 
                 render_pass.set_pipeline(&downsample_pipeline);
@@ -852,6 +856,7 @@ impl OffscreenRenderer {
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: dst_view,
                         resolve_target: None,
+                        depth_slice: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                             store: wgpu::StoreOp::Store,
@@ -860,6 +865,7 @@ impl OffscreenRenderer {
                     depth_stencil_attachment: None,
                     timestamp_writes: None,
                     occlusion_query_set: None,
+                    multiview_mask: None,
                 });
 
                 render_pass.set_pipeline(&upsample_pipeline);
@@ -894,8 +900,8 @@ impl OffscreenRenderer {
                 self.device
                     .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                         label: Some("Morph Pipeline Layout"),
-                        bind_group_layouts: &[&self.blur_bind_group_layout],
-                        push_constant_ranges: &[],
+                        bind_group_layouts: &[Some(&self.blur_bind_group_layout)],
+                        immediate_size: 0,
                     });
 
             let vertex_buffer_layout = wgpu::VertexBufferLayout {
@@ -962,7 +968,7 @@ impl OffscreenRenderer {
                             mask: !0,
                             alpha_to_coverage_enabled: false,
                         },
-                        multiview: None,
+                        multiview_mask: None,
                         cache: None,
                     });
 
@@ -1011,7 +1017,7 @@ impl OffscreenRenderer {
                             mask: !0,
                             alpha_to_coverage_enabled: false,
                         },
-                        multiview: None,
+                        multiview_mask: None,
                         cache: None,
                     });
 
@@ -1091,7 +1097,7 @@ impl OffscreenRenderer {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
 
@@ -1146,6 +1152,7 @@ impl OffscreenRenderer {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: dst_view,
                     resolve_target: None,
+                    depth_slice: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                         store: wgpu::StoreOp::Store,
@@ -1154,6 +1161,7 @@ impl OffscreenRenderer {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
 
             render_pass.set_pipeline(&pipeline);
@@ -1204,6 +1212,7 @@ impl OffscreenRenderer {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: dst_view,
                     resolve_target: None,
+                    depth_slice: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                         store: wgpu::StoreOp::Store,
@@ -1212,6 +1221,7 @@ impl OffscreenRenderer {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
 
             render_pass.set_pipeline(&pipeline);

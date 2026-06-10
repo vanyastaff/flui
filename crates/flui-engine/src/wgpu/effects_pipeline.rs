@@ -50,8 +50,11 @@ pub fn create_gradient_pipeline_layout(
 ) -> wgpu::PipelineLayout {
     device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Shared Gradient Pipeline Layout"),
-        bind_group_layouts: &[viewport_bind_group_layout, gradient_bind_group_layout],
-        push_constant_ranges: &[],
+        bind_group_layouts: &[
+            Some(viewport_bind_group_layout),
+            Some(gradient_bind_group_layout),
+        ],
+        immediate_size: 0,
     })
 }
 
@@ -108,7 +111,7 @@ pub fn create_linear_gradient_pipeline(
             mask: !0,
             alpha_to_coverage_enabled: false,
         },
-        multiview: None,
+        multiview_mask: None,
         cache: None,
     })
 }
@@ -167,7 +170,7 @@ pub fn create_radial_gradient_pipeline(
             mask: !0,
             alpha_to_coverage_enabled: false,
         },
-        multiview: None,
+        multiview_mask: None,
         cache: None,
     })
 }
@@ -226,7 +229,7 @@ pub fn create_sweep_gradient_pipeline(
             mask: !0,
             alpha_to_coverage_enabled: false,
         },
-        multiview: None,
+        multiview_mask: None,
         cache: None,
     })
 }
@@ -244,8 +247,8 @@ pub fn create_shadow_pipeline(
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Shadow Pipeline Layout"),
-        bind_group_layouts: &[viewport_bind_group_layout],
-        push_constant_ranges: &[],
+        bind_group_layouts: &[Some(viewport_bind_group_layout)],
+        immediate_size: 0,
     });
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -291,7 +294,7 @@ pub fn create_shadow_pipeline(
             mask: !0,
             alpha_to_coverage_enabled: false,
         },
-        multiview: None,
+        multiview_mask: None,
         cache: None,
     })
 }
