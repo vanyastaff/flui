@@ -490,27 +490,33 @@ impl crate::traits::HotReloadCapability for RenderViewAdapter {}
 impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewAdapter {
     fn perform_layout_raw(
         &mut self,
-        _ctx: &mut <crate::protocol::BoxProtocol as crate::protocol::Protocol>::LayoutCtxErased<'_>,
+        ctx: &mut <crate::protocol::BoxProtocol as crate::protocol::Protocol>::LayoutCtxErased<'_>,
     ) -> crate::error::RenderResult<crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>>
     {
-        // D-block PR-A1b U19 — RenderView is the root and manages its own
-        // layout via the `perform_layout()` method on the embedded
-        // `RenderView`. The erased ctx is unused — root layout is driven
-        // by `configuration().preferred_size` rather than parent-supplied
-        // constraints (Flutter parity, `.flutter/.../view.dart`).
-        //
-        // Follow-up to PR #141 #5 Option A: signature returns
-        // `RenderResult<Size>`. The adapter itself has no contract
-        // surface to violate — there is no `complete_with_size`
-        // analogue to forget — so it never returns a typed `Err`.
-        // `RenderView::perform_layout` can still trip its internal
-        // `assert!` invariants (e.g. missing `prepare_initial_frame`)
-        // which propagate as panics; those are caught upstream by
-        // `RenderEntry::layout_leaf_only`'s `catch_unwind` and surface
-        // as `RenderError::Poisoned` — same as any third-party panic
-        // from user widget code.
+        // The root sizes itself from its configuration (Flutter parity,
+        // `.flutter/.../view.dart`) — but it MUST still drive its
+        // children: a child the root never `layout_child`s has no
+        // constraints, so run_layout drops its dirty entry and the
+        // window stays blank. Children get the view's own size as
+        // tight constraints and sit at the origin.
         self.view.perform_layout();
-        Ok(self.view.size())
+        let size = self.view.size();
+
+        let typed_inner = crate::protocol::BoxLayoutCtx::<
+            flui_tree::Variable,
+            crate::parent_data::BoxParentData,
+        >::from_erased(ctx);
+        let mut layout_ctx = crate::context::BoxLayoutContext::<
+            flui_tree::Variable,
+            crate::parent_data::BoxParentData,
+        >::new(typed_inner);
+        let child_constraints = crate::constraints::BoxConstraints::tight(size);
+        for i in 0..layout_ctx.child_count() {
+            let _ = layout_ctx.layout_child(i, child_constraints);
+            layout_ctx.position_child(i, flui_types::Offset::ZERO);
+        }
+
+        Ok(size)
     }
 
     fn paint_raw(&self, recorder: &mut crate::context::FragmentRecorder, child_count: usize) {

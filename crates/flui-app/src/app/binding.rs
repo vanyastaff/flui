@@ -427,6 +427,12 @@ impl AppBinding {
         // frame -- the owner is still usable for the next call.
         let layer_tree = {
             let mut guard = self.shared_pipeline_owner.write();
+            // The window's constraints ARE the root constraints — without
+            // this, frame 1 has neither cached state nor root_constraints
+            // and run_layout drops the root dirty entry (blank window).
+            // set_root_constraints marks the root dirty only on CHANGE,
+            // so the per-frame call is idempotent and resize-correct.
+            guard.set_root_constraints(Some(constraints));
             let owner = std::mem::take(&mut *guard);
             let (owner, result) = owner.run_frame();
             *guard = owner;

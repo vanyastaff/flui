@@ -229,11 +229,11 @@ flui-painting = { path = "crates/flui-painting" }
 # flui-interaction = { path = "crates/flui-interaction" }
 
 # === Rendering Layer ===
-# flui-rendering = { path = "crates/flui-rendering" }
+flui-rendering = { path = "crates/flui-rendering" }
 # flui-engine = { path = "crates/flui-engine" }  # GPU backend - enable when needed
 
 # === View Layer ===
-# flui-view = { path = "crates/flui-view" }
+flui-view = { path = "crates/flui-view" }
 
 # === Reactive Layer ===
 # flui-scheduler = { path = "crates/flui-scheduler" }

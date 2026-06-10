@@ -74,7 +74,11 @@ fn init_logging() {
 
     flui_foundation::log::Logger::new()
         .with_filter(&filter)
-        .with_level(flui_foundation::log::Level::DEBUG)
+        // TRACE ceiling: the per-target filter (RUST_LOG / the default
+        // string above) decides what's emitted — a DEBUG ceiling here
+        // silently made every trace! unreachable no matter what the
+        // user put in RUST_LOG.
+        .with_level(flui_foundation::log::Level::TRACE)
         .init();
 }
 

@@ -197,6 +197,12 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
         let physical_size = Size::new(px(width), px(height));
         let config = ViewConfiguration::from_size(physical_size, 1.0);
         render_view.set_configuration(config);
+        // Bootstrap the root transform + root layer. Without this,
+        // RenderView::perform_layout asserts on the missing transform
+        // the first time the pipeline lays out the root — the adapter
+        // path never attaches an owner pointer, so the without-owner
+        // variant (idempotent) is the right bootstrap here.
+        render_view.prepare_initial_frame_without_owner();
 
         // Insert into PipelineOwner's RenderTree via RenderViewAdapter
         if let Some(pipeline_owner) = &self.pipeline_owner {
