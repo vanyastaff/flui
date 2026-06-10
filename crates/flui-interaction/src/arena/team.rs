@@ -76,10 +76,19 @@ impl TeamEntry {
     /// - Accepted: The captain (or this member) wins on behalf of the team
     /// - Rejected: The member is removed from the team; if empty, team rejects
     pub fn resolve(&self, disposition: GestureDisposition) {
-        // Get the entry to resolve while holding the lock, then resolve outside
-        let entry_to_resolve = self.combiner.lock().resolve(&self.member, disposition);
+        // Compute state transitions under the lock; dispatch every member
+        // callback and the arena resolution AFTER the guard drops. A member's
+        // reject_gesture commonly re-enters this combiner (e.g. recognizer ->
+        // handle_cancel -> stop_tracking -> arena.sweep -> the team's wrapper),
+        // and parking_lot mutexes are non-reentrant.
+        let (to_reject, entry_to_resolve) = {
+            let mut combiner = self.combiner.lock();
+            combiner.resolve(&self.member, disposition)
+        };
 
-        // Resolve arena entry outside the lock to avoid deadlock
+        if let Some((member, pointer)) = to_reject {
+            member.reject_gesture(pointer);
+        }
         if let Some((entry, disp)) = entry_to_resolve {
             entry.resolve(disp);
         }
@@ -134,15 +143,21 @@ impl CombiningMember {
     }
 
     /// Resolve a member with the given disposition.
-    /// Returns an optional entry to resolve (to avoid holding lock during arena
-    /// call).
+    ///
+    /// Pure state transition: returns the member to reject and/or the arena
+    /// entry to resolve so the caller can dispatch both AFTER releasing the
+    /// combiner lock (member callbacks re-enter the combiner).
+    #[allow(clippy::type_complexity)] // local return plumbing, not public API
     fn resolve(
         &mut self,
         member: &Arc<dyn GestureArenaMember>,
         disposition: GestureDisposition,
-    ) -> Option<(GestureArenaEntry, GestureDisposition)> {
+    ) -> (
+        Option<(Arc<dyn GestureArenaMember>, PointerId)>,
+        Option<(GestureArenaEntry, GestureDisposition)>,
+    ) {
         if self.resolved {
-            return None;
+            return (None, None);
         }
 
         match disposition {
@@ -151,31 +166,40 @@ impl CombiningMember {
                 self.winner = Some(self.team.captain().unwrap_or_else(|| member.clone()));
 
                 // Return entry to resolve outside lock
-                self.entry
-                    .clone()
-                    .map(|e| (e, GestureDisposition::Accepted))
+                (
+                    None,
+                    self.entry
+                        .clone()
+                        .map(|e| (e, GestureDisposition::Accepted)),
+                )
             }
             GestureDisposition::Rejected => {
-                // Remove member from team
+                // Remove member from team; the caller notifies it outside the
+                // lock.
                 self.members.retain(|m| !Arc::ptr_eq(m, member));
-                member.reject_gesture(self.pointer);
+                let to_reject = Some((member.clone(), self.pointer));
 
                 // If no members left, reject the whole team
-                if self.members.is_empty() {
+                let entry = if self.members.is_empty() {
                     self.entry
                         .clone()
                         .map(|e| (e, GestureDisposition::Rejected))
                 } else {
                     None
-                }
+                };
+                (to_reject, entry)
             }
         }
     }
 
     /// Called when the team wins in the arena.
-    fn accept_gesture(&mut self) {
+    ///
+    /// Returns the member notifications to dispatch after the combiner lock
+    /// is released.
+    fn accept_gesture(&mut self) -> PendingTeamNotifications {
+        let mut pending = PendingTeamNotifications::new(self.pointer);
         if self.resolved {
-            return;
+            return pending;
         }
         self.resolved = true;
 
@@ -193,39 +217,77 @@ impl CombiningMember {
             .zip(captain.as_ref())
             .is_some_and(|(w, c)| Arc::ptr_eq(w, c));
 
-        // Notify all members - they all lose except if one of them is the winner
+        // Queue all member notifications - they all lose except the winner
         for member in &self.members {
             let is_winner = winner.as_ref().is_some_and(|w| Arc::ptr_eq(w, member));
             if is_winner {
-                member.accept_gesture(self.pointer);
+                pending.accepts.push(member.clone());
             } else {
-                member.reject_gesture(self.pointer);
+                pending.rejects.push(member.clone());
             }
         }
 
         // If winner is the captain (not in members), notify captain separately
-        if winner_is_captain && let Some(ref captain) = captain {
-            captain.accept_gesture(self.pointer);
+        if winner_is_captain && let Some(captain) = captain {
+            pending.accepts.push(captain);
         }
 
         // Remove from team's combiners
         self.team.remove_combiner(self.pointer);
+        pending
     }
 
     /// Called when the team loses in the arena.
-    fn reject_gesture(&mut self) {
+    ///
+    /// Returns the member notifications to dispatch after the combiner lock
+    /// is released.
+    fn reject_gesture(&mut self) -> PendingTeamNotifications {
+        let mut pending = PendingTeamNotifications::new(self.pointer);
         if self.resolved {
-            return;
+            return pending;
         }
         self.resolved = true;
 
-        // Reject all members
-        for member in &self.members {
-            member.reject_gesture(self.pointer);
-        }
+        // Queue rejection for all members
+        pending.rejects.extend(self.members.iter().cloned());
 
         // Remove from team's combiners
         self.team.remove_combiner(self.pointer);
+        pending
+    }
+}
+
+/// Member notifications computed under the combiner lock and dispatched after
+/// it is released.
+///
+/// Member callbacks routinely re-enter the combiner (a rejected recognizer's
+/// `handle_cancel` path sweeps the arena, which resolves this team's wrapper,
+/// which locks the same combiner); dispatching under the lock would deadlock
+/// on parking_lot's non-reentrant mutex.
+struct PendingTeamNotifications {
+    pointer: PointerId,
+    /// At most the winner and (separately) the captain.
+    accepts: SmallVec<[Arc<dyn GestureArenaMember>; 2]>,
+    rejects: SmallVec<[Arc<dyn GestureArenaMember>; 4]>,
+}
+
+impl PendingTeamNotifications {
+    fn new(pointer: PointerId) -> Self {
+        Self {
+            pointer,
+            accepts: SmallVec::new(),
+            rejects: SmallVec::new(),
+        }
+    }
+
+    /// Fire all queued notifications. Call WITHOUT the combiner lock held.
+    fn dispatch(self) {
+        for member in self.accepts {
+            member.accept_gesture(self.pointer);
+        }
+        for member in self.rejects {
+            member.reject_gesture(self.pointer);
+        }
     }
 }
 
@@ -243,11 +305,13 @@ impl crate::sealed::arena_member::Sealed for CombiningMemberWrapper {}
 
 impl GestureArenaMember for CombiningMemberWrapper {
     fn accept_gesture(&self, _pointer: PointerId) {
-        self.combiner.lock().accept_gesture();
+        let pending = self.combiner.lock().accept_gesture();
+        pending.dispatch();
     }
 
     fn reject_gesture(&self, _pointer: PointerId) {
-        self.combiner.lock().reject_gesture();
+        let pending = self.combiner.lock().reject_gesture();
+        pending.dispatch();
     }
 }
 
@@ -280,8 +344,6 @@ pub struct GestureArenaTeam {
     combiners: DashMap<PointerId, Arc<Mutex<CombiningMember>>>,
     /// Captain that wins on behalf of the team.
     captain: Mutex<Option<Arc<dyn GestureArenaMember>>>,
-    /// Self-reference for creating combiners.
-    self_ref: Mutex<Option<Arc<GestureArenaTeam>>>,
 }
 
 impl GestureArenaTeam {
@@ -289,13 +351,10 @@ impl GestureArenaTeam {
     ///
     /// When the team wins, the first member added wins.
     pub fn new() -> Arc<Self> {
-        let team = Arc::new(Self {
+        Arc::new(Self {
             combiners: DashMap::new(),
             captain: Mutex::new(None),
-            self_ref: Mutex::new(None),
-        });
-        *team.self_ref.lock() = Some(team.clone());
-        team
+        })
     }
 
     /// Create a new gesture arena team with a captain.
@@ -303,13 +362,10 @@ impl GestureArenaTeam {
     /// When any team member wins, the captain receives the gesture.
     /// This is useful for forwarding gestures (e.g., to native views).
     pub fn with_captain(captain: Arc<dyn GestureArenaMember>) -> Arc<Self> {
-        let team = Arc::new(Self {
+        Arc::new(Self {
             combiners: DashMap::new(),
             captain: Mutex::new(Some(captain)),
-            self_ref: Mutex::new(None),
-        });
-        *team.self_ref.lock() = Some(team.clone());
-        team
+        })
     }
 
     /// Get the team's captain (if any).
@@ -394,7 +450,6 @@ impl Default for GestureArenaTeam {
         Self {
             combiners: DashMap::new(),
             captain: Mutex::new(None),
-            self_ref: Mutex::new(None),
         }
     }
 }
@@ -457,6 +512,67 @@ mod tests {
         let team = GestureArenaTeam::new();
         assert!(team.is_empty());
         assert!(team.captain().is_none());
+    }
+
+    #[test]
+    fn team_is_dropped_when_last_handle_goes_away() {
+        // Regression: the team used to store a strong Arc to itself
+        // (`self_ref`), a reference cycle that kept every team alive for the
+        // process lifetime.
+        let team = GestureArenaTeam::new();
+        let weak = Arc::downgrade(&team);
+        drop(team);
+        assert!(
+            weak.upgrade().is_none(),
+            "GestureArenaTeam must not keep itself alive via a self-cycle"
+        );
+    }
+
+    #[test]
+    fn reentrant_resolve_from_reject_callback_does_not_deadlock() {
+        // Regression: CombiningMember::resolve used to fire
+        // member.reject_gesture while holding the combiner lock. A member
+        // whose rejection handler re-enters the team (here: resolving its own
+        // entry again, as a recognizer's cancel path does via arena.sweep)
+        // would self-deadlock on the non-reentrant mutex.
+        struct Reentrant {
+            entry: Mutex<Option<TeamEntry>>,
+            rejected: AtomicBool,
+        }
+        impl crate::sealed::arena_member::Sealed for Reentrant {}
+        impl GestureArenaMember for Reentrant {
+            fn accept_gesture(&self, _pointer: PointerId) {}
+            fn reject_gesture(&self, _pointer: PointerId) {
+                self.rejected.store(true, Ordering::SeqCst);
+                // Re-enter the same combiner from inside the callback. The
+                // guard must drop before resolve() so the nested second
+                // rejection callback can re-acquire OUR OWN entry mutex —
+                // the deadlock under test is the combiner's, not this one.
+                let taken = self.entry.lock().take();
+                if let Some(entry) = taken {
+                    entry.resolve(GestureDisposition::Rejected);
+                }
+            }
+        }
+
+        let arena = GestureArena::new();
+        let team = GestureArenaTeam::new();
+        let pointer = PointerId::new(7).expect("nonzero pointer id");
+
+        let reentrant = Arc::new(Reentrant {
+            entry: Mutex::new(None),
+            rejected: AtomicBool::new(false),
+        });
+        let other = MockMember::new(1);
+
+        let entry = team.add(pointer, reentrant.clone(), &arena);
+        let _other_entry = team.add(pointer, other.clone(), &arena);
+        *reentrant.entry.lock() = Some(team.add(pointer, reentrant.clone(), &arena));
+
+        // Rejecting the member fires reject_gesture, which re-enters the
+        // combiner; must complete without deadlocking.
+        entry.resolve(GestureDisposition::Rejected);
+        assert!(reentrant.rejected.load(Ordering::SeqCst));
     }
 
     #[test]

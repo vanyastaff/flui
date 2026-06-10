@@ -60,33 +60,6 @@ pub enum DragStartBehavior {
     Start,
 }
 
-/// Configures how a drag handles multiple active pointers on a multi-touch
-/// device.
-///
-/// Flutter parity: `gestures/recognizer.dart:64` `MultitouchDragStrategy`.
-///
-/// - [`LatestPointer`](Self::LatestPointer): only the most recently added
-///   pointer is tracked. When that pointer lifts, the next active pointer
-///   takes over. This is the Android default.
-/// - [`AverageBoundaryPointers`](Self::AverageBoundaryPointers): the average
-///   of the boundary pointers drives the delta. Typical iOS scroll behaviour.
-/// - [`SumAllPointers`](Self::SumAllPointers): the sum of all active pointer
-///   deltas. Two-finger scrolling moves twice as fast as one-finger.
-///
-/// Single-pointer drags are unaffected by this setting.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[non_exhaustive]
-pub enum MultitouchDragStrategy {
-    /// Only the most recently added pointer is tracked. Flutter default —
-    /// matches `DragGestureRecognizer.multitouchDragStrategy`.
-    #[default]
-    LatestPointer,
-    /// Average of the boundary (extremal) pointer deltas.
-    AverageBoundaryPointers,
-    /// Sum of all active pointer deltas.
-    SumAllPointers,
-}
-
 /// Details about drag down (pointer contact before drag starts)
 #[derive(Debug, Clone, PartialEq)]
 pub struct DragDownDetails {
@@ -192,12 +165,6 @@ pub struct DragGestureRecognizer {
     ///   position (Flutter default).
     start_behavior: DragStartBehavior,
 
-    /// Multi-touch aggregation policy.
-    ///
-    /// Single-pointer drags are unaffected; the policy only matters when
-    /// two or more pointers are active simultaneously.
-    multitouch_strategy: MultitouchDragStrategy,
-
     /// Callbacks
     callbacks: Arc<Mutex<DragCallbacks>>,
 
@@ -214,7 +181,6 @@ impl std::fmt::Debug for DragGestureRecognizer {
             .field("state", &self.state)
             .field("axis", &self.axis)
             .field("start_behavior", &self.start_behavior)
-            .field("multitouch_strategy", &self.multitouch_strategy)
             .field("drag_state", &*self.drag_state.lock())
             .field("settings", &self.settings.lock())
             .finish_non_exhaustive()
@@ -278,7 +244,6 @@ impl DragGestureRecognizer {
             state: RecognizerBase::new(arena),
             axis,
             start_behavior: DragStartBehavior::default(),
-            multitouch_strategy: MultitouchDragStrategy::default(),
             callbacks: Arc::new(Mutex::new(DragCallbacks::default())),
             drag_state: Arc::new(Mutex::new(DragState::default())),
             settings: Arc::new(Mutex::new(GestureSettings::default())),
@@ -295,7 +260,6 @@ impl DragGestureRecognizer {
             state: RecognizerBase::new(arena),
             axis,
             start_behavior: DragStartBehavior::default(),
-            multitouch_strategy: MultitouchDragStrategy::default(),
             callbacks: Arc::new(Mutex::new(DragCallbacks::default())),
             drag_state: Arc::new(Mutex::new(DragState::default())),
             settings: Arc::new(Mutex::new(settings)),
@@ -311,20 +275,6 @@ impl DragGestureRecognizer {
         // this is a cheap move, and it keeps the constructor pattern uniform.
         Arc::new(Self {
             start_behavior: behavior,
-            ..(*self).clone()
-        })
-    }
-
-    /// Configure the multi-touch aggregation policy.
-    ///
-    /// See [`MultitouchDragStrategy`] for the semantics. Default is
-    /// [`MultitouchDragStrategy::LatestPointer`].
-    pub fn with_multitouch_drag_strategy(
-        self: Arc<Self>,
-        strategy: MultitouchDragStrategy,
-    ) -> Arc<Self> {
-        Arc::new(Self {
-            multitouch_strategy: strategy,
             ..(*self).clone()
         })
     }
@@ -347,11 +297,6 @@ impl DragGestureRecognizer {
     /// Currently-configured [`DragStartBehavior`].
     pub fn drag_start_behavior(&self) -> DragStartBehavior {
         self.start_behavior
-    }
-
-    /// Currently-configured [`MultitouchDragStrategy`].
-    pub fn multitouch_drag_strategy(&self) -> MultitouchDragStrategy {
-        self.multitouch_strategy
     }
 
     /// Minimum drag distance for the current axis. Per-axis slop:
@@ -915,22 +860,6 @@ mod tests {
             make_move_event(Offset::new(Pixels(15.0), Pixels(50.0)), PointerType::Touch);
         recognizer.handle_event(&move_event2);
         assert!(*started.lock());
-    }
-
-    #[test]
-    fn multitouch_drag_strategy_default_is_latest() {
-        let arena = GestureArena::new();
-        let rec = DragGestureRecognizer::new(arena, DragAxis::Free);
-        assert_eq!(
-            rec.multitouch_drag_strategy(),
-            MultitouchDragStrategy::LatestPointer
-        );
-        // Builder overrides the default.
-        let rec2 = rec.with_multitouch_drag_strategy(MultitouchDragStrategy::SumAllPointers);
-        assert_eq!(
-            rec2.multitouch_drag_strategy(),
-            MultitouchDragStrategy::SumAllPointers
-        );
     }
 
     #[test]

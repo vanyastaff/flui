@@ -593,21 +593,21 @@ impl GestureRecognizer for ScaleGestureRecognizer {
         if !self.state.assert_not_disposed("handle_event") {
             return;
         }
+        // Route by the event's own pointer id (Flutter parity:
+        // `ScaleGestureRecognizer.handleEvent` keys `_pointerLocations` by
+        // `event.pointer`). Attributing a secondary finger's events to the
+        // primary pointer corrupts span and focal point and leaves two-finger
+        // pinch inert.
         match event {
             PointerEvent::Move(data) => {
-                // We need to figure out which pointer this is
-                // For now, assume it's the primary pointer
-                // In a real implementation, we'd track pointer IDs
-                if let Some(pointer) = self.state.primary_pointer() {
-                    let pos = data.current.position;
-                    let position = Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32));
-                    self.handle_pointer_move(pointer, position);
-                }
+                let pointer = crate::events::extract_pointer_id(event);
+                let pos = data.current.position;
+                let position = Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32));
+                self.handle_pointer_move(pointer, position);
             }
-            PointerEvent::Up(_data) => {
-                if let Some(pointer) = self.state.primary_pointer() {
-                    self.handle_pointer_up(pointer);
-                }
+            PointerEvent::Up(_) => {
+                let pointer = crate::events::extract_pointer_id(event);
+                self.handle_pointer_up(pointer);
             }
             PointerEvent::Cancel(_) => {
                 self.handle_cancel();
@@ -691,6 +691,71 @@ mod tests {
         let recognizer = ScaleGestureRecognizer::new(arena);
 
         assert_eq!(recognizer.primary_pointer(), None);
+    }
+
+    #[test]
+    fn two_finger_pinch_routes_events_per_pointer() {
+        use crate::events::{PointerType, make_move_event_for_id, make_up_event_for_id};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // Regression: handle_event used to attribute every Move/Up to the
+        // primary pointer, so the second finger's movement never updated its
+        // own slot and pinch produced no scale updates.
+        let arena = GestureArena::new();
+        let updates = Arc::new(AtomicUsize::new(0));
+        let last_scale = Arc::new(Mutex::new(1.0_f32));
+        let updates2 = Arc::clone(&updates);
+        let last_scale2 = Arc::clone(&last_scale);
+        let recognizer = ScaleGestureRecognizer::new(arena).with_on_scale_update(move |details| {
+            updates2.fetch_add(1, Ordering::SeqCst);
+            *last_scale2.lock() = details.scale;
+        });
+
+        let finger1 = PointerId::new(2).expect("nonzero pointer id");
+        let finger2 = PointerId::new(3).expect("nonzero pointer id");
+        recognizer.add_pointer(finger1, Offset::new(Pixels(0.0), Pixels(0.0)));
+        recognizer.add_pointer(finger2, Offset::new(Pixels(100.0), Pixels(0.0)));
+
+        // Move ONLY the second finger outward through the public event path.
+        let move2 = make_move_event_for_id(
+            finger2,
+            Offset::new(Pixels(200.0), Pixels(0.0)),
+            PointerType::Touch,
+        );
+        recognizer.handle_event(&move2); // crosses the 5% slop -> Started
+        let move2b = make_move_event_for_id(
+            finger2,
+            Offset::new(Pixels(220.0), Pixels(0.0)),
+            PointerType::Touch,
+        );
+        recognizer.handle_event(&move2b);
+
+        assert!(
+            updates.load(Ordering::SeqCst) >= 1,
+            "second finger's movement must drive scale updates"
+        );
+        assert!(
+            (*last_scale.lock() - 2.2).abs() < 0.05,
+            "span 220/100 must be reported, got {}",
+            *last_scale.lock()
+        );
+
+        // Lifting the SECOND finger must remove its own slot.
+        let up2 = make_up_event_for_id(
+            finger2,
+            Offset::new(Pixels(220.0), Pixels(0.0)),
+            PointerType::Touch,
+        );
+        recognizer.handle_event(&up2);
+        assert_eq!(recognizer.gesture_state.lock().pointers.len(), 1);
+        assert!(
+            recognizer
+                .gesture_state
+                .lock()
+                .pointers
+                .contains_key(&finger1),
+            "the remaining slot must belong to the first finger"
+        );
     }
 
     #[test]

@@ -228,7 +228,10 @@ impl PointerEventResampler {
             callback(event);
         }
 
-        // Interpolate if we have move events pending
+        // Interpolate if we have move events pending (Flutter parity:
+        // `resampler.dart _samplePointerPosition` synthesizes a Move at the
+        // interpolated position so recognisers advance smoothly between
+        // sensor samples instead of stalling until the next real event).
         if !inner.event_queue.is_empty()
             && inner.last_position.is_some()
             && let Some(next_event) = inner.event_queue.front()
@@ -250,14 +253,17 @@ impl PointerEventResampler {
 
                 // Only emit if position actually changed
                 if interpolated_pos != last_pos {
-                    // For interpolated events, we clone the original and update position
-                    // This is a simplified version - in production we'd create proper
-                    // interpolated PointerUpdate events
+                    // Synthesize the interpolated Move from the pending event:
+                    // same pointer/buttons/pressure state, position replaced.
+                    let mut interpolated = next_event.event.clone();
+                    if let PointerEvent::Move(update) = &mut interpolated {
+                        update.current.position = dpi::PhysicalPosition::new(
+                            f64::from(interpolated_pos.dx.get()),
+                            f64::from(interpolated_pos.dy.get()),
+                        );
+                    }
                     inner.last_position = Some(interpolated_pos);
-                    // Note: We skip emitting interpolated events for now since
-                    // creating new PointerUpdate requires complex state
-                    // copying. The resampler primarily
-                    // helps with timing alignment.
+                    callback(interpolated);
                 }
             }
         }
@@ -325,6 +331,64 @@ mod tests {
         assert!(!resampler.is_down());
         assert!(!resampler.has_pending_events());
         assert_eq!(resampler.pointer_id(), PointerId::PRIMARY);
+    }
+
+    #[test]
+    fn sample_emits_interpolated_move_between_pending_events() {
+        use crate::events::make_move_event_for_id;
+
+        // Regression: the interpolated position used to be computed (and
+        // last_position advanced) but the synthesized Move was never emitted,
+        // so recognisers stalled until the next real sensor event.
+        let resampler = PointerEventResampler::new(PointerId::PRIMARY);
+        resampler.start_tracking();
+
+        // First move is in the past relative to the sample time.
+        resampler.add_event(make_move_event_for_id(
+            PointerId::PRIMARY,
+            Offset::new(Pixels(0.0), Pixels(0.0)),
+            PointerType::Touch,
+        ));
+        std::thread::sleep(Duration::from_millis(3));
+        let sample_time = Instant::now();
+        std::thread::sleep(Duration::from_millis(3));
+        // Second move arrives after the sample time -> stays pending.
+        resampler.add_event(make_move_event_for_id(
+            PointerId::PRIMARY,
+            Offset::new(Pixels(100.0), Pixels(0.0)),
+            PointerType::Touch,
+        ));
+
+        let mut emitted: Vec<Offset<Pixels>> = Vec::new();
+        resampler.sample(
+            sample_time,
+            sample_time + Duration::from_millis(100),
+            |event| {
+                assert!(
+                    matches!(event, PointerEvent::Move(..)),
+                    "only Move events are expected in this scenario"
+                );
+                emitted.push(event.position());
+            },
+        );
+
+        // The real first move plus a synthesized interpolated move toward
+        // the pending event (the wide sample window clamps t to 1.0, so the
+        // interpolation lands on the pending position).
+        assert_eq!(
+            emitted.len(),
+            2,
+            "an interpolated Move must be emitted toward the pending event"
+        );
+        assert!(
+            (emitted[1].dx.get() - 100.0).abs() < 0.5,
+            "interpolated position must approach the pending event, got {:?}",
+            emitted[1]
+        );
+        assert!(
+            resampler.has_pending_events(),
+            "the future-timestamped event itself must remain queued"
+        );
     }
 
     #[test]
