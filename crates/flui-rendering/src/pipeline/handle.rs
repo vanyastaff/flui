@@ -25,8 +25,13 @@
 //! When the receiving owner drops, outstanding handles receive
 //! `Err(SendError::OwnerGone)` on their next `request_mark_dirty`.
 
+use std::sync::Arc;
+
 use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
 use flui_foundation::RenderId;
+use parking_lot::RwLock;
+
+use super::notifier::VisualUpdateNotifier;
 
 // ---------------------------------------------------------------------------
 // DirtyRequest / DirtyKind
@@ -103,18 +108,43 @@ impl<T> From<TrySendError<T>> for SendError {
 /// independent. The receiver is held only by the `PipelineOwner` and
 /// dropped when the owner drops -- at which point all outstanding handles
 /// return [`SendError::OwnerGone`] on their next call.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct PipelineOwnerHandle {
     tx: Sender<DirtyRequest>,
     capacity: usize,
+    /// Shared with the owner: a successful enqueue FIRES the
+    /// visual-update wake, so a request landed while the event loop
+    /// idles still produces the frame that observes it. Enqueue-only
+    /// (the pre-wake shape) was the "GIF frozen until you scroll" bug:
+    /// the channel filled and nothing ever drained it.
+    notifier: Arc<RwLock<VisualUpdateNotifier>>,
+}
+
+impl std::fmt::Debug for PipelineOwnerHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PipelineOwnerHandle")
+            .field("capacity", &self.capacity)
+            .field("pending", &self.tx.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl PipelineOwnerHandle {
     /// Constructs the handle + receiver pair. Internal use only;
     /// `PipelineOwner::new` wires this up.
-    pub(super) fn new_pair(capacity: usize) -> (Self, Receiver<DirtyRequest>) {
+    pub(super) fn new_pair(
+        capacity: usize,
+        notifier: Arc<RwLock<VisualUpdateNotifier>>,
+    ) -> (Self, Receiver<DirtyRequest>) {
         let (tx, rx) = bounded(capacity);
-        (Self { tx, capacity }, rx)
+        (
+            Self {
+                tx,
+                capacity,
+                notifier,
+            },
+            rx,
+        )
     }
 
     /// The channel's configured capacity.
@@ -146,12 +176,73 @@ impl PipelineOwnerHandle {
     ) -> Result<(), SendError> {
         let req = DirtyRequest { id, depth, kind };
         match self.tx.try_send(req) {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                // Wake the platform: an idle event loop must produce the
+                // frame whose `drain_pending_dirty` observes this request
+                // (same contract as a local dirty mark firing the
+                // notifier). Idempotent — a pending frame absorbs
+                // repeated wakes.
+                self.notifier.read().fire_need_visual_update();
+                Ok(())
+            }
             Err(TrySendError::Full(_)) => Err(SendError::ChannelFull {
                 capacity: self.capacity,
             }),
             Err(TrySendError::Disconnected(_)) => Err(SendError::OwnerGone),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RepaintHandle
+// ---------------------------------------------------------------------------
+
+/// A node-bound repaint capability for background producers.
+///
+/// Hand one to async work whose completion changes a SPECIFIC render
+/// object's pixels — a finished image decode, an arriving network
+/// asset, a video frame. Calling [`mark_needs_paint`](Self::mark_needs_paint)
+/// from any thread enqueues a paint request AND wakes the platform; the
+/// owner replays it through the standard paint mark on the next frame.
+///
+/// The captured [`RenderId`] is generational: when the node is removed,
+/// the id's generation dies with it and the owner's drain drops the
+/// request silently — a stale handle is a no-op, never a repaint of an
+/// unrelated reused slot. No explicit revocation call exists or is
+/// needed.
+#[derive(Debug, Clone)]
+pub struct RepaintHandle {
+    handle: PipelineOwnerHandle,
+    id: RenderId,
+    /// Depth snapshot at creation; advisory only (the owner re-reads
+    /// the live node's depth on drain).
+    depth: usize,
+}
+
+impl RepaintHandle {
+    /// Binds a pipeline handle to one render object. Internal;
+    /// `PipelineOwner::repaint_handle` is the public constructor.
+    pub(super) fn new(handle: PipelineOwnerHandle, id: RenderId, depth: usize) -> Self {
+        Self { handle, id, depth }
+    }
+
+    /// The render object this handle repaints.
+    #[must_use]
+    pub fn id(&self) -> RenderId {
+        self.id
+    }
+
+    /// Requests a repaint of the bound node on the next frame and wakes
+    /// the platform. Callable from any thread.
+    ///
+    /// # Errors
+    ///
+    /// [`SendError::ChannelFull`] under backpressure (back off and
+    /// retry), [`SendError::OwnerGone`] once the pipeline owner is
+    /// dropped.
+    pub fn mark_needs_paint(&self) -> Result<(), SendError> {
+        self.handle
+            .request_mark_dirty(self.id, self.depth, DirtyKind::Paint)
     }
 }
 
@@ -163,9 +254,13 @@ mod tests {
         RenderId::new(n)
     }
 
+    fn pair(capacity: usize) -> (PipelineOwnerHandle, Receiver<DirtyRequest>) {
+        PipelineOwnerHandle::new_pair(capacity, Arc::new(RwLock::new(VisualUpdateNotifier::new())))
+    }
+
     #[test]
     fn handle_send_recv_round_trip() {
-        let (handle, rx) = PipelineOwnerHandle::new_pair(4);
+        let (handle, rx) = pair(4);
         assert_eq!(handle.capacity(), 4);
         handle
             .request_mark_dirty(id(1), 2, DirtyKind::Layout)
@@ -178,7 +273,7 @@ mod tests {
 
     #[test]
     fn handle_returns_channel_full_at_capacity() {
-        let (handle, _rx) = PipelineOwnerHandle::new_pair(2);
+        let (handle, _rx) = pair(2);
         handle
             .request_mark_dirty(id(1), 0, DirtyKind::Paint)
             .unwrap();
@@ -193,7 +288,7 @@ mod tests {
 
     #[test]
     fn handle_returns_owner_gone_after_receiver_drop() {
-        let (handle, rx) = PipelineOwnerHandle::new_pair(4);
+        let (handle, rx) = pair(4);
         drop(rx);
         let err = handle
             .request_mark_dirty(id(1), 0, DirtyKind::Layout)
@@ -203,7 +298,7 @@ mod tests {
 
     #[test]
     fn handle_is_clone_and_each_clone_sends_independently() {
-        let (handle_a, rx) = PipelineOwnerHandle::new_pair(4);
+        let (handle_a, rx) = pair(4);
         let handle_b = handle_a.clone();
         handle_a
             .request_mark_dirty(id(1), 0, DirtyKind::Layout)

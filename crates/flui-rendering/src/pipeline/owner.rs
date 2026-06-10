@@ -111,7 +111,7 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// Consolidated visual-update + semantics-owner-lifecycle callback
     /// notifier. Replaces three previously-separate `Box<dyn Fn() + Send +
     /// Sync>` fields. See [`VisualUpdateNotifier`].
-    notifier: VisualUpdateNotifier,
+    notifier: std::sync::Arc<parking_lot::RwLock<VisualUpdateNotifier>>,
 
     /// Co-located dirty sets for the four pipeline phases. See
     /// [`DirtySets`]. Replaces what used to be four
@@ -222,12 +222,14 @@ impl PipelineOwner<Idle> {
     /// dirty-channel capacity. Use this when the default 256 doesn't match
     /// the producer profile.
     pub fn new_with_capacity(dirty_channel_capacity: usize) -> Self {
-        let (handle, dirty_rx) = PipelineOwnerHandle::new_pair(dirty_channel_capacity);
+        let notifier = std::sync::Arc::new(parking_lot::RwLock::new(VisualUpdateNotifier::new()));
+        let (handle, dirty_rx) =
+            PipelineOwnerHandle::new_pair(dirty_channel_capacity, std::sync::Arc::clone(&notifier));
         Self {
             id: PIPELINE_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
             render_tree: RenderTree::new(),
             root_id: None,
-            notifier: VisualUpdateNotifier::new(),
+            notifier,
             dirty: DirtySets::new(),
             mid_layout_marks: DirtySets::new(),
             root_constraints: None,
@@ -264,7 +266,11 @@ impl PipelineOwner<Idle> {
         if let Some(f) = on_semantics_owner_disposed {
             notifier.set_semantics_owner_disposed(f);
         }
-        let (handle, dirty_rx) = PipelineOwnerHandle::new_pair(DEFAULT_DIRTY_CHANNEL_CAPACITY);
+        let notifier = std::sync::Arc::new(parking_lot::RwLock::new(notifier));
+        let (handle, dirty_rx) = PipelineOwnerHandle::new_pair(
+            DEFAULT_DIRTY_CHANNEL_CAPACITY,
+            std::sync::Arc::clone(&notifier),
+        );
         Self {
             id: PIPELINE_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
             render_tree: RenderTree::new(),
@@ -317,11 +323,17 @@ impl PipelineOwner<Idle> {
     /// tuple is `Err(...)`. The owner is **always** usable for a
     /// subsequent frame on the success and error paths alike.
     pub fn run_frame(
-        self,
+        mut self,
     ) -> (
         PipelineOwner<Idle>,
         crate::error::RenderResult<Option<LayerTree>>,
     ) {
+        // Observe cross-thread dirty requests (RepaintHandle /
+        // PipelineOwnerHandle producers) before any phase runs — an
+        // async decode that finished while the app idled lands in this
+        // frame, not never.
+        self.drain_pending_dirty();
+
         // Layout
         let mut owner = self.into_layout();
         if let Err(e) = owner.run_layout() {
@@ -377,7 +389,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.notifier.set_need_visual_update(callback);
+        self.notifier.write().set_need_visual_update(callback);
     }
 
     /// Sets the callback for when semantics owner is created.
@@ -385,7 +397,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.notifier.set_semantics_owner_created(callback);
+        self.notifier.write().set_semantics_owner_created(callback);
     }
 
     /// Sets the callback for when semantics owner is disposed.
@@ -393,14 +405,14 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.notifier.set_semantics_owner_disposed(callback);
+        self.notifier.write().set_semantics_owner_disposed(callback);
     }
 
     /// Requests a visual update.
     ///
     /// Called by render objects when they need to be re-rendered.
     pub fn request_visual_update(&self) {
-        self.notifier.fire_need_visual_update();
+        self.notifier.read().fire_need_visual_update();
     }
 
     // ========================================================================
@@ -417,6 +429,24 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         self.handle.clone()
     }
 
+    /// Binds a [`RepaintHandle`](crate::pipeline::RepaintHandle) to a
+    /// live render object — the
+    /// capability async producers (image decodes, arriving assets) use
+    /// to repaint that node from any thread, with the platform woken on
+    /// every request.
+    ///
+    /// `None` for a stale/foreign id. Once the node is later removed,
+    /// the returned handle degrades to a silent no-op (generational id:
+    /// the drain drops requests whose generation died).
+    pub fn repaint_handle(&self, id: RenderId) -> Option<crate::pipeline::RepaintHandle> {
+        let depth = self.render_tree.get(id)?.depth() as usize;
+        Some(crate::pipeline::RepaintHandle::new(
+            self.handle.clone(),
+            id,
+            depth,
+        ))
+    }
+
     /// Drains the pending dirty-request channel into the local
     /// [`DirtySets`].
     ///
@@ -428,29 +458,33 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     pub fn drain_pending_dirty(&mut self) -> usize {
         let mut drained = 0;
         while let Ok(req) = self.dirty_rx.try_recv() {
-            match req.kind {
-                DirtyKind::Layout => {
-                    self.dirty
-                        .needs_layout
-                        .push(DirtyNode::new(req.id, req.depth));
-                }
-                DirtyKind::Compositing => {
-                    self.dirty
-                        .needs_compositing
-                        .push(DirtyNode::new(req.id, req.depth));
-                }
-                DirtyKind::Paint => {
-                    self.dirty
-                        .needs_paint
-                        .push(DirtyNode::new(req.id, req.depth));
-                }
-                DirtyKind::Semantics => {
-                    self.dirty
-                        .needs_semantics
-                        .push(DirtyNode::new(req.id, req.depth));
-                }
-            }
             drained += 1;
+            // Generation-validated replay through the SAME mark paths
+            // local callers use: a stale id (the node died after the
+            // producer captured its handle) falls out silently, the
+            // layout mark walks to its relayout boundary, compositing
+            // keeps the queue⇒flag invariant, and every path carries
+            // its own dedup. The request's depth is advisory — the live
+            // node's depth is authoritative.
+            //
+            // Pre-fix this pushed raw queue entries: a layout request
+            // for a non-boundary node became a bogus dirty ROOT, a
+            // compositing request skipped the flag (the silent-loss
+            // footgun `add_node_needing_compositing_bits_update`
+            // exists to prevent), and dead ids were replayed verbatim.
+            let Some(node) = self.render_tree.get(req.id) else {
+                tracing::trace!(?req, "drain_pending_dirty: stale id, dropped");
+                continue;
+            };
+            let depth = node.depth() as usize;
+            match req.kind {
+                DirtyKind::Layout => self.mark_needs_layout(req.id),
+                DirtyKind::Compositing => {
+                    self.add_node_needing_compositing_bits_update(req.id, depth);
+                }
+                DirtyKind::Paint => self.add_node_needing_paint(req.id, depth),
+                DirtyKind::Semantics => self.add_node_needing_semantics(req.id, depth),
+            }
         }
         drained
     }
@@ -920,7 +954,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // loop produces the frame (Flutter parity: markNeedsLayout →
         // owner.requestVisualUpdate()). Fired only on a NEW queue entry:
         // an existing entry means a frame is already scheduled.
-        self.notifier.fire_need_visual_update();
+        self.notifier.read().fire_need_visual_update();
     }
 
     /// Marks a node as needing layout, propagating the `NEEDS_LAYOUT` flag
@@ -1014,7 +1048,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                     // markNeedsLayout → owner.requestVisualUpdate()).
                     // Fired only on a NEW boundary entry — an existing
                     // entry means a frame is already scheduled.
-                    self.notifier.fire_need_visual_update();
+                    self.notifier.read().fire_need_visual_update();
                 }
                 return;
             }
@@ -1172,7 +1206,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // drained into next-frame work at the end of run_paint — without
         // this wake an idle app would never paint them (the "GIF frozen
         // until you scroll" failure mode).
-        self.notifier.fire_need_visual_update();
+        self.notifier.read().fire_need_visual_update();
     }
 
     /// Adds a node to the compositing bits dirty list.
@@ -1253,9 +1287,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     pub fn set_semantics_enabled(&self, enabled: bool) {
         let was_enabled = self.semantics_enabled.swap(enabled, Ordering::Relaxed);
         if enabled && !was_enabled {
-            self.notifier.fire_semantics_owner_created();
+            self.notifier.read().fire_semantics_owner_created();
         } else if !enabled && was_enabled {
-            self.notifier.fire_semantics_owner_disposed();
+            self.notifier.read().fire_semantics_owner_disposed();
         }
     }
 

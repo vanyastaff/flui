@@ -21,7 +21,9 @@ pub use flui_types::painting::{BlendMode, ClipOp, FilterQuality, ImageFilter, Po
 // Re-export canvas types from flui_types
 pub use dirty::{DirtyNode, DirtySets};
 pub use flui_types::painting::{BlurStyle, StrokeCap, StrokeJoin, TileMode};
-pub use handle::{DirtyKind, DirtyRequest, PipelineOwnerHandle, SendError as DirtySendError};
+pub use handle::{
+    DirtyKind, DirtyRequest, PipelineOwnerHandle, RepaintHandle, SendError as DirtySendError,
+};
 pub use notifier::VisualUpdateNotifier;
 pub use owner::PipelineOwner;
 pub use phase::{Compositing, Idle, Layout, PaintPhase, PipelinePhase, Semantics};
