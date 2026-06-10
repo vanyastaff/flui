@@ -209,18 +209,40 @@ where
 
     // 6. Register frame callback -> scheduler + AppBinding::render_frame()
     let renderer_frame = Arc::clone(&renderer);
+    let frame_budget =
+        std::time::Duration::from_secs_f64(1.0 / f64::from(config.target_fps.max(1)));
+    let mut last_frame_started: Option<web_time::Instant> = None;
     window.on_request_frame(Box::new(move || {
         let binding = AppBinding::instance();
+        let scheduler = Scheduler::instance();
 
-        // On-demand rendering: skip frame if nothing changed
-        if !binding.needs_redraw() && !binding.has_pending_work() {
+        // On-demand rendering: skip frame if nothing changed. A frame
+        // the SCHEDULER scheduled (a pending animation ticker callback)
+        // counts as work: `needs_redraw` is cleared by `mark_rendered`
+        // at the end of the previous frame, so without this check the
+        // gate starves tickers after one frame — the wake hook gets the
+        // event loop here, and this lets the pump actually run.
+        let dirty = binding.needs_redraw() || binding.has_pending_work();
+        if !dirty && !scheduler.is_frame_scheduled() {
             return;
         }
 
+        // Pace pure ticker-driven frames to the configured target FPS.
+        // WM_PAINT-style redraw requests carry no vsync: an animation
+        // re-requesting a redraw every frame would otherwise spin the
+        // render loop as fast as the CPU allows (observed: ~30 000 fps
+        // with a Mailbox present mode). Dirty work renders immediately.
+        if !dirty && let Some(started) = last_frame_started {
+            let elapsed = started.elapsed();
+            if elapsed < frame_budget {
+                std::thread::sleep(frame_budget - elapsed);
+            }
+        }
+
         let now = web_time::Instant::now();
+        last_frame_started = Some(now);
 
         // Scheduler callbacks (animations)
-        let scheduler = Scheduler::instance();
         let _frame_id = scheduler.handle_begin_frame(now);
         scheduler.handle_draw_frame();
 
@@ -465,7 +487,12 @@ where
 
         // Normal path: use AppBinding's widget pipeline
         let binding = AppBinding::instance();
-        if !binding.needs_redraw() && !binding.has_pending_work() {
+        // Same gate as the desktop path: a scheduler-scheduled frame
+        // (pending animation ticker) is work even when nothing is dirty.
+        if !binding.needs_redraw()
+            && !binding.has_pending_work()
+            && !Scheduler::instance().is_frame_scheduled()
+        {
             return;
         }
 
@@ -623,7 +650,12 @@ where
     window.on_request_frame(Box::new(move || {
         let binding = AppBinding::instance();
 
-        if !binding.needs_redraw() && !binding.has_pending_work() {
+        // Same gate as the desktop path: a scheduler-scheduled frame
+        // (pending animation ticker) is work even when nothing is dirty.
+        if !binding.needs_redraw()
+            && !binding.has_pending_work()
+            && !Scheduler::instance().is_frame_scheduled()
+        {
             return;
         }
 

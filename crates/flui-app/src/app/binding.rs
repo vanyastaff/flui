@@ -127,6 +127,19 @@ impl AppBinding {
             .write()
             .set_on_need_visual_update(|| AppBinding::instance().wake_frame());
 
+        // Animation-wake wiring: scheduling a frame callback (a ticker
+        // tick) fires this hook on the scheduler's false→true
+        // `frame_scheduled` transition (Flutter parity:
+        // `SchedulerBinding.scheduleFrame` → platform `scheduleFrame`).
+        // Without it an AnimationController only advances on frames some
+        // OTHER source produces — after the first idle frame the ticker
+        // starves and the animation freezes. Same lock-safety argument as
+        // the visual-update hook above: `wake_frame` touches only the
+        // `active_window` leaf Mutex.
+        Scheduler::instance().set_on_frame_scheduled(Some(std::sync::Arc::new(|| {
+            AppBinding::instance().wake_frame();
+        })));
+
         // Create RendererBinding sharing the SAME PipelineOwner
         let renderer =
             RenderingFlutterBinding::new_with_pipeline(Arc::clone(&shared_pipeline_owner));
@@ -500,6 +513,14 @@ impl AppBinding {
         if let Some(ref scene) = scene
             && scene.has_content()
         {
+            // The pipeline painted a FRESH scene this frame, so the
+            // on-screen content is stale. The engine's damage tracker is
+            // only marked by resize/surface-create paths; without this
+            // mark, `render_scene` early-returns on "no damage" and every
+            // animation frame is silently dropped — the screen then only
+            // updates on resize. Until fine-grained damage from the layer
+            // diff lands, a new scene is a full repaint.
+            renderer.mark_full_repaint();
             match renderer.render_scene(scene) {
                 Ok(()) => {
                     self.frames_rendered.fetch_add(1, Ordering::Relaxed);
