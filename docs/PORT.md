@@ -692,7 +692,7 @@ The table below is the canonical "use this, don't write a custom one" lookup. Ve
 | Logging | `tracing` + `tracing-forest` | Span-aware structured logging. `tracing::debug!(?value)` lazily formats only when the subscriber accepts. |
 | Hashing | `ahash` | Faster than std `SipHash` for non-DoS data. Workspace-default hasher (see §Type map — `Map`, `Set`). |
 | Caching | `moka` | Concurrent LRU/TLRU with future-aware loaders. Used by `flui-assets`. |
-| GPU | `wgpu` (25.x — see Cargo.toml comment about codespan-reporting bug in 26.x/27.x) | The cross-platform GPU abstraction. flui-engine sits directly on wgpu; no intermediate (no Skia, no custom backend). |
+| GPU | `wgpu` (29.x) | The cross-platform GPU abstraction. flui-engine sits directly on wgpu; no intermediate (no Skia, no custom backend). |
 | Windowing | `winit` (0.30) | Cross-platform window + event loop. |
 | Image decoding | `image` (PNG/JPEG/GIF; WebP deferred per upstream fix for Rust 1.91+) | Standard image-decoding crate. |
 | Font parsing | `ttf-parser` | Lightweight, no allocation. |
@@ -715,7 +715,7 @@ When a need arises that the table does not cover, the order of operations is:
 - **Rust toolchain**: `channel = "stable"` per [`rust-toolchain.toml`](../rust-toolchain.toml). Tracks the latest stable release.
 - **MSRV** (`rust-version` in [`Cargo.toml`](../Cargo.toml)): bumped **no later than 6 weeks** after a new stable release. Rust ships every 6 weeks (current: **1.96**, released ~2026-05-28; next: **1.97** ~2026-07-09). The MSRV bump PR is mechanical — bump the field, update the CI matrix, ship.
 - **Workspace dependencies**: caret-pinned (`"1.43"`, not `"=1.43.2"`). Patch bumps automatic via `cargo update`. Minor bumps batched monthly; major bumps reviewed individually.
-- **Pinned exceptions**: documented inline in `Cargo.toml` (current: `wgpu = "25.0"` due to `codespan-reporting` bug in 26.x/27.x; `image` `webp` feature disabled per `image-webp` issue #102).
+- **Pinned exceptions**: documented inline in `Cargo.toml` (current: `image` `webp` feature disabled per `image-webp` issue #102; no wgpu pin — tracking latest stable major).
 
 ### Recent stabilizations to fold into the port
 

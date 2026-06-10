@@ -11,7 +11,7 @@ FLUI is a modular, Flutter-inspired declarative UI framework for Rust with a thr
 - **Programming language:** Rust 1.96 (edition 2024)
 - **Build system:** Cargo workspace (20+ crates organized in foundation / core / rendering / framework / application layers)
 - **Async runtime:** `tokio` 1.43 LTS
-- **Graphics:** `wgpu` 25.x (pinned), `lyon`, `glyphon`, `cosmic-text`, `glam`
+- **Graphics:** `wgpu` 29.x, `lyon`, `glyphon`, `cosmic-text`, `glam`
 - **Platform:** native Win32, AppKit, headless backends + `winit` 0.30 fallback
 - **Diagnostics:** `tracing`, `tracing-forest`
 - **Errors:** `thiserror` (libraries), `anyhow` (applications)
@@ -152,7 +152,7 @@ Run `just` (no argument) for the full grouped recipe list. Raw `cargo` commands 
   - Correct: first `git checkout main`, then `git pull origin main`
 - **Never run destructive git operations** (`git checkout`, `git reset`, `git stash`, `git push --force`, `git branch -D`, etc.) without explicit user permission. Prefer non-destructive alternatives (new branches, new commits, tagging) and ask before discarding work.
 - **Honor the architecture contract.** Cross-check any non-trivial change against [`docs/FOUNDATIONS.md`](docs/FOUNDATIONS.md) and [`docs/ROADMAP.md`](docs/ROADMAP.md) — especially the dependency DAG, `unsafe` boundaries, and the no-`unwrap`/`println!` rules.
-- **Pin `wgpu` at 25.x.** 26.0+ is broken upstream (`https://github.com/gfx-rs/wgpu/issues/7915`).
+- **Track latest stable wgpu major.** The workspace currently uses 29.x (see `[workspace.dependencies]` in `Cargo.toml` for the caret pin and update policy). No active pin — the 25.x pin was lifted after the gfx-rs/wgpu#7915 codespan-reporting issue was resolved.
 - **Reference, don't copy.** `.flutter/` and `.gpui/` exist as architectural references only; adapt their patterns to FLUI idioms (Arity system, Ambassador delegation, no nullability).
 - **Use the ID offset pattern.** Slab indices are 0-based; public IDs (`ViewId`, `ElementId`, `RenderId`, `LayerId`, `SemanticsId`) are 1-based `NonZeroUsize`. Insert: `slab_index + 1`; lookup: `id.get() - 1`.
 - **Logging via `tracing` only.** No `println!`, `eprintln!`, or `dbg!` in shipped code.

@@ -15,7 +15,7 @@ This page covers prerequisites, the first build, and how to run the bundled exam
 | `wasm-pack` | 0.13+ | Required only for `examples/web_demo` and `examples/painting_demo`. |
 | Native toolchain | platform-specific | MSVC on Windows, Xcode CLT on macOS, NDK on Android. |
 
-`wgpu` is pinned at the **25.x** line. 26.0+ has known breakage upstream — do not bump it. See `https://github.com/gfx-rs/wgpu/issues/7915`.
+`wgpu` is currently at **29.x** and tracks the latest stable major (see `[workspace.dependencies]` in `Cargo.toml`).
 
 ## Clone and Build
 
@@ -115,7 +115,7 @@ RUST_LOG=flui_platform=trace,flui_engine=info cargo test -p flui-platform
 | `error: package 'flui-X' not found` | The crate is currently disabled in `Cargo.toml` `[workspace.members]`. Check [`crates.md`](crates.md). |
 | `error[E0432]: unresolved import 'flui_rendering::prelude::*'` | The crate is not in the dependency graph or the `prelude` module does not exist yet. |
 | `error: linking with 'link.exe'` on Windows | Install Visual Studio Build Tools 2022 (Desktop development with C++). |
-| `wgpu` crashes or shows blank window | Update graphics drivers; verify `wgpu` is still on 25.x. |
+| `wgpu` crashes or shows blank window | Update graphics drivers; `cargo update -p wgpu` to pick up any patch-level fixes. |
 | Long build times | Use `cargo build --workspace` once, then incremental `cargo check -p <crate>`. The release linker is pinned per-target in `.cargo/config.toml`. |
 
 ## See Also

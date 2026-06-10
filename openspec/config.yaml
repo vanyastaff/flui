@@ -9,7 +9,7 @@ context: |
     .flutter/  — Flutter source for architectural reference (read-only)
     .gpui/     — GPUI source for Rust platform-pattern reference (read-only)
 
-  Stack: Rust 1.96 + Cargo workspace, tokio, wgpu 25.x (pinned),
+  Stack: Rust 1.96 + Cargo workspace, tokio, wgpu 29.x,
   lyon, glyphon, cosmic-text, glam, tracing.
 rules:
   proposal:

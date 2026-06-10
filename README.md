@@ -32,7 +32,7 @@ For a step-by-step setup including platform notes (Windows / macOS / Android NDK
 
 - **Three-tree pipeline.** Immutable `View` → mutable `Element` → layout/paint `Render`. Build / Layout / Paint phases run on demand only.
 - **Type-safe arity.** Render children parameterized by `Leaf`, `Single`, `Optional`, `Variable` — child-count mismatches become compile-time errors.
-- **GPU-first rendering.** `wgpu` 25.x backend with `lyon` tessellation and `cosmic-text` / `glyphon` for high-quality text.
+- **GPU-first rendering.** `wgpu` 29.x backend with `lyon` tessellation and `cosmic-text` / `glyphon` for high-quality text.
 - **Cross-platform.** Native Win32 and AppKit backends, headless mode for CI, Android NDK target, WASM/WebGPU, plus a `winit` fallback.
 - **Hot-reload scenes.** `dlopen`-based plugin host (`flui-hot-reload`) for desktop iteration without process restarts.
 - **Strict architecture.** Layered crate DAG with no upward edges. `unsafe` is confined to `flui-platform`, `flui-painting`, `flui-engine`. Constitution-mandated and reviewed at the workspace level.
