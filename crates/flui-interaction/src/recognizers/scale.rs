@@ -401,7 +401,7 @@ impl ScaleGestureRecognizer {
                 // second)
                 let velocity = state
                     .scale_velocity_tracker
-                    .velocity()
+                    .get_velocity()
                     .pixels_per_second
                     .dx
                     .0;
@@ -634,7 +634,7 @@ impl GestureRecognizer for ScaleGestureRecognizer {
 }
 
 // =============================================================================
-// Canonical trait hierarchy adoption (U19)
+// Canonical trait hierarchy adoption
 // =============================================================================
 //
 // Flutter parity: `scale.dart:345 ScaleGestureRecognizer extends

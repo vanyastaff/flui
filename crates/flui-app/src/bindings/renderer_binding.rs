@@ -39,7 +39,7 @@ use std::{
 };
 
 use flui_foundation::{BindingBase, HasInstance, impl_binding_singleton};
-use flui_interaction::{MouseTracker, binding::GestureBinding};
+use flui_interaction::MouseTracker;
 use flui_painting::PaintingBinding;
 use flui_rendering::{
     binding::RendererBinding,
@@ -266,13 +266,6 @@ impl RenderingFlutterBinding {
     // Binding Accessors
     // ========================================================================
 
-    /// Get the GestureBinding singleton.
-    ///
-    /// Equivalent to Flutter's `GestureBinding.instance`.
-    pub fn gestures() -> &'static GestureBinding {
-        GestureBinding::instance()
-    }
-
     /// Get the Scheduler singleton.
     ///
     /// Equivalent to Flutter's `SchedulerBinding.instance`.
@@ -313,9 +306,11 @@ impl RenderingFlutterBinding {
 
 impl BindingBase for RenderingFlutterBinding {
     fn init_instances(&mut self) {
-        // Initialize GestureBinding first (provides hit testing)
-        let _ = GestureBinding::instance();
-        tracing::debug!("GestureBinding initialized via RenderingFlutterBinding");
+        // The gesture binding is owned by `AppBinding` (a plain field), which is
+        // the single authoritative instance driving input and hit testing. We
+        // deliberately do not touch `GestureBinding::instance()` here — a second
+        // lazily-initialized global would be a distinct allocation with its own
+        // arena that never receives the real pointer registrations.
 
         // Initialize scheduler
         let _ = Scheduler::instance();
@@ -495,6 +490,14 @@ impl RendererBinding for RenderingFlutterBinding {
 mod tests {
     use super::*;
 
+    /// `RenderingFlutterBinding::instance()` is a process-wide singleton, so the
+    /// tests that toggle its `semantics_enabled` flag share one `AtomicBool`.
+    /// They serialize through this lock (held for each test's duration) so they
+    /// cannot interleave their writes and observe each other's state — the
+    /// listener test in particular asserts exact callback counts that a
+    /// concurrent toggle would corrupt.
+    static SEMANTICS_TEST_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
     #[test]
     fn test_singleton() {
         let binding1 = RenderingFlutterBinding::instance();
@@ -511,9 +514,12 @@ mod tests {
 
     #[test]
     fn test_semantics_enabled() {
+        let _guard = SEMANTICS_TEST_LOCK.lock();
         let binding = RenderingFlutterBinding::instance();
 
-        // Initially disabled
+        // Establish a known starting state under the lock rather than assuming
+        // the process-wide default (the listener test toggles the same flag).
+        binding.set_semantics_enabled(false);
         assert!(!binding.semantics_enabled());
 
         // Enable
@@ -566,7 +572,14 @@ mod tests {
     fn test_semantics_listener() {
         use std::sync::atomic::AtomicUsize;
 
+        let _guard = SEMANTICS_TEST_LOCK.lock();
         let binding = RenderingFlutterBinding::instance();
+
+        // Force a known `false` baseline *before* attaching the listener, so
+        // the listener only counts the toggles this test performs and the
+        // first `set_semantics_enabled(true)` is an observable state change.
+        binding.set_semantics_enabled(false);
+
         let call_count = Arc::new(AtomicUsize::new(0));
         let call_count_clone = call_count.clone();
 
@@ -589,5 +602,8 @@ mod tests {
         binding.set_semantics_enabled(true);
         // Should not increment (listener removed)
         assert_eq!(call_count.load(Ordering::Relaxed), 2);
+
+        // Leave the shared singleton disabled for the next test.
+        binding.set_semantics_enabled(false);
     }
 }

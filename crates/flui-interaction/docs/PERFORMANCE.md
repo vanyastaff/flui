@@ -25,23 +25,12 @@ let mut tracker = VelocityTracker::new();
 tracker.add_position(Instant::now(), position);
 
 // Get velocity (px/s)
-let velocity = tracker.velocity();
+let velocity = tracker.get_velocity();
 println!("Speed: {} px/s", velocity.magnitude());
 ```
 
-**Estimation Strategies:**
-
-| Strategy | Accuracy | Performance | Use Case |
-|----------|----------|-------------|----------|
-| `LeastSquaresPolynomial` | High | Moderate | Default, gesture detection |
-| `LinearRegression` | Medium | Fast | Simple tracking |
-| `TwoSample` | Low | Fastest | High-frequency updates |
-
-```rust
-let tracker = VelocityTracker::with_strategy(
-    VelocityEstimationStrategy::LinearRegression
-);
-```
+The tracker uses least-squares polynomial regression (Flutter's algorithm),
+the only estimator in the canonical pipeline.
 
 **Algorithm Constants:**
 - `HORIZON`: 100ms sample window
@@ -102,7 +91,6 @@ let predictor = InputPredictor::with_config(PredictionConfig {
     max_prediction_time: Duration::from_millis(32),
     use_acceleration: true,
     smoothing: 0.2,
-    velocity_strategy: VelocityEstimationStrategy::LeastSquaresPolynomial,
 });
 ```
 

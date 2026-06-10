@@ -317,7 +317,7 @@ impl HitTestResult {
     ///
     /// # Why a closure and not a guard
     ///
-    /// PR #110 review feedback (Codex P2): the pre-fix
+    /// The pre-fix
     /// `paint_offset_scope -> TransformGuard<'_>` API held an
     /// exclusive `&'a mut HitTestResult` borrow for the guard's
     /// lifetime. Calls like
@@ -353,7 +353,7 @@ impl HitTestResult {
     ///
     /// See [`with_paint_offset`](Self::with_paint_offset) for the
     /// Flutter-parity rationale and the closure-vs-guard discussion
-    /// (PR #110 review feedback); this is the matrix-typed sibling
+    /// (closure-vs-guard rationale); this is the matrix-typed sibling
     /// for callers that need a full 4x4 transform rather than a
     /// paint-offset.
     pub fn with_paint_transform<F, R>(&mut self, transform: Matrix4, f: F) -> R

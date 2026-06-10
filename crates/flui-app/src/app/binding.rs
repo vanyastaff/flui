@@ -455,6 +455,10 @@ impl AppBinding {
         // 1. Flush coalesced pointer moves (GestureBinding handles coalescing)
         self.gestures.flush_pending_moves();
 
+        // 1b. Advance recognizer deadlines so a held-still pointer past its
+        //     timeout (e.g. long press) fires without a further input event.
+        self.gestures.tick_deadlines();
+
         // 2. Draw frame (build + layout + paint → Scene)
         let (width, height) = renderer.size();
         let constraints = BoxConstraints::tight(Size::new(px(width as f32), px(height as f32)));
@@ -514,20 +518,12 @@ impl AppBinding {
             PlatformInput::Pointer(pointer_event) => {
                 self.gestures
                     .handle_pointer_event(&pointer_event, |position| {
-                        // Cycle 4 U-4: single canonical `HitTestResult`
-                        // flows through both rendering traversal and
-                        // gesture dispatch. The pre-cycle bridge code
-                        // here built a `flui_rendering::hit_testing::HitTestResult`
-                        // and then -- under the literal
-                        // `// TODO: Convert rendering HitTestEntry
-                        // targets to interaction targets` -- returned an
-                        // empty `flui_interaction` result instead. The
-                        // bridge dropped every hit silently.
-                        // Post-U-4 there is a single result type; the
-                        // rendering crate's re-export points at
-                        // `flui_interaction::routing::HitTestResult`,
-                        // so the same instance flows through both
-                        // layers without conversion.
+                        // A single canonical `HitTestResult` flows through both
+                        // rendering traversal and gesture dispatch: the
+                        // rendering crate re-exports
+                        // `flui_interaction::routing::HitTestResult`, so the
+                        // same instance crosses both layers without conversion
+                        // (no per-hit bridge that could silently drop targets).
                         use flui_rendering::binding::RendererBinding;
                         let renderer = self.renderer.read();
                         let mut result = flui_interaction::routing::HitTestResult::new();
@@ -589,5 +585,52 @@ mod tests {
         // Verify the renderer sub-binding is accessible (created during
         // AppBinding::new)
         let _renderer = binding.renderer();
+    }
+
+    #[test]
+    fn input_dispatches_through_the_exposed_gesture_binding() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        use flui_interaction::PointerId;
+        use flui_interaction::events::{PointerEvent, PointerType, make_down_event_for_id};
+        use flui_interaction::routing::HitTestResult;
+        use flui_types::geometry::{Offset, Pixels};
+
+        // A handler registered on the gesture binding the public accessor
+        // exposes must observe an event dispatched through that same binding —
+        // proving registration and dispatch share ONE authoritative gesture
+        // binding / arena, with no separate global instance to diverge.
+        let app = AppBinding::instance();
+
+        // A test-local pointer id keeps this isolated from other tests that
+        // share the `AppBinding` singleton (its arena / router / hit-test maps),
+        // and a per-pointer route is scoped to that id (unlike a global handler).
+        let pointer = PointerId::new(9001).expect("nonzero pointer id");
+
+        let fired = Arc::new(AtomicBool::new(false));
+        let f = fired.clone();
+        let handler: Arc<dyn Fn(&PointerEvent) + Send + Sync> =
+            Arc::new(move |_| f.store(true, Ordering::Relaxed));
+        app.gestures().pointer_router().add_route(pointer, handler);
+
+        // Dispatch straight through the accessor-exposed binding via the
+        // explicit-result path, which bypasses hit testing (no renderer lock,
+        // no simultaneous-pointer cap that other tests could exhaust).
+        let event = make_down_event_for_id(
+            pointer,
+            Offset::new(Pixels(10.0), Pixels(10.0)),
+            PointerType::Touch,
+        );
+        app.gestures()
+            .handle_pointer_event_with_result(&event, &HitTestResult::new());
+
+        assert!(
+            fired.load(Ordering::Relaxed),
+            "the binding AppBinding::gestures() exposes must dispatch the event it is handed"
+        );
+
+        // Shared process singleton — clean up this pointer's route + arena entry.
+        app.gestures().pointer_router().remove_all_routes(pointer);
+        app.gestures().sweep_arena(pointer);
     }
 }

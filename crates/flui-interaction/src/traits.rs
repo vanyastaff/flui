@@ -118,7 +118,7 @@ impl PointerEventExtTrait for PointerEvent {
     }
 
     fn pointer_id(&self) -> PointerId {
-        // U9: PointerId is `ui_events::pointer::PointerId(NonZeroU64)`.
+        // PointerId is `ui_events::pointer::PointerId(NonZeroU64)`.
         // Delegate to the canonical extractor — zero-cost field load,
         // no per-event hasher allocation. Matches Flutter
         // `gestures/binding.dart` `event.pointer` semantics.

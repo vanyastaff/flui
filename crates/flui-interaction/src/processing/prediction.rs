@@ -35,7 +35,7 @@ use std::time::{Duration, Instant};
 
 use flui_types::geometry::{Offset, Pixels};
 
-use super::velocity::{Velocity, VelocityEstimationStrategy, VelocityTracker};
+use super::velocity::{Velocity, VelocityTracker};
 
 // ============================================================================
 // Constants
@@ -64,8 +64,6 @@ pub struct PredictionConfig {
     /// Smoothing factor for predictions (0.0 = no smoothing, 1.0 = max
     /// smoothing).
     pub smoothing: f32,
-    /// Velocity estimation strategy.
-    pub velocity_strategy: VelocityEstimationStrategy,
 }
 
 impl Default for PredictionConfig {
@@ -74,7 +72,6 @@ impl Default for PredictionConfig {
             max_prediction_time: MAX_PREDICTION_TIME,
             use_acceleration: true,
             smoothing: 0.3,
-            velocity_strategy: VelocityEstimationStrategy::LeastSquaresPolynomial,
         }
     }
 }
@@ -86,7 +83,6 @@ impl PredictionConfig {
             max_prediction_time: Duration::from_millis(32),
             use_acceleration: true,
             smoothing: 0.1,
-            velocity_strategy: VelocityEstimationStrategy::LeastSquaresPolynomial,
         }
     }
 
@@ -97,7 +93,6 @@ impl PredictionConfig {
             max_prediction_time: Duration::from_millis(16),
             use_acceleration: false,
             smoothing: 0.5,
-            velocity_strategy: VelocityEstimationStrategy::LinearRegression,
         }
     }
 
@@ -107,7 +102,6 @@ impl PredictionConfig {
             max_prediction_time: Duration::ZERO,
             use_acceleration: false,
             smoothing: 0.0,
-            velocity_strategy: VelocityEstimationStrategy::TwoSample,
         }
     }
 }
@@ -202,7 +196,7 @@ impl InputPredictor {
     /// Create a predictor with custom configuration.
     pub fn with_config(config: PredictionConfig) -> Self {
         Self {
-            velocity_tracker: VelocityTracker::with_strategy(config.velocity_strategy),
+            velocity_tracker: VelocityTracker::new(),
             config,
             last_position: None,
             last_time: None,
@@ -226,7 +220,7 @@ impl InputPredictor {
     pub fn add_sample(&mut self, time: Instant, position: Offset<Pixels>) {
         // Store previous velocity for acceleration
         if self.velocity_tracker.has_sufficient_data() {
-            self.prev_velocity = Some(self.velocity_tracker.velocity());
+            self.prev_velocity = Some(self.velocity_tracker.get_velocity());
             self.prev_velocity_time = self.last_time;
         }
 
@@ -248,8 +242,8 @@ impl InputPredictor {
         // Clamp prediction time
         let time_ahead = time_ahead.min(self.config.max_prediction_time);
 
-        // If disabled or no data, return last known position
-        if time_ahead.is_zero() || self.last_position.is_none() {
+        // If disabled or no data, return last known position (if any)
+        if time_ahead.is_zero() {
             return PredictedPosition {
                 position: self.last_position.unwrap_or(Offset::ZERO),
                 confidence: if self.last_position.is_some() {
@@ -262,8 +256,18 @@ impl InputPredictor {
             };
         }
 
-        let last_pos = self.last_position.unwrap();
-        let velocity = self.velocity_tracker.velocity();
+        // From here on, `last_pos` is the only way to access `self.last_position`;
+        // the `if let` guard makes the `None` case unrepresentable and removes
+        // the need for an `.unwrap()`.
+        let Some(last_pos) = self.last_position else {
+            return PredictedPosition {
+                position: Offset::ZERO,
+                confidence: 0.0,
+                prediction_time: Duration::ZERO,
+                velocity: Velocity::ZERO,
+            };
+        };
+        let velocity = self.velocity_tracker.get_velocity();
 
         // Not enough data for prediction
         if !self.velocity_tracker.has_sufficient_data()
@@ -317,8 +321,11 @@ impl InputPredictor {
         }
 
         // Calculate confidence based on velocity consistency and sample count
-        let estimate = self.velocity_tracker.estimate();
-        let base_confidence = estimate.confidence;
+        // (estimate() returns Option — a missing estimate is a confidence 0 signal).
+        let base_confidence = self
+            .velocity_tracker
+            .estimate()
+            .map_or(0.0, |e| e.confidence);
 
         // Reduce confidence for longer predictions
         let time_factor = 1.0 - (dt / self.config.max_prediction_time.as_secs_f32()).min(1.0);
@@ -334,7 +341,9 @@ impl InputPredictor {
 
     /// Predict position for next frame at given frame rate.
     pub fn predict_next_frame(&mut self, fps: u32) -> PredictedPosition {
-        let frame_time = Duration::from_secs_f32(1.0 / fps as f32);
+        // Clamp to >= 1 fps so `fps == 0` cannot produce an infinite/NaN frame
+        // time (untrusted callers / config may pass 0).
+        let frame_time = Duration::from_secs_f32(1.0 / fps.max(1) as f32);
         self.predict(frame_time)
     }
 
@@ -349,8 +358,11 @@ impl InputPredictor {
     }
 
     /// Get the current velocity estimate.
-    pub fn velocity(&self) -> Velocity {
-        self.velocity_tracker.velocity()
+    ///
+    /// `&mut self` because the underlying [`VelocityTracker`] memoizes its
+    /// estimate on query (the cache is invalidated by the next sample).
+    pub fn velocity(&mut self) -> Velocity {
+        self.velocity_tracker.get_velocity()
     }
 
     /// Reset the predictor, clearing all history.
@@ -500,5 +512,21 @@ mod tests {
 
         // 30fps should predict further than 60fps
         assert!(at_30fps.prediction_time > at_60fps.prediction_time);
+    }
+
+    #[test]
+    fn predict_next_frame_zero_fps_does_not_panic() {
+        let mut predictor = InputPredictor::new();
+        let start = Instant::now();
+        for i in 0..5 {
+            predictor.add_sample(
+                start + Duration::from_millis(i * 10),
+                Offset::new(Pixels(i as f32 * 10.0), Pixels(0.0)),
+            );
+        }
+        // `fps == 0` must clamp rather than divide by zero into a non-finite
+        // frame time.
+        let predicted = predictor.predict_next_frame(0);
+        assert!(predicted.prediction_time.as_secs_f32().is_finite());
     }
 }

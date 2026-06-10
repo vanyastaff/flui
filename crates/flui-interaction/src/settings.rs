@@ -41,6 +41,20 @@ pub const DEFAULT_PEN_SLOP: f32 = 8.0;
 /// Default pan slop (same as touch slop by default).
 pub const DEFAULT_PAN_SLOP: f32 = 18.0;
 
+/// Default vertical-only pan slop.
+///
+/// Matches Flutter's `kVerticalDragSlopThreshold = kTouchSlop` (18 logical px)
+/// for vertical drag. Same numeric value as [`DEFAULT_PAN_SLOP`] by default
+/// — the split exists so apps can tune vertical drag more aggressively than
+/// free pan (or vice versa) without touching the other.
+pub const DEFAULT_PAN_SLOP_VERTICAL: f32 = 18.0;
+
+/// Default horizontal-only pan slop.
+///
+/// See [`DEFAULT_PAN_SLOP_VERTICAL`] for the rationale behind the per-axis
+/// split (Flutter parity).
+pub const DEFAULT_PAN_SLOP_HORIZONTAL: f32 = 18.0;
+
 /// Default scale slop (minimum scale factor change to start scaling).
 pub const DEFAULT_SCALE_SLOP: f32 = 0.05;
 
@@ -86,12 +100,25 @@ pub const DEFAULT_MAX_FLING_VELOCITY: f32 = 8000.0;
 /// }
 /// ```
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct GestureSettings {
     /// Maximum distance for a tap gesture (device-specific).
     touch_slop: f32,
 
-    /// Maximum distance for starting a pan gesture.
+    /// Maximum distance for starting a pan gesture (free direction).
     pan_slop: f32,
+
+    /// Maximum vertical-only distance to start a vertical drag.
+    ///
+    /// Per-axis split lets the recogniser use a different tolerance for
+    /// vertical-only drags than for free pans. Defaults to
+    /// [`DEFAULT_PAN_SLOP_VERTICAL`].
+    pan_slop_vertical: f32,
+
+    /// Maximum horizontal-only distance to start a horizontal drag.
+    ///
+    /// See [`Self::pan_slop_vertical`] — same rationale, horizontal axis.
+    pan_slop_horizontal: f32,
 
     /// Minimum scale factor change to start scaling.
     scale_slop: f32,
@@ -131,9 +158,13 @@ impl GestureSettings {
         min_fling_velocity: f32,
         max_fling_velocity: f32,
     ) -> Self {
+        // Per-axis slops default to the free pan slop so existing
+        // callers (pre-per-axis-split) keep their current tolerance.
         Self {
             touch_slop,
             pan_slop,
+            pan_slop_vertical: pan_slop,
+            pan_slop_horizontal: pan_slop,
             scale_slop,
             double_tap_slop,
             double_tap_timeout,
@@ -150,6 +181,8 @@ impl GestureSettings {
         Self {
             touch_slop: DEFAULT_TOUCH_SLOP,
             pan_slop: DEFAULT_PAN_SLOP,
+            pan_slop_vertical: DEFAULT_PAN_SLOP_VERTICAL,
+            pan_slop_horizontal: DEFAULT_PAN_SLOP_HORIZONTAL,
             scale_slop: DEFAULT_SCALE_SLOP,
             double_tap_slop: DEFAULT_DOUBLE_TAP_SLOP,
             double_tap_timeout: DEFAULT_DOUBLE_TAP_TIMEOUT,
@@ -166,6 +199,8 @@ impl GestureSettings {
         Self {
             touch_slop: DEFAULT_MOUSE_SLOP,
             pan_slop: DEFAULT_MOUSE_SLOP,
+            pan_slop_vertical: DEFAULT_MOUSE_SLOP,
+            pan_slop_horizontal: DEFAULT_MOUSE_SLOP,
             scale_slop: DEFAULT_SCALE_SLOP,
             double_tap_slop: DEFAULT_DOUBLE_TAP_SLOP,
             double_tap_timeout: DEFAULT_DOUBLE_TAP_TIMEOUT,
@@ -182,6 +217,8 @@ impl GestureSettings {
         Self {
             touch_slop: DEFAULT_PEN_SLOP,
             pan_slop: DEFAULT_PEN_SLOP,
+            pan_slop_vertical: DEFAULT_PEN_SLOP,
+            pan_slop_horizontal: DEFAULT_PEN_SLOP,
             scale_slop: DEFAULT_SCALE_SLOP,
             double_tap_slop: DEFAULT_DOUBLE_TAP_SLOP,
             double_tap_timeout: DEFAULT_DOUBLE_TAP_TIMEOUT,
@@ -224,6 +261,24 @@ impl GestureSettings {
     #[inline]
     pub fn pan_slop(&self) -> f32 {
         self.pan_slop
+    }
+
+    /// Get the vertical-only pan slop (per-axis tolerance).
+    ///
+    /// Used by the vertical-drag recogniser to decide when a vertical
+    /// drag crosses the acceptance threshold. Returns the same value as
+    /// [`Self::pan_slop`] unless explicitly set via [`Self::with_pan_slop_vertical`].
+    #[inline]
+    pub fn pan_slop_vertical(&self) -> f32 {
+        self.pan_slop_vertical
+    }
+
+    /// Get the horizontal-only pan slop (per-axis tolerance).
+    ///
+    /// See [`Self::pan_slop_vertical`] — same rationale, horizontal axis.
+    #[inline]
+    pub fn pan_slop_horizontal(&self) -> f32 {
+        self.pan_slop_horizontal
     }
 
     /// Get the scale slop (minimum scale change to start scaling).
@@ -277,6 +332,26 @@ impl GestureSettings {
     #[inline]
     pub fn with_pan_slop(mut self, slop: f32) -> Self {
         self.pan_slop = slop;
+        self
+    }
+
+    /// Set the vertical-only pan slop (per-axis tolerance).
+    ///
+    /// Independent of [`Self::with_pan_slop`] so callers can tune vertical
+    /// drag without affecting free pan. Use this in vertical-only widgets
+    /// (e.g. scroll views).
+    #[inline]
+    pub fn with_pan_slop_vertical(mut self, slop: f32) -> Self {
+        self.pan_slop_vertical = slop;
+        self
+    }
+
+    /// Set the horizontal-only pan slop (per-axis tolerance).
+    ///
+    /// See [`Self::with_pan_slop_vertical`] — same rationale, horizontal axis.
+    #[inline]
+    pub fn with_pan_slop_horizontal(mut self, slop: f32) -> Self {
+        self.pan_slop_horizontal = slop;
         self
     }
 

@@ -1338,18 +1338,22 @@ name = "flui-interaction"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.10.0",
+ "criterion",
  "crossbeam",
  "cursor-icon",
  "dashmap",
  "dpi",
  "flui-foundation",
+ "flui-interaction",
  "flui-types",
  "futures",
  "once_cell",
  "parking_lot",
+ "proptest",
  "smallvec",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "ui-events",
 ]
 

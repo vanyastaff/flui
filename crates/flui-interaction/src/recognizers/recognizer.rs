@@ -3,10 +3,14 @@
 //! Defines the core `GestureRecognizer` trait and common types used by all
 //! recognizers.
 
-use std::sync::Arc;
+use std::sync::{
+    Arc, Weak,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+};
 
 use flui_types::{Offset, geometry::Pixels};
 use parking_lot::Mutex;
+use tracing::instrument;
 
 use crate::{
     arena::{GestureArena, GestureArenaMember},
@@ -56,21 +60,35 @@ pub trait GestureRecognizer: GestureArenaMember + Send + Sync {
 /// - Initial position tracking
 /// - Disposal
 ///
-/// Renamed from `GestureRecognizerState` in U5 to free that name for the
+/// Renamed from `GestureRecognizerState` to free that name for the
 /// canonical Flutter `GestureRecognizerState` FSM enum (see below).
 #[derive(Clone)]
 pub struct RecognizerBase {
     /// Gesture arena for conflict resolution
     arena: GestureArena,
 
-    /// Primary pointer ID being tracked
-    primary_pointer: Arc<Mutex<Option<PointerId>>>,
+    /// Primary pointer ID being tracked, as a raw `u64` (`0` == none).
+    ///
+    /// Read on every event (the per-pointer filter), so it is a lock-free
+    /// `AtomicU64` rather than `Mutex<Option<PointerId>>`. `PointerId` is
+    /// `NonZeroU64`-backed, so `0` is an unambiguous "none" sentinel.
+    primary_pointer: Arc<AtomicU64>,
 
     /// Initial position of primary pointer
     initial_position: Arc<Mutex<Option<Offset<Pixels>>>>,
 
-    /// Whether recognizer has been disposed
-    disposed: Arc<Mutex<bool>>,
+    /// Whether recognizer has been disposed. Checked on every event via
+    /// `assert_not_disposed`, so a lock-free `AtomicBool`.
+    disposed: Arc<AtomicBool>,
+
+    /// Weak handle to the exact `Arc<dyn GestureArenaMember>` this recognizer
+    /// registered with the arena in [`start_tracking`](Self::start_tracking).
+    ///
+    /// The arena identifies winners by `Arc::ptr_eq`, so claiming a win
+    /// requires resolving with the *same* allocation that was added — not a
+    /// fresh `Arc::new(self.clone())`. A `Weak` (not `Arc`) avoids a
+    /// self-referential cycle that would leak the recognizer.
+    tracked_member: Arc<Mutex<Option<Weak<dyn GestureArenaMember>>>>,
 }
 
 impl RecognizerBase {
@@ -78,9 +96,10 @@ impl RecognizerBase {
     pub fn new(arena: GestureArena) -> Self {
         Self {
             arena,
-            primary_pointer: Arc::new(Mutex::new(None)),
+            primary_pointer: Arc::new(AtomicU64::new(0)),
             initial_position: Arc::new(Mutex::new(None)),
-            disposed: Arc::new(Mutex::new(false)),
+            disposed: Arc::new(AtomicBool::new(false)),
+            tracked_member: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -93,12 +112,14 @@ impl RecognizerBase {
     /// Get the primary pointer ID (if tracking one)
     #[inline]
     pub fn primary_pointer(&self) -> Option<PointerId> {
-        *self.primary_pointer.lock()
+        // `PointerId::new` is `0 -> None`, so it round-trips the sentinel.
+        PointerId::new(self.primary_pointer.load(Ordering::Relaxed))
     }
 
     /// Set the primary pointer
     pub fn set_primary_pointer(&self, pointer: Option<PointerId>) {
-        *self.primary_pointer.lock() = pointer;
+        let raw = pointer.map_or(0, |id| id.get_inner().get());
+        self.primary_pointer.store(raw, Ordering::Relaxed);
     }
 
     /// Get the initial position of the primary pointer
@@ -115,23 +136,29 @@ impl RecognizerBase {
     /// Check if recognizer has been disposed
     #[inline]
     pub fn is_disposed(&self) -> bool {
-        *self.disposed.lock()
+        self.disposed.load(Ordering::Relaxed)
     }
 
     /// Mark as disposed
     pub fn mark_disposed(&self) {
-        *self.disposed.lock() = true;
+        self.disposed.store(true, Ordering::Relaxed);
     }
 
     /// Debug-assert that the recognizer has not been disposed.
     ///
-    /// Adopts the PR #84 `ChangeNotifier::dispose` lifecycle pattern at
+    /// Adopts the `ChangeNotifier::dispose` lifecycle pattern at
     /// [`crates/flui-foundation/src/notifier.rs`](../../crates/flui-foundation/src/notifier.rs)
     /// — use-after-dispose triggers a `debug_assert!` panic in debug
     /// builds + `tracing::warn!` + no-op semantics in release.
     ///
     /// Returns `true` if the recognizer is still live (call sites should
     /// proceed); `false` if disposed (call sites should early-return).
+    #[instrument(
+        name = "recognizer.assert_not_disposed",
+        level = "trace",
+        skip(self),
+        fields(op = %op, primary = ?self.primary_pointer())
+    )]
     #[inline]
     pub fn assert_not_disposed(&self, op: &'static str) -> bool {
         if self.is_disposed() {
@@ -149,6 +176,16 @@ impl RecognizerBase {
     ///
     /// Sets this as the primary pointer and stores initial position.
     /// Adds recognizer to gesture arena.
+    #[instrument(
+        name = "recognizer.start_tracking",
+        level = "debug",
+        skip(self, recognizer),
+        fields(
+            pointer = ?pointer,
+            position = ?position,
+            event = %crate::observability::GestureEvent::StartedTracking,
+        )
+    )]
     pub fn start_tracking<T: GestureArenaMember + Clone + 'static>(
         &self,
         pointer: PointerId,
@@ -162,11 +199,40 @@ impl RecognizerBase {
         self.set_primary_pointer(Some(pointer));
         self.set_initial_position(Some(position));
 
-        // Add to arena (clone Arc to satisfy trait bounds)
-        self.arena.add(pointer, recognizer.clone());
+        // Register with the arena and remember this exact allocation (as a
+        // `Weak`) so a later `accept_tracked()` can resolve with the same
+        // `Arc` identity the arena matches on via `Arc::ptr_eq`.
+        let member: Arc<dyn GestureArenaMember> = recognizer.clone();
+        *self.tracked_member.lock() = Some(Arc::downgrade(&member));
+        self.arena.add(pointer, member);
+    }
+
+    /// Claim the arena win for the currently-tracked pointer.
+    ///
+    /// Resolves the arena in favour of this recognizer using the stable member
+    /// identity captured in [`start_tracking`](Self::start_tracking), so
+    /// competing members receive `reject_gesture`. No-op when not tracking a
+    /// pointer or when the arena entry is already resolved or gone.
+    pub fn accept_tracked(&self) {
+        let Some(pointer) = self.primary_pointer() else {
+            return;
+        };
+        let Some(member) = self.tracked_member.lock().as_ref().and_then(Weak::upgrade) else {
+            return;
+        };
+        self.arena.resolve(pointer, Some(member));
     }
 
     /// Stop tracking (called on success or rejection)
+    #[instrument(
+        name = "recognizer.stop_tracking",
+        level = "debug",
+        skip(self),
+        fields(
+            pointer = ?self.primary_pointer(),
+            event = %crate::observability::GestureEvent::StoppedTracking,
+        )
+    )]
     pub fn stop_tracking(&self) {
         if let Some(pointer) = self.primary_pointer() {
             self.arena.sweep(pointer);
@@ -176,6 +242,15 @@ impl RecognizerBase {
     }
 
     /// Accept this gesture (win the arena)
+    #[instrument(
+        name = "recognizer.accept",
+        level = "debug",
+        skip(self, recognizer),
+        fields(
+            pointer = ?self.primary_pointer(),
+            event = %crate::observability::GestureEvent::ArenaAccepted,
+        )
+    )]
     pub fn accept<T: GestureArenaMember + Clone + 'static>(&self, recognizer: &Arc<T>) {
         if let Some(pointer) = self.primary_pointer() {
             self.arena.resolve(pointer, Some(recognizer.clone()));
@@ -183,6 +258,15 @@ impl RecognizerBase {
     }
 
     /// Reject this gesture (lose the arena or explicit rejection)
+    #[instrument(
+        name = "recognizer.reject",
+        level = "debug",
+        skip(self),
+        fields(
+            pointer = ?self.primary_pointer(),
+            event = %crate::observability::GestureEvent::ArenaRejected,
+        )
+    )]
     pub fn reject(&self) {
         if let Some(pointer) = self.primary_pointer() {
             self.arena.resolve(pointer, None);

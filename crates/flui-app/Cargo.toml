@@ -63,3 +63,7 @@ wasm-bindgen-futures = "0.4"
 android-activity = { version = "0.6", features = ["native-activity"] }
 
 [dev-dependencies]
+# Enable flui-interaction's `testing` feature in test builds so tests can
+# construct synthetic pointer events via `events::make_*_event`. Feature
+# unification keeps these helpers out of the release `flui-app` binary.
+flui-interaction = { path = "../flui-interaction", features = ["testing"] }

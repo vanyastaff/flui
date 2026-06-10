@@ -27,21 +27,21 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
-//! use flui_interaction::resampler::PointerEventResampler;
+//! ```rust
+//! use std::time::{Duration, Instant};
+//!
 //! use flui_interaction::ids::PointerId;
-//! use std::time::Duration;
+//! use flui_interaction::processing::PointerEventResampler;
 //!
-//! let mut resampler = PointerEventResampler::new(PointerId::PRIMARY);
-//!
-//! // Add incoming events
-//! resampler.add_event(pointer_event);
-//!
-//! // Sample at 60Hz
-//! let sample_time = Duration::from_secs_f64(1.0 / 60.0);
-//! resampler.sample(sample_time, |resampled_event| {
-//!     // Process resampled event
+//! let resampler = PointerEventResampler::new(PointerId::PRIMARY);
+//! // The 60 Hz frame tick. The resampler enforces a 1 ms minimum
+//! // interval between samples, so back-to-back ticks coalesce.
+//! let now = Instant::now();
+//! let next = now + Duration::from_millis(16);
+//! resampler.sample(now, next, |_event| {
+//!     // dispatch to recognisers here
 //! });
+//! let _has_pending = resampler.has_pending_events();
 //! ```
 
 use std::{
@@ -120,6 +120,19 @@ impl PointerEventResampler {
         }
     }
 
+    /// Marks the pointer as down and tracked WITHOUT queueing an event.
+    ///
+    /// The binding dispatches the `Down` event directly (synchronously, to
+    /// close the arena and cache the hit test), so the resampler must not also
+    /// re-emit it on the next `sample()`. This establishes the tracking state
+    /// that `sample()` requires (`is_tracked`) so subsequent moves are paced
+    /// instead of silently dropped.
+    pub fn start_tracking(&self) {
+        let mut inner = self.inner.lock();
+        inner.is_down = true;
+        inner.is_tracked = true;
+    }
+
     /// Adds a pointer event to the resampling queue
     ///
     /// Events are buffered and will be processed during the next `sample()`
@@ -192,12 +205,19 @@ impl PointerEventResampler {
         inner.last_sample_time = Some(sample_time);
 
         // Process all events up to sample_time
-        while let Some(buffered) = inner.event_queue.front() {
-            if buffered.timestamp > sample_time {
+        while let Some(front) = inner.event_queue.front() {
+            if front.timestamp > sample_time {
                 break; // Future event, wait for next sample
             }
 
-            let buffered = inner.event_queue.pop_front().unwrap();
+            // Invariant: the loop guard verified `front()` returns `Some`, so
+            // `pop_front` cannot return `None` unless another thread mutates
+            // the queue between the two calls. We hold `&mut inner` via the
+            // enclosing `&mut self` so no concurrent access is possible.
+            let buffered = inner
+                .event_queue
+                .pop_front()
+                .expect("event_queue front returned Some in the loop guard");
             let event = buffered.event;
 
             // Update last position for interpolation

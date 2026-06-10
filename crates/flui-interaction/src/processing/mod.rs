@@ -14,19 +14,27 @@
 //!
 //! let mut tracker = VelocityTracker::new();
 //! tracker.add_position(now, position);
-//! let velocity = tracker.velocity();
+//! let velocity = tracker.get_velocity();
 //!
 //! let mut predictor = InputPredictor::new();
 //! predictor.add_sample(now, position);
 //! let predicted = predictor.predict(Duration::from_millis(16));
 //! ```
 
+mod lsq_solver;
 mod prediction;
 mod raw_input;
 mod resampler;
+mod sampling_clock;
 mod velocity;
 
+// `lsq_solver` (LeastSquaresSolver / PolynomialFit / MAX_*) is crate-internal
+// numerical machinery shared by the velocity tracker; it is intentionally NOT
+// re-exported, so the public API is not pinned to the solver's internals.
 pub use prediction::{InputPredictor, PredictedPosition, PredictionConfig};
 pub use raw_input::{InputMode, RawInputHandler, RawPointerEvent};
 pub use resampler::PointerEventResampler;
-pub use velocity::{Velocity, VelocityEstimate, VelocityEstimationStrategy, VelocityTracker};
+pub use sampling_clock::{DEFAULT_SAMPLE_PERIOD, SamplingClock};
+pub use velocity::{
+    IosFlingVelocityTracker, MacosFlingVelocityTracker, Velocity, VelocityEstimate, VelocityTracker,
+};
