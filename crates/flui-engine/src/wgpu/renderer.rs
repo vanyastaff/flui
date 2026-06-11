@@ -203,11 +203,13 @@ impl Renderer {
         let surface = unsafe {
             // wgpu 29.x multi-monitor fix: explicitly extract raw handles to work
             // around DisplayHandle lifetime issues on multi-display systems.
-            let window_handle = window.window_handle()
+            let window_handle = window
+                .window_handle()
                 .map_err(|e| EngineError::surface_creation(std::io::Error::other(e.to_string())))?;
-            let display_handle = window.display_handle()
+            let display_handle = window
+                .display_handle()
                 .map_err(|e| EngineError::surface_creation(std::io::Error::other(e.to_string())))?;
-            
+
             // Create surface target with explicit raw handles to avoid lifetime issues
             let surface_target = wgpu::SurfaceTargetUnsafe::RawHandle {
                 raw_display_handle: Some(display_handle.as_raw()),

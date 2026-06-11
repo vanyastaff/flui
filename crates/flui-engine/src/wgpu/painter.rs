@@ -285,6 +285,13 @@ pub struct WgpuPainter {
     /// Texture instance batch
     texture_batch: super::instancing::InstanceBatch<super::instancing::TextureInstance>,
 
+    /// Pending cached images (each with its own texture)
+    /// Stored as (TextureId, TextureInstance) pairs to be flushed in render()
+    pending_cached_images: Vec<(
+        super::texture_cache::TextureId,
+        super::instancing::TextureInstance,
+    )>,
+
     /// Texture bind group layout (for texture + sampler)
     texture_bind_group_layout: wgpu::BindGroupLayout,
 
@@ -820,6 +827,9 @@ impl WgpuPainter {
         // Create texture instance batch
         let texture_batch = super::instancing::InstanceBatch::new(1024); // 1024 textures per batch
 
+        // Create pending cached images list
+        let pending_cached_images = Vec::new();
+
         // Create tessellator for complex shapes
         let tessellator = Tessellator::new();
 
@@ -905,6 +915,7 @@ impl WgpuPainter {
             instanced_arc_pipeline,
             instanced_texture_pipeline,
             texture_batch,
+            pending_cached_images,
             texture_bind_group_layout,
             linear_gradient_pipeline,
             radial_gradient_pipeline,
@@ -1058,6 +1069,7 @@ impl WgpuPainter {
             match item {
                 DrawItem::Segment(mut seg) => {
                     self.flush_segment(&mut seg, encoder, view);
+                    self.flush_pending_cached_images(encoder, view);
                 }
                 DrawItem::OffscreenTexture(p) => {
                     let instance = super::instancing::TextureInstance::new(
@@ -1073,6 +1085,9 @@ impl WgpuPainter {
                 }
             }
         }
+
+        // Ensure any trailing image draws are submitted.
+        self.flush_pending_cached_images(encoder, view);
 
         // ===== Render Text (global - always on top) =====
         self.text_renderer
@@ -2042,6 +2057,30 @@ impl WgpuPainter {
         // Clear batch for next frame
         self.texture_batch.clear();
     }
+
+    fn flush_pending_cached_images(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+    ) {
+        let mut pending_images: Vec<(
+            super::texture_cache::TextureId,
+            super::instancing::TextureInstance,
+        )> = self.pending_cached_images.drain(..).collect();
+
+        // Pre-fetch views so we can release the mutable cache borrow before drawing.
+        let mut image_renders = Vec::new();
+        for (texture_id, instance) in pending_images.drain(..) {
+            if let Some(cached_texture) = self.texture_cache.get(&texture_id) {
+                image_renders.push((instance, cached_texture.view.clone()));
+            }
+        }
+
+        for (instance, texture_view) in image_renders {
+            let _ = self.texture_batch.add(instance);
+            self.flush_texture_batch(encoder, view, &texture_view);
+        }
+    }
 }
 
 // ===== Public Drawing API =====
@@ -2526,27 +2565,19 @@ impl WgpuPainter {
     }
 
     pub fn draw_image(&mut self, image: &flui_types::painting::Image, dst_rect: Rect<Pixels>) {
-        #[cfg(debug_assertions)]
-        tracing::trace!(
-            "WgpuPainter::draw_image: size={}x{}, dst={:?}",
-            image.width(),
-            image.height(),
-            dst_rect
-        );
-
         // Use Arc pointer identity for O(1) cache lookup instead of hashing all pixels
         let texture_id = super::texture_cache::TextureId::from_ptr(image.data_ptr());
+        let data = image.data();
 
         // Load or get cached texture (small images are auto-packed into the atlas)
         match self.texture_cache.load_from_rgba(
-            texture_id,
+            texture_id.clone(),
             image.width(),
             image.height(),
-            image.data(),
+            data,
         ) {
             Ok(cached_texture) => {
-                // Use atlas UV coordinates when the image lives in the shared
-                // atlas, otherwise use full-texture UVs [0,0,1,1].
+                // Preserve atlas UVs when the image is packed into the shared atlas.
                 let instance = if let Some(uv_rect) = cached_texture.uv_rect {
                     super::instancing::TextureInstance::with_uv(
                         dst_rect,
@@ -2559,10 +2590,11 @@ impl WgpuPainter {
                         flui_types::styling::Color::WHITE,
                     )
                 };
-                let _ = self.texture_batch.add(instance);
+
+                // Add to pending list for flush in render()
+                self.pending_cached_images.push((texture_id, instance));
             }
             Err(e) => {
-                #[cfg(debug_assertions)]
                 tracing::error!("Failed to load image texture: {}", e);
             }
         }

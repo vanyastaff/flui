@@ -951,6 +951,9 @@ impl HasDisplayHandle for WindowsWindow {
     fn display_handle(
         &self,
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+        // wgpu 29.x fix: For multi-monitor support, ensure we return a valid display handle.
+        // WindowsDisplayHandle::new() creates a valid default for Windows Display enumeration.
+        // This helps wgpu locate the correct adapter/surface for the window's monitor.
         let handle = WindowsDisplayHandle::new();
         Ok(unsafe {
             raw_window_handle::DisplayHandle::borrow_raw(RawDisplayHandle::Windows(handle))

@@ -1,17 +1,13 @@
 //! `image_demo` — interactive visual check of [`RenderImage`].
 //!
 //! Displays a real image (JPEG/PNG decoded via the `image` crate) in an
-//! interactive window, cycling through all [`ImageFit`] modes to show how
-//! [`RenderImage`] scales and aligns on real, variable-aspect photos.
+//! interactive window showing how [`RenderImage`] scales and aligns
+//! on real, variable-aspect photos.
 //!
 //! The demo goes through the full pipeline: View → Element → RenderImage
 //! → layout → paint (fragment recording) → LayerTree → Scene → GPU.
 //!
 //! Run with: cargo run --example image_demo
-//!
-//! **Controls:**
-//! - Click or press Space/Enter to cycle to the next fit mode
-//! - Press 'Q' or Escape to quit
 
 use flui_app::run_app;
 use flui_rendering::objects::{ImageAlignment, ImageFit, RenderImage};
@@ -24,45 +20,10 @@ struct SharedImage {
     data: std::sync::Arc<FluiImage>,
 }
 
-/// Demo state: tracks which fit mode to display.
-#[derive(Clone, Copy, Debug)]
-enum DemoFitMode {
-    Fill,
-    Contain,
-    Cover,
-    ScaleDown,
-    None,
-}
-
-impl DemoFitMode {
-    #[allow(dead_code)]
-    fn next(self) -> Self {
-        match self {
-            Self::Fill => Self::Contain,
-            Self::Contain => Self::Cover,
-            Self::Cover => Self::ScaleDown,
-            Self::ScaleDown => Self::None,
-            Self::None => Self::Fill,
-        }
-    }
-
-    #[allow(dead_code)]
-    fn label(self) -> &'static str {
-        match self {
-            Self::Fill => "Fill (stretch to box)",
-            Self::Contain => "Contain (letterbox)",
-            Self::Cover => "Cover (crop to fill)",
-            Self::ScaleDown => "ScaleDown (contain or natural)",
-            Self::None => "None (natural size, cropped)",
-        }
-    }
-}
-
 /// Render view for the image display.
 #[derive(Clone)]
 struct ImageDisplay {
     image: SharedImage,
-    fit: DemoFitMode,
 }
 
 impl RenderView for ImageDisplay {
@@ -70,18 +31,11 @@ impl RenderView for ImageDisplay {
     type RenderObject = RenderImage;
 
     fn create_render_object(&self) -> Self::RenderObject {
-        let obj = RenderImage::from_image(
+        RenderImage::from_image(
             (*self.image.data).clone(),
-            match self.fit {
-                DemoFitMode::Fill => ImageFit::Fill,
-                DemoFitMode::Contain => ImageFit::Contain,
-                DemoFitMode::Cover => ImageFit::Cover,
-                DemoFitMode::ScaleDown => ImageFit::ScaleDown,
-                DemoFitMode::None => ImageFit::None,
-            },
+            ImageFit::Contain,
             ImageAlignment::Center,
-        );
-        obj
+        )
     }
 
     fn update_render_object(&self, render_object: &mut Self::RenderObject) {
@@ -95,14 +49,12 @@ flui_view::impl_render_view!(ImageDisplay);
 #[derive(Clone)]
 struct App {
     image: SharedImage,
-    fit: DemoFitMode,
 }
 
 impl StatelessView for App {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         ImageDisplay {
             image: self.image.clone(),
-            fit: self.fit,
         }
         .boxed()
     }
@@ -128,6 +80,11 @@ fn load_image() -> anyhow::Result<SharedImage> {
     println!("Source image: {iw}x{ih} ({} bytes RGBA)", decoded.len());
 
     let flui_image = FluiImage::from_rgba8(iw, ih, decoded.as_raw().clone());
+
+    // Verify the image was created correctly
+    println!("FluiImage size: {:?}", flui_image.size());
+    println!("FluiImage byte_count: {}", flui_image.byte_count());
+
     Ok(SharedImage {
         data: std::sync::Arc::new(flui_image),
     })
@@ -135,17 +92,9 @@ fn load_image() -> anyhow::Result<SharedImage> {
 
 fn main() -> anyhow::Result<()> {
     let image = load_image()?;
-    println!("Loaded. Starting app...\n");
-    println!("Controls:");
-    println!("  Click or Space/Enter: cycle fit mode");
-    println!("  Q or Escape: quit\n");
-    println!("Press Enter to launch window...");
-    let _ = std::io::stdin().read_line(&mut String::new());
+    println!("Loaded. Starting app...");
 
-    run_app(App {
-        image,
-        fit: DemoFitMode::Fill,
-    });
+    run_app(App { image });
 
     Ok(())
 }
