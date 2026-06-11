@@ -268,7 +268,7 @@ pub type LayoutChildCallback<'a> =
 /// Called when a Box parent's `layout_sliver_child()` is invoked. The callback
 /// receives the sliver child's [`flui_foundation::RenderId`] and
 /// [`SliverConstraints`], drives leaf layout on the child via the pre-acquired
-/// [`crate::pipeline::SubtreeBorrows`] pool, and returns the child's
+/// pipeline subtree-borrow pool, and returns the child's
 /// [`SliverGeometry`].
 ///
 /// Mirrors [`LayoutChildCallback`] in contract; distinct because the input and
