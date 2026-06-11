@@ -382,18 +382,20 @@ where
 
     fn hit_test_raw(
         &self,
-        _position: crate::protocol::ProtocolPosition<SliverProtocol>,
+        position: crate::protocol::ProtocolPosition<SliverProtocol>,
         _child_count: usize,
-        _hit_child: &mut (
+        hit_child: &mut (
                  dyn FnMut(usize, Option<crate::protocol::ProtocolPosition<SliverProtocol>>) -> bool
                      + Send
                      + Sync
              ),
     ) -> bool {
-        // Sliver hit testing lands with the sliver layout walk
-        // (Core.2); until then a sliver subtree reports a miss rather
-        // than a false hit.
-        false
+        let inner =
+            crate::protocol::SliverHitTestCtx::<T::Arity, T::ParentData>::with_child_callback(
+                position, hit_child,
+            );
+        let mut ctx = crate::context::SliverHitTestContext::new(inner);
+        T::hit_test(self, &mut ctx)
     }
 
     fn geometry(&self) -> &crate::protocol::ProtocolGeometry<SliverProtocol> {

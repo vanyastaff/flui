@@ -889,10 +889,15 @@ impl SliverHitTestEntry {
     }
 }
 
+/// Driver-supplied child recursion for the sliver hit-test walk.
+pub type SliverHitTestChildCallback<'a> =
+    &'a mut (dyn FnMut(usize, Option<MainAxisPosition>) -> bool + Send + Sync);
+
 /// Sliver hit test context implementation.
 pub struct SliverHitTestCtx<'ctx, A: Arity, P: ParentData> {
     position: MainAxisPosition,
     result: SliverHitTestResult,
+    child_callback: Option<SliverHitTestChildCallback<'ctx>>,
     _phantom: std::marker::PhantomData<(&'ctx (), A, P)>,
 }
 
@@ -902,6 +907,20 @@ impl<'ctx, A: Arity, P: ParentData> SliverHitTestCtx<'ctx, A, P> {
         Self {
             position,
             result: SliverHitTestResult::new(),
+            child_callback: None,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    /// Creates a context wired to the pipeline driver's child recursion.
+    pub fn with_child_callback(
+        position: MainAxisPosition,
+        callback: SliverHitTestChildCallback<'ctx>,
+    ) -> Self {
+        Self {
+            position,
+            result: SliverHitTestResult::new(),
+            child_callback: Some(callback),
             _phantom: std::marker::PhantomData,
         }
     }
@@ -937,8 +956,18 @@ impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, SliverHitTest, A, P>
         self.position.main_axis >= 0.0 && self.position.main_axis <= bounds.height().get()
     }
 
-    fn hit_test_child(&mut self, _index: usize, _position: MainAxisPosition) -> bool {
-        false // Override in actual implementation
+    fn hit_test_child(&mut self, index: usize, position: MainAxisPosition) -> bool {
+        match self.child_callback.as_mut() {
+            Some(callback) => callback(index, Some(position)),
+            None => false,
+        }
+    }
+
+    fn hit_test_child_at_layout_offset(&mut self, index: usize) -> bool {
+        match self.child_callback.as_mut() {
+            Some(callback) => callback(index, None),
+            None => false,
+        }
     }
 
     fn push_transform(&mut self, _transform: Matrix4) {

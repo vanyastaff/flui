@@ -25,7 +25,7 @@ use crate::{
     constraints::{BoxConstraints, SliverConstraints, SliverGeometry},
     context::{FragmentClip, FragmentOp, FragmentRecorder},
     protocol::{
-        BoxProtocol, Protocol, SliverProtocol,
+        BoxProtocol, MainAxisPosition, Protocol, SliverProtocol,
         box_protocol::{BoxLayoutCtxErased, LayoutChildCallback, SliverLayoutChildCallback},
         sliver_protocol::{SliverChildLayoutCallback, SliverLayoutCtxErased},
     },
@@ -672,7 +672,10 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             return false;
         };
         let Some(entry) = node.as_box() else {
-            // Sliver hit testing lands with the sliver walk (Core.2).
+            if node.as_sliver().is_some() {
+                let sliver_position = Self::sliver_hit_position_from_offset(node, position);
+                return self.hit_test_sliver_subtree(id, sliver_position, result);
+            }
             return false;
         };
         let children: Vec<RenderId> = node.children().to_vec();
@@ -698,6 +701,73 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         if hit {
             // Leaf-first path: children pushed their entries during
             // the callback above; the ancestor follows.
+            result.add(crate::hit_testing::HitTestEntry::new(id));
+        }
+        hit
+    }
+
+    fn sliver_hit_position_from_offset(node: &RenderNode, position: Offset) -> MainAxisPosition {
+        let axis_direction = node
+            .as_sliver()
+            .and_then(|entry| entry.state().constraints())
+            .map(|constraints| constraints.axis_direction);
+
+        match axis_direction {
+            Some(
+                flui_types::layout::AxisDirection::LeftToRight
+                | flui_types::layout::AxisDirection::RightToLeft,
+            ) => MainAxisPosition::from_horizontal_offset(position),
+            _ => MainAxisPosition::from_vertical_offset(position),
+        }
+    }
+
+    fn hit_test_sliver_subtree(
+        &self,
+        id: RenderId,
+        position: MainAxisPosition,
+        result: &mut crate::hit_testing::HitTestResult,
+    ) -> bool
+    where
+        Phase: Sync,
+    {
+        ensure_stack(|| self.hit_test_sliver_subtree_impl(id, position, result))
+    }
+
+    fn hit_test_sliver_subtree_impl(
+        &self,
+        id: RenderId,
+        position: MainAxisPosition,
+        result: &mut crate::hit_testing::HitTestResult,
+    ) -> bool
+    where
+        Phase: Sync,
+    {
+        let Some(node) = self.render_tree.get(id) else {
+            return false;
+        };
+        let Some(entry) = node.as_sliver() else {
+            return false;
+        };
+        let children: Vec<RenderId> = node.children().to_vec();
+        let render_object = entry.render_object();
+
+        let mut hit_child = |index: usize, override_pos: Option<MainAxisPosition>| -> bool {
+            let Some(&child_id) = children.get(index) else {
+                return false;
+            };
+            let child_position = override_pos.unwrap_or(position);
+            let Some(child_node) = self.render_tree.get(child_id) else {
+                return false;
+            };
+            if child_node.as_sliver().is_some() {
+                self.hit_test_sliver_subtree(child_id, child_position, result)
+            } else {
+                false
+            }
+        };
+
+        let hit = render_object.hit_test_raw(position, children.len(), &mut hit_child);
+        if hit {
             result.add(crate::hit_testing::HitTestEntry::new(id));
         }
         hit
