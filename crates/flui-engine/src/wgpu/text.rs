@@ -11,17 +11,162 @@
 //! when the same text is rendered in subsequent frames.
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
+use std::hash::{Hash, Hasher};
 
 use flui_types::{
     geometry::{Pixels, Point},
     styling::Color,
+    typography::{FontStyle, FontWeight, InlineSpan, TextSpan, TextStyle},
 };
 use glyphon::{
-    Attrs, Buffer, Cache, Color as GlyphonColor, Family, FontSystem, Metrics, Resolution, Shaping,
-    SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer as GlyphonRenderer, Viewport,
+    Attrs, AttrsOwned, Buffer, Cache, Color as GlyphonColor, Family, FontSystem, Metrics,
+    Resolution, Shaping, Style, SwashCache, TextArea, TextAtlas, TextBounds,
+    TextRenderer as GlyphonRenderer, Viewport, Weight,
 };
 
-/// Cache key for text buffers
+// ---------------------------------------------------------------------------
+// Span flattening (pure logic, no GPU types — testable without wgpu)
+// ---------------------------------------------------------------------------
+
+/// Flattens an [`InlineSpan`] tree into per-run `(text, merged style)` pairs
+/// in document order, applying FLUI style inheritance: each child's style
+/// merges over its ancestors' (`TextStyle::merge`), so a bold child of a
+/// sized parent shapes bold at the parent's size.
+///
+/// `scale` is baked into every effective font size here — the shaper sees
+/// final pixel sizes.  Placeholder spans contribute no text.
+///
+/// Average and worst case O(total spans + text bytes): one pre-order walk.
+pub(super) fn collect_styled_spans(
+    span: &InlineSpan,
+    scale: f32,
+) -> Vec<(String, Option<TextStyle>)> {
+    fn walk(
+        span: &TextSpan,
+        inherited: Option<&TextStyle>,
+        scale: f32,
+        out: &mut Vec<(String, Option<TextStyle>)>,
+    ) {
+        let merged: Option<TextStyle> = match (inherited, span.style.as_ref()) {
+            (Some(parent), Some(own)) => Some(parent.merge(own)),
+            (Some(parent), None) => Some(parent.clone()),
+            (None, Some(own)) => Some(own.clone()),
+            (None, None) => None,
+        };
+        if let Some(text) = &span.text
+            && !text.is_empty()
+        {
+            let mut effective = merged.clone();
+            if let Some(style) = &mut effective
+                && let Some(size) = style.font_size
+            {
+                style.font_size = Some(size * f64::from(scale));
+            }
+            out.push((text.clone(), effective));
+        }
+        for child in &span.children {
+            walk(child, merged.as_ref(), scale, out);
+        }
+    }
+
+    let mut out = Vec::new();
+    match span {
+        InlineSpan::Text(root) => walk(root, None, scale, &mut out),
+        InlineSpan::Placeholder(_) => {}
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Style → cosmic-text attrs conversion (mirrors flui-painting's style_to_attrs)
+// ---------------------------------------------------------------------------
+
+/// Maps a FLUI [`TextStyle`] to an owned cosmic-text [`AttrsOwned`].
+///
+/// Per-span font size overrides the buffer-level default via
+/// `Attrs::metrics(Metrics::new(size, size * 1.2))` (cosmic-text 0.18.2
+/// `attrs.rs:304`).  Color is mapped from `style.foreground` (takes
+/// precedence) or `style.color`; when neither is set `base_color` is used.
+///
+/// API verified against:
+/// `C:/.cargo/registry/src/.../cosmic-text-0.18.2/src/attrs.rs:263`
+/// (`Attrs::color`), `:304` (`Attrs::metrics`), `:269` (`Attrs::family`),
+/// `:285` (`Attrs::style`), `:289` (`Attrs::weight`).
+pub(super) fn style_to_attrs_owned(style: Option<&TextStyle>, base_color: Color) -> AttrsOwned {
+    let mut attrs = Attrs::new();
+
+    // Resolve color: foreground > color > base_color
+    let color = style
+        .and_then(|s| s.foreground.or(s.color))
+        .unwrap_or(base_color);
+    attrs = attrs.color(GlyphonColor::rgba(color.r, color.g, color.b, color.a));
+
+    if let Some(style) = style {
+        // Font family
+        if let Some(ref family) = style.font_family {
+            attrs = attrs.family(match family.as_str() {
+                "serif" | "Serif" => Family::Serif,
+                "sans-serif" | "SansSerif" | "sans" => Family::SansSerif,
+                "monospace" | "Monospace" | "mono" => Family::Monospace,
+                "cursive" | "Cursive" => Family::Cursive,
+                "fantasy" | "Fantasy" => Family::Fantasy,
+                name => Family::Name(name),
+            });
+        }
+
+        // Font weight
+        if let Some(weight) = style.font_weight {
+            attrs = attrs.weight(match weight {
+                FontWeight::W100 => Weight::THIN,
+                FontWeight::W200 => Weight::EXTRA_LIGHT,
+                FontWeight::W300 => Weight::LIGHT,
+                FontWeight::W400 => Weight::NORMAL,
+                FontWeight::W500 => Weight::MEDIUM,
+                FontWeight::W600 => Weight::SEMIBOLD,
+                FontWeight::W700 => Weight::BOLD,
+                FontWeight::W800 => Weight::EXTRA_BOLD,
+                FontWeight::W900 => Weight::BLACK,
+            });
+        }
+
+        // Font style (normal / italic)
+        if let Some(font_style) = style.font_style {
+            attrs = attrs.style(match font_style {
+                FontStyle::Normal => Style::Normal,
+                FontStyle::Italic => Style::Italic,
+            });
+        }
+
+        // Per-span font size → per-span Metrics override.
+        // cosmic-text 0.18.2: Attrs::metrics(Metrics) sets metrics_opt on the
+        // run, overriding the buffer-level default for this run only.
+        // line_height = size × height-multiplier (or ×1.2 when absent).
+        #[allow(clippy::cast_possible_truncation)]
+        if let Some(size) = style.font_size.map(|s| s as f32) {
+            #[allow(clippy::cast_possible_truncation)]
+            let line_height = style.height.map_or(size * 1.2, |h| h as f32 * size);
+            attrs = attrs.metrics(Metrics::new(size, line_height));
+        }
+
+        // Letter spacing in EM (cosmic: spacing_em = px / font_size).
+        #[allow(clippy::cast_possible_truncation)]
+        if let Some(spacing) = style.letter_spacing.map(|s| s as f32)
+            && let Some(size) = style.font_size.map(|s| s as f32)
+            && size > 0.0
+        {
+            attrs = attrs.letter_spacing(spacing / size);
+        }
+    }
+
+    AttrsOwned::new(&attrs)
+}
+
+// ---------------------------------------------------------------------------
+// Cache key for rich text buffers
+// ---------------------------------------------------------------------------
+
+/// Cache key for a plain-text buffer (single font size, no per-span styling).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct TextCacheKey {
     text: String,
@@ -37,10 +182,115 @@ impl TextCacheKey {
     }
 }
 
+/// Cache key for a rich-text buffer (per-span styled runs).
+///
+/// Hashed from the concatenated text + per-run serialised style fields so that
+/// two spans with identical plain text but different styling map to distinct
+/// buffers.  Only layout-affecting style fields enter the hash (colors alone do
+/// not change glyph geometry, but they DO affect how the run is rendered, so we
+/// include them to avoid the wrong color bleeding through a stale cache entry).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RichTextCacheKey {
+    /// All runs serialised to `"text\x00family\x00weight\x00style\x00size_bits\x00color_bits"`.
+    runs_fingerprint: String,
+}
+
+impl Hash for RichTextCacheKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.runs_fingerprint.hash(state);
+    }
+}
+
+impl RichTextCacheKey {
+    /// The key must fingerprint EVERY field `style_to_attrs_owned` feeds the
+    /// shaper (the `TextStyle::layout_affecting_eq` set), or two
+    /// identically-worded but differently-styled spans collide and reuse the
+    /// wrong shaped buffer: family, weight, style, font_size, color,
+    /// letter_spacing, height (per-run `Metrics` line height), plus the
+    /// buffer-level `base_font_size` default.
+    fn new(runs: &[(String, Option<TextStyle>)], base_font_size: f32, base_color: Color) -> Self {
+        let base_color_bits =
+            u32::from_le_bytes([base_color.r, base_color.g, base_color.b, base_color.a]);
+        let mut fingerprint = String::new();
+        fingerprint.push_str(&base_font_size.to_bits().to_string());
+        fingerprint.push('\x03');
+        for (text, style) in runs {
+            fingerprint.push_str(text);
+            fingerprint.push('\x00');
+            if let Some(s) = style {
+                if let Some(ref fam) = s.font_family {
+                    fingerprint.push_str(fam);
+                }
+                fingerprint.push('\x01');
+                if let Some(w) = s.font_weight {
+                    fingerprint.push_str(&(w.value().to_string()));
+                }
+                fingerprint.push('\x01');
+                if let Some(fs) = s.font_style {
+                    fingerprint.push(match fs {
+                        FontStyle::Normal => 'N',
+                        FontStyle::Italic => 'I',
+                    });
+                }
+                fingerprint.push('\x01');
+                if let Some(sz) = s.font_size {
+                    // f64 font-size values come from TextStyle which is a UI
+                    // coordinate: practical range 1–300 pt, well within f32.
+                    #[allow(clippy::cast_possible_truncation)]
+                    let bits = (sz as f32).to_bits();
+                    fingerprint.push_str(&bits.to_string());
+                }
+                fingerprint.push('\x01');
+                if let Some(ls) = s.letter_spacing {
+                    #[allow(clippy::cast_possible_truncation)] // UI coordinate, fits f32
+                    let bits = (ls as f32).to_bits();
+                    fingerprint.push_str(&bits.to_string());
+                }
+                fingerprint.push('\x01');
+                if let Some(h) = s.height {
+                    #[allow(clippy::cast_possible_truncation)] // UI coordinate, fits f32
+                    let bits = (h as f32).to_bits();
+                    fingerprint.push_str(&bits.to_string());
+                }
+                fingerprint.push('\x01');
+                // Color: foreground > color > base_color
+                let color = s.foreground.or(s.color).unwrap_or(base_color);
+                let cbits = u32::from_le_bytes([color.r, color.g, color.b, color.a]);
+                fingerprint.push_str(&cbits.to_string());
+            } else {
+                // No style — only base color applies
+                fingerprint.push_str(&base_color_bits.to_string());
+            }
+            fingerprint.push('\x02');
+        }
+        Self {
+            runs_fingerprint: fingerprint,
+        }
+    }
+}
+
 /// Cached text buffer with LRU tracking
 struct CachedBuffer {
     buffer: Buffer,
     last_used_frame: u64,
+}
+
+/// Discriminated batch entry: either a plain-text buffer or a rich-text buffer.
+///
+/// Both variants carry the screen position and the glyphon default color (used
+/// as `TextArea::default_color`; per-run colors come from `Attrs::color` on the
+/// rich path).
+enum BatchEntry {
+    Plain {
+        key: TextCacheKey,
+        position: Point<Pixels>,
+        color: GlyphonColor,
+    },
+    Rich {
+        key: RichTextCacheKey,
+        position: Point<Pixels>,
+        default_color: GlyphonColor,
+    },
 }
 
 /// Text rendering system using glyphon
@@ -50,14 +300,16 @@ struct CachedBuffer {
 ///
 /// # Caching
 ///
-/// Text buffers are cached by (text, font_size) to avoid expensive re-layout.
+/// Text buffers are cached by content + style fingerprint to avoid expensive
+/// re-layout.  Plain text uses `(text, font_size)`; rich text uses a
+/// per-run style fingerprint that covers family/weight/style/size/color.
 /// Cache is automatically pruned to remove stale entries.
 ///
 /// # Example
 /// ```ignore
 /// let mut text_renderer = TextRenderer::new(&device, &queue, surface_format)?;
 ///
-/// // Add text during frame
+/// // Add plain text during frame
 /// text_renderer.add_text("Hello, World!", Point::new(10.0, 10.0), 16.0, Color::BLACK);
 ///
 /// // Render all text at end of frame
@@ -79,16 +331,19 @@ pub struct TextRenderer {
     /// Viewport (manages resolution and transforms)
     viewport: Viewport,
 
-    /// Batched text buffers for current frame (references into cache)
-    text_areas_data: Vec<(TextCacheKey, Point<Pixels>, GlyphonColor)>,
+    /// Ordered batch of text buffers for the current frame.
+    batch: Vec<BatchEntry>,
 
-    /// Cache of text buffers (text + font_size -> Buffer)
-    buffer_cache: HashMap<TextCacheKey, CachedBuffer>,
+    /// Cache of plain-text buffers (text + font_size → Buffer)
+    plain_cache: HashMap<TextCacheKey, CachedBuffer>,
+
+    /// Cache of rich-text buffers (style fingerprint → Buffer)
+    rich_cache: HashMap<RichTextCacheKey, CachedBuffer>,
 
     /// Current frame number for LRU tracking
     current_frame: u64,
 
-    /// Max cache size (number of entries)
+    /// Max entries per cache (plain and rich each limited independently)
     max_cache_size: usize,
 
     /// Cache statistics
@@ -97,45 +352,40 @@ pub struct TextRenderer {
 }
 
 impl TextRenderer {
-    /// Initialize font system with smart fallback strategy
+    /// Initializes the font system with a smart fallback strategy.
     ///
-    /// Strategy:
-    /// 1. Try to load system fonts (works on desktop platforms)
-    /// 2. If system fonts unavailable or empty, load embedded fonts
-    /// 3. Embedded fonts are always included as fallback for reliability
+    /// Strategy (in order):
+    /// 1. Try to load system fonts (works on desktop platforms).
+    /// 2. If no system fonts are found, fall back to the embedded Roboto-Regular.
     fn initialize_font_system() -> FontSystem {
         let mut fs = FontSystem::new();
 
-        // Check if system fonts were loaded successfully
-        let system_fonts_available = fs.db().faces().count() > 0;
-
-        if system_fonts_available {
-            tracing::trace!("Loaded {} system fonts", fs.db().faces().count());
+        let system_font_count = fs.db().faces().count();
+        if system_font_count > 0 {
+            tracing::trace!(count = system_font_count, "loaded system fonts");
         } else {
-            // No system fonts - load embedded fonts as primary
-            tracing::warn!("No system fonts available, loading embedded fonts");
+            tracing::warn!("no system fonts available; loading embedded fonts");
             Self::load_embedded_fonts(&mut fs);
 
-            if fs.db().faces().count() == 0 {
-                tracing::error!("Failed to load any fonts! Text rendering may fail.");
+            let embedded_count = fs.db().faces().count();
+            if embedded_count == 0 {
+                tracing::error!("failed to load any fonts; text rendering may be blank");
             } else {
-                tracing::info!("Loaded {} embedded fonts", fs.db().faces().count());
+                tracing::info!(count = embedded_count, "loaded embedded fonts");
             }
         }
 
         fs
     }
 
-    /// Load embedded fonts into font system
+    /// Loads the embedded Roboto-Regular font into `fs`.
     ///
-    /// Includes Roboto-Regular as the primary fallback font.
-    /// This ensures text rendering works on all platforms.
+    /// Embedded fonts act as the final fallback when no system fonts are
+    /// present (e.g. CI, headless, minimal containers).
     fn load_embedded_fonts(fs: &mut FontSystem) {
         const ROBOTO_REGULAR: &[u8] = include_bytes!("../../assets/fonts/Roboto-Regular.ttf");
-
-        // Note: load_font_data() returns (), not Result
         fs.db_mut().load_font_data(ROBOTO_REGULAR.to_vec());
-        tracing::trace!("Loaded embedded Roboto-Regular font");
+        tracing::trace!("loaded embedded Roboto-Regular font");
 
         // TODO(REMOVE_BY=2026-09-22, cycle-4 E-15): add more embedded
         // fonts if needed (Bold, Italic, etc.) OR delete this TODO if
@@ -143,42 +393,22 @@ impl TextRenderer {
         // covers default Material text rendering). The cadence comment
         // forces a decision rather than letting the placeholder rot
         // (same discipline as cycle 3 PR #106 REMOVE_BY pattern).
-        // const ROBOTO_BOLD: &[u8] =
-        // include_bytes!("../../assets/fonts/Roboto-Bold.ttf");
-        // fs.db_mut().load_font_data(ROBOTO_BOLD.to_vec());
     }
 
-    /// Create a new text renderer
-    ///
-    /// # Arguments
-    /// * `device` - wgpu device
-    /// * `queue` - wgpu queue
-    /// * `format` - Surface texture format
+    /// Creates a new `TextRenderer` bound to the given wgpu `device`/`queue`.
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
-        #[cfg(debug_assertions)]
-        tracing::trace!("TextRenderer::new: format={:?}", format);
+        tracing::trace!(format = ?format, "TextRenderer::new");
 
-        // Initialize font system with smart fallback
         let font_system = Self::initialize_font_system();
-
-        // Initialize glyph rasterization
         let swash_cache = SwashCache::new();
-
-        // Create GPU glyph cache
         let cache = Cache::new(device);
-
-        // Create text atlas (texture for glyphs)
         let mut text_atlas = TextAtlas::new(device, queue, &cache, format);
-
-        // Create glyphon renderer
         let renderer = GlyphonRenderer::new(
             &mut text_atlas,
             device,
             wgpu::MultisampleState::default(),
             None,
         );
-
-        // Create viewport
         let viewport = Viewport::new(device, &cache);
 
         Self {
@@ -187,128 +417,211 @@ impl TextRenderer {
             text_atlas,
             renderer,
             viewport,
-            text_areas_data: Vec::new(),
-            buffer_cache: HashMap::new(),
+            batch: Vec::new(),
+            plain_cache: HashMap::new(),
+            rich_cache: HashMap::new(),
             current_frame: 0,
-            max_cache_size: 256, // Reasonable default for most UIs
+            max_cache_size: 256,
             cache_hits: 0,
             cache_misses: 0,
         }
     }
 
-    /// Get or create a cached buffer for text
-    fn get_or_create_buffer(&mut self, key: &TextCacheKey) -> &Buffer {
-        // Check if we have a cached buffer
-        if self.buffer_cache.contains_key(key) {
-            // Update LRU timestamp
-            if let Some(cached) = self.buffer_cache.get_mut(key) {
-                cached.last_used_frame = self.current_frame;
+    // ------------------------------------------------------------------
+    // Plain-text path (single font size + color; no per-span styling)
+    // ------------------------------------------------------------------
+
+    /// Ensures a plain-text buffer is present in the cache, creating it if
+    /// needed, and returns an immutable reference to it.
+    fn ensure_plain_buffer(&mut self, key: &TextCacheKey) {
+        // entry() avoids the double-lookup of get() + insert().
+        match self.plain_cache.entry(key.clone()) {
+            Entry::Occupied(mut e) => {
+                e.get_mut().last_used_frame = self.current_frame;
+                self.cache_hits += 1;
             }
-            self.cache_hits += 1;
-        } else {
-            // Create new buffer
-            let font_size = f32::from_bits(key.font_size_bits);
-            let mut buffer = Buffer::new(&mut self.font_system, Metrics::new(font_size, font_size));
-
-            // Set buffer size (large enough for most text)
-            buffer.set_size(&mut self.font_system, Some(1000.0), Some(1000.0));
-
-            // Set text with default font attributes
-            let attrs = Attrs::new().family(Family::SansSerif);
-            buffer.set_text(
-                &mut self.font_system,
-                &key.text,
-                &attrs,
-                Shaping::Advanced,
-                None,
-            );
-
-            // Shape the text (this is the expensive part!)
-            buffer.shape_until_scroll(&mut self.font_system, false);
-
-            self.buffer_cache.insert(
-                key.clone(),
-                CachedBuffer {
+            Entry::Vacant(e) => {
+                let font_size = f32::from_bits(key.font_size_bits);
+                let line_height = font_size * 1.2;
+                let mut buffer =
+                    Buffer::new(&mut self.font_system, Metrics::new(font_size, line_height));
+                // Unbounded width — wrap-width matching is a follow-up (paint seam).
+                buffer.set_size(&mut self.font_system, Some(f32::MAX), None);
+                let attrs = Attrs::new().family(Family::SansSerif);
+                buffer.set_text(
+                    &mut self.font_system,
+                    &key.text,
+                    &attrs,
+                    Shaping::Advanced,
+                    None,
+                );
+                buffer.shape_until_scroll(&mut self.font_system, false);
+                e.insert(CachedBuffer {
                     buffer,
                     last_used_frame: self.current_frame,
-                },
-            );
-            self.cache_misses += 1;
+                });
+                self.cache_misses += 1;
+            }
         }
-
-        &self.buffer_cache.get(key).unwrap().buffer
     }
 
-    /// Add text to be rendered this frame
+    /// Batches a plain-text string for rendering this frame.
     ///
-    /// Text is batched and rendered together for efficiency.
-    /// Buffers are cached to avoid re-layout on subsequent frames.
-    ///
-    /// # Arguments
-    /// * `text` - Text string to render
-    /// * `position` - Screen position (top-left corner)
-    /// * `font_size` - Font size in pixels
-    /// * `color` - Text color
+    /// Buffers are cached by `(text, font_size)` to avoid re-layout when the
+    /// same string appears in subsequent frames.
     pub fn add_text(&mut self, text: &str, position: Point<Pixels>, font_size: f32, color: Color) {
-        #[cfg(debug_assertions)]
-        tracing::trace!(
-            "TextRenderer::add_text: text='{}', position={:?}, size={}, color={:?}",
-            text,
-            position,
-            font_size,
-            color
-        );
+        tracing::trace!(text, ?position, font_size, ?color, "TextRenderer::add_text");
 
-        // Create cache key
         let key = TextCacheKey::new(text, font_size);
-
-        // Ensure buffer exists in cache (creates if needed)
-        let _ = self.get_or_create_buffer(&key);
-
-        // Convert FLUI color to glyphon color
+        self.ensure_plain_buffer(&key);
         let glyphon_color = GlyphonColor::rgba(color.r, color.g, color.b, color.a);
-
-        // Add to batch (just store key reference, actual buffer is in cache)
-        self.text_areas_data.push((key, position, glyphon_color));
+        self.batch.push(BatchEntry::Plain {
+            key,
+            position,
+            color: glyphon_color,
+        });
     }
 
-    /// Prune old cache entries (LRU eviction)
-    fn prune_cache(&mut self) {
-        if self.buffer_cache.len() <= self.max_cache_size {
+    // ------------------------------------------------------------------
+    // Rich-text path (per-span family / weight / style / size / color)
+    // ------------------------------------------------------------------
+
+    /// Batches a set of styled runs for rendering this frame.
+    ///
+    /// `runs` is the output of [`collect_styled_spans`]: each entry is
+    /// `(text_fragment, merged_style)` with the `text_scale_factor` already
+    /// baked into `style.font_size`.  `base_font_size` is the buffer-level
+    /// default applied to runs that carry no explicit size; `base_color` is
+    /// the fallback color for runs with no color override.
+    ///
+    /// Buffers are cached by a style fingerprint that covers all layout- and
+    /// paint-affecting fields so that differently-styled identical strings
+    /// never collide.
+    pub fn add_rich_text(
+        &mut self,
+        runs: &[(String, Option<TextStyle>)],
+        position: Point<Pixels>,
+        base_font_size: f32,
+        base_color: Color,
+    ) {
+        if runs.is_empty() {
             return;
         }
 
-        // Remove entries not used in the last 60 frames (~1 second at 60fps)
-        let threshold_frame = self.current_frame.saturating_sub(60);
-        self.buffer_cache
-            .retain(|_, cached| cached.last_used_frame >= threshold_frame);
+        tracing::trace!(
+            run_count = runs.len(),
+            ?position,
+            base_font_size,
+            ?base_color,
+            "TextRenderer::add_rich_text"
+        );
 
-        // If still too large, remove oldest entries
-        while self.buffer_cache.len() > self.max_cache_size {
-            // Find oldest entry
-            if let Some(oldest_key) = self
-                .buffer_cache
+        let key = RichTextCacheKey::new(runs, base_font_size, base_color);
+        match self.rich_cache.entry(key.clone()) {
+            Entry::Occupied(mut e) => {
+                e.get_mut().last_used_frame = self.current_frame;
+                self.cache_hits += 1;
+            }
+            Entry::Vacant(e) => {
+                let line_height = base_font_size * 1.2;
+                let mut buffer = Buffer::new(
+                    &mut self.font_system,
+                    Metrics::new(base_font_size, line_height),
+                );
+                // Unbounded width — wrap-width matching is a follow-up (paint seam).
+                buffer.set_size(&mut self.font_system, Some(f32::MAX), None);
+
+                // Build per-run AttrsOwned; the iterator borrows from the vec
+                // of owned values, satisfying set_rich_text's lifetime.
+                let owned_attrs: Vec<AttrsOwned> = runs
+                    .iter()
+                    .map(|(_, style)| style_to_attrs_owned(style.as_ref(), base_color))
+                    .collect();
+
+                buffer.set_rich_text(
+                    &mut self.font_system,
+                    runs.iter()
+                        .zip(owned_attrs.iter())
+                        .map(|((text, _), attrs)| (text.as_str(), attrs.as_attrs())),
+                    &Attrs::new(),
+                    Shaping::Advanced,
+                    None,
+                );
+                buffer.shape_until_scroll(&mut self.font_system, false);
+
+                e.insert(CachedBuffer {
+                    buffer,
+                    last_used_frame: self.current_frame,
+                });
+                self.cache_misses += 1;
+            }
+        }
+
+        let default_color =
+            GlyphonColor::rgba(base_color.r, base_color.g, base_color.b, base_color.a);
+        self.batch.push(BatchEntry::Rich {
+            key,
+            position,
+            default_color,
+        });
+    }
+
+    // ------------------------------------------------------------------
+    // Cache eviction
+    // ------------------------------------------------------------------
+
+    /// Evicts stale entries from both caches using LRU.
+    ///
+    /// Average O(n) over cache size; worst case same (no early exit).
+    fn prune_cache(&mut self) {
+        Self::evict_cache(
+            &mut self.plain_cache,
+            self.current_frame,
+            self.max_cache_size,
+        );
+        Self::evict_cache(
+            &mut self.rich_cache,
+            self.current_frame,
+            self.max_cache_size,
+        );
+    }
+
+    fn evict_cache<K: Eq + std::hash::Hash + Clone>(
+        cache: &mut HashMap<K, CachedBuffer>,
+        current_frame: u64,
+        max_size: usize,
+    ) {
+        if cache.len() <= max_size {
+            return;
+        }
+        // First pass: drop entries not used in the last ~1 s (60 frames).
+        let threshold = current_frame.saturating_sub(60);
+        cache.retain(|_, v| v.last_used_frame >= threshold);
+
+        // Second pass: if still over budget, remove the single oldest entry
+        // one at a time until we fit.  Average O(n) per iteration; total
+        // iterations bounded by initial overage.
+        while cache.len() > max_size {
+            let oldest = cache
                 .iter()
                 .min_by_key(|(_, v)| v.last_used_frame)
-                .map(|(k, _)| k.clone())
-            {
-                self.buffer_cache.remove(&oldest_key);
-            } else {
-                break;
+                .map(|(k, _)| k.clone());
+            match oldest {
+                Some(k) => {
+                    cache.remove(&k);
+                }
+                None => break,
             }
         }
     }
 
-    /// Render all batched text to the GPU
+    // ------------------------------------------------------------------
+    // Frame render
+    // ------------------------------------------------------------------
+
+    /// Renders all batched text to the GPU.
     ///
-    /// This should be called once per frame after all text has been added.
-    ///
-    /// # Arguments
-    /// * `device` - wgpu device
-    /// * `queue` - wgpu queue
-    /// * `view` - Texture view to render to
-    /// * `encoder` - Command encoder
-    /// * `size` - Viewport size (width, height)
+    /// Call once per frame after all `add_text`/`add_rich_text` calls.
     #[must_use = "errors must be propagated or handled"]
     pub fn render(
         &mut self,
@@ -318,31 +631,28 @@ impl TextRenderer {
         encoder: &mut wgpu::CommandEncoder,
         size: (u32, u32),
     ) -> crate::error::EngineResult<()> {
-        // Increment frame counter
         self.current_frame += 1;
 
-        // Skip if no text to render
-        if self.text_areas_data.is_empty() {
+        if self.batch.is_empty() {
             return Ok(());
         }
 
-        #[cfg(debug_assertions)]
-        {
-            let hit_rate = if self.cache_hits + self.cache_misses > 0 {
-                (self.cache_hits as f64 / (self.cache_hits + self.cache_misses) as f64) * 100.0
-            } else {
-                0.0
-            };
-            tracing::trace!(
-                "TextRenderer::render: {} text buffers, size=({}, {}), cache_hit_rate={:.1}%",
-                self.text_areas_data.len(),
-                size.0,
-                size.1,
-                hit_rate
-            );
-        }
+        let total = self.batch.len();
+        let hit_rate = if self.cache_hits + self.cache_misses > 0 {
+            #[allow(clippy::cast_precision_loss)] // u64 → f64 for a display ratio
+            let r = (self.cache_hits as f64 / (self.cache_hits + self.cache_misses) as f64) * 100.0;
+            r
+        } else {
+            0.0
+        };
+        tracing::trace!(
+            buffers = total,
+            width = size.0,
+            height = size.1,
+            cache_hit_rate = format_args!("{hit_rate:.1}%"),
+            "TextRenderer::render"
+        );
 
-        // Update viewport with current resolution
         self.viewport.update(
             queue,
             Resolution {
@@ -351,35 +661,34 @@ impl TextRenderer {
             },
         );
 
-        // Create text areas from cached buffers
-        let text_areas: Vec<TextArea<'_>> = self
-            .text_areas_data
-            .iter()
-            .filter_map(|(key, position, color)| {
-                self.buffer_cache.get(key).map(|cached| {
-                    #[allow(clippy::cast_possible_wrap)]
-                    let right = size.0 as i32;
-                    #[allow(clippy::cast_possible_wrap)]
-                    let bottom = size.1 as i32;
-                    TextArea {
-                        buffer: &cached.buffer,
-                        left: position.x.0,
-                        top: position.y.0,
-                        scale: 1.0,
-                        bounds: TextBounds {
-                            left: 0,
-                            top: 0,
-                            right,
-                            bottom,
-                        },
-                        default_color: *color,
-                        custom_glyphs: &[],
-                    }
-                })
-            })
-            .collect();
+        // i32 viewport bounds used by every TextArea.
+        // Viewport width/height are u32; wgpu's maximum surface dimension is
+        // 8192 (well under i32::MAX = 2 147 483 647), so wrapping is impossible.
+        #[allow(clippy::cast_possible_wrap)]
+        let right = size.0 as i32;
+        #[allow(clippy::cast_possible_wrap)]
+        let bottom = size.1 as i32;
+        let full_bounds = TextBounds {
+            left: 0,
+            top: 0,
+            right,
+            bottom,
+        };
 
-        // Prepare glyphs (upload to GPU)
+        // Build TextArea values by field-splitting `self` so that the
+        // immutable borrows into the two caches are disjoint from the
+        // mutable borrows `prepare` needs.  All five fields accessed here
+        // (`batch`, `plain_cache`, `rich_cache`, `renderer`, `font_system`,
+        // `text_atlas`, `viewport`, `swash_cache`) are distinct struct
+        // fields; Rust's borrow checker accepts simultaneous borrows of
+        // disjoint fields when they are named directly (not through `self`).
+        let text_areas: Vec<TextArea<'_>> = build_text_areas(
+            &self.batch,
+            &self.plain_cache,
+            &self.rich_cache,
+            full_bounds,
+        );
+
         self.renderer
             .prepare(
                 device,
@@ -392,7 +701,6 @@ impl TextRenderer {
             )
             .map_err(|e| crate::error::EngineError::text_render(format!("prepare: {e:?}")))?;
 
-        // Render text
         let mut text_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Text Render Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -400,7 +708,7 @@ impl TextRenderer {
                 resolve_target: None,
                 depth_slice: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load, // Don't clear - text is rendered on top
+                    load: wgpu::LoadOp::Load,
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -414,10 +722,8 @@ impl TextRenderer {
             .render(&self.text_atlas, &self.viewport, &mut text_pass)
             .map_err(|e| crate::error::EngineError::text_render(format!("render: {e:?}")))?;
 
-        // Clear batch data for next frame (but keep cache!)
-        self.text_areas_data.clear();
+        self.batch.clear();
 
-        // Periodically prune cache
         if self.current_frame.is_multiple_of(60) {
             self.prune_cache();
         }
@@ -425,26 +731,217 @@ impl TextRenderer {
         Ok(())
     }
 
-    /// Get number of batched text buffers
+    // ------------------------------------------------------------------
+    // Diagnostics
+    // ------------------------------------------------------------------
+
+    /// Returns the number of text areas queued for the current frame.
     #[inline]
     pub fn text_count(&self) -> usize {
-        self.text_areas_data.len()
+        self.batch.len()
     }
 
-    /// Get cache statistics (hits, misses, cache_size)
-    #[allow(dead_code)]
-    pub fn cache_stats(&self) -> (u64, u64, usize) {
-        (self.cache_hits, self.cache_misses, self.buffer_cache.len())
+    /// Returns `(hits, misses, plain_cache_size, rich_cache_size)`.
+    #[allow(dead_code)] // exposed for diagnostics / tests
+    pub fn cache_stats(&self) -> (u64, u64, usize, usize) {
+        (
+            self.cache_hits,
+            self.cache_misses,
+            self.plain_cache.len(),
+            self.rich_cache.len(),
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Free helper: build TextArea batch without borrowing the rest of TextRenderer
+// ---------------------------------------------------------------------------
+
+/// Collects [`TextArea`] values from the two caches for a single frame.
+///
+/// Extracted as a free function so that `render` can simultaneously hold
+/// immutable borrows into `plain_cache` / `rich_cache` AND mutable borrows
+/// into `font_system` / `text_atlas` / `swash_cache` — all disjoint
+/// `TextRenderer` fields.  The borrow checker accepts this when the borrows
+/// are named at the call site rather than going through `&mut self`.
+///
+/// Entries whose cache key is not found (should never happen: the key is
+/// always inserted before the batch entry is pushed) are silently skipped so
+/// that a logic error degrades gracefully rather than panicking.
+fn build_text_areas<'cache>(
+    batch: &[BatchEntry],
+    plain_cache: &'cache HashMap<TextCacheKey, CachedBuffer>,
+    rich_cache: &'cache HashMap<RichTextCacheKey, CachedBuffer>,
+    bounds: TextBounds,
+) -> Vec<TextArea<'cache>> {
+    batch
+        .iter()
+        .filter_map(|entry| match entry {
+            BatchEntry::Plain {
+                key,
+                position,
+                color,
+            } => plain_cache.get(key).map(|c| TextArea {
+                buffer: &c.buffer,
+                left: position.x.0,
+                top: position.y.0,
+                scale: 1.0,
+                bounds,
+                default_color: *color,
+                custom_glyphs: &[],
+            }),
+            BatchEntry::Rich {
+                key,
+                position,
+                default_color,
+            } => rich_cache.get(key).map(|c| TextArea {
+                buffer: &c.buffer,
+                left: position.x.0,
+                top: position.y.0,
+                scale: 1.0,
+                bounds,
+                default_color: *default_color,
+                custom_glyphs: &[],
+            }),
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::collect_styled_spans;
+    use flui_types::typography::{FontWeight, InlineSpan, TextSpan, TextStyle};
+
+    /// A bold child of a sized parent must carry both bold weight and the
+    /// inherited size after flattening.
+    #[test]
+    fn collect_styled_spans_inherits_size_and_bold() {
+        let parent_style = TextStyle {
+            font_size: Some(24.0),
+            ..Default::default()
+        };
+        let child_style = TextStyle {
+            font_weight: Some(FontWeight::W700),
+            ..Default::default()
+        };
+
+        let span = InlineSpan::Text(std::sync::Arc::new(
+            TextSpan::new("parent")
+                .with_style(parent_style)
+                .with_child(TextSpan::styled("child", child_style)),
+        ));
+
+        // scale = 2.0 baked in: parent font_size 24 → 48; child inherits 48.
+        let runs = collect_styled_spans(&span, 2.0);
+
+        assert_eq!(runs.len(), 2, "expected two runs: parent text + child text");
+
+        let (parent_text, parent_style) = &runs[0];
+        assert_eq!(parent_text, "parent");
+        let ps = parent_style.as_ref().expect("parent run must have a style");
+        assert!(
+            (ps.font_size.unwrap() - 48.0).abs() < f64::EPSILON,
+            "parent font_size should be 24 × 2 = 48, got {:?}",
+            ps.font_size
+        );
+        assert!(
+            ps.font_weight.is_none() || ps.font_weight == Some(FontWeight::W400),
+            "parent run should carry no bold override"
+        );
+
+        let (child_text, child_style) = &runs[1];
+        assert_eq!(child_text, "child");
+        let cs = child_style.as_ref().expect("child run must have a style");
+        // Child inherits parent's scaled size.
+        assert!(
+            (cs.font_size.unwrap() - 48.0).abs() < f64::EPSILON,
+            "child should inherit parent font_size 48, got {:?}",
+            cs.font_size
+        );
+        assert_eq!(
+            cs.font_weight,
+            Some(FontWeight::W700),
+            "child must carry bold weight"
+        );
+    }
+
+    /// A placeholder span at the root contributes zero runs.
+    #[test]
+    fn collect_styled_spans_placeholder_yields_no_runs() {
+        use flui_types::typography::{PlaceholderAlignment, PlaceholderSpan};
+        let span = InlineSpan::Placeholder(PlaceholderSpan::new(
+            32.0,
+            32.0,
+            PlaceholderAlignment::Baseline,
+        ));
+        let runs = collect_styled_spans(&span, 1.0);
+        assert!(runs.is_empty(), "placeholder span must produce no runs");
+    }
+
+    /// An empty text node is skipped; only non-empty nodes appear in output.
+    #[test]
+    fn collect_styled_spans_skips_empty_text() {
+        let span = InlineSpan::Text(std::sync::Arc::new(
+            TextSpan::new("").with_child(TextSpan::new("hello")),
+        ));
+        let runs = collect_styled_spans(&span, 1.0);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].0, "hello");
+    }
+
+    /// The cache key must change when any shaper-affecting field changes —
+    /// otherwise two identically-worded but differently-styled spans collide
+    /// and reuse the wrong shaped buffer.
+    #[test]
+    fn rich_cache_key_distinguishes_every_layout_affecting_field() {
+        use flui_types::Color;
+
+        use super::RichTextCacheKey;
+
+        let base = TextStyle {
+            font_size: Some(16.0),
+            ..Default::default()
+        };
+        let runs_of = |s: &TextStyle| vec![("text".to_string(), Some(s.clone()))];
+        let key = |s: &TextStyle| RichTextCacheKey::new(&runs_of(s), 14.0, Color::BLACK);
+        let baseline = key(&base);
+
+        let with_spacing = TextStyle {
+            letter_spacing: Some(2.0),
+            ..base.clone()
+        };
+        assert_ne!(baseline, key(&with_spacing), "letter_spacing must be keyed");
+
+        let with_height = TextStyle {
+            height: Some(1.5),
+            ..base.clone()
+        };
+        assert_ne!(baseline, key(&with_height), "height must be keyed");
+
+        let with_color = TextStyle {
+            color: Some(Color::RED),
+            ..base.clone()
+        };
+        assert_ne!(baseline, key(&with_color), "color must be keyed");
+
+        // The buffer-level default size is part of the key too.
+        assert_ne!(
+            RichTextCacheKey::new(&runs_of(&base), 14.0, Color::BLACK),
+            RichTextCacheKey::new(&runs_of(&base), 28.0, Color::BLACK),
+            "base_font_size must be keyed",
+        );
     }
 }
 
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
-mod tests {
-
+mod gpu_tests {
     #[test]
     fn test_text_batching() {
-        // Note: Can't test without wgpu device, but we can test the API
-        // structure This would need integration tests with a headless
-        // device
+        // GPU-backed batching tests require a wgpu device.
+        // Run with: cargo test -p flui-engine --features enable-wgpu-tests,dx12
     }
 }

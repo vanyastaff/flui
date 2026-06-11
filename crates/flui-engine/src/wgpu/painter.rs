@@ -2466,21 +2466,42 @@ impl WgpuPainter {
     }
 
     pub fn text(&mut self, text: &str, position: Point<Pixels>, font_size: f32, paint: &Paint) {
-        #[cfg(debug_assertions)]
         tracing::trace!(
-            "WgpuPainter::text: text='{}', position={:?}, size={}, color={:?}",
             text,
-            position,
+            ?position,
             font_size,
-            paint.color
+            color = ?paint.color,
+            "WgpuPainter::text"
         );
-
-        // Apply transform to position
         let transformed_position = self.apply_transform(position);
-
-        // Delegate to text renderer
         self.text_renderer
             .add_text(text, transformed_position, font_size, paint.color);
+    }
+
+    /// Renders a sequence of styled runs as rich text.
+    ///
+    /// `runs` is the flattened output of `collect_styled_spans`: each entry is
+    /// `(text_fragment, merged_style)` with `text_scale_factor` already baked
+    /// into `style.font_size`.  `base_font_size` is the buffer-level default
+    /// for runs with no explicit size; `base_color` is the fallback for runs
+    /// with no color.
+    pub fn rich_text(
+        &mut self,
+        runs: &[(String, Option<flui_types::typography::TextStyle>)],
+        position: Point<Pixels>,
+        base_font_size: f32,
+        base_color: flui_types::styling::Color,
+    ) {
+        tracing::trace!(
+            run_count = runs.len(),
+            ?position,
+            base_font_size,
+            ?base_color,
+            "WgpuPainter::rich_text"
+        );
+        let transformed_position = self.apply_transform(position);
+        self.text_renderer
+            .add_rich_text(runs, transformed_position, base_font_size, base_color);
     }
 
     pub fn texture(&mut self, texture_id: TextureId, dst_rect: Rect<Pixels>) {
