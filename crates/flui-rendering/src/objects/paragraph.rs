@@ -1,0 +1,278 @@
+//! RenderParagraph — lays out and paints styled text.
+//!
+//! Wraps [`flui_painting::TextPainter`] (the cosmic-text-backed shaping +
+//! metrics authority) the way [`RenderImage`](super::RenderImage) wraps a
+//! leaf: the render object owns a painter, drives its layout from box
+//! constraints, and forwards intrinsics / baseline / paint to it. Ports the
+//! renderable core of Flutter's `RenderParagraph` (`paragraph.dart`): layout,
+//! dry layout, the four intrinsics, baseline, and paint with
+//! `softWrap`/`maxLines`/`overflow`.
+//!
+//! Out of scope for this object (separable per Flutter's own structure):
+//! inline `WidgetSpan` children, text selection, and semantics.
+
+use flui_foundation::Diagnosticable;
+use flui_painting::{TextBaseline as PainterBaseline, TextPainter};
+use flui_tree::Leaf;
+use flui_types::{
+    Offset, Point, Rect, Size,
+    typography::{InlineSpan, TextAlign, TextDirection},
+};
+
+use crate::{
+    constraints::BoxConstraints,
+    context::{BoxDryLayoutCtx, BoxIntrinsicsCtx, BoxLayoutContext, PaintCx},
+    parent_data::BoxParentData,
+    traits::{
+        HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability, TextBaseline,
+    },
+};
+
+/// Render object that lays out and paints a styled text span.
+#[derive(Debug)]
+pub struct RenderParagraph {
+    /// The shaping + metrics authority. Owns the text, alignment, scale,
+    /// max-lines/ellipsis, and the cached layout.
+    painter: TextPainter,
+    /// Whether the text wraps at the box's max width. When `false` the text
+    /// lays out at unbounded width (single logical line per hard break) and
+    /// can overflow — Flutter `RenderParagraph.softWrap`.
+    soft_wrap: bool,
+    /// Cached layout size (set by `perform_layout`).
+    size: Size,
+}
+
+impl RenderParagraph {
+    /// Creates a paragraph for `text` laid out in `direction`.
+    pub fn new(text: impl Into<InlineSpan>, direction: TextDirection) -> Self {
+        Self {
+            painter: TextPainter::new()
+                .with_text(text)
+                .with_text_direction(direction),
+            soft_wrap: true,
+            size: Size::ZERO,
+        }
+    }
+
+    /// Sets the text alignment (builder form).
+    #[must_use]
+    pub fn with_text_align(mut self, align: TextAlign) -> Self {
+        self.painter.set_text_align(align);
+        self
+    }
+
+    /// Sets the maximum number of lines before truncation (builder form).
+    #[must_use]
+    pub fn with_max_lines(mut self, max_lines: Option<u32>) -> Self {
+        self.painter.set_max_lines(max_lines);
+        self
+    }
+
+    /// Sets the ellipsis string shown when text is truncated (builder form).
+    #[must_use]
+    pub fn with_ellipsis(mut self, ellipsis: Option<String>) -> Self {
+        self.painter.set_ellipsis(ellipsis);
+        self
+    }
+
+    /// Sets the accessibility text scale factor (builder form).
+    #[must_use]
+    pub fn with_text_scale_factor(mut self, factor: f32) -> Self {
+        self.painter.set_text_scale_factor(factor);
+        self
+    }
+
+    /// Disables line wrapping (builder form) — the text lays out at unbounded
+    /// width and may overflow the box.
+    #[must_use]
+    pub fn without_soft_wrap(mut self) -> Self {
+        self.soft_wrap = false;
+        self
+    }
+
+    /// Replaces the text span. The caller is responsible for marking the node
+    /// layout-dirty.
+    pub fn set_text(&mut self, text: impl Into<InlineSpan>) {
+        self.painter.set_text(Some(text.into()));
+    }
+
+    /// Sets the text alignment. The caller is responsible for marking the node
+    /// layout-dirty.
+    pub fn set_text_align(&mut self, align: TextAlign) {
+        self.painter.set_text_align(align);
+    }
+
+    /// Read access to the underlying painter (cursor / selection geometry).
+    pub fn painter(&self) -> &TextPainter {
+        &self.painter
+    }
+
+    /// The width to lay out at for the given constraints, honoring `soft_wrap`.
+    /// An infinite max width (or `soft_wrap == false`) means "do not wrap".
+    fn layout_max_width(&self, constraints: &BoxConstraints) -> f32 {
+        let max = constraints.max_width.get();
+        if self.soft_wrap && max.is_finite() {
+            max
+        } else {
+            f32::INFINITY
+        }
+    }
+}
+
+impl Diagnosticable for RenderParagraph {}
+
+impl RenderBox for RenderParagraph {
+    type Arity = Leaf;
+    type ParentData = BoxParentData;
+
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) {
+        let constraints = *ctx.constraints();
+        let max_width = self.layout_max_width(&constraints);
+        self.painter.layout(constraints.min_width.get(), max_width);
+        // The text's own size, then clamped into the box constraints
+        // (Flutter `size = constraints.constrain(textPainter.size)`).
+        let size = constraints.constrain(self.painter.size());
+        self.size = size;
+        ctx.complete_with_size(size);
+    }
+
+    fn compute_dry_layout(
+        &self,
+        constraints: BoxConstraints,
+        _ctx: &mut BoxDryLayoutCtx<'_>,
+    ) -> Size {
+        let max_width = self.layout_max_width(&constraints);
+        let text_size = self
+            .painter
+            .dry_size(constraints.min_width.get(), max_width);
+        constraints.constrain(text_size)
+    }
+
+    // Width intrinsics ignore the height extent (text width does not depend on
+    // available height); height intrinsics lay the text out at the given width.
+
+    fn compute_min_intrinsic_width(&self, _height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        self.painter.min_intrinsic_width()
+    }
+
+    fn compute_max_intrinsic_width(&self, _height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        self.painter.max_intrinsic_width()
+    }
+
+    fn compute_min_intrinsic_height(&self, width: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        self.painter.intrinsic_height(width)
+    }
+
+    fn compute_max_intrinsic_height(&self, width: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        self.painter.intrinsic_height(width)
+    }
+
+    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f32> {
+        // Map the render-side baseline enum onto the painting-side one (two
+        // parallel definitions, consolidation tracked). Valid only after
+        // `perform_layout` populated the painter's cache; the baseline phase
+        // always runs after layout, but guard so a stray pre-layout query
+        // returns None instead of panicking.
+        let painter_baseline = match baseline {
+            TextBaseline::Alphabetic => PainterBaseline::Alphabetic,
+            TextBaseline::Ideographic => PainterBaseline::Ideographic,
+        };
+        self.painter.has_layout().then(|| {
+            self.painter
+                .compute_distance_to_actual_baseline(painter_baseline)
+        })
+    }
+
+    fn size(&self) -> &Size {
+        &self.size
+    }
+
+    fn size_mut(&mut self) -> &mut Size {
+        &mut self.size
+    }
+
+    fn box_paint_bounds(&self) -> Rect {
+        Rect::from_origin_size(Point::ZERO, self.size)
+    }
+
+    fn paint(&self, ctx: &mut PaintCx<'_, Leaf>) {
+        // The recorder pre-translates the canvas to this node's origin, so the
+        // text paints in local coordinates. Skipped before layout (no cache).
+        if self.painter.has_layout() {
+            self.painter.paint(ctx.canvas(), Offset::ZERO);
+        }
+    }
+}
+
+impl PaintEffectsCapability for RenderParagraph {}
+impl SemanticsCapability for RenderParagraph {}
+impl HotReloadCapability for RenderParagraph {}
+
+#[cfg(test)]
+mod tests {
+    use flui_types::{geometry::px, typography::TextSpan};
+
+    use super::*;
+    use crate::context::intrinsics_test_support::{leaf_dry_layout, leaf_intrinsics};
+
+    fn para(text: &str) -> RenderParagraph {
+        RenderParagraph::new(TextSpan::new(text), TextDirection::Ltr)
+    }
+
+    #[test]
+    fn new_starts_zero_sized_and_baseline_is_none_before_layout() {
+        let p = para("hello");
+        assert_eq!(*p.size(), Size::ZERO);
+        assert_eq!(
+            p.compute_distance_to_actual_baseline(TextBaseline::Alphabetic),
+            None,
+            "baseline is unavailable until perform_layout runs",
+        );
+    }
+
+    #[test]
+    fn max_intrinsic_width_bounds_min_intrinsic_width() {
+        let p = para("hello world wrapping example");
+        let max = leaf_intrinsics(|c| p.compute_max_intrinsic_width(f32::INFINITY, c));
+        let min = leaf_intrinsics(|c| p.compute_min_intrinsic_width(f32::INFINITY, c));
+        assert!(max > 0.0, "single-line width must be positive, got {max}");
+        assert!(
+            min > 0.0 && min <= max,
+            "min-content {min} must be in (0, max-content {max}]",
+        );
+    }
+
+    #[test]
+    fn narrow_constraints_wrap_taller_and_no_wider_than_single_line() {
+        let p = para("a b c d e f g h i j k l m n");
+        let wide = leaf_dry_layout(|c| {
+            p.compute_dry_layout(
+                BoxConstraints::new(px(0.0), px(10_000.0), px(0.0), px(10_000.0)),
+                c,
+            )
+        });
+        let narrow = leaf_dry_layout(|c| {
+            p.compute_dry_layout(
+                BoxConstraints::new(px(0.0), px(30.0), px(0.0), px(10_000.0)),
+                c,
+            )
+        });
+        assert!(
+            narrow.height > wide.height,
+            "wrapping at 30px ({narrow:?}) must be taller than a single line ({wide:?})",
+        );
+        assert!(
+            narrow.width <= wide.width,
+            "wrapped width {:?} cannot exceed the single-line width {:?}",
+            narrow.width,
+            wide.width,
+        );
+    }
+
+    #[test]
+    fn intrinsic_height_is_positive_for_text() {
+        let p = para("hello");
+        let h = leaf_intrinsics(|c| p.compute_min_intrinsic_height(200.0, c));
+        assert!(h > 0.0, "laid-out text has positive height, got {h}");
+    }
+}
