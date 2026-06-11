@@ -253,6 +253,8 @@ impl Renderer {
             .await
             .map_err(EngineError::device_creation)?;
 
+        Self::install_device_diagnostics(&device);
+
         let device = Arc::new(device);
         let queue = Arc::new(queue);
 
@@ -353,6 +355,8 @@ impl Renderer {
             .await
             .map_err(EngineError::device_creation)?;
 
+        Self::install_device_diagnostics(&device);
+
         Ok(Self {
             instance,
             adapter,
@@ -419,6 +423,31 @@ impl Renderer {
             tracing::warn!("Unknown platform, using all available backends");
             wgpu::Backends::all()
         }
+    }
+
+    /// Installs diagnostic callbacks on a freshly created device.
+    ///
+    /// wgpu's default behaviour translates an uncaptured error (validation
+    /// bug, out-of-memory, internal GPU failure) into a thread panic, and a
+    /// lost device surfaces only as repeated surface failures with no cause.
+    /// Both callbacks route the fault through `tracing` so it is logged and
+    /// diagnosable instead of aborting the process or spinning the render
+    /// loop blind.
+    fn install_device_diagnostics(device: &wgpu::Device) {
+        device.on_uncaptured_error(Arc::new(|error: wgpu::Error| {
+            tracing::error!(
+                %error,
+                "wgpu uncaptured error (validation / out-of-memory / internal)",
+            );
+        }));
+        device.set_device_lost_callback(|reason, message| {
+            tracing::error!(
+                ?reason,
+                %message,
+                "wgpu device lost — the GPU context is gone; the renderer must \
+                 recreate the device to recover",
+            );
+        });
     }
 
     /// Required GPU features based on capabilities and adapter support
