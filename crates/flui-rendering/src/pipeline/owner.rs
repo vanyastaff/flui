@@ -2275,7 +2275,7 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
     // RenderEntry::layout_leaf_only's post-perform_layout discipline).
     // On the Err path above, state is intentionally unmodified so
     // NEEDS_LAYOUT stays set for next-frame retry.
-    
+
     // D-block PR-A1 U20 — Debug geometry validation (Flutter parity).
     // Objects must return finite sizes that satisfy their constraints.
     debug_assert!(
@@ -2291,7 +2291,7 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
         geometry,
         constraints
     );
-    
+
     entry.state_mut().set_geometry(geometry);
     entry.state_mut().set_constraints(constraints);
 

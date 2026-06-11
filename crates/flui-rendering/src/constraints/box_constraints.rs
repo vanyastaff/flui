@@ -333,10 +333,7 @@ impl BoxConstraints {
     ///
     /// Flutter equivalent: `BoxConstraints.constrainSizeAndAttemptToPreserveAspectRatio`
     #[must_use]
-    pub fn constrain_size_and_attempt_to_preserve_aspect_ratio(
-        &self,
-        size: Size,
-    ) -> Size {
+    pub fn constrain_size_and_attempt_to_preserve_aspect_ratio(&self, size: Size) -> Size {
         // Zero size: return as-is
         if size.width.get() == 0.0 || size.height.get() == 0.0 {
             return Size::new(
@@ -355,7 +352,7 @@ impl BoxConstraints {
         // If the constrained size doesn't match the aspect ratio, adjust
         // one dimension to restore it. Pick the dimension with more room.
         let constrained_ratio = w.get() / h.get();
-        
+
         if constrained_ratio > aspect_ratio {
             // Width is too large; scale down to maintain aspect ratio
             w = Pixels::new(h.get() * aspect_ratio);
@@ -449,10 +446,18 @@ impl BoxConstraints {
     #[must_use]
     pub fn tighten(&self, width: Option<Pixels>, height: Option<Pixels>) -> Self {
         Self {
-            min_width: width.map(|w| w.clamp(self.min_width, self.max_width)).unwrap_or(self.min_width),
-            max_width: width.map(|w| w.clamp(self.min_width, self.max_width)).unwrap_or(self.max_width),
-            min_height: height.map(|h| h.clamp(self.min_height, self.max_height)).unwrap_or(self.min_height),
-            max_height: height.map(|h| h.clamp(self.min_height, self.max_height)).unwrap_or(self.max_height),
+            min_width: width
+                .map(|w| w.clamp(self.min_width, self.max_width))
+                .unwrap_or(self.min_width),
+            max_width: width
+                .map(|w| w.clamp(self.min_width, self.max_width))
+                .unwrap_or(self.max_width),
+            min_height: height
+                .map(|h| h.clamp(self.min_height, self.max_height))
+                .unwrap_or(self.min_height),
+            max_height: height
+                .map(|h| h.clamp(self.min_height, self.max_height))
+                .unwrap_or(self.max_height),
         }
     }
 

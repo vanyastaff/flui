@@ -6,7 +6,7 @@
 
 use flui_foundation::Diagnosticable;
 use flui_tree::Leaf;
-use flui_types::{Offset, Point, Pixels, Rect, Size, painting::Image};
+use flui_types::{Offset, Pixels, Point, Rect, Size, painting::Image};
 
 use crate::{
     constraints::BoxConstraints,
@@ -172,14 +172,29 @@ impl RenderImage {
     /// Returns `None` when the intrinsic size is degenerate (zero in either
     /// dimension), in which case there is nothing to paint.
     fn compute_paint_rect(&self) -> Option<Rect> {
+        self.paint_rect_in(self.size)
+    }
+
+    /// Computes the destination rectangle for the image content within a box
+    /// of the given size, applying the fit mode (scaling) and alignment
+    /// (positioning).
+    ///
+    /// This is the public, pipeline-independent form of the fit + alignment
+    /// math used by [`Self::paint`]; it lets callers (tests, demos, custom
+    /// compositors) reproduce exactly where the image content lands inside a
+    /// box of `box_size` without driving a full paint pass.
+    ///
+    /// Returns `None` when the intrinsic size is degenerate (zero in either
+    /// dimension), in which case there is nothing to paint.
+    pub fn paint_rect_in(&self, box_size: Size) -> Option<Rect> {
         let iw = self.intrinsic_size.width.get();
         let ih = self.intrinsic_size.height.get();
         if iw <= 0.0 || ih <= 0.0 {
             return None;
         }
 
-        let bw = self.size.width.get();
-        let bh = self.size.height.get();
+        let bw = box_size.width.get();
+        let bh = box_size.height.get();
 
         // Determine the painted (scaled) size of the image content.
         let (pw, ph) = match self.fit {
@@ -201,7 +216,7 @@ impl RenderImage {
         };
 
         let painted = Size::new(Pixels::new(pw), Pixels::new(ph));
-        let origin = self.alignment.offset(painted, self.size);
+        let origin = self.alignment.offset(painted, box_size);
         Some(Rect::from_origin_size(
             Point::new(origin.dx, origin.dy),
             painted,
@@ -209,7 +224,10 @@ impl RenderImage {
     }
 
     /// Computes the size of the image given the fit mode and constraints.
-    fn compute_size(&self, constraints: &BoxConstraints) -> Size {
+    ///
+    /// Public so that callers can reproduce layout sizing without driving a
+    /// full layout pass (tests, demos).
+    pub fn compute_size(&self, constraints: &BoxConstraints) -> Size {
         match self.fit {
             ImageFit::Fill => {
                 // Fill the entire box
@@ -220,16 +238,13 @@ impl RenderImage {
             }
             ImageFit::Contain => {
                 // Fit entirely within the box, preserving aspect ratio
-                constraints.constrain_size_and_attempt_to_preserve_aspect_ratio(
-                    self.intrinsic_size,
-                )
+                constraints.constrain_size_and_attempt_to_preserve_aspect_ratio(self.intrinsic_size)
             }
             ImageFit::Cover => {
                 // Cover the entire box, preserving aspect ratio
                 // (image may be cropped)
-                let constrained = constraints.constrain_size_and_attempt_to_preserve_aspect_ratio(
-                    self.intrinsic_size,
-                );
+                let constrained = constraints
+                    .constrain_size_and_attempt_to_preserve_aspect_ratio(self.intrinsic_size);
                 // Ensure at least minimum dimensions are met
                 Size::new(
                     constrained.width.max(constraints.min_width),
@@ -244,9 +259,8 @@ impl RenderImage {
                     min_height: Pixels::ZERO,
                     max_height: self.intrinsic_size.height,
                 };
-                let size = unconstrained.constrain_size_and_attempt_to_preserve_aspect_ratio(
-                    self.intrinsic_size,
-                );
+                let size = unconstrained
+                    .constrain_size_and_attempt_to_preserve_aspect_ratio(self.intrinsic_size);
                 constraints.constrain(size)
             }
             ImageFit::None => {
@@ -408,11 +422,8 @@ mod tests {
 
     #[test]
     fn test_from_image_derives_intrinsic_size() {
-        let image = RenderImage::from_image(
-            test_image_2x2(),
-            ImageFit::Contain,
-            ImageAlignment::Center,
-        );
+        let image =
+            RenderImage::from_image(test_image_2x2(), ImageFit::Contain, ImageAlignment::Center);
         assert_eq!(image.intrinsic_size, Size::new(px(2.0), px(2.0)));
         assert!(image.image().is_some());
     }
@@ -559,11 +570,8 @@ mod tests {
         // 2x2 image, Contain into a 100x50 box (intrinsic 2:2 = 1:1).
         // Contain scale = min(100/2, 50/2) = 25 → painted 50x50.
         // Center alignment → origin x = (100-50)/2 = 25, y = (50-50)/2 = 0.
-        let mut image = RenderImage::from_image(
-            test_image_2x2(),
-            ImageFit::Contain,
-            ImageAlignment::Center,
-        );
+        let mut image =
+            RenderImage::from_image(test_image_2x2(), ImageFit::Contain, ImageAlignment::Center);
         image.size = Size::new(px(100.0), px(50.0));
 
         let draws = capture_draw_images(&image);
@@ -579,11 +587,8 @@ mod tests {
 
     #[test]
     fn test_paint_fill_covers_whole_box() {
-        let mut image = RenderImage::from_image(
-            test_image_2x2(),
-            ImageFit::Fill,
-            ImageAlignment::TopLeft,
-        );
+        let mut image =
+            RenderImage::from_image(test_image_2x2(), ImageFit::Fill, ImageAlignment::TopLeft);
         image.size = Size::new(px(120.0), px(80.0));
 
         let draws = capture_draw_images(&image);
@@ -595,4 +600,3 @@ mod tests {
         assert_eq!(dst.size().height, px(80.0));
     }
 }
-

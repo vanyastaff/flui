@@ -213,10 +213,8 @@ impl RenderBox for RenderFractionalTranslation {
             // offset in the transform stack before testing the child.
             let offset = self.pixel_offset();
             ctx.push_offset(offset);
-            let child_position = Offset::new(
-                ctx.position().dx - offset.dx,
-                ctx.position().dy - offset.dy,
-            );
+            let child_position =
+                Offset::new(ctx.position().dx - offset.dx, ctx.position().dy - offset.dy);
             let hit = ctx.hit_test_child(0, child_position);
             ctx.pop_transform();
             hit
