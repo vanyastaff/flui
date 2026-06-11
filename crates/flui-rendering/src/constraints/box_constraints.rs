@@ -328,8 +328,8 @@ impl BoxConstraints {
     /// 1. Preserves the original aspect ratio
     /// 2. Fits within these constraints
     ///
-    /// If the natural size is zero, returns zero size.
-    /// If either constraint is unbounded, fills along that axis.
+    /// If the natural size is zero, returns the constrained zero size.
+    /// If an axis is unbounded, the natural size is kept on that axis (subject to min constraints).
     ///
     /// Flutter equivalent: `BoxConstraints.constrainSizeAndAttemptToPreserveAspectRatio`
     #[must_use]

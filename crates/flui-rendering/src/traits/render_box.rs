@@ -160,8 +160,8 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     ///
     /// ```ignore
     /// fn hit_test(&self, ctx: &mut BoxHitTestContext<Single, BoxParentData>) -> bool {
-    ///     // Always call parent's default gating
-    ///     if !super::hit_test(self, ctx) {
+    ///     // Start with the default bounds gate.
+    ///     if !ctx.is_within_size(self.size().width, self.size().height) {
     ///         return false;
     ///     }
     ///     // Then test children

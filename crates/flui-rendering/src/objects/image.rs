@@ -230,11 +230,8 @@ impl RenderImage {
     pub fn compute_size(&self, constraints: &BoxConstraints) -> Size {
         match self.fit {
             ImageFit::Fill => {
-                // Fill the entire box
-                Size::new(
-                    constraints.constrain_width(self.intrinsic_size.width),
-                    constraints.constrain_height(self.intrinsic_size.height),
-                )
+                // Fill the maximum box allowed by constraints.
+                constraints.biggest()
             }
             ImageFit::Contain => {
                 // Fit entirely within the box, preserving aspect ratio

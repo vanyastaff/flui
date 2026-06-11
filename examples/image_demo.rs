@@ -70,14 +70,18 @@ impl View for App {
 }
 
 fn load_image() -> anyhow::Result<SharedImage> {
-    let input = std::env::temp_dir().join("flui_test_cat.jpg");
+    let input = std::env::args()
+        .nth(1)
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("flui_test_cat.jpg"));
     println!("Loading image: {}", input.display());
 
     let decoded = image::open(&input)?.to_rgba8();
     let (iw, ih) = decoded.dimensions();
-    println!("Source image: {iw}x{ih} ({} bytes RGBA)", decoded.len());
+    let rgba = decoded.into_raw();
+    println!("Source image: {iw}x{ih} ({} bytes RGBA)", rgba.len());
 
-    let flui_image = FluiImage::from_rgba8(iw, ih, decoded.as_raw().clone());
+    let flui_image = FluiImage::from_rgba8(iw, ih, rgba);
 
     // Verify the image was created correctly
     println!("FluiImage size: {:?}", flui_image.size());

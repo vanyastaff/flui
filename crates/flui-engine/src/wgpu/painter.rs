@@ -146,6 +146,11 @@ struct DrawSegment {
     radial_grad_scissors: Vec<ScissorRegion>,
     /// Scissor regions for sweep gradient batch
     sweep_grad_scissors: Vec<ScissorRegion>,
+    /// Cached image draws queued for this segment.
+    cached_images: Vec<(
+        super::texture_cache::TextureId,
+        super::instancing::TextureInstance,
+    )>,
 }
 
 impl DrawSegment {
@@ -170,6 +175,7 @@ impl DrawSegment {
             linear_grad_scissors: Vec::new(),
             radial_grad_scissors: Vec::new(),
             sweep_grad_scissors: Vec::new(),
+            cached_images: Vec::new(),
         }
     }
 
@@ -200,6 +206,7 @@ impl DrawSegment {
             && self.sweep_gradient_batch.is_empty()
             && self.vertices.is_empty()
             && self.tess_batches.is_empty()
+            && self.cached_images.is_empty()
     }
 }
 
@@ -284,13 +291,6 @@ pub struct WgpuPainter {
 
     /// Texture instance batch
     texture_batch: super::instancing::InstanceBatch<super::instancing::TextureInstance>,
-
-    /// Pending cached images (each with its own texture)
-    /// Stored as (TextureId, TextureInstance) pairs to be flushed in render()
-    pending_cached_images: Vec<(
-        super::texture_cache::TextureId,
-        super::instancing::TextureInstance,
-    )>,
 
     /// Texture bind group layout (for texture + sampler)
     texture_bind_group_layout: wgpu::BindGroupLayout,
@@ -827,9 +827,6 @@ impl WgpuPainter {
         // Create texture instance batch
         let texture_batch = super::instancing::InstanceBatch::new(1024); // 1024 textures per batch
 
-        // Create pending cached images list
-        let pending_cached_images = Vec::new();
-
         // Create tessellator for complex shapes
         let tessellator = Tessellator::new();
 
@@ -915,7 +912,6 @@ impl WgpuPainter {
             instanced_arc_pipeline,
             instanced_texture_pipeline,
             texture_batch,
-            pending_cached_images,
             texture_bind_group_layout,
             linear_gradient_pipeline,
             radial_gradient_pipeline,
@@ -1069,7 +1065,6 @@ impl WgpuPainter {
             match item {
                 DrawItem::Segment(mut seg) => {
                     self.flush_segment(&mut seg, encoder, view);
-                    self.flush_pending_cached_images(encoder, view);
                 }
                 DrawItem::OffscreenTexture(p) => {
                     let instance = super::instancing::TextureInstance::new(
@@ -1085,9 +1080,6 @@ impl WgpuPainter {
                 }
             }
         }
-
-        // Ensure any trailing image draws are submitted.
-        self.flush_pending_cached_images(encoder, view);
 
         // ===== Render Text (global - always on top) =====
         self.text_renderer
@@ -1129,10 +1121,11 @@ impl WgpuPainter {
         // 1. Instanced primitives (rect, circle, arc, shadow) - similar pipelines
         // 2. Gradient primitives (linear, radial, sweep) - similar pipelines
         // 3. Tessellated geometry - different pipeline type
-        // 4. Textures - handled separately via flush_texture_batch (requires texture bind group changes)
+        // 4. Segment-cached images - grouped by texture while preserving draw order
         self.flush_all_instanced_batches(encoder, view);
         self.flush_gradient_batches(encoder, view);
         self.flush_tessellated_geometry(encoder, view);
+        self.flush_segment_cached_images(encoder, view);
 
         // Swap back (now empty after flush)
         std::mem::swap(&mut self.current_segment, seg);
@@ -2058,7 +2051,7 @@ impl WgpuPainter {
         self.texture_batch.clear();
     }
 
-    fn flush_pending_cached_images(
+    fn flush_segment_cached_images(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
@@ -2066,19 +2059,36 @@ impl WgpuPainter {
         let mut pending_images: Vec<(
             super::texture_cache::TextureId,
             super::instancing::TextureInstance,
-        )> = self.pending_cached_images.drain(..).collect();
+        )> = self.current_segment.cached_images.drain(..).collect();
 
-        // Pre-fetch views so we can release the mutable cache borrow before drawing.
-        let mut image_renders = Vec::new();
+        if pending_images.is_empty() {
+            return;
+        }
+
+        let mut active_texture_id: Option<super::texture_cache::TextureId> = None;
+        let mut active_texture_view: Option<wgpu::TextureView> = None;
+
         for (texture_id, instance) in pending_images.drain(..) {
-            if let Some(cached_texture) = self.texture_cache.get(&texture_id) {
-                image_renders.push((instance, cached_texture.view.clone()));
+            if active_texture_id.as_ref() != Some(&texture_id) {
+                if let Some(texture_view) = active_texture_view.as_ref() {
+                    self.flush_texture_batch(encoder, view, texture_view);
+                }
+                active_texture_id = Some(texture_id.clone());
+                active_texture_view = self
+                    .texture_cache
+                    .get(&texture_id)
+                    .map(|cached| cached.view.clone());
+            }
+
+            if let Some(texture_view) = active_texture_view.as_ref()
+                && self.texture_batch.add(instance)
+            {
+                self.flush_texture_batch(encoder, view, texture_view);
             }
         }
 
-        for (instance, texture_view) in image_renders {
-            let _ = self.texture_batch.add(instance);
-            self.flush_texture_batch(encoder, view, &texture_view);
+        if let Some(texture_view) = active_texture_view.as_ref() {
+            self.flush_texture_batch(encoder, view, texture_view);
         }
     }
 }
@@ -2596,8 +2606,10 @@ impl WgpuPainter {
                     )
                 };
 
-                // Add to pending list for flush in render()
-                self.pending_cached_images.push((texture_id, instance));
+                // Keep cached image draws in segment order for correct layer compositing.
+                self.current_segment
+                    .cached_images
+                    .push((texture_id, instance));
             }
             Err(e) => {
                 tracing::error!("Failed to load image texture: {}", e);
