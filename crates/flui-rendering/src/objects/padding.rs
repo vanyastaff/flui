@@ -130,9 +130,16 @@ impl RenderBox for RenderPadding {
             return false;
         }
 
-        // Then test child at its offset
+        // Then test child at its offset, recording the offset in the transform stack
         if self.has_child {
-            ctx.hit_test_child_at_offset(0, self.child_offset)
+            ctx.push_offset(self.child_offset);
+            let child_position = Offset::new(
+                ctx.position().dx - self.child_offset.dx,
+                ctx.position().dy - self.child_offset.dy,
+            );
+            let hit = ctx.hit_test_child(0, child_position);
+            ctx.pop_transform();
+            hit
         } else {
             false
         }

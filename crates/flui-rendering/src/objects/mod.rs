@@ -73,6 +73,7 @@ mod flex;
 mod fractional_translation;
 mod fractionally_sized_box;
 mod ignore_pointer;
+mod image;
 mod limited_box;
 mod meta_data;
 mod offstage;
@@ -102,6 +103,7 @@ pub use flex::{CrossAxisAlignment, FlexDirection, MainAxisAlignment, MainAxisSiz
 pub use fractional_translation::{RenderFractionalTranslation, TranslationFraction};
 pub use fractionally_sized_box::{FractionFactor, RenderFractionallySizedBox};
 pub use ignore_pointer::RenderIgnorePointer;
+pub use image::{ImageAlignment, ImageFit, RenderImage};
 pub use limited_box::RenderLimitedBox;
 pub use meta_data::{MetaDataPayload, RenderMetaData};
 pub use offstage::RenderOffstage;

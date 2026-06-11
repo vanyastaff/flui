@@ -321,6 +321,54 @@ impl BoxConstraints {
             && size.height <= self.max_height
     }
 
+    /// Constrains a size while attempting to preserve aspect ratio.
+    ///
+    /// Given a natural size (e.g., image dimensions), this method finds the
+    /// largest size that:
+    /// 1. Preserves the original aspect ratio
+    /// 2. Fits within these constraints
+    ///
+    /// If the natural size is zero, returns zero size.
+    /// If either constraint is unbounded, fills along that axis.
+    ///
+    /// Flutter equivalent: `BoxConstraints.constrainSizeAndAttemptToPreserveAspectRatio`
+    #[must_use]
+    pub fn constrain_size_and_attempt_to_preserve_aspect_ratio(
+        &self,
+        size: Size,
+    ) -> Size {
+        // Zero size: return as-is
+        if size.width.get() == 0.0 || size.height.get() == 0.0 {
+            return Size::new(
+                self.constrain_width(size.width),
+                self.constrain_height(size.height),
+            );
+        }
+
+        // Aspect ratio of the natural size
+        let aspect_ratio = size.width.get() / size.height.get();
+
+        // Start by constraining to the absolute limits
+        let mut w = self.constrain_width(size.width);
+        let mut h = self.constrain_height(size.height);
+
+        // If the constrained size doesn't match the aspect ratio, adjust
+        // one dimension to restore it. Pick the dimension with more room.
+        let constrained_ratio = w.get() / h.get();
+        
+        if constrained_ratio > aspect_ratio {
+            // Width is too large; scale down to maintain aspect ratio
+            w = Pixels::new(h.get() * aspect_ratio);
+            w = self.constrain_width(w);
+        } else if constrained_ratio < aspect_ratio {
+            // Height is too large; scale down to maintain aspect ratio
+            h = Pixels::new(w.get() / aspect_ratio);
+            h = self.constrain_height(h);
+        }
+
+        Size::new(w, h)
+    }
+
     // ============================================================================
     // TRANSFORMATION OPERATIONS
     // ============================================================================
@@ -382,15 +430,29 @@ impl BoxConstraints {
 
     /// Tightens constraints to specific dimensions.
     ///
-    /// Sets both min and max to the given value for specified dimensions.
+    /// Sets both min and max to the given value for specified dimensions,
+    /// clamped to existing bounds to maintain invariant (min <= max).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let constraints = BoxConstraints {
+    ///     min_width: 0,
+    ///     max_width: 100,
+    ///     min_height: 0,
+    ///     max_height: 100,
+    /// };
+    /// let tight = constraints.tighten(Some(Pixels(500)), None);
+    /// // Result: min_width=100, max_width=100 (clamped to existing max)
+    /// ```
     #[inline]
     #[must_use]
     pub fn tighten(&self, width: Option<Pixels>, height: Option<Pixels>) -> Self {
         Self {
-            min_width: width.unwrap_or(self.min_width),
-            max_width: width.unwrap_or(self.max_width),
-            min_height: height.unwrap_or(self.min_height),
-            max_height: height.unwrap_or(self.max_height),
+            min_width: width.map(|w| w.clamp(self.min_width, self.max_width)).unwrap_or(self.min_width),
+            max_width: width.map(|w| w.clamp(self.min_width, self.max_width)).unwrap_or(self.max_width),
+            min_height: height.map(|h| h.clamp(self.min_height, self.max_height)).unwrap_or(self.min_height),
+            max_height: height.map(|h| h.clamp(self.min_height, self.max_height)).unwrap_or(self.max_height),
         }
     }
 

@@ -138,28 +138,44 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
 
     /// Hit tests this render object.
     ///
+    /// The default implementation checks if the hit position is within the
+    /// render object's size bounds (Flutter parity: `RenderBox.hitTest`
+    /// in `box.dart:2916-2959`). Subclasses can override to add children
+    /// testing or special hit behavior.
+    ///
     /// The context provides:
     /// - Position via `ctx.position()` or `ctx.x()`, `ctx.y()`
     /// - Bounds checking via `ctx.is_within_size(w, h)`
-    /// - Child testing via `ctx.hit_test_child_at_offset()`
-    /// - Result management via `ctx.add_self(id)`
+    /// - Child testing via `ctx.hit_test_child()`, `ctx.hit_test_child_at_layout_offset()`
+    /// - Result management via `ctx.add_hit()`, `ctx.result_mut()`
+    /// - Transform stack via `ctx.push_offset()`, `ctx.push_transform()`
+    ///
+    /// # Default behavior
+    ///
+    /// Returns true iff the hit position is within this object's bounds
+    /// (size.contains check). Override this method to add child testing,
+    /// transform recording, or special hit behaviors.
     ///
     /// # Example
     ///
     /// ```ignore
     /// fn hit_test(&self, ctx: &mut BoxHitTestContext<Single, BoxParentData>) -> bool {
-    ///     if !ctx.is_within_size(self.size.width, self.size.height) {
+    ///     // Always call parent's default gating
+    ///     if !super::hit_test(self, ctx) {
     ///         return false;
     ///     }
-    ///     // Test children first
-    ///     if ctx.hit_test_child_at_offset(0, child_offset) {
+    ///     // Then test children
+    ///     if ctx.hit_test_child_at_layout_offset(0) {
     ///         return true;
     ///     }
-    ///     ctx.add_self(self.id);
+    ///     // This object is the hit target
+    ///     ctx.result_mut().add(HitTestEntry::new(self.id()));
     ///     true
     /// }
     /// ```
-    fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Self::Arity, Self::ParentData>) -> bool;
+    fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Self::Arity, Self::ParentData>) -> bool {
+        ctx.is_within_size(self.size().width, self.size().height)
+    }
 
     // ========================================================================
     // Parent Data
