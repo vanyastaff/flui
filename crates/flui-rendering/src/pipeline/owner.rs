@@ -685,14 +685,22 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             let Some(&child_id) = children.get(index) else {
                 return false;
             };
-            let child_position = override_pos.unwrap_or_else(|| {
-                let offset = self
-                    .render_tree
-                    .get(child_id)
-                    .map(RenderNode::offset)
-                    .unwrap_or(Offset::ZERO);
-                position - offset
-            });
+            let Some(child_node) = self.render_tree.get(child_id) else {
+                return false;
+            };
+            if child_node.as_sliver().is_some() {
+                // Explicit positions are already child-local; the layout-offset
+                // fallback starts from the child's physical paint offset.
+                let child_position = match override_pos {
+                    Some(position) => Self::sliver_hit_position_from_offset(child_node, position),
+                    None => Self::sliver_hit_position_from_paint_offset(
+                        child_node,
+                        position - child_node.offset(),
+                    ),
+                };
+                return self.hit_test_sliver_subtree(child_id, child_position, result);
+            }
+            let child_position = override_pos.unwrap_or_else(|| position - child_node.offset());
             self.hit_test_subtree(child_id, child_position, result)
         };
 
@@ -718,6 +726,43 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             ) => MainAxisPosition::from_horizontal_offset(position),
             _ => MainAxisPosition::from_vertical_offset(position),
         }
+    }
+
+    fn sliver_hit_position_from_paint_offset(
+        node: &RenderNode,
+        position: Offset,
+    ) -> MainAxisPosition {
+        let Some(entry) = node.as_sliver() else {
+            return MainAxisPosition::from_vertical_offset(position);
+        };
+        let Some(constraints) = entry.state().constraints() else {
+            return MainAxisPosition::from_vertical_offset(position);
+        };
+
+        let (raw_main, cross_axis) = match constraints.axis_direction {
+            flui_types::layout::AxisDirection::LeftToRight
+            | flui_types::layout::AxisDirection::RightToLeft => {
+                (position.dx.get(), position.dy.get())
+            }
+            flui_types::layout::AxisDirection::TopToBottom
+            | flui_types::layout::AxisDirection::BottomToTop => {
+                (position.dy.get(), position.dx.get())
+            }
+        };
+        let effective_axis_direction = match constraints.growth_direction {
+            crate::constraints::GrowthDirection::Forward => constraints.axis_direction,
+            crate::constraints::GrowthDirection::Reverse => constraints.axis_direction.opposite(),
+        };
+        let main_axis = if effective_axis_direction.is_reversed() {
+            entry
+                .state()
+                .geometry()
+                .map_or(raw_main, |geometry| geometry.paint_extent - raw_main)
+        } else {
+            raw_main
+        };
+
+        MainAxisPosition::new(main_axis, cross_axis)
     }
 
     fn sliver_hit_position_minus_offset(
