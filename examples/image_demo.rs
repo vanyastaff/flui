@@ -139,6 +139,8 @@ fn main() -> anyhow::Result<()> {
     println!("Controls:");
     println!("  Click or Space/Enter: cycle fit mode");
     println!("  Q or Escape: quit\n");
+    println!("Press Enter to launch window...");
+    let _ = std::io::stdin().read_line(&mut String::new());
 
     run_app(App {
         image,
