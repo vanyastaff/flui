@@ -27,27 +27,22 @@ env:
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────
-  # checks — fast gate. fmt + clippy + port-check + typos + Taplo.
-  # Every downstream job depends on this. Ubuntu only — pure source analysis.
+  # checks — fast source gate. fmt + port-check + typos + Taplo. No compile.
+  # Every downstream job (clippy, test, doc, bench-compile) depends on this, so
+  # a malformed PR fails in seconds before any workspace build starts.
+  # Ubuntu only — pure source analysis. clippy lives in its own parallel job.
   # ─────────────────────────────────────────────────────────────────────────
   checks:
-    name: checks (fmt, clippy, port-check, typos, taplo)
+    name: checks (fmt, port-check, typos, taplo)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - name: Install Rust stable + components
+      - name: Install Rust stable + rustfmt
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
-
-      - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@v2
-        with:
-          # Skip cache writes on merge-queue runs to avoid poisoning the cache
-          # with merge-commit artifacts (per xilem/tokio precedent).
-          save-if: ${{ github.event_name != 'merge_group' }}
+          components: rustfmt
 
       - name: Install CI tools (typos, taplo, ripgrep)
         uses: taiki-e/install-action@v2
@@ -70,6 +65,30 @@ jobs:
       - name: scripts/port-check.sh (7 institutional refusal triggers)
         run: bash scripts/port-check.sh -v
 
+  # ─────────────────────────────────────────────────────────────────────────
+  # clippy — workspace lint with -D warnings. Split out of `checks` so it runs
+  # in PARALLEL with test/doc/bench-compile instead of gating them: clippy
+  # compiles the whole workspace (minutes); the rest of `checks` is seconds.
+  # Gated on `checks` so a malformed PR fails cheap before this build starts.
+  # ─────────────────────────────────────────────────────────────────────────
+  clippy:
+    name: clippy
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust stable + clippy
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name != 'merge_group' }}
+
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
@@ -84,11 +103,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # Windows temporarily dropped from the matrix: day-to-day development
+        # happens on Windows locally, so Windows regressions surface there
+        # first — paying the wgpu/PDB build cost in CI is redundant for now.
+        # Re-add `windows-latest` here (and in `bench-compile`) once the
+        # workspace stabilizes and cross-platform CI coverage is worth the time.
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -133,11 +157,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # Windows temporarily dropped — see the note in the `test` job.
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -167,7 +192,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
