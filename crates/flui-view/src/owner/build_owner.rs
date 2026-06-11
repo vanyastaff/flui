@@ -872,8 +872,9 @@ mod tests {
         assert_eq!(tree.len(), DEPTH);
 
         // Park the chain root in the inactive queue and finalize — the
-        // collection must reach all 20 000 descendants without
-        // exhausting the stack, then tear them down deepest-first.
+        // collection must reach all 20 000 chain nodes (the root plus
+        // its 19 999 descendants) without exhausting the stack, then
+        // tear them down deepest-first.
         owner.add_to_inactive(root_id, 0);
         owner.finalize_tree(&mut tree);
 
