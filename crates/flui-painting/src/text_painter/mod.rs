@@ -234,6 +234,15 @@ impl TextPainter {
         self.text.as_ref()
     }
 
+    /// Whether [`layout`](Self::layout) has run and a cached result is
+    /// available — guards the methods (paint, baseline, cursor) that
+    /// otherwise panic when queried before layout.
+    #[inline]
+    #[must_use]
+    pub fn has_layout(&self) -> bool {
+        self.layout_cache.is_some()
+    }
+
     /// Returns the text alignment.
     #[inline]
     #[must_use]

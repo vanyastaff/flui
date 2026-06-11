@@ -223,6 +223,62 @@ impl TextPainter {
             .expect("layout() must be called before accessing did_exceed_max_lines")
             .did_exceed_max_lines
     }
+
+    // ===== Intrinsic dimensions =====
+    //
+    // Transient measurements that do NOT touch `layout_cache`, so a
+    // parent may probe intrinsics without disturbing the painter's
+    // committed layout. Each re-shapes through `compute_layout_metrics`
+    // (the same path `layout` uses) at a probe width. Returns 0 when no
+    // text is set.
+
+    /// The width the text wants with no line wrapping — its single-line
+    /// width (Flutter `RenderParagraph.computeMaxIntrinsicWidth`).
+    #[must_use]
+    pub fn max_intrinsic_width(&self) -> f32 {
+        let Some(text) = self.text.as_ref() else {
+            return 0.0;
+        };
+        let (metrics, _) = self.compute_layout_metrics(text, 0.0, f32::INFINITY);
+        metrics.size.width.0
+    }
+
+    /// The narrowest width the text can take without overflowing — the
+    /// width of its widest unbreakable run, found by wrapping at every
+    /// opportunity (Flutter `RenderParagraph.computeMinIntrinsicWidth`).
+    #[must_use]
+    pub fn min_intrinsic_width(&self) -> f32 {
+        let Some(text) = self.text.as_ref() else {
+            return 0.0;
+        };
+        let (metrics, _) = self.compute_layout_metrics(text, 0.0, 0.0);
+        metrics.size.width.0
+    }
+
+    /// The height the text takes when laid out at `width` — both the min
+    /// and max intrinsic height for a paragraph (Flutter
+    /// `RenderParagraph._computeIntrinsicHeight`).
+    #[must_use]
+    pub fn intrinsic_height(&self, width: f32) -> f32 {
+        let Some(text) = self.text.as_ref() else {
+            return 0.0;
+        };
+        let (metrics, _) = self.compute_layout_metrics(text, width, width);
+        metrics.size.height.0
+    }
+
+    /// The size the text would take under the given width constraints,
+    /// without committing to `layout_cache` — Flutter's
+    /// `TextPainter`-backed dry layout. Returns `Size::ZERO` when no text
+    /// is set.
+    #[must_use]
+    pub fn dry_size(&self, min_width: f32, max_width: f32) -> Size<Pixels> {
+        let Some(text) = self.text.as_ref() else {
+            return Size::ZERO;
+        };
+        let (metrics, _) = self.compute_layout_metrics(text, min_width, max_width);
+        metrics.size
+    }
 }
 
 /// Flattens an [`InlineSpan`] tree into per-run `(text, merged style)`
