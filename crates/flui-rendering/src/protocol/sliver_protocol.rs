@@ -180,7 +180,7 @@ impl LayoutCapability for SliverLayout {
 /// 1. `Direct` (constructor [`SliverLayoutCtx::new`]): owns constraints and a
 ///    local geometry slot. This is the production path created by
 ///    [`SliverProtocol::with_leaf_erased_ctx`] and the pipeline.
-/// 2. `Proxy` (constructor [`SliverLayoutCtx::from_erased`]): wraps
+/// 2. `Proxy` (constructor `SliverLayoutCtx::from_erased`): wraps
 ///    `&mut dyn SliverLayoutCtxErased` so the
 ///    `RenderObject<SliverProtocol>` blanket impl can reconstruct a typed
 ///    `SliverLayoutCtx<T::Arity, T::ParentData>` from the erased GAT
