@@ -74,7 +74,11 @@ fn init_logging() {
 
     flui_foundation::log::Logger::new()
         .with_filter(&filter)
-        .with_level(flui_foundation::log::Level::DEBUG)
+        // TRACE ceiling: the per-target filter (RUST_LOG / the default
+        // string above) decides what's emitted — a DEBUG ceiling here
+        // silently made every trace! unreachable no matter what the
+        // user put in RUST_LOG.
+        .with_level(flui_foundation::log::Level::TRACE)
         .init();
 }
 
@@ -129,11 +133,19 @@ where
     };
     renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
 
-    // 3. Mount root widget
+    // 3. Mount root widget at the LOGICAL size; the framework lays out
+    // in logical pixels and the paint root's DPR transform maps to the
+    // physical surface. Set the DPR BEFORE attach so the RenderView
+    // configuration and the first frame agree on the scale.
+    let scale_factor = window.scale_factor() as f32;
+    AppBinding::instance()
+        .render_pipeline_mut()
+        .set_device_pixel_ratio(scale_factor);
+    let logical = window.logical_size();
     if let Err(e) = AppBinding::instance().attach_root_widget_with_size(
         &root,
-        phys_size.width.0 as f32,
-        phys_size.height.0 as f32,
+        logical.width.0 as f32,
+        logical.height.0 as f32,
     ) {
         tracing::error!("Root widget attach failed: {:?}", e);
         return;
@@ -197,18 +209,40 @@ where
 
     // 6. Register frame callback -> scheduler + AppBinding::render_frame()
     let renderer_frame = Arc::clone(&renderer);
+    let frame_budget =
+        std::time::Duration::from_secs_f64(1.0 / f64::from(config.target_fps.max(1)));
+    let mut last_frame_started: Option<web_time::Instant> = None;
     window.on_request_frame(Box::new(move || {
         let binding = AppBinding::instance();
+        let scheduler = Scheduler::instance();
 
-        // On-demand rendering: skip frame if nothing changed
-        if !binding.needs_redraw() && !binding.has_pending_work() {
+        // On-demand rendering: skip frame if nothing changed. A frame
+        // the SCHEDULER scheduled (a pending animation ticker callback)
+        // counts as work: `needs_redraw` is cleared by `mark_rendered`
+        // at the end of the previous frame, so without this check the
+        // gate starves tickers after one frame — the wake hook gets the
+        // event loop here, and this lets the pump actually run.
+        let dirty = binding.needs_redraw() || binding.has_pending_work();
+        if !dirty && !scheduler.is_frame_scheduled() {
             return;
         }
 
+        // Pace pure ticker-driven frames to the configured target FPS.
+        // WM_PAINT-style redraw requests carry no vsync: an animation
+        // re-requesting a redraw every frame would otherwise spin the
+        // render loop as fast as the CPU allows (observed: ~30 000 fps
+        // with a Mailbox present mode). Dirty work renders immediately.
+        if !dirty && let Some(started) = last_frame_started {
+            let elapsed = started.elapsed();
+            if elapsed < frame_budget {
+                std::thread::sleep(frame_budget - elapsed);
+            }
+        }
+
         let now = web_time::Instant::now();
+        last_frame_started = Some(now);
 
         // Scheduler callbacks (animations)
-        let scheduler = Scheduler::instance();
         let _frame_id = scheduler.handle_begin_frame(now);
         scheduler.handle_draw_frame();
 
@@ -223,6 +257,11 @@ where
         let w = (size.width.0 * scale_factor) as u32;
         let h = (size.height.0 * scale_factor) as u32;
         renderer_resize.lock().resize(w, h);
+        // A monitor change can change the DPR — keep the paint root's
+        // scale in sync with the surface.
+        AppBinding::instance()
+            .render_pipeline_mut()
+            .set_device_pixel_ratio(scale_factor);
         AppBinding::instance().request_redraw();
     }));
 
@@ -395,11 +434,17 @@ where
     };
     renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
 
-    // 3. Mount root widget (used when no plugin is active)
+    // 3. Mount root widget (used when no plugin is active) at the
+    // LOGICAL size; the paint root's DPR transform maps to physical.
+    let scale_factor = window.scale_factor() as f32;
+    AppBinding::instance()
+        .render_pipeline_mut()
+        .set_device_pixel_ratio(scale_factor);
+    let logical = window.logical_size();
     if let Err(e) = AppBinding::instance().attach_root_widget_with_size(
         &root,
-        phys_size.width.0 as f32,
-        phys_size.height.0 as f32,
+        logical.width.0 as f32,
+        logical.height.0 as f32,
     ) {
         tracing::error!("Root widget attach failed: {:?}", e);
         return;
@@ -442,7 +487,12 @@ where
 
         // Normal path: use AppBinding's widget pipeline
         let binding = AppBinding::instance();
-        if !binding.needs_redraw() && !binding.has_pending_work() {
+        // Same gate as the desktop path: a scheduler-scheduled frame
+        // (pending animation ticker) is work even when nothing is dirty.
+        if !binding.needs_redraw()
+            && !binding.has_pending_work()
+            && !Scheduler::instance().is_frame_scheduled()
+        {
             return;
         }
 
@@ -461,6 +511,11 @@ where
         let w = (size.width.0 * scale_factor) as u32;
         let h = (size.height.0 * scale_factor) as u32;
         renderer_resize.lock().resize(w, h);
+        // A monitor change can change the DPR — keep the paint root's
+        // scale in sync with the surface.
+        AppBinding::instance()
+            .render_pipeline_mut()
+            .set_device_pixel_ratio(scale_factor as f32);
         AppBinding::instance().request_redraw();
     }));
 
@@ -565,12 +620,17 @@ where
         tracing::info!("WebGPU renderer initialized");
     });
 
-    // 3. Mount root widget
-    let phys_size = window.physical_size();
+    // 3. Mount root widget at the LOGICAL size; the paint root's DPR
+    // transform maps to the physical canvas.
+    let scale_factor = window.scale_factor() as f32;
+    AppBinding::instance()
+        .render_pipeline_mut()
+        .set_device_pixel_ratio(scale_factor);
+    let logical = window.logical_size();
     if let Err(e) = AppBinding::instance().attach_root_widget_with_size(
         &root,
-        phys_size.width.0 as f32,
-        phys_size.height.0 as f32,
+        logical.width.0 as f32,
+        logical.height.0 as f32,
     ) {
         tracing::error!("Root widget attach failed: {:?}", e);
         return;
@@ -590,7 +650,12 @@ where
     window.on_request_frame(Box::new(move || {
         let binding = AppBinding::instance();
 
-        if !binding.needs_redraw() && !binding.has_pending_work() {
+        // Same gate as the desktop path: a scheduler-scheduled frame
+        // (pending animation ticker) is work even when nothing is dirty.
+        if !binding.needs_redraw()
+            && !binding.has_pending_work()
+            && !Scheduler::instance().is_frame_scheduled()
+        {
             return;
         }
 

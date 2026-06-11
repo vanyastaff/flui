@@ -109,8 +109,8 @@ pub mod prelude {
     pub use crate::constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry};
     // Context types for RenderBox and RenderSliver
     pub use crate::context::{
-        BoxHitTestContext, BoxLayoutContext, BoxPaintContext, PaintContext, SliverHitTestContext,
-        SliverLayoutContext, SliverPaintContext,
+        BoxHitTestContext, BoxLayoutContext, FragmentRecorder, PaintCx, PaintFragment,
+        SliverHitTestContext, SliverLayoutContext,
     };
     // Error types
     pub use crate::error::{RenderError, RenderResult};
@@ -148,7 +148,7 @@ pub mod prelude {
             SliverGridParentData, SliverMultiBoxAdaptorParentData, SliverParentData,
             SliverPhysicalParentData, StackParentData,
         },
-        pipeline::{Canvas, CanvasContext, Paint, PaintStyle, PipelineOwner},
+        pipeline::{Canvas, Paint, PaintStyle, PipelineOwner},
         protocol::{BoxProtocol, Protocol, SliverProtocol},
         semantics::{
             SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsNodeUpdate,
@@ -176,12 +176,12 @@ pub mod prelude {
 // Re-export key types at crate root
 // Context system
 pub use context::{
-    BoxHitTestContext, BoxLayoutContext, BoxPaintContext, HitTestContext, LayoutContext,
-    PaintContext, SliverHitTestContext, SliverLayoutContext, SliverPaintContext,
+    BoxHitTestContext, BoxLayoutContext, FragmentRecorder, HitTestContext, LayoutContext, PaintCx,
+    PaintFragment, SliverHitTestContext, SliverLayoutContext,
 };
 pub use error::{RenderError, RenderResult};
 pub use parent_data::ParentData;
-pub use pipeline::{CanvasContext, PipelineOwner};
+pub use pipeline::PipelineOwner;
 pub use protocol::{
     // Marker traits
     BidirectionalProtocol,

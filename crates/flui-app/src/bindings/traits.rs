@@ -135,7 +135,6 @@ pub trait RendererBindingBehavior: Binding {
     ///
     /// The binding will:
     /// - Set and update the view's configuration
-    /// - Call `composite_frame()` when producing frames
     /// - Forward pointer events for hit testing
     fn add_render_view(&mut self, view: Self::RenderView);
 

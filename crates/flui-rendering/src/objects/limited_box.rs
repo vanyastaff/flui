@@ -223,10 +223,21 @@ impl RenderBox for RenderLimitedBox {
         Rect::from_origin_size(Point::ZERO, self.size)
     }
 
-    fn compute_dry_layout(&self, constraints: BoxConstraints) -> Size {
+    fn compute_dry_layout(
+        &self,
+        constraints: BoxConstraints,
+        ctx: &mut crate::context::BoxDryLayoutCtx<'_>,
+    ) -> Size {
+        // Flutter parity: proxy_box.dart `RenderLimitedBox._computeSize`
+        // — with a child, its dry size under the limited constraints,
+        // re-constrained by the incoming set; without one, the smallest
+        // size satisfying the limited constraints.
         let limited = self.limit_constraints(constraints);
-        // No child case: smallest size that satisfies the limited constraints.
-        constraints.constrain(Size::new(limited.min_width, limited.min_height))
+        if ctx.child_count() > 0 {
+            constraints.constrain(ctx.child_dry_layout(0, limited))
+        } else {
+            constraints.constrain(Size::new(limited.min_width, limited.min_height))
+        }
     }
 }
 
@@ -326,14 +337,18 @@ mod tests {
     #[test]
     fn dry_layout_without_child_is_smallest() {
         let node = RenderLimitedBox::both(px(120.0), px(60.0));
-        let dry = node.compute_dry_layout(bc(0.0, f32::INFINITY, 0.0, f32::INFINITY));
+        let dry = crate::context::intrinsics_test_support::leaf_dry_layout(|ctx| {
+            node.compute_dry_layout(bc(0.0, f32::INFINITY, 0.0, f32::INFINITY), ctx)
+        });
         assert_eq!(dry, Size::ZERO);
     }
 
     #[test]
     fn dry_layout_honours_min_constraints() {
         let node = RenderLimitedBox::both(px(120.0), px(60.0));
-        let dry = node.compute_dry_layout(bc(40.0, f32::INFINITY, 30.0, f32::INFINITY));
+        let dry = crate::context::intrinsics_test_support::leaf_dry_layout(|ctx| {
+            node.compute_dry_layout(bc(40.0, f32::INFINITY, 30.0, f32::INFINITY), ctx)
+        });
         assert_eq!(dry, Size::new(px(40.0), px(30.0)));
     }
 }

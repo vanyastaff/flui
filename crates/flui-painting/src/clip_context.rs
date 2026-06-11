@@ -6,31 +6,19 @@
 //! **Lines:** 1-95 (Flutter 3.24)
 //!
 //! This module provides the [`ClipContext`] trait, which is the base
-//! abstraction for clip operations. In Flutter, `ClipContext` is an abstract
-//! class that `PaintingContext` extends; in FLUI the production implementer
-//! is `flui_rendering::context::CanvasContext` (a `PaintingContext` type is
-//! not present in the current workspace).
+//! abstraction for clip operations. In Flutter, `ClipContext` is an
+//! abstract class that `PaintingContext` extends. In FLUI the
+//! fragment paint model records clips as layer scopes
+//! (`PaintCx::with_clip_*` in `flui-rendering`); this trait is the
+//! canvas-level counterpart the composer's canvas-clip lowering
+//! implements when it folds non-composited clip layers back into the
+//! merged picture (`needs_compositing == false` fast path).
 //!
 //! # Architecture
 //!
 //! ```text
-//! ClipContext (trait)  [flui_painting]
-//!     └── CanvasContext (implements)  [flui_rendering]
-//! ```
-//!
-//! # Usage
-//!
-//! ```rust,ignore
-//! use flui_painting::ClipContext;
-//! use flui_rendering::context::CanvasContext;
-//! use flui_types::geometry::Pixels;
-//!
-//! fn paint(&self, ctx: &mut CanvasContext, offset: Offset<Pixels>) {
-//!     // ClipContext methods available directly:
-//!     ctx.clip_rect_and_paint(rect, Clip::AntiAlias, bounds, |ctx| {
-//!         ctx.canvas().draw_rect(rect, &paint);
-//!     });
-//! }
+//! ClipContext (trait)            [flui_painting]
+//!     └── composer-side lowering [flui_rendering paint walk]
 //! ```
 
 use flui_types::{

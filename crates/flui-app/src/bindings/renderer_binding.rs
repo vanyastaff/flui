@@ -122,10 +122,6 @@ impl std::fmt::Debug for RenderingFlutterBinding {
     }
 }
 
-// Safety: All fields are thread-safe
-unsafe impl Send for RenderingFlutterBinding {}
-unsafe impl Sync for RenderingFlutterBinding {}
-
 impl Default for RenderingFlutterBinding {
     fn default() -> Self {
         Self::new()
@@ -359,12 +355,22 @@ impl RendererBinding for RenderingFlutterBinding {
 
     // ---- formerly ViewHitTestable ----
 
-    fn hit_test_in_view(&self, result: &mut HitTestResult, position: Offset, view_id: u64) {
-        let views = self.render_views.read();
-        if let Some(view) = views.get(&view_id) {
-            let view_guard = view.read();
-            view_guard.hit_test(result, position);
-        }
+    fn hit_test_in_view(&self, result: &mut HitTestResult, position: Offset, _view_id: u64) {
+        // Hits route through the REAL render tree (the pipeline
+        // owner's), not the per-view registry — the registry views
+        // are bare metric holders with no children, so testing them
+        // produced no targets. Leaf-first entries come back from the
+        // owner's hit-test walk (RenderState.offset-aware).
+        //
+        // The position arrives in LOGICAL pixels already: every
+        // platform converter normalizes at event build (winit and
+        // Win32 divide raw physical coordinates by the scale factor;
+        // macOS NSPoint is logical natively). The render tree lives in
+        // logical pixels too, so the position passes through unscaled
+        // — dividing by the DPR here would shrink every hit a second
+        // time on scaled displays.
+        let owner = self.root_pipeline_owner.read();
+        owner.hit_test(position, result);
     }
 
     // ---- RendererBinding proper ----
@@ -414,18 +420,13 @@ impl RendererBinding for RenderingFlutterBinding {
         }
     }
 
-    fn draw_frame(&self) {
-        // Mythos Step 7 finalization (2026-05-20): use mem::take +
-        // run_frame to consume the owner through the typestate
-        // transitions. The four `flush_*` calls collapse to one
-        // `run_frame()` orchestration; semantics now runs inside
-        // run_frame regardless of `send_frames_to_engine`, so the only
-        // gated work below is the per-view composite handoff.
-        //
-        // Mythos Step 12 (2026-05-20): `run_frame` returns
-        // `(PipelineOwner<Idle>, RenderResult<Option<LayerTree>>)`. The
-        // owner is always restored; on error the frame is dropped and
-        // logged via tracing.
+    fn draw_frame(&self) -> Option<flui_layer::LayerTree> {
+        // Single authoritative frame path: run_frame produces the
+        // layer tree; the caller (platform binding / embedder) wraps
+        // it in a Scene and submits it to the renderer. The previous
+        // shape dropped the tree here while a divergent
+        // `composite_frame()` loop computed per-view metadata that
+        // never reached a compositor — both dead ends are gone.
         let root_owner = self.root_pipeline_owner();
         let layer_tree = {
             let mut guard = root_owner.write();
@@ -441,23 +442,15 @@ impl RendererBinding for RenderingFlutterBinding {
             }
         };
 
-        // Phase 6: Composite frames (only if sending frames)
         if self.send_frames_to_engine() {
-            // Composite each render view
-            for (_, view) in self.render_views.read().iter() {
-                let view_guard = view.read();
-                let _result = view_guard.composite_frame();
-                // In a real implementation, send to GPU here
-            }
-
-            // Mark first frame sent
+            // First non-deferred frame marks the gate open.
             self.first_frame_sent.store(true, Ordering::Relaxed);
+            layer_tree
+        } else {
+            // Deferred-first-frame: pipeline work ran (warm-up), the
+            // output is withheld until the deferral count drains.
+            None
         }
-
-        // The produced layer tree is the responsibility of the
-        // concrete compositor wiring; today this binding does not own
-        // one, so we drop the value here intentionally.
-        let _ = layer_tree;
     }
 
     fn perform_semantics_action(
@@ -546,6 +539,102 @@ mod tests {
         // Allow first frame
         binding.allow_first_frame();
         assert!(binding.send_frames_to_engine());
+    }
+
+    /// The authoritative frame path: `draw_frame` returns the layer
+    /// tree the pipeline produced (for the caller to wrap in a Scene
+    /// and hand to the renderer), and withholds it while the first
+    /// frame is deferred. Uses an isolated (non-singleton) binding so
+    /// no other test's pipeline state can interfere.
+    #[test]
+    fn draw_frame_returns_layer_tree_and_defers_when_gated() {
+        use flui_rendering::{constraints::BoxConstraints, objects::RenderColoredBox};
+        use flui_types::{Size, geometry::px};
+
+        let owner = Arc::new(RwLock::new(PipelineOwner::new()));
+        let root_id = {
+            let mut o = owner.write();
+            let id = o.insert(Box::new(RenderColoredBox::red(40.0, 40.0))
+                as Box<
+                    dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>,
+                >);
+            o.set_root_id(Some(id));
+            o.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(100.0), px(100.0)))));
+            id
+        };
+        let binding = RenderingFlutterBinding::new_with_pipeline(owner);
+
+        // Deferred: the pipeline still runs (warm-up) but the output
+        // is withheld.
+        binding.defer_first_frame();
+        assert!(
+            binding.draw_frame().is_none(),
+            "deferred first frame must withhold the layer tree",
+        );
+        binding.allow_first_frame();
+
+        // The deferred pass consumed the dirty work — re-mark so the
+        // next frame paints again.
+        binding
+            .root_pipeline_owner()
+            .write()
+            .mark_needs_layout(root_id);
+        let tree = binding
+            .draw_frame()
+            .expect("non-deferred frame with dirty work must return the layer tree");
+        assert!(
+            !tree.is_empty(),
+            "the produced layer tree must contain the painted root",
+        );
+    }
+
+    /// Pointer positions arrive in LOGICAL pixels from every platform
+    /// converter (winit/Win32 divide by the scale factor at event
+    /// build; NSPoint is logical natively) — `hit_test_in_view` must
+    /// not divide by the DPR again. The distinguishing probe: at DPR 2
+    /// a logical point OUTSIDE the box must miss; the old double
+    /// division mapped it back inside and produced phantom hits.
+    #[test]
+    fn hit_test_in_view_takes_logical_positions_without_rescaling() {
+        use flui_rendering::{constraints::BoxConstraints, objects::RenderColoredBox};
+        use flui_types::{Offset, geometry::px};
+
+        let owner = Arc::new(RwLock::new(PipelineOwner::new()));
+        {
+            let mut o = owner.write();
+            o.set_device_pixel_ratio(2.0);
+            let id = o.insert(Box::new(RenderColoredBox::red(40.0, 40.0))
+                as Box<
+                    dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>,
+                >);
+            o.set_root_id(Some(id));
+            // LOOSE constraints so the box keeps its preferred 40×40
+            // and points outside it exist inside the 100×100 window.
+            o.set_root_constraints(Some(BoxConstraints::new(
+                px(0.0),
+                px(100.0),
+                px(0.0),
+                px(100.0),
+            )));
+        }
+        let binding = RenderingFlutterBinding::new_with_pipeline(owner);
+        let _ = binding.draw_frame();
+
+        let mut inside = flui_interaction::routing::HitTestResult::new();
+        binding.hit_test_in_view(&mut inside, Offset::new(px(30.0), px(30.0)), 0);
+        assert!(
+            !inside.is_empty(),
+            "logical (30,30) lies inside the 40×40 box and must hit",
+        );
+
+        let mut outside = flui_interaction::routing::HitTestResult::new();
+        binding.hit_test_in_view(&mut outside, Offset::new(px(60.0), px(60.0)), 0);
+        assert!(
+            outside.is_empty(),
+            "logical (60,60) lies outside the 40×40 box and must miss; \
+             a hit means the position was divided by the DPR a second \
+             time ((60,60)/2 = (30,30) lands back inside the box)",
+        );
     }
 
     #[test]

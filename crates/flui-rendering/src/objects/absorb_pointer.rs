@@ -24,7 +24,7 @@ use flui_tree::Single;
 use flui_types::{Offset, Point, Rect, Size};
 
 use crate::{
-    context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext},
+    context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
     traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
 };
@@ -109,9 +109,7 @@ impl RenderBox for RenderAbsorbPointer {
         &mut self.size
     }
 
-    fn paint(&self, ctx: &mut BoxPaintContext<'_, Single, BoxParentData>) {
-        ctx.paint_child();
-    }
+    // paint: default pass-through (splices the child in order).
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
         if !ctx.is_within_size(self.size.width, self.size.height) {

@@ -162,41 +162,122 @@ impl RenderBox for RenderConstrainedBox {
 
     // ----- Intrinsic dimensions (Flutter parity) --------------------------
 
-    fn compute_min_intrinsic_width(&self, height: f32) -> f32 {
-        let min = self.additional_constraints.min_width.get();
-        let max = self.additional_constraints.max_width.get();
-        // Without a child, Flutter would defer to the child's intrinsic
-        // width; we don't have child intrinsic plumbing in this slot, so
-        // we return the constraint's lower bound clamped to the upper.
-        let _ = height;
-        if min.is_finite() { min.min(max) } else { 0.0 }
+    // Flutter parity: proxy_box.dart `RenderConstrainedBox` — a tight
+    // additional constraint answers directly; otherwise the child's
+    // intrinsic is constrained by the additional bounds (unless those
+    // bounds are infinite, which would poison the fold).
+
+    fn compute_min_intrinsic_width(
+        &self,
+        height: f32,
+        ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
+        let ac = &self.additional_constraints;
+        if ac.has_bounded_width() && ac.has_tight_width() {
+            return ac.min_width.get();
+        }
+        let width = if ctx.child_count() > 0 {
+            ctx.child_min_intrinsic_width(0, height)
+        } else {
+            0.0
+        };
+        debug_assert!(
+            width.is_finite(),
+            "child min intrinsic width must be finite"
+        );
+        if !ac.has_infinite_width() {
+            ac.constrain_width(flui_types::geometry::px(width)).get()
+        } else {
+            width
+        }
     }
 
-    fn compute_max_intrinsic_width(&self, height: f32) -> f32 {
-        let max = self.additional_constraints.max_width.get();
-        let _ = height;
-        if max.is_finite() { max } else { 0.0 }
+    fn compute_max_intrinsic_width(
+        &self,
+        height: f32,
+        ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
+        let ac = &self.additional_constraints;
+        if ac.has_bounded_width() && ac.has_tight_width() {
+            return ac.min_width.get();
+        }
+        let width = if ctx.child_count() > 0 {
+            ctx.child_max_intrinsic_width(0, height)
+        } else {
+            0.0
+        };
+        debug_assert!(
+            width.is_finite(),
+            "child max intrinsic width must be finite"
+        );
+        if !ac.has_infinite_width() {
+            ac.constrain_width(flui_types::geometry::px(width)).get()
+        } else {
+            width
+        }
     }
 
-    fn compute_min_intrinsic_height(&self, width: f32) -> f32 {
-        let min = self.additional_constraints.min_height.get();
-        let max = self.additional_constraints.max_height.get();
-        let _ = width;
-        if min.is_finite() { min.min(max) } else { 0.0 }
+    fn compute_min_intrinsic_height(
+        &self,
+        width: f32,
+        ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
+        let ac = &self.additional_constraints;
+        if ac.has_bounded_height() && ac.has_tight_height() {
+            return ac.min_height.get();
+        }
+        let height = if ctx.child_count() > 0 {
+            ctx.child_min_intrinsic_height(0, width)
+        } else {
+            0.0
+        };
+        debug_assert!(
+            height.is_finite(),
+            "child min intrinsic height must be finite"
+        );
+        if !ac.has_infinite_height() {
+            ac.constrain_height(flui_types::geometry::px(height)).get()
+        } else {
+            height
+        }
     }
 
-    fn compute_max_intrinsic_height(&self, width: f32) -> f32 {
-        let max = self.additional_constraints.max_height.get();
-        let _ = width;
-        if max.is_finite() { max } else { 0.0 }
+    fn compute_max_intrinsic_height(
+        &self,
+        width: f32,
+        ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
+        let ac = &self.additional_constraints;
+        if ac.has_bounded_height() && ac.has_tight_height() {
+            return ac.min_height.get();
+        }
+        let height = if ctx.child_count() > 0 {
+            ctx.child_max_intrinsic_height(0, width)
+        } else {
+            0.0
+        };
+        debug_assert!(
+            height.is_finite(),
+            "child max intrinsic height must be finite"
+        );
+        if !ac.has_infinite_height() {
+            ac.constrain_height(flui_types::geometry::px(height)).get()
+        } else {
+            height
+        }
     }
 
-    fn compute_dry_layout(&self, constraints: BoxConstraints) -> Size {
+    fn compute_dry_layout(
+        &self,
+        constraints: BoxConstraints,
+        ctx: &mut crate::context::BoxDryLayoutCtx<'_>,
+    ) -> Size {
         let combined = self.additional_constraints.enforce(&constraints);
-        // Without a real child, the dry layout returns the smallest size
-        // that satisfies the combined constraint set; with a child, the
-        // pipeline-level dry-layout machinery would walk through.
-        constraints.constrain(combined.smallest())
+        if ctx.child_count() > 0 {
+            ctx.child_dry_layout(0, combined)
+        } else {
+            combined.constrain(Size::ZERO)
+        }
     }
 }
 
@@ -249,19 +330,28 @@ mod tests {
     // ---------- intrinsic dimensions --------------------------------------
 
     #[test]
-    fn intrinsic_widths_match_finite_constraints() {
+    fn intrinsics_constrain_the_childless_zero() {
         let node = RenderConstrainedBox::new(bounded(100.0, 200.0, 50.0, 150.0));
-        assert_eq!(node.compute_min_intrinsic_width(0.0), 100.0);
-        assert_eq!(node.compute_max_intrinsic_width(0.0), 200.0);
-        assert_eq!(node.compute_min_intrinsic_height(0.0), 50.0);
-        assert_eq!(node.compute_max_intrinsic_height(0.0), 150.0);
+        crate::context::intrinsics_test_support::leaf_intrinsics(|ctx| {
+            // Flutter parity (proxy_box.dart:236-285): non-tight bounds
+            // CONSTRAIN the child's answer — childless that answer is
+            // 0.0, so every dimension lands on the LOWER bound. The
+            // pre-ctx implementation returned the upper bound for the
+            // max dimensions, which the reference does not do.
+            assert_eq!(node.compute_min_intrinsic_width(0.0, ctx), 100.0);
+            assert_eq!(node.compute_max_intrinsic_width(0.0, ctx), 100.0);
+            assert_eq!(node.compute_min_intrinsic_height(0.0, ctx), 50.0);
+            assert_eq!(node.compute_max_intrinsic_height(0.0, ctx), 50.0);
+        });
     }
 
     #[test]
-    fn intrinsic_widths_zero_when_unbounded() {
+    fn intrinsics_pass_through_when_unbounded() {
         let node = RenderConstrainedBox::new(BoxConstraints::UNCONSTRAINED);
-        assert_eq!(node.compute_max_intrinsic_width(0.0), 0.0);
-        assert_eq!(node.compute_max_intrinsic_height(0.0), 0.0);
+        crate::context::intrinsics_test_support::leaf_intrinsics(|ctx| {
+            assert_eq!(node.compute_max_intrinsic_width(0.0, ctx), 0.0);
+            assert_eq!(node.compute_max_intrinsic_height(0.0, ctx), 0.0);
+        });
     }
 
     // ---------- dry layout ------------------------------------------------
@@ -270,7 +360,9 @@ mod tests {
     fn dry_layout_combines_constraints() {
         let node = RenderConstrainedBox::new(bounded(80.0, 160.0, 40.0, 120.0));
         // Incoming constraints allow up to 500x500.
-        let dry = node.compute_dry_layout(bounded(0.0, 500.0, 0.0, 500.0));
+        let dry = crate::context::intrinsics_test_support::leaf_dry_layout(|ctx| {
+            node.compute_dry_layout(bounded(0.0, 500.0, 0.0, 500.0), ctx)
+        });
         // Without a child the smallest satisfying combined size is the
         // additional-constraints min (80, 40).
         assert_eq!(dry, Size::new(px(80.0), px(40.0)));
@@ -281,7 +373,9 @@ mod tests {
         let node = RenderConstrainedBox::new(bounded(0.0, 1000.0, 0.0, 1000.0));
         // Incoming caps at 100x50 — combined.smallest() is (0,0) but the
         // value is unaffected; final constraint is incoming-bounded.
-        let dry = node.compute_dry_layout(bounded(0.0, 100.0, 0.0, 50.0));
+        let dry = crate::context::intrinsics_test_support::leaf_dry_layout(|ctx| {
+            node.compute_dry_layout(bounded(0.0, 100.0, 0.0, 50.0), ctx)
+        });
         assert_eq!(dry, Size::ZERO);
     }
 

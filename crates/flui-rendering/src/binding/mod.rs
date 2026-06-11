@@ -26,6 +26,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use flui_interaction::MouseTracker;
+use flui_layer::LayerTree;
 
 use crate::{
     hit_testing::HitTestResult,
@@ -261,22 +262,25 @@ pub trait RendererBinding: Send + Sync {
         true
     }
 
-    /// Pump the rendering pipeline to generate a frame.
+    /// Pump the rendering pipeline to generate a frame, returning the
+    /// produced layer tree.
     ///
-    /// This is the main entry point for frame production. Uses
-    /// `mem::replace` to consume the owner out of the `RwLock`, drive
-    /// it through `run_frame` (which composes all four phase transitions),
-    /// and put it back. Semantics now runs inside `run_frame`, so the
-    /// `send_frames_to_engine` branch only handles compositing for the
-    /// engine handoff.
+    /// The single authoritative frame path: consume the owner out of
+    /// the `RwLock`, drive it through `run_frame` (all four phase
+    /// transitions; semantics included), put it back, and hand the
+    /// produced `LayerTree` to the caller. The caller — a platform
+    /// binding or embedder — wraps the tree in a `Scene` and submits
+    /// it to the renderer (`AppBinding::render_frame` is the
+    /// production incarnation: `draw_frame → Scene::new →
+    /// Renderer::render_scene`).
     ///
-    /// Mythos Step 7 finalization (2026-05-20). Mythos Step 12
-    /// (2026-05-20): `run_frame` returns `(PipelineOwner<Idle>,
-    /// RenderResult<Option<LayerTree>>)`. On error (e.g. a render
-    /// object panicked and was caught by `catch_unwind`), the frame is
-    /// dropped, the error is logged via tracing, and the owner is put
-    /// back ready for the next frame.
-    fn draw_frame(&self) {
+    /// Returns `None` when the frame is deferred
+    /// ([`Self::send_frames_to_engine`] is `false` — Flutter's
+    /// deferred-first-frame mechanism; pipeline work still runs so
+    /// warm-up costs are paid early), when the pipeline produced no
+    /// tree (no root), or when a phase errored (logged, frame
+    /// dropped, owner restored for the next frame).
+    fn draw_frame(&self) -> Option<LayerTree> {
         let root_owner = self.root_pipeline_owner();
 
         // Consume the owner through the typestate transitions.
@@ -294,24 +298,12 @@ pub trait RendererBinding: Send + Sync {
             }
         };
 
-        // Phase 6: Composite frames (only if sending frames)
         if self.send_frames_to_engine() {
-            // Composite each render view. R-6 reshape: iterate ids,
-            // look up each view individually — the outer-container
-            // lock topology is hidden behind the primitives.
-            for view_id in self.render_view_ids() {
-                if let Some(view) = self.render_view(view_id) {
-                    let view_guard = view.read();
-                    let _result = view_guard.composite_frame();
-                    // In a real implementation, send to GPU here.
-                }
-            }
+            layer_tree
+        } else {
+            // Deferred: the work ran (warm-up), the output is withheld.
+            None
         }
-
-        // Hand the produced layer tree to the compositor (the actual
-        // wiring is concrete-binding territory; defaults discard it
-        // because no compositor is available at the trait level).
-        let _ = layer_tree;
     }
 
     // ========================================================================

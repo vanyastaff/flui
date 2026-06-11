@@ -9,27 +9,18 @@
 //!   operations
 //! - [`HitTestContext`]: Rich hit testing API with position helpers and child
 //!   testing
-//!
-//! For painting, use [`CanvasContext`] for low-level canvas operations.
+//! - [`PaintCx`]: Sans-IO fragment-recording paint context (see
+//!   [`paint_cx`](self) module docs for the model)
 //!
 //! # Type Aliases for RenderBox
 //!
 //! - [`BoxLayoutContext`]: Layout context for box protocol
 //! - [`BoxHitTestContext`]: Hit test context for box protocol
 //!
-//! # Architecture
-//!
-//! Contexts wrap the underlying capability implementations and provide:
-//! - **Scoped operations**: `with_save()`, `with_translate()`
-//! - **Chaining API**: Fluent builder pattern for sequential operations
-//! - **Conditional operations**: `when()`, `when_else()`
-//! - **Child helpers**: `layout_child()`, `hit_test_child()`
-//!
 //! # Example
 //!
 //! ```ignore
-//! use flui_rendering::context::{BoxLayoutContext, BoxHitTestContext};
-//! use flui_rendering::context::CanvasContext;
+//! use flui_rendering::context::{BoxLayoutContext, BoxHitTestContext, PaintCx};
 //!
 //! impl RenderBox for MyWidget {
 //!     type Arity = Single;
@@ -41,10 +32,10 @@
 //!         ctx.complete_with_size(ctx.constrain(child_size));
 //!     }
 //!
-//!     fn paint(&self, ctx: &mut BoxPaintContext<'_, Single, BoxParentData>) {
-//!         // Draw self
+//!     fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+//!         // Draw self in LOCAL coordinates (origin pre-translated).
 //!         ctx.canvas().draw_rect(...);
-//!         // Paint child
+//!         // Splice the child at its laid-out offset.
 //!         ctx.paint_child();
 //!     }
 //!
@@ -58,15 +49,19 @@
 //! }
 //! ```
 
-mod canvas;
 mod hit_test;
+mod intrinsics;
 mod layout;
-mod paint;
+mod paint_cx;
 
-pub use canvas::{Canvas, CanvasContext, DisplayList, Paint, PaintStyle};
+pub use flui_painting::{Canvas, DisplayList, Paint, PaintStyle};
 pub use hit_test::HitTestContext;
+#[cfg(test)]
+pub(crate) use intrinsics::test_support as intrinsics_test_support;
+pub use intrinsics::{BoxDryLayoutCtx, BoxIntrinsicsCtx};
 pub use layout::LayoutContext;
-pub use paint::{ChildPaintInfo, PaintChildCallback, PaintContext};
+pub(crate) use paint_cx::{FragmentClip, FragmentOp};
+pub use paint_cx::{FragmentRecorder, PaintCx, PaintFragment};
 
 // ============================================================================
 // Protocol Type Aliases
@@ -87,11 +82,6 @@ pub type BoxLayoutContext<'ctx, A, PD> = LayoutContext<'ctx, BoxProtocol, A, PD>
 /// This is the context type passed to `RenderBox::hit_test()`.
 pub type BoxHitTestContext<'ctx, A, PD> = HitTestContext<'ctx, BoxProtocol, A, PD>;
 
-/// Paint context for RenderBox.
-///
-/// This is the context type passed to `RenderBox::paint()`.
-pub type BoxPaintContext<'ctx, A, PD> = PaintContext<'ctx, BoxProtocol, A, PD>;
-
 // ────────────────────────────────────────────────────────────────────────────
 // Sliver Protocol
 // ────────────────────────────────────────────────────────────────────────────
@@ -105,8 +95,3 @@ pub type SliverLayoutContext<'ctx, A, PD> = LayoutContext<'ctx, SliverProtocol, 
 ///
 /// This is the context type passed to `RenderSliver::hit_test()`.
 pub type SliverHitTestContext<'ctx, A, PD> = HitTestContext<'ctx, SliverProtocol, A, PD>;
-
-/// Paint context for RenderSliver.
-///
-/// This is the context type passed to `RenderSliver::paint()`.
-pub type SliverPaintContext<'ctx, A, PD> = PaintContext<'ctx, SliverProtocol, A, PD>;

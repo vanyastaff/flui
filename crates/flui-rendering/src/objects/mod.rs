@@ -67,6 +67,7 @@ mod center;
 mod clip;
 mod colored_box;
 mod constrained_box;
+mod decorated_box;
 mod fitted_box;
 mod flex;
 mod fractional_translation;
@@ -95,8 +96,9 @@ pub use clip::{
 };
 pub use colored_box::RenderColoredBox;
 pub use constrained_box::RenderConstrainedBox;
+pub use decorated_box::{DecorationPosition, RenderDecoratedBox};
 pub use fitted_box::RenderFittedBox;
-pub use flex::{CrossAxisAlignment, FlexDirection, MainAxisAlignment, RenderFlex};
+pub use flex::{CrossAxisAlignment, FlexDirection, MainAxisAlignment, MainAxisSize, RenderFlex};
 pub use fractional_translation::{RenderFractionalTranslation, TranslationFraction};
 pub use fractionally_sized_box::{FractionFactor, RenderFractionallySizedBox};
 pub use ignore_pointer::RenderIgnorePointer;

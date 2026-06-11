@@ -377,6 +377,12 @@ struct BindingState {
     performance_mode_requests: AtomicU32,
     /// Current performance mode
     current_performance_mode: Mutex<PerformanceMode>,
+    /// Platform wake hook, fired on the `frame_scheduled` false->true
+    /// transition (Flutter parity: `SchedulerBinding.scheduleFrame` ->
+    /// `platformDispatcher.scheduleFrame`). Without it, ticker
+    /// re-registration only sets an atomic nobody reads while the
+    /// platform sleeps, and animations starve after the first frame.
+    on_frame_scheduled: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 /// Main scheduler for frame and task management
@@ -468,6 +474,7 @@ impl Scheduler {
                 last_timings_report: Mutex::new(Instant::now()),
                 performance_mode_requests: AtomicU32::new(0),
                 current_performance_mode: Mutex::new(PerformanceMode::Normal),
+                on_frame_scheduled: Mutex::new(None),
             }),
             task_queue: TaskQueue::new(),
         }
@@ -712,7 +719,10 @@ impl Scheduler {
             .transient
             .lock()
             .push(CancellableTransientCallback { id, callback });
-        self.frame.frame_scheduled.store(true, Ordering::Release);
+        // Registering a tick demands a frame to run it in (Flutter parity:
+        // `scheduleFrameCallback` calls `scheduleFrame`). `request_frame`
+        // wakes the platform on the false->true transition.
+        self.request_frame();
         tracing::debug!("schedule_frame_callback: registered callback id={:?}", id);
         id
     }
@@ -751,12 +761,36 @@ impl Scheduler {
     /// Schedule a legacy frame callback
     pub fn schedule_frame(&self, callback: FrameCallback) {
         self.callbacks.frame.lock().push(callback);
-        self.frame.frame_scheduled.store(true, Ordering::Release);
+        self.request_frame();
     }
 
-    /// Request a frame (without callback)
+    /// Request a frame (without callback).
+    ///
+    /// On the `frame_scheduled` false→true transition this fires the
+    /// platform wake hook (see
+    /// [`set_on_frame_scheduled`](Self::set_on_frame_scheduled)) so an
+    /// idle event loop actually produces the requested frame. While a
+    /// frame is already pending the hook stays silent — one wake per
+    /// scheduled frame.
     pub fn request_frame(&self) {
-        self.frame.frame_scheduled.store(true, Ordering::Release);
+        let was_scheduled = self.frame.frame_scheduled.swap(true, Ordering::AcqRel);
+        if !was_scheduled {
+            let hook = self.binding.on_frame_scheduled.lock().clone();
+            if let Some(hook) = hook {
+                hook();
+            }
+        }
+    }
+
+    /// Install the platform wake hook fired when a frame is first
+    /// scheduled (Flutter parity: `SchedulerBinding.scheduleFrame` →
+    /// `platformDispatcher.scheduleFrame`).
+    ///
+    /// The hook runs on whichever thread schedules the frame and may run
+    /// while callers hold their own locks — it must only touch wake
+    /// machinery (e.g. `request_redraw`), never re-enter the scheduler.
+    pub fn set_on_frame_scheduled(&self, hook: Option<Arc<dyn Fn() + Send + Sync>>) {
+        *self.binding.on_frame_scheduled.lock() = hook;
     }
 
     /// Add a persistent frame callback.
@@ -1643,6 +1677,42 @@ mod tests {
         assert_eq!(received, vsync);
     }
 
+    /// The platform wake hook fires exactly once per `frame_scheduled`
+    /// false→true transition: re-requesting a pending frame stays
+    /// silent, and `handle_begin_frame` re-arms the edge. A ticker that
+    /// re-registers its callback during the frame therefore wakes the
+    /// platform for the NEXT frame — the self-sustaining animation loop.
+    #[test]
+    fn frame_scheduled_hook_fires_once_per_transition() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let scheduler = Scheduler::new();
+        let fired = Arc::new(AtomicUsize::new(0));
+        let fired_hook = Arc::clone(&fired);
+        scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
+            fired_hook.fetch_add(1, Ordering::SeqCst);
+        })));
+
+        scheduler.request_frame();
+        scheduler.request_frame();
+        assert_eq!(
+            fired.load(Ordering::SeqCst),
+            1,
+            "a pending frame must not re-wake the platform",
+        );
+
+        // A frame runs; during it a ticker re-registers (transient
+        // callback) — the cleared edge fires the hook again.
+        scheduler.handle_begin_frame(Instant::now());
+        scheduler.schedule_frame_callback(Box::new(|_| {}));
+        scheduler.handle_draw_frame();
+        assert_eq!(
+            fired.load(Ordering::SeqCst),
+            2,
+            "re-registration after begin_frame must wake the next frame",
+        );
+    }
+
     #[test]
     fn test_microtask_execution() {
         let scheduler = Scheduler::new();
@@ -2053,7 +2123,7 @@ mod tests {
 
     #[test]
     fn test_end_of_frame_completes_after_frame() {
-        use std::task::{RawWaker, RawWakerVTable, Waker};
+        use std::task::Waker;
 
         let scheduler = Scheduler::new();
 
@@ -2061,19 +2131,7 @@ mod tests {
         let mut future = scheduler.end_of_frame();
 
         // Create a no-op waker for polling
-        fn noop_waker() -> Waker {
-            fn clone(_: *const ()) -> RawWaker {
-                RawWaker::new(std::ptr::null(), &VTABLE)
-            }
-            fn wake(_: *const ()) {}
-            fn wake_by_ref(_: *const ()) {}
-            fn drop(_: *const ()) {}
-            static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
-            unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
-        }
-
-        let waker = noop_waker();
-        let mut cx = Context::from_waker(&waker);
+        let mut cx = Context::from_waker(Waker::noop());
 
         // Should be pending before frame
         let result = Pin::new(&mut future).poll(&mut cx);
@@ -2103,23 +2161,11 @@ mod tests {
 
     #[test]
     fn test_multiple_waiters_notified() {
-        use std::task::{RawWaker, RawWakerVTable, Waker};
+        use std::task::Waker;
 
         let scheduler = Scheduler::new();
 
-        fn noop_waker() -> Waker {
-            fn clone(_: *const ()) -> RawWaker {
-                RawWaker::new(std::ptr::null(), &VTABLE)
-            }
-            fn wake(_: *const ()) {}
-            fn wake_by_ref(_: *const ()) {}
-            fn drop(_: *const ()) {}
-            static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
-            unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
-        }
-
-        let waker = noop_waker();
-        let mut cx = Context::from_waker(&waker);
+        let mut cx = Context::from_waker(Waker::noop());
 
         // Create multiple futures
         let mut future1 = scheduler.end_of_frame();

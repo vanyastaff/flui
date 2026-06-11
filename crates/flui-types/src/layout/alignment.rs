@@ -5,7 +5,7 @@
 
 use std::ops::{Add, Neg};
 
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum MainAxisSize {
     /// Minimize the amount of space occupied by the children.

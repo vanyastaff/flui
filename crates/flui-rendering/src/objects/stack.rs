@@ -41,14 +41,11 @@
 
 use flui_tree::Variable;
 pub use flui_types::layout::StackFit;
-use flui_types::{
-    Alignment, Offset, Pixels, Point, Rect, Size,
-    painting::{Clip, ClipOp},
-};
+use flui_types::{Alignment, Offset, Pixels, Point, Rect, Size, painting::Clip};
 
 use crate::{
     constraints::BoxConstraints,
-    context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext},
+    context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::StackParentData,
     traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
 };
@@ -202,8 +199,6 @@ pub struct RenderStack {
     has_visual_overflow: bool,
     /// Child count snapshot for hit-testing.
     child_count: usize,
-    /// Cached offsets, indexed by child slot.
-    child_offsets: Vec<Offset>,
 }
 
 impl RenderStack {
@@ -217,7 +212,6 @@ impl RenderStack {
             size: Size::ZERO,
             has_visual_overflow: false,
             child_count: 0,
-            child_offsets: Vec::new(),
         }
     }
 
@@ -345,8 +339,6 @@ impl RenderBox for RenderStack {
         let child_count = ctx.child_count();
         self.child_count = child_count;
         self.has_visual_overflow = false;
-        self.child_offsets.clear();
-        self.child_offsets.resize(child_count, Offset::ZERO);
 
         // No-child fast path — Flutter parity: take the biggest finite
         // size, otherwise the smallest.
@@ -429,7 +421,6 @@ impl RenderBox for RenderStack {
                             self.size.height - child_size.height,
                         ),
                     );
-                    self.child_offsets[i] = offset;
                     ctx.position_child(i, offset);
                 }
                 Some(spec) => {
@@ -440,7 +431,6 @@ impl RenderBox for RenderStack {
                     if Self::child_overflows(self.size, offset, child_size) {
                         self.has_visual_overflow = true;
                     }
-                    self.child_offsets[i] = offset;
                     ctx.position_child(i, offset);
                 }
             }
@@ -457,25 +447,19 @@ impl RenderBox for RenderStack {
         &mut self.size
     }
 
-    fn paint(&self, ctx: &mut BoxPaintContext<'_, Variable, StackParentData>) {
+    fn paint(&self, ctx: &mut crate::context::PaintCx<'_, Variable>) {
         // Clip when overflow happens AND the user asked for clipping.
-        let count = ctx.child_count();
+        // The clip must cover the CHILDREN, so it goes through a clip
+        // layer scope (canvas clips are run-local and never extend
+        // across child markers).
         if self.has_visual_overflow && self.clip_behavior != Clip::None {
-            let bounds =
-                Rect::from_origin_size(Point::ZERO, self.size).translate_offset(ctx.offset());
-            let clip_behavior = self.clip_behavior;
-            ctx.with_save(|ctx| {
-                ctx.canvas()
-                    .clip_rect_ext(bounds, ClipOp::Intersect, clip_behavior);
+            let bounds = Rect::from_origin_size(Point::ZERO, self.size);
+            ctx.with_clip_rect(bounds, self.clip_behavior, |ctx| {
                 // Paint all children in order (bottom-up = first to last).
-                for i in 0..count {
-                    ctx.paint_child(i);
-                }
+                ctx.paint_children();
             });
         } else {
-            for i in 0..count {
-                ctx.paint_child(i);
-            }
+            ctx.paint_children();
         }
     }
 
@@ -485,9 +469,7 @@ impl RenderBox for RenderStack {
         }
         // Test children in reverse order — top-most first.
         for i in (0..self.child_count).rev() {
-            if let Some(&offset) = self.child_offsets.get(i)
-                && ctx.hit_test_child_at_offset(i, offset)
-            {
+            if ctx.hit_test_child_at_layout_offset(i) {
                 return true;
             }
         }

@@ -320,6 +320,8 @@ fn text_painter_layout_caching() {
 
 #[test]
 fn text_painter_invalidation_on_setter() {
+    use flui_painting::Invalidation;
+
     let span = TextSpan::new("Hello");
     let mut painter = TextPainter::new()
         .with_text(span)
@@ -328,10 +330,27 @@ fn text_painter_invalidation_on_setter() {
     painter.layout(0.0, 200.0);
     assert!(painter.did_layout());
 
-    painter.set_text_align(TextAlign::Center);
+    // Alignment is a PAINT offset over the shaped lines (the
+    // shaped/paint split) — the layout cache survives and only the
+    // offset moves. The pre-split contract re-shaped here, which is
+    // exactly the Flutter behavior the split exists to beat.
+    let inv = painter.set_text_align(TextAlign::Center);
+    assert_eq!(inv, Invalidation::Paint);
+    assert!(
+        painter.did_layout(),
+        "an alignment change must keep the shaped layout"
+    );
+
+    // A font-size change rewrites glyph geometry — full relayout.
+    let inv = painter.set_text(Some(
+        TextSpan::new("Hello")
+            .with_style(flui_types::typography::TextStyle::new().with_font_size(22.0))
+            .into(),
+    ));
+    assert_eq!(inv, Invalidation::Layout);
     assert!(
         !painter.did_layout(),
-        "changing alignment should invalidate layout"
+        "a layout-affecting change must drop the shaped layout"
     );
 }
 

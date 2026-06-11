@@ -11,18 +11,21 @@ use std::{
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
-use flui_foundation::RenderId;
-use flui_layer::LayerTree;
+use flui_foundation::{LayerId, RenderId};
+use flui_layer::{
+    ClipPathLayer, ClipRRectLayer, ClipRectLayer, Layer, LayerTree, OffsetLayer, OpacityLayer,
+    PictureLayer, TransformLayer,
+};
+use flui_painting::DisplayList;
 use flui_types::{Offset, Size};
 use parking_lot::Mutex;
 use rustc_hash::FxHashSet;
 
 use crate::{
     constraints::BoxConstraints,
-    context::CanvasContext,
-    parent_data::BoxParentData,
+    context::{FragmentClip, FragmentOp, FragmentRecorder},
     protocol::{
-        BoxLayoutCtx, BoxProtocol, ChildState, Protocol,
+        BoxProtocol, Protocol,
         box_protocol::{BoxLayoutCtxErased, LayoutChildCallback},
     },
     storage::{RenderEntry, RenderNode, RenderTree},
@@ -108,7 +111,7 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// Consolidated visual-update + semantics-owner-lifecycle callback
     /// notifier. Replaces three previously-separate `Box<dyn Fn() + Send +
     /// Sync>` fields. See [`VisualUpdateNotifier`].
-    notifier: VisualUpdateNotifier,
+    notifier: std::sync::Arc<parking_lot::RwLock<VisualUpdateNotifier>>,
 
     /// Co-located dirty sets for the four pipeline phases. See
     /// [`DirtySets`]. Replaces what used to be four
@@ -159,6 +162,12 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
 
     /// The layer tree produced by the last paint phase.
     last_layer_tree: Option<LayerTree>,
+
+    /// Device pixel ratio threaded into every paint pass (text shaping
+    /// and hairline snapping are DPR-dependent). Set by the platform
+    /// binding on surface creation / DPI change; defaults to 1.0 for
+    /// headless tests.
+    device_pixel_ratio: f32,
 
     /// Prototype handle held by the owner so `handle()` can clone it for
     /// each caller without re-allocating the channel. See
@@ -213,12 +222,14 @@ impl PipelineOwner<Idle> {
     /// dirty-channel capacity. Use this when the default 256 doesn't match
     /// the producer profile.
     pub fn new_with_capacity(dirty_channel_capacity: usize) -> Self {
-        let (handle, dirty_rx) = PipelineOwnerHandle::new_pair(dirty_channel_capacity);
+        let notifier = std::sync::Arc::new(parking_lot::RwLock::new(VisualUpdateNotifier::new()));
+        let (handle, dirty_rx) =
+            PipelineOwnerHandle::new_pair(dirty_channel_capacity, std::sync::Arc::clone(&notifier));
         Self {
             id: PIPELINE_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
             render_tree: RenderTree::new(),
             root_id: None,
-            notifier: VisualUpdateNotifier::new(),
+            notifier,
             dirty: DirtySets::new(),
             mid_layout_marks: DirtySets::new(),
             root_constraints: None,
@@ -227,6 +238,7 @@ impl PipelineOwner<Idle> {
             debug_doing_semantics: false,
             semantics_enabled: AtomicBool::new(false),
             last_layer_tree: None,
+            device_pixel_ratio: 1.0,
             handle,
             dirty_rx,
             _phase: PhantomData,
@@ -254,7 +266,11 @@ impl PipelineOwner<Idle> {
         if let Some(f) = on_semantics_owner_disposed {
             notifier.set_semantics_owner_disposed(f);
         }
-        let (handle, dirty_rx) = PipelineOwnerHandle::new_pair(DEFAULT_DIRTY_CHANNEL_CAPACITY);
+        let notifier = std::sync::Arc::new(parking_lot::RwLock::new(notifier));
+        let (handle, dirty_rx) = PipelineOwnerHandle::new_pair(
+            DEFAULT_DIRTY_CHANNEL_CAPACITY,
+            std::sync::Arc::clone(&notifier),
+        );
         Self {
             id: PIPELINE_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
             render_tree: RenderTree::new(),
@@ -268,6 +284,7 @@ impl PipelineOwner<Idle> {
             debug_doing_semantics: false,
             semantics_enabled: AtomicBool::new(false),
             last_layer_tree: None,
+            device_pixel_ratio: 1.0,
             handle,
             dirty_rx,
             _phase: PhantomData,
@@ -306,11 +323,17 @@ impl PipelineOwner<Idle> {
     /// tuple is `Err(...)`. The owner is **always** usable for a
     /// subsequent frame on the success and error paths alike.
     pub fn run_frame(
-        self,
+        mut self,
     ) -> (
         PipelineOwner<Idle>,
         crate::error::RenderResult<Option<LayerTree>>,
     ) {
+        // Observe cross-thread dirty requests (RepaintHandle /
+        // PipelineOwnerHandle producers) before any phase runs — an
+        // async decode that finished while the app idled lands in this
+        // frame, not never.
+        self.drain_pending_dirty();
+
         // Layout
         let mut owner = self.into_layout();
         if let Err(e) = owner.run_layout() {
@@ -366,7 +389,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.notifier.set_need_visual_update(callback);
+        self.notifier.write().set_need_visual_update(callback);
     }
 
     /// Sets the callback for when semantics owner is created.
@@ -374,7 +397,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.notifier.set_semantics_owner_created(callback);
+        self.notifier.write().set_semantics_owner_created(callback);
     }
 
     /// Sets the callback for when semantics owner is disposed.
@@ -382,14 +405,14 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.notifier.set_semantics_owner_disposed(callback);
+        self.notifier.write().set_semantics_owner_disposed(callback);
     }
 
     /// Requests a visual update.
     ///
     /// Called by render objects when they need to be re-rendered.
     pub fn request_visual_update(&self) {
-        self.notifier.fire_need_visual_update();
+        self.notifier.read().fire_need_visual_update();
     }
 
     // ========================================================================
@@ -406,6 +429,24 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         self.handle.clone()
     }
 
+    /// Binds a [`RepaintHandle`](crate::pipeline::RepaintHandle) to a
+    /// live render object — the
+    /// capability async producers (image decodes, arriving assets) use
+    /// to repaint that node from any thread, with the platform woken on
+    /// every request.
+    ///
+    /// `None` for a stale/foreign id. Once the node is later removed,
+    /// the returned handle degrades to a silent no-op (generational id:
+    /// the drain drops requests whose generation died).
+    pub fn repaint_handle(&self, id: RenderId) -> Option<crate::pipeline::RepaintHandle> {
+        let depth = self.render_tree.get(id)?.depth() as usize;
+        Some(crate::pipeline::RepaintHandle::new(
+            self.handle.clone(),
+            id,
+            depth,
+        ))
+    }
+
     /// Drains the pending dirty-request channel into the local
     /// [`DirtySets`].
     ///
@@ -417,29 +458,33 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     pub fn drain_pending_dirty(&mut self) -> usize {
         let mut drained = 0;
         while let Ok(req) = self.dirty_rx.try_recv() {
-            match req.kind {
-                DirtyKind::Layout => {
-                    self.dirty
-                        .needs_layout
-                        .push(DirtyNode::new(req.id, req.depth));
-                }
-                DirtyKind::Compositing => {
-                    self.dirty
-                        .needs_compositing
-                        .push(DirtyNode::new(req.id, req.depth));
-                }
-                DirtyKind::Paint => {
-                    self.dirty
-                        .needs_paint
-                        .push(DirtyNode::new(req.id, req.depth));
-                }
-                DirtyKind::Semantics => {
-                    self.dirty
-                        .needs_semantics
-                        .push(DirtyNode::new(req.id, req.depth));
-                }
-            }
             drained += 1;
+            // Generation-validated replay through the SAME mark paths
+            // local callers use: a stale id (the node died after the
+            // producer captured its handle) falls out silently, the
+            // layout mark walks to its relayout boundary, compositing
+            // keeps the queue⇒flag invariant, and every path carries
+            // its own dedup. The request's depth is advisory — the live
+            // node's depth is authoritative.
+            //
+            // Pre-fix this pushed raw queue entries: a layout request
+            // for a non-boundary node became a bogus dirty ROOT, a
+            // compositing request skipped the flag (the silent-loss
+            // footgun `add_node_needing_compositing_bits_update`
+            // exists to prevent), and dead ids were replayed verbatim.
+            let Some(node) = self.render_tree.get(req.id) else {
+                tracing::trace!(?req, "drain_pending_dirty: stale id, dropped");
+                continue;
+            };
+            let depth = node.depth() as usize;
+            match req.kind {
+                DirtyKind::Layout => self.mark_needs_layout(req.id),
+                DirtyKind::Compositing => {
+                    self.add_node_needing_compositing_bits_update(req.id, depth);
+                }
+                DirtyKind::Paint => self.add_node_needing_paint(req.id, depth),
+                DirtyKind::Semantics => self.add_node_needing_semantics(req.id, depth),
+            }
         }
         drained
     }
@@ -525,6 +570,141 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// `<Idle>`.
     pub fn take_layer_tree(&mut self) -> Option<LayerTree> {
         self.last_layer_tree.take()
+    }
+
+    /// Device pixel ratio threaded into every paint pass.
+    pub fn device_pixel_ratio(&self) -> f32 {
+        self.device_pixel_ratio
+    }
+
+    /// Removes the subtree rooted at `id` — THE dispose site.
+    ///
+    /// Removal is where owner-side state dies (the inversion of the
+    /// "Drop will handle it" idea): a `Drop` impl has no
+    /// `&PipelineOwner`, so it cannot evict dirty-queue entries — only
+    /// this method can. Order:
+    ///
+    /// 1. collect the subtree's ids;
+    /// 2. evict every id from ALL dirty queues (live + mid-phase) so
+    ///    no phase walks a freed slot's stale entry;
+    /// 3. cascade-remove the nodes (each freed slot's generation bumps
+    ///    — outstanding ids go stale, D2);
+    /// 4. clear `root_id` when the root itself was removed.
+    ///
+    /// `Drop` on render objects remains strictly node-local (decoded
+    /// images, shaped text, GPU handles).
+    ///
+    /// Returns the number of nodes removed. Must not run mid-phase —
+    /// the layout/paint walks hold raw borrows into the slab.
+    pub fn remove_render_object(&mut self, id: RenderId) -> usize {
+        debug_assert!(
+            !self.debug_doing_layout && !self.debug_doing_paint,
+            "remove_render_object during an active layout/paint phase —              the walks hold borrows into the slab; defer removal to              between-frame work",
+        );
+
+        let subtree = self.render_tree.collect_subtree_ids(id);
+        if subtree.is_empty() {
+            return 0;
+        }
+        let removed: FxHashSet<RenderId> = subtree.iter().copied().collect();
+        self.dirty.evict(&removed);
+        self.mid_layout_marks.evict(&removed);
+
+        let count = self.render_tree.remove_recursive(id);
+        if self.root_id == Some(id) {
+            self.root_id = None;
+        }
+        tracing::debug!(?id, count, "remove_render_object: subtree disposed");
+        count
+    }
+
+    /// Hit-tests the render tree at `position` (root-local
+    /// coordinates), appending leaf-first entries to `result`.
+    ///
+    /// The walk mirrors the paint walk's shape: per node, the
+    /// protocol blanket wraps a driver-supplied child-recursion
+    /// callback in the typed, arity-gated hit-test context and calls
+    /// the object's `hit_test`. `None` child overrides resolve to the
+    /// child's laid-out `RenderState.offset` — parents no longer
+    /// mirror offsets in their own fields to hit-test children.
+    ///
+    /// Returns whether anything was hit. O(visited nodes) average;
+    /// worst case O(tree) when nothing claims the position.
+    pub fn hit_test(&self, position: Offset, result: &mut crate::hit_testing::HitTestResult) -> bool
+    where
+        // The child-recursion callback must be Send + Sync (ctx trait
+        // bounds, U19 inheritance); it captures &self, so the phase
+        // marker must be Sync. Every phase is a ZST — always satisfied
+        // at call sites, spelled out for the generic impl.
+        Phase: Sync,
+    {
+        let Some(root_id) = self.root_id else {
+            return false;
+        };
+        self.hit_test_subtree(root_id, position, result)
+    }
+
+    fn hit_test_subtree(
+        &self,
+        id: RenderId,
+        position: Offset,
+        result: &mut crate::hit_testing::HitTestResult,
+    ) -> bool
+    where
+        Phase: Sync,
+    {
+        let Some(node) = self.render_tree.get(id) else {
+            return false;
+        };
+        let Some(entry) = node.as_box() else {
+            // Sliver hit testing lands with the sliver walk (Core.2).
+            return false;
+        };
+        let children: Vec<RenderId> = node.children().to_vec();
+        let render_object = entry.render_object();
+
+        let mut hit_child = |index: usize, override_pos: Option<Offset>| -> bool {
+            let Some(&child_id) = children.get(index) else {
+                return false;
+            };
+            let child_position = override_pos.unwrap_or_else(|| {
+                let offset = self
+                    .render_tree
+                    .get(child_id)
+                    .and_then(|n| n.as_box())
+                    .map(|e| e.state().offset())
+                    .unwrap_or(Offset::ZERO);
+                position - offset
+            });
+            self.hit_test_subtree(child_id, child_position, result)
+        };
+
+        let hit = render_object.hit_test_raw(position, children.len(), &mut hit_child);
+        if hit {
+            // Leaf-first path: children pushed their entries during
+            // the callback above; the ancestor follows.
+            result.add(crate::hit_testing::HitTestEntry::new(id));
+        }
+        hit
+    }
+
+    /// Sets the device pixel ratio for subsequent paint passes.
+    ///
+    /// Called by the platform binding on surface creation and DPI
+    /// change. Non-finite or non-positive values are rejected (kept at
+    /// the previous ratio) — a zero or NaN DPR poisons every shaped
+    /// glyph and snapped hairline downstream.
+    pub fn set_device_pixel_ratio(&mut self, dpr: f32) {
+        if dpr.is_finite() && dpr > 0.0 {
+            self.device_pixel_ratio = dpr;
+        } else {
+            tracing::warn!(
+                dpr,
+                "set_device_pixel_ratio: rejecting non-finite / non-positive \
+                 ratio; keeping {}",
+                self.device_pixel_ratio,
+            );
+        }
     }
 
     // ========================================================================
@@ -770,6 +950,11 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             return;
         }
         target.push(DirtyNode::new(node_id, depth));
+        // New work was scheduled — wake the platform so an idle event
+        // loop produces the frame (Flutter parity: markNeedsLayout →
+        // owner.requestVisualUpdate()). Fired only on a NEW queue entry:
+        // an existing entry means a frame is already scheduled.
+        self.notifier.read().fire_need_visual_update();
     }
 
     /// Marks a node as needing layout, propagating the `NEEDS_LAYOUT` flag
@@ -832,8 +1017,18 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 // correctness without depending on the precise clearing
                 // schedule; idempotence keeps it cheap.
                 node.mark_layout_flag();
+                // Flutter box.dart:2840 — a non-empty layout cache means an
+                // ANCESTOR's layout consumed this node's intrinsics/dry
+                // layout/baseline, so the invalidation must reach that
+                // ancestor: keep walking past a relayout boundary (the
+                // boundary only isolates constraint-driven layout, not
+                // intrinsic queries). Each ancestor visited clears its own
+                // cache the same way, so the escalation chains exactly as
+                // far as the cached dependencies go and no further.
+                let had_cached_queries = node.clear_layout_cache();
                 let parent = node.links().parent();
-                let boundary = node.is_relayout_boundary() || parent.is_none();
+                let boundary =
+                    (node.is_relayout_boundary() && !had_cached_queries) || parent.is_none();
                 let depth = node.depth() as usize;
                 (boundary, depth, parent)
             };
@@ -848,6 +1043,12 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 // had drained the dirty queue but not cleared the flag.
                 if !self.dirty.needs_layout.iter().any(|d| d.id == current) {
                     self.dirty.needs_layout.push(DirtyNode::new(current, depth));
+                    // Wake the platform: an idle event loop must produce
+                    // a frame for this invalidation (Flutter parity:
+                    // markNeedsLayout → owner.requestVisualUpdate()).
+                    // Fired only on a NEW boundary entry — an existing
+                    // entry means a frame is already scheduled.
+                    self.notifier.read().fire_need_visual_update();
                 }
                 return;
             }
@@ -855,6 +1056,126 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             // so reaching this branch guarantees `Some(_)`.
             current = parent.unwrap();
         }
+    }
+
+    // ========================================================================
+    // Intrinsic / Dry-Layout Queries (memoized walks)
+    // ========================================================================
+
+    /// One intrinsic dimension of a box subtree, memoized per node.
+    ///
+    /// The walk mirrors Flutter's `getMinIntrinsicWidth`-family wrapper
+    /// layer (box.dart `_computeIntrinsics`): every node's answer for
+    /// `(dimension, extent)` is cached in its `RenderState` layout
+    /// cache, and `mark_needs_layout` clears the cache with
+    /// boundary-crossing escalation. Repeated probes of the same child
+    /// at the same extent — the canonical N-child container pattern —
+    /// cost one computation each.
+    ///
+    /// Average O(subtree) on a cold cache, O(1) per cached node;
+    /// worst case adds the hash-collision factor of the per-node maps.
+    ///
+    /// # Errors
+    ///
+    /// [`RenderError::NodeNotFound`](crate::error::RenderError::NodeNotFound)
+    /// for a stale/foreign id,
+    /// [`RenderError::ProtocolMismatch`](crate::error::RenderError::ProtocolMismatch)
+    /// if the subtree contains a sliver node (box intrinsics are
+    /// undefined there).
+    pub fn box_intrinsic_dimension(
+        &mut self,
+        id: RenderId,
+        dimension: crate::storage::IntrinsicDimension,
+        extent: f32,
+    ) -> crate::error::RenderResult<f32> {
+        let mut slots = self.acquire_query_slots(id)?;
+        intrinsic_query(&mut slots, id, dimension, extent)
+    }
+
+    /// The size a box subtree WOULD take under `constraints`, memoized
+    /// per `(node, constraints)` — Flutter's `getDryLayout`.
+    ///
+    /// # Errors
+    ///
+    /// Same surface as [`Self::box_intrinsic_dimension`].
+    pub fn box_dry_layout(
+        &mut self,
+        id: RenderId,
+        constraints: crate::constraints::BoxConstraints,
+    ) -> crate::error::RenderResult<flui_types::Size> {
+        let mut slots = self.acquire_query_slots(id)?;
+        dry_layout_query(&mut slots, id, constraints)
+    }
+
+    /// The dry baseline of a box node for `constraints`, memoized per
+    /// `(constraints, baseline)` — Flutter's `getDryBaseline`. The
+    /// computed answer may be `None` ("no baseline"); that answer is
+    /// cached too.
+    ///
+    /// # Errors
+    ///
+    /// Same surface as [`Self::box_intrinsic_dimension`].
+    pub fn box_dry_baseline(
+        &mut self,
+        id: RenderId,
+        constraints: crate::constraints::BoxConstraints,
+        baseline: crate::traits::TextBaseline,
+    ) -> crate::error::RenderResult<Option<f32>> {
+        let Some(node) = self.render_tree.get_mut(id) else {
+            return Err(crate::error::RenderError::NodeNotFound(id));
+        };
+        let Some(entry) = node.as_box_mut() else {
+            return Err(crate::error::RenderError::ProtocolMismatch {
+                node_protocol: "sliver",
+                constraints_protocol: "box",
+            });
+        };
+        if let Some(hit) = entry
+            .state()
+            .layout_cache()
+            .peek_dry_baseline(constraints, baseline)
+        {
+            return Ok(hit);
+        }
+        let value = entry
+            .render_object()
+            .dry_baseline_raw(constraints, baseline);
+        entry
+            .state_mut()
+            .layout_cache_mut()
+            .insert_dry_baseline(constraints, baseline, value);
+        Ok(value)
+    }
+
+    /// Acquires the take-out borrow map for a memoizing query walk:
+    /// disjoint `&mut` over the subtree (the same `get_subtree_mut`
+    /// primitive the layout walk uses) plus each node's child-id
+    /// snapshot. A node is moved OUT of its slot while its own
+    /// computation runs, so re-entry — a child-link cycle — is
+    /// detectable instead of UB.
+    fn acquire_query_slots(
+        &mut self,
+        id: RenderId,
+    ) -> crate::error::RenderResult<rustc_hash::FxHashMap<RenderId, QuerySlot<'_>>> {
+        let ids = self.render_tree.collect_subtree_ids(id);
+        let nodes = self
+            .render_tree
+            .get_subtree_mut(&ids)
+            .ok_or(crate::error::RenderError::NodeNotFound(id))?;
+        Ok(ids
+            .iter()
+            .zip(nodes)
+            .map(|(&node_id, node)| {
+                let children = node.children().to_vec();
+                (
+                    node_id,
+                    QuerySlot {
+                        node: Some(node),
+                        children,
+                    },
+                )
+            })
+            .collect())
     }
 
     /// Adds a node to the paint dirty list.
@@ -881,6 +1202,11 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             return;
         }
         target.push(DirtyNode::new(node_id, depth));
+        // Wake the platform for the (next) frame. Mid-paint marks are
+        // drained into next-frame work at the end of run_paint — without
+        // this wake an idle app would never paint them (the "GIF frozen
+        // until you scroll" failure mode).
+        self.notifier.read().fire_need_visual_update();
     }
 
     /// Adds a node to the compositing bits dirty list.
@@ -961,9 +1287,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     pub fn set_semantics_enabled(&self, enabled: bool) {
         let was_enabled = self.semantics_enabled.swap(enabled, Ordering::Relaxed);
         if enabled && !was_enabled {
-            self.notifier.fire_semantics_owner_created();
+            self.notifier.read().fire_semantics_owner_created();
         } else if !enabled && was_enabled {
-            self.notifier.fire_semantics_owner_disposed();
+            self.notifier.read().fire_semantics_owner_disposed();
         }
     }
 
@@ -1193,6 +1519,15 @@ impl PipelineOwner<Layout> {
                     self.drain_mid_layout_marks();
                     return Err(e);
                 }
+
+                // Flutter parity (object.dart: `RenderObject.layout`
+                // unconditionally ends with `markNeedsPaint()`): a
+                // subtree that re-laid out must repaint, otherwise a
+                // pure-layout invalidation (setState moving a child)
+                // leaves stale pixels on screen. One entry per dirty
+                // root suffices — run_paint walks the whole tree from
+                // the root, so triggering the phase is what matters.
+                self.add_node_needing_paint(dirty_node.id, dirty_node.depth);
             }
 
             self.debug_doing_layout = false;
@@ -1225,6 +1560,16 @@ impl PipelineOwner<Layout> {
     ///    dirty queue's shallow-first ordering ensures parents are
     ///    processed before children).
     fn cached_or_root_constraints(&self, id: RenderId) -> Option<BoxConstraints> {
+        // The binding-set root constraints are AUTHORITATIVE for the
+        // root: on resize, set_root_constraints updates them and marks
+        // the root dirty — if the stale cached constraints won here,
+        // the resize relayout would run at the OLD window size and the
+        // newly exposed area would stay unpainted.
+        if self.root_id == Some(id)
+            && let Some(root) = self.root_constraints
+        {
+            return Some(root);
+        }
         if let Some(node) = self.render_tree.get(id)
             && let Some(entry) = node.as_box()
             && let Some(cached) = entry.state().constraints()
@@ -1241,7 +1586,7 @@ impl PipelineOwner<Layout> {
     ///
     /// Lays out the subtree rooted at `id` with the supplied
     /// `constraints`, running `RenderObject::perform_layout_raw` against a
-    /// typed [`BoxLayoutCtx`] populated with the parent's direct children
+    /// typed [`crate::protocol::BoxLayoutCtx`] populated with the parent's direct children
     /// (companion memo D1). Returns the parent's computed `Size` on
     /// success.
     ///
@@ -1271,7 +1616,7 @@ impl PipelineOwner<Layout> {
     ///    reborrow at each call level. The leaf path delegates to
     ///    [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only).
     ///    The non-leaf path constructs a Direct-storage `BoxLayoutCtx`
-    ///    via [`BoxLayoutCtx::with_layout_callback`] with a closure
+    ///    via the erased driver context ([`crate::protocol::ErasedBoxLayoutCtx`]) with a closure
     ///    that captures `&SubtreeBorrows` (Sync via `NodePtr`'s
     ///    `unsafe impl`) and re-enters `layout_subtree_borrowed` for
     ///    each child. The bridge in `traits/render_box.rs` reconstructs
@@ -1340,7 +1685,7 @@ impl PipelineOwner<Layout> {
     /// # ParentData scope (current limitation)
     ///
     /// The pipeline-side Direct `BoxLayoutCtx` is parameterised over
-    /// [`BoxParentData`], so widgets whose `T::ParentData` is the default
+    /// [`crate::parent_data::BoxParentData`], so widgets whose `T::ParentData` is the default
     /// (`RenderPadding`, `RenderCenter`, `RenderColoredBox`,
     /// `RenderOpacity`, `RenderTransform`, `RenderSizedBox`) drive
     /// through correctly. Non-default parent-data types (e.g.,
@@ -1732,8 +2077,32 @@ unsafe fn layout_subtree_borrowed<'tree>(
     // flag + recursive callback. Same shape as the prior U20 version,
     // but the callback recurses into `layout_subtree_borrowed` which
     // uses pre-acquired NodePtrs instead of fresh tree reborrows.
-    let mut child_states: Vec<ChildState<BoxParentData>> =
-        child_ids.iter().map(|&cid| ChildState::new(cid)).collect();
+    let mut child_states: Vec<crate::protocol::ErasedChildState> = child_ids
+        .iter()
+        .map(|&cid| crate::protocol::ErasedChildState::new(cid))
+        .collect();
+
+    // Seed each ChildState.offset from the child's persisted
+    // RenderState.offset. A parent that does not re-position a child
+    // during this walk must preserve the child's prior offset
+    // (Flutter parity: BoxParentData.offset persists until
+    // positionChild overwrites it) — without the seed, the
+    // post-layout commit below would silently reset unpositioned
+    // children to Offset::ZERO.
+    for cs in &mut child_states {
+        if let Some(child_ptr) = borrows.get(cs.id) {
+            // SAFETY: shared reborrow of a DISTINCT child slot
+            // (parent ≠ child by tree acyclicity). No `&mut` to this
+            // slot is live: the recursive layout callback has not run
+            // yet, and `node_ref` covers only the parent's slot.
+            // Distinct slot reborrows have independent tags under
+            // Stacked / Tree Borrows.
+            let child_node: &RenderNode = unsafe { &*child_ptr.0 };
+            if let Some(child_entry) = child_node.as_box() {
+                cs.offset = child_entry.state().offset();
+            }
+        }
+    }
 
     // Descendant-error tracking flag. Closure flips to `true` on any
     // descendant `RenderError`; stage 6 below skips `clear_needs_layout`
@@ -1775,11 +2144,15 @@ unsafe fn layout_subtree_borrowed<'tree>(
     };
     let cb_ref: LayoutChildCallback<'_> = &cb_owned;
 
-    // Construct pipeline-side Direct BoxLayoutCtx (Variable arity is
-    // most permissive — Proxy bridge picks T::Arity from the user's
-    // RenderBox impl regardless; BoxParentData per ParentData scope
-    // limitation on `layout_dirty_root`).
-    let mut ctx = BoxLayoutCtx::<flui_tree::Variable, BoxParentData>::with_layout_callback(
+    // Construct the driver-side PARENT-DATA-ERASED context. The walk
+    // cannot name the parent's ParentData type (it holds dyn nodes);
+    // the typed blanket bridge reconstructs BoxLayoutCtx<T::Arity,
+    // T::ParentData> per node and lazily creates each child's
+    // parent-data slot with T::ParentData::default() — Flex/Stack and
+    // every other non-BoxParentData parent now lay out in production
+    // (the former ChildState<BoxParentData> hardcode panicked them in
+    // from_erased).
+    let mut ctx = crate::protocol::ErasedBoxLayoutCtx::new(
         constraints,
         &mut child_states,
         &child_ids,
@@ -1821,6 +2194,31 @@ unsafe fn layout_subtree_borrowed<'tree>(
     // NEEDS_LAYOUT stays set for next-frame retry.
     entry.state_mut().set_geometry(geometry);
     entry.state_mut().set_constraints(constraints);
+
+    // Commit the offsets perform_layout wrote via `position_child`
+    // into each child's persisted `RenderState.offset`. The
+    // `ChildState` vec is a per-walk transient — without this commit
+    // every positioned offset dies with the stack frame and paint /
+    // hit-test (which read `RenderState.offset` as the authoritative
+    // child position) would place all children at the parent origin.
+    // Runs only on the parent-success path: on the Err / panic paths
+    // above, state stays unmodified so NEEDS_LAYOUT retry semantics
+    // hold. A descendant error does NOT skip the commit — the
+    // parent's perform_layout returned Ok, so its positioning
+    // decisions are valid regardless of a failed grandchild.
+    for cs in &child_states {
+        if let Some(child_ptr) = borrows.get(cs.id) {
+            // SAFETY: shared reborrow of a DISTINCT child slot
+            // (parent ≠ child by tree acyclicity). All recursive
+            // child borrows ended when perform_layout_raw returned;
+            // `entry`/`node_ref` cover only the parent's slot.
+            // `set_offset` is an atomic store through `&self`.
+            let child_node: &RenderNode = unsafe { &*child_ptr.0 };
+            if let Some(child_entry) = child_node.as_box() {
+                child_entry.state().set_offset(cs.offset);
+            }
+        }
+    }
 
     // Bootstrap relayout boundary (U17). BoxProtocol runs the Flutter
     // formula; SliverProtocol would be a no-op (not reachable on this
@@ -2058,12 +2456,18 @@ impl PipelineOwner<PaintPhase> {
 
     /// Paints all dirty render objects.
     ///
-    /// This is phase 3 of the rendering pipeline. During paint:
-    /// - Render objects record paint commands
-    /// - Compositing layers are built
+    /// Phase 3 of the rendering pipeline, as a **fragment composition**
+    /// (sans-IO paint model): each node's `paint_raw` records a
+    /// node-local fragment — draw runs, child markers, clip scopes —
+    /// which is immediately replayed into the frame's [`LayerTree`].
+    /// Adjacent inline draw runs merge into shared `PictureLayer`s;
+    /// repaint-boundary children are rebased to `Offset::ZERO` under
+    /// their own `OffsetLayer`; clip scopes become real clip layers.
     ///
-    /// Nodes are sorted by depth (deep first) so children are painted before
-    /// their parents. This matches Flutter's `flushPaint` behavior.
+    /// A fresh full `LayerTree` is produced every paint pass —
+    /// cross-frame retention of boundary subtrees is deliberately out
+    /// of scope until the layer tree grows a structural-sharing
+    /// substrate and the engine an incremental upload path.
     pub fn run_paint(&mut self) -> crate::error::RenderResult<()> {
         if self.dirty.needs_paint.is_empty() {
             return Ok(());
@@ -2074,85 +2478,38 @@ impl PipelineOwner<PaintPhase> {
 
         self.debug_doing_paint = true;
 
-        // Cycle 4 R-15: pre-fix this method
-        //   1. drained `dirty.needs_paint` via `std::mem::take` (capacity-
-        //      dropping),
-        //   2. did NOT sort the dirty list by depth (comment said
-        //      "we don't need to sort since we paint from root"),
-        //   3. cleared every dirty node's `needs_paint` flag in a
-        //      separate loop BEFORE the paint walk,
-        //   4. painted via root descent (`paint_node_recursive`),
-        //   5. silently dropped any dirty node not reached by the
-        //      descent (its flag was already cleared, its paint command
-        //      never recorded).
-        //
-        // Audit R-15 flagged steps 2/3/5 as a half-impl: Flutter's
-        // `flushPaint` sorts dirty deep-first AND paints each node
-        // (paint clears the flag, no separate pass). Dropping paints
-        // for unreached nodes is silent bug-bait for any future
-        // multi-root or detached-subtree design.
-        //
-        // Post-fix:
-        //   1. Sort dirty deep-first (Reverse depth) so repaint-
-        //      boundary subtrees process before their ancestors when
-        //      the per-node dirty-driven paint path lands.
-        //   2. Walk via root descent (unchanged).
-        //   3. `paint_node_recursive` clears `needs_paint` per node it
-        //      visits (folded into the recursion).
-        //   4. After the walk, scan the dirty list for nodes whose
-        //      flag is still set -- those are the unreached cases.
-        //   5. Emit `tracing::warn!` for each unreached dirty node,
-        //      then clear (so the dirty list doesn't accumulate
-        //      across frames).
-
+        // Deepest-first ordering retained (Flutter `flushPaint`): the
+        // full-tree descent below repaints everything, but per-boundary
+        // dirty-driven repaints will rely on this order once retention
+        // lands, and keeping it now means the dirty-list semantics
+        // don't shift under that change.
         self.dirty
             .needs_paint
             .sort_unstable_by_key(|n| std::cmp::Reverse(n.depth));
 
-        // Paint render tree recursively starting from root.
-        // Each parent paints itself, then paints children with
-        // accumulated offset.
-        //
-        // Mythos Step 12: paint_node_recursive returns RenderResult<()>;
-        // a panicking render object surfaces as Err(Poisoned). We must
-        // restore debug_doing_paint before `?`-propagating so the
-        // owner's debug invariants stay consistent on the error path.
         if let Some(root_id) = self.root_id
-            && let Some(root_node) = self.render_tree.get(root_id)
+            && self.render_tree.get(root_id).is_some()
         {
-            let paint_bounds = root_node.paint_bounds();
-            tracing::debug!("run_paint: painting root with bounds {:?}", paint_bounds);
-
-            // Create CanvasContext
-            let mut context = CanvasContext::new(paint_bounds);
-
-            // Paint recursively from root with offset accumulation.
-            // `paint_node_recursive` clears `needs_paint` on every
-            // node it visits (R-15 fold), so the dirty-list scan
-            // below only fires for the unreached cases.
-            let paint_result = self.paint_node_recursive(&mut context, root_id, Offset::ZERO);
-
-            match paint_result {
+            let mut composer = FragmentComposer::new(self.device_pixel_ratio);
+            match self.paint_subtree(&mut composer, root_id, Offset::ZERO) {
                 Ok(()) => {
-                    // Store the resulting layer tree
-                    self.last_layer_tree = Some(context.into_layer_tree());
-                    tracing::debug!(
-                        "run_paint: layer tree has {} layers",
-                        self.last_layer_tree.as_ref().map(|t| t.len()).unwrap_or(0)
-                    );
+                    let layer_tree = composer.finish();
+                    tracing::debug!("run_paint: layer tree has {} layers", layer_tree.len());
+                    self.last_layer_tree = Some(layer_tree);
                 }
                 Err(e) => {
+                    // Restore the debug invariant before propagating so
+                    // the owner stays consistent on the error path.
                     self.debug_doing_paint = false;
                     return Err(e);
                 }
             }
         }
 
-        // R-15: dirty-list residue scan. Any node still flagged
-        // needs_paint AFTER the root descent is the unreached case
-        // the pre-fix loop silently swallowed. Warn + clear so the
-        // bug is visible AND the dirty list doesn't accumulate
-        // across frames.
+        // Dirty-list residue scan: any node still flagged needs_paint
+        // AFTER the root descent was not reached by it (multi-root or
+        // detached subtree). Warn + clear so the bug is visible AND the
+        // dirty list doesn't accumulate across frames.
         for dirty_node in &self.dirty.needs_paint {
             if let Some(render_node) = self.render_tree.get(dirty_node.id)
                 && render_node.needs_paint()
@@ -2166,246 +2523,300 @@ impl PipelineOwner<PaintPhase> {
                 render_node.clear_needs_paint();
             }
         }
-        // `clear()` retains capacity per cycle 4 R-1/R-4 PR #109
-        // review feedback (preserve Vec backing across frames).
+        // `clear()` retains capacity (preserve Vec backing across frames).
         self.dirty.needs_paint.clear();
 
         self.debug_doing_paint = false;
 
-        // PR-A1 U22 P1 review fix (Codex 3294365736): drain
-        // mid_layout_marks.needs_paint back into dirty so paint marks
-        // made during this iteration's `debug_doing_paint = true`
-        // window aren't stranded. The current run_paint is single-
-        // pass (no outer while loop), so drained entries land on
-        // dirty.needs_paint for the NEXT run_paint invocation rather
-        // than this one — matches Flutter's flushPaint semantics
-        // where mid-paint marks become next-frame work.
+        // Drain mid-paint dirty marks back into the dirty sets so paint
+        // marks made during this pass become next-frame work rather
+        // than being stranded — Flutter's flushPaint semantics.
         self.drain_mid_layout_marks();
 
         Ok(())
     }
 
-    /// Recursively paints a node and its children with accumulated offset.
+    /// Records one node's paint fragment and replays it into the
+    /// composer, recursing at child markers.
     ///
-    /// This follows Flutter's approach where each parent:
-    /// 1. Paints itself at the given offset
-    /// 2. For each child, adds child's offset and recursively paints
-    ///
-    /// # Repaint Boundaries
-    ///
-    /// When a child is a repaint boundary (`is_repaint_boundary() == true`),
-    /// it creates its own `OffsetLayer` to isolate its painting. The offset
-    /// is stored in the layer rather than accumulated, allowing the subtree
-    /// to be cached and reused when only the offset changes.
-    ///
-    /// The tree structure (parent-child relationships) is stored in RenderTree,
-    /// while child offsets are stored in each render object's internal state
-    /// (set during layout via position_child).
-    fn paint_node_recursive(
+    /// Per-node order follows Flutter's `PaintingContext._paintWithContext`:
+    /// `WAS_REPAINT_BOUNDARY` is written and `NEEDS_PAINT` cleared
+    /// **before** the node paints, so a paint body that re-marks its own
+    /// node is caught by the debug check below instead of silently
+    /// erasing the evidence.
+    fn paint_subtree(
         &self,
-        context: &mut CanvasContext,
+        composer: &mut FragmentComposer,
         node_id: RenderId,
-        offset: Offset,
+        origin: Offset,
     ) -> crate::error::RenderResult<()> {
-        // Get the render node and collect info for painting
-        let (is_repaint_boundary, children_with_offsets, paint_alpha, paint_transform): (
-            bool,
-            Vec<(RenderId, Offset)>,
-            Option<u8>,
-            Option<flui_types::Matrix4>,
-        ) = {
-            if let Some(render_node) = self.render_tree.get(node_id) {
-                let render_object = render_node.box_render_object();
-
-                // Get children from tree structure (RenderNode stores parent-child
-                // relationships)
-                let tree_children = render_node.children();
-
-                let is_boundary = render_object.is_repaint_boundary();
-                let alpha = render_object.paint_alpha();
-                let transform = render_object.paint_transform();
-
-                tracing::debug!(
-                    "paint_node_recursive: node_id={:?}, offset=({}, {}), is_repaint_boundary={}, tree_children={}, ro_child_count={}, alpha={:?}",
-                    node_id,
-                    offset.dx,
-                    offset.dy,
-                    is_boundary,
-                    tree_children.len(),
-                    render_object.child_count(),
-                    alpha
-                );
-
-                // Paint this node at the accumulated offset.
-                //
-                // Mythos Step 12: the paint call is third-party code. Wrap
-                // in catch_unwind so a panicking render object surfaces as
-                // RenderError::Poisoned rather than aborting the process.
-                // AssertUnwindSafe is justified because (a) the canvas
-                // context's drawing primitives are themselves panic-safe
-                // (they record commands into Vec, no mid-state torn
-                // invariants) and (b) the render object's internal state
-                // is opaque to us -- on panic we treat the node as torn
-                // and let the caller decide whether to drop it.
-                let debug_name = render_object.debug_name();
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    render_object.paint(context, offset);
-                }))
-                .map_err(|_| crate::error::RenderError::poisoned(debug_name, "paint"))?;
-
-                // Cycle 4 R-15: clear the needs_paint flag now that
-                // this node has been painted. Pre-fix the flag was
-                // cleared in a separate up-front loop on `dirty.needs_paint`,
-                // which silently dropped paints for nodes not reachable
-                // from `root_id`. Folding the clear into the recursive
-                // visit ensures the flag-clear and the paint walk stay
-                // in lockstep -- Flutter's `flushPaint` model.
-                render_node.clear_needs_paint();
-
-                // For each child in the tree, get its offset from the render object
-                // The render object stores offsets via position_child during layout
-                let children: Vec<_> = tree_children
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &child_id)| {
-                        // Get offset from render object (set during layout)
-                        let child_offset = render_object.child_offset(i);
-                        tracing::debug!(
-                            "  child[{}]: id={:?}, offset=({}, {})",
-                            i,
-                            child_id,
-                            child_offset.dx,
-                            child_offset.dy
-                        );
-                        (child_id, child_offset)
-                    })
-                    .collect();
-
-                (is_boundary, children, alpha, transform)
-            } else {
-                return Ok(());
-            }
+        let Some(render_node) = self.render_tree.get(node_id) else {
+            return Ok(());
         };
+        let render_object = render_node.box_render_object();
+        let is_repaint_boundary = render_object.is_repaint_boundary();
+        let alpha = render_object.paint_alpha();
+        let transform = render_object.paint_transform();
+        let child_ids: Vec<RenderId> = render_node.children().to_vec();
 
-        // Mythos Step 12: paint_children captures a mutable error slot.
-        // The push_opacity / push_transform callbacks are FnOnce; if a
-        // recursive paint surfaces a Poisoned error, we stash it and the
-        // outer function returns it once the closure has unwound.
-        let mut child_error: Option<crate::error::RenderError> = None;
-        let mut paint_children = |ctx: &mut CanvasContext, base_offset: Offset| {
-            for (child_id, child_offset) in &children_with_offsets {
-                if child_error.is_some() {
-                    return;
-                }
-                // Check if child is a repaint boundary
-                let child_is_repaint_boundary = {
-                    if let Some(child_node) = self.render_tree.get(*child_id) {
-                        child_node.box_render_object().is_repaint_boundary()
-                    } else {
-                        false
-                    }
-                };
-
-                let result = if child_is_repaint_boundary {
-                    // For repaint boundaries, create a new OffsetLayer
-                    let child_accumulated_offset = base_offset + *child_offset;
-                    let mut inner_result: crate::error::RenderResult<()> = Ok(());
-                    ctx.paint_child_with_offset(child_accumulated_offset, |child_ctx| {
-                        inner_result =
-                            self.paint_node_recursive(child_ctx, *child_id, Offset::ZERO);
-                    });
-                    inner_result
-                } else {
-                    // Normal case: accumulate offset and paint directly
-                    let child_accumulated_offset = base_offset + *child_offset;
-                    self.paint_node_recursive(ctx, *child_id, child_accumulated_offset)
-                };
-
-                if let Err(e) = result {
-                    child_error = Some(e);
-                    return;
-                }
-            }
-        };
-
-        // Apply effect layers (opacity, transform) around children
-        if let Some(alpha) = paint_alpha {
-            // Skip painting children entirely if fully transparent
-            if alpha == 0 {
-                // Don't paint children at all
-            } else {
-                // Wrap children in opacity layer
-                // The offset is where this node is positioned. Children are painted
-                // relative to this node, so we pass Offset::ZERO for children's base,
-                // but the OpacityLayer itself is positioned at `offset`.
-                context.push_opacity(offset, alpha, |opacity_ctx| {
-                    if let Some(transform) = paint_transform {
-                        // Apply transform layer inside opacity
-                        opacity_ctx.push_transform(
-                            true,
-                            Offset::ZERO,
-                            &transform,
-                            |transform_ctx| {
-                                paint_children(transform_ctx, Offset::ZERO);
-                            },
-                            None,
-                        );
-                    } else {
-                        // Children paint relative to the opacity layer's origin
-                        paint_children(opacity_ctx, Offset::ZERO);
-                    }
-                });
-            }
-        } else if let Some(transform) = paint_transform {
-            // Apply transform layer
-            context.push_transform(
-                true,
-                offset,
-                &transform,
-                |transform_ctx| {
-                    paint_children(transform_ctx, Offset::ZERO);
-                },
-                None,
-            );
-        } else {
-            // No effect layers - paint children directly
-            paint_children(context, offset);
-        }
-
-        // Propagate any child error captured during recursive paint.
-        if let Some(err) = child_error {
-            return Err(err);
-        }
-
-        // Track repaint-boundary status for the next compositing-bits
-        // walk. Per Flutter `object.dart:3560` the field is written
-        // UNCONDITIONALLY at every paint (`_wasRepaintBoundary =
-        // isRepaintBoundary`) so a node that flips from boundary to
-        // non-boundary leaves a `WAS_REPAINT_BOUNDARY=true` trail
-        // exactly once, and the next compositing walk's
-        // `!is_boundary && was_boundary` check catches the transition
-        // (see [`PipelineOwner::update_subtree_compositing_bits`],
-        // D-block PR-A2 U34).
-        //
-        // **PR-A2 U35:** pre-U35 only the `is_repaint_boundary == true`
-        // branch wrote here; a node going from boundary to non-boundary
-        // never cleared `WAS_REPAINT_BOUNDARY`, so the compositing
-        // walk's lost-boundary branch would fire repeatedly. Now matches
-        // Flutter's unconditional write semantics.
-        //
-        // U2 exemplar refactor: the previous shape took a write lock on
-        // the trait object (`render_node.box_render_object_mut()`) to
-        // flip a single bool via `set_was_repaint_boundary`. The bit
-        // lives on `RenderState` as `WAS_REPAINT_BOUNDARY` (see
-        // `storage/flags.rs`); the paint phase flips an atomic without
-        // touching the trait object.
-        if let Some(render_node) = self.render_tree.get(node_id)
-            && let Some(entry) = render_node.as_box()
-        {
+        // Written unconditionally PRE-paint (Flutter object.dart:3560):
+        // a node flipping boundary→non-boundary leaves exactly one
+        // `WAS_REPAINT_BOUNDARY=true` trail for the next compositing
+        // walk's lost-boundary branch.
+        if let Some(entry) = render_node.as_box() {
             entry.state().set_was_repaint_boundary(is_repaint_boundary);
         }
 
+        // Clear BEFORE paint so the post-paint check catches a paint
+        // body that marks its own node dirty (paint-must-not-redirty).
+        render_node.clear_needs_paint();
+
+        // Fully transparent subtree: skip recording entirely. Children
+        // keep whatever dirty flags they carry; the residue scan in
+        // run_paint clears them with a warning.
+        if alpha == Some(0) {
+            return Ok(());
+        }
+
+        // Record the node's fragment. paint_raw sees ONLY the recorder
+        // (sans-IO): no tree access, no layer access, no recursion.
+        let debug_name = render_object.debug_name();
+        let mut recorder = FragmentRecorder::new(origin, self.device_pixel_ratio);
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            render_object.paint_raw(&mut recorder, child_ids.len());
+        }))
+        .map_err(|_| crate::error::RenderError::poisoned(debug_name, "paint"))?;
+        let fragment = recorder.finish();
+
+        debug_assert!(
+            !render_node.needs_paint(),
+            "paint-must-not-redirty: a render object marked ITSELF \
+             needs-paint during its own paint; derive visual changes \
+             from state read at paint time instead of re-marking",
+        );
+
+        // Effect hooks wrap the ENTIRE node fragment (self draws AND
+        // children). The pre-fragment walk wrapped children only; hook
+        // implementors draw nothing themselves, so the visible result
+        // is identical and the new rule matches Flutter (RenderOpacity
+        // wraps its child's whole paint).
+        let mut effect_layers = 0usize;
+        if let Some(alpha) = alpha {
+            composer.push_layer(Layer::Opacity(OpacityLayer::with_offset(
+                f32::from(alpha) / 255.0,
+                Offset::ZERO,
+            )));
+            effect_layers += 1;
+        }
+        if let Some(matrix) = transform {
+            // The node reports its transform in LOCAL coordinates, but
+            // every run inside this layer space is recorded with the
+            // accumulated `origin` baked into its canvas transform.
+            // Conjugate by the origin (Flutter object.dart
+            // `pushTransform`: T(offset)·M·T(−offset)) so the matrix
+            // pivots around the node's own origin instead of the layer
+            // origin — a raw local matrix would translate/rotate the
+            // whole accumulated space.
+            let effective = if origin == Offset::ZERO {
+                matrix
+            } else {
+                let (dx, dy) = (origin.dx.get(), origin.dy.get());
+                flui_types::Matrix4::translation(dx, dy, 0.0)
+                    * matrix
+                    * flui_types::Matrix4::translation(-dx, -dy, 0.0)
+            };
+            composer.push_layer(Layer::Transform(TransformLayer::new(effective)));
+            effect_layers += 1;
+        }
+
+        for op in fragment.ops {
+            match op {
+                FragmentOp::Run(list) => composer.append_run(list),
+                FragmentOp::Push(clip) => composer.push_layer(clip_layer(*clip, origin)),
+                FragmentOp::Pop => composer.pop_layer(),
+                FragmentOp::Child {
+                    index,
+                    offset_override,
+                } => {
+                    let Some(&child_id) = child_ids.get(index) else {
+                        debug_assert!(
+                            false,
+                            "fragment child marker {index} out of range ({} children) — \
+                             PaintCx bounds-checks markers, so a mismatch means the \
+                             tree changed during paint",
+                            child_ids.len(),
+                        );
+                        continue;
+                    };
+                    // Authoritative child position: RenderState.offset,
+                    // committed by the layout walk; paint_child_at
+                    // overrides it explicitly.
+                    let child_offset = offset_override.unwrap_or_else(|| {
+                        self.render_tree
+                            .get(child_id)
+                            .and_then(|n| n.as_box())
+                            .map(|e| e.state().offset())
+                            .unwrap_or(Offset::ZERO)
+                    });
+                    let child_is_boundary = self
+                        .render_tree
+                        .get(child_id)
+                        .is_some_and(|n| n.box_render_object().is_repaint_boundary());
+
+                    if child_is_boundary {
+                        // Boundary children rebase to ZERO under their
+                        // own OffsetLayer so a future offset-only move
+                        // is a layer-property update, not a repaint.
+                        composer.push_layer(Layer::Offset(OffsetLayer::new(origin + child_offset)));
+                        self.paint_subtree(composer, child_id, Offset::ZERO)?;
+                        composer.pop_layer();
+                    } else {
+                        // Inline children bake into the shared picture
+                        // space — runs merge, no extra layer.
+                        self.paint_subtree(composer, child_id, origin + child_offset)?;
+                    }
+                }
+            }
+        }
+
+        for _ in 0..effect_layers {
+            composer.pop_layer();
+        }
+
         Ok(())
+    }
+}
+
+// ============================================================================
+// Fragment composition (paint phase plumbing)
+// ============================================================================
+
+/// Builds the frame's [`LayerTree`] from replayed paint fragments,
+/// merging adjacent inline draw runs into shared `PictureLayer`s.
+///
+/// Sealing discipline mirrors the recorder's: the open run is flushed
+/// into a `PictureLayer` whenever a layer boundary needs ordering
+/// (push/pop) and at [`Self::finish`]. The stack always holds at least
+/// the root `OffsetLayer`.
+#[derive(Debug)]
+struct FragmentComposer {
+    tree: LayerTree,
+    stack: Vec<LayerId>,
+    open: DisplayList,
+}
+
+impl FragmentComposer {
+    /// `device_pixel_ratio` becomes the root layer's scale: the
+    /// framework paints in LOGICAL pixels, the engine rasterizes in
+    /// physical surface pixels — the root transform is the single
+    /// place the two meet (Flutter's RenderView root transform).
+    fn new(device_pixel_ratio: f32) -> Self {
+        let mut tree = LayerTree::new();
+        let root_layer = if (device_pixel_ratio - 1.0).abs() < f32::EPSILON {
+            Layer::Offset(OffsetLayer::zero())
+        } else {
+            Layer::Transform(TransformLayer::new(flui_types::Matrix4::scaling(
+                device_pixel_ratio,
+                device_pixel_ratio,
+                1.0,
+            )))
+        };
+        let root = tree.insert(root_layer);
+        tree.set_root(Some(root));
+        Self {
+            tree,
+            stack: vec![root],
+            open: DisplayList::new(),
+        }
+    }
+
+    /// Merges a sealed fragment run into the open picture.
+    fn append_run(&mut self, run: DisplayList) {
+        self.open.append(run);
+    }
+
+    /// Flushes the open picture into a `PictureLayer` under the
+    /// current stack top (no-op when empty).
+    fn seal_picture(&mut self) {
+        if flui_painting::DisplayListCore::is_empty(&self.open) {
+            return;
+        }
+        let list = std::mem::take(&mut self.open);
+        let layer_id = self.tree.insert(Layer::from(PictureLayer::new(list)));
+        let parent = *self
+            .stack
+            .last()
+            .expect("composer stack always holds the root layer (popping it is rejected)");
+        self.tree.add_child(parent, layer_id);
+    }
+
+    fn push_layer(&mut self, layer: Layer) {
+        self.seal_picture();
+        let id = self.tree.insert(layer);
+        let parent = *self
+            .stack
+            .last()
+            .expect("composer stack always holds the root layer (popping it is rejected)");
+        self.tree.add_child(parent, id);
+        self.stack.push(id);
+    }
+
+    fn pop_layer(&mut self) {
+        self.seal_picture();
+        debug_assert!(
+            self.stack.len() > 1,
+            "composer pop without matching push — fragment scope ops are \
+             balanced by the recorder, so an underflow means the replay \
+             loop pushed/popped asymmetrically",
+        );
+        if self.stack.len() > 1 {
+            self.stack.pop();
+        }
+    }
+
+    fn finish(mut self) -> LayerTree {
+        self.seal_picture();
+        debug_assert_eq!(
+            self.stack.len(),
+            1,
+            "composer finished with unbalanced layer stack — every \
+             push_layer in the replay loop must have a matching pop_layer",
+        );
+        self.tree
+    }
+}
+
+/// Maps a recorded clip scope onto its `flui-layer` clip layer.
+///
+/// Clip shapes are recorded in the node's LOCAL coordinates, while the
+/// runs they bracket carry the accumulated `origin` baked into their
+/// canvas transforms — so the shape is shifted by `origin` here
+/// (Flutter `pushClipRect`: `clipRect.shift(offset)`), or a clip away
+/// from the parent origin would cut at the layer's (0,0) instead of
+/// the node's position.
+///
+/// Always a real clip layer today; lowering non-composited clips back
+/// into canvas clips inside the merged picture is a composer-side
+/// optimization gated on the `needs_compositing` bits — correctness is
+/// identical either way, so the recording API does not expose the
+/// choice.
+fn clip_layer(clip: FragmentClip, origin: Offset) -> Layer {
+    match clip {
+        FragmentClip::Rect { rect, behavior } => {
+            Layer::ClipRect(ClipRectLayer::new(rect.translate_offset(origin), behavior))
+        }
+        FragmentClip::RRect { rrect, behavior } => Layer::ClipRRect(ClipRRectLayer::new(
+            rrect.translate_offset(origin),
+            behavior,
+        )),
+        FragmentClip::Path { path, behavior } => {
+            let path = if origin == Offset::ZERO {
+                *path
+            } else {
+                path.translate(origin)
+            };
+            Layer::ClipPath(Box::new(ClipPathLayer::new(path, behavior)))
+        }
     }
 }
 
@@ -2522,10 +2933,180 @@ where
         debug_doing_semantics: from.debug_doing_semantics,
         semantics_enabled: from.semantics_enabled,
         last_layer_tree: from.last_layer_tree,
+        device_pixel_ratio: from.device_pixel_ratio,
         handle: from.handle,
         dirty_rx: from.dirty_rx,
         _phase: PhantomData,
     }
+}
+
+// ============================================================================
+// Memoizing query walks (intrinsics / dry layout)
+// ============================================================================
+
+/// One node's slot in a memoizing query walk: the disjoint `&mut`
+/// borrow plus a snapshot of the node's child ids. The node is moved
+/// OUT (`node.take()`) while its own computation runs, so re-entry —
+/// which only a cyclic child link can produce — is detected instead of
+/// aliasing the borrow.
+struct QuerySlot<'a> {
+    node: Option<&'a mut crate::storage::RenderNode>,
+    children: Vec<RenderId>,
+}
+
+/// Recursive memoized intrinsic query over the take-out slot map.
+///
+/// Per node: cache peek → on miss, run the object's `intrinsic_raw`
+/// with a child callback that recurses through this same function →
+/// store the result. Errors inside the child callback are stashed and
+/// re-raised after the object call returns (the raw callback channel
+/// is infallible by design — same convention as the hit-test walk).
+fn intrinsic_query(
+    slots: &mut rustc_hash::FxHashMap<RenderId, QuerySlot<'_>>,
+    id: RenderId,
+    dimension: crate::storage::IntrinsicDimension,
+    extent: f32,
+) -> crate::error::RenderResult<f32> {
+    let Some(slot) = slots.get_mut(&id) else {
+        return Err(crate::error::RenderError::NodeNotFound(id));
+    };
+    let Some(node) = slot.node.take() else {
+        // Only reachable through a cyclic child link: the node's own
+        // computation is still on the stack. Degenerate-but-defined in
+        // release; loud in debug (collect_subtree_ids already refuses
+        // to loop, so the cycle must close through duplicate child
+        // indices).
+        debug_assert!(
+            false,
+            "intrinsic query re-entered node {id:?} mid-computation — cyclic child links"
+        );
+        return Ok(0.0);
+    };
+    let children = slot.children.clone();
+
+    let result = (|| {
+        let Some(entry) = node.as_box_mut() else {
+            return Err(crate::error::RenderError::ProtocolMismatch {
+                node_protocol: "sliver",
+                constraints_protocol: "box",
+            });
+        };
+        if let Some(hit) = entry
+            .state()
+            .layout_cache()
+            .peek_intrinsic(dimension, extent)
+        {
+            return Ok(hit);
+        }
+        let mut child_err: Option<crate::error::RenderError> = None;
+        let value = {
+            let child_err = &mut child_err;
+            let mut child_query =
+                |index: usize, dim: crate::storage::IntrinsicDimension, ext: f32| -> f32 {
+                    let Some(&child_id) = children.get(index) else {
+                        child_err.get_or_insert(crate::error::RenderError::contract_violation(
+                            "intrinsic child query",
+                            "child index out of range for this node's children",
+                        ));
+                        return 0.0;
+                    };
+                    match intrinsic_query(slots, child_id, dim, ext) {
+                        Ok(v) => v,
+                        Err(err) => {
+                            child_err.get_or_insert(err);
+                            0.0
+                        }
+                    }
+                };
+            entry
+                .render_object()
+                .intrinsic_raw(dimension, extent, children.len(), &mut child_query)
+        };
+        if let Some(err) = child_err {
+            return Err(err);
+        }
+        entry
+            .state_mut()
+            .layout_cache_mut()
+            .insert_intrinsic(dimension, extent, value);
+        Ok(value)
+    })();
+
+    // Restore the slot even on the error path — sibling queries in the
+    // same walk must still find the node.
+    if let Some(slot) = slots.get_mut(&id) {
+        slot.node = Some(node);
+    }
+    result
+}
+
+/// Recursive memoized dry-layout query; same skeleton as
+/// [`intrinsic_query`] with `(constraints → Size)` payloads.
+fn dry_layout_query(
+    slots: &mut rustc_hash::FxHashMap<RenderId, QuerySlot<'_>>,
+    id: RenderId,
+    constraints: crate::constraints::BoxConstraints,
+) -> crate::error::RenderResult<flui_types::Size> {
+    let Some(slot) = slots.get_mut(&id) else {
+        return Err(crate::error::RenderError::NodeNotFound(id));
+    };
+    let Some(node) = slot.node.take() else {
+        debug_assert!(
+            false,
+            "dry-layout query re-entered node {id:?} mid-computation — cyclic child links"
+        );
+        return Ok(flui_types::Size::ZERO);
+    };
+    let children = slot.children.clone();
+
+    let result = (|| {
+        let Some(entry) = node.as_box_mut() else {
+            return Err(crate::error::RenderError::ProtocolMismatch {
+                node_protocol: "sliver",
+                constraints_protocol: "box",
+            });
+        };
+        if let Some(hit) = entry.state().layout_cache().peek_dry_layout(constraints) {
+            return Ok(hit);
+        }
+        let mut child_err: Option<crate::error::RenderError> = None;
+        let value = {
+            let child_err = &mut child_err;
+            let mut child_dry =
+                |index: usize, c: crate::constraints::BoxConstraints| -> flui_types::Size {
+                    let Some(&child_id) = children.get(index) else {
+                        child_err.get_or_insert(crate::error::RenderError::contract_violation(
+                            "dry-layout child query",
+                            "child index out of range for this node's children",
+                        ));
+                        return flui_types::Size::ZERO;
+                    };
+                    match dry_layout_query(slots, child_id, c) {
+                        Ok(v) => v,
+                        Err(err) => {
+                            child_err.get_or_insert(err);
+                            flui_types::Size::ZERO
+                        }
+                    }
+                };
+            entry
+                .render_object()
+                .dry_layout_raw(constraints, children.len(), &mut child_dry)
+        };
+        if let Some(err) = child_err {
+            return Err(err);
+        }
+        entry
+            .state_mut()
+            .layout_cache_mut()
+            .insert_dry_layout(constraints, value);
+        Ok(value)
+    })();
+
+    if let Some(slot) = slots.get_mut(&id) {
+        slot.node = Some(node);
+    }
+    result
 }
 
 // ============================================================================
@@ -2681,6 +3262,83 @@ mod tests {
         assert_eq!(counter.load(Ordering::Relaxed), 2);
     }
 
+    /// Idle-wake contract: scheduling NEW dirty work fires the
+    /// visual-update callback exactly once per new queue entry, so a
+    /// quiescent platform loop wakes for the frame — and duplicate
+    /// marks (a frame is already scheduled) don't spam wakes.
+    #[test]
+    fn dirty_marks_fire_visual_update_once_per_new_entry() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let counter_clone = counter.clone();
+        let mut owner = PipelineOwner::with_callbacks(
+            Some(move || {
+                counter_clone.fetch_add(1, Ordering::Relaxed);
+            }),
+            None::<fn()>,
+            None::<fn()>,
+        );
+
+        owner.add_node_needing_layout(RenderId::new(1), 0);
+        assert_eq!(
+            counter.load(Ordering::Relaxed),
+            1,
+            "a new layout entry must wake the platform",
+        );
+        owner.add_node_needing_layout(RenderId::new(1), 0);
+        assert_eq!(
+            counter.load(Ordering::Relaxed),
+            1,
+            "a duplicate entry means a frame is already scheduled — no second wake",
+        );
+
+        owner.add_node_needing_paint(RenderId::new(2), 1);
+        assert_eq!(
+            counter.load(Ordering::Relaxed),
+            2,
+            "a new paint entry must wake the platform",
+        );
+        owner.add_node_needing_paint(RenderId::new(2), 1);
+        assert_eq!(counter.load(Ordering::Relaxed), 2);
+    }
+
+    /// The boundary-walking `mark_needs_layout` fires the wake when it
+    /// enqueues the boundary, and stays silent when the boundary is
+    /// already queued.
+    #[test]
+    fn mark_needs_layout_fires_visual_update_on_boundary_enqueue() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let counter_clone = counter.clone();
+        let mut owner = PipelineOwner::with_callbacks(
+            Some(move || {
+                counter_clone.fetch_add(1, Ordering::Relaxed);
+            }),
+            None::<fn()>,
+            None::<fn()>,
+        );
+
+        let id = owner.insert(Box::new(crate::objects::RenderColoredBox::red(10.0, 10.0))
+            as Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>);
+        owner.clear_all_dirty_nodes();
+        let base = counter.load(Ordering::Relaxed);
+
+        owner.mark_needs_layout(id);
+        assert_eq!(
+            counter.load(Ordering::Relaxed),
+            base + 1,
+            "enqueueing the relayout boundary must wake the platform",
+        );
+        owner.mark_needs_layout(id);
+        assert_eq!(
+            counter.load(Ordering::Relaxed),
+            base + 1,
+            "boundary already queued — no extra wake",
+        );
+    }
+
     // ========================================================================
     // Mythos Step 12: catch_unwind plumbing
     // ========================================================================
@@ -2727,14 +3385,22 @@ mod tests {
             Ok(self.size)
         }
 
-        fn paint(&self, _context: &mut crate::context::CanvasContext, _offset: flui_types::Offset) {
-            panic!("PanickingPaintBox::paint -- intentional test panic");
+        fn paint_raw(&self, _recorder: &mut crate::context::FragmentRecorder, _child_count: usize) {
+            panic!("PanickingPaintBox::paint_raw -- intentional test panic");
         }
 
         fn hit_test_raw(
             &self,
-            _result: &mut crate::protocol::ProtocolHitResult<crate::protocol::BoxProtocol>,
             _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
+            _child_count: usize,
+            _hit_child: &mut (
+                     dyn FnMut(
+                usize,
+                Option<crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>>,
+            ) -> bool
+                         + Send
+                         + Sync
+                 ),
         ) -> bool {
             false
         }
@@ -2797,13 +3463,21 @@ mod tests {
             panic!("PanickingLayoutBox::perform_layout_raw -- intentional test panic");
         }
 
-        fn paint(&self, _context: &mut crate::context::CanvasContext, _offset: flui_types::Offset) {
+        fn paint_raw(&self, _recorder: &mut crate::context::FragmentRecorder, _child_count: usize) {
         }
 
         fn hit_test_raw(
             &self,
-            _result: &mut crate::protocol::ProtocolHitResult<crate::protocol::BoxProtocol>,
             _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
+            _child_count: usize,
+            _hit_child: &mut (
+                     dyn FnMut(
+                usize,
+                Option<crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>>,
+            ) -> bool
+                         + Send
+                         + Sync
+                 ),
         ) -> bool {
             false
         }

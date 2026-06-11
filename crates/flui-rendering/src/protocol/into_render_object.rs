@@ -65,9 +65,10 @@
 //!         ctx.complete_with_size(size);
 //!     }
 //!
-//!     fn paint(&self, ctx: &mut CanvasContext, offset: Offset) {
-//!         let rect = Rect::from_size(self.size).translate(offset);
-//!         ctx.canvas().draw_rect(rect, self.color);
+//!     fn paint(&self, ctx: &mut PaintCx<'_, Leaf>) {
+//!         // Local coordinates — the recorder pre-translates to the
+//!         // node's origin.
+//!         ctx.canvas().draw_rect(Rect::from_size(self.size), self.color);
 //!     }
 //!
 //!     fn hit_test(&self, ctx: &mut BoxHitTestContext<Leaf, BoxParentData>) -> bool {

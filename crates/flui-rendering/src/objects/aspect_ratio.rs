@@ -287,39 +287,78 @@ impl RenderBox for RenderAspectRatio {
 
     // ---- intrinsic dimensions ------------------------------------------
 
-    fn compute_min_intrinsic_width(&self, height: f32) -> f32 {
+    // Flutter parity: proxy_box.dart `RenderAspectRatio` — a finite
+    // extent answers with pure ratio math; an unbounded extent defers
+    // to the child's own intrinsic (`child?.get* ?? 0.0`).
+
+    fn compute_min_intrinsic_width(
+        &self,
+        height: f32,
+        ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
         if height.is_finite() {
-            height * self.aspect_ratio.value()
+            return height * self.aspect_ratio.value();
+        }
+        if ctx.child_count() > 0 {
+            ctx.child_min_intrinsic_width(0, height)
         } else {
             0.0
         }
     }
 
-    fn compute_max_intrinsic_width(&self, height: f32) -> f32 {
+    fn compute_max_intrinsic_width(
+        &self,
+        height: f32,
+        ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
         if height.is_finite() {
-            height * self.aspect_ratio.value()
+            return height * self.aspect_ratio.value();
+        }
+        if ctx.child_count() > 0 {
+            ctx.child_max_intrinsic_width(0, height)
         } else {
             0.0
         }
     }
 
-    fn compute_min_intrinsic_height(&self, width: f32) -> f32 {
+    fn compute_min_intrinsic_height(
+        &self,
+        width: f32,
+        ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
         if width.is_finite() {
-            width / self.aspect_ratio.value()
+            return width / self.aspect_ratio.value();
+        }
+        if ctx.child_count() > 0 {
+            ctx.child_min_intrinsic_height(0, width)
         } else {
             0.0
         }
     }
 
-    fn compute_max_intrinsic_height(&self, width: f32) -> f32 {
+    fn compute_max_intrinsic_height(
+        &self,
+        width: f32,
+        ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
         if width.is_finite() {
-            width / self.aspect_ratio.value()
+            return width / self.aspect_ratio.value();
+        }
+        if ctx.child_count() > 0 {
+            ctx.child_max_intrinsic_height(0, width)
         } else {
             0.0
         }
     }
 
-    fn compute_dry_layout(&self, constraints: BoxConstraints) -> Size {
+    fn compute_dry_layout(
+        &self,
+        constraints: BoxConstraints,
+        _ctx: &mut crate::context::BoxDryLayoutCtx<'_>,
+    ) -> Size {
+        // Sizing is fully determined by the ratio + constraints; the
+        // child is laid out tight to this size and never consulted
+        // (proxy_box.dart `RenderAspectRatio.computeDryLayout`).
         self.apply_aspect_ratio(constraints)
     }
 }
@@ -442,18 +481,24 @@ mod tests {
     #[test]
     fn intrinsics_multiply_or_divide_by_ratio() {
         let node = RenderAspectRatio::new(AspectRatio::new(2.0).unwrap());
-        // For 2:1, width is 2× height; height is 0.5× width.
-        assert_eq!(node.compute_min_intrinsic_width(100.0), 200.0);
-        assert_eq!(node.compute_max_intrinsic_width(100.0), 200.0);
-        assert_eq!(node.compute_min_intrinsic_height(100.0), 50.0);
-        assert_eq!(node.compute_max_intrinsic_height(100.0), 50.0);
+        crate::context::intrinsics_test_support::leaf_intrinsics(|ctx| {
+            // For 2:1, width is 2× height; height is 0.5× width.
+            assert_eq!(node.compute_min_intrinsic_width(100.0, ctx), 200.0);
+            assert_eq!(node.compute_max_intrinsic_width(100.0, ctx), 200.0);
+            assert_eq!(node.compute_min_intrinsic_height(100.0, ctx), 50.0);
+            assert_eq!(node.compute_max_intrinsic_height(100.0, ctx), 50.0);
+        });
     }
 
     #[test]
-    fn intrinsics_zero_for_infinite_input() {
+    fn intrinsics_zero_for_infinite_input_without_child() {
         let node = RenderAspectRatio::new(AspectRatio::SQUARE);
-        assert_eq!(node.compute_min_intrinsic_width(f32::INFINITY), 0.0);
-        assert_eq!(node.compute_max_intrinsic_height(f32::INFINITY), 0.0);
+        crate::context::intrinsics_test_support::leaf_intrinsics(|ctx| {
+            // Unbounded extent defers to the child; childless → 0.0
+            // (proxy_box.dart `child?.getMinIntrinsicWidth ?? 0.0`).
+            assert_eq!(node.compute_min_intrinsic_width(f32::INFINITY, ctx), 0.0);
+            assert_eq!(node.compute_max_intrinsic_height(f32::INFINITY, ctx), 0.0);
+        });
     }
 
     // ---------- API surface -----------------------------------------------

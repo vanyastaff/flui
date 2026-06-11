@@ -94,6 +94,8 @@ impl Protocol for BoxProtocol {
     // PORT-CHECK-OK-DYN: protocol-layout-erasure (D-block PR-A1b U19, memo D5)
     type LayoutCtxErased<'ctx> = dyn BoxLayoutCtxErased + 'ctx;
 
+    type LayoutCache = crate::storage::BoxLayoutCache;
+
     fn name() -> &'static str {
         "box"
     }
@@ -610,7 +612,12 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
                 .and_then(|c| c.get_mut(index))
                 .map(|child| &mut child.parent_data),
             BoxLayoutCtxStorage::Proxy { erased, .. } => erased
-                .child_parent_data_dyn_mut(index)
+                // Lazily create the slot with THIS parent's type — the
+                // erased driver storage holds Option<Box<dyn ParentData>>
+                // and cannot name P (one-downcast rule).
+                .child_parent_data_dyn_or_insert(index, &|| {
+                    Box::new(P::default()) as Box<dyn ParentData>
+                })
                 .and_then(|d| d.downcast_mut::<P>()),
         }
     }
@@ -706,6 +713,25 @@ pub trait BoxLayoutCtxErased: Send + Sync {
 
     /// Mutable counterpart to [`Self::child_parent_data_dyn`].
     fn child_parent_data_dyn_mut(&mut self, index: usize) -> Option<&mut dyn ParentData>;
+
+    /// Mutable access to child `index`'s parent data, CREATING the
+    /// slot via `create` when it is empty.
+    ///
+    /// The erased driver storage cannot name a parent-data type; the
+    /// typed bridge can (`T::ParentData::default`) — this method is
+    /// the one-downcast rule's write path. The default forwards to
+    /// [`Self::child_parent_data_dyn_mut`] (no creation) for typed
+    /// Direct storages, whose slots always exist.
+    ///
+    /// Returns `None` only when `index` is out of bounds or the
+    /// context has no children access.
+    fn child_parent_data_dyn_or_insert(
+        &mut self,
+        index: usize,
+        _create: &dyn Fn() -> Box<dyn ParentData>,
+    ) -> Option<&mut dyn ParentData> {
+        self.child_parent_data_dyn_mut(index)
+    }
 
     /// `TypeId` of the underlying parent-data type held by this erased
     /// context, when known.
@@ -809,6 +835,144 @@ impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, 
 }
 
 // ============================================================================
+// ERASED DRIVER LAYOUT CONTEXT (parent-data-erased pipeline storage)
+// ============================================================================
+
+/// Per-child layout state with PARENT-DATA-ERASED storage — what the
+/// pipeline's layout walk owns.
+///
+/// The driver cannot name a parent's `ParentData` type (it walks
+/// `dyn RenderObject` nodes), so the slot is `Option<Box<dyn
+/// ParentData>>`, lazily created by the typed blanket bridge with
+/// `T::ParentData::default()` on first mutable access
+/// ([`BoxLayoutCtxErased::child_parent_data_dyn_or_insert`]). This is
+/// what lifts the former `ChildState<BoxParentData>` hardcode that
+/// made every non-`BoxParentData` parent (Flex, Stack) panic in
+/// production layout.
+#[derive(Debug)]
+pub struct ErasedChildState {
+    /// Render ID of this child.
+    pub id: flui_foundation::RenderId,
+    /// Computed size after layout.
+    pub size: Size,
+    /// Position offset set by parent.
+    pub offset: Offset,
+    /// Parent data, created on demand by the typed bridge.
+    pub parent_data: Option<Box<dyn ParentData>>,
+}
+
+impl ErasedChildState {
+    /// Creates an empty child slot.
+    pub fn new(id: flui_foundation::RenderId) -> Self {
+        Self {
+            id,
+            size: Size::ZERO,
+            offset: Offset::ZERO,
+            parent_data: None,
+        }
+    }
+}
+
+/// Driver-native, parent-data-erased implementation of
+/// [`BoxLayoutCtxErased`] — the production layout walk's context.
+///
+/// Mirrors the Direct `BoxLayoutCtx` shape (children slice, child
+/// ids, synchronous layout callback) minus the `P` parameter; the
+/// typed view is reconstructed per node by the blanket bridge's
+/// `from_erased` with the node's OWN `Arity` and `ParentData`.
+pub struct ErasedBoxLayoutCtx<'ctx> {
+    constraints: BoxConstraints,
+    geometry: Option<Size>,
+    children: &'ctx mut Vec<ErasedChildState>,
+    child_ids: &'ctx [flui_foundation::RenderId],
+    layout_child_callback: LayoutChildCallback<'ctx>,
+}
+
+impl<'ctx> ErasedBoxLayoutCtx<'ctx> {
+    /// Creates the walk-side context over pre-built child slots.
+    pub fn new(
+        constraints: BoxConstraints,
+        children: &'ctx mut Vec<ErasedChildState>,
+        child_ids: &'ctx [flui_foundation::RenderId],
+        layout_child_callback: LayoutChildCallback<'ctx>,
+    ) -> Self {
+        Self {
+            constraints,
+            geometry: None,
+            children,
+            child_ids,
+            layout_child_callback,
+        }
+    }
+
+    /// The parent's completed size, when `complete_layout` ran.
+    pub fn geometry(&self) -> Option<&Size> {
+        self.geometry.as_ref()
+    }
+}
+
+impl BoxLayoutCtxErased for ErasedBoxLayoutCtx<'_> {
+    fn constraints(&self) -> BoxConstraints {
+        self.constraints
+    }
+
+    fn child_count(&self) -> usize {
+        self.child_ids.len()
+    }
+
+    fn layout_child(&mut self, index: usize, constraints: BoxConstraints) -> Size {
+        let Some(&child_id) = self.child_ids.get(index) else {
+            return Size::ZERO;
+        };
+        let size = (self.layout_child_callback)(child_id, constraints);
+        if let Some(slot) = self.children.get_mut(index) {
+            slot.size = size;
+        }
+        size
+    }
+
+    fn position_child(&mut self, index: usize, offset: Offset) {
+        if let Some(slot) = self.children.get_mut(index) {
+            slot.offset = offset;
+        }
+    }
+
+    fn complete_layout(&mut self, size: Size) {
+        self.geometry = Some(size);
+    }
+
+    fn child_parent_data_dyn(&self, index: usize) -> Option<&dyn ParentData> {
+        self.children
+            .get(index)
+            .and_then(|slot| slot.parent_data.as_deref())
+    }
+
+    fn child_parent_data_dyn_mut(&mut self, index: usize) -> Option<&mut dyn ParentData> {
+        self.children
+            .get_mut(index)
+            .and_then(|slot| slot.parent_data.as_deref_mut())
+    }
+
+    fn child_parent_data_dyn_or_insert(
+        &mut self,
+        index: usize,
+        create: &dyn Fn() -> Box<dyn ParentData>,
+    ) -> Option<&mut dyn ParentData> {
+        let slot = self.children.get_mut(index)?;
+        Some(slot.parent_data.get_or_insert_with(create).as_mut())
+    }
+
+    fn parent_data_type_id(&self) -> Option<std::any::TypeId> {
+        // Evidence from the first created slot; all slots in one walk
+        // frame share the (single) parent's type by construction.
+        self.children
+            .iter()
+            .find_map(|slot| slot.parent_data.as_deref())
+            .map(|pd| pd.as_any().type_id())
+    }
+}
+
+// ============================================================================
 // BOX HIT TEST CAPABILITY
 // ============================================================================
 
@@ -903,9 +1067,28 @@ impl BoxHitTestEntry {
 /// (one full re-fold over the now-shorter stack). Per-call cost
 /// drops from O(stack_depth) to O(1) for queries, and pops stay
 /// O(stack_depth) but amortize across the matched push.
+/// Driver-supplied child recursion for the box hit-test walk.
+///
+/// `(index, position_override)`: `Some(p)` tests the child at the
+/// exact position `p` (the parent already transformed it — clip /
+/// transform objects); `None` tests at the child's laid-out position
+/// (the driver subtracts the child's `RenderState.offset`). Returns
+/// whether the child subtree was hit.
+// `Send + Sync` mechanically required by `HitTestContextApi`'s bounds
+// (inherited like `LayoutChildCallback`'s — see U19); the walk itself
+// is control-plane single-threaded.
+pub type HitTestChildCallback<'a> =
+    &'a mut (dyn FnMut(usize, Option<Offset>) -> bool + Send + Sync);
+
+/// Box-protocol hit-test context: local-space position, the entry
+/// path under construction, the live child recursion supplied by the
+/// pipeline driver, and the transform stack (R-24 cached composition).
 pub struct BoxHitTestCtx<'ctx, A: Arity, P: ParentData> {
     position: Offset,
     result: BoxHitTestResult,
+    /// Live recursion into the pipeline's hit-test walk. `None` in
+    /// leaf test fixtures — child tests then report a miss.
+    child_callback: Option<HitTestChildCallback<'ctx>>,
     transform_stack: Vec<Matrix4>,
     /// Cached composition of `transform_stack` in push-order. Kept in
     /// sync with the stack via `push_transform` (multiply in) and
@@ -920,6 +1103,21 @@ impl<'ctx, A: Arity, P: ParentData> BoxHitTestCtx<'ctx, A, P> {
         Self {
             position,
             result: BoxHitTestResult::new(),
+            child_callback: None,
+            transform_stack: Vec::new(),
+            composed_transform: Matrix4::IDENTITY,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    /// Creates a context wired to the pipeline driver's child
+    /// recursion — the production constructor (the `new` form is for
+    /// leaf-only test fixtures).
+    pub fn with_child_callback(position: Offset, callback: HitTestChildCallback<'ctx>) -> Self {
+        Self {
+            position,
+            result: BoxHitTestResult::new(),
+            child_callback: Some(callback),
             transform_stack: Vec::new(),
             composed_transform: Matrix4::IDENTITY,
             _phantom: std::marker::PhantomData,
@@ -976,8 +1174,18 @@ impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, BoxHitTest, A, P>
         bounds.contains(Point::new(self.position.dx, self.position.dy))
     }
 
-    fn hit_test_child(&mut self, _index: usize, _position: Offset) -> bool {
-        false // Override in actual implementation
+    fn hit_test_child(&mut self, index: usize, position: Offset) -> bool {
+        match self.child_callback.as_mut() {
+            Some(callback) => callback(index, Some(position)),
+            None => false,
+        }
+    }
+
+    fn hit_test_child_at_layout_offset(&mut self, index: usize) -> bool {
+        match self.child_callback.as_mut() {
+            Some(callback) => callback(index, None),
+            None => false,
+        }
     }
 
     fn push_transform(&mut self, transform: Matrix4) {

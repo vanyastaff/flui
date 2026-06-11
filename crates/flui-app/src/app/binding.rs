@@ -110,6 +110,36 @@ impl AppBinding {
         let shared_pipeline_owner =
             Arc::new(RwLock::new(flui_rendering::pipeline::PipelineOwner::new()));
 
+        // Idle-wake wiring: a dirty mark (mark_needs_layout /
+        // add_node_needing_paint) fires this callback so a quiescent
+        // event loop produces the frame — without it, work scheduled
+        // while the app is idle (an async image decode, a timer-driven
+        // setState) would sit in the dirty queues until some unrelated
+        // input forced a redraw.
+        //
+        // Lock order is safe: the callback fires while the CALLER holds
+        // the pipeline-owner lock, and `wake_frame` acquires only the
+        // `active_window` leaf Mutex — never the owner, never `widgets`.
+        // `AppBinding::instance()` is resolved lazily at fire time, not
+        // captured, so this closure cannot re-enter `new()` during
+        // singleton construction (dirty marks only happen after init).
+        shared_pipeline_owner
+            .write()
+            .set_on_need_visual_update(|| AppBinding::instance().wake_frame());
+
+        // Animation-wake wiring: scheduling a frame callback (a ticker
+        // tick) fires this hook on the scheduler's false→true
+        // `frame_scheduled` transition (Flutter parity:
+        // `SchedulerBinding.scheduleFrame` → platform `scheduleFrame`).
+        // Without it an AnimationController only advances on frames some
+        // OTHER source produces — after the first idle frame the ticker
+        // starves and the animation freezes. Same lock-safety argument as
+        // the visual-update hook above: `wake_frame` touches only the
+        // `active_window` leaf Mutex.
+        Scheduler::instance().set_on_frame_scheduled(Some(std::sync::Arc::new(|| {
+            AppBinding::instance().wake_frame();
+        })));
+
         // Create RendererBinding sharing the SAME PipelineOwner
         let renderer =
             RenderingFlutterBinding::new_with_pipeline(Arc::clone(&shared_pipeline_owner));
@@ -410,6 +440,12 @@ impl AppBinding {
         // frame -- the owner is still usable for the next call.
         let layer_tree = {
             let mut guard = self.shared_pipeline_owner.write();
+            // The window's constraints ARE the root constraints — without
+            // this, frame 1 has neither cached state nor root_constraints
+            // and run_layout drops the root dirty entry (blank window).
+            // set_root_constraints marks the root dirty only on CHANGE,
+            // so the per-frame call is idempotent and resize-correct.
+            guard.set_root_constraints(Some(constraints));
             let owner = std::mem::take(&mut *guard);
             let (owner, result) = owner.run_frame();
             *guard = owner;
@@ -462,15 +498,29 @@ impl AppBinding {
         //     timeout (e.g. long press) fires without a further input event.
         self.gestures.tick_deadlines();
 
-        // 2. Draw frame (build + layout + paint → Scene)
+        // 2. Draw frame (build + layout + paint → Scene). The surface
+        // reports PHYSICAL pixels; the framework lays out in LOGICAL
+        // pixels — the paint root's DPR transform bridges back. A
+        // physical-sized layout at DPR 2 would paint everything double
+        // size (the "red box covers a quarter of the window" bug).
         let (width, height) = renderer.size();
-        let constraints = BoxConstraints::tight(Size::new(px(width as f32), px(height as f32)));
+        let dpr = self.shared_pipeline_owner.read().device_pixel_ratio();
+        let constraints =
+            BoxConstraints::tight(Size::new(px(width as f32 / dpr), px(height as f32 / dpr)));
         let scene = self.draw_frame(constraints);
 
         // 3. Render scene to GPU
         if let Some(ref scene) = scene
             && scene.has_content()
         {
+            // The pipeline painted a FRESH scene this frame, so the
+            // on-screen content is stale. The engine's damage tracker is
+            // only marked by resize/surface-create paths; without this
+            // mark, `render_scene` early-returns on "no damage" and every
+            // animation frame is silently dropped — the screen then only
+            // updates on resize. Until fine-grained damage from the layer
+            // diff lands, a new scene is a full repaint.
+            renderer.mark_full_repaint();
             match renderer.render_scene(scene) {
                 Ok(()) => {
                     self.frames_rendered.fetch_add(1, Ordering::Relaxed);
@@ -566,6 +616,34 @@ mod tests {
         let binding1 = AppBinding::instance();
         let binding2 = AppBinding::instance();
         assert!(std::ptr::eq(binding1, binding2));
+    }
+
+    /// Idle-wake wiring smoke test: a dirty mark on the shared
+    /// pipeline owner must reach `AppBinding::wake_frame` through the
+    /// visual-update notifier set in `AppBinding::new`, flipping
+    /// `needs_redraw` so the platform loop produces a frame.
+    #[test]
+    fn dirty_mark_fires_wake_via_notifier() {
+        let binding = AppBinding::instance();
+
+        let id = binding.shared_pipeline_owner.write().insert(Box::new(
+            flui_rendering::objects::RenderColoredBox::red(10.0, 10.0),
+        )
+            as Box<
+                dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>,
+            >);
+        binding
+            .shared_pipeline_owner
+            .write()
+            .clear_all_dirty_nodes();
+        binding.mark_rendered();
+
+        binding.shared_pipeline_owner.write().mark_needs_layout(id);
+        assert!(
+            binding.needs_redraw(),
+            "an owner dirty mark must wake the binding via the \
+             visual-update notifier wired in AppBinding::new",
+        );
     }
 
     #[test]

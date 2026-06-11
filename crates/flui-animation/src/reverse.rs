@@ -187,7 +187,10 @@ mod tests {
 
         let _ = controller.stop();
 
-        // Reverse → Forward
+        // Reverse → Forward. reverse() at the lower bound settles
+        // immediately as Dismissed (zero remaining distance), so move
+        // mid-range first to observe a RUNNING reverse status.
+        controller.set_value(0.5);
         let _ = controller.reverse();
         assert_eq!(controller.status(), AnimationStatus::Reverse);
         assert_eq!(reversed.status(), AnimationStatus::Forward);

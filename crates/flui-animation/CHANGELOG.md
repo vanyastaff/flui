@@ -25,6 +25,14 @@ Versioning: per `docs/release.md` policy.
 
 ### Changed
 
+- `forward()`/`reverse()`/`forward_from`/`reverse_from` and
+  `animate_to`/`animate_back` with no explicit duration now scale the run's
+  duration by the remaining fraction of the range (Flutter parity:
+  `AnimationController._animateToInternal`). A mid-flight `reverse()` keeps
+  the full-range velocity instead of stretching the leftover distance over
+  the entire duration. Starting a run whose value already sits at its target
+  settles immediately with the final status (`Completed`/`Dismissed`) instead
+  of running a full-duration no-op that re-notified listeners every frame.
 - `AnimationController::is_animating()` is now ticker-based (Flutter parity:
   `AnimationController` overrides `isAnimating` with `ticker.isActive`).
   Previously a stopped controller positioned at an interior value reported

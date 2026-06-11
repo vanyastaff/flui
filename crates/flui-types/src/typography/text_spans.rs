@@ -97,6 +97,25 @@ impl InlineSpan {
     pub fn has_semantics(&self) -> bool {
         self.as_trait().has_semantics()
     }
+
+    /// Compares only the parts that affect SHAPING/LAYOUT: text
+    /// content, layout-affecting style fields
+    /// ([`TextStyle::layout_affecting_eq`]), and placeholder geometry.
+    ///
+    /// `true` means the two span trees produce identical glyph
+    /// geometry — a text engine may keep its shaped layout and only
+    /// re-emit paint commands (colors/shadows changed at most).
+    /// Interaction-only fields (semantic labels, cursors, tap
+    /// handlers) are ignored: they affect neither shaping nor paint.
+    #[must_use]
+    pub fn layout_affecting_eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Text(a), Self::Text(b)) => a.layout_affecting_eq(b),
+            // Placeholder geometry IS layout: any change re-shapes.
+            (Self::Placeholder(a), Self::Placeholder(b)) => a == b,
+            _ => false,
+        }
+    }
 }
 
 impl From<TextSpan> for InlineSpan {
@@ -168,6 +187,32 @@ impl PartialEq for TextSpan {
 }
 
 impl TextSpan {
+    /// Recursive layout-affecting comparison: text content, the
+    /// layout-affecting style fields, and the children pairwise.
+    ///
+    /// Average and worst case O(total spans + total text bytes) — one
+    /// walk over both trees, short-circuiting on the first difference.
+    /// See [`InlineSpan::layout_affecting_eq`] for the contract.
+    #[must_use]
+    pub fn layout_affecting_eq(&self, other: &Self) -> bool {
+        if self.text != other.text || self.children.len() != other.children.len() {
+            return false;
+        }
+        let style_eq = match (&self.style, &other.style) {
+            (None, None) => true,
+            (Some(a), Some(b)) => a.layout_affecting_eq(b),
+            // A style appearing/disappearing can change font selection
+            // via inheritance — conservatively a layout change.
+            _ => false,
+        };
+        style_eq
+            && self
+                .children
+                .iter()
+                .zip(&other.children)
+                .all(|(a, b)| a.layout_affecting_eq(b))
+    }
+
     /// Creates a new text span with the given text.
     #[must_use]
     #[inline]

@@ -3,7 +3,7 @@
 //! This module provides the [`TreeWrite`] trait for modifying
 //! tree structure (insert, remove, reparent).
 
-use flui_foundation::Identifier;
+use flui_foundation::TreeId;
 
 use super::TreeRead;
 use crate::depth::INLINE_TREE_DEPTH;
@@ -31,7 +31,7 @@ use crate::error::{TreeError, TreeResult};
 /// - `NotFound` - Node doesn't exist
 /// - `CycleDetected` - Reparenting would create a cycle
 /// - `AlreadyExists` - Node already in tree
-pub trait TreeWrite<I: Identifier>: TreeRead<I> {
+pub trait TreeWrite<I: TreeId>: TreeRead<I> {
     /// Returns a mutable reference to the node with the given ID.
     ///
     /// # Arguments
@@ -167,7 +167,7 @@ pub trait TreeWrite<I: Identifier>: TreeRead<I> {
     ///
     /// Uses a `HashSet<I>` visited set for O(1) per-node detection
     /// (O(N) space). The `I: Hash + Eq` bound is already supplied by the
-    /// [`Identifier`] supertrait, so no extra bound is required here.
+    /// [`TreeId`] bound, so no extra bound is required here.
     /// Under the normal public API (`add_child`, `set_parent`) cycle
     /// creation is rejected at insertion time; this guard is
     /// defense-in-depth against a corrupted slab.
@@ -212,10 +212,10 @@ pub trait TreeWrite<I: Identifier>: TreeRead<I> {
                 // `current` was already visited: the slab contains a
                 // cycle. Abort rather than loop forever.
                 tracing::warn!(
-                    node_id = current.get(),
+                    node_id = current.debug_value(),
                     "cycle detected in cascade removal; aborting traversal"
                 );
-                return Err(TreeError::cycle_detected(current.get()));
+                return Err(TreeError::cycle_detected(current.debug_value()));
             }
             worklist.push(current);
             // Push children for later processing. Since this is a
@@ -298,7 +298,7 @@ pub trait TreeWrite<I: Identifier>: TreeRead<I> {
 ///
 /// This trait provides operations that need both write access and
 /// navigation capabilities.
-pub trait TreeWriteNav<I: Identifier>: TreeWrite<I> + super::TreeNav<I> {
+pub trait TreeWriteNav<I: TreeId>: TreeWrite<I> + super::TreeNav<I> {
     /// Sets the parent of a node.
     ///
     /// # Arguments
@@ -371,15 +371,15 @@ pub trait TreeWriteNav<I: Identifier>: TreeWrite<I> + super::TreeNav<I> {
         Self: Sized,
     {
         if !self.contains(from) {
-            return Err(TreeError::not_found(from.get()));
+            return Err(TreeError::not_found(from.debug_value()));
         }
         if !self.contains(to) {
-            return Err(TreeError::not_found(to.get()));
+            return Err(TreeError::not_found(to.debug_value()));
         }
 
         // Check for cycles: 'to' can't be a descendant of 'from'
         if self.is_ancestor_of(from, to) {
-            return Err(TreeError::cycle_detected(to.get()));
+            return Err(TreeError::cycle_detected(to.debug_value()));
         }
 
         // Collect children first (to avoid borrow issues)
@@ -418,7 +418,7 @@ pub trait TreeWriteNav<I: Identifier>: TreeWrite<I> + super::TreeNav<I> {
                 // safe here because the node is freshly inserted and
                 // has no children yet — cascade vs shallow is moot.
                 self.remove_shallow(id);
-                return Err(TreeError::not_found(parent_id.get()));
+                return Err(TreeError::not_found(parent_id.debug_value()));
             }
             self.set_parent(id, Some(parent_id))?;
         }
@@ -431,7 +431,7 @@ pub trait TreeWriteNav<I: Identifier>: TreeWrite<I> + super::TreeNav<I> {
 // BLANKET IMPLEMENTATIONS
 // ============================================================================
 
-impl<I: Identifier, T: TreeWrite<I> + ?Sized> TreeWrite<I> for &mut T {
+impl<I: TreeId, T: TreeWrite<I> + ?Sized> TreeWrite<I> for &mut T {
     #[inline]
     fn get_mut(&mut self, id: I) -> Option<&mut Self::Node> {
         (**self).get_mut(id)
@@ -458,7 +458,7 @@ impl<I: Identifier, T: TreeWrite<I> + ?Sized> TreeWrite<I> for &mut T {
     }
 }
 
-impl<I: Identifier, T: TreeWrite<I> + ?Sized> TreeWrite<I> for Box<T> {
+impl<I: TreeId, T: TreeWrite<I> + ?Sized> TreeWrite<I> for Box<T> {
     #[inline]
     fn get_mut(&mut self, id: I) -> Option<&mut Self::Node> {
         (**self).get_mut(id)
@@ -623,18 +623,18 @@ mod tests {
         fn set_parent(&mut self, child: ViewId, new_parent: Option<ViewId>) -> TreeResult<ViewId> {
             // Check child exists
             if !self.contains(child) {
-                return Err(TreeError::not_found(child.get()));
+                return Err(TreeError::not_found(child.debug_value()));
             }
 
             // Check new parent exists (if provided)
             if let Some(parent_id) = new_parent {
                 if !self.contains(parent_id) {
-                    return Err(TreeError::not_found(parent_id.get()));
+                    return Err(TreeError::not_found(parent_id.debug_value()));
                 }
 
                 // Check for cycles: new_parent must not be a descendant of child
                 if self.is_ancestor_of(child, parent_id) || parent_id == child {
-                    return Err(TreeError::cycle_detected(child.get()));
+                    return Err(TreeError::cycle_detected(child.debug_value()));
                 }
             }
 

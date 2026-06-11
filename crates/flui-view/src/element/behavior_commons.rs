@@ -273,9 +273,10 @@ pub(crate) fn remove_render_object_from_tree<V, A>(
         // primitive (now renamed `remove_shallow`). Element unmount
         // wants the cascade — when a parent element unmounts, all
         // descendant render objects must come down with it.
-        use flui_tree::TreeWrite;
+
         let mut owner = pipeline_owner.write();
-        owner.render_tree_mut().remove(render_id);
+        // Dispose protocol: evict dirty entries, then free the slots.
+        owner.remove_render_object(render_id);
         tracing::debug!(
             "{}::on_unmount removed render_id={:?}",
             behavior_name,

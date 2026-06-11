@@ -560,21 +560,22 @@ fn u19_render_view_adapter_bridge_smoke() {
 
     let mut adapter = RenderViewAdapter::new(view);
 
-    // Hand the adapter a sentinel erased ctx — its body ignores the
-    // ctx and drives layout from its own configuration.
-    let sentinel_constraints = BoxConstraints::tight(Size::new(px(999.0), px(999.0)));
-    let size = <BoxProtocol as Protocol>::with_leaf_erased_ctx(sentinel_constraints, |erased| {
+    // The INCOMING constraints are authoritative — they carry the live
+    // window size (set_root_constraints every frame). The mount-time
+    // configuration is a snapshot that goes stale on the first resize;
+    // sizing from it left newly exposed window area unpainted forever
+    // (caught by the colored-box e2e gate, pinned by
+    // tests/root_resize_repaint.rs).
+    let incoming = BoxConstraints::tight(Size::new(px(999.0), px(999.0)));
+    let size = <BoxProtocol as Protocol>::with_leaf_erased_ctx(incoming, |erased| {
         <RenderViewAdapter as RenderObject<BoxProtocol>>::perform_layout_raw(&mut adapter, erased)
     })
     .expect("RenderViewAdapter root layout must always succeed");
 
-    // Logical constraints from from_size(200×150, 1.0) are tight at
-    // (200, 150). RenderView::perform_layout writes size =
-    // constraints.smallest() = (200, 150).
     assert_eq!(
         size,
-        Size::new(px(200.0), px(150.0)),
-        "RenderViewAdapter must layout from its embedded configuration, \
-         not from the sentinel erased-ctx constraints",
+        Size::new(px(999.0), px(999.0)),
+        "RenderViewAdapter must size from the INCOMING root constraints \
+         (live window size), not from its mount-time configuration snapshot",
     );
 }

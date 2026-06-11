@@ -49,7 +49,13 @@ fn test_text_painter_setters_invalidate_layout() {
     painter.layout(0.0, 200.0);
     assert!(painter.did_layout());
 
+    // Alignment is a paint offset over the shaped lines (shaped/paint
+    // split) — the layout cache survives the change.
     painter.set_text_align(TextAlign::Center);
+    assert!(painter.did_layout());
+
+    // Layout-affecting setters still drop the cache.
+    painter.set_max_lines(Some(1));
     assert!(!painter.did_layout());
 }
 

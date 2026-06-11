@@ -1,11 +1,11 @@
 //! RenderBox trait for 2D box layout with Arity-based child management.
 
 use flui_tree::Arity;
-use flui_types::{Offset, Point, Rect, Size};
+use flui_types::{Point, Rect, Size};
 
 use crate::{
     constraints::BoxConstraints,
-    context::{BoxHitTestContext, BoxLayoutContext, BoxPaintContext, CanvasContext},
+    context::{BoxHitTestContext, BoxLayoutContext},
     hit_testing::HitTestBehavior,
     parent_data::ParentData,
     protocol::BoxProtocol,
@@ -190,44 +190,54 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     // ========================================================================
     // Intrinsic Dimensions
     // ========================================================================
-
-    /// Returns the minimum intrinsic width for a given height.
-    fn get_min_intrinsic_width(&self, height: f32) -> f32 {
-        self.compute_min_intrinsic_width(height)
-    }
-
-    /// Returns the maximum intrinsic width for a given height.
-    fn get_max_intrinsic_width(&self, height: f32) -> f32 {
-        self.compute_max_intrinsic_width(height)
-    }
-
-    /// Returns the minimum intrinsic height for a given width.
-    fn get_min_intrinsic_height(&self, width: f32) -> f32 {
-        self.compute_min_intrinsic_height(width)
-    }
-
-    /// Returns the maximum intrinsic height for a given width.
-    fn get_max_intrinsic_height(&self, width: f32) -> f32 {
-        self.compute_max_intrinsic_height(width)
-    }
+    //
+    // Pure functions of the object's configuration plus the SAME
+    // queries on children (through the ctx — objects hold no child
+    // pointers). Callers go through the pipeline
+    // (`PipelineOwner::box_intrinsic_dimension`), which memoizes every
+    // level in the per-node layout cache and clears it on
+    // `mark_needs_layout` with boundary-crossing escalation
+    // (Flutter `_LayoutCacheStorage`, box.dart:2840). The Flutter
+    // `getMinIntrinsicWidth` wrapper layer IS the pipeline here; there
+    // is deliberately no uncached `get_*` mirror on the trait.
 
     /// Computes the minimum intrinsic width for a given height.
-    fn compute_min_intrinsic_width(&self, _height: f32) -> f32 {
+    ///
+    /// Default: `0.0` (Flutter parity — `RenderBox` itself reports no
+    /// intrinsic extent; containers override and fold their children's
+    /// answers via `ctx`).
+    fn compute_min_intrinsic_width(
+        &self,
+        _height: f32,
+        _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
         0.0
     }
 
     /// Computes the maximum intrinsic width for a given height.
-    fn compute_max_intrinsic_width(&self, _height: f32) -> f32 {
+    fn compute_max_intrinsic_width(
+        &self,
+        _height: f32,
+        _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
         0.0
     }
 
     /// Computes the minimum intrinsic height for a given width.
-    fn compute_min_intrinsic_height(&self, _width: f32) -> f32 {
+    fn compute_min_intrinsic_height(
+        &self,
+        _width: f32,
+        _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
         0.0
     }
 
     /// Computes the maximum intrinsic height for a given width.
-    fn compute_max_intrinsic_height(&self, _width: f32) -> f32 {
+    fn compute_max_intrinsic_height(
+        &self,
+        _width: f32,
+        _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
         0.0
     }
 
@@ -235,14 +245,15 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     // Dry Layout
     // ========================================================================
 
-    /// Returns the size this box would like to be given the constraints.
-    fn get_dry_layout(&self, constraints: BoxConstraints) -> Size {
-        self.compute_dry_layout(constraints)
-    }
-
     /// Computes the size this box would have given the constraints,
-    /// without actually laying out.
-    fn compute_dry_layout(&self, _constraints: BoxConstraints) -> Size {
+    /// without laying out — a pure mirror of `perform_layout`'s sizing
+    /// logic. Children are probed through `ctx` (memoized by the
+    /// pipeline). Queried via `PipelineOwner::box_dry_layout`.
+    fn compute_dry_layout(
+        &self,
+        _constraints: BoxConstraints,
+        _ctx: &mut crate::context::BoxDryLayoutCtx<'_>,
+    ) -> Size {
         Size::ZERO
     }
 
@@ -255,18 +266,16 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         self.compute_distance_to_actual_baseline(baseline)
     }
 
-    /// Returns the distance from the top of the box to its first baseline
-    /// for the given constraints (dry layout).
-    fn get_dry_baseline(&self, constraints: BoxConstraints, baseline: TextBaseline) -> Option<f32> {
-        self.compute_dry_baseline(constraints, baseline)
-    }
-
     /// Computes the distance from the top of the box to its first baseline.
     fn compute_distance_to_actual_baseline(&self, _baseline: TextBaseline) -> Option<f32> {
         None
     }
 
-    /// Computes the dry baseline for the given constraints.
+    /// Computes the dry baseline for the given constraints — where the
+    /// first baseline WOULD sit after a layout with these constraints.
+    /// Memoized per `(constraints, baseline)` by the pipeline
+    /// (`PipelineOwner::box_dry_baseline`); the cached entry includes a
+    /// computed `None`.
     fn compute_dry_baseline(
         &self,
         _constraints: BoxConstraints,
@@ -294,30 +303,39 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     // Painting
     // ========================================================================
 
-    /// Paints this render object and its children.
+    /// Records this render object's paint fragment.
     ///
     /// The context provides:
-    /// - Current offset via `ctx.offset()`
-    /// - Canvas for drawing via `ctx.canvas()`
-    /// - Child painting via `ctx.paint_child()` (arity-specific)
+    /// - A recording canvas pre-translated to this node's origin via
+    ///   `ctx.canvas()` — **draw in local coordinates**, no offset
+    ///   arithmetic
+    /// - Child splicing via `ctx.paint_child()` (arity-gated: `Leaf`
+    ///   has no child methods at compile time)
+    /// - Clip scopes that cover children via `ctx.with_clip_rect()`
+    ///   and friends
+    ///
+    /// Paint is a sans-IO encoder pass: the recorded fragment is
+    /// replayed into the layer tree by the pipeline; this method never
+    /// touches the live render tree.
     ///
     /// # Example
     ///
     /// ```ignore
-    /// fn paint(&self, ctx: &mut BoxPaintContext<'_, Single, BoxParentData>) {
-    ///     // Draw background
-    ///     let rect = Rect::from_size(self.size).translate(ctx.offset());
-    ///     ctx.canvas().draw_rect(rect, &Paint::fill(self.color));
-    ///
-    ///     // Paint child
+    /// fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
+    ///     // Draw background in local coordinates.
+    ///     ctx.canvas()
+    ///         .draw_rect(Rect::from_origin_size(Point::ZERO, self.size), &paint);
+    ///     // Splice the child at its laid-out offset.
     ///     ctx.paint_child();
     /// }
     /// ```
     ///
-    /// Default implementation paints children only (for containers that
-    /// don't draw themselves).
-    fn paint(&self, _ctx: &mut BoxPaintContext<'_, Self::Arity, Self::ParentData>) {
-        // Default: no-op - pipeline handles child painting if not overridden
+    /// The default implementation splices all children in tree order
+    /// (Flutter's `RenderProxyBox.paint` parity) — pass-through
+    /// containers need no override. An override that does NOT call any
+    /// child-painting method hides its subtree (offstage semantics).
+    fn paint(&self, ctx: &mut crate::context::PaintCx<'_, Self::Arity>) {
+        ctx.paint_children_in_order();
     }
 
     // ========================================================================
@@ -367,9 +385,9 @@ pub enum TextBaseline {
 ///
 /// `hit_test_raw` is still a placeholder — hit testing flows through
 /// `RenderBox::hit_test()` with `BoxHitTestContext` and is wired
-/// separately by the hit-test pipeline. The painting flow is also still
-/// out-of-band: the pipeline constructs `BoxPaintContext` and calls
-/// `RenderBox::paint()` directly.
+/// separately by the hit-test pipeline. `paint_raw` is the live paint
+/// bridge: it wraps the pipeline's `FragmentRecorder` in the typed
+/// `PaintCx<T::Arity>` and calls `RenderBox::paint`.
 ///
 /// Note: This requires T to also implement Diagnosticable since `RenderObject<P>`
 /// requires it.
@@ -430,22 +448,83 @@ where
         })
     }
 
-    fn paint(&self, _context: &mut CanvasContext, _offset: Offset) {
-        // Protocol bridge only - no-op.
-        // Real painting flows through RenderBox::paint() with BoxPaintContext,
-        // which provides children access and paint_child() callbacks.
-        // The pipeline creates the proper context and calls RenderBox::paint()
-        // directly.
+    fn paint_raw(&self, recorder: &mut crate::context::FragmentRecorder, child_count: usize) {
+        // The paint bridge: wrap the recorder in the typed, arity-gated
+        // PaintCx and call the user's RenderBox::paint. Unlike the
+        // layout bridge there is no GAT erasure — the recorder is a
+        // concrete type (no ParentData in the paint surface), so the
+        // re-typing is a zero-cost PhantomData re-tag.
+        let mut cx = crate::context::PaintCx::<T::Arity>::new(recorder, child_count);
+        T::paint(self, &mut cx);
     }
 
     fn hit_test_raw(
         &self,
-        _result: &mut crate::protocol::ProtocolHitResult<BoxProtocol>,
-        _position: crate::protocol::ProtocolPosition<BoxProtocol>,
+        position: crate::protocol::ProtocolPosition<BoxProtocol>,
+        _child_count: usize,
+        hit_child: &mut (
+                 dyn FnMut(usize, Option<crate::protocol::ProtocolPosition<BoxProtocol>>) -> bool
+                     + Send
+                     + Sync
+             ),
     ) -> bool {
-        // Protocol bridge only - returns false.
-        // Real hit testing flows through RenderBox::hit_test() with BoxHitTestContext.
-        false
+        // The hit-test bridge: wrap the driver's child recursion in
+        // the typed, arity-gated BoxHitTestContext and call the user's
+        // RenderBox::hit_test. Same shape as the paint bridge — no GAT
+        // erasure needed, the position/callback types are concrete.
+        let inner = crate::protocol::BoxHitTestCtx::<T::Arity, T::ParentData>::with_child_callback(
+            position, hit_child,
+        );
+        let mut ctx = crate::context::BoxHitTestContext::new(inner);
+        T::hit_test(self, &mut ctx)
+    }
+
+    fn intrinsic_raw(
+        &self,
+        dimension: crate::storage::IntrinsicDimension,
+        extent: f32,
+        child_count: usize,
+        child_query: &mut (
+                 dyn FnMut(usize, crate::storage::IntrinsicDimension, f32) -> f32 + Send + Sync
+             ),
+    ) -> f32 {
+        // The intrinsics bridge: wrap the driver's memoizing child
+        // recursion in the typed ctx and dispatch the dimension to the
+        // matching typed compute_* — same shape as the paint/hit
+        // bridges, no GAT erasure needed.
+        use crate::storage::IntrinsicDimension as Dim;
+        let mut ctx = crate::context::BoxIntrinsicsCtx::new(child_count, child_query);
+        match dimension {
+            Dim::MinWidth => T::compute_min_intrinsic_width(self, extent, &mut ctx),
+            Dim::MaxWidth => T::compute_max_intrinsic_width(self, extent, &mut ctx),
+            Dim::MinHeight => T::compute_min_intrinsic_height(self, extent, &mut ctx),
+            Dim::MaxHeight => T::compute_max_intrinsic_height(self, extent, &mut ctx),
+        }
+    }
+
+    fn dry_layout_raw(
+        &self,
+        constraints: crate::protocol::ProtocolConstraints<BoxProtocol>,
+        child_count: usize,
+        child_dry: &mut (
+                 dyn FnMut(
+            usize,
+            crate::protocol::ProtocolConstraints<BoxProtocol>,
+        ) -> crate::protocol::ProtocolGeometry<BoxProtocol>
+                     + Send
+                     + Sync
+             ),
+    ) -> crate::protocol::ProtocolGeometry<BoxProtocol> {
+        let mut ctx = crate::context::BoxDryLayoutCtx::new(child_count, child_dry);
+        T::compute_dry_layout(self, constraints, &mut ctx)
+    }
+
+    fn dry_baseline_raw(
+        &self,
+        constraints: crate::protocol::ProtocolConstraints<BoxProtocol>,
+        baseline: crate::traits::TextBaseline,
+    ) -> Option<f32> {
+        T::compute_dry_baseline(self, constraints, baseline)
     }
 
     fn geometry(&self) -> &crate::protocol::ProtocolGeometry<BoxProtocol> {

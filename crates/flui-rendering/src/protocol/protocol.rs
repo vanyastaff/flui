@@ -86,6 +86,16 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
     where
         Self: 'ctx;
 
+    /// Per-node layout calculation cache stored on `RenderState<Self>`.
+    ///
+    /// For `BoxProtocol` this is the four-map
+    /// [`BoxLayoutCache`](crate::storage::BoxLayoutCache) (intrinsic
+    /// dimensions, dry layout, dry baselines — Flutter's
+    /// `_LayoutCacheStorage`); the sliver protocol carries no cache yet
+    /// (`()`), so its `clear` never triggers the boundary-crossing
+    /// invalidation escalation.
+    type LayoutCache: crate::storage::ProtocolLayoutCache;
+
     /// Protocol name for debugging and diagnostics.
     fn name() -> &'static str;
 

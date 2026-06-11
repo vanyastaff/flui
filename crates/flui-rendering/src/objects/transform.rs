@@ -200,33 +200,28 @@ impl RenderBox for RenderTransform {
     // paint() uses default no-op - transform is applied via paint_transform()
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
-        // Transform hit test position by inverse matrix
-        let effective = self.effective_transform();
-
-        // Try to invert the matrix
-        if let Some(inverse) = effective.try_inverse() {
-            let local_pos = ctx.position();
-            let (tx, ty) = inverse.transform_point(local_pos.dx, local_pos.dy);
-
-            // Check if transformed point is within bounds
-            if tx < Pixels::ZERO
-                || tx > self.size.width
-                || ty < Pixels::ZERO
-                || ty > self.size.height
-            {
-                return false;
-            }
-
-            if self.has_child {
-                // Create transformed context for child hit testing
-                ctx.hit_test_child_at_offset(0, Offset::ZERO)
-            } else {
-                false
-            }
-        } else {
-            // Matrix is not invertible, cannot hit test
-            false
+        // A transform does NOT test its own (untransformed) size — how the
+        // untransformed size and the child's transformed position interact
+        // is ill-defined, so only the child decides (Flutter parity:
+        // `RenderTransform.hitTest`, box.dart). A scale(2) child visually
+        // covering 80×80 must be hittable across that whole area even
+        // though this node's laid-out size is 40×40.
+        if !self.has_child {
+            return false;
         }
+        let Some(inverse) = self.effective_transform().try_inverse() else {
+            // A degenerate (non-invertible) matrix collapses the subtree
+            // to zero visual area: nothing is visible, nothing is hit.
+            return false;
+        };
+        let local_pos = ctx.position();
+        let (tx, ty) = inverse.transform_point(local_pos.dx, local_pos.dy);
+        // Transform symmetry: the child sees the SAME point the paint
+        // matrix mapped — forward the inverse-transformed position, not
+        // the original one. (The pre-fix shape passed the untransformed
+        // position; the inverse was used only for a bounds gate, so any
+        // scaled/rotated child hit-tested at the wrong local point.)
+        ctx.hit_test_child(0, Offset::new(tx, ty))
     }
 
     fn box_paint_bounds(&self) -> Rect {
@@ -282,6 +277,28 @@ impl HotReloadCapability for RenderTransform {}
 
 #[cfg(test)]
 mod tests {
+
+    /// Transform symmetry: `paint_transform` hands the pipeline the
+    /// SAME matrix hit-test inverts (`effective_transform` both ways),
+    /// and the inverse maps a visual point to the child-local point.
+    #[test]
+    fn paint_and_hit_test_share_one_transform() {
+        let mut node = RenderTransform::scale(2.0, 2.0);
+        node.has_child = true;
+        assert_eq!(node.paint_transform(), Some(node.effective_transform()));
+
+        let inverse = node
+            .effective_transform()
+            .try_inverse()
+            .expect("scale(2,2) is invertible");
+        let (tx, ty) = inverse.transform_point(
+            flui_types::geometry::px(80.0),
+            flui_types::geometry::px(60.0),
+        );
+        assert!((tx.get() - 40.0).abs() < 1e-4, "tx = {tx:?}");
+        assert!((ty.get() - 30.0).abs() < 1e-4, "ty = {ty:?}");
+    }
+
     use std::f32::consts::PI;
 
     use flui_types::geometry::px;

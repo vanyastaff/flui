@@ -1,11 +1,11 @@
 //! RenderSliver trait for scrollable content layout.
 
 use flui_tree::Arity;
-use flui_types::{Offset, Pixels, Rect, Size, geometry::px, prelude::AxisDirection};
+use flui_types::{Pixels, Rect, Size, geometry::px, prelude::AxisDirection};
 
 use crate::{
     constraints::{SliverConstraints, SliverGeometry},
-    context::{CanvasContext, SliverHitTestContext, SliverLayoutContext, SliverPaintContext},
+    context::{SliverHitTestContext, SliverLayoutContext},
     parent_data::ParentData,
     protocol::SliverProtocol,
     traits::RenderObject,
@@ -255,31 +255,18 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static 
     // Painting
     // ========================================================================
 
-    /// Paints this sliver and its children.
+    /// Records this sliver's paint fragment.
     ///
-    /// The context provides:
-    /// - Current offset via `ctx.offset()`
-    /// - Canvas for drawing via `ctx.canvas()`
-    /// - Child painting via `ctx.paint_child()` (arity-specific)
+    /// Same sans-IO fragment model as
+    /// [`RenderBox::paint`](crate::traits::RenderBox::paint): the
+    /// canvas is pre-translated to the sliver's origin (draw in local
+    /// coordinates) and children are spliced via the arity-gated
+    /// `paint_child` surface. Visibility culling stays the sliver's
+    /// job — splice only the visible child range.
     ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// fn paint(&self, ctx: &mut SliverPaintContext<'_, Variable, SliverParentData>) {
-    ///     // Draw visible portion
-    ///     let rect = self.visible_rect().translate(ctx.offset());
-    ///     ctx.canvas().draw_rect(rect, &paint);
-    ///
-    ///     // Paint visible children
-    ///     for i in self.first_visible..=self.last_visible {
-    ///         ctx.paint_child(i);
-    ///     }
-    /// }
-    /// ```
-    ///
-    /// Default implementation paints children only.
-    fn paint(&self, _ctx: &mut SliverPaintContext<'_, Self::Arity, Self::ParentData>) {
-        // Default: no-op - pipeline handles child painting if not overridden
+    /// The default implementation splices all children in tree order.
+    fn paint(&self, ctx: &mut crate::context::PaintCx<'_, Self::Arity>) {
+        ctx.paint_children_in_order();
     }
 
     // ========================================================================
@@ -378,22 +365,27 @@ where
         ))
     }
 
-    fn paint(&self, _context: &mut CanvasContext, _offset: Offset) {
-        // Protocol bridge only - no-op.
-        // Real painting flows through RenderSliver::paint() with
-        // SliverPaintContext, which provides children access and
-        // paint_child() callbacks. The pipeline creates the proper
-        // context and calls RenderSliver::paint() directly.
+    fn paint_raw(&self, recorder: &mut crate::context::FragmentRecorder, child_count: usize) {
+        // Same paint bridge shape as the BoxProtocol blanket: wrap the
+        // recorder in the typed PaintCx<T::Arity> and call the user's
+        // RenderSliver::paint.
+        let mut cx = crate::context::PaintCx::<T::Arity>::new(recorder, child_count);
+        T::paint(self, &mut cx);
     }
 
     fn hit_test_raw(
         &self,
-        _result: &mut crate::protocol::ProtocolHitResult<SliverProtocol>,
         _position: crate::protocol::ProtocolPosition<SliverProtocol>,
+        _child_count: usize,
+        _hit_child: &mut (
+                 dyn FnMut(usize, Option<crate::protocol::ProtocolPosition<SliverProtocol>>) -> bool
+                     + Send
+                     + Sync
+             ),
     ) -> bool {
-        // Protocol bridge only - returns false.
-        // Real hit testing flows through RenderSliver::hit_test() with
-        // SliverHitTestContext.
+        // Sliver hit testing lands with the sliver layout walk
+        // (Core.2); until then a sliver subtree reports a miss rather
+        // than a false hit.
         false
     }
 

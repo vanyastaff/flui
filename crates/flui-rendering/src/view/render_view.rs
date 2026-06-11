@@ -11,7 +11,6 @@ use parking_lot::RwLock;
 use super::ViewConfiguration;
 use crate::{
     constraints::BoxConstraints,
-    context::CanvasContext,
     // Cycle 4 U-4: `HitTestResult` is re-exported from
     // `flui_interaction::routing` via `hit_testing::mod`; the import
     // path stays the same but the underlying type is now the
@@ -374,11 +373,6 @@ impl RenderView {
     // Painting
     // ========================================================================
 
-    /// Paints this render view.
-    pub fn paint_view(&self, _context: &mut CanvasContext, _offset: Offset) {
-        // No children to paint currently
-    }
-
     /// Returns the paint bounds for this render view (in physical pixels).
     pub fn physical_paint_bounds(&self) -> Rect {
         let config = self.configuration();
@@ -496,40 +490,79 @@ impl crate::traits::HotReloadCapability for RenderViewAdapter {}
 impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewAdapter {
     fn perform_layout_raw(
         &mut self,
-        _ctx: &mut <crate::protocol::BoxProtocol as crate::protocol::Protocol>::LayoutCtxErased<'_>,
+        ctx: &mut <crate::protocol::BoxProtocol as crate::protocol::Protocol>::LayoutCtxErased<'_>,
     ) -> crate::error::RenderResult<crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>>
     {
-        // D-block PR-A1b U19 — RenderView is the root and manages its own
-        // layout via the `perform_layout()` method on the embedded
-        // `RenderView`. The erased ctx is unused — root layout is driven
-        // by `configuration().preferred_size` rather than parent-supplied
-        // constraints (Flutter parity, `.flutter/.../view.dart`).
-        //
-        // Follow-up to PR #141 #5 Option A: signature returns
-        // `RenderResult<Size>`. The adapter itself has no contract
-        // surface to violate — there is no `complete_with_size`
-        // analogue to forget — so it never returns a typed `Err`.
-        // `RenderView::perform_layout` can still trip its internal
-        // `assert!` invariants (e.g. missing `prepare_initial_frame`)
-        // which propagate as panics; those are caught upstream by
-        // `RenderEntry::layout_leaf_only`'s `catch_unwind` and surface
-        // as `RenderError::Poisoned` — same as any third-party panic
-        // from user widget code.
-        self.view.perform_layout();
-        Ok(self.view.size())
+        // The INCOMING constraints are authoritative — they carry the
+        // live window size from the binding (set_root_constraints every
+        // frame). The mount-time ViewConfiguration is a snapshot that
+        // goes stale on the first resize; sizing from it left every
+        // newly exposed pixel unpainted. The root fills whatever the
+        // window gives it (Flutter parity: tight root constraints), and
+        // children get that size as tight constraints at the origin.
+        let typed_inner = crate::protocol::BoxLayoutCtx::<
+            flui_tree::Variable,
+            crate::parent_data::BoxParentData,
+        >::from_erased(ctx);
+        let mut layout_ctx = crate::context::BoxLayoutContext::<
+            flui_tree::Variable,
+            crate::parent_data::BoxParentData,
+        >::new(typed_inner);
+
+        let constraints = *layout_ctx.constraints();
+        let size = constraints.biggest();
+        if !size.is_finite() {
+            // Root constraints come from the window surface and must be
+            // bounded; letting INF through would poison every descendant
+            // geometry and paint bound downstream of `view.size`. A
+            // typed error keeps the failure diagnosable in release
+            // builds (a debug_assert would silently propagate there).
+            tracing::error!(?constraints, "root constraints must be bounded");
+            return Err(crate::error::RenderError::unbounded_constraint(
+                "RenderViewAdapter",
+            ));
+        }
+        self.view.size = size;
+
+        let child_constraints = crate::constraints::BoxConstraints::tight(size);
+        for i in 0..layout_ctx.child_count() {
+            let _ = layout_ctx.layout_child(i, child_constraints);
+            layout_ctx.position_child(i, flui_types::Offset::ZERO);
+        }
+
+        Ok(size)
     }
 
-    fn paint(&self, context: &mut CanvasContext, offset: Offset) {
-        self.view.paint_view(context, offset);
+    fn paint_raw(&self, recorder: &mut crate::context::FragmentRecorder, child_count: usize) {
+        // Root pass-through: the view draws nothing itself and splices
+        // every child subtree in order.
+        let mut cx = crate::context::PaintCx::<flui_tree::Variable>::new(recorder, child_count);
+        cx.paint_children();
     }
 
     fn hit_test_raw(
         &self,
-        _result: &mut crate::protocol::ProtocolHitResult<crate::protocol::BoxProtocol>,
         _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
+        child_count: usize,
+        hit_child: &mut (
+                 dyn FnMut(
+            usize,
+            Option<crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>>,
+        ) -> bool
+                     + Send
+                     + Sync
+             ),
     ) -> bool {
-        // RenderView always hits (it's the root)
-        true
+        // Root pass-through: test children topmost-first (later
+        // siblings paint on top). The view itself claims no hit — an
+        // empty window region reports a miss instead of a phantom
+        // root target.
+        for index in (0..child_count).rev() {
+            if hit_child(index, None) {
+                return true;
+            }
+        }
+        false
     }
 
     fn is_repaint_boundary(&self) -> bool {

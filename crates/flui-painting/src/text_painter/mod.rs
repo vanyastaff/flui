@@ -39,6 +39,31 @@ pub use baseline::TextBaseline;
 /// Default font size when none is specified.
 pub const DEFAULT_FONT_SIZE: f32 = 14.0;
 
+/// What a property change invalidates — the shaped/paint split.
+///
+/// Flutter cannot update paint attributes without recreating the engine
+/// paragraph ("no API to only make those updates",
+/// text_painter.dart:1335-1352): a color change re-shapes. flui's
+/// [`TextPainter::set_text`] diffs the old and new span trees
+/// ([`InlineSpan::layout_affecting_eq`]) and reports which half
+/// actually changed; a paint-only change KEEPS the shaped layout —
+/// metrics, baselines, and cursor geometry stay valid, and the next
+/// paint re-emits draw commands with the new attributes at zero
+/// reshape cost.
+///
+/// The variants are ordered by severity, so a prop-diff over several
+/// properties can fold with `max`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Invalidation {
+    /// Nothing observable changed.
+    None,
+    /// Only paint attributes changed (colors, shadows): repaint with
+    /// the existing shaped layout.
+    Paint,
+    /// Glyph geometry changed: re-shape before the next paint.
+    Layout,
+}
+
 /// A painter that lays out and paints text.
 ///
 /// This is the primary interface for measuring and rendering text in
@@ -267,23 +292,56 @@ impl TextPainter {
 
     // ===== Setters =====
 
-    /// Sets the text to paint.
+    /// Sets the text to paint and reports what the change invalidates.
     ///
-    /// After calling this, you must call
-    /// [`layout`](crate::TextPainter::layout) before painting.
-    pub fn set_text(&mut self, text: Option<InlineSpan>) {
-        if self.text != text {
-            self.text = text;
+    /// The shaped/paint split: when the new span tree differs only in
+    /// paint attributes (colors, shadows), the shaped layout is KEPT —
+    /// size, baselines, and cursor geometry remain valid, and the next
+    /// [`paint`](TextPainter::paint) emits the new attributes with zero
+    /// reshape cost. Only a layout-affecting change (text content, font
+    /// selection, sizes, spacing) drops the cache, and only then must
+    /// [`layout`](TextPainter::layout) run again before painting. The
+    /// caller (a render object) routes the returned [`Invalidation`] to
+    /// its mark-needs-layout / mark-needs-paint decision.
+    pub fn set_text(&mut self, text: Option<InlineSpan>) -> Invalidation {
+        if self.text == text {
+            return Invalidation::None;
+        }
+        let layout_preserved = match (&self.text, &text) {
+            (Some(old), Some(new)) => old.layout_affecting_eq(new),
+            // Appearing/disappearing text is always a layout change.
+            _ => false,
+        };
+        self.text = text;
+        if layout_preserved {
+            Invalidation::Paint
+        } else {
             self.mark_needs_layout();
+            Invalidation::Layout
         }
     }
 
     /// Sets the text alignment.
-    pub fn set_text_align(&mut self, align: TextAlign) {
-        if self.text_align != align {
-            self.text_align = align;
-            self.mark_needs_layout();
+    ///
+    /// Alignment is a PAINT offset over the shaped lines, not a shaping
+    /// input: the cached layout is kept and only its paint offset is
+    /// recomputed (Flutter bakes alignment into the paragraph and
+    /// re-shapes here).
+    pub fn set_text_align(&mut self, align: TextAlign) -> Invalidation {
+        if self.text_align == align {
+            return Invalidation::None;
         }
+        self.text_align = align;
+        // Two-step to satisfy the borrow checker: compute from the
+        // cache's stored extents, then write back.
+        let recomputed = self
+            .layout_cache
+            .as_ref()
+            .map(|cache| self.compute_paint_offset(cache.size.width.0, cache.max_width));
+        if let (Some(cache), Some(offset)) = (&mut self.layout_cache, recomputed) {
+            cache.paint_offset = offset;
+        }
+        Invalidation::Paint
     }
 
     /// Sets the text direction.

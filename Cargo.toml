@@ -195,11 +195,21 @@ keywords = ["gui", "ui", "wgpu", "flutter", "reactive"]
 [dev-dependencies]
 # === Foundation Layer ===
 flui-types = { path = "crates/flui-types" }
+flui-foundation = { path = "crates/flui-foundation" } # HasInstance/Listenable in animated_box_app
 # flui-tree = { path = "crates/flui-tree" }
 
 # === Core Layer ===
 flui-layer = { path = "crates/flui-layer" }
 flui-painting = { path = "crates/flui-painting" }
+# === Rendering Layer (colored_box_app / animated_box_app examples) ===
+flui-rendering = { path = "crates/flui-rendering" }
+
+# === View Layer ===
+flui-view = { path = "crates/flui-view" }
+
+# === Reactive Layer (animated_box_app example) ===
+flui-scheduler = { path = "crates/flui-scheduler" }
+flui-animation = { path = "crates/flui-animation" }
 
 # === Application Layer ===
 flui-app = { path = "crates/flui-app" }

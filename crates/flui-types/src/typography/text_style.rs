@@ -237,6 +237,30 @@ impl TextStyle {
         Self::default()
     }
 
+    /// Compares only the fields that affect SHAPING/LAYOUT — font
+    /// selection (family/fallback/weight/style/features/variations),
+    /// font size, spacing, and line height.
+    ///
+    /// Two styles that differ only in paint attributes (colors,
+    /// foreground/background paints, shadows) produce byte-identical
+    /// glyph geometry, so a text engine may keep its shaped layout and
+    /// only re-emit draw commands. This is the single source of truth
+    /// for that partition: a new `TextStyle` field MUST be classified
+    /// here as layout-affecting or paint-only when it is added.
+    #[must_use]
+    pub fn layout_affecting_eq(&self, other: &Self) -> bool {
+        self.font_size == other.font_size
+            && self.font_weight == other.font_weight
+            && self.font_style == other.font_style
+            && self.letter_spacing == other.letter_spacing
+            && self.word_spacing == other.word_spacing
+            && self.height == other.height
+            && self.font_family == other.font_family
+            && self.font_family_fallback == other.font_family_fallback
+            && self.font_features == other.font_features
+            && self.font_variations == other.font_variations
+    }
+
     /// Sets the text color.
     #[inline]
     pub fn with_color(mut self, color: Color) -> Self {
