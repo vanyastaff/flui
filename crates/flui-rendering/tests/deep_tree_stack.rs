@@ -73,6 +73,61 @@ fn deep_chain_survives_layout_paint_and_hit_walks() {
     );
 }
 
+/// The compositing-bits walk through a deep, fully marked path.
+///
+/// Fresh inserts carry `NEEDS_LAYOUT | NEEDS_PAINT` only, so the
+/// `run_frame` test above never descends this walk — its early-return
+/// on an unmarked node stops at the root. The production deep
+/// scenario is a compositing/repaint-boundary change at the bottom of
+/// the tree: the mark side flags the node and every ancestor, and the
+/// next compositing phase descends the whole marked path. The
+/// compositing frames are far smaller than layout frames, so the
+/// depth is raised to 20 000 — enough to overflow a 1 MiB stack if
+/// the `ensure_stack` probe is ever removed (2 500 survived even
+/// unprotected, by luck).
+#[test]
+#[cfg_attr(miri, ignore = "plain-recursion fallback; depth covered natively")]
+fn deep_chain_survives_compositing_bits_walk() {
+    const COMPOSITING_DEPTH: usize = 20_000;
+
+    let mut owner = PipelineOwner::new();
+    let root = owner.insert(Box::new(RenderColoredBox::red(10.0, 10.0)) as BoxedRenderObject);
+    let mut parent = root;
+    let mut leaf = root;
+    for _ in 1..COMPOSITING_DEPTH {
+        parent = owner
+            .insert_child_render_object(parent, Box::new(RenderColoredBox::red(10.0, 10.0)))
+            .expect("chain link insert");
+        leaf = parent;
+    }
+    owner.set_root_id(Some(root));
+
+    // Mark the full path the way a production boundary flip does
+    // (Flutter `markNeedsCompositingBitsUpdate` flags the node and
+    // walks up flagging every ancestor).
+    for id in owner.render_tree().collect_subtree_ids(root) {
+        owner
+            .render_tree()
+            .get(id)
+            .expect("live chain node")
+            .mark_needs_compositing_bits_update();
+    }
+    owner.add_node_needing_compositing_bits_update(root, 0);
+
+    let owner = owner.into_layout();
+    let mut owner = owner.into_compositing();
+    owner
+        .run_compositing()
+        .expect("deep compositing walk must not error");
+
+    let leaf_node = owner.render_tree().get(leaf).expect("leaf still live");
+    assert!(
+        !leaf_node.needs_compositing_bits_update(),
+        "the walk must have descended all the way to the leaf and \
+         cleared its flag",
+    );
+}
+
 /// Disposal of a 2500-level chain through the owner's removal path
 /// (previously a plain recursive `remove_recursive`, now iterative).
 #[test]
