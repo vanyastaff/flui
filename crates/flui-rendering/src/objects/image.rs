@@ -202,6 +202,18 @@ impl RenderBox for RenderImage {
     fn box_paint_bounds(&self) -> Rect {
         Rect::from_origin_size(Point::ZERO, self.size)
     }
+
+    fn paint(&self, _ctx: &mut crate::context::PaintCx<'_, Leaf>) {
+        // TODO: Implement paint() when Image source is available.
+        // Current block:
+        // - RenderImage doesn't store the actual Image (bitmap data)
+        // - Need Image parameter in constructor or property setter
+        // - Pattern: ctx.canvas().draw_image(image, dst_rect, paint)
+        //
+        // Example (when Image is available):
+        // let rect = Rect::from_origin_size(Point::ZERO, self.size);
+        // ctx.canvas().draw_image(self.image.clone(), rect, None);
+    }
 }
 
 impl PaintEffectsCapability for RenderImage {}
