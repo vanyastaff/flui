@@ -13,7 +13,7 @@ use flui_types::{
 };
 
 use crate::{
-    constraints::{BoxConstraints, Constraints},
+    constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry},
     parent_data::{BoxParentData, ParentData},
     protocol::{
         capabilities::{HitTestCapability, HitTestContextApi, LayoutCapability, LayoutContextApi},
@@ -262,6 +262,19 @@ impl LayoutCapability for BoxLayout {
 /// the RenderTree, and returns the child's size.
 pub type LayoutChildCallback<'a> =
     &'a (dyn Fn(flui_foundation::RenderId, BoxConstraints) -> Size + Send + Sync);
+
+/// Callback type for cross-protocol sliver child layout driven by a Box parent.
+///
+/// Called when a Box parent's `layout_sliver_child()` is invoked. The callback
+/// receives the sliver child's [`flui_foundation::RenderId`] and
+/// [`SliverConstraints`], drives leaf layout on the child via the pre-acquired
+/// pipeline subtree-borrow pool, and returns the child's
+/// [`SliverGeometry`].
+///
+/// Mirrors [`LayoutChildCallback`] in contract; distinct because the input and
+/// output types differ (sliver protocol vs. box protocol).
+pub type SliverLayoutChildCallback<'a> =
+    &'a (dyn Fn(flui_foundation::RenderId, SliverConstraints) -> SliverGeometry + Send + Sync);
 
 /// Per-child geometry storage owned by the typed wrapper when bridging
 /// from an erased context.
@@ -707,6 +720,23 @@ pub trait BoxLayoutCtxErased: Send + Sync {
     /// constraints; returns the child's computed `Size`.
     fn layout_child(&mut self, index: usize, constraints: BoxConstraints) -> Size;
 
+    /// Lays out a **sliver** child at `index` with the given
+    /// [`SliverConstraints`]; returns the child's [`SliverGeometry`].
+    ///
+    /// Only the **leaf** sliver path is supported here (non-leaf sliver
+    /// children gate to [`crate::error::RenderError::ContractViolation`]
+    /// inside `RenderEntry::layout_leaf_only` when the arity check fires).
+    ///
+    /// When no sliver callback is wired (e.g. a Direct-storage context
+    /// constructed without one), returns [`SliverGeometry::ZERO`] — same
+    /// conservative fallback as `layout_child` returning `Size::ZERO` on
+    /// the no-callback Direct path.
+    fn layout_sliver_child(
+        &mut self,
+        index: usize,
+        constraints: SliverConstraints,
+    ) -> SliverGeometry;
+
     /// Records the paint offset for child at `index`.
     fn position_child(&mut self, index: usize, offset: Offset);
 
@@ -799,6 +829,26 @@ impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, 
     #[inline]
     fn layout_child(&mut self, index: usize, constraints: BoxConstraints) -> Size {
         <Self as LayoutContextApi<'_, BoxLayout, A, P>>::layout_child(self, index, constraints)
+    }
+
+    #[inline]
+    fn layout_sliver_child(
+        &mut self,
+        index: usize,
+        constraints: SliverConstraints,
+    ) -> SliverGeometry {
+        // Direct-storage `BoxLayoutCtx` does not carry a sliver callback
+        // (it is used by leaf-only paths and unit tests that never wire
+        // cross-protocol layout). Return `ZERO` — the same conservative
+        // fallback as `layout_child` returning `Size::ZERO` on the
+        // no-callback Direct path. Proxy storage delegates to the
+        // underlying erased ctx which IS wired by the pipeline.
+        match &mut self.storage {
+            BoxLayoutCtxStorage::Direct { .. } => SliverGeometry::ZERO,
+            BoxLayoutCtxStorage::Proxy { erased, .. } => {
+                erased.layout_sliver_child(index, constraints)
+            }
+        }
     }
 
     #[inline]
@@ -907,15 +957,26 @@ pub struct ErasedBoxLayoutCtx<'ctx> {
     children: &'ctx mut Vec<ErasedChildState>,
     child_ids: &'ctx [flui_foundation::RenderId],
     layout_child_callback: LayoutChildCallback<'ctx>,
+    /// Optional callback for cross-protocol sliver child layout.
+    ///
+    /// `None` when no sliver children are present in this subtree walk.
+    /// `layout_sliver_child` returns [`SliverGeometry::ZERO`] in that
+    /// case, matching the conservative fallback on the box path.
+    sliver_layout_child_callback: Option<SliverLayoutChildCallback<'ctx>>,
 }
 
 impl<'ctx> ErasedBoxLayoutCtx<'ctx> {
     /// Creates the walk-side context over pre-built child slots.
+    ///
+    /// `sliver_layout_child_callback` is `None` when the parent is known
+    /// to have no sliver children (avoids the allocation + closure
+    /// construction on the all-box common path).
     pub fn new(
         constraints: BoxConstraints,
         children: &'ctx mut Vec<ErasedChildState>,
         child_ids: &'ctx [flui_foundation::RenderId],
         layout_child_callback: LayoutChildCallback<'ctx>,
+        sliver_layout_child_callback: Option<SliverLayoutChildCallback<'ctx>>,
     ) -> Self {
         Self {
             constraints,
@@ -923,6 +984,7 @@ impl<'ctx> ErasedBoxLayoutCtx<'ctx> {
             children,
             child_ids,
             layout_child_callback,
+            sliver_layout_child_callback,
         }
     }
 
@@ -950,6 +1012,20 @@ impl BoxLayoutCtxErased for ErasedBoxLayoutCtx<'_> {
             slot.size = size;
         }
         size
+    }
+
+    fn layout_sliver_child(
+        &mut self,
+        index: usize,
+        constraints: SliverConstraints,
+    ) -> SliverGeometry {
+        let Some(&child_id) = self.child_ids.get(index) else {
+            return SliverGeometry::ZERO;
+        };
+        match self.sliver_layout_child_callback {
+            Some(cb) => (cb)(child_id, constraints),
+            None => SliverGeometry::ZERO,
+        }
     }
 
     fn position_child(&mut self, index: usize, offset: Offset) {

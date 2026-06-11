@@ -34,7 +34,7 @@ use flui_tree::Arity;
 use flui_types::{Pixels, Size, geometry::Offset};
 
 use crate::{
-    constraints::{BoxConstraints, Constraints},
+    constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry},
     parent_data::ParentData,
     protocol::{BoxLayout, LayoutCapability, LayoutContextApi, Protocol},
 };
@@ -333,6 +333,45 @@ where
     pub fn complete_matching_child(&mut self) {
         let size = self.child_geometry(0).cloned().unwrap_or(Size::ZERO);
         self.inner.complete_layout(size);
+    }
+}
+
+// ============================================================================
+// BOX CROSS-PROTOCOL EXTENSIONS
+// ============================================================================
+//
+// Separate impl block so the `BoxLayoutCtxErased` bound does not pollute
+// the shared-method-name impl above (which would cause E0034 ambiguity
+// between `BoxLayoutCtxErased::constraints` and
+// `LayoutContextApi::constraints`).
+
+impl<'ctx, A: Arity, PD: ParentData + Default> LayoutContext<'ctx, BoxProtocol, A, PD>
+where
+    <BoxLayout as LayoutCapability>::Context<'ctx, A, PD>:
+        crate::protocol::box_protocol::BoxLayoutCtxErased,
+{
+    /// Lays out a **sliver** child at `index` with the given
+    /// [`SliverConstraints`] and returns its [`SliverGeometry`].
+    ///
+    /// Delegates to
+    /// [`crate::protocol::box_protocol::BoxLayoutCtxErased::layout_sliver_child`]
+    /// on the underlying context. In Direct-storage contexts (leaf-only
+    /// layout, unit tests without a pipeline-wired sliver callback) the
+    /// underlying impl returns [`SliverGeometry::ZERO`]. In the production
+    /// pipeline-driven Proxy context the call drives
+    /// `layout_sliver_subtree_borrowed` on the pre-acquired sliver-child slot.
+    ///
+    /// `RenderViewport::perform_layout` (next PR) is the primary consumer.
+    pub fn layout_sliver_child(
+        &mut self,
+        index: usize,
+        constraints: SliverConstraints,
+    ) -> SliverGeometry {
+        crate::protocol::box_protocol::BoxLayoutCtxErased::layout_sliver_child(
+            &mut self.inner,
+            index,
+            constraints,
+        )
     }
 }
 
