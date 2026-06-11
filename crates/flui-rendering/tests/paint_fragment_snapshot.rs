@@ -24,7 +24,8 @@ use flui_rendering::{
     constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
     context::{BoxHitTestContext, BoxLayoutContext, SliverHitTestContext, SliverLayoutContext},
     objects::{
-        RenderClipRect, RenderColoredBox, RenderPadding, RenderRepaintBoundary, RenderSliverPadding,
+        RenderClipRect, RenderColoredBox, RenderPadding, RenderRepaintBoundary,
+        RenderSliverPadding, RenderSliverToBoxAdapter,
     },
     parent_data::{BoxParentData, SliverParentData},
     pipeline::PipelineOwner,
@@ -464,6 +465,49 @@ fn box_host_splices_sliver_leaf_paint_into_picture() {
     assert_eq!(
         first_picture(&tree).bounds(),
         Rect::from_origin_size(Point::ZERO, Size::new(px(100.0), px(80.0))),
+    );
+}
+
+#[test]
+fn box_host_splices_sliver_to_box_adapter_child_at_paint_offset() {
+    let mut constraints = sliver_paint_constraints();
+    constraints.scroll_offset = 40.0;
+
+    let mut owner = PipelineOwner::new();
+    let host_id = owner.insert(Box::new(SliverPaintHost {
+        constraints,
+        size: Size::ZERO,
+    }) as BoxedRenderObject);
+    let adapter_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            host_id,
+            Box::new(RenderSliverToBoxAdapter::new()) as BoxedSliverObject,
+        )
+        .expect("sliver adapter child");
+    owner
+        .render_tree_mut()
+        .insert_box_child(
+            adapter_id,
+            Box::new(RenderColoredBox::red(100.0, 80.0)) as BoxedRenderObject,
+        )
+        .expect("box child");
+
+    owner.set_root_id(Some(host_id));
+    owner.set_root_constraints(Some(BoxConstraints::new(
+        px(0.0),
+        px(200.0),
+        px(0.0),
+        px(200.0),
+    )));
+
+    let (tree, _owner) = paint_frame(owner);
+
+    assert_eq!(
+        first_picture(&tree).bounds(),
+        Rect::from_ltrb(px(0.0), px(-40.0), px(100.0), px(40.0)),
+        "RenderSliverToBoxAdapter paint must compose its Box child at \
+         the same -scroll_offset paint offset committed during layout",
     );
 }
 

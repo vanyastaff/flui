@@ -8,10 +8,13 @@
 
 use flui_foundation::RenderId;
 use flui_tree::Arity;
-use flui_types::geometry::{Matrix4, Offset, Rect};
+use flui_types::{
+    Size,
+    geometry::{Matrix4, Offset, Rect},
+};
 
 use crate::{
-    constraints::{Constraints, SliverConstraints, SliverGeometry},
+    constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry},
     parent_data::{ParentData, SliverParentData},
     protocol::{
         box_protocol::BoxProtocol,
@@ -181,6 +184,9 @@ impl<P: ParentData + Default> SliverChildState<P> {
 pub type SliverChildLayoutCallback<'a> =
     &'a (dyn Fn(RenderId, SliverConstraints) -> SliverGeometry + Send + Sync);
 
+/// Callback type for cross-protocol box child layout driven by a Sliver parent.
+pub type BoxChildLayoutCallback<'a> = &'a (dyn Fn(RenderId, BoxConstraints) -> Size + Send + Sync);
+
 /// Dense per-child geometry cache used by Proxy storage.
 type ProxySliverChildGeometryCache = Vec<Option<SliverGeometry>>;
 
@@ -239,6 +245,7 @@ enum SliverLayoutCtxStorage<'ctx, P: ParentData + Default> {
         children: Option<&'ctx mut Vec<SliverChildState<P>>>,
         child_ids: Option<&'ctx [RenderId]>,
         layout_child_callback: Option<SliverChildLayoutCallback<'ctx>>,
+        layout_box_child_callback: Option<BoxChildLayoutCallback<'ctx>>,
     },
     /// Bridge path: wraps the erased context from the pipeline boundary.
     ///
@@ -267,6 +274,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
                 children: None,
                 child_ids: None,
                 layout_child_callback: None,
+                layout_box_child_callback: None,
             },
             _phantom: std::marker::PhantomData,
         }
@@ -284,6 +292,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
                 children: Some(children),
                 child_ids: None,
                 layout_child_callback: None,
+                layout_box_child_callback: None,
             },
             _phantom: std::marker::PhantomData,
         }
@@ -295,6 +304,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
         children: &'ctx mut Vec<SliverChildState<P>>,
         child_ids: &'ctx [RenderId],
         layout_child_callback: SliverChildLayoutCallback<'ctx>,
+        layout_box_child_callback: Option<BoxChildLayoutCallback<'ctx>>,
     ) -> Self {
         Self {
             storage: SliverLayoutCtxStorage::Direct {
@@ -303,6 +313,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
                 children: Some(children),
                 child_ids: Some(child_ids),
                 layout_child_callback: Some(layout_child_callback),
+                layout_box_child_callback,
             },
             _phantom: std::marker::PhantomData,
         }
@@ -404,6 +415,28 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
         match &self.storage {
             SliverLayoutCtxStorage::Direct { constraints, .. }
             | SliverLayoutCtxStorage::Proxy { constraints, .. } => constraints.cross_axis_extent,
+        }
+    }
+
+    /// Lays out a Box-protocol child of this Sliver parent.
+    pub fn layout_box_child(&mut self, index: usize, constraints: BoxConstraints) -> Size {
+        match &mut self.storage {
+            SliverLayoutCtxStorage::Direct {
+                child_ids,
+                layout_box_child_callback,
+                ..
+            } => {
+                if let (Some(child_ids), Some(callback)) =
+                    (*child_ids, layout_box_child_callback.as_ref())
+                    && let Some(&child_id) = child_ids.get(index)
+                {
+                    return callback(child_id, constraints);
+                }
+                Size::ZERO
+            }
+            SliverLayoutCtxStorage::Proxy { erased, .. } => {
+                erased.layout_box_child(index, constraints)
+            }
         }
     }
 }
@@ -573,6 +606,9 @@ pub trait SliverLayoutCtxErased: Send + Sync {
     /// constraints; returns the child's computed [`SliverGeometry`].
     fn layout_child(&mut self, index: usize, constraints: SliverConstraints) -> SliverGeometry;
 
+    /// Performs synchronous Box layout on child at `index`.
+    fn layout_box_child(&mut self, index: usize, constraints: BoxConstraints) -> Size;
+
     /// Records the paint offset for child at `index`.
     fn position_child(&mut self, index: usize, offset: Offset);
 
@@ -622,6 +658,11 @@ impl<A: Arity, P: ParentData + Default> SliverLayoutCtxErased for SliverLayoutCt
     #[inline]
     fn layout_child(&mut self, index: usize, constraints: SliverConstraints) -> SliverGeometry {
         <Self as LayoutContextApi<'_, SliverLayout, A, P>>::layout_child(self, index, constraints)
+    }
+
+    #[inline]
+    fn layout_box_child(&mut self, index: usize, constraints: BoxConstraints) -> Size {
+        SliverLayoutCtx::layout_box_child(self, index, constraints)
     }
 
     #[inline]
@@ -708,6 +749,7 @@ pub struct ErasedSliverLayoutCtx<'ctx> {
     children: &'ctx mut Vec<ErasedSliverChildState>,
     child_ids: &'ctx [RenderId],
     layout_child_callback: SliverChildLayoutCallback<'ctx>,
+    layout_box_child_callback: BoxChildLayoutCallback<'ctx>,
 }
 
 impl<'ctx> ErasedSliverLayoutCtx<'ctx> {
@@ -717,6 +759,7 @@ impl<'ctx> ErasedSliverLayoutCtx<'ctx> {
         children: &'ctx mut Vec<ErasedSliverChildState>,
         child_ids: &'ctx [RenderId],
         layout_child_callback: SliverChildLayoutCallback<'ctx>,
+        layout_box_child_callback: BoxChildLayoutCallback<'ctx>,
     ) -> Self {
         Self {
             constraints,
@@ -724,6 +767,7 @@ impl<'ctx> ErasedSliverLayoutCtx<'ctx> {
             children,
             child_ids,
             layout_child_callback,
+            layout_box_child_callback,
         }
     }
 
@@ -751,6 +795,13 @@ impl SliverLayoutCtxErased for ErasedSliverLayoutCtx<'_> {
             slot.geometry = geometry;
         }
         geometry
+    }
+
+    fn layout_box_child(&mut self, index: usize, constraints: BoxConstraints) -> Size {
+        let Some(&child_id) = self.child_ids.get(index) else {
+            return Size::ZERO;
+        };
+        (self.layout_box_child_callback)(child_id, constraints)
     }
 
     fn position_child(&mut self, index: usize, offset: Offset) {

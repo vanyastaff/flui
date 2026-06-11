@@ -8,9 +8,12 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use flui_types::layout::{Axis, AxisDirection};
+use flui_types::{
+    geometry::px,
+    layout::{Axis, AxisDirection},
+};
 
-use super::{Constraints, GrowthDirection};
+use super::{BoxConstraints, Constraints, GrowthDirection};
 use crate::view::ScrollDirection;
 
 /// Layout constraints for sliver (scrollable) content.
@@ -201,6 +204,36 @@ impl SliverConstraints {
     #[must_use]
     pub const fn axis(&self) -> Axis {
         self.axis_direction.axis()
+    }
+
+    /// Returns [`BoxConstraints`] that reflect this sliver constraint space.
+    ///
+    /// Mirrors Flutter's `SliverConstraints.asBoxConstraints`: the cross axis
+    /// is tight to either `cross_axis_extent` or this constraint's own
+    /// cross-axis extent, while the main axis uses `min_extent..max_extent`.
+    #[inline]
+    #[must_use]
+    pub fn as_box_constraints(
+        &self,
+        min_extent: f32,
+        max_extent: f32,
+        cross_axis_extent: Option<f32>,
+    ) -> BoxConstraints {
+        let cross_axis_extent = cross_axis_extent.unwrap_or(self.cross_axis_extent);
+        match self.axis() {
+            Axis::Horizontal => BoxConstraints::new(
+                px(min_extent),
+                px(max_extent),
+                px(cross_axis_extent),
+                px(cross_axis_extent),
+            ),
+            Axis::Vertical => BoxConstraints::new(
+                px(cross_axis_extent),
+                px(cross_axis_extent),
+                px(min_extent),
+                px(max_extent),
+            ),
+        }
     }
 
     /// Returns whether content is at or before the viewport start.

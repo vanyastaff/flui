@@ -745,6 +745,26 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         }
     }
 
+    fn box_hit_offset_from_sliver_position(
+        constraints: &SliverConstraints,
+        position: MainAxisPosition,
+        offset: Offset,
+    ) -> Offset {
+        let absolute = match constraints.axis_direction {
+            flui_types::layout::AxisDirection::LeftToRight
+            | flui_types::layout::AxisDirection::RightToLeft => Offset::new(
+                flui_types::geometry::px(position.main_axis),
+                flui_types::geometry::px(position.cross_axis),
+            ),
+            flui_types::layout::AxisDirection::TopToBottom
+            | flui_types::layout::AxisDirection::BottomToTop => Offset::new(
+                flui_types::geometry::px(position.cross_axis),
+                flui_types::geometry::px(position.main_axis),
+            ),
+        };
+        absolute - offset
+    }
+
     fn hit_test_sliver_subtree(
         &self,
         id: RenderId,
@@ -804,6 +824,13 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                     )
                 });
                 self.hit_test_sliver_subtree(child_id, child_position, result)
+            } else if child_node.as_box().is_some() {
+                let child_position = Self::box_hit_offset_from_sliver_position(
+                    constraints,
+                    override_pos.unwrap_or(position),
+                    child_node.offset(),
+                );
+                self.hit_test_subtree(child_id, child_position, result)
             } else {
                 false
             }
@@ -2593,6 +2620,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl<'tree>(
     let descendant_error_flag: std::sync::Arc<std::sync::atomic::AtomicBool> =
         std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let descendant_error_for_cb = std::sync::Arc::clone(&descendant_error_flag);
+    let descendant_error_for_box_cb = std::sync::Arc::clone(&descendant_error_flag);
     let borrows_for_cb: &SubtreeBorrows<'_> = borrows;
 
     let cb_owned = move |child_id: RenderId,
@@ -2620,11 +2648,33 @@ unsafe fn layout_sliver_subtree_borrowed_impl<'tree>(
     };
     let cb_ref: SliverChildLayoutCallback<'_> = &cb_owned;
 
+    let box_cb_owned = move |child_id: RenderId, child_constraints: BoxConstraints| -> Size {
+        // SAFETY: same subtree-borrow contract as the sliver child callback,
+        // but routed through the Box layout walk for Sliver -> Box adapters.
+        match unsafe { layout_subtree_borrowed(borrows_for_cb, child_id, child_constraints) } {
+            Ok(size) => size,
+            Err(err) => {
+                descendant_error_for_box_cb.store(true, std::sync::atomic::Ordering::Relaxed);
+                tracing::error!(
+                    parent = ?id,
+                    ?child_id,
+                    ?err,
+                    "layout_dirty_root: box descendant layout failed from sliver parent; \
+                     returning Size::ZERO to caller's perform_layout. \
+                     Parent NEEDS_LAYOUT preserved for next-frame retry.",
+                );
+                Size::ZERO
+            }
+        }
+    };
+    let box_cb_ref: crate::protocol::sliver_protocol::BoxChildLayoutCallback<'_> = &box_cb_owned;
+
     let mut ctx = crate::protocol::ErasedSliverLayoutCtx::new(
         constraints,
         &mut child_states,
         &child_ids,
         cb_ref,
+        box_cb_ref,
     );
     let erased: &mut dyn SliverLayoutCtxErased = &mut ctx;
 
