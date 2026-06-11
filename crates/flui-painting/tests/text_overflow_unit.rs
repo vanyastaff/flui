@@ -186,6 +186,112 @@ fn named_font_family_reaches_the_shaper() {
 }
 
 #[test]
+fn rich_child_span_styles_reach_the_shaper() {
+    use flui_types::typography::TextStyle;
+
+    // Root at 14px with a 28px child span: the rich path must measure
+    // the child at 28px. The flattened pre-fix path shaped EVERYTHING
+    // at the root size, so the two trees below measured identically.
+    let big_child = TextSpan::new("AA").with_style(TextStyle::new().with_font_size(14.0));
+    let rich = {
+        let mut root = TextSpan::new("AA");
+        root.style = Some(TextStyle::new().with_font_size(14.0));
+        root.children
+            .push(TextSpan::new("BB").with_style(TextStyle::new().with_font_size(28.0)));
+        root
+    };
+
+    let mut rich_painter = TextPainter::new()
+        .with_text(rich)
+        .with_text_direction(TextDirection::Ltr);
+    rich_painter.layout(0.0, f32::INFINITY);
+
+    let mut flat_painter = TextPainter::new()
+        .with_text({
+            let mut root = big_child;
+            root.children.push(TextSpan::new("BB"));
+            root
+        })
+        .with_text_direction(TextDirection::Ltr);
+    flat_painter.layout(0.0, f32::INFINITY);
+
+    assert!(
+        rich_painter.width() > flat_painter.width() + 1.0,
+        "a 28px child span must measure wider than the same text at \
+         the root's 14px ({} vs {})",
+        rich_painter.width(),
+        flat_painter.width()
+    );
+    assert!(
+        rich_painter.height() > flat_painter.height() + 1.0,
+        "the line box must grow to the larger span"
+    );
+}
+
+#[test]
+fn rich_inheritance_merges_parent_style_into_children() {
+    use flui_types::typography::TextStyle;
+
+    // A child WITHOUT its own size inherits the parent's 28px — the
+    // tree must measure exactly like the flat 28px equivalent.
+    let inherited = {
+        let mut root = TextSpan::new("AA");
+        root.style = Some(TextStyle::new().with_font_size(28.0));
+        root.children.push(TextSpan::new("BB"));
+        root
+    };
+    let flat = TextSpan::new("AABB").with_style(TextStyle::new().with_font_size(28.0));
+
+    let mut a = TextPainter::new()
+        .with_text(inherited)
+        .with_text_direction(TextDirection::Ltr);
+    a.layout(0.0, f32::INFINITY);
+    let mut b = TextPainter::new()
+        .with_text(flat)
+        .with_text_direction(TextDirection::Ltr);
+    b.layout(0.0, f32::INFINITY);
+
+    assert!(
+        (a.width() - b.width()).abs() < 0.5,
+        "style inheritance must shape the child at the parent's size \
+         ({} vs {})",
+        a.width(),
+        b.width()
+    );
+}
+
+#[test]
+fn rich_truncation_keeps_span_styling() {
+    use flui_types::typography::TextStyle;
+
+    // Two spans wrapped to one allowed line with an ellipsis: the rich
+    // truncation slices the SPANS and the result still fits the width.
+    let rich = {
+        let mut root = TextSpan::new("first segment of text ");
+        root.style = Some(TextStyle::new().with_font_size(14.0));
+        root.children.push(
+            TextSpan::new("second segment that will be cut")
+                .with_style(TextStyle::new().with_font_size(20.0)),
+        );
+        root
+    };
+    let mut painter = TextPainter::new()
+        .with_text(rich)
+        .with_text_direction(TextDirection::Ltr)
+        .with_max_lines(Some(1))
+        .with_ellipsis(Some("…".to_string()));
+    painter.layout(0.0, 120.0);
+
+    assert!(painter.did_exceed_max_lines());
+    assert_eq!(painter.get_line_metrics().len(), 1, "one kept line");
+    assert!(
+        painter.width() <= 120.0 + 0.5,
+        "ellipsized rich line must fit the constraint, got {}",
+        painter.width()
+    );
+}
+
+#[test]
 fn painter_enforces_max_lines_end_to_end() {
     let mut painter = TextPainter::new()
         .with_text(TextSpan::new(

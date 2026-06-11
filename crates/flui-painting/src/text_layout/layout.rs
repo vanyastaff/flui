@@ -65,10 +65,16 @@ pub(super) fn font_system() -> &'static Mutex<FontSystem> {
 pub struct TextLayout {
     /// The underlying cosmic-text buffer.
     buffer: Buffer,
-    /// Source text, kept for byte-based queries (e.g.
-    /// `get_word_boundary`) that need to inspect characters around a
-    /// caret without re-walking every glyph in every layout run.
+    /// Source text (concatenation of all runs), kept for byte-based
+    /// queries (e.g. `get_word_boundary`) that need to inspect
+    /// characters around a caret without re-walking every glyph in
+    /// every layout run.
     text: String,
+    /// The styled runs the buffer was shaped from. Owned so the
+    /// max-lines truncation can re-shape a SLICED prefix with the same
+    /// per-run attributes — a rich layout truncates without losing the
+    /// styling of the kept spans.
+    runs: Vec<OwnedRun>,
     /// Font size used for layout.
     font_size: f32,
     /// Line height used for layout.
@@ -77,6 +83,13 @@ pub struct TextLayout {
     direction: TextDirection,
     /// Whether `with_overflow` truncated the text to a max line count.
     truncated: bool,
+}
+
+/// One styled run feeding rich shaping (`Buffer::set_rich_text`).
+#[derive(Clone)]
+struct OwnedRun {
+    text: String,
+    attrs: cosmic_text::AttrsOwned,
 }
 
 impl TextLayout {
@@ -127,49 +140,128 @@ impl TextLayout {
         max_lines: Option<usize>,
         ellipsis: Option<&str>,
     ) -> Self {
+        Self::from_spans(
+            vec![(text.to_string(), style.cloned())],
+            style,
+            font_size,
+            max_width,
+            line_height,
+            direction,
+            max_lines,
+            ellipsis,
+        )
+    }
+
+    /// Creates a RICH text layout from styled spans.
+    ///
+    /// Each span carries its own (already inheritance-merged) style:
+    /// per-span font selection, weight, style, and font size all reach
+    /// the shaper — a bold or larger child span measures as bold or
+    /// larger instead of being flattened to the root style.
+    /// `default_style` and `font_size` describe the buffer-level
+    /// defaults applied where a span has no style of its own.
+    ///
+    /// Truncation (`max_lines`/`ellipsis`) slices the SPANS, so a
+    /// truncated rich layout keeps the styling of everything it kept;
+    /// the ellipsis inherits the last kept span's attributes.
+    #[allow(clippy::too_many_arguments)] // mirrors the shaping input surface
+    pub fn from_spans(
+        spans: Vec<(String, Option<TextStyle>)>,
+        default_style: Option<&TextStyle>,
+        font_size: f32,
+        max_width: Option<f32>,
+        line_height: Option<f32>,
+        direction: TextDirection,
+        max_lines: Option<usize>,
+        ellipsis: Option<&str>,
+    ) -> Self {
         debug_assert!(
             font_size > 0.0 && font_size.is_finite(),
-            "TextLayout::new font_size must be positive and finite, got {font_size}"
+            "TextLayout font_size must be positive and finite, got {font_size}"
         );
 
-        let mut font_system = font_system().lock();
-
         let line_height = line_height.unwrap_or(font_size * 1.2);
-        let metrics = Metrics::new(font_size, line_height);
+        let default_attrs = cosmic_text::AttrsOwned::new(style_to_attrs(default_style));
 
-        let attrs = style_to_attrs(style);
-        let mut buffer = Buffer::new(&mut font_system, metrics);
+        let runs: Vec<OwnedRun> = spans
+            .into_iter()
+            .map(|(text, style)| {
+                let attrs = match &style {
+                    Some(style) => {
+                        let mut attrs = style_to_attrs(Some(style));
+                        // Per-span font size/line height ride on the attrs
+                        // (cosmic's per-span Metrics); spans without one
+                        // inherit the buffer-level default. Letter spacing
+                        // has no per-span channel in cosmic-text 0.12 —
+                        // it gains one (`letter_spacing_opt`) with the
+                        // 0.18 dependency already on main.
+                        #[allow(clippy::cast_possible_truncation)]
+                        // f64 style sizes → f32 shaping space
+                        if let Some(size) = style.font_size.map(|s| s as f32) {
+                            #[allow(clippy::cast_possible_truncation)]
+                            let span_line_height =
+                                style.height.map_or(size * 1.2, |h| h as f32 * size);
+                            attrs = attrs.metrics(Metrics::new(size, span_line_height));
+                        }
+                        cosmic_text::AttrsOwned::new(attrs)
+                    }
+                    None => default_attrs.clone(),
+                };
+                OwnedRun { text, attrs }
+            })
+            .collect();
+
+        let mut font_system = font_system().lock();
+        let mut buffer = Buffer::new(&mut font_system, Metrics::new(font_size, line_height));
         buffer.set_size(&mut font_system, max_width, None);
-        buffer.set_text(&mut font_system, text, attrs, Shaping::Advanced);
-        buffer.shape_until_scroll(&mut font_system, false);
 
+        let text: String = runs.iter().map(|run| run.text.as_str()).collect();
         let mut this = Self {
             buffer,
-            text: text.to_string(),
+            text,
+            runs,
             font_size,
             line_height,
             direction,
             truncated: false,
         };
+        this.shape_runs(&mut font_system);
 
         if let Some(max_lines) = max_lines
             && max_lines > 0
         {
-            this.enforce_max_lines(&mut font_system, max_lines, ellipsis, max_width, &attrs);
+            this.enforce_max_lines(&mut font_system, max_lines, ellipsis, max_width);
         }
 
         this
     }
 
+    /// (Re-)shapes the buffer from the current runs.
+    fn shape_runs(&mut self, font_system: &mut FontSystem) {
+        self.buffer.set_rich_text(
+            font_system,
+            self.runs
+                .iter()
+                .map(|run| (run.text.as_str(), run.attrs.as_attrs())),
+            cosmic_text::Attrs::new(),
+            Shaping::Advanced,
+        );
+        self.buffer.shape_until_scroll(font_system, false);
+    }
+
     /// Truncates the shaped buffer to `max_lines` visual lines,
     /// optionally appending `ellipsis` to the last kept line.
+    ///
+    /// Rich-aware: the cut slices the styled RUNS (a run boundary is a
+    /// char boundary of the concatenated text by construction), so the
+    /// kept prefix re-shapes with its original per-span attributes and
+    /// the ellipsis inherits the last kept run's.
     fn enforce_max_lines(
         &mut self,
         font_system: &mut FontSystem,
         max_lines: usize,
         ellipsis: Option<&str>,
         max_width: Option<f32>,
-        attrs: &cosmic_text::Attrs<'_>,
     ) {
         // Visual-line end positions as byte offsets into the ORIGINAL
         // text. Glyph offsets are relative to their source line, so the
@@ -197,15 +289,28 @@ impl TextLayout {
         }
         self.truncated = true;
 
+        // The original (untruncated) inputs survive the fit loop; the
+        // layout's own fields are only committed on success.
+        let full_runs = std::mem::take(&mut self.runs);
+        let full_text = std::mem::take(&mut self.text);
+
         let mut cut = run_ends[max_lines - 1];
         loop {
-            let mut candidate = self.text[..cut].to_string();
-            if let Some(ellipsis) = ellipsis {
-                candidate.push_str(ellipsis);
+            let mut candidate = Self::sliced_runs(&full_runs, cut);
+            if let Some(ellipsis) = ellipsis
+                && !ellipsis.is_empty()
+            {
+                let attrs = candidate.last().or(full_runs.first()).map_or_else(
+                    || cosmic_text::AttrsOwned::new(cosmic_text::Attrs::new()),
+                    |run| run.attrs.clone(),
+                );
+                candidate.push(OwnedRun {
+                    text: ellipsis.to_string(),
+                    attrs,
+                });
             }
-            self.buffer
-                .set_text(font_system, &candidate, *attrs, Shaping::Advanced);
-            self.buffer.shape_until_scroll(font_system, false);
+            self.runs = candidate;
+            self.shape_runs(font_system);
 
             let lines = self.buffer.layout_runs().count();
             let last_width = self
@@ -214,20 +319,46 @@ impl TextLayout {
                 .last()
                 .map_or(0.0, |run| run.line_w);
             let fits_width = max_width.is_none_or(|w| last_width <= w);
-            if lines <= max_lines && fits_width {
-                self.text = candidate;
+            let exhausted = cut == 0;
+            if (lines <= max_lines && fits_width) || exhausted {
+                // Commit: concatenated text mirrors the shaped runs.
+                self.text = self.runs.iter().map(|run| run.text.as_str()).collect();
                 return;
             }
 
             // Drop one more character (never splitting a codepoint) and
             // retry; an empty prefix terminates the loop with just the
             // ellipsis (or the empty string) shaped.
-            let Some((prev, _)) = self.text[..cut].char_indices().next_back() else {
-                self.text = candidate;
+            let Some((prev, _)) = full_text[..cut].char_indices().next_back() else {
+                self.text = self.runs.iter().map(|run| run.text.as_str()).collect();
                 return;
             };
             cut = prev;
         }
+    }
+
+    /// The styled runs covering `text[..cut]`: full runs before the
+    /// cut, the run containing it sliced at the (char-boundary) cut.
+    fn sliced_runs(runs: &[OwnedRun], cut: usize) -> Vec<OwnedRun> {
+        let mut out = Vec::new();
+        let mut base = 0usize;
+        for run in runs {
+            let end = base + run.text.len();
+            if cut <= base {
+                break;
+            }
+            if cut >= end {
+                out.push(run.clone());
+            } else {
+                out.push(OwnedRun {
+                    text: run.text[..cut - base].to_string(),
+                    attrs: run.attrs.clone(),
+                });
+                break;
+            }
+            base = end;
+        }
+        out
     }
 
     /// Returns the computed metrics for this layout.

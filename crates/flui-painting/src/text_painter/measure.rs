@@ -8,7 +8,7 @@
 
 use flui_types::{
     geometry::{Offset, Pixels, Size},
-    typography::{InlineSpan, TextAlign, TextDirection},
+    typography::{InlineSpan, TextAlign, TextDirection, TextStyle},
 };
 
 use super::{DEFAULT_FONT_SIZE, LayoutMetrics, TextBaseline, TextLayoutCache, TextPainter};
@@ -87,13 +87,19 @@ impl TextPainter {
             None
         };
 
-        let plain_text = text.to_plain_text();
+        // RICH shaping: the span tree flattens to per-run styles with
+        // inheritance (`TextStyle::merge`), so a bold or larger child
+        // span measures as bold or larger — `to_plain_text` used to
+        // flatten everything onto the root style. The text scale factor
+        // is baked into each run's font size here, where the effective
+        // size is known.
+        let spans = collect_styled_spans(text, self.text_scale_factor);
         // max_lines/ellipsis are ENFORCED by the shaper-level truncation:
         // size, line metrics, and painted glyphs all agree on the kept
         // lines (pre-fix the painter only *detected* the overflow and
         // painted every line anyway).
-        let layout = TextLayout::with_overflow(
-            &plain_text,
+        let layout = TextLayout::from_spans(
+            spans,
             text.style(),
             scaled_font_size,
             max_width_opt,
@@ -217,4 +223,53 @@ impl TextPainter {
             .expect("layout() must be called before accessing did_exceed_max_lines")
             .did_exceed_max_lines
     }
+}
+
+/// Flattens an [`InlineSpan`] tree into per-run `(text, merged style)`
+/// pairs in document order, applying style INHERITANCE: each child's
+/// style merges over its ancestors' (`TextStyle::merge`), so a bold
+/// child of a sized parent shapes bold at the parent's size.
+///
+/// The text scale factor is baked into every effective font size here
+/// — the shaper sees final pixel sizes. Placeholder spans contribute no
+/// text (their geometry enters layout as placeholder dimensions, not
+/// glyphs).
+///
+/// Average and worst case O(total spans + text bytes): one pre-order
+/// walk.
+fn collect_styled_spans(span: &InlineSpan, scale: f32) -> Vec<(String, Option<TextStyle>)> {
+    fn walk(
+        span: &flui_types::typography::TextSpan,
+        inherited: Option<&TextStyle>,
+        scale: f32,
+        out: &mut Vec<(String, Option<TextStyle>)>,
+    ) {
+        let merged: Option<TextStyle> = match (inherited, span.style.as_ref()) {
+            (Some(parent), Some(own)) => Some(parent.merge(own)),
+            (Some(parent), None) => Some(parent.clone()),
+            (None, Some(own)) => Some(own.clone()),
+            (None, None) => None,
+        };
+        if let Some(text) = &span.text
+            && !text.is_empty()
+        {
+            let mut effective = merged.clone();
+            if let Some(style) = &mut effective
+                && let Some(size) = style.font_size
+            {
+                style.font_size = Some(size * f64::from(scale));
+            }
+            out.push((text.clone(), effective));
+        }
+        for child in &span.children {
+            walk(child, merged.as_ref(), scale, out);
+        }
+    }
+
+    let mut out = Vec::new();
+    match span {
+        InlineSpan::Text(root) => walk(root, None, scale, &mut out),
+        InlineSpan::Placeholder(_) => {}
+    }
+    out
 }
