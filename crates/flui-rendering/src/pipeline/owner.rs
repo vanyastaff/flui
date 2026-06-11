@@ -653,6 +653,20 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     where
         Phase: Sync,
     {
+        ensure_stack(|| self.hit_test_subtree_impl(id, position, result))
+    }
+
+    /// Body of [`Self::hit_test_subtree`]; split out so every
+    /// recursion level enters through the [`ensure_stack`] probe.
+    fn hit_test_subtree_impl(
+        &self,
+        id: RenderId,
+        position: Offset,
+        result: &mut crate::hit_testing::HitTestResult,
+    ) -> bool
+    where
+        Phase: Sync,
+    {
         let Some(node) = self.render_tree.get(id) else {
             return false;
         };
@@ -1997,6 +2011,38 @@ impl<'b, 'tree> Drop for LayoutCycleGuard<'b, 'tree> {
     }
 }
 
+/// Grows the stack ahead of each pipeline-walk recursion level so
+/// arbitrarily deep render trees cannot overflow the fixed OS stack
+/// (the Windows main thread gets 1 MiB by default; a ~1000-level
+/// single-child chain blew it in the `layout/deep/1000` bench, and a
+/// production tree of that depth would crash the app identically).
+///
+/// Same discipline as rustc's `ensure_sufficient_stack`: when fewer
+/// than the red-zone bytes remain, the continuation runs on a fresh
+/// heap-allocated stack segment. Cost on the hot path is one
+/// stack-pointer probe per recursion level (sub-ns next to the
+/// per-node layout/paint work).
+///
+/// Falls back to a direct call under miri (psm's stack-switching
+/// assembly cannot be interpreted) and on wasm32 (no stack switching;
+/// the dependency is compiled out in Cargo.toml) — those environments
+/// keep plain recursion and its pre-existing depth limits.
+#[inline]
+fn ensure_stack<R>(f: impl FnOnce() -> R) -> R {
+    #[cfg(any(miri, target_arch = "wasm32"))]
+    {
+        f()
+    }
+    #[cfg(not(any(miri, target_arch = "wasm32")))]
+    {
+        // 128 KiB red zone: covers the deepest single-level frame
+        // chain between two probes (driver frame + typed ctx + the
+        // render object's own perform_layout/paint locals). 2 MiB
+        // segments amortize one allocation across many levels.
+        stacker::maybe_grow(128 * 1024, 2 * 1024 * 1024, f)
+    }
+}
+
 /// Recursive helper for [`PipelineOwner::layout_dirty_root`].
 ///
 /// Reborrows one [`NodePtr`] from the pre-acquired [`SubtreeBorrows`]
@@ -2022,6 +2068,26 @@ impl<'b, 'tree> Drop for LayoutCycleGuard<'b, 'tree> {
 ///    [`crate::error::RenderError::LayoutCycle`] on re-entry into
 ///    a slot already in flight up the stack).
 unsafe fn layout_subtree_borrowed<'tree>(
+    borrows: &SubtreeBorrows<'tree>,
+    id: RenderId,
+    constraints: BoxConstraints,
+) -> crate::error::RenderResult<Size> {
+    ensure_stack(|| {
+        // SAFETY: identical contract, forwarded verbatim from this
+        // wrapper's own `# Safety` section; the stack-growth wrapper
+        // only relocates which memory the frames live in, never their
+        // borrow structure, lifetimes, or drop order.
+        unsafe { layout_subtree_borrowed_impl(borrows, id, constraints) }
+    })
+}
+
+/// Body of [`layout_subtree_borrowed`]; split out so every recursion
+/// level enters through the [`ensure_stack`] probe.
+///
+/// # Safety
+///
+/// Same contract as [`layout_subtree_borrowed`].
+unsafe fn layout_subtree_borrowed_impl<'tree>(
     borrows: &SubtreeBorrows<'tree>,
     id: RenderId,
     constraints: BoxConstraints,
@@ -2550,6 +2616,17 @@ impl PipelineOwner<PaintPhase> {
         node_id: RenderId,
         origin: Offset,
     ) -> crate::error::RenderResult<()> {
+        ensure_stack(|| self.paint_subtree_impl(composer, node_id, origin))
+    }
+
+    /// Body of [`Self::paint_subtree`]; split out so every recursion
+    /// level enters through the [`ensure_stack`] probe.
+    fn paint_subtree_impl(
+        &self,
+        composer: &mut FragmentComposer,
+        node_id: RenderId,
+        origin: Offset,
+    ) -> crate::error::RenderResult<()> {
         let Some(render_node) = self.render_tree.get(node_id) else {
             return Ok(());
         };
@@ -2967,6 +3044,17 @@ fn intrinsic_query(
     dimension: crate::storage::IntrinsicDimension,
     extent: f32,
 ) -> crate::error::RenderResult<f32> {
+    ensure_stack(|| intrinsic_query_impl(slots, id, dimension, extent))
+}
+
+/// Body of [`intrinsic_query`]; split out so every recursion level
+/// enters through the [`ensure_stack`] probe.
+fn intrinsic_query_impl(
+    slots: &mut rustc_hash::FxHashMap<RenderId, QuerySlot<'_>>,
+    id: RenderId,
+    dimension: crate::storage::IntrinsicDimension,
+    extent: f32,
+) -> crate::error::RenderResult<f32> {
     let Some(slot) = slots.get_mut(&id) else {
         return Err(crate::error::RenderError::NodeNotFound(id));
     };
@@ -3043,6 +3131,16 @@ fn intrinsic_query(
 /// Recursive memoized dry-layout query; same skeleton as
 /// [`intrinsic_query`] with `(constraints → Size)` payloads.
 fn dry_layout_query(
+    slots: &mut rustc_hash::FxHashMap<RenderId, QuerySlot<'_>>,
+    id: RenderId,
+    constraints: crate::constraints::BoxConstraints,
+) -> crate::error::RenderResult<flui_types::Size> {
+    ensure_stack(|| dry_layout_query_impl(slots, id, constraints))
+}
+
+/// Body of [`dry_layout_query`]; split out so every recursion level
+/// enters through the [`ensure_stack`] probe.
+fn dry_layout_query_impl(
     slots: &mut rustc_hash::FxHashMap<RenderId, QuerySlot<'_>>,
     id: RenderId,
     constraints: crate::constraints::BoxConstraints,
