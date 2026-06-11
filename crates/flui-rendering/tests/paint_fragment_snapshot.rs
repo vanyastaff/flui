@@ -19,19 +19,25 @@
 
 use flui_layer::{Layer, LayerTree};
 use flui_painting::DisplayListCore;
+use flui_painting::Paint;
 use flui_rendering::{
-    constraints::BoxConstraints,
-    context::{BoxHitTestContext, BoxLayoutContext},
+    constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
+    context::{BoxHitTestContext, BoxLayoutContext, SliverHitTestContext, SliverLayoutContext},
     objects::{RenderClipRect, RenderColoredBox, RenderPadding, RenderRepaintBoundary},
-    parent_data::BoxParentData,
+    parent_data::{BoxParentData, SliverParentData},
     pipeline::PipelineOwner,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+    protocol::{BoxProtocol, SliverProtocol},
+    traits::{
+        HotReloadCapability, PaintEffectsCapability, RenderBox, RenderObject, RenderSliver,
+        SemanticsCapability,
+    },
+    view::ScrollDirection,
 };
-use flui_tree::Variable;
-use flui_types::{Offset, Point, Rect, Size, geometry::px};
+use flui_tree::{Leaf, Variable};
+use flui_types::{Color, Offset, Point, Rect, Size, geometry::px, layout::AxisDirection};
 
-type BoxedRenderObject =
-    Box<dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>>;
+type BoxedRenderObject = Box<dyn RenderObject<BoxProtocol>>;
+type BoxedSliverObject = Box<dyn RenderObject<SliverProtocol>>;
 
 /// Runs layout → compositing → paint and returns the produced layer
 /// tree.
@@ -255,5 +261,154 @@ fn clip_rect_object_brackets_child_in_clip_layer() {
         "RenderClipRect must produce a ClipRect LAYER covering the \
          child's picture — canvas clips are run-local and would never \
          reach the child",
+    );
+}
+
+// ============================================================================
+// 5. Box host paints a sliver subtree
+// ============================================================================
+
+fn sliver_paint_constraints() -> SliverConstraints {
+    SliverConstraints {
+        axis_direction: AxisDirection::TopToBottom,
+        cross_axis_direction: AxisDirection::LeftToRight,
+        growth_direction: GrowthDirection::Forward,
+        user_scroll_direction: ScrollDirection::Idle,
+        scroll_offset: 0.0,
+        preceding_scroll_extent: 0.0,
+        overlap: 0.0,
+        remaining_paint_extent: 200.0,
+        cross_axis_extent: 100.0,
+        viewport_main_axis_extent: 200.0,
+        remaining_cache_extent: 200.0,
+        cache_origin: 0.0,
+    }
+}
+
+#[derive(Debug)]
+struct SliverPaintHost {
+    constraints: SliverConstraints,
+    size: Size,
+}
+
+impl flui_foundation::Diagnosticable for SliverPaintHost {}
+impl PaintEffectsCapability for SliverPaintHost {}
+impl SemanticsCapability for SliverPaintHost {}
+impl HotReloadCapability for SliverPaintHost {}
+
+impl RenderBox for SliverPaintHost {
+    type Arity = Variable;
+    type ParentData = BoxParentData;
+
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>) {
+        if ctx.child_count() > 0 {
+            let _ = ctx.layout_sliver_child(0, self.constraints);
+        }
+        self.size = ctx.constraints().biggest();
+        ctx.complete_with_size(self.size);
+    }
+
+    fn size(&self) -> &Size {
+        &self.size
+    }
+
+    fn size_mut(&mut self) -> &mut Size {
+        &mut self.size
+    }
+
+    fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Variable, BoxParentData>) -> bool {
+        false
+    }
+}
+
+#[derive(Debug, Default)]
+struct PaintLeafSliver {
+    constraints: SliverConstraints,
+    geometry: SliverGeometry,
+}
+
+impl flui_foundation::Diagnosticable for PaintLeafSliver {}
+impl PaintEffectsCapability for PaintLeafSliver {}
+impl SemanticsCapability for PaintLeafSliver {}
+impl HotReloadCapability for PaintLeafSliver {}
+
+impl RenderSliver for PaintLeafSliver {
+    type Arity = Leaf;
+    type ParentData = SliverParentData;
+
+    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
+        self.constraints = *ctx.constraints();
+        let geometry = SliverGeometry {
+            scroll_extent: 80.0,
+            paint_extent: 80.0,
+            layout_extent: 80.0,
+            max_paint_extent: 80.0,
+            hit_test_extent: 80.0,
+            visible: true,
+            ..SliverGeometry::ZERO
+        };
+        self.geometry = geometry;
+        ctx.complete(geometry);
+    }
+
+    fn geometry(&self) -> &SliverGeometry {
+        &self.geometry
+    }
+
+    fn constraints(&self) -> &SliverConstraints {
+        &self.constraints
+    }
+
+    fn set_geometry(&mut self, geometry: SliverGeometry) {
+        self.geometry = geometry;
+    }
+
+    fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Leaf>) {
+        let rect = Rect::from_origin_size(Point::ZERO, Size::new(px(100.0), px(80.0)));
+        ctx.canvas().draw_rect(rect, &Paint::fill(Color::RED));
+    }
+
+    fn hit_test(&self, _ctx: &mut SliverHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
+        false
+    }
+
+    fn sliver_paint_bounds(&self) -> Rect {
+        Rect::from_origin_size(Point::ZERO, Size::new(px(100.0), px(80.0)))
+    }
+}
+
+#[test]
+fn box_host_splices_sliver_leaf_paint_into_picture() {
+    let mut owner = PipelineOwner::new();
+    let host_id = owner.insert(Box::new(SliverPaintHost {
+        constraints: sliver_paint_constraints(),
+        size: Size::ZERO,
+    }) as BoxedRenderObject);
+    owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            host_id,
+            Box::new(PaintLeafSliver::default()) as BoxedSliverObject,
+        )
+        .expect("sliver child");
+
+    owner.set_root_id(Some(host_id));
+    owner.set_root_constraints(Some(BoxConstraints::new(
+        px(0.0),
+        px(200.0),
+        px(0.0),
+        px(200.0),
+    )));
+
+    let (tree, _owner) = paint_frame(owner);
+
+    assert_eq!(
+        structure(&tree),
+        vec![(0, "Offset"), (1, "Picture")],
+        "inline sliver paint should splice into the Box host's picture stream",
+    );
+    assert_eq!(
+        first_picture(&tree).bounds(),
+        Rect::from_origin_size(Point::ZERO, Size::new(px(100.0), px(80.0))),
     );
 }

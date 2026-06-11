@@ -2953,29 +2953,16 @@ impl PipelineOwner<PaintPhase> {
             return Ok(());
         };
 
-        // Type safety: reject non-Box protocols symmetrically with layout/intrinsics walks
-        let render_entry = match render_node.as_box() {
-            Some(entry) => entry,
-            None => {
-                return Err(crate::error::RenderError::ProtocolMismatch {
-                    node_protocol: render_node.protocol_name(),
-                    constraints_protocol: "Box",
-                });
-            }
-        };
-        let render_object = render_entry.render_object();
-        let is_repaint_boundary = render_object.is_repaint_boundary();
-        let alpha = render_object.paint_alpha();
-        let transform = render_object.paint_transform();
+        let is_repaint_boundary = render_node.is_repaint_boundary();
+        let alpha = render_node.paint_alpha();
+        let transform = render_node.paint_transform();
         let child_ids: Vec<RenderId> = render_node.children().to_vec();
 
         // Written unconditionally PRE-paint (Flutter object.dart:3560):
         // a node flipping boundary→non-boundary leaves exactly one
         // `WAS_REPAINT_BOUNDARY=true` trail for the next compositing
         // walk's lost-boundary branch.
-        if let Some(entry) = render_node.as_box() {
-            entry.state().set_was_repaint_boundary(is_repaint_boundary);
-        }
+        render_node.set_was_repaint_boundary(is_repaint_boundary);
 
         // Clear BEFORE paint so the post-paint check catches a paint
         // body that marks its own node dirty (paint-must-not-redirty).
@@ -2990,10 +2977,10 @@ impl PipelineOwner<PaintPhase> {
 
         // Record the node's fragment. paint_raw sees ONLY the recorder
         // (sans-IO): no tree access, no layer access, no recursion.
-        let debug_name = render_object.debug_name();
+        let debug_name = render_node.debug_name();
         let mut recorder = FragmentRecorder::new(origin, self.device_pixel_ratio);
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            render_object.paint_raw(&mut recorder, child_ids.len());
+            render_node.paint_raw(&mut recorder, child_ids.len());
         }))
         .map_err(|_| crate::error::RenderError::poisoned(debug_name, "paint"))?;
         let fragment = recorder.finish();
@@ -3071,8 +3058,7 @@ impl PipelineOwner<PaintPhase> {
                     let child_is_boundary = self
                         .render_tree
                         .get(child_id)
-                        .and_then(|n| n.as_box())
-                        .is_some_and(|entry| entry.render_object().is_repaint_boundary());
+                        .is_some_and(RenderNode::is_repaint_boundary);
 
                     if child_is_boundary {
                         // Boundary children rebase to ZERO under their
