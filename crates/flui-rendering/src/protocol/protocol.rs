@@ -134,6 +134,24 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
         let _ = (state, has_parent);
     }
 
+    /// Debug-only check that a freshly computed layout result is well-formed:
+    /// a finite geometry that satisfies the constraints it was laid out under.
+    ///
+    /// Called at every layout-commit site (leaf and container paths). The
+    /// default is a no-op — sliver geometry validation is deferred to Core.2.
+    /// `BoxProtocol` overrides it with Flutter's `debugAssertDoesMeetConstraints`
+    /// (`box.dart`): a node's own size must be finite and within its
+    /// constraints. The `debug_assert!` bodies compile out in release builds,
+    /// leaving the override an empty call the optimizer can drop.
+    fn debug_assert_layout_output(
+        constraints: &<Self::Layout as LayoutCapability>::Constraints,
+        geometry: &<Self::Layout as LayoutCapability>::Geometry,
+    ) where
+        Self: Sized,
+    {
+        let _ = (constraints, geometry);
+    }
+
     /// Constructs a leaf-mode (no children, no layout callback) erased
     /// layout context from protocol-typed constraints, then invokes `f`
     /// with a `&mut Self::LayoutCtxErased<'_>` referencing it.

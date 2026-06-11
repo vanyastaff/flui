@@ -203,18 +203,18 @@ pub enum RenderError {
     // ========================================================================
     // D-block PR-A1b — protocol-erased dispatch
     // ========================================================================
-    /// The protocol-erased constraints or geometry variant did not match
-    /// the node's protocol. Returned from
-    /// [`RenderNode::layout_leaf_erased`](crate::storage::RenderNode::layout_leaf_erased)
-    /// when a `Box(_)` constraint is handed to a `Sliver` node (or vice
-    /// versa). Indicates a bug in the pipeline-dispatch caller.
-    #[error(
-        "protocol mismatch in layout_erased: node is {node_protocol}, constraints are {constraints_protocol}"
-    )]
+    /// A pipeline walk reached a node whose protocol does not match the
+    /// protocol the walk expects. Returned by the layout walk (a `Box(_)`
+    /// constraint handed to a `Sliver` node or vice versa) and by the paint
+    /// walk (a sliver node reached by the box paint walk). Indicates a bug in
+    /// the pipeline-dispatch caller — the message is phase-agnostic because
+    /// more than one walk produces it.
+    #[error("protocol mismatch: node is {node_protocol}, walk expected {constraints_protocol}")]
     ProtocolMismatch {
         /// Protocol of the node that received the call.
         node_protocol: &'static str,
-        /// Protocol of the constraints actually passed.
+        /// Protocol the walk expected (e.g. `"Box"` for the box layout/paint
+        /// walks).
         constraints_protocol: &'static str,
     },
 
