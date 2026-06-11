@@ -513,5 +513,86 @@ mod tests {
         image.size = Size::new(px(100.0), px(100.0));
         assert!(image.compute_paint_rect().is_none());
     }
+
+    // ===== Paint pipeline integration (drives the real paint() method) =====
+
+    use crate::context::{FragmentRecorder, PaintCx};
+    use flui_painting::{DisplayListCore, DrawCommand};
+    use flui_types::Offset;
+
+    /// Runs `paint()` through a real FragmentRecorder and returns the
+    /// recorded DrawImage commands (image byte_count, dst rect).
+    fn capture_draw_images(image: &RenderImage) -> Vec<(usize, Rect)> {
+        let mut rec = FragmentRecorder::new(Offset::ZERO, 1.0);
+        {
+            let mut cx = PaintCx::<Leaf>::new(&mut rec, 0);
+            image.paint(&mut cx);
+        }
+        let frag = rec.finish();
+        let mut out = Vec::new();
+        for op in &frag.ops {
+            if let crate::context::FragmentOp::Run(list) = op {
+                for cmd in list.commands() {
+                    if let DrawCommand::DrawImage { image, dst, .. } = cmd {
+                        out.push((image.byte_count(), *dst));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn test_paint_without_image_records_nothing() {
+        let mut image = RenderImage::new(
+            Size::new(px(10.0), px(10.0)),
+            ImageFit::Fill,
+            ImageAlignment::Center,
+        );
+        image.size = Size::new(px(100.0), px(100.0));
+        // No source image set → paint() should be a no-op.
+        assert!(capture_draw_images(&image).is_empty());
+    }
+
+    #[test]
+    fn test_paint_with_image_records_draw_image_with_fit_rect() {
+        // 2x2 image, Contain into a 100x50 box (intrinsic 2:2 = 1:1).
+        // Contain scale = min(100/2, 50/2) = 25 → painted 50x50.
+        // Center alignment → origin x = (100-50)/2 = 25, y = (50-50)/2 = 0.
+        let mut image = RenderImage::from_image(
+            test_image_2x2(),
+            ImageFit::Contain,
+            ImageAlignment::Center,
+        );
+        image.size = Size::new(px(100.0), px(50.0));
+
+        let draws = capture_draw_images(&image);
+        assert_eq!(draws.len(), 1, "expected exactly one DrawImage command");
+
+        let (byte_count, dst) = draws[0];
+        assert_eq!(byte_count, 2 * 2 * 4, "2x2 RGBA = 16 bytes");
+        assert_eq!(dst.size().width, px(50.0));
+        assert_eq!(dst.size().height, px(50.0));
+        assert_eq!(dst.origin().x, px(25.0));
+        assert_eq!(dst.origin().y, Pixels::ZERO);
+    }
+
+    #[test]
+    fn test_paint_fill_covers_whole_box() {
+        let mut image = RenderImage::from_image(
+            test_image_2x2(),
+            ImageFit::Fill,
+            ImageAlignment::TopLeft,
+        );
+        image.size = Size::new(px(120.0), px(80.0));
+
+        let draws = capture_draw_images(&image);
+        assert_eq!(draws.len(), 1);
+        let (_, dst) = draws[0];
+        assert_eq!(dst.origin().x, Pixels::ZERO);
+        assert_eq!(dst.origin().y, Pixels::ZERO);
+        assert_eq!(dst.size().width, px(120.0));
+        assert_eq!(dst.size().height, px(80.0));
+    }
 }
 
