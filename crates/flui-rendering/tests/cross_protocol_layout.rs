@@ -22,7 +22,7 @@ use flui_foundation::Diagnosticable;
 use flui_rendering::{
     constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
     context::{BoxLayoutContext, SliverHitTestContext, SliverLayoutContext},
-    objects::RenderColoredBox,
+    objects::{RenderColoredBox, RenderSliverPadding},
     parent_data::{BoxParentData, SliverParentData},
     pipeline::PipelineOwner,
     protocol::{BoxProtocol, SliverProtocol},
@@ -227,6 +227,85 @@ fn cross_protocol_box_parent_lays_out_leaf_sliver_child() {
     assert!(
         !parent_node.needs_layout(),
         "parent NEEDS_LAYOUT must be cleared after successful cross-protocol layout"
+    );
+}
+
+// ============================================================================
+// Test 1b — Positive: Box parent lays out a non-leaf Sliver child
+// ============================================================================
+
+/// Box parent with a `RenderSliverPadding` child drives the sliver non-leaf
+/// walk: the padding sliver must lay out its own leaf sliver child, compose
+/// the padded geometry, and return that geometry to the Box parent.
+///
+/// This is the next Core.2 step after W3.2b-1's leaf-only sliver bridge. On
+/// the leaf-only bridge this regresses to `SliverGeometry::ZERO` and leaves
+/// the Box parent dirty because `RenderSliverPadding` is gated as non-leaf.
+#[test]
+fn cross_protocol_box_parent_lays_out_sliver_padding_with_leaf_child() {
+    let sc = make_sliver_constraints();
+    let captured: Arc<Mutex<Option<SliverGeometry>>> = Arc::new(Mutex::new(None));
+
+    let parent_obj: Box<dyn RenderObject<BoxProtocol>> = Box::new(BoxWithSliverChild {
+        sliver_constraints: sc,
+        captured: Arc::clone(&captured),
+        size: Size::ZERO,
+    });
+    let padding_obj: Box<dyn RenderObject<SliverProtocol>> =
+        Box::new(RenderSliverPadding::symmetric(0.0, 10.0));
+    let leaf_obj: Box<dyn RenderObject<SliverProtocol>> = Box::new(StubLeafSliver::default());
+
+    let mut pipeline = fresh_layout_pipeline();
+    let parent_id = pipeline.render_tree_mut().insert_box(parent_obj);
+    let padding_id = pipeline
+        .render_tree_mut()
+        .insert_sliver_child(parent_id, padding_obj)
+        .expect("tree must accept RenderSliverPadding under a Box parent");
+    pipeline
+        .render_tree_mut()
+        .insert_sliver_child(padding_id, leaf_obj)
+        .expect("tree must accept a leaf Sliver child under RenderSliverPadding");
+
+    let box_constraints = BoxConstraints::new(px(0.0), px(800.0), px(0.0), px(600.0));
+    let result = pipeline.layout_dirty_root(parent_id, box_constraints);
+    assert!(
+        result.is_ok(),
+        "layout_dirty_root must succeed for Box parent -> SliverPadding -> leaf Sliver: {result:?}"
+    );
+
+    let geom = captured
+        .lock()
+        .unwrap()
+        .expect("perform_layout must have called layout_sliver_child");
+
+    assert_eq!(
+        geom.scroll_extent, 220.0,
+        "10px top + 10px bottom padding must add 20px to the leaf's 200px scroll extent"
+    );
+    assert_eq!(
+        geom.paint_extent, 220.0,
+        "remaining_paint_extent=400 gives enough room for 200px leaf + 20px padding"
+    );
+    assert_eq!(
+        geom.layout_extent, 220.0,
+        "layout extent should match the fully visible padded extent"
+    );
+
+    let parent_node = pipeline
+        .render_tree()
+        .get(parent_id)
+        .expect("parent must remain in the tree after layout");
+    assert!(
+        !parent_node.needs_layout(),
+        "parent NEEDS_LAYOUT must be cleared after successful non-leaf sliver layout"
+    );
+    let padding_node = pipeline
+        .render_tree()
+        .get(padding_id)
+        .expect("padding sliver must remain in the tree after layout");
+    assert!(
+        !padding_node.needs_layout(),
+        "RenderSliverPadding NEEDS_LAYOUT must be cleared after its child layout succeeds"
     );
 }
 

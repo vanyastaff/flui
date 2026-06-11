@@ -137,15 +137,18 @@ pub use protocol::{
 // SLIVER PROTOCOL EXPORTS
 // ============================================================================
 pub use sliver_protocol::{
+    // Layout
+    ErasedSliverChildState,
+    ErasedSliverLayoutCtx,
     // Hit test
     MainAxisPosition,
+    SliverChildState,
     // Cache key
     SliverConstraintsCacheKey,
     SliverHitTest,
     SliverHitTestCtx,
     SliverHitTestEntry,
     SliverHitTestResult,
-    // Layout
     SliverLayout,
     SliverLayoutCtx,
     // Protocol

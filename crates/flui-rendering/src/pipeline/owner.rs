@@ -25,8 +25,9 @@ use crate::{
     constraints::{BoxConstraints, SliverConstraints, SliverGeometry},
     context::{FragmentClip, FragmentOp, FragmentRecorder},
     protocol::{
-        BoxProtocol, Protocol,
+        BoxProtocol, Protocol, SliverProtocol,
         box_protocol::{BoxLayoutCtxErased, LayoutChildCallback, SliverLayoutChildCallback},
+        sliver_protocol::{SliverChildLayoutCallback, SliverLayoutCtxErased},
     },
     storage::{RenderEntry, RenderNode, RenderTree},
 };
@@ -2367,7 +2368,7 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
 }
 
 // ============================================================================
-// Cross-protocol child layout: Box parent → leaf Sliver child
+// Cross-protocol child layout: Box parent → Sliver child
 // ============================================================================
 //
 // `layout_sliver_subtree_borrowed` is the Sliver sibling of
@@ -2375,14 +2376,13 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
 // closure captured inside `layout_subtree_borrowed_impl`'s non-leaf path
 // when a Box parent calls `ctx.layout_sliver_child(index, constraints)`.
 //
-// Scope: LEAF sliver children only. Non-leaf sliver children are gated by
-// the arity check inside `RenderEntry::layout_leaf_only` (the Sliver
-// blanket returns `RenderError::ContractViolation` for non-leaf nodes).
+// Scope: sliver subtrees. Leaf nodes still delegate to
+// `RenderEntry::layout_leaf_only`; non-leaf slivers get an erased driver
+// context and may call `ctx.layout_child(...)` to lay out sliver children.
 //
 // The short-circuit clean-child optimisation from the Box path is omitted
-// here on purpose: leaf slivers always relayout because their constraints
-// change with scroll position on every frame. Omitting the check is
-// correct and saves a branch.
+// here on purpose: sliver constraints change with scroll position on every
+// frame. Omitting the check is correct and saves a branch.
 
 /// Stack-probe wrapper for [`layout_sliver_subtree_borrowed_impl`].
 ///
@@ -2445,7 +2445,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl<'tree>(
     let node_ref: &mut crate::storage::RenderNode = unsafe { &mut *node_ptr };
 
     let node_protocol = node_ref.protocol_name();
-    let entry: &mut RenderEntry<crate::protocol::SliverProtocol> = match node_ref.as_sliver_mut() {
+    let entry: &mut RenderEntry<SliverProtocol> = match node_ref.as_sliver_mut() {
         Some(e) => e,
         None => {
             return Err(crate::error::RenderError::ProtocolMismatch {
@@ -2454,12 +2454,97 @@ unsafe fn layout_sliver_subtree_borrowed_impl<'tree>(
             });
         }
     };
+    let child_ids: Vec<RenderId> = entry.links().children().to_vec();
 
-    // Delegate to the generic leaf-only layout path.
-    // Non-leaf sliver nodes trigger `RenderError::ContractViolation`
-    // inside `layout_leaf_only` via the arity gate — the non-leaf
-    // sliver walk is out of scope for this change.
-    entry.layout_leaf_only(constraints)
+    if child_ids.is_empty() {
+        return entry.layout_leaf_only(constraints);
+    }
+
+    let mut child_states: Vec<crate::protocol::ErasedSliverChildState> = child_ids
+        .iter()
+        .map(|&cid| crate::protocol::ErasedSliverChildState::new(cid))
+        .collect();
+
+    let descendant_error_flag: std::sync::Arc<std::sync::atomic::AtomicBool> =
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let descendant_error_for_cb = std::sync::Arc::clone(&descendant_error_flag);
+    let borrows_for_cb: &SubtreeBorrows<'_> = borrows;
+
+    let cb_owned = move |child_id: RenderId,
+                         child_constraints: SliverConstraints|
+          -> SliverGeometry {
+        // SAFETY: `borrows_for_cb` is alive for the whole dirty-root
+        // walk, and this callback reborrows a child slot distinct from
+        // the current sliver node. `LayoutCycleGuard` rejects re-entry.
+        match unsafe { layout_sliver_subtree_borrowed(borrows_for_cb, child_id, child_constraints) }
+        {
+            Ok(geometry) => geometry,
+            Err(err) => {
+                descendant_error_for_cb.store(true, std::sync::atomic::Ordering::Relaxed);
+                tracing::error!(
+                    parent = ?id,
+                    ?child_id,
+                    ?err,
+                    "layout_dirty_root: sliver descendant layout failed; \
+                     returning SliverGeometry::ZERO to caller's perform_layout. \
+                     Parent NEEDS_LAYOUT preserved for next-frame retry.",
+                );
+                SliverGeometry::ZERO
+            }
+        }
+    };
+    let cb_ref: SliverChildLayoutCallback<'_> = &cb_owned;
+
+    let mut ctx = crate::protocol::ErasedSliverLayoutCtx::new(
+        constraints,
+        &mut child_states,
+        &child_ids,
+        cb_ref,
+    );
+    let erased: &mut dyn SliverLayoutCtxErased = &mut ctx;
+
+    let debug_name = entry.render_object().debug_name();
+    let render_object = entry.render_object_mut();
+    let unwind_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        render_object.perform_layout_raw(erased)
+    }));
+    let geometry = match unwind_result {
+        Ok(inner) => inner?,
+        Err(payload) => {
+            let msg = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&'static str>().copied())
+                .unwrap_or("(non-string panic payload)");
+            tracing::error!(
+                render_object = debug_name,
+                panic_msg = msg,
+                "perform_layout panicked in non-leaf sliver path — surfacing as \
+                 RenderError::Poisoned",
+            );
+            return Err(crate::error::RenderError::poisoned(debug_name, "layout"));
+        }
+    };
+
+    <SliverProtocol as Protocol>::debug_assert_layout_output(&constraints, &geometry);
+
+    entry.state_mut().set_geometry(geometry);
+    entry.state_mut().set_constraints(constraints);
+
+    let has_parent = entry.links().parent().is_some();
+    <SliverProtocol as Protocol>::bootstrap_relayout_boundary(entry.state(), has_parent);
+
+    if !descendant_error_flag.load(std::sync::atomic::Ordering::Relaxed) {
+        entry.clear_needs_layout();
+    } else {
+        tracing::debug!(
+            parent = ?id,
+            "layout_dirty_root: a sliver descendant errored during this walk; \
+             keeping parent NEEDS_LAYOUT set for next-frame retry"
+        );
+    }
+
+    Ok(geometry)
 }
 
 // ============================================================================

@@ -723,9 +723,8 @@ pub trait BoxLayoutCtxErased: Send + Sync {
     /// Lays out a **sliver** child at `index` with the given
     /// [`SliverConstraints`]; returns the child's [`SliverGeometry`].
     ///
-    /// Only the **leaf** sliver path is supported here (non-leaf sliver
-    /// children gate to [`crate::error::RenderError::ContractViolation`]
-    /// inside `RenderEntry::layout_leaf_only` when the arity check fires).
+    /// The pipeline callback drives the sliver subtree walk, so both leaf
+    /// and child-bearing slivers can be laid out through this method.
     ///
     /// When no sliver callback is wired (e.g. a Direct-storage context
     /// constructed without one), returns [`SliverGeometry::ZERO`] — same
