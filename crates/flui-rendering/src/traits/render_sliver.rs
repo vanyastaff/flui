@@ -358,6 +358,23 @@ where
         // Child layout operations are still leaf-scoped stubs (child
         // count returns 0, `layout_child` returns `SliverGeometry::ZERO`);
         // the full child-walk bridge is a follow-on Core.2 wave.
+        //
+        // Leaf-arity gate: the blanket installs for EVERY `T: RenderSliver`,
+        // but the reconstructed context cannot yet lay out children. A
+        // non-leaf sliver (e.g. `RenderSliverPadding`, arity `Single`) would
+        // read the stubbed child API and silently produce wrong geometry
+        // instead of failing. Until the child-walk bridge lands, restrict
+        // the live path to `Leaf` arity and preserve the loud
+        // `ContractViolation` for every other arity (`Arity: 'static`, so
+        // the identity check is exact and the only arity that passes is
+        // `flui_tree::Leaf`).
+        if core::any::TypeId::of::<T::Arity>() != core::any::TypeId::of::<flui_tree::Leaf>() {
+            return Err(crate::error::RenderError::contract_violation(
+                self.debug_name(),
+                "RenderSliver child layout is not yet wired: only Leaf-arity \
+                 slivers lay out through perform_layout_raw (Core.2 child-walk pending)",
+            ));
+        }
         let typed_inner =
             crate::protocol::SliverLayoutCtx::<T::Arity, T::ParentData>::from_erased(ctx);
         let mut layout_ctx =
@@ -433,7 +450,7 @@ pub trait RenderProxySliver<C: RenderSliver>: RenderSliver {
 
 #[cfg(test)]
 mod tests {
-    use flui_tree::Leaf;
+    use flui_tree::{Leaf, Single};
     use flui_types::layout::AxisDirection;
 
     use super::*;
@@ -706,5 +723,88 @@ mod tests {
         let geom = ctx.geometry().copied().unwrap();
         assert_eq!(geom.scroll_extent, 100.0);
         assert_eq!(geom.paint_extent, 100.0);
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Test double — non-leaf (Single) arity: completes geometry, but the
+    // bridge must refuse it because the child-walk is not yet wired.
+    // ────────────────────────────────────────────────────────────────────────
+
+    struct SingleAritySliver {
+        constraints: SliverConstraints,
+        geometry: SliverGeometry,
+    }
+
+    impl std::fmt::Debug for SingleAritySliver {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("SingleAritySliver").finish_non_exhaustive()
+        }
+    }
+
+    impl flui_foundation::Diagnosticable for SingleAritySliver {
+        fn debug_fill_properties(&self, _properties: &mut flui_foundation::DiagnosticsBuilder) {}
+    }
+    impl PaintEffectsCapability for SingleAritySliver {}
+    impl SemanticsCapability for SingleAritySliver {}
+    impl HotReloadCapability for SingleAritySliver {}
+
+    impl RenderSliver for SingleAritySliver {
+        type Arity = Single;
+        type ParentData = crate::parent_data::SliverParentData;
+
+        fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Single, Self::ParentData>) {
+            // A well-behaved body that DOES complete — proving the bridge
+            // rejects on arity *before* running it, not because of a missing
+            // completion call.
+            let c = *ctx.constraints();
+            self.constraints = c;
+            let geom = SliverGeometry::new(c.remaining_paint_extent, c.remaining_paint_extent, 0.0);
+            self.geometry = geom;
+            ctx.complete(geom);
+        }
+
+        fn geometry(&self) -> &SliverGeometry {
+            &self.geometry
+        }
+
+        fn constraints(&self) -> &SliverConstraints {
+            &self.constraints
+        }
+
+        fn set_geometry(&mut self, geometry: SliverGeometry) {
+            self.geometry = geometry;
+        }
+
+        fn hit_test(&self, _ctx: &mut SliverHitTestContext<'_, Single, Self::ParentData>) -> bool {
+            false
+        }
+    }
+
+    /// A non-`Leaf` sliver must hit the arity gate and return
+    /// `ContractViolation` — even though its `perform_layout` would complete —
+    /// because the child-walk bridge is not yet wired. This preserves the
+    /// pre-bridge loud-fail for `RenderSliverPadding` & friends (arity
+    /// `Single`) rather than silently dropping their child geometry.
+    #[test]
+    fn sliver_non_leaf_arity_is_gated_to_contract_violation() {
+        let constraints = vertical_constraints(0.0, 600.0);
+        let mut sliver = SingleAritySliver {
+            constraints,
+            geometry: SliverGeometry::ZERO,
+        };
+
+        let result = SliverProtocol::with_leaf_erased_ctx(constraints, |erased| {
+            use crate::protocol::RenderObject;
+            sliver.perform_layout_raw(erased)
+        });
+
+        assert!(
+            matches!(
+                result,
+                Err(crate::error::RenderError::ContractViolation { .. })
+            ),
+            "non-leaf sliver must be gated to ContractViolation until child-walk \
+             lands, got {result:?}",
+        );
     }
 }
