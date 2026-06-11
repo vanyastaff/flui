@@ -167,6 +167,39 @@ impl BoxConstraints {
         }
     }
 
+    /// Creates constraints that tighten each dimension to its value only when
+    /// that value is finite, leaving infinite dimensions unconstrained.
+    ///
+    /// Mirrors Flutter's `BoxConstraints.tightForFinite` (`box.dart`), used by
+    /// intrinsic-dimension probes that pass `f32::INFINITY` for the axis they
+    /// are not constraining.
+    #[inline]
+    #[must_use]
+    pub fn tight_for_finite(width: Pixels, height: Pixels) -> Self {
+        Self {
+            min_width: if width.is_finite() {
+                width
+            } else {
+                Pixels::ZERO
+            },
+            max_width: if width.is_finite() {
+                width
+            } else {
+                Pixels::INFINITY
+            },
+            min_height: if height.is_finite() {
+                height
+            } else {
+                Pixels::ZERO
+            },
+            max_height: if height.is_finite() {
+                height
+            } else {
+                Pixels::INFINITY
+            },
+        }
+    }
+
     // ============================================================================
     // NORMALIZATION FOR CACHING
     // ============================================================================
@@ -334,36 +367,52 @@ impl BoxConstraints {
     /// Flutter equivalent: `BoxConstraints.constrainSizeAndAttemptToPreserveAspectRatio`
     #[must_use]
     pub fn constrain_size_and_attempt_to_preserve_aspect_ratio(&self, size: Size) -> Size {
-        // Zero size: return as-is
-        if size.width.get() == 0.0 || size.height.get() == 0.0 {
-            return Size::new(
-                self.constrain_width(size.width),
-                self.constrain_height(size.height),
-            );
+        // Tight constraints fix the size outright (Flutter `box.dart`).
+        if self.is_tight() {
+            return self.smallest();
         }
 
-        // Aspect ratio of the natural size
-        let aspect_ratio = size.width.get() / size.height.get();
+        let mut width = size.width.get();
+        let mut height = size.height.get();
 
-        // Start by constraining to the absolute limits
-        let mut w = self.constrain_width(size.width);
-        let mut h = self.constrain_height(size.height);
-
-        // If the constrained size doesn't match the aspect ratio, adjust
-        // one dimension to restore it. Pick the dimension with more room.
-        let constrained_ratio = w.get() / h.get();
-
-        if constrained_ratio > aspect_ratio {
-            // Width is too large; scale down to maintain aspect ratio
-            w = Pixels::new(h.get() * aspect_ratio);
-            w = self.constrain_width(w);
-        } else if constrained_ratio < aspect_ratio {
-            // Height is too large; scale down to maintain aspect ratio
-            h = Pixels::new(w.get() / aspect_ratio);
-            h = self.constrain_height(h);
+        // A degenerate aspect source has no ratio to preserve — just constrain.
+        if width <= 0.0 || height <= 0.0 {
+            return self.constrain(size);
         }
 
-        Size::new(w, h)
+        let aspect_ratio = width / height;
+        let min_w = self.min_width.get();
+        let max_w = self.max_width.get();
+        let min_h = self.min_height.get();
+        let max_h = self.max_height.get();
+
+        // Adjust each out-of-range dimension and bring the OTHER dimension along
+        // to keep the ratio. Order (max then min, width then height) and the
+        // re-derivation of the partner dimension match Flutter's
+        // `constrainSizeAndAttemptToPreserveAspectRatio` exactly — the previous
+        // flui version clamped a dimension up to its min and then "scaled down"
+        // the same dimension, which got re-clamped and never grew its partner.
+        if width > max_w {
+            width = max_w;
+            height = width / aspect_ratio;
+        }
+        if height > max_h {
+            height = max_h;
+            width = height * aspect_ratio;
+        }
+        if width < min_w {
+            width = min_w;
+            height = width / aspect_ratio;
+        }
+        if height < min_h {
+            height = min_h;
+            width = height * aspect_ratio;
+        }
+
+        Size::new(
+            self.constrain_width(Pixels::new(width)),
+            self.constrain_height(Pixels::new(height)),
+        )
     }
 
     // ============================================================================
