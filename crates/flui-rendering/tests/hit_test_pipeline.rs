@@ -479,6 +479,53 @@ impl RenderSliver for HitLeafSliver {
     }
 }
 
+#[derive(Debug, Default)]
+struct DefaultSelfHitSliver {
+    constraints: SliverConstraints,
+    geometry: SliverGeometry,
+}
+
+impl flui_foundation::Diagnosticable for DefaultSelfHitSliver {}
+impl PaintEffectsCapability for DefaultSelfHitSliver {}
+impl SemanticsCapability for DefaultSelfHitSliver {}
+impl HotReloadCapability for DefaultSelfHitSliver {}
+
+impl RenderSliver for DefaultSelfHitSliver {
+    type Arity = Leaf;
+    type ParentData = SliverParentData;
+
+    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
+        self.constraints = *ctx.constraints();
+        let geometry = SliverGeometry {
+            scroll_extent: 80.0,
+            paint_extent: 80.0,
+            layout_extent: 80.0,
+            max_paint_extent: 80.0,
+            hit_test_extent: 80.0,
+            visible: true,
+            ..SliverGeometry::ZERO
+        };
+        self.geometry = geometry;
+        ctx.complete(geometry);
+    }
+
+    fn geometry(&self) -> &SliverGeometry {
+        &self.geometry
+    }
+
+    fn constraints(&self) -> &SliverConstraints {
+        &self.constraints
+    }
+
+    fn set_geometry(&mut self, geometry: SliverGeometry) {
+        self.geometry = geometry;
+    }
+
+    fn hit_test_self(&self, main: f32, cross: f32) -> bool {
+        main >= 0.0 && main < self.geometry.hit_test_extent && cross >= 0.0
+    }
+}
+
 #[derive(Debug)]
 struct OvereagerHitLeafSliver {
     constraints: SliverConstraints,
@@ -594,6 +641,35 @@ fn sliver_hit_walk_gates_each_level_before_dispatch() {
     assert!(
         hits(&owner, 120.0, 10.0).is_empty(),
         "cross-axis position outside constraints.cross_axis_extent must miss",
+    );
+}
+
+#[test]
+fn sliver_default_hit_test_uses_hit_test_self() {
+    let mut owner = PipelineOwner::new();
+    let host_id = owner.insert(Box::new(SliverHitHost {
+        constraints: sliver_hit_constraints(),
+        size: Size::ZERO,
+    }) as BoxedRenderObject);
+    let leaf_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            host_id,
+            Box::new(DefaultSelfHitSliver::default()) as BoxedSliverObject,
+        )
+        .expect("sliver leaf child");
+
+    let owner = laid_out(owner, host_id);
+
+    assert_eq!(
+        hits(&owner, 10.0, 10.0),
+        vec![leaf_id, host_id],
+        "a sliver can override hit_test_self and rely on the default \
+         RenderSliver::hit_test dispatcher",
+    );
+    assert!(
+        hits(&owner, 10.0, 90.0).is_empty(),
+        "the pipeline-level sliver hit gate still clips by geometry.hit_test_extent",
     );
 }
 

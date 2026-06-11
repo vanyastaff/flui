@@ -281,8 +281,26 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static 
     /// The context provides:
     /// - Position via `ctx.main_axis()`, `ctx.cross_axis()`
     /// - Child testing via `ctx.hit_test_child()`
-    /// - Result management via `ctx.add_self(id)`
-    fn hit_test(&self, ctx: &mut SliverHitTestContext<'_, Self::Arity, Self::ParentData>) -> bool;
+    ///
+    /// Mirrors Flutter's `RenderSliver.hitTest` dispatcher shape:
+    /// children first, then [`Self::hit_test_self`]. The pipeline owns
+    /// the geometry/cross-axis gate and appends the sliver's hit entry
+    /// when this method returns `true`.
+    fn hit_test(&self, ctx: &mut SliverHitTestContext<'_, Self::Arity, Self::ParentData>) -> bool {
+        self.hit_test_children(ctx) || self.hit_test_self(ctx.main_axis(), ctx.cross_axis())
+    }
+
+    /// Hit tests this sliver's children.
+    ///
+    /// Container slivers should override this in reverse paint order. Leaf
+    /// slivers normally leave it as `false` and override
+    /// [`Self::hit_test_self`] instead.
+    fn hit_test_children(
+        &self,
+        _ctx: &mut SliverHitTestContext<'_, Self::Arity, Self::ParentData>,
+    ) -> bool {
+        false
+    }
 
     /// Hit tests just this sliver (not children).
     fn hit_test_self(&self, _main: f32, _cross: f32) -> bool {
