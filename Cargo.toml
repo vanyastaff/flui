@@ -158,7 +158,7 @@ rustc-hash = "2.1"
 lasso = { version = "0.7", features = ["multi-threaded"] }
 
 # PERFORMANCE & PROFILING
-criterion = "0.7"
+criterion = "0.8"
 
 # Workspace-wide lints for consistent code quality (Rust 1.74+)
 [workspace.lints.rust]
