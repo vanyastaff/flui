@@ -6,11 +6,11 @@
 
 use flui_foundation::Diagnosticable;
 use flui_tree::Leaf;
-use flui_types::{Offset, Point, Pixels, Rect, Size};
+use flui_types::{Offset, Point, Pixels, Rect, Size, painting::Image};
 
 use crate::{
     constraints::BoxConstraints,
-    context::BoxLayoutContext,
+    context::{BoxLayoutContext, PaintCx},
     parent_data::BoxParentData,
     traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
 };
@@ -57,7 +57,6 @@ pub enum ImageAlignment {
 
 impl ImageAlignment {
     /// Calculates the offset for the given image and container size.
-    #[allow(dead_code)]
     fn offset(&self, image_size: Size, container_size: Size) -> Offset {
         let x = match self {
             Self::TopLeft | Self::Left | Self::BottomLeft => Pixels::ZERO,
@@ -91,6 +90,10 @@ impl ImageAlignment {
 /// - Intrinsic size queries based on image dimensions
 #[derive(Debug, Clone)]
 pub struct RenderImage {
+    /// The image to display. `None` until a source is provided (e.g. async
+    /// load). When `None`, the object still lays out via `intrinsic_size`
+    /// but paints nothing.
+    image: Option<Image>,
     /// Natural (intrinsic) size of the image.
     intrinsic_size: Size,
     /// How to fit the image into available space.
@@ -102,14 +105,46 @@ pub struct RenderImage {
 }
 
 impl RenderImage {
-    /// Creates a new RenderImage with the given intrinsic size.
+    /// Creates a new RenderImage with the given intrinsic size and no image
+    /// source yet (placeholder layout).
     pub fn new(intrinsic_size: Size, fit: ImageFit, alignment: ImageAlignment) -> Self {
         Self {
+            image: None,
             intrinsic_size,
             fit,
             alignment,
             size: Size::ZERO,
         }
+    }
+
+    /// Creates a RenderImage backed by an actual [`Image`].
+    ///
+    /// The intrinsic size is derived from the image's pixel dimensions.
+    pub fn from_image(image: Image, fit: ImageFit, alignment: ImageAlignment) -> Self {
+        let intrinsic_size = image.size();
+        Self {
+            image: Some(image),
+            intrinsic_size,
+            fit,
+            alignment,
+            size: Size::ZERO,
+        }
+    }
+
+    /// Returns the current image source, if any.
+    pub fn image(&self) -> Option<&Image> {
+        self.image.as_ref()
+    }
+
+    /// Sets the image source and updates the intrinsic size from its
+    /// dimensions.
+    ///
+    /// The caller is responsible for marking the node layout-dirty.
+    pub fn set_image(&mut self, image: Option<Image>) {
+        if let Some(ref img) = image {
+            self.intrinsic_size = img.size();
+        }
+        self.image = image;
     }
 
     /// Sets the intrinsic (natural) size of the image.
@@ -128,6 +163,49 @@ impl RenderImage {
     pub fn set_alignment(&mut self, alignment: ImageAlignment) {
         self.alignment = alignment;
         // Caller responsible for marking repaint dirty
+    }
+
+    /// Computes the destination rectangle for the image content within the
+    /// laid-out box, applying the fit mode (scaling) and alignment
+    /// (positioning).
+    ///
+    /// Returns `None` when the intrinsic size is degenerate (zero in either
+    /// dimension), in which case there is nothing to paint.
+    fn compute_paint_rect(&self) -> Option<Rect> {
+        let iw = self.intrinsic_size.width.get();
+        let ih = self.intrinsic_size.height.get();
+        if iw <= 0.0 || ih <= 0.0 {
+            return None;
+        }
+
+        let bw = self.size.width.get();
+        let bh = self.size.height.get();
+
+        // Determine the painted (scaled) size of the image content.
+        let (pw, ph) = match self.fit {
+            ImageFit::Fill => (bw, bh),
+            ImageFit::Contain => {
+                let scale = (bw / iw).min(bh / ih);
+                (iw * scale, ih * scale)
+            }
+            ImageFit::Cover => {
+                let scale = (bw / iw).max(bh / ih);
+                (iw * scale, ih * scale)
+            }
+            ImageFit::ScaleDown => {
+                // Like Contain but never enlarge.
+                let scale = (bw / iw).min(bh / ih).min(1.0);
+                (iw * scale, ih * scale)
+            }
+            ImageFit::None => (iw, ih),
+        };
+
+        let painted = Size::new(Pixels::new(pw), Pixels::new(ph));
+        let origin = self.alignment.offset(painted, self.size);
+        Some(Rect::from_origin_size(
+            Point::new(origin.dx, origin.dy),
+            painted,
+        ))
     }
 
     /// Computes the size of the image given the fit mode and constraints.
@@ -186,7 +264,7 @@ impl RenderBox for RenderImage {
     type ParentData = BoxParentData;
 
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) {
-        let size = self.compute_size(&ctx.constraints());
+        let size = self.compute_size(ctx.constraints());
         self.size = size;
         ctx.complete_with_size(size);
     }
@@ -203,16 +281,16 @@ impl RenderBox for RenderImage {
         Rect::from_origin_size(Point::ZERO, self.size)
     }
 
-    fn paint(&self, _ctx: &mut crate::context::PaintCx<'_, Leaf>) {
-        // TODO: Implement paint() when Image source is available.
-        // Current block:
-        // - RenderImage doesn't store the actual Image (bitmap data)
-        // - Need Image parameter in constructor or property setter
-        // - Pattern: ctx.canvas().draw_image(image, dst_rect, paint)
-        //
-        // Example (when Image is available):
-        // let rect = Rect::from_origin_size(Point::ZERO, self.size);
-        // ctx.canvas().draw_image(self.image.clone(), rect, None);
+    fn paint(&self, ctx: &mut PaintCx<'_, Leaf>) {
+        // Nothing to draw without a source image.
+        let Some(image) = self.image.as_ref() else {
+            return;
+        };
+        // Apply fit + alignment to obtain the destination rect in local
+        // coordinates (the recorder pre-translates to this node's origin).
+        if let Some(dst) = self.compute_paint_rect() {
+            ctx.canvas().draw_image(image.clone(), dst, None);
+        }
     }
 }
 
@@ -321,6 +399,119 @@ mod tests {
         let offset = alignment.offset(image_size, container_size);
         assert_eq!(offset.dx, Pixels::ZERO);
         assert_eq!(offset.dy, Pixels::ZERO);
+    }
+
+    fn test_image_2x2() -> Image {
+        // 2x2 RGBA image (16 bytes), all opaque white.
+        Image::from_rgba8(2, 2, vec![255; 2 * 2 * 4])
+    }
+
+    #[test]
+    fn test_from_image_derives_intrinsic_size() {
+        let image = RenderImage::from_image(
+            test_image_2x2(),
+            ImageFit::Contain,
+            ImageAlignment::Center,
+        );
+        assert_eq!(image.intrinsic_size, Size::new(px(2.0), px(2.0)));
+        assert!(image.image().is_some());
+    }
+
+    #[test]
+    fn test_set_image_updates_intrinsic_size() {
+        let mut image = RenderImage::new(
+            Size::new(px(10.0), px(10.0)),
+            ImageFit::Contain,
+            ImageAlignment::Center,
+        );
+        assert!(image.image().is_none());
+
+        image.set_image(Some(test_image_2x2()));
+        assert_eq!(image.intrinsic_size, Size::new(px(2.0), px(2.0)));
+        assert!(image.image().is_some());
+
+        image.set_image(None);
+        assert!(image.image().is_none());
+        // Clearing the image leaves the last intrinsic size unchanged.
+        assert_eq!(image.intrinsic_size, Size::new(px(2.0), px(2.0)));
+    }
+
+    #[test]
+    fn test_compute_paint_rect_contain_centers() {
+        // Intrinsic 2:1 (200x100) in a 100x100 box → contain gives 100x50
+        // centered vertically at y=25.
+        let mut image = RenderImage::new(
+            Size::new(px(200.0), px(100.0)),
+            ImageFit::Contain,
+            ImageAlignment::Center,
+        );
+        image.size = Size::new(px(100.0), px(100.0));
+
+        let rect = image.compute_paint_rect().expect("paint rect");
+        assert_eq!(rect.size().width, px(100.0));
+        assert_eq!(rect.size().height, px(50.0));
+        assert_eq!(rect.origin().x, Pixels::ZERO);
+        assert_eq!(rect.origin().y, px(25.0));
+    }
+
+    #[test]
+    fn test_compute_paint_rect_fill_matches_box() {
+        let mut image = RenderImage::new(
+            Size::new(px(50.0), px(50.0)),
+            ImageFit::Fill,
+            ImageAlignment::TopLeft,
+        );
+        image.size = Size::new(px(120.0), px(80.0));
+
+        let rect = image.compute_paint_rect().expect("paint rect");
+        assert_eq!(rect.size().width, px(120.0));
+        assert_eq!(rect.size().height, px(80.0));
+        assert_eq!(rect.origin().x, Pixels::ZERO);
+        assert_eq!(rect.origin().y, Pixels::ZERO);
+    }
+
+    #[test]
+    fn test_compute_paint_rect_cover_overflows_box() {
+        // Intrinsic 1:2 (100x200) covered into 100x100 box → scale by max
+        // (1.0 vs 0.5) = 1.0, painted 100x200, overflowing height (cropped).
+        let mut image = RenderImage::new(
+            Size::new(px(100.0), px(200.0)),
+            ImageFit::Cover,
+            ImageAlignment::Center,
+        );
+        image.size = Size::new(px(100.0), px(100.0));
+
+        let rect = image.compute_paint_rect().expect("paint rect");
+        assert_eq!(rect.size().width, px(100.0));
+        assert_eq!(rect.size().height, px(200.0));
+        // Centered vertically → origin y = (100 - 200)/2 = -50 (crop top/bottom)
+        assert_eq!(rect.origin().y, px(-50.0));
+    }
+
+    #[test]
+    fn test_compute_paint_rect_scale_down_never_enlarges() {
+        // Small 10x10 image in a big 100x100 box → ScaleDown keeps 10x10.
+        let mut image = RenderImage::new(
+            Size::new(px(10.0), px(10.0)),
+            ImageFit::ScaleDown,
+            ImageAlignment::TopLeft,
+        );
+        image.size = Size::new(px(100.0), px(100.0));
+
+        let rect = image.compute_paint_rect().expect("paint rect");
+        assert_eq!(rect.size().width, px(10.0));
+        assert_eq!(rect.size().height, px(10.0));
+    }
+
+    #[test]
+    fn test_compute_paint_rect_zero_intrinsic_is_none() {
+        let mut image = RenderImage::new(
+            Size::new(px(0.0), px(50.0)),
+            ImageFit::Contain,
+            ImageAlignment::Center,
+        );
+        image.size = Size::new(px(100.0), px(100.0));
+        assert!(image.compute_paint_rect().is_none());
     }
 }
 
