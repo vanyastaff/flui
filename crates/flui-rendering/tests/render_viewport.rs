@@ -1,5 +1,10 @@
 //! Core.2 W3.4a: minimal `RenderViewport` driver for sliver children.
 
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
+
 use flui_foundation::Diagnosticable;
 use flui_rendering::{
     constraints::{BoxConstraints, SliverConstraints, SliverGeometry},
@@ -205,6 +210,70 @@ impl RenderSliver for CorrectingSliver {
     }
 }
 
+#[derive(Debug)]
+struct CountingSliver {
+    scroll_extent: f32,
+    layouts: Arc<AtomicUsize>,
+    constraints: SliverConstraints,
+    geometry: SliverGeometry,
+}
+
+impl CountingSliver {
+    fn new(scroll_extent: f32, layouts: Arc<AtomicUsize>) -> Self {
+        Self {
+            scroll_extent,
+            layouts,
+            constraints: SliverConstraints::default(),
+            geometry: SliverGeometry::ZERO,
+        }
+    }
+}
+
+impl Diagnosticable for CountingSliver {}
+impl PaintEffectsCapability for CountingSliver {}
+impl SemanticsCapability for CountingSliver {}
+impl HotReloadCapability for CountingSliver {}
+
+impl RenderSliver for CountingSliver {
+    type Arity = Leaf;
+    type ParentData = SliverParentData;
+
+    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
+        self.layouts.fetch_add(1, Ordering::SeqCst);
+        self.constraints = *ctx.constraints();
+        let paint_extent = self.calculate_paint_offset(&self.constraints, 0.0, self.scroll_extent);
+        let cache_extent = self.calculate_cache_offset(&self.constraints, 0.0, self.scroll_extent);
+        self.geometry = SliverGeometry {
+            scroll_extent: self.scroll_extent,
+            paint_extent,
+            layout_extent: paint_extent,
+            max_paint_extent: self.scroll_extent,
+            hit_test_extent: paint_extent,
+            cache_extent,
+            visible: paint_extent > 0.0,
+            has_visual_overflow: self.constraints.scroll_offset > 0.0,
+            ..SliverGeometry::ZERO
+        };
+        ctx.complete(self.geometry);
+    }
+
+    fn constraints(&self) -> &SliverConstraints {
+        &self.constraints
+    }
+
+    fn geometry(&self) -> &SliverGeometry {
+        &self.geometry
+    }
+
+    fn set_geometry(&mut self, geometry: SliverGeometry) {
+        self.geometry = geometry;
+    }
+
+    fn hit_test(&self, _ctx: &mut SliverHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
+        false
+    }
+}
+
 #[test]
 fn viewport_lays_out_forward_slivers_and_applies_content_dimensions() {
     let viewport = RenderViewport::with_offset(
@@ -359,5 +428,74 @@ fn viewport_hit_tests_in_opposite_paint_order() {
         hits(&owner, 10.0, 10.0),
         vec![first_id, root_id],
         "FirstIsTop paints earlier children on top, so hit testing must visit them first",
+    );
+}
+
+#[test]
+fn viewport_reuses_clean_cached_tail_extents_after_cache_window() {
+    let viewport = RenderViewport::with_offset(
+        AxisDirection::TopToBottom,
+        AxisDirection::LeftToRight,
+        ScrollableViewportOffset::zero(),
+    );
+
+    let mut owner = PipelineOwner::new();
+    let root_id = owner.insert(Box::new(viewport));
+    let layout_counts = (0..8)
+        .map(|_| Arc::new(AtomicUsize::new(0)))
+        .collect::<Vec<_>>();
+
+    for counter in &layout_counts {
+        owner
+            .render_tree_mut()
+            .insert_sliver_child(
+                root_id,
+                Box::new(CountingSliver::new(100.0, Arc::clone(counter))) as BoxedSliverObject,
+            )
+            .expect("counting sliver");
+    }
+
+    let owner = laid_out(owner, root_id);
+    assert!(
+        layout_counts
+            .iter()
+            .all(|counter| counter.load(Ordering::SeqCst) == 1),
+        "first layout seeds geometry for every direct sliver child",
+    );
+
+    let mut owner = owner.into_idle();
+    owner.mark_needs_layout(root_id);
+    let mut owner = owner.into_layout();
+    owner.run_layout().expect("second layout succeeds");
+
+    assert!(
+        layout_counts
+            .iter()
+            .take(4)
+            .all(|counter| counter.load(Ordering::SeqCst) == 2),
+        "second layout still drives the visible/cache window",
+    );
+    assert!(
+        layout_counts
+            .iter()
+            .skip(4)
+            .all(|counter| counter.load(Ordering::SeqCst) == 1),
+        "clean slivers after the cache window should reuse cached scroll extents",
+    );
+
+    let viewport = owner
+        .render_tree()
+        .get(root_id)
+        .and_then(|node| node.as_box())
+        .and_then(|entry| {
+            entry
+                .render_object()
+                .downcast_ref::<RenderViewport<ScrollableViewportOffset>>()
+        })
+        .expect("root is RenderViewport");
+    assert_eq!(
+        viewport.offset().max_scroll_extent(),
+        700.0,
+        "reusing cached tail extents must preserve the full scroll range",
     );
 }

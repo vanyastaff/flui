@@ -205,27 +205,34 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             };
             let corrected_cache_origin = cache_origin.max(-sliver_scroll_offset);
             let cache_extent_correction = cache_origin - corrected_cache_origin;
+            let child_remaining_paint_extent =
+                (remaining_paint_extent - layout_offset + initial_layout_offset).max(0.0);
+            let child_remaining_cache_extent =
+                (remaining_cache_extent + cache_extent_correction).max(0.0);
+            let constraints = SliverConstraints {
+                axis_direction: self.axis_direction,
+                growth_direction,
+                user_scroll_direction: adjusted_user_scroll_direction,
+                scroll_offset: sliver_scroll_offset,
+                preceding_scroll_extent,
+                overlap: max_paint_offset - layout_offset,
+                remaining_paint_extent: child_remaining_paint_extent,
+                cross_axis_extent,
+                cross_axis_direction: self.cross_axis_direction,
+                viewport_main_axis_extent: main_axis_extent,
+                remaining_cache_extent: child_remaining_cache_extent,
+                cache_origin: corrected_cache_origin,
+            };
 
-            let geometry = ctx.layout_sliver_child(
-                index,
-                SliverConstraints {
-                    axis_direction: self.axis_direction,
-                    growth_direction,
-                    user_scroll_direction: adjusted_user_scroll_direction,
-                    scroll_offset: sliver_scroll_offset,
-                    preceding_scroll_extent,
-                    overlap: max_paint_offset - layout_offset,
-                    remaining_paint_extent: (remaining_paint_extent - layout_offset
-                        + initial_layout_offset)
-                        .max(0.0),
-                    cross_axis_extent,
-                    cross_axis_direction: self.cross_axis_direction,
-                    viewport_main_axis_extent: main_axis_extent,
-                    remaining_cache_extent: (remaining_cache_extent + cache_extent_correction)
-                        .max(0.0),
-                    cache_origin: corrected_cache_origin,
-                },
-            );
+            let geometry = if child_remaining_paint_extent <= f32::EPSILON
+                && child_remaining_cache_extent <= f32::EPSILON
+                && sliver_scroll_offset <= f32::EPSILON
+                && let Some(cached_geometry) = cached_clean_sliver_geometry(ctx, index, constraints)
+            {
+                cached_geometry
+            } else {
+                ctx.layout_sliver_child(index, constraints)
+            };
 
             if let Some(correction) = geometry.scroll_offset_correction {
                 return correction;
@@ -438,5 +445,21 @@ fn apply_growth_direction_to_scroll_direction(
     match growth_direction {
         GrowthDirection::Forward => scroll_direction,
         GrowthDirection::Reverse => scroll_direction.flip(),
+    }
+}
+
+fn cached_clean_sliver_geometry(
+    ctx: &BoxLayoutContext<'_, Variable, BoxParentData>,
+    index: usize,
+    constraints: SliverConstraints,
+) -> Option<SliverGeometry> {
+    if ctx.sliver_child_needs_layout(index) {
+        return None;
+    }
+    let (cached_constraints, cached_geometry) = ctx.cached_sliver_child_layout(index)?;
+    if cached_constraints == constraints && cached_geometry.scroll_offset_correction.is_none() {
+        Some(cached_geometry)
+    } else {
+        None
     }
 }

@@ -736,6 +736,20 @@ pub trait BoxLayoutCtxErased: Send + Sync {
         constraints: SliverConstraints,
     ) -> SliverGeometry;
 
+    /// Returns the last known sliver constraints and geometry for child
+    /// `index`, when this context is backed by pipeline storage.
+    fn cached_sliver_child_layout(
+        &self,
+        _index: usize,
+    ) -> Option<(SliverConstraints, SliverGeometry)> {
+        None
+    }
+
+    /// Returns whether sliver child `index` is currently marked dirty.
+    fn sliver_child_needs_layout(&self, _index: usize) -> bool {
+        true
+    }
+
     /// Records the paint offset for child at `index`.
     fn position_child(&mut self, index: usize, offset: Offset);
 
@@ -851,6 +865,25 @@ impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, 
     }
 
     #[inline]
+    fn cached_sliver_child_layout(
+        &self,
+        index: usize,
+    ) -> Option<(SliverConstraints, SliverGeometry)> {
+        match &self.storage {
+            BoxLayoutCtxStorage::Direct { .. } => None,
+            BoxLayoutCtxStorage::Proxy { erased, .. } => erased.cached_sliver_child_layout(index),
+        }
+    }
+
+    #[inline]
+    fn sliver_child_needs_layout(&self, index: usize) -> bool {
+        match &self.storage {
+            BoxLayoutCtxStorage::Direct { .. } => true,
+            BoxLayoutCtxStorage::Proxy { erased, .. } => erased.sliver_child_needs_layout(index),
+        }
+    }
+
+    #[inline]
     fn position_child(&mut self, index: usize, offset: Offset) {
         <Self as LayoutContextApi<'_, BoxLayout, A, P>>::position_child(self, index, offset)
     }
@@ -927,6 +960,12 @@ pub struct ErasedChildState {
     pub size: Size,
     /// Position offset set by parent.
     pub offset: Offset,
+    /// Last constraints used to lay out this child when it is a sliver.
+    pub sliver_constraints: Option<SliverConstraints>,
+    /// Last geometry produced by this child when it is a sliver.
+    pub sliver_geometry: Option<SliverGeometry>,
+    /// Whether the child still needs layout in the backing render tree.
+    pub needs_layout: bool,
     /// Parent data, created on demand by the typed bridge.
     pub parent_data: Option<Box<dyn ParentData>>,
 }
@@ -938,6 +977,9 @@ impl ErasedChildState {
             id,
             size: Size::ZERO,
             offset: Offset::ZERO,
+            sliver_constraints: None,
+            sliver_geometry: None,
+            needs_layout: true,
             parent_data: None,
         }
     }
@@ -1021,10 +1063,31 @@ impl BoxLayoutCtxErased for ErasedBoxLayoutCtx<'_> {
         let Some(&child_id) = self.child_ids.get(index) else {
             return SliverGeometry::ZERO;
         };
-        match self.sliver_layout_child_callback {
+        let geometry = match self.sliver_layout_child_callback {
             Some(cb) => (cb)(child_id, constraints),
             None => SliverGeometry::ZERO,
+        };
+        if let Some(slot) = self.children.get_mut(index) {
+            slot.sliver_constraints = Some(constraints);
+            slot.sliver_geometry = Some(geometry);
+            slot.needs_layout = false;
         }
+        geometry
+    }
+
+    fn cached_sliver_child_layout(
+        &self,
+        index: usize,
+    ) -> Option<(SliverConstraints, SliverGeometry)> {
+        let slot = self.children.get(index)?;
+        Some((slot.sliver_constraints?, slot.sliver_geometry?))
+    }
+
+    fn sliver_child_needs_layout(&self, index: usize) -> bool {
+        self.children
+            .get(index)
+            .map(|slot| slot.needs_layout)
+            .unwrap_or(true)
     }
 
     fn position_child(&mut self, index: usize, offset: Offset) {
