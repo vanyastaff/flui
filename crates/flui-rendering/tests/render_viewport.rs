@@ -146,6 +146,72 @@ impl RenderSliver for FixedSliver {
 }
 
 #[derive(Debug)]
+struct MainAxisBandSliver {
+    extent: f32,
+    hit_start: f32,
+    hit_end: f32,
+    constraints: SliverConstraints,
+    geometry: SliverGeometry,
+}
+
+impl MainAxisBandSliver {
+    fn new(extent: f32, hit_start: f32, hit_end: f32) -> Self {
+        Self {
+            extent,
+            hit_start,
+            hit_end,
+            constraints: SliverConstraints::default(),
+            geometry: SliverGeometry::ZERO,
+        }
+    }
+}
+
+impl Diagnosticable for MainAxisBandSliver {}
+impl PaintEffectsCapability for MainAxisBandSliver {}
+impl SemanticsCapability for MainAxisBandSliver {}
+impl HotReloadCapability for MainAxisBandSliver {}
+
+impl RenderSliver for MainAxisBandSliver {
+    type Arity = Leaf;
+    type ParentData = SliverParentData;
+
+    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
+        self.constraints = *ctx.constraints();
+        let paint_extent = self.calculate_paint_offset(&self.constraints, 0.0, self.extent);
+        self.geometry = SliverGeometry {
+            scroll_extent: self.extent,
+            paint_extent,
+            layout_extent: paint_extent,
+            max_paint_extent: self.extent,
+            hit_test_extent: paint_extent,
+            cache_extent: self.calculate_cache_offset(&self.constraints, 0.0, self.extent),
+            visible: paint_extent > 0.0,
+            ..SliverGeometry::ZERO
+        };
+        ctx.complete(self.geometry);
+    }
+
+    fn constraints(&self) -> &SliverConstraints {
+        &self.constraints
+    }
+
+    fn geometry(&self) -> &SliverGeometry {
+        &self.geometry
+    }
+
+    fn set_geometry(&mut self, geometry: SliverGeometry) {
+        self.geometry = geometry;
+    }
+
+    fn hit_test_self(&self, main: f32, cross: f32) -> bool {
+        main >= self.hit_start
+            && main < self.hit_end
+            && cross >= 0.0
+            && cross < self.constraints.cross_axis_extent
+    }
+}
+
+#[derive(Debug)]
 struct CorrectingSliver {
     correction: f32,
     corrected: bool,
@@ -428,6 +494,42 @@ fn viewport_hit_tests_in_opposite_paint_order() {
         hits(&owner, 10.0, 10.0),
         vec![first_id, root_id],
         "FirstIsTop paints earlier children on top, so hit testing must visit them first",
+    );
+}
+
+#[test]
+fn viewport_hit_test_flips_reverse_axis_into_sliver_main_axis() {
+    let viewport = RenderViewport::with_offset(
+        AxisDirection::BottomToTop,
+        AxisDirection::LeftToRight,
+        ScrollableViewportOffset::zero(),
+    );
+
+    let mut owner = PipelineOwner::new();
+    let root_id = owner.insert(Box::new(viewport));
+    let sliver_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            root_id,
+            Box::new(MainAxisBandSliver::new(40.0, 0.0, 15.0)) as BoxedSliverObject,
+        )
+        .expect("reverse-axis sliver");
+
+    let owner = laid_out(owner, root_id);
+
+    assert_eq!(
+        render_offset(&owner, sliver_id),
+        Offset::new(px(0.0), px(60.0)),
+        "bottom-to-top viewport paints the first 40px sliver at the bottom edge",
+    );
+    assert_eq!(
+        hits(&owner, 10.0, 90.0),
+        vec![sliver_id, root_id],
+        "parent y=90 must map to sliver main=10, inside the leading hit band",
+    );
+    assert!(
+        hits(&owner, 10.0, 70.0).is_empty(),
+        "parent y=70 maps to sliver main=30 and must miss the leading hit band",
     );
 }
 
