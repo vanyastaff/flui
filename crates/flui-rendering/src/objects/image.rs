@@ -246,8 +246,13 @@ impl RenderImage {
     /// Returns `None` when the intrinsic size is degenerate (zero in either
     /// dimension), in which case there is nothing to paint.
     pub fn paint_rect_in(&self, box_size: Size) -> Option<Rect> {
-        let iw = self.intrinsic_size.width.get();
-        let ih = self.intrinsic_size.height.get();
+        // Logical image size (Flutter `ImageInfo.scale`): the fit math operates
+        // on the same `intrinsic / scale` dimensions the box was laid out
+        // against, so a high-DPI asset paints at its logical size — without the
+        // divide, `ImageFit::None`/`ScaleDown` would draw a 2x asset at its full
+        // pixel size and overflow its laid-out box.
+        let iw = self.intrinsic_size.width.get() / self.scale;
+        let ih = self.intrinsic_size.height.get() / self.scale;
         if iw <= 0.0 || ih <= 0.0 {
             return None;
         }
@@ -299,8 +304,11 @@ impl RenderImage {
     /// full layout pass (tests, demos).
     pub fn compute_size(&self, constraints: &BoxConstraints) -> Size {
         // Fold the explicit width/height into the constraints so all three are
-        // treated uniformly (Flutter: tightFor(width, height).enforce(...)).
-        let folded = BoxConstraints::tight_for(self.width, self.height).enforce(constraints);
+        // treated uniformly (Flutter `tightFor(w, h).enforce(constraints)`).
+        // `tighten` clamps each forced dimension INTO the parent's range, so a
+        // forced size outside the parent's min/max can never commit a size that
+        // violates the incoming constraints.
+        let folded = constraints.tighten(self.width, self.height);
 
         let aspect = Size::new(
             Pixels::new(self.intrinsic_size.width.get() / self.scale),
@@ -823,5 +831,50 @@ mod tests {
         let dry = leaf_dry_layout(|c| img.compute_dry_layout(constraints, c));
         assert_eq!(dry, img.compute_size(&constraints));
         assert_eq!(dry, Size::new(px(80.0), px(40.0)));
+    }
+
+    #[test]
+    fn forced_width_below_parent_minimum_respects_the_parent() {
+        // Forced width 40, but the parent demands min_width 50: the committed
+        // size must not drop below the parent's minimum.
+        let mut img = RenderImage::new(
+            Size::new(px(4.0), px(4.0)),
+            ImageFit::Contain,
+            ImageAlignment::Center,
+        );
+        img.set_width(Some(px(40.0)));
+        let constraints = BoxConstraints {
+            min_width: px(50.0),
+            max_width: px(200.0),
+            min_height: Pixels::ZERO,
+            max_height: px(200.0),
+        };
+        let size = img.compute_size(&constraints);
+        assert!(
+            size.width >= px(50.0),
+            "forced width {} must not violate the parent minimum 50",
+            size.width.get(),
+        );
+        assert!(
+            constraints.is_satisfied_by(size),
+            "size {size:?} must satisfy parent"
+        );
+    }
+
+    #[test]
+    fn scale_shrinks_the_painted_size() {
+        // 200x100 asset at scale 2 → logical 100x50. In an oversized box,
+        // ImageFit::None paints at the logical size, not the raw pixel size.
+        let mut img = RenderImage::new(
+            Size::new(px(200.0), px(100.0)),
+            ImageFit::None,
+            ImageAlignment::TopLeft,
+        );
+        img.set_scale(2.0);
+        let rect = img
+            .paint_rect_in(Size::new(px(400.0), px(400.0)))
+            .expect("paint rect");
+        assert_eq!(rect.size().width, px(100.0));
+        assert_eq!(rect.size().height, px(50.0));
     }
 }
