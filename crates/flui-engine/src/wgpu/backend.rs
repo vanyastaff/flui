@@ -468,22 +468,31 @@ impl CommandRenderer for Backend<'_> {
         text_scale_factor: f64,
         transform: &Matrix4,
     ) {
-        let text = span.to_plain_text();
-        if text.is_empty() {
+        // Resolve the buffer-level defaults from the root span's style.
+        let root_style = span.style();
+        #[allow(clippy::cast_possible_truncation)] // f64 font-size fits in f32 at UI scales
+        let base_font_size = root_style.and_then(|s| s.font_size).unwrap_or(14.0) as f32;
+        #[allow(clippy::cast_possible_truncation)]
+        let scaled_font_size = base_font_size * (text_scale_factor as f32);
+        let base_color = root_style
+            .and_then(|s| s.foreground.or(s.color))
+            .unwrap_or(Color::BLACK);
+
+        // Flatten the span tree into per-run (text, merged style) pairs with
+        // text_scale_factor baked into every effective font size.
+        // Average and worst case O(total spans + text bytes): one pre-order walk.
+        #[allow(clippy::cast_possible_truncation)] // same truncation guard as above
+        let runs = crate::wgpu::text::collect_styled_spans(span, text_scale_factor as f32);
+
+        if runs.is_empty() {
             return;
         }
 
-        let style = span.style();
-        #[allow(clippy::cast_possible_truncation)]
-        let base_font_size = style.and_then(|s| s.font_size).unwrap_or(14.0) as f32;
-        #[allow(clippy::cast_possible_truncation)]
-        let font_size = base_font_size * (text_scale_factor as f32);
-        let color = style.and_then(|s| s.color).unwrap_or(Color::BLACK);
-        let paint = Paint::fill(color);
+        // Paint wrap-width matching (buffer width = layout constraint) is a
+        // follow-up; the rich buffer is currently unbounded on the x-axis.
         let position = Point::new(offset.dx, offset.dy);
-
         self.with_transform(transform, |painter| {
-            painter.text(&text, position, font_size, &paint);
+            painter.rich_text(&runs, position, scaled_font_size, base_color);
         });
     }
 
