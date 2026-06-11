@@ -86,7 +86,8 @@ impl RenderSliver for StubLeafSliver {
     type ParentData = SliverParentData;
 
     fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
-        let paint = 200.0_f32.min(ctx.constraints().remaining_paint_extent);
+        self.constraints = *ctx.constraints();
+        let paint = 200.0_f32.min(self.constraints.remaining_paint_extent);
         let geom = SliverGeometry {
             scroll_extent: 200.0,
             paint_extent: paint,
@@ -96,6 +97,9 @@ impl RenderSliver for StubLeafSliver {
             visible: paint > 0.0,
             ..SliverGeometry::ZERO
         };
+        // Keep the object's own fields in sync with the layout result so
+        // `constraints()` / `geometry()` honor the RenderSliver contract.
+        self.geometry = geom;
         ctx.complete(geom);
     }
 
