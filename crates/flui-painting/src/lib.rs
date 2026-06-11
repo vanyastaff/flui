@@ -166,6 +166,7 @@
 pub mod binding;
 pub mod canvas;
 pub mod clip_context;
+pub mod decoration;
 pub mod display_list;
 pub mod error;
 
@@ -184,6 +185,7 @@ pub use binding::{CachedImage, ImageCache, ImageHandle, PaintingBinding, image_c
 // Primary API types
 pub use canvas::Canvas;
 pub use clip_context::ClipContext;
+pub use decoration::{box_decoration_hit_test, paint_box_decoration, resolve_gradient};
 pub use display_list::{
     DisplayList, DisplayListCore, DisplayListExt, DisplayListStats, DrawCommand,
 };
