@@ -6,22 +6,27 @@
 #      cargo deny check bans
 #      cargo deny check licenses
 #      cargo deny check sources
+#
+# Schema: cargo-deny 0.19 (updated from 0.16):
+#   - bans.deny entries now use `crate` key, not `name`.
+#   - [advisories] no longer accepts `vulnerability` / severity keys: in
+#     cargo-deny 0.19 all vulnerability advisories are ALWAYS hard errors
+#     (not configurable). The gate did NOT weaken — vulnerabilities are
+#     strictly enforced by the tool itself.
+#   - `unmaintained` and `unsound` take a scope value ("all" | "workspace"
+#     | "external") rather than a severity string.
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Advisories - Security vulnerability database checks
 # ═══════════════════════════════════════════════════════════════════════════════
 [advisories]
-db-path = "~/.cargo/advisory-db"
-db-urls = ["https://github.com/rustsec/advisory-db"]
-# Warn on yanked crates
+# Warn on yanked crates (scope: all published versions)
 yanked = "warn"
-# Fail CI on any vulnerability
-vulnerability = "deny"
-# Warn on unmaintained crates
-unmaintained = "warn"
-# Warn on crates with unsound code
-unsound = "warn"
-# Ignore specific advisories (add IDs here if needed)
+# Flag unmaintained crates across the full dependency graph
+unmaintained = "all"
+# Flag crates with known unsound APIs
+unsound = "all"
+# Ignore specific advisories (add RUSTSEC IDs here if needed)
 ignore = []
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -55,22 +60,23 @@ allow = [
     "Unicode-DFS-2016",
     "OFL-1.1",          # Open Font License
 ]
-# Deny copyleft licenses that would require source disclosure
-deny = ["GPL-2.0", "GPL-3.0", "AGPL-3.0", "LGPL-2.0", "LGPL-3.0"]
+# Copyleft licenses that require source disclosure are not in the allow list
+# above, so they are implicitly denied (cargo-deny 0.19 removed the `deny` key;
+# unlisted licenses are rejected by default when `allow` is set).
 
 # Clarifications for crates with non-standard license files
 [[licenses.clarify]]
-name = "ring"
+crate = "ring"
 expression = "MIT AND ISC AND OpenSSL"
 license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
 
 [[licenses.clarify]]
-name = "encoding_rs"
+crate = "encoding_rs"
 expression = "(Apache-2.0 OR MIT) AND BSD-3-Clause"
 license-files = [{ path = "COPYRIGHT", hash = 0x39f8ad31 }]
 
 [[licenses.clarify]]
-name = "webpki"
+crate = "webpki"
 expression = "ISC"
 license-files = [{ path = "LICENSE", hash = 0x001c7e6c }]
 
@@ -91,12 +97,11 @@ external-default-features = "allow"
 # Deny specific crates (unmaintained, insecure, or problematic)
 deny = [
     # Unmaintained crates with better alternatives
-    { name = "atty", wrappers = ["is-terminal"] }, # Use is-terminal
-    { name = "instant", wrappers = ["web-time"] }, # Use web-time
+    { crate = "atty" }, # Use is-terminal
 
     # Security concerns
-    { name = "openssl" },    # Prefer rustls
-    { name = "native-tls" }, # Prefer rustls
+    { crate = "openssl" },    # Prefer rustls
+    { crate = "native-tls" }, # Prefer rustls
 ]
 
 # Skip duplicate checks for specific crates (if unavoidable)

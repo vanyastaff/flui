@@ -45,6 +45,12 @@
 //! `tracing::dispatcher::set_default()` (global) and gate the
 //! affected tests behind `#[serial_test::serial]`. Phase 1 ships the
 //! per-thread discipline (KTD-5).
+//!
+//! Even with per-thread dispatchers, tests installing a collector
+//! must be `#[serial_test::serial]`-gated: tracing-core's callsite
+//! interest cache is process-global, and concurrent dispatcher
+//! installs/drops race its rebuild — a freshly installed collector
+//! can then miss events, tripping the vacuous-pass guard.
 
 use std::sync::{Arc, Mutex};
 
@@ -305,7 +311,17 @@ mod tests {
         );
     }
 
+    // All five tests below install a per-thread dispatcher via
+    // `tracing::dispatcher::with_default`. Installing/dropping a
+    // dispatcher triggers tracing-core's global callsite
+    // interest-cache rebuild; under parallel test execution that
+    // rebuild races between threads and a freshly installed
+    // per-thread collector can miss events (observed as a
+    // vacuous-pass-guard failure in full-workspace runs). The module
+    // docs prescribe `#[serial_test::serial]` gating for exactly this
+    // hazard.
     #[test]
+    #[serial_test::serial]
     fn collector_captures_mount_event() {
         let events = with_collector(|| {
             emit_event(&ReconcileEvent::mount(
@@ -327,6 +343,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn collector_captures_all_five_kinds() {
         let events = with_collector(|| {
             let parent = ElementId::new(1);
@@ -361,6 +378,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn collector_ignores_other_targets() {
         let events = with_collector(|| {
             // Emission on a different target must NOT land in the
@@ -388,6 +406,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn collector_clear_resets_buffer() {
         let collector = ReconcileEventCollector::new();
         let subscriber = Registry::default().with(collector.layer());
@@ -411,6 +430,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn malformed_event_dropped_silently() {
         // Emit a partial event (missing required fields) on the
         // reconcile target. The collector's `build()` returns None,

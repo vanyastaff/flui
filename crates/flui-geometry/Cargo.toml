@@ -48,9 +48,6 @@ float_cmp = "allow"
 wildcard_imports = "allow"
 
 [dependencies]
-# Numeric traits for generic math (Float, Num, etc.)
-num-traits = "0.2"
-
 # Error handling
 thiserror = { workspace = true }
 
@@ -60,20 +57,16 @@ serde = { workspace = true, optional = true }
 # Linear-algebra backend (Option D, N-geom PR 2): glam provides SIMD-by-default
 # matrix/vector math + `bytemuck` Pod derives + the `mint` interop cascade.
 # Non-optional — Matrix4 (and, in later PR-2 steps, Vec2/Transform) delegate to it.
-glam = { version = "0.30", features = ["bytemuck", "mint"] }
+glam = { version = "0.33", features = ["bytemuck", "mint"] }
 
 # Pod/Zeroable derives for zero-copy GPU upload (Matrix4 + future vertex structs).
 bytemuck = { version = "1", features = ["derive"] }
-
-# mint: zero-cost bridge layer (glam <-> kurbo) for the painting/curve seam.
-mint = { version = "0.5", optional = true }
 
 # kurbo: f64 Bézier/curve math for the painting layer. The bridge
 # (src/bridges/kurbo.rs) is gated behind `feature = "kurbo"` (PR 3, U8).
 kurbo = { version = "0.13", optional = true }
 
 [dev-dependencies]
-proptest = "1.5"
 
 [features]
 default = []
@@ -81,8 +74,9 @@ default = []
 # Serde support for all geometry types
 serde = ["dep:serde"]
 
-# mint interoperability (own-type <-> mint bridges)
-mint = ["dep:mint"]
+# mint interoperability — glam already enables mint via features = ["mint"];
+# this feature flag is kept for API compat (flui-types/mint forwards here).
+mint = []
 
 # kurbo interop bridge (flui-geometry/src/bridges/kurbo.rs) — gates Core.2.
 kurbo = ["dep:kurbo"]

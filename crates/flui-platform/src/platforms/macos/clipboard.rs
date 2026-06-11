@@ -4,11 +4,10 @@
 //! Thread-safe wrapper with proper Objective-C object lifetime management.
 
 use cocoa::{
-    appkit::NSPasteboard,
     base::{id, nil},
-    foundation::{NSArray, NSString},
+    foundation::NSString,
 };
-use objc::runtime::Object;
+use objc::{class, msg_send, sel, sel_impl};
 use parking_lot::Mutex;
 
 use crate::traits::Clipboard;
@@ -22,11 +21,21 @@ pub struct MacOSClipboard {
     pasteboard: Mutex<id>,
 }
 
+// SAFETY: the stored pointer is the process-wide `generalPasteboard`
+// singleton (never deallocated); access is serialized through the Mutex, and
+// NSPasteboard's mutating selectors are documented as thread-safe.
+unsafe impl Send for MacOSClipboard {}
+// SAFETY: see `Send` above — the singleton pointer is immutable and all
+// pasteboard calls go through the Mutex.
+unsafe impl Sync for MacOSClipboard {}
+
 impl MacOSClipboard {
     /// Create a new clipboard instance
     ///
     /// Gets the general system pasteboard ([NSPasteboard generalPasteboard]).
     pub fn new() -> Self {
+        // SAFETY: `+[NSPasteboard generalPasteboard]` returns the process-wide
+        // singleton (or nil, which is checked); no lifetime obligations.
         unsafe {
             let pasteboard: id = msg_send![class!(NSPasteboard), generalPasteboard];
 
@@ -48,6 +57,8 @@ impl MacOSClipboard {
     /// Use this to detect if clipboard has changed without reading contents.
     #[allow(dead_code)]
     fn change_count(&self) -> i64 {
+        // SAFETY: the stored pointer is the live pasteboard singleton (or nil,
+        // which is checked); `changeCount` is a plain integer getter.
         unsafe {
             let pasteboard = *self.pasteboard.lock();
             if pasteboard == nil {
@@ -66,6 +77,9 @@ impl Default for MacOSClipboard {
 
 impl Clipboard for MacOSClipboard {
     fn read_text(&self) -> Option<String> {
+        // SAFETY: the stored pointer is the live pasteboard singleton (nil
+        // checked); returned NSStrings are autoreleased and their UTF8String
+        // buffers are copied into owned Strings before the pool drains.
         unsafe {
             let pasteboard = *self.pasteboard.lock();
             if pasteboard == nil {
@@ -116,6 +130,9 @@ impl Clipboard for MacOSClipboard {
     }
 
     fn write_text(&self, text: String) {
+        // SAFETY: the stored pointer is the live pasteboard singleton (nil
+        // checked); NSStrings are created from valid Rust strings and
+        // ownership passes to the pasteboard.
         unsafe {
             let pasteboard = *self.pasteboard.lock();
             if pasteboard == nil {
@@ -146,6 +163,9 @@ impl Clipboard for MacOSClipboard {
     }
 
     fn has_text(&self) -> bool {
+        // SAFETY: the stored pointer is the live pasteboard singleton (nil
+        // checked); `types`/`containsObject:` operate on autoreleased objects
+        // consumed before the pool drains.
         unsafe {
             let pasteboard = *self.pasteboard.lock();
             if pasteboard == nil {

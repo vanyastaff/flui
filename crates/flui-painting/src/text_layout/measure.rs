@@ -85,7 +85,7 @@ pub fn measure_text(
     buffer.set_size(&mut font_system, max_width, None);
 
     let attrs = style_to_attrs(style);
-    buffer.set_text(&mut font_system, text, attrs, Shaping::Advanced);
+    buffer.set_text(&mut font_system, text, &attrs, Shaping::Advanced, None);
     buffer.shape_until_scroll(&mut font_system, false);
 
     let mut total_height = 0.0f32;

@@ -10,8 +10,17 @@ crate-type = ["cdylib"]
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = false
 
+# cargo-shear: wasm-bindgen-futures is a false positive — the dependency is
+# required by the #[wasm_bindgen(start)] procedural macro expansion on the
+# async `main` fn (the macro emits wasm_bindgen_futures::spawn_local internally).
+# shear cannot see through attribute-macro token output.
+[package.metadata.cargo-shear]
+ignored = ["wasm-bindgen-futures"]
+
 [dependencies]
 wasm-bindgen = "0.2.109"
+# Required by #[wasm_bindgen(start)] on an async fn — the macro expands to
+# wasm_bindgen_futures::spawn_local internally.
 wasm-bindgen-futures = "0.4.49"
 web-sys = { version = "0.3.86", features = [
     "Window",
@@ -21,11 +30,7 @@ web-sys = { version = "0.3.86", features = [
     "console",
 ] }
 console_error_panic_hook = "0.1"
-js-sys = "0.3"
 raw-window-handle = "0.6"
 wgpu = { workspace = true, features = ["webgpu", "wgsl"] }
-flui-painting = { path = "../../crates/flui-painting" }
 flui-engine = { path = "../../crates/flui-engine", features = ["wgpu-backend", "webgpu"] }
 flui-types = { path = "../../crates/flui-types" }
-flui-layer = { path = "../../crates/flui-layer" }
-glam = "0.30"

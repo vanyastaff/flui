@@ -155,9 +155,10 @@ impl TextLayout {
     /// Creates a RICH text layout from styled spans.
     ///
     /// Each span carries its own (already inheritance-merged) style:
-    /// per-span font selection, weight, style, and font size all reach
-    /// the shaper — a bold or larger child span measures as bold or
-    /// larger instead of being flattened to the root style.
+    /// per-span font selection, weight, style, font size, and letter
+    /// spacing all reach the shaper — a bold or larger child span
+    /// measures as bold or larger instead of being flattened to the
+    /// root style.
     /// `default_style` and `font_size` describe the buffer-level
     /// defaults applied where a span has no style of its own.
     ///
@@ -181,7 +182,7 @@ impl TextLayout {
         );
 
         let line_height = line_height.unwrap_or(font_size * 1.2);
-        let default_attrs = cosmic_text::AttrsOwned::new(style_to_attrs(default_style));
+        let default_attrs = cosmic_text::AttrsOwned::new(&style_to_attrs(default_style));
 
         let runs: Vec<OwnedRun> = spans
             .into_iter()
@@ -191,10 +192,7 @@ impl TextLayout {
                         let mut attrs = style_to_attrs(Some(style));
                         // Per-span font size/line height ride on the attrs
                         // (cosmic's per-span Metrics); spans without one
-                        // inherit the buffer-level default. Letter spacing
-                        // has no per-span channel in cosmic-text 0.12 —
-                        // it gains one (`letter_spacing_opt`) with the
-                        // 0.18 dependency already on main.
+                        // inherit the buffer-level default.
                         #[allow(clippy::cast_possible_truncation)]
                         // f64 style sizes → f32 shaping space
                         if let Some(size) = style.font_size.map(|s| s as f32) {
@@ -202,8 +200,16 @@ impl TextLayout {
                             let span_line_height =
                                 style.height.map_or(size * 1.2, |h| h as f32 * size);
                             attrs = attrs.metrics(Metrics::new(size, span_line_height));
+                            // cosmic letter spacing is in EM; ours is in
+                            // logical px.
+                            #[allow(clippy::cast_possible_truncation)]
+                            if let Some(spacing) = style.letter_spacing.map(|s| s as f32)
+                                && size > 0.0
+                            {
+                                attrs = attrs.letter_spacing(spacing / size);
+                            }
                         }
-                        cosmic_text::AttrsOwned::new(attrs)
+                        cosmic_text::AttrsOwned::new(&attrs)
                     }
                     None => default_attrs.clone(),
                 };
@@ -243,8 +249,9 @@ impl TextLayout {
             self.runs
                 .iter()
                 .map(|run| (run.text.as_str(), run.attrs.as_attrs())),
-            cosmic_text::Attrs::new(),
+            &cosmic_text::Attrs::new(),
             Shaping::Advanced,
+            None,
         );
         self.buffer.shape_until_scroll(font_system, false);
     }
@@ -301,7 +308,7 @@ impl TextLayout {
                 && !ellipsis.is_empty()
             {
                 let attrs = candidate.last().or(full_runs.first()).map_or_else(
-                    || cosmic_text::AttrsOwned::new(cosmic_text::Attrs::new()),
+                    || cosmic_text::AttrsOwned::new(&cosmic_text::Attrs::new()),
                     |run| run.attrs.clone(),
                 );
                 candidate.push(OwnedRun {

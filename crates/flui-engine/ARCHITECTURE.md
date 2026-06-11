@@ -28,7 +28,7 @@ The relevant external APIs the crate consumes:
 | [`src/wgpu/occlusion.rs`](src/wgpu/occlusion.rs) `OcclusionTracker` | -- | Per-frame opaque-region tracker. Pure CPU; no GPU API surface. |
 
 **Spec references:**
-- wgpu API: [wgpu.rs documentation](https://docs.rs/wgpu) (workspace pin 25.x; see [`Cargo.toml`](../../Cargo.toml) `[workspace.dependencies]`).
+- wgpu API: [wgpu.rs documentation](https://docs.rs/wgpu) (workspace 29.x; see [`Cargo.toml`](../../Cargo.toml) `[workspace.dependencies]`).
 - Vulkan spec: [Khronos Vulkan 1.4 Specification](https://registry.khronos.org/vulkan/specs/1.4/html/vkspec.html) -- consumed via wgpu's `vulkan` backend on Linux/Android.
 - Metal spec: [Apple Metal 4 documentation](https://developer.apple.com/documentation/metal) -- consumed via wgpu's `metal` backend on macOS/iOS.
 - DirectX 12: [Microsoft DirectX 12 Agility SDK](https://devblogs.microsoft.com/directx/directx12agility/) -- consumed via wgpu's `dx12` backend on Windows.
@@ -103,7 +103,7 @@ The `GpuCapabilities` struct in `wgpu/renderer.rs` is the canonical capability s
 **Alternatives:**
 - Keep `anyhow::Result` on `Renderer::new` "because it's simpler" -- rejected. Inconsistent with `RenderResult<T>` on every other engine API.
 - Use the existing `RenderError::ResourceCreation(String)` variant via `format!("font load {path}: {e}")` for font_loader -- rejected during the chain's cleanup pass. The format-into-String shape severs `Error::source()` and loses `io::ErrorKind` discrimination. Added `RenderError::ResourceIo { context, #[source] source: io::Error }` instead.
-- Keep `RenderError::NoAdapter` as a sentinel-only variant (discarding the wgpu diagnostic via `.map_err(|_| NoAdapter)`) -- rejected during the chain's cleanup pass. wgpu 25.x's `RequestAdapterError::NotFound` carries `active_backends` / `requested_backends` / `supported_backends` / `no_fallback_backends` / `no_adapter_backends` / `incompatible_surface_backends` operator-diagnostic fields; the original `.map_err(|_| NoAdapter)` flatten dropped them. Added `RenderError::AdapterRequest(#[source] Box<dyn Error + Send + Sync>)` to preserve the diagnostic.
+- Keep `RenderError::NoAdapter` as a sentinel-only variant (discarding the wgpu diagnostic via `.map_err(|_| NoAdapter)`) -- rejected during the chain's cleanup pass. wgpu 29.x's `RequestAdapterError::NotFound` carries `active_backends` / `requested_backends` / `supported_backends` / `no_fallback_backends` / `no_adapter_backends` / `incompatible_surface_backends` operator-diagnostic fields; the original `.map_err(|_| NoAdapter)` flatten dropped them. Added `RenderError::AdapterRequest(#[source] Box<dyn Error + Send + Sync>)` to preserve the diagnostic.
 
 **Accepted trade-off:** Verdict §12 rejected design #8. **No `flui-app` ripple was required** -- `RenderError: Error + Send + Sync` auto-converts to `anyhow::Error` via the blanket `From<E: Error + Send + Sync + 'static>` impl. The original plan's claim of "ripple into flui-app" was incorrect; verified by `cargo build -p flui-app` clean post-migration with zero caller-side changes. The migration is engine-internal.
 
@@ -156,7 +156,7 @@ Per-frame `Arc::clone` removal (verdict's U7) and `Arc<Mutex<OffscreenRenderer>>
 | `Renderer::instance` ([`src/wgpu/renderer.rs`](src/wgpu/renderer.rs)) | `wgpu::Instance` | Owned, keep-alive | Single mutator. `#[allow(dead_code)]` documents the keep-alive shape (Adapter depends on Instance being alive). |
 | `Renderer::adapter` | `wgpu::Adapter` | Owned, keep-alive | Same shape. |
 | `Renderer::device` / `Renderer::queue` | `Arc<wgpu::Device>` / `Arc<wgpu::Queue>` | Shared, wgpu convention | wgpu's own API uses `Arc` for these handles (cheap ref-count, not lock-protected). Shared by `WgpuPainter` and `OffscreenRenderer` via setup-phase `Arc::clone` (acceptable; not per-frame). |
-| `Renderer::surface` | `Option<wgpu::Surface<'static>>` | Owned, single-mutator | wgpu 25.x's `Surface<'_>: Send + Sync` (verified via `assert_impl_all!` in `wgpu/src/api/surface.rs`). Single-mutator enforced by code convention (only `Renderer::render_scene` calls `surface.get_current_texture`), not by trait bound. |
+| `Renderer::surface` | `Option<wgpu::Surface<'static>>` | Owned, single-mutator | wgpu 29.x's `Surface<'_>: Send + Sync` (verified via `assert_impl_all!` in `wgpu/src/api/surface.rs`). Single-mutator enforced by code convention (only `Renderer::render_scene` calls `surface.get_current_texture`), not by trait bound. |
 | `Renderer::painter` | `Option<WgpuPainter>` | Owned, single-mutator | The take/return dance during `render_scene` is the per-frame ownership transfer. |
 | `Renderer::offscreen` | `Option<Arc<parking_lot::Mutex<OffscreenRenderer>>>` | **Mythos friction** | The lock is uncontended in production (single-mutator). Removal requires a `Backend<'a>` lifetime refactor; see [Outstanding refactors](#outstanding-refactors). |
 | `Backend::offscreen` | `Option<Arc<parking_lot::Mutex<OffscreenRenderer>>>` | **Mythos friction** | Same; symmetric with the above. |
@@ -177,8 +177,8 @@ Per-frame `Arc::clone` removal (verdict's U7) and `Arc<Mutex<OffscreenRenderer>>
 
 No `unsafe impl Send/Sync` anywhere in the crate. Two unsafe surfaces total: one in `renderer.rs` (wgpu surface creation), one in `buffer_pool.rs` (5-block disjoint-borrow primitive, pre-existing). Net unsafe delta for the chain: **0** (chain added zero; consolidated one existing block in `renderer.rs` with a documented SAFETY comment).
 
-**Auto-derived Send/Sync** on (verified against wgpu 25.x trait bounds):
-- `Renderer` -- `Send + Sync` today (every field is `Send + Sync`: wgpu `Instance`/`Adapter`/`Device`/`Queue`/`Surface<'static>` are all `Send + Sync` in wgpu 25.x; `Arc<parking_lot::Mutex<OffscreenRenderer>>` provides `Sync` via the Mutex). Single-mutator enforced by code convention, not by trait bound. After U6 (Outstanding refactor) replaces `Arc<Mutex<OffscreenRenderer>>` with owned `Option<OffscreenRenderer>`, `Renderer: Send + Sync` will still hold iff `OffscreenRenderer: Sync`; if not, `Renderer` becomes `Send`-only.
+**Auto-derived Send/Sync** on (verified against wgpu 29.x trait bounds):
+- `Renderer` -- `Send + Sync` today (every field is `Send + Sync`: wgpu `Instance`/`Adapter`/`Device`/`Queue`/`Surface<'static>` are all `Send + Sync` in wgpu 29.x; `Arc<parking_lot::Mutex<OffscreenRenderer>>` provides `Sync` via the Mutex). Single-mutator enforced by code convention, not by trait bound. After U6 (Outstanding refactor) replaces `Arc<Mutex<OffscreenRenderer>>` with owned `Option<OffscreenRenderer>`, `Renderer: Send + Sync` will still hold iff `OffscreenRenderer: Sync`; if not, `Renderer` becomes `Send`-only.
 - `WgpuPainter` -- `Send`, not `Sync` (holds `Arc<wgpu::Device>` + `Arc<wgpu::Queue>` which are `Send + Sync`, but internal batch state uses `Vec<T>` mutated through `&mut self`; no interior mutability sync surface).
 - `OffscreenRenderer` -- `Send`, not `Sync` (HashMap of `Arc<RenderPipeline>` is `Send`; the struct has no interior-mutability sync primitives).
 - `TexturePool` -- `Send + Sync` today (through inner `Arc<Mutex<TexturePoolInner>>`); will become `Send`-only after U8 (Outstanding refactor) replaces the inner lock with direct ownership.

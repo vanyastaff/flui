@@ -192,7 +192,6 @@ let data = loader.load(&AssetKey::new("data")).await?;
 | Feature | Description | Default |
 |---------|-------------|---------|
 | `images` | Enable image loading (PNG, JPEG, GIF, WebP) | No |
-| `serde` | Enable serde serialization (bundles, manifests) | No |
 | `network` | Enable HTTP/HTTPS asset loading | No |
 | `full` | Enable all stable features | No |
 

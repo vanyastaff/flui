@@ -36,7 +36,7 @@ The translation manual draws inspiration from Bun's [oven-sh/bun#PORTING.md](htt
 - [§Strings discipline](#strings-discipline) — 8-row decision tree (UI text / message fields / static IDs / Cow / interned / external bytes / paths / widget keys)
 - [§Error mapping canonical shape](#error-mapping-canonical-shape) — `thiserror` + `#[non_exhaustive]` + `Box<str>` + `anyhow` at app-edge only
 - [§Inline port markers tier](#inline-port-markers-tier) — `TODO(port)` / `PERF(port)` / `PORT NOTE` / `SAFETY` grammar + `port-check.sh` integration
-- [§Ecosystem-first principle](#ecosystem-first-principle) — adopted-crates table + version policy + Rust 1.95 stabilizations folded into the port
+- [§Ecosystem-first principle](#ecosystem-first-principle) — adopted-crates table + version policy + Rust 1.95/1.96 stabilizations folded into the port
 - [§Don't translate](#dont-translate) — source-level dropped + binding-deletion precedents
 
 ---
@@ -692,7 +692,7 @@ The table below is the canonical "use this, don't write a custom one" lookup. Ve
 | Logging | `tracing` + `tracing-forest` | Span-aware structured logging. `tracing::debug!(?value)` lazily formats only when the subscriber accepts. |
 | Hashing | `ahash` | Faster than std `SipHash` for non-DoS data. Workspace-default hasher (see §Type map — `Map`, `Set`). |
 | Caching | `moka` | Concurrent LRU/TLRU with future-aware loaders. Used by `flui-assets`. |
-| GPU | `wgpu` (25.x — see Cargo.toml comment about codespan-reporting bug in 26.x/27.x) | The cross-platform GPU abstraction. flui-engine sits directly on wgpu; no intermediate (no Skia, no custom backend). |
+| GPU | `wgpu` (29.x) | The cross-platform GPU abstraction. flui-engine sits directly on wgpu; no intermediate (no Skia, no custom backend). |
 | Windowing | `winit` (0.30) | Cross-platform window + event loop. |
 | Image decoding | `image` (PNG/JPEG/GIF; WebP deferred per upstream fix for Rust 1.91+) | Standard image-decoding crate. |
 | Font parsing | `ttf-parser` | Lightweight, no allocation. |
@@ -712,10 +712,10 @@ When a need arises that the table does not cover, the order of operations is:
 
 ### Version policy
 
-- **Rust toolchain**: `channel = "stable"` per [`rust-toolchain.toml`](../rust-toolchain.toml). Tracks the latest stable release.
-- **MSRV** (`rust-version` in [`Cargo.toml`](../Cargo.toml)): bumped **no later than 6 weeks** after a new stable release. Rust ships every 6 weeks (current: **1.95**, released 2026-04-16; next: **1.96** ~2026-05-28). The MSRV bump PR is mechanical — bump the field, update the CI matrix, ship.
+- **Rust toolchain**: pinned to an explicit stable version (currently `channel = "1.96.0"`) in [`rust-toolchain.toml`](../rust-toolchain.toml), kept in lockstep with the MSRV below and bumped by the same PR.
+- **MSRV** (`rust-version` in [`Cargo.toml`](../Cargo.toml)): bumped **no later than 6 weeks** after a new stable release. Rust ships every 6 weeks (current: **1.96**, released 2026-05-25; next: **1.97** ~2026-07-09). The MSRV bump PR is mechanical — bump the field and `rust-toolchain.toml`, update the CI matrix, ship.
 - **Workspace dependencies**: caret-pinned (`"1.43"`, not `"=1.43.2"`). Patch bumps automatic via `cargo update`. Minor bumps batched monthly; major bumps reviewed individually.
-- **Pinned exceptions**: documented inline in `Cargo.toml` (current: `wgpu = "25.0"` due to `codespan-reporting` bug in 26.x/27.x; `image` `webp` feature disabled per `image-webp` issue #102).
+- **Pinned exceptions**: documented inline in `Cargo.toml` (current: `image` `webp` feature disabled per `image-webp` issue #102; no wgpu pin — tracking latest stable major).
 
 ### Recent stabilizations to fold into the port
 
@@ -729,7 +729,7 @@ Rust 1.95 (2026-04-16) introduced features directly relevant to this port:
 | `Vec::push_mut` / `insert_mut`, `VecDeque::push_front_mut` / `push_back_mut`, `LinkedList::push_front_mut` / `push_back_mut` | Returns `&mut T` to the inserted slot — useful for chained init like `vec.push_mut(Node::new()).attach(parent_id);`. `LinkedList::insert_mut` was **not** stabilized in 1.95. |
 | `Layout::dangling_ptr` / `repeat` / `repeat_packed` / `extend_packed` | Allocator primitives. Phase B hot-path candidates if/when flui adopts an arena allocator beyond `bumpalo` (currently not a workspace dep). |
 
-Rust 1.96 will be tracked in this section on release.
+Rust 1.96 (~2026-05-28) stabilizations relevant to this port will be added here as they are confirmed and applied. Rust 1.97 will be tracked in this section on release.
 
 ---
 

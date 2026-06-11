@@ -114,7 +114,7 @@ impl WindowsWindow {
             .context("Failed to create window")?;
 
             if hwnd.is_invalid() {
-                return Err(windows::core::Error::from_win32().into());
+                return Err(windows::core::Error::from_thread().into());
             }
 
             // Remove background brush to allow Mica backdrop

@@ -24,7 +24,6 @@ arboard = { workspace = true, optional = true }
 
 # Error handling & logging
 anyhow = { workspace = true }
-thiserror = { workspace = true }
 tracing = { workspace = true }
 
 # Synchronization
@@ -38,7 +37,7 @@ bitflags = "2.6"
 
 # Windows platform
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.59", features = [
+windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
@@ -58,32 +57,22 @@ windows = { version = "0.59", features = [
 # macOS platform
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26.0"
-cocoa-foundation = "0.2.0"
-core-foundation = "0.10.0"
-core-graphics = "0.24"
 objc = "0.2"
-foreign-types = "0.5"
-block = "0.1"
 
 # Android platform
 [target.'cfg(target_os = "android")'.dependencies]
 android-activity = { version = "0.6", features = ["native-activity"] }
-ndk = { version = "0.9", features = ["rwh_06"] }
 libc = "0.2"
-log = "0.4"
 
 # Native-only async dependencies (not available on wasm32)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
 num_cpus = "1.16"
-flume = "0.11"                                                               # Better MPSC channels for UI thread communication
-waker-fn = "1.2"                                                             # Simplified async waker creation
+flume = "0.12"                                                               # Better MPSC channels for UI thread communication
 
 # Web/WASM platform
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
-wasm-bindgen-futures = "0.4"
-js-sys = "0.3"
 web-sys = { version = "0.3", features = [
     # Core DOM
     "Window",
@@ -143,6 +132,11 @@ web = []
 # Linux display server protocols
 wayland = []
 x11 = []
+
+[lints.rust]
+# objc 0.2 macros expand `cfg(feature = "cargo-clippy")` probes (macOS backend);
+# declare the value so `unexpected_cfgs` stays quiet under the clippy driver.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
 
 [dev-dependencies]
 tracing-subscriber = { workspace = true }

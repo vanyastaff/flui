@@ -4,19 +4,14 @@
 //! Tahoe 26. It provides rich, dynamic materials with depth, blur, and vibrancy
 //! effects.
 //!
+//! Implemented on top of `NSVisualEffectView` via raw `objc` messaging (the
+//! same Objective-C binding stack as the rest of this backend); the dedicated
+//! Liquid Glass API will be adopted once exposed by AppKit.
+//!
 //! # Reference
 //! - macOS Tahoe 26 (Released September 15, 2025)
 //! - FINAL macOS version supporting Intel Macs
 //! - Design System: https://developer.apple.com/design/human-interface-guidelines/materials
-
-#[cfg(target_os = "macos")]
-use objc2::rc::Retained;
-#[cfg(target_os = "macos")]
-use objc2_app_kit::{
-    NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectView,
-};
-#[cfg(target_os = "macos")]
-use objc2_foundation::MainThreadMarker;
 
 /// Liquid Glass material variants introduced in macOS Tahoe 26
 ///
@@ -90,42 +85,39 @@ impl LiquidGlassMaterial {
         }
     }
 
-    /// Map to NSVisualEffectMaterial
+    /// Map to a raw `NSVisualEffectMaterial` value for `setMaterial:`.
     ///
-    /// Liquid Glass uses enhanced NSVisualEffectView with new materials
-    /// introduced in macOS Tahoe 26.
-    #[cfg(target_os = "macos")]
-    pub(crate) fn to_ns_material(self) -> NSVisualEffectMaterial {
+    /// Raw values per AppKit's `NSVisualEffectMaterial` enum:
+    /// `menu = 5`, `popover = 6`, `sidebar = 7`, `hudWindow = 13`,
+    /// `contentBackground = 18`.
+    ///
+    /// These mappings are approximations until the official Liquid Glass API
+    /// is exposed; macOS Tahoe 26 will provide dedicated materials.
+    pub(crate) fn to_ns_visual_effect_material(self) -> usize {
         match self {
-            // Note: These mappings are approximations until official Liquid Glass API is available
-            // In macOS Tahoe 26, Apple will provide dedicated LiquidGlass materials
-            LiquidGlassMaterial::Standard => NSVisualEffectMaterial::ContentBackground,
-            LiquidGlassMaterial::Prominent => NSVisualEffectMaterial::HUDWindow,
-            LiquidGlassMaterial::Sidebar => NSVisualEffectMaterial::Sidebar,
-            LiquidGlassMaterial::Menu => NSVisualEffectMaterial::Menu,
-            LiquidGlassMaterial::Popover => NSVisualEffectMaterial::Popover,
-            LiquidGlassMaterial::ControlCenter => NSVisualEffectMaterial::HUDWindow,
+            LiquidGlassMaterial::Standard => 18,      // contentBackground
+            LiquidGlassMaterial::Prominent => 13,     // hudWindow
+            LiquidGlassMaterial::Sidebar => 7,        // sidebar
+            LiquidGlassMaterial::Menu => 5,           // menu
+            LiquidGlassMaterial::Popover => 6,        // popover
+            LiquidGlassMaterial::ControlCenter => 13, // hudWindow
         }
     }
 
     /// Check if Liquid Glass is available on this system
     ///
     /// Liquid Glass requires macOS Tahoe 26 or later.
-    #[cfg(target_os = "macos")]
     pub fn is_available() -> bool {
         // Check macOS version
         if let Ok(version) = std::process::Command::new("sw_vers")
             .arg("-productVersion")
             .output()
+            && let Ok(version_str) = String::from_utf8(version.stdout)
+            // Parse version (e.g., "26.0.0" for Tahoe)
+            && let Some(major) = version_str.split('.').next()
+            && let Ok(major_version) = major.trim().parse::<u32>()
         {
-            if let Ok(version_str) = String::from_utf8(version.stdout) {
-                // Parse version (e.g., "26.0.0" for Tahoe)
-                if let Some(major) = version_str.split('.').next() {
-                    if let Ok(major_version) = major.trim().parse::<u32>() {
-                        return major_version >= 26; // Tahoe is macOS 26
-                    }
-                }
-            }
+            return major_version >= 26; // Tahoe is macOS 26
         }
         false
     }
@@ -150,6 +142,10 @@ pub struct LiquidGlassConfig {
 
     /// Vibrancy strength (0.0-1.0, default: 1.0)
     pub vibrancy: f32,
+
+    /// Extend the material under a transparent titlebar
+    /// (`NSFullSizeContentViewWindowMask` + `titlebarAppearsTransparent`)
+    pub transparent_titlebar: bool,
 }
 
 impl LiquidGlassConfig {
@@ -161,30 +157,49 @@ impl LiquidGlassConfig {
             tint: None,
             blending_mode: BlendingMode::BehindWindow,
             vibrancy: 1.0,
+            transparent_titlebar: false,
         }
     }
 
+    /// Create a configuration from a material with default settings
+    ///
+    /// Alias for [`LiquidGlassConfig::new`].
+    pub fn from_material(material: LiquidGlassMaterial) -> Self {
+        Self::new(material)
+    }
+
     /// Set custom blur radius
+    #[must_use]
     pub fn with_blur_radius(mut self, radius: f32) -> Self {
         self.blur_radius = Some(radius);
         self
     }
 
     /// Set custom tint color
+    #[must_use]
     pub fn with_tint(mut self, r: f32, g: f32, b: f32, a: f32) -> Self {
         self.tint = Some((r, g, b, a));
         self
     }
 
     /// Set blending mode
+    #[must_use]
     pub fn with_blending_mode(mut self, mode: BlendingMode) -> Self {
         self.blending_mode = mode;
         self
     }
 
     /// Set vibrancy strength
+    #[must_use]
     pub fn with_vibrancy(mut self, vibrancy: f32) -> Self {
         self.vibrancy = vibrancy.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Make the titlebar transparent so the material extends under it
+    #[must_use]
+    pub fn with_transparent_titlebar(mut self, transparent: bool) -> Self {
+        self.transparent_titlebar = transparent;
         self
     }
 
@@ -216,59 +231,16 @@ pub enum BlendingMode {
     WithinWindow,
 }
 
-#[cfg(target_os = "macos")]
 impl BlendingMode {
-    pub(crate) fn to_ns_blending_mode(self) -> NSVisualEffectBlendingMode {
+    /// Map to a raw `NSVisualEffectBlendingMode` value for `setBlendingMode:`.
+    ///
+    /// Raw values per AppKit: `behindWindow = 0`, `withinWindow = 1`.
+    pub(crate) fn to_ns_blending_mode(self) -> usize {
         match self {
-            BlendingMode::BehindWindow => NSVisualEffectBlendingMode::BehindWindow,
-            BlendingMode::WithinWindow => NSVisualEffectBlendingMode::WithinWindow,
+            BlendingMode::BehindWindow => 0,
+            BlendingMode::WithinWindow => 1,
         }
     }
-}
-
-/// Apply Liquid Glass material to an NSView
-///
-/// This creates an NSVisualEffectView with Liquid Glass configuration and adds
-/// it as a subview.
-///
-/// # Safety
-/// Must be called on the main thread.
-#[cfg(target_os = "macos")]
-pub unsafe fn apply_liquid_glass_to_view(
-    parent_view: &NSView,
-    config: &LiquidGlassConfig,
-    _mtm: MainThreadMarker,
-) -> Retained<NSVisualEffectView> {
-    // Create NSVisualEffectView
-    let effect_view = NSVisualEffectView::new(_mtm);
-
-    // Set material
-    effect_view.setMaterial(config.material.to_ns_material());
-
-    // Set blending mode
-    effect_view.setBlendingMode(config.blending_mode.to_ns_blending_mode());
-
-    // Set state (active for vibrancy)
-    effect_view.setState(objc2_app_kit::NSVisualEffectState::Active);
-
-    // Set appearance (auto - follows system theme)
-    effect_view.setAppearance(None);
-
-    // Match parent view frame
-    effect_view.setFrame(parent_view.frame());
-    effect_view.setAutoresizingMask(
-        objc2_app_kit::NSAutoresizingMaskOptions::NSViewWidthSizable
-            | objc2_app_kit::NSAutoresizingMaskOptions::NSViewHeightSizable,
-    );
-
-    // Add as subview (behind content)
-    parent_view.addSubview_positioned_relativeTo(
-        &effect_view,
-        objc2_app_kit::NSWindowOrderingMode::Below,
-        None,
-    );
-
-    effect_view
 }
 
 #[cfg(test)]
@@ -291,10 +263,10 @@ mod tests {
             assert!(blur > 0.0, "Blur radius must be positive");
 
             let (r, g, b, a) = material.default_tint();
-            assert!(r >= 0.0 && r <= 1.0);
-            assert!(g >= 0.0 && g <= 1.0);
-            assert!(b >= 0.0 && b <= 1.0);
-            assert!(a >= 0.0 && a <= 1.0);
+            assert!((0.0..=1.0).contains(&r));
+            assert!((0.0..=1.0).contains(&g));
+            assert!((0.0..=1.0).contains(&b));
+            assert!((0.0..=1.0).contains(&a));
         }
     }
 
@@ -316,6 +288,15 @@ mod tests {
         let config = LiquidGlassConfig::default();
         assert_eq!(config.material, LiquidGlassMaterial::Standard);
         assert_eq!(config.vibrancy, 1.0);
+        assert!(!config.transparent_titlebar);
+    }
+
+    #[test]
+    fn test_from_material_matches_new() {
+        let a = LiquidGlassConfig::from_material(LiquidGlassMaterial::Menu);
+        let b = LiquidGlassConfig::new(LiquidGlassMaterial::Menu);
+        assert_eq!(a.material, b.material);
+        assert_eq!(a.transparent_titlebar, b.transparent_titlebar);
     }
 
     #[test]
@@ -325,5 +306,16 @@ mod tests {
 
         let config = LiquidGlassConfig::default().with_vibrancy(-0.5);
         assert_eq!(config.vibrancy, 0.0);
+    }
+
+    #[test]
+    fn test_material_raw_values() {
+        assert_eq!(
+            LiquidGlassMaterial::Sidebar.to_ns_visual_effect_material(),
+            7
+        );
+        assert_eq!(LiquidGlassMaterial::Menu.to_ns_visual_effect_material(), 5);
+        assert_eq!(BlendingMode::BehindWindow.to_ns_blending_mode(), 0);
+        assert_eq!(BlendingMode::WithinWindow.to_ns_blending_mode(), 1);
     }
 }

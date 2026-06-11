@@ -23,7 +23,7 @@ flui_assets = "0.1"
 tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
 
 # Optional features
-flui_assets = { version = "0.1", features = ["images", "serde"] }
+flui_assets = { version = "0.1", features = ["images"] }
 ```
 
 ### Your First Asset
@@ -574,7 +574,6 @@ fn process_font(font: FontHandle) {
 
 | Feature | Description | Dependencies |
 |---------|-------------|--------------|
-| `serde` | Enable serde serialization | `serde`, `serde_json` |
 | `images` | Enable image loading | `image` |
 | `network` | Enable HTTP/HTTPS loading | `reqwest` |
 | `full` | Enable all stable features | All above |
@@ -586,7 +585,7 @@ fn process_font(font: FontHandle) {
 flui_assets = { version = "0.1", features = ["images"] }
 
 # Multiple features
-flui_assets = { version = "0.1", features = ["images", "serde"] }
+flui_assets = { version = "0.1", features = ["images", "network"] }
 
 # All features
 flui_assets = { version = "0.1", features = ["full"] }

@@ -215,7 +215,13 @@ impl TextRenderer {
 
             // Set text with default font attributes
             let attrs = Attrs::new().family(Family::SansSerif);
-            buffer.set_text(&mut self.font_system, &key.text, &attrs, Shaping::Advanced);
+            buffer.set_text(
+                &mut self.font_system,
+                &key.text,
+                &attrs,
+                Shaping::Advanced,
+                None,
+            );
 
             // Shape the text (this is the expensive part!)
             buffer.shape_until_scroll(&mut self.font_system, false);
@@ -392,6 +398,7 @@ impl TextRenderer {
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view,
                 resolve_target: None,
+                depth_slice: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Load, // Don't clear - text is rendered on top
                     store: wgpu::StoreOp::Store,
@@ -400,6 +407,7 @@ impl TextRenderer {
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
 
         self.renderer

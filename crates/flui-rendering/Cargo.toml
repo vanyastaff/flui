@@ -22,15 +22,12 @@ flui-semantics = { path = "../flui-semantics" }
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-serde = { workspace = true, optional = true }
-once_cell = { workspace = true }
 bitflags = { workspace = true }
 smallvec = { workspace = true }
 downcast-rs = "2.0"
-slab = "0.4"                                  # For RenderTree storage
-ambassador = { workspace = true }             # Trait delegation via procedural macros
-crossbeam-channel = "0.5"                     # PipelineOwnerHandle bounded mark-dirty channel
-rustc-hash = { workspace = true }             # FxHashSet for layout cycle guard (D-block U21)
+slab = "0.4"                       # For RenderTree storage
+crossbeam-channel = "0.5"          # PipelineOwnerHandle bounded mark-dirty channel
+rustc-hash = { workspace = true }  # FxHashSet for layout cycle guard (D-block U21)
 
 [[bench]]
 name = "layout"
@@ -42,7 +39,6 @@ harness = false
 
 [dev-dependencies]
 criterion.workspace = true
-mockall = "0.13"
 # Animation -> render-pipeline integration scenarios (tests only; no
 # production dependency between the layers).
 flui-animation = { path = "../flui-animation" }
@@ -50,7 +46,9 @@ flui-scheduler = { path = "../flui-scheduler" }
 
 [features]
 default = []
-serde = ["dep:serde", "flui-types/serde"]
+# serde: no direct serde derives in this crate; forwards to flui-types/serde
+# so downstream consumers enabling this feature get geometry/type serde impls.
+serde = ["flui-types/serde"]
 
 # Cycle 4 R-18: gate `ScrollMetrics` trait + `FixedScrollMetrics` +
 # `FixedExtentMetrics` (~452 LOC at `src/constraints/scroll_metrics.rs`)

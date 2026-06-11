@@ -22,7 +22,6 @@ parking_lot.workspace = true
 
 # Lock-free concurrent collections
 dashmap.workspace = true
-crossbeam.workspace = true
 
 # Error derive
 thiserror.workspace = true

@@ -26,11 +26,16 @@ pub async fn main() {
     let width = canvas.width();
     let height = canvas.height();
 
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::BROWSER_WEBGPU,
-        ..Default::default()
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
     });
 
+    // SAFETY: The boxed JsValue is heap-allocated and lives for the duration of
+    // the unsafe block; NonNull is non-null by construction via Box::into_raw.
+    // The resulting surface is used immediately in this function and the canvas
+    // outlives both the surface and the wgpu instance (canvas is owned by the
+    // calling JS context for the page lifetime).
     #[allow(unsafe_code)]
     let surface = unsafe {
         use std::ptr::NonNull;
@@ -41,7 +46,7 @@ pub async fn main() {
         let raw_display =
             raw_window_handle::RawDisplayHandle::Web(raw_window_handle::WebDisplayHandle::new());
         let target = wgpu::SurfaceTargetUnsafe::RawHandle {
-            raw_display_handle: raw_display,
+            raw_display_handle: Some(raw_display),
             raw_window_handle: raw_window,
         };
         instance.create_surface_unsafe(target)
@@ -60,7 +65,14 @@ pub async fn main() {
     web_sys::console::log_1(&format!("Adapter: {:?}", adapter.get_info().name).into());
 
     let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor::default())
+        .request_device(&wgpu::DeviceDescriptor {
+            label: None,
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
+            memory_hints: wgpu::MemoryHints::default(),
+            experimental_features: wgpu::ExperimentalFeatures::disabled(),
+            trace: wgpu::Trace::Off,
+        })
         .await
         .expect("failed to request device");
 
@@ -81,9 +93,14 @@ pub async fn main() {
 
     draw_all_demos(&mut painter);
 
-    let output = surface
-        .get_current_texture()
-        .expect("failed to get current texture");
+    let output = match surface.get_current_texture() {
+        wgpu::CurrentSurfaceTexture::Success(frame)
+        | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+        other => {
+            web_sys::console::error_1(&format!("get_current_texture failed: {other:?}").into());
+            return;
+        }
+    };
     let view = output
         .texture
         .create_view(&wgpu::TextureViewDescriptor::default());
@@ -99,6 +116,7 @@ pub async fn main() {
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &view,
                 resolve_target: None,
+                depth_slice: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color {
                         r: 0.06,
@@ -112,6 +130,7 @@ pub async fn main() {
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
     }
 
