@@ -1,0 +1,293 @@
+//! Cross-protocol child layout — Box parent lays out a leaf Sliver child.
+//!
+//! Core.2 W3.2b-1: verifies that a Box parent can call
+//! `ctx.layout_sliver_child(index, constraints)` to drive a Sliver child
+//! through the `layout_sliver_subtree_borrowed` pipeline path, and that
+//! calling that method when the indexed child is a Box-protocol node returns
+//! `SliverGeometry::ZERO` and keeps the parent marked dirty.
+//!
+//! Tests:
+//!   1. **Positive** — Box parent + leaf Sliver child → non-zero
+//!      [`SliverGeometry`] produced, parent `needs_layout` cleared.
+//!   2. **Negative** — Box parent calls `layout_sliver_child` on a Box child
+//!      (protocol mismatch) → `SliverGeometry::ZERO`, parent stays dirty.
+//!
+//! Refs:
+//!   * `crates/flui-rendering/src/pipeline/owner.rs` `layout_sliver_subtree_borrowed`
+//!   * `crates/flui-rendering/src/protocol/box_protocol.rs` `BoxLayoutCtxErased::layout_sliver_child`
+
+use std::sync::{Arc, Mutex};
+
+use flui_foundation::Diagnosticable;
+use flui_rendering::{
+    constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
+    context::{BoxLayoutContext, SliverHitTestContext, SliverLayoutContext},
+    objects::RenderColoredBox,
+    parent_data::{BoxParentData, SliverParentData},
+    pipeline::PipelineOwner,
+    protocol::{BoxProtocol, SliverProtocol},
+    traits::{
+        HotReloadCapability, PaintEffectsCapability, RenderBox, RenderObject, RenderSliver,
+        SemanticsCapability,
+    },
+    view::ScrollDirection,
+};
+use flui_tree::{Leaf, Variable};
+use flui_types::{Point, Rect, Size, geometry::px, layout::AxisDirection};
+
+// ============================================================================
+// Shared fixtures
+// ============================================================================
+
+/// Pipeline owner in the Layout phase.
+fn fresh_layout_pipeline() -> PipelineOwner<flui_rendering::pipeline::Layout> {
+    PipelineOwner::new().into_layout()
+}
+
+/// A sliver constraints value representing a 600×300 vertical viewport
+/// at scroll offset 0 with 400 px of remaining paint extent.
+fn make_sliver_constraints() -> SliverConstraints {
+    SliverConstraints {
+        axis_direction: AxisDirection::TopToBottom,
+        cross_axis_direction: AxisDirection::LeftToRight,
+        growth_direction: GrowthDirection::Forward,
+        user_scroll_direction: ScrollDirection::Idle,
+        scroll_offset: 0.0,
+        preceding_scroll_extent: 0.0,
+        overlap: 0.0,
+        remaining_paint_extent: 400.0,
+        cross_axis_extent: 300.0,
+        viewport_main_axis_extent: 600.0,
+        remaining_cache_extent: 450.0,
+        cache_origin: 0.0,
+    }
+}
+
+// ============================================================================
+// StubLeafSliver — minimal leaf Sliver render object
+// ============================================================================
+
+/// Leaf sliver that reports a deterministic geometry: 200 px scroll extent,
+/// paint extent clamped to remaining paint extent. Used to confirm that the
+/// cross-protocol path actually calls into the sliver's `perform_layout`.
+#[derive(Debug, Default)]
+struct StubLeafSliver {
+    constraints: SliverConstraints,
+    geometry: SliverGeometry,
+}
+
+impl Diagnosticable for StubLeafSliver {}
+impl PaintEffectsCapability for StubLeafSliver {}
+impl SemanticsCapability for StubLeafSliver {}
+impl HotReloadCapability for StubLeafSliver {}
+
+impl RenderSliver for StubLeafSliver {
+    type Arity = Leaf;
+    type ParentData = SliverParentData;
+
+    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
+        let paint = 200.0_f32.min(ctx.constraints().remaining_paint_extent);
+        let geom = SliverGeometry {
+            scroll_extent: 200.0,
+            paint_extent: paint,
+            layout_extent: paint,
+            max_paint_extent: 200.0,
+            hit_test_extent: paint,
+            visible: paint > 0.0,
+            ..SliverGeometry::ZERO
+        };
+        ctx.complete(geom);
+    }
+
+    fn constraints(&self) -> &SliverConstraints {
+        &self.constraints
+    }
+
+    fn geometry(&self) -> &SliverGeometry {
+        &self.geometry
+    }
+
+    fn set_geometry(&mut self, geometry: SliverGeometry) {
+        self.geometry = geometry;
+    }
+
+    fn hit_test(&self, _ctx: &mut SliverHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
+        false
+    }
+
+    fn sliver_paint_bounds(&self) -> Rect {
+        Rect::from_origin_size(Point::ZERO, Size::ZERO)
+    }
+}
+
+// ============================================================================
+// BoxWithSliverChild — Box parent that drives a sliver child
+// ============================================================================
+
+/// `Variable`-arity Box render object that, during layout, calls
+/// `ctx.layout_sliver_child(0, sliver_constraints)` and records the
+/// returned [`SliverGeometry`] in a shared sink.
+///
+/// Completes with the biggest size allowed by the parent constraints so the
+/// pipeline succeeds and dirty-flag state is observable.
+struct BoxWithSliverChild {
+    sliver_constraints: SliverConstraints,
+    /// Records the `SliverGeometry` received from `layout_sliver_child`.
+    captured: Arc<Mutex<Option<SliverGeometry>>>,
+    size: Size,
+}
+
+impl std::fmt::Debug for BoxWithSliverChild {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BoxWithSliverChild").finish_non_exhaustive()
+    }
+}
+
+impl Diagnosticable for BoxWithSliverChild {}
+impl PaintEffectsCapability for BoxWithSliverChild {}
+impl SemanticsCapability for BoxWithSliverChild {}
+impl HotReloadCapability for BoxWithSliverChild {}
+
+impl RenderBox for BoxWithSliverChild {
+    type Arity = Variable;
+    type ParentData = BoxParentData;
+
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>) {
+        let geom = ctx.layout_sliver_child(0, self.sliver_constraints);
+        *self.captured.lock().unwrap() = Some(geom);
+        ctx.complete_with_size(ctx.constraints().biggest());
+    }
+
+    fn size(&self) -> &Size {
+        &self.size
+    }
+
+    fn size_mut(&mut self) -> &mut Size {
+        &mut self.size
+    }
+}
+
+// ============================================================================
+// Test 1 — Positive: Box parent lays out a leaf Sliver child
+// ============================================================================
+
+/// Box parent with a leaf Sliver child drives `layout_sliver_subtree_borrowed`
+/// and receives the child's non-zero [`SliverGeometry`].
+///
+/// `layout_dirty_root` must return `Ok`, the captured geometry must have
+/// `scroll_extent = 200.0`, and the parent's `needs_layout` must be cleared.
+#[test]
+fn cross_protocol_box_parent_lays_out_leaf_sliver_child() {
+    let sc = make_sliver_constraints();
+    let captured: Arc<Mutex<Option<SliverGeometry>>> = Arc::new(Mutex::new(None));
+
+    let parent_obj: Box<dyn RenderObject<BoxProtocol>> = Box::new(BoxWithSliverChild {
+        sliver_constraints: sc,
+        captured: Arc::clone(&captured),
+        size: Size::ZERO,
+    });
+    let sliver_obj: Box<dyn RenderObject<SliverProtocol>> = Box::new(StubLeafSliver::default());
+
+    let mut pipeline = fresh_layout_pipeline();
+    let parent_id = pipeline.render_tree_mut().insert_box(parent_obj);
+    pipeline
+        .render_tree_mut()
+        .insert_sliver_child(parent_id, sliver_obj)
+        .expect("tree must accept a Sliver child under a Box parent");
+
+    let box_constraints = BoxConstraints::new(px(0.0), px(800.0), px(0.0), px(600.0));
+    let result = pipeline.layout_dirty_root(parent_id, box_constraints);
+    assert!(
+        result.is_ok(),
+        "layout_dirty_root must succeed for Box parent + leaf Sliver child: {result:?}"
+    );
+
+    let geom = captured
+        .lock()
+        .unwrap()
+        .expect("perform_layout must have called layout_sliver_child and stored the result");
+
+    assert_eq!(
+        geom.scroll_extent, 200.0,
+        "StubLeafSliver always reports scroll_extent=200.0; captured geometry must match"
+    );
+    assert!(
+        geom.paint_extent > 0.0,
+        "remaining_paint_extent=400.0 so StubLeafSliver's paint_extent (min(200,400)=200) must be >0"
+    );
+
+    let parent_node = pipeline
+        .render_tree()
+        .get(parent_id)
+        .expect("parent must remain in the tree after layout");
+    assert!(
+        !parent_node.needs_layout(),
+        "parent NEEDS_LAYOUT must be cleared after successful cross-protocol layout"
+    );
+}
+
+// ============================================================================
+// Test 2 — Negative: layout_sliver_child on a Box child returns ZERO + stays dirty
+// ============================================================================
+
+/// Calling `ctx.layout_sliver_child(0, ...)` when child 0 is a Box-protocol
+/// node triggers a `ProtocolMismatch` error in `layout_sliver_subtree_borrowed_impl`
+/// (`as_sliver_mut()` returns `None`).  The sliver callback sets the
+/// descendant-error flag → parent `NEEDS_LAYOUT` stays set for retry,
+/// and `SliverGeometry::ZERO` is returned to the parent's `perform_layout`.
+///
+/// Assertions:
+/// - `layout_dirty_root` returns `Ok` (parent's own geometry is produced).
+/// - The captured geometry equals `SliverGeometry::ZERO`.
+/// - Parent remains dirty (`needs_layout() == true`).
+#[test]
+fn cross_protocol_layout_sliver_child_on_box_child_returns_zero_and_keeps_dirty() {
+    let sc = make_sliver_constraints();
+    let captured: Arc<Mutex<Option<SliverGeometry>>> = Arc::new(Mutex::new(None));
+
+    let parent_obj: Box<dyn RenderObject<BoxProtocol>> = Box::new(BoxWithSliverChild {
+        sliver_constraints: sc,
+        captured: Arc::clone(&captured),
+        size: Size::ZERO,
+    });
+    // Deliberately insert a Box child, not a Sliver child.
+    let box_child: Box<dyn RenderObject<BoxProtocol>> = Box::new(RenderColoredBox::red(40.0, 40.0));
+
+    let mut pipeline = fresh_layout_pipeline();
+    let parent_id = pipeline.render_tree_mut().insert_box(parent_obj);
+    pipeline
+        .render_tree_mut()
+        .insert_box_child(parent_id, box_child)
+        .expect("tree must accept a Box child");
+
+    let box_constraints = BoxConstraints::new(px(0.0), px(800.0), px(0.0), px(600.0));
+
+    // The parent's perform_layout calls complete_with_size and returns Ok,
+    // so layout_dirty_root itself returns Ok.  Only the descendant-error flag
+    // prevents NEEDS_LAYOUT from being cleared.
+    let result = pipeline.layout_dirty_root(parent_id, box_constraints);
+    assert!(
+        result.is_ok(),
+        "layout_dirty_root must return Ok even when a descendant ProtocolMismatch occurs: {result:?}"
+    );
+
+    let geom = captured
+        .lock()
+        .unwrap()
+        .expect("perform_layout must have called layout_sliver_child");
+    assert_eq!(
+        geom,
+        SliverGeometry::ZERO,
+        "layout_sliver_child on a Box-protocol child must return SliverGeometry::ZERO"
+    );
+
+    let parent_node = pipeline
+        .render_tree()
+        .get(parent_id)
+        .expect("parent must remain in the tree after layout");
+    assert!(
+        parent_node.needs_layout(),
+        "parent NEEDS_LAYOUT must remain set after descendant ProtocolMismatch \
+         (descendant_error_flag keeps the dirty bit for next-frame retry)"
+    );
+}

@@ -22,11 +22,11 @@ use parking_lot::Mutex;
 use rustc_hash::FxHashSet;
 
 use crate::{
-    constraints::BoxConstraints,
+    constraints::{BoxConstraints, SliverConstraints, SliverGeometry},
     context::{FragmentClip, FragmentOp, FragmentRecorder},
     protocol::{
         BoxProtocol, Protocol,
-        box_protocol::{BoxLayoutCtxErased, LayoutChildCallback},
+        box_protocol::{BoxLayoutCtxErased, LayoutChildCallback, SliverLayoutChildCallback},
     },
     storage::{RenderEntry, RenderNode, RenderTree},
 };
@@ -2203,6 +2203,7 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
     // is Sync too. So `&SubtreeBorrows: Send + Sync`, satisfying
     // `LayoutChildCallback: Send + Sync`.
     let borrows_for_cb: &SubtreeBorrows<'_> = borrows;
+    let descendant_error_for_sliver_cb = std::sync::Arc::clone(&descendant_error_flag);
     let cb_owned = move |child_id: RenderId, child_constraints: BoxConstraints| -> Size {
         // SAFETY: `borrows_for_cb` is alive (held by the outer
         // layout_dirty_root stack frame for the entire walk). The
@@ -2227,6 +2228,40 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
     };
     let cb_ref: LayoutChildCallback<'_> = &cb_owned;
 
+    // Sliver child callback: invoked when the Box parent calls
+    // `ctx.layout_sliver_child(index, sliver_constraints)`.  Uses the
+    // same `borrows_for_cb` pool and `descendant_error_flag` as the box
+    // callback — no extra pre-acquisition needed since sliver children
+    // are already in the pre-acquired `SubtreeBorrows` set.
+    let sliver_cb_owned = move |child_id: RenderId,
+                                sliver_constraints: SliverConstraints|
+          -> SliverGeometry {
+        // SAFETY: `borrows_for_cb` is alive for the entire walk (held
+        // by the `layout_dirty_root` stack frame). The reborrow targets
+        // `child_id`'s slot — distinct from the Box parent's slot
+        // (tree acyclicity) and from any concurrently-active Box child
+        // slot (LayoutCycleGuard blocks re-entry). No two concurrent
+        // reborrows of the same NodePtr.
+        match unsafe {
+            layout_sliver_subtree_borrowed(borrows_for_cb, child_id, sliver_constraints)
+        } {
+            Ok(geometry) => geometry,
+            Err(err) => {
+                descendant_error_for_sliver_cb.store(true, std::sync::atomic::Ordering::Relaxed);
+                tracing::error!(
+                    parent = ?id,
+                    ?child_id,
+                    ?err,
+                    "layout_dirty_root: sliver descendant layout failed; \
+                         returning SliverGeometry::ZERO to caller's perform_layout. \
+                         Parent NEEDS_LAYOUT preserved for next-frame retry.",
+                );
+                SliverGeometry::ZERO
+            }
+        }
+    };
+    let sliver_cb_ref: SliverLayoutChildCallback<'_> = &sliver_cb_owned;
+
     // Construct the driver-side PARENT-DATA-ERASED context. The walk
     // cannot name the parent's ParentData type (it holds dyn nodes);
     // the typed blanket bridge reconstructs BoxLayoutCtx<T::Arity,
@@ -2240,6 +2275,7 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
         &mut child_states,
         &child_ids,
         cb_ref,
+        Some(sliver_cb_ref),
     );
     let erased: &mut dyn BoxLayoutCtxErased = &mut ctx;
 
@@ -2328,6 +2364,102 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
     }
 
     Ok(geometry)
+}
+
+// ============================================================================
+// Cross-protocol child layout: Box parent → leaf Sliver child
+// ============================================================================
+//
+// `layout_sliver_subtree_borrowed` is the Sliver sibling of
+// `layout_subtree_borrowed`. It is called from the `sliver_cb_owned`
+// closure captured inside `layout_subtree_borrowed_impl`'s non-leaf path
+// when a Box parent calls `ctx.layout_sliver_child(index, constraints)`.
+//
+// Scope: LEAF sliver children only. Non-leaf sliver children are gated by
+// the arity check inside `RenderEntry::layout_leaf_only` (the Sliver
+// blanket returns `RenderError::ContractViolation` for non-leaf nodes).
+//
+// The short-circuit clean-child optimisation from the Box path is omitted
+// here on purpose: leaf slivers always relayout because their constraints
+// change with scroll position on every frame. Omitting the check is
+// correct and saves a branch.
+
+/// Stack-probe wrapper for [`layout_sliver_subtree_borrowed_impl`].
+///
+/// # Safety
+///
+/// Same contract as [`layout_subtree_borrowed`]:
+/// 1. `borrows` must outlive every recursive invocation this helper
+///    triggers (it is held by the outer `layout_dirty_root` stack frame
+///    for the entire walk).
+/// 2. At any moment, no two concurrent reborrows of the SAME [`NodePtr`]
+///    exist. The `LayoutCycleGuard` enforces this by returning
+///    [`crate::error::RenderError::LayoutCycle`] on re-entry into a slot
+///    already in flight, preventing the otherwise-UB second Unique tag.
+unsafe fn layout_sliver_subtree_borrowed<'tree>(
+    borrows: &SubtreeBorrows<'tree>,
+    id: flui_foundation::RenderId,
+    constraints: SliverConstraints,
+) -> crate::error::RenderResult<SliverGeometry> {
+    ensure_stack(|| {
+        // SAFETY: identical contract, forwarded verbatim from this
+        // wrapper's own `# Safety` section; the stack-growth wrapper
+        // only relocates which memory the frames live in, never their
+        // borrow structure, lifetimes, or drop order.
+        unsafe { layout_sliver_subtree_borrowed_impl(borrows, id, constraints) }
+    })
+}
+
+/// Body of [`layout_sliver_subtree_borrowed`]; split out so every
+/// recursion level enters through the [`ensure_stack`] probe.
+///
+/// # Safety
+///
+/// Same contract as [`layout_sliver_subtree_borrowed`].
+unsafe fn layout_sliver_subtree_borrowed_impl<'tree>(
+    borrows: &SubtreeBorrows<'tree>,
+    id: flui_foundation::RenderId,
+    constraints: SliverConstraints,
+) -> crate::error::RenderResult<SliverGeometry> {
+    // U21 cycle guard: register `id` in currently_laying_out *before*
+    // any NodePtr reborrow. Same RAII discipline as the Box path —
+    // Drop runs on every exit including unwind so the set stays
+    // consistent across panics.
+    let _cycle_guard = LayoutCycleGuard::enter(borrows, id)?;
+
+    // Resolve id → NodePtr. Cross-thread access panics inside `get`.
+    let NodePtr(node_ptr) = match borrows.get(id) {
+        Some(np) => np,
+        None => return Err(crate::error::RenderError::NodeNotFound(id)),
+    };
+
+    // SAFETY: `node_ptr` aliases a `&mut RenderNode` that
+    // `SubtreeBorrows` holds disjointly from every other slot it
+    // covers. The reborrow below is the FIRST and ONLY reborrow of
+    // `id`'s slot in this call frame; no other live `&mut` to this
+    // slot exists — the Box parent's reborrow belongs to a DISTINCT
+    // slot (parent ≠ child by tree acyclicity), and the cycle guard
+    // above prevents re-entry into `id` from the same call stack.
+    // Distinct slot reborrows have independent Unique tags under
+    // Stacked / Tree Borrows — no aliasing.
+    let node_ref: &mut crate::storage::RenderNode = unsafe { &mut *node_ptr };
+
+    let node_protocol = node_ref.protocol_name();
+    let entry: &mut RenderEntry<crate::protocol::SliverProtocol> = match node_ref.as_sliver_mut() {
+        Some(e) => e,
+        None => {
+            return Err(crate::error::RenderError::ProtocolMismatch {
+                node_protocol,
+                constraints_protocol: "Sliver",
+            });
+        }
+    };
+
+    // Delegate to the generic leaf-only layout path.
+    // Non-leaf sliver nodes trigger `RenderError::ContractViolation`
+    // inside `layout_leaf_only` via the arity gate — the non-leaf
+    // sliver walk is out of scope for this change.
+    entry.layout_leaf_only(constraints)
 }
 
 // ============================================================================
