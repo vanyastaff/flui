@@ -2565,6 +2565,11 @@ impl WgpuPainter {
     }
 
     pub fn draw_image(&mut self, image: &flui_types::painting::Image, dst_rect: Rect<Pixels>) {
+        let top_left = self.apply_transform(Point::new(dst_rect.left(), dst_rect.top()));
+        let bottom_right = self.apply_transform(Point::new(dst_rect.right(), dst_rect.bottom()));
+        let transformed_rect =
+            Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
+
         // Use Arc pointer identity for O(1) cache lookup instead of hashing all pixels
         let texture_id = super::texture_cache::TextureId::from_ptr(image.data_ptr());
         let data = image.data();
@@ -2580,13 +2585,13 @@ impl WgpuPainter {
                 // Preserve atlas UVs when the image is packed into the shared atlas.
                 let instance = if let Some(uv_rect) = cached_texture.uv_rect {
                     super::instancing::TextureInstance::with_uv(
-                        dst_rect,
+                        transformed_rect,
                         uv_rect,
                         flui_types::styling::Color::WHITE,
                     )
                 } else {
                     super::instancing::TextureInstance::new(
-                        dst_rect,
+                        transformed_rect,
                         flui_types::styling::Color::WHITE,
                     )
                 };

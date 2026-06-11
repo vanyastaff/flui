@@ -70,9 +70,7 @@ impl View for App {
 }
 
 fn load_image() -> anyhow::Result<SharedImage> {
-    use std::path::PathBuf;
-
-    let input = PathBuf::from(std::env::temp_dir()).join("flui_test_cat.jpg");
+    let input = std::env::temp_dir().join("flui_test_cat.jpg");
     println!("Loading image: {}", input.display());
 
     let decoded = image::open(&input)?.to_rgba8();
