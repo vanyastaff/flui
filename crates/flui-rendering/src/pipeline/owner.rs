@@ -2362,6 +2362,11 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
             // Stacked / Tree Borrows.
             let child_node: &RenderNode = unsafe { &*child_ptr.0 };
             cs.offset = child_node.offset();
+            cs.needs_layout = child_node.needs_layout();
+            if let Some(sliver_entry) = child_node.as_sliver() {
+                cs.sliver_constraints = sliver_entry.state().constraints().copied();
+                cs.sliver_geometry = sliver_entry.state().geometry();
+            }
         }
     }
 

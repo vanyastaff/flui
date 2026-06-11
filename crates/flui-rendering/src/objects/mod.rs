@@ -50,6 +50,8 @@
 //!   skipped paint, no hit-test) (Core.2 Wave 5a)
 //! - [`RenderSliverToBoxAdapter`] - Wraps one Box child in Sliver
 //!   protocol geometry (Core.2 W3.3)
+//! - [`RenderViewport`] - Box viewport that drives Sliver children
+//!   (Core.2 W3.4a)
 //!
 //! # Example
 //!
@@ -91,6 +93,7 @@ mod sliver_padding;
 mod sliver_to_box_adapter;
 mod stack;
 mod transform;
+mod viewport;
 
 pub use absorb_pointer::RenderAbsorbPointer;
 pub use aspect_ratio::{AspectRatio, RenderAspectRatio};
@@ -123,3 +126,4 @@ pub use sliver_padding::RenderSliverPadding;
 pub use sliver_to_box_adapter::RenderSliverToBoxAdapter;
 pub use stack::{PositionedSpec, RenderStack, StackFit};
 pub use transform::RenderTransform;
+pub use viewport::RenderViewport;

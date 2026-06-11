@@ -373,6 +373,26 @@ where
             constraints,
         )
     }
+
+    /// Returns the last known sliver constraints and geometry for a sliver
+    /// child, when the production pipeline has cached them.
+    pub fn cached_sliver_child_layout(
+        &self,
+        index: usize,
+    ) -> Option<(SliverConstraints, SliverGeometry)> {
+        crate::protocol::box_protocol::BoxLayoutCtxErased::cached_sliver_child_layout(
+            &self.inner,
+            index,
+        )
+    }
+
+    /// Returns whether a sliver child is still marked as needing layout.
+    pub fn sliver_child_needs_layout(&self, index: usize) -> bool {
+        crate::protocol::box_protocol::BoxLayoutCtxErased::sliver_child_needs_layout(
+            &self.inner,
+            index,
+        )
+    }
 }
 
 // ============================================================================
