@@ -745,6 +745,58 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         }
     }
 
+    fn box_hit_offset_from_sliver_position(
+        constraints: &SliverConstraints,
+        geometry: &SliverGeometry,
+        child_size: Size,
+        position: MainAxisPosition,
+        offset: Offset,
+    ) -> Offset {
+        let reversed = matches!(
+            constraints.axis_direction,
+            flui_types::layout::AxisDirection::RightToLeft
+                | flui_types::layout::AxisDirection::BottomToTop
+        );
+        let right_way_up = match constraints.growth_direction {
+            crate::constraints::GrowthDirection::Forward => !reversed,
+            crate::constraints::GrowthDirection::Reverse => reversed,
+        };
+
+        let (paint_main, paint_cross, child_main_extent) = match constraints.axis_direction {
+            flui_types::layout::AxisDirection::LeftToRight
+            | flui_types::layout::AxisDirection::RightToLeft => {
+                (offset.dx.get(), offset.dy.get(), child_size.width.get())
+            }
+            flui_types::layout::AxisDirection::TopToBottom
+            | flui_types::layout::AxisDirection::BottomToTop => {
+                (offset.dy.get(), offset.dx.get(), child_size.height.get())
+            }
+        };
+        let child_main_axis_position = if right_way_up {
+            paint_main
+        } else {
+            geometry.paint_extent - child_main_extent - paint_main
+        };
+        let mut local_main = position.main_axis - child_main_axis_position;
+        if !right_way_up {
+            local_main = child_main_extent - local_main;
+        }
+        let local_cross = position.cross_axis - paint_cross;
+
+        match constraints.axis_direction {
+            flui_types::layout::AxisDirection::LeftToRight
+            | flui_types::layout::AxisDirection::RightToLeft => Offset::new(
+                flui_types::geometry::px(local_main),
+                flui_types::geometry::px(local_cross),
+            ),
+            flui_types::layout::AxisDirection::TopToBottom
+            | flui_types::layout::AxisDirection::BottomToTop => Offset::new(
+                flui_types::geometry::px(local_cross),
+                flui_types::geometry::px(local_main),
+            ),
+        }
+    }
+
     fn hit_test_sliver_subtree(
         &self,
         id: RenderId,
@@ -804,6 +856,18 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                     )
                 });
                 self.hit_test_sliver_subtree(child_id, child_position, result)
+            } else if let Some(child_entry) = child_node.as_box() {
+                let Some(child_size) = child_entry.state().geometry() else {
+                    return false;
+                };
+                let child_position = Self::box_hit_offset_from_sliver_position(
+                    constraints,
+                    &geometry,
+                    child_size,
+                    override_pos.unwrap_or(position),
+                    child_node.offset(),
+                );
+                self.hit_test_subtree(child_id, child_position, result)
             } else {
                 false
             }
@@ -2593,6 +2657,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl<'tree>(
     let descendant_error_flag: std::sync::Arc<std::sync::atomic::AtomicBool> =
         std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let descendant_error_for_cb = std::sync::Arc::clone(&descendant_error_flag);
+    let descendant_error_for_box_cb = std::sync::Arc::clone(&descendant_error_flag);
     let borrows_for_cb: &SubtreeBorrows<'_> = borrows;
 
     let cb_owned = move |child_id: RenderId,
@@ -2620,11 +2685,33 @@ unsafe fn layout_sliver_subtree_borrowed_impl<'tree>(
     };
     let cb_ref: SliverChildLayoutCallback<'_> = &cb_owned;
 
+    let box_cb_owned = move |child_id: RenderId, child_constraints: BoxConstraints| -> Size {
+        // SAFETY: same subtree-borrow contract as the sliver child callback,
+        // but routed through the Box layout walk for Sliver -> Box adapters.
+        match unsafe { layout_subtree_borrowed(borrows_for_cb, child_id, child_constraints) } {
+            Ok(size) => size,
+            Err(err) => {
+                descendant_error_for_box_cb.store(true, std::sync::atomic::Ordering::Relaxed);
+                tracing::error!(
+                    parent = ?id,
+                    ?child_id,
+                    ?err,
+                    "layout_dirty_root: box descendant layout failed from sliver parent; \
+                     returning Size::ZERO to caller's perform_layout. \
+                     Parent NEEDS_LAYOUT preserved for next-frame retry.",
+                );
+                Size::ZERO
+            }
+        }
+    };
+    let box_cb_ref: crate::protocol::sliver_protocol::BoxChildLayoutCallback<'_> = &box_cb_owned;
+
     let mut ctx = crate::protocol::ErasedSliverLayoutCtx::new(
         constraints,
         &mut child_states,
         &child_ids,
         cb_ref,
+        box_cb_ref,
     );
     let erased: &mut dyn SliverLayoutCtxErased = &mut ctx;
 

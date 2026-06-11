@@ -190,7 +190,7 @@ where
 // BOX-SPECIFIC EXTENSIONS
 // ============================================================================
 
-use crate::protocol::BoxProtocol;
+use crate::protocol::{BoxProtocol, SliverProtocol};
 
 impl<'ctx, A: Arity, PD: ParentData + Default> LayoutContext<'ctx, BoxProtocol, A, PD>
 where
@@ -368,6 +368,31 @@ where
         constraints: SliverConstraints,
     ) -> SliverGeometry {
         crate::protocol::box_protocol::BoxLayoutCtxErased::layout_sliver_child(
+            &mut self.inner,
+            index,
+            constraints,
+        )
+    }
+}
+
+// ============================================================================
+// SLIVER CROSS-PROTOCOL EXTENSIONS
+// ============================================================================
+
+impl<'ctx, A: Arity, PD: ParentData + Default> LayoutContext<'ctx, SliverProtocol, A, PD>
+where
+    <crate::protocol::SliverLayout as LayoutCapability>::Context<'ctx, A, PD>:
+        crate::protocol::sliver_protocol::SliverLayoutCtxErased,
+{
+    /// Lays out a **Box** child at `index` with the given
+    /// [`BoxConstraints`] and returns its [`Size`].
+    ///
+    /// This is the reverse bridge of
+    /// [`Self::layout_sliver_child`]: Sliver render objects such as
+    /// `RenderSliverToBoxAdapter` can host Box children and still drive the
+    /// normal Box subtree layout walk through the pipeline.
+    pub fn layout_box_child(&mut self, index: usize, constraints: BoxConstraints) -> Size {
+        crate::protocol::sliver_protocol::SliverLayoutCtxErased::layout_box_child(
             &mut self.inner,
             index,
             constraints,

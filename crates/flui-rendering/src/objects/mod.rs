@@ -48,6 +48,8 @@
 //!   subtree to siblings beneath in the viewport (Core.2 Wave 5a)
 //! - [`RenderSliverOffstage`] - Hides a sliver subtree (zero geometry,
 //!   skipped paint, no hit-test) (Core.2 Wave 5a)
+//! - [`RenderSliverToBoxAdapter`] - Wraps one Box child in Sliver
+//!   protocol geometry (Core.2 W3.3)
 //!
 //! # Example
 //!
@@ -86,6 +88,7 @@ mod sliver_ignore_pointer;
 mod sliver_offstage;
 mod sliver_opacity;
 mod sliver_padding;
+mod sliver_to_box_adapter;
 mod stack;
 mod transform;
 
@@ -117,5 +120,6 @@ pub use sliver_ignore_pointer::RenderSliverIgnorePointer;
 pub use sliver_offstage::RenderSliverOffstage;
 pub use sliver_opacity::RenderSliverOpacity;
 pub use sliver_padding::RenderSliverPadding;
+pub use sliver_to_box_adapter::RenderSliverToBoxAdapter;
 pub use stack::{PositionedSpec, RenderStack, StackFit};
 pub use transform::RenderTransform;
