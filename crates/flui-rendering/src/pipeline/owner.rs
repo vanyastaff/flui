@@ -747,22 +747,54 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 
     fn box_hit_offset_from_sliver_position(
         constraints: &SliverConstraints,
+        geometry: &SliverGeometry,
+        child_size: Size,
         position: MainAxisPosition,
         offset: Offset,
     ) -> Offset {
-        let absolute = match constraints.axis_direction {
+        let reversed = matches!(
+            constraints.axis_direction,
+            flui_types::layout::AxisDirection::RightToLeft
+                | flui_types::layout::AxisDirection::BottomToTop
+        );
+        let right_way_up = match constraints.growth_direction {
+            crate::constraints::GrowthDirection::Forward => !reversed,
+            crate::constraints::GrowthDirection::Reverse => reversed,
+        };
+
+        let (paint_main, paint_cross, child_main_extent) = match constraints.axis_direction {
+            flui_types::layout::AxisDirection::LeftToRight
+            | flui_types::layout::AxisDirection::RightToLeft => {
+                (offset.dx.get(), offset.dy.get(), child_size.width.get())
+            }
+            flui_types::layout::AxisDirection::TopToBottom
+            | flui_types::layout::AxisDirection::BottomToTop => {
+                (offset.dy.get(), offset.dx.get(), child_size.height.get())
+            }
+        };
+        let child_main_axis_position = if right_way_up {
+            paint_main
+        } else {
+            geometry.paint_extent - child_main_extent - paint_main
+        };
+        let mut local_main = position.main_axis - child_main_axis_position;
+        if !right_way_up {
+            local_main = child_main_extent - local_main;
+        }
+        let local_cross = position.cross_axis - paint_cross;
+
+        match constraints.axis_direction {
             flui_types::layout::AxisDirection::LeftToRight
             | flui_types::layout::AxisDirection::RightToLeft => Offset::new(
-                flui_types::geometry::px(position.main_axis),
-                flui_types::geometry::px(position.cross_axis),
+                flui_types::geometry::px(local_main),
+                flui_types::geometry::px(local_cross),
             ),
             flui_types::layout::AxisDirection::TopToBottom
             | flui_types::layout::AxisDirection::BottomToTop => Offset::new(
-                flui_types::geometry::px(position.cross_axis),
-                flui_types::geometry::px(position.main_axis),
+                flui_types::geometry::px(local_cross),
+                flui_types::geometry::px(local_main),
             ),
-        };
-        absolute - offset
+        }
     }
 
     fn hit_test_sliver_subtree(
@@ -824,9 +856,14 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                     )
                 });
                 self.hit_test_sliver_subtree(child_id, child_position, result)
-            } else if child_node.as_box().is_some() {
+            } else if let Some(child_entry) = child_node.as_box() {
+                let Some(child_size) = child_entry.state().geometry() else {
+                    return false;
+                };
                 let child_position = Self::box_hit_offset_from_sliver_position(
                     constraints,
+                    &geometry,
+                    child_size,
                     override_pos.unwrap_or(position),
                     child_node.offset(),
                 );

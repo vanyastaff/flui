@@ -132,9 +132,86 @@ impl RenderBox for FixedHitBox {
 }
 
 #[derive(Debug)]
+struct VerticalBandHitBox {
+    size: Size,
+}
+
+impl VerticalBandHitBox {
+    fn new() -> Self {
+        Self { size: Size::ZERO }
+    }
+}
+
+impl flui_foundation::Diagnosticable for VerticalBandHitBox {}
+impl PaintEffectsCapability for VerticalBandHitBox {}
+impl SemanticsCapability for VerticalBandHitBox {}
+impl HotReloadCapability for VerticalBandHitBox {}
+
+impl RenderBox for VerticalBandHitBox {
+    type Arity = Leaf;
+    type ParentData = BoxParentData;
+
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, Self::ParentData>) {
+        self.size = ctx.constraints().constrain(Size::new(px(300.0), px(180.0)));
+        ctx.complete_with_size(self.size);
+    }
+
+    fn size(&self) -> &Size {
+        &self.size
+    }
+
+    fn size_mut(&mut self) -> &mut Size {
+        &mut self.size
+    }
+
+    fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
+        let local = ctx.offset();
+        local.dx >= px(0.0)
+            && local.dx < self.size.width
+            && local.dy >= px(120.0)
+            && local.dy < px(140.0)
+    }
+}
+
+#[derive(Debug)]
 struct SliverHost {
     constraints: SliverConstraints,
     size: Size,
+}
+
+#[test]
+fn sliver_to_box_adapter_reverse_growth_hit_tests_box_child_right_way_up() {
+    let mut constraints = vertical_constraints(40.0);
+    constraints.growth_direction = GrowthDirection::Reverse;
+
+    let mut owner = PipelineOwner::new();
+    let root_id = owner.insert(Box::new(SliverHost {
+        constraints,
+        size: Size::ZERO,
+    }) as BoxedRenderObject);
+    let adapter_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            root_id,
+            Box::new(RenderSliverToBoxAdapter::new()) as BoxedSliverObject,
+        )
+        .expect("sliver adapter child");
+    let child_id = owner
+        .render_tree_mut()
+        .insert_box_child(
+            adapter_id,
+            Box::new(VerticalBandHitBox::new()) as BoxedRenderObject,
+        )
+        .expect("box child under sliver adapter");
+
+    let owner = laid_out(owner, root_id);
+
+    assert_eq!(
+        hits(&owner, 10.0, 10.0),
+        vec![child_id, adapter_id, root_id],
+        "reverse growth must mirror Flutter RenderSliverHelpers::hitTestBoxChild: \
+         main=10 maps to child-local y=130, not y=50",
+    );
 }
 
 impl flui_foundation::Diagnosticable for SliverHost {}
