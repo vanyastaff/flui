@@ -125,6 +125,27 @@ impl Protocol for BoxProtocol {
         state.compute_relayout_boundary(true, false, has_parent);
     }
 
+    /// Flutter's `debugAssertDoesMeetConstraints` (`box.dart`): a node's own
+    /// committed size must be finite and satisfy the constraints it was laid
+    /// out under. A render object that needs to overflow passes modified
+    /// constraints down to its children — its own size still stays in range,
+    /// so this catches the silent-commit of an infinite or constraint-
+    /// violating size at the source.
+    fn debug_assert_layout_output(constraints: &BoxConstraints, geometry: &Size) {
+        debug_assert!(
+            geometry.width.get().is_finite() && geometry.height.get().is_finite(),
+            "layout produced a non-finite size {geometry:?} under {constraints:?}: a \
+             render object returned inf/NaN — constrain the result before returning it",
+        );
+        debug_assert!(
+            constraints.is_satisfied_by(*geometry),
+            "layout produced size {geometry:?} that violates its constraints \
+             {constraints:?}: a node's own size must satisfy the constraints it was \
+             given — pass modified constraints to children instead of overflowing the \
+             node's own size",
+        );
+    }
+
     /// D-block PR-A1b U19 — wraps the given `BoxConstraints` in a typed
     /// `BoxLayoutCtx::<Leaf, BoxParentData>::new(constraints)` (no
     /// children, no callback) and hands an erased `&mut dyn

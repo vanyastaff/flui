@@ -2276,21 +2276,10 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
     // On the Err path above, state is intentionally unmodified so
     // NEEDS_LAYOUT stays set for next-frame retry.
 
-    // D-block PR-A1 U20 — Debug geometry validation (Flutter parity).
-    // Objects must return finite sizes that satisfy their constraints.
-    debug_assert!(
-        geometry.is_finite(),
-        "{}: perform_layout returned non-finite size: {:?}",
-        debug_name,
-        geometry
-    );
-    debug_assert!(
-        constraints.is_satisfied_by(geometry),
-        "{}: perform_layout returned size {:?} that violates constraints {:?}",
-        debug_name,
-        geometry,
-        constraints
-    );
+    // Same protocol-generic geometry check the leaf commit runs
+    // (RenderEntry::layout_leaf_only) — Flutter's debugAssertDoesMeetConstraints:
+    // a finite size that satisfies the constraints. No-op for slivers.
+    <BoxProtocol as Protocol>::debug_assert_layout_output(&constraints, &geometry);
 
     entry.state_mut().set_geometry(geometry);
     entry.state_mut().set_constraints(constraints);
@@ -3989,5 +3978,89 @@ mod tests {
         let phantom = RenderId::new(99);
         owner.mark_needs_layout(phantom);
         assert!(owner.nodes_needing_layout().is_empty());
+    }
+
+    /// Leaf `RenderObject<BoxProtocol>` returning a fixed size regardless of
+    /// the constraints — used to drive the layout-output debug assertion on
+    /// the leaf commit path (`RenderEntry::layout_leaf_only`).
+    #[derive(Debug)]
+    struct FixedSizeLeaf {
+        size: flui_types::Size,
+    }
+
+    impl flui_foundation::Diagnosticable for FixedSizeLeaf {}
+    impl crate::traits::PaintEffectsCapability for FixedSizeLeaf {}
+    impl crate::traits::SemanticsCapability for FixedSizeLeaf {}
+    impl crate::traits::HotReloadCapability for FixedSizeLeaf {}
+
+    impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for FixedSizeLeaf {
+        fn perform_layout_raw(
+            &mut self,
+            _ctx: &mut <crate::protocol::BoxProtocol as crate::protocol::Protocol>::LayoutCtxErased<
+                '_,
+            >,
+        ) -> crate::error::RenderResult<
+            crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>,
+        > {
+            Ok(self.size)
+        }
+
+        fn paint_raw(&self, _recorder: &mut crate::context::FragmentRecorder, _child_count: usize) {
+        }
+
+        fn hit_test_raw(
+            &self,
+            _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
+            _child_count: usize,
+            _hit_child: &mut (
+                     dyn FnMut(
+                usize,
+                Option<crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>>,
+            ) -> bool
+                         + Send
+                         + Sync
+                 ),
+        ) -> bool {
+            false
+        }
+
+        fn geometry(&self) -> &crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol> {
+            &self.size
+        }
+
+        fn set_geometry(
+            &mut self,
+            geometry: crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>,
+        ) {
+            self.size = geometry;
+        }
+
+        fn paint_bounds(&self) -> flui_types::Rect {
+            flui_types::Rect::from_origin_size(flui_types::Point::ZERO, self.size)
+        }
+    }
+
+    /// A leaf committing a size that violates the constraints it was laid out
+    /// under trips `Protocol::debug_assert_layout_output` (Flutter
+    /// `debugAssertDoesMeetConstraints`) on the leaf commit path — a node
+    /// returning 999×999 under tight 100×100 is a layout bug.
+    #[test]
+    #[should_panic(expected = "violates its constraints")]
+    fn leaf_committing_a_constraint_violating_size_trips_the_layout_assert() {
+        let mut owner = PipelineOwner::new();
+        let root = owner.insert(Box::new(FixedSizeLeaf {
+            size: flui_types::Size::new(
+                flui_types::geometry::px(999.0),
+                flui_types::geometry::px(999.0),
+            ),
+        })
+            as Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>);
+        owner.set_root_id(Some(root));
+        owner.set_root_constraints(Some(BoxConstraints::tight(flui_types::Size::new(
+            flui_types::geometry::px(100.0),
+            flui_types::geometry::px(100.0),
+        ))));
+
+        let _ = owner.run_frame();
     }
 }
