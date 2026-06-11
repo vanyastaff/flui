@@ -572,6 +572,24 @@ impl RenderNode {
         }
     }
 
+    /// Returns this node's parent-relative offset.
+    #[inline]
+    pub fn offset(&self) -> flui_types::Offset {
+        match self {
+            Self::Box(entry) => entry.state().offset(),
+            Self::Sliver(entry) => entry.state().offset(),
+        }
+    }
+
+    /// Sets this node's parent-relative offset.
+    #[inline]
+    pub fn set_offset(&self, offset: flui_types::Offset) {
+        match self {
+            Self::Box(entry) => entry.state().set_offset(offset),
+            Self::Sliver(entry) => entry.state().set_offset(offset),
+        }
+    }
+
     /// Returns the size for Box protocol nodes (None for Sliver nodes).
     pub fn size(&self) -> Option<flui_types::Size> {
         match self {

@@ -23,7 +23,9 @@ use flui_painting::Paint;
 use flui_rendering::{
     constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
     context::{BoxHitTestContext, BoxLayoutContext, SliverHitTestContext, SliverLayoutContext},
-    objects::{RenderClipRect, RenderColoredBox, RenderPadding, RenderRepaintBoundary},
+    objects::{
+        RenderClipRect, RenderColoredBox, RenderPadding, RenderRepaintBoundary, RenderSliverPadding,
+    },
     parent_data::{BoxParentData, SliverParentData},
     pipeline::PipelineOwner,
     protocol::{BoxProtocol, SliverProtocol},
@@ -410,5 +412,45 @@ fn box_host_splices_sliver_leaf_paint_into_picture() {
     assert_eq!(
         first_picture(&tree).bounds(),
         Rect::from_origin_size(Point::ZERO, Size::new(px(100.0), px(80.0))),
+    );
+}
+
+#[test]
+fn box_host_splices_sliver_padding_child_at_paint_offset() {
+    let mut owner = PipelineOwner::new();
+    let host_id = owner.insert(Box::new(SliverPaintHost {
+        constraints: sliver_paint_constraints(),
+        size: Size::ZERO,
+    }) as BoxedRenderObject);
+    let padding_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            host_id,
+            Box::new(RenderSliverPadding::symmetric(7.0, 10.0)) as BoxedSliverObject,
+        )
+        .expect("sliver padding child");
+    owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            padding_id,
+            Box::new(PaintLeafSliver::default()) as BoxedSliverObject,
+        )
+        .expect("sliver leaf child");
+
+    owner.set_root_id(Some(host_id));
+    owner.set_root_constraints(Some(BoxConstraints::new(
+        px(0.0),
+        px(200.0),
+        px(0.0),
+        px(200.0),
+    )));
+
+    let (tree, _owner) = paint_frame(owner);
+
+    assert_eq!(
+        first_picture(&tree).bounds(),
+        Rect::from_ltrb(px(7.0), px(10.0), px(107.0), px(90.0)),
+        "sliver child paint must be composed at the paint offset computed \
+         by RenderSliverPadding",
     );
 }

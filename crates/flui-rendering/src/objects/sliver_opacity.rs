@@ -204,17 +204,13 @@ impl RenderSliver for RenderSliverOpacity {
 
     fn hit_test(
         &self,
-        _ctx: &mut SliverHitTestContext<'_, Single, SliverPhysicalParentData>,
+        ctx: &mut SliverHitTestContext<'_, Single, SliverPhysicalParentData>,
     ) -> bool {
         // Transparent — fully-transparent slivers still hit-test (Flutter
         // parity: `RenderSliverOpacity` does not gate hit-testing on
         // alpha, leaving that to `RenderSliverIgnorePointer`). The
-        // viewport drives child hit-testing directly; opacity adds no
-        // extra hit area.
-        //
-        // TODO(core.2): once `SliverHitTestContext` exposes
-        // `hit_test_child(0)` with offset translation, delegate here.
-        false
+        // opacity object adds no extra hit area.
+        ctx.hit_test_child_at_layout_offset(0)
     }
 
     fn sliver_paint_bounds(&self) -> Rect {

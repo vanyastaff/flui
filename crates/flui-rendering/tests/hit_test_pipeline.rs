@@ -16,7 +16,8 @@ use flui_rendering::{
     context::{BoxHitTestContext, BoxLayoutContext, SliverHitTestContext, SliverLayoutContext},
     hit_testing::HitTestResult,
     objects::{
-        RenderColoredBox, RenderFlex, RenderPadding, RenderSliverIgnorePointer, RenderTransform,
+        RenderColoredBox, RenderFlex, RenderPadding, RenderSliverIgnorePointer,
+        RenderSliverOpacity, RenderSliverPadding, RenderTransform,
     },
     parent_data::{BoxParentData, SliverParentData},
     pipeline::PipelineOwner,
@@ -306,6 +307,44 @@ impl RenderBox for SliverHitHost {
     }
 }
 
+#[derive(Debug)]
+struct PositionedSliverHitHost {
+    constraints: SliverConstraints,
+    offset: Offset,
+    size: Size,
+}
+
+impl flui_foundation::Diagnosticable for PositionedSliverHitHost {}
+impl PaintEffectsCapability for PositionedSliverHitHost {}
+impl SemanticsCapability for PositionedSliverHitHost {}
+impl HotReloadCapability for PositionedSliverHitHost {}
+
+impl RenderBox for PositionedSliverHitHost {
+    type Arity = Variable;
+    type ParentData = BoxParentData;
+
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>) {
+        if ctx.child_count() > 0 {
+            let _ = ctx.layout_sliver_child(0, self.constraints);
+            ctx.position_child(0, self.offset);
+        }
+        self.size = ctx.constraints().biggest();
+        ctx.complete_with_size(self.size);
+    }
+
+    fn size(&self) -> &Size {
+        &self.size
+    }
+
+    fn size_mut(&mut self) -> &mut Size {
+        &mut self.size
+    }
+
+    fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Variable, BoxParentData>) -> bool {
+        ctx.hit_test_child_at_layout_offset(0)
+    }
+}
+
 #[derive(Debug, Default)]
 struct HitLeafSliver {
     constraints: SliverConstraints,
@@ -390,5 +429,103 @@ fn box_host_hit_tests_sliver_proxy_subtree_leaf_first() {
     assert!(
         hits(&owner, 10.0, 120.0).is_empty(),
         "main-axis position beyond the leaf sliver's hit extent must miss",
+    );
+}
+
+#[test]
+fn box_parent_positions_sliver_child_for_hit_testing() {
+    let mut owner = PipelineOwner::new();
+    let host_id = owner.insert(Box::new(PositionedSliverHitHost {
+        constraints: sliver_hit_constraints(),
+        offset: Offset::new(px(0.0), px(20.0)),
+        size: Size::ZERO,
+    }) as BoxedRenderObject);
+    let leaf_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            host_id,
+            Box::new(HitLeafSliver::default()) as BoxedSliverObject,
+        )
+        .expect("sliver leaf child");
+
+    let owner = laid_out(owner, host_id);
+
+    assert_eq!(
+        hits(&owner, 10.0, 90.0),
+        vec![leaf_id, host_id],
+        "Box parent position_child must commit offsets for Sliver children \
+         too: visual y=90 becomes sliver-local main=70",
+    );
+}
+
+#[test]
+fn box_host_hit_tests_transparent_sliver_opacity_child() {
+    let mut owner = PipelineOwner::new();
+    let host_id = owner.insert(Box::new(SliverHitHost {
+        constraints: sliver_hit_constraints(),
+        size: Size::ZERO,
+    }) as BoxedRenderObject);
+    let opacity_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            host_id,
+            Box::new(RenderSliverOpacity::transparent()) as BoxedSliverObject,
+        )
+        .expect("sliver opacity child");
+    let leaf_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            opacity_id,
+            Box::new(HitLeafSliver::default()) as BoxedSliverObject,
+        )
+        .expect("sliver leaf child");
+
+    let owner = laid_out(owner, host_id);
+
+    assert_eq!(
+        hits(&owner, 10.0, 10.0),
+        vec![leaf_id, opacity_id, host_id],
+        "RenderSliverOpacity must not gate hit-testing on alpha; it \
+         transparently delegates to its child",
+    );
+}
+
+#[test]
+fn box_host_hit_tests_sliver_padding_child_at_paint_offset() {
+    let mut owner = PipelineOwner::new();
+    let host_id = owner.insert(Box::new(SliverHitHost {
+        constraints: sliver_hit_constraints(),
+        size: Size::ZERO,
+    }) as BoxedRenderObject);
+    let padding_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            host_id,
+            Box::new(RenderSliverPadding::symmetric(7.0, 10.0)) as BoxedSliverObject,
+        )
+        .expect("sliver padding child");
+    let leaf_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            padding_id,
+            Box::new(HitLeafSliver::default()) as BoxedSliverObject,
+        )
+        .expect("sliver leaf child");
+
+    let owner = laid_out(owner, host_id);
+
+    assert_eq!(
+        hits(&owner, 10.0, 15.0),
+        vec![leaf_id, padding_id, host_id],
+        "the point is inside the child after subtracting the padding \
+         paint offset (cross=7, main=10)",
+    );
+    assert!(
+        hits(&owner, 10.0, 5.0).is_empty(),
+        "the leading main-axis padding itself is hit-transparent",
+    );
+    assert!(
+        hits(&owner, 3.0, 15.0).is_empty(),
+        "the leading cross-axis padding itself is hit-transparent",
     );
 }

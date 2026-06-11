@@ -354,7 +354,10 @@ impl RenderSliver for RenderSliverPadding {
 
         let (geometry, child_paint_offset) = self.padded_geometry(&constraints, &child_geometry);
 
-        // Set the child's paint offset within the padded box.
+        // Set the child's paint offset within the padded box. The
+        // layout walk commits this into the child's RenderState so
+        // later paint and hit-test phases use the same placement.
+        ctx.position_child(0, child_paint_offset);
         if let Some(pd) = ctx.child_parent_data_mut(0) {
             pd.paint_offset = child_paint_offset;
         }
@@ -377,23 +380,12 @@ impl RenderSliver for RenderSliverPadding {
 
     fn hit_test(
         &self,
-        _ctx: &mut SliverHitTestContext<'_, Single, SliverPhysicalParentData>,
+        ctx: &mut SliverHitTestContext<'_, Single, SliverPhysicalParentData>,
     ) -> bool {
-        // Sliver hit-testing currently has no per-child offset path
-        // exposed on the rich context (see
-        // `crates/flui-rendering/src/context/hit_test.rs`) — the
-        // viewport drives child-offset translation directly. Padding
-        // adds no hit area beyond what the child reports, so we
-        // delegate trivially: return false here (the viewport falls
-        // through to the next sliver) and rely on the child sliver's
-        // own `hit_test` once the rich Sliver hit-test API exposes
-        // child-offset translation.
-        //
-        // TODO(core.2): once `SliverHitTestContext` exposes
-        // `hit_test_child_at_offset(0, paint_offset)`, route through
-        // it here so the padded region itself is included in the hit
-        // region.
-        false
+        // Padding contributes no hit area of its own; it only forwards
+        // hits into the child after the pipeline subtracts the committed
+        // child paint offset.
+        ctx.hit_test_child_at_layout_offset(0)
     }
 
     fn sliver_paint_bounds(&self) -> Rect {

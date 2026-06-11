@@ -689,8 +689,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 let offset = self
                     .render_tree
                     .get(child_id)
-                    .and_then(|n| n.as_box())
-                    .map(|e| e.state().offset())
+                    .map(RenderNode::offset)
                     .unwrap_or(Offset::ZERO);
                 position - offset
             });
@@ -718,6 +717,31 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 | flui_types::layout::AxisDirection::RightToLeft,
             ) => MainAxisPosition::from_horizontal_offset(position),
             _ => MainAxisPosition::from_vertical_offset(position),
+        }
+    }
+
+    fn sliver_hit_position_minus_offset(
+        node: &RenderNode,
+        position: MainAxisPosition,
+        offset: Offset,
+    ) -> MainAxisPosition {
+        let axis_direction = node
+            .as_sliver()
+            .and_then(|entry| entry.state().constraints())
+            .map(|constraints| constraints.axis_direction);
+
+        match axis_direction {
+            Some(
+                flui_types::layout::AxisDirection::LeftToRight
+                | flui_types::layout::AxisDirection::RightToLeft,
+            ) => MainAxisPosition::new(
+                position.main_axis - offset.dx.get(),
+                position.cross_axis - offset.dy.get(),
+            ),
+            _ => MainAxisPosition::new(
+                position.main_axis - offset.dy.get(),
+                position.cross_axis - offset.dx.get(),
+            ),
         }
     }
 
@@ -755,11 +779,17 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             let Some(&child_id) = children.get(index) else {
                 return false;
             };
-            let child_position = override_pos.unwrap_or(position);
             let Some(child_node) = self.render_tree.get(child_id) else {
                 return false;
             };
             if child_node.as_sliver().is_some() {
+                let child_position = override_pos.unwrap_or_else(|| {
+                    Self::sliver_hit_position_minus_offset(
+                        child_node,
+                        position,
+                        child_node.offset(),
+                    )
+                });
                 self.hit_test_sliver_subtree(child_id, child_position, result)
             } else {
                 false
@@ -2410,9 +2440,7 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
             // `entry`/`node_ref` cover only the parent's slot.
             // `set_offset` is an atomic store through `&self`.
             let child_node: &RenderNode = unsafe { &*child_ptr.0 };
-            if let Some(child_entry) = child_node.as_box() {
-                child_entry.state().set_offset(cs.offset);
-            }
+            child_node.set_offset(cs.offset);
         }
     }
 
@@ -2600,6 +2628,22 @@ unsafe fn layout_sliver_subtree_borrowed_impl<'tree>(
 
     entry.state_mut().set_geometry(geometry);
     entry.state_mut().set_constraints(constraints);
+
+    // Commit child paint offsets produced by sliver parents
+    // (`RenderSliverPadding` et al.) into the same parent-relative
+    // offset slot that paint / hit-test already consult. The
+    // `ErasedSliverChildState` vec is per-walk transient; without
+    // this commit, child placement dies with the layout stack frame.
+    for cs in &child_states {
+        if let Some(child_ptr) = borrows.get(cs.id) {
+            // SAFETY: shared reborrow of a DISTINCT child slot
+            // (parent != child by tree acyclicity). All recursive
+            // child borrows ended when perform_layout_raw returned;
+            // `entry` / `node_ref` cover only the parent's slot.
+            let child_node: &crate::storage::RenderNode = unsafe { &*child_ptr.0 };
+            child_node.set_offset(cs.offset);
+        }
+    }
 
     let has_parent = entry.links().parent().is_some();
     <SliverProtocol as Protocol>::bootstrap_relayout_boundary(entry.state(), has_parent);
@@ -3051,8 +3095,7 @@ impl PipelineOwner<PaintPhase> {
                     let child_offset = offset_override.unwrap_or_else(|| {
                         self.render_tree
                             .get(child_id)
-                            .and_then(|n| n.as_box())
-                            .map(|e| e.state().offset())
+                            .map(RenderNode::offset)
                             .unwrap_or(Offset::ZERO)
                     });
                     let child_is_boundary = self

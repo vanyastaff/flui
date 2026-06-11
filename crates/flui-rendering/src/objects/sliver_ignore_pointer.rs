@@ -132,16 +132,8 @@ impl RenderSliver for RenderSliverIgnorePointer {
             return false;
         }
 
-        // Defer to the child via the generic per-child hit-test API.
-        // `SliverHitTestContext::hit_test_child(0, position)` is the
-        // generic [`HitTestContext`] forward — Sliver protocol does not
-        // yet expose an `_at_offset` variant (see
-        // `crates/flui-rendering/src/context/hit_test.rs`), so we
-        // forward the current main/cross axis position unchanged. The
-        // child is positioned by the viewport, not by this proxy, so
-        // the identity-position forwarding is correct.
-        let position = ctx.main_axis_position();
-        ctx.hit_test_child(0, position)
+        // Defer to the child at its committed sliver paint offset.
+        ctx.hit_test_child_at_layout_offset(0)
     }
 
     fn sliver_paint_bounds(&self) -> Rect {
