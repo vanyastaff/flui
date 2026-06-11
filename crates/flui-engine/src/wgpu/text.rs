@@ -209,17 +209,28 @@ impl RichTextCacheKey {
     /// letter_spacing, height (per-run `Metrics` line height), plus the
     /// buffer-level `base_font_size` default.
     fn new(runs: &[(String, Option<TextStyle>)], base_font_size: f32, base_color: Color) -> Self {
+        // Variable-length strings (run text, font family) are length-prefixed
+        // `<byte-len>:<bytes>` (netstring style) so the concatenation is
+        // unambiguous even when the text itself contains the field separators —
+        // otherwise two distinct run sequences could fingerprint identically
+        // and collide on a stale buffer.
+        fn push_len_prefixed(out: &mut String, s: &str) {
+            out.push_str(&s.len().to_string());
+            out.push(':');
+            out.push_str(s);
+        }
+
         let base_color_bits =
             u32::from_le_bytes([base_color.r, base_color.g, base_color.b, base_color.a]);
         let mut fingerprint = String::new();
         fingerprint.push_str(&base_font_size.to_bits().to_string());
         fingerprint.push('\x03');
         for (text, style) in runs {
-            fingerprint.push_str(text);
+            push_len_prefixed(&mut fingerprint, text);
             fingerprint.push('\x00');
             if let Some(s) = style {
                 if let Some(ref fam) = s.font_family {
-                    fingerprint.push_str(fam);
+                    push_len_prefixed(&mut fingerprint, fam);
                 }
                 fingerprint.push('\x01');
                 if let Some(w) = s.font_weight {
@@ -431,8 +442,9 @@ impl TextRenderer {
     // Plain-text path (single font size + color; no per-span styling)
     // ------------------------------------------------------------------
 
-    /// Ensures a plain-text buffer is present in the cache, creating it if
-    /// needed, and returns an immutable reference to it.
+    /// Ensures a plain-text buffer for `key` is present in the cache,
+    /// shaping and inserting it on a miss. The buffer is read back from the
+    /// cache by `key` at batch-build time, so this returns nothing.
     fn ensure_plain_buffer(&mut self, key: &TextCacheKey) {
         // entry() avoids the double-lookup of get() + insert().
         match self.plain_cache.entry(key.clone()) {
@@ -933,6 +945,23 @@ mod tests {
             RichTextCacheKey::new(&runs_of(&base), 14.0, Color::BLACK),
             RichTextCacheKey::new(&runs_of(&base), 28.0, Color::BLACK),
             "base_font_size must be keyed",
+        );
+    }
+
+    /// Run text containing the fingerprint's own separator bytes must not let
+    /// two distinct run sequences collide (length-prefixed encoding).
+    #[test]
+    fn rich_cache_key_is_collision_free_with_separator_bytes_in_text() {
+        use flui_types::Color;
+
+        use super::RichTextCacheKey;
+
+        let one_run = vec![("a\u{0}b\u{1}c\u{2}".to_string(), None)];
+        let two_runs = vec![("a".to_string(), None), ("b\u{1}c\u{2}".to_string(), None)];
+        assert_ne!(
+            RichTextCacheKey::new(&one_run, 14.0, Color::BLACK),
+            RichTextCacheKey::new(&two_runs, 14.0, Color::BLACK),
+            "separator bytes in run text must not collide distinct run sequences",
         );
     }
 }
