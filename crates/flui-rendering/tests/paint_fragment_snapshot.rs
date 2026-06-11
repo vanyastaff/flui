@@ -379,6 +379,58 @@ impl RenderSliver for PaintLeafSliver {
     }
 }
 
+#[derive(Debug, Default)]
+struct InvisiblePaintLeafSliver {
+    constraints: SliverConstraints,
+    geometry: SliverGeometry,
+}
+
+impl flui_foundation::Diagnosticable for InvisiblePaintLeafSliver {}
+impl PaintEffectsCapability for InvisiblePaintLeafSliver {}
+impl SemanticsCapability for InvisiblePaintLeafSliver {}
+impl HotReloadCapability for InvisiblePaintLeafSliver {}
+
+impl RenderSliver for InvisiblePaintLeafSliver {
+    type Arity = Leaf;
+    type ParentData = SliverParentData;
+
+    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
+        self.constraints = *ctx.constraints();
+        let geometry = SliverGeometry {
+            scroll_extent: 80.0,
+            paint_extent: 0.0,
+            layout_extent: 0.0,
+            max_paint_extent: 80.0,
+            hit_test_extent: 0.0,
+            visible: false,
+            ..SliverGeometry::ZERO
+        };
+        self.geometry = geometry;
+        ctx.complete(geometry);
+    }
+
+    fn geometry(&self) -> &SliverGeometry {
+        &self.geometry
+    }
+
+    fn constraints(&self) -> &SliverConstraints {
+        &self.constraints
+    }
+
+    fn set_geometry(&mut self, geometry: SliverGeometry) {
+        self.geometry = geometry;
+    }
+
+    fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Leaf>) {
+        let rect = Rect::from_origin_size(Point::ZERO, Size::new(px(100.0), px(80.0)));
+        ctx.canvas().draw_rect(rect, &Paint::fill(Color::RED));
+    }
+
+    fn hit_test(&self, _ctx: &mut SliverHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
+        false
+    }
+}
+
 #[test]
 fn box_host_splices_sliver_leaf_paint_into_picture() {
     let mut owner = PipelineOwner::new();
@@ -412,6 +464,46 @@ fn box_host_splices_sliver_leaf_paint_into_picture() {
     assert_eq!(
         first_picture(&tree).bounds(),
         Rect::from_origin_size(Point::ZERO, Size::new(px(100.0), px(80.0))),
+    );
+}
+
+#[test]
+fn box_host_skips_invisible_sliver_child_paint() {
+    let mut owner = PipelineOwner::new();
+    let host_id = owner.insert(Box::new(SliverPaintHost {
+        constraints: sliver_paint_constraints(),
+        size: Size::ZERO,
+    }) as BoxedRenderObject);
+    let padding_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            host_id,
+            Box::new(RenderSliverPadding::symmetric(0.0, 10.0)) as BoxedSliverObject,
+        )
+        .expect("sliver padding child");
+    owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            padding_id,
+            Box::new(InvisiblePaintLeafSliver::default()) as BoxedSliverObject,
+        )
+        .expect("sliver leaf child");
+
+    owner.set_root_id(Some(host_id));
+    owner.set_root_constraints(Some(BoxConstraints::new(
+        px(0.0),
+        px(200.0),
+        px(0.0),
+        px(200.0),
+    )));
+
+    let (tree, _owner) = paint_frame(owner);
+
+    assert_eq!(
+        structure(&tree),
+        vec![(0, "Offset")],
+        "sliver children whose geometry.visible is false must not be spliced \
+         into the paint stream",
     );
 }
 

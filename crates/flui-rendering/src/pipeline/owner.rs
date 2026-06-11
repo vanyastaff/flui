@@ -772,6 +772,19 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         let Some(entry) = node.as_sliver() else {
             return false;
         };
+        let Some(geometry) = entry.state().geometry() else {
+            return false;
+        };
+        let Some(constraints) = entry.state().constraints() else {
+            return false;
+        };
+        if position.main_axis < 0.0
+            || position.main_axis >= geometry.hit_test_extent
+            || position.cross_axis < 0.0
+            || position.cross_axis >= constraints.cross_axis_extent
+        {
+            return false;
+        }
         let children: Vec<RenderId> = node.children().to_vec();
         let render_object = entry.render_object();
 
@@ -2272,7 +2285,9 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
     // (Flutter parity: BoxParentData.offset persists until
     // positionChild overwrites it) — without the seed, the
     // post-layout commit below would silently reset unpositioned
-    // children to Offset::ZERO.
+    // children to Offset::ZERO. Box parents can now host both Box and
+    // Sliver children, so seed through RenderNode's protocol-generic
+    // offset view.
     for cs in &mut child_states {
         if let Some(child_ptr) = borrows.get(cs.id) {
             // SAFETY: shared reborrow of a DISTINCT child slot
@@ -2282,9 +2297,7 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
             // Distinct slot reborrows have independent tags under
             // Stacked / Tree Borrows.
             let child_node: &RenderNode = unsafe { &*child_ptr.0 };
-            if let Some(child_entry) = child_node.as_box() {
-                cs.offset = child_entry.state().offset();
-            }
+            cs.offset = child_node.offset();
         }
     }
 
@@ -2562,6 +2575,20 @@ unsafe fn layout_sliver_subtree_borrowed_impl<'tree>(
         .iter()
         .map(|&cid| crate::protocol::ErasedSliverChildState::new(cid))
         .collect();
+
+    // Seed child offsets from persisted RenderState so a sliver parent that
+    // does not call `position_child` on a later pass preserves its child's
+    // previous placement, matching the Box path's offset semantics.
+    for cs in &mut child_states {
+        if let Some(child_ptr) = borrows.get(cs.id) {
+            // SAFETY: shared reborrow of a DISTINCT child slot
+            // (parent != child by tree acyclicity). No recursive child
+            // borrow has run yet in this frame, and `node_ref` covers only
+            // the current sliver parent slot.
+            let child_node: &crate::storage::RenderNode = unsafe { &*child_ptr.0 };
+            cs.offset = child_node.offset();
+        }
+    }
 
     let descendant_error_flag: std::sync::Arc<std::sync::atomic::AtomicBool> =
         std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -3089,19 +3116,21 @@ impl PipelineOwner<PaintPhase> {
                         );
                         continue;
                     };
+                    let Some(child_node) = self.render_tree.get(child_id) else {
+                        continue;
+                    };
+                    if child_node
+                        .as_sliver()
+                        .and_then(|entry| entry.state().geometry())
+                        .is_some_and(|geometry| !geometry.visible)
+                    {
+                        continue;
+                    }
                     // Authoritative child position: RenderState.offset,
                     // committed by the layout walk; paint_child_at
                     // overrides it explicitly.
-                    let child_offset = offset_override.unwrap_or_else(|| {
-                        self.render_tree
-                            .get(child_id)
-                            .map(RenderNode::offset)
-                            .unwrap_or(Offset::ZERO)
-                    });
-                    let child_is_boundary = self
-                        .render_tree
-                        .get(child_id)
-                        .is_some_and(RenderNode::is_repaint_boundary);
+                    let child_offset = offset_override.unwrap_or_else(|| child_node.offset());
+                    let child_is_boundary = child_node.is_repaint_boundary();
 
                     if child_is_boundary {
                         // Boundary children rebase to ZERO under their

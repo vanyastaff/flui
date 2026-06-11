@@ -150,11 +150,14 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static 
         debug_assert!(from <= to);
         let remaining_cache_extent = constraints.remaining_cache_extent;
         let cache_origin = constraints.cache_origin;
+        let scroll_offset = constraints.scroll_offset;
 
-        let a = cache_origin;
-        let b = cache_origin + remaining_cache_extent;
+        let a = scroll_offset + cache_origin;
+        let b = scroll_offset + remaining_cache_extent;
 
-        (to.min(b) - from.max(a)).max(0.0)
+        (to.min(b) - from.max(a))
+            .max(0.0)
+            .min(remaining_cache_extent)
     }
 
     /// Returns the position of a child along the main axis.
@@ -470,6 +473,17 @@ mod tests {
         )
     }
 
+    fn vertical_cache_constraints(
+        scroll_offset: f32,
+        remaining_cache_extent: f32,
+        cache_origin: f32,
+    ) -> SliverConstraints {
+        let mut constraints = vertical_constraints(scroll_offset, 50.0);
+        constraints.remaining_cache_extent = remaining_cache_extent;
+        constraints.cache_origin = cache_origin;
+        constraints
+    }
+
     // ────────────────────────────────────────────────────────────────────────
     // Test double — completing leaf
     //
@@ -666,6 +680,19 @@ mod tests {
             (geom.paint_extent - 80.0).abs() < 1e-4,
             "paint_extent clamped to remaining_paint_extent=80, got {}",
             geom.paint_extent
+        );
+    }
+
+    #[test]
+    fn calculate_cache_offset_uses_scroll_offset_plus_cache_origin_window() {
+        let sliver = FixedHeightSliver::new(200.0);
+        let constraints = vertical_cache_constraints(50.0, 100.0, -20.0);
+
+        assert_eq!(
+            sliver.calculate_cache_offset(&constraints, 0.0, 40.0),
+            10.0,
+            "Flutter cache window is [scroll_offset + cache_origin, \
+             scroll_offset + remaining_cache_extent]",
         );
     }
 

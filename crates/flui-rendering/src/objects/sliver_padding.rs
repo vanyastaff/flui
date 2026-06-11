@@ -1,7 +1,7 @@
 //! `RenderSliverPadding` — single-child sliver that pads its inner sliver on
 //! all four sides (main- and cross-axis), honouring the sliver layout
 //! protocol (scroll/paint/cache extents, scroll-offset correction passthrough,
-//! viewport overlap reset).
+//! viewport overlap reduction).
 //!
 //! # Flutter equivalence
 //!
@@ -165,9 +165,11 @@ impl RenderSliverPadding {
             from <= to,
             "cache_offset: from ({from}) must be <= to ({to})"
         );
-        let a = constraints.cache_origin;
-        let b = constraints.cache_origin + constraints.remaining_cache_extent;
-        (to.min(b) - from.max(a)).max(0.0)
+        let a = constraints.scroll_offset + constraints.cache_origin;
+        let b = constraints.scroll_offset + constraints.remaining_cache_extent;
+        (to.min(b) - from.max(a))
+            .max(0.0)
+            .min(constraints.remaining_cache_extent)
     }
 
     /// Computes the sliver child's constraints given the parent
@@ -178,7 +180,7 @@ impl RenderSliverPadding {
     /// - `scroll_offset` reduced by the leading padding (clamped to 0),
     /// - `cache_origin` extended by the leading padding (clamped to 0
     ///   on the high side — `cache_origin` is always <= 0),
-    /// - `overlap` reset to 0 (padding consumes any prior overlap),
+    /// - positive `overlap` reduced by the leading paint padding,
     /// - `remaining_paint_extent` reduced by the leading paint padding,
     /// - `remaining_cache_extent` reduced by the leading cache padding,
     /// - `cross_axis_extent` reduced by the total cross padding
@@ -192,7 +194,11 @@ impl RenderSliverPadding {
         let mut cc = *parent;
         cc.scroll_offset = (parent.scroll_offset - before).max(0.0);
         cc.cache_origin = (parent.cache_origin + before).min(0.0);
-        cc.overlap = 0.0;
+        cc.overlap = if parent.overlap > 0.0 {
+            (parent.overlap - before_pad_paint).max(0.0)
+        } else {
+            parent.overlap
+        };
         cc.remaining_paint_extent = parent.remaining_paint_extent - before_pad_paint;
         cc.remaining_cache_extent = parent.remaining_cache_extent - before_pad_cache;
         cc.cross_axis_extent = (parent.cross_axis_extent - cross).max(0.0);
@@ -263,8 +269,8 @@ impl RenderSliverPadding {
                 .cache_extent
                 .max(child_geometry.layout_extent + after_pad_cache))
         .min(parent.remaining_cache_extent);
-        let hit_test_extent = (main_pad_paint + child_geometry.hit_test_extent)
-            .max(before_pad_paint + child_geometry.paint_extent);
+        let hit_test_extent = (main_pad_paint + child_geometry.paint_extent)
+            .max(before_pad_paint + child_geometry.hit_test_extent);
 
         let geometry = SliverGeometry {
             paint_origin: child_geometry.paint_origin,
@@ -358,10 +364,6 @@ impl RenderSliver for RenderSliverPadding {
         // layout walk commits this into the child's RenderState so
         // later paint and hit-test phases use the same placement.
         ctx.position_child(0, child_paint_offset);
-        if let Some(pd) = ctx.child_parent_data_mut(0) {
-            pd.paint_offset = child_paint_offset;
-        }
-
         self.geometry = geometry;
         ctx.complete(geometry);
     }
@@ -553,6 +555,17 @@ mod tests {
     }
 
     #[test]
+    fn cache_offset_window_starts_at_scroll_offset_plus_cache_origin() {
+        let mut c = vertical_constraints(50.0, 50.0, 100.0, 300.0);
+        c.cache_origin = -20.0;
+
+        // Flutter's cache window is [scroll_offset + cache_origin,
+        // scroll_offset + remaining_cache_extent] = [30, 150]. The range
+        // [0, 40] overlaps only [30, 40] → 10.
+        assert_eq!(RenderSliverPadding::cache_offset(&c, 0.0, 40.0), 10.0);
+    }
+
+    #[test]
     fn resolve_picks_per_axis_padding_correctly() {
         let p = RenderSliverPadding::new(EdgeInsets {
             top: px(10.0),
@@ -608,6 +621,25 @@ mod tests {
         assert_eq!(cc.preceding_scroll_extent, 10.0);
         // Remaining paint reduced by leading paint padding (full 10 because scroll_offset=0).
         assert_eq!(cc.remaining_paint_extent, 200.0 - 10.0);
+    }
+
+    #[test]
+    fn child_constraints_reduce_positive_overlap_by_before_paint_padding() {
+        let p = RenderSliverPadding::new(EdgeInsets {
+            top: px(10.0),
+            right: px(0.0),
+            bottom: px(0.0),
+            left: px(0.0),
+        });
+        let mut parent = vertical_constraints(0.0, 200.0, 200.0, 300.0);
+        parent.overlap = 30.0;
+
+        let cc = p.child_constraints(&parent);
+
+        assert_eq!(
+            cc.overlap, 20.0,
+            "positive overlap is reduced by beforePaddingPaintExtent, not reset",
+        );
     }
 
     // ────────────────────────────────────────────────────────────────────────
@@ -666,6 +698,27 @@ mod tests {
         // paint_offset.y = before_pad_paint (10).
         assert_eq!(paint_offset.dx, px(0.0));
         assert_eq!(paint_offset.dy, px(10.0));
+    }
+
+    #[test]
+    fn padded_geometry_hit_test_extent_pairs_main_padding_with_paint_extent() {
+        let p = RenderSliverPadding::new(EdgeInsets {
+            top: px(10.0),
+            right: px(0.0),
+            bottom: px(20.0),
+            left: px(0.0),
+        });
+        let parent = vertical_constraints(0.0, 200.0, 200.0, 300.0);
+        let mut child = child_geom(100.0, 40.0, 40.0, 40.0);
+        child.hit_test_extent = 100.0;
+
+        let (geom, _paint_offset) = p.padded_geometry(&parent, &child);
+
+        assert_eq!(
+            geom.hit_test_extent, 110.0,
+            "Flutter formula: max(main_pad_paint + child.paint_extent, \
+             before_pad_paint + child.hit_test_extent)",
+        );
     }
 
     #[test]
