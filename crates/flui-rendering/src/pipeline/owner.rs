@@ -2413,6 +2413,18 @@ impl PipelineOwner<Compositing> {
     /// interior-mutability flag accessors; paint-queue side effects are
     /// staged via `actions` for post-walk application.
     fn update_subtree_compositing_bits(&self, id: RenderId, actions: &mut CompositingWalkActions) {
+        ensure_stack(|| self.update_subtree_compositing_bits_impl(id, actions));
+    }
+
+    /// Body of [`Self::update_subtree_compositing_bits`]; split out so
+    /// every recursion level enters through the [`ensure_stack`] probe.
+    /// (Its frames are smaller than the layout walk's, so it survived
+    /// deeper trees by luck — same crash class, just a later threshold.)
+    fn update_subtree_compositing_bits_impl(
+        &self,
+        id: RenderId,
+        actions: &mut CompositingWalkActions,
+    ) {
         let Some(node) = self.render_tree.get(id) else {
             return;
         };

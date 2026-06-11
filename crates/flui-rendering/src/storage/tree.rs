@@ -531,24 +531,20 @@ impl RenderTree {
     /// for new code; this inherent stays for in-crate callers that want
     /// the count.
     pub fn remove_recursive(&mut self, id: RenderId) -> usize {
+        // Iterative: collect the subtree up front (explicit-stack
+        // pre-order with cycle protection), then remove in REVERSE
+        // collection order — in reversed pre-order every child comes
+        // before its parent, which preserves the recursive version's
+        // child-first removal. Plain recursion here overflowed the
+        // 1 MiB Windows main-thread stack on deep chains (the same
+        // crash class the pipeline walks hit at ~1000 levels).
+        let subtree = self.collect_subtree_ids(id);
         let mut count = 0;
-
-        // Get children first (clone to avoid borrow issues)
-        let children: Vec<RenderId> = self
-            .get(id)
-            .map(|n| n.children().to_vec())
-            .unwrap_or_default();
-
-        // Remove children recursively
-        for child_id in children {
-            count += self.remove_recursive(child_id);
+        for &node_id in subtree.iter().rev() {
+            if self.remove_shallow(node_id).is_some() {
+                count += 1;
+            }
         }
-
-        // Remove the node itself
-        if self.remove_shallow(id).is_some() {
-            count += 1;
-        }
-
         count
     }
 
@@ -852,29 +848,28 @@ impl RenderTree {
     where
         F: FnMut(&mut Self, RenderId),
     {
-        if let Some(root_id) = self.root {
-            self.visit_depth_first_mut_from(root_id, &mut f);
-        }
-    }
-
-    /// Visits all nodes mutably in depth-first pre-order starting from a given
-    /// node.
-    fn visit_depth_first_mut_from<F>(&mut self, id: RenderId, f: &mut F)
-    where
-        F: FnMut(&mut Self, RenderId),
-    {
-        // Get children first (clone to avoid borrow issues)
-        let children: Vec<RenderId> = self
-            .get(id)
-            .map(|n| n.children().to_vec())
-            .unwrap_or_default();
-
-        // Visit this node
-        f(self, id);
-
-        // Visit children
-        for child_id in children {
-            self.visit_depth_first_mut_from(child_id, f);
+        // Iterative (explicit work-stack) like the immutable twin
+        // above — plain recursion overflows the fixed OS stack on
+        // deep chains. The child snapshot is taken BEFORE `f` runs
+        // (the recursive version did the same), so a callback that
+        // mutates the visited node's children does not change this
+        // node's traversal.
+        let Some(root_id) = self.root else {
+            return;
+        };
+        let mut stack: smallvec::SmallVec<[RenderId; 32]> = smallvec::SmallVec::new();
+        stack.push(root_id);
+        while let Some(id) = stack.pop() {
+            let children: Vec<RenderId> = self
+                .get(id)
+                .map(|n| n.children().to_vec())
+                .unwrap_or_default();
+            f(self, id);
+            // Reverse push so pop() yields original child-order
+            // (pre-order traversal).
+            for &child_id in children.iter().rev() {
+                stack.push(child_id);
+            }
         }
     }
 }
@@ -1471,5 +1466,45 @@ mod tests {
         let mut visited = 0_usize;
         tree.visit_depth_first(|_, _| visited += 1);
         assert_eq!(visited, 0);
+    }
+
+    /// The mutable visitor keeps the immutable twin's pre-order and,
+    /// being iterative, survives chains far deeper than the OS stack
+    /// would allow with the old recursive descent.
+    #[test]
+    fn visit_depth_first_mut_preorder_and_deep_chain() {
+        let mut tree = RenderTree::new();
+        let root = tree.insert_box(make_leaf());
+        tree.set_root(Some(root));
+        let a = tree.insert_box_child(root, make_leaf()).expect("insert a");
+        let a1 = tree.insert_box_child(a, make_leaf()).expect("insert a1");
+        let b = tree.insert_box_child(root, make_leaf()).expect("insert b");
+
+        let mut visited = Vec::new();
+        tree.visit_depth_first_mut(|_, id| visited.push(id));
+        assert_eq!(
+            visited,
+            vec![root, a, a1, b],
+            "mutable visit must keep the immutable twin's pre-order"
+        );
+
+        // Deep chain: 2500 levels. Kept modest under miri (the walk is
+        // a plain loop, but the interpreter pays per node).
+        let depth = if cfg!(miri) { 64 } else { 2_500 };
+        let mut tree = RenderTree::new();
+        let root = tree.insert_box(make_leaf());
+        tree.set_root(Some(root));
+        let mut parent = root;
+        for _ in 1..depth {
+            parent = tree
+                .insert_box_child(parent, make_leaf())
+                .expect("chain link insert");
+        }
+        let mut count = 0_usize;
+        tree.visit_depth_first_mut(|_, _| count += 1);
+        assert_eq!(
+            count, depth,
+            "every chain node must be visited exactly once"
+        );
     }
 }

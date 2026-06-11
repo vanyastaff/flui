@@ -73,6 +73,28 @@ fn deep_chain_survives_layout_paint_and_hit_walks() {
     );
 }
 
+/// Disposal of a 2500-level chain through the owner's removal path
+/// (previously a plain recursive `remove_recursive`, now iterative).
+#[test]
+#[cfg_attr(miri, ignore = "plain-recursion fallback; depth covered natively")]
+fn deep_chain_survives_subtree_disposal() {
+    let mut owner = PipelineOwner::new();
+    let root = owner.insert(Box::new(RenderPadding::all(1.0)) as BoxedRenderObject);
+    let mut parent = root;
+    for _ in 1..DEPTH {
+        parent = owner
+            .insert_child_render_object(parent, Box::new(RenderPadding::all(1.0)))
+            .expect("chain link insert");
+    }
+
+    let removed = owner.remove_render_object(root);
+    assert_eq!(removed, DEPTH, "every chain node must be disposed");
+    assert!(
+        owner.root_id().is_none(),
+        "removing the root must clear root_id",
+    );
+}
+
 /// Intrinsic + dry-layout query walks through a 2500-level
 /// ConstrainedBox chain (the child-forwarding query recursion).
 #[test]
