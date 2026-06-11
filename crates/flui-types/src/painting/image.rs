@@ -120,7 +120,7 @@ impl Image {
     #[inline]
     #[must_use]
     pub fn data(&self) -> &[u8] {
-        &self.data
+        &self.data[..]
     }
 
     /// Returns the number of bytes used by this image.

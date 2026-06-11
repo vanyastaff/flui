@@ -209,16 +209,18 @@ impl RenderBox for RenderFractionalTranslation {
             return false;
         }
         if self.transform_hit_tests {
-            // The visual content is shifted by `pixel_offset()`; to
-            // hit-test the child at the visually-correct point we
-            // ask the context to test the child as if it sat at that
-            // offset. Subtracting works because `hit_test_child_at_offset`
-            // applies the offset as the child's position — the pointer
-            // position is then naturally subtracted by the framework
-            // when descending.
-            ctx.hit_test_child_at_offset(0, self.pixel_offset())
+            // The visual content is shifted by `pixel_offset()`; record this
+            // offset in the transform stack before testing the child.
+            let offset = self.pixel_offset();
+            ctx.push_offset(offset);
+            let child_position =
+                Offset::new(ctx.position().dx - offset.dx, ctx.position().dy - offset.dy);
+            let hit = ctx.hit_test_child(0, child_position);
+            ctx.pop_transform();
+            hit
         } else {
-            ctx.hit_test_child_at_offset(0, Offset::ZERO)
+            // No transform: test at child's layout offset only
+            ctx.hit_test_child_at_layout_offset(0)
         }
     }
 

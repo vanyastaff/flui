@@ -1095,6 +1095,7 @@ dependencies = [
  "flui-scheduler",
  "flui-types",
  "flui-view",
+ "image",
  "pollster",
  "raw-window-handle",
  "tracing",

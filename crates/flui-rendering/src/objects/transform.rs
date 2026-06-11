@@ -221,7 +221,12 @@ impl RenderBox for RenderTransform {
         // the original one. (The pre-fix shape passed the untransformed
         // position; the inverse was used only for a bounds gate, so any
         // scaled/rotated child hit-tested at the wrong local point.)
-        ctx.hit_test_child(0, Offset::new(tx, ty))
+
+        // Record the forward transform for hit entries (R-24 stack composition).
+        ctx.push_transform(self.effective_transform());
+        let hit = ctx.hit_test_child(0, Offset::new(tx, ty));
+        ctx.pop_transform();
+        hit
     }
 
     fn box_paint_bounds(&self) -> Rect {

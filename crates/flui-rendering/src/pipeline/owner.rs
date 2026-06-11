@@ -2131,6 +2131,23 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
     };
     let child_ids: Vec<RenderId> = entry.links().children().to_vec();
 
+    // Short-circuit clean children: if NEEDS_LAYOUT is not set AND
+    // constraints match the cached value, skip layout entirely.
+    // (Flutter rendering/object.dart:2852: early return before recurse)
+    if !entry.needs_layout() && entry.state().has_constraints(&constraints) {
+        // If constraints match and layout is clean, geometry MUST be present
+        // from prior layout. This is a structural invariant.
+        if let Some(geometry) = entry.state().geometry() {
+            return Ok(geometry);
+        }
+        // If not, log and continue with layout (should never happen).
+        tracing::warn!(
+            node_id = ?id,
+            "layout short-circuit: clean constraints cache but missing geometry; \
+             proceeding with layout (invariant violation)"
+        );
+    }
+
     // Leaf path: delegate to layout_leaf_only (constructs typed
     // BoxLayoutCtx<Leaf> + catch_unwind + state update + relayout-
     // boundary bootstrap). Same code as the U18/U19 leaf bridge tests
@@ -2258,6 +2275,23 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
     // RenderEntry::layout_leaf_only's post-perform_layout discipline).
     // On the Err path above, state is intentionally unmodified so
     // NEEDS_LAYOUT stays set for next-frame retry.
+
+    // D-block PR-A1 U20 — Debug geometry validation (Flutter parity).
+    // Objects must return finite sizes that satisfy their constraints.
+    debug_assert!(
+        geometry.is_finite(),
+        "{}: perform_layout returned non-finite size: {:?}",
+        debug_name,
+        geometry
+    );
+    debug_assert!(
+        constraints.is_satisfied_by(geometry),
+        "{}: perform_layout returned size {:?} that violates constraints {:?}",
+        debug_name,
+        geometry,
+        constraints
+    );
+
     entry.state_mut().set_geometry(geometry);
     entry.state_mut().set_constraints(constraints);
 
@@ -2642,7 +2676,18 @@ impl PipelineOwner<PaintPhase> {
         let Some(render_node) = self.render_tree.get(node_id) else {
             return Ok(());
         };
-        let render_object = render_node.box_render_object();
+
+        // Type safety: reject non-Box protocols symmetrically with layout/intrinsics walks
+        let render_entry = match render_node.as_box() {
+            Some(entry) => entry,
+            None => {
+                return Err(crate::error::RenderError::ProtocolMismatch {
+                    node_protocol: render_node.protocol_name(),
+                    constraints_protocol: "Box",
+                });
+            }
+        };
+        let render_object = render_entry.render_object();
         let is_repaint_boundary = render_object.is_repaint_boundary();
         let alpha = render_object.paint_alpha();
         let transform = render_object.paint_transform();
@@ -2750,7 +2795,8 @@ impl PipelineOwner<PaintPhase> {
                     let child_is_boundary = self
                         .render_tree
                         .get(child_id)
-                        .is_some_and(|n| n.box_render_object().is_repaint_boundary());
+                        .and_then(|n| n.as_box())
+                        .is_some_and(|entry| entry.render_object().is_repaint_boundary());
 
                     if child_is_boundary {
                         // Boundary children rebase to ZERO under their

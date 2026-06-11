@@ -110,12 +110,12 @@ impl PositionedSpec {
         let tighten_w = if let (Some(l), Some(r)) = (self.left, self.right) {
             Some((stack_size.width - l - r).max(Pixels::ZERO))
         } else {
-            self.width
+            self.width.map(|w| w.max(Pixels::ZERO))
         };
         let tighten_h = if let (Some(t), Some(b)) = (self.top, self.bottom) {
             Some((stack_size.height - t - b).max(Pixels::ZERO))
         } else {
-            self.height
+            self.height.map(|h| h.max(Pixels::ZERO))
         };
 
         if let Some(w) = tighten_w {

@@ -229,6 +229,9 @@ raw-window-handle.workspace = true
 # === Error Handling (for examples) ===
 anyhow.workspace = true
 
+# === Image decoding (image_demo example) ===
+image.workspace = true
+
 # === Logging ===
 tracing.workspace = true
 tracing-subscriber.workspace = true

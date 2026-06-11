@@ -5,7 +5,7 @@ use flui_tree::Leaf;
 use flui_types::{Color, Point, Rect, Size, geometry::px};
 
 use crate::{
-    context::{BoxHitTestContext, BoxLayoutContext},
+    context::BoxLayoutContext,
     parent_data::BoxParentData,
     traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
 };
@@ -99,10 +99,6 @@ impl RenderBox for RenderColoredBox {
         let rect = Rect::from_origin_size(Point::ZERO, self.size);
         let color = Color::from_rgba_f32_array(self.color);
         ctx.canvas().draw_rect(rect, &Paint::fill(color));
-    }
-
-    fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Leaf, BoxParentData>) -> bool {
-        ctx.is_within_size(self.size.width, self.size.height)
     }
 
     fn box_paint_bounds(&self) -> Rect {

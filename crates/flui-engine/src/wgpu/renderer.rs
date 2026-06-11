@@ -201,12 +201,20 @@ impl Renderer {
         // here once for the combined block.
         #[allow(unsafe_code)]
         let surface = unsafe {
-            // wgpu 29.x: HandleError does not implement std::error::Error, so we
-            // cannot pass `e` directly to `surface_creation`. Wrap via
-            // `std::io::Error::other` to preserve the Display message while
-            // satisfying the `Box<dyn Error + Send + Sync>` bound.
-            let surface_target = wgpu::SurfaceTargetUnsafe::from_window(window)
+            // wgpu 29.x multi-monitor fix: explicitly extract raw handles to work
+            // around DisplayHandle lifetime issues on multi-display systems.
+            let window_handle = window
+                .window_handle()
                 .map_err(|e| EngineError::surface_creation(std::io::Error::other(e.to_string())))?;
+            let display_handle = window
+                .display_handle()
+                .map_err(|e| EngineError::surface_creation(std::io::Error::other(e.to_string())))?;
+
+            // Create surface target with explicit raw handles to avoid lifetime issues
+            let surface_target = wgpu::SurfaceTargetUnsafe::RawHandle {
+                raw_display_handle: Some(display_handle.as_raw()),
+                raw_window_handle: window_handle.as_raw(),
+            };
             instance
                 .create_surface_unsafe(surface_target)
                 .map_err(EngineError::surface_creation)?

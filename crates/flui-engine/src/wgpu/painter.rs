@@ -146,6 +146,11 @@ struct DrawSegment {
     radial_grad_scissors: Vec<ScissorRegion>,
     /// Scissor regions for sweep gradient batch
     sweep_grad_scissors: Vec<ScissorRegion>,
+    /// Cached image draws queued for this segment.
+    cached_images: Vec<(
+        super::texture_cache::TextureId,
+        super::instancing::TextureInstance,
+    )>,
 }
 
 impl DrawSegment {
@@ -170,6 +175,7 @@ impl DrawSegment {
             linear_grad_scissors: Vec::new(),
             radial_grad_scissors: Vec::new(),
             sweep_grad_scissors: Vec::new(),
+            cached_images: Vec::new(),
         }
     }
 
@@ -200,6 +206,7 @@ impl DrawSegment {
             && self.sweep_gradient_batch.is_empty()
             && self.vertices.is_empty()
             && self.tess_batches.is_empty()
+            && self.cached_images.is_empty()
     }
 }
 
@@ -1114,10 +1121,11 @@ impl WgpuPainter {
         // 1. Instanced primitives (rect, circle, arc, shadow) - similar pipelines
         // 2. Gradient primitives (linear, radial, sweep) - similar pipelines
         // 3. Tessellated geometry - different pipeline type
-        // 4. Textures - handled separately via flush_texture_batch (requires texture bind group changes)
+        // 4. Segment-cached images - grouped by texture while preserving draw order
         self.flush_all_instanced_batches(encoder, view);
         self.flush_gradient_batches(encoder, view);
         self.flush_tessellated_geometry(encoder, view);
+        self.flush_segment_cached_images(encoder, view);
 
         // Swap back (now empty after flush)
         std::mem::swap(&mut self.current_segment, seg);
@@ -2042,6 +2050,47 @@ impl WgpuPainter {
         // Clear batch for next frame
         self.texture_batch.clear();
     }
+
+    fn flush_segment_cached_images(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+    ) {
+        let mut pending_images: Vec<(
+            super::texture_cache::TextureId,
+            super::instancing::TextureInstance,
+        )> = self.current_segment.cached_images.drain(..).collect();
+
+        if pending_images.is_empty() {
+            return;
+        }
+
+        let mut active_texture_id: Option<super::texture_cache::TextureId> = None;
+        let mut active_texture_view: Option<wgpu::TextureView> = None;
+
+        for (texture_id, instance) in pending_images.drain(..) {
+            if active_texture_id.as_ref() != Some(&texture_id) {
+                if let Some(texture_view) = active_texture_view.as_ref() {
+                    self.flush_texture_batch(encoder, view, texture_view);
+                }
+                active_texture_id = Some(texture_id.clone());
+                active_texture_view = self
+                    .texture_cache
+                    .get(&texture_id)
+                    .map(|cached| cached.view.clone());
+            }
+
+            if let Some(texture_view) = active_texture_view.as_ref()
+                && self.texture_batch.add(instance)
+            {
+                self.flush_texture_batch(encoder, view, texture_view);
+            }
+        }
+
+        if let Some(texture_view) = active_texture_view.as_ref() {
+            self.flush_texture_batch(encoder, view, texture_view);
+        }
+    }
 }
 
 // ===== Public Drawing API =====
@@ -2526,43 +2575,43 @@ impl WgpuPainter {
     }
 
     pub fn draw_image(&mut self, image: &flui_types::painting::Image, dst_rect: Rect<Pixels>) {
-        #[cfg(debug_assertions)]
-        tracing::trace!(
-            "WgpuPainter::draw_image: size={}x{}, dst={:?}",
-            image.width(),
-            image.height(),
-            dst_rect
-        );
+        let top_left = self.apply_transform(Point::new(dst_rect.left(), dst_rect.top()));
+        let bottom_right = self.apply_transform(Point::new(dst_rect.right(), dst_rect.bottom()));
+        let transformed_rect =
+            Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
 
         // Use Arc pointer identity for O(1) cache lookup instead of hashing all pixels
         let texture_id = super::texture_cache::TextureId::from_ptr(image.data_ptr());
+        let data = image.data();
 
         // Load or get cached texture (small images are auto-packed into the atlas)
         match self.texture_cache.load_from_rgba(
-            texture_id,
+            texture_id.clone(),
             image.width(),
             image.height(),
-            image.data(),
+            data,
         ) {
             Ok(cached_texture) => {
-                // Use atlas UV coordinates when the image lives in the shared
-                // atlas, otherwise use full-texture UVs [0,0,1,1].
+                // Preserve atlas UVs when the image is packed into the shared atlas.
                 let instance = if let Some(uv_rect) = cached_texture.uv_rect {
                     super::instancing::TextureInstance::with_uv(
-                        dst_rect,
+                        transformed_rect,
                         uv_rect,
                         flui_types::styling::Color::WHITE,
                     )
                 } else {
                     super::instancing::TextureInstance::new(
-                        dst_rect,
+                        transformed_rect,
                         flui_types::styling::Color::WHITE,
                     )
                 };
-                let _ = self.texture_batch.add(instance);
+
+                // Keep cached image draws in segment order for correct layer compositing.
+                self.current_segment
+                    .cached_images
+                    .push((texture_id, instance));
             }
             Err(e) => {
-                #[cfg(debug_assertions)]
                 tracing::error!("Failed to load image texture: {}", e);
             }
         }
