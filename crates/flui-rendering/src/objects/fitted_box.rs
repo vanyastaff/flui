@@ -318,7 +318,7 @@ impl RenderBox for RenderFittedBox {
         // matrix `paint_transform` hands the pipeline (one accessor,
         // both directions), so scaled children receive the correct
         // local point. (The pre-fix shape shifted by align_offset only
-        // — any non-unit scale mis-targeted the child.)
+        // — any non-unit scale sent the child a wrong local point.)
         let Some(inverse) = self.effective_transform().try_inverse() else {
             // Degenerate scale (zero area) — nothing is visually
             // hittable under a non-invertible transform.

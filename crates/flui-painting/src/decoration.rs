@@ -34,7 +34,7 @@ pub fn paint_box_decoration(
     //    effect drawn INSIDE the shape above the background — a
     //    different compositing path the engine does not expose yet;
     //    painting them as outer drop shadows would be visually wrong,
-    //    so they are skipped loudly rather than mis-rendered.
+    //    so they are skipped loudly rather than rendered wrongly.
     if let Some(shadows) = &decoration.box_shadow {
         for shadow in shadows {
             if shadow.inset {

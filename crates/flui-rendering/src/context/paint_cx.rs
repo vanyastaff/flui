@@ -135,7 +135,7 @@ pub struct FragmentRecorder {
     /// Currently open `Push` scopes; must be 0 at `finish` (the
     /// closure-based `with_*` API makes imbalance unreachable from
     /// safe user code, the counter turns an internal bug into a loud
-    /// debug failure instead of a silently mis-nested layer tree).
+    /// debug failure instead of a silently malformed layer tree).
     open_scopes: usize,
     dpr: f32,
 }
