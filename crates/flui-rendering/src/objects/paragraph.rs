@@ -5,11 +5,12 @@
 //! leaf: the render object owns a painter, drives its layout from box
 //! constraints, and forwards intrinsics / baseline / paint to it. Ports the
 //! renderable core of Flutter's `RenderParagraph` (`paragraph.dart`): layout,
-//! dry layout, the four intrinsics, baseline, and paint with
-//! `softWrap`/`maxLines`/`overflow`.
+//! dry layout, the four intrinsics, baseline, and paint — with `softWrap`,
+//! `maxLines`, and ellipsis truncation.
 //!
 //! Out of scope for this object (separable per Flutter's own structure):
-//! inline `WidgetSpan` children, text selection, and semantics.
+//! inline `WidgetSpan` children, text selection, semantics, and the
+//! clip/fade `TextOverflow` policies (only `ellipsis` is wired here).
 
 use flui_foundation::Diagnosticable;
 use flui_painting::{TextBaseline as PainterBaseline, TextPainter};
@@ -107,11 +108,16 @@ impl RenderParagraph {
         &self.painter
     }
 
-    /// The width to lay out at for the given constraints, honoring `soft_wrap`.
-    /// An infinite max width (or `soft_wrap == false`) means "do not wrap".
+    /// The width to lay out at for the given constraints. The box width
+    /// matters — and the finite max is used — when the text wraps OR an
+    /// ellipsis is configured (Flutter `_layoutText`:
+    /// `widthMatters = softWrap || overflow == ellipsis`). A no-wrap label
+    /// still needs the finite width so its ellipsis truncation can trigger;
+    /// only a no-wrap, no-ellipsis paragraph lays out at unbounded width.
     fn layout_max_width(&self, constraints: &BoxConstraints) -> f32 {
+        let width_matters = self.soft_wrap || self.painter.ellipsis().is_some();
         let max = constraints.max_width.get();
-        if self.soft_wrap && max.is_finite() {
+        if width_matters && max.is_finite() {
             max
         } else {
             f32::INFINITY
@@ -274,5 +280,42 @@ mod tests {
         let p = para("hello");
         let h = leaf_intrinsics(|c| p.compute_min_intrinsic_height(200.0, c));
         assert!(h > 0.0, "laid-out text has positive height, got {h}");
+    }
+
+    #[test]
+    fn intrinsic_height_is_finite_at_infinite_width() {
+        let p = para("hello world");
+        let h = leaf_intrinsics(|c| p.compute_max_intrinsic_height(f32::INFINITY, c));
+        assert!(
+            h.is_finite() && h > 0.0,
+            "height at unbounded width must be finite, got {h}",
+        );
+    }
+
+    #[test]
+    fn no_wrap_ellipsis_truncates_under_finite_constraints() {
+        // A single-line label with an ellipsis must still honor the finite
+        // parent width (so truncation triggers) even though wrapping is off.
+        let p = RenderParagraph::new(
+            TextSpan::new("a very long single line of text that must be ellipsized"),
+            TextDirection::Ltr,
+        )
+        .without_soft_wrap()
+        .with_max_lines(Some(1))
+        .with_ellipsis(Some("…".to_string()));
+
+        let full = leaf_intrinsics(|c| p.compute_max_intrinsic_width(f32::INFINITY, c));
+        let dry = leaf_dry_layout(|c| {
+            p.compute_dry_layout(
+                BoxConstraints::new(px(0.0), px(60.0), px(0.0), px(10_000.0)),
+                c,
+            )
+        });
+        assert!(
+            dry.width.get() < full,
+            "ellipsized width {} must be less than the untruncated single-line width {full} \
+             (the finite max width must reach the painter despite soft_wrap=false)",
+            dry.width.get(),
+        );
     }
 }

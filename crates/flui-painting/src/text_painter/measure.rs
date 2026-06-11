@@ -263,7 +263,11 @@ impl TextPainter {
         let Some(text) = self.text.as_ref() else {
             return 0.0;
         };
-        let (metrics, _) = self.compute_layout_metrics(text, width, width);
+        // Wrap at `width` (max) but pass `0` as the min: only the height is
+        // wanted, and a non-zero min only inflates the width field via
+        // `width.max(min_width)` — an infinite `width` probe would otherwise
+        // make that field infinite.
+        let (metrics, _) = self.compute_layout_metrics(text, 0.0, width);
         metrics.size.height.0
     }
 
