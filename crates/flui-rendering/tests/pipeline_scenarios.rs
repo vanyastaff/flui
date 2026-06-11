@@ -29,7 +29,7 @@ use flui_rendering::{
     },
     pipeline::PipelineOwner,
 };
-use flui_types::{EdgeInsets, Offset, Size, geometry::px};
+use flui_types::{EdgeInsets, Matrix4, Offset, Point, Rect, Size, geometry::px};
 
 type BoxedRenderObject =
     Box<dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>>;
@@ -204,6 +204,70 @@ fn mixed_flex_padding_transform_clip_frame() {
             "Picture",
         ],
         "inline draws merge; Transform and ClipRect split the stream",
+    );
+
+    // Effect/clip layers must anchor at the NODE origin, not the layer
+    // origin: descendant runs carry the accumulated origin baked into
+    // their canvas transforms, so the composer conjugates the local
+    // matrix by the origin (Flutter pushTransform: T(o)·M·T(−o)) and
+    // shifts clip shapes (Flutter pushClipRect: clipRect.shift(offset)).
+    // A raw local matrix/shape here would pivot/cut at the row's (0,0).
+    let local = owner
+        .render_tree()
+        .get(scaler)
+        .expect("scaler node")
+        .box_render_object()
+        .paint_transform()
+        .expect("scale(2,2) reports a paint transform");
+    let expected =
+        Matrix4::translation(50.0, 0.0, 0.0) * local * Matrix4::translation(-50.0, 0.0, 0.0);
+    assert_ne!(
+        expected, local,
+        "sanity: at a non-zero origin the conjugation must differ from \
+         the raw local matrix",
+    );
+    let transform_matrices: Vec<Matrix4> = {
+        fn walk(tree: &LayerTree, id: flui_foundation::LayerId, out: &mut Vec<Matrix4>) {
+            let node = tree.get(id).expect("live layer id");
+            if let Layer::Transform(t) = node.layer() {
+                out.push(*t.transform());
+            }
+            for &c in node.children() {
+                walk(tree, c, out);
+            }
+        }
+        let mut out = Vec::new();
+        walk(&tree, tree.root().expect("root"), &mut out);
+        out
+    };
+    assert_eq!(
+        transform_matrices,
+        vec![expected],
+        "the scaler's TransformLayer must carry the origin-conjugated \
+         matrix (pivot at the node origin x=50, not the row origin)",
+    );
+    let clip_rects: Vec<Rect> = {
+        fn walk(tree: &LayerTree, id: flui_foundation::LayerId, out: &mut Vec<Rect>) {
+            let node = tree.get(id).expect("live layer id");
+            if let Layer::ClipRect(c) = node.layer() {
+                out.push(c.clip_rect());
+            }
+            for &child in node.children() {
+                walk(tree, child, out);
+            }
+        }
+        let mut out = Vec::new();
+        walk(&tree, tree.root().expect("root"), &mut out);
+        out
+    };
+    assert_eq!(
+        clip_rects,
+        vec![Rect::from_origin_size(
+            Point::new(px(70.0), px(0.0)),
+            Size::new(px(40.0), px(40.0)),
+        )],
+        "the clip shape recorded in node-local coordinates must be \
+         shifted by the node origin to match the origin-baked runs",
     );
 
     // Region hits. The scaled blue's VISUAL extent is 50..90 (its

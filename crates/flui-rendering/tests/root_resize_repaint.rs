@@ -110,3 +110,46 @@ fn resize_relays_out_and_repaints_at_the_new_size() {
          ViewConfiguration snapshot must not cap the painted area)",
     );
 }
+
+/// Unbounded root constraints are a binding bug, not a layout input —
+/// the adapter must surface a typed error instead of letting
+/// `constraints.biggest()` poison `view.size` (and every downstream
+/// geometry) with INF in release builds.
+#[test]
+fn unbounded_root_constraints_surface_a_typed_error() {
+    let mut owner = PipelineOwner::new();
+
+    let mut render_view = RenderView::new();
+    render_view.set_configuration(ViewConfiguration::from_size(
+        Size::new(px(100.0), px(100.0)),
+        1.0,
+    ));
+    render_view.prepare_initial_frame_without_owner();
+    let root_id = owner.insert(Box::new(RenderViewAdapter::new(render_view))
+        as Box<
+            dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>,
+        >);
+    owner
+        .insert_child_render_object(root_id, Box::new(RenderColoredBox::red(40.0, 40.0)))
+        .expect("colored child insert");
+    owner.set_root_id(Some(root_id));
+
+    owner.set_root_constraints(Some(BoxConstraints::new(
+        px(0.0),
+        px(f32::INFINITY),
+        px(0.0),
+        px(f32::INFINITY),
+    )));
+
+    let mut owner = owner.into_layout();
+    let err = owner
+        .run_layout()
+        .expect_err("an unbounded root must fail layout with a diagnosable error");
+    assert!(
+        matches!(
+            err,
+            flui_rendering::error::RenderError::UnboundedConstraint { .. }
+        ),
+        "expected UnboundedConstraint, got {err:?}",
+    );
+}

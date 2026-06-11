@@ -511,10 +511,17 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
 
         let constraints = *layout_ctx.constraints();
         let size = constraints.biggest();
-        debug_assert!(
-            size.is_finite(),
-            "root constraints must be bounded (the window has a size); got {constraints:?}",
-        );
+        if !size.is_finite() {
+            // Root constraints come from the window surface and must be
+            // bounded; letting INF through would poison every descendant
+            // geometry and paint bound downstream of `view.size`. A
+            // typed error keeps the failure diagnosable in release
+            // builds (a debug_assert would silently propagate there).
+            tracing::error!(?constraints, "root constraints must be bounded");
+            return Err(crate::error::RenderError::unbounded_constraint(
+                "RenderViewAdapter",
+            ));
+        }
         self.view.size = size;
 
         let child_constraints = crate::constraints::BoxConstraints::tight(size);

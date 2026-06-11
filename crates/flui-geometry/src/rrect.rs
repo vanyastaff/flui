@@ -419,6 +419,19 @@ impl RRect {
         )
     }
 
+    /// Translates the rounded rect by an offset; corner radii are
+    /// translation-invariant and pass through unchanged.
+    ///
+    /// Mirrors [`Rect::translate_offset`] (Flutter `RRect.shift`).
+    #[inline]
+    #[must_use]
+    pub fn translate_offset(&self, offset: crate::Offset<Pixels>) -> Self {
+        Self {
+            rect: self.rect.translate_offset(offset),
+            ..*self
+        }
+    }
+
     /// Inflates the rectangle by delta pixels (outward).
     #[inline]
     #[must_use]
@@ -503,3 +516,27 @@ impl From<Rect<Pixels>> for RRect {
 // ============================================================================
 // Tests
 // ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Offset;
+
+    #[test]
+    fn translate_offset_moves_rect_and_keeps_radii() {
+        let rrect = RRect::from_rect_and_radius(
+            Rect::from_origin_size(Point::ZERO, Size::new(px(40.0), px(40.0))),
+            Radius::circular(px(8.0)),
+        );
+        let moved = rrect.translate_offset(Offset::new(px(70.0), px(10.0)));
+        assert_eq!(
+            moved.rect,
+            Rect::from_origin_size(
+                Point::new(px(70.0), px(10.0)),
+                Size::new(px(40.0), px(40.0)),
+            ),
+        );
+        assert_eq!(moved.top_left, rrect.top_left);
+        assert_eq!(moved.bottom_right, rrect.bottom_right);
+    }
+}

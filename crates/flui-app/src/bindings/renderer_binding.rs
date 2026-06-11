@@ -362,13 +362,15 @@ impl RendererBinding for RenderingFlutterBinding {
         // produced no targets. Leaf-first entries come back from the
         // owner's hit-test walk (RenderState.offset-aware).
         //
-        // Platform pointer positions are PHYSICAL window pixels; the
-        // tree lives in LOGICAL pixels — divide by the DPR the paint
-        // root multiplies by, or every hit drifts by the scale factor.
+        // The position arrives in LOGICAL pixels already: every
+        // platform converter normalizes at event build (winit and
+        // Win32 divide raw physical coordinates by the scale factor;
+        // macOS NSPoint is logical natively). The render tree lives in
+        // logical pixels too, so the position passes through unscaled
+        // — dividing by the DPR here would shrink every hit a second
+        // time on scaled displays.
         let owner = self.root_pipeline_owner.read();
-        let dpr = owner.device_pixel_ratio();
-        let logical = Offset::new(position.dx / dpr, position.dy / dpr);
-        owner.hit_test(logical, result);
+        owner.hit_test(position, result);
     }
 
     // ---- RendererBinding proper ----
@@ -583,6 +585,55 @@ mod tests {
         assert!(
             !tree.is_empty(),
             "the produced layer tree must contain the painted root",
+        );
+    }
+
+    /// Pointer positions arrive in LOGICAL pixels from every platform
+    /// converter (winit/Win32 divide by the scale factor at event
+    /// build; NSPoint is logical natively) — `hit_test_in_view` must
+    /// not divide by the DPR again. The distinguishing probe: at DPR 2
+    /// a logical point OUTSIDE the box must miss; the old double
+    /// division mapped it back inside and produced phantom hits.
+    #[test]
+    fn hit_test_in_view_takes_logical_positions_without_rescaling() {
+        use flui_rendering::{constraints::BoxConstraints, objects::RenderColoredBox};
+        use flui_types::{Offset, geometry::px};
+
+        let owner = Arc::new(RwLock::new(PipelineOwner::new()));
+        {
+            let mut o = owner.write();
+            o.set_device_pixel_ratio(2.0);
+            let id = o.insert(Box::new(RenderColoredBox::red(40.0, 40.0))
+                as Box<
+                    dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>,
+                >);
+            o.set_root_id(Some(id));
+            // LOOSE constraints so the box keeps its preferred 40×40
+            // and points outside it exist inside the 100×100 window.
+            o.set_root_constraints(Some(BoxConstraints::new(
+                px(0.0),
+                px(100.0),
+                px(0.0),
+                px(100.0),
+            )));
+        }
+        let binding = RenderingFlutterBinding::new_with_pipeline(owner);
+        let _ = binding.draw_frame();
+
+        let mut inside = flui_interaction::routing::HitTestResult::new();
+        binding.hit_test_in_view(&mut inside, Offset::new(px(30.0), px(30.0)), 0);
+        assert!(
+            !inside.is_empty(),
+            "logical (30,30) lies inside the 40×40 box and must hit",
+        );
+
+        let mut outside = flui_interaction::routing::HitTestResult::new();
+        binding.hit_test_in_view(&mut outside, Offset::new(px(60.0), px(60.0)), 0);
+        assert!(
+            outside.is_empty(),
+            "logical (60,60) lies outside the 40×40 box and must miss; \
+             a hit means the position was divided by the DPR a second \
+             time ((60,60)/2 = (30,30) lands back inside the box)",
         );
     }
 
