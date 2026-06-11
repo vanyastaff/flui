@@ -94,11 +94,27 @@ pub struct RenderImage {
     /// load). When `None`, the object still lays out via `intrinsic_size`
     /// but paints nothing.
     image: Option<Image>,
-    /// Natural (intrinsic) size of the image.
+    /// Natural (intrinsic) size of the image, in image pixels. Divided by
+    /// [`scale`](Self::scale) to obtain the logical aspect source. flui keeps
+    /// this stored (Flutter derives it live from the image) so a not-yet-loaded
+    /// image can still reserve layout space — a superset of Flutter, which
+    /// returns `constraints.smallest` while the image is null.
     intrinsic_size: Size,
-    /// How to fit the image into available space.
+    /// Optional forced logical width. Folded into the constraints during
+    /// sizing (Flutter `RenderImage.width`); `None` means derive from the
+    /// image aspect.
+    width: Option<Pixels>,
+    /// Optional forced logical height (Flutter `RenderImage.height`).
+    height: Option<Pixels>,
+    /// Number of image pixels per logical pixel (Flutter `RenderImage.scale`).
+    /// The intrinsic size is divided by this to get the logical aspect source,
+    /// so a 2x asset renders at half its pixel dimensions.
+    scale: f32,
+    /// How to fit the image into available space. Affects paint only (where
+    /// the image is fitted into the laid-out box), not the box size — matching
+    /// Flutter, whose `_sizeForConstraints` never reads `fit`.
     fit: ImageFit,
-    /// How to align the image within the box.
+    /// How to align the image within the box. Paint-only, like `fit`.
     alignment: ImageAlignment,
     /// Cached layout size (set by perform_layout).
     size: Size,
@@ -111,6 +127,9 @@ impl RenderImage {
         Self {
             image: None,
             intrinsic_size,
+            width: None,
+            height: None,
+            scale: 1.0,
             fit,
             alignment,
             size: Size::ZERO,
@@ -125,6 +144,9 @@ impl RenderImage {
         Self {
             image: Some(image),
             intrinsic_size,
+            width: None,
+            height: None,
+            scale: 1.0,
             fit,
             alignment,
             size: Size::ZERO,
@@ -134,6 +156,21 @@ impl RenderImage {
     /// Returns the current image source, if any.
     pub fn image(&self) -> Option<&Image> {
         self.image.as_ref()
+    }
+
+    /// Returns the forced logical width, if set.
+    pub fn width(&self) -> Option<Pixels> {
+        self.width
+    }
+
+    /// Returns the forced logical height, if set.
+    pub fn height(&self) -> Option<Pixels> {
+        self.height
+    }
+
+    /// Returns the image-pixels-per-logical-pixel scale.
+    pub fn scale(&self) -> f32 {
+        self.scale
     }
 
     /// Sets the image source and updates the intrinsic size from its
@@ -163,6 +200,28 @@ impl RenderImage {
     pub fn set_alignment(&mut self, alignment: ImageAlignment) {
         self.alignment = alignment;
         // Caller responsible for marking repaint dirty
+    }
+
+    /// Sets the forced logical width (`None` to derive from the image aspect).
+    pub fn set_width(&mut self, width: Option<Pixels>) {
+        self.width = width;
+        // Caller responsible for marking the node layout-dirty.
+    }
+
+    /// Sets the forced logical height (`None` to derive from the image aspect).
+    pub fn set_height(&mut self, height: Option<Pixels>) {
+        self.height = height;
+        // Caller responsible for marking the node layout-dirty.
+    }
+
+    /// Sets the image-pixels-per-logical-pixel scale. A non-finite or
+    /// non-positive value is rejected (the previous scale is kept) because it
+    /// would make the logical aspect source NaN or zero.
+    pub fn set_scale(&mut self, scale: f32) {
+        if scale.is_finite() && scale > 0.0 {
+            self.scale = scale;
+        }
+        // Caller responsible for marking the node layout-dirty.
     }
 
     /// Computes the destination rectangle for the image content within the
@@ -223,48 +282,34 @@ impl RenderImage {
         ))
     }
 
-    /// Computes the size of the image given the fit mode and constraints.
+    /// Computes the box size for the given constraints — a direct port of
+    /// Flutter's `RenderImage._sizeForConstraints` (`image.dart`).
+    ///
+    /// The box size is **independent of [`fit`](ImageFit)**: the explicit
+    /// `width`/`height` are folded into the constraints, then the box takes the
+    /// largest size that fits while preserving the image's aspect ratio
+    /// (intrinsic size divided by `scale`). `fit` only governs where the image
+    /// is drawn inside this box, in [`Self::paint_rect_in`].
+    ///
+    /// The logical aspect source is `intrinsic_size / scale`; when it is
+    /// degenerate (zero in either dimension) the box falls back to the
+    /// constraints' smallest size, mirroring Flutter's null-image branch.
     ///
     /// Public so that callers can reproduce layout sizing without driving a
     /// full layout pass (tests, demos).
     pub fn compute_size(&self, constraints: &BoxConstraints) -> Size {
-        match self.fit {
-            ImageFit::Fill => {
-                // Fill the maximum box allowed by constraints.
-                constraints.biggest()
-            }
-            ImageFit::Contain => {
-                // Fit entirely within the box, preserving aspect ratio
-                constraints.constrain_size_and_attempt_to_preserve_aspect_ratio(self.intrinsic_size)
-            }
-            ImageFit::Cover => {
-                // Cover the entire box, preserving aspect ratio
-                // (image may be cropped)
-                let constrained = constraints
-                    .constrain_size_and_attempt_to_preserve_aspect_ratio(self.intrinsic_size);
-                // Ensure at least minimum dimensions are met
-                Size::new(
-                    constrained.width.max(constraints.min_width),
-                    constrained.height.max(constraints.min_height),
-                )
-            }
-            ImageFit::ScaleDown => {
-                // Like Contain, but never enlarge
-                let unconstrained = BoxConstraints {
-                    min_width: Pixels::ZERO,
-                    max_width: self.intrinsic_size.width,
-                    min_height: Pixels::ZERO,
-                    max_height: self.intrinsic_size.height,
-                };
-                let size = unconstrained
-                    .constrain_size_and_attempt_to_preserve_aspect_ratio(self.intrinsic_size);
-                constraints.constrain(size)
-            }
-            ImageFit::None => {
-                // Show at natural size, clamped to constraints
-                constraints.constrain(self.intrinsic_size)
-            }
+        // Fold the explicit width/height into the constraints so all three are
+        // treated uniformly (Flutter: tightFor(width, height).enforce(...)).
+        let folded = BoxConstraints::tight_for(self.width, self.height).enforce(constraints);
+
+        let aspect = Size::new(
+            Pixels::new(self.intrinsic_size.width.get() / self.scale),
+            Pixels::new(self.intrinsic_size.height.get() / self.scale),
+        );
+        if aspect.width.get() <= 0.0 || aspect.height.get() <= 0.0 {
+            return folded.smallest();
         }
+        folded.constrain_size_and_attempt_to_preserve_aspect_ratio(aspect)
     }
 }
 
@@ -302,6 +347,80 @@ impl RenderBox for RenderImage {
         if let Some(dst) = self.compute_paint_rect() {
             ctx.canvas().draw_image(image.clone(), dst, None);
         }
+    }
+
+    // Intrinsics mirror Flutter `RenderImage` (`image.dart`): the size the box
+    // would take with the cross-axis extent tightened. With no forced
+    // width/height the min-intrinsics report 0 (the image can scale to nothing),
+    // while max-intrinsics always report the aspect-preserved extent. A leaf,
+    // so the `_ctx` child channel is unused.
+
+    fn compute_min_intrinsic_width(
+        &self,
+        height: f32,
+        _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
+        if self.width.is_none() && self.height.is_none() {
+            return 0.0;
+        }
+        self.compute_size(&BoxConstraints::tight_for_finite(
+            Pixels::INFINITY,
+            Pixels::new(height),
+        ))
+        .width
+        .get()
+    }
+
+    fn compute_max_intrinsic_width(
+        &self,
+        height: f32,
+        _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
+        self.compute_size(&BoxConstraints::tight_for_finite(
+            Pixels::INFINITY,
+            Pixels::new(height),
+        ))
+        .width
+        .get()
+    }
+
+    fn compute_min_intrinsic_height(
+        &self,
+        width: f32,
+        _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
+        if self.width.is_none() && self.height.is_none() {
+            return 0.0;
+        }
+        self.compute_size(&BoxConstraints::tight_for_finite(
+            Pixels::new(width),
+            Pixels::INFINITY,
+        ))
+        .height
+        .get()
+    }
+
+    fn compute_max_intrinsic_height(
+        &self,
+        width: f32,
+        _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
+        self.compute_size(&BoxConstraints::tight_for_finite(
+            Pixels::new(width),
+            Pixels::INFINITY,
+        ))
+        .height
+        .get()
+    }
+
+    /// Dry layout is the exact box size `perform_layout` commits — both go
+    /// through `compute_size` (Flutter `computeDryLayout == _sizeForConstraints`).
+    fn compute_dry_layout(
+        &self,
+        constraints: BoxConstraints,
+        _ctx: &mut crate::context::BoxDryLayoutCtx<'_>,
+    ) -> Size {
+        self.compute_size(&constraints)
     }
 }
 
@@ -595,5 +714,114 @@ mod tests {
         assert_eq!(dst.origin().y, Pixels::ZERO);
         assert_eq!(dst.size().width, px(120.0));
         assert_eq!(dst.size().height, px(80.0));
+    }
+
+    // ===== width / height / scale folding + intrinsics + dry layout =====
+
+    use crate::context::intrinsics_test_support::{leaf_dry_layout, leaf_intrinsics};
+
+    #[test]
+    fn forced_width_tightens_box_and_preserves_aspect() {
+        // 1:1 intrinsic, forced logical width 40, otherwise unconstrained → 40x40.
+        let mut img = RenderImage::new(
+            Size::new(px(4.0), px(4.0)),
+            ImageFit::Contain,
+            ImageAlignment::Center,
+        );
+        img.set_width(Some(px(40.0)));
+        assert_eq!(
+            img.compute_size(&BoxConstraints::UNCONSTRAINED),
+            Size::new(px(40.0), px(40.0)),
+        );
+    }
+
+    #[test]
+    fn scale_divides_the_aspect_source() {
+        // 200x100 intrinsic at scale 2 → logical aspect source 100x50.
+        let mut img = RenderImage::new(
+            Size::new(px(200.0), px(100.0)),
+            ImageFit::Fill,
+            ImageAlignment::Center,
+        );
+        img.set_scale(2.0);
+        assert_eq!(
+            img.compute_size(&BoxConstraints::UNCONSTRAINED),
+            Size::new(px(100.0), px(50.0)),
+        );
+    }
+
+    #[test]
+    fn box_size_is_independent_of_fit() {
+        // Flutter `_sizeForConstraints` never reads `fit`: every fit mode under
+        // the same constraints + intrinsic must produce the same box.
+        let constraints = BoxConstraints {
+            min_width: Pixels::ZERO,
+            max_width: px(80.0),
+            min_height: Pixels::ZERO,
+            max_height: px(80.0),
+        };
+        let intrinsic = Size::new(px(200.0), px(100.0)); // 2:1 → 80x40 in an 80² box
+        for fit in [
+            ImageFit::Fill,
+            ImageFit::Contain,
+            ImageFit::Cover,
+            ImageFit::ScaleDown,
+            ImageFit::None,
+        ] {
+            let img = RenderImage::new(intrinsic, fit, ImageAlignment::Center);
+            assert_eq!(
+                img.compute_size(&constraints),
+                Size::new(px(80.0), px(40.0)),
+                "fit {fit:?} must not affect the box size",
+            );
+        }
+    }
+
+    #[test]
+    fn intrinsics_report_aspect_extent() {
+        let img = RenderImage::new(
+            Size::new(px(200.0), px(100.0)),
+            ImageFit::Contain,
+            ImageAlignment::Center,
+        );
+        // Max-intrinsics under an unbounded cross extent = the aspect source.
+        assert_eq!(
+            leaf_intrinsics(|c| img.compute_max_intrinsic_width(f32::INFINITY, c)),
+            200.0,
+        );
+        assert_eq!(
+            leaf_intrinsics(|c| img.compute_max_intrinsic_height(f32::INFINITY, c)),
+            100.0,
+        );
+        // Min-intrinsics are 0 with no forced width/height (the image can scale
+        // down to nothing).
+        assert_eq!(
+            leaf_intrinsics(|c| img.compute_min_intrinsic_width(f32::INFINITY, c)),
+            0.0,
+        );
+        assert_eq!(
+            leaf_intrinsics(|c| img.compute_min_intrinsic_height(f32::INFINITY, c)),
+            0.0,
+        );
+    }
+
+    #[test]
+    fn forced_width_drives_min_intrinsic_and_dry_layout_matches_layout() {
+        let mut img = RenderImage::new(
+            Size::new(px(200.0), px(100.0)),
+            ImageFit::Contain,
+            ImageAlignment::Center,
+        );
+        img.set_width(Some(px(80.0)));
+        // A forced width makes the min-intrinsic-width report it (80).
+        assert_eq!(
+            leaf_intrinsics(|c| img.compute_min_intrinsic_width(f32::INFINITY, c)),
+            80.0,
+        );
+        // Dry layout equals the size perform_layout commits for the same constraints.
+        let constraints = BoxConstraints::UNCONSTRAINED;
+        let dry = leaf_dry_layout(|c| img.compute_dry_layout(constraints, c));
+        assert_eq!(dry, img.compute_size(&constraints));
+        assert_eq!(dry, Size::new(px(80.0), px(40.0)));
     }
 }
