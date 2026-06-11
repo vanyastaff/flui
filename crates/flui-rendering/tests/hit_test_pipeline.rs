@@ -12,19 +12,27 @@
 //!    matrix (the D8 hit-test-under-transform gate).
 
 use flui_rendering::{
-    constraints::BoxConstraints,
-    context::{BoxHitTestContext, BoxLayoutContext},
+    constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
+    context::{BoxHitTestContext, BoxLayoutContext, SliverHitTestContext, SliverLayoutContext},
     hit_testing::HitTestResult,
-    objects::{RenderColoredBox, RenderFlex, RenderPadding, RenderTransform},
-    parent_data::BoxParentData,
+    objects::{
+        RenderColoredBox, RenderFlex, RenderPadding, RenderSliverIgnorePointer,
+        RenderSliverOpacity, RenderSliverPadding, RenderTransform,
+    },
+    parent_data::{BoxParentData, SliverParentData},
     pipeline::PipelineOwner,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+    protocol::{BoxProtocol, SliverProtocol},
+    traits::{
+        HotReloadCapability, PaintEffectsCapability, RenderBox, RenderObject, RenderSliver,
+        SemanticsCapability,
+    },
+    view::ScrollDirection,
 };
-use flui_tree::Variable;
-use flui_types::{Offset, Size, geometry::px};
+use flui_tree::{Leaf, Variable};
+use flui_types::{Offset, Rect, Size, geometry::px, layout::AxisDirection};
 
-type BoxedRenderObject =
-    Box<dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>>;
+type BoxedRenderObject = Box<dyn RenderObject<BoxProtocol>>;
+type BoxedSliverObject = Box<dyn RenderObject<SliverProtocol>>;
 
 /// Lays out the tree, then returns the laid-out owner for hit queries.
 fn laid_out(
@@ -51,6 +59,17 @@ fn hits(
     let mut result = HitTestResult::new();
     owner.hit_test(Offset::new(px(x), px(y)), &mut result);
     result.path().iter().map(|e| e.target).collect()
+}
+
+fn render_offset(
+    owner: &flui_rendering::pipeline::PipelineOwner<flui_rendering::pipeline::phase::Layout>,
+    id: flui_foundation::RenderId,
+) -> Offset {
+    owner
+        .render_tree()
+        .get(id)
+        .map(flui_rendering::storage::RenderNode::offset)
+        .expect("node exists")
 }
 
 // ============================================================================
@@ -239,5 +258,577 @@ fn flex_lays_out_and_hits_children_at_layout_offsets() {
         hits(&owner, 50.0, 10.0).first().copied(),
         Some(second),
         "(50,10) lands in the second flex child at its laid-out offset",
+    );
+}
+
+// ============================================================================
+// 5. Sliver subtree hit-testing through a Box host
+// ============================================================================
+
+fn sliver_hit_constraints() -> SliverConstraints {
+    SliverConstraints {
+        axis_direction: AxisDirection::TopToBottom,
+        cross_axis_direction: AxisDirection::LeftToRight,
+        growth_direction: GrowthDirection::Forward,
+        user_scroll_direction: ScrollDirection::Idle,
+        scroll_offset: 0.0,
+        preceding_scroll_extent: 0.0,
+        overlap: 0.0,
+        remaining_paint_extent: 200.0,
+        cross_axis_extent: 100.0,
+        viewport_main_axis_extent: 200.0,
+        remaining_cache_extent: 200.0,
+        cache_origin: 0.0,
+    }
+}
+
+#[derive(Debug)]
+struct SliverHitHost {
+    constraints: SliverConstraints,
+    size: Size,
+}
+
+impl flui_foundation::Diagnosticable for SliverHitHost {}
+impl PaintEffectsCapability for SliverHitHost {}
+impl SemanticsCapability for SliverHitHost {}
+impl HotReloadCapability for SliverHitHost {}
+
+impl RenderBox for SliverHitHost {
+    type Arity = Variable;
+    type ParentData = BoxParentData;
+
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>) {
+        if ctx.child_count() > 0 {
+            let _ = ctx.layout_sliver_child(0, self.constraints);
+        }
+        self.size = ctx.constraints().biggest();
+        ctx.complete_with_size(self.size);
+    }
+
+    fn size(&self) -> &Size {
+        &self.size
+    }
+
+    fn size_mut(&mut self) -> &mut Size {
+        &mut self.size
+    }
+
+    fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Variable, BoxParentData>) -> bool {
+        ctx.hit_test_child(0, ctx.offset())
+    }
+}
+
+#[derive(Debug)]
+struct PositionedSliverHitHost {
+    constraints: SliverConstraints,
+    offset: Offset,
+    position_child: bool,
+    size: Size,
+}
+
+impl flui_foundation::Diagnosticable for PositionedSliverHitHost {}
+impl PaintEffectsCapability for PositionedSliverHitHost {}
+impl SemanticsCapability for PositionedSliverHitHost {}
+impl HotReloadCapability for PositionedSliverHitHost {}
+
+impl RenderBox for PositionedSliverHitHost {
+    type Arity = Variable;
+    type ParentData = BoxParentData;
+
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>) {
+        if ctx.child_count() > 0 {
+            let _ = ctx.layout_sliver_child(0, self.constraints);
+            if self.position_child {
+                ctx.position_child(0, self.offset);
+            }
+        }
+        self.size = ctx.constraints().biggest();
+        ctx.complete_with_size(self.size);
+    }
+
+    fn size(&self) -> &Size {
+        &self.size
+    }
+
+    fn size_mut(&mut self) -> &mut Size {
+        &mut self.size
+    }
+
+    fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Variable, BoxParentData>) -> bool {
+        ctx.hit_test_child_at_layout_offset(0)
+    }
+}
+
+#[derive(Debug)]
+struct ConditionalOffsetSliverParent {
+    position_child: bool,
+    offset: Offset,
+    constraints: SliverConstraints,
+    geometry: SliverGeometry,
+}
+
+impl ConditionalOffsetSliverParent {
+    fn new(offset: Offset) -> Self {
+        Self {
+            position_child: true,
+            offset,
+            constraints: sliver_hit_constraints(),
+            geometry: SliverGeometry::ZERO,
+        }
+    }
+}
+
+impl flui_foundation::Diagnosticable for ConditionalOffsetSliverParent {}
+impl PaintEffectsCapability for ConditionalOffsetSliverParent {}
+impl SemanticsCapability for ConditionalOffsetSliverParent {}
+impl HotReloadCapability for ConditionalOffsetSliverParent {}
+
+impl RenderSliver for ConditionalOffsetSliverParent {
+    type Arity = flui_tree::Single;
+    type ParentData = SliverParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut SliverLayoutContext<'_, flui_tree::Single, Self::ParentData>,
+    ) {
+        self.constraints = *ctx.constraints();
+        let child_geometry = ctx.layout_child(0, self.constraints);
+        if self.position_child {
+            ctx.position_child(0, self.offset);
+        }
+        self.geometry = SliverGeometry {
+            hit_test_extent: 120.0,
+            paint_extent: 120.0,
+            layout_extent: 120.0,
+            max_paint_extent: 120.0,
+            visible: true,
+            ..child_geometry
+        };
+        ctx.complete(self.geometry);
+    }
+
+    fn geometry(&self) -> &SliverGeometry {
+        &self.geometry
+    }
+
+    fn constraints(&self) -> &SliverConstraints {
+        &self.constraints
+    }
+
+    fn set_geometry(&mut self, geometry: SliverGeometry) {
+        self.geometry = geometry;
+    }
+
+    fn hit_test(
+        &self,
+        ctx: &mut SliverHitTestContext<'_, flui_tree::Single, Self::ParentData>,
+    ) -> bool {
+        ctx.hit_test_child_at_layout_offset(0)
+    }
+}
+
+#[derive(Debug, Default)]
+struct HitLeafSliver {
+    constraints: SliverConstraints,
+    geometry: SliverGeometry,
+}
+
+impl flui_foundation::Diagnosticable for HitLeafSliver {}
+impl PaintEffectsCapability for HitLeafSliver {}
+impl SemanticsCapability for HitLeafSliver {}
+impl HotReloadCapability for HitLeafSliver {}
+
+impl RenderSliver for HitLeafSliver {
+    type Arity = Leaf;
+    type ParentData = SliverParentData;
+
+    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
+        self.constraints = *ctx.constraints();
+        let geometry = SliverGeometry {
+            scroll_extent: 80.0,
+            paint_extent: 80.0,
+            layout_extent: 80.0,
+            max_paint_extent: 80.0,
+            hit_test_extent: 80.0,
+            visible: true,
+            ..SliverGeometry::ZERO
+        };
+        self.geometry = geometry;
+        ctx.complete(geometry);
+    }
+
+    fn geometry(&self) -> &SliverGeometry {
+        &self.geometry
+    }
+
+    fn constraints(&self) -> &SliverConstraints {
+        &self.constraints
+    }
+
+    fn set_geometry(&mut self, geometry: SliverGeometry) {
+        self.geometry = geometry;
+    }
+
+    fn hit_test(&self, ctx: &mut SliverHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
+        ctx.is_within_main_axis_range(0.0, self.geometry.hit_test_extent)
+            && ctx.is_within_cross_axis_range(0.0, self.constraints.cross_axis_extent)
+    }
+
+    fn sliver_paint_bounds(&self) -> Rect {
+        Rect::from_origin_size(flui_types::Point::ZERO, Size::new(px(100.0), px(80.0)))
+    }
+}
+
+#[derive(Debug)]
+struct OvereagerHitLeafSliver {
+    constraints: SliverConstraints,
+    geometry: SliverGeometry,
+}
+
+impl OvereagerHitLeafSliver {
+    fn new(paint_extent: f32, hit_test_extent: f32) -> Self {
+        Self {
+            constraints: sliver_hit_constraints(),
+            geometry: SliverGeometry {
+                scroll_extent: hit_test_extent.max(paint_extent),
+                paint_extent,
+                layout_extent: paint_extent,
+                max_paint_extent: paint_extent,
+                hit_test_extent,
+                visible: paint_extent > 0.0,
+                ..SliverGeometry::ZERO
+            },
+        }
+    }
+}
+
+impl flui_foundation::Diagnosticable for OvereagerHitLeafSliver {}
+impl PaintEffectsCapability for OvereagerHitLeafSliver {}
+impl SemanticsCapability for OvereagerHitLeafSliver {}
+impl HotReloadCapability for OvereagerHitLeafSliver {}
+
+impl RenderSliver for OvereagerHitLeafSliver {
+    type Arity = Leaf;
+    type ParentData = SliverParentData;
+
+    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
+        self.constraints = *ctx.constraints();
+        ctx.complete(self.geometry);
+    }
+
+    fn geometry(&self) -> &SliverGeometry {
+        &self.geometry
+    }
+
+    fn constraints(&self) -> &SliverConstraints {
+        &self.constraints
+    }
+
+    fn set_geometry(&mut self, geometry: SliverGeometry) {
+        self.geometry = geometry;
+    }
+
+    fn hit_test(&self, _ctx: &mut SliverHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
+        true
+    }
+}
+
+#[test]
+fn box_host_hit_tests_sliver_proxy_subtree_leaf_first() {
+    let mut owner = PipelineOwner::new();
+    let host_id = owner.insert(Box::new(SliverHitHost {
+        constraints: sliver_hit_constraints(),
+        size: Size::ZERO,
+    }) as BoxedRenderObject);
+    let proxy_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            host_id,
+            Box::new(RenderSliverIgnorePointer::new(false)) as BoxedSliverObject,
+        )
+        .expect("sliver proxy child");
+    let leaf_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            proxy_id,
+            Box::new(HitLeafSliver::default()) as BoxedSliverObject,
+        )
+        .expect("sliver leaf child");
+
+    let owner = laid_out(owner, host_id);
+
+    assert_eq!(
+        hits(&owner, 10.0, 10.0),
+        vec![leaf_id, proxy_id, host_id],
+        "hit path must cross Box -> SliverIgnorePointer -> leaf Sliver and remain leaf-first",
+    );
+    assert!(
+        hits(&owner, 10.0, 120.0).is_empty(),
+        "main-axis position beyond the leaf sliver's hit extent must miss",
+    );
+}
+
+#[test]
+fn sliver_hit_walk_gates_each_level_before_dispatch() {
+    let mut owner = PipelineOwner::new();
+    let host_id = owner.insert(Box::new(SliverHitHost {
+        constraints: sliver_hit_constraints(),
+        size: Size::ZERO,
+    }) as BoxedRenderObject);
+    let leaf_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            host_id,
+            Box::new(OvereagerHitLeafSliver::new(40.0, 40.0)) as BoxedSliverObject,
+        )
+        .expect("sliver leaf child");
+
+    let owner = laid_out(owner, host_id);
+
+    assert_eq!(hits(&owner, 10.0, 10.0), vec![leaf_id, host_id]);
+    assert!(
+        hits(&owner, 10.0, 45.0).is_empty(),
+        "main-axis position outside geometry.hit_test_extent must miss \
+         before the object's hit_test override can claim it",
+    );
+    assert!(
+        hits(&owner, 120.0, 10.0).is_empty(),
+        "cross-axis position outside constraints.cross_axis_extent must miss",
+    );
+}
+
+#[test]
+fn box_parent_positions_sliver_child_for_hit_testing() {
+    let mut owner = PipelineOwner::new();
+    let host_id = owner.insert(Box::new(PositionedSliverHitHost {
+        constraints: sliver_hit_constraints(),
+        offset: Offset::new(px(0.0), px(20.0)),
+        position_child: true,
+        size: Size::ZERO,
+    }) as BoxedRenderObject);
+    let leaf_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            host_id,
+            Box::new(HitLeafSliver::default()) as BoxedSliverObject,
+        )
+        .expect("sliver leaf child");
+
+    let owner = laid_out(owner, host_id);
+
+    assert_eq!(
+        hits(&owner, 10.0, 90.0),
+        vec![leaf_id, host_id],
+        "Box parent position_child must commit offsets for Sliver children \
+         too: visual y=90 becomes sliver-local main=70",
+    );
+}
+
+#[test]
+fn box_parent_preserves_unpositioned_sliver_child_offset_across_relayout() {
+    let mut owner = PipelineOwner::new();
+    let host_id = owner.insert(Box::new(PositionedSliverHitHost {
+        constraints: sliver_hit_constraints(),
+        offset: Offset::new(px(0.0), px(20.0)),
+        position_child: true,
+        size: Size::ZERO,
+    }) as BoxedRenderObject);
+    let leaf_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            host_id,
+            Box::new(HitLeafSliver::default()) as BoxedSliverObject,
+        )
+        .expect("sliver leaf child");
+
+    let owner = laid_out(owner, host_id);
+    assert_eq!(
+        render_offset(&owner, leaf_id),
+        Offset::new(px(0.0), px(20.0))
+    );
+
+    let mut owner = owner.into_idle();
+    {
+        let node = owner
+            .render_tree_mut()
+            .get_mut(host_id)
+            .expect("host in tree");
+        let entry = node.as_box_mut().expect("box entry");
+        let host = entry
+            .render_object_mut()
+            .as_any_mut()
+            .downcast_mut::<PositionedSliverHitHost>()
+            .expect("positioned host downcast");
+        host.position_child = false;
+    }
+    owner.mark_needs_layout(host_id);
+    let mut owner = owner.into_layout();
+    owner.run_layout().expect("relayout succeeds");
+
+    assert_eq!(
+        render_offset(&owner, leaf_id),
+        Offset::new(px(0.0), px(20.0)),
+        "a Box parent that lays out a Sliver child without re-positioning \
+         it must preserve the child's previous offset",
+    );
+}
+
+#[test]
+fn unpositioned_sliver_child_keeps_prior_offset_across_relayout() {
+    let mut owner = PipelineOwner::new();
+    let host_id = owner.insert(Box::new(SliverHitHost {
+        constraints: sliver_hit_constraints(),
+        size: Size::ZERO,
+    }) as BoxedRenderObject);
+    let proxy_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            host_id,
+            Box::new(ConditionalOffsetSliverParent::new(Offset::new(
+                px(0.0),
+                px(20.0),
+            ))) as BoxedSliverObject,
+        )
+        .expect("sliver proxy child");
+    let leaf_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            proxy_id,
+            Box::new(HitLeafSliver::default()) as BoxedSliverObject,
+        )
+        .expect("sliver leaf child");
+
+    let owner = laid_out(owner, host_id);
+    assert_eq!(
+        render_offset(&owner, leaf_id),
+        Offset::new(px(0.0), px(20.0))
+    );
+
+    let mut owner = owner.into_idle();
+    {
+        let node = owner
+            .render_tree_mut()
+            .get_mut(proxy_id)
+            .expect("proxy in tree");
+        let entry = node.as_sliver_mut().expect("sliver entry");
+        let proxy = entry
+            .render_object_mut()
+            .as_any_mut()
+            .downcast_mut::<ConditionalOffsetSliverParent>()
+            .expect("conditional proxy downcast");
+        proxy.position_child = false;
+    }
+    owner.mark_needs_layout(host_id);
+    let mut owner = owner.into_layout();
+    owner.run_layout().expect("relayout succeeds");
+
+    assert_eq!(
+        render_offset(&owner, leaf_id),
+        Offset::new(px(0.0), px(20.0)),
+        "a sliver parent that does not call position_child on a later \
+         pass must preserve the child's previously committed offset",
+    );
+}
+
+#[test]
+fn box_host_hit_tests_transparent_sliver_opacity_child() {
+    let mut owner = PipelineOwner::new();
+    let host_id = owner.insert(Box::new(SliverHitHost {
+        constraints: sliver_hit_constraints(),
+        size: Size::ZERO,
+    }) as BoxedRenderObject);
+    let opacity_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            host_id,
+            Box::new(RenderSliverOpacity::transparent()) as BoxedSliverObject,
+        )
+        .expect("sliver opacity child");
+    let leaf_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            opacity_id,
+            Box::new(HitLeafSliver::default()) as BoxedSliverObject,
+        )
+        .expect("sliver leaf child");
+
+    let owner = laid_out(owner, host_id);
+
+    assert_eq!(
+        hits(&owner, 10.0, 10.0),
+        vec![leaf_id, opacity_id, host_id],
+        "RenderSliverOpacity must not gate hit-testing on alpha; it \
+         transparently delegates to its child",
+    );
+}
+
+#[test]
+fn sliver_padding_hit_test_extent_uses_child_hit_extent_without_after_padding() {
+    let mut owner = PipelineOwner::new();
+    let host_id = owner.insert(Box::new(SliverHitHost {
+        constraints: sliver_hit_constraints(),
+        size: Size::ZERO,
+    }) as BoxedRenderObject);
+    let padding_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            host_id,
+            Box::new(RenderSliverPadding::symmetric(0.0, 10.0)) as BoxedSliverObject,
+        )
+        .expect("sliver padding child");
+    owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            padding_id,
+            Box::new(OvereagerHitLeafSliver::new(40.0, 100.0)) as BoxedSliverObject,
+        )
+        .expect("sliver leaf child");
+
+    let owner = laid_out(owner, host_id);
+
+    assert!(
+        hits(&owner, 10.0, 120.0).is_empty(),
+        "hit position beyond Flutter's padded hit-test extent must miss \
+         even if the child would otherwise claim it",
+    );
+}
+
+#[test]
+fn box_host_hit_tests_sliver_padding_child_at_paint_offset() {
+    let mut owner = PipelineOwner::new();
+    let host_id = owner.insert(Box::new(SliverHitHost {
+        constraints: sliver_hit_constraints(),
+        size: Size::ZERO,
+    }) as BoxedRenderObject);
+    let padding_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            host_id,
+            Box::new(RenderSliverPadding::symmetric(7.0, 10.0)) as BoxedSliverObject,
+        )
+        .expect("sliver padding child");
+    let leaf_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            padding_id,
+            Box::new(HitLeafSliver::default()) as BoxedSliverObject,
+        )
+        .expect("sliver leaf child");
+
+    let owner = laid_out(owner, host_id);
+
+    assert_eq!(
+        hits(&owner, 10.0, 15.0),
+        vec![leaf_id, padding_id, host_id],
+        "the point is inside the child after subtracting the padding \
+         paint offset (cross=7, main=10)",
+    );
+    assert!(
+        hits(&owner, 10.0, 5.0).is_empty(),
+        "the leading main-axis padding itself is hit-transparent",
+    );
+    assert!(
+        hits(&owner, 3.0, 15.0).is_empty(),
+        "the leading cross-axis padding itself is hit-transparent",
     );
 }

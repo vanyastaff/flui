@@ -25,8 +25,9 @@ use crate::{
     constraints::{BoxConstraints, SliverConstraints, SliverGeometry},
     context::{FragmentClip, FragmentOp, FragmentRecorder},
     protocol::{
-        BoxProtocol, Protocol,
+        BoxProtocol, MainAxisPosition, Protocol, SliverProtocol,
         box_protocol::{BoxLayoutCtxErased, LayoutChildCallback, SliverLayoutChildCallback},
+        sliver_protocol::{SliverChildLayoutCallback, SliverLayoutCtxErased},
     },
     storage::{RenderEntry, RenderNode, RenderTree},
 };
@@ -671,7 +672,10 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             return false;
         };
         let Some(entry) = node.as_box() else {
-            // Sliver hit testing lands with the sliver walk (Core.2).
+            if node.as_sliver().is_some() {
+                let sliver_position = Self::sliver_hit_position_from_offset(node, position);
+                return self.hit_test_sliver_subtree(id, sliver_position, result);
+            }
             return false;
         };
         let children: Vec<RenderId> = node.children().to_vec();
@@ -685,8 +689,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 let offset = self
                     .render_tree
                     .get(child_id)
-                    .and_then(|n| n.as_box())
-                    .map(|e| e.state().offset())
+                    .map(RenderNode::offset)
                     .unwrap_or(Offset::ZERO);
                 position - offset
             });
@@ -697,6 +700,117 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         if hit {
             // Leaf-first path: children pushed their entries during
             // the callback above; the ancestor follows.
+            result.add(crate::hit_testing::HitTestEntry::new(id));
+        }
+        hit
+    }
+
+    fn sliver_hit_position_from_offset(node: &RenderNode, position: Offset) -> MainAxisPosition {
+        let axis_direction = node
+            .as_sliver()
+            .and_then(|entry| entry.state().constraints())
+            .map(|constraints| constraints.axis_direction);
+
+        match axis_direction {
+            Some(
+                flui_types::layout::AxisDirection::LeftToRight
+                | flui_types::layout::AxisDirection::RightToLeft,
+            ) => MainAxisPosition::from_horizontal_offset(position),
+            _ => MainAxisPosition::from_vertical_offset(position),
+        }
+    }
+
+    fn sliver_hit_position_minus_offset(
+        node: &RenderNode,
+        position: MainAxisPosition,
+        offset: Offset,
+    ) -> MainAxisPosition {
+        let axis_direction = node
+            .as_sliver()
+            .and_then(|entry| entry.state().constraints())
+            .map(|constraints| constraints.axis_direction);
+
+        match axis_direction {
+            Some(
+                flui_types::layout::AxisDirection::LeftToRight
+                | flui_types::layout::AxisDirection::RightToLeft,
+            ) => MainAxisPosition::new(
+                position.main_axis - offset.dx.get(),
+                position.cross_axis - offset.dy.get(),
+            ),
+            _ => MainAxisPosition::new(
+                position.main_axis - offset.dy.get(),
+                position.cross_axis - offset.dx.get(),
+            ),
+        }
+    }
+
+    fn hit_test_sliver_subtree(
+        &self,
+        id: RenderId,
+        position: MainAxisPosition,
+        result: &mut crate::hit_testing::HitTestResult,
+    ) -> bool
+    where
+        Phase: Sync,
+    {
+        ensure_stack(|| self.hit_test_sliver_subtree_impl(id, position, result))
+    }
+
+    fn hit_test_sliver_subtree_impl(
+        &self,
+        id: RenderId,
+        position: MainAxisPosition,
+        result: &mut crate::hit_testing::HitTestResult,
+    ) -> bool
+    where
+        Phase: Sync,
+    {
+        let Some(node) = self.render_tree.get(id) else {
+            return false;
+        };
+        let Some(entry) = node.as_sliver() else {
+            return false;
+        };
+        let Some(geometry) = entry.state().geometry() else {
+            return false;
+        };
+        let Some(constraints) = entry.state().constraints() else {
+            return false;
+        };
+        if position.main_axis < 0.0
+            || position.main_axis >= geometry.hit_test_extent
+            || position.cross_axis < 0.0
+            || position.cross_axis >= constraints.cross_axis_extent
+        {
+            return false;
+        }
+        let children: Vec<RenderId> = node.children().to_vec();
+        let render_object = entry.render_object();
+
+        let mut hit_child = |index: usize, override_pos: Option<MainAxisPosition>| -> bool {
+            let Some(&child_id) = children.get(index) else {
+                return false;
+            };
+            let Some(child_node) = self.render_tree.get(child_id) else {
+                return false;
+            };
+            if child_node.as_sliver().is_some() {
+                let child_position = override_pos.unwrap_or_else(|| {
+                    Self::sliver_hit_position_minus_offset(
+                        child_node,
+                        position,
+                        child_node.offset(),
+                    )
+                });
+                self.hit_test_sliver_subtree(child_id, child_position, result)
+            } else {
+                false
+            }
+        };
+
+        let hit = render_object.hit_test_raw(position, children.len(), &mut hit_child);
+        if hit {
             result.add(crate::hit_testing::HitTestEntry::new(id));
         }
         hit
@@ -2171,7 +2285,9 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
     // (Flutter parity: BoxParentData.offset persists until
     // positionChild overwrites it) — without the seed, the
     // post-layout commit below would silently reset unpositioned
-    // children to Offset::ZERO.
+    // children to Offset::ZERO. Box parents can now host both Box and
+    // Sliver children, so seed through RenderNode's protocol-generic
+    // offset view.
     for cs in &mut child_states {
         if let Some(child_ptr) = borrows.get(cs.id) {
             // SAFETY: shared reborrow of a DISTINCT child slot
@@ -2181,9 +2297,7 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
             // Distinct slot reborrows have independent tags under
             // Stacked / Tree Borrows.
             let child_node: &RenderNode = unsafe { &*child_ptr.0 };
-            if let Some(child_entry) = child_node.as_box() {
-                cs.offset = child_entry.state().offset();
-            }
+            cs.offset = child_node.offset();
         }
     }
 
@@ -2339,9 +2453,7 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
             // `entry`/`node_ref` cover only the parent's slot.
             // `set_offset` is an atomic store through `&self`.
             let child_node: &RenderNode = unsafe { &*child_ptr.0 };
-            if let Some(child_entry) = child_node.as_box() {
-                child_entry.state().set_offset(cs.offset);
-            }
+            child_node.set_offset(cs.offset);
         }
     }
 
@@ -2367,7 +2479,7 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
 }
 
 // ============================================================================
-// Cross-protocol child layout: Box parent → leaf Sliver child
+// Cross-protocol child layout: Box parent → Sliver child
 // ============================================================================
 //
 // `layout_sliver_subtree_borrowed` is the Sliver sibling of
@@ -2375,14 +2487,13 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
 // closure captured inside `layout_subtree_borrowed_impl`'s non-leaf path
 // when a Box parent calls `ctx.layout_sliver_child(index, constraints)`.
 //
-// Scope: LEAF sliver children only. Non-leaf sliver children are gated by
-// the arity check inside `RenderEntry::layout_leaf_only` (the Sliver
-// blanket returns `RenderError::ContractViolation` for non-leaf nodes).
+// Scope: sliver subtrees. Leaf nodes still delegate to
+// `RenderEntry::layout_leaf_only`; non-leaf slivers get an erased driver
+// context and may call `ctx.layout_child(...)` to lay out sliver children.
 //
 // The short-circuit clean-child optimisation from the Box path is omitted
-// here on purpose: leaf slivers always relayout because their constraints
-// change with scroll position on every frame. Omitting the check is
-// correct and saves a branch.
+// here on purpose: sliver constraints change with scroll position on every
+// frame. Omitting the check is correct and saves a branch.
 
 /// Stack-probe wrapper for [`layout_sliver_subtree_borrowed_impl`].
 ///
@@ -2445,7 +2556,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl<'tree>(
     let node_ref: &mut crate::storage::RenderNode = unsafe { &mut *node_ptr };
 
     let node_protocol = node_ref.protocol_name();
-    let entry: &mut RenderEntry<crate::protocol::SliverProtocol> = match node_ref.as_sliver_mut() {
+    let entry: &mut RenderEntry<SliverProtocol> = match node_ref.as_sliver_mut() {
         Some(e) => e,
         None => {
             return Err(crate::error::RenderError::ProtocolMismatch {
@@ -2454,12 +2565,127 @@ unsafe fn layout_sliver_subtree_borrowed_impl<'tree>(
             });
         }
     };
+    let child_ids: Vec<RenderId> = entry.links().children().to_vec();
 
-    // Delegate to the generic leaf-only layout path.
-    // Non-leaf sliver nodes trigger `RenderError::ContractViolation`
-    // inside `layout_leaf_only` via the arity gate — the non-leaf
-    // sliver walk is out of scope for this change.
-    entry.layout_leaf_only(constraints)
+    if child_ids.is_empty() {
+        return entry.layout_leaf_only(constraints);
+    }
+
+    let mut child_states: Vec<crate::protocol::ErasedSliverChildState> = child_ids
+        .iter()
+        .map(|&cid| crate::protocol::ErasedSliverChildState::new(cid))
+        .collect();
+
+    // Seed child offsets from persisted RenderState so a sliver parent that
+    // does not call `position_child` on a later pass preserves its child's
+    // previous placement, matching the Box path's offset semantics.
+    for cs in &mut child_states {
+        if let Some(child_ptr) = borrows.get(cs.id) {
+            // SAFETY: shared reborrow of a DISTINCT child slot
+            // (parent != child by tree acyclicity). No recursive child
+            // borrow has run yet in this frame, and `node_ref` covers only
+            // the current sliver parent slot.
+            let child_node: &crate::storage::RenderNode = unsafe { &*child_ptr.0 };
+            cs.offset = child_node.offset();
+        }
+    }
+
+    let descendant_error_flag: std::sync::Arc<std::sync::atomic::AtomicBool> =
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let descendant_error_for_cb = std::sync::Arc::clone(&descendant_error_flag);
+    let borrows_for_cb: &SubtreeBorrows<'_> = borrows;
+
+    let cb_owned = move |child_id: RenderId,
+                         child_constraints: SliverConstraints|
+          -> SliverGeometry {
+        // SAFETY: `borrows_for_cb` is alive for the whole dirty-root
+        // walk, and this callback reborrows a child slot distinct from
+        // the current sliver node. `LayoutCycleGuard` rejects re-entry.
+        match unsafe { layout_sliver_subtree_borrowed(borrows_for_cb, child_id, child_constraints) }
+        {
+            Ok(geometry) => geometry,
+            Err(err) => {
+                descendant_error_for_cb.store(true, std::sync::atomic::Ordering::Relaxed);
+                tracing::error!(
+                    parent = ?id,
+                    ?child_id,
+                    ?err,
+                    "layout_dirty_root: sliver descendant layout failed; \
+                     returning SliverGeometry::ZERO to caller's perform_layout. \
+                     Parent NEEDS_LAYOUT preserved for next-frame retry.",
+                );
+                SliverGeometry::ZERO
+            }
+        }
+    };
+    let cb_ref: SliverChildLayoutCallback<'_> = &cb_owned;
+
+    let mut ctx = crate::protocol::ErasedSliverLayoutCtx::new(
+        constraints,
+        &mut child_states,
+        &child_ids,
+        cb_ref,
+    );
+    let erased: &mut dyn SliverLayoutCtxErased = &mut ctx;
+
+    let debug_name = entry.render_object().debug_name();
+    let render_object = entry.render_object_mut();
+    let unwind_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        render_object.perform_layout_raw(erased)
+    }));
+    let geometry = match unwind_result {
+        Ok(inner) => inner?,
+        Err(payload) => {
+            let msg = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&'static str>().copied())
+                .unwrap_or("(non-string panic payload)");
+            tracing::error!(
+                render_object = debug_name,
+                panic_msg = msg,
+                "perform_layout panicked in non-leaf sliver path — surfacing as \
+                 RenderError::Poisoned",
+            );
+            return Err(crate::error::RenderError::poisoned(debug_name, "layout"));
+        }
+    };
+
+    <SliverProtocol as Protocol>::debug_assert_layout_output(&constraints, &geometry);
+
+    entry.state_mut().set_geometry(geometry);
+    entry.state_mut().set_constraints(constraints);
+
+    // Commit child paint offsets produced by sliver parents
+    // (`RenderSliverPadding` et al.) into the same parent-relative
+    // offset slot that paint / hit-test already consult. The
+    // `ErasedSliverChildState` vec is per-walk transient; without
+    // this commit, child placement dies with the layout stack frame.
+    for cs in &child_states {
+        if let Some(child_ptr) = borrows.get(cs.id) {
+            // SAFETY: shared reborrow of a DISTINCT child slot
+            // (parent != child by tree acyclicity). All recursive
+            // child borrows ended when perform_layout_raw returned;
+            // `entry` / `node_ref` cover only the parent's slot.
+            let child_node: &crate::storage::RenderNode = unsafe { &*child_ptr.0 };
+            child_node.set_offset(cs.offset);
+        }
+    }
+
+    let has_parent = entry.links().parent().is_some();
+    <SliverProtocol as Protocol>::bootstrap_relayout_boundary(entry.state(), has_parent);
+
+    if !descendant_error_flag.load(std::sync::atomic::Ordering::Relaxed) {
+        entry.clear_needs_layout();
+    } else {
+        tracing::debug!(
+            parent = ?id,
+            "layout_dirty_root: a sliver descendant errored during this walk; \
+             keeping parent NEEDS_LAYOUT set for next-frame retry"
+        );
+    }
+
+    Ok(geometry)
 }
 
 // ============================================================================
@@ -2798,29 +3024,16 @@ impl PipelineOwner<PaintPhase> {
             return Ok(());
         };
 
-        // Type safety: reject non-Box protocols symmetrically with layout/intrinsics walks
-        let render_entry = match render_node.as_box() {
-            Some(entry) => entry,
-            None => {
-                return Err(crate::error::RenderError::ProtocolMismatch {
-                    node_protocol: render_node.protocol_name(),
-                    constraints_protocol: "Box",
-                });
-            }
-        };
-        let render_object = render_entry.render_object();
-        let is_repaint_boundary = render_object.is_repaint_boundary();
-        let alpha = render_object.paint_alpha();
-        let transform = render_object.paint_transform();
+        let is_repaint_boundary = render_node.is_repaint_boundary();
+        let alpha = render_node.paint_alpha();
+        let transform = render_node.paint_transform();
         let child_ids: Vec<RenderId> = render_node.children().to_vec();
 
         // Written unconditionally PRE-paint (Flutter object.dart:3560):
         // a node flipping boundary→non-boundary leaves exactly one
         // `WAS_REPAINT_BOUNDARY=true` trail for the next compositing
         // walk's lost-boundary branch.
-        if let Some(entry) = render_node.as_box() {
-            entry.state().set_was_repaint_boundary(is_repaint_boundary);
-        }
+        render_node.set_was_repaint_boundary(is_repaint_boundary);
 
         // Clear BEFORE paint so the post-paint check catches a paint
         // body that marks its own node dirty (paint-must-not-redirty).
@@ -2835,10 +3048,10 @@ impl PipelineOwner<PaintPhase> {
 
         // Record the node's fragment. paint_raw sees ONLY the recorder
         // (sans-IO): no tree access, no layer access, no recursion.
-        let debug_name = render_object.debug_name();
+        let debug_name = render_node.debug_name();
         let mut recorder = FragmentRecorder::new(origin, self.device_pixel_ratio);
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            render_object.paint_raw(&mut recorder, child_ids.len());
+            render_node.paint_raw(&mut recorder, child_ids.len());
         }))
         .map_err(|_| crate::error::RenderError::poisoned(debug_name, "paint"))?;
         let fragment = recorder.finish();
@@ -2903,21 +3116,21 @@ impl PipelineOwner<PaintPhase> {
                         );
                         continue;
                     };
+                    let Some(child_node) = self.render_tree.get(child_id) else {
+                        continue;
+                    };
+                    if child_node
+                        .as_sliver()
+                        .and_then(|entry| entry.state().geometry())
+                        .is_some_and(|geometry| !geometry.visible)
+                    {
+                        continue;
+                    }
                     // Authoritative child position: RenderState.offset,
                     // committed by the layout walk; paint_child_at
                     // overrides it explicitly.
-                    let child_offset = offset_override.unwrap_or_else(|| {
-                        self.render_tree
-                            .get(child_id)
-                            .and_then(|n| n.as_box())
-                            .map(|e| e.state().offset())
-                            .unwrap_or(Offset::ZERO)
-                    });
-                    let child_is_boundary = self
-                        .render_tree
-                        .get(child_id)
-                        .and_then(|n| n.as_box())
-                        .is_some_and(|entry| entry.render_object().is_repaint_boundary());
+                    let child_offset = offset_override.unwrap_or_else(|| child_node.offset());
+                    let child_is_boundary = child_node.is_repaint_boundary();
 
                     if child_is_boundary {
                         // Boundary children rebase to ZERO under their

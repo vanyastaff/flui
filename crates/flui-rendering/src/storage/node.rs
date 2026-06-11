@@ -536,6 +536,60 @@ impl RenderNode {
         }
     }
 
+    /// Stable debug name for the stored render object.
+    #[inline]
+    pub fn debug_name(&self) -> &'static str {
+        match self {
+            Self::Box(entry) => entry.render_object().debug_name(),
+            Self::Sliver(entry) => entry.render_object().debug_name(),
+        }
+    }
+
+    /// Optional paint opacity effect for this render object.
+    #[inline]
+    pub fn paint_alpha(&self) -> Option<u8> {
+        match self {
+            Self::Box(entry) => entry.render_object().paint_alpha(),
+            Self::Sliver(entry) => entry.render_object().paint_alpha(),
+        }
+    }
+
+    /// Optional paint transform effect for this render object.
+    #[inline]
+    pub fn paint_transform(&self) -> Option<flui_types::Matrix4> {
+        match self {
+            Self::Box(entry) => entry.render_object().paint_transform(),
+            Self::Sliver(entry) => entry.render_object().paint_transform(),
+        }
+    }
+
+    /// Records this node's paint fragment through the protocol blanket.
+    #[inline]
+    pub fn paint_raw(&self, recorder: &mut crate::context::FragmentRecorder, child_count: usize) {
+        match self {
+            Self::Box(entry) => entry.render_object().paint_raw(recorder, child_count),
+            Self::Sliver(entry) => entry.render_object().paint_raw(recorder, child_count),
+        }
+    }
+
+    /// Returns this node's parent-relative offset.
+    #[inline]
+    pub fn offset(&self) -> flui_types::Offset {
+        match self {
+            Self::Box(entry) => entry.state().offset(),
+            Self::Sliver(entry) => entry.state().offset(),
+        }
+    }
+
+    /// Sets this node's parent-relative offset.
+    #[inline]
+    pub fn set_offset(&self, offset: flui_types::Offset) {
+        match self {
+            Self::Box(entry) => entry.state().set_offset(offset),
+            Self::Sliver(entry) => entry.state().set_offset(offset),
+        }
+    }
+
     /// Returns the size for Box protocol nodes (None for Sliver nodes).
     pub fn size(&self) -> Option<flui_types::Size> {
         match self {
