@@ -481,7 +481,7 @@ impl BuildOwner {
             .sort_by_key(|entry| std::cmp::Reverse(entry.depth()));
 
         // Take ownership of inactive elements to avoid borrow conflicts.
-        // `mem::take` snapshots the queue before the recursive unmount so
+        // `mem::take` snapshots the queue before the unmount sweep so
         // mid-iteration `ElementOwner::push_inactive` calls (e.g. children
         // deactivating as a parent unmounts) land in the *next* frame's
         // queue rather than re-entering this drain — same snapshot-then-fire
@@ -521,24 +521,37 @@ impl BuildOwner {
         tracing::debug!("Finalize tree complete");
     }
 
-    /// Recursively collect all element IDs to unmount, parent before
-    /// children (pre-order).
+    /// Iteratively collect all element IDs to unmount, parent before
+    /// children (pre-order DFS, children in
+    /// [`ElementNode::child_ids`](crate::tree::ElementNode) slot order).
     ///
-    /// E3: children come from the slab-resident
-    /// [`ElementNode::child_ids`](crate::tree::ElementNode) list — the
-    /// single element graph — read through a fresh, immediately-dropped
-    /// `&ElementTree` borrow. `finalize_tree` reverses the collected order
-    /// so `remove_finalized` runs deepest-first.
+    /// E3: children come from the slab-resident `child_ids` list — the
+    /// single element graph. `finalize_tree` reverses the collected order
+    /// so `remove_finalized` runs deepest-first; pre-order guarantees a
+    /// parent always precedes every one of its descendants, so the
+    /// reversed sweep never frees a parent slot before its children.
+    ///
+    /// The walk is driven by an explicit `Vec` work-stack instead of
+    /// recursion: the element tree nests several times deeper than the
+    /// render tree, and a recursive shape overflowed the 1 MiB Windows
+    /// main-thread stack on deep chains (the failure class PR #177
+    /// closed for the render-tree walks). To preserve the recursive
+    /// shape's visit order on a LIFO stack, children are pushed in
+    /// reverse slot order so the leftmost child is popped next — same
+    /// discipline as `WidgetsBinding::collect_all_elements`.
+    ///
+    /// Complexity: O(n) time over the n reachable nodes, average and
+    /// worst case (each node pushed/popped exactly once); the work-stack
+    /// peaks at O(n) heap in the degenerate all-siblings case and O(tree
+    /// height) for a chain. Call-stack usage is constant.
     fn collect_elements_to_unmount(tree: &ElementTree, id: ElementId, result: &mut Vec<ElementId>) {
-        // Add this element
-        result.push(id);
-
-        // Collect children (owned snapshot so no slab borrow is held
-        // across the recursive call).
-        if let Some(node) = tree.get(id) {
-            let children: Vec<ElementId> = node.child_ids().to_vec();
-            for child_id in children {
-                Self::collect_elements_to_unmount(tree, child_id, result);
+        let mut stack: Vec<ElementId> = vec![id];
+        while let Some(id) = stack.pop() {
+            result.push(id);
+            // The `tree.get` shared borrow ends with the statement; the
+            // extend writes only into the local stack, never the slab.
+            if let Some(node) = tree.get(id) {
+                stack.extend(node.child_ids().iter().rev().copied());
             }
         }
     }
@@ -818,6 +831,58 @@ mod tests {
         // Second caller sees None — the entry was removed atomically.
         assert_eq!(owner.take_global_key_for_reparent(hash), None);
         assert_eq!(owner.element_for_global_key(hash), None);
+    }
+
+    /// Deep-tree stack-safety: `finalize_tree`'s subtree collection must
+    /// survive an element chain far deeper than the fixed OS stack would
+    /// allow with plain recursion. The element tree nests several times
+    /// deeper than the render tree (every render object is wrapped in
+    /// multiple composition views), so it hits the 1 MiB Windows
+    /// main-thread stack earlier — same failure class PR #177 closed in
+    /// flui-rendering. The collection frame is small, so the depth is
+    /// 20 000 (the small-frame sizing the flui-rendering
+    /// compositing-bits test established; 2 500 survived unprotected
+    /// there by luck).
+    ///
+    /// Ignored under miri: the interpreter cannot finish a 20 000-level
+    /// walk in reasonable time; the shallow finalize-path coverage in
+    /// this module exercises the same code natively.
+    #[test]
+    #[cfg_attr(miri, ignore = "20k-node walk too slow for the interpreter")]
+    fn finalize_tree_survives_deep_chain() {
+        const DEPTH: usize = 20_000;
+
+        let mut owner = BuildOwner::new();
+        let mut tree = ElementTree::new();
+
+        let view = TestView;
+        let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
+
+        // Build a root → c1 → c2 → … single-child chain. `insert` wires
+        // the child's parent edge; the parent's `child_ids` list (what
+        // the unmount collection walks) is stamped explicitly.
+        let mut parent_id = root_id;
+        for _ in 1..DEPTH {
+            let child_id = tree.insert(&view, parent_id, 0, &mut owner.element_owner_mut());
+            tree.get_mut(parent_id)
+                .expect("freshly inserted parent resolves")
+                .set_child_ids(vec![child_id]);
+            parent_id = child_id;
+        }
+        assert_eq!(tree.len(), DEPTH);
+
+        // Park the chain root in the inactive queue and finalize — the
+        // collection must reach all 20 000 chain nodes (the root plus
+        // its 19 999 descendants) without exhausting the stack, then
+        // tear them down deepest-first.
+        owner.add_to_inactive(root_id, 0);
+        owner.finalize_tree(&mut tree);
+
+        assert_eq!(
+            tree.len(),
+            0,
+            "every chain node must be collected and unmounted"
+        );
     }
 
     /// `take_global_key_for_reparent` on an unknown hash returns

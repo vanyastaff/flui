@@ -438,24 +438,36 @@ fn remove_child(tree: &mut ElementTree, id: ElementId, owner: &mut crate::Elemen
 }
 
 /// Collect `id` and its whole subtree in pre-order (parent before
-/// children) through fresh, immediately-dropped `&ElementTree` borrows.
+/// children, children in `child_ids` slot order).
 ///
 /// The caller removes the collected ids in REVERSE (deepest-first) so no
-/// parent slot is freed before its children — mirrors
+/// parent slot is freed before its children — pre-order guarantees a
+/// parent always precedes every one of its descendants. Mirrors
 /// [`BuildOwner::finalize_tree`](crate::BuildOwner::finalize_tree) +
 /// `collect_elements_to_unmount`.
 ///
-/// Complexity: O(n) over the subtree size n (each node visited once); the
-/// recursion depth equals the subtree height.
+/// The walk is driven by an explicit `Vec` work-stack instead of
+/// recursion: the element tree nests several times deeper than the
+/// render tree, and a recursive shape overflowed the 1 MiB Windows
+/// main-thread stack on deep chains (the failure class PR #177 closed
+/// for the render-tree walks). To preserve the recursive shape's visit
+/// order on a LIFO stack, children are pushed in reverse slot order so
+/// the leftmost child is popped next — same discipline as
+/// `WidgetsBinding::collect_all_elements`.
+///
+/// Complexity: O(n) time over the subtree size n, average and worst case
+/// (each node pushed/popped exactly once); the work-stack peaks at O(n)
+/// heap in the degenerate all-siblings case and O(subtree height) for a
+/// chain. Call-stack usage is constant.
 fn collect_subtree_preorder(tree: &ElementTree, id: ElementId, out: &mut Vec<ElementId>) {
-    out.push(id);
-    // Owned snapshot so no slab borrow is held across the recursive call.
-    let children: Vec<ElementId> = match tree.get(id) {
-        Some(node) => node.child_ids().to_vec(),
-        None => return,
-    };
-    for child in children {
-        collect_subtree_preorder(tree, child, out);
+    let mut stack: Vec<ElementId> = vec![id];
+    while let Some(id) = stack.pop() {
+        out.push(id);
+        // The `tree.get` shared borrow ends with the statement; the
+        // extend writes only into the local stack, never the slab.
+        if let Some(node) = tree.get(id) {
+            stack.extend(node.child_ids().iter().rev().copied());
+        }
     }
 }
 
@@ -967,6 +979,53 @@ mod tests {
         assert!(tree.get(a).is_none(), "removed subtree top is gone");
         assert!(tree.get(a1).is_none(), "mid descendant is not orphaned");
         assert!(tree.get(a1a).is_none(), "leaf descendant is not orphaned");
+        assert_eq!(tree.len(), 1, "only the root remains — no slab leak");
+    }
+
+    /// Deep-tree stack-safety: the eager removal path's subtree
+    /// collection must survive an element chain far deeper than the
+    /// fixed OS stack would allow with plain recursion. The element tree
+    /// nests several times deeper than the render tree (every render
+    /// object is wrapped in multiple composition views), so it hits the
+    /// 1 MiB Windows main-thread stack earlier — same failure class
+    /// PR #177 closed in flui-rendering. The collection frame is small,
+    /// so the depth is 20 000 (the small-frame sizing the
+    /// flui-rendering compositing-bits test established; 2 500 survived
+    /// unprotected there by luck).
+    ///
+    /// The chain is built one generation at a time through the
+    /// production reconciler (it inserts a parent's DIRECT children
+    /// only), then torn down by reconciling the root to zero children —
+    /// the keyless top takes the eager path, which collects and frees
+    /// the whole 20 000-node subtree in one call.
+    ///
+    /// Ignored under miri: the interpreter cannot finish a 20 000-level
+    /// walk in reasonable time; `eager_remove_tears_down_whole_subtree`
+    /// exercises the same path natively at shallow depth.
+    #[test]
+    #[cfg_attr(miri, ignore = "20k-node walk too slow for the interpreter")]
+    fn eager_remove_survives_deep_chain() {
+        const DEPTH: usize = 20_000;
+
+        let (mut tree, mut owner, root) = fixture();
+
+        let mut parent = root;
+        for _ in 0..DEPTH {
+            reconcile_children_by_id(
+                &mut tree,
+                parent,
+                &plain_views(&[1]),
+                &mut owner.element_owner_mut(),
+            );
+            parent = tree.get(parent).expect("parent resolves").child_ids()[0];
+        }
+        assert_eq!(tree.len(), DEPTH + 1, "root + 20 000 chain nodes");
+
+        // Drop the chain top from the root's children → the eager
+        // removal must collect and free all 20 000 descendants without
+        // exhausting the stack.
+        reconcile_children_by_id(&mut tree, root, &[], &mut owner.element_owner_mut());
+
         assert_eq!(tree.len(), 1, "only the root remains — no slab leak");
     }
 
