@@ -127,7 +127,11 @@ impl TextPainter {
     }
 
     /// Computes the paint offset based on text alignment.
-    fn compute_paint_offset(&self, content_width: f32, max_width: f32) -> Offset<Pixels> {
+    pub(super) fn compute_paint_offset(
+        &self,
+        content_width: f32,
+        max_width: f32,
+    ) -> Offset<Pixels> {
         if !max_width.is_finite() {
             return Offset::ZERO;
         }

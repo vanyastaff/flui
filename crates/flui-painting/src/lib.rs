@@ -192,7 +192,7 @@ pub use text_layout::{
     LineInfo, TextLayout, TextLayoutResult, detect_text_direction, measure_inline_span,
     measure_text,
 };
-pub use text_painter::{DEFAULT_FONT_SIZE, TextBaseline, TextPainter};
+pub use text_painter::{DEFAULT_FONT_SIZE, Invalidation, TextBaseline, TextPainter};
 
 // Re-export essential painting types from flui_types for user convenience.
 // This creates a cohesive API where users don't need to import from multiple

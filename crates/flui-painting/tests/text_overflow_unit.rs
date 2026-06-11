@@ -118,6 +118,74 @@ fn baselines_come_from_the_shaper() {
 }
 
 #[test]
+fn color_change_keeps_the_shaped_layout() {
+    use flui_painting::Invalidation;
+    use flui_types::Color;
+    use flui_types::typography::TextStyle;
+
+    let mut painter = TextPainter::new()
+        .with_text(
+            TextSpan::new("Hello").with_style(TextStyle::new().with_color(Color::rgb(255, 0, 0))),
+        )
+        .with_text_direction(TextDirection::Ltr);
+    painter.layout(0.0, 200.0);
+    let size_before = painter.size();
+    let baseline_before =
+        painter.compute_distance_to_actual_baseline(flui_painting::TextBaseline::Alphabetic);
+
+    // The structural win over Flutter ("no API to only make those
+    // updates", text_painter.dart:1335): a color-only change keeps the
+    // shaped layout — metrics and baselines stay valid with NO
+    // re-layout call.
+    let inv = painter.set_text(Some(
+        TextSpan::new("Hello")
+            .with_style(TextStyle::new().with_color(Color::rgb(0, 0, 255)))
+            .into(),
+    ));
+    assert_eq!(inv, Invalidation::Paint);
+    assert!(painter.did_layout(), "shaped layout must survive a recolor");
+    assert_eq!(painter.size(), size_before);
+    assert!(
+        (painter.compute_distance_to_actual_baseline(flui_painting::TextBaseline::Alphabetic)
+            - baseline_before)
+            .abs()
+            < f32::EPSILON
+    );
+
+    // Identical span → no invalidation at all.
+    let inv = painter.set_text(Some(
+        TextSpan::new("Hello")
+            .with_style(TextStyle::new().with_color(Color::rgb(0, 0, 255)))
+            .into(),
+    ));
+    assert_eq!(inv, Invalidation::None);
+}
+
+#[test]
+fn named_font_family_reaches_the_shaper() {
+    use flui_types::typography::TextStyle;
+
+    // Pre-fix every non-generic family name collapsed to SansSerif, so
+    // "monospace-by-name" shaped identically to the default face. A
+    // family that actually reaches the shaper must equalize i-vs-m
+    // advance widths; the named branch is the same `Family` mapping.
+    let mono = TextLayout::new(
+        "iiii mmmm",
+        Some(&TextStyle::new().with_font_family("monospace")),
+        24.0,
+        None,
+        None,
+        TextDirection::Ltr,
+    );
+    let default_face = TextLayout::new("iiii mmmm", None, 24.0, None, None, TextDirection::Ltr);
+    assert!(
+        (mono.metrics().width - default_face.metrics().width).abs() > 0.5,
+        "a family that reaches the shaper must change advance widths \
+         for i-vs-m text (monospace equalizes them)"
+    );
+}
+
+#[test]
 fn painter_enforces_max_lines_end_to_end() {
     let mut painter = TextPainter::new()
         .with_text(TextSpan::new(

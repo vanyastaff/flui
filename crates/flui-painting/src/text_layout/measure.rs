@@ -13,7 +13,10 @@ use super::TextLayoutResult;
 use super::layout::font_system;
 
 /// Converts FLUI `TextStyle` to cosmic-text `Attrs`.
-pub(super) fn style_to_attrs(style: Option<&TextStyle>) -> Attrs<'static> {
+///
+/// The returned `Attrs` borrows the style's family string for
+/// `Family::Name`, hence the shared lifetime.
+pub(super) fn style_to_attrs(style: Option<&TextStyle>) -> Attrs<'_> {
     let mut attrs = Attrs::new();
 
     if let Some(style) = style {
@@ -24,7 +27,12 @@ pub(super) fn style_to_attrs(style: Option<&TextStyle>) -> Attrs<'static> {
                 "monospace" | "Monospace" | "mono" => Family::Monospace,
                 "cursive" | "Cursive" => Family::Cursive,
                 "fantasy" | "Fantasy" => Family::Fantasy,
-                _ => Family::SansSerif,
+                // A NAMED family resolves against the FontSystem's
+                // discovered fonts (cosmic falls back internally when
+                // the name is unknown). Pre-fix every named font —
+                // "Inter", "JetBrains Mono", … — silently became
+                // SansSerif.
+                name => Family::Name(name),
             });
         }
 
