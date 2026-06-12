@@ -235,7 +235,7 @@ impl RenderFlex {
         max_flex_fraction * total_flex as f32 + inflexible_space
     }
 
-    /// Folds child intrinsics along the cross axis (max for rows, sum for columns).
+    /// Folds child intrinsics along the cross axis (max of child cross sizes).
     fn intrinsic_cross(
         &self,
         ctx: &mut BoxIntrinsicsCtx<'_>,
@@ -246,22 +246,11 @@ impl RenderFlex {
         if child_count == 0 {
             return 0.0;
         }
-        match self.direction {
-            FlexDirection::Horizontal => {
-                let mut max = 0.0f32;
-                for i in 0..child_count {
-                    max = max.max(child_cross(ctx, i, main_extent));
-                }
-                max
-            }
-            FlexDirection::Vertical => {
-                let mut sum = 0.0f32;
-                for i in 0..child_count {
-                    sum += child_cross(ctx, i, main_extent);
-                }
-                sum + self.spacing * (child_count.saturating_sub(1)) as f32
-            }
+        let mut max = 0.0f32;
+        for i in 0..child_count {
+            max = max.max(child_cross(ctx, i, main_extent));
         }
+        max
     }
 }
 

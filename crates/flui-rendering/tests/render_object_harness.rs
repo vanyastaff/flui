@@ -892,6 +892,24 @@ fn harness_flex_column_stacks_children_vertically() {
 }
 
 #[test]
+fn harness_flex_column_max_child_intrinsic_width() {
+    let mut run = RenderTester::mount(
+        box_node(RenderFlex::column())
+            .child(box_node(RenderColoredBox::red(30.0, 20.0)).label("a"))
+            .child(box_node(RenderColoredBox::green(50.0, 20.0)).label("b")),
+    )
+    .with_size(Size::new(px(200.0), px(100.0)))
+    .run_layout();
+
+    assert_eq!(
+        run.min_intrinsic_width(run.root(), 100.0),
+        50.0,
+        "column cross-axis width is max child width, not sum",
+    );
+    assert_eq!(run.max_intrinsic_width(run.root(), 100.0), 50.0);
+}
+
+#[test]
 fn harness_stack_max_child_intrinsic_width() {
     let mut run = RenderTester::mount(
         box_node(RenderStack::new())

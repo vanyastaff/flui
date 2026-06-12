@@ -1405,9 +1405,19 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         dimension: crate::storage::IntrinsicDimension,
         extent: f32,
     ) -> crate::error::RenderResult<f32> {
+        #[cfg(any(test, feature = "testing"))]
         let parent_data_seeds = self.parent_data_seeds.clone();
         let mut slots = self.acquire_query_slots(id)?;
-        intrinsic_query(&mut slots, id, dimension, extent, &parent_data_seeds)
+        intrinsic_query(
+            &mut slots,
+            id,
+            dimension,
+            extent,
+            #[cfg(any(test, feature = "testing"))]
+            &parent_data_seeds,
+            #[cfg(not(any(test, feature = "testing")))]
+            &(),
+        )
     }
 
     /// The size a box subtree WOULD take under `constraints`, memoized
@@ -2770,7 +2780,14 @@ unsafe fn box_intrinsic_query_borrowed_impl<'tree>(
                 }
             };
         let mut child_flex = |index: usize| -> i32 {
-            child_flex_from_seeds(&borrows.parent_data_seeds, &child_ids, index)
+            child_flex_from_seeds(
+                #[cfg(any(test, feature = "testing"))]
+                &borrows.parent_data_seeds,
+                #[cfg(not(any(test, feature = "testing")))]
+                &(),
+                &child_ids,
+                index,
+            )
         };
         entry.render_object().intrinsic_raw(
             dimension,
@@ -3801,6 +3818,7 @@ struct QuerySlot<'a> {
     children: Vec<RenderId>,
 }
 
+#[cfg(any(test, feature = "testing"))]
 fn flex_factor_from_seed(seed: &ParentDataSeed) -> i32 {
     match seed {
         ParentDataSeed::Flex(data) => data.flex.unwrap_or(0).max(0),
@@ -3809,15 +3827,24 @@ fn flex_factor_from_seed(seed: &ParentDataSeed) -> i32 {
 }
 
 fn child_flex_from_seeds(
-    parent_data_seeds: &FxHashMap<RenderId, ParentDataSeed>,
+    #[cfg(any(test, feature = "testing"))] parent_data_seeds: &FxHashMap<RenderId, ParentDataSeed>,
+    #[cfg(not(any(test, feature = "testing")))] _parent_data_seeds: &(),
     children: &[RenderId],
     index: usize,
 ) -> i32 {
-    children
-        .get(index)
-        .and_then(|child_id| parent_data_seeds.get(child_id))
-        .map(flex_factor_from_seed)
-        .unwrap_or(0)
+    #[cfg(any(test, feature = "testing"))]
+    {
+        children
+            .get(index)
+            .and_then(|child_id| parent_data_seeds.get(child_id))
+            .map(flex_factor_from_seed)
+            .unwrap_or(0)
+    }
+    #[cfg(not(any(test, feature = "testing")))]
+    {
+        let _ = (children, index);
+        0
+    }
 }
 
 /// Recursive memoized intrinsic query over the take-out slot map.
@@ -3832,9 +3859,16 @@ fn intrinsic_query(
     id: RenderId,
     dimension: crate::storage::IntrinsicDimension,
     extent: f32,
-    parent_data_seeds: &FxHashMap<RenderId, ParentDataSeed>,
+    #[cfg(any(test, feature = "testing"))] parent_data_seeds: &FxHashMap<RenderId, ParentDataSeed>,
+    #[cfg(not(any(test, feature = "testing")))] parent_data_seeds: &(),
 ) -> crate::error::RenderResult<f32> {
-    ensure_stack(|| intrinsic_query_impl(slots, id, dimension, extent, parent_data_seeds))
+    ensure_stack(|| intrinsic_query_impl(
+        slots,
+        id,
+        dimension,
+        extent,
+        parent_data_seeds,
+    ))
 }
 
 /// Body of [`intrinsic_query`]; split out so every recursion level
@@ -3844,7 +3878,8 @@ fn intrinsic_query_impl(
     id: RenderId,
     dimension: crate::storage::IntrinsicDimension,
     extent: f32,
-    parent_data_seeds: &FxHashMap<RenderId, ParentDataSeed>,
+    #[cfg(any(test, feature = "testing"))] parent_data_seeds: &FxHashMap<RenderId, ParentDataSeed>,
+    #[cfg(not(any(test, feature = "testing")))] parent_data_seeds: &(),
 ) -> crate::error::RenderResult<f32> {
     let Some(slot) = slots.get_mut(&id) else {
         return Err(crate::error::RenderError::NodeNotFound(id));
@@ -3898,7 +3933,11 @@ fn intrinsic_query_impl(
                     }
                 };
             let mut child_flex = |index: usize| -> i32 {
-                child_flex_from_seeds(parent_data_seeds, &children, index)
+                child_flex_from_seeds(
+                    parent_data_seeds,
+                    &children,
+                    index,
+                )
             };
             entry.render_object().intrinsic_raw(
                 dimension,

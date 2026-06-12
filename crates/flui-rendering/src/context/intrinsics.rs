@@ -33,7 +33,7 @@ pub enum DryBaselineChildResponse {
 
 /// Child-query channel for one dry-baseline computation.
 ///
-/// Handed to [`RenderBox::compute_dry_baseline`]; baseline and dry-layout
+/// Handed to [`crate::traits::RenderBox::compute_dry_baseline`]; baseline and dry-layout
 /// child probes share one driver callback so the slot map is borrowed once.
 pub struct BoxDryBaselineCtx<'a> {
     child_count: usize,
