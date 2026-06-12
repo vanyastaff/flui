@@ -3862,13 +3862,7 @@ fn intrinsic_query(
     #[cfg(any(test, feature = "testing"))] parent_data_seeds: &FxHashMap<RenderId, ParentDataSeed>,
     #[cfg(not(any(test, feature = "testing")))] parent_data_seeds: &(),
 ) -> crate::error::RenderResult<f32> {
-    ensure_stack(|| intrinsic_query_impl(
-        slots,
-        id,
-        dimension,
-        extent,
-        parent_data_seeds,
-    ))
+    ensure_stack(|| intrinsic_query_impl(slots, id, dimension, extent, parent_data_seeds))
 }
 
 /// Body of [`intrinsic_query`]; split out so every recursion level
@@ -3933,11 +3927,7 @@ fn intrinsic_query_impl(
                     }
                 };
             let mut child_flex = |index: usize| -> i32 {
-                child_flex_from_seeds(
-                    parent_data_seeds,
-                    &children,
-                    index,
-                )
+                child_flex_from_seeds(parent_data_seeds, &children, index)
             };
             entry.render_object().intrinsic_raw(
                 dimension,
