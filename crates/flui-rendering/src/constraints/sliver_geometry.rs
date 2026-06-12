@@ -305,8 +305,8 @@ impl SliverGeometry {
     #[inline]
     #[must_use]
     pub fn validation_error(&self) -> Option<&'static str> {
-        if !self.scroll_extent.is_finite() {
-            return Some("scroll_extent is not finite");
+        if self.scroll_extent.is_nan() {
+            return Some("scroll_extent is NaN");
         }
         if !self.paint_extent.is_finite() {
             return Some("paint_extent is not finite");
@@ -317,8 +317,8 @@ impl SliverGeometry {
         if !self.layout_extent.is_finite() {
             return Some("layout_extent is not finite");
         }
-        if !self.max_paint_extent.is_finite() {
-            return Some("max_paint_extent is not finite");
+        if self.max_paint_extent.is_nan() {
+            return Some("max_paint_extent is NaN");
         }
         if !self.max_scroll_obstruction_extent.is_finite() {
             return Some("max_scroll_obstruction_extent is not finite");
@@ -570,5 +570,21 @@ mod tests {
             geometry.validation_error(),
             Some("paint_extent exceeds max_paint_extent")
         );
+    }
+
+    #[test]
+    fn validation_allows_infinite_scroll_and_max_paint_extents() {
+        let geometry = SliverGeometry {
+            scroll_extent: f32::INFINITY,
+            paint_extent: 100.0,
+            layout_extent: 100.0,
+            max_paint_extent: f32::INFINITY,
+            hit_test_extent: 100.0,
+            cache_extent: 120.0,
+            visible: true,
+            ..SliverGeometry::ZERO
+        };
+
+        assert_eq!(geometry.validation_error(), None);
     }
 }
