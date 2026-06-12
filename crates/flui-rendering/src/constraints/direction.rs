@@ -4,6 +4,8 @@
 
 use std::fmt;
 
+use flui_types::layout::AxisDirection;
+
 /// Direction in which content grows within a scrollable area.
 ///
 /// Determines whether new content is added at the end (Forward) or
@@ -84,6 +86,19 @@ impl GrowthDirection {
         }
     }
 
+    /// Applies growth direction to an axis direction.
+    ///
+    /// Mirrors Flutter's `applyGrowthDirectionToAxisDirection`: forward growth
+    /// keeps the axis direction, while reverse growth uses its opposite.
+    #[inline]
+    #[must_use]
+    pub const fn apply_to_axis_direction(self, axis_direction: AxisDirection) -> AxisDirection {
+        match self {
+            GrowthDirection::Forward => axis_direction,
+            GrowthDirection::Reverse => axis_direction.opposite(),
+        }
+    }
+
     /// Returns the directional multiplier (+1 for Forward, -1 for Reverse).
     ///
     /// Useful for calculations that need to scale by direction.
@@ -158,6 +173,30 @@ mod tests {
 
         assert_eq!(GrowthDirection::Forward.apply_to_i32(10), 10);
         assert_eq!(GrowthDirection::Reverse.apply_to_i32(10), -10);
+    }
+
+    #[test]
+    fn test_apply_to_axis_direction() {
+        use flui_types::layout::AxisDirection::{
+            BottomToTop, LeftToRight, RightToLeft, TopToBottom,
+        };
+
+        assert_eq!(
+            GrowthDirection::Forward.apply_to_axis_direction(TopToBottom),
+            TopToBottom
+        );
+        assert_eq!(
+            GrowthDirection::Reverse.apply_to_axis_direction(TopToBottom),
+            BottomToTop
+        );
+        assert_eq!(
+            GrowthDirection::Forward.apply_to_axis_direction(LeftToRight),
+            LeftToRight
+        );
+        assert_eq!(
+            GrowthDirection::Reverse.apply_to_axis_direction(LeftToRight),
+            RightToLeft
+        );
     }
 
     #[test]

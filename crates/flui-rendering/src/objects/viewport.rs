@@ -343,7 +343,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
         growth_direction: GrowthDirection,
         paint_extent: f32,
     ) -> Offset {
-        match apply_growth_direction_to_axis_direction(self.axis_direction, growth_direction) {
+        match growth_direction.apply_to_axis_direction(self.axis_direction) {
             TopToBottom => Offset::new(px(0.0), px(layout_offset)),
             BottomToTop => Offset::new(
                 px(0.0),
@@ -476,16 +476,6 @@ const fn default_cross_axis_direction(axis_direction: AxisDirection) -> AxisDire
     match axis_direction {
         TopToBottom | BottomToTop => LeftToRight,
         LeftToRight | RightToLeft => TopToBottom,
-    }
-}
-
-const fn apply_growth_direction_to_axis_direction(
-    axis_direction: AxisDirection,
-    growth_direction: GrowthDirection,
-) -> AxisDirection {
-    match growth_direction {
-        GrowthDirection::Forward => axis_direction,
-        GrowthDirection::Reverse => axis_direction.opposite(),
     }
 }
 
