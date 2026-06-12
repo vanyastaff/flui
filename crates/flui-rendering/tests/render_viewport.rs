@@ -73,6 +73,8 @@ struct FixedSliver {
     layout_extent: Option<f32>,
     constraints: SliverConstraints,
     geometry: SliverGeometry,
+    /// When `Some`, updated each layout with the child's growth direction.
+    recorded_growth_direction: Option<GrowthDirection>,
 }
 
 impl FixedSliver {
@@ -83,6 +85,14 @@ impl FixedSliver {
             layout_extent: None,
             constraints: SliverConstraints::default(),
             geometry: SliverGeometry::ZERO,
+            recorded_growth_direction: None,
+        }
+    }
+
+    fn recording_growth(scroll_extent: f32) -> Self {
+        Self {
+            recorded_growth_direction: Some(GrowthDirection::Forward),
+            ..Self::new(scroll_extent)
         }
     }
 
@@ -93,7 +103,13 @@ impl FixedSliver {
             layout_extent: Some(layout_extent),
             constraints: SliverConstraints::default(),
             geometry: SliverGeometry::ZERO,
+            recorded_growth_direction: None,
         }
+    }
+
+    fn last_growth_direction(&self) -> GrowthDirection {
+        self.recorded_growth_direction
+            .expect("FixedSliver::recording_growth was not used")
     }
 }
 
@@ -108,6 +124,9 @@ impl RenderSliver for FixedSliver {
 
     fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
         self.constraints = *ctx.constraints();
+        if self.recorded_growth_direction.is_some() {
+            self.recorded_growth_direction = Some(self.constraints.growth_direction);
+        }
         let paint_extent = self.calculate_paint_offset(&self.constraints, 0.0, self.paint_extent);
         let layout_extent = self.layout_extent.unwrap_or(paint_extent);
         let cache_extent = self.calculate_cache_offset(&self.constraints, 0.0, self.paint_extent);
@@ -206,68 +225,6 @@ impl RenderSliver for InvisibleHitSliver {
 
     fn hit_test_self(&self, main: f32, cross: f32) -> bool {
         main >= 0.0 && main < self.geometry.hit_test_extent && cross >= 0.0
-    }
-}
-
-#[derive(Debug)]
-struct GrowthRecordingSliver {
-    scroll_extent: f32,
-    constraints: SliverConstraints,
-    geometry: SliverGeometry,
-    last_growth_direction: GrowthDirection,
-}
-
-impl GrowthRecordingSliver {
-    fn new(scroll_extent: f32) -> Self {
-        Self {
-            scroll_extent,
-            constraints: SliverConstraints::default(),
-            geometry: SliverGeometry::ZERO,
-            last_growth_direction: GrowthDirection::Forward,
-        }
-    }
-}
-
-impl Diagnosticable for GrowthRecordingSliver {}
-impl PaintEffectsCapability for GrowthRecordingSliver {}
-impl SemanticsCapability for GrowthRecordingSliver {}
-impl HotReloadCapability for GrowthRecordingSliver {}
-
-impl RenderSliver for GrowthRecordingSliver {
-    type Arity = Leaf;
-    type ParentData = SliverParentData;
-
-    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
-        self.constraints = *ctx.constraints();
-        self.last_growth_direction = self.constraints.growth_direction;
-        let paint_extent = self.calculate_paint_offset(&self.constraints, 0.0, self.scroll_extent);
-        self.geometry = SliverGeometry {
-            scroll_extent: self.scroll_extent,
-            paint_extent,
-            layout_extent: paint_extent,
-            max_paint_extent: self.scroll_extent,
-            hit_test_extent: paint_extent,
-            cache_extent: self.calculate_cache_offset(&self.constraints, 0.0, self.scroll_extent),
-            visible: paint_extent > 0.0,
-            ..SliverGeometry::ZERO
-        };
-        ctx.complete(self.geometry);
-    }
-
-    fn constraints(&self) -> &SliverConstraints {
-        &self.constraints
-    }
-
-    fn geometry(&self) -> &SliverGeometry {
-        &self.geometry
-    }
-
-    fn set_geometry(&mut self, geometry: SliverGeometry) {
-        self.geometry = geometry;
-    }
-
-    fn hit_test_self(&self, _main: f32, _cross: f32) -> bool {
-        false
     }
 }
 
@@ -942,7 +899,7 @@ fn viewport_reverse_section_passes_reverse_growth_to_slivers() {
 
     let mut owner = PipelineOwner::new();
     let root_id = owner.insert(Box::new(viewport));
-    let sliver = GrowthRecordingSliver::new(40.0);
+    let sliver = FixedSliver::recording_growth(40.0);
     let sliver_id = owner
         .render_tree_mut()
         .insert_sliver_child(root_id, Box::new(sliver) as BoxedSliverObject)
@@ -953,15 +910,11 @@ fn viewport_reverse_section_passes_reverse_growth_to_slivers() {
         .render_tree()
         .get(sliver_id)
         .and_then(|node| node.as_sliver())
-        .and_then(|entry| {
-            entry
-                .render_object()
-                .downcast_ref::<GrowthRecordingSliver>()
-        })
-        .expect("GrowthRecordingSliver");
+        .and_then(|entry| entry.render_object().downcast_ref::<FixedSliver>())
+        .expect("FixedSliver");
 
     assert_eq!(
-        sliver.last_growth_direction,
+        sliver.last_growth_direction(),
         GrowthDirection::Reverse,
         "reverse-side viewport children must receive GrowthDirection::Reverse",
     );

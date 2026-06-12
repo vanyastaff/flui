@@ -524,45 +524,6 @@ mod tests {
         }
     }
 
-    #[derive(Debug)]
-    struct PositionProbeChild;
-
-    impl flui_foundation::Diagnosticable for PositionProbeChild {}
-    impl PaintEffectsCapability for PositionProbeChild {}
-    impl SemanticsCapability for PositionProbeChild {}
-    impl HotReloadCapability for PositionProbeChild {}
-
-    impl RenderSliver for PositionProbeChild {
-        type Arity = flui_tree::Leaf;
-        type ParentData = SliverPhysicalParentData;
-
-        fn perform_layout(
-            &mut self,
-            ctx: &mut SliverLayoutContext<'_, Self::Arity, Self::ParentData>,
-        ) {
-            let _ = ctx;
-        }
-
-        fn geometry(&self) -> &SliverGeometry {
-            static ZERO: SliverGeometry = SliverGeometry::ZERO;
-            &ZERO
-        }
-
-        fn constraints(&self) -> &SliverConstraints {
-            static DEFAULT: SliverConstraints = empty_sliver_constraints();
-            &DEFAULT
-        }
-
-        fn set_geometry(&mut self, _: SliverGeometry) {}
-
-        fn hit_test(
-            &self,
-            _: &mut SliverHitTestContext<'_, Self::Arity, Self::ParentData>,
-        ) -> bool {
-            false
-        }
-    }
-
     /// Builds a child sliver geometry with explicit fields for the
     /// composition test.
     fn child_geom(
@@ -980,6 +941,7 @@ mod tests {
     #[test]
     fn child_position_helpers_use_leading_padding() {
         use crate::protocol::SliverProtocol;
+        use crate::test_support::NoopSliver;
         use crate::traits::{RenderObject, RenderSliver};
 
         let padding = RenderSliverPadding::new(EdgeInsets {
@@ -990,7 +952,7 @@ mod tests {
         });
         let constraints = vertical_constraints(5.0, 200.0, 200.0, 300.0);
         let p = padding_with_constraints(padding, constraints);
-        let child = PositionProbeChild;
+        let child = NoopSliver;
         let child_ref: &dyn RenderObject<SliverProtocol> = &child;
 
         assert_eq!(
@@ -1013,6 +975,7 @@ mod tests {
     #[test]
     fn child_position_helpers_use_reverse_growth_leading_padding() {
         use crate::protocol::SliverProtocol;
+        use crate::test_support::NoopSliver;
         use crate::traits::{RenderObject, RenderSliver};
 
         let padding = RenderSliverPadding::new(EdgeInsets {
@@ -1024,7 +987,7 @@ mod tests {
         let mut constraints = vertical_constraints(5.0, 200.0, 200.0, 300.0);
         constraints.growth_direction = GrowthDirection::Reverse;
         let p = padding_with_constraints(padding, constraints);
-        let child = PositionProbeChild;
+        let child = NoopSliver;
         let child_ref: &dyn RenderObject<SliverProtocol> = &child;
 
         assert_eq!(

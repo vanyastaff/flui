@@ -9,9 +9,8 @@ use flui_tree::Single;
 use flui_types::layout::AxisDirection::*;
 
 use crate::{
-    constraints::{GrowthDirection, SliverConstraints, SliverGeometry},
+    constraints::{GrowthDirection, SliverConstraints, SliverGeometry, child_paint_offset},
     context::{PaintCx, SliverHitTestContext, SliverLayoutContext},
-    objects::sliver_helpers::child_paint_offset,
     parent_data::SliverPhysicalParentData,
     traits::{HotReloadCapability, PaintEffectsCapability, RenderSliver, SemanticsCapability},
 };

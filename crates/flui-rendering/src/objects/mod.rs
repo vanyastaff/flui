@@ -99,7 +99,6 @@ mod sized_box;
 mod sliver_fill_remaining;
 mod sliver_fill_viewport;
 mod sliver_fixed_extent_list;
-mod sliver_helpers;
 mod sliver_ignore_pointer;
 mod sliver_offstage;
 mod sliver_opacity;

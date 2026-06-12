@@ -25,6 +25,22 @@ use crate::{
 const MAX_LAYOUT_CYCLES_PER_CHILD: usize = 10;
 const DEFAULT_CACHE_EXTENT: f32 = 250.0;
 
+/// Parameters for one forward or reverse child walk inside [`RenderViewport`].
+#[derive(Debug, Clone, Copy)]
+struct LayoutChildSequenceParams {
+    scroll_offset: f32,
+    overlap: f32,
+    layout_offset: f32,
+    remaining_paint_extent: f32,
+    main_axis_extent: f32,
+    cross_axis_extent: f32,
+    growth_direction: GrowthDirection,
+    remaining_cache_extent: f32,
+    cache_origin: f32,
+    child_start: usize,
+    child_end: usize,
+}
+
 /// A Box-protocol viewport that lays out Sliver-protocol children.
 #[derive(Debug)]
 pub struct RenderViewport<O = ScrollableViewportOffset> {
@@ -126,8 +142,15 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
     /// `Some(index)`, children `[0..index)` use forward growth and `[index..)` use
     /// reverse growth from the trailing edge.
     #[inline]
-    pub const fn set_center_sliver_index(&mut self, index: Option<usize>) {
+    pub fn set_center_sliver_index(&mut self, index: Option<usize>) {
         self.center_sliver_index = index;
+    }
+
+    /// Returns the configured center sliver index, if any.
+    #[inline]
+    #[must_use]
+    pub const fn center_sliver_index(&self) -> Option<usize> {
+        self.center_sliver_index
     }
 
     /// Last total scroll extent reported by the forward sliver sequence.
@@ -219,64 +242,71 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             (full_cache_extent - center_cache_offset).clamp(0.0, full_cache_extent);
 
         let child_count = ctx.child_count();
-        let center = self.center_sliver_index.unwrap_or(child_count);
+        let center = match self.center_sliver_index {
+            None => child_count,
+            Some(index) => {
+                debug_assert!(
+                    index <= child_count,
+                    "center_sliver_index ({index}) must be <= child_count ({child_count})"
+                );
+                index.min(child_count)
+            }
+        };
+
+        let sequence_base = LayoutChildSequenceParams {
+            scroll_offset: corrected_offset.max(0.0),
+            overlap: center_offset.min(0.0),
+            layout_offset: 0.0,
+            remaining_paint_extent: main_axis_extent,
+            main_axis_extent,
+            cross_axis_extent,
+            growth_direction: GrowthDirection::Forward,
+            remaining_cache_extent,
+            cache_origin: center_offset.clamp(-cache_extent, 0.0),
+            child_start: 0,
+            child_end: center,
+        };
 
         if center > 0 {
-            let correction = self.layout_child_sequence(
-                ctx,
-                corrected_offset.max(0.0),
-                center_offset.min(0.0),
-                0.0,
-                main_axis_extent,
-                main_axis_extent,
-                cross_axis_extent,
-                GrowthDirection::Forward,
-                remaining_cache_extent,
-                center_offset.clamp(-cache_extent, 0.0),
-                0,
-                center,
-            );
+            let correction = self.layout_child_sequence(ctx, sequence_base);
             if correction != 0.0 {
                 return correction;
             }
         }
 
         if center < child_count {
-            return self.layout_child_sequence(
-                ctx,
-                corrected_offset.max(0.0),
-                center_offset.min(0.0),
-                0.0,
-                main_axis_extent,
-                main_axis_extent,
-                cross_axis_extent,
-                GrowthDirection::Reverse,
-                remaining_cache_extent,
-                center_offset.clamp(-cache_extent, 0.0),
-                center,
-                child_count,
-            );
+            // W3.2 limitation: reverse pass reuses the forward-pass cache window.
+            // Flutter recomputes cache parameters from forward results (Wave 3.3).
+            let reverse_params = LayoutChildSequenceParams {
+                growth_direction: GrowthDirection::Reverse,
+                child_start: center,
+                child_end: child_count,
+                ..sequence_base
+            };
+            self.layout_child_sequence(ctx, reverse_params)
+        } else {
+            0.0
         }
-
-        0.0
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn layout_child_sequence(
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>,
-        mut scroll_offset: f32,
-        overlap: f32,
-        mut layout_offset: f32,
-        remaining_paint_extent: f32,
-        main_axis_extent: f32,
-        cross_axis_extent: f32,
-        growth_direction: GrowthDirection,
-        mut remaining_cache_extent: f32,
-        mut cache_origin: f32,
-        child_start: usize,
-        child_end: usize,
+        params: LayoutChildSequenceParams,
     ) -> f32 {
+        let LayoutChildSequenceParams {
+            mut scroll_offset,
+            overlap,
+            mut layout_offset,
+            remaining_paint_extent,
+            main_axis_extent,
+            cross_axis_extent,
+            growth_direction,
+            mut remaining_cache_extent,
+            mut cache_origin,
+            child_start,
+            child_end,
+        } = params;
         let initial_layout_offset = layout_offset;
         let adjusted_user_scroll_direction =
             crate::constraints::apply_growth_direction_to_scroll_direction(
@@ -462,6 +492,8 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
             }
 
             if self.offset.apply_content_dimensions(
+                // Reverse-side slivers accumulate negative min_scroll_extent; report
+                // it so scroll-range semantics match Flutter (pre-W3.2 hardcoded 0.0).
                 self.min_scroll_extent,
                 (self.max_scroll_extent - main_axis_extent).max(0.0),
             ) {
