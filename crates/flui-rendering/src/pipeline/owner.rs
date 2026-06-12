@@ -693,10 +693,15 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 // fallback starts from the child's physical paint offset.
                 let child_position = match override_pos {
                     Some(position) => Self::sliver_hit_position_from_offset(child_node, position),
-                    None => Self::sliver_hit_position_from_paint_offset(
-                        child_node,
-                        position - child_node.offset(),
-                    ),
+                    None => {
+                        if !Self::sliver_child_is_visible(child_node) {
+                            return false;
+                        }
+                        Self::sliver_hit_position_from_paint_offset(
+                            child_node,
+                            position - child_node.offset(),
+                        )
+                    }
                 };
                 return self.hit_test_sliver_subtree(child_id, child_position, result);
             }
@@ -763,6 +768,12 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         };
 
         MainAxisPosition::new(main_axis, cross_axis)
+    }
+
+    fn sliver_child_is_visible(node: &RenderNode) -> bool {
+        node.as_sliver()
+            .and_then(|entry| entry.state().geometry())
+            .is_some_and(|geometry| geometry.visible)
     }
 
     fn sliver_hit_position_minus_paint_offset(
