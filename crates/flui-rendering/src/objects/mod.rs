@@ -52,6 +52,9 @@
 //!   protocol geometry (Core.2 W3.3)
 //! - [`RenderSliverFillRemainingWithScrollable`] - Sizes one Box child to
 //!   the remaining viewport paint extent (Core.2 W3.8)
+//! - [`RenderSliverFillRemaining`] /
+//!   [`RenderSliverFillRemainingAndOverscroll`] - Non-scroll fill remaining
+//!   variants that use Box child intrinsics (Core.2 W3.9)
 //! - [`RenderViewport`] - Box viewport that drives Sliver children
 //!   (Core.2 W3.4a)
 //!
@@ -122,7 +125,10 @@ pub use padding::RenderPadding;
 pub use paragraph::RenderParagraph;
 pub use repaint_boundary::RenderRepaintBoundary;
 pub use sized_box::RenderSizedBox;
-pub use sliver_fill_remaining::RenderSliverFillRemainingWithScrollable;
+pub use sliver_fill_remaining::{
+    RenderSliverFillRemaining, RenderSliverFillRemainingAndOverscroll,
+    RenderSliverFillRemainingWithScrollable,
+};
 pub use sliver_ignore_pointer::RenderSliverIgnorePointer;
 pub use sliver_offstage::RenderSliverOffstage;
 pub use sliver_opacity::RenderSliverOpacity;

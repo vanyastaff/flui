@@ -21,6 +21,7 @@ use crate::{
         capabilities::{HitTestCapability, HitTestContextApi, LayoutCapability, LayoutContextApi},
         protocol::{Protocol, ProtocolCompatible, sealed},
     },
+    storage::IntrinsicDimension,
 };
 
 // ============================================================================
@@ -187,6 +188,11 @@ pub type SliverChildLayoutCallback<'a> =
 /// Callback type for cross-protocol box child layout driven by a Sliver parent.
 pub type BoxChildLayoutCallback<'a> = &'a (dyn Fn(RenderId, BoxConstraints) -> Size + Send + Sync);
 
+/// Callback type for cross-protocol box child intrinsic queries driven by a
+/// Sliver parent.
+pub type BoxChildIntrinsicCallback<'a> =
+    &'a (dyn Fn(RenderId, IntrinsicDimension, f32) -> f32 + Send + Sync);
+
 /// Dense per-child geometry cache used by Proxy storage.
 type ProxySliverChildGeometryCache = Vec<Option<SliverGeometry>>;
 
@@ -246,6 +252,7 @@ enum SliverLayoutCtxStorage<'ctx, P: ParentData + Default> {
         child_ids: Option<&'ctx [RenderId]>,
         layout_child_callback: Option<SliverChildLayoutCallback<'ctx>>,
         layout_box_child_callback: Option<BoxChildLayoutCallback<'ctx>>,
+        box_child_intrinsic_callback: Option<BoxChildIntrinsicCallback<'ctx>>,
     },
     /// Bridge path: wraps the erased context from the pipeline boundary.
     ///
@@ -275,6 +282,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
                 child_ids: None,
                 layout_child_callback: None,
                 layout_box_child_callback: None,
+                box_child_intrinsic_callback: None,
             },
             _phantom: std::marker::PhantomData,
         }
@@ -293,6 +301,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
                 child_ids: None,
                 layout_child_callback: None,
                 layout_box_child_callback: None,
+                box_child_intrinsic_callback: None,
             },
             _phantom: std::marker::PhantomData,
         }
@@ -305,6 +314,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
         child_ids: &'ctx [RenderId],
         layout_child_callback: SliverChildLayoutCallback<'ctx>,
         layout_box_child_callback: Option<BoxChildLayoutCallback<'ctx>>,
+        box_child_intrinsic_callback: Option<BoxChildIntrinsicCallback<'ctx>>,
     ) -> Self {
         Self {
             storage: SliverLayoutCtxStorage::Direct {
@@ -314,6 +324,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
                 child_ids: Some(child_ids),
                 layout_child_callback: Some(layout_child_callback),
                 layout_box_child_callback,
+                box_child_intrinsic_callback,
             },
             _phantom: std::marker::PhantomData,
         }
@@ -436,6 +447,33 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
             }
             SliverLayoutCtxStorage::Proxy { erased, .. } => {
                 erased.layout_box_child(index, constraints)
+            }
+        }
+    }
+
+    /// Queries one Box-protocol child's intrinsic dimension.
+    pub fn box_child_intrinsic(
+        &mut self,
+        index: usize,
+        dimension: IntrinsicDimension,
+        extent: f32,
+    ) -> f32 {
+        match &mut self.storage {
+            SliverLayoutCtxStorage::Direct {
+                child_ids,
+                box_child_intrinsic_callback,
+                ..
+            } => {
+                if let (Some(child_ids), Some(callback)) =
+                    (*child_ids, box_child_intrinsic_callback.as_ref())
+                    && let Some(&child_id) = child_ids.get(index)
+                {
+                    return callback(child_id, dimension, extent);
+                }
+                0.0
+            }
+            SliverLayoutCtxStorage::Proxy { erased, .. } => {
+                erased.box_child_intrinsic(index, dimension, extent)
             }
         }
     }
@@ -609,6 +647,14 @@ pub trait SliverLayoutCtxErased: Send + Sync {
     /// Performs synchronous Box layout on child at `index`.
     fn layout_box_child(&mut self, index: usize, constraints: BoxConstraints) -> Size;
 
+    /// Performs a synchronous Box intrinsic query on child at `index`.
+    fn box_child_intrinsic(
+        &mut self,
+        index: usize,
+        dimension: IntrinsicDimension,
+        extent: f32,
+    ) -> f32;
+
     /// Records the paint offset for child at `index`.
     fn position_child(&mut self, index: usize, offset: Offset);
 
@@ -663,6 +709,16 @@ impl<A: Arity, P: ParentData + Default> SliverLayoutCtxErased for SliverLayoutCt
     #[inline]
     fn layout_box_child(&mut self, index: usize, constraints: BoxConstraints) -> Size {
         SliverLayoutCtx::layout_box_child(self, index, constraints)
+    }
+
+    #[inline]
+    fn box_child_intrinsic(
+        &mut self,
+        index: usize,
+        dimension: IntrinsicDimension,
+        extent: f32,
+    ) -> f32 {
+        SliverLayoutCtx::box_child_intrinsic(self, index, dimension, extent)
     }
 
     #[inline]
@@ -750,6 +806,7 @@ pub struct ErasedSliverLayoutCtx<'ctx> {
     child_ids: &'ctx [RenderId],
     layout_child_callback: SliverChildLayoutCallback<'ctx>,
     layout_box_child_callback: BoxChildLayoutCallback<'ctx>,
+    box_child_intrinsic_callback: BoxChildIntrinsicCallback<'ctx>,
 }
 
 impl<'ctx> ErasedSliverLayoutCtx<'ctx> {
@@ -760,6 +817,7 @@ impl<'ctx> ErasedSliverLayoutCtx<'ctx> {
         child_ids: &'ctx [RenderId],
         layout_child_callback: SliverChildLayoutCallback<'ctx>,
         layout_box_child_callback: BoxChildLayoutCallback<'ctx>,
+        box_child_intrinsic_callback: BoxChildIntrinsicCallback<'ctx>,
     ) -> Self {
         Self {
             constraints,
@@ -768,6 +826,7 @@ impl<'ctx> ErasedSliverLayoutCtx<'ctx> {
             child_ids,
             layout_child_callback,
             layout_box_child_callback,
+            box_child_intrinsic_callback,
         }
     }
 
@@ -802,6 +861,18 @@ impl SliverLayoutCtxErased for ErasedSliverLayoutCtx<'_> {
             return Size::ZERO;
         };
         (self.layout_box_child_callback)(child_id, constraints)
+    }
+
+    fn box_child_intrinsic(
+        &mut self,
+        index: usize,
+        dimension: IntrinsicDimension,
+        extent: f32,
+    ) -> f32 {
+        let Some(&child_id) = self.child_ids.get(index) else {
+            return 0.0;
+        };
+        (self.box_child_intrinsic_callback)(child_id, dimension, extent)
     }
 
     fn position_child(&mut self, index: usize, offset: Offset) {

@@ -2631,6 +2631,107 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
     Ok(geometry)
 }
 
+/// Recursive Box intrinsic query over the pre-acquired layout subtree.
+///
+/// Used when a Sliver parent needs Flutter-style Box child intrinsics during
+/// layout. It shares the layout walk's [`SubtreeBorrows`] pool instead of
+/// re-entering `PipelineOwner`, preserving the same disjoint-slot discipline as
+/// `layout_subtree_borrowed`.
+unsafe fn box_intrinsic_query_borrowed<'tree>(
+    borrows: &SubtreeBorrows<'tree>,
+    id: RenderId,
+    dimension: crate::storage::IntrinsicDimension,
+    extent: f32,
+) -> crate::error::RenderResult<f32> {
+    ensure_stack(|| {
+        // SAFETY: forwarded from this wrapper; ensure_stack only changes stack
+        // placement, not borrow lifetimes or aliasing.
+        unsafe { box_intrinsic_query_borrowed_impl(borrows, id, dimension, extent) }
+    })
+}
+
+/// Body of [`box_intrinsic_query_borrowed`].
+///
+/// # Safety
+///
+/// Same contract as [`layout_subtree_borrowed`]: `borrows` must outlive this
+/// call and recursive child callbacks, and re-entry into an in-flight node is
+/// rejected by [`LayoutCycleGuard`] before any second mutable reborrow occurs.
+unsafe fn box_intrinsic_query_borrowed_impl<'tree>(
+    borrows: &SubtreeBorrows<'tree>,
+    id: RenderId,
+    dimension: crate::storage::IntrinsicDimension,
+    extent: f32,
+) -> crate::error::RenderResult<f32> {
+    let _cycle_guard = LayoutCycleGuard::enter(borrows, id)?;
+
+    let NodePtr(node_ptr) = match borrows.get(id) {
+        Some(np) => np,
+        None => return Err(crate::error::RenderError::NodeNotFound(id)),
+    };
+
+    // SAFETY: this is the only live reborrow of `id` in this intrinsic query
+    // frame. Recursive callbacks target child slots; cycle guard rejects
+    // attempts to revisit an in-flight ancestor.
+    let node_ref: &mut RenderNode = unsafe { &mut *node_ptr };
+    let node_protocol = node_ref.protocol_name();
+    let entry: &mut RenderEntry<BoxProtocol> = match node_ref.as_box_mut() {
+        Some(e) => e,
+        None => {
+            return Err(crate::error::RenderError::ProtocolMismatch {
+                node_protocol,
+                constraints_protocol: "box",
+            });
+        }
+    };
+
+    if let Some(hit) = entry
+        .state()
+        .layout_cache()
+        .peek_intrinsic(dimension, extent)
+    {
+        return Ok(hit);
+    }
+
+    let child_ids: Vec<RenderId> = entry.links().children().to_vec();
+    let mut child_err: Option<crate::error::RenderError> = None;
+    let value = {
+        let child_err = &mut child_err;
+        let mut child_query =
+            |index: usize, dim: crate::storage::IntrinsicDimension, ext: f32| -> f32 {
+                let Some(&child_id) = child_ids.get(index) else {
+                    child_err.get_or_insert(crate::error::RenderError::contract_violation(
+                        "sliver box child intrinsic query",
+                        "child index out of range for this node's children",
+                    ));
+                    return 0.0;
+                };
+                // SAFETY: the child query uses the same pre-acquired subtree
+                // and targets a child slot distinct from the current box node.
+                match unsafe { box_intrinsic_query_borrowed(borrows, child_id, dim, ext) } {
+                    Ok(value) => value,
+                    Err(err) => {
+                        child_err.get_or_insert(err);
+                        0.0
+                    }
+                }
+            };
+        entry
+            .render_object()
+            .intrinsic_raw(dimension, extent, child_ids.len(), &mut child_query)
+    };
+
+    if let Some(err) = child_err {
+        return Err(err);
+    }
+
+    entry
+        .state_mut()
+        .layout_cache_mut()
+        .insert_intrinsic(dimension, extent, value);
+    Ok(value)
+}
+
 // ============================================================================
 // Cross-protocol child layout: Box parent → Sliver child
 // ============================================================================
@@ -2747,6 +2848,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl<'tree>(
         std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let descendant_error_for_cb = std::sync::Arc::clone(&descendant_error_flag);
     let descendant_error_for_box_cb = std::sync::Arc::clone(&descendant_error_flag);
+    let descendant_error_for_intrinsic_cb = std::sync::Arc::clone(&descendant_error_flag);
     let borrows_for_cb: &SubtreeBorrows<'_> = borrows;
 
     let cb_owned = move |child_id: RenderId,
@@ -2795,12 +2897,39 @@ unsafe fn layout_sliver_subtree_borrowed_impl<'tree>(
     };
     let box_cb_ref: crate::protocol::sliver_protocol::BoxChildLayoutCallback<'_> = &box_cb_owned;
 
+    let box_intrinsic_cb_owned = move |child_id: RenderId,
+                                       dimension: crate::storage::IntrinsicDimension,
+                                       extent: f32|
+          -> f32 {
+        // SAFETY: same subtree-borrow contract as the Sliver -> Box layout
+        // callback, but this read-only sizing query routes through the Box
+        // intrinsic bridge instead of perform_layout.
+        match unsafe { box_intrinsic_query_borrowed(borrows_for_cb, child_id, dimension, extent) } {
+            Ok(value) => value,
+            Err(err) => {
+                descendant_error_for_intrinsic_cb.store(true, std::sync::atomic::Ordering::Relaxed);
+                tracing::error!(
+                    parent = ?id,
+                    ?child_id,
+                    ?err,
+                    "layout_dirty_root: box intrinsic query failed from sliver parent; \
+                     returning 0.0 to caller's perform_layout. \
+                     Parent NEEDS_LAYOUT preserved for next-frame retry.",
+                );
+                0.0
+            }
+        }
+    };
+    let box_intrinsic_cb_ref: crate::protocol::sliver_protocol::BoxChildIntrinsicCallback<'_> =
+        &box_intrinsic_cb_owned;
+
     let mut ctx = crate::protocol::ErasedSliverLayoutCtx::new(
         constraints,
         &mut child_states,
         &child_ids,
         cb_ref,
         box_cb_ref,
+        box_intrinsic_cb_ref,
     );
     let erased: &mut dyn SliverLayoutCtxErased = &mut ctx;
 
