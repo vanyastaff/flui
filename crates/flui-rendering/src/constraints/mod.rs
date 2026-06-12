@@ -96,7 +96,7 @@ mod sliver_geometry;
 use std::fmt;
 
 pub use box_constraints::BoxConstraints;
-pub use direction::GrowthDirection;
+pub use direction::{GrowthDirection, apply_growth_direction_to_scroll_direction, right_way_up};
 #[cfg(feature = "scrolling")]
 pub use scroll_metrics::{FixedExtentMetrics, FixedScrollMetrics, ScrollMetrics};
 pub use sliver_constraints::SliverConstraints;

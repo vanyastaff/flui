@@ -391,13 +391,39 @@ impl RenderSliver for RenderSliverPadding {
         self.geometry = geometry;
     }
 
+    fn child_main_axis_position(
+        &self,
+        _child: &dyn crate::traits::RenderObject<crate::protocol::SliverProtocol>,
+    ) -> f32 {
+        let (before, _, _, _) = self.resolve(&self.constraints);
+        Self::paint_offset(&self.constraints, 0.0, before)
+    }
+
+    fn child_cross_axis_position(
+        &self,
+        _child: &dyn crate::traits::RenderObject<crate::protocol::SliverProtocol>,
+    ) -> f32 {
+        match self.constraints.axis() {
+            Axis::Vertical => self.padding.left.get(),
+            Axis::Horizontal => self.padding.top.get(),
+        }
+    }
+
+    fn child_scroll_offset(
+        &self,
+        _child: &dyn crate::traits::RenderObject<crate::protocol::SliverProtocol>,
+    ) -> Option<f32> {
+        let (before, _, _, _) = self.resolve(&self.constraints);
+        Some(before)
+    }
+
     fn hit_test(
         &self,
         ctx: &mut SliverHitTestContext<'_, Single, SliverPhysicalParentData>,
     ) -> bool {
-        // Padding contributes no hit area of its own; it only forwards
-        // hits into the child after the pipeline subtracts the committed
-        // child paint offset.
+        if self.geometry.hit_test_extent <= 0.0 {
+            return false;
+        }
         ctx.hit_test_child_at_layout_offset(0)
     }
 
@@ -830,6 +856,95 @@ mod tests {
         // paint_offset.y = cross_before (top = 7).
         assert_eq!(paint_offset.dx, px(10.0));
         assert_eq!(paint_offset.dy, px(7.0));
+    }
+
+    #[test]
+    fn padded_geometry_with_partially_scrolled_leading_padding() {
+        let p = RenderSliverPadding::new(EdgeInsets {
+            top: px(10.0),
+            right: px(0.0),
+            bottom: px(20.0),
+            left: px(0.0),
+        });
+        let parent = vertical_constraints(5.0, 200.0, 200.0, 300.0);
+        let child = child_geom(100.0, 80.0, 80.0, 80.0);
+
+        let (geom, paint_offset) = p.padded_geometry(&parent, &child);
+
+        assert_eq!(geom.paint_extent, 105.0);
+        assert_eq!(geom.layout_extent, 105.0);
+        assert_eq!(paint_offset.dy, px(5.0));
+        assert_eq!(paint_offset.dx, px(0.0));
+    }
+
+    #[test]
+    fn padded_geometry_reverse_growth_child_paint_offset() {
+        let p = RenderSliverPadding::new(EdgeInsets {
+            top: px(10.0),
+            right: px(0.0),
+            bottom: px(20.0),
+            left: px(0.0),
+        });
+        let mut parent = vertical_constraints(0.0, 200.0, 200.0, 300.0);
+        parent.growth_direction = GrowthDirection::Reverse;
+        let child = child_geom(100.0, 80.0, 80.0, 80.0);
+
+        let (_geom, paint_offset) = p.padded_geometry(&parent, &child);
+
+        // Reverse vertical growth uses bottom padding as leading; child is
+        // positioned from the trailing end of the padded scroll extent.
+        assert_eq!(paint_offset.dy, px(10.0));
+    }
+
+    #[test]
+    fn empty_geometry_with_scrolled_leading_padding() {
+        let p = RenderSliverPadding::symmetric(0.0, 15.0);
+        let parent = vertical_constraints(5.0, 200.0, 200.0, 300.0);
+        let geom = p.empty_geometry(&parent);
+
+        assert_eq!(geom.scroll_extent, 30.0);
+        assert_eq!(geom.paint_extent, 25.0);
+        assert_eq!(geom.hit_test_extent, 25.0);
+    }
+
+    #[test]
+    fn child_constraints_negative_overlap_passthrough() {
+        let p = RenderSliverPadding::new(EdgeInsets {
+            top: px(10.0),
+            right: px(0.0),
+            bottom: px(0.0),
+            left: px(0.0),
+        });
+        let mut parent = vertical_constraints(0.0, 200.0, 200.0, 300.0);
+        parent.overlap = -12.0;
+
+        let cc = p.child_constraints(&parent);
+
+        assert_eq!(cc.overlap, -12.0);
+    }
+
+    #[test]
+    fn child_position_helpers_use_leading_padding() {
+        let p = RenderSliverPadding::new(EdgeInsets {
+            top: px(10.0),
+            right: px(0.0),
+            bottom: px(20.0),
+            left: px(3.0),
+        });
+        let constraints = vertical_constraints(5.0, 200.0, 200.0, 300.0);
+        let (before, _, _, _) = p.resolve(&constraints);
+
+        assert_eq!(
+            RenderSliverPadding::paint_offset(&constraints, 0.0, before),
+            5.0,
+            "child main-axis position matches visible leading padding",
+        );
+        assert_eq!(before, 10.0, "child scroll offset uses leading padding");
+        assert_eq!(
+            p.padding.left.get(),
+            3.0,
+            "cross-axis position uses left inset"
+        );
     }
 
     // ────────────────────────────────────────────────────────────────────────

@@ -59,7 +59,7 @@ use flui_rendering::{
     traits::TextBaseline,
 };
 use flui_types::{
-    Alignment, Offset, Point, Rect, Size,
+    Alignment, EdgeInsets, Offset, Point, Rect, Size,
     geometry::px,
     layout::{AxisDirection, BoxFit, StackFit},
     painting::Clip,
@@ -115,6 +115,18 @@ fn loose(max: f32) -> BoxConstraints {
 
 fn viewport(sliver: TreeNode) -> TreeNode {
     viewport_multi([sliver])
+}
+
+fn viewport_with_scroll(offset: f32, sliver: TreeNode) -> TreeNode {
+    use flui_rendering::view::ScrollableViewportOffset;
+
+    box_node(RenderViewport::with_offset(
+        AxisDirection::TopToBottom,
+        AxisDirection::LeftToRight,
+        ScrollableViewportOffset::new(offset),
+    ))
+    .label("viewport")
+    .child(sliver)
 }
 
 fn viewport_multi(slivers: impl IntoIterator<Item = TreeNode>) -> TreeNode {
@@ -1148,6 +1160,40 @@ fn harness_sliver_padding_insets_geometry() {
     assert_has_committed_geometry(
         tree.find_descendant("RenderSliverPadding")
             .expect("padding"),
+    );
+}
+
+#[test]
+fn harness_sliver_padding_scrolled_viewport_applies_leading_padding() {
+    let run = RenderTester::mount(viewport_with_scroll(
+        5.0,
+        sliver_node(RenderSliverPadding::new(EdgeInsets {
+            top: px(10.0),
+            right: px(0.0),
+            bottom: px(20.0),
+            left: px(0.0),
+        }))
+        .label("pad")
+        .child(
+            sliver_node(RenderSliverToBoxAdapter::new())
+                .label("adapter")
+                .child(box_node(RenderSizedBox::fixed(px(300.0), px(80.0))).label("box")),
+        ),
+    ))
+    .with_size(Size::new(px(300.0), px(100.0)))
+    .run_layout();
+
+    let pad = run.sliver_geometry(run.id("pad"));
+    assert_eq!(pad.scroll_extent, 110.0);
+    assert_eq!(
+        pad.paint_extent, 100.0,
+        "paint extent is clamped to the 100px viewport main axis",
+    );
+    assert_eq!(run.offset(run.id("adapter")).dy, px(5.0));
+    assert_has_committed_geometry(
+        run.diagnostics()
+            .find_descendant("RenderSliverToBoxAdapter")
+            .expect("adapter"),
     );
 }
 

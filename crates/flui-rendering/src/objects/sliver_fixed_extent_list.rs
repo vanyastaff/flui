@@ -167,7 +167,10 @@ fn child_paint_offset(
     child_main_extent: f32,
 ) -> Offset {
     let child_main_axis_position = layout_offset - constraints.scroll_offset;
-    let main_axis_delta = if right_way_up(constraints) {
+    let main_axis_delta = if crate::constraints::right_way_up(
+        constraints.axis_direction,
+        constraints.growth_direction,
+    ) {
         child_main_axis_position
     } else {
         geometry.paint_extent - child_main_extent - child_main_axis_position
@@ -176,14 +179,6 @@ fn child_paint_offset(
     match constraints.axis_direction.axis() {
         Axis::Horizontal => Offset::new(px(main_axis_delta), px(0.0)),
         Axis::Vertical => Offset::new(px(0.0), px(main_axis_delta)),
-    }
-}
-
-const fn right_way_up(constraints: &SliverConstraints) -> bool {
-    let reversed = constraints.axis_direction.is_reversed();
-    match constraints.growth_direction {
-        GrowthDirection::Forward => !reversed,
-        GrowthDirection::Reverse => reversed,
     }
 }
 
