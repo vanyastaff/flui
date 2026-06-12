@@ -108,6 +108,7 @@ flui/
 | Architecture | `docs/architecture.md` | Three-tree pipeline + layered DAG overview (current state) |
 | Crates Map | `docs/crates.md` | Per-layer crate inventory and status |
 | Testing | `docs/testing.md` | Build / test / clippy / fmt commands and coverage targets |
+| Render harness | `crates/flui-rendering/docs/TESTING.md` | `RenderTester` / `Probe` API, catalog rules, multi-frame helpers |
 | Contributing | `docs/contributing.md` | Workflow, commits, agent conventions |
 | Crate architecture notes | `crates/<crate>/ARCHITECTURE.md` | Per-crate architecture (e.g. `flui-foundation/ARCHITECTURE.md`) |
 | Plans | `docs/plans/` | Dated planning notes per workstream |
@@ -164,3 +165,97 @@ Run `just` (no argument) for the full grouped recipe list. Raw `cargo` commands 
 - **Test the edge, not just the happy path.** Any rendering fix should include regression tests for non-zero scroll/overlap/cache offsets, invisible or fully scrolled-out children, differing paint vs hit-test extents, relayout without repositioning, and cross-protocol Box/Sliver paths when relevant.
 - **Verify before commit or PR update.** For `flui-rendering` work, run targeted tests for the changed behavior, then `cargo fmt --package flui-rendering -- --check`, `cargo test -p flui-rendering`, and `cargo clippy -p flui-rendering --all-targets -- -D warnings` unless the user explicitly asks for a lighter pass.
 - **Be skeptical of broad fixes.** When expanding a commit path or shared pipeline behavior, check every protocol that now flows through it and seed/commit persistent state symmetrically so one protocol is not reset by another.
+
+## Render-Object Testing Checklist
+
+When adding or materially changing a **`RenderBox`** or **`RenderSliver`** in `flui-rendering`, land harness coverage in the same PR. Do not rely on GPU demos or manual inspection — use the headless pipeline via `flui_rendering::testing` (see [`crates/flui-rendering/docs/TESTING.md`](crates/flui-rendering/docs/TESTING.md)).
+
+### 1. Register the type (CI will fail if skipped)
+
+Every concrete type exported from `crates/flui-rendering/src/objects/mod.rs` must appear in the harness catalog:
+
+| Step | File | Action |
+|------|------|--------|
+| Export | `objects/mod.rs` | `pub use …::RenderYourType` |
+| Catalog list | `tests/render_object_harness.rs` | Add `"RenderYourType"` to `RENDER_OBJECT_TYPES` (keep sorted) |
+| Coverage table | same file, module doc | Add a row: harness test name(s), Layout / Hit-test / Paint / Diagnostics |
+| Harness test | same file | Add `#[test] fn harness_your_type_…()` that **uses the type name** inside the test body |
+
+Two guards run in CI:
+
+- `catalog_covers_every_render_object_name` — each `RENDER_OBJECT_TYPES` entry must appear in at least one `#[test] fn harness_*` block.
+- `render_object_types_match_exports` — `RENDER_OBJECT_TYPES` must match `pub use` exports in `objects/mod.rs` (generic `RenderClip` is excluded; concrete clip variants are not).
+
+### 2. Build the smallest meaningful tree
+
+```rust
+use flui_rendering::objects::*;
+use flui_rendering::testing::{RenderTester, Probe, box_node, sliver_node};
+
+// Box object — root or nested under a sized host
+RenderTester::mount(box_node(RenderYourType::new(…)).label("node"))
+    .with_size(Size::new(px(100.0), px(100.0)))
+    .run_layout(); // or .run_frame() when paint/layers matter
+
+// Sliver object — always under a Box viewport root (never a sliver root)
+RenderTester::mount(
+    box_node(RenderViewport::new(AxisDirection::TopToBottom))
+        .child(sliver_node(RenderYourSliver::new(…)).label("sliver")),
+)
+.with_size(Size::new(px(300.0), px(100.0)))
+.run_layout();
+```
+
+- **Box root** for box-only objects; **viewport host** for every sliver.
+- Use `.label("…")` on nodes you assert via `run.id("…")`.
+- Stack / flex children need parent metadata: `TreeNode::with_stack_parent_data` or `with_flex_parent_data` (see [`parent_data.rs`](crates/flui-rendering/src/testing/parent_data.rs)).
+
+### 3. Assert by capability (not every object needs every column)
+
+| Capability | When required | Typical assertions |
+|------------|---------------|-------------------|
+| **Layout** | Always | `run.box_geometry(id)`, `run.offset(id)`, `run.sliver_geometry(id)`; `assert_has_committed_size` / `assert_has_committed_geometry` |
+| **Diagnostics** | Always | `impl Diagnosticable` with **snake_case** property names; `assert_descendant_properties(&run.diagnostics(), "RenderYourType", &[…])`; use `run.property_f64` / `descendant_property_f64` for numeric fields (unit suffixes like `25px` are parsed) |
+| **Hit-test** | Pointer-blocking or positioned semantics | `run.hit(x, y)`, `run.hit_first(x, y)` — include a negative case (miss / pass-through) |
+| **Paint** | `perform_paint`, opacity, transform, decoration, picture layers | `.run_frame()` or `advance_paint`; `run.structure()`, `run.picture_bounds()`, `run.opacity_alpha()`, `run.has_picture_layer()` |
+| **Multi-frame** | Animated or dirty-state behavior | `run.update::<T>`, `run.update_paint::<T>`, `advance_layout`, `simulate` + `AnimationController` (see `tests/harness_animation.rs`) |
+
+Pick **at least one** `harness_<snake_name>_…` test per type. Split into multiple tests when layout vs paint vs hit-test need different tree shapes.
+
+### 4. Diagnostics contract
+
+- Object config: `debug_fill_properties` on the render type (`Diagnosticable`).
+- Runtime state: pipeline adds committed fields (`paint_offset`, `size`, sliver `geometry`, etc.) — do not duplicate scroll offset as bare `offset` on viewports (`scroll_offset` is the config field).
+- Property names are **snake_case** everywhere (render objects, layer tree, harness assertions).
+- Avoid duplicate type names in one diagnostics tree; `find_descendant_unique` is used by `Probe::descendant_property*`.
+
+### 5. Edge cases (regression tests beyond happy path)
+
+Add extra tests when the Flutter port has non-obvious behavior:
+
+- Non-zero scroll / cache / overlap offsets on viewport + sliver chains
+- Invisible or fully scrolled-out children (zero geometry, no paint, no hit)
+- Paint extent vs hit-test extent divergence (e.g. `RenderFractionalTranslation` without hit transform)
+- Relayout without repositioning; paint-only mutation without layout (`update_paint` + `pump`)
+- Cross-protocol paths (box child under sliver adapter, multiple slivers in one viewport)
+
+Check `.flutter/` for the reference behavior before asserting.
+
+### 6. Local verification (before PR)
+
+```bash
+cargo test -p flui-rendering --test render_object_harness
+cargo test -p flui-rendering --test harness_animation   # if animation/multi-frame touched
+cargo test -p flui-rendering
+cargo fmt --package flui-rendering -- --check
+cargo clippy -p flui-rendering --all-targets -- -D warnings
+bash scripts/port-check.sh -v   # no duplicate cross-crate test helper names; testing modules gated
+```
+
+### 7. Naming conventions
+
+| Item | Pattern | Example |
+|------|---------|---------|
+| Harness test fn | `harness_<snake_case>_…` | `harness_sliver_fixed_extent_list_geometry` |
+| Type string in diagnostics | Rust struct name | `"RenderSliverFixedExtentList"` |
+| Label registry | `LayerLabelRegistry` (layer), `RenderLabelRegistry` (render) — do not reintroduce a shared `IdRegistry` name across crates |
