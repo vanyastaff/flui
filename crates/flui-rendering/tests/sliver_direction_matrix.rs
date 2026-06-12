@@ -5,6 +5,7 @@
 
 use flui_rendering::{
     constraints::{GrowthDirection, apply_growth_direction_to_scroll_direction, right_way_up},
+    impl_sliver_test_caps,
     traits::RenderSliver,
     view::ScrollDirection,
 };
@@ -80,10 +81,7 @@ impl RenderSliver for DirectionProbe {
     }
 }
 
-impl flui_foundation::Diagnosticable for DirectionProbe {}
-impl flui_rendering::traits::PaintEffectsCapability for DirectionProbe {}
-impl flui_rendering::traits::SemanticsCapability for DirectionProbe {}
-impl flui_rendering::traits::HotReloadCapability for DirectionProbe {}
+impl_sliver_test_caps!(DirectionProbe);
 
 #[test]
 fn sliver_direction_matrix_eight_by_three() {

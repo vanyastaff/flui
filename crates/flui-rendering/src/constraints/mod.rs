@@ -92,6 +92,7 @@ mod direction;
 mod scroll_metrics;
 mod sliver_constraints;
 mod sliver_geometry;
+mod sliver_layout;
 
 use std::fmt;
 
@@ -101,6 +102,7 @@ pub use direction::{GrowthDirection, apply_growth_direction_to_scroll_direction,
 pub use scroll_metrics::{FixedExtentMetrics, FixedScrollMetrics, ScrollMetrics};
 pub use sliver_constraints::SliverConstraints;
 pub use sliver_geometry::SliverGeometry;
+pub(crate) use sliver_layout::child_paint_offset;
 
 /// Abstract constraint trait following Flutter's protocol.
 ///

@@ -236,6 +236,16 @@ impl SliverConstraints {
         }
     }
 
+    /// Box constraints with a tight cross axis and unbounded main-axis max.
+    ///
+    /// Used by single-child sliver adapters that size to the child's intrinsic
+    /// main-axis extent.
+    #[inline]
+    #[must_use]
+    pub fn unbounded_main_axis_box_constraints(&self) -> BoxConstraints {
+        self.as_box_constraints(0.0, f32::INFINITY, None)
+    }
+
     /// Returns whether content is at or before the viewport start.
     #[inline]
     #[must_use]

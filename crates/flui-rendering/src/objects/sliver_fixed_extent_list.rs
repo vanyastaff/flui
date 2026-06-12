@@ -2,14 +2,10 @@
 
 use flui_foundation::Diagnosticable;
 use flui_tree::Variable;
-use flui_types::{
-    Offset,
-    geometry::px,
-    layout::{Axis, AxisDirection::*},
-};
+use flui_types::{geometry::px, layout::AxisDirection::*};
 
 use crate::{
-    constraints::{GrowthDirection, SliverConstraints, SliverGeometry},
+    constraints::{GrowthDirection, SliverConstraints, SliverGeometry, child_paint_offset},
     context::{PaintCx, SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverPhysicalParentData,
     traits::{HotReloadCapability, PaintEffectsCapability, RenderSliver, SemanticsCapability},
@@ -122,8 +118,8 @@ impl RenderSliver for RenderSliverFixedExtentList {
                 child_paint_offset(
                     &self.constraints,
                     &geometry,
-                    layout_offset,
-                    self.item_extent,
+                    px(layout_offset),
+                    px(self.item_extent),
                 ),
             );
         }
@@ -157,28 +153,6 @@ impl RenderSliver for RenderSliverFixedExtentList {
             }
         }
         false
-    }
-}
-
-fn child_paint_offset(
-    constraints: &SliverConstraints,
-    geometry: &SliverGeometry,
-    layout_offset: f32,
-    child_main_extent: f32,
-) -> Offset {
-    let child_main_axis_position = layout_offset - constraints.scroll_offset;
-    let main_axis_delta = if crate::constraints::right_way_up(
-        constraints.axis_direction,
-        constraints.growth_direction,
-    ) {
-        child_main_axis_position
-    } else {
-        geometry.paint_extent - child_main_extent - child_main_axis_position
-    };
-
-    match constraints.axis_direction.axis() {
-        Axis::Horizontal => Offset::new(px(main_axis_delta), px(0.0)),
-        Axis::Vertical => Offset::new(px(0.0), px(main_axis_delta)),
     }
 }
 

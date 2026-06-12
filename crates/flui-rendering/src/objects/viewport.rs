@@ -8,7 +8,7 @@
 use flui_foundation::Diagnosticable;
 use flui_tree::Variable;
 use flui_types::{
-    Offset, Point, Rect, Size,
+    Offset, Pixels, Point, Rect, Size,
     geometry::px,
     layout::{Axis, AxisDirection, AxisDirection::*},
     painting::Clip,
@@ -24,6 +24,37 @@ use crate::{
 
 const MAX_LAYOUT_CYCLES_PER_CHILD: usize = 10;
 const DEFAULT_CACHE_EXTENT: f32 = 250.0;
+/// Scroll correction returned when layout accepts the current offset unchanged.
+const NO_SCROLL_CORRECTION: f32 = 0.0;
+
+/// Parameters for one forward or reverse child walk inside [`RenderViewport`].
+#[derive(Debug, Clone, Copy)]
+struct LayoutChildSequenceParams {
+    scroll_offset: f32,
+    overlap: f32,
+    layout_offset: f32,
+    remaining_paint_extent: f32,
+    main_axis_extent: f32,
+    cross_axis_extent: f32,
+    growth_direction: GrowthDirection,
+    remaining_cache_extent: f32,
+    cache_origin: f32,
+    child_start: usize,
+    child_end: usize,
+}
+
+/// Per-child sliver constraint fields that vary during a viewport walk.
+#[derive(Debug, Clone, Copy)]
+struct ChildSliverLayoutFields {
+    growth_direction: GrowthDirection,
+    user_scroll_direction: crate::view::ScrollDirection,
+    scroll_offset: f32,
+    preceding_scroll_extent: f32,
+    overlap: f32,
+    remaining_paint_extent: f32,
+    remaining_cache_extent: f32,
+    cache_origin: f32,
+}
 
 /// A Box-protocol viewport that lays out Sliver-protocol children.
 #[derive(Debug)]
@@ -34,6 +65,9 @@ pub struct RenderViewport<O = ScrollableViewportOffset> {
     cache_extent: f32,
     cache_extent_style: CacheExtentStyle,
     paint_order: SliverPaintOrder,
+    /// When set, children before this index use forward growth; from this index
+    /// onward use reverse growth (Flutter `center` sliver partition, W3.2 slice).
+    center_sliver_index: Option<usize>,
     size: Size,
     child_count: usize,
     min_scroll_extent: f32,
@@ -72,6 +106,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             cache_extent: DEFAULT_CACHE_EXTENT,
             cache_extent_style: CacheExtentStyle::Pixel,
             paint_order: SliverPaintOrder::FirstIsTop,
+            center_sliver_index: None,
             size: Size::ZERO,
             child_count: 0,
             min_scroll_extent: 0.0,
@@ -114,6 +149,23 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
     pub const fn set_cache_extent(&mut self, cache_extent: f32, style: CacheExtentStyle) {
         self.cache_extent = cache_extent;
         self.cache_extent_style = style;
+    }
+
+    /// Sets the index of the center sliver for forward/reverse growth partitioning.
+    ///
+    /// `None` (default) lays out all children with forward growth. When set to
+    /// `Some(index)`, children `[0..index)` use forward growth and `[index..)` use
+    /// reverse growth from the trailing edge.
+    #[inline]
+    pub fn set_center_sliver_index(&mut self, index: Option<usize>) {
+        self.center_sliver_index = index;
+    }
+
+    /// Returns the configured center sliver index, if any.
+    #[inline]
+    #[must_use]
+    pub fn center_sliver_index(&self) -> Option<usize> {
+        self.center_sliver_index
     }
 
     /// Last total scroll extent reported by the forward sliver sequence.
@@ -184,6 +236,29 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
         }
     }
 
+    fn child_sliver_constraints(
+        &self,
+        main_axis_extent: f32,
+        cross_axis_extent: f32,
+        fields: ChildSliverLayoutFields,
+    ) -> SliverConstraints {
+        SliverConstraints::new(
+            self.axis_direction,
+            fields.growth_direction,
+            fields.user_scroll_direction,
+            fields.scroll_offset,
+            fields.preceding_scroll_extent,
+            fields.overlap,
+            fields.remaining_paint_extent,
+            cross_axis_extent,
+            self.cross_axis_direction,
+            main_axis_extent,
+            fields.remaining_cache_extent,
+            fields.cache_origin,
+        )
+    }
+
+    #[must_use = "scroll correction must be applied when non-zero"]
     fn attempt_layout(
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>,
@@ -204,34 +279,73 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
         let remaining_cache_extent =
             (full_cache_extent - center_cache_offset).clamp(0.0, full_cache_extent);
 
-        self.layout_child_sequence(
-            ctx,
-            corrected_offset.max(0.0),
-            center_offset.min(0.0),
-            0.0,
-            main_axis_extent,
+        let child_count = ctx.child_count();
+        let center = match self.center_sliver_index {
+            None => child_count,
+            Some(index) => {
+                debug_assert!(
+                    index <= child_count,
+                    "center_sliver_index ({index}) must be <= child_count ({child_count})"
+                );
+                index.min(child_count)
+            }
+        };
+
+        let sequence_base = LayoutChildSequenceParams {
+            scroll_offset: corrected_offset.max(0.0),
+            overlap: center_offset.min(0.0),
+            layout_offset: 0.0,
+            remaining_paint_extent: main_axis_extent,
             main_axis_extent,
             cross_axis_extent,
-            GrowthDirection::Forward,
+            growth_direction: GrowthDirection::Forward,
             remaining_cache_extent,
-            center_offset.clamp(-cache_extent, 0.0),
-        )
+            cache_origin: center_offset.clamp(-cache_extent, 0.0),
+            child_start: 0,
+            child_end: center,
+        };
+
+        if center > 0 {
+            let correction = self.layout_child_sequence(ctx, sequence_base);
+            if correction != 0.0 {
+                return correction;
+            }
+        }
+
+        if center < child_count {
+            // W3.2 limitation: reverse pass reuses the forward-pass cache window.
+            // Flutter recomputes cache parameters from forward results (Wave 3.3).
+            let reverse_params = LayoutChildSequenceParams {
+                growth_direction: GrowthDirection::Reverse,
+                child_start: center,
+                child_end: child_count,
+                ..sequence_base
+            };
+            self.layout_child_sequence(ctx, reverse_params)
+        } else {
+            NO_SCROLL_CORRECTION
+        }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[must_use = "correction value must be checked; 0.0 means layout accepted"]
     fn layout_child_sequence(
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>,
-        mut scroll_offset: f32,
-        overlap: f32,
-        mut layout_offset: f32,
-        remaining_paint_extent: f32,
-        main_axis_extent: f32,
-        cross_axis_extent: f32,
-        growth_direction: GrowthDirection,
-        mut remaining_cache_extent: f32,
-        mut cache_origin: f32,
+        params: LayoutChildSequenceParams,
     ) -> f32 {
+        let LayoutChildSequenceParams {
+            mut scroll_offset,
+            overlap,
+            mut layout_offset,
+            remaining_paint_extent,
+            main_axis_extent,
+            cross_axis_extent,
+            growth_direction,
+            mut remaining_cache_extent,
+            mut cache_origin,
+            child_start,
+            child_end,
+        } = params;
         let initial_layout_offset = layout_offset;
         let adjusted_user_scroll_direction =
             crate::constraints::apply_growth_direction_to_scroll_direction(
@@ -241,7 +355,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
         let mut max_paint_offset = layout_offset + overlap;
         let mut preceding_scroll_extent = 0.0;
 
-        for index in 0..ctx.child_count() {
+        for index in child_start..child_end {
             let sliver_scroll_offset = if scroll_offset <= 0.0 {
                 0.0
             } else {
@@ -253,30 +367,30 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
                 (remaining_paint_extent - layout_offset + initial_layout_offset).max(0.0);
             let child_remaining_cache_extent =
                 (remaining_cache_extent + cache_extent_correction).max(0.0);
-            let constraints = SliverConstraints {
-                axis_direction: self.axis_direction,
-                growth_direction,
-                user_scroll_direction: adjusted_user_scroll_direction,
-                scroll_offset: sliver_scroll_offset,
-                preceding_scroll_extent,
-                overlap: max_paint_offset - layout_offset,
-                remaining_paint_extent: child_remaining_paint_extent,
+            let constraints = self.child_sliver_constraints(
+                main_axis_extent,
                 cross_axis_extent,
-                cross_axis_direction: self.cross_axis_direction,
-                viewport_main_axis_extent: main_axis_extent,
-                remaining_cache_extent: child_remaining_cache_extent,
-                cache_origin: corrected_cache_origin,
-            };
+                ChildSliverLayoutFields {
+                    growth_direction,
+                    user_scroll_direction: adjusted_user_scroll_direction,
+                    scroll_offset: sliver_scroll_offset,
+                    preceding_scroll_extent,
+                    overlap: max_paint_offset - layout_offset,
+                    remaining_paint_extent: child_remaining_paint_extent,
+                    remaining_cache_extent: child_remaining_cache_extent,
+                    cache_origin: corrected_cache_origin,
+                },
+            );
 
-            let geometry = if child_remaining_paint_extent <= f32::EPSILON
-                && child_remaining_cache_extent <= f32::EPSILON
-                && sliver_scroll_offset <= f32::EPSILON
-                && let Some(cached_geometry) = cached_clean_sliver_geometry(ctx, index, constraints)
-            {
-                cached_geometry
-            } else {
-                ctx.layout_sliver_child(index, constraints)
-            };
+            let geometry = try_cached_sliver_geometry(
+                ctx,
+                index,
+                constraints,
+                child_remaining_paint_extent,
+                child_remaining_cache_extent,
+                sliver_scroll_offset,
+            )
+            .unwrap_or_else(|| ctx.layout_sliver_child(index, constraints));
 
             if let Some(correction) = geometry.scroll_offset_correction {
                 return correction;
@@ -291,9 +405,9 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             ctx.position_child(
                 index,
                 self.compute_absolute_paint_offset(
-                    child_layout_offset,
+                    px(child_layout_offset),
                     growth_direction,
-                    geometry.paint_extent,
+                    px(geometry.paint_extent),
                 ),
             );
 
@@ -308,7 +422,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
                 cache_origin = (corrected_cache_origin + geometry.cache_extent).min(0.0);
             }
 
-            self.update_out_of_band_data(growth_direction, geometry);
+            self.update_out_of_band_data(growth_direction, &geometry);
         }
 
         0.0
@@ -317,7 +431,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
     fn update_out_of_band_data(
         &mut self,
         growth_direction: GrowthDirection,
-        geometry: SliverGeometry,
+        geometry: &SliverGeometry,
     ) {
         match growth_direction {
             GrowthDirection::Forward => {
@@ -337,10 +451,12 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
 
     fn compute_absolute_paint_offset(
         &self,
-        layout_offset: f32,
+        layout_offset: Pixels,
         growth_direction: GrowthDirection,
-        paint_extent: f32,
+        paint_extent: Pixels,
     ) -> Offset {
+        let layout_offset = layout_offset.get();
+        let paint_extent = paint_extent.get();
         match growth_direction.apply_to_axis_direction(self.axis_direction) {
             TopToBottom => Offset::new(px(0.0), px(layout_offset)),
             BottomToTop => Offset::new(
@@ -374,6 +490,9 @@ impl<O: ViewportOffset + 'static> Diagnosticable for RenderViewport<O> {
         properties.add_double("cache_extent", self.cache_extent, Some("px"));
         properties.add_enum("cache_extent_style", self.cache_extent_style);
         properties.add_enum("paint_order", self.paint_order);
+        if let Some(center) = self.center_sliver_index {
+            properties.add_int("center_sliver_index", center as i64, None);
+        }
     }
 }
 impl<O: ViewportOffset + 'static> PaintEffectsCapability for RenderViewport<O> {}
@@ -416,10 +535,12 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
                 continue;
             }
 
-            if self
-                .offset
-                .apply_content_dimensions(0.0, (self.max_scroll_extent - main_axis_extent).max(0.0))
-            {
+            if self.offset.apply_content_dimensions(
+                // Reverse-side slivers accumulate negative min_scroll_extent; report
+                // it so scroll-range semantics match Flutter (pre-W3.2 hardcoded 0.0).
+                self.min_scroll_extent,
+                (self.max_scroll_extent - main_axis_extent).max(0.0),
+            ) {
                 accepted = true;
                 break;
             }
@@ -484,6 +605,23 @@ const fn default_cross_axis_direction(axis_direction: AxisDirection) -> AxisDire
         TopToBottom | BottomToTop => LeftToRight,
         LeftToRight | RightToLeft => TopToBottom,
     }
+}
+
+fn try_cached_sliver_geometry(
+    ctx: &BoxLayoutContext<'_, Variable, BoxParentData>,
+    index: usize,
+    constraints: SliverConstraints,
+    child_remaining_paint_extent: f32,
+    child_remaining_cache_extent: f32,
+    sliver_scroll_offset: f32,
+) -> Option<SliverGeometry> {
+    if child_remaining_paint_extent > f32::EPSILON
+        || child_remaining_cache_extent > f32::EPSILON
+        || sliver_scroll_offset > f32::EPSILON
+    {
+        return None;
+    }
+    cached_clean_sliver_geometry(ctx, index, constraints)
 }
 
 fn cached_clean_sliver_geometry(
