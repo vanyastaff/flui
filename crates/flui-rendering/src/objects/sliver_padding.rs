@@ -36,10 +36,10 @@
 //!   remain test-friendly.
 
 use flui_tree::Single;
-use flui_types::{Axis, EdgeInsets, Offset, Pixels, Rect, geometry::px};
+use flui_types::{Axis, EdgeInsets, Offset, Pixels, Rect, geometry::px, layout::AxisDirection};
 
 use crate::{
-    constraints::{SliverConstraints, SliverGeometry},
+    constraints::{GrowthDirection, SliverConstraints, SliverGeometry},
     context::{SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverPhysicalParentData,
     traits::{HotReloadCapability, PaintEffectsCapability, RenderSliver, SemanticsCapability},
@@ -119,27 +119,31 @@ impl RenderSliverPadding {
     /// Returns `(before, after, main_total, cross_total)` padding in
     /// constraint-axis–oriented form.
     ///
-    /// * `before` — leading main-axis padding (top for vertical
-    ///   scroll; left for horizontal).
-    /// * `after` — trailing main-axis padding.
+    /// * `before` — main-axis padding nearest the zero scroll offset after
+    ///   applying [`GrowthDirection`] to the axis direction.
+    /// * `after` — the opposite main-axis padding.
     /// * `main_total` — `before + after`.
     /// * `cross_total` — total padding on the cross axis.
     #[inline]
-    fn resolve(&self, axis: Axis) -> (f32, f32, f32, f32) {
-        match axis {
-            Axis::Vertical => (
-                self.padding.top.get(),
-                self.padding.bottom.get(),
-                self.padding.vertical_total().get(),
-                self.padding.horizontal_total().get(),
-            ),
-            Axis::Horizontal => (
-                self.padding.left.get(),
-                self.padding.right.get(),
-                self.padding.horizontal_total().get(),
-                self.padding.vertical_total().get(),
-            ),
-        }
+    fn resolve(&self, constraints: &SliverConstraints) -> (f32, f32, f32, f32) {
+        let main = match constraints.axis() {
+            Axis::Vertical => self.padding.vertical_total().get(),
+            Axis::Horizontal => self.padding.horizontal_total().get(),
+        };
+        let cross = match constraints.axis() {
+            Axis::Vertical => self.padding.horizontal_total().get(),
+            Axis::Horizontal => self.padding.vertical_total().get(),
+        };
+        let (before, after) = match apply_growth_direction_to_axis_direction(
+            constraints.axis_direction,
+            constraints.growth_direction,
+        ) {
+            AxisDirection::TopToBottom => (self.padding.top.get(), self.padding.bottom.get()),
+            AxisDirection::BottomToTop => (self.padding.bottom.get(), self.padding.top.get()),
+            AxisDirection::LeftToRight => (self.padding.left.get(), self.padding.right.get()),
+            AxisDirection::RightToLeft => (self.padding.right.get(), self.padding.left.get()),
+        };
+        (before, after, main, cross)
     }
 
     /// Sliver `calculatePaintOffset` (Flutter source-of-truth) inlined as
@@ -187,7 +191,7 @@ impl RenderSliverPadding {
     ///   (clamped to 0),
     /// - `preceding_scroll_extent` extended by the leading padding.
     pub fn child_constraints(&self, parent: &SliverConstraints) -> SliverConstraints {
-        let (before, _after, _main, cross) = self.resolve(parent.axis());
+        let (before, _after, _main, cross) = self.resolve(parent);
         let before_pad_paint = Self::paint_offset(parent, 0.0, before);
         let before_pad_cache = Self::cache_offset(parent, 0.0, before);
 
@@ -210,7 +214,7 @@ impl RenderSliverPadding {
     /// child sliver. The padded region itself still consumes scroll
     /// extent, paints (up to the remaining paint budget), and caches.
     pub fn empty_geometry(&self, parent: &SliverConstraints) -> SliverGeometry {
-        let (_before, _after, main, _cross) = self.resolve(parent.axis());
+        let (_before, _after, main, _cross) = self.resolve(parent);
         let paint_extent = Self::paint_offset(parent, 0.0, main).min(parent.remaining_paint_extent);
         let cache_extent = Self::cache_offset(parent, 0.0, main);
 
@@ -242,7 +246,7 @@ impl RenderSliverPadding {
         child_geometry: &SliverGeometry,
     ) -> (SliverGeometry, Offset) {
         let axis = parent.axis();
-        let (before, _after, main, _cross) = self.resolve(axis);
+        let (before, _after, main, _cross) = self.resolve(parent);
 
         let before_pad_paint = Self::paint_offset(parent, 0.0, before);
         let before_pad_cache = Self::cache_offset(parent, 0.0, before);
@@ -264,11 +268,8 @@ impl RenderSliverPadding {
                 .max(child_geometry.layout_extent + after_pad_paint))
         .min(parent.remaining_paint_extent);
         let layout_extent = (main_pad_paint + child_geometry.layout_extent).min(paint_extent);
-        let cache_extent = (before_pad_cache
-            + child_geometry
-                .cache_extent
-                .max(child_geometry.layout_extent + after_pad_cache))
-        .min(parent.remaining_cache_extent);
+        let cache_extent = (before_pad_cache + after_pad_cache + child_geometry.cache_extent)
+            .min(parent.remaining_cache_extent);
         let hit_test_extent = (main_pad_paint + child_geometry.paint_extent)
             .max(before_pad_paint + child_geometry.hit_test_extent);
 
@@ -287,19 +288,36 @@ impl RenderSliverPadding {
             scroll_offset_correction: None,
         };
 
-        // Child paint-offset within the padded box. Cross-axis "before"
-        // is the leading edge of the cross axis — top for horizontal
-        // scroll (cross axis is vertical), left for vertical scroll
-        // (cross axis is horizontal).
+        let effective_axis_direction = apply_growth_direction_to_axis_direction(
+            parent.axis_direction,
+            parent.growth_direction,
+        );
+        let calculated_offset = match effective_axis_direction {
+            AxisDirection::BottomToTop => Self::paint_offset(
+                parent,
+                self.padding.bottom.get() + child_geometry.scroll_extent,
+                self.padding.vertical_total().get() + child_geometry.scroll_extent,
+            ),
+            AxisDirection::RightToLeft => Self::paint_offset(
+                parent,
+                self.padding.right.get() + child_geometry.scroll_extent,
+                self.padding.horizontal_total().get() + child_geometry.scroll_extent,
+            ),
+            AxisDirection::LeftToRight => Self::paint_offset(parent, 0.0, self.padding.left.get()),
+            AxisDirection::TopToBottom => Self::paint_offset(parent, 0.0, self.padding.top.get()),
+        };
+
         let cross_before = match axis {
             Axis::Horizontal => self.padding.top.get(),
             Axis::Vertical => self.padding.left.get(),
         };
         let paint_offset = match axis {
             Axis::Horizontal => {
-                Offset::new(Pixels::new(before_pad_paint), Pixels::new(cross_before))
+                Offset::new(Pixels::new(calculated_offset), Pixels::new(cross_before))
             }
-            Axis::Vertical => Offset::new(Pixels::new(cross_before), Pixels::new(before_pad_paint)),
+            Axis::Vertical => {
+                Offset::new(Pixels::new(cross_before), Pixels::new(calculated_offset))
+            }
         };
 
         (geometry, paint_offset)
@@ -426,6 +444,16 @@ const fn empty_sliver_constraints() -> SliverConstraints {
         0.0, // remaining_cache_extent
         0.0, // cache_origin
     )
+}
+
+const fn apply_growth_direction_to_axis_direction(
+    axis_direction: AxisDirection,
+    growth_direction: GrowthDirection,
+) -> AxisDirection {
+    match growth_direction {
+        GrowthDirection::Forward => axis_direction,
+        GrowthDirection::Reverse => axis_direction.opposite(),
+    }
 }
 
 // ============================================================================
@@ -574,15 +602,34 @@ mod tests {
             left: px(3.0),
         });
 
-        // Vertical scroll: main = top+bottom = 30, cross = left+right = 8.
-        let (before_v, after_v, main_v, cross_v) = p.resolve(Axis::Vertical);
+        // Vertical down scroll: main = top+bottom = 30, cross = left+right = 8.
+        let constraints = vertical_constraints(0.0, 200.0, 200.0, 300.0);
+        let (before_v, after_v, main_v, cross_v) = p.resolve(&constraints);
         assert_eq!(before_v, 10.0);
         assert_eq!(after_v, 20.0);
         assert_eq!(main_v, 30.0);
         assert_eq!(cross_v, 8.0);
 
-        // Horizontal scroll: main = left+right = 8, cross = top+bottom = 30.
-        let (before_h, after_h, main_h, cross_h) = p.resolve(Axis::Horizontal);
+        // Horizontal right scroll: main = left+right = 8, cross = top+bottom = 30.
+        use flui_types::layout::AxisDirection;
+
+        use crate::view::ScrollDirection;
+
+        let constraints = SliverConstraints::new(
+            AxisDirection::LeftToRight,
+            GrowthDirection::Forward,
+            ScrollDirection::Idle,
+            0.0,
+            0.0,
+            0.0,
+            200.0,
+            300.0,
+            AxisDirection::TopToBottom,
+            200.0,
+            200.0,
+            0.0,
+        );
+        let (before_h, after_h, main_h, cross_h) = p.resolve(&constraints);
         assert_eq!(before_h, 3.0);
         assert_eq!(after_h, 5.0);
         assert_eq!(main_h, 8.0);
@@ -640,6 +687,31 @@ mod tests {
             cc.overlap, 20.0,
             "positive overlap is reduced by beforePaddingPaintExtent, not reset",
         );
+    }
+
+    #[test]
+    fn child_constraints_use_effective_growth_direction_for_before_padding() {
+        let p = RenderSliverPadding::new(EdgeInsets {
+            top: px(10.0),
+            right: px(0.0),
+            bottom: px(20.0),
+            left: px(0.0),
+        });
+        let mut parent = vertical_constraints(15.0, 200.0, 200.0, 300.0);
+        parent.growth_direction = GrowthDirection::Reverse;
+
+        let cc = p.child_constraints(&parent);
+
+        assert_eq!(
+            cc.scroll_offset, 0.0,
+            "reverse vertical growth uses bottom padding as beforePadding",
+        );
+        assert_eq!(cc.preceding_scroll_extent, 20.0);
+        assert_eq!(
+            cc.remaining_paint_extent, 195.0,
+            "only the visible 5px tail of beforePadding is removed at scroll_offset=15",
+        );
+        assert_eq!(cc.remaining_cache_extent, 195.0);
     }
 
     // ────────────────────────────────────────────────────────────────────────
@@ -717,7 +789,26 @@ mod tests {
         assert_eq!(
             geom.hit_test_extent, 110.0,
             "Flutter formula: max(main_pad_paint + child.paint_extent, \
-             before_pad_paint + child.hit_test_extent)",
+            before_pad_paint + child.hit_test_extent)",
+        );
+    }
+
+    #[test]
+    fn padded_geometry_cache_extent_adds_padding_cache_to_child_cache_extent() {
+        let p = RenderSliverPadding::new(EdgeInsets {
+            top: px(10.0),
+            right: px(0.0),
+            bottom: px(20.0),
+            left: px(0.0),
+        });
+        let parent = vertical_constraints(0.0, 200.0, 200.0, 300.0);
+        let child = child_geom(100.0, 80.0, 80.0, 5.0);
+
+        let (geom, _paint_offset) = p.padded_geometry(&parent, &child);
+
+        assert_eq!(
+            geom.cache_extent, 35.0,
+            "Flutter formula: before+after cache padding (30) plus child cache extent (5)",
         );
     }
 
