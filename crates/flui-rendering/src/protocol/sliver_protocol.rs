@@ -1098,8 +1098,11 @@ impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, SliverHitTest, A, P>
     }
 
     fn is_hit(&self, bounds: Rect) -> bool {
-        // For slivers, check if main axis position is within bounds height
-        self.position.main_axis >= 0.0 && self.position.main_axis <= bounds.height().get()
+        // Sliver bounds are interpreted as cross-axis width by main-axis height.
+        self.position.main_axis >= 0.0
+            && self.position.main_axis < bounds.height().get()
+            && self.position.cross_axis >= 0.0
+            && self.position.cross_axis < bounds.width().get()
     }
 
     fn hit_test_child(&mut self, index: usize, position: MainAxisPosition) -> bool {
@@ -1131,6 +1134,9 @@ impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, SliverHitTest, A, P>
 
 #[cfg(test)]
 mod tests {
+    use flui_tree::Leaf;
+    use flui_types::geometry::px;
+
     use super::*;
 
     #[test]
@@ -1159,6 +1165,27 @@ mod tests {
         result.add(SliverHitTestEntry::new(1, 100.0));
         assert!(!result.is_empty());
         assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn sliver_hit_test_context_checks_main_and_cross_axis_bounds() {
+        let bounds = Rect::from_ltrb(px(0.0), px(0.0), px(30.0), px(50.0));
+
+        let inside: SliverHitTestCtx<'_, Leaf, SliverParentData> =
+            SliverHitTestCtx::new(MainAxisPosition::new(49.999, 29.999));
+        assert!(inside.is_hit(bounds));
+
+        let main_upper_edge: SliverHitTestCtx<'_, Leaf, SliverParentData> =
+            SliverHitTestCtx::new(MainAxisPosition::new(50.0, 10.0));
+        assert!(!main_upper_edge.is_hit(bounds));
+
+        let cross_upper_edge: SliverHitTestCtx<'_, Leaf, SliverParentData> =
+            SliverHitTestCtx::new(MainAxisPosition::new(10.0, 30.0));
+        assert!(!cross_upper_edge.is_hit(bounds));
+
+        let negative_cross: SliverHitTestCtx<'_, Leaf, SliverParentData> =
+            SliverHitTestCtx::new(MainAxisPosition::new(10.0, -0.1));
+        assert!(!negative_cross.is_hit(bounds));
     }
 
     #[test]
