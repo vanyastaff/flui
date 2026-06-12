@@ -52,9 +52,24 @@ fn hits(
     cross: f32,
     main: f32,
 ) -> Vec<flui_foundation::RenderId> {
+    hits_at(owner, cross, main)
+}
+
+fn hits_at(
+    owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,
+    x: f32,
+    y: f32,
+) -> Vec<flui_foundation::RenderId> {
     let mut result = HitTestResult::new();
-    owner.hit_test(Offset::new(px(cross), px(main)), &mut result);
+    owner.hit_test(Offset::new(px(x), px(y)), &mut result);
     result.path().iter().map(|entry| entry.target).collect()
+}
+
+const fn test_cross_axis_direction(axis_direction: AxisDirection) -> AxisDirection {
+    match axis_direction {
+        AxisDirection::TopToBottom | AxisDirection::BottomToTop => AxisDirection::LeftToRight,
+        AxisDirection::LeftToRight | AxisDirection::RightToLeft => AxisDirection::TopToBottom,
+    }
 }
 
 #[derive(Debug)]
@@ -261,6 +276,82 @@ impl RenderSliver for MainAxisBandSliver {
     fn hit_test_self(&self, main: f32, cross: f32) -> bool {
         main >= self.hit_start
             && main < self.hit_end
+            && cross >= 0.0
+            && cross < self.constraints.cross_axis_extent
+    }
+}
+
+#[derive(Debug)]
+struct GeometrySliver {
+    scroll_extent: f32,
+    paint_origin: f32,
+    paint_extent: f32,
+    layout_extent: f32,
+    hit_test_extent: f32,
+    constraints: SliverConstraints,
+    geometry: SliverGeometry,
+}
+
+impl GeometrySliver {
+    fn new(
+        scroll_extent: f32,
+        paint_origin: f32,
+        paint_extent: f32,
+        layout_extent: f32,
+        hit_test_extent: f32,
+    ) -> Self {
+        Self {
+            scroll_extent,
+            paint_origin,
+            paint_extent,
+            layout_extent,
+            hit_test_extent,
+            constraints: SliverConstraints::default(),
+            geometry: SliverGeometry::ZERO,
+        }
+    }
+}
+
+impl Diagnosticable for GeometrySliver {}
+impl PaintEffectsCapability for GeometrySliver {}
+impl SemanticsCapability for GeometrySliver {}
+impl HotReloadCapability for GeometrySliver {}
+
+impl RenderSliver for GeometrySliver {
+    type Arity = Leaf;
+    type ParentData = SliverParentData;
+
+    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
+        self.constraints = *ctx.constraints();
+        self.geometry = SliverGeometry {
+            scroll_extent: self.scroll_extent,
+            paint_origin: self.paint_origin,
+            paint_extent: self.paint_extent,
+            layout_extent: self.layout_extent,
+            max_paint_extent: self.paint_extent,
+            hit_test_extent: self.hit_test_extent,
+            cache_extent: self.paint_extent,
+            visible: self.paint_extent > 0.0,
+            ..SliverGeometry::ZERO
+        };
+        ctx.complete(self.geometry);
+    }
+
+    fn constraints(&self) -> &SliverConstraints {
+        &self.constraints
+    }
+
+    fn geometry(&self) -> &SliverGeometry {
+        &self.geometry
+    }
+
+    fn set_geometry(&mut self, geometry: SliverGeometry) {
+        self.geometry = geometry;
+    }
+
+    fn hit_test_self(&self, main: f32, cross: f32) -> bool {
+        main >= 0.0
+            && main < self.geometry.hit_test_extent
             && cross >= 0.0
             && cross < self.constraints.cross_axis_extent
     }
@@ -698,6 +789,138 @@ fn viewport_resets_sliver_out_of_band_data_between_layout_passes() {
     assert!(
         !viewport.has_visual_overflow(),
         "out-of-band overflow must be recomputed from the current layout pass",
+    );
+}
+
+#[test]
+fn viewport_positions_first_sliver_for_each_axis_direction() {
+    let cases = [
+        (AxisDirection::TopToBottom, Offset::new(px(0.0), px(0.0))),
+        (AxisDirection::BottomToTop, Offset::new(px(0.0), px(60.0))),
+        (AxisDirection::LeftToRight, Offset::new(px(0.0), px(0.0))),
+        (AxisDirection::RightToLeft, Offset::new(px(60.0), px(0.0))),
+    ];
+
+    for (axis_direction, expected_offset) in cases {
+        let viewport = RenderViewport::with_offset(
+            axis_direction,
+            test_cross_axis_direction(axis_direction),
+            ScrollableViewportOffset::zero(),
+        );
+
+        let mut owner = PipelineOwner::new();
+        let root_id = owner.insert(Box::new(viewport));
+        let sliver_id = owner
+            .render_tree_mut()
+            .insert_sliver_child(
+                root_id,
+                Box::new(FixedSliver::new(40.0)) as BoxedSliverObject,
+            )
+            .expect("sliver");
+
+        let owner = laid_out(owner, root_id);
+
+        assert_eq!(
+            render_offset(&owner, sliver_id),
+            expected_offset,
+            "{axis_direction:?} must place a 40px sliver against the physical leading edge",
+        );
+    }
+}
+
+#[test]
+fn viewport_hit_test_maps_each_axis_direction_into_sliver_main_axis() {
+    let cases = [
+        (
+            AxisDirection::TopToBottom,
+            Offset::new(px(10.0), px(10.0)),
+            Offset::new(px(10.0), px(30.0)),
+        ),
+        (
+            AxisDirection::BottomToTop,
+            Offset::new(px(10.0), px(90.0)),
+            Offset::new(px(10.0), px(70.0)),
+        ),
+        (
+            AxisDirection::LeftToRight,
+            Offset::new(px(10.0), px(10.0)),
+            Offset::new(px(30.0), px(10.0)),
+        ),
+        (
+            AxisDirection::RightToLeft,
+            Offset::new(px(90.0), px(10.0)),
+            Offset::new(px(70.0), px(10.0)),
+        ),
+    ];
+
+    for (axis_direction, hit_position, miss_position) in cases {
+        let viewport = RenderViewport::with_offset(
+            axis_direction,
+            test_cross_axis_direction(axis_direction),
+            ScrollableViewportOffset::zero(),
+        );
+
+        let mut owner = PipelineOwner::new();
+        let root_id = owner.insert(Box::new(viewport));
+        let sliver_id = owner
+            .render_tree_mut()
+            .insert_sliver_child(
+                root_id,
+                Box::new(MainAxisBandSliver::new(40.0, 0.0, 15.0)) as BoxedSliverObject,
+            )
+            .expect("sliver");
+
+        let owner = laid_out(owner, root_id);
+
+        assert_eq!(
+            hits_at(&owner, hit_position.dx.get(), hit_position.dy.get()),
+            vec![sliver_id, root_id],
+            "{axis_direction:?} must map the physical leading band into sliver main-axis space",
+        );
+        assert!(
+            hits_at(&owner, miss_position.dx.get(), miss_position.dy.get()).is_empty(),
+            "{axis_direction:?} must miss outside the sliver's leading hit band",
+        );
+    }
+}
+
+#[test]
+fn viewport_hit_testing_tracks_paint_origin_and_hit_test_extent() {
+    let viewport = RenderViewport::with_offset(
+        AxisDirection::TopToBottom,
+        AxisDirection::LeftToRight,
+        ScrollableViewportOffset::zero(),
+    );
+
+    let mut owner = PipelineOwner::new();
+    let root_id = owner.insert(Box::new(viewport));
+    let sliver_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            root_id,
+            Box::new(GeometrySliver::new(0.0, 20.0, 30.0, 0.0, 12.0)) as BoxedSliverObject,
+        )
+        .expect("paint-origin sliver");
+
+    let owner = laid_out(owner, root_id);
+
+    assert_eq!(
+        render_offset(&owner, sliver_id),
+        Offset::new(px(0.0), px(20.0)),
+        "paint_origin shifts the physical sliver paint offset",
+    );
+    assert_eq!(
+        hits_at(&owner, 10.0, 31.0),
+        vec![sliver_id, root_id],
+        "parent y=31 maps to child main=11 after the 20px paint_origin shift",
+    );
+    assert!(
+        hits_at(&owner, 10.0, 35.0).is_empty(),
+        "parent y=35 is still inside paint_extent but beyond hit_test_extent=12",
+    );
+    assert!(
+        hits_at(&owner, 10.0, 10.0).is_empty(),
+        "points before the shifted paint origin must miss",
     );
 }
 
