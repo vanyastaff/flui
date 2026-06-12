@@ -271,6 +271,7 @@ pub trait RenderObject<P: Protocol>:
         _child_query: &mut (
                  dyn FnMut(usize, crate::storage::IntrinsicDimension, f32) -> f32 + Send + Sync
              ),
+        _child_flex: &mut (dyn FnMut(usize) -> i32 + Send + Sync),
     ) -> f32 {
         0.0
     }

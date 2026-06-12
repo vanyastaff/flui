@@ -504,13 +504,14 @@ where
         child_query: &mut (
                  dyn FnMut(usize, crate::storage::IntrinsicDimension, f32) -> f32 + Send + Sync
              ),
+        child_flex: &mut (dyn FnMut(usize) -> i32 + Send + Sync),
     ) -> f32 {
         // The intrinsics bridge: wrap the driver's memoizing child
         // recursion in the typed ctx and dispatch the dimension to the
         // matching typed compute_* — same shape as the paint/hit
         // bridges, no GAT erasure needed.
         use crate::storage::IntrinsicDimension as Dim;
-        let mut ctx = crate::context::BoxIntrinsicsCtx::new(child_count, child_query);
+        let mut ctx = crate::context::BoxIntrinsicsCtx::new(child_count, child_query, child_flex);
         match dimension {
             Dim::MinWidth => T::compute_min_intrinsic_width(self, extent, &mut ctx),
             Dim::MaxWidth => T::compute_max_intrinsic_width(self, extent, &mut ctx),

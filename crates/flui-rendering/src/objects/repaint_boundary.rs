@@ -160,6 +160,7 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderRepai
         child_query: &mut (
                  dyn FnMut(usize, crate::storage::IntrinsicDimension, f32) -> f32 + Send + Sync
              ),
+        _child_flex: &mut (dyn FnMut(usize) -> i32 + Send + Sync),
     ) -> f32 {
         if child_count == 0 {
             0.0

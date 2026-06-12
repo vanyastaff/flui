@@ -86,6 +86,14 @@ impl<'a> BoxDryBaselineCtx<'a> {
     }
 }
 
+/// Driver callbacks for one intrinsic computation.
+pub struct IntrinsicChildChannel<'a> {
+    /// Memoized child intrinsic probes.
+    pub query: &'a mut (dyn FnMut(usize, IntrinsicDimension, f32) -> f32 + Send + Sync),
+    /// Flex factor for child `index` (`0` when inflexible or unknown).
+    pub flex: &'a mut (dyn FnMut(usize) -> i32 + Send + Sync),
+}
+
 /// Child-query channel for one intrinsic computation.
 ///
 /// Handed to [`RenderBox::compute_min_intrinsic_width`] and friends.
@@ -97,15 +105,21 @@ impl<'a> BoxDryBaselineCtx<'a> {
 pub struct BoxIntrinsicsCtx<'a> {
     child_count: usize,
     query: &'a mut (dyn FnMut(usize, IntrinsicDimension, f32) -> f32 + Send + Sync),
+    flex: &'a mut (dyn FnMut(usize) -> i32 + Send + Sync),
 }
 
 impl<'a> BoxIntrinsicsCtx<'a> {
-    /// Wraps the driver's child-query callback.
+    /// Wraps the driver's child-query and flex-factor callbacks.
     pub(crate) fn new(
         child_count: usize,
         query: &'a mut (dyn FnMut(usize, IntrinsicDimension, f32) -> f32 + Send + Sync),
+        flex: &'a mut (dyn FnMut(usize) -> i32 + Send + Sync),
     ) -> Self {
-        Self { child_count, query }
+        Self {
+            child_count,
+            query,
+            flex,
+        }
     }
 
     /// Number of tree children.
@@ -142,6 +156,11 @@ impl<'a> BoxIntrinsicsCtx<'a> {
     /// The child's maximum intrinsic height for the given width.
     pub fn child_max_intrinsic_height(&mut self, index: usize, width: f32) -> f32 {
         self.child_intrinsic(index, IntrinsicDimension::MaxHeight, width)
+    }
+
+    /// Flex factor for child `index` (`0` when inflexible or unknown).
+    pub fn child_flex(&mut self, index: usize) -> i32 {
+        (self.flex)(index).max(0)
     }
 }
 
@@ -187,13 +206,23 @@ pub(crate) mod test_support {
     /// childless objects: any child query is a contract violation and
     /// panics with the probe's coordinates.
     pub(crate) fn leaf_intrinsics<R>(f: impl FnOnce(&mut BoxIntrinsicsCtx<'_>) -> R) -> R {
-        let mut deny = |index: usize, dim: IntrinsicDimension, extent: f32| -> f32 {
+        let mut deny_query = |index: usize, dim: IntrinsicDimension, extent: f32| -> f32 {
             panic!(
                 "leaf object queried child {index} ({dim:?} @ {extent}) — \
                  a childless compute_* must not consult children"
             )
         };
-        f(&mut BoxIntrinsicsCtx::new(0, &mut deny))
+        let mut deny_flex = |index: usize| -> i32 {
+            panic!(
+                "leaf object queried flex for child {index} — \
+                 a childless compute_* must not consult children"
+            )
+        };
+        let mut channel = IntrinsicChildChannel {
+            query: &mut deny_query,
+            flex: &mut deny_flex,
+        };
+        f(&mut BoxIntrinsicsCtx::new(0, channel.query, channel.flex))
     }
 
     /// Leaf context for `compute_dry_layout` tests; mirrors

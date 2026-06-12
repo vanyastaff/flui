@@ -61,7 +61,7 @@ pub use hit_test::HitTestContext;
 pub(crate) use intrinsics::test_support as intrinsics_test_support;
 pub use intrinsics::{
     BoxDryBaselineCtx, BoxDryLayoutCtx, BoxIntrinsicsCtx, DryBaselineChildRequest,
-    DryBaselineChildResponse,
+    DryBaselineChildResponse, IntrinsicChildChannel,
 };
 pub use layout::LayoutContext;
 pub(crate) use paint_cx::{FragmentClip, FragmentOp};

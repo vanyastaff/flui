@@ -50,7 +50,7 @@
 use flui_rendering::{
     constraints::BoxConstraints,
     objects::*,
-    parent_data::StackParentData,
+    parent_data::{FlexParentData, StackParentData},
     testing::{
         BoxQueryRun, Probe, RenderTester, TreeNode, assert_descendant_properties,
         assert_has_committed_geometry, assert_has_committed_size, box_node, sliver_node,
@@ -849,6 +849,27 @@ fn harness_flex_row_sums_child_min_intrinsic_widths() {
 
     assert_eq!(run.min_intrinsic_width(run.root(), 100.0), 80.0);
     assert_eq!(run.max_intrinsic_height(run.root(), 200.0), 20.0);
+}
+
+#[test]
+fn harness_flex_row_weights_flexible_child_min_intrinsic_width() {
+    let mut run = RenderTester::mount(
+        box_node(RenderFlex::row())
+            .child(
+                box_node(RenderColoredBox::red(100.0, 20.0))
+                    .with_flex_parent_data(FlexParentData::flexible(1))
+                    .label("flex"),
+            )
+            .child(box_node(RenderColoredBox::green(40.0, 20.0)).label("fixed")),
+    )
+    .with_size(Size::new(px(200.0), px(100.0)))
+    .run_layout();
+
+    assert_eq!(
+        run.min_intrinsic_width(run.root(), 100.0),
+        140.0,
+        "flex child min 100 at flex 1 plus fixed 40",
+    );
 }
 
 #[test]

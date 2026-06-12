@@ -1405,8 +1405,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         dimension: crate::storage::IntrinsicDimension,
         extent: f32,
     ) -> crate::error::RenderResult<f32> {
+        let parent_data_seeds = self.parent_data_seeds.clone();
         let mut slots = self.acquire_query_slots(id)?;
-        intrinsic_query(&mut slots, id, dimension, extent)
+        intrinsic_query(&mut slots, id, dimension, extent, &parent_data_seeds)
     }
 
     /// The size a box subtree WOULD take under `constraints`, memoized
@@ -2768,9 +2769,16 @@ unsafe fn box_intrinsic_query_borrowed_impl<'tree>(
                     }
                 }
             };
-        entry
-            .render_object()
-            .intrinsic_raw(dimension, extent, child_ids.len(), &mut child_query)
+        let mut child_flex = |index: usize| -> i32 {
+            child_flex_from_seeds(&borrows.parent_data_seeds, &child_ids, index)
+        };
+        entry.render_object().intrinsic_raw(
+            dimension,
+            extent,
+            child_ids.len(),
+            &mut child_query,
+            &mut child_flex,
+        )
     };
 
     if let Some(err) = child_err {
@@ -3793,6 +3801,25 @@ struct QuerySlot<'a> {
     children: Vec<RenderId>,
 }
 
+fn flex_factor_from_seed(seed: &ParentDataSeed) -> i32 {
+    match seed {
+        ParentDataSeed::Flex(data) => data.flex.unwrap_or(0).max(0),
+        _ => 0,
+    }
+}
+
+fn child_flex_from_seeds(
+    parent_data_seeds: &FxHashMap<RenderId, ParentDataSeed>,
+    children: &[RenderId],
+    index: usize,
+) -> i32 {
+    children
+        .get(index)
+        .and_then(|child_id| parent_data_seeds.get(child_id))
+        .map(flex_factor_from_seed)
+        .unwrap_or(0)
+}
+
 /// Recursive memoized intrinsic query over the take-out slot map.
 ///
 /// Per node: cache peek → on miss, run the object's `intrinsic_raw`
@@ -3805,8 +3832,9 @@ fn intrinsic_query(
     id: RenderId,
     dimension: crate::storage::IntrinsicDimension,
     extent: f32,
+    parent_data_seeds: &FxHashMap<RenderId, ParentDataSeed>,
 ) -> crate::error::RenderResult<f32> {
-    ensure_stack(|| intrinsic_query_impl(slots, id, dimension, extent))
+    ensure_stack(|| intrinsic_query_impl(slots, id, dimension, extent, parent_data_seeds))
 }
 
 /// Body of [`intrinsic_query`]; split out so every recursion level
@@ -3816,6 +3844,7 @@ fn intrinsic_query_impl(
     id: RenderId,
     dimension: crate::storage::IntrinsicDimension,
     extent: f32,
+    parent_data_seeds: &FxHashMap<RenderId, ParentDataSeed>,
 ) -> crate::error::RenderResult<f32> {
     let Some(slot) = slots.get_mut(&id) else {
         return Err(crate::error::RenderError::NodeNotFound(id));
@@ -3860,7 +3889,7 @@ fn intrinsic_query_impl(
                         ));
                         return 0.0;
                     };
-                    match intrinsic_query(slots, child_id, dim, ext) {
+                    match intrinsic_query(slots, child_id, dim, ext, parent_data_seeds) {
                         Ok(v) => v,
                         Err(err) => {
                             child_err.get_or_insert(err);
@@ -3868,9 +3897,16 @@ fn intrinsic_query_impl(
                         }
                     }
                 };
-            entry
-                .render_object()
-                .intrinsic_raw(dimension, extent, children.len(), &mut child_query)
+            let mut child_flex = |index: usize| -> i32 {
+                child_flex_from_seeds(parent_data_seeds, &children, index)
+            };
+            entry.render_object().intrinsic_raw(
+                dimension,
+                extent,
+                children.len(),
+                &mut child_query,
+                &mut child_flex,
+            )
         };
         if let Some(err) = child_err {
             return Err(err);
