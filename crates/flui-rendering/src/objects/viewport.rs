@@ -41,6 +41,8 @@ pub struct RenderViewport<O = ScrollableViewportOffset> {
     child_count: usize,
     min_scroll_extent: f32,
     max_scroll_extent: f32,
+    max_scroll_obstruction_extent: f32,
+    sliver_obstruction_extents: Vec<f32>,
     has_visual_overflow: bool,
 }
 
@@ -77,6 +79,8 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             child_count: 0,
             min_scroll_extent: 0.0,
             max_scroll_extent: 0.0,
+            max_scroll_obstruction_extent: 0.0,
+            sliver_obstruction_extents: Vec::new(),
             has_visual_overflow: false,
         }
     }
@@ -122,6 +126,46 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
         self.max_scroll_extent
     }
 
+    /// Last total reverse scroll extent reported by the reverse sliver sequence.
+    #[inline]
+    #[must_use]
+    pub const fn min_scroll_extent(&self) -> f32 {
+        self.min_scroll_extent
+    }
+
+    /// Last total pinned obstruction extent reported by the sliver sequence.
+    #[inline]
+    #[must_use]
+    pub const fn max_scroll_obstruction_extent(&self) -> f32 {
+        self.max_scroll_obstruction_extent
+    }
+
+    /// Total obstruction extent contributed by slivers before `child_index`.
+    ///
+    /// This mirrors Flutter's `maxScrollObstructionExtentBefore` shape for
+    /// FLUI's current direct-child, forward-sequence viewport.
+    #[inline]
+    #[must_use]
+    pub fn max_scroll_obstruction_extent_before(&self, child_index: usize) -> Option<f32> {
+        if child_index >= self.sliver_obstruction_extents.len() {
+            return None;
+        }
+
+        Some(
+            self.sliver_obstruction_extents
+                .iter()
+                .take(child_index)
+                .sum(),
+        )
+    }
+
+    /// Whether the last layout pass reported visual overflow.
+    #[inline]
+    #[must_use]
+    pub const fn has_visual_overflow(&self) -> bool {
+        self.has_visual_overflow
+    }
+
     fn calculated_cache_extent(&self, main_axis_extent: f32) -> f32 {
         match self.cache_extent_style {
             CacheExtentStyle::Pixel => self.cache_extent.max(0.0),
@@ -152,6 +196,8 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
     ) -> f32 {
         self.min_scroll_extent = 0.0;
         self.max_scroll_extent = 0.0;
+        self.max_scroll_obstruction_extent = 0.0;
+        self.sliver_obstruction_extents.clear();
         self.has_visual_overflow = false;
 
         let center_offset = -corrected_offset;
@@ -283,6 +329,9 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
                 self.min_scroll_extent -= geometry.scroll_extent;
             }
         }
+        self.max_scroll_obstruction_extent += geometry.max_scroll_obstruction_extent;
+        self.sliver_obstruction_extents
+            .push(geometry.max_scroll_obstruction_extent);
         if geometry.has_visual_overflow {
             self.has_visual_overflow = true;
         }
@@ -338,6 +387,8 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
         if ctx.child_count() == 0 {
             self.min_scroll_extent = 0.0;
             self.max_scroll_extent = 0.0;
+            self.max_scroll_obstruction_extent = 0.0;
+            self.sliver_obstruction_extents.clear();
             self.has_visual_overflow = false;
             let _ = self.offset.apply_content_dimensions(0.0, 0.0);
             ctx.complete_with_size(self.size);

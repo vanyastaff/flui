@@ -2,7 +2,7 @@
 
 use std::sync::{
     Arc,
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use flui_foundation::Diagnosticable;
@@ -395,6 +395,139 @@ impl RenderSliver for CountingSliver {
     }
 }
 
+#[derive(Debug)]
+struct OutOfBandSliver {
+    scroll_extent: f32,
+    max_scroll_obstruction_extent: f32,
+    has_visual_overflow: bool,
+    constraints: SliverConstraints,
+    geometry: SliverGeometry,
+}
+
+impl OutOfBandSliver {
+    fn new(
+        scroll_extent: f32,
+        max_scroll_obstruction_extent: f32,
+        has_visual_overflow: bool,
+    ) -> Self {
+        Self {
+            scroll_extent,
+            max_scroll_obstruction_extent,
+            has_visual_overflow,
+            constraints: SliverConstraints::default(),
+            geometry: SliverGeometry::ZERO,
+        }
+    }
+}
+
+impl Diagnosticable for OutOfBandSliver {}
+impl PaintEffectsCapability for OutOfBandSliver {}
+impl SemanticsCapability for OutOfBandSliver {}
+impl HotReloadCapability for OutOfBandSliver {}
+
+impl RenderSliver for OutOfBandSliver {
+    type Arity = Leaf;
+    type ParentData = SliverParentData;
+
+    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
+        self.constraints = *ctx.constraints();
+        let paint_extent = self.calculate_paint_offset(&self.constraints, 0.0, self.scroll_extent);
+        let cache_extent = self.calculate_cache_offset(&self.constraints, 0.0, self.scroll_extent);
+        self.geometry = SliverGeometry {
+            scroll_extent: self.scroll_extent,
+            paint_extent,
+            layout_extent: paint_extent,
+            max_paint_extent: self.scroll_extent,
+            max_scroll_obstruction_extent: self.max_scroll_obstruction_extent,
+            hit_test_extent: paint_extent,
+            cache_extent,
+            visible: paint_extent > 0.0,
+            has_visual_overflow: self.has_visual_overflow,
+            ..SliverGeometry::ZERO
+        };
+        ctx.complete(self.geometry);
+    }
+
+    fn constraints(&self) -> &SliverConstraints {
+        &self.constraints
+    }
+
+    fn geometry(&self) -> &SliverGeometry {
+        &self.geometry
+    }
+
+    fn set_geometry(&mut self, geometry: SliverGeometry) {
+        self.geometry = geometry;
+    }
+}
+
+#[derive(Debug)]
+struct DynamicOutOfBandSliver {
+    scroll_extent: f32,
+    max_scroll_obstruction_extent: Arc<AtomicUsize>,
+    has_visual_overflow: Arc<AtomicBool>,
+    constraints: SliverConstraints,
+    geometry: SliverGeometry,
+}
+
+impl DynamicOutOfBandSliver {
+    fn new(
+        scroll_extent: f32,
+        max_scroll_obstruction_extent: Arc<AtomicUsize>,
+        has_visual_overflow: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
+            scroll_extent,
+            max_scroll_obstruction_extent,
+            has_visual_overflow,
+            constraints: SliverConstraints::default(),
+            geometry: SliverGeometry::ZERO,
+        }
+    }
+}
+
+impl Diagnosticable for DynamicOutOfBandSliver {}
+impl PaintEffectsCapability for DynamicOutOfBandSliver {}
+impl SemanticsCapability for DynamicOutOfBandSliver {}
+impl HotReloadCapability for DynamicOutOfBandSliver {}
+
+impl RenderSliver for DynamicOutOfBandSliver {
+    type Arity = Leaf;
+    type ParentData = SliverParentData;
+
+    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
+        self.constraints = *ctx.constraints();
+        let paint_extent = self.calculate_paint_offset(&self.constraints, 0.0, self.scroll_extent);
+        let cache_extent = self.calculate_cache_offset(&self.constraints, 0.0, self.scroll_extent);
+        self.geometry = SliverGeometry {
+            scroll_extent: self.scroll_extent,
+            paint_extent,
+            layout_extent: paint_extent,
+            max_paint_extent: self.scroll_extent,
+            max_scroll_obstruction_extent: self.max_scroll_obstruction_extent.load(Ordering::SeqCst)
+                as f32,
+            hit_test_extent: paint_extent,
+            cache_extent,
+            visible: paint_extent > 0.0,
+            has_visual_overflow: self.has_visual_overflow.load(Ordering::SeqCst),
+            ..SliverGeometry::ZERO
+        };
+        ctx.complete(self.geometry);
+    }
+
+    fn constraints(&self) -> &SliverConstraints {
+        &self.constraints
+    }
+
+    fn geometry(&self) -> &SliverGeometry {
+        &self.geometry
+    }
+
+    fn set_geometry(&mut self, geometry: SliverGeometry) {
+        self.geometry = geometry;
+    }
+}
+
 #[test]
 fn viewport_lays_out_forward_slivers_and_applies_content_dimensions() {
     let viewport = RenderViewport::with_offset(
@@ -445,6 +578,126 @@ fn viewport_lays_out_forward_slivers_and_applies_content_dimensions() {
         render_offset(&owner, second_id),
         Offset::new(px(0.0), px(30.0)),
         "second sliver advances by first.layout_extent after the first sliver consumes 40px of scroll",
+    );
+}
+
+#[test]
+fn viewport_tracks_sliver_out_of_band_obstruction_and_overflow() {
+    let viewport = RenderViewport::with_offset(
+        AxisDirection::TopToBottom,
+        AxisDirection::LeftToRight,
+        ScrollableViewportOffset::zero(),
+    );
+
+    let mut owner = PipelineOwner::new();
+    let root_id = owner.insert(Box::new(viewport));
+    owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            root_id,
+            Box::new(OutOfBandSliver::new(40.0, 12.0, false)) as BoxedSliverObject,
+        )
+        .expect("first sliver");
+    owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            root_id,
+            Box::new(OutOfBandSliver::new(50.0, 7.0, true)) as BoxedSliverObject,
+        )
+        .expect("second sliver");
+    owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            root_id,
+            Box::new(OutOfBandSliver::new(60.0, 0.0, false)) as BoxedSliverObject,
+        )
+        .expect("third sliver");
+
+    let owner = laid_out(owner, root_id);
+    let viewport = owner
+        .render_tree()
+        .get(root_id)
+        .and_then(|node| node.as_box())
+        .and_then(|entry| {
+            entry
+                .render_object()
+                .downcast_ref::<RenderViewport<ScrollableViewportOffset>>()
+        })
+        .expect("root is RenderViewport");
+
+    assert_eq!(viewport.min_scroll_extent(), 0.0);
+    assert_eq!(viewport.max_scroll_extent(), 150.0);
+    assert_eq!(viewport.max_scroll_obstruction_extent(), 19.0);
+    assert_eq!(viewport.max_scroll_obstruction_extent_before(0), Some(0.0));
+    assert_eq!(viewport.max_scroll_obstruction_extent_before(1), Some(12.0));
+    assert_eq!(viewport.max_scroll_obstruction_extent_before(2), Some(19.0));
+    assert_eq!(viewport.max_scroll_obstruction_extent_before(3), None);
+    assert!(
+        viewport.has_visual_overflow(),
+        "viewport must retain child-reported visual overflow for clipping",
+    );
+}
+
+#[test]
+fn viewport_resets_sliver_out_of_band_data_between_layout_passes() {
+    let viewport = RenderViewport::with_offset(
+        AxisDirection::TopToBottom,
+        AxisDirection::LeftToRight,
+        ScrollableViewportOffset::zero(),
+    );
+    let obstruction = Arc::new(AtomicUsize::new(18));
+    let overflow = Arc::new(AtomicBool::new(true));
+
+    let mut owner = PipelineOwner::new();
+    let root_id = owner.insert(Box::new(viewport));
+    owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            root_id,
+            Box::new(DynamicOutOfBandSliver::new(
+                40.0,
+                Arc::clone(&obstruction),
+                Arc::clone(&overflow),
+            )) as BoxedSliverObject,
+        )
+        .expect("dynamic sliver");
+
+    let owner = laid_out(owner, root_id);
+    let viewport = owner
+        .render_tree()
+        .get(root_id)
+        .and_then(|node| node.as_box())
+        .and_then(|entry| {
+            entry
+                .render_object()
+                .downcast_ref::<RenderViewport<ScrollableViewportOffset>>()
+        })
+        .expect("root is RenderViewport");
+    assert_eq!(viewport.max_scroll_obstruction_extent(), 18.0);
+    assert!(viewport.has_visual_overflow());
+
+    obstruction.store(0, Ordering::SeqCst);
+    overflow.store(false, Ordering::SeqCst);
+    let mut owner = owner.into_idle();
+    owner.mark_needs_layout(root_id);
+    let mut owner = owner.into_layout();
+    owner.run_layout().expect("second layout succeeds");
+    let viewport = owner
+        .render_tree()
+        .get(root_id)
+        .and_then(|node| node.as_box())
+        .and_then(|entry| {
+            entry
+                .render_object()
+                .downcast_ref::<RenderViewport<ScrollableViewportOffset>>()
+        })
+        .expect("root is RenderViewport");
+
+    assert_eq!(viewport.max_scroll_obstruction_extent(), 0.0);
+    assert_eq!(viewport.max_scroll_obstruction_extent_before(0), Some(0.0));
+    assert!(
+        !viewport.has_visual_overflow(),
+        "out-of-band overflow must be recomputed from the current layout pass",
     );
 }
 
