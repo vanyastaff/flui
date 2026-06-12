@@ -37,6 +37,7 @@ use crate::{
     constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry},
     parent_data::ParentData,
     protocol::{BoxLayout, LayoutCapability, LayoutContextApi, Protocol},
+    storage::IntrinsicDimension,
 };
 
 // ============================================================================
@@ -417,6 +418,31 @@ where
             index,
             constraints,
         )
+    }
+
+    /// Queries a **Box** child intrinsic dimension from a Sliver parent.
+    pub fn box_child_intrinsic(
+        &mut self,
+        index: usize,
+        dimension: IntrinsicDimension,
+        extent: f32,
+    ) -> f32 {
+        crate::protocol::sliver_protocol::SliverLayoutCtxErased::box_child_intrinsic(
+            &mut self.inner,
+            index,
+            dimension,
+            extent,
+        )
+    }
+
+    /// Convenience wrapper for the child's maximum intrinsic height.
+    pub fn box_child_max_intrinsic_height(&mut self, index: usize, width: f32) -> f32 {
+        self.box_child_intrinsic(index, IntrinsicDimension::MaxHeight, width)
+    }
+
+    /// Convenience wrapper for the child's maximum intrinsic width.
+    pub fn box_child_max_intrinsic_width(&mut self, index: usize, height: f32) -> f32 {
+        self.box_child_intrinsic(index, IntrinsicDimension::MaxWidth, height)
     }
 }
 
