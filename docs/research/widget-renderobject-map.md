@@ -130,7 +130,7 @@
 | `ShrinkWrappingViewport` | `RenderShrinkWrappingViewport` | Needed | Variable(Sliver) | Viewport that sizes to content |
 | `SliverList` | `RenderSliverList` | Needed | Variable(Box) | Lazy linear list of box children |
 | `SliverGrid` | `RenderSliverGrid` | Needed | Variable(Box) | Lazy 2D grid of box children |
-| `SliverFixedExtentList` | `RenderSliverFixedExtentList` | Needed | Variable(Box) | Fixed-height items (optimized layout) |
+| `SliverFixedExtentList` | `RenderSliverFixedExtentList` | **Exists** | Variable(Box) | Eager attached-child fixed extent; lazy adaptor pending |
 | `SliverFillViewport` | `RenderSliverFillViewport` | Needed | Variable(Box) | Each child fills viewport main-axis extent |
 | `SliverToBoxAdapter` | `RenderSliverToBoxAdapter` | Needed | Single(Box) | Wraps single box child in sliver protocol |
 | `SliverPadding` | `RenderSliverPadding` | **Exists** | Single(Sliver) | Pads a sliver child |
