@@ -156,3 +156,11 @@ Run `just` (no argument) for the full grouped recipe list. Raw `cargo` commands 
 - **Reference, don't copy.** `.flutter/` and `.gpui/` exist as architectural references only; adapt their patterns to FLUI idioms (Arity system, Ambassador delegation, no nullability).
 - **Use the ID offset pattern.** Slab indices are 0-based; public IDs (`ViewId`, `ElementId`, `RenderId`, `LayerId`, `SemanticsId`) are 1-based `NonZeroUsize`. Insert: `slab_index + 1`; lookup: `id.get() - 1`.
 - **Logging via `tracing` only.** No `println!`, `eprintln!`, or `dbg!` in shipped code.
+
+## Agent Memory / Quality Bar
+
+- **Check Flutter before changing Flutter-parity behavior.** For render tree, sliver, layout, paint, hit-test, semantics, scheduling, and parent-data behavior, inspect the vendored `.flutter/` implementation first and preserve the behavioral contract unless FLUI has an explicit documented divergence.
+- **Prefer behavior-first ports.** Translate Flutter semantics into Rust-native structure, but keep edge-case behavior loyal: scroll/cache windows, overlap handling, visibility gates, parent-data persistence, paint offsets, hit-test bounds, relayout boundaries, and error/retry semantics.
+- **Test the edge, not just the happy path.** Any rendering fix should include regression tests for non-zero scroll/overlap/cache offsets, invisible or fully scrolled-out children, differing paint vs hit-test extents, relayout without repositioning, and cross-protocol Box/Sliver paths when relevant.
+- **Verify before commit or PR update.** For `flui-rendering` work, run targeted tests for the changed behavior, then `cargo fmt --package flui-rendering -- --check`, `cargo test -p flui-rendering`, and `cargo clippy -p flui-rendering --all-targets -- -D warnings` unless the user explicitly asks for a lighter pass.
+- **Be skeptical of broad fixes.** When expanding a commit path or shared pipeline behavior, check every protocol that now flows through it and seed/commit persistent state symmetrically so one protocol is not reset by another.
