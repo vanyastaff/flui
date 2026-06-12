@@ -76,6 +76,7 @@
 
 mod absorb_pointer;
 mod aspect_ratio;
+mod baseline;
 mod center;
 mod clip;
 mod colored_box;
@@ -109,6 +110,7 @@ mod viewport;
 
 pub use absorb_pointer::RenderAbsorbPointer;
 pub use aspect_ratio::{AspectRatio, RenderAspectRatio};
+pub use baseline::RenderBaseline;
 pub use center::RenderCenter;
 pub use clip::{
     ClipGeometry, CustomClipper, Oval, RenderClip, RenderClipOval, RenderClipPath, RenderClipRRect,

@@ -555,6 +555,10 @@ where
         T::compute_dry_baseline(self, constraints, baseline, &mut ctx)
     }
 
+    fn actual_baseline_raw(&self, baseline: crate::traits::TextBaseline) -> Option<f32> {
+        T::compute_distance_to_actual_baseline(self, baseline)
+    }
+
     fn geometry(&self) -> &crate::protocol::ProtocolGeometry<BoxProtocol> {
         self.size()
     }

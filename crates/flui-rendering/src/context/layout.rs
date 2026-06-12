@@ -394,6 +394,20 @@ where
             index,
         )
     }
+
+    /// Distance from the top of child `index` to its first baseline of
+    /// `baseline` kind, after the child has been laid out in this walk.
+    pub fn child_distance_to_actual_baseline(
+        &self,
+        index: usize,
+        baseline: crate::traits::TextBaseline,
+    ) -> Option<f32> {
+        crate::protocol::box_protocol::BoxLayoutCtxErased::child_distance_to_actual_baseline(
+            &self.inner,
+            index,
+            baseline,
+        )
+    }
 }
 
 // ============================================================================

@@ -13,6 +13,7 @@
 //! | `RenderPadding` | `harness_padding_*` | yes | — | — | yes | queries |
 //! | `RenderCenter` | `harness_center_*` | yes | — | — | yes | — |
 //! | `RenderAspectRatio` | `harness_aspect_ratio_*` | yes | — | — | yes | — |
+//! | `RenderBaseline` | `harness_baseline_*` | yes | — | — | yes | queries |
 //! | `RenderConstrainedBox` | `harness_constrained_box_*` | yes | — | — | yes | — |
 //! | `RenderLimitedBox` | `harness_limited_box_*` | yes | — | — | yes | — |
 //! | `RenderOffstage` | `harness_offstage_*` | yes | yes | — | yes | — |
@@ -55,6 +56,7 @@ use flui_rendering::{
         BoxQueryRun, Probe, RenderTester, TreeNode, assert_descendant_properties,
         assert_has_committed_geometry, assert_has_committed_size, box_node, sliver_node,
     },
+    traits::TextBaseline,
 };
 use flui_types::{
     Alignment, Offset, Point, Rect, Size,
@@ -74,6 +76,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderPadding",
     "RenderCenter",
     "RenderAspectRatio",
+    "RenderBaseline",
     "RenderConstrainedBox",
     "RenderLimitedBox",
     "RenderOffstage",
@@ -338,6 +341,61 @@ fn harness_center_with_factors_shrinks_available_space() {
     assert!(
         run.descendant_property("RenderCenter", "height_factor")
             .is_some()
+    );
+}
+
+#[test]
+fn harness_baseline_positions_text_at_offset() {
+    let mut run = RenderTester::mount(
+        box_node(RenderBaseline::new(TextBaseline::Alphabetic, px(0.0))).child(
+            box_node(RenderParagraph::new(
+                TextSpan::new("Ag"),
+                TextDirection::Ltr,
+            ))
+            .label("text"),
+        ),
+    )
+    .with_size(Size::new(px(200.0), px(100.0)))
+    .run_layout();
+
+    let tree = run.diagnostics();
+    assert_has_committed_size(
+        tree.find_descendant("RenderBaseline")
+            .expect("RenderBaseline"),
+    );
+    assert_descendant_properties(&tree, "RenderBaseline", &["baseline"]);
+    let constraints = BoxConstraints::loose(Size::new(px(200.0), px(100.0)));
+    let baseline = run
+        .dry_baseline(run.root(), constraints, TextBaseline::Alphabetic)
+        .expect("paragraph reports a dry baseline");
+    assert_eq!(baseline, 0.0);
+}
+
+#[test]
+fn harness_flex_row_baseline_aligns_text_and_box() {
+    let run = RenderTester::mount(
+        box_node(
+            RenderFlex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Baseline)
+                .with_text_baseline(TextBaseline::Alphabetic),
+        )
+        .child(
+            box_node(RenderParagraph::new(
+                TextSpan::new("Ag"),
+                TextDirection::Ltr,
+            ))
+            .label("text"),
+        )
+        .child(box_node(RenderColoredBox::red(20.0, 40.0)).label("box")),
+    )
+    .with_size(Size::new(px(300.0), px(100.0)))
+    .run_layout();
+
+    let text_y = run.offset(run.id("text")).dy.get();
+    let box_y = run.offset(run.id("box")).dy.get();
+    assert!(
+        (text_y - box_y).abs() < 0.5,
+        "baseline row should align text and box on the same cross offset (text={text_y}, box={box_y})",
     );
 }
 
