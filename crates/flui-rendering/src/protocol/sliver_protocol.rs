@@ -127,6 +127,8 @@ pub struct SliverLayout;
 pub struct SliverConstraintsCacheKey {
     axis_direction: u8,
     growth_direction: u8,
+    user_scroll_direction: u8,
+    cross_axis_direction: u8,
     cross_axis_extent_bits: u32,
     viewport_main_axis_extent_bits: u32,
     scroll_offset_bits: u32,
@@ -160,6 +162,8 @@ impl SliverConstraintsCacheKey {
         Some(Self {
             axis_direction: c.axis_direction as u8,
             growth_direction: c.growth_direction as u8,
+            user_scroll_direction: c.user_scroll_direction as u8,
+            cross_axis_direction: c.cross_axis_direction as u8,
             cross_axis_extent_bits: c.cross_axis_extent.to_bits(),
             viewport_main_axis_extent_bits: c.viewport_main_axis_extent.to_bits(),
             scroll_offset_bits: c.scroll_offset.to_bits(),
@@ -1168,5 +1172,45 @@ mod tests {
         // Box and Sliver protocols are compatible via adapters
         assert!(<SliverProtocol as ProtocolCompatible<BoxProtocol>>::is_compatible());
         assert!(<BoxProtocol as ProtocolCompatible<SliverProtocol>>::is_compatible());
+    }
+
+    #[test]
+    fn sliver_constraints_cache_key_includes_all_direction_fields() {
+        use flui_types::layout::AxisDirection;
+
+        use crate::{constraints::GrowthDirection, view::ScrollDirection};
+
+        let base = SliverConstraints::new(
+            AxisDirection::TopToBottom,
+            GrowthDirection::Forward,
+            ScrollDirection::Idle,
+            10.0,
+            20.0,
+            0.0,
+            100.0,
+            300.0,
+            AxisDirection::LeftToRight,
+            100.0,
+            120.0,
+            -20.0,
+        );
+
+        let mut changed_user_scroll = base;
+        changed_user_scroll.user_scroll_direction = ScrollDirection::Forward;
+        assert_ne!(
+            SliverConstraintsCacheKey::from_constraints(&base),
+            SliverConstraintsCacheKey::from_constraints(&changed_user_scroll),
+            "user_scroll_direction participates in SliverConstraints::Hash and must also \
+             participate in the layout cache key",
+        );
+
+        let mut changed_cross_axis = base;
+        changed_cross_axis.cross_axis_direction = AxisDirection::RightToLeft;
+        assert_ne!(
+            SliverConstraintsCacheKey::from_constraints(&base),
+            SliverConstraintsCacheKey::from_constraints(&changed_cross_axis),
+            "cross_axis_direction participates in SliverConstraints::Hash and must also \
+             participate in the layout cache key",
+        );
     }
 }
