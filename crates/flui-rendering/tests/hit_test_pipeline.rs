@@ -282,6 +282,13 @@ fn sliver_hit_constraints() -> SliverConstraints {
     }
 }
 
+fn reverse_growth_sliver_hit_constraints() -> SliverConstraints {
+    SliverConstraints {
+        growth_direction: GrowthDirection::Reverse,
+        ..sliver_hit_constraints()
+    }
+}
+
 #[derive(Debug)]
 struct SliverHitHost {
     constraints: SliverConstraints,
@@ -476,6 +483,69 @@ impl RenderSliver for HitLeafSliver {
 
     fn sliver_paint_bounds(&self) -> Rect {
         Rect::from_origin_size(flui_types::Point::ZERO, Size::new(px(100.0), px(80.0)))
+    }
+}
+
+#[derive(Debug)]
+struct MainAxisBandSliver {
+    hit_start: f32,
+    hit_end: f32,
+    constraints: SliverConstraints,
+    geometry: SliverGeometry,
+}
+
+impl MainAxisBandSliver {
+    fn new(hit_start: f32, hit_end: f32) -> Self {
+        Self {
+            hit_start,
+            hit_end,
+            constraints: SliverConstraints::default(),
+            geometry: SliverGeometry::ZERO,
+        }
+    }
+}
+
+impl flui_foundation::Diagnosticable for MainAxisBandSliver {}
+impl PaintEffectsCapability for MainAxisBandSliver {}
+impl SemanticsCapability for MainAxisBandSliver {}
+impl HotReloadCapability for MainAxisBandSliver {}
+
+impl RenderSliver for MainAxisBandSliver {
+    type Arity = Leaf;
+    type ParentData = SliverParentData;
+
+    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
+        self.constraints = *ctx.constraints();
+        let geometry = SliverGeometry {
+            scroll_extent: 80.0,
+            paint_extent: 80.0,
+            layout_extent: 80.0,
+            max_paint_extent: 80.0,
+            hit_test_extent: 80.0,
+            visible: true,
+            ..SliverGeometry::ZERO
+        };
+        self.geometry = geometry;
+        ctx.complete(geometry);
+    }
+
+    fn geometry(&self) -> &SliverGeometry {
+        &self.geometry
+    }
+
+    fn constraints(&self) -> &SliverConstraints {
+        &self.constraints
+    }
+
+    fn set_geometry(&mut self, geometry: SliverGeometry) {
+        self.geometry = geometry;
+    }
+
+    fn hit_test_self(&self, main: f32, cross: f32) -> bool {
+        main >= self.hit_start
+            && main < self.hit_end
+            && cross >= 0.0
+            && cross < self.constraints.cross_axis_extent
     }
 }
 
@@ -803,6 +873,51 @@ fn unpositioned_sliver_child_keeps_prior_offset_across_relayout() {
         Offset::new(px(0.0), px(20.0)),
         "a sliver parent that does not call position_child on a later \
          pass must preserve the child's previously committed offset",
+    );
+}
+
+#[test]
+fn reverse_growth_sliver_parent_converts_child_paint_offset_for_hit_testing() {
+    let mut owner = PipelineOwner::new();
+    let host_id = owner.insert(Box::new(PositionedSliverHitHost {
+        constraints: reverse_growth_sliver_hit_constraints(),
+        offset: Offset::ZERO,
+        position_child: true,
+        size: Size::ZERO,
+    }) as BoxedRenderObject);
+    let parent_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            host_id,
+            Box::new(ConditionalOffsetSliverParent::new(Offset::new(
+                px(0.0),
+                px(10.0),
+            ))) as BoxedSliverObject,
+        )
+        .expect("reverse-growth sliver parent");
+    let leaf_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            parent_id,
+            Box::new(MainAxisBandSliver::new(0.0, 15.0)) as BoxedSliverObject,
+        )
+        .expect("band sliver leaf");
+
+    let owner = laid_out(owner, host_id);
+    assert_eq!(
+        render_offset(&owner, leaf_id),
+        Offset::new(px(0.0), px(10.0)),
+        "fixture sanity: parent positioned the child 10px from the physical top",
+    );
+    assert_eq!(
+        hits(&owner, 10.0, 80.0),
+        vec![leaf_id, parent_id, host_id],
+        "reverse-growth parent main=40 maps through physical y=80 and child \
+         offset=10 to child main=10, inside the leading hit band",
+    );
+    assert!(
+        hits(&owner, 10.0, 60.0).is_empty(),
+        "box y=60 maps to child main=30 and must miss the leading hit band",
     );
 }
 

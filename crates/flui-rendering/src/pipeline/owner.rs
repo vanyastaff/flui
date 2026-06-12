@@ -765,28 +765,51 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         MainAxisPosition::new(main_axis, cross_axis)
     }
 
-    fn sliver_hit_position_minus_offset(
-        node: &RenderNode,
+    fn sliver_hit_position_minus_paint_offset(
+        parent_constraints: &SliverConstraints,
+        parent_geometry: &SliverGeometry,
+        child_node: &RenderNode,
         position: MainAxisPosition,
         offset: Offset,
     ) -> MainAxisPosition {
-        let axis_direction = node
-            .as_sliver()
-            .and_then(|entry| entry.state().constraints())
-            .map(|constraints| constraints.axis_direction);
+        let Some(child_entry) = child_node.as_sliver() else {
+            return position;
+        };
+        let Some(child_constraints) = child_entry.state().constraints() else {
+            return position;
+        };
+        let Some(child_geometry) = child_entry.state().geometry() else {
+            return position;
+        };
 
-        match axis_direction {
-            Some(
-                flui_types::layout::AxisDirection::LeftToRight
-                | flui_types::layout::AxisDirection::RightToLeft,
-            ) => MainAxisPosition::new(
-                position.main_axis - offset.dx.get(),
-                position.cross_axis - offset.dy.get(),
-            ),
-            _ => MainAxisPosition::new(
-                position.main_axis - offset.dy.get(),
-                position.cross_axis - offset.dx.get(),
-            ),
+        let (offset_main, offset_cross) = match child_constraints.axis_direction {
+            flui_types::layout::AxisDirection::LeftToRight
+            | flui_types::layout::AxisDirection::RightToLeft => (offset.dx.get(), offset.dy.get()),
+            flui_types::layout::AxisDirection::TopToBottom
+            | flui_types::layout::AxisDirection::BottomToTop => (offset.dy.get(), offset.dx.get()),
+        };
+        let parent_physical_main =
+            if Self::effective_sliver_axis_direction(parent_constraints).is_reversed() {
+                parent_geometry.paint_extent - position.main_axis
+            } else {
+                position.main_axis
+            };
+        let child_physical_main = parent_physical_main - offset_main;
+        let child_main = if Self::effective_sliver_axis_direction(child_constraints).is_reversed() {
+            child_geometry.paint_extent - child_physical_main
+        } else {
+            child_physical_main
+        };
+
+        MainAxisPosition::new(child_main, position.cross_axis - offset_cross)
+    }
+
+    fn effective_sliver_axis_direction(
+        constraints: &SliverConstraints,
+    ) -> flui_types::layout::AxisDirection {
+        match constraints.growth_direction {
+            crate::constraints::GrowthDirection::Forward => constraints.axis_direction,
+            crate::constraints::GrowthDirection::Reverse => constraints.axis_direction.opposite(),
         }
     }
 
@@ -893,13 +916,18 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 return false;
             };
             if child_node.as_sliver().is_some() {
-                let child_position = override_pos.unwrap_or_else(|| {
-                    Self::sliver_hit_position_minus_offset(
+                // Explicit positions are already in child sliver coordinates.
+                // The layout-offset fallback starts from physical paint data.
+                let child_position = match override_pos {
+                    Some(position) => position,
+                    None => Self::sliver_hit_position_minus_paint_offset(
+                        constraints,
+                        &geometry,
                         child_node,
                         position,
                         child_node.offset(),
-                    )
-                });
+                    ),
+                };
                 self.hit_test_sliver_subtree(child_id, child_position, result)
             } else if let Some(child_entry) = child_node.as_box() {
                 let Some(child_size) = child_entry.state().geometry() else {
