@@ -151,6 +151,56 @@ impl RenderBox for FixedHitBox {
 }
 
 #[derive(Debug)]
+struct ExpandingHitBox {
+    intrinsic: Size,
+    size: Size,
+}
+
+impl ExpandingHitBox {
+    fn new(width: f32, height: f32) -> Self {
+        Self {
+            intrinsic: Size::new(px(width), px(height)),
+            size: Size::ZERO,
+        }
+    }
+}
+
+impl flui_foundation::Diagnosticable for ExpandingHitBox {}
+impl PaintEffectsCapability for ExpandingHitBox {}
+impl SemanticsCapability for ExpandingHitBox {}
+impl HotReloadCapability for ExpandingHitBox {}
+
+impl RenderBox for ExpandingHitBox {
+    type Arity = Leaf;
+    type ParentData = BoxParentData;
+
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, Self::ParentData>) {
+        self.size = ctx.constraints().biggest();
+        ctx.complete_with_size(self.size);
+    }
+
+    fn size(&self) -> &Size {
+        &self.size
+    }
+
+    fn size_mut(&mut self) -> &mut Size {
+        &mut self.size
+    }
+
+    fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
+        ctx.is_within_bounds(Rect::from_origin_size(flui_types::Point::ZERO, self.size))
+    }
+
+    fn compute_max_intrinsic_width(&self, _height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        self.intrinsic.width.get()
+    }
+
+    fn compute_max_intrinsic_height(&self, _width: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        self.intrinsic.height.get()
+    }
+}
+
+#[derive(Debug)]
 struct IntrinsicProbeSliver {
     constraints: SliverConstraints,
     geometry: SliverGeometry,
@@ -496,4 +546,42 @@ fn sliver_fill_remaining_overscroll_expands_max_paint_extent() {
     assert_eq!(geometry.max_paint_extent, 120.0);
     assert_eq!(geometry.hit_test_extent, 90.0);
     assert_eq!(geometry.cache_extent, 80.0);
+}
+
+#[test]
+fn sliver_fill_remaining_overscroll_reverse_axis_positions_actual_child_extent() {
+    let mut constraints = vertical_constraints(0.0, 20.0, 90.0, -30.0);
+    constraints.axis_direction = AxisDirection::BottomToTop;
+
+    let mut owner = PipelineOwner::new();
+    let root_id = owner.insert(Box::new(SliverHost {
+        constraints,
+        size: Size::ZERO,
+    }) as BoxedRenderObject);
+    let sliver_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            root_id,
+            Box::new(RenderSliverFillRemainingAndOverscroll::new()) as BoxedSliverObject,
+        )
+        .expect("fill remaining overscroll sliver");
+    let child_id = owner
+        .render_tree_mut()
+        .insert_box_child(
+            sliver_id,
+            Box::new(ExpandingHitBox::new(300.0, 40.0)) as BoxedRenderObject,
+        )
+        .expect("box child");
+
+    let owner = laid_out(owner, root_id);
+    let geometry = sliver_geometry(&owner, sliver_id);
+
+    assert_eq!(box_size(&owner, child_id), Size::new(px(300.0), px(120.0)));
+    assert_eq!(geometry.scroll_extent, 80.0);
+    assert_eq!(geometry.paint_extent, 90.0);
+    assert_eq!(geometry.max_paint_extent, 120.0);
+    assert_eq!(
+        render_offset(&owner, child_id),
+        Offset::new(px(0.0), px(-30.0))
+    );
 }

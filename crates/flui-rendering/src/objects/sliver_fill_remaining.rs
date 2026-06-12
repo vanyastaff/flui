@@ -10,7 +10,7 @@
 use flui_foundation::Diagnosticable;
 use flui_tree::Single;
 use flui_types::{
-    Offset,
+    Offset, Size,
     geometry::px,
     layout::{AxisDirection, AxisDirection::*},
 };
@@ -163,16 +163,18 @@ impl RenderSliver for RenderSliverFillRemainingAndOverscroll {
             .max(0.0);
         let mut max_extent =
             (self.constraints.remaining_paint_extent - self.constraints.overlap.min(0.0)).max(0.0);
+        let mut child_main_extent = extent;
 
         if ctx.child_count() > 0 {
             let child_extent = child_max_intrinsic_main_extent(ctx, &self.constraints);
             extent = extent.max(child_extent);
             max_extent = max_extent.max(extent);
-            ctx.layout_box_child(
+            let child_size = ctx.layout_box_child(
                 0,
                 self.constraints
                     .as_box_constraints(extent, max_extent, None),
             );
+            child_main_extent = size_main_axis_extent(child_size, &self.constraints);
         }
 
         let painted_child_size = max_extent.min(self.constraints.remaining_paint_extent);
@@ -190,7 +192,10 @@ impl RenderSliver for RenderSliverFillRemainingAndOverscroll {
             ..SliverGeometry::ZERO
         };
         if ctx.child_count() > 0 {
-            ctx.position_child(0, child_paint_offset(&self.constraints, &geometry));
+            ctx.position_child(
+                0,
+                child_paint_offset_for_extent(&self.constraints, &geometry, child_main_extent),
+            );
         }
         self.geometry = geometry;
         ctx.complete(geometry);
@@ -348,7 +353,24 @@ fn child_max_intrinsic_main_extent(
 }
 
 #[inline]
+fn size_main_axis_extent(size: Size, constraints: &SliverConstraints) -> f32 {
+    match constraints.axis_direction.axis() {
+        flui_types::layout::Axis::Horizontal => size.width.get(),
+        flui_types::layout::Axis::Vertical => size.height.get(),
+    }
+}
+
+#[inline]
 fn child_paint_offset(constraints: &SliverConstraints, geometry: &SliverGeometry) -> Offset {
+    child_paint_offset_for_extent(constraints, geometry, geometry.scroll_extent)
+}
+
+#[inline]
+fn child_paint_offset_for_extent(
+    constraints: &SliverConstraints,
+    geometry: &SliverGeometry,
+    child_main_extent: f32,
+) -> Offset {
     match apply_growth_direction_to_axis_direction(
         constraints.axis_direction,
         constraints.growth_direction,
@@ -357,10 +379,10 @@ fn child_paint_offset(constraints: &SliverConstraints, geometry: &SliverGeometry
         LeftToRight => Offset::new(px(-constraints.scroll_offset), px(0.0)),
         BottomToTop => Offset::new(
             px(0.0),
-            px(geometry.paint_extent + constraints.scroll_offset - geometry.scroll_extent),
+            px(geometry.paint_extent + constraints.scroll_offset - child_main_extent),
         ),
         RightToLeft => Offset::new(
-            px(geometry.paint_extent + constraints.scroll_offset - geometry.scroll_extent),
+            px(geometry.paint_extent + constraints.scroll_offset - child_main_extent),
             px(0.0),
         ),
     }
