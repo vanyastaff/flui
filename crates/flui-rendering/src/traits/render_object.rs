@@ -326,7 +326,7 @@ pub trait RenderObject<P: Protocol>:
     /// baseline alignment) during `perform_layout`.
     ///
     /// Default: `None` (no baseline). Box objects override via
-    /// [`RenderBox::compute_distance_to_actual_baseline`].
+    /// [`RenderBox::compute_distance_to_actual_baseline`](crate::traits::RenderBox::compute_distance_to_actual_baseline).
     fn actual_baseline_raw(&self, _baseline: crate::traits::TextBaseline) -> Option<f32> {
         None
     }

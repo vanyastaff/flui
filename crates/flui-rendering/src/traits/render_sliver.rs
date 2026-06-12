@@ -110,10 +110,11 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static 
         0.0
     }
 
-    /// Computes the portion of this sliver that is visible in the viewport.
+    /// Computes how much of the `[from, to]` range lies inside the viewport
+    /// paint window `[scroll_offset, scroll_offset + remaining_paint_extent]`.
     ///
-    /// Given a `from` and `to` range in the sliver's coordinate space,
-    /// this returns the offset at which the visible portion begins.
+    /// Returns the **extent** (length) of the visible intersection, not a
+    /// coordinate offset — matching Flutter's `calculatePaintOffset` naming.
     ///
     /// # Arguments
     ///
@@ -753,6 +754,30 @@ mod tests {
             10.0,
             "Flutter cache window is [scroll_offset + cache_origin, \
             scroll_offset + remaining_cache_extent]",
+        );
+    }
+
+    /// Regression: audit scroll=1000 / origin=-250 / remaining=1100 → window
+    /// [750, 2100], not the pre-fix [cache_origin, cache_origin+remaining].
+    #[test]
+    fn calculate_cache_offset_non_zero_scroll_uses_flutter_window() {
+        let sliver = FixedHeightSliver::new(200.0);
+        let constraints = vertical_cache_constraints(1000.0, 1100.0, -250.0);
+
+        assert_eq!(
+            sliver.calculate_cache_offset(&constraints, 700.0, 800.0),
+            50.0,
+            "intersection of [700,800] with [750,2100]",
+        );
+        assert_eq!(
+            sliver.calculate_cache_offset(&constraints, 750.0, 2100.0),
+            1100.0,
+            "full window clamped to remaining_cache_extent",
+        );
+        assert_eq!(
+            sliver.calculate_cache_offset(&constraints, 0.0, 500.0),
+            0.0,
+            "range entirely before cache window",
         );
     }
 
