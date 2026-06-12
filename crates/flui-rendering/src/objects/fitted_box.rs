@@ -44,7 +44,9 @@ use crate::{
     constraints::BoxConstraints,
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability, TextBaseline},
+    traits::{
+        HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability, TextBaseline,
+    },
 };
 
 /// A render object that scales its child to fit its own box.

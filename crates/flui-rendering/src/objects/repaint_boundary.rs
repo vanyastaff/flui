@@ -176,7 +176,8 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderRepai
                  dyn FnMut(
             usize,
             crate::protocol::ProtocolConstraints<crate::protocol::BoxProtocol>,
-        ) -> crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>
+        )
+            -> crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>
                      + Send
                      + Sync
              ),

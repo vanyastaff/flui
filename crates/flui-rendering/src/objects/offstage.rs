@@ -21,13 +21,15 @@ use flui_types::{Offset, Point, Rect, Size};
 
 use crate::{
     constraints::BoxConstraints,
-    context::{BoxHitTestContext, BoxLayoutContext},
     context::proxy_queries::{
         forward_dry_baseline, forward_dry_layout, forward_max_intrinsic_height,
         forward_max_intrinsic_width, forward_min_intrinsic_height, forward_min_intrinsic_width,
     },
+    context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability, TextBaseline},
+    traits::{
+        HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability, TextBaseline,
+    },
 };
 
 /// A render object that, when `offstage` is true, collapses to zero

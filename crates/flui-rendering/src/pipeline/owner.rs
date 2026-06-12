@@ -4937,12 +4937,12 @@ mod tests {
     }
 
     /// A leaf committing a size that violates the constraints it was laid out
-    /// under trips `Protocol::debug_assert_layout_output` (Flutter
-    /// `debugAssertDoesMeetConstraints`) on the leaf commit path — a node
-    /// returning 999×999 under tight 100×100 is a layout bug.
+    /// under surfaces `RenderError::InvalidGeometry` on the leaf commit path —
+    /// a node returning 999×999 under tight 100×100 is a layout bug.
     #[test]
-    #[should_panic(expected = "violates its constraints")]
-    fn leaf_committing_a_constraint_violating_size_trips_the_layout_assert() {
+    fn leaf_committing_a_constraint_violating_size_returns_invalid_geometry() {
+        use crate::error::RenderError;
+
         let mut owner = PipelineOwner::new();
         let root = owner.insert(Box::new(FixedSizeLeaf {
             size: flui_types::Size::new(
@@ -4957,6 +4957,12 @@ mod tests {
             flui_types::geometry::px(100.0),
         ))));
 
-        let _ = owner.run_frame();
+        let (_, result) = owner.run_frame();
+        match result {
+            Err(RenderError::InvalidGeometry { reason, .. }) => {
+                assert!(reason.contains("does not satisfy"));
+            }
+            other => panic!("expected InvalidGeometry, got {other:?}"),
+        }
     }
 }

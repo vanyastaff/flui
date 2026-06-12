@@ -472,7 +472,10 @@ fn passthrough_proxy_forwards_intrinsics_and_dry_layout() {
     let width = owner
         .box_intrinsic_dimension(proxy_id, IntrinsicDimension::MinWidth, 100.0)
         .expect("proxy intrinsic width");
-    assert_eq!(width, 40.0, "opacity must forward child min intrinsic width");
+    assert_eq!(
+        width, 40.0,
+        "opacity must forward child min intrinsic width"
+    );
     assert_eq!(intrinsic_runs.load(Ordering::Relaxed), 1);
 
     let size = owner
@@ -489,7 +492,9 @@ fn passthrough_proxy_forwards_intrinsics_and_dry_layout() {
     owner
         .box_intrinsic_dimension(proxy_id, IntrinsicDimension::MinWidth, 100.0)
         .expect("cached intrinsic");
-    owner.box_dry_layout(proxy_id, constraints).expect("cached dry");
+    owner
+        .box_dry_layout(proxy_id, constraints)
+        .expect("cached dry");
     assert_eq!(intrinsic_runs.load(Ordering::Relaxed), 1);
     assert_eq!(dry_runs.load(Ordering::Relaxed), 1);
 }
@@ -527,9 +532,8 @@ fn sized_box_reports_fixed_intrinsics_and_dry_layout() {
     use flui_rendering::objects::RenderSizedBox;
 
     let mut owner = PipelineOwner::new();
-    let sized_id = owner.insert(
-        Box::new(RenderSizedBox::fixed(px(80.0), px(30.0))) as BoxedRenderObject,
-    );
+    let sized_id =
+        owner.insert(Box::new(RenderSizedBox::fixed(px(80.0), px(30.0))) as BoxedRenderObject);
 
     let width = owner
         .box_intrinsic_dimension(sized_id, IntrinsicDimension::MinWidth, 0.0)

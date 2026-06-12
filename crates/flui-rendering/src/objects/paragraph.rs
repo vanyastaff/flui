@@ -260,7 +260,9 @@ mod tests {
     use flui_types::{geometry::px, typography::TextSpan};
 
     use super::*;
-    use crate::context::intrinsics_test_support::{leaf_dry_baseline, leaf_dry_layout, leaf_intrinsics};
+    use crate::context::intrinsics_test_support::{
+        leaf_dry_baseline, leaf_dry_layout, leaf_intrinsics,
+    };
 
     fn para(text: &str) -> RenderParagraph {
         RenderParagraph::new(TextSpan::new(text), TextDirection::Ltr)
@@ -320,9 +322,8 @@ mod tests {
     fn dry_baseline_is_available_without_layout() {
         let p = para("hello");
         let constraints = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0));
-        let dry = leaf_dry_baseline(|c| {
-            p.compute_dry_baseline(constraints, TextBaseline::Alphabetic, c)
-        });
+        let dry =
+            leaf_dry_baseline(|c| p.compute_dry_baseline(constraints, TextBaseline::Alphabetic, c));
         assert!(
             dry.is_some_and(|baseline| baseline > 0.0),
             "text dry baseline must be computable before perform_layout",

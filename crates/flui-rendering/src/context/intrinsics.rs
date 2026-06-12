@@ -37,18 +37,20 @@ pub enum DryBaselineChildResponse {
 /// child probes share one driver callback so the slot map is borrowed once.
 pub struct BoxDryBaselineCtx<'a> {
     child_count: usize,
-    query: &'a mut (dyn FnMut(usize, DryBaselineChildRequest) -> DryBaselineChildResponse
-             + Send
-             + Sync),
+    query: &'a mut (
+                dyn FnMut(usize, DryBaselineChildRequest) -> DryBaselineChildResponse + Send + Sync
+            ),
 }
 
 impl<'a> BoxDryBaselineCtx<'a> {
     /// Wraps the driver's child dry-baseline callback.
     pub(crate) fn new(
         child_count: usize,
-        query: &'a mut (dyn FnMut(usize, DryBaselineChildRequest) -> DryBaselineChildResponse
-                 + Send
-                 + Sync),
+        query: &'a mut (
+                    dyn FnMut(usize, DryBaselineChildRequest) -> DryBaselineChildResponse
+                        + Send
+                        + Sync
+                ),
     ) -> Self {
         Self { child_count, query }
     }
@@ -66,7 +68,10 @@ impl<'a> BoxDryBaselineCtx<'a> {
         constraints: BoxConstraints,
         baseline: TextBaseline,
     ) -> Option<f32> {
-        match (self.query)(index, DryBaselineChildRequest::Baseline(constraints, baseline)) {
+        match (self.query)(
+            index,
+            DryBaselineChildRequest::Baseline(constraints, baseline),
+        ) {
             DryBaselineChildResponse::Baseline(v) => v,
             DryBaselineChildResponse::DryLayout(_) => None,
         }
@@ -205,7 +210,9 @@ pub(crate) mod test_support {
 
     /// Leaf context for `compute_dry_baseline` tests.
     pub(crate) fn leaf_dry_baseline<R>(f: impl FnOnce(&mut BoxDryBaselineCtx<'_>) -> R) -> R {
-        let mut deny = |index: usize, request: DryBaselineChildRequest| -> DryBaselineChildResponse {
+        let mut deny = |index: usize,
+                        request: DryBaselineChildRequest|
+         -> DryBaselineChildResponse {
             match request {
                 DryBaselineChildRequest::Baseline(constraints, baseline) => panic!(
                     "leaf object dry-baselined child {index} ({constraints:?}, {baseline:?}) — \

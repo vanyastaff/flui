@@ -140,7 +140,9 @@ macro_rules! forward_single_child_box_queries {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::context::intrinsics::test_support::{leaf_dry_baseline, leaf_dry_layout, leaf_intrinsics};
+    use crate::context::intrinsics::test_support::{
+        leaf_dry_baseline, leaf_dry_layout, leaf_intrinsics,
+    };
 
     #[test]
     fn leaf_helpers_reject_child_queries() {

@@ -146,6 +146,30 @@ impl Protocol for BoxProtocol {
         );
     }
 
+    /// Runtime counterpart to [`Self::debug_assert_layout_output`] — surfaces
+    /// Flutter's `debugAssertDoesMeetConstraints` as
+    /// [`RenderError::InvalidGeometry`](crate::error::RenderError::InvalidGeometry)
+    /// so bad sizes fail the frame instead of committing silently.
+    fn validate_layout_output(
+        render_object: &'static str,
+        constraints: &BoxConstraints,
+        geometry: &Size,
+    ) -> crate::error::RenderResult<()> {
+        if !geometry.width.get().is_finite() || !geometry.height.get().is_finite() {
+            return Err(crate::error::RenderError::invalid_geometry(
+                render_object,
+                "non-finite width or height",
+            ));
+        }
+        if !constraints.is_satisfied_by(*geometry) {
+            return Err(crate::error::RenderError::invalid_geometry(
+                render_object,
+                "size does not satisfy layout constraints",
+            ));
+        }
+        Ok(())
+    }
+
     /// D-block PR-A1b U19 — wraps the given `BoxConstraints` in a typed
     /// `BoxLayoutCtx::<Leaf, BoxParentData>::new(constraints)` (no
     /// children, no callback) and hands an erased `&mut dyn
@@ -1381,6 +1405,31 @@ mod tests {
     #[test]
     fn test_box_protocol_name() {
         assert_eq!(BoxProtocol::name(), "box");
+    }
+
+    #[test]
+    fn validate_layout_output_rejects_non_finite_and_oversized_geometry() {
+        use crate::error::RenderError;
+
+        let constraints = BoxConstraints::new(px(0.0), px(100.0), px(0.0), px(100.0));
+        let ok = Size::new(px(40.0), px(40.0));
+        BoxProtocol::validate_layout_output("TestBox", &constraints, &ok).expect("valid size");
+
+        let bad = Size::new(px(f32::INFINITY), px(40.0));
+        match BoxProtocol::validate_layout_output("TestBox", &constraints, &bad) {
+            Err(RenderError::InvalidGeometry { reason, .. }) => {
+                assert!(reason.contains("non-finite"));
+            }
+            other => panic!("expected InvalidGeometry, got {other:?}"),
+        }
+
+        let oversize = Size::new(px(200.0), px(40.0));
+        match BoxProtocol::validate_layout_output("TestBox", &constraints, &oversize) {
+            Err(RenderError::InvalidGeometry { reason, .. }) => {
+                assert!(reason.contains("does not satisfy"));
+            }
+            other => panic!("expected InvalidGeometry, got {other:?}"),
+        }
     }
 
     #[test]

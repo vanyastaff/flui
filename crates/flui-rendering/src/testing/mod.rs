@@ -66,8 +66,8 @@ pub use assertions::{
 };
 pub use harness::{FrameRun, LayoutRun, RenderTester};
 pub use inspect::Probe;
-pub use queries::BoxQueryRun;
 pub use parent_data::ParentDataSeed;
+pub use queries::BoxQueryRun;
 pub use report::FrameReport;
 pub use tree::{
     RenderLabelRegistry, TreeNode, box_node, box_node_boxed, sliver_node, sliver_node_boxed,

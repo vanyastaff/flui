@@ -28,8 +28,8 @@
 //! | `RenderClipPath` | `harness_clip_path_*` | yes | — | — | yes | — |
 //! | `RenderRepaintBoundary` | `harness_repaint_boundary_*` | yes | — | yes | yes | — |
 //! | `RenderMetaData` | `harness_metadata_*` | yes | — | — | yes | — |
-//! | `RenderFlex` | `harness_flex_*` | yes | — | — | yes | — |
-//! | `RenderStack` | `harness_stack_*` | yes | yes | — | yes | — |
+//! | `RenderFlex` | `harness_flex_*` | yes | — | — | yes | queries |
+//! | `RenderStack` | `harness_stack_*` | yes | yes | — | yes | queries |
 //! | `RenderAbsorbPointer` | `harness_absorb_pointer_*` | yes | yes | — | yes | — |
 //! | `RenderIgnorePointer` | `harness_ignore_pointer_*` | yes | yes | — | yes | — |
 //! | `RenderSliverFixedExtentList` | `harness_sliver_fixed_extent_list_*` | yes | — | — | yes | — |
@@ -838,6 +838,20 @@ fn harness_flex_row_positions_children_on_main_axis() {
 }
 
 #[test]
+fn harness_flex_row_sums_child_min_intrinsic_widths() {
+    let mut run = RenderTester::mount(
+        box_node(RenderFlex::row())
+            .child(box_node(RenderColoredBox::red(30.0, 20.0)).label("a"))
+            .child(box_node(RenderColoredBox::green(50.0, 20.0)).label("b")),
+    )
+    .with_size(Size::new(px(200.0), px(100.0)))
+    .run_layout();
+
+    assert_eq!(run.min_intrinsic_width(run.root(), 100.0), 80.0);
+    assert_eq!(run.max_intrinsic_height(run.root(), 200.0), 20.0);
+}
+
+#[test]
 fn harness_flex_column_stacks_children_vertically() {
     let run = RenderTester::mount(
         box_node(RenderFlex::column())
@@ -854,6 +868,20 @@ fn harness_flex_column_stacks_children_vertically() {
             .as_deref(),
         Some("Vertical"),
     );
+}
+
+#[test]
+fn harness_stack_max_child_intrinsic_width() {
+    let mut run = RenderTester::mount(
+        box_node(RenderStack::new())
+            .child(box_node(RenderColoredBox::red(30.0, 20.0)).label("a"))
+            .child(box_node(RenderColoredBox::green(50.0, 25.0)).label("b")),
+    )
+    .with_size(Size::new(px(200.0), px(100.0)))
+    .run_layout();
+
+    assert_eq!(run.min_intrinsic_width(run.root(), 100.0), 50.0);
+    assert_eq!(run.max_intrinsic_height(run.root(), 200.0), 25.0);
 }
 
 #[test]

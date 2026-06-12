@@ -45,7 +45,7 @@ use flui_types::{Alignment, Offset, Pixels, Point, Rect, Size, painting::Clip};
 
 use crate::{
     constraints::BoxConstraints,
-    context::{BoxHitTestContext, BoxLayoutContext},
+    context::{BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext},
     parent_data::StackParentData,
     traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
 };
@@ -308,6 +308,23 @@ impl RenderStack {
             || (offset.dx + child_size.width).get() > stack_size.width.get()
             || (offset.dy + child_size.height).get() > stack_size.height.get()
     }
+
+    /// Flutter stack.dart: each intrinsic dimension is the max of the children.
+    fn max_child_intrinsic(
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+        extent: f32,
+        mut query: impl FnMut(&mut BoxIntrinsicsCtx<'_>, usize, f32) -> f32,
+    ) -> f32 {
+        let child_count = ctx.child_count();
+        if child_count == 0 {
+            return 0.0;
+        }
+        let mut max = 0.0f32;
+        for i in 0..child_count {
+            max = max.max(query(ctx, i, extent));
+        }
+        max
+    }
 }
 
 impl Default for RenderStack {
@@ -442,6 +459,30 @@ impl RenderBox for RenderStack {
 
     fn size_mut(&mut self) -> &mut Size {
         &mut self.size
+    }
+
+    fn compute_min_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        Self::max_child_intrinsic(ctx, height, |ctx, i, extent| {
+            ctx.child_min_intrinsic_width(i, extent)
+        })
+    }
+
+    fn compute_max_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        Self::max_child_intrinsic(ctx, height, |ctx, i, extent| {
+            ctx.child_max_intrinsic_width(i, extent)
+        })
+    }
+
+    fn compute_min_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        Self::max_child_intrinsic(ctx, width, |ctx, i, extent| {
+            ctx.child_min_intrinsic_height(i, extent)
+        })
+    }
+
+    fn compute_max_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        Self::max_child_intrinsic(ctx, width, |ctx, i, extent| {
+            ctx.child_max_intrinsic_height(i, extent)
+        })
     }
 
     fn paint(&self, ctx: &mut crate::context::PaintCx<'_, Variable>) {
