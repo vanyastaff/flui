@@ -7,7 +7,9 @@ use crate::{
     constraints::BoxConstraints,
     context::{BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext},
     parent_data::{FlexFit, FlexParentData},
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+    traits::{
+        HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability, TextBaseline,
+    },
 };
 
 /// Direction of the flex layout.
@@ -59,6 +61,8 @@ pub enum CrossAxisAlignment {
     Center,
     /// Children are stretched to fill the cross axis.
     Stretch,
+    /// Align children by their text baselines (horizontal flex only).
+    Baseline,
 }
 
 /// A render object that lays out children in a flex layout (row or column).
@@ -87,6 +91,8 @@ pub struct RenderFlex {
     main_axis_size: MainAxisSize,
     /// Cross axis alignment.
     cross_axis_alignment: CrossAxisAlignment,
+    /// Baseline kind used when [`CrossAxisAlignment::Baseline`] is selected.
+    text_baseline: TextBaseline,
     /// Spacing between children.
     spacing: f32,
     /// Size after layout.
@@ -102,6 +108,7 @@ impl Default for RenderFlex {
             main_axis_alignment: MainAxisAlignment::Start,
             main_axis_size: MainAxisSize::Max,
             cross_axis_alignment: CrossAxisAlignment::Start,
+            text_baseline: TextBaseline::Alphabetic,
             spacing: 0.0,
             size: Size::ZERO,
             child_count: 0,
@@ -146,6 +153,12 @@ impl RenderFlex {
     /// Sets the cross axis alignment.
     pub fn with_cross_axis_alignment(mut self, alignment: CrossAxisAlignment) -> Self {
         self.cross_axis_alignment = alignment;
+        self
+    }
+
+    /// Sets the text baseline used for [`CrossAxisAlignment::Baseline`].
+    pub fn with_text_baseline(mut self, baseline: TextBaseline) -> Self {
+        self.text_baseline = baseline;
         self
     }
 
@@ -260,6 +273,9 @@ impl flui_foundation::Diagnosticable for RenderFlex {
         properties.add_enum("main_axis_alignment", self.main_axis_alignment);
         properties.add_default_enum("main_axis_size", self.main_axis_size, MainAxisSize::Max);
         properties.add_enum("cross_axis_alignment", self.cross_axis_alignment);
+        if self.cross_axis_alignment == CrossAxisAlignment::Baseline {
+            properties.add_enum("text_baseline", self.text_baseline);
+        }
         properties.add_default_double("spacing", self.spacing, 0.0, Some("px"));
     }
 }
@@ -473,6 +489,24 @@ impl RenderBox for RenderFlex {
             }
         };
 
+        // Flutter flex.dart: baseline cross-axis alignment applies to rows only.
+        let max_baseline_distance = if self.direction == FlexDirection::Horizontal
+            && self.cross_axis_alignment == CrossAxisAlignment::Baseline
+        {
+            let mut max = None::<f32>;
+            for i in 0..child_count {
+                if let Some(d) = ctx.child_distance_to_actual_baseline(i, self.text_baseline) {
+                    max = Some(match max {
+                        Some(m) => m.max(d),
+                        None => d,
+                    });
+                }
+            }
+            max
+        } else {
+            None
+        };
+
         // Position each child and track offsets
 
         for (i, slot) in child_sizes.iter().enumerate().take(child_count) {
@@ -484,6 +518,15 @@ impl RenderBox for RenderFlex {
                 CrossAxisAlignment::End => cross_extent - self.cross_size(child_size),
                 CrossAxisAlignment::Center => (cross_extent - self.cross_size(child_size)) / 2.0,
                 CrossAxisAlignment::Stretch => Pixels::ZERO,
+                CrossAxisAlignment::Baseline => {
+                    if let Some(max_dist) = max_baseline_distance {
+                        ctx.child_distance_to_actual_baseline(i, self.text_baseline)
+                            .map(|child_dist| Pixels::new(max_dist - child_dist))
+                            .unwrap_or(Pixels::ZERO)
+                    } else {
+                        Pixels::ZERO
+                    }
+                }
             };
 
             let offset = self.offset(main_offset, cross_offset);

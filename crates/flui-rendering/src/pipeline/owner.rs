@@ -31,7 +31,10 @@ use crate::{
     context::{FragmentClip, FragmentOp, FragmentRecorder},
     protocol::{
         BoxProtocol, MainAxisPosition, Protocol, SliverProtocol,
-        box_protocol::{BoxLayoutCtxErased, LayoutChildCallback, SliverLayoutChildCallback},
+        box_protocol::{
+            ActualBaselineChildCallback, BoxLayoutCtxErased, LayoutChildCallback,
+            SliverLayoutChildCallback,
+        },
         sliver_protocol::{SliverChildLayoutCallback, SliverLayoutCtxErased},
     },
     storage::{RenderEntry, RenderNode, RenderTree},
@@ -2556,6 +2559,18 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
     };
     let cb_ref: LayoutChildCallback<'_> = &cb_owned;
 
+    let baseline_cb_owned = move |child_id: RenderId, baseline: crate::traits::TextBaseline| {
+        borrows_for_cb.get(child_id).and_then(|child_ptr| {
+            // SAFETY: shared reborrow of a distinct child slot after its
+            // layout completed in this walk; no concurrent &mut to the slot.
+            let child_node: &RenderNode = unsafe { &*child_ptr.0 };
+            child_node
+                .as_box()
+                .and_then(|entry| entry.render_object().actual_baseline_raw(baseline))
+        })
+    };
+    let baseline_cb_ref: ActualBaselineChildCallback<'_> = &baseline_cb_owned;
+
     // Sliver child callback: invoked when the Box parent calls
     // `ctx.layout_sliver_child(index, sliver_constraints)`.  Uses the
     // same `borrows_for_cb` pool and `descendant_error_flag` as the box
@@ -2603,6 +2618,7 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
         &mut child_states,
         &child_ids,
         cb_ref,
+        baseline_cb_ref,
         Some(sliver_cb_ref),
     );
     let erased: &mut dyn BoxLayoutCtxErased = &mut ctx;

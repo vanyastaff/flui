@@ -287,6 +287,14 @@ impl LayoutCapability for BoxLayout {
 pub type LayoutChildCallback<'a> =
     &'a (dyn Fn(flui_foundation::RenderId, BoxConstraints) -> Size + Send + Sync);
 
+/// Callback for reading a laid-out child's actual baseline distance.
+///
+/// Called after `layout_child` when a parent needs the post-layout baseline
+/// position (e.g. `RenderBaseline`, flex baseline cross-axis alignment).
+pub type ActualBaselineChildCallback<'a> = &'a (
+        dyn Fn(flui_foundation::RenderId, crate::traits::TextBaseline) -> Option<f32> + Send + Sync
+    );
+
 /// Callback type for cross-protocol sliver child layout driven by a Box parent.
 ///
 /// Called when a Box parent's `layout_sliver_child()` is invoked. The callback
@@ -515,6 +523,21 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
         match &self.storage {
             BoxLayoutCtxStorage::Direct { geometry, .. }
             | BoxLayoutCtxStorage::Proxy { geometry, .. } => geometry.as_ref(),
+        }
+    }
+
+    /// Distance from the top of child `index` to its first baseline of
+    /// `baseline` kind, after the child has been laid out in this walk.
+    pub fn child_distance_to_actual_baseline(
+        &self,
+        index: usize,
+        baseline: crate::traits::TextBaseline,
+    ) -> Option<f32> {
+        match &self.storage {
+            BoxLayoutCtxStorage::Direct { .. } => None,
+            BoxLayoutCtxStorage::Proxy { erased, .. } => {
+                erased.child_distance_to_actual_baseline(index, baseline)
+            }
         }
     }
 }
@@ -789,6 +812,18 @@ pub trait BoxLayoutCtxErased: Send + Sync {
     /// and Proxy `complete_layout` mirror.
     fn complete_layout(&mut self, size: Size);
 
+    /// Distance from the top of child `index` to its first baseline of
+    /// `baseline` kind, after the child has been laid out in this walk.
+    ///
+    /// Default: `None` when the walk does not wire a baseline callback.
+    fn child_distance_to_actual_baseline(
+        &self,
+        _index: usize,
+        _baseline: crate::traits::TextBaseline,
+    ) -> Option<f32> {
+        None
+    }
+
     /// Reads child `index`'s parent data as `&dyn ParentData`. Returns
     /// `None` if `index` is out of bounds or the context wasn't
     /// constructed with children access.
@@ -918,6 +953,20 @@ impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, 
     }
 
     #[inline]
+    fn child_distance_to_actual_baseline(
+        &self,
+        index: usize,
+        baseline: crate::traits::TextBaseline,
+    ) -> Option<f32> {
+        match &self.storage {
+            BoxLayoutCtxStorage::Direct { .. } => None,
+            BoxLayoutCtxStorage::Proxy { erased, .. } => {
+                erased.child_distance_to_actual_baseline(index, baseline)
+            }
+        }
+    }
+
+    #[inline]
     fn child_parent_data_dyn(&self, index: usize) -> Option<&dyn ParentData> {
         // Storage-aware: Direct returns own children's parent_data;
         // Proxy delegates back through the underlying erased ctx.
@@ -1022,6 +1071,7 @@ pub struct ErasedBoxLayoutCtx<'ctx> {
     children: &'ctx mut Vec<ErasedChildState>,
     child_ids: &'ctx [flui_foundation::RenderId],
     layout_child_callback: LayoutChildCallback<'ctx>,
+    actual_baseline_callback: ActualBaselineChildCallback<'ctx>,
     /// Optional callback for cross-protocol sliver child layout.
     ///
     /// `None` when no sliver children are present in this subtree walk.
@@ -1041,6 +1091,7 @@ impl<'ctx> ErasedBoxLayoutCtx<'ctx> {
         children: &'ctx mut Vec<ErasedChildState>,
         child_ids: &'ctx [flui_foundation::RenderId],
         layout_child_callback: LayoutChildCallback<'ctx>,
+        actual_baseline_callback: ActualBaselineChildCallback<'ctx>,
         sliver_layout_child_callback: Option<SliverLayoutChildCallback<'ctx>>,
     ) -> Self {
         Self {
@@ -1049,6 +1100,7 @@ impl<'ctx> ErasedBoxLayoutCtx<'ctx> {
             children,
             child_ids,
             layout_child_callback,
+            actual_baseline_callback,
             sliver_layout_child_callback,
         }
     }
@@ -1077,6 +1129,15 @@ impl BoxLayoutCtxErased for ErasedBoxLayoutCtx<'_> {
             slot.size = size;
         }
         size
+    }
+
+    fn child_distance_to_actual_baseline(
+        &self,
+        index: usize,
+        baseline: crate::traits::TextBaseline,
+    ) -> Option<f32> {
+        let &child_id = self.child_ids.get(index)?;
+        (self.actual_baseline_callback)(child_id, baseline)
     }
 
     fn layout_sliver_child(
