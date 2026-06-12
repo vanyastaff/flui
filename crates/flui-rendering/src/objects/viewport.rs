@@ -372,7 +372,7 @@ impl<O: ViewportOffset + 'static> Diagnosticable for RenderViewport<O> {
     fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
         properties.add_enum("axis_direction", self.axis_direction);
         properties.add_enum("cross_axis_direction", self.cross_axis_direction);
-        properties.add_double("offset", self.offset.pixels(), Some("px"));
+        properties.add_double("scroll_offset", self.offset.pixels(), Some("px"));
         properties.add_double("cache_extent", self.cache_extent, Some("px"));
         properties.add_enum("cache_extent_style", self.cache_extent_style);
         properties.add_enum("paint_order", self.paint_order);

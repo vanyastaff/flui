@@ -448,6 +448,16 @@ impl DiagnosticsProperty {
         self
     }
 
+    /// Omit the `name: value` separator (builder pattern).
+    ///
+    /// Used by [`DiagnosticsPropertyKind::Flag`] so true flags render as the
+    /// property name only.
+    #[must_use]
+    pub const fn without_separator(mut self) -> Self {
+        self.show_separator = false;
+        self
+    }
+
     /// Set a default value (builder pattern)
     #[must_use]
     pub fn with_default(mut self, default: impl Into<String>) -> Self {
@@ -519,6 +529,45 @@ impl DiagnosticsProperty {
             },
         }
     }
+}
+
+/// Failure modes for [`DiagnosticsNode::find_descendant_unique`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DescendantLookupError {
+    /// No descendant matched the requested name.
+    NotFound,
+    /// More than one descendant matched the requested name.
+    Ambiguous,
+}
+
+impl std::error::Error for DescendantLookupError {}
+
+impl fmt::Display for DescendantLookupError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotFound => f.write_str("diagnostics descendant not found"),
+            Self::Ambiguous => f.write_str("diagnostics descendant name is ambiguous"),
+        }
+    }
+}
+
+fn walk_descendant<'a>(
+    node: &'a DiagnosticsNode,
+    name: &str,
+    found: &mut Option<&'a DiagnosticsNode>,
+) -> bool {
+    if node.name.as_deref() == Some(name) {
+        if found.is_some() {
+            return true;
+        }
+        *found = Some(node);
+    }
+    for child in &node.children {
+        if walk_descendant(child, name, found) {
+            return true;
+        }
+    }
+    false
 }
 
 impl fmt::Display for DiagnosticsProperty {
@@ -642,21 +691,40 @@ impl DiagnosticsNode {
     /// Returns the first descendant node named `name` (depth-first), if present.
     #[must_use]
     pub fn find_descendant(&self, name: &str) -> Option<&Self> {
-        if self.name.as_deref() == Some(name) {
-            return Some(self);
+        self.find_descendant_unique(name).ok()
+    }
+
+    /// Returns the sole descendant named `name` (depth-first).
+    ///
+    /// # Errors
+    ///
+    /// - [`DescendantLookupError::NotFound`] when no node matches `name`.
+    /// - [`DescendantLookupError::Ambiguous`] when more than one node matches.
+    pub fn find_descendant_unique(&self, name: &str) -> Result<&Self, DescendantLookupError> {
+        let mut found: Option<&DiagnosticsNode> = None;
+        if walk_descendant(self, name, &mut found) {
+            Err(DescendantLookupError::Ambiguous)
+        } else {
+            found.ok_or(DescendantLookupError::NotFound)
         }
-        for child in &self.children {
-            if let Some(found) = child.find_descendant(name) {
-                return Some(found);
-            }
-        }
-        None
+    }
+
+    /// Returns the named property record, if present.
+    #[must_use]
+    pub fn find_property(&self, name: &str) -> Option<&DiagnosticsProperty> {
+        self.properties
+            .iter()
+            .find(|property| property.name() == name)
     }
 
     /// Parses the named property as `f64`, if present and parseable.
+    ///
+    /// Respects [`DiagnosticsPropertyKind::Double`] / [`DiagnosticsPropertyKind::Int`]
+    /// unit suffixes (e.g. `"25px"` → `25.0`).
     #[must_use]
     pub fn get_property_f64(&self, name: &str) -> Option<f64> {
-        self.get_property(name)?.parse().ok()
+        self.find_property(name)
+            .and_then(parse_numeric_property_value)
     }
 
     /// Returns the diagnostic level
@@ -965,7 +1033,9 @@ impl DiagnosticsBuilder {
     pub fn add_flag(&mut self, name: impl Into<String>, value: bool, if_true: &str) -> &mut Self {
         if value {
             self.properties.push(
-                DiagnosticsProperty::new(name, if_true).with_kind(DiagnosticsPropertyKind::Flag),
+                DiagnosticsProperty::new(name, if_true)
+                    .with_kind(DiagnosticsPropertyKind::Flag)
+                    .without_separator(),
             );
         }
         self
@@ -1122,6 +1192,22 @@ fn format_double(value: f32, unit: Option<&str>) -> String {
         Some(u) => format!("{value}{u}"),
         None => format!("{value}"),
     }
+}
+
+/// Parses a numeric diagnostics property, stripping a typed unit suffix when
+/// present.
+fn parse_numeric_property_value(property: &DiagnosticsProperty) -> Option<f64> {
+    let raw = property.value();
+    let numeric = match property.kind() {
+        DiagnosticsPropertyKind::Double { unit } | DiagnosticsPropertyKind::Int { unit } => {
+            match unit {
+                Some(suffix) if raw.ends_with(suffix.as_ref()) => &raw[..raw.len() - suffix.len()],
+                _ => raw,
+            }
+        }
+        _ => raw,
+    };
+    numeric.trim().parse().ok()
 }
 
 #[cfg(test)]
@@ -1455,6 +1541,27 @@ mod tests {
         let node = DiagnosticsNode::new("Box").property("opacity", "0.5");
         assert_eq!(node.get_property_f64("opacity"), Some(0.5));
         assert_eq!(node.get_property_f64("missing"), None);
+    }
+
+    #[test]
+    fn test_diagnostics_node_get_property_f64_strips_unit_suffix() {
+        let mut builder = DiagnosticsBuilder::new();
+        builder.add_double("item_extent", 25.0, Some("px"));
+        let [property] = builder.build().try_into().ok().unwrap();
+        let node = DiagnosticsNode::new("RenderSliverFixedExtentList").with_property(property);
+        assert_eq!(node.get_property_f64("item_extent"), Some(25.0));
+    }
+
+    #[test]
+    fn test_diagnostics_node_find_descendant_unique_rejects_ambiguous() {
+        let tree = DiagnosticsNode::new("Root")
+            .child(DiagnosticsNode::new("RenderPadding"))
+            .child(DiagnosticsNode::new("RenderPadding"));
+        assert_eq!(
+            tree.find_descendant_unique("RenderPadding"),
+            Err(DescendantLookupError::Ambiguous),
+        );
+        assert!(tree.find_descendant("RenderPadding").is_none());
     }
 
     #[test]

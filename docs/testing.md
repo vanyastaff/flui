@@ -207,7 +207,7 @@ supports deterministic multi-frame scenarios (no wall clock):
 
 | Method | Use when |
 |--------|----------|
-| `update` + `pump` | Layout changed (padding, size, position) |
+| `update` + `pump` | Layout changed (padding, size, sliver extent) |
 | `update_paint` + `pump` | Paint-only change (color, opacity) |
 | `advance_layout` / `advance_paint` | Shorthand: mutate + one frame |
 | `simulate(ticks, \|t, run\| …)` | Tick loop: mutate in closure, auto-pump each step |

@@ -41,7 +41,7 @@
 //! | `RenderSliverFillRemainingWithScrollable` | `harness_sliver_fill_remaining_with_scrollable_*` | yes | — | — | yes |
 //! | `RenderSliverIgnorePointer` | `harness_sliver_ignore_pointer_*` | yes | yes | — | yes |
 //! | `RenderSliverOffstage` | `harness_sliver_offstage_*` | yes | — | — | yes |
-//! | `RenderSliverOpacity` | `harness_sliver_opacity_*` | yes | — | — | yes |
+//! | `RenderSliverOpacity` | `harness_sliver_opacity_*` | yes | — | yes | yes |
 //! | `RenderViewport` | `harness_viewport_*` | yes | — | — | yes |
 //!
 //! [`catalog_covers_every_render_object_name`] guards the table: every row's
@@ -1135,6 +1135,38 @@ fn harness_sliver_offstage_visible_reports_child_geometry() {
 }
 
 #[test]
+fn harness_sliver_opacity_repaints_on_paint_mutation() {
+    let mut run = RenderTester::mount(viewport(
+        sliver_node(RenderSliverOpacity::new(1.0))
+            .label("opacity")
+            .child(
+                sliver_node(RenderSliverFixedExtentList::new(30.0))
+                    .child(box_node(RenderColoredBox::red(300.0, 1000.0))),
+            ),
+    ))
+    .with_size(Size::new(px(300.0), px(100.0)))
+    .run_frame();
+
+    let opacity = run.id("opacity");
+    let report = run.advance_paint::<RenderSliverOpacity>(opacity, |o| {
+        o.set_opacity(0.5);
+    });
+    assert!(
+        report.painted,
+        "sliver opacity change must repaint: {report}"
+    );
+    assert!(
+        run.structure().contains(&"Opacity"),
+        "semi-opaque sliver must pay for an OpacityLayer: {:?}",
+        run.structure(),
+    );
+    assert!(
+        (run.opacity_alpha().expect("opacity layer present") - 0.5).abs() < 0.01,
+        "opacity layer alpha must track the animated value",
+    );
+}
+
+#[test]
 fn harness_sliver_opacity_passes_geometry() {
     let run = RenderTester::mount(viewport(
         sliver_node(RenderSliverOpacity::new(0.5))
@@ -1166,7 +1198,7 @@ fn harness_viewport_self_describes() {
     assert_descendant_properties(
         &run.diagnostics(),
         "RenderViewport",
-        &["axis_direction", "offset", "cache_extent"],
+        &["axis_direction", "scroll_offset", "cache_extent"],
     );
 }
 
@@ -1195,11 +1227,48 @@ fn harness_viewport_stacks_two_slivers() {
 fn catalog_covers_every_render_object_name() {
     let source = include_str!("render_object_harness.rs");
     for &type_name in RENDER_OBJECT_TYPES {
-        let hits = source.matches(type_name).count();
+        let covered = source
+            .split("#[test]")
+            .skip(1)
+            .any(|chunk| chunk.contains("fn harness_") && chunk.contains(type_name));
         assert!(
-            hits >= 3,
-            "{type_name} must appear in the module doc, RENDER_OBJECT_TYPES, and at least one \
-             harness test (found {hits} references)",
+            covered,
+            "{type_name} must appear in at least one `#[test] fn harness_*` block",
         );
     }
+}
+
+#[test]
+fn render_object_types_match_exports() {
+    let objects_mod = include_str!("../src/objects/mod.rs");
+    let mut exported: Vec<&str> = Vec::new();
+    let mut in_pub_use = false;
+    for line in objects_mod.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("pub use ") {
+            in_pub_use = true;
+        }
+        if in_pub_use {
+            for word in trimmed.split(|c: char| !c.is_alphanumeric() && c != '_') {
+                if word.starts_with("Render") {
+                    exported.push(word);
+                }
+            }
+            if trimmed.ends_with(';') {
+                in_pub_use = false;
+            }
+        }
+    }
+    exported.sort_unstable();
+    exported.dedup();
+    // Generic clip family root — harness catalog targets the concrete variants.
+    exported.retain(|name| *name != "RenderClip");
+
+    let mut catalog: Vec<&str> = RENDER_OBJECT_TYPES.to_vec();
+    catalog.sort_unstable();
+
+    assert_eq!(
+        catalog, exported,
+        "RENDER_OBJECT_TYPES must match `pub use` exports in objects/mod.rs",
+    );
 }

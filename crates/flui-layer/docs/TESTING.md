@@ -37,7 +37,7 @@ source of truth** for layer-tree walks. `flui-rendering` does not duplicate them
 | `LayerSpec::label("name")` | Register label for `tester.id("name")` |
 | `LayerSpec::child` / `children` | Nesting |
 | `mount(tree, spec)` | Low-level insert + wire children (used by `LayerTester`) |
-| `IdRegistry` | Label → `LayerId` map |
+| `LayerLabelRegistry` | Label → `LayerId` map |
 
 ### `LayerTester` ([`tester`](../src/testing/tester.rs))
 

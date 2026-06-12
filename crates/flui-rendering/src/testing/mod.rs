@@ -26,8 +26,8 @@
 //!    [`FrameRun::advance_layout`] / [`FrameRun::advance_paint`] (mutate +
 //!    one frame), [`FrameRun::simulate`] (tick loop + pump per step),
 //!    [`FrameRun::pump_frames`] / [`FrameRun::pump_idle_frames`] (skip settled
-//!    frames). Paint-only changes use [`FrameRun::update_paint`]; layout
-//!    changes use [`FrameRun::update`].
+//!    frames). Layout changes use [`FrameRun::update`]; paint-only changes use
+//!    [`FrameRun::update_paint`] (Box and Sliver alike).
 //!
 //! [`PipelineOwner`]: crate::pipeline::PipelineOwner
 //!
@@ -66,7 +66,9 @@ pub use harness::{FrameRun, LayoutRun, RenderTester};
 pub use inspect::Probe;
 pub use parent_data::ParentDataSeed;
 pub use report::FrameReport;
-pub use tree::{IdRegistry, TreeNode, box_node, box_node_boxed, sliver_node, sliver_node_boxed};
+pub use tree::{
+    RenderLabelRegistry, TreeNode, box_node, box_node_boxed, sliver_node, sliver_node_boxed,
+};
 
 #[cfg(test)]
 mod tests;

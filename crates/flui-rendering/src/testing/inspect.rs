@@ -20,7 +20,7 @@ use crate::{
     hit_testing::HitTestResult,
     pipeline::{PipelineOwner, PipelinePhase},
     storage::RenderNode,
-    testing::tree::IdRegistry,
+    testing::tree::RenderLabelRegistry,
 };
 
 // The layer-tree walkers live in `flui_layer` (the crate that owns
@@ -95,7 +95,7 @@ pub fn render_diagnostics<P: PipelinePhase>(owner: &PipelineOwner<P>) -> Diagnos
 /// and of how far the pipeline was driven.
 ///
 /// Implementors supply the underlying [`PipelineOwner`] and the label
-/// [`IdRegistry`]; the provided methods do the rest. Box trees read
+/// [`RenderLabelRegistry`]; the provided methods do the rest. Box trees read
 /// [`box_geometry`](Probe::box_geometry); Sliver trees read
 /// [`sliver_geometry`](Probe::sliver_geometry); everything else is common.
 pub trait Probe {
@@ -106,7 +106,7 @@ pub trait Probe {
     fn pipeline(&self) -> &PipelineOwner<Self::Phase>;
 
     /// The label -> id registry built while mounting the tree.
-    fn registry(&self) -> &IdRegistry;
+    fn registry(&self) -> &RenderLabelRegistry;
 
     /// A diagnostics tree mirroring the render hierarchy, with each node's
     /// own properties plus committed geometry/offset.
@@ -134,7 +134,8 @@ pub trait Probe {
     /// type name (e.g. `"RenderColoredBox"`, `"RenderFlex"`).
     fn descendant_property(&self, type_name: &str, property: &str) -> Option<String> {
         self.diagnostics()
-            .find_descendant(type_name)?
+            .find_descendant_unique(type_name)
+            .ok()?
             .get_property(property)
             .map(str::to_owned)
     }
@@ -142,7 +143,8 @@ pub trait Probe {
     /// Parses a numeric property on the first descendant matched by `type_name`.
     fn descendant_property_f64(&self, type_name: &str, property: &str) -> Option<f64> {
         self.diagnostics()
-            .find_descendant(type_name)?
+            .find_descendant_unique(type_name)
+            .ok()?
             .get_property_f64(property)
     }
 

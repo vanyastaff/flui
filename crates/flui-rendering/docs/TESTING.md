@@ -72,7 +72,7 @@ use **snake_case**.
 |--------|---------|
 | `root()` | Root `RenderId` |
 | `owner()` / `owner_mut()` | Escape hatch to `PipelineOwner<Layout>` |
-| `update::<T>(id, edit)` | Mutate + `mark_needs_layout` |
+| `update::<T>(id, edit)` | Mutate + `mark_needs_layout` (Box or Sliver) |
 | `update_paint::<T>(id, edit)` | Mutate + paint-dirty (no layout pass here) |
 | `mark_needs_paint(id)` | Paint-dirty only |
 | `relayout()` | Re-run layout after `update` |
@@ -91,7 +91,7 @@ Implements [`Probe`](../src/testing/inspect.rs).
 | `report()` / `pump()` | `FrameReport` snapshot; run another frame |
 | `pump_frames(n)` | `n` consecutive frames, collect reports |
 | `pump_idle_frames(n)` | Skip `n` settled frames (panics if anything paints) |
-| `update::<T>(id, edit)` | Layout mutation |
+| `update::<T>(id, edit)` | Layout mutation (Box or Sliver) |
 | `update_paint::<T>(id, edit)` | Paint mutation (+ compositing bits refresh) |
 | `advance_layout::<T>(id, edit)` | `update` + `pump` |
 | `advance_paint::<T>(id, edit)` | `update_paint` + `pump` |

@@ -678,7 +678,7 @@ for libfile in ${trigger11_lib_files}; do
       fi
       prev_lineno=$((prev_lineno - 1))
     done
-    if echo "${prev_content}" | grep -qE '#\[cfg\(feature[[:space:]]*=[[:space:]]*"unstable-'; then
+    if echo "${prev_content}" | grep -qE '#\[cfg\([^)]*feature[[:space:]]*=[[:space:]]*"(unstable-|testing)"'; then
       continue
     fi
 

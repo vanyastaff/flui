@@ -145,11 +145,11 @@ impl TreeNode {
 /// Produced by [`mount`] and carried by the run results so assertions can
 /// reference nodes by name instead of threading raw ids around.
 #[derive(Debug, Default, Clone)]
-pub struct IdRegistry {
+pub struct RenderLabelRegistry {
     by_label: HashMap<&'static str, RenderId>,
 }
 
-impl IdRegistry {
+impl RenderLabelRegistry {
     /// Records a label -> id mapping, panicking on a duplicate label (a
     /// duplicate is a test-authoring bug, not a runtime condition).
     fn record(&mut self, label: &'static str, id: RenderId) {
@@ -169,8 +169,8 @@ impl IdRegistry {
 /// label registry.
 ///
 /// The root must be a Box node; a Sliver root panics with a clear message.
-pub fn mount(owner: &mut PipelineOwner<Idle>, spec: TreeNode) -> (RenderId, IdRegistry) {
-    let mut registry = IdRegistry::default();
+pub fn mount(owner: &mut PipelineOwner<Idle>, spec: TreeNode) -> (RenderId, RenderLabelRegistry) {
+    let mut registry = RenderLabelRegistry::default();
     let root_id = match spec.payload {
         NodePayload::Box(render_object) => owner.insert(render_object),
         NodePayload::Sliver(_) => panic!(
@@ -195,7 +195,7 @@ fn mount_child(
     owner: &mut PipelineOwner<Idle>,
     parent_id: RenderId,
     spec: TreeNode,
-    registry: &mut IdRegistry,
+    registry: &mut RenderLabelRegistry,
 ) {
     let id = match spec.payload {
         NodePayload::Box(render_object) => owner

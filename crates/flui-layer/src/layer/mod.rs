@@ -425,7 +425,7 @@ impl Diagnosticable for Layer {
             }
             _ => {}
         }
-        properties.add_flag("needsCompositing", self.needs_compositing(), "true");
+        properties.add_flag("needs_compositing", self.needs_compositing(), "true");
     }
 }
 

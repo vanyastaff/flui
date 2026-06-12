@@ -26,10 +26,11 @@ use flui_types::{Rect, Size, geometry::px};
 use crate::{
     constraints::BoxConstraints,
     pipeline::{Idle, Layout, PipelineOwner},
+    storage::RenderNode,
     testing::{
         inspect::{self, Probe},
         report::FrameReport,
-        tree::{self, IdRegistry, TreeNode},
+        tree::{self, RenderLabelRegistry, TreeNode},
     },
 };
 
@@ -53,24 +54,35 @@ fn mark_needs_paint<P: crate::pipeline::PipelinePhase>(owner: &mut PipelineOwner
     owner.add_node_needing_paint(id, depth);
 }
 
-/// Downcasts the Box render object at `id` to `T` and runs `edit`.
-fn edit_box_object<T: 'static, P: crate::pipeline::PipelinePhase>(
+/// Downcasts the render object at `id` to `T` and runs `edit`.
+///
+/// Dispatches on the node's Box/Sliver protocol; `T` must match the concrete
+/// type stored at `id`.
+fn edit_object<T: 'static, P: crate::pipeline::PipelinePhase>(
     owner: &mut PipelineOwner<P>,
     id: RenderId,
     edit: impl FnOnce(&mut T),
 ) {
-    let entry = owner
+    let node = owner
         .render_tree_mut()
         .get_mut(id)
-        .expect("update: render id must be live")
-        .as_box_mut()
-        .expect("update: node must be a Box render object");
-    let object = entry
-        .render_object_mut()
-        .as_any_mut()
-        .downcast_mut::<T>()
-        .expect("update: render object is not of the requested type");
-    edit(object);
+        .expect("update: render id must be live");
+    match node {
+        RenderNode::Box(entry) => edit(
+            entry
+                .render_object_mut()
+                .as_any_mut()
+                .downcast_mut::<T>()
+                .expect("update: render object is not of the requested type"),
+        ),
+        RenderNode::Sliver(entry) => edit(
+            entry
+                .render_object_mut()
+                .as_any_mut()
+                .downcast_mut::<T>()
+                .expect("update: render object is not of the requested type"),
+        ),
+    }
 }
 
 /// A configured-but-not-yet-run render-object test.
@@ -108,7 +120,7 @@ impl RenderTester {
     }
 
     /// Builds the owner, mounts the spec, and seeds the root + constraints.
-    fn build(self) -> (PipelineOwner<Idle>, RenderId, IdRegistry) {
+    fn build(self) -> (PipelineOwner<Idle>, RenderId, RenderLabelRegistry) {
         let mut owner = PipelineOwner::new();
         let (root_id, registry) = tree::mount(&mut owner, self.spec);
         owner.set_root_id(Some(root_id));
@@ -151,7 +163,7 @@ impl RenderTester {
 pub struct LayoutRun {
     owner: PipelineOwner<Layout>,
     root_id: RenderId,
-    registry: IdRegistry,
+    registry: RenderLabelRegistry,
 }
 
 impl LayoutRun {
@@ -172,26 +184,28 @@ impl LayoutRun {
         &mut self.owner
     }
 
-    /// Downcasts the Box render object at `id` to `T`, runs `edit`, and marks
-    /// the node layout-dirty. Pair with [`relayout`](LayoutRun::relayout) to
-    /// re-run layout and observe the new geometry — the layout-only analog of
+    /// Downcasts the render object at `id` to `T`, runs `edit`, and marks the
+    /// node layout-dirty. Pair with [`relayout`](LayoutRun::relayout) to re-run
+    /// layout and observe the new geometry — the layout-only analog of
     /// [`FrameRun::update`] + [`FrameRun::pump`].
     ///
-    /// Panics if the id is stale, is not a Box node, or is not a `T`.
+    /// Works for Box and Sliver nodes; `T` must match the concrete type at `id`.
+    ///
+    /// Panics if the id is stale or is not a `T`.
     pub fn update<T: 'static>(&mut self, id: RenderId, edit: impl FnOnce(&mut T)) {
-        edit_box_object(&mut self.owner, id, edit);
+        edit_object(&mut self.owner, id, edit);
         self.owner.mark_needs_layout(id);
     }
 
-    /// Downcasts the Box render object at `id` to `T`, runs `edit`, and marks
-    /// the node paint-dirty (opacity, color, transform, … — no layout pass).
+    /// Downcasts the render object at `id` to `T`, runs `edit`, and marks the
+    /// node paint-dirty (opacity, color, transform, … — no layout pass).
     ///
     /// Pair with a full [`FrameRun`] if the change must be painted; layout-only
     /// runs do not execute the paint phase.
     ///
-    /// Panics if the id is stale, is not a Box node, or is not a `T`.
+    /// Panics if the id is stale or is not a `T`.
     pub fn update_paint<T: 'static>(&mut self, id: RenderId, edit: impl FnOnce(&mut T)) {
-        edit_box_object(&mut self.owner, id, edit);
+        edit_object(&mut self.owner, id, edit);
         mark_needs_paint(&mut self.owner, id);
     }
 
@@ -216,7 +230,7 @@ impl Probe for LayoutRun {
         &self.owner
     }
 
-    fn registry(&self) -> &IdRegistry {
+    fn registry(&self) -> &RenderLabelRegistry {
         &self.registry
     }
 }
@@ -226,7 +240,7 @@ impl Probe for LayoutRun {
 pub struct FrameRun {
     owner: PipelineOwner<Idle>,
     root_id: RenderId,
-    registry: IdRegistry,
+    registry: RenderLabelRegistry,
     layer_tree: Option<LayerTree>,
 }
 
@@ -411,13 +425,13 @@ impl FrameRun {
         &mut self.owner
     }
 
-    /// Downcasts the Box render object at `id` to `T`, runs `edit`, and marks
-    /// the node layout-dirty — the multi-frame mutate-then-[`pump`](FrameRun::pump)
-    /// flow in one call, collapsing the
-    /// `get_mut → as_box_mut → render_object_mut → as_any_mut → downcast_mut`
-    /// dance.
+    /// Downcasts the render object at `id` to `T`, runs `edit`, and marks the
+    /// node layout-dirty — the multi-frame mutate-then-[`pump`](FrameRun::pump)
+    /// flow in one call.
     ///
-    /// Panics if the id is stale, is not a Box node, or is not a `T`.
+    /// Works for Box and Sliver nodes; `T` must match the concrete type at `id`.
+    ///
+    /// Panics if the id is stale or is not a `T`.
     ///
     /// ```
     /// # use flui_rendering::objects::{RenderColoredBox, RenderPadding};
@@ -434,16 +448,16 @@ impl FrameRun {
     /// assert_eq!(run.offset(run.id("child")), Offset::new(px(20.0), px(20.0)));
     /// ```
     pub fn update<T: 'static>(&mut self, id: RenderId, edit: impl FnOnce(&mut T)) {
-        edit_box_object(&mut self.owner, id, edit);
+        edit_object(&mut self.owner, id, edit);
         self.owner.mark_needs_layout(id);
     }
 
-    /// Downcasts the Box render object at `id` to `T`, runs `edit`, and marks
-    /// the node paint-dirty. Pair with [`pump`](FrameRun::pump).
+    /// Downcasts the render object at `id` to `T`, runs `edit`, and marks the
+    /// node paint-dirty. Pair with [`pump`](FrameRun::pump).
     ///
-    /// Panics if the id is stale, is not a Box node, or is not a `T`.
+    /// Panics if the id is stale or is not a `T`.
     pub fn update_paint<T: 'static>(&mut self, id: RenderId, edit: impl FnOnce(&mut T)) {
-        edit_box_object(&mut self.owner, id, edit);
+        edit_object(&mut self.owner, id, edit);
         mark_needs_paint(&mut self.owner, id);
     }
 
@@ -460,7 +474,7 @@ impl Probe for FrameRun {
         &self.owner
     }
 
-    fn registry(&self) -> &IdRegistry {
+    fn registry(&self) -> &RenderLabelRegistry {
         &self.registry
     }
 }

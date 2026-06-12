@@ -56,11 +56,11 @@ impl LayerSpec {
 
 /// Maps `&'static str` labels to the `LayerId`s minted while mounting a spec.
 #[derive(Debug, Default, Clone)]
-pub struct IdRegistry {
+pub struct LayerLabelRegistry {
     by_label: HashMap<&'static str, LayerId>,
 }
 
-impl IdRegistry {
+impl LayerLabelRegistry {
     fn record(&mut self, label: &'static str, id: LayerId) {
         let previous = self.by_label.insert(label, id);
         assert!(
@@ -78,14 +78,14 @@ impl IdRegistry {
 
 /// Inserts `spec` into `tree`, wires children, sets the root, and returns the
 /// root id plus the label registry.
-pub fn mount(tree: &mut LayerTree, spec: LayerSpec) -> (LayerId, IdRegistry) {
-    let mut registry = IdRegistry::default();
+pub fn mount(tree: &mut LayerTree, spec: LayerSpec) -> (LayerId, LayerLabelRegistry) {
+    let mut registry = LayerLabelRegistry::default();
     let root = mount_node(tree, spec, &mut registry);
     tree.set_root(Some(root));
     (root, registry)
 }
 
-fn mount_node(tree: &mut LayerTree, spec: LayerSpec, registry: &mut IdRegistry) -> LayerId {
+fn mount_node(tree: &mut LayerTree, spec: LayerSpec, registry: &mut LayerLabelRegistry) -> LayerId {
     let id = tree.insert(spec.layer);
     if let Some(label) = spec.label {
         registry.record(label, id);

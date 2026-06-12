@@ -19,7 +19,9 @@ use flui_layer::{
 use flui_painting::DisplayList;
 use flui_types::{Offset, Size};
 use parking_lot::Mutex;
-use rustc_hash::{FxHashMap, FxHashSet};
+#[cfg(any(test, feature = "testing"))]
+use rustc_hash::FxHashMap;
+use rustc_hash::FxHashSet;
 
 #[cfg(any(test, feature = "testing"))]
 use crate::testing::parent_data::ParentDataSeed;
@@ -262,6 +264,8 @@ impl PipelineOwner<Idle> {
 
     /// Records harness parent metadata for `child_id`, cloned into the
     /// transient child slots before each layout walk.
+    ///
+    /// A second call for the same `child_id` replaces the previous seed.
     #[cfg(any(test, feature = "testing"))]
     pub fn seed_parent_data(&mut self, child_id: RenderId, seed: ParentDataSeed) {
         self.parent_data_seeds.insert(child_id, seed);
@@ -3975,14 +3979,14 @@ fn dry_layout_query_impl(
 fn node_diagnostics(node: &RenderNode) -> DiagnosticsNode {
     if let Some(entry) = node.as_box() {
         let mut diagnostics = entry.render_object().to_diagnostics_node();
-        diagnostics = diagnostics.property("offset", format!("{:?}", node.offset()));
+        diagnostics = diagnostics.property("paint_offset", format!("{:?}", node.offset()));
         if let Some(size) = entry.state().geometry() {
             diagnostics = diagnostics.property("size", format!("{size:?}"));
         }
         diagnostics
     } else if let Some(entry) = node.as_sliver() {
         let mut diagnostics = entry.render_object().to_diagnostics_node();
-        diagnostics = diagnostics.property("offset", format!("{:?}", node.offset()));
+        diagnostics = diagnostics.property("paint_offset", format!("{:?}", node.offset()));
         if let Some(geometry) = entry.state().geometry() {
             diagnostics = diagnostics.property("geometry", format!("{geometry:?}"));
         }

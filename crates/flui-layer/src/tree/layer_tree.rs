@@ -73,10 +73,10 @@ impl Diagnosticable for LayerNode {
     fn to_diagnostics_node(&self) -> flui_foundation::DiagnosticsNode {
         let mut node = self.layer.to_diagnostics_node();
         if let Some(offset) = self.offset {
-            node = node.property("nodeOffset", format!("{offset:?}"));
+            node = node.property("node_offset", format!("{offset:?}"));
         }
         if let Some(element_id) = self.element_id {
-            node = node.property("elementId", format!("{element_id:?}"));
+            node = node.property("element_id", format!("{element_id:?}"));
         }
         node
     }

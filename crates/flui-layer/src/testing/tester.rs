@@ -8,7 +8,7 @@ use flui_types::Rect;
 use crate::{
     testing::{
         inspect,
-        spec::{self, IdRegistry, LayerSpec},
+        spec::{self, LayerLabelRegistry, LayerSpec},
     },
     LayerTree,
 };
@@ -17,7 +17,7 @@ use crate::{
 pub struct LayerTester {
     tree: LayerTree,
     root: LayerId,
-    registry: IdRegistry,
+    registry: LayerLabelRegistry,
 }
 
 impl LayerTester {
