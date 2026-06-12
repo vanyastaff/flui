@@ -55,6 +55,8 @@
 //! - [`RenderSliverFillRemaining`] /
 //!   [`RenderSliverFillRemainingAndOverscroll`] - Non-scroll fill remaining
 //!   variants that use Box child intrinsics (Core.2 W3.9)
+//! - [`RenderSliverFillViewport`] - Sizes each Box child to a viewport
+//!   fraction in the sliver main axis (Core.2 W3.10)
 //! - [`RenderViewport`] - Box viewport that drives Sliver children
 //!   (Core.2 W3.4a)
 //!
@@ -92,6 +94,7 @@ mod paragraph;
 mod repaint_boundary;
 mod sized_box;
 mod sliver_fill_remaining;
+mod sliver_fill_viewport;
 mod sliver_ignore_pointer;
 mod sliver_offstage;
 mod sliver_opacity;
@@ -129,6 +132,7 @@ pub use sliver_fill_remaining::{
     RenderSliverFillRemaining, RenderSliverFillRemainingAndOverscroll,
     RenderSliverFillRemainingWithScrollable,
 };
+pub use sliver_fill_viewport::RenderSliverFillViewport;
 pub use sliver_ignore_pointer::RenderSliverIgnorePointer;
 pub use sliver_offstage::RenderSliverOffstage;
 pub use sliver_opacity::RenderSliverOpacity;
