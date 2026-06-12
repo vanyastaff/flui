@@ -3,19 +3,16 @@
 //! Exercises 4 axis directions × 2 growth directions through a Box host that
 //! lays out a band sliver with explicit [`SliverConstraints`].
 
-use flui_foundation::Diagnosticable;
 use flui_rendering::{
     constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
     context::{BoxHitTestContext, BoxLayoutContext, SliverLayoutContext},
+    impl_sliver_test_caps,
     objects::RenderViewport,
     parent_data::{BoxParentData, SliverParentData},
     pipeline::PipelineOwner,
     protocol::SliverProtocol,
     testing::{inspect, sliver},
-    traits::{
-        HotReloadCapability, PaintEffectsCapability, RenderBox, RenderObject, RenderSliver,
-        SemanticsCapability,
-    },
+    traits::{RenderBox, RenderObject, RenderSliver},
     view::ScrollableViewportOffset,
 };
 use flui_tree::{Leaf, Variable};
@@ -64,10 +61,7 @@ struct SliverHitHost {
     size: Size,
 }
 
-impl Diagnosticable for SliverHitHost {}
-impl PaintEffectsCapability for SliverHitHost {}
-impl SemanticsCapability for SliverHitHost {}
-impl HotReloadCapability for SliverHitHost {}
+impl_sliver_test_caps!(SliverHitHost);
 
 impl RenderBox for SliverHitHost {
     type Arity = Variable;
@@ -115,10 +109,7 @@ impl MainAxisBandSliver {
     }
 }
 
-impl Diagnosticable for MainAxisBandSliver {}
-impl PaintEffectsCapability for MainAxisBandSliver {}
-impl SemanticsCapability for MainAxisBandSliver {}
-impl HotReloadCapability for MainAxisBandSliver {}
+impl_sliver_test_caps!(MainAxisBandSliver);
 
 impl RenderSliver for MainAxisBandSliver {
     type Arity = Leaf;

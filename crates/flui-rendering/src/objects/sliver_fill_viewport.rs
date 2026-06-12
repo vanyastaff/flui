@@ -2,7 +2,7 @@
 
 use flui_foundation::Diagnosticable;
 use flui_tree::Variable;
-use flui_types::layout::AxisDirection::*;
+use flui_types::{geometry::px, layout::AxisDirection::*};
 
 use crate::{
     constraints::{GrowthDirection, SliverConstraints, SliverGeometry, child_paint_offset},
@@ -141,7 +141,12 @@ impl RenderSliver for RenderSliverFillViewport {
             let layout_offset = item_extent * index as f32;
             ctx.position_child(
                 index,
-                child_paint_offset(&self.constraints, &geometry, layout_offset, item_extent),
+                child_paint_offset(
+                    &self.constraints,
+                    &geometry,
+                    px(layout_offset),
+                    px(item_extent),
+                ),
             );
         }
 

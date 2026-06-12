@@ -6,7 +6,7 @@
 
 use flui_foundation::Diagnosticable;
 use flui_tree::Single;
-use flui_types::layout::AxisDirection::*;
+use flui_types::{geometry::px, layout::AxisDirection::*};
 
 use crate::{
     constraints::{GrowthDirection, SliverConstraints, SliverGeometry, child_paint_offset},
@@ -59,11 +59,8 @@ impl RenderSliver for RenderSliverToBoxAdapter {
             return;
         }
 
-        let child_size = ctx.layout_box_child(
-            0,
-            self.constraints
-                .as_box_constraints(0.0, f32::INFINITY, None),
-        );
+        let child_size =
+            ctx.layout_box_child(0, self.constraints.unbounded_main_axis_box_constraints());
         let child_extent = match self.constraints.axis_direction {
             LeftToRight | RightToLeft => child_size.width.get(),
             TopToBottom | BottomToTop => child_size.height.get(),
@@ -84,7 +81,7 @@ impl RenderSliver for RenderSliverToBoxAdapter {
             ..SliverGeometry::ZERO
         };
         let child_paint_offset =
-            child_paint_offset(&self.constraints, &geometry, 0.0, child_extent);
+            child_paint_offset(&self.constraints, &geometry, px(0.0), px(child_extent));
         ctx.position_child(0, child_paint_offset);
         self.geometry = geometry;
         ctx.complete(geometry);

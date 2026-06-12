@@ -1,13 +1,13 @@
 //! Minimal leaf sliver used as a trait-method probe in unit tests.
 
-use flui_foundation::Diagnosticable;
 use flui_tree::Leaf;
 
 use crate::{
     constraints::{SliverConstraints, SliverGeometry},
     context::{SliverHitTestContext, SliverLayoutContext},
+    impl_sliver_test_caps,
     parent_data::SliverPhysicalParentData,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderSliver, SemanticsCapability},
+    traits::RenderSliver,
 };
 
 const fn empty_sliver_constraints() -> SliverConstraints {
@@ -36,10 +36,7 @@ const fn empty_sliver_constraints() -> SliverConstraints {
 #[derive(Debug, Default)]
 pub struct NoopSliver;
 
-impl Diagnosticable for NoopSliver {}
-impl PaintEffectsCapability for NoopSliver {}
-impl SemanticsCapability for NoopSliver {}
-impl HotReloadCapability for NoopSliver {}
+impl_sliver_test_caps!(NoopSliver);
 
 impl RenderSliver for NoopSliver {
     type Arity = Leaf;

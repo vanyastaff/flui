@@ -5,19 +5,16 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
-use flui_foundation::Diagnosticable;
 use flui_rendering::{
     constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
     context::{SliverHitTestContext, SliverLayoutContext},
+    impl_sliver_test_caps,
     objects::RenderViewport,
     parent_data::SliverParentData,
     pipeline::PipelineOwner,
     protocol::SliverProtocol,
     testing::inspect,
-    traits::{
-        HotReloadCapability, PaintEffectsCapability, RenderObject, RenderSliver,
-        SemanticsCapability,
-    },
+    traits::{RenderObject, RenderSliver},
     view::{ScrollableViewportOffset, SliverPaintOrder, ViewportOffset},
 };
 use flui_tree::Leaf;
@@ -64,6 +61,55 @@ const fn test_cross_axis_direction(axis_direction: AxisDirection) -> AxisDirecti
         AxisDirection::TopToBottom | AxisDirection::BottomToTop => AxisDirection::LeftToRight,
         AxisDirection::LeftToRight | AxisDirection::RightToLeft => AxisDirection::TopToBottom,
     }
+}
+
+fn laid_out_viewport_with_sliver(
+    viewport: RenderViewport<ScrollableViewportOffset>,
+    extent: f32,
+) -> (
+    PipelineOwner<flui_rendering::pipeline::phase::Layout>,
+    flui_foundation::RenderId,
+    flui_foundation::RenderId,
+) {
+    let mut owner = PipelineOwner::new();
+    let root_id = owner.insert(Box::new(viewport));
+    let sliver_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            root_id,
+            Box::new(FixedSliver::new(extent)) as BoxedSliverObject,
+        )
+        .expect("sliver");
+    let owner = laid_out(owner, root_id);
+    (owner, root_id, sliver_id)
+}
+
+fn viewport_from_owner(
+    owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,
+    root_id: flui_foundation::RenderId,
+) -> &RenderViewport<ScrollableViewportOffset> {
+    owner
+        .render_tree()
+        .get(root_id)
+        .and_then(|node| node.as_box())
+        .and_then(|entry| {
+            entry
+                .render_object()
+                .downcast_ref::<RenderViewport<ScrollableViewportOffset>>()
+        })
+        .expect("root is RenderViewport")
+}
+
+fn fixed_sliver_from_owner(
+    owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,
+    sliver_id: flui_foundation::RenderId,
+) -> &FixedSliver {
+    owner
+        .render_tree()
+        .get(sliver_id)
+        .and_then(|node| node.as_sliver())
+        .and_then(|entry| entry.render_object().downcast_ref::<FixedSliver>())
+        .expect("FixedSliver")
 }
 
 #[derive(Debug)]
@@ -113,10 +159,7 @@ impl FixedSliver {
     }
 }
 
-impl Diagnosticable for FixedSliver {}
-impl PaintEffectsCapability for FixedSliver {}
-impl SemanticsCapability for FixedSliver {}
-impl HotReloadCapability for FixedSliver {}
+impl_sliver_test_caps!(FixedSliver);
 
 impl RenderSliver for FixedSliver {
     type Arity = Leaf;
@@ -188,10 +231,7 @@ impl Default for InvisibleHitSliver {
     }
 }
 
-impl Diagnosticable for InvisibleHitSliver {}
-impl PaintEffectsCapability for InvisibleHitSliver {}
-impl SemanticsCapability for InvisibleHitSliver {}
-impl HotReloadCapability for InvisibleHitSliver {}
+impl_sliver_test_caps!(InvisibleHitSliver);
 
 impl RenderSliver for InvisibleHitSliver {
     type Arity = Leaf;
@@ -249,10 +289,7 @@ impl MainAxisBandSliver {
     }
 }
 
-impl Diagnosticable for MainAxisBandSliver {}
-impl PaintEffectsCapability for MainAxisBandSliver {}
-impl SemanticsCapability for MainAxisBandSliver {}
-impl HotReloadCapability for MainAxisBandSliver {}
+impl_sliver_test_caps!(MainAxisBandSliver);
 
 impl RenderSliver for MainAxisBandSliver {
     type Arity = Leaf;
@@ -325,10 +362,7 @@ impl GeometrySliver {
     }
 }
 
-impl Diagnosticable for GeometrySliver {}
-impl PaintEffectsCapability for GeometrySliver {}
-impl SemanticsCapability for GeometrySliver {}
-impl HotReloadCapability for GeometrySliver {}
+impl_sliver_test_caps!(GeometrySliver);
 
 impl RenderSliver for GeometrySliver {
     type Arity = Leaf;
@@ -389,10 +423,7 @@ impl CorrectingSliver {
     }
 }
 
-impl Diagnosticable for CorrectingSliver {}
-impl PaintEffectsCapability for CorrectingSliver {}
-impl SemanticsCapability for CorrectingSliver {}
-impl HotReloadCapability for CorrectingSliver {}
+impl_sliver_test_caps!(CorrectingSliver);
 
 impl RenderSliver for CorrectingSliver {
     type Arity = Leaf;
@@ -454,10 +485,7 @@ impl CountingSliver {
     }
 }
 
-impl Diagnosticable for CountingSliver {}
-impl PaintEffectsCapability for CountingSliver {}
-impl SemanticsCapability for CountingSliver {}
-impl HotReloadCapability for CountingSliver {}
+impl_sliver_test_caps!(CountingSliver);
 
 impl RenderSliver for CountingSliver {
     type Arity = Leaf;
@@ -524,10 +552,7 @@ impl OutOfBandSliver {
     }
 }
 
-impl Diagnosticable for OutOfBandSliver {}
-impl PaintEffectsCapability for OutOfBandSliver {}
-impl SemanticsCapability for OutOfBandSliver {}
-impl HotReloadCapability for OutOfBandSliver {}
+impl_sliver_test_caps!(OutOfBandSliver);
 
 impl RenderSliver for OutOfBandSliver {
     type Arity = Leaf;
@@ -590,10 +615,7 @@ impl DynamicOutOfBandSliver {
     }
 }
 
-impl Diagnosticable for DynamicOutOfBandSliver {}
-impl PaintEffectsCapability for DynamicOutOfBandSliver {}
-impl SemanticsCapability for DynamicOutOfBandSliver {}
-impl HotReloadCapability for DynamicOutOfBandSliver {}
+impl_sliver_test_caps!(DynamicOutOfBandSliver);
 
 impl RenderSliver for DynamicOutOfBandSliver {
     type Arity = Leaf;
@@ -922,6 +944,88 @@ fn viewport_reverse_section_passes_reverse_growth_to_slivers() {
         render_offset(&owner, sliver_id),
         Offset::new(px(0.0), px(60.0))
     );
+}
+
+#[test]
+fn viewport_center_partition_lays_out_forward_then_reverse() {
+    let mut viewport = RenderViewport::with_offset(
+        AxisDirection::TopToBottom,
+        AxisDirection::LeftToRight,
+        ScrollableViewportOffset::zero(),
+    );
+    viewport.set_center_sliver_index(Some(1));
+
+    let mut owner = PipelineOwner::new();
+    let root_id = owner.insert(Box::new(viewport));
+    let s0 = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            root_id,
+            Box::new(FixedSliver::recording_growth(30.0)) as BoxedSliverObject,
+        )
+        .expect("forward sliver");
+    let s1 = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            root_id,
+            Box::new(FixedSliver::recording_growth(30.0)) as BoxedSliverObject,
+        )
+        .expect("reverse sliver");
+
+    let owner = laid_out(owner, root_id);
+    let fwd = fixed_sliver_from_owner(&owner, s0);
+    let rev = fixed_sliver_from_owner(&owner, s1);
+
+    assert_eq!(fwd.last_growth_direction(), GrowthDirection::Forward);
+    assert_eq!(rev.last_growth_direction(), GrowthDirection::Reverse);
+    assert_eq!(render_offset(&owner, s0), Offset::new(px(0.0), px(0.0)));
+    assert_eq!(render_offset(&owner, s1), Offset::new(px(0.0), px(70.0)));
+}
+
+#[test]
+fn viewport_reverse_slivers_produce_negative_min_scroll_extent() {
+    let mut viewport = RenderViewport::with_offset(
+        AxisDirection::TopToBottom,
+        AxisDirection::LeftToRight,
+        ScrollableViewportOffset::zero(),
+    );
+    viewport.set_center_sliver_index(Some(0));
+
+    let (owner, root_id, _) = laid_out_viewport_with_sliver(viewport, 50.0);
+    let viewport = viewport_from_owner(&owner, root_id);
+
+    assert_eq!(
+        viewport.min_scroll_extent(),
+        -50.0,
+        "reverse slivers must accumulate negative min_scroll_extent",
+    );
+}
+
+#[test]
+fn viewport_center_at_child_count_behaves_like_no_center() {
+    for axis in [AxisDirection::TopToBottom, AxisDirection::LeftToRight] {
+        let mut with_center = RenderViewport::with_offset(
+            axis,
+            test_cross_axis_direction(axis),
+            ScrollableViewportOffset::zero(),
+        );
+        with_center.set_center_sliver_index(Some(1));
+
+        let without_center = RenderViewport::with_offset(
+            axis,
+            test_cross_axis_direction(axis),
+            ScrollableViewportOffset::zero(),
+        );
+
+        let (owner_a, _, sliver_a) = laid_out_viewport_with_sliver(with_center, 40.0);
+        let (owner_b, _, sliver_b) = laid_out_viewport_with_sliver(without_center, 40.0);
+
+        assert_eq!(
+            render_offset(&owner_a, sliver_a),
+            render_offset(&owner_b, sliver_b),
+            "{axis:?}: center==child_count must match no-center behavior",
+        );
+    }
 }
 
 #[test]

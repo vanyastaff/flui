@@ -96,6 +96,17 @@ pub mod testing;
 pub mod traits;
 pub mod view;
 
+/// Implements the four no-op capability traits for test/fixture sliver types.
+#[macro_export]
+macro_rules! impl_sliver_test_caps {
+    ($t:ty) => {
+        impl flui_foundation::Diagnosticable for $t {}
+        impl $crate::traits::PaintEffectsCapability for $t {}
+        impl $crate::traits::SemanticsCapability for $t {}
+        impl $crate::traits::HotReloadCapability for $t {}
+    };
+}
+
 /// Re-export layer types from flui-layer crate for convenience.
 pub mod layer {
     pub use flui_layer::*;

@@ -1,6 +1,6 @@
 //! Pure sliver layout math shared by render objects and the pipeline.
 
-use flui_types::{Offset, geometry::px, layout::Axis};
+use flui_types::{Offset, Pixels, geometry::px, layout::Axis};
 
 use super::{SliverConstraints, SliverGeometry, right_way_up};
 
@@ -10,9 +10,11 @@ use super::{SliverConstraints, SliverGeometry, right_way_up};
 pub(crate) fn child_paint_offset(
     constraints: &SliverConstraints,
     geometry: &SliverGeometry,
-    layout_offset: f32,
-    child_main_extent: f32,
+    layout_offset: Pixels,
+    child_main_extent: Pixels,
 ) -> Offset {
+    let layout_offset = layout_offset.get();
+    let child_main_extent = child_main_extent.get();
     let child_main_axis_position = layout_offset - constraints.scroll_offset;
     let main_axis_delta = if right_way_up(constraints.axis_direction, constraints.growth_direction)
     {
@@ -29,27 +31,19 @@ pub(crate) fn child_paint_offset(
 
 #[cfg(test)]
 mod tests {
-    use flui_types::layout::AxisDirection;
-
     use super::*;
     use crate::constraints::GrowthDirection;
-    use crate::view::ScrollDirection;
+    use crate::testing::sliver;
 
     fn vertical_constraints(growth: GrowthDirection, scroll_offset: f32) -> SliverConstraints {
-        SliverConstraints::new(
-            AxisDirection::TopToBottom,
-            growth,
-            ScrollDirection::Idle,
-            scroll_offset,
-            0.0,
-            0.0,
-            200.0,
-            100.0,
-            AxisDirection::LeftToRight,
-            200.0,
-            200.0,
-            0.0,
-        )
+        sliver::vertical()
+            .with_growth_direction(growth)
+            .scroll_offset(scroll_offset)
+            .remaining_paint_extent(200.0)
+            .cross_axis_extent(100.0)
+            .viewport_main_axis_extent(200.0)
+            .remaining_cache_extent(200.0)
+            .build()
     }
 
     fn geometry(paint_extent: f32, scroll_extent: f32) -> SliverGeometry {
@@ -70,7 +64,7 @@ mod tests {
         let geom = geometry(80.0, 100.0);
 
         assert_eq!(
-            child_paint_offset(&constraints, &geom, 0.0, 100.0),
+            child_paint_offset(&constraints, &geom, px(0.0), px(100.0)),
             Offset::new(px(0.0), px(-10.0)),
         );
     }
@@ -81,7 +75,7 @@ mod tests {
         let geom = geometry(40.0, 40.0);
 
         assert_eq!(
-            child_paint_offset(&constraints, &geom, 0.0, 40.0),
+            child_paint_offset(&constraints, &geom, px(0.0), px(40.0)),
             Offset::new(px(0.0), px(0.0)),
         );
     }
@@ -92,8 +86,29 @@ mod tests {
         let geom = geometry(80.0, 120.0);
 
         assert_eq!(
-            child_paint_offset(&constraints, &geom, 40.0, 30.0),
+            child_paint_offset(&constraints, &geom, px(40.0), px(30.0)),
             Offset::new(px(0.0), px(40.0)),
+        );
+    }
+
+    #[test]
+    fn child_paint_offset_horizontal_rtl_reverse_maps_to_x() {
+        use flui_types::layout::AxisDirection;
+
+        let constraints = sliver::horizontal()
+            .with_axis_direction(AxisDirection::RightToLeft)
+            .with_growth_direction(GrowthDirection::Reverse)
+            .scroll_offset(5.0)
+            .remaining_paint_extent(200.0)
+            .cross_axis_extent(100.0)
+            .viewport_main_axis_extent(200.0)
+            .remaining_cache_extent(200.0)
+            .build();
+        let geom = geometry(80.0, 100.0);
+
+        assert_eq!(
+            child_paint_offset(&constraints, &geom, px(0.0), px(80.0)),
+            Offset::new(px(-5.0), px(0.0)),
         );
     }
 }
