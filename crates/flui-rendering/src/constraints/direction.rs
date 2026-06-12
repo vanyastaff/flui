@@ -131,6 +131,44 @@ impl fmt::Display for GrowthDirection {
     }
 }
 
+/// Applies growth direction to the user scroll direction.
+///
+/// Mirrors Flutter's composition inside `RenderViewport.layoutChildSequence`:
+/// reverse growth flips the scroll direction; forward growth preserves it.
+#[inline]
+#[must_use]
+pub fn apply_growth_direction_to_scroll_direction(
+    scroll_direction: crate::view::ScrollDirection,
+    growth_direction: GrowthDirection,
+) -> crate::view::ScrollDirection {
+    use crate::view::ScrollDirection;
+
+    match growth_direction {
+        GrowthDirection::Forward => scroll_direction,
+        GrowthDirection::Reverse => match scroll_direction {
+            ScrollDirection::Idle => ScrollDirection::Idle,
+            ScrollDirection::Forward => ScrollDirection::Reverse,
+            ScrollDirection::Reverse => ScrollDirection::Forward,
+        },
+    }
+}
+
+/// Whether sliver content is laid out in the "right way up" reading direction.
+///
+/// Mirrors Flutter's `RenderSliverHelpers.rightWayUp`.
+#[inline]
+#[must_use]
+pub const fn right_way_up(
+    axis_direction: AxisDirection,
+    growth_direction: GrowthDirection,
+) -> bool {
+    let reversed = axis_direction.is_reversed();
+    match growth_direction {
+        GrowthDirection::Forward => !reversed,
+        GrowthDirection::Reverse => reversed,
+    }
+}
+
 // ============================================================================
 // TESTS
 // ============================================================================
@@ -176,27 +214,89 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_to_axis_direction() {
+    fn test_apply_to_axis_direction_all_pairs() {
         use flui_types::layout::AxisDirection::{
             BottomToTop, LeftToRight, RightToLeft, TopToBottom,
         };
 
+        let cases = [
+            (TopToBottom, GrowthDirection::Forward, TopToBottom),
+            (TopToBottom, GrowthDirection::Reverse, BottomToTop),
+            (BottomToTop, GrowthDirection::Forward, BottomToTop),
+            (BottomToTop, GrowthDirection::Reverse, TopToBottom),
+            (LeftToRight, GrowthDirection::Forward, LeftToRight),
+            (LeftToRight, GrowthDirection::Reverse, RightToLeft),
+            (RightToLeft, GrowthDirection::Forward, RightToLeft),
+            (RightToLeft, GrowthDirection::Reverse, LeftToRight),
+        ];
+
+        for (axis, growth, expected) in cases {
+            assert_eq!(
+                growth.apply_to_axis_direction(axis),
+                expected,
+                "axis={axis:?}, growth={growth:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn test_apply_growth_direction_to_scroll_direction() {
+        use crate::view::ScrollDirection;
+
         assert_eq!(
-            GrowthDirection::Forward.apply_to_axis_direction(TopToBottom),
-            TopToBottom
+            apply_growth_direction_to_scroll_direction(
+                ScrollDirection::Forward,
+                GrowthDirection::Forward
+            ),
+            ScrollDirection::Forward,
         );
         assert_eq!(
-            GrowthDirection::Reverse.apply_to_axis_direction(TopToBottom),
-            BottomToTop
+            apply_growth_direction_to_scroll_direction(
+                ScrollDirection::Forward,
+                GrowthDirection::Reverse
+            ),
+            ScrollDirection::Reverse,
         );
         assert_eq!(
-            GrowthDirection::Forward.apply_to_axis_direction(LeftToRight),
-            LeftToRight
+            apply_growth_direction_to_scroll_direction(
+                ScrollDirection::Reverse,
+                GrowthDirection::Reverse
+            ),
+            ScrollDirection::Forward,
         );
         assert_eq!(
-            GrowthDirection::Reverse.apply_to_axis_direction(LeftToRight),
-            RightToLeft
+            apply_growth_direction_to_scroll_direction(
+                ScrollDirection::Idle,
+                GrowthDirection::Reverse
+            ),
+            ScrollDirection::Idle,
         );
+    }
+
+    #[test]
+    fn test_right_way_up_all_pairs() {
+        use flui_types::layout::AxisDirection::{
+            BottomToTop, LeftToRight, RightToLeft, TopToBottom,
+        };
+
+        let cases = [
+            (TopToBottom, GrowthDirection::Forward, true),
+            (TopToBottom, GrowthDirection::Reverse, false),
+            (BottomToTop, GrowthDirection::Forward, false),
+            (BottomToTop, GrowthDirection::Reverse, true),
+            (LeftToRight, GrowthDirection::Forward, true),
+            (LeftToRight, GrowthDirection::Reverse, false),
+            (RightToLeft, GrowthDirection::Forward, false),
+            (RightToLeft, GrowthDirection::Reverse, true),
+        ];
+
+        for (axis, growth, expected) in cases {
+            assert_eq!(
+                right_way_up(axis, growth),
+                expected,
+                "axis={axis:?}, growth={growth:?}",
+            );
+        }
     }
 
     #[test]

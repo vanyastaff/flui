@@ -843,29 +843,27 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             flui_types::layout::AxisDirection::TopToBottom
             | flui_types::layout::AxisDirection::BottomToTop => (offset.dy.get(), offset.dx.get()),
         };
-        let parent_physical_main =
-            if Self::effective_sliver_axis_direction(parent_constraints).is_reversed() {
-                parent_geometry.paint_extent - position.main_axis
-            } else {
-                position.main_axis
-            };
+        let parent_physical_main = if parent_constraints
+            .growth_direction
+            .apply_to_axis_direction(parent_constraints.axis_direction)
+            .is_reversed()
+        {
+            parent_geometry.paint_extent - position.main_axis
+        } else {
+            position.main_axis
+        };
         let child_physical_main = parent_physical_main - offset_main;
-        let child_main = if Self::effective_sliver_axis_direction(child_constraints).is_reversed() {
+        let child_main = if child_constraints
+            .growth_direction
+            .apply_to_axis_direction(child_constraints.axis_direction)
+            .is_reversed()
+        {
             child_geometry.paint_extent - child_physical_main
         } else {
             child_physical_main
         };
 
         MainAxisPosition::new(child_main, position.cross_axis - offset_cross)
-    }
-
-    fn effective_sliver_axis_direction(
-        constraints: &SliverConstraints,
-    ) -> flui_types::layout::AxisDirection {
-        match constraints.growth_direction {
-            crate::constraints::GrowthDirection::Forward => constraints.axis_direction,
-            crate::constraints::GrowthDirection::Reverse => constraints.axis_direction.opposite(),
-        }
     }
 
     fn box_hit_offset_from_sliver_position(
@@ -875,15 +873,10 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         position: MainAxisPosition,
         offset: Offset,
     ) -> Offset {
-        let reversed = matches!(
+        let right_way_up = crate::constraints::right_way_up(
             constraints.axis_direction,
-            flui_types::layout::AxisDirection::RightToLeft
-                | flui_types::layout::AxisDirection::BottomToTop
+            constraints.growth_direction,
         );
-        let right_way_up = match constraints.growth_direction {
-            crate::constraints::GrowthDirection::Forward => !reversed,
-            crate::constraints::GrowthDirection::Reverse => reversed,
-        };
 
         let (paint_main, paint_cross, child_main_extent) = match constraints.axis_direction {
             flui_types::layout::AxisDirection::LeftToRight

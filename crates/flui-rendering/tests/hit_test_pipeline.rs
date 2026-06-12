@@ -1018,6 +1018,31 @@ fn sliver_padding_hit_test_extent_uses_child_hit_extent_without_after_padding() 
 }
 
 #[test]
+fn sliver_padding_skips_hit_test_when_hit_test_extent_zero() {
+    let mut owner = PipelineOwner::new();
+    let mut constraints = sliver_hit_constraints();
+    constraints.scroll_offset = 500.0;
+    let host_id = owner.insert(Box::new(SliverHitHost {
+        constraints,
+        size: Size::ZERO,
+    }) as BoxedRenderObject);
+    owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            host_id,
+            Box::new(RenderSliverPadding::symmetric(0.0, 10.0)) as BoxedSliverObject,
+        )
+        .expect("padding without child");
+
+    let owner = laid_out(owner, host_id);
+
+    assert!(
+        hits(&owner, 10.0, 10.0).is_empty(),
+        "padding with zero hit_test_extent must not forward hits to a missing child",
+    );
+}
+
+#[test]
 fn box_host_hit_tests_sliver_padding_child_at_paint_offset() {
     let mut owner = PipelineOwner::new();
     let host_id = owner.insert(Box::new(SliverHitHost {

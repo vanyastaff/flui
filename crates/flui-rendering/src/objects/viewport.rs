@@ -19,10 +19,7 @@ use crate::{
     context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
     parent_data::BoxParentData,
     traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
-    view::{
-        CacheExtentStyle, ScrollDirection, ScrollableViewportOffset, SliverPaintOrder,
-        ViewportOffset,
-    },
+    view::{CacheExtentStyle, ScrollableViewportOffset, SliverPaintOrder, ViewportOffset},
 };
 
 const MAX_LAYOUT_CYCLES_PER_CHILD: usize = 10;
@@ -236,10 +233,11 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
         mut cache_origin: f32,
     ) -> f32 {
         let initial_layout_offset = layout_offset;
-        let adjusted_user_scroll_direction = apply_growth_direction_to_scroll_direction(
-            self.offset.user_scroll_direction(),
-            growth_direction,
-        );
+        let adjusted_user_scroll_direction =
+            crate::constraints::apply_growth_direction_to_scroll_direction(
+                self.offset.user_scroll_direction(),
+                growth_direction,
+            );
         let mut max_paint_offset = layout_offset + overlap;
         let mut preceding_scroll_extent = 0.0;
 
@@ -485,16 +483,6 @@ const fn default_cross_axis_direction(axis_direction: AxisDirection) -> AxisDire
     match axis_direction {
         TopToBottom | BottomToTop => LeftToRight,
         LeftToRight | RightToLeft => TopToBottom,
-    }
-}
-
-fn apply_growth_direction_to_scroll_direction(
-    scroll_direction: ScrollDirection,
-    growth_direction: GrowthDirection,
-) -> ScrollDirection {
-    match growth_direction {
-        GrowthDirection::Forward => scroll_direction,
-        GrowthDirection::Reverse => scroll_direction.flip(),
     }
 }
 
