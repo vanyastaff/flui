@@ -39,7 +39,7 @@ use flui_tree::Single;
 use flui_types::{Axis, EdgeInsets, Offset, Pixels, Rect, geometry::px, layout::AxisDirection};
 
 use crate::{
-    constraints::{GrowthDirection, SliverConstraints, SliverGeometry},
+    constraints::{SliverConstraints, SliverGeometry},
     context::{SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverPhysicalParentData,
     traits::{HotReloadCapability, PaintEffectsCapability, RenderSliver, SemanticsCapability},
@@ -120,7 +120,8 @@ impl RenderSliverPadding {
     /// constraint-axis–oriented form.
     ///
     /// * `before` — main-axis padding nearest the zero scroll offset after
-    ///   applying [`GrowthDirection`] to the axis direction.
+    ///   applying [`GrowthDirection`](crate::constraints::GrowthDirection)
+    ///   to the axis direction.
     /// * `after` — the opposite main-axis padding.
     /// * `main_total` — `before + after`.
     /// * `cross_total` — total padding on the cross axis.
@@ -134,10 +135,10 @@ impl RenderSliverPadding {
             Axis::Vertical => self.padding.horizontal_total().get(),
             Axis::Horizontal => self.padding.vertical_total().get(),
         };
-        let (before, after) = match apply_growth_direction_to_axis_direction(
-            constraints.axis_direction,
-            constraints.growth_direction,
-        ) {
+        let (before, after) = match constraints
+            .growth_direction
+            .apply_to_axis_direction(constraints.axis_direction)
+        {
             AxisDirection::TopToBottom => (self.padding.top.get(), self.padding.bottom.get()),
             AxisDirection::BottomToTop => (self.padding.bottom.get(), self.padding.top.get()),
             AxisDirection::LeftToRight => (self.padding.left.get(), self.padding.right.get()),
@@ -288,10 +289,9 @@ impl RenderSliverPadding {
             scroll_offset_correction: None,
         };
 
-        let effective_axis_direction = apply_growth_direction_to_axis_direction(
-            parent.axis_direction,
-            parent.growth_direction,
-        );
+        let effective_axis_direction = parent
+            .growth_direction
+            .apply_to_axis_direction(parent.axis_direction);
         let calculated_offset = match effective_axis_direction {
             AxisDirection::BottomToTop => Self::paint_offset(
                 parent,
@@ -444,16 +444,6 @@ const fn empty_sliver_constraints() -> SliverConstraints {
         0.0, // remaining_cache_extent
         0.0, // cache_origin
     )
-}
-
-const fn apply_growth_direction_to_axis_direction(
-    axis_direction: AxisDirection,
-    growth_direction: GrowthDirection,
-) -> AxisDirection {
-    match growth_direction {
-        GrowthDirection::Forward => axis_direction,
-        GrowthDirection::Reverse => axis_direction.opposite(),
-    }
 }
 
 // ============================================================================

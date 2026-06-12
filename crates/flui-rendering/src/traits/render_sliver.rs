@@ -4,7 +4,7 @@ use flui_tree::Arity;
 use flui_types::{Pixels, Rect, Size, geometry::px, prelude::AxisDirection};
 
 use crate::{
-    constraints::{GrowthDirection, SliverConstraints, SliverGeometry},
+    constraints::{SliverConstraints, SliverGeometry},
     context::{SliverHitTestContext, SliverLayoutContext},
     parent_data::ParentData,
     protocol::SliverProtocol,
@@ -252,10 +252,10 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static 
     fn get_absolute_size_relative_to_origin(&self, paint_extent: f32) -> Size {
         let constraints = self.constraints();
 
-        match apply_growth_direction_to_axis_direction(
-            constraints.axis_direction,
-            constraints.growth_direction,
-        ) {
+        match constraints
+            .growth_direction
+            .apply_to_axis_direction(constraints.axis_direction)
+        {
             AxisDirection::TopToBottom => {
                 Size::new(px(constraints.cross_axis_extent), px(paint_extent))
             }
@@ -342,16 +342,6 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static 
     /// Creates default parent data for a child.
     fn create_default_parent_data() -> Self::ParentData {
         Self::ParentData::default()
-    }
-}
-
-const fn apply_growth_direction_to_axis_direction(
-    axis_direction: AxisDirection,
-    growth_direction: GrowthDirection,
-) -> AxisDirection {
-    match growth_direction {
-        GrowthDirection::Forward => axis_direction,
-        GrowthDirection::Reverse => axis_direction.opposite(),
     }
 }
 

@@ -6,11 +6,7 @@
 
 use flui_foundation::Diagnosticable;
 use flui_tree::Single;
-use flui_types::{
-    Offset,
-    geometry::px,
-    layout::{AxisDirection, AxisDirection::*},
-};
+use flui_types::{Offset, geometry::px, layout::AxisDirection::*};
 
 use crate::{
     constraints::{GrowthDirection, SliverConstraints, SliverGeometry},
@@ -39,10 +35,10 @@ impl RenderSliverToBoxAdapter {
 
     #[inline]
     fn child_paint_offset(constraints: &SliverConstraints, geometry: &SliverGeometry) -> Offset {
-        match apply_growth_direction_to_axis_direction(
-            constraints.axis_direction,
-            constraints.growth_direction,
-        ) {
+        match constraints
+            .growth_direction
+            .apply_to_axis_direction(constraints.axis_direction)
+        {
             TopToBottom => Offset::new(px(0.0), px(-constraints.scroll_offset)),
             LeftToRight => Offset::new(px(-constraints.scroll_offset), px(0.0)),
             BottomToTop => Offset::new(
@@ -137,16 +133,6 @@ impl RenderSliver for RenderSliverToBoxAdapter {
 
     fn hit_test(&self, ctx: &mut SliverHitTestContext<'_, Single, Self::ParentData>) -> bool {
         ctx.hit_test_child_at_layout_offset(0)
-    }
-}
-
-const fn apply_growth_direction_to_axis_direction(
-    axis_direction: AxisDirection,
-    growth_direction: GrowthDirection,
-) -> AxisDirection {
-    match growth_direction {
-        GrowthDirection::Forward => axis_direction,
-        GrowthDirection::Reverse => axis_direction.opposite(),
     }
 }
 

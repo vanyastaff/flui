@@ -9,11 +9,7 @@
 
 use flui_foundation::Diagnosticable;
 use flui_tree::Single;
-use flui_types::{
-    Offset, Size,
-    geometry::px,
-    layout::{AxisDirection, AxisDirection::*},
-};
+use flui_types::{Offset, Size, geometry::px, layout::AxisDirection::*};
 
 use crate::{
     constraints::{GrowthDirection, SliverConstraints, SliverGeometry},
@@ -371,10 +367,10 @@ fn child_paint_offset_for_extent(
     geometry: &SliverGeometry,
     child_main_extent: f32,
 ) -> Offset {
-    match apply_growth_direction_to_axis_direction(
-        constraints.axis_direction,
-        constraints.growth_direction,
-    ) {
+    match constraints
+        .growth_direction
+        .apply_to_axis_direction(constraints.axis_direction)
+    {
         TopToBottom => Offset::new(px(0.0), px(-constraints.scroll_offset)),
         LeftToRight => Offset::new(px(-constraints.scroll_offset), px(0.0)),
         BottomToTop => Offset::new(
@@ -385,16 +381,6 @@ fn child_paint_offset_for_extent(
             px(geometry.paint_extent + constraints.scroll_offset - child_main_extent),
             px(0.0),
         ),
-    }
-}
-
-const fn apply_growth_direction_to_axis_direction(
-    axis_direction: AxisDirection,
-    growth_direction: GrowthDirection,
-) -> AxisDirection {
-    match growth_direction {
-        GrowthDirection::Forward => axis_direction,
-        GrowthDirection::Reverse => axis_direction.opposite(),
     }
 }
 
