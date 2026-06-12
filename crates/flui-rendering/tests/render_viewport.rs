@@ -146,6 +146,61 @@ impl RenderSliver for FixedSliver {
 }
 
 #[derive(Debug)]
+struct InvisibleHitSliver {
+    constraints: SliverConstraints,
+    geometry: SliverGeometry,
+}
+
+impl Default for InvisibleHitSliver {
+    fn default() -> Self {
+        Self {
+            constraints: SliverConstraints::default(),
+            geometry: SliverGeometry::ZERO,
+        }
+    }
+}
+
+impl Diagnosticable for InvisibleHitSliver {}
+impl PaintEffectsCapability for InvisibleHitSliver {}
+impl SemanticsCapability for InvisibleHitSliver {}
+impl HotReloadCapability for InvisibleHitSliver {}
+
+impl RenderSliver for InvisibleHitSliver {
+    type Arity = Leaf;
+    type ParentData = SliverParentData;
+
+    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
+        self.constraints = *ctx.constraints();
+        self.geometry = SliverGeometry {
+            scroll_extent: 0.0,
+            paint_extent: 100.0,
+            layout_extent: 0.0,
+            max_paint_extent: 100.0,
+            hit_test_extent: 100.0,
+            visible: false,
+            ..SliverGeometry::ZERO
+        };
+        ctx.complete(self.geometry);
+    }
+
+    fn constraints(&self) -> &SliverConstraints {
+        &self.constraints
+    }
+
+    fn geometry(&self) -> &SliverGeometry {
+        &self.geometry
+    }
+
+    fn set_geometry(&mut self, geometry: SliverGeometry) {
+        self.geometry = geometry;
+    }
+
+    fn hit_test_self(&self, main: f32, cross: f32) -> bool {
+        main >= 0.0 && main < self.geometry.hit_test_extent && cross >= 0.0
+    }
+}
+
+#[derive(Debug)]
 struct MainAxisBandSliver {
     extent: f32,
     hit_start: f32,
@@ -494,6 +549,46 @@ fn viewport_hit_tests_in_opposite_paint_order() {
         hits(&owner, 10.0, 10.0),
         vec![first_id, root_id],
         "FirstIsTop paints earlier children on top, so hit testing must visit them first",
+    );
+}
+
+#[test]
+fn viewport_skips_invisible_sliver_children_during_hit_testing() {
+    let viewport = RenderViewport::with_offset(
+        AxisDirection::TopToBottom,
+        AxisDirection::LeftToRight,
+        ScrollableViewportOffset::zero(),
+    );
+
+    let mut owner = PipelineOwner::new();
+    let root_id = owner.insert(Box::new(viewport));
+    let invisible_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            root_id,
+            Box::new(InvisibleHitSliver::default()) as BoxedSliverObject,
+        )
+        .expect("invisible sliver");
+    let visible_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            root_id,
+            Box::new(FixedSliver::with_extents(0.0, 100.0, 0.0)) as BoxedSliverObject,
+        )
+        .expect("visible sliver");
+
+    let owner = laid_out(owner, root_id);
+
+    assert_eq!(
+        render_offset(&owner, invisible_id),
+        Offset::ZERO,
+        "fixture sanity: invisible and visible slivers overlap in paint space",
+    );
+    assert_eq!(
+        hits(&owner, 10.0, 10.0),
+        vec![visible_id, root_id],
+        "RenderViewport must mirror Flutter and skip geometry.visible=false \
+         slivers before hit-testing them",
     );
 }
 
