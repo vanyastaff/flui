@@ -4,7 +4,7 @@ use flui_tree::Arity;
 use flui_types::{Pixels, Rect, Size, geometry::px, prelude::AxisDirection};
 
 use crate::{
-    constraints::{SliverConstraints, SliverGeometry},
+    constraints::{GrowthDirection, SliverConstraints, SliverGeometry},
     context::{SliverHitTestContext, SliverLayoutContext},
     parent_data::ParentData,
     protocol::SliverProtocol,
@@ -237,8 +237,9 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static 
 
     /// Returns the absolute size relative to the origin.
     ///
-    /// Like `get_absolute_size`, but takes into account the growth
-    /// direction and axis direction to position relative to origin.
+    /// Like `get_absolute_size`, but takes into account the growth direction
+    /// and axis direction to position relative to origin. Dimensions along
+    /// the effective up/left direction may be negative.
     ///
     /// # Arguments
     ///
@@ -249,9 +250,25 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static 
     /// Corresponds to `RenderSliver.getAbsoluteSizeRelativeToOrigin` in
     /// Flutter.
     fn get_absolute_size_relative_to_origin(&self, paint_extent: f32) -> Size {
-        // By default, same as get_absolute_size
-        // Override for slivers that need special handling
-        self.get_absolute_size(paint_extent)
+        let constraints = self.constraints();
+
+        match apply_growth_direction_to_axis_direction(
+            constraints.axis_direction,
+            constraints.growth_direction,
+        ) {
+            AxisDirection::TopToBottom => {
+                Size::new(px(constraints.cross_axis_extent), px(paint_extent))
+            }
+            AxisDirection::BottomToTop => {
+                Size::new(px(constraints.cross_axis_extent), px(-paint_extent))
+            }
+            AxisDirection::LeftToRight => {
+                Size::new(px(paint_extent), px(constraints.cross_axis_extent))
+            }
+            AxisDirection::RightToLeft => {
+                Size::new(px(-paint_extent), px(constraints.cross_axis_extent))
+            }
+        }
     }
 
     // ========================================================================
@@ -325,6 +342,16 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static 
     /// Creates default parent data for a child.
     fn create_default_parent_data() -> Self::ParentData {
         Self::ParentData::default()
+    }
+}
+
+const fn apply_growth_direction_to_axis_direction(
+    axis_direction: AxisDirection,
+    growth_direction: GrowthDirection,
+) -> AxisDirection {
+    match growth_direction {
+        GrowthDirection::Forward => axis_direction,
+        GrowthDirection::Reverse => axis_direction.opposite(),
     }
 }
 
@@ -457,7 +484,7 @@ pub trait RenderProxySliver<C: RenderSliver>: RenderSliver {
 #[cfg(test)]
 mod tests {
     use flui_tree::{Leaf, Single};
-    use flui_types::layout::AxisDirection;
+    use flui_types::layout::{AxisDirection, AxisDirection::*};
 
     use super::*;
     use crate::{
@@ -500,6 +527,31 @@ mod tests {
         constraints.remaining_cache_extent = remaining_cache_extent;
         constraints.cache_origin = cache_origin;
         constraints
+    }
+
+    fn directional_constraints(
+        axis_direction: AxisDirection,
+        growth_direction: GrowthDirection,
+    ) -> SliverConstraints {
+        let cross_axis_direction = match axis_direction {
+            LeftToRight | RightToLeft => TopToBottom,
+            TopToBottom | BottomToTop => LeftToRight,
+        };
+
+        SliverConstraints::new(
+            axis_direction,
+            growth_direction,
+            ScrollDirection::Idle,
+            0.0,   // scroll_offset
+            0.0,   // preceding_scroll_extent
+            0.0,   // overlap
+            100.0, // remaining_paint_extent
+            40.0,  // cross_axis_extent
+            cross_axis_direction,
+            100.0, // viewport_main_axis_extent
+            100.0, // remaining_cache_extent
+            0.0,   // cache_origin
+        )
     }
 
     // ────────────────────────────────────────────────────────────────────────
@@ -710,8 +762,35 @@ mod tests {
             sliver.calculate_cache_offset(&constraints, 0.0, 40.0),
             10.0,
             "Flutter cache window is [scroll_offset + cache_origin, \
-             scroll_offset + remaining_cache_extent]",
+            scroll_offset + remaining_cache_extent]",
         );
+    }
+
+    #[test]
+    fn get_absolute_size_relative_to_origin_applies_growth_direction_sign() {
+        use GrowthDirection::{Forward, Reverse};
+
+        let cases = [
+            (TopToBottom, Forward, Size::new(px(40.0), px(25.0))),
+            (BottomToTop, Forward, Size::new(px(40.0), px(-25.0))),
+            (TopToBottom, Reverse, Size::new(px(40.0), px(-25.0))),
+            (BottomToTop, Reverse, Size::new(px(40.0), px(25.0))),
+            (LeftToRight, Forward, Size::new(px(25.0), px(40.0))),
+            (RightToLeft, Forward, Size::new(px(-25.0), px(40.0))),
+            (LeftToRight, Reverse, Size::new(px(-25.0), px(40.0))),
+            (RightToLeft, Reverse, Size::new(px(25.0), px(40.0))),
+        ];
+
+        for (axis_direction, growth_direction, expected) in cases {
+            let mut sliver = FixedHeightSliver::new(200.0);
+            sliver.constraints = directional_constraints(axis_direction, growth_direction);
+
+            assert_eq!(
+                sliver.get_absolute_size_relative_to_origin(25.0),
+                expected,
+                "axis_direction={axis_direction:?}, growth_direction={growth_direction:?}",
+            );
+        }
     }
 
     /// A `perform_layout` that never calls `ctx.complete(…)` must cause

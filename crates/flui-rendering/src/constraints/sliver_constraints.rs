@@ -348,6 +348,7 @@ impl Constraints for SliverConstraints {
     fn is_normalized(&self) -> bool {
         self.scroll_offset >= 0.0
             && self.preceding_scroll_extent >= 0.0
+            && self.axis_direction.axis() != self.cross_axis_direction.axis()
             && self.remaining_paint_extent >= 0.0
             && self.cross_axis_extent >= 0.0
             && self.viewport_main_axis_extent >= 0.0
@@ -463,6 +464,21 @@ mod tests {
         assert!(c.is_at_viewport_start());
         assert!(c.has_remaining_paint_extent());
         assert!(!c.is_scrolled_out_of_view());
+    }
+
+    #[test]
+    fn is_normalized_rejects_parallel_main_and_cross_axis_directions() {
+        let mut c = SliverConstraints::default()
+            .with_remaining_paint_extent(100.0)
+            .with_cross_axis_extent(50.0);
+        c.viewport_main_axis_extent = 100.0;
+        c.remaining_cache_extent = 100.0;
+        c.cross_axis_direction = AxisDirection::BottomToTop;
+
+        assert!(
+            !c.is_normalized(),
+            "main and cross axis directions must be orthogonal"
+        );
     }
 
     #[test]
