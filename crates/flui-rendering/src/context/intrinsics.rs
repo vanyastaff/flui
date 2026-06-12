@@ -218,7 +218,7 @@ pub(crate) mod test_support {
                  a childless compute_* must not consult children"
             )
         };
-        let mut channel = IntrinsicChildChannel {
+        let channel = IntrinsicChildChannel {
             query: &mut deny_query,
             flex: &mut deny_flex,
         };
