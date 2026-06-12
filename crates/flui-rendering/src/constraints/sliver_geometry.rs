@@ -8,6 +8,8 @@ use std::{
     hash::{Hash, Hasher},
 };
 
+const PRECISION_ERROR_TOLERANCE: f32 = flui_foundation::EPSILON_F32;
+
 /// Layout output describing space occupied by a sliver.
 ///
 /// After a sliver performs layout, it returns geometry describing:
@@ -299,46 +301,90 @@ impl SliverGeometry {
     // VALIDATION
     // ============================================================================
 
+    /// Returns the first Flutter-compatible geometry invariant violation.
+    #[inline]
+    #[must_use]
+    pub fn validation_error(&self) -> Option<&'static str> {
+        if self.scroll_extent.is_nan() {
+            return Some("scroll_extent is NaN");
+        }
+        if !self.paint_extent.is_finite() {
+            return Some("paint_extent is not finite");
+        }
+        if !self.paint_origin.is_finite() {
+            return Some("paint_origin is not finite");
+        }
+        if !self.layout_extent.is_finite() {
+            return Some("layout_extent is not finite");
+        }
+        if self.max_paint_extent.is_nan() {
+            return Some("max_paint_extent is NaN");
+        }
+        if !self.max_scroll_obstruction_extent.is_finite() {
+            return Some("max_scroll_obstruction_extent is not finite");
+        }
+        if !self.hit_test_extent.is_finite() {
+            return Some("hit_test_extent is not finite");
+        }
+        if !self.cache_extent.is_finite() {
+            return Some("cache_extent is not finite");
+        }
+
+        if self.scroll_extent < 0.0 {
+            return Some("scroll_extent is negative");
+        }
+        if self.paint_extent < 0.0 {
+            return Some("paint_extent is negative");
+        }
+        if self.layout_extent < 0.0 {
+            return Some("layout_extent is negative");
+        }
+        if self.max_paint_extent < 0.0 {
+            return Some("max_paint_extent is negative");
+        }
+        if self.max_scroll_obstruction_extent < 0.0 {
+            return Some("max_scroll_obstruction_extent is negative");
+        }
+        if self.hit_test_extent < 0.0 {
+            return Some("hit_test_extent is negative");
+        }
+        if self.cache_extent < 0.0 {
+            return Some("cache_extent is negative");
+        }
+
+        if let Some(extent) = self.cross_axis_extent {
+            if !extent.is_finite() {
+                return Some("cross_axis_extent is not finite");
+            }
+            if extent < 0.0 {
+                return Some("cross_axis_extent is negative");
+            }
+        }
+
+        if self.layout_extent > self.paint_extent {
+            return Some("layout_extent exceeds paint_extent");
+        }
+        if self.paint_extent - self.max_paint_extent > PRECISION_ERROR_TOLERANCE {
+            return Some("paint_extent exceeds max_paint_extent");
+        }
+
+        if let Some(correction) = self.scroll_offset_correction {
+            if !correction.is_finite() {
+                return Some("scroll_offset_correction is not finite");
+            }
+            if correction == 0.0 {
+                return Some("scroll_offset_correction is zero");
+            }
+        }
+
+        None
+    }
+
     /// Validates geometry invariants in debug builds.
     #[cfg(debug_assertions)]
     pub fn debug_assert_valid(&self) {
-        debug_assert!(
-            self.scroll_extent >= 0.0,
-            "scroll_extent must be non-negative: {}",
-            self.scroll_extent
-        );
-
-        debug_assert!(
-            self.paint_extent >= 0.0,
-            "paint_extent must be non-negative: {}",
-            self.paint_extent
-        );
-
-        debug_assert!(
-            self.layout_extent >= 0.0,
-            "layout_extent must be non-negative: {}",
-            self.layout_extent
-        );
-
-        debug_assert!(
-            self.max_paint_extent >= self.paint_extent,
-            "max_paint_extent ({}) must be >= paint_extent ({})",
-            self.max_paint_extent,
-            self.paint_extent
-        );
-
-        debug_assert!(
-            self.cache_extent >= self.layout_extent,
-            "cache_extent ({}) must be >= layout_extent ({})",
-            self.cache_extent,
-            self.layout_extent
-        );
-
-        if let Some(correction) = self.scroll_offset_correction {
-            debug_assert!(
-                correction != 0.0,
-                "scroll_offset_correction must be non-zero if set"
-            );
+        if let Some(reason) = self.validation_error() {
+            debug_assert!(false, "SliverGeometry is not valid: {reason}: {self:?}");
         }
     }
 
@@ -481,5 +527,64 @@ mod tests {
     fn test_validation() {
         let valid = SliverGeometry::new(100.0, 50.0, 0.0);
         valid.debug_assert_valid(); // Should not panic
+    }
+
+    #[test]
+    fn validation_rejects_non_finite_and_negative_extents() {
+        let geometry = SliverGeometry {
+            hit_test_extent: -1.0,
+            ..SliverGeometry::new(100.0, 50.0, 0.0)
+        };
+        assert_eq!(
+            geometry.validation_error(),
+            Some("hit_test_extent is negative")
+        );
+
+        let geometry = SliverGeometry {
+            paint_origin: f32::NAN,
+            ..SliverGeometry::new(100.0, 50.0, 0.0)
+        };
+        assert_eq!(
+            geometry.validation_error(),
+            Some("paint_origin is not finite")
+        );
+    }
+
+    #[test]
+    fn validation_allows_precision_tolerance_for_max_paint_extent() {
+        let geometry = SliverGeometry {
+            paint_extent: 1.0,
+            layout_extent: 1.0,
+            max_paint_extent: 1.0 - flui_foundation::EPSILON_F32 / 2.0,
+            ..SliverGeometry::ZERO
+        };
+        assert_eq!(geometry.validation_error(), None);
+
+        let geometry = SliverGeometry {
+            paint_extent: 1.0,
+            layout_extent: 1.0,
+            max_paint_extent: 1.0 - flui_foundation::EPSILON_F32 * 2.0,
+            ..SliverGeometry::ZERO
+        };
+        assert_eq!(
+            geometry.validation_error(),
+            Some("paint_extent exceeds max_paint_extent")
+        );
+    }
+
+    #[test]
+    fn validation_allows_infinite_scroll_and_max_paint_extents() {
+        let geometry = SliverGeometry {
+            scroll_extent: f32::INFINITY,
+            paint_extent: 100.0,
+            layout_extent: 100.0,
+            max_paint_extent: f32::INFINITY,
+            hit_test_extent: 100.0,
+            cache_extent: 120.0,
+            visible: true,
+            ..SliverGeometry::ZERO
+        };
+
+        assert_eq!(geometry.validation_error(), None);
     }
 }

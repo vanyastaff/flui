@@ -386,6 +386,11 @@ impl<P: Protocol> RenderEntry<P> {
 
         // Update state -- only on the success path. On panic, state remains
         // untouched and NEEDS_LAYOUT stays set so a retry is possible.
+        <P as crate::protocol::Protocol>::validate_layout_output(
+            debug_name,
+            &constraints,
+            &geometry,
+        )?;
         <P as crate::protocol::Protocol>::debug_assert_layout_output(&constraints, &geometry);
         self.state.set_geometry(geometry.clone());
         self.state.set_constraints(constraints);

@@ -2579,9 +2579,11 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
     // On the Err path above, state is intentionally unmodified so
     // NEEDS_LAYOUT stays set for next-frame retry.
 
-    // Same protocol-generic geometry check the leaf commit runs
-    // (RenderEntry::layout_leaf_only) — Flutter's debugAssertDoesMeetConstraints:
-    // a finite size that satisfies the constraints. No-op for slivers.
+    // Same protocol-generic geometry guards the leaf commit runs
+    // (RenderEntry::layout_leaf_only). Runtime validation happens before
+    // state commit; debug assertions then mirror Flutter's debug-only
+    // contract checks.
+    <BoxProtocol as Protocol>::validate_layout_output(debug_name, &constraints, &geometry)?;
     <BoxProtocol as Protocol>::debug_assert_layout_output(&constraints, &geometry);
 
     entry.state_mut().set_geometry(geometry);
@@ -2956,6 +2958,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl<'tree>(
         }
     };
 
+    <SliverProtocol as Protocol>::validate_layout_output(debug_name, &constraints, &geometry)?;
     <SliverProtocol as Protocol>::debug_assert_layout_output(&constraints, &geometry);
 
     entry.state_mut().set_geometry(geometry);
