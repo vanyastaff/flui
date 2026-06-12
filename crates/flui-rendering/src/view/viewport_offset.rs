@@ -1,14 +1,8 @@
 //! Viewport offset for scroll position tracking.
 
-use std::{
-    fmt::Debug,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-};
+use std::{fmt::Debug, sync::Arc};
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 
 /// The direction of a scroll, relative to the positive scroll offset axis.
 ///
@@ -259,8 +253,14 @@ pub struct ScrollableViewportOffset {
     /// Listeners for change notifications.
     listeners: RwLock<Vec<Arc<dyn Fn() + Send + Sync>>>,
 
-    /// Whether we're currently notifying listeners.
-    notifying: AtomicBool,
+    /// Reentrant notification bookkeeping.
+    notification_state: Mutex<NotificationState>,
+}
+
+#[derive(Debug, Default)]
+struct NotificationState {
+    notifying: bool,
+    pending_passes: usize,
 }
 
 impl Debug for ScrollableViewportOffset {
@@ -290,7 +290,7 @@ impl ScrollableViewportOffset {
             user_scroll_direction: ScrollDirection::Idle,
             allow_implicit_scrolling: true,
             listeners: RwLock::new(Vec::new()),
-            notifying: AtomicBool::new(false),
+            notification_state: Mutex::new(NotificationState::default()),
         }
     }
 
@@ -358,17 +358,38 @@ impl ScrollableViewportOffset {
     }
 
     fn notify_listeners(&self) {
-        // Prevent recursive notification
-        if self.notifying.swap(true, Ordering::SeqCst) {
-            return;
+        {
+            let mut state = self.notification_state.lock();
+            if state.notifying {
+                state.pending_passes = state.pending_passes.saturating_add(1);
+                return;
+            }
+            state.notifying = true;
         }
 
-        let listeners = self.listeners.read();
-        for listener in listeners.iter() {
-            listener();
-        }
+        loop {
+            let listeners = self.listeners.read().clone();
+            for listener in listeners {
+                if self.is_listener_registered(&listener) {
+                    listener();
+                }
+            }
 
-        self.notifying.store(false, Ordering::SeqCst);
+            let mut state = self.notification_state.lock();
+            if state.pending_passes > 0 {
+                state.pending_passes -= 1;
+                continue;
+            }
+            state.notifying = false;
+            break;
+        }
+    }
+
+    fn is_listener_registered(&self, listener: &Arc<dyn Fn() + Send + Sync>) -> bool {
+        self.listeners
+            .read()
+            .iter()
+            .any(|registered| Arc::ptr_eq(registered, listener))
     }
 }
 
@@ -586,6 +607,74 @@ mod tests {
         offset.remove_listener(&listener);
         offset.notify_listeners();
         assert_eq!(counter.load(Ordering::SeqCst), 1); // No change after removal
+    }
+
+    #[test]
+    fn scrollable_viewport_offset_reentrant_notify_runs_after_current_pass() {
+        use std::sync::{
+            Mutex,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let offset = Arc::new(ScrollableViewportOffset::zero());
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let first_listener_calls = Arc::new(AtomicUsize::new(0));
+
+        let listener_offset = offset.clone();
+        let listener_events = events.clone();
+        let listener_calls = first_listener_calls.clone();
+        let first_listener: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            listener_events.lock().expect("events lock").push("a");
+            if listener_calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                listener_offset.notify_listeners();
+            }
+        });
+
+        let listener_events = events.clone();
+        let second_listener: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            listener_events.lock().expect("events lock").push("b");
+        });
+
+        offset.add_listener(first_listener);
+        offset.add_listener(second_listener);
+        offset.notify_listeners();
+
+        assert_eq!(
+            events.lock().expect("events lock").as_slice(),
+            ["a", "b", "a", "b"],
+            "nested notifications must queue a follow-up pass instead of being dropped",
+        );
+    }
+
+    #[test]
+    fn scrollable_viewport_offset_skips_listener_removed_during_notify() {
+        use std::sync::Mutex;
+
+        let offset = Arc::new(ScrollableViewportOffset::zero());
+        let events = Arc::new(Mutex::new(Vec::new()));
+
+        let second_events = events.clone();
+        let second_listener: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            second_events.lock().expect("events lock").push("b");
+        });
+
+        let first_offset = offset.clone();
+        let first_events = events.clone();
+        let listener_to_remove = second_listener.clone();
+        let first_listener: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            first_events.lock().expect("events lock").push("a");
+            first_offset.remove_listener(&listener_to_remove);
+        });
+
+        offset.add_listener(first_listener);
+        offset.add_listener(second_listener);
+        offset.notify_listeners();
+
+        assert_eq!(
+            events.lock().expect("events lock").as_slice(),
+            ["a"],
+            "listeners removed earlier in the same notify pass must be skipped",
+        );
     }
 
     #[test]
