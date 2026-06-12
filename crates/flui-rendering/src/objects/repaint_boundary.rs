@@ -152,6 +152,69 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderRepai
         child_count > 0 && hit_child(0, None)
     }
 
+    fn intrinsic_raw(
+        &self,
+        dimension: crate::storage::IntrinsicDimension,
+        extent: f32,
+        child_count: usize,
+        child_query: &mut (
+                 dyn FnMut(usize, crate::storage::IntrinsicDimension, f32) -> f32 + Send + Sync
+             ),
+    ) -> f32 {
+        if child_count == 0 {
+            0.0
+        } else {
+            child_query(0, dimension, extent)
+        }
+    }
+
+    fn dry_layout_raw(
+        &self,
+        constraints: crate::protocol::ProtocolConstraints<crate::protocol::BoxProtocol>,
+        child_count: usize,
+        child_dry: &mut (
+                 dyn FnMut(
+            usize,
+            crate::protocol::ProtocolConstraints<crate::protocol::BoxProtocol>,
+        ) -> crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>
+                     + Send
+                     + Sync
+             ),
+    ) -> crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol> {
+        if child_count == 0 {
+            constraints.smallest()
+        } else {
+            child_dry(0, constraints)
+        }
+    }
+
+    fn dry_baseline_raw(
+        &self,
+        constraints: crate::protocol::ProtocolConstraints<crate::protocol::BoxProtocol>,
+        baseline: crate::traits::TextBaseline,
+        child_count: usize,
+        child_query: &mut (
+                 dyn FnMut(
+            usize,
+            crate::context::DryBaselineChildRequest,
+        ) -> crate::context::DryBaselineChildResponse
+                     + Send
+                     + Sync
+             ),
+    ) -> Option<f32> {
+        if child_count == 0 {
+            None
+        } else {
+            match child_query(
+                0,
+                crate::context::DryBaselineChildRequest::Baseline(constraints, baseline),
+            ) {
+                crate::context::DryBaselineChildResponse::Baseline(v) => v,
+                crate::context::DryBaselineChildResponse::DryLayout(_) => None,
+            }
+        }
+    }
+
     // === Optimization boundaries (the KEY overrides) ========================
 
     fn is_repaint_boundary(&self) -> bool {

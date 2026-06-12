@@ -194,6 +194,8 @@ impl RenderBox for RenderMetaData {
         &mut self.size
     }
 
+    crate::forward_single_child_box_queries!();
+
     // paint: default pass-through (splices the child in order).
 
     fn hit_test_behavior(&self) -> HitTestBehavior {

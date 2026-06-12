@@ -22,7 +22,7 @@ use flui_types::{
 
 use crate::{
     constraints::BoxConstraints,
-    context::{BoxDryLayoutCtx, BoxIntrinsicsCtx, BoxLayoutContext, PaintCx},
+    context::{BoxDryBaselineCtx, BoxDryLayoutCtx, BoxIntrinsicsCtx, BoxLayoutContext, PaintCx},
     parent_data::BoxParentData,
     traits::{
         HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability, TextBaseline,
@@ -180,6 +180,21 @@ impl RenderBox for RenderParagraph {
         constraints.constrain(text_size)
     }
 
+    fn compute_dry_baseline(
+        &self,
+        constraints: BoxConstraints,
+        baseline: TextBaseline,
+        _ctx: &mut BoxDryBaselineCtx<'_>,
+    ) -> Option<f32> {
+        let max_width = self.layout_max_width(&constraints);
+        let painter_baseline = match baseline {
+            TextBaseline::Alphabetic => PainterBaseline::Alphabetic,
+            TextBaseline::Ideographic => PainterBaseline::Ideographic,
+        };
+        self.painter
+            .dry_baseline(constraints.min_width.get(), max_width, painter_baseline)
+    }
+
     // Width intrinsics ignore the height extent (text width does not depend on
     // available height); height intrinsics lay the text out at the given width.
 
@@ -245,7 +260,7 @@ mod tests {
     use flui_types::{geometry::px, typography::TextSpan};
 
     use super::*;
-    use crate::context::intrinsics_test_support::{leaf_dry_layout, leaf_intrinsics};
+    use crate::context::intrinsics_test_support::{leaf_dry_baseline, leaf_dry_layout, leaf_intrinsics};
 
     fn para(text: &str) -> RenderParagraph {
         RenderParagraph::new(TextSpan::new(text), TextDirection::Ltr)
@@ -298,6 +313,19 @@ mod tests {
             "wrapped width {:?} cannot exceed the single-line width {:?}",
             narrow.width,
             wide.width,
+        );
+    }
+
+    #[test]
+    fn dry_baseline_is_available_without_layout() {
+        let p = para("hello");
+        let constraints = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0));
+        let dry = leaf_dry_baseline(|c| {
+            p.compute_dry_baseline(constraints, TextBaseline::Alphabetic, c)
+        });
+        assert!(
+            dry.is_some_and(|baseline| baseline > 0.0),
+            "text dry baseline must be computable before perform_layout",
         );
     }
 

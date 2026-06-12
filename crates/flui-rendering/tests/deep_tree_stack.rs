@@ -176,11 +176,10 @@ fn deep_chain_survives_intrinsic_and_dry_layout_queries() {
         "intrinsic answer must be a real number, got {width}",
     );
 
-    // The leaf's DEFAULT dry layout is `constraints.smallest()` (only
-    // the child-forwarding containers implement dry queries so far),
-    // so the answer is 0×0 — what matters here is that the
-    // child-forwarding recursion reached it through 2500 levels
-    // without exhausting the stack.
+    // ConstrainedBox forwards dry layout through the chain; the leaf
+    // ColoredBox reports its preferred 40×40 under loose constraints.
+    // What matters here is that child-forwarding recursion reaches the
+    // leaf through 2500 levels without exhausting the stack.
     let size = owner
         .box_dry_layout(
             root,
@@ -189,7 +188,7 @@ fn deep_chain_survives_intrinsic_and_dry_layout_queries() {
         .expect("deep dry-layout query must not error");
     assert_eq!(
         size,
-        Size::new(px(0.0), px(0.0)),
-        "the chain forwards the leaf's default dry answer unchanged",
+        Size::new(px(40.0), px(40.0)),
+        "the chain must forward the leaf's dry layout answer unchanged",
     );
 }

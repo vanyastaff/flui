@@ -291,11 +291,12 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     /// first baseline WOULD sit after a layout with these constraints.
     /// Memoized per `(constraints, baseline)` by the pipeline
     /// (`PipelineOwner::box_dry_baseline`); the cached entry includes a
-    /// computed `None`.
+    /// computed `None`. Children are probed through `ctx`.
     fn compute_dry_baseline(
         &self,
         _constraints: BoxConstraints,
         _baseline: TextBaseline,
+        _ctx: &mut crate::context::BoxDryBaselineCtx<'_>,
     ) -> Option<f32> {
         None
     }
@@ -539,8 +540,18 @@ where
         &self,
         constraints: crate::protocol::ProtocolConstraints<BoxProtocol>,
         baseline: crate::traits::TextBaseline,
+        child_count: usize,
+        child_query: &mut (
+                 dyn FnMut(
+            usize,
+            crate::context::DryBaselineChildRequest,
+        ) -> crate::context::DryBaselineChildResponse
+                     + Send
+                     + Sync
+             ),
     ) -> Option<f32> {
-        T::compute_dry_baseline(self, constraints, baseline)
+        let mut ctx = crate::context::BoxDryBaselineCtx::new(child_count, child_query);
+        T::compute_dry_baseline(self, constraints, baseline, &mut ctx)
     }
 
     fn geometry(&self) -> &crate::protocol::ProtocolGeometry<BoxProtocol> {

@@ -4,9 +4,10 @@ use flui_tree::Single;
 use flui_types::{Offset, Point, Rect, Size};
 
 use crate::{
+    constraints::BoxConstraints,
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability, TextBaseline},
 };
 
 /// A render object that centers its child within the available space.
@@ -62,6 +63,20 @@ impl RenderCenter {
     /// Returns the height factor.
     pub fn height_factor(&self) -> Option<f32> {
         self.height_factor
+    }
+
+    fn dry_size(&self, constraints: &BoxConstraints, child_size: Size) -> Size {
+        let width = if let Some(factor) = self.width_factor {
+            child_size.width * factor
+        } else {
+            constraints.max_width
+        };
+        let height = if let Some(factor) = self.height_factor {
+            child_size.height * factor
+        } else {
+            constraints.max_height
+        };
+        constraints.constrain(Size::new(width, height))
     }
 }
 
@@ -141,6 +156,83 @@ impl RenderBox for RenderCenter {
 
     fn size_mut(&mut self) -> &mut Size {
         &mut self.size
+    }
+
+    fn compute_min_intrinsic_width(
+        &self,
+        height: f32,
+        ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
+        if ctx.child_count() == 0 {
+            return 0.0;
+        }
+        let w_factor = self.width_factor.unwrap_or(1.0);
+        ctx.child_min_intrinsic_width(0, height) * w_factor
+    }
+
+    fn compute_max_intrinsic_width(
+        &self,
+        height: f32,
+        ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
+        if ctx.child_count() == 0 {
+            return 0.0;
+        }
+        let w_factor = self.width_factor.unwrap_or(1.0);
+        ctx.child_max_intrinsic_width(0, height) * w_factor
+    }
+
+    fn compute_min_intrinsic_height(
+        &self,
+        width: f32,
+        ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
+        if ctx.child_count() == 0 {
+            return 0.0;
+        }
+        let h_factor = self.height_factor.unwrap_or(1.0);
+        ctx.child_min_intrinsic_height(0, width) * h_factor
+    }
+
+    fn compute_max_intrinsic_height(
+        &self,
+        width: f32,
+        ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
+        if ctx.child_count() == 0 {
+            return 0.0;
+        }
+        let h_factor = self.height_factor.unwrap_or(1.0);
+        ctx.child_max_intrinsic_height(0, width) * h_factor
+    }
+
+    fn compute_dry_layout(
+        &self,
+        constraints: BoxConstraints,
+        ctx: &mut crate::context::BoxDryLayoutCtx<'_>,
+    ) -> Size {
+        if ctx.child_count() == 0 {
+            return constraints.biggest();
+        }
+        let child_size = ctx.child_dry_layout(0, constraints.loosen());
+        self.dry_size(&constraints, child_size)
+    }
+
+    fn compute_dry_baseline(
+        &self,
+        constraints: BoxConstraints,
+        baseline: TextBaseline,
+        ctx: &mut crate::context::BoxDryBaselineCtx<'_>,
+    ) -> Option<f32> {
+        if ctx.child_count() == 0 {
+            return None;
+        }
+        let child_constraints = constraints.loosen();
+        let child_baseline = ctx.child_dry_baseline(0, child_constraints, baseline)?;
+        let child_size = ctx.child_dry_layout(0, child_constraints);
+        let size = self.dry_size(&constraints, child_size);
+        let free_h = size.height.get() - child_size.height.get();
+        Some(child_baseline + free_h * 0.5)
     }
 
     // paint() uses default no-op - Center just positions children

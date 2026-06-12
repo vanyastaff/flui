@@ -283,6 +283,19 @@ impl TextPainter {
         let (metrics, _) = self.compute_layout_metrics(text, min_width, max_width);
         metrics.size
     }
+
+    /// Where the first baseline of the given kind would sit after a dry
+    /// layout under the width constraints, without touching
+    /// `layout_cache`.
+    #[must_use]
+    pub fn dry_baseline(&self, min_width: f32, max_width: f32, baseline: TextBaseline) -> Option<f32> {
+        let text = self.text.as_ref()?;
+        let (metrics, _) = self.compute_layout_metrics(text, min_width, max_width);
+        Some(match baseline {
+            TextBaseline::Alphabetic => metrics.alphabetic_baseline,
+            TextBaseline::Ideographic => metrics.ideographic_baseline,
+        })
+    }
 }
 
 /// Flattens an [`InlineSpan`] tree into per-run `(text, merged style)`

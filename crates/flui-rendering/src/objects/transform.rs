@@ -203,6 +203,8 @@ impl RenderBox for RenderTransform {
         &mut self.size
     }
 
+    crate::forward_single_child_box_queries!();
+
     // paint() uses default no-op - transform is applied via paint_transform()
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {

@@ -44,7 +44,7 @@ use crate::{
     constraints::BoxConstraints,
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability, TextBaseline},
 };
 
 /// A render object that scales its child to fit its own box.
@@ -295,6 +295,51 @@ impl RenderBox for RenderFittedBox {
 
     fn size_mut(&mut self) -> &mut Size {
         &mut self.size
+    }
+
+    crate::forward_single_child_intrinsics!();
+
+    fn compute_dry_layout(
+        &self,
+        constraints: BoxConstraints,
+        ctx: &mut crate::context::BoxDryLayoutCtx<'_>,
+    ) -> Size {
+        if ctx.child_count() == 0 {
+            return constraints.smallest();
+        }
+        let child_size = ctx.child_dry_layout(0, BoxConstraints::UNCONSTRAINED);
+        if child_size.width <= px(0.0) || child_size.height <= px(0.0) {
+            return constraints.smallest();
+        }
+        match self.fit {
+            BoxFit::ScaleDown => {
+                let loosened = constraints.loosen();
+                constraints.constrain(
+                    loosened.constrain_size_and_attempt_to_preserve_aspect_ratio(child_size),
+                )
+            }
+            BoxFit::Contain
+            | BoxFit::Cover
+            | BoxFit::Fill
+            | BoxFit::FitHeight
+            | BoxFit::FitWidth
+            | BoxFit::None => {
+                constraints.constrain_size_and_attempt_to_preserve_aspect_ratio(child_size)
+            }
+        }
+    }
+
+    fn compute_dry_baseline(
+        &self,
+        _constraints: BoxConstraints,
+        baseline: TextBaseline,
+        ctx: &mut crate::context::BoxDryBaselineCtx<'_>,
+    ) -> Option<f32> {
+        if ctx.child_count() == 0 {
+            None
+        } else {
+            ctx.child_dry_baseline(0, BoxConstraints::UNCONSTRAINED, baseline)
+        }
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {

@@ -11,6 +11,75 @@ use flui_types::Size;
 
 use crate::constraints::BoxConstraints;
 use crate::storage::IntrinsicDimension;
+use crate::traits::TextBaseline;
+
+/// Child probe kinds issued during a dry-baseline computation.
+#[derive(Debug, Clone, Copy)]
+pub enum DryBaselineChildRequest {
+    /// Dry baseline under `constraints`.
+    Baseline(BoxConstraints, TextBaseline),
+    /// Dry layout size under `constraints`.
+    DryLayout(BoxConstraints),
+}
+
+/// Answers to [`DryBaselineChildRequest`].
+#[derive(Debug, Clone, Copy)]
+pub enum DryBaselineChildResponse {
+    /// Child dry-baseline result.
+    Baseline(Option<f32>),
+    /// Child dry-layout size.
+    DryLayout(Size),
+}
+
+/// Child-query channel for one dry-baseline computation.
+///
+/// Handed to [`RenderBox::compute_dry_baseline`]; baseline and dry-layout
+/// child probes share one driver callback so the slot map is borrowed once.
+pub struct BoxDryBaselineCtx<'a> {
+    child_count: usize,
+    query: &'a mut (dyn FnMut(usize, DryBaselineChildRequest) -> DryBaselineChildResponse
+             + Send
+             + Sync),
+}
+
+impl<'a> BoxDryBaselineCtx<'a> {
+    /// Wraps the driver's child dry-baseline callback.
+    pub(crate) fn new(
+        child_count: usize,
+        query: &'a mut (dyn FnMut(usize, DryBaselineChildRequest) -> DryBaselineChildResponse
+                 + Send
+                 + Sync),
+    ) -> Self {
+        Self { child_count, query }
+    }
+
+    /// Number of tree children.
+    #[must_use]
+    pub fn child_count(&self) -> usize {
+        self.child_count
+    }
+
+    /// The dry baseline the child would report under `constraints`.
+    pub fn child_dry_baseline(
+        &mut self,
+        index: usize,
+        constraints: BoxConstraints,
+        baseline: TextBaseline,
+    ) -> Option<f32> {
+        match (self.query)(index, DryBaselineChildRequest::Baseline(constraints, baseline)) {
+            DryBaselineChildResponse::Baseline(v) => v,
+            DryBaselineChildResponse::DryLayout(_) => None,
+        }
+    }
+
+    /// The size the child would take under `constraints`, without laying it out.
+    pub fn child_dry_layout(&mut self, index: usize, constraints: BoxConstraints) -> Size {
+        match (self.query)(index, DryBaselineChildRequest::DryLayout(constraints)) {
+            DryBaselineChildResponse::DryLayout(size) => size,
+            DryBaselineChildResponse::Baseline(_) => Size::ZERO,
+        }
+    }
+}
 
 /// Child-query channel for one intrinsic computation.
 ///
@@ -132,5 +201,22 @@ pub(crate) mod test_support {
             )
         };
         f(&mut BoxDryLayoutCtx::new(0, &mut deny))
+    }
+
+    /// Leaf context for `compute_dry_baseline` tests.
+    pub(crate) fn leaf_dry_baseline<R>(f: impl FnOnce(&mut BoxDryBaselineCtx<'_>) -> R) -> R {
+        let mut deny = |index: usize, request: DryBaselineChildRequest| -> DryBaselineChildResponse {
+            match request {
+                DryBaselineChildRequest::Baseline(constraints, baseline) => panic!(
+                    "leaf object dry-baselined child {index} ({constraints:?}, {baseline:?}) — \
+                 a childless compute_dry_baseline must not consult children"
+                ),
+                DryBaselineChildRequest::DryLayout(constraints) => panic!(
+                    "leaf object dry-laid out child {index} ({constraints:?}) during dry baseline — \
+                 a childless compute_dry_baseline must not consult children"
+                ),
+            }
+        };
+        f(&mut BoxDryBaselineCtx::new(0, &mut deny))
     }
 }

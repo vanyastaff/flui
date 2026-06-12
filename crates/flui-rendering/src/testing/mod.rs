@@ -21,7 +21,8 @@
 //!    - [`RenderTester::run_frame`] -> [`FrameRun`] (full frame: layer
 //!      structure, picture bounds, [`FrameReport`], repeated `pump`).
 //! 3. Inspect via the shared [`Probe`] trait (`offset`, `box_geometry`,
-//!    `sliver_geometry`, `hit`, `id`).
+//!    `sliver_geometry`, `hit`, `id`) and, for proxy/leaf query contracts,
+//!    [`BoxQueryRun`] (`min_intrinsic_width`, `dry_layout`, `dry_baseline`, …).
 //! 4. Drive multi-frame / animation scenarios on [`FrameRun`]:
 //!    [`FrameRun::advance_layout`] / [`FrameRun::advance_paint`] (mutate +
 //!    one frame), [`FrameRun::simulate`] (tick loop + pump per step),
@@ -54,6 +55,7 @@ pub mod assertions;
 mod harness;
 pub mod inspect;
 pub mod parent_data;
+pub mod queries;
 mod report;
 pub mod sliver;
 pub mod tree;
@@ -64,6 +66,7 @@ pub use assertions::{
 };
 pub use harness::{FrameRun, LayoutRun, RenderTester};
 pub use inspect::Probe;
+pub use queries::BoxQueryRun;
 pub use parent_data::ParentDataSeed;
 pub use report::FrameReport;
 pub use tree::{

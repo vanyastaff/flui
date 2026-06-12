@@ -119,6 +119,8 @@ impl RenderBox for RenderDecoratedBox {
         &mut self.size
     }
 
+    crate::forward_single_child_box_queries!();
+
     fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
         let rect = self.paint_rect();
         if self.position == DecorationPosition::Background {

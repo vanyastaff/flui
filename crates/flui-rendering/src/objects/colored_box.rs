@@ -5,6 +5,7 @@ use flui_tree::Leaf;
 use flui_types::{Color, Point, Rect, Size, geometry::px};
 
 use crate::{
+    constraints::BoxConstraints,
     context::BoxLayoutContext,
     parent_data::BoxParentData,
     traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
@@ -97,6 +98,46 @@ impl RenderBox for RenderColoredBox {
     }
     fn size_mut(&mut self) -> &mut Size {
         &mut self.size
+    }
+
+    fn compute_min_intrinsic_width(
+        &self,
+        _height: f32,
+        _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
+        self.preferred_size.width.get()
+    }
+
+    fn compute_max_intrinsic_width(
+        &self,
+        _height: f32,
+        _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
+        self.preferred_size.width.get()
+    }
+
+    fn compute_min_intrinsic_height(
+        &self,
+        _width: f32,
+        _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
+        self.preferred_size.height.get()
+    }
+
+    fn compute_max_intrinsic_height(
+        &self,
+        _width: f32,
+        _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
+        self.preferred_size.height.get()
+    }
+
+    fn compute_dry_layout(
+        &self,
+        constraints: BoxConstraints,
+        _ctx: &mut crate::context::BoxDryLayoutCtx<'_>,
+    ) -> Size {
+        constraints.constrain(self.preferred_size)
     }
 
     fn paint(&self, ctx: &mut crate::context::PaintCx<'_, Leaf>) {

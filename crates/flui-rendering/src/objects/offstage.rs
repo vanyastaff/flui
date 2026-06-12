@@ -22,8 +22,12 @@ use flui_types::{Offset, Point, Rect, Size};
 use crate::{
     constraints::BoxConstraints,
     context::{BoxHitTestContext, BoxLayoutContext},
+    context::proxy_queries::{
+        forward_dry_baseline, forward_dry_layout, forward_max_intrinsic_height,
+        forward_max_intrinsic_width, forward_min_intrinsic_height, forward_min_intrinsic_width,
+    },
     parent_data::BoxParentData,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability, TextBaseline},
 };
 
 /// A render object that, when `offstage` is true, collapses to zero
@@ -129,6 +133,79 @@ impl RenderBox for RenderOffstage {
 
     fn size_mut(&mut self) -> &mut Size {
         &mut self.size
+    }
+
+    fn compute_min_intrinsic_width(
+        &self,
+        height: f32,
+        ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
+        if self.offstage {
+            0.0
+        } else {
+            forward_min_intrinsic_width(ctx, height)
+        }
+    }
+
+    fn compute_max_intrinsic_width(
+        &self,
+        height: f32,
+        ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
+        if self.offstage {
+            0.0
+        } else {
+            forward_max_intrinsic_width(ctx, height)
+        }
+    }
+
+    fn compute_min_intrinsic_height(
+        &self,
+        width: f32,
+        ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
+        if self.offstage {
+            0.0
+        } else {
+            forward_min_intrinsic_height(ctx, width)
+        }
+    }
+
+    fn compute_max_intrinsic_height(
+        &self,
+        width: f32,
+        ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
+        if self.offstage {
+            0.0
+        } else {
+            forward_max_intrinsic_height(ctx, width)
+        }
+    }
+
+    fn compute_dry_layout(
+        &self,
+        constraints: BoxConstraints,
+        ctx: &mut crate::context::BoxDryLayoutCtx<'_>,
+    ) -> Size {
+        if self.offstage {
+            Size::ZERO
+        } else {
+            forward_dry_layout(constraints, ctx)
+        }
+    }
+
+    fn compute_dry_baseline(
+        &self,
+        constraints: BoxConstraints,
+        baseline: TextBaseline,
+        ctx: &mut crate::context::BoxDryBaselineCtx<'_>,
+    ) -> Option<f32> {
+        if self.offstage {
+            None
+        } else {
+            forward_dry_baseline(constraints, baseline, ctx)
+        }
     }
 
     fn paint(&self, ctx: &mut crate::context::PaintCx<'_, Single>) {

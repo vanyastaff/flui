@@ -424,6 +424,23 @@ impl RenderBox for RenderFractionallySizedBox {
         );
         result / self.height_factor_or_one()
     }
+
+    fn compute_dry_baseline(
+        &self,
+        constraints: BoxConstraints,
+        baseline: crate::traits::TextBaseline,
+        ctx: &mut crate::context::BoxDryBaselineCtx<'_>,
+    ) -> Option<f32> {
+        if ctx.child_count() == 0 {
+            return None;
+        }
+        let child_constraints = self.child_constraints(constraints);
+        let child_baseline = ctx.child_dry_baseline(0, child_constraints, baseline)?;
+        let child_size = ctx.child_dry_layout(0, child_constraints);
+        let size = constraints.constrain(child_size);
+        let offset = self.align_child(size, child_size);
+        Some(child_baseline + offset.dy.get())
+    }
 }
 
 // Mythos Step 11: explicit (default) capability opt-outs.

@@ -105,6 +105,8 @@ impl RenderBox for RenderIgnorePointer {
         &mut self.size
     }
 
+    crate::forward_single_child_box_queries!();
+
     // paint: default pass-through (splices the child in order).
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {

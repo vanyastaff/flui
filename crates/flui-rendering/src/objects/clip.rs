@@ -533,6 +533,8 @@ impl<S: ClipGeometry> RenderBox for RenderClip<S> {
         &mut self.size
     }
 
+    crate::forward_single_child_box_queries!();
+
     fn paint(&self, ctx: &mut crate::context::PaintCx<'_, Single>) {
         // The clip is a LAYER scope so it covers the child subtree —
         // canvas clips are run-local in the fragment paint model and
