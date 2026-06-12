@@ -135,6 +135,92 @@ The constitution requires `///` doc comments on every public item and `//!` over
 - **Visual regression tests** (planned) will use snapshot-based comparison against the headless backend.
 - **No mocking frameworks.** Use trait-based test doubles. The `HeadlessPlatform` backend is the canonical test surface for platform-dependent code.
 
+## Test Harnesses (`testing` feature)
+
+The rendering stack ships opt-in test harnesses (off by default so they never
+land in normal/release builds). Each crate enables `testing` for its own
+tests/benches/examples via a self dev-dependency; downstream crates opt in with
+`features = ["testing"]`.
+
+**Per-crate guides (API reference + examples):**
+
+| Crate | Doc | Entry point |
+|-------|-----|-------------|
+| `flui-rendering` | [crates/flui-rendering/docs/TESTING.md](../crates/flui-rendering/docs/TESTING.md) | `RenderTester`, `Probe`, `box_node` / `sliver_node`, multi-frame `FrameRun` |
+| `flui-layer` | [crates/flui-layer/docs/TESTING.md](../crates/flui-layer/docs/TESTING.md) | `LayerTester`, `layer`, `inspect::structure` |
+| `flui-painting` | [crates/flui-painting/docs/TESTING.md](../crates/flui-painting/docs/TESTING.md) | `record`, `command_count`, `bounds`, `diagnostics` |
+| `flui-foundation` | [crates/flui-foundation/docs/TESTING.md](../crates/flui-foundation/docs/TESTING.md) | `DiagnosticsNode` / `DiagnosticsBuilder` for structured assertions (no `testing` module) |
+
+| Crate | What it gives you |
+|-------|-------------------|
+| `flui-painting` | Builds a `DisplayList` without `Canvas::new()` / `finish()` boilerplate. |
+| `flui-layer` | Declarative `LayerTree` builder and layer walkers reused by `flui-rendering`. |
+| `flui-rendering` | Real `PipelineOwner` trees (Box + Sliver), layout/frame depths, animation helpers. |
+| `flui-foundation` | Diagnostics substrate: `find_descendant`, `get_property`, typed property builders. |
+
+Diagnostics dumps are backed by `flui_foundation::Diagnosticable`: every node
+self-describes its own **user-config** properties (a `RenderFlex`'s
+`main_axis_alignment`, a `RenderPadding`'s `padding`), while `PipelineOwner`
+adds committed **runtime** fields (`offset`, `size`, sliver `geometry`) when
+building the tree. Property names use **snake_case** (Rust idiom, not Dart
+camelCase). Prefer typed builder helpers (`add_enum`, `add_default_double`,
+`add_flag`, `add_size`) over raw `format!("{:?}")` strings — defaults are
+hidden automatically and kinds format cleanly in dumps.
+
+Structured assertions should use `Probe::property` / `property_f64` /
+`descendant_property` (or `DiagnosticsNode::get_property` /
+`find_descendant`) instead of substring-matching `Probe::dump()`. Use
+`to_string_deep_at_level(DiagnosticLevel::Info)` when fine-grained debug
+properties should be omitted.
+
+A `Probe::dump()` is what a failing assertion should print to show *why*.
+
+```bash
+cargo run -p flui-rendering --example render_inspector --features testing
+cargo test -p flui-rendering --test render_object_harness
+```
+
+### Render-object harness catalog
+
+`crates/flui-rendering/tests/render_object_harness.rs` is the CI-facing
+catalog: every concrete `RenderBox` / `RenderSliver` type is mounted
+through `RenderTester`, laid out (or painted when hit-test / layer
+structure matters), and asserted via `Probe` + structured diagnostics
+queries. The file header lists a per-type coverage map; `RENDER_OBJECT_TYPES`
+is the manifest of all 37 exported render types; and
+`catalog_covers_every_render_object_name` fails CI if any type is missing
+from the harness file. Add a harness test when landing a new render object
+so layout, hit-test, and config/runtime diagnostics stay pinned without
+visual inspection.
+
+Parent metadata that widgets normally write before layout (stack
+positioning, flex factors, future animation parent slots) can be expressed
+in harness trees via [`ParentDataSeed`](../../crates/flui-rendering/src/testing/parent_data.rs)
+on [`TreeNode::with_parent_data_seed`](../../crates/flui-rendering/src/testing/tree.rs).
+The pipeline clones each seed into the per-walk child slots before
+`perform_layout` runs.
+
+### Multi-frame and animation testing
+
+After `.run_frame()`, [`FrameRun`](../../crates/flui-rendering/src/testing/harness.rs)
+supports deterministic multi-frame scenarios (no wall clock):
+
+| Method | Use when |
+|--------|----------|
+| `update` + `pump` | Layout changed (padding, size, position) |
+| `update_paint` + `pump` | Paint-only change (color, opacity) |
+| `advance_layout` / `advance_paint` | Shorthand: mutate + one frame |
+| `simulate(ticks, \|t, run\| …)` | Tick loop: mutate in closure, auto-pump each step |
+| `pump_frames(n)` | Skip `n` frames (idle frames produce no layer tree) |
+| `pump_idle_frames(n)` | Strict: panic if any skipped frame paints or stays dirty |
+
+Pair with `AnimationController::tick_at(t)` inside `simulate` for
+production-faithful animation tests. Assert per frame via `Probe` (`offset`,
+`box_geometry`, `picture_bounds`, `property`) and layer helpers
+(`opacity_alpha`, `has_picture_layer`). See
+`crates/flui-rendering/tests/harness_animation.rs` and
+`crates/flui-rendering/tests/animation_pipeline.rs`.
+
 ## CI Expectations
 
 The same three quality gates run in CI on every PR:

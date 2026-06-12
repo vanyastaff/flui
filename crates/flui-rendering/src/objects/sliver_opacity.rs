@@ -161,10 +161,12 @@ impl Default for RenderSliverOpacity {
 
 impl flui_foundation::Diagnosticable for RenderSliverOpacity {
     fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add("opacity", self.opacity);
-        builder.add("alpha", self.alpha);
-        builder.add("always_needs_compositing", self.always_needs_compositing);
-        builder.add("needs_compositing", self.needs_compositing());
+        builder.add_default_double("opacity", self.opacity, 1.0, None);
+        builder.add_flag(
+            "always_needs_compositing",
+            self.always_needs_compositing,
+            "always needs compositing",
+        );
     }
 }
 
@@ -351,16 +353,9 @@ mod tests {
             .iter()
             .map(|p| p.name().to_string())
             .collect();
-        for required in [
-            "opacity",
-            "alpha",
-            "always_needs_compositing",
-            "needs_compositing",
-        ] {
-            assert!(
-                names.iter().any(|n| n == required),
-                "missing diagnostic field: {required}"
-            );
-        }
+        assert!(
+            names.iter().any(|n| n == "opacity"),
+            "missing diagnostic field: opacity"
+        );
     }
 }

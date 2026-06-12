@@ -5,7 +5,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use flui_foundation::{ElementId, LayerId};
+use flui_foundation::{Diagnosticable, ElementId, LayerId};
 use flui_types::{geometry::Pixels, Offset};
 use slab::Slab;
 
@@ -65,6 +65,21 @@ pub struct LayerNode {
     /// have not yet been pushed). Cleared by the engine after a successful
     /// scene build. Mirrors Flutter `layer.dart` `_needsAddToScene`.
     needs_add_to_scene: AtomicBool,
+}
+
+impl Diagnosticable for LayerNode {
+    /// Names the node by its layer kind and merges the layer's own
+    /// properties with node-level metadata (parent offset, element id).
+    fn to_diagnostics_node(&self) -> flui_foundation::DiagnosticsNode {
+        let mut node = self.layer.to_diagnostics_node();
+        if let Some(offset) = self.offset {
+            node = node.property("nodeOffset", format!("{offset:?}"));
+        }
+        if let Some(element_id) = self.element_id {
+            node = node.property("elementId", format!("{element_id:?}"));
+        }
+        node
+    }
 }
 
 impl LayerNode {

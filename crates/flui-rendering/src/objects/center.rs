@@ -67,10 +67,11 @@ impl RenderCenter {
 
 impl flui_foundation::Diagnosticable for RenderCenter {
     fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add("size", format!("{:?}", self.size));
-        builder.add("width_factor", format!("{:?}", self.width_factor));
-        builder.add("height_factor", format!("{:?}", self.height_factor));
-        builder.add("has_child", self.has_child);
+        builder.add_optional("width_factor", self.width_factor.map(|f| format!("{f:?}")));
+        builder.add_optional(
+            "height_factor",
+            self.height_factor.map(|f| format!("{f:?}")),
+        );
     }
 }
 

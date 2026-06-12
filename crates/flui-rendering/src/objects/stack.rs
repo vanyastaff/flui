@@ -318,15 +318,12 @@ impl Default for RenderStack {
 
 impl flui_foundation::Diagnosticable for RenderStack {
     fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add("fit", format!("{:?}", self.fit));
         builder.add(
             "alignment",
             format!("({}, {})", self.alignment.x, self.alignment.y),
         );
-        builder.add("clip_behavior", format!("{:?}", self.clip_behavior));
-        builder.add("size", format!("{:?}", self.size));
-        builder.add("has_visual_overflow", self.has_visual_overflow);
-        builder.add("child_count", self.child_count);
+        builder.add_enum("fit", self.fit);
+        builder.add_enum("clip_behavior", self.clip_behavior);
     }
 }
 
@@ -709,14 +706,7 @@ mod tests {
             .iter()
             .map(|p| p.name().to_string())
             .collect();
-        for required in [
-            "fit",
-            "alignment",
-            "clip_behavior",
-            "size",
-            "has_visual_overflow",
-            "child_count",
-        ] {
+        for required in ["alignment", "fit", "clip_behavior"] {
             assert!(
                 names.iter().any(|n| n == required),
                 "missing diagnostic field: {required}"

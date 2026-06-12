@@ -137,6 +137,13 @@ mod sealed {
 /// private), preserves engine-level dispatch invariants, and lets the
 /// compiler monomorphise the clip-emission path per shape.
 pub trait ClipGeometry: sealed::Sealed + Clone + fmt::Debug + Send + Sync + 'static {
+    /// Flutter-parity diagnostics label (`RenderClipRect`, `RenderClipRRect`, …).
+    ///
+    /// Generic `RenderClip<S>` would otherwise surface as
+    /// `RenderClip<Rect<Pixels>>` via `type_name`, which breaks structured
+    /// tree queries in the render harness.
+    const DIAGNOSTIC_NAME: &'static str;
+
     /// Returns the default clip for a render box of `size` whose origin
     /// is at `(0, 0)` in local coordinates.
     fn default_for_size(size: Size) -> Self;
@@ -166,6 +173,8 @@ pub trait ClipGeometry: sealed::Sealed + Clone + fmt::Debug + Send + Sync + 'sta
 // ---- Rect ------------------------------------------------------------------
 
 impl ClipGeometry for Rect<Pixels> {
+    const DIAGNOSTIC_NAME: &'static str = "RenderClipRect";
+
     fn default_for_size(size: Size) -> Self {
         Rect::from_origin_size(Point::ZERO, size)
     }
@@ -187,6 +196,8 @@ impl ClipGeometry for Rect<Pixels> {
 // ---- RRect -----------------------------------------------------------------
 
 impl ClipGeometry for RRect {
+    const DIAGNOSTIC_NAME: &'static str = "RenderClipRRect";
+
     fn default_for_size(size: Size) -> Self {
         RRect::from_rect(Rect::from_origin_size(Point::ZERO, size))
     }
@@ -266,6 +277,8 @@ impl ClipGeometry for RRect {
 // ---- Oval ------------------------------------------------------------------
 
 impl ClipGeometry for Oval {
+    const DIAGNOSTIC_NAME: &'static str = "RenderClipOval";
+
     fn default_for_size(size: Size) -> Self {
         Oval::from_size(size)
     }
@@ -294,6 +307,8 @@ impl ClipGeometry for Oval {
 // ---- Path ------------------------------------------------------------------
 
 impl ClipGeometry for Path {
+    const DIAGNOSTIC_NAME: &'static str = "RenderClipPath";
+
     fn default_for_size(size: Size) -> Self {
         // A path-shaped default is the rectangle outline of `size`.
         let mut p = Path::new();
@@ -472,11 +487,21 @@ impl<S: ClipGeometry> Default for RenderClip<S> {
 }
 
 impl<S: ClipGeometry> flui_foundation::Diagnosticable for RenderClip<S> {
+    fn to_diagnostics_node(&self) -> flui_foundation::DiagnosticsNode {
+        let mut node = flui_foundation::DiagnosticsNode::new(S::DIAGNOSTIC_NAME);
+        let mut builder = flui_foundation::DiagnosticsBuilder::new();
+        self.debug_fill_properties(&mut builder);
+        *node.properties_mut() = builder.build();
+        node
+    }
+
     fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add("clip_behavior", format!("{:?}", self.clip_behavior));
-        builder.add("custom_clipper", self.clipper.is_some());
-        builder.add("size", format!("{:?}", self.size));
-        builder.add("has_child", self.has_child);
+        builder.add_enum("clip_behavior", self.clip_behavior);
+        builder.add_flag(
+            "custom_clipper",
+            self.clipper.is_some(),
+            "has custom clipper",
+        );
     }
 }
 
@@ -740,7 +765,28 @@ mod tests {
             .map(|p| p.name().to_string())
             .collect();
         assert!(names.iter().any(|n| n == "clip_behavior"));
-        assert!(names.iter().any(|n| n == "custom_clipper"));
-        assert!(names.iter().any(|n| n == "size"));
+        assert!(!names.iter().any(|n| n == "custom_clipper"));
+    }
+
+    #[test]
+    fn to_diagnostics_node_uses_flutter_parity_alias_names() {
+        use flui_foundation::Diagnosticable;
+
+        assert_eq!(
+            RenderClipRect::anti_alias().to_diagnostics_node().name(),
+            Some("RenderClipRect")
+        );
+        assert_eq!(
+            RenderClipRRect::anti_alias().to_diagnostics_node().name(),
+            Some("RenderClipRRect")
+        );
+        assert_eq!(
+            RenderClipOval::anti_alias().to_diagnostics_node().name(),
+            Some("RenderClipOval")
+        );
+        assert_eq!(
+            RenderClipPath::anti_alias().to_diagnostics_node().name(),
+            Some("RenderClipPath")
+        );
     }
 }

@@ -84,6 +84,13 @@ pub mod protocol;
 pub use flui_semantics as semantics;
 pub mod objects;
 pub mod storage;
+// Render-object test harness. Compiled only for this crate's own tests
+// (`cfg(test)`) or when a consumer enables the `testing` feature. Builds
+// real `PipelineOwner` trees through the production pipeline and exposes a
+// protocol-agnostic inspection surface for Box and Sliver render objects.
+// See [`testing`] for the module overview.
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 pub mod traits;
 pub mod view;
 

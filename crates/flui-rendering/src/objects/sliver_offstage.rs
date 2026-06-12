@@ -104,8 +104,7 @@ impl Default for RenderSliverOffstage {
 
 impl flui_foundation::Diagnosticable for RenderSliverOffstage {
     fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add("offstage", self.offstage);
-        builder.add("geometry", format!("{:?}", self.geometry));
+        builder.add_flag("offstage", self.offstage, "offstage");
     }
 }
 
@@ -264,11 +263,9 @@ mod tests {
             .iter()
             .map(|p| p.name().to_string())
             .collect();
-        for required in ["offstage", "geometry"] {
-            assert!(
-                names.iter().any(|n| n == required),
-                "missing diagnostic field: {required}"
-            );
-        }
+        assert!(
+            names.iter().any(|n| n == "offstage"),
+            "missing diagnostic field: offstage"
+        );
     }
 }

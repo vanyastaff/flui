@@ -159,9 +159,11 @@ impl flui_foundation::Diagnosticable for RenderFractionalTranslation {
             "translation",
             format!("({}, {})", self.translation.dx, self.translation.dy),
         );
-        builder.add("transform_hit_tests", self.transform_hit_tests);
-        builder.add("size", format!("{:?}", self.size));
-        builder.add("has_child", self.has_child);
+        builder.add_flag(
+            "transform_hit_tests",
+            self.transform_hit_tests,
+            "transform hit tests",
+        );
     }
 }
 
@@ -327,7 +329,7 @@ mod tests {
             .iter()
             .map(|p| p.name().to_string())
             .collect();
-        for required in ["translation", "transform_hit_tests", "size", "has_child"] {
+        for required in ["translation", "transform_hit_tests"] {
             assert!(
                 names.iter().any(|n| n == required),
                 "missing diagnostic field: {required}"

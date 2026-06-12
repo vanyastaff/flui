@@ -57,19 +57,18 @@ fn test_display_list_apply_transform_via_canvas() {
 
 #[test]
 fn test_display_list_command_iteration() {
-    use flui_painting::Canvas;
+    // Dogfoods the `testing::record` builder (no manual Canvas::new/finish).
+    let dl = flui_painting::testing::record(|canvas| {
+        canvas.draw_rect(
+            Rect::from_ltrb(px(0.0), px(0.0), px(50.0), px(50.0)),
+            &Paint::default(),
+        );
+        canvas.draw_rect(
+            Rect::from_ltrb(px(50.0), px(50.0), px(100.0), px(100.0)),
+            &Paint::default(),
+        );
+    });
 
-    let mut canvas = Canvas::new();
-    canvas.draw_rect(
-        Rect::from_ltrb(px(0.0), px(0.0), px(50.0), px(50.0)),
-        &Paint::default(),
-    );
-    canvas.draw_rect(
-        Rect::from_ltrb(px(50.0), px(50.0), px(100.0), px(100.0)),
-        &Paint::default(),
-    );
-
-    let dl = canvas.finish();
     let count = dl.commands().count();
     assert_eq!(count, 2);
 

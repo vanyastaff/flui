@@ -11,6 +11,12 @@ categories = ["gui", "graphics", "rendering"]
 [features]
 default = []
 
+# testing: opt-in layer-tree test harness (`crate::testing`) — declarative
+# LayerTree builder + structural/bounds inspection + a Diagnosticable-backed
+# tree dump. Off by default; enabled for this crate's own dev targets via the
+# self dev-dependency below, and forwarded by downstream crates that want it.
+testing = []
+
 [dependencies]
 # Foundation - canonical ID types
 flui-foundation = { path = "../flui-foundation" }
@@ -34,4 +40,6 @@ tracing = "0.1"
 thiserror = { workspace = true }
 
 [dev-dependencies]
-# For tests
+# Self dev-dependency that turns the off-by-default `testing` feature on for
+# this crate's own integration tests, so `tests/*.rs` can reach the harness.
+flui-layer = { path = ".", features = ["testing"] }

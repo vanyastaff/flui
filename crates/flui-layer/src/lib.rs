@@ -100,6 +100,12 @@ mod link_registry;
 mod scene;
 
 pub mod layer;
+// Layer-tree test harness. Compiled only for this crate's own tests
+// (`cfg(test)`) or when a consumer enables the `testing` feature. Provides a
+// declarative `LayerTree` builder, structural/bounds inspection, and a
+// `Diagnosticable`-backed tree dump. See [`testing`] for the overview.
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 pub mod tree;
 
 pub use error::{LayerError, LayerResult};

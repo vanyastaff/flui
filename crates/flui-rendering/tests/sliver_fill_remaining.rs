@@ -1,7 +1,6 @@
 use flui_rendering::{
-    constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
+    constraints::{BoxConstraints, SliverConstraints, SliverGeometry},
     context::{BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext, SliverLayoutContext},
-    hit_testing::HitTestResult,
     objects::{
         RenderSliverFillRemaining, RenderSliverFillRemainingAndOverscroll,
         RenderSliverFillRemainingWithScrollable,
@@ -10,11 +9,11 @@ use flui_rendering::{
     pipeline::PipelineOwner,
     protocol::{BoxProtocol, SliverProtocol},
     storage::IntrinsicDimension,
+    testing::{inspect, sliver as sliver_presets},
     traits::{
         HotReloadCapability, PaintEffectsCapability, RenderBox, RenderObject, RenderSliver,
         SemanticsCapability,
     },
-    view::ScrollDirection,
 };
 use flui_tree::{Leaf, Single};
 use flui_types::{Offset, Rect, Size, geometry::px, layout::AxisDirection};
@@ -28,20 +27,16 @@ fn vertical_constraints(
     remaining_paint_extent: f32,
     overlap: f32,
 ) -> SliverConstraints {
-    SliverConstraints {
-        axis_direction: AxisDirection::TopToBottom,
-        cross_axis_direction: AxisDirection::LeftToRight,
-        growth_direction: GrowthDirection::Forward,
-        user_scroll_direction: ScrollDirection::Idle,
-        scroll_offset,
-        preceding_scroll_extent,
-        overlap,
-        remaining_paint_extent,
-        cross_axis_extent: 300.0,
-        viewport_main_axis_extent: 100.0,
-        remaining_cache_extent: 120.0,
-        cache_origin: -20.0,
-    }
+    sliver_presets::vertical()
+        .scroll_offset(scroll_offset)
+        .preceding_scroll_extent(preceding_scroll_extent)
+        .overlap(overlap)
+        .remaining_paint_extent(remaining_paint_extent)
+        .cross_axis_extent(300.0)
+        .viewport_main_axis_extent(100.0)
+        .remaining_cache_extent(120.0)
+        .cache_origin(-20.0)
+        .build()
 }
 
 fn laid_out(
@@ -59,35 +54,21 @@ fn sliver_geometry(
     owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,
     id: flui_foundation::RenderId,
 ) -> SliverGeometry {
-    owner
-        .render_tree()
-        .get(id)
-        .and_then(|node| node.as_sliver())
-        .and_then(|entry| entry.state().geometry())
-        .expect("sliver geometry is committed")
+    inspect::sliver_geometry(owner, id).expect("sliver geometry is committed")
 }
 
 fn box_size(
     owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,
     id: flui_foundation::RenderId,
 ) -> Size {
-    owner
-        .render_tree()
-        .get(id)
-        .and_then(|node| node.as_box())
-        .and_then(|entry| entry.state().geometry())
-        .expect("box geometry is committed")
+    inspect::box_geometry(owner, id).expect("box geometry is committed")
 }
 
 fn render_offset(
     owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,
     id: flui_foundation::RenderId,
 ) -> Offset {
-    owner
-        .render_tree()
-        .get(id)
-        .map(flui_rendering::storage::RenderNode::offset)
-        .expect("node exists")
+    inspect::render_offset(owner, id).expect("node exists")
 }
 
 fn hits(
@@ -95,9 +76,7 @@ fn hits(
     cross: f32,
     main: f32,
 ) -> Vec<flui_foundation::RenderId> {
-    let mut result = HitTestResult::new();
-    owner.hit_test(Offset::new(px(cross), px(main)), &mut result);
-    result.path().iter().map(|entry| entry.target).collect()
+    inspect::hit_path(owner, cross, main)
 }
 
 #[derive(Debug)]

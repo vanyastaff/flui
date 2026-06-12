@@ -75,9 +75,7 @@ impl Default for RenderIgnorePointer {
 
 impl flui_foundation::Diagnosticable for RenderIgnorePointer {
     fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add("ignoring", self.ignoring);
-        builder.add("size", format!("{:?}", self.size));
-        builder.add("has_child", self.has_child);
+        builder.add_flag("ignoring", self.ignoring, "ignoring");
     }
 }
 
@@ -184,11 +182,9 @@ mod tests {
             .iter()
             .map(|p| p.name().to_string())
             .collect();
-        for required in ["ignoring", "size", "has_child"] {
-            assert!(
-                names.iter().any(|n| n == required),
-                "missing diagnostic field: {required}"
-            );
-        }
+        assert!(
+            names.iter().any(|n| n == "ignoring"),
+            "missing diagnostic field: ignoring"
+        );
     }
 }

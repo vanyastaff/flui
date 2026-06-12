@@ -203,7 +203,15 @@ impl RenderFlex {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderFlex {}
+impl flui_foundation::Diagnosticable for RenderFlex {
+    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
+        properties.add_enum("direction", self.direction);
+        properties.add_enum("main_axis_alignment", self.main_axis_alignment);
+        properties.add_default_enum("main_axis_size", self.main_axis_size, MainAxisSize::Max);
+        properties.add_enum("cross_axis_alignment", self.cross_axis_alignment);
+        properties.add_default_double("spacing", self.spacing, 0.0, Some("px"));
+    }
+}
 impl RenderBox for RenderFlex {
     type Arity = Variable;
     type ParentData = FlexParentData;

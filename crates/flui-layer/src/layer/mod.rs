@@ -108,6 +108,9 @@ pub use clip_rect::ClipRectLayer;
 pub use clip_rrect::ClipRRectLayer;
 pub use clip_superellipse::ClipSuperellipseLayer;
 pub use color_filter::ColorFilterLayer;
+use flui_foundation::{Diagnosticable, DiagnosticsBuilder, DiagnosticsNode};
+// `DisplayListCore` brings `len()` on the picture's display list into scope.
+use flui_painting::DisplayListCore;
 use flui_types::geometry::{Pixels, Rect};
 pub use follower::FollowerLayer;
 pub use image_filter::ImageFilterLayer;
@@ -360,6 +363,69 @@ impl Layer {
             // All other layers are conservatively treated as non-opaque
             _ => false,
         }
+    }
+
+    /// Returns the short variant name of this layer (e.g. `"Picture"`,
+    /// `"ClipRect"`). Used for diagnostics and structural test snapshots.
+    #[must_use]
+    pub const fn kind_name(&self) -> &'static str {
+        match self {
+            Layer::Canvas(_) => "Canvas",
+            Layer::Picture(_) => "Picture",
+            Layer::Texture(_) => "Texture",
+            Layer::PlatformView(_) => "PlatformView",
+            Layer::PerformanceOverlay(_) => "PerformanceOverlay",
+            Layer::ClipRect(_) => "ClipRect",
+            Layer::ClipRRect(_) => "ClipRRect",
+            Layer::ClipPath(_) => "ClipPath",
+            Layer::ClipSuperellipse(_) => "ClipSuperellipse",
+            Layer::Offset(_) => "Offset",
+            Layer::Transform(_) => "Transform",
+            Layer::Opacity(_) => "Opacity",
+            Layer::ColorFilter(_) => "ColorFilter",
+            Layer::ImageFilter(_) => "ImageFilter",
+            Layer::ShaderMask(_) => "ShaderMask",
+            Layer::BackdropFilter(_) => "BackdropFilter",
+            Layer::Leader(_) => "Leader",
+            Layer::Follower(_) => "Follower",
+            Layer::AnnotatedRegion(_) => "AnnotatedRegion",
+        }
+    }
+}
+
+impl Diagnosticable for Layer {
+    fn to_diagnostics_node(&self) -> DiagnosticsNode {
+        let mut node = DiagnosticsNode::new(self.kind_name());
+        let mut builder = DiagnosticsBuilder::new();
+        self.debug_fill_properties(&mut builder);
+        *node.properties_mut() = builder.build();
+        node
+    }
+
+    fn debug_fill_properties(&self, properties: &mut DiagnosticsBuilder) {
+        if let Some(bounds) = self.bounds() {
+            properties.add("bounds", format!("{bounds:?}"));
+        }
+        match self {
+            Layer::Offset(layer) => {
+                properties.add("offset", format!("{:?}", layer.offset()));
+            }
+            Layer::Transform(layer) => {
+                properties.add("transform", format!("{:?}", layer.transform()));
+            }
+            Layer::Opacity(layer) => {
+                properties.add("alpha", layer.alpha());
+                properties.add("offset", format!("{:?}", layer.offset()));
+            }
+            Layer::ClipRect(layer) => {
+                properties.add("clip_rect", format!("{:?}", layer.clip_rect()));
+            }
+            Layer::Picture(layer) => {
+                properties.add("commands", layer.picture().len());
+            }
+            _ => {}
+        }
+        properties.add_flag("needsCompositing", self.needs_compositing(), "true");
     }
 }
 

@@ -11,7 +11,7 @@ use std::{
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
-use flui_foundation::{LayerId, RenderId};
+use flui_foundation::{DiagnosticsNode, LayerId, RenderId};
 use flui_layer::{
     ClipPathLayer, ClipRRectLayer, ClipRectLayer, Layer, LayerTree, OffsetLayer, OpacityLayer,
     PictureLayer, TransformLayer,
@@ -19,7 +19,10 @@ use flui_layer::{
 use flui_painting::DisplayList;
 use flui_types::{Offset, Size};
 use parking_lot::Mutex;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
+
+#[cfg(any(test, feature = "testing"))]
+use crate::testing::parent_data::ParentDataSeed;
 
 use crate::{
     constraints::{BoxConstraints, SliverConstraints, SliverGeometry},
@@ -179,6 +182,15 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// `dirty` by `drain_pending_dirty` at phase boundaries.
     dirty_rx: crossbeam_channel::Receiver<DirtyRequest>,
 
+    /// Harness-only parent-data presets keyed by child [`RenderId`].
+    ///
+    /// Cloned into per-walk [`ErasedChildState`] / [`ErasedSliverChildState`]
+    /// slots before layout so headless tests can express widget-level
+    /// configuration (stack positioning, flex factors, future animation
+    /// parent slots) without an element tree.
+    #[cfg(any(test, feature = "testing"))]
+    parent_data_seeds: FxHashMap<RenderId, ParentDataSeed>,
+
     /// Phantom marker for the typestate phase. Always zero-sized.
     /// See `crates/flui-rendering/src/pipeline/phase.rs`.
     _phase: PhantomData<Phase>,
@@ -242,8 +254,17 @@ impl PipelineOwner<Idle> {
             device_pixel_ratio: 1.0,
             handle,
             dirty_rx,
+            #[cfg(any(test, feature = "testing"))]
+            parent_data_seeds: FxHashMap::default(),
             _phase: PhantomData,
         }
+    }
+
+    /// Records harness parent metadata for `child_id`, cloned into the
+    /// transient child slots before each layout walk.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn seed_parent_data(&mut self, child_id: RenderId, seed: ParentDataSeed) {
+        self.parent_data_seeds.insert(child_id, seed);
     }
 
     /// Creates a new pipeline owner with callbacks in the [`Idle`] phase.
@@ -288,6 +309,8 @@ impl PipelineOwner<Idle> {
             device_pixel_ratio: 1.0,
             handle,
             dirty_rx,
+            #[cfg(any(test, feature = "testing"))]
+            parent_data_seeds: FxHashMap::default(),
             _phase: PhantomData,
         }
     }
@@ -2042,7 +2065,12 @@ impl PipelineOwner<Layout> {
         // &mut RenderNode borrows just acquired) so the recursive walk
         // can reborrow one slot at a time without re-entering the
         // tree's slab borrow.
-        let borrows = SubtreeBorrows::new(&subtree_ids, node_refs);
+        let borrows = SubtreeBorrows::new(
+            &subtree_ids,
+            node_refs,
+            #[cfg(any(test, feature = "testing"))]
+            &self.parent_data_seeds,
+        );
 
         // Step 4: recursive walk via index-into-pre-acquired-pool. No
         // &mut RenderTree appears inside the callback chain — only
@@ -2122,6 +2150,8 @@ unsafe impl Sync for NodePtr {}
 /// Cheap: one `ThreadId::eq` per lookup.
 struct SubtreeBorrows<'tree> {
     by_id: std::collections::HashMap<RenderId, NodePtr>,
+    #[cfg(any(test, feature = "testing"))]
+    parent_data_seeds: FxHashMap<RenderId, ParentDataSeed>,
     /// Set of ids whose layout is currently in flight at some recursion
     /// level above the current call. Insert on layout entry, remove on
     /// drop (RAII via [`LayoutCycleGuard`]). Re-entry on a member id
@@ -2150,7 +2180,11 @@ impl<'tree> SubtreeBorrows<'tree> {
     /// satisfy this — currently the only caller is
     /// [`PipelineOwner::layout_dirty_root`] which feeds the two
     /// methods' outputs directly to this ctor.
-    fn new(ids: &[RenderId], refs: Vec<&'tree mut RenderNode>) -> Self {
+    fn new(
+        ids: &[RenderId],
+        refs: Vec<&'tree mut RenderNode>,
+        #[cfg(any(test, feature = "testing"))] all_seeds: &FxHashMap<RenderId, ParentDataSeed>,
+    ) -> Self {
         debug_assert_eq!(
             ids.len(),
             refs.len(),
@@ -2162,8 +2196,15 @@ impl<'tree> SubtreeBorrows<'tree> {
         for (&id, r) in ids.iter().zip(refs) {
             by_id.insert(id, NodePtr(r as *mut RenderNode));
         }
+        #[cfg(any(test, feature = "testing"))]
+        let parent_data_seeds = ids
+            .iter()
+            .filter_map(|id| all_seeds.get(id).map(|seed| (*id, seed.clone())))
+            .collect();
         Self {
             by_id,
+            #[cfg(any(test, feature = "testing"))]
+            parent_data_seeds,
             // Pre-sized to subtree size — at most `ids.len()` entries
             // can be in-flight concurrently (the recursive walk
             // descends linearly through one path at a time).
@@ -2173,6 +2214,17 @@ impl<'tree> SubtreeBorrows<'tree> {
             )),
             owner_thread,
             _lifetime: std::marker::PhantomData,
+        }
+    }
+
+    #[cfg(any(test, feature = "testing"))]
+    fn seed_child_parent_data(
+        &self,
+        child_id: RenderId,
+        slot: &mut Option<Box<dyn crate::parent_data::ParentData>>,
+    ) {
+        if let Some(seed) = self.parent_data_seeds.get(&child_id) {
+            *slot = Some(seed.to_box());
         }
     }
 
@@ -2452,6 +2504,8 @@ unsafe fn layout_subtree_borrowed_impl<'tree>(
                 cs.sliver_geometry = sliver_entry.state().geometry();
             }
         }
+        #[cfg(any(test, feature = "testing"))]
+        borrows.seed_child_parent_data(cs.id, &mut cs.parent_data);
     }
 
     // Descendant-error tracking flag. Closure flips to `true` on any
@@ -2844,6 +2898,8 @@ unsafe fn layout_sliver_subtree_borrowed_impl<'tree>(
             let child_node: &crate::storage::RenderNode = unsafe { &*child_ptr.0 };
             cs.offset = child_node.offset();
         }
+        #[cfg(any(test, feature = "testing"))]
+        borrows.seed_child_parent_data(cs.id, &mut cs.parent_data);
     }
 
     let descendant_error_flag: std::sync::Arc<std::sync::atomic::AtomicBool> =
@@ -3713,6 +3769,8 @@ where
         device_pixel_ratio: from.device_pixel_ratio,
         handle: from.handle,
         dirty_rx: from.dirty_rx,
+        #[cfg(any(test, feature = "testing"))]
+        parent_data_seeds: from.parent_data_seeds,
         _phase: PhantomData,
     }
 }
@@ -3905,6 +3963,64 @@ fn dry_layout_query_impl(
         slot.node = Some(node);
     }
     result
+}
+
+// ============================================================================
+// Diagnostics dump (Diagnosticable-backed)
+// ============================================================================
+
+/// Builds a [`DiagnosticsNode`] for a single render node: the render object
+/// self-describes its own properties, and the committed geometry/offset is
+/// layered on from `RenderState`.
+fn node_diagnostics(node: &RenderNode) -> DiagnosticsNode {
+    if let Some(entry) = node.as_box() {
+        let mut diagnostics = entry.render_object().to_diagnostics_node();
+        diagnostics = diagnostics.property("offset", format!("{:?}", node.offset()));
+        if let Some(size) = entry.state().geometry() {
+            diagnostics = diagnostics.property("size", format!("{size:?}"));
+        }
+        diagnostics
+    } else if let Some(entry) = node.as_sliver() {
+        let mut diagnostics = entry.render_object().to_diagnostics_node();
+        diagnostics = diagnostics.property("offset", format!("{:?}", node.offset()));
+        if let Some(geometry) = entry.state().geometry() {
+            diagnostics = diagnostics.property("geometry", format!("{geometry:?}"));
+        }
+        diagnostics
+    } else {
+        DiagnosticsNode::new("<unknown>")
+    }
+}
+
+impl<Phase: PipelinePhase> PipelineOwner<Phase> {
+    /// Returns a [`DiagnosticsNode`] tree mirroring the render hierarchy
+    /// rooted at [`root_id`](Self::root_id), or `None` if no root is set.
+    ///
+    /// Each node self-describes via its render object's
+    /// [`Diagnosticable`](flui_foundation::Diagnosticable) impl, with the
+    /// committed geometry/offset layered on. This is the
+    /// `Diagnosticable`-backed counterpart to a plain `{:?}` dump and the
+    /// basis for [`debug_dump_pipeline_owner_tree`](crate::binding::debug_dump_pipeline_owner_tree).
+    pub fn debug_diagnostics_tree(&self) -> Option<DiagnosticsNode> {
+        self.debug_diagnostics_subtree(self.root_id?)
+    }
+
+    /// Returns the [`DiagnosticsNode`] for a single node `id` (no children),
+    /// or `None` if the id is not live.
+    pub fn debug_node_diagnostics(&self, id: RenderId) -> Option<DiagnosticsNode> {
+        Some(node_diagnostics(self.render_tree.get(id)?))
+    }
+
+    fn debug_diagnostics_subtree(&self, id: RenderId) -> Option<DiagnosticsNode> {
+        let node = self.render_tree.get(id)?;
+        let mut diagnostics = node_diagnostics(node);
+        for &child in node.children() {
+            if let Some(child_diagnostics) = self.debug_diagnostics_subtree(child) {
+                diagnostics.add_child(child_diagnostics);
+            }
+        }
+        Some(diagnostics)
+    }
 }
 
 // ============================================================================

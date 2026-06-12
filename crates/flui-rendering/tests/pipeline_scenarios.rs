@@ -1,89 +1,43 @@
 //! Render-object foundation under realistic multi-frame scenarios.
 //!
-//! Each scenario drives the REAL `run_frame` orchestration (layout →
-//! compositing → paint) the bindings use in production, then asserts
-//! on observable outputs: committed `RenderState` offsets, layer-tree
-//! structure, picture bounds, hit paths, and dirty-queue hygiene.
+//! Each scenario drives the REAL frame pipeline (layout → compositing →
+//! paint) the bindings use in production, then asserts on observable
+//! outputs: committed offsets, layer-tree structure, picture bounds, hit
+//! paths, dirty-queue hygiene, and — via the `Diagnosticable`-backed
+//! diagnostics — the render objects' self-described configuration.
+//!
+//! These scenarios are expressed with the `flui_rendering::testing` harness
+//! (`RenderTester` / `FrameRun` / `Probe`): declarative tree specs, symmetric
+//! `run_frame`, `update` + `pump` for multi-frame mutation, and structured
+//! property queries. The advanced layer-internal checks (transform matrices,
+//! clip shapes, offset layers) still walk the produced `LayerTree` directly.
 //!
 //! Scenarios:
-//! 1. deep nesting — offsets accumulate through a 50-deep padding
-//!    chain and a single merged picture comes out;
-//! 2. mixed tree — flex + padding + transform + clip in one frame:
-//!    structure, bounds, and per-region hits;
-//! 3. invalidation round-trips — paint-only frame, then a
-//!    layout-changing frame, across three frames;
-//! 4. idle stability — frames after a clean one produce NO output
-//!    (no spurious repaints from leftover dirty state);
-//! 5. removal churn — remove + reinsert under one parent: stale ids
-//!    miss, queues stay clean, the new subtree paints;
-//! 6. repaint-boundary subtree — the boundary's OffsetLayer split
-//!    survives re-frames and carries the laid-out offset.
+//! 1. deep nesting — offsets accumulate through a 50-deep padding chain and
+//!    a single merged picture comes out;
+//! 2. mixed tree — flex + padding + transform + clip in one frame;
+//! 3. invalidation round-trips — paint-only then layout-changing frames;
+//! 4. idle stability — frames after a clean one produce NO output;
+//! 5. removal churn — remove + reinsert under one parent;
+//! 6. repaint-boundary subtree — the boundary's OffsetLayer split survives
+//!    re-frames;
+//! 7. edge cases — zero sizes and empty containers;
+//! 8. churn stress — 20 remove+reinsert cycles.
 
 use flui_layer::{Layer, LayerTree};
-use flui_painting::DisplayListCore;
 use flui_rendering::{
     constraints::BoxConstraints,
-    hit_testing::HitTestResult,
     objects::{
-        RenderColoredBox, RenderFlex, RenderPadding, RenderRepaintBoundary, RenderTransform,
+        RenderClipRect, RenderColoredBox, RenderFlex, RenderPadding, RenderRepaintBoundary,
+        RenderTransform,
     },
-    pipeline::PipelineOwner,
+    testing::{Probe, RenderTester, box_node},
 };
 use flui_types::{EdgeInsets, Matrix4, Offset, Point, Rect, Size, geometry::px};
 
-type BoxedRenderObject =
-    Box<dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>>;
-
-fn frame(owner: PipelineOwner) -> (PipelineOwner, Option<LayerTree>) {
-    let (owner, result) = owner.run_frame();
-    (owner, result.expect("frame must not error"))
-}
-
-fn structure(tree: &LayerTree) -> Vec<&'static str> {
-    fn walk(tree: &LayerTree, id: flui_foundation::LayerId, out: &mut Vec<&'static str>) {
-        let node = tree.get(id).expect("live layer id");
-        out.push(match node.layer() {
-            Layer::Offset(_) => "Offset",
-            Layer::Picture(_) => "Picture",
-            Layer::ClipRect(_) => "ClipRect",
-            Layer::Transform(_) => "Transform",
-            _ => "Other",
-        });
-        for &c in node.children() {
-            walk(tree, c, out);
-        }
-    }
-    let mut out = Vec::new();
-    if let Some(root) = tree.root() {
-        walk(tree, root, &mut out);
-    }
-    out
-}
-
-fn first_picture_bounds(tree: &LayerTree) -> flui_types::Rect {
-    fn find(tree: &LayerTree, id: flui_foundation::LayerId) -> Option<flui_types::Rect> {
-        let node = tree.get(id)?;
-        if let Layer::Picture(p) = node.layer() {
-            return Some(p.picture().bounds());
-        }
-        node.children().iter().find_map(|&c| find(tree, c))
-    }
-    find(tree, tree.root().expect("root")).expect("picture present")
-}
-
-fn state_offset(owner: &PipelineOwner, id: flui_foundation::RenderId) -> Offset {
-    owner
-        .render_tree()
-        .get(id)
-        .and_then(|n| n.as_box())
-        .map(|e| e.state().offset())
-        .expect("node state")
-}
-
-fn hits(owner: &PipelineOwner, x: f32, y: f32) -> Vec<flui_foundation::RenderId> {
-    let mut result = HitTestResult::new();
-    owner.hit_test(Offset::new(px(x), px(y)), &mut result);
-    result.path().iter().map(|e| e.target).collect()
+/// Loose `0..=hi x 0..=hi` constraints (children settle at natural size).
+fn loose(width: f32, height: f32) -> BoxConstraints {
+    BoxConstraints::new(px(0.0), px(width), px(0.0), px(height))
 }
 
 // ============================================================================
@@ -92,53 +46,48 @@ fn hits(owner: &PipelineOwner, x: f32, y: f32) -> Vec<flui_foundation::RenderId>
 
 #[test]
 fn deep_padding_chain_accumulates_offsets_and_merges_one_picture() {
-    let mut owner = PipelineOwner::new();
-    let root = owner.insert(Box::new(RenderPadding::all(1.0)) as BoxedRenderObject);
-    let mut parent = root;
-    for _ in 0..49 {
-        parent = owner
-            .insert_child_render_object(parent, Box::new(RenderPadding::all(1.0)))
-            .expect("padding link");
+    // Build leaf-first, then wrap in 50 padding(1px) layers.
+    let mut spec = box_node(RenderColoredBox::red(10.0, 10.0)).label("leaf");
+    for _ in 0..50 {
+        spec = box_node(RenderPadding::all(1.0)).child(spec);
     }
-    let leaf = owner
-        .insert_child_render_object(parent, Box::new(RenderColoredBox::red(10.0, 10.0)))
-        .expect("leaf");
+    let run = RenderTester::mount(spec)
+        .with_constraints(loose(500.0, 500.0))
+        .run_frame();
 
-    owner.set_root_id(Some(root));
-    owner.set_root_constraints(Some(BoxConstraints::new(
-        px(0.0),
-        px(500.0),
-        px(0.0),
-        px(500.0),
-    )));
+    let leaf = run.id("leaf");
+    let root = run.root();
 
-    let (owner, tree) = frame(owner);
-    let tree = tree.expect("first frame paints");
-
-    // Every padding contributes (1,1) to ITS child — each link's
-    // committed RenderState offset is exactly (1,1)...
-    assert_eq!(state_offset(&owner, leaf), Offset::new(px(1.0), px(1.0)));
+    // Every padding contributes (1,1) to ITS child — the leaf's committed
+    // offset relative to its parent is exactly (1,1)...
+    assert_eq!(run.offset(leaf), Offset::new(px(1.0), px(1.0)));
     // ...and the picture's ABSOLUTE bounds carry the full 50-deep
     // accumulation: the leaf draws at (50,50)..(60,60).
     assert_eq!(
-        first_picture_bounds(&tree),
-        flui_types::Rect::from_ltrb(px(50.0), px(50.0), px(60.0), px(60.0)),
+        run.picture_bounds(),
+        Some(Rect::from_ltrb(px(50.0), px(50.0), px(60.0), px(60.0))),
         "accumulated origins must be baked through the whole chain",
     );
     assert_eq!(
-        structure(&tree),
+        run.structure(),
         vec!["Offset", "Picture"],
         "51 inline nodes still merge into ONE picture",
     );
 
     // Hit straight through all 50 levels, leaf-first path of 51 ids.
-    let path = hits(&owner, 55.0, 55.0);
+    let path = run.hit(55.0, 55.0);
     assert_eq!(path.len(), 51);
     assert_eq!(path[0], leaf, "leaf-first");
     assert_eq!(path[50], root, "root last");
     assert!(
-        hits(&owner, 5.0, 5.0).is_empty(),
+        run.hit(5.0, 5.0).is_empty(),
         "the border region (inside paddings, outside the box) misses",
+    );
+
+    // The leaf self-describes its color through the full pipeline.
+    assert_eq!(
+        run.property(leaf, "color").as_deref(),
+        Some("[1.0, 0.0, 0.0, 1.0]"),
     );
 }
 
@@ -148,53 +97,43 @@ fn deep_padding_chain_accumulates_offsets_and_merges_one_picture() {
 
 #[test]
 fn mixed_flex_padding_transform_clip_frame() {
-    let mut owner = PipelineOwner::new();
     // row[ padding(5){red 40}, transform(scale2){blue 20}, clip{green 40} ]
-    let row = owner.insert(Box::new(RenderFlex::row()) as BoxedRenderObject);
-    let pad = owner
-        .insert_child_render_object(row, Box::new(RenderPadding::all(5.0)))
-        .expect("pad");
-    let red = owner
-        .insert_child_render_object(pad, Box::new(RenderColoredBox::red(40.0, 40.0)))
-        .expect("red");
-    let scaler = owner
-        .insert_child_render_object(row, Box::new(RenderTransform::scale(2.0, 2.0)))
-        .expect("scaler");
-    let blue = owner
-        .insert_child_render_object(scaler, Box::new(RenderColoredBox::blue(20.0, 20.0)))
-        .expect("blue");
-    let clip = owner
-        .insert_child_render_object(
-            row,
-            Box::new(flui_rendering::objects::RenderClipRect::hard_edge()),
-        )
-        .expect("clip");
-    let green = owner
-        .insert_child_render_object(clip, Box::new(RenderColoredBox::green(40.0, 40.0)))
-        .expect("green");
+    let run = RenderTester::mount(
+        box_node(RenderFlex::row())
+            .child(
+                box_node(RenderPadding::all(5.0))
+                    .label("pad")
+                    .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("red")),
+            )
+            .child(
+                box_node(RenderTransform::scale(2.0, 2.0))
+                    .label("scaler")
+                    .child(box_node(RenderColoredBox::blue(20.0, 20.0)).label("blue")),
+            )
+            .child(
+                box_node(RenderClipRect::hard_edge())
+                    .label("clip")
+                    .child(box_node(RenderColoredBox::green(40.0, 40.0)).label("green")),
+            ),
+    )
+    .with_constraints(loose(300.0, 100.0))
+    .run_frame();
 
-    owner.set_root_id(Some(row));
-    owner.set_root_constraints(Some(BoxConstraints::new(
-        px(0.0),
-        px(300.0),
-        px(0.0),
-        px(100.0),
-    )));
+    let pad = run.id("pad");
+    let red = run.id("red");
+    let scaler = run.id("scaler");
+    let blue = run.id("blue");
+    let clip = run.id("clip");
+    let green = run.id("green");
 
-    let (owner, tree) = frame(owner);
-    let tree = tree.expect("frame paints");
+    // Row children sit at main-axis offsets 0 / 50 / 70.
+    assert_eq!(run.offset(pad), Offset::new(px(0.0), px(0.0)));
+    assert_eq!(run.offset(scaler), Offset::new(px(50.0), px(0.0)));
+    assert_eq!(run.offset(clip), Offset::new(px(70.0), px(0.0)));
 
-    // Row children sit at main-axis offsets 0 / 50 / 70
-    // (padding 40+10 wide, transform reports child size 20, clip 40).
-    assert_eq!(state_offset(&owner, pad), Offset::new(px(0.0), px(0.0)));
-    assert_eq!(state_offset(&owner, scaler), Offset::new(px(50.0), px(0.0)));
-    assert_eq!(state_offset(&owner, clip), Offset::new(px(70.0), px(0.0)));
-
-    // Layer splits happen exactly where semantics demand them: the
-    // transform's effect hook wraps ITS subtree in a TransformLayer,
-    // the clip scope brackets green — everything else merges.
+    // Layer splits happen exactly where semantics demand them.
     assert_eq!(
-        structure(&tree),
+        run.structure(),
         vec![
             "Offset",
             "Picture",
@@ -206,13 +145,11 @@ fn mixed_flex_padding_transform_clip_frame() {
         "inline draws merge; Transform and ClipRect split the stream",
     );
 
-    // Effect/clip layers must anchor at the NODE origin, not the layer
-    // origin: descendant runs carry the accumulated origin baked into
-    // their canvas transforms, so the composer conjugates the local
-    // matrix by the origin (Flutter pushTransform: T(o)·M·T(−o)) and
-    // shifts clip shapes (Flutter pushClipRect: clipRect.shift(offset)).
-    // A raw local matrix/shape here would pivot/cut at the row's (0,0).
-    let local = owner
+    // Effect/clip layers anchor at the NODE origin (Flutter pushTransform:
+    // T(o)·M·T(−o); pushClipRect: clipRect.shift(offset)).
+    let tree = run.layer_tree().expect("frame paints");
+    let local = run
+        .owner()
         .render_tree()
         .get(scaler)
         .expect("scaler node")
@@ -237,14 +174,13 @@ fn mixed_flex_padding_transform_clip_frame() {
             }
         }
         let mut out = Vec::new();
-        walk(&tree, tree.root().expect("root"), &mut out);
+        walk(tree, tree.root().expect("root"), &mut out);
         out
     };
     assert_eq!(
         transform_matrices,
         vec![expected],
-        "the scaler's TransformLayer must carry the origin-conjugated \
-         matrix (pivot at the node origin x=50, not the row origin)",
+        "the scaler's TransformLayer must carry the origin-conjugated matrix",
     );
     let clip_rects: Vec<Rect> = {
         fn walk(tree: &LayerTree, id: flui_foundation::LayerId, out: &mut Vec<Rect>) {
@@ -257,7 +193,7 @@ fn mixed_flex_padding_transform_clip_frame() {
             }
         }
         let mut out = Vec::new();
-        walk(&tree, tree.root().expect("root"), &mut out);
+        walk(tree, tree.root().expect("root"), &mut out);
         out
     };
     assert_eq!(
@@ -266,20 +202,36 @@ fn mixed_flex_padding_transform_clip_frame() {
             Point::new(px(70.0), px(0.0)),
             Size::new(px(40.0), px(40.0)),
         )],
-        "the clip shape recorded in node-local coordinates must be \
-         shifted by the node origin to match the origin-baked runs",
+        "the clip shape must be shifted by the node origin",
     );
 
-    // Region hits. The scaled blue's VISUAL extent is 50..90 (its
-    // 20-wide geometry under scale 2) and overlaps the clip at 70..110
-    // — in the overlap the LATER sibling (green) wins, topmost-first.
-    assert_eq!(hits(&owner, 20.0, 20.0).first().copied(), Some(red));
-    // (60,10): inverse-mapped blue-local (5,5), left of green's start.
-    assert_eq!(hits(&owner, 60.0, 10.0).first().copied(), Some(blue));
-    // (80,20): inside BOTH blue's visual extent and green — z-order
-    // gives the later sibling the hit.
-    assert_eq!(hits(&owner, 80.0, 20.0).first().copied(), Some(green));
-    assert_eq!(hits(&owner, 100.0, 20.0).first().copied(), Some(green));
+    // Region hits. Scaled blue's visual extent is 50..90 and overlaps the
+    // clip at 70..110 — in the overlap the later sibling (green) wins.
+    assert_eq!(run.hit(20.0, 20.0).first().copied(), Some(red));
+    assert_eq!(run.hit(60.0, 10.0).first().copied(), Some(blue));
+    assert_eq!(run.hit(80.0, 20.0).first().copied(), Some(green));
+    assert_eq!(run.hit(100.0, 20.0).first().copied(), Some(green));
+
+    // Self-description: the scaler reports its (local) transform and the
+    // padding its insets — config the geometry assertions don't cover.
+    assert!(
+        run.property(scaler, "transform").is_some(),
+        "the transform node self-describes its matrix",
+    );
+    assert!(
+        run.property(pad, "padding").is_some(),
+        "the padding node self-describes its insets",
+    );
+    assert_eq!(
+        run.descendant_property("RenderFlex", "direction")
+            .as_deref(),
+        Some("Horizontal"),
+    );
+    assert!(
+        run.descendant_property("RenderPadding", "padding")
+            .is_some(),
+        "padding self-describes its insets",
+    );
 }
 
 // ============================================================================
@@ -288,52 +240,36 @@ fn mixed_flex_padding_transform_clip_frame() {
 
 #[test]
 fn paint_only_then_layout_invalidations_round_trip() {
-    let mut owner = PipelineOwner::new();
-    let pad = owner.insert(Box::new(RenderPadding::all(5.0)) as BoxedRenderObject);
-    let child = owner
-        .insert_child_render_object(pad, Box::new(RenderColoredBox::red(40.0, 40.0)))
-        .expect("child");
-    owner.set_root_id(Some(pad));
-    owner.set_root_constraints(Some(BoxConstraints::new(
-        px(0.0),
-        px(200.0),
-        px(0.0),
-        px(200.0),
-    )));
-
-    // Frame 1: full.
-    let (mut owner, tree) = frame(owner);
-    assert!(tree.is_some());
+    let mut run = RenderTester::mount(
+        box_node(RenderPadding::all(5.0))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0, 200.0))
+    .run_frame();
+    let pad = run.root();
+    let child = run.id("child");
+    assert!(run.painted(), "frame 1 paints");
 
     // Frame 2: paint-only invalidation — no layout change, fresh tree.
-    owner.add_node_needing_paint(child, 1);
-    let (mut owner, tree2) = frame(owner);
-    let tree2 = tree2.expect("paint-only frame repaints");
+    run.owner_mut().add_node_needing_paint(child, 1);
+    let report = run.pump();
+    assert!(report.painted, "paint-only frame repaints");
     assert_eq!(
-        first_picture_bounds(&tree2),
-        flui_types::Rect::from_ltrb(px(5.0), px(5.0), px(45.0), px(45.0)),
+        run.picture_bounds(),
+        Some(Rect::from_ltrb(px(5.0), px(5.0), px(45.0), px(45.0))),
         "geometry unchanged on a paint-only frame",
     );
 
     // Frame 3: layout invalidation — padding grows, offsets move.
-    {
-        let tree_mut = owner.render_tree_mut();
-        let node = tree_mut.get_mut(pad).expect("pad");
-        let entry = node.as_box_mut().expect("box");
-        entry
-            .render_object_mut()
-            .as_any_mut()
-            .downcast_mut::<RenderPadding>()
-            .expect("padding")
-            .set_padding(EdgeInsets::all(px(20.0)));
-    }
-    owner.mark_needs_layout(pad);
-    let (owner, tree3) = frame(owner);
-    let tree3 = tree3.expect("layout frame repaints");
-    assert_eq!(state_offset(&owner, child), Offset::new(px(20.0), px(20.0)));
+    run.update::<RenderPadding>(pad, |padding| {
+        padding.set_padding(EdgeInsets::all(px(20.0)));
+    });
+    let report = run.pump();
+    assert!(report.painted, "layout frame repaints");
+    assert_eq!(run.offset(child), Offset::new(px(20.0), px(20.0)));
     assert_eq!(
-        first_picture_bounds(&tree3),
-        flui_types::Rect::from_ltrb(px(20.0), px(20.0), px(60.0), px(60.0)),
+        run.picture_bounds(),
+        Some(Rect::from_ltrb(px(20.0), px(20.0), px(60.0), px(60.0))),
         "relayout must repaint at the NEW offsets",
     );
 }
@@ -344,24 +280,20 @@ fn paint_only_then_layout_invalidations_round_trip() {
 
 #[test]
 fn clean_frames_after_first_produce_no_layer_tree() {
-    let mut owner = PipelineOwner::new();
-    let root = owner.insert(Box::new(RenderColoredBox::red(40.0, 40.0)) as BoxedRenderObject);
-    owner.set_root_id(Some(root));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(100.0), px(100.0)))));
-
-    let (mut owner, first) = frame(owner);
-    assert!(first.is_some(), "frame 1 paints");
+    let mut run = RenderTester::mount(box_node(RenderColoredBox::red(40.0, 40.0)))
+        .with_size(Size::new(px(100.0), px(100.0)))
+        .run_frame();
+    assert!(run.painted(), "frame 1 paints");
 
     for n in 2..=5 {
-        let (next_owner, tree) = frame(owner);
-        owner = next_owner;
+        let report = run.pump();
         assert!(
-            tree.is_none(),
+            !report.painted,
             "frame {n} has no dirty work and must produce no output — \
              leftover dirty state here means an idle app burns frames",
         );
     }
-    assert!(!owner.has_dirty_nodes());
+    assert!(run.is_clean());
 }
 
 // ============================================================================
@@ -370,51 +302,41 @@ fn clean_frames_after_first_produce_no_layer_tree() {
 
 #[test]
 fn remove_and_reinsert_child_keeps_pipeline_clean() {
-    let mut owner = PipelineOwner::new();
-    let pad = owner.insert(Box::new(RenderPadding::all(5.0)) as BoxedRenderObject);
-    let first_child = owner
-        .insert_child_render_object(pad, Box::new(RenderColoredBox::red(40.0, 40.0)))
-        .expect("first child");
-    owner.set_root_id(Some(pad));
-    owner.set_root_constraints(Some(BoxConstraints::new(
-        px(0.0),
-        px(200.0),
-        px(0.0),
-        px(200.0),
-    )));
-
-    let (mut owner, _) = frame(owner);
+    let mut run = RenderTester::mount(
+        box_node(RenderPadding::all(5.0))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("first")),
+    )
+    .with_constraints(loose(200.0, 200.0))
+    .run_frame();
+    let pad = run.root();
+    let first_child = run.id("first");
 
     // Remove the child, reinsert a different one (slot reuse).
-    let removed = owner.remove_render_object(first_child);
-    assert_eq!(removed, 1);
-    let second_child = owner
+    assert_eq!(run.owner_mut().remove_render_object(first_child), 1);
+    let second_child = run
+        .owner_mut()
         .insert_child_render_object(pad, Box::new(RenderColoredBox::blue(60.0, 60.0)))
         .expect("second child");
-    owner.mark_needs_layout(pad);
-
-    let (owner, tree) = frame(owner);
-    let tree = tree.expect("churn frame paints");
+    run.owner_mut().mark_needs_layout(pad);
+    let report = run.pump();
+    assert!(report.painted, "churn frame paints");
 
     assert!(
-        owner.render_tree().get(first_child).is_none(),
+        run.owner().render_tree().get(first_child).is_none(),
         "the stale id must not resolve to the reused slot (ABA guard)",
     );
+    assert_eq!(run.offset(second_child), Offset::new(px(5.0), px(5.0)));
     assert_eq!(
-        state_offset(&owner, second_child),
-        Offset::new(px(5.0), px(5.0))
-    );
-    assert_eq!(
-        first_picture_bounds(&tree),
-        flui_types::Rect::from_ltrb(px(5.0), px(5.0), px(65.0), px(65.0)),
+        run.picture_bounds(),
+        Some(Rect::from_ltrb(px(5.0), px(5.0), px(65.0), px(65.0))),
         "the NEW child paints at the padded origin",
     );
     assert_eq!(
-        hits(&owner, 30.0, 30.0).first().copied(),
+        run.hit(30.0, 30.0).first().copied(),
         Some(second_child),
         "hits route to the new child, never the stale id",
     );
-    assert!(!owner.has_dirty_nodes(), "queues drain fully after churn");
+    assert!(run.is_clean(), "queues drain fully after churn");
 }
 
 // ============================================================================
@@ -423,55 +345,36 @@ fn remove_and_reinsert_child_keeps_pipeline_clean() {
 
 #[test]
 fn repaint_boundary_split_survives_relayout_frames() {
-    let mut owner = PipelineOwner::new();
-    let pad = owner.insert(Box::new(RenderPadding::all(5.0)) as BoxedRenderObject);
-    let boundary = owner
-        .insert_child_render_object(pad, Box::new(RenderRepaintBoundary::new()))
-        .expect("boundary");
-    let leaf = owner
-        .insert_child_render_object(boundary, Box::new(RenderColoredBox::red(40.0, 40.0)))
-        .expect("leaf");
-    owner.set_root_id(Some(pad));
-    owner.set_root_constraints(Some(BoxConstraints::new(
-        px(0.0),
-        px(200.0),
-        px(0.0),
-        px(200.0),
-    )));
-
-    let (mut owner, tree1) = frame(owner);
-    let tree1 = tree1.expect("frame 1");
+    let mut run = RenderTester::mount(
+        box_node(RenderPadding::all(5.0)).child(
+            box_node(RenderRepaintBoundary::new())
+                .label("boundary")
+                .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("leaf")),
+        ),
+    )
+    .with_constraints(loose(200.0, 200.0))
+    .run_frame();
+    let pad = run.root();
+    let leaf = run.id("leaf");
     assert_eq!(
-        structure(&tree1),
+        run.structure(),
         vec!["Offset", "Offset", "Picture"],
         "the boundary subtree splits under its own OffsetLayer",
     );
 
     // Move the boundary by growing the padding; re-frame.
-    {
-        let tree_mut = owner.render_tree_mut();
-        let entry = tree_mut
-            .get_mut(pad)
-            .expect("pad")
-            .as_box_mut()
-            .expect("box");
-        entry
-            .render_object_mut()
-            .as_any_mut()
-            .downcast_mut::<RenderPadding>()
-            .expect("padding")
-            .set_padding(EdgeInsets::all(px(30.0)));
-    }
-    owner.mark_needs_layout(pad);
-    let (owner, tree2) = frame(owner);
-    let tree2 = tree2.expect("frame 2");
+    run.update::<RenderPadding>(pad, |padding| {
+        padding.set_padding(EdgeInsets::all(px(30.0)));
+    });
+    run.pump();
 
-    assert_eq!(structure(&tree2), vec!["Offset", "Offset", "Picture"]);
-    // The boundary's OffsetLayer carries the NEW accumulated offset;
-    // the picture inside stays rebased at zero.
-    let root_id = tree2.root().expect("root");
-    let boundary_layer_id = tree2.get(root_id).expect("root node").children()[0];
-    let boundary_node = tree2.get(boundary_layer_id).expect("boundary node");
+    assert_eq!(run.structure(), vec!["Offset", "Offset", "Picture"]);
+    // The boundary's OffsetLayer carries the NEW accumulated offset; the
+    // picture inside stays rebased at zero.
+    let tree = run.layer_tree().expect("frame 2");
+    let root_id = tree.root().expect("root");
+    let boundary_layer_id = tree.get(root_id).expect("root node").children()[0];
+    let boundary_node = tree.get(boundary_layer_id).expect("boundary node");
     let Layer::Offset(offset_layer) = boundary_node.layer() else {
         panic!("boundary layer must be an OffsetLayer");
     };
@@ -481,11 +384,11 @@ fn repaint_boundary_split_survives_relayout_frames() {
         "an offset-only move shows up as the layer's offset",
     );
     assert_eq!(
-        first_picture_bounds(&tree2),
-        flui_types::Rect::from_ltrb(px(0.0), px(0.0), px(40.0), px(40.0)),
+        run.picture_bounds(),
+        Some(Rect::from_ltrb(px(0.0), px(0.0), px(40.0), px(40.0))),
         "boundary-subtree coordinates stay rebased to zero",
     );
-    assert_eq!(state_offset(&owner, leaf), Offset::new(px(0.0), px(0.0)));
+    assert_eq!(run.offset(leaf), Offset::new(px(0.0), px(0.0)));
 }
 
 // ============================================================================
@@ -494,47 +397,32 @@ fn repaint_boundary_split_survives_relayout_frames() {
 
 #[test]
 fn zero_size_children_and_empty_containers_survive_the_pipeline() {
-    let mut owner = PipelineOwner::new();
-    let row = owner.insert(Box::new(RenderFlex::row()) as BoxedRenderObject);
-    // A zero-size child, an empty nested row, and a normal child.
-    let zero = owner
-        .insert_child_render_object(row, Box::new(RenderColoredBox::red(0.0, 0.0)))
-        .expect("zero child");
-    let empty_row = owner
-        .insert_child_render_object(row, Box::new(RenderFlex::row()))
-        .expect("empty row");
-    let normal = owner
-        .insert_child_render_object(row, Box::new(RenderColoredBox::blue(40.0, 40.0)))
-        .expect("normal child");
+    let run = RenderTester::mount(
+        box_node(RenderFlex::row())
+            .child(box_node(RenderColoredBox::red(0.0, 0.0)).label("zero"))
+            .child(box_node(RenderFlex::row()).label("empty_row"))
+            .child(box_node(RenderColoredBox::blue(40.0, 40.0)).label("normal")),
+    )
+    .with_constraints(loose(200.0, 100.0))
+    .run_frame();
 
-    owner.set_root_id(Some(row));
-    owner.set_root_constraints(Some(BoxConstraints::new(
-        px(0.0),
-        px(200.0),
-        px(0.0),
-        px(100.0),
-    )));
+    let zero = run.id("zero");
+    let empty_row = run.id("empty_row");
+    let normal = run.id("normal");
 
-    let (owner, tree) = frame(owner);
-    let tree = tree.expect("frame paints despite degenerate children");
-
-    // Zero-size and empty contribute nothing to main extent: the
-    // normal child sits at x = 0 + 0 + 0 = 0.
-    assert_eq!(state_offset(&owner, zero), Offset::new(px(0.0), px(0.0)));
-    assert_eq!(
-        state_offset(&owner, empty_row),
-        Offset::new(px(0.0), px(0.0))
-    );
-    assert_eq!(state_offset(&owner, normal), Offset::new(px(0.0), px(0.0)));
+    // Zero-size and empty contribute nothing to the main extent.
+    assert_eq!(run.offset(zero), Offset::new(px(0.0), px(0.0)));
+    assert_eq!(run.offset(empty_row), Offset::new(px(0.0), px(0.0)));
+    assert_eq!(run.offset(normal), Offset::new(px(0.0), px(0.0)));
 
     // Only the normal child draws; degenerate nodes add no commands.
     assert_eq!(
-        first_picture_bounds(&tree),
-        flui_types::Rect::from_ltrb(px(0.0), px(0.0), px(40.0), px(40.0)),
+        run.picture_bounds(),
+        Some(Rect::from_ltrb(px(0.0), px(0.0), px(40.0), px(40.0))),
     );
     // A zero-area child never claims a hit.
-    assert_eq!(hits(&owner, 10.0, 10.0).first().copied(), Some(normal));
-    assert!(!owner.has_dirty_nodes());
+    assert_eq!(run.hit(10.0, 10.0).first().copied(), Some(normal));
+    assert!(run.is_clean());
 }
 
 // ============================================================================
@@ -543,47 +431,44 @@ fn zero_size_children_and_empty_containers_survive_the_pipeline() {
 
 #[test]
 fn repeated_churn_cycles_stay_clean_and_generations_protect_every_round() {
-    let mut owner = PipelineOwner::new();
-    let pad = owner.insert(Box::new(RenderPadding::all(5.0)) as BoxedRenderObject);
-    owner.set_root_id(Some(pad));
-    owner.set_root_constraints(Some(BoxConstraints::new(
-        px(0.0),
-        px(200.0),
-        px(0.0),
-        px(200.0),
-    )));
+    let mut run = RenderTester::mount(
+        box_node(RenderPadding::all(5.0))
+            .child(box_node(RenderColoredBox::red(10.0, 10.0)).label("initial")),
+    )
+    .with_constraints(loose(200.0, 200.0))
+    .run_frame();
+    let pad = run.root();
+    let mut current = run.id("initial");
+    assert!(run.painted(), "initial frame paints");
 
     let mut stale_ids = Vec::new();
-    let mut current = owner
-        .insert_child_render_object(pad, Box::new(RenderColoredBox::red(10.0, 10.0)))
-        .expect("initial child");
-
     for round in 0..20u32 {
-        let (next_owner, tree) = frame(owner);
-        owner = next_owner;
-        assert!(tree.is_some(), "round {round}: churn frame must paint");
-
-        assert_eq!(owner.remove_render_object(current), 1, "round {round}");
+        assert_eq!(
+            run.owner_mut().remove_render_object(current),
+            1,
+            "round {round}"
+        );
         stale_ids.push(current);
         let side = 10.0 + round as f32;
-        current = owner
+        current = run
+            .owner_mut()
             .insert_child_render_object(pad, Box::new(RenderColoredBox::blue(side, side)))
             .expect("reinserted child");
-        owner.mark_needs_layout(pad);
+        run.owner_mut().mark_needs_layout(pad);
+        let report = run.pump();
+        assert!(report.painted, "round {round}: churn frame must paint");
     }
 
-    let (owner, tree) = frame(owner);
-    assert!(tree.is_some(), "final frame paints");
-    assert!(!owner.has_dirty_nodes(), "no residue after 20 churn rounds");
+    assert!(run.is_clean(), "no residue after 20 churn rounds");
 
-    // EVERY historical id must stay dead — slot reuse never
-    // resurrects an old handle, no matter how many generations passed.
+    // EVERY historical id must stay dead — slot reuse never resurrects an
+    // old handle, no matter how many generations passed.
     for (i, stale) in stale_ids.iter().enumerate() {
         assert!(
-            owner.render_tree().get(*stale).is_none(),
+            run.owner().render_tree().get(*stale).is_none(),
             "stale id from round {i} must not resolve",
         );
     }
-    assert!(owner.render_tree().get(current).is_some());
-    assert_eq!(hits(&owner, 20.0, 20.0).first().copied(), Some(current));
+    assert!(run.owner().render_tree().get(current).is_some());
+    assert_eq!(run.hit(20.0, 20.0).first().copied(), Some(current));
 }

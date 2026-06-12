@@ -1261,6 +1261,7 @@ name = "flui-layer"
 version = "0.1.0"
 dependencies = [
  "flui-foundation",
+ "flui-layer",
  "flui-painting",
  "flui-tree",
  "flui-types",
@@ -1285,6 +1286,7 @@ version = "0.1.0"
 dependencies = [
  "cosmic-text",
  "flui-foundation",
+ "flui-painting",
  "flui-types",
  "parking_lot",
  "serde",
@@ -1348,6 +1350,7 @@ dependencies = [
  "flui-interaction",
  "flui-layer",
  "flui-painting",
+ "flui-rendering",
  "flui-scheduler",
  "flui-semantics",
  "flui-tree",

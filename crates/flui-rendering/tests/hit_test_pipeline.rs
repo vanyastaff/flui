@@ -14,7 +14,6 @@
 use flui_rendering::{
     constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
     context::{BoxHitTestContext, BoxLayoutContext, SliverHitTestContext, SliverLayoutContext},
-    hit_testing::HitTestResult,
     objects::{
         RenderColoredBox, RenderFlex, RenderPadding, RenderSliverIgnorePointer,
         RenderSliverOpacity, RenderSliverPadding, RenderTransform,
@@ -22,6 +21,7 @@ use flui_rendering::{
     parent_data::{BoxParentData, SliverParentData},
     pipeline::PipelineOwner,
     protocol::{BoxProtocol, SliverProtocol},
+    testing::inspect,
     traits::{
         HotReloadCapability, PaintEffectsCapability, RenderBox, RenderObject, RenderSliver,
         SemanticsCapability,
@@ -56,20 +56,14 @@ fn hits(
     x: f32,
     y: f32,
 ) -> Vec<flui_foundation::RenderId> {
-    let mut result = HitTestResult::new();
-    owner.hit_test(Offset::new(px(x), px(y)), &mut result);
-    result.path().iter().map(|e| e.target).collect()
+    inspect::hit_path(owner, x, y)
 }
 
 fn render_offset(
     owner: &flui_rendering::pipeline::PipelineOwner<flui_rendering::pipeline::phase::Layout>,
     id: flui_foundation::RenderId,
 ) -> Offset {
-    owner
-        .render_tree()
-        .get(id)
-        .map(flui_rendering::storage::RenderNode::offset)
-        .expect("node exists")
+    inspect::render_offset(owner, id).expect("node exists")
 }
 
 // ============================================================================

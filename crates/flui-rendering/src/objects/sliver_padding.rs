@@ -333,14 +333,7 @@ impl Default for RenderSliverPadding {
 
 impl flui_foundation::Diagnosticable for RenderSliverPadding {
     fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add(
-            "padding",
-            format!(
-                "EdgeInsets(top={}, right={}, bottom={}, left={})",
-                self.padding.top, self.padding.right, self.padding.bottom, self.padding.left,
-            ),
-        );
-        builder.add("geometry", format!("{:?}", self.geometry));
+        builder.add_enum("padding", self.padding);
     }
 }
 
@@ -854,11 +847,9 @@ mod tests {
             .iter()
             .map(|p| p.name().to_string())
             .collect();
-        for required in ["padding", "geometry"] {
-            assert!(
-                names.iter().any(|n| n == required),
-                "missing diagnostic field: {required}"
-            );
-        }
+        assert!(
+            names.iter().any(|n| n == "padding"),
+            "missing diagnostic field: padding"
+        );
     }
 }

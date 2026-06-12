@@ -103,12 +103,7 @@ impl RenderConstrainedBox {
 
 impl flui_foundation::Diagnosticable for RenderConstrainedBox {
     fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add(
-            "additional_constraints",
-            format!("{:?}", self.additional_constraints),
-        );
-        builder.add("size", format!("{:?}", self.size));
-        builder.add("has_child", self.has_child);
+        builder.add_enum("additional_constraints", self.additional_constraints);
     }
 }
 
@@ -393,7 +388,5 @@ mod tests {
             .map(|p| p.name().to_string())
             .collect();
         assert!(names.iter().any(|n| n == "additional_constraints"));
-        assert!(names.iter().any(|n| n == "size"));
-        assert!(names.iter().any(|n| n == "has_child"));
     }
 }

@@ -87,7 +87,12 @@ impl RenderDecoratedBox {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderDecoratedBox {}
+impl flui_foundation::Diagnosticable for RenderDecoratedBox {
+    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
+        properties.add_enum("decoration", self.decoration.clone());
+        properties.add_default_enum("position", self.position, DecorationPosition::Background);
+    }
+}
 
 impl RenderBox for RenderDecoratedBox {
     type Arity = Single;

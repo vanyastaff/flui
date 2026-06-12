@@ -77,9 +77,7 @@ impl Default for RenderAbsorbPointer {
 
 impl flui_foundation::Diagnosticable for RenderAbsorbPointer {
     fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add("absorbing", self.absorbing);
-        builder.add("size", format!("{:?}", self.size));
-        builder.add("has_child", self.has_child);
+        builder.add_flag("absorbing", self.absorbing, "absorbing");
     }
 }
 
@@ -189,11 +187,9 @@ mod tests {
             .iter()
             .map(|p| p.name().to_string())
             .collect();
-        for required in ["absorbing", "size", "has_child"] {
-            assert!(
-                names.iter().any(|n| n == required),
-                "missing diagnostic field: {required}"
-            );
-        }
+        assert!(
+            names.iter().any(|n| n == "absorbing"),
+            "missing diagnostic field: absorbing"
+        );
     }
 }

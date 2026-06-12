@@ -166,7 +166,13 @@ impl Default for RenderTransform {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderTransform {}
+impl flui_foundation::Diagnosticable for RenderTransform {
+    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
+        properties.add("transform", format!("{:?}", self.transform));
+        properties.add_enum("alignment", self.alignment);
+        properties.add_optional("origin", self.origin.map(|o| format!("{o:?}")));
+    }
+}
 impl RenderBox for RenderTransform {
     type Arity = Single;
     type ParentData = BoxParentData;
