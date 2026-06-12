@@ -12,7 +12,10 @@
 
 use flui_types::layout::AxisDirection;
 
-use crate::{constraints::SliverConstraints, view::ScrollDirection};
+use crate::{
+    constraints::{GrowthDirection, SliverConstraints},
+    view::ScrollDirection,
+};
 
 /// A chainable builder for [`SliverConstraints`].
 ///
@@ -84,6 +87,24 @@ impl SliverConstraintsBuilder {
     #[must_use]
     pub fn user_scroll_direction(mut self, value: ScrollDirection) -> Self {
         self.inner.user_scroll_direction = value;
+        self
+    }
+
+    /// Sets the main-axis direction and matching cross-axis direction.
+    #[must_use]
+    pub fn with_axis_direction(mut self, axis: AxisDirection) -> Self {
+        self.inner.axis_direction = axis;
+        self.inner.cross_axis_direction = match axis {
+            AxisDirection::TopToBottom | AxisDirection::BottomToTop => AxisDirection::LeftToRight,
+            AxisDirection::LeftToRight | AxisDirection::RightToLeft => AxisDirection::TopToBottom,
+        };
+        self
+    }
+
+    /// Sets the growth direction (forward from leading edge or reverse from trailing).
+    #[must_use]
+    pub fn with_growth_direction(mut self, growth: GrowthDirection) -> Self {
+        self.inner.growth_direction = growth;
         self
     }
 

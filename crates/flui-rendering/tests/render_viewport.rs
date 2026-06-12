@@ -7,7 +7,7 @@ use std::sync::{
 
 use flui_foundation::Diagnosticable;
 use flui_rendering::{
-    constraints::{BoxConstraints, SliverConstraints, SliverGeometry},
+    constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
     context::{SliverHitTestContext, SliverLayoutContext},
     objects::RenderViewport,
     parent_data::SliverParentData,
@@ -206,6 +206,68 @@ impl RenderSliver for InvisibleHitSliver {
 
     fn hit_test_self(&self, main: f32, cross: f32) -> bool {
         main >= 0.0 && main < self.geometry.hit_test_extent && cross >= 0.0
+    }
+}
+
+#[derive(Debug)]
+struct GrowthRecordingSliver {
+    scroll_extent: f32,
+    constraints: SliverConstraints,
+    geometry: SliverGeometry,
+    last_growth_direction: GrowthDirection,
+}
+
+impl GrowthRecordingSliver {
+    fn new(scroll_extent: f32) -> Self {
+        Self {
+            scroll_extent,
+            constraints: SliverConstraints::default(),
+            geometry: SliverGeometry::ZERO,
+            last_growth_direction: GrowthDirection::Forward,
+        }
+    }
+}
+
+impl Diagnosticable for GrowthRecordingSliver {}
+impl PaintEffectsCapability for GrowthRecordingSliver {}
+impl SemanticsCapability for GrowthRecordingSliver {}
+impl HotReloadCapability for GrowthRecordingSliver {}
+
+impl RenderSliver for GrowthRecordingSliver {
+    type Arity = Leaf;
+    type ParentData = SliverParentData;
+
+    fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>) {
+        self.constraints = *ctx.constraints();
+        self.last_growth_direction = self.constraints.growth_direction;
+        let paint_extent = self.calculate_paint_offset(&self.constraints, 0.0, self.scroll_extent);
+        self.geometry = SliverGeometry {
+            scroll_extent: self.scroll_extent,
+            paint_extent,
+            layout_extent: paint_extent,
+            max_paint_extent: self.scroll_extent,
+            hit_test_extent: paint_extent,
+            cache_extent: self.calculate_cache_offset(&self.constraints, 0.0, self.scroll_extent),
+            visible: paint_extent > 0.0,
+            ..SliverGeometry::ZERO
+        };
+        ctx.complete(self.geometry);
+    }
+
+    fn constraints(&self) -> &SliverConstraints {
+        &self.constraints
+    }
+
+    fn geometry(&self) -> &SliverGeometry {
+        &self.geometry
+    }
+
+    fn set_geometry(&mut self, geometry: SliverGeometry) {
+        self.geometry = geometry;
+    }
+
+    fn hit_test_self(&self, _main: f32, _cross: f32) -> bool {
+        false
     }
 }
 
@@ -787,20 +849,67 @@ fn viewport_resets_sliver_out_of_band_data_between_layout_passes() {
 }
 
 #[test]
-fn viewport_positions_first_sliver_for_each_axis_direction() {
+fn viewport_positions_first_sliver_for_axis_and_growth_matrix() {
     let cases = [
-        (AxisDirection::TopToBottom, Offset::new(px(0.0), px(0.0))),
-        (AxisDirection::BottomToTop, Offset::new(px(0.0), px(60.0))),
-        (AxisDirection::LeftToRight, Offset::new(px(0.0), px(0.0))),
-        (AxisDirection::RightToLeft, Offset::new(px(60.0), px(0.0))),
+        (
+            AxisDirection::TopToBottom,
+            GrowthDirection::Forward,
+            None,
+            Offset::new(px(0.0), px(0.0)),
+        ),
+        (
+            AxisDirection::TopToBottom,
+            GrowthDirection::Reverse,
+            Some(0),
+            Offset::new(px(0.0), px(60.0)),
+        ),
+        (
+            AxisDirection::BottomToTop,
+            GrowthDirection::Forward,
+            None,
+            Offset::new(px(0.0), px(60.0)),
+        ),
+        (
+            AxisDirection::BottomToTop,
+            GrowthDirection::Reverse,
+            Some(0),
+            Offset::new(px(0.0), px(0.0)),
+        ),
+        (
+            AxisDirection::LeftToRight,
+            GrowthDirection::Forward,
+            None,
+            Offset::new(px(0.0), px(0.0)),
+        ),
+        (
+            AxisDirection::LeftToRight,
+            GrowthDirection::Reverse,
+            Some(0),
+            Offset::new(px(60.0), px(0.0)),
+        ),
+        (
+            AxisDirection::RightToLeft,
+            GrowthDirection::Forward,
+            None,
+            Offset::new(px(60.0), px(0.0)),
+        ),
+        (
+            AxisDirection::RightToLeft,
+            GrowthDirection::Reverse,
+            Some(0),
+            Offset::new(px(0.0), px(0.0)),
+        ),
     ];
 
-    for (axis_direction, expected_offset) in cases {
-        let viewport = RenderViewport::with_offset(
+    for (axis_direction, growth, center, expected_offset) in cases {
+        let mut viewport = RenderViewport::with_offset(
             axis_direction,
             test_cross_axis_direction(axis_direction),
             ScrollableViewportOffset::zero(),
         );
+        if growth == GrowthDirection::Reverse {
+            viewport.set_center_sliver_index(center);
+        }
 
         let mut owner = PipelineOwner::new();
         let root_id = owner.insert(Box::new(viewport));
@@ -817,42 +926,117 @@ fn viewport_positions_first_sliver_for_each_axis_direction() {
         assert_eq!(
             render_offset(&owner, sliver_id),
             expected_offset,
-            "{axis_direction:?} must place a 40px sliver against the physical leading edge",
+            "{axis_direction:?} {growth:?} must place a 40px sliver at the expected paint offset",
         );
     }
 }
 
 #[test]
+fn viewport_reverse_section_passes_reverse_growth_to_slivers() {
+    let mut viewport = RenderViewport::with_offset(
+        AxisDirection::TopToBottom,
+        AxisDirection::LeftToRight,
+        ScrollableViewportOffset::zero(),
+    );
+    viewport.set_center_sliver_index(Some(0));
+
+    let mut owner = PipelineOwner::new();
+    let root_id = owner.insert(Box::new(viewport));
+    let sliver = GrowthRecordingSliver::new(40.0);
+    let sliver_id = owner
+        .render_tree_mut()
+        .insert_sliver_child(root_id, Box::new(sliver) as BoxedSliverObject)
+        .expect("sliver");
+
+    let owner = laid_out(owner, root_id);
+    let sliver = owner
+        .render_tree()
+        .get(sliver_id)
+        .and_then(|node| node.as_sliver())
+        .and_then(|entry| {
+            entry
+                .render_object()
+                .downcast_ref::<GrowthRecordingSliver>()
+        })
+        .expect("GrowthRecordingSliver");
+
+    assert_eq!(
+        sliver.last_growth_direction,
+        GrowthDirection::Reverse,
+        "reverse-side viewport children must receive GrowthDirection::Reverse",
+    );
+    assert_eq!(
+        render_offset(&owner, sliver_id),
+        Offset::new(px(0.0), px(60.0))
+    );
+}
+
+#[test]
 fn viewport_hit_test_maps_each_axis_direction_into_sliver_main_axis() {
-    let cases = [
+    let forward_cases = [
         (
             AxisDirection::TopToBottom,
+            None,
             Offset::new(px(10.0), px(10.0)),
             Offset::new(px(10.0), px(30.0)),
         ),
         (
             AxisDirection::BottomToTop,
+            None,
             Offset::new(px(10.0), px(90.0)),
             Offset::new(px(10.0), px(70.0)),
         ),
         (
             AxisDirection::LeftToRight,
+            None,
             Offset::new(px(10.0), px(10.0)),
             Offset::new(px(30.0), px(10.0)),
         ),
         (
             AxisDirection::RightToLeft,
+            None,
             Offset::new(px(90.0), px(10.0)),
             Offset::new(px(70.0), px(10.0)),
         ),
     ];
+    let reverse_cases = [
+        (
+            AxisDirection::TopToBottom,
+            Some(0),
+            Offset::new(px(10.0), px(90.0)),
+            Offset::new(px(10.0), px(70.0)),
+        ),
+        (
+            AxisDirection::BottomToTop,
+            Some(0),
+            Offset::new(px(10.0), px(10.0)),
+            Offset::new(px(10.0), px(30.0)),
+        ),
+        (
+            AxisDirection::LeftToRight,
+            Some(0),
+            Offset::new(px(90.0), px(10.0)),
+            Offset::new(px(70.0), px(10.0)),
+        ),
+        (
+            AxisDirection::RightToLeft,
+            Some(0),
+            Offset::new(px(10.0), px(10.0)),
+            Offset::new(px(30.0), px(10.0)),
+        ),
+    ];
 
-    for (axis_direction, hit_position, miss_position) in cases {
-        let viewport = RenderViewport::with_offset(
+    for (axis_direction, center, hit_position, miss_position) in
+        forward_cases.into_iter().chain(reverse_cases)
+    {
+        let mut viewport = RenderViewport::with_offset(
             axis_direction,
             test_cross_axis_direction(axis_direction),
             ScrollableViewportOffset::zero(),
         );
+        if let Some(center_index) = center {
+            viewport.set_center_sliver_index(Some(center_index));
+        }
 
         let mut owner = PipelineOwner::new();
         let root_id = owner.insert(Box::new(viewport));
@@ -869,11 +1053,11 @@ fn viewport_hit_test_maps_each_axis_direction_into_sliver_main_axis() {
         assert_eq!(
             hits_at(&owner, hit_position.dx.get(), hit_position.dy.get()),
             vec![sliver_id, root_id],
-            "{axis_direction:?} must map the physical leading band into sliver main-axis space",
+            "{axis_direction:?} center={center:?} must map the leading hit band into sliver main-axis space",
         );
         assert!(
             hits_at(&owner, miss_position.dx.get(), miss_position.dy.get()).is_empty(),
-            "{axis_direction:?} must miss outside the sliver's leading hit band",
+            "{axis_direction:?} center={center:?} must miss outside the sliver's leading hit band",
         );
     }
 }

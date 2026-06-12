@@ -6,11 +6,12 @@
 
 use flui_foundation::Diagnosticable;
 use flui_tree::Single;
-use flui_types::{Offset, geometry::px, layout::AxisDirection::*};
+use flui_types::layout::AxisDirection::*;
 
 use crate::{
     constraints::{GrowthDirection, SliverConstraints, SliverGeometry},
     context::{PaintCx, SliverHitTestContext, SliverLayoutContext},
+    objects::sliver_helpers::child_paint_offset,
     parent_data::SliverPhysicalParentData,
     traits::{HotReloadCapability, PaintEffectsCapability, RenderSliver, SemanticsCapability},
 };
@@ -30,25 +31,6 @@ impl RenderSliverToBoxAdapter {
         Self {
             constraints: empty_sliver_constraints(),
             geometry: SliverGeometry::ZERO,
-        }
-    }
-
-    #[inline]
-    fn child_paint_offset(constraints: &SliverConstraints, geometry: &SliverGeometry) -> Offset {
-        match constraints
-            .growth_direction
-            .apply_to_axis_direction(constraints.axis_direction)
-        {
-            TopToBottom => Offset::new(px(0.0), px(-constraints.scroll_offset)),
-            LeftToRight => Offset::new(px(-constraints.scroll_offset), px(0.0)),
-            BottomToTop => Offset::new(
-                px(0.0),
-                px(geometry.paint_extent + constraints.scroll_offset - geometry.scroll_extent),
-            ),
-            RightToLeft => Offset::new(
-                px(geometry.paint_extent + constraints.scroll_offset - geometry.scroll_extent),
-                px(0.0),
-            ),
         }
     }
 }
@@ -102,7 +84,8 @@ impl RenderSliver for RenderSliverToBoxAdapter {
                 || self.constraints.scroll_offset > 0.0,
             ..SliverGeometry::ZERO
         };
-        let child_paint_offset = Self::child_paint_offset(&self.constraints, &geometry);
+        let child_paint_offset =
+            child_paint_offset(&self.constraints, &geometry, 0.0, child_extent);
         ctx.position_child(0, child_paint_offset);
         self.geometry = geometry;
         ctx.complete(geometry);

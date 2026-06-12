@@ -34,6 +34,9 @@ pub struct RenderViewport<O = ScrollableViewportOffset> {
     cache_extent: f32,
     cache_extent_style: CacheExtentStyle,
     paint_order: SliverPaintOrder,
+    /// When set, children before this index use forward growth; from this index
+    /// onward use reverse growth (Flutter `center` sliver partition, W3.2 slice).
+    center_sliver_index: Option<usize>,
     size: Size,
     child_count: usize,
     min_scroll_extent: f32,
@@ -72,6 +75,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             cache_extent: DEFAULT_CACHE_EXTENT,
             cache_extent_style: CacheExtentStyle::Pixel,
             paint_order: SliverPaintOrder::FirstIsTop,
+            center_sliver_index: None,
             size: Size::ZERO,
             child_count: 0,
             min_scroll_extent: 0.0,
@@ -114,6 +118,16 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
     pub const fn set_cache_extent(&mut self, cache_extent: f32, style: CacheExtentStyle) {
         self.cache_extent = cache_extent;
         self.cache_extent_style = style;
+    }
+
+    /// Sets the index of the center sliver for forward/reverse growth partitioning.
+    ///
+    /// `None` (default) lays out all children with forward growth. When set to
+    /// `Some(index)`, children `[0..index)` use forward growth and `[index..)` use
+    /// reverse growth from the trailing edge.
+    #[inline]
+    pub const fn set_center_sliver_index(&mut self, index: Option<usize>) {
+        self.center_sliver_index = index;
     }
 
     /// Last total scroll extent reported by the forward sliver sequence.
@@ -204,18 +218,47 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
         let remaining_cache_extent =
             (full_cache_extent - center_cache_offset).clamp(0.0, full_cache_extent);
 
-        self.layout_child_sequence(
-            ctx,
-            corrected_offset.max(0.0),
-            center_offset.min(0.0),
-            0.0,
-            main_axis_extent,
-            main_axis_extent,
-            cross_axis_extent,
-            GrowthDirection::Forward,
-            remaining_cache_extent,
-            center_offset.clamp(-cache_extent, 0.0),
-        )
+        let child_count = ctx.child_count();
+        let center = self.center_sliver_index.unwrap_or(child_count);
+
+        if center > 0 {
+            let correction = self.layout_child_sequence(
+                ctx,
+                corrected_offset.max(0.0),
+                center_offset.min(0.0),
+                0.0,
+                main_axis_extent,
+                main_axis_extent,
+                cross_axis_extent,
+                GrowthDirection::Forward,
+                remaining_cache_extent,
+                center_offset.clamp(-cache_extent, 0.0),
+                0,
+                center,
+            );
+            if correction != 0.0 {
+                return correction;
+            }
+        }
+
+        if center < child_count {
+            return self.layout_child_sequence(
+                ctx,
+                corrected_offset.max(0.0),
+                center_offset.min(0.0),
+                0.0,
+                main_axis_extent,
+                main_axis_extent,
+                cross_axis_extent,
+                GrowthDirection::Reverse,
+                remaining_cache_extent,
+                center_offset.clamp(-cache_extent, 0.0),
+                center,
+                child_count,
+            );
+        }
+
+        0.0
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -231,6 +274,8 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
         growth_direction: GrowthDirection,
         mut remaining_cache_extent: f32,
         mut cache_origin: f32,
+        child_start: usize,
+        child_end: usize,
     ) -> f32 {
         let initial_layout_offset = layout_offset;
         let adjusted_user_scroll_direction =
@@ -241,7 +286,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
         let mut max_paint_offset = layout_offset + overlap;
         let mut preceding_scroll_extent = 0.0;
 
-        for index in 0..ctx.child_count() {
+        for index in child_start..child_end {
             let sliver_scroll_offset = if scroll_offset <= 0.0 {
                 0.0
             } else {
@@ -416,10 +461,10 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
                 continue;
             }
 
-            if self
-                .offset
-                .apply_content_dimensions(0.0, (self.max_scroll_extent - main_axis_extent).max(0.0))
-            {
+            if self.offset.apply_content_dimensions(
+                self.min_scroll_extent,
+                (self.max_scroll_extent - main_axis_extent).max(0.0),
+            ) {
                 accepted = true;
                 break;
             }
