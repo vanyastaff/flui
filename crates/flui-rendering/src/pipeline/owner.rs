@@ -718,22 +718,36 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             if child_node.as_sliver().is_some() {
                 // Explicit positions are already child-local; the layout-offset
                 // fallback starts from the child's physical paint offset.
-                let child_position = match override_pos {
-                    Some(position) => Self::sliver_hit_position_from_offset(child_node, position),
+                return match override_pos {
+                    Some(position) => {
+                        let child_position =
+                            Self::sliver_hit_position_from_offset(child_node, position);
+                        self.hit_test_sliver_subtree(child_id, child_position, result)
+                    }
                     None => {
                         if !Self::sliver_child_is_visible(child_node) {
                             return false;
                         }
-                        Self::sliver_hit_position_from_paint_offset(
-                            child_node,
-                            position - child_node.offset(),
-                        )
+                        let child_offset = child_node.offset();
+                        result.with_paint_offset(child_offset, |result| {
+                            let child_position = Self::sliver_hit_position_from_paint_offset(
+                                child_node,
+                                position - child_offset,
+                            );
+                            self.hit_test_sliver_subtree(child_id, child_position, result)
+                        })
                     }
                 };
-                return self.hit_test_sliver_subtree(child_id, child_position, result);
             }
-            let child_position = override_pos.unwrap_or_else(|| position - child_node.offset());
-            self.hit_test_subtree(child_id, child_position, result)
+            match override_pos {
+                Some(child_position) => self.hit_test_subtree(child_id, child_position, result),
+                None => {
+                    let child_offset = child_node.offset();
+                    result.with_paint_offset(child_offset, |result| {
+                        self.hit_test_subtree(child_id, position - child_offset, result)
+                    })
+                }
+            }
         };
 
         let hit = render_object.hit_test_raw(position, children.len(), &mut hit_child);
@@ -1391,8 +1405,19 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         dimension: crate::storage::IntrinsicDimension,
         extent: f32,
     ) -> crate::error::RenderResult<f32> {
+        #[cfg(any(test, feature = "testing"))]
+        let parent_data_seeds = self.parent_data_seeds.clone();
         let mut slots = self.acquire_query_slots(id)?;
-        intrinsic_query(&mut slots, id, dimension, extent)
+        intrinsic_query(
+            &mut slots,
+            id,
+            dimension,
+            extent,
+            #[cfg(any(test, feature = "testing"))]
+            &parent_data_seeds,
+            #[cfg(not(any(test, feature = "testing")))]
+            &(),
+        )
     }
 
     /// The size a box subtree WOULD take under `constraints`, memoized
@@ -1424,30 +1449,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         constraints: crate::constraints::BoxConstraints,
         baseline: crate::traits::TextBaseline,
     ) -> crate::error::RenderResult<Option<f32>> {
-        let Some(node) = self.render_tree.get_mut(id) else {
-            return Err(crate::error::RenderError::NodeNotFound(id));
-        };
-        let Some(entry) = node.as_box_mut() else {
-            return Err(crate::error::RenderError::ProtocolMismatch {
-                node_protocol: "sliver",
-                constraints_protocol: "box",
-            });
-        };
-        if let Some(hit) = entry
-            .state()
-            .layout_cache()
-            .peek_dry_baseline(constraints, baseline)
-        {
-            return Ok(hit);
-        }
-        let value = entry
-            .render_object()
-            .dry_baseline_raw(constraints, baseline);
-        entry
-            .state_mut()
-            .layout_cache_mut()
-            .insert_dry_baseline(constraints, baseline, value);
-        Ok(value)
+        let mut slots = self.acquire_query_slots(id)?;
+        dry_baseline_query(&mut slots, id, constraints, baseline)
     }
 
     /// Acquires the take-out borrow map for a memoizing query walk:
@@ -2776,9 +2779,23 @@ unsafe fn box_intrinsic_query_borrowed_impl<'tree>(
                     }
                 }
             };
-        entry
-            .render_object()
-            .intrinsic_raw(dimension, extent, child_ids.len(), &mut child_query)
+        let mut child_flex = |index: usize| -> i32 {
+            child_flex_from_seeds(
+                #[cfg(any(test, feature = "testing"))]
+                &borrows.parent_data_seeds,
+                #[cfg(not(any(test, feature = "testing")))]
+                &(),
+                &child_ids,
+                index,
+            )
+        };
+        entry.render_object().intrinsic_raw(
+            dimension,
+            extent,
+            child_ids.len(),
+            &mut child_query,
+            &mut child_flex,
+        )
     };
 
     if let Some(err) = child_err {
@@ -3414,6 +3431,14 @@ impl PipelineOwner<PaintPhase> {
             return Ok(());
         }
 
+        // Flutter object.dart:3497 — a node that still needs layout must
+        // not paint stale geometry. Layout runs before paint in the
+        // pipeline, so this guards descendant-error and partial-frame
+        // paths where a poisoned layout left the flag set.
+        if render_node.needs_layout() {
+            return Ok(());
+        }
+
         // Record the node's fragment. paint_raw sees ONLY the recorder
         // (sans-IO): no tree access, no layer access, no recursion.
         let debug_name = render_node.debug_name();
@@ -3793,6 +3818,35 @@ struct QuerySlot<'a> {
     children: Vec<RenderId>,
 }
 
+#[cfg(any(test, feature = "testing"))]
+fn flex_factor_from_seed(seed: &ParentDataSeed) -> i32 {
+    match seed {
+        ParentDataSeed::Flex(data) => data.flex.unwrap_or(0).max(0),
+        _ => 0,
+    }
+}
+
+fn child_flex_from_seeds(
+    #[cfg(any(test, feature = "testing"))] parent_data_seeds: &FxHashMap<RenderId, ParentDataSeed>,
+    #[cfg(not(any(test, feature = "testing")))] _parent_data_seeds: &(),
+    children: &[RenderId],
+    index: usize,
+) -> i32 {
+    #[cfg(any(test, feature = "testing"))]
+    {
+        children
+            .get(index)
+            .and_then(|child_id| parent_data_seeds.get(child_id))
+            .map(flex_factor_from_seed)
+            .unwrap_or(0)
+    }
+    #[cfg(not(any(test, feature = "testing")))]
+    {
+        let _ = (children, index);
+        0
+    }
+}
+
 /// Recursive memoized intrinsic query over the take-out slot map.
 ///
 /// Per node: cache peek → on miss, run the object's `intrinsic_raw`
@@ -3805,8 +3859,10 @@ fn intrinsic_query(
     id: RenderId,
     dimension: crate::storage::IntrinsicDimension,
     extent: f32,
+    #[cfg(any(test, feature = "testing"))] parent_data_seeds: &FxHashMap<RenderId, ParentDataSeed>,
+    #[cfg(not(any(test, feature = "testing")))] parent_data_seeds: &(),
 ) -> crate::error::RenderResult<f32> {
-    ensure_stack(|| intrinsic_query_impl(slots, id, dimension, extent))
+    ensure_stack(|| intrinsic_query_impl(slots, id, dimension, extent, parent_data_seeds))
 }
 
 /// Body of [`intrinsic_query`]; split out so every recursion level
@@ -3816,6 +3872,8 @@ fn intrinsic_query_impl(
     id: RenderId,
     dimension: crate::storage::IntrinsicDimension,
     extent: f32,
+    #[cfg(any(test, feature = "testing"))] parent_data_seeds: &FxHashMap<RenderId, ParentDataSeed>,
+    #[cfg(not(any(test, feature = "testing")))] parent_data_seeds: &(),
 ) -> crate::error::RenderResult<f32> {
     let Some(slot) = slots.get_mut(&id) else {
         return Err(crate::error::RenderError::NodeNotFound(id));
@@ -3860,7 +3918,7 @@ fn intrinsic_query_impl(
                         ));
                         return 0.0;
                     };
-                    match intrinsic_query(slots, child_id, dim, ext) {
+                    match intrinsic_query(slots, child_id, dim, ext, parent_data_seeds) {
                         Ok(v) => v,
                         Err(err) => {
                             child_err.get_or_insert(err);
@@ -3868,9 +3926,16 @@ fn intrinsic_query_impl(
                         }
                     }
                 };
-            entry
-                .render_object()
-                .intrinsic_raw(dimension, extent, children.len(), &mut child_query)
+            let mut child_flex = |index: usize| -> i32 {
+                child_flex_from_seeds(parent_data_seeds, &children, index)
+            };
+            entry.render_object().intrinsic_raw(
+                dimension,
+                extent,
+                children.len(),
+                &mut child_query,
+                &mut child_flex,
+            )
         };
         if let Some(err) = child_err {
             return Err(err);
@@ -3960,6 +4025,117 @@ fn dry_layout_query_impl(
             .state_mut()
             .layout_cache_mut()
             .insert_dry_layout(constraints, value);
+        Ok(value)
+    })();
+
+    if let Some(slot) = slots.get_mut(&id) {
+        slot.node = Some(node);
+    }
+    result
+}
+
+/// Recursive memoized dry-baseline query; same skeleton as
+/// [`dry_layout_query`] with `(constraints, baseline → Option<f32>)`
+/// payloads.
+fn dry_baseline_query(
+    slots: &mut rustc_hash::FxHashMap<RenderId, QuerySlot<'_>>,
+    id: RenderId,
+    constraints: crate::constraints::BoxConstraints,
+    baseline: crate::traits::TextBaseline,
+) -> crate::error::RenderResult<Option<f32>> {
+    ensure_stack(|| dry_baseline_query_impl(slots, id, constraints, baseline))
+}
+
+/// Body of [`dry_baseline_query`]; split out so every recursion level
+/// enters through the [`ensure_stack`] probe.
+fn dry_baseline_query_impl(
+    slots: &mut rustc_hash::FxHashMap<RenderId, QuerySlot<'_>>,
+    id: RenderId,
+    constraints: crate::constraints::BoxConstraints,
+    baseline: crate::traits::TextBaseline,
+) -> crate::error::RenderResult<Option<f32>> {
+    let Some(slot) = slots.get_mut(&id) else {
+        return Err(crate::error::RenderError::NodeNotFound(id));
+    };
+    let Some(node) = slot.node.take() else {
+        debug_assert!(
+            false,
+            "dry-baseline query re-entered node {id:?} mid-computation — cyclic child links"
+        );
+        return Ok(None);
+    };
+    let children = slot.children.clone();
+
+    let result = (|| {
+        let Some(entry) = node.as_box_mut() else {
+            return Err(crate::error::RenderError::ProtocolMismatch {
+                node_protocol: "sliver",
+                constraints_protocol: "box",
+            });
+        };
+        if let Some(hit) = entry
+            .state()
+            .layout_cache()
+            .peek_dry_baseline(constraints, baseline)
+        {
+            return Ok(hit);
+        }
+        let mut child_err: Option<crate::error::RenderError> = None;
+        let value = {
+            let child_err = &mut child_err;
+            let mut child_query = |index: usize,
+                                   request: crate::context::DryBaselineChildRequest|
+             -> crate::context::DryBaselineChildResponse {
+                use crate::context::{DryBaselineChildRequest, DryBaselineChildResponse};
+                let Some(&child_id) = children.get(index) else {
+                    child_err.get_or_insert(crate::error::RenderError::contract_violation(
+                        "dry-baseline child query",
+                        "child index out of range for this node's children",
+                    ));
+                    return match request {
+                        DryBaselineChildRequest::Baseline(_, _) => {
+                            DryBaselineChildResponse::Baseline(None)
+                        }
+                        DryBaselineChildRequest::DryLayout(_) => {
+                            DryBaselineChildResponse::DryLayout(flui_types::Size::ZERO)
+                        }
+                    };
+                };
+                match request {
+                    DryBaselineChildRequest::Baseline(c, b) => {
+                        match dry_baseline_query(slots, child_id, c, b) {
+                            Ok(v) => DryBaselineChildResponse::Baseline(v),
+                            Err(err) => {
+                                child_err.get_or_insert(err);
+                                DryBaselineChildResponse::Baseline(None)
+                            }
+                        }
+                    }
+                    DryBaselineChildRequest::DryLayout(c) => {
+                        match dry_layout_query(slots, child_id, c) {
+                            Ok(v) => DryBaselineChildResponse::DryLayout(v),
+                            Err(err) => {
+                                child_err.get_or_insert(err);
+                                DryBaselineChildResponse::DryLayout(flui_types::Size::ZERO)
+                            }
+                        }
+                    }
+                }
+            };
+            entry.render_object().dry_baseline_raw(
+                constraints,
+                baseline,
+                children.len(),
+                &mut child_query,
+            )
+        };
+        if let Some(err) = child_err {
+            return Err(err);
+        }
+        entry
+            .state_mut()
+            .layout_cache_mut()
+            .insert_dry_baseline(constraints, baseline, value);
         Ok(value)
     })();
 
@@ -4421,7 +4597,9 @@ mod tests {
     /// The owner must remain usable for a subsequent frame.
     #[test]
     fn test_run_frame_catches_paint_panic() {
+        use crate::constraints::BoxConstraints;
         use crate::error::RenderError;
+        use flui_types::geometry::px;
 
         // Silence the default panic hook for the duration of this test
         // so cargo test output isn't polluted by the intentional panic.
@@ -4432,6 +4610,16 @@ mod tests {
         let root_id = owner.insert(Box::new(PanickingPaintBox::new())
             as Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>);
         owner.set_root_id(Some(root_id));
+        // Root layout needs binding constraints on the first frame; without
+        // them run_layout skips the dirty entry, NEEDS_LAYOUT stays set, and
+        // the paint guard (Flutter object.dart:3497) correctly skips paint —
+        // which would make this test miss the intentional paint panic.
+        owner.set_root_constraints(Some(BoxConstraints::new(
+            px(0.0),
+            px(200.0),
+            px(0.0),
+            px(200.0),
+        )));
 
         let (owner, result) = owner.run_frame();
 
@@ -4814,12 +5002,12 @@ mod tests {
     }
 
     /// A leaf committing a size that violates the constraints it was laid out
-    /// under trips `Protocol::debug_assert_layout_output` (Flutter
-    /// `debugAssertDoesMeetConstraints`) on the leaf commit path — a node
-    /// returning 999×999 under tight 100×100 is a layout bug.
+    /// under surfaces `RenderError::InvalidGeometry` on the leaf commit path —
+    /// a node returning 999×999 under tight 100×100 is a layout bug.
     #[test]
-    #[should_panic(expected = "violates its constraints")]
-    fn leaf_committing_a_constraint_violating_size_trips_the_layout_assert() {
+    fn leaf_committing_a_constraint_violating_size_returns_invalid_geometry() {
+        use crate::error::RenderError;
+
         let mut owner = PipelineOwner::new();
         let root = owner.insert(Box::new(FixedSizeLeaf {
             size: flui_types::Size::new(
@@ -4834,6 +5022,12 @@ mod tests {
             flui_types::geometry::px(100.0),
         ))));
 
-        let _ = owner.run_frame();
+        let (_, result) = owner.run_frame();
+        match result {
+            Err(RenderError::InvalidGeometry { reason, .. }) => {
+                assert!(reason.contains("does not satisfy"));
+            }
+            other => panic!("expected InvalidGeometry, got {other:?}"),
+        }
     }
 }

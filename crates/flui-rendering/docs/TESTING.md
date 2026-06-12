@@ -34,7 +34,8 @@ TreeNode spec  →  RenderTester::mount  →  run_layout | run_frame
    [`sliver_node`](../src/testing/tree.rs), optional [`ParentDataSeed`](../src/testing/parent_data.rs),
    and [`TreeNode::label`](../src/testing/tree.rs).
 2. **Drive** the production pipeline at the depth you need.
-3. **Inspect** through the shared [`Probe`](../src/testing/inspect.rs) trait.
+3. **Inspect** through the shared [`Probe`](../src/testing/inspect.rs) trait and,
+   for proxy query contracts, [`BoxQueryRun`](../src/testing/queries.rs).
 4. **Animate** with multi-frame helpers on [`FrameRun`](../src/testing/harness.rs).
 
 Diagnostics dumps combine each render object's **user config** (via
@@ -76,8 +77,9 @@ use **snake_case**.
 | `update_paint::<T>(id, edit)` | Mutate + paint-dirty (no layout pass here) |
 | `mark_needs_paint(id)` | Paint-dirty only |
 | `relayout()` | Re-run layout after `update` |
+| [`BoxQueryRun`](../src/testing/queries.rs) | Intrinsics / dry layout / dry baseline (see below) |
 
-Implements [`Probe`](../src/testing/inspect.rs).
+Implements [`Probe`](../src/testing/inspect.rs) and [`BoxQueryRun`](../src/testing/queries.rs).
 
 ### `FrameRun`
 
@@ -99,7 +101,7 @@ Implements [`Probe`](../src/testing/inspect.rs).
 | `opacity_alpha()` | First opacity layer alpha, if any |
 | `has_picture_layer()` | Whether a picture layer exists |
 
-Implements [`Probe`](../src/testing/inspect.rs).
+Implements [`Probe`](../src/testing/inspect.rs) and [`BoxQueryRun`](../src/testing/queries.rs).
 
 ### `Probe` (shared inspection)
 
@@ -115,6 +117,46 @@ Implements [`Probe`](../src/testing/inspect.rs).
 | `property_f64(id, "name")` | Parsed numeric property |
 | `descendant_property("RenderFlex", "direction")` | Find by type name |
 | `dump()` | Printable tree (for failure messages) |
+
+### `BoxQueryRun` (intrinsics / dry probes)
+
+Implemented on both [`LayoutRun`](../src/testing/harness.rs) and
+[`FrameRun`](../src/testing/harness.rs). Queries use the production
+[`PipelineOwner`](../src/pipeline/owner.rs) memoization path — they do **not**
+require a prior layout pass, but you can call them after `run_layout` or
+`run_frame` to assert proxy forwarding contracts.
+
+| Method | Purpose |
+|--------|---------|
+| `intrinsic_dimension(id, dimension, extent)` | Raw intrinsic dispatch |
+| `min_intrinsic_width(id, height)` | `computeMinIntrinsicWidth` |
+| `max_intrinsic_width(id, height)` | `computeMaxIntrinsicWidth` |
+| `min_intrinsic_height(id, width)` | `computeMinIntrinsicHeight` |
+| `max_intrinsic_height(id, width)` | `computeMaxIntrinsicHeight` |
+| `dry_layout(id, constraints)` | Flutter `getDryLayout` |
+| `dry_baseline(id, constraints, baseline)` | Flutter `getDryBaseline` |
+
+```rust
+use flui_rendering::objects::{RenderColoredBox, RenderOpacity};
+use flui_rendering::testing::{BoxQueryRun, RenderTester, box_node};
+use flui_types::{Size, geometry::px};
+
+let constraints = flui_rendering::constraints::BoxConstraints::new(
+    px(0.0), px(200.0), px(0.0), px(200.0),
+);
+let mut run = RenderTester::mount(
+    box_node(RenderOpacity::opaque())
+        .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+)
+.with_constraints(constraints)
+.run_layout();
+
+assert_eq!(run.min_intrinsic_width(run.root(), 100.0), 40.0);
+assert_eq!(
+    run.dry_layout(run.root(), constraints),
+    Size::new(px(40.0), px(40.0)),
+);
+```
 
 ### Assertion helpers ([`assertions`](../src/testing/assertions.rs))
 

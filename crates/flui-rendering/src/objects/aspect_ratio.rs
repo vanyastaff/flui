@@ -360,6 +360,19 @@ impl RenderBox for RenderAspectRatio {
         // (proxy_box.dart `RenderAspectRatio.computeDryLayout`).
         self.apply_aspect_ratio(constraints)
     }
+
+    fn compute_dry_baseline(
+        &self,
+        constraints: BoxConstraints,
+        baseline: crate::traits::TextBaseline,
+        ctx: &mut crate::context::BoxDryBaselineCtx<'_>,
+    ) -> Option<f32> {
+        if ctx.child_count() == 0 {
+            return None;
+        }
+        let tight = BoxConstraints::tight(self.apply_aspect_ratio(constraints));
+        ctx.child_dry_baseline(0, tight, baseline)
+    }
 }
 
 // Mythos Step 11: explicit (default) capability opt-outs.

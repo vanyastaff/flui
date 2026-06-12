@@ -166,6 +166,8 @@ impl RenderBox for RenderOpacity {
         &mut self.size
     }
 
+    crate::forward_single_child_box_queries!();
+
     // paint() uses default no-op - opacity is applied via paint_alpha()
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {

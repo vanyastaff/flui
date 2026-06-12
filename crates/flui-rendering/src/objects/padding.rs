@@ -126,24 +126,96 @@ impl RenderBox for RenderPadding {
         &mut self.size
     }
 
+    fn compute_min_intrinsic_width(
+        &self,
+        height: f32,
+        ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
+        let deflated_height = (height - self.padding.vertical_total().get()).max(0.0);
+        if ctx.child_count() == 0 {
+            return self.padding.horizontal_total().get();
+        }
+        ctx.child_min_intrinsic_width(0, deflated_height) + self.padding.horizontal_total().get()
+    }
+
+    fn compute_max_intrinsic_width(
+        &self,
+        height: f32,
+        ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
+        let deflated_height = (height - self.padding.vertical_total().get()).max(0.0);
+        if ctx.child_count() == 0 {
+            return self.padding.horizontal_total().get();
+        }
+        ctx.child_max_intrinsic_width(0, deflated_height) + self.padding.horizontal_total().get()
+    }
+
+    fn compute_min_intrinsic_height(
+        &self,
+        width: f32,
+        ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
+        let deflated_width = (width - self.padding.horizontal_total().get()).max(0.0);
+        if ctx.child_count() == 0 {
+            return self.padding.vertical_total().get();
+        }
+        ctx.child_min_intrinsic_height(0, deflated_width) + self.padding.vertical_total().get()
+    }
+
+    fn compute_max_intrinsic_height(
+        &self,
+        width: f32,
+        ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
+        let deflated_width = (width - self.padding.horizontal_total().get()).max(0.0);
+        if ctx.child_count() == 0 {
+            return self.padding.vertical_total().get();
+        }
+        ctx.child_max_intrinsic_height(0, deflated_width) + self.padding.vertical_total().get()
+    }
+
+    fn compute_dry_layout(
+        &self,
+        constraints: BoxConstraints,
+        ctx: &mut crate::context::BoxDryLayoutCtx<'_>,
+    ) -> Size {
+        if ctx.child_count() == 0 {
+            return constraints.constrain(Size::new(
+                self.padding.horizontal_total(),
+                self.padding.vertical_total(),
+            ));
+        }
+        let child_constraints = self.deflate_constraints(&constraints);
+        let child_size = ctx.child_dry_layout(0, child_constraints);
+        constraints.constrain(Size::new(
+            child_size.width + self.padding.horizontal_total(),
+            child_size.height + self.padding.vertical_total(),
+        ))
+    }
+
+    fn compute_dry_baseline(
+        &self,
+        constraints: BoxConstraints,
+        baseline: crate::traits::TextBaseline,
+        ctx: &mut crate::context::BoxDryBaselineCtx<'_>,
+    ) -> Option<f32> {
+        if ctx.child_count() == 0 {
+            return None;
+        }
+        let child_constraints = self.deflate_constraints(&constraints);
+        let child_baseline = ctx.child_dry_baseline(0, child_constraints, baseline)?;
+        Some(child_baseline + self.padding.top.get())
+    }
+
     // paint() uses default no-op - Padding just positions children
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
-        // First check if we're in bounds
         if !ctx.is_within_size(self.size.width, self.size.height) {
             return false;
         }
 
-        // Then test child at its offset, recording the offset in the transform stack
         if self.has_child {
-            ctx.push_offset(self.child_offset);
-            let child_position = Offset::new(
-                ctx.position().dx - self.child_offset.dx,
-                ctx.position().dy - self.child_offset.dy,
-            );
-            let hit = ctx.hit_test_child(0, child_position);
-            ctx.pop_transform();
-            hit
+            ctx.hit_test_child_at_layout_offset(0)
         } else {
             false
         }

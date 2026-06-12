@@ -5,7 +5,7 @@ use flui_types::{Offset, Pixels, Point, Rect, Size, geometry::px};
 
 use crate::{
     constraints::BoxConstraints,
-    context::{BoxHitTestContext, BoxLayoutContext},
+    context::{BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext},
     parent_data::{FlexFit, FlexParentData},
     traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
 };
@@ -200,6 +200,57 @@ impl RenderFlex {
             FlexDirection::Horizontal => Size::new(main, cross),
             FlexDirection::Vertical => Size::new(cross, main),
         }
+    }
+
+    /// Flutter `RenderFlex._getIntrinsicSize` main-axis branch
+    /// (`flex.dart:716-733`): flex children contribute via the largest
+    /// per-flex-unit size; inflexible children sum directly.
+    fn fold_main_axis_intrinsics(
+        &self,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+        cross_extent: f32,
+        mut child_size: impl FnMut(&mut BoxIntrinsicsCtx<'_>, usize, f32) -> f32,
+    ) -> f32 {
+        let child_count = ctx.child_count();
+        if child_count == 0 {
+            return 0.0;
+        }
+
+        let spacing_total = self.spacing * (child_count.saturating_sub(1)) as f32;
+        let mut total_flex = 0i32;
+        let mut inflexible_space = spacing_total;
+        let mut max_flex_fraction = 0.0f32;
+
+        for i in 0..child_count {
+            let flex = ctx.child_flex(i);
+            total_flex += flex;
+            if flex > 0 {
+                let size = child_size(ctx, i, cross_extent);
+                max_flex_fraction = max_flex_fraction.max(size / flex as f32);
+            } else {
+                inflexible_space += child_size(ctx, i, cross_extent);
+            }
+        }
+
+        max_flex_fraction * total_flex as f32 + inflexible_space
+    }
+
+    /// Folds child intrinsics along the cross axis (max of child cross sizes).
+    fn intrinsic_cross(
+        &self,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+        main_extent: f32,
+        mut child_cross: impl FnMut(&mut BoxIntrinsicsCtx<'_>, usize, f32) -> f32,
+    ) -> f32 {
+        let child_count = ctx.child_count();
+        if child_count == 0 {
+            return 0.0;
+        }
+        let mut max = 0.0f32;
+        for i in 0..child_count {
+            max = max.max(child_cross(ctx, i, main_extent));
+        }
+        max
     }
 }
 
@@ -450,6 +501,54 @@ impl RenderBox for RenderFlex {
 
     fn size_mut(&mut self) -> &mut Size {
         &mut self.size
+    }
+
+    fn compute_min_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        match self.direction {
+            FlexDirection::Horizontal => {
+                self.fold_main_axis_intrinsics(ctx, height, |ctx, i, e| {
+                    ctx.child_min_intrinsic_width(i, e)
+                })
+            }
+            FlexDirection::Vertical => {
+                self.intrinsic_cross(ctx, height, |ctx, i, e| ctx.child_min_intrinsic_width(i, e))
+            }
+        }
+    }
+
+    fn compute_max_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        match self.direction {
+            FlexDirection::Horizontal => {
+                self.fold_main_axis_intrinsics(ctx, height, |ctx, i, e| {
+                    ctx.child_max_intrinsic_width(i, e)
+                })
+            }
+            FlexDirection::Vertical => {
+                self.intrinsic_cross(ctx, height, |ctx, i, e| ctx.child_max_intrinsic_width(i, e))
+            }
+        }
+    }
+
+    fn compute_min_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        match self.direction {
+            FlexDirection::Vertical => self.fold_main_axis_intrinsics(ctx, width, |ctx, i, e| {
+                ctx.child_min_intrinsic_height(i, e)
+            }),
+            FlexDirection::Horizontal => {
+                self.intrinsic_cross(ctx, width, |ctx, i, e| ctx.child_min_intrinsic_height(i, e))
+            }
+        }
+    }
+
+    fn compute_max_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        match self.direction {
+            FlexDirection::Vertical => self.fold_main_axis_intrinsics(ctx, width, |ctx, i, e| {
+                ctx.child_max_intrinsic_height(i, e)
+            }),
+            FlexDirection::Horizontal => {
+                self.intrinsic_cross(ctx, width, |ctx, i, e| ctx.child_max_intrinsic_height(i, e))
+            }
+        }
     }
 
     // paint() uses default no-op - Flex just positions children

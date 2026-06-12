@@ -4,45 +4,45 @@
 //!
 //! # Coverage map (one row per exported render type)
 //!
-//! | Type | Harness test(s) | Layout | Hit-test | Paint | Diagnostics |
-//! |------|-----------------|--------|----------|-------|-------------|
-//! | `RenderSizedBox` | `harness_sized_box_*` | yes | — | — | yes |
-//! | `RenderColoredBox` | `harness_colored_box_*` | yes | yes | yes | yes |
-//! | `RenderImage` | `harness_image_*` | yes | — | yes | yes |
-//! | `RenderParagraph` | `harness_paragraph_*` | yes | — | yes | yes |
-//! | `RenderPadding` | `harness_padding_*` | yes | — | — | yes |
-//! | `RenderCenter` | `harness_center_*` | yes | — | — | yes |
-//! | `RenderAspectRatio` | `harness_aspect_ratio_*` | yes | — | — | yes |
-//! | `RenderConstrainedBox` | `harness_constrained_box_*` | yes | — | — | yes |
-//! | `RenderLimitedBox` | `harness_limited_box_*` | yes | — | — | yes |
-//! | `RenderOffstage` | `harness_offstage_*` | yes | yes | — | yes |
-//! | `RenderOpacity` | `harness_opacity_*` | yes | — | yes | yes |
-//! | `RenderTransform` | `harness_transform_*` | yes | — | yes | yes |
-//! | `RenderFittedBox` | `harness_fitted_box_*` | yes | — | — | yes |
-//! | `RenderFractionallySizedBox` | `harness_fractionally_sized_box_*` | yes | — | — | yes |
-//! | `RenderFractionalTranslation` | `harness_fractional_translation_*` | yes | — | — | yes |
-//! | `RenderDecoratedBox` | `harness_decorated_box_*` | yes | — | yes | yes |
-//! | `RenderClipRect` | `harness_clip_rect_*` | yes | — | — | yes |
-//! | `RenderClipRRect` | `harness_clip_rrect_*` | yes | — | — | yes |
-//! | `RenderClipOval` | `harness_clip_oval_*` | yes | — | — | yes |
-//! | `RenderClipPath` | `harness_clip_path_*` | yes | — | — | yes |
-//! | `RenderRepaintBoundary` | `harness_repaint_boundary_*` | yes | — | yes | yes |
-//! | `RenderMetaData` | `harness_metadata_*` | yes | — | — | yes |
-//! | `RenderFlex` | `harness_flex_*` | yes | — | — | yes |
-//! | `RenderStack` | `harness_stack_*` | yes | yes | — | yes |
-//! | `RenderAbsorbPointer` | `harness_absorb_pointer_*` | yes | yes | — | yes |
-//! | `RenderIgnorePointer` | `harness_ignore_pointer_*` | yes | yes | — | yes |
-//! | `RenderSliverFixedExtentList` | `harness_sliver_fixed_extent_list_*` | yes | — | — | yes |
-//! | `RenderSliverPadding` | `harness_sliver_padding_*` | yes | — | — | yes |
-//! | `RenderSliverToBoxAdapter` | `harness_sliver_to_box_adapter_*` | yes | — | — | yes |
-//! | `RenderSliverFillViewport` | `harness_sliver_fill_viewport_*` | yes | — | — | yes |
-//! | `RenderSliverFillRemaining` | `harness_sliver_fill_remaining_*` | yes | — | — | yes |
-//! | `RenderSliverFillRemainingAndOverscroll` | `harness_sliver_fill_remaining_and_overscroll_*` | yes | — | — | yes |
-//! | `RenderSliverFillRemainingWithScrollable` | `harness_sliver_fill_remaining_with_scrollable_*` | yes | — | — | yes |
-//! | `RenderSliverIgnorePointer` | `harness_sliver_ignore_pointer_*` | yes | yes | — | yes |
-//! | `RenderSliverOffstage` | `harness_sliver_offstage_*` | yes | — | — | yes |
-//! | `RenderSliverOpacity` | `harness_sliver_opacity_*` | yes | — | yes | yes |
-//! | `RenderViewport` | `harness_viewport_*` | yes | — | — | yes |
+//! | Type | Harness test(s) | Layout | Hit-test | Paint | Diagnostics | Queries |
+//! |------|-----------------|--------|----------|-------|-------------|---------|
+//! | `RenderSizedBox` | `harness_sized_box_*` | yes | — | — | yes | queries |
+//! | `RenderColoredBox` | `harness_colored_box_*` | yes | yes | yes | yes | — |
+//! | `RenderImage` | `harness_image_*` | yes | — | yes | yes | — |
+//! | `RenderParagraph` | `harness_paragraph_*` | yes | — | yes | yes | — |
+//! | `RenderPadding` | `harness_padding_*` | yes | — | — | yes | queries |
+//! | `RenderCenter` | `harness_center_*` | yes | — | — | yes | — |
+//! | `RenderAspectRatio` | `harness_aspect_ratio_*` | yes | — | — | yes | — |
+//! | `RenderConstrainedBox` | `harness_constrained_box_*` | yes | — | — | yes | — |
+//! | `RenderLimitedBox` | `harness_limited_box_*` | yes | — | — | yes | — |
+//! | `RenderOffstage` | `harness_offstage_*` | yes | yes | — | yes | — |
+//! | `RenderOpacity` | `harness_opacity_*` | yes | — | yes | yes | queries |
+//! | `RenderTransform` | `harness_transform_*` | yes | — | yes | yes | — |
+//! | `RenderFittedBox` | `harness_fitted_box_*` | yes | — | — | yes | — |
+//! | `RenderFractionallySizedBox` | `harness_fractionally_sized_box_*` | yes | — | — | yes | — |
+//! | `RenderFractionalTranslation` | `harness_fractional_translation_*` | yes | — | — | yes | — |
+//! | `RenderDecoratedBox` | `harness_decorated_box_*` | yes | — | yes | yes | — |
+//! | `RenderClipRect` | `harness_clip_rect_*` | yes | — | — | yes | — |
+//! | `RenderClipRRect` | `harness_clip_rrect_*` | yes | — | — | yes | — |
+//! | `RenderClipOval` | `harness_clip_oval_*` | yes | — | — | yes | — |
+//! | `RenderClipPath` | `harness_clip_path_*` | yes | — | — | yes | — |
+//! | `RenderRepaintBoundary` | `harness_repaint_boundary_*` | yes | — | yes | yes | — |
+//! | `RenderMetaData` | `harness_metadata_*` | yes | — | — | yes | — |
+//! | `RenderFlex` | `harness_flex_*` | yes | — | — | yes | queries |
+//! | `RenderStack` | `harness_stack_*` | yes | yes | — | yes | queries |
+//! | `RenderAbsorbPointer` | `harness_absorb_pointer_*` | yes | yes | — | yes | — |
+//! | `RenderIgnorePointer` | `harness_ignore_pointer_*` | yes | yes | — | yes | — |
+//! | `RenderSliverFixedExtentList` | `harness_sliver_fixed_extent_list_*` | yes | — | — | yes | — |
+//! | `RenderSliverPadding` | `harness_sliver_padding_*` | yes | — | — | yes | — |
+//! | `RenderSliverToBoxAdapter` | `harness_sliver_to_box_adapter_*` | yes | — | — | yes | — |
+//! | `RenderSliverFillViewport` | `harness_sliver_fill_viewport_*` | yes | — | — | yes | — |
+//! | `RenderSliverFillRemaining` | `harness_sliver_fill_remaining_*` | yes | — | — | yes | — |
+//! | `RenderSliverFillRemainingAndOverscroll` | `harness_sliver_fill_remaining_and_overscroll_*` | yes | — | — | yes | — |
+//! | `RenderSliverFillRemainingWithScrollable` | `harness_sliver_fill_remaining_with_scrollable_*` | yes | — | — | yes | — |
+//! | `RenderSliverIgnorePointer` | `harness_sliver_ignore_pointer_*` | yes | yes | — | yes | — |
+//! | `RenderSliverOffstage` | `harness_sliver_offstage_*` | yes | — | — | yes | — |
+//! | `RenderSliverOpacity` | `harness_sliver_opacity_*` | yes | — | yes | yes | — |
+//! | `RenderViewport` | `harness_viewport_*` | yes | — | — | yes | — |
 //!
 //! [`catalog_covers_every_render_object_name`] guards the table: every row's
 //! type string must appear in this file so a missing harness test fails CI.
@@ -50,10 +50,10 @@
 use flui_rendering::{
     constraints::BoxConstraints,
     objects::*,
-    parent_data::StackParentData,
+    parent_data::{FlexParentData, StackParentData},
     testing::{
-        Probe, RenderTester, TreeNode, assert_descendant_properties, assert_has_committed_geometry,
-        assert_has_committed_size, box_node, sliver_node,
+        BoxQueryRun, Probe, RenderTester, TreeNode, assert_descendant_properties,
+        assert_has_committed_geometry, assert_has_committed_size, box_node, sliver_node,
     },
 };
 use flui_types::{
@@ -165,6 +165,20 @@ fn harness_sized_box_width_only_leaves_height_loose() {
 }
 
 #[test]
+fn harness_sized_box_reports_fixed_queries() {
+    let constraints = loose(200.0);
+    let mut run = RenderTester::mount(box_node(RenderSizedBox::fixed(px(80.0), px(30.0))))
+        .with_constraints(constraints)
+        .run_layout();
+
+    assert_eq!(run.min_intrinsic_width(run.root(), 0.0), 80.0);
+    assert_eq!(
+        run.dry_layout(run.root(), constraints),
+        Size::new(px(80.0), px(30.0))
+    );
+}
+
+#[test]
 fn harness_colored_box_self_describes_and_paints() {
     let run = RenderTester::mount(box_node(RenderColoredBox::red(50.0, 50.0)))
         .with_size(Size::new(px(100.0), px(100.0)))
@@ -270,6 +284,23 @@ fn harness_padding_deflates_child_offset() {
     assert!(
         run.descendant_property("RenderPadding", "padding")
             .is_some()
+    );
+}
+
+#[test]
+fn harness_padding_forwards_intrinsics_with_insets() {
+    let mut run = RenderTester::mount(
+        box_node(RenderPadding::all(10.0))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    let padding = run.root();
+    assert_eq!(
+        run.min_intrinsic_width(padding, 100.0),
+        60.0,
+        "padding must add horizontal insets to the child's 40px min width"
     );
 }
 
@@ -454,6 +485,30 @@ fn harness_opacity_passes_child_geometry() {
     assert_eq!(
         run.descendant_property_f64("RenderOpacity", "opacity"),
         Some(0.5)
+    );
+}
+
+#[test]
+fn harness_opacity_forwards_box_queries() {
+    let constraints = loose(200.0);
+    let mut run = RenderTester::mount(
+        box_node(RenderOpacity::opaque())
+            .label("proxy")
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(constraints)
+    .run_layout();
+
+    let proxy = run.id("proxy");
+    assert_eq!(
+        run.min_intrinsic_width(proxy, 100.0),
+        40.0,
+        "opacity must forward child min intrinsic width"
+    );
+    assert_eq!(
+        run.dry_layout(proxy, constraints),
+        Size::new(px(40.0), px(40.0)),
+        "opacity must forward child dry layout"
     );
 }
 
@@ -783,6 +838,41 @@ fn harness_flex_row_positions_children_on_main_axis() {
 }
 
 #[test]
+fn harness_flex_row_sums_child_min_intrinsic_widths() {
+    let mut run = RenderTester::mount(
+        box_node(RenderFlex::row())
+            .child(box_node(RenderColoredBox::red(30.0, 20.0)).label("a"))
+            .child(box_node(RenderColoredBox::green(50.0, 20.0)).label("b")),
+    )
+    .with_size(Size::new(px(200.0), px(100.0)))
+    .run_layout();
+
+    assert_eq!(run.min_intrinsic_width(run.root(), 100.0), 80.0);
+    assert_eq!(run.max_intrinsic_height(run.root(), 200.0), 20.0);
+}
+
+#[test]
+fn harness_flex_row_weights_flexible_child_min_intrinsic_width() {
+    let mut run = RenderTester::mount(
+        box_node(RenderFlex::row())
+            .child(
+                box_node(RenderColoredBox::red(100.0, 20.0))
+                    .with_flex_parent_data(FlexParentData::flexible(1))
+                    .label("flex"),
+            )
+            .child(box_node(RenderColoredBox::green(40.0, 20.0)).label("fixed")),
+    )
+    .with_size(Size::new(px(200.0), px(100.0)))
+    .run_layout();
+
+    assert_eq!(
+        run.min_intrinsic_width(run.root(), 100.0),
+        140.0,
+        "flex child min 100 at flex 1 plus fixed 40",
+    );
+}
+
+#[test]
 fn harness_flex_column_stacks_children_vertically() {
     let run = RenderTester::mount(
         box_node(RenderFlex::column())
@@ -799,6 +889,38 @@ fn harness_flex_column_stacks_children_vertically() {
             .as_deref(),
         Some("Vertical"),
     );
+}
+
+#[test]
+fn harness_flex_column_max_child_intrinsic_width() {
+    let mut run = RenderTester::mount(
+        box_node(RenderFlex::column())
+            .child(box_node(RenderColoredBox::red(30.0, 20.0)).label("a"))
+            .child(box_node(RenderColoredBox::green(50.0, 20.0)).label("b")),
+    )
+    .with_size(Size::new(px(200.0), px(100.0)))
+    .run_layout();
+
+    assert_eq!(
+        run.min_intrinsic_width(run.root(), 100.0),
+        50.0,
+        "column cross-axis width is max child width, not sum",
+    );
+    assert_eq!(run.max_intrinsic_width(run.root(), 100.0), 50.0);
+}
+
+#[test]
+fn harness_stack_max_child_intrinsic_width() {
+    let mut run = RenderTester::mount(
+        box_node(RenderStack::new())
+            .child(box_node(RenderColoredBox::red(30.0, 20.0)).label("a"))
+            .child(box_node(RenderColoredBox::green(50.0, 25.0)).label("b")),
+    )
+    .with_size(Size::new(px(200.0), px(100.0)))
+    .run_layout();
+
+    assert_eq!(run.min_intrinsic_width(run.root(), 100.0), 50.0);
+    assert_eq!(run.max_intrinsic_height(run.root(), 200.0), 25.0);
 }
 
 #[test]

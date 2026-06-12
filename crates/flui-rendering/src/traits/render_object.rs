@@ -271,6 +271,7 @@ pub trait RenderObject<P: Protocol>:
         _child_query: &mut (
                  dyn FnMut(usize, crate::storage::IntrinsicDimension, f32) -> f32 + Send + Sync
              ),
+        _child_flex: &mut (dyn FnMut(usize) -> i32 + Send + Sync),
     ) -> f32 {
         0.0
     }
@@ -301,14 +302,21 @@ pub trait RenderObject<P: Protocol>:
     /// constraints. `None` means "this box has no baseline".
     ///
     /// Container objects that derive their baseline from a child need a
-    /// child-query channel like the other walks; none of the current
-    /// box objects report baselines yet, so the channel is added
-    /// together with the first text-bearing render object rather than
-    /// speculatively here.
+    /// child-query channel like the other memoized walks; the driver
+    /// memoizes every level in the per-node layout cache.
     fn dry_baseline_raw(
         &self,
         _constraints: ProtocolConstraints<P>,
         _baseline: crate::traits::TextBaseline,
+        _child_count: usize,
+        _child_query: &mut (
+                 dyn FnMut(
+            usize,
+            crate::context::DryBaselineChildRequest,
+        ) -> crate::context::DryBaselineChildResponse
+                     + Send
+                     + Sync
+             ),
     ) -> Option<f32> {
         None
     }

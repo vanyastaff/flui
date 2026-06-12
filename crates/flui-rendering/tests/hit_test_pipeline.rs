@@ -9,11 +9,13 @@
 //!    parents no longer mirror offsets in their own fields
 //!    (`hit_test_child_at_layout_offset`, Flex's `Vec<Offset>` is gone);
 //! 3. a transform parent hit-tests through the INVERSE of its paint
-//!    matrix (the D8 hit-test-under-transform gate).
+//!    matrix; child descent records paint offsets on the result
+//!    transform stack for gesture dispatch.
 
 use flui_rendering::{
     constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
     context::{BoxHitTestContext, BoxLayoutContext, SliverHitTestContext, SliverLayoutContext},
+    hit_testing::HitTestResult,
     objects::{
         RenderColoredBox, RenderFlex, RenderPadding, RenderSliverIgnorePointer,
         RenderSliverOpacity, RenderSliverPadding, RenderTransform,
@@ -29,7 +31,7 @@ use flui_rendering::{
     view::ScrollDirection,
 };
 use flui_tree::{Leaf, Variable};
-use flui_types::{Offset, Rect, Size, geometry::px, layout::AxisDirection};
+use flui_types::{Matrix4, Offset, Rect, Size, geometry::px, layout::AxisDirection};
 
 type BoxedRenderObject = Box<dyn RenderObject<BoxProtocol>>;
 type BoxedSliverObject = Box<dyn RenderObject<SliverProtocol>>;
@@ -207,6 +209,43 @@ fn transform_child_hits_through_inverse_matrix() {
     assert!(
         hits(&owner, 90.0, 90.0).is_empty(),
         "outside the inverse-mapped child bounds → miss",
+    );
+}
+
+#[test]
+fn hit_entry_records_child_paint_offset_transform() {
+    let mut owner = PipelineOwner::new();
+    let padding_id = owner.insert(Box::new(RenderPadding::all(5.0)) as BoxedRenderObject);
+    let child_id = owner
+        .insert_child_render_object(padding_id, Box::new(RenderColoredBox::red(40.0, 40.0)))
+        .expect("child insert");
+    let owner = laid_out(owner, padding_id);
+
+    let mut result = HitTestResult::new();
+    owner.hit_test(Offset::new(px(20.0), px(20.0)), &mut result);
+
+    let child_entry = result
+        .path()
+        .iter()
+        .find(|entry| entry.target == child_id)
+        .expect("child must be in hit path");
+
+    let transform = child_entry
+        .transform
+        .expect("hit entry must capture the result transform stack");
+    assert_ne!(
+        transform,
+        Matrix4::identity(),
+        "laid-out child offset must contribute a non-identity transform",
+    );
+
+    let inverse = transform
+        .try_inverse()
+        .expect("paint-offset transform must be invertible");
+    let (local_x, local_y) = inverse.transform_point(px(20.0), px(20.0));
+    assert!(
+        (local_x.get() - 15.0).abs() < 0.01 && (local_y.get() - 15.0).abs() < 0.01,
+        "inverse transform must map global (20,20) to child-local (15,15) through 5px padding",
     );
 }
 

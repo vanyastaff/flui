@@ -222,6 +222,8 @@ impl RenderBox for RenderLimitedBox {
         Rect::from_origin_size(Point::ZERO, self.size)
     }
 
+    crate::forward_single_child_intrinsics!();
+
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
@@ -237,6 +239,15 @@ impl RenderBox for RenderLimitedBox {
         } else {
             constraints.constrain(Size::new(limited.min_width, limited.min_height))
         }
+    }
+
+    fn compute_dry_baseline(
+        &self,
+        constraints: BoxConstraints,
+        baseline: crate::traits::TextBaseline,
+        ctx: &mut crate::context::BoxDryBaselineCtx<'_>,
+    ) -> Option<f32> {
+        crate::context::proxy_queries::forward_dry_baseline(constraints, baseline, ctx)
     }
 }
 

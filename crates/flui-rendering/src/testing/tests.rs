@@ -15,7 +15,7 @@ use crate::{
         RenderSliverFixedExtentList, RenderStack, RenderViewport,
     },
     parent_data::{FlexParentData, StackParentData},
-    testing::{Probe, RenderTester, box_node, sliver_node},
+    testing::{BoxQueryRun, Probe, RenderTester, box_node, sliver_node},
 };
 
 /// Loose `0..=200 x 0..=200` constraints: children settle at their natural
@@ -398,4 +398,39 @@ fn unknown_label_resolves_to_none() {
         .with_size(Size::new(px(50.0), px(50.0)))
         .run_layout();
     assert!(run.try_id("missing").is_none());
+}
+
+// ============================================================================
+// Box query helpers
+// ============================================================================
+
+#[test]
+fn layout_run_box_queries_match_pipeline() {
+    let constraints = loose_200();
+    let mut run = RenderTester::mount(
+        box_node(RenderOpacity::opaque())
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(constraints)
+    .run_layout();
+
+    assert_eq!(run.min_intrinsic_width(run.root(), 100.0), 40.0);
+    assert_eq!(
+        run.dry_layout(run.root(), constraints),
+        Size::new(px(40.0), px(40.0))
+    );
+}
+
+#[test]
+fn frame_run_box_queries_work_after_paint() {
+    let constraints = loose_200();
+    let mut run = RenderTester::mount(
+        box_node(RenderPadding::all(5.0))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(constraints)
+    .run_frame();
+
+    assert_eq!(run.min_intrinsic_width(run.root(), 100.0), 50.0);
+    assert!(run.painted());
 }

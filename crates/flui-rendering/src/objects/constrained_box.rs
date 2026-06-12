@@ -274,6 +274,20 @@ impl RenderBox for RenderConstrainedBox {
             combined.constrain(Size::ZERO)
         }
     }
+
+    fn compute_dry_baseline(
+        &self,
+        constraints: BoxConstraints,
+        baseline: crate::traits::TextBaseline,
+        ctx: &mut crate::context::BoxDryBaselineCtx<'_>,
+    ) -> Option<f32> {
+        let combined = self.additional_constraints.enforce(&constraints);
+        if ctx.child_count() > 0 {
+            ctx.child_dry_baseline(0, combined, baseline)
+        } else {
+            None
+        }
+    }
 }
 
 // Mythos Step 11: explicit (default) capability opt-outs.

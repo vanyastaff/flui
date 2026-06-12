@@ -11,6 +11,8 @@
 //!   * crates/flui-rendering/src/pipeline/owner.rs — `run_paint`,
 //!     `paint_node_recursive`
 
+use flui_foundation::LayerId;
+use flui_layer::{Layer, LayerTree};
 use flui_rendering::{
     constraints::BoxConstraints,
     objects::{RenderColoredBox, RenderPadding, RenderRepaintBoundary},
@@ -261,5 +263,65 @@ fn u35_unpainted_unreached_nodes_still_clear_flag() {
     assert!(
         !owner.render_tree().get(root_id).unwrap().needs_paint(),
         "root needs_paint must be cleared after paint (painted by root descent)",
+    );
+}
+
+fn layer_tree_has_picture(tree: &LayerTree) -> bool {
+    fn walk(tree: &LayerTree, id: LayerId) -> bool {
+        let Some(node) = tree.get(id) else {
+            return false;
+        };
+        matches!(node.layer(), Layer::Picture(_))
+            || node.children().iter().any(|&child| walk(tree, child))
+    }
+    tree.root().is_some_and(|root| walk(tree, root))
+}
+
+#[test]
+fn paint_skips_node_that_still_needs_layout() {
+    let mut owner = PipelineOwner::new();
+    let root_id = owner.insert(Box::new(RenderPadding::all(0.0))
+        as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
+    let child_id = owner
+        .insert_child_render_object(root_id, Box::new(RenderColoredBox::red(40.0, 40.0)))
+        .expect("child insert");
+
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::new(
+        px(0.0),
+        px(200.0),
+        px(0.0),
+        px(200.0),
+    )));
+
+    let mut owner = owner.into_layout();
+    owner.run_layout().expect("layout");
+    let mut owner = owner.into_compositing();
+    owner.run_compositing().expect("compositing");
+    let mut owner = owner.into_paint();
+    owner.run_paint().expect("paint");
+
+    assert!(
+        owner.layer_tree().is_some_and(layer_tree_has_picture),
+        "first paint must record child picture ops",
+    );
+
+    let root_depth = owner.render_tree().depth(root_id).unwrap_or(0) as usize;
+    let mut owner = owner.into_idle();
+    owner
+        .render_tree()
+        .get(child_id)
+        .expect("child")
+        .mark_layout_flag();
+    owner.add_node_needing_paint(root_id, root_depth);
+
+    let owner = owner.into_layout();
+    let owner = owner.into_compositing();
+    let mut owner = owner.into_paint();
+    owner.run_paint().expect("repaint with stale child layout");
+
+    assert!(
+        !owner.layer_tree().is_some_and(layer_tree_has_picture),
+        "needs_layout node must not paint stale geometry",
     );
 }

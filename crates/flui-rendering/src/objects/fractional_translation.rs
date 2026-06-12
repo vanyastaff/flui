@@ -193,6 +193,8 @@ impl RenderBox for RenderFractionalTranslation {
         &mut self.size
     }
 
+    crate::forward_single_child_box_queries!();
+
     fn paint(&self, ctx: &mut crate::context::PaintCx<'_, Single>) {
         if !self.has_child {
             return;

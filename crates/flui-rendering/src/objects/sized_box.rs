@@ -4,6 +4,7 @@ use flui_tree::Leaf;
 use flui_types::{Pixels, Point, Rect, Size};
 
 use crate::{
+    constraints::BoxConstraints,
     context::BoxLayoutContext,
     parent_data::BoxParentData,
     traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
@@ -77,6 +78,18 @@ impl RenderSizedBox {
     pub fn height(&self) -> Option<Pixels> {
         self.height
     }
+
+    fn resolved_size(&self, constraints: &BoxConstraints) -> Size {
+        let width = self
+            .width
+            .map(|w| w.clamp(constraints.min_width, constraints.max_width))
+            .unwrap_or(constraints.max_width);
+        let height = self
+            .height
+            .map(|h| h.clamp(constraints.min_height, constraints.max_height))
+            .unwrap_or(constraints.max_height);
+        Size::new(width, height)
+    }
 }
 
 impl flui_foundation::Diagnosticable for RenderSizedBox {
@@ -113,6 +126,46 @@ impl RenderBox for RenderSizedBox {
 
     fn size_mut(&mut self) -> &mut Size {
         &mut self.size
+    }
+
+    fn compute_min_intrinsic_width(
+        &self,
+        _height: f32,
+        _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
+        self.width.map(|w| w.get()).unwrap_or(0.0)
+    }
+
+    fn compute_max_intrinsic_width(
+        &self,
+        _height: f32,
+        _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
+        self.width.map(|w| w.get()).unwrap_or(0.0)
+    }
+
+    fn compute_min_intrinsic_height(
+        &self,
+        _width: f32,
+        _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
+        self.height.map(|h| h.get()).unwrap_or(0.0)
+    }
+
+    fn compute_max_intrinsic_height(
+        &self,
+        _width: f32,
+        _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
+    ) -> f32 {
+        self.height.map(|h| h.get()).unwrap_or(0.0)
+    }
+
+    fn compute_dry_layout(
+        &self,
+        constraints: BoxConstraints,
+        _ctx: &mut crate::context::BoxDryLayoutCtx<'_>,
+    ) -> Size {
+        self.resolved_size(&constraints)
     }
 
     // paint() uses default no-op - SizedBox only affects layout
