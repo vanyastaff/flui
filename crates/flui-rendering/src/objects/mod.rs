@@ -57,6 +57,8 @@
 //!   variants that use Box child intrinsics (Core.2 W3.9)
 //! - [`RenderSliverFillViewport`] - Sizes each Box child to a viewport
 //!   fraction in the sliver main axis (Core.2 W3.10)
+//! - [`RenderSliverFixedExtentList`] - Sizes each Box child to a fixed
+//!   main-axis extent (Core.2 W3.17)
 //! - [`RenderViewport`] - Box viewport that drives Sliver children
 //!   (Core.2 W3.4a)
 //!
@@ -95,6 +97,7 @@ mod repaint_boundary;
 mod sized_box;
 mod sliver_fill_remaining;
 mod sliver_fill_viewport;
+mod sliver_fixed_extent_list;
 mod sliver_ignore_pointer;
 mod sliver_offstage;
 mod sliver_opacity;
@@ -133,6 +136,7 @@ pub use sliver_fill_remaining::{
     RenderSliverFillRemainingWithScrollable,
 };
 pub use sliver_fill_viewport::RenderSliverFillViewport;
+pub use sliver_fixed_extent_list::RenderSliverFixedExtentList;
 pub use sliver_ignore_pointer::RenderSliverIgnorePointer;
 pub use sliver_offstage::RenderSliverOffstage;
 pub use sliver_opacity::RenderSliverOpacity;
