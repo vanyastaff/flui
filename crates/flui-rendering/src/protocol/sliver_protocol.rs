@@ -54,6 +54,26 @@ impl Protocol for SliverProtocol {
         "sliver"
     }
 
+    fn debug_assert_layout_output(constraints: &SliverConstraints, geometry: &SliverGeometry) {
+        let _ = constraints;
+        geometry.debug_assert_valid();
+    }
+
+    fn validate_layout_output(
+        render_object: &'static str,
+        constraints: &SliverConstraints,
+        geometry: &SliverGeometry,
+    ) -> crate::error::RenderResult<()> {
+        let _ = constraints;
+        if let Some(reason) = geometry.validation_error() {
+            return Err(crate::error::RenderError::invalid_geometry(
+                render_object,
+                reason,
+            ));
+        }
+        Ok(())
+    }
+
     /// D-block PR-A1b U19 — Sliver counterpart to
     /// [`BoxProtocol::with_leaf_erased_ctx`](super::BoxProtocol::with_leaf_erased_ctx).
     /// Wraps the given `SliverConstraints` in a typed

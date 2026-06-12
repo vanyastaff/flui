@@ -152,6 +152,25 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
         let _ = (constraints, geometry);
     }
 
+    /// Runtime validation for a freshly computed layout result before it is
+    /// committed to [`RenderState`](crate::storage::RenderState).
+    ///
+    /// The default is a no-op. Protocols with recoverable geometry contracts
+    /// override this to surface
+    /// [`RenderError::InvalidGeometry`](crate::error::RenderError::InvalidGeometry)
+    /// while leaving the previous committed geometry intact.
+    fn validate_layout_output(
+        render_object: &'static str,
+        constraints: &<Self::Layout as LayoutCapability>::Constraints,
+        geometry: &<Self::Layout as LayoutCapability>::Geometry,
+    ) -> crate::error::RenderResult<()>
+    where
+        Self: Sized,
+    {
+        let _ = (render_object, constraints, geometry);
+        Ok(())
+    }
+
     /// Constructs a leaf-mode (no children, no layout callback) erased
     /// layout context from protocol-typed constraints, then invokes `f`
     /// with a `&mut Self::LayoutCtxErased<'_>` referencing it.
