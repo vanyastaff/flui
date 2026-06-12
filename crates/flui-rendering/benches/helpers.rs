@@ -12,14 +12,25 @@ use flui_rendering::{
     constraints::BoxConstraints,
     objects::{RenderColoredBox, RenderFlex, RenderPadding},
     pipeline::{Compositing, Layout, PaintPhase, PipelineOwner},
-    protocol::BoxProtocol,
-    traits::RenderObject,
+    testing::{TreeNode, box_node, tree},
 };
 use flui_types::{Size, geometry::px};
 
 /// Tight 200×200 root constraint used across all bench tree shapes.
 pub fn root_constraints() -> BoxConstraints {
     BoxConstraints::tight(Size::new(px(200.0), px(200.0)))
+}
+
+/// Mounts a `TreeNode` spec into a fresh owner with the shared root
+/// constraints and returns it in the `Layout` phase, ready for `run_layout`.
+/// Construction goes through the same `flui_rendering::testing` builder the
+/// integration tests use, so benches measure the genuine production contract.
+fn mount_layout(spec: TreeNode) -> PipelineOwner<Layout> {
+    let mut owner = PipelineOwner::new();
+    let (root_id, _registry) = tree::mount(&mut owner, spec);
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(root_constraints()));
+    owner.into_layout()
 }
 
 // ============================================================================
@@ -31,17 +42,10 @@ pub fn root_constraints() -> BoxConstraints {
 ///
 /// Measures the cost of one root-layout pass across `n` same-depth children.
 pub fn build_flat(n: usize) -> PipelineOwner<Layout> {
-    let mut owner = PipelineOwner::new();
-    let root_id = owner.insert(Box::new(RenderFlex::row()) as Box<dyn RenderObject<BoxProtocol>>);
-    owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(root_constraints()));
-
-    for _ in 0..n {
-        owner
-            .insert_child_render_object(root_id, Box::new(RenderColoredBox::red(1.0, 1.0)))
-            .expect("child insert must succeed: parent id was just inserted and is valid");
-    }
-    owner.into_layout()
+    mount_layout(
+        box_node(RenderFlex::row())
+            .children((0..n).map(|_| box_node(RenderColoredBox::red(1.0, 1.0)))),
+    )
 }
 
 // ============================================================================
@@ -54,58 +58,15 @@ pub fn build_flat(n: usize) -> PipelineOwner<Layout> {
 /// Measures the cost of a layout pass that must recurse `depth` levels deep.
 /// Padding=0 keeps arithmetic trivial so the bench reflects traversal cost.
 ///
-/// Construction strategy (API constraint): `insert_child_render_object`
-/// creates a *new* node as child — it cannot adopt an existing node. We
-/// therefore build top-down: insert the root padding first, then at each step
-/// insert the next level as a child of the previous level. The final level
-/// inserts the leaf `ColoredBox`.
+/// The spec is built leaf-first and wrapped `depth` times, so `depth == 0`
+/// degenerates to a bare leaf and `depth == k` yields `k` padding wrappers
+/// around one `ColoredBox`.
 pub fn build_deep(depth: usize) -> PipelineOwner<Layout> {
-    let mut owner = PipelineOwner::new();
-
-    if depth == 0 {
-        // Degenerate: single leaf, no wrappers.
-        let root_id =
-            owner.insert(
-                Box::new(RenderColoredBox::red(1.0, 1.0)) as Box<dyn RenderObject<BoxProtocol>>
-            );
-        owner.set_root_id(Some(root_id));
-        owner.set_root_constraints(Some(root_constraints()));
-        return owner.into_layout();
+    let mut node = box_node(RenderColoredBox::red(1.0, 1.0));
+    for _ in 0..depth {
+        node = box_node(RenderPadding::all(0.0)).child(node);
     }
-
-    // Insert the first (top) padding as root.
-    let root_id =
-        owner.insert(Box::new(RenderPadding::all(0.0)) as Box<dyn RenderObject<BoxProtocol>>);
-    owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(root_constraints()));
-
-    let mut current = root_id;
-
-    // Add `depth - 1` intermediate padding nodes after the root padding, then
-    // one ColoredBox leaf — `depth` padding wrappers total. When depth==1 the
-    // range is empty and we fall straight through to the leaf insert below.
-    //
-    // Invariant: `current` is always a Padding node that was just inserted and
-    // has no children yet, so every insert_child_render_object call succeeds.
-    for _ in 1..depth {
-        let next = owner
-            .insert_child_render_object(current, Box::new(RenderPadding::all(0.0)))
-            .expect(
-                "chain insert must succeed: current is a valid padding node just inserted \
-                 and has no children yet",
-            );
-        current = next;
-    }
-
-    // Always insert one ColoredBox leaf as child of the deepest padding.
-    owner
-        .insert_child_render_object(current, Box::new(RenderColoredBox::red(1.0, 1.0)))
-        .expect(
-            "leaf insert must succeed: current is a valid padding node just inserted \
-             and has no children yet",
-        );
-
-    owner.into_layout()
+    mount_layout(node)
 }
 
 // ============================================================================

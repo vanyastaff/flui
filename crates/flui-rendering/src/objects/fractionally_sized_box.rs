@@ -285,7 +285,6 @@ impl flui_foundation::Diagnosticable for RenderFractionallySizedBox {
             "alignment",
             format!("({}, {})", self.alignment.x, self.alignment.y),
         );
-        builder.add("size", format!("{:?}", self.size));
     }
 }
 

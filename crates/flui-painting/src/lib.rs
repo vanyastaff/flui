@@ -173,6 +173,13 @@ pub mod error;
 pub mod text_layout;
 pub mod text_painter;
 
+// Painting test harness. Compiled only for this crate's own tests
+// (`cfg(test)`) or when a consumer enables the `testing` feature. Provides a
+// `record` builder for `DisplayList`s plus diagnostics helpers. See
+// [`testing`] for the overview.
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
+
 // ===== Facade Pattern: Public Re-exports =====
 //
 // Re-export all public types at the crate root for convenient access.

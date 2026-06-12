@@ -99,7 +99,11 @@ impl Default for RenderSliverFillViewport {
     }
 }
 
-impl Diagnosticable for RenderSliverFillViewport {}
+impl Diagnosticable for RenderSliverFillViewport {
+    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
+        properties.add_double("viewport_fraction", self.viewport_fraction, None);
+    }
+}
 impl PaintEffectsCapability for RenderSliverFillViewport {}
 impl SemanticsCapability for RenderSliverFillViewport {}
 impl HotReloadCapability for RenderSliverFillViewport {}

@@ -1,17 +1,16 @@
 //! `RenderSliverFixedExtentList` — direct Box children with a fixed main-axis extent.
 
 use flui_rendering::{
-    constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
+    constraints::{BoxConstraints, SliverConstraints, SliverGeometry},
     context::{BoxHitTestContext, BoxLayoutContext},
-    hit_testing::HitTestResult,
     objects::RenderSliverFixedExtentList,
     parent_data::BoxParentData,
     pipeline::PipelineOwner,
     protocol::{BoxProtocol, SliverProtocol},
+    testing::{inspect, sliver as sliver_presets},
     traits::{
         HotReloadCapability, PaintEffectsCapability, RenderBox, RenderObject, SemanticsCapability,
     },
-    view::ScrollDirection,
 };
 use flui_tree::Leaf;
 use flui_types::{Offset, Rect, Size, geometry::px, layout::AxisDirection};
@@ -20,37 +19,25 @@ type BoxedRenderObject = Box<dyn RenderObject<BoxProtocol>>;
 type BoxedSliverObject = Box<dyn RenderObject<SliverProtocol>>;
 
 fn vertical_constraints(scroll_offset: f32) -> SliverConstraints {
-    SliverConstraints {
-        axis_direction: AxisDirection::TopToBottom,
-        cross_axis_direction: AxisDirection::LeftToRight,
-        growth_direction: GrowthDirection::Forward,
-        user_scroll_direction: ScrollDirection::Idle,
-        scroll_offset,
-        preceding_scroll_extent: 0.0,
-        overlap: 0.0,
-        remaining_paint_extent: 100.0,
-        cross_axis_extent: 300.0,
-        viewport_main_axis_extent: 100.0,
-        remaining_cache_extent: 120.0,
-        cache_origin: -20.0,
-    }
+    sliver_presets::vertical()
+        .scroll_offset(scroll_offset)
+        .remaining_paint_extent(100.0)
+        .cross_axis_extent(300.0)
+        .viewport_main_axis_extent(100.0)
+        .remaining_cache_extent(120.0)
+        .cache_origin(-20.0)
+        .build()
 }
 
 fn horizontal_constraints(scroll_offset: f32) -> SliverConstraints {
-    SliverConstraints {
-        axis_direction: AxisDirection::LeftToRight,
-        cross_axis_direction: AxisDirection::TopToBottom,
-        growth_direction: GrowthDirection::Forward,
-        user_scroll_direction: ScrollDirection::Idle,
-        scroll_offset,
-        preceding_scroll_extent: 0.0,
-        overlap: 0.0,
-        remaining_paint_extent: 300.0,
-        cross_axis_extent: 100.0,
-        viewport_main_axis_extent: 300.0,
-        remaining_cache_extent: 320.0,
-        cache_origin: -20.0,
-    }
+    sliver_presets::horizontal()
+        .scroll_offset(scroll_offset)
+        .remaining_paint_extent(300.0)
+        .cross_axis_extent(100.0)
+        .viewport_main_axis_extent(300.0)
+        .remaining_cache_extent(320.0)
+        .cache_origin(-20.0)
+        .build()
 }
 
 fn laid_out(
@@ -68,35 +55,21 @@ fn sliver_geometry(
     owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,
     id: flui_foundation::RenderId,
 ) -> SliverGeometry {
-    owner
-        .render_tree()
-        .get(id)
-        .and_then(|node| node.as_sliver())
-        .and_then(|entry| entry.state().geometry())
-        .expect("sliver geometry is committed")
+    inspect::sliver_geometry(owner, id).expect("sliver geometry is committed")
 }
 
 fn box_size(
     owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,
     id: flui_foundation::RenderId,
 ) -> Size {
-    owner
-        .render_tree()
-        .get(id)
-        .and_then(|node| node.as_box())
-        .and_then(|entry| entry.state().geometry())
-        .expect("box geometry is committed")
+    inspect::box_geometry(owner, id).expect("box geometry is committed")
 }
 
 fn render_offset(
     owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,
     id: flui_foundation::RenderId,
 ) -> Offset {
-    owner
-        .render_tree()
-        .get(id)
-        .map(flui_rendering::storage::RenderNode::offset)
-        .expect("node exists")
+    inspect::render_offset(owner, id).expect("node exists")
 }
 
 fn hits(
@@ -104,9 +77,7 @@ fn hits(
     x: f32,
     y: f32,
 ) -> Vec<flui_foundation::RenderId> {
-    let mut result = HitTestResult::new();
-    owner.hit_test(Offset::new(px(x), px(y)), &mut result);
-    result.path().iter().map(|entry| entry.target).collect()
+    inspect::hit_path(owner, x, y)
 }
 
 #[derive(Debug)]
@@ -243,6 +214,21 @@ fn sliver_fixed_extent_list_sizes_children_to_item_extent() {
     assert_eq!(geometry.hit_test_extent, 95.0);
     assert_eq!(geometry.cache_extent, 115.0);
     assert!(geometry.has_visual_overflow);
+
+    // The Diagnosticable-backed dump surfaces the sliver's committed
+    // geometry (cross-protocol: sliver nodes carry a `geometry` property,
+    // box nodes carry `size`). Exercises `PipelineOwner::debug_diagnostics_tree`
+    // and the foundation `DiagnosticsNode` query getters.
+    let diagnostics = owner
+        .debug_diagnostics_tree()
+        .expect("laid-out tree has a diagnostics root");
+    let sliver = diagnostics
+        .find_descendant("RenderSliverFixedExtentList")
+        .expect("the host's sliver child appears in the diagnostics tree");
+    assert!(
+        sliver.get_property("geometry").is_some(),
+        "the sliver self-reports its committed geometry in the dump",
+    );
 
     for &child_id in &child_ids {
         assert_eq!(box_size(&owner, child_id), Size::new(px(300.0), px(30.0)));

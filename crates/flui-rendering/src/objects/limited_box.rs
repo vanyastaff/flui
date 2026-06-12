@@ -172,7 +172,6 @@ impl flui_foundation::Diagnosticable for RenderLimitedBox {
                 .map(|v| format!("{}", v.get()))
                 .unwrap_or_else(|| "unset".to_string()),
         );
-        builder.add("size", format!("{:?}", self.size));
     }
 }
 

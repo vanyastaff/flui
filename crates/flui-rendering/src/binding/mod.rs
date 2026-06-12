@@ -476,9 +476,17 @@ pub fn debug_dump_semantics_tree<B: RendererBinding + ?Sized>(
 }
 
 /// Prints a textual representation of the pipeline owner tree.
+///
+/// When the owner has a root, this renders the `Diagnosticable`-backed
+/// diagnostics tree (each render object self-describes its properties, with
+/// committed geometry/offset layered on); otherwise it falls back to the
+/// owner's `Debug` representation.
 pub fn debug_dump_pipeline_owner_tree<B: RendererBinding + ?Sized>(binding: &B) -> String {
     let owner = binding.root_pipeline_owner().read();
-    format!("{:?}", *owner)
+    match owner.debug_diagnostics_tree() {
+        Some(tree) => tree.to_string(),
+        None => format!("{:?}", *owner),
+    }
 }
 
 // ============================================================================

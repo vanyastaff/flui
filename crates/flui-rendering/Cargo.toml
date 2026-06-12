@@ -45,18 +45,43 @@ harness = false
 name = "paint"
 harness = false
 
+# Headless render-object inspection runner. Gated on `testing` so the
+# example only builds when the harness module is compiled in. Run with
+# `cargo run -p flui-rendering --example render_inspector --features testing`.
+[[example]]
+name = "render_inspector"
+required-features = ["testing"]
+
 [dev-dependencies]
 criterion.workspace = true
 # Animation -> render-pipeline integration scenarios (tests only; no
 # production dependency between the layers).
 flui-animation = { path = "../flui-animation" }
 flui-scheduler = { path = "../flui-scheduler" }
+# Self dev-dependency that turns the off-by-default `testing` feature on
+# for this crate's own integration tests (`tests/*.rs`), benches, and
+# examples. Unit tests reach the harness via `cfg(test)`; the separate
+# integration-test/bench/example crates link the normally-built library,
+# so the feature must be flipped on for the dev build graph. This is the
+# standard Cargo pattern for shipping a feature-gated test-support module
+# without making it part of normal/release builds.
+flui-rendering = { path = ".", features = ["testing"] }
 
 [features]
 default = []
 # serde: no direct serde derives in this crate; forwards to flui-types/serde
 # so downstream consumers enabling this feature get geometry/type serde impls.
 serde = ["flui-types/serde"]
+
+# testing: opt-in render-object test harness (`crate::testing`). Builds a
+# real `PipelineOwner` tree from a declarative spec, drives the production
+# layout/frame pipeline, and exposes a protocol-agnostic inspection surface
+# (Box + Sliver). Off by default so it never lands in normal/release builds;
+# enabled automatically for this crate's own dev targets via the self
+# dev-dependency above. Downstream crates (e.g. flui-app) opt in explicitly.
+# Forwards to `flui-layer/testing` so the layer-tree walkers (`structure`,
+# `first_picture_bounds`, diagnostics dump) are reused rather than duplicated.
+testing = ["flui-layer/testing"]
 
 # Cycle 4 R-18: gate `ScrollMetrics` trait + `FixedScrollMetrics` +
 # `FixedExtentMetrics` (~452 LOC at `src/constraints/scroll_metrics.rs`)

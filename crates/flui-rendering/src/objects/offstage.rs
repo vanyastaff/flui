@@ -84,9 +84,7 @@ impl Default for RenderOffstage {
 
 impl flui_foundation::Diagnosticable for RenderOffstage {
     fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add("offstage", self.offstage);
-        builder.add("size", format!("{:?}", self.size));
-        builder.add("has_child", self.has_child);
+        builder.add_flag("offstage", self.offstage, "offstage");
     }
 }
 
@@ -207,7 +205,7 @@ mod tests {
     #[test]
     fn debug_fill_properties_lists_state() {
         use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
-        let node = RenderOffstage::visible();
+        let node = RenderOffstage::hidden();
         let mut builder = DiagnosticsBuilder::new();
         node.debug_fill_properties(&mut builder);
         let names: Vec<String> = builder
@@ -215,12 +213,10 @@ mod tests {
             .iter()
             .map(|p| p.name().to_string())
             .collect();
-        for required in ["offstage", "size", "has_child"] {
-            assert!(
-                names.iter().any(|n| n == required),
-                "missing diagnostic field: {required}"
-            );
-        }
+        assert!(
+            names.iter().any(|n| n == "offstage"),
+            "missing diagnostic field: offstage"
+        );
     }
 
     #[test]

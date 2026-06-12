@@ -125,7 +125,16 @@ impl Default for RenderOpacity {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderOpacity {}
+impl flui_foundation::Diagnosticable for RenderOpacity {
+    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
+        properties.add_default_double("opacity", self.opacity, 1.0, None);
+        properties.add_flag(
+            "always_needs_compositing",
+            self.always_needs_compositing,
+            "always needs compositing",
+        );
+    }
+}
 impl RenderBox for RenderOpacity {
     type Arity = Single;
     type ParentData = BoxParentData;

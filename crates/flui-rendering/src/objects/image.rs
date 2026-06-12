@@ -321,7 +321,34 @@ impl RenderImage {
     }
 }
 
-impl Diagnosticable for RenderImage {}
+impl Diagnosticable for RenderImage {
+    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
+        properties.add(
+            "image",
+            if self.image.is_some() {
+                "loaded"
+            } else {
+                "none"
+            },
+        );
+        properties.add("intrinsic_size", format!("{:?}", self.intrinsic_size));
+        properties.add(
+            "width",
+            self.width
+                .map(|w| format!("{w:?}"))
+                .unwrap_or_else(|| "unset".to_string()),
+        );
+        properties.add(
+            "height",
+            self.height
+                .map(|h| format!("{h:?}"))
+                .unwrap_or_else(|| "unset".to_string()),
+        );
+        properties.add_default_double("scale", self.scale, 1.0, None);
+        properties.add_enum("fit", self.fit);
+        properties.add_enum("alignment", self.alignment);
+    }
+}
 
 impl RenderBox for RenderImage {
     type Arity = Leaf;

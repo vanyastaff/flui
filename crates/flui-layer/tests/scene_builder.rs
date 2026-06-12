@@ -57,6 +57,13 @@ fn test_scene_builder_push_pop() {
     let children = tree.children(offset_id).unwrap();
     assert_eq!(children.len(), 1);
     assert_eq!(children[0], opacity_id);
+
+    // Cross-check the same structure through the shared inspection walker
+    // (dogfoods `testing::inspect::structure` on a SceneBuilder-built tree).
+    assert_eq!(
+        flui_layer::testing::inspect::structure(&tree),
+        vec!["Offset", "Opacity"],
+    );
 }
 
 #[test]

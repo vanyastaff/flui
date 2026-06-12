@@ -70,7 +70,13 @@ impl RenderColoredBox {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderColoredBox {}
+impl flui_foundation::Diagnosticable for RenderColoredBox {
+    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
+        // `color` is the defining config; the committed `size` is layered on
+        // by the test harness from `RenderState`, so it is not repeated here.
+        properties.add_color("color", format!("{:?}", self.color));
+    }
+}
 impl RenderBox for RenderColoredBox {
     type Arity = Leaf;
     type ParentData = BoxParentData;

@@ -85,8 +85,7 @@ impl Default for RenderSliverIgnorePointer {
 
 impl flui_foundation::Diagnosticable for RenderSliverIgnorePointer {
     fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add("ignoring", self.ignoring);
-        builder.add("geometry", format!("{:?}", self.geometry));
+        builder.add_flag("ignoring", self.ignoring, "ignoring");
     }
 }
 
@@ -220,11 +219,9 @@ mod tests {
             .iter()
             .map(|p| p.name().to_string())
             .collect();
-        for required in ["ignoring", "geometry"] {
-            assert!(
-                names.iter().any(|n| n == required),
-                "missing diagnostic field: {required}"
-            );
-        }
+        assert!(
+            names.iter().any(|n| n == "ignoring"),
+            "missing diagnostic field: ignoring"
+        );
     }
 }

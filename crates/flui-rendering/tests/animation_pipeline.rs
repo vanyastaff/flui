@@ -23,12 +23,12 @@ use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController};
 use flui_layer::{Layer, LayerTree};
-use flui_painting::DisplayListCore;
 use flui_rendering::{
     constraints::BoxConstraints,
     hit_testing::HitTestResult,
     objects::{RenderColoredBox, RenderOpacity, RenderPadding, RenderTransform},
     pipeline::PipelineOwner,
+    testing::inspect,
 };
 use flui_scheduler::Scheduler;
 use flui_types::{EdgeInsets, Matrix4, Offset, Size, geometry::px};
@@ -46,12 +46,7 @@ fn frame(owner: PipelineOwner) -> (PipelineOwner, Option<LayerTree>) {
 }
 
 fn state_offset(owner: &PipelineOwner, id: flui_foundation::RenderId) -> Offset {
-    owner
-        .render_tree()
-        .get(id)
-        .and_then(|n| n.as_box())
-        .map(|e| e.state().offset())
-        .expect("node state")
+    inspect::render_offset(owner, id).expect("node state")
 }
 
 fn set_padding(owner: &mut PipelineOwner, id: flui_foundation::RenderId, value: f32) {
@@ -110,16 +105,7 @@ fn animated_padding_tracks_controller_value_across_frames() {
             "frame {i}: committed offset must equal the animated padding",
         );
         // The picture's bounds track the animated origin exactly.
-        let bounds = {
-            fn find(tree: &LayerTree, id: flui_foundation::LayerId) -> Option<flui_types::Rect> {
-                let node = tree.get(id)?;
-                if let Layer::Picture(p) = node.layer() {
-                    return Some(p.picture().bounds());
-                }
-                node.children().iter().find_map(|&c| find(tree, c))
-            }
-            find(&tree, tree.root().expect("root")).expect("picture")
-        };
+        let bounds = inspect::first_picture_bounds(&tree).expect("picture");
         assert_eq!(
             bounds,
             flui_types::Rect::from_ltrb(

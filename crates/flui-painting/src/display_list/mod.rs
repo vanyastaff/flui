@@ -34,6 +34,7 @@
 
 use std::ops::{Index, IndexMut};
 
+use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
 use flui_types::geometry::{Matrix4, Pixels, Rect};
 
 pub mod command;
@@ -72,6 +73,13 @@ pub struct DisplayList {
 
     /// Cached bounds of all drawing.
     pub(crate) bounds: Rect<Pixels>,
+}
+
+impl Diagnosticable for DisplayList {
+    fn debug_fill_properties(&self, properties: &mut DiagnosticsBuilder) {
+        properties.add("commands", self.commands.len());
+        properties.add("bounds", format!("{:?}", self.bounds));
+    }
 }
 
 impl DisplayList {

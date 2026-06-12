@@ -79,7 +79,12 @@ impl RenderSizedBox {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderSizedBox {}
+impl flui_foundation::Diagnosticable for RenderSizedBox {
+    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
+        properties.add_optional("width", self.width.map(|w| format!("{w:?}")));
+        properties.add_optional("height", self.height.map(|h| format!("{h:?}")));
+    }
+}
 impl RenderBox for RenderSizedBox {
     type Arity = Leaf;
     type ParentData = BoxParentData;

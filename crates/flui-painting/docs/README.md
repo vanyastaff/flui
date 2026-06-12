@@ -19,6 +19,7 @@ Welcome to the `flui_painting` documentation! This directory contains comprehens
 ### For Contributors
 
 - **[Contributing Guide](../CONTRIBUTING.md)** - How to contribute to the project
+- **[Test Harness (`testing` feature)](./TESTING.md)** - `record`, display-list inspection, examples
 
 ## Overview
 

@@ -448,6 +448,16 @@ impl DiagnosticsProperty {
         self
     }
 
+    /// Omit the `name: value` separator (builder pattern).
+    ///
+    /// Used by [`DiagnosticsPropertyKind::Flag`] so true flags render as the
+    /// property name only.
+    #[must_use]
+    pub const fn without_separator(mut self) -> Self {
+        self.show_separator = false;
+        self
+    }
+
     /// Set a default value (builder pattern)
     #[must_use]
     pub fn with_default(mut self, default: impl Into<String>) -> Self {
@@ -481,27 +491,83 @@ impl DiagnosticsProperty {
     /// Format the property as a string with given style
     #[must_use]
     pub fn format_with_style(&self, style: DiagnosticsTreeStyle) -> String {
-        match style {
-            DiagnosticsTreeStyle::SingleLine => {
+        if self.is_hidden() {
+            return String::new();
+        }
+
+        match &self.kind {
+            DiagnosticsPropertyKind::Flag => {
                 if self.show_name {
                     if self.show_separator {
                         format!("{}: {}", self.name, self.value)
                     } else {
-                        format!("{} {}", self.name, self.value)
+                        self.name.clone()
                     }
                 } else {
                     self.value.clone()
                 }
             }
-            _ => {
-                if self.show_name {
-                    format!("{}: {}", self.name, self.value)
-                } else {
-                    self.value.clone()
+            _ => match style {
+                DiagnosticsTreeStyle::SingleLine => {
+                    if self.show_name {
+                        if self.show_separator {
+                            format!("{}: {}", self.name, self.value)
+                        } else {
+                            format!("{} {}", self.name, self.value)
+                        }
+                    } else {
+                        self.value.clone()
+                    }
                 }
-            }
+                _ => {
+                    if self.show_name {
+                        format!("{}: {}", self.name, self.value)
+                    } else {
+                        self.value.clone()
+                    }
+                }
+            },
         }
     }
+}
+
+/// Failure modes for [`DiagnosticsNode::find_descendant_unique`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DescendantLookupError {
+    /// No descendant matched the requested name.
+    NotFound,
+    /// More than one descendant matched the requested name.
+    Ambiguous,
+}
+
+impl std::error::Error for DescendantLookupError {}
+
+impl fmt::Display for DescendantLookupError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotFound => f.write_str("diagnostics descendant not found"),
+            Self::Ambiguous => f.write_str("diagnostics descendant name is ambiguous"),
+        }
+    }
+}
+
+fn walk_descendant<'a>(
+    node: &'a DiagnosticsNode,
+    name: &str,
+    found: &mut Option<&'a DiagnosticsNode>,
+) -> bool {
+    if node.name.as_deref() == Some(name) {
+        if found.is_some() {
+            return true;
+        }
+        *found = Some(node);
+    }
+    for child in &node.children {
+        if walk_descendant(child, name, found) {
+            return true;
+        }
+    }
+    false
 }
 
 impl fmt::Display for DiagnosticsProperty {
@@ -602,6 +668,65 @@ impl DiagnosticsNode {
         &mut self.children
     }
 
+    /// Returns the value of the first property named `name`, if present.
+    ///
+    /// Convenience for structured assertions over a diagnostics tree
+    /// (instead of substring-matching the rendered dump).
+    #[must_use]
+    pub fn get_property(&self, name: &str) -> Option<&str> {
+        self.properties
+            .iter()
+            .find(|property| property.name() == name)
+            .map(DiagnosticsProperty::value)
+    }
+
+    /// Returns the first child node named `name`, if present.
+    #[must_use]
+    pub fn find_child(&self, name: &str) -> Option<&Self> {
+        self.children
+            .iter()
+            .find(|child| child.name() == Some(name))
+    }
+
+    /// Returns the first descendant node named `name` (depth-first), if present.
+    #[must_use]
+    pub fn find_descendant(&self, name: &str) -> Option<&Self> {
+        self.find_descendant_unique(name).ok()
+    }
+
+    /// Returns the sole descendant named `name` (depth-first).
+    ///
+    /// # Errors
+    ///
+    /// - [`DescendantLookupError::NotFound`] when no node matches `name`.
+    /// - [`DescendantLookupError::Ambiguous`] when more than one node matches.
+    pub fn find_descendant_unique(&self, name: &str) -> Result<&Self, DescendantLookupError> {
+        let mut found: Option<&DiagnosticsNode> = None;
+        if walk_descendant(self, name, &mut found) {
+            Err(DescendantLookupError::Ambiguous)
+        } else {
+            found.ok_or(DescendantLookupError::NotFound)
+        }
+    }
+
+    /// Returns the named property record, if present.
+    #[must_use]
+    pub fn find_property(&self, name: &str) -> Option<&DiagnosticsProperty> {
+        self.properties
+            .iter()
+            .find(|property| property.name() == name)
+    }
+
+    /// Parses the named property as `f64`, if present and parseable.
+    ///
+    /// Respects [`DiagnosticsPropertyKind::Double`] / [`DiagnosticsPropertyKind::Int`]
+    /// unit suffixes (e.g. `"25px"` → `25.0`).
+    #[must_use]
+    pub fn get_property_f64(&self, name: &str) -> Option<f64> {
+        self.find_property(name)
+            .and_then(parse_numeric_property_value)
+    }
+
     /// Returns the diagnostic level
     #[must_use]
     #[inline]
@@ -628,6 +753,13 @@ impl DiagnosticsNode {
     #[inline]
     pub const fn has_children(&self) -> bool {
         !self.children.is_empty()
+    }
+
+    /// Checks if this node should be displayed at the given minimum level.
+    #[must_use]
+    #[inline]
+    pub const fn is_visible_at_level(&self, min_level: DiagnosticLevel) -> bool {
+        self.level as u8 >= min_level as u8
     }
 
     /// Add a property
@@ -729,10 +861,21 @@ impl DiagnosticsNode {
         self
     }
 
-    /// Convert to a deep string representation
+    /// Convert to a deep string representation (all non-hidden properties).
     #[must_use]
     pub fn format_deep(&self, indent: usize) -> String {
+        self.format_deep_filtered(indent, DiagnosticLevel::Hidden)
+    }
+
+    /// Convert to a deep string representation, omitting properties and nodes
+    /// below `min_level` and properties equal to their default value.
+    #[must_use]
+    pub fn format_deep_filtered(&self, indent: usize, min_level: DiagnosticLevel) -> String {
         use std::fmt::Write;
+
+        if !self.is_visible_at_level(min_level) {
+            return String::new();
+        }
 
         let mut result = String::new();
         let prefix = "  ".repeat(indent);
@@ -742,17 +885,32 @@ impl DiagnosticsNode {
         }
 
         for prop in &self.properties {
-            if !prop.is_hidden() {
-                let formatted = prop.format_with_style(self.style);
+            if prop.is_hidden() || !prop.is_visible_at_level(min_level) {
+                continue;
+            }
+            let formatted = prop.format_with_style(self.style);
+            if !formatted.is_empty() {
                 let _ = writeln!(result, "{prefix}  {formatted}");
             }
         }
 
         for child in &self.children {
-            result.push_str(&child.format_deep(indent + 1));
+            result.push_str(&child.format_deep_filtered(indent + 1, min_level));
         }
 
         result
+    }
+
+    /// Renders the full tree from the root (same as [`fmt::Display`]).
+    #[must_use]
+    pub fn to_string_deep(&self) -> String {
+        self.format_deep(0)
+    }
+
+    /// Renders the tree, omitting diagnostics below `min_level`.
+    #[must_use]
+    pub fn to_string_deep_at_level(&self, min_level: DiagnosticLevel) -> String {
+        self.format_deep_filtered(0, min_level)
     }
 }
 
@@ -868,12 +1026,130 @@ impl DiagnosticsBuilder {
         self
     }
 
-    /// Add a flag property (bool).
+    /// Add a flag property (bool). Omitted when `value` is false.
+    ///
+    /// Uses [`DiagnosticsPropertyKind::Flag`] so tree renderers can format the
+    /// property without a redundant `true` suffix.
     pub fn add_flag(&mut self, name: impl Into<String>, value: bool, if_true: &str) -> &mut Self {
         if value {
-            self.properties
-                .push(DiagnosticsProperty::new(name, if_true));
+            self.properties.push(
+                DiagnosticsProperty::new(name, if_true)
+                    .with_kind(DiagnosticsPropertyKind::Flag)
+                    .without_separator(),
+            );
         }
+        self
+    }
+
+    /// Add a property that is hidden when equal to `default`.
+    pub fn add_default(
+        &mut self,
+        name: impl Into<String>,
+        value: impl fmt::Display,
+        default: impl Into<String>,
+    ) -> &mut Self {
+        self.properties
+            .push(DiagnosticsProperty::new(name, value).with_default(default.into()));
+        self
+    }
+
+    /// Add an enum-like property (`Debug` formatted) with [`DiagnosticsPropertyKind::Enum`].
+    pub fn add_enum(&mut self, name: impl Into<String>, value: impl fmt::Debug) -> &mut Self {
+        self.properties.push(
+            DiagnosticsProperty::new(name, format!("{value:?}"))
+                .with_kind(DiagnosticsPropertyKind::Enum { description: None }),
+        );
+        self
+    }
+
+    /// Add an enum property hidden when it equals `default`.
+    pub fn add_default_enum<T: fmt::Debug>(
+        &mut self,
+        name: impl Into<String>,
+        value: T,
+        default: T,
+    ) -> &mut Self {
+        self.properties.push(
+            DiagnosticsProperty::new(name, format!("{value:?}"))
+                .with_default(format!("{default:?}"))
+                .with_kind(DiagnosticsPropertyKind::Enum { description: None }),
+        );
+        self
+    }
+
+    /// Add a floating-point property with an optional unit suffix.
+    pub fn add_double(
+        &mut self,
+        name: impl Into<String>,
+        value: f32,
+        unit: Option<&'static str>,
+    ) -> &mut Self {
+        self.properties.push(
+            DiagnosticsProperty::new(name, format_double(value, unit)).with_kind(
+                DiagnosticsPropertyKind::Double {
+                    unit: unit.map(std::borrow::Cow::Borrowed),
+                },
+            ),
+        );
+        self
+    }
+
+    /// Add a floating-point property hidden when equal to `default`.
+    pub fn add_default_double(
+        &mut self,
+        name: impl Into<String>,
+        value: f32,
+        default: f32,
+        unit: Option<&'static str>,
+    ) -> &mut Self {
+        self.properties.push(
+            DiagnosticsProperty::new(name, format_double(value, unit))
+                .with_default(format_double(default, unit))
+                .with_kind(DiagnosticsPropertyKind::Double {
+                    unit: unit.map(std::borrow::Cow::Borrowed),
+                }),
+        );
+        self
+    }
+
+    /// Add an integer property with an optional unit suffix.
+    pub fn add_int(
+        &mut self,
+        name: impl Into<String>,
+        value: i64,
+        unit: Option<&'static str>,
+    ) -> &mut Self {
+        let formatted = match unit {
+            Some(u) => format!("{value}{u}"),
+            None => format!("{value}"),
+        };
+        self.properties
+            .push(DiagnosticsProperty::new(name, formatted).with_kind(
+                DiagnosticsPropertyKind::Int {
+                    unit: unit.map(std::borrow::Cow::Borrowed),
+                },
+            ));
+        self
+    }
+
+    /// Add a size property (`width x height`).
+    pub fn add_size(
+        &mut self,
+        name: impl Into<String>,
+        width: impl fmt::Display,
+        height: impl fmt::Display,
+    ) -> &mut Self {
+        self.properties.push(
+            DiagnosticsProperty::new(name, format!("{width} x {height}"))
+                .with_kind(DiagnosticsPropertyKind::Size),
+        );
+        self
+    }
+
+    /// Add a color property (RGBA display).
+    pub fn add_color(&mut self, name: impl Into<String>, value: impl fmt::Display) -> &mut Self {
+        self.properties
+            .push(DiagnosticsProperty::new(name, value).with_kind(DiagnosticsPropertyKind::Color));
         self
     }
 
@@ -908,6 +1184,30 @@ impl DiagnosticsBuilder {
     pub fn build(self) -> Vec<DiagnosticsProperty> {
         self.properties
     }
+}
+
+#[inline]
+fn format_double(value: f32, unit: Option<&str>) -> String {
+    match unit {
+        Some(u) => format!("{value}{u}"),
+        None => format!("{value}"),
+    }
+}
+
+/// Parses a numeric diagnostics property, stripping a typed unit suffix when
+/// present.
+fn parse_numeric_property_value(property: &DiagnosticsProperty) -> Option<f64> {
+    let raw = property.value();
+    let numeric = match property.kind() {
+        DiagnosticsPropertyKind::Double { unit } | DiagnosticsPropertyKind::Int { unit } => {
+            match unit {
+                Some(suffix) if raw.ends_with(suffix.as_ref()) => &raw[..raw.len() - suffix.len()],
+                _ => raw,
+            }
+        }
+        _ => raw,
+    };
+    numeric.trim().parse().ok()
 }
 
 #[cfg(test)]
@@ -1180,6 +1480,88 @@ mod tests {
             "type_name should be short (no module path), got: {:?}",
             node.name()
         );
+    }
+
+    #[test]
+    fn test_diagnostics_builder_typed_helpers() {
+        let mut builder = DiagnosticsBuilder::new();
+        builder.add_enum("direction", "Horizontal");
+        builder.add_default("spacing", 0, "0");
+        builder.add_default_double("opacity", 1.0, 1.0, None);
+        builder.add_default_double("gap", 8.0, 0.0, Some("px"));
+        builder.add_size("size", 100, 50);
+        builder.add_flag("visible", true, "visible");
+
+        let props = builder.build();
+        assert_eq!(props.len(), 6);
+        assert_eq!(
+            props[0].kind(),
+            &DiagnosticsPropertyKind::Enum { description: None }
+        );
+        assert!(props[1].is_hidden());
+        assert!(props[2].is_hidden());
+        assert!(!props[3].is_hidden());
+        assert_eq!(props[4].kind(), &DiagnosticsPropertyKind::Size);
+        assert_eq!(props[5].kind(), &DiagnosticsPropertyKind::Flag);
+    }
+
+    #[test]
+    fn test_diagnostics_node_find_descendant() {
+        let tree = DiagnosticsNode::new("Root").child(
+            DiagnosticsNode::new("RenderFlex")
+                .property("direction", "Horizontal")
+                .child(DiagnosticsNode::new("RenderPadding")),
+        );
+
+        let flex = tree.find_descendant("RenderFlex").expect("flex");
+        assert_eq!(flex.get_property("direction"), Some("Horizontal"));
+        assert!(tree.find_descendant("RenderPadding").is_some());
+        assert!(tree.find_descendant("Missing").is_none());
+    }
+
+    #[test]
+    fn test_diagnostics_node_format_deep_filtered() {
+        let node = DiagnosticsNode::new("Box")
+            .property("opacity", 1.0)
+            .with_property(
+                DiagnosticsProperty::new("debug_only", "trace").with_level(DiagnosticLevel::Debug),
+            );
+
+        let full = node.format_deep(0);
+        assert!(full.contains("opacity"));
+        assert!(full.contains("debug_only"));
+
+        let info_only = node.to_string_deep_at_level(DiagnosticLevel::Info);
+        assert!(info_only.contains("opacity"));
+        assert!(!info_only.contains("debug_only"));
+    }
+
+    #[test]
+    fn test_diagnostics_node_get_property_f64() {
+        let node = DiagnosticsNode::new("Box").property("opacity", "0.5");
+        assert_eq!(node.get_property_f64("opacity"), Some(0.5));
+        assert_eq!(node.get_property_f64("missing"), None);
+    }
+
+    #[test]
+    fn test_diagnostics_node_get_property_f64_strips_unit_suffix() {
+        let mut builder = DiagnosticsBuilder::new();
+        builder.add_double("item_extent", 25.0, Some("px"));
+        let [property] = builder.build().try_into().ok().unwrap();
+        let node = DiagnosticsNode::new("RenderSliverFixedExtentList").with_property(property);
+        assert_eq!(node.get_property_f64("item_extent"), Some(25.0));
+    }
+
+    #[test]
+    fn test_diagnostics_node_find_descendant_unique_rejects_ambiguous() {
+        let tree = DiagnosticsNode::new("Root")
+            .child(DiagnosticsNode::new("RenderPadding"))
+            .child(DiagnosticsNode::new("RenderPadding"));
+        assert_eq!(
+            tree.find_descendant_unique("RenderPadding"),
+            Err(DescendantLookupError::Ambiguous),
+        );
+        assert!(tree.find_descendant("RenderPadding").is_none());
     }
 
     #[test]

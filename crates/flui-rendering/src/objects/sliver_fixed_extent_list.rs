@@ -74,7 +74,11 @@ impl RenderSliverFixedExtentList {
     }
 }
 
-impl Diagnosticable for RenderSliverFixedExtentList {}
+impl Diagnosticable for RenderSliverFixedExtentList {
+    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
+        properties.add_double("item_extent", self.item_extent, Some("px"));
+    }
+}
 impl PaintEffectsCapability for RenderSliverFixedExtentList {}
 impl SemanticsCapability for RenderSliverFixedExtentList {}
 impl HotReloadCapability for RenderSliverFixedExtentList {}

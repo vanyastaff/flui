@@ -163,10 +163,8 @@ impl fmt::Debug for RenderMetaData {
 
 impl flui_foundation::Diagnosticable for RenderMetaData {
     fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add("has_metadata", self.metadata.is_some());
-        builder.add("behavior", format!("{:?}", self.behavior));
-        builder.add("size", format!("{:?}", self.size));
-        builder.add("has_child", self.has_child);
+        builder.add_flag("has_metadata", self.metadata.is_some(), "has metadata");
+        builder.add_enum("behavior", self.behavior);
     }
 }
 
@@ -337,7 +335,7 @@ mod tests {
             .iter()
             .map(|p| p.name().to_string())
             .collect();
-        for required in ["has_metadata", "behavior", "size", "has_child"] {
+        for required in ["has_metadata", "behavior"] {
             assert!(
                 names.iter().any(|n| n == required),
                 "missing diagnostic field: {required}"

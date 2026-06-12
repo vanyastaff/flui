@@ -45,6 +45,8 @@ impl Default for RenderSliverFillRemaining {
     }
 }
 
+// Geometry-only fill: no configurable fields. Committed geometry is layered
+// onto the diagnostics node by the tree walk.
 impl Diagnosticable for RenderSliverFillRemaining {}
 impl PaintEffectsCapability for RenderSliverFillRemaining {}
 impl SemanticsCapability for RenderSliverFillRemaining {}
@@ -143,6 +145,7 @@ impl Default for RenderSliverFillRemainingAndOverscroll {
     }
 }
 
+// Geometry-only fill: no configurable fields (see above).
 impl Diagnosticable for RenderSliverFillRemainingAndOverscroll {}
 impl PaintEffectsCapability for RenderSliverFillRemainingAndOverscroll {}
 impl SemanticsCapability for RenderSliverFillRemainingAndOverscroll {}
@@ -253,6 +256,7 @@ impl Default for RenderSliverFillRemainingWithScrollable {
     }
 }
 
+// Geometry-only fill: no configurable fields (see above).
 impl Diagnosticable for RenderSliverFillRemainingWithScrollable {}
 impl PaintEffectsCapability for RenderSliverFillRemainingWithScrollable {}
 impl SemanticsCapability for RenderSliverFillRemainingWithScrollable {}

@@ -24,9 +24,17 @@ parking_lot = { workspace = true }
 cosmic-text = { version = "0.18" }
 
 [dev-dependencies]
+# Self dev-dependency that turns the off-by-default `testing` feature on for
+# this crate's own integration tests, so `tests/*.rs` can reach the harness.
+flui-painting = { path = ".", features = ["testing"] }
 
 [features]
 serde = ["dep:serde", "flui-types/serde"]
+
+# testing: opt-in painting test harness (`crate::testing`) — a `record`
+# builder for `DisplayList`s plus diagnostics helpers. Off by default;
+# enabled for this crate's dev targets via the self dev-dependency above.
+testing = []
 
 [lints]
 workspace = true

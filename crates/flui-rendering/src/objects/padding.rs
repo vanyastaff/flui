@@ -76,7 +76,11 @@ impl RenderPadding {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderPadding {}
+impl flui_foundation::Diagnosticable for RenderPadding {
+    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
+        properties.add_enum("padding", self.padding);
+    }
+}
 impl RenderBox for RenderPadding {
     type Arity = Single;
     type ParentData = BoxParentData;

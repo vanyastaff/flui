@@ -9,11 +9,11 @@ use flui_foundation::Diagnosticable;
 use flui_rendering::{
     constraints::{BoxConstraints, SliverConstraints, SliverGeometry},
     context::{SliverHitTestContext, SliverLayoutContext},
-    hit_testing::HitTestResult,
     objects::RenderViewport,
     parent_data::SliverParentData,
     pipeline::PipelineOwner,
     protocol::SliverProtocol,
+    testing::inspect,
     traits::{
         HotReloadCapability, PaintEffectsCapability, RenderObject, RenderSliver,
         SemanticsCapability,
@@ -40,11 +40,7 @@ fn render_offset(
     owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,
     id: flui_foundation::RenderId,
 ) -> Offset {
-    owner
-        .render_tree()
-        .get(id)
-        .map(flui_rendering::storage::RenderNode::offset)
-        .expect("node exists")
+    inspect::render_offset(owner, id).expect("node exists")
 }
 
 fn hits(
@@ -60,9 +56,7 @@ fn hits_at(
     x: f32,
     y: f32,
 ) -> Vec<flui_foundation::RenderId> {
-    let mut result = HitTestResult::new();
-    owner.hit_test(Offset::new(px(x), px(y)), &mut result);
-    result.path().iter().map(|entry| entry.target).collect()
+    inspect::hit_path(owner, x, y)
 }
 
 const fn test_cross_axis_direction(axis_direction: AxisDirection) -> AxisDirection {

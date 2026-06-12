@@ -30,6 +30,7 @@ use flui_rendering::{
     parent_data::{BoxParentData, SliverParentData},
     pipeline::PipelineOwner,
     protocol::{BoxProtocol, SliverProtocol},
+    testing::inspect,
     traits::{
         HotReloadCapability, PaintEffectsCapability, RenderBox, RenderObject, RenderSliver,
         SemanticsCapability,
@@ -62,36 +63,10 @@ fn paint_frame(
     (tree, owner)
 }
 
-/// Collects `(depth, variant-name)` pairs in DFS order — the
-/// structural snapshot.
+/// Collects `(depth, variant-name)` pairs in DFS order — the structural
+/// snapshot. Delegates to the shared inspection surface.
 fn structure(tree: &LayerTree) -> Vec<(usize, &'static str)> {
-    fn walk(
-        tree: &LayerTree,
-        id: flui_foundation::LayerId,
-        depth: usize,
-        out: &mut Vec<(usize, &'static str)>,
-    ) {
-        let node = tree.get(id).expect("walk only visits live ids");
-        let name = match node.layer() {
-            Layer::Offset(_) => "Offset",
-            Layer::Picture(_) => "Picture",
-            Layer::ClipRect(_) => "ClipRect",
-            Layer::ClipRRect(_) => "ClipRRect",
-            Layer::ClipPath(_) => "ClipPath",
-            Layer::Opacity(_) => "Opacity",
-            Layer::Transform(_) => "Transform",
-            _ => "Other",
-        };
-        out.push((depth, name));
-        for &child in node.children() {
-            walk(tree, child, depth + 1, out);
-        }
-    }
-    let mut out = Vec::new();
-    if let Some(root) = tree.root() {
-        walk(tree, root, 0, &mut out);
-    }
-    out
+    inspect::layer_structure_with_depth(tree)
 }
 
 /// First picture's display list in DFS order.

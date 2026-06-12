@@ -59,6 +59,8 @@ impl Default for RenderSliverToBoxAdapter {
     }
 }
 
+// Geometry-only adapter: no configurable fields to surface. The committed
+// sliver geometry is layered onto the diagnostics node by the tree walk.
 impl Diagnosticable for RenderSliverToBoxAdapter {}
 impl PaintEffectsCapability for RenderSliverToBoxAdapter {}
 impl SemanticsCapability for RenderSliverToBoxAdapter {}

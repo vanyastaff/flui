@@ -210,16 +210,12 @@ impl Default for RenderFittedBox {
 
 impl flui_foundation::Diagnosticable for RenderFittedBox {
     fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add("fit", format!("{:?}", self.fit));
+        builder.add_enum("fit", self.fit);
         builder.add(
             "alignment",
             format!("({}, {})", self.alignment.x, self.alignment.y),
         );
-        builder.add("clip_behavior", format!("{:?}", self.clip_behavior));
-        builder.add("size", format!("{:?}", self.size));
-        builder.add("scale", format!("({}, {})", self.scale_x, self.scale_y));
-        builder.add("has_visual_overflow", self.has_visual_overflow);
-        builder.add("has_child", self.has_child);
+        builder.add_enum("clip_behavior", self.clip_behavior);
     }
 }
 
@@ -482,15 +478,7 @@ mod tests {
             .iter()
             .map(|p| p.name().to_string())
             .collect();
-        for required in [
-            "fit",
-            "alignment",
-            "clip_behavior",
-            "size",
-            "scale",
-            "has_visual_overflow",
-            "has_child",
-        ] {
+        for required in ["fit", "alignment", "clip_behavior"] {
             assert!(
                 names.iter().any(|n| n == required),
                 "missing diagnostic field: {required}"
