@@ -1,8 +1,24 @@
 {
   "mcpServers": {
+    "serena": {
+      "command": "serena",
+      "args": [
+        "start-mcp-server",
+        "--context",
+        "claude-code",
+        "--project",
+        "."
+      ]
+    },
+    "rust-analyzer-mcp": {
+      "command": "rust-analyzer-mcp"
+    },
+    "rust-mcp-server": {
+      "command": "rust-mcp-server",
+      "args": ["--workspace", "."]
+    },
     "cratesio": {
-      "type": "http",
-      "url": "https://cratesio-mcp.fly.dev/"
+      "command": "cratesio-mcp"
     },
     "rust-docs": {
       "command": "rust-docs-mcp"

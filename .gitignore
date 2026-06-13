@@ -24,6 +24,7 @@ debug/
 !.claude/hooks/*
 
 .agents
+.mimocode/
 
 /%TEMP%/
 
