@@ -117,13 +117,13 @@ pub enum Extent {
 
 - `new(item_count, default_estimate)`, `len`, `is_empty`.
 - `set_count(n)` — insert/remove items, `O(log n)` via the tree (not an array shift).
-- `set_measured(index, extent, anchor: (usize, f32)) -> Option<AnchorCorrection>` — replace an estimate with the real extent; returns a correction **iff** the change shifts content above the anchor item.
-- `query(&ScrollWindow) -> VisibleRange` — `O(log n)`, returns the **dual** range (tight visible `[first, last)` + cache `[cache_first, cache_last)`) plus `leading_offset`.
+- `set_measured(index, extent, anchor: (usize, f32)) -> Option<AnchorCorrection>` — replace an estimate with the real extent; returns a correction **iff** the change shifts content above the anchor item. An out-of-range anchor index is **ignored, not silently clamped** (a fabricated anchor would mis-compute the correction); the measurement itself always lands.
+- `query(&self, &ScrollWindow) -> VisibleRange` — `O(log n)`, returns the **dual** range (tight visible `[first, last)` + cache `[cache_first, cache_last)`) plus `leading_offset`. A **pure read** (`&self`): the result is a function of the window and current extents only, so the core holds **no viewport state**.
 - `offset_of(index) -> f32`, `is_measured(index) -> bool`.
 - `invalidate_from(index)` — watermark; extents after a structural change recompute lazily, `O(log n)` in the tree.
 - `anchor_item() -> (usize, f32)` — getter so the consumer restores position after a layout invalidation.
 - `total_extent() -> Extent` where `Extent = Exact(f32) | Estimated(f32)`; plus `measured_count()` / `estimated_count()` for scrollbar stability (Flutter #97676 is the cautionary tale of average-based jumpiness).
-- `scroll_to_item(index, alignment)` — note the fixpoint-measure caveat when scrolling to an *unmeasured* target.
+- `scroll_to_item(index, alignment, viewport_extent)` — viewport is a **caller-supplied argument**, not recorded state (no stale-viewport ordering hazard); note the fixpoint-measure caveat when scrolling to an *unmeasured* target.
 
 - **No new workspace crate** is added in this delivery. The module is **agnostic by API contract** (its `pub` surface names no render/sliver/protocol type), so it can be lifted into a standalone `flui-virtualization` crate later — cheaply, mechanically, and non-breakingly — once a 2nd *direct* consumer appears. The agnostic *shape* (the part that ossifies into a contract) is locked correctly **now**; the crate boundary (reversible packaging, *not* a contract) is deferred.
 - **`FenwickExtents` is DELETED in U1** — it has **zero callers**, and the research verdict is that a Fenwick/BIT is the structurally-wrong tool for a dynamic list (`O(n)` mid-list insert). It is removed from `crates/flui-rendering/src/slivers/fenwick.rs` and **replaced by the SumTree/augmented-B+-tree** backbone described above (built in the new `virtualization` module). Fixed-extent lists need no tree at all (`offset = index × extent` is `O(1)`); only variable-extent lists need the SumTree. (No cross-crate move; the deletion breaks no import because there are no callers — see Consequences.)

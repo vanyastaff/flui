@@ -271,11 +271,6 @@ pub struct Virtualizer {
     /// The current scroll anchor `(index, sub_offset)`. Item-identity, not raw
     /// pixel — see the module docs.
     anchor: (usize, f32),
-    /// Main-axis viewport extent recorded from the most recent
-    /// [`query`](Self::query). [`scroll_to_item`](Self::scroll_to_item) needs it
-    /// to honour non-leading alignment; `0.0` before any query, which makes
-    /// every alignment collapse to leading-edge (a safe default).
-    viewport_extent: f32,
 }
 
 impl Virtualizer {
@@ -292,7 +287,6 @@ impl Virtualizer {
             default_estimate: est,
             measured: 0,
             anchor: (0, 0.0),
-            viewport_extent: 0.0,
         }
     }
 
@@ -351,13 +345,18 @@ impl Virtualizer {
     /// estimate (or a previous measurement).
     ///
     /// `anchor` is the caller's current anchor `(index, sub_offset)`; it becomes
-    /// the virtualizer's anchor. Returns `Some(AnchorCorrection)` **iff** the
-    /// measured item lies strictly *above* the anchor item and its extent
+    /// the virtualizer's anchor **when it points at a live item**. An
+    /// out-of-range anchor index is ignored (the prior anchor is kept, never
+    /// silently clamped), since a fabricated anchor would mis-compute the
+    /// correction. The measurement itself always lands regardless of the anchor.
+    ///
+    /// Returns `Some(AnchorCorrection)` **iff** the anchor was in range, the
+    /// measured item lies strictly *above* the anchor item, and its extent
     /// actually changed — in which case `delta` is the signed pixel shift the
     /// anchored content would otherwise undergo (`new_extent - old_extent`),
     /// which the caller adds to its scroll offset to stay stationary. Returns
-    /// `None` for a measure at or below the anchor, or one that did not change
-    /// the extent.
+    /// `None` for a measure at or below the anchor, an out-of-range anchor, or
+    /// one that did not change the extent.
     ///
     /// Complexity: `O(log n)` (one tree point-update plus the anchor compare).
     pub fn set_measured(
@@ -370,8 +369,15 @@ impl Virtualizer {
         if index >= self.tree.len() {
             return None;
         }
-        self.anchor = anchor;
-        self.clamp_anchor();
+        // Adopt the caller's anchor only when it points at a live item. An
+        // out-of-range anchor is a caller error we refuse to enshrine: a silent
+        // clamp would fabricate an anchor and mis-compute the correction below.
+        // `self.anchor` is otherwise kept valid by every structural edit, so a
+        // measurement (which never changes `len`) leaves it valid.
+        let anchor_in_range = anchor.0 < self.tree.len();
+        if anchor_in_range {
+            self.anchor = anchor;
+        }
 
         let new_extent = extent.max(0.0);
         let old = self
@@ -385,32 +391,28 @@ impl Virtualizer {
         let delta = new_extent - old_extent;
         // A correction is owed only when the changed item sits strictly above
         // the anchor item: only then does the anchor's pixel position move. A
-        // measure at or below the anchor leaves everything above it untouched.
-        if index < self.anchor.0 && delta != 0.0 {
+        // measure at or below the anchor — or one against an out-of-range anchor
+        // we declined to adopt — leaves the anchored content where it is.
+        if anchor_in_range && index < anchor.0 && delta != 0.0 {
             Some(AnchorCorrection { delta })
         } else {
             None
         }
     }
 
-    /// Returns the dual visible/cache [`VisibleRange`] for `window`, and records
-    /// `window.main_extent` as the viewport extent
-    /// [`scroll_to_item`](Self::scroll_to_item) aligns against.
+    /// Returns the dual visible/cache [`VisibleRange`] for `window`.
     ///
     /// `[first, last)` is the tight band intersecting the viewport;
     /// `[cache_first, cache_last)` additionally spans the cache buffer.
     /// `leading_offset` is the first visible item's offset minus `window.offset`
     /// (`<= 0`). Empty ([`VisibleRange::EMPTY`]) when there are no items.
     ///
-    /// Takes `&mut self` (not `&self`) only to record the viewport extent — a
-    /// `Virtualizer` is the stateful windowing engine for one scroll view, so it
-    /// learns that view's extent here. The returned range is a pure function of
-    /// the window and the current extents.
+    /// Pure read: the returned range is a function of `window` and the current
+    /// extents only, so this takes `&self` and never mutates the windowing state.
     ///
     /// Complexity: `O(log n)` — four boundary seeks, each `O(log n)`. (The
     /// returned [`VisibleRange`] is itself `#[must_use]`.)
-    pub fn query(&mut self, window: &ScrollWindow) -> VisibleRange {
-        self.viewport_extent = window.main_extent.max(0.0);
+    pub fn query(&self, window: &ScrollWindow) -> VisibleRange {
         let count = self.tree.len();
         if count == 0 {
             return VisibleRange::EMPTY;
@@ -556,12 +558,10 @@ impl Virtualizer {
     /// `alignment` is `0.0` for the item's leading edge flush with the viewport
     /// leading edge, `1.0` for the item's trailing edge flush with the viewport
     /// trailing edge, `0.5` for centered; it is clamped to `[0, 1]`. The
-    /// viewport extent used is the one recorded by the most recent
-    /// [`query`](Self::query); before any query it is `0.0`, so the offset
-    /// positions the item's `alignment`-fraction point at the scroll origin
-    /// (`alignment = 0.0` still yields the item's leading edge). The returned
-    /// offset is clamped to `[0, max_scroll]` where
-    /// `max_scroll = max(0, total_extent - viewport)`.
+    /// `viewport_extent` is supplied by the caller (clamped to `>= 0`); the
+    /// `Virtualizer` holds no viewport state of its own. The returned offset is
+    /// clamped to `[0, max_scroll]` where
+    /// `max_scroll = max(0, total_extent - viewport_extent)`.
     ///
     /// **Fixpoint-measure caveat:** if `index` (or any item before it) is still
     /// [`ItemExtent::Unmeasured`], the offset is computed from estimates; a
@@ -573,11 +573,11 @@ impl Virtualizer {
     /// # Panics
     /// Panics if `index >= len()` (there is no such item to scroll to).
     #[must_use]
-    pub fn scroll_to_item(&mut self, index: usize, alignment: f32) -> f32 {
+    pub fn scroll_to_item(&mut self, index: usize, alignment: f32, viewport_extent: f32) -> f32 {
         assert!(index < self.tree.len(), "scroll_to_item index out of range");
         let item_start = self.tree.offset_of(index);
         let item_extent = self.tree.get(index).extent();
-        let viewport = self.viewport_extent;
+        let viewport = viewport_extent.max(0.0);
         let a = alignment.clamp(0.0, 1.0);
 
         // Offset that places the item's leading edge at fraction `a` of the way

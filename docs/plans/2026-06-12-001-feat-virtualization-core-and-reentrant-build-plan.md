@@ -50,13 +50,13 @@ The `virtualization` module in `flui-rendering` is generic over a plain `ScrollW
 
 - `new(item_count, default_estimate)`, `len`, `is_empty`.
 - `set_count(n)` — insert/remove items, `O(log n)` via the tree (not an array shift — this is the capability Fenwick could not give).
-- `set_measured(index, extent, anchor: (usize, f32)) -> Option<AnchorCorrection>` — replace an estimate with the real extent; returns a correction **iff** the change shifts content above the anchor item. Anchor is **item-identity** `(index, sub_offset)`, not raw pixel.
-- `query(&ScrollWindow) -> VisibleRange` — `O(log n)`; returns the **dual** range (tight visible `[first, last)` + cache `[cache_first, cache_last)`) plus `leading_offset` (first item's offset minus `window.offset`, `≤ 0`), so callers prioritize render vs measure.
+- `set_measured(index, extent, anchor: (usize, f32)) -> Option<AnchorCorrection>` — replace an estimate with the real extent; returns a correction **iff** the change shifts content above the anchor item. Anchor is **item-identity** `(index, sub_offset)`, not raw pixel. An out-of-range anchor index is **ignored, not clamped**; the measurement still lands.
+- `query(&self, &ScrollWindow) -> VisibleRange` — `O(log n)`; a **pure read** (no recorded viewport state); returns the **dual** range (tight visible `[first, last)` + cache `[cache_first, cache_last)`) plus `leading_offset` (first item's offset minus `window.offset`, `≤ 0`), so callers prioritize render vs measure.
 - `offset_of(index) -> f32`, `is_measured(index) -> bool`.
 - `invalidate_from(index)` — watermark; extents after a structural change recompute lazily, `O(log n)` in the tree.
 - `anchor_item() -> (usize, f32)` — getter so the consumer restores position after a layout invalidation.
 - `total_extent() -> Extent` (`Extent = Exact(f32) | Estimated(f32)`), `measured_count()` / `estimated_count()` — scrollbar stability (Flutter #97676 = the average-based-jumpiness cautionary tale).
-- `scroll_to_item(index, alignment)` — note the fixpoint-measure caveat when the target is unmeasured.
+- `scroll_to_item(index, alignment, viewport_extent)` — viewport is a **caller-supplied argument** (no stale-viewport hazard); note the fixpoint-measure caveat when the target is unmeasured.
 - estimate-for-unmeasured: the `Unmeasured { hint }` seed keeps total scroll extent and the scrollbar stable before every item is laid out (TanStack-style estimate-then-correct).
 
 The core is **build-agnostic** — it never builds, lays out, or names a child render object. It is pure windowing arithmetic over indices and extents.

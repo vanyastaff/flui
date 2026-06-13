@@ -85,7 +85,7 @@ fn remeasuring_does_not_double_count() {
 
 #[test]
 fn query_empty_is_empty_range() {
-    let mut v = Virtualizer::new(0, 10.0);
+    let v = Virtualizer::new(0, 10.0);
     let r = v.query(&ScrollWindow::new(0.0, 100.0));
     assert_eq!(r, VisibleRange::EMPTY);
 }
@@ -93,7 +93,7 @@ fn query_empty_is_empty_range() {
 #[test]
 fn query_visible_band_uniform() {
     // 10 items x 20px = 200px total. Viewport [25, 75) -> items 1,2,3.
-    let mut v = Virtualizer::new(10, 20.0);
+    let v = Virtualizer::new(10, 20.0);
     let r = v.query(&ScrollWindow::new(25.0, 50.0));
     assert_eq!(r.first, 1, "item 1 starts at 20, contains offset 25");
     assert_eq!(r.last, 4, "viewport ends at 75, inside item 3 (60..80)");
@@ -104,7 +104,7 @@ fn query_visible_band_uniform() {
 #[test]
 fn query_dual_band_with_cache() {
     // 20 items x 10px. Viewport [50,80) + cache 20 before / 30 after.
-    let mut v = Virtualizer::new(20, 10.0);
+    let v = Virtualizer::new(20, 10.0);
     let window = ScrollWindow {
         offset: 50.0,
         main_extent: 30.0,
@@ -122,7 +122,7 @@ fn query_dual_band_with_cache() {
 
 #[test]
 fn query_clamps_at_ends() {
-    let mut v = Virtualizer::new(5, 10.0); // total 50
+    let v = Virtualizer::new(5, 10.0); // total 50
     // Window past the end.
     let r = v.query(&ScrollWindow::new(45.0, 100.0));
     assert_eq!(r.first, 4);
@@ -136,7 +136,7 @@ fn query_clamps_at_ends() {
 
 #[test]
 fn query_zero_extent_viewport_is_empty_visible_band() {
-    let mut v = Virtualizer::new(5, 10.0);
+    let v = Virtualizer::new(5, 10.0);
     let r = v.query(&ScrollWindow::new(20.0, 0.0));
     // Zero-height viewport: visible band empty, but first is well-defined.
     assert_eq!(r.first, 2);
@@ -204,6 +204,28 @@ fn anchor_correction_keeps_content_stationary() {
         after - before,
         corr.delta
     );
+}
+
+#[test]
+fn set_measured_out_of_range_anchor_is_ignored_but_still_measures() {
+    let mut v = Virtualizer::new(10, 10.0);
+    // Establish a valid anchor at item 5.
+    v.set_measured(5, 10.0, (5, 0.0));
+    assert_eq!(v.anchor_item(), (5, 0.0));
+    // Measure item 2 (above the anchor) but pass an out-of-range anchor index:
+    // the anchor is refused (kept at 5, NOT silently clamped to 9), and no
+    // correction is emitted because a fabricated anchor can't be reasoned about.
+    let corr = v.set_measured(2, 18.0, (99, 0.0));
+    assert_eq!(corr, None, "out-of-range anchor yields no correction");
+    assert_eq!(
+        v.anchor_item(),
+        (5, 0.0),
+        "out-of-range anchor is ignored, not clamped"
+    );
+    // The measurement itself still landed regardless of the bad anchor.
+    assert!(v.is_measured(2));
+    // items 0,1,3,4,6,7,8,9 estimated (8*10=80) + item 2 (18) + item 5 (10).
+    assert_eq!(v.total_extent(), Extent::Estimated(108.0));
 }
 
 // ============================================================================
@@ -281,37 +303,50 @@ fn invalidate_from_resets_to_estimates() {
 // ============================================================================
 
 #[test]
-fn scroll_to_item_leading_before_any_query() {
+fn scroll_to_item_zero_viewport_is_leading_flush() {
     let mut v = Virtualizer::new(10, 10.0);
-    // No query yet -> viewport extent 0. alignment 0 is still leading-flush
-    // (item start at the origin); alignment 1 puts the item's trailing edge at
-    // the origin (item_start + item_extent = 40 + 10 = 50).
-    assert!(approx(v.scroll_to_item(4, 0.0), 40.0));
-    assert!(approx(v.scroll_to_item(4, 1.0), 50.0));
+    // viewport_extent 0: alignment 0 is leading-flush (item start at the
+    // origin); alignment 1 puts the item's trailing edge at the origin
+    // (item_start + item_extent = 40 + 10 = 50).
+    assert!(approx(v.scroll_to_item(4, 0.0, 0.0), 40.0));
+    assert!(approx(v.scroll_to_item(4, 1.0, 0.0), 50.0));
     assert_eq!(v.anchor_item(), (4, 0.0));
 }
 
 #[test]
 fn scroll_to_item_alignment_uses_viewport() {
     let mut v = Virtualizer::new(10, 10.0); // total 100
-    let _ = v.query(&ScrollWindow::new(0.0, 40.0)); // record viewport extent 40
-    // Item 5 starts at 50, extent 10.
+    // Item 5 starts at 50, extent 10; viewport 40 supplied by the caller.
     // leading (a=0): 50
-    assert!(approx(v.scroll_to_item(5, 0.0), 50.0));
+    assert!(approx(v.scroll_to_item(5, 0.0, 40.0), 50.0));
     // trailing (a=1): 50 - (40 - 10) = 20
-    assert!(approx(v.scroll_to_item(5, 1.0), 20.0));
+    assert!(approx(v.scroll_to_item(5, 1.0, 40.0), 20.0));
     // center (a=0.5): 50 - 0.5*(40-10) = 35
-    assert!(approx(v.scroll_to_item(5, 0.5), 35.0));
+    assert!(approx(v.scroll_to_item(5, 0.5, 40.0), 35.0));
 }
 
 #[test]
 fn scroll_to_item_clamps_to_scroll_range() {
-    let mut v = Virtualizer::new(10, 10.0); // total 100
-    let _ = v.query(&ScrollWindow::new(0.0, 40.0)); // max_scroll = 60
+    let mut v = Virtualizer::new(10, 10.0); // total 100, viewport 40 -> max_scroll 60
     // Trailing-align item 0: 0 - (40-10) = -30 -> clamps to 0.
-    assert!(approx(v.scroll_to_item(0, 1.0), 0.0));
+    assert!(approx(v.scroll_to_item(0, 1.0, 40.0), 0.0));
     // Leading-align last item: starts at 90 -> clamps to 60.
-    assert!(approx(v.scroll_to_item(9, 0.0), 60.0));
+    assert!(approx(v.scroll_to_item(9, 0.0, 40.0), 60.0));
+}
+
+#[test]
+fn scroll_to_item_uses_caller_viewport_no_hidden_state() {
+    // The viewport is a call argument, not recorded state, so the stale-viewport
+    // ordering hazard cannot arise: two calls with different viewports disagree,
+    // and an interleaved (pure, `&self`) query cannot influence a later call.
+    let mut v = Virtualizer::new(10, 10.0); // total 100
+    // center-align item 5 (start 50, ext 10).
+    // viewport 40: 50 - 0.5*(40-10) = 35.
+    // viewport 20: 50 - 0.5*(20-10) = 45.
+    assert!(approx(v.scroll_to_item(5, 0.5, 40.0), 35.0));
+    assert!(approx(v.scroll_to_item(5, 0.5, 20.0), 45.0));
+    let _ = v.query(&ScrollWindow::new(0.0, 999.0));
+    assert!(approx(v.scroll_to_item(5, 0.5, 20.0), 45.0));
 }
 
 // ============================================================================
@@ -356,7 +391,7 @@ fn seek_both_directions_on_10k_items() {
 
 #[test]
 fn boundary_offset_zero_and_total() {
-    let mut v = Virtualizer::new(4, 10.0); // total 40
+    let v = Virtualizer::new(4, 10.0); // total 40
     // offset 0 -> item 0
     let r0 = v.query(&ScrollWindow::new(0.0, 5.0));
     assert_eq!(r0.first, 0);
@@ -368,7 +403,7 @@ fn boundary_offset_zero_and_total() {
 
 #[test]
 fn single_item_virtualizer() {
-    let mut v = Virtualizer::new(1, 42.0);
+    let v = Virtualizer::new(1, 42.0);
     assert_eq!(v.len(), 1);
     assert!(approx(v.offset_of(0), 0.0));
     assert!(approx(v.offset_of(1), 42.0));
@@ -650,11 +685,12 @@ mod prop {
 }
 
 // ===========================================================================
-// ADVERSARIAL PROBES (temporary — to be reverted). Exercise the UNTESTED
-// mid-list insert/remove rebalancing of ExtentTree directly, plus edge cases
-// the existing suite never hits.
+// Direct ExtentTree edits — the mid-list insert/remove differentiator. A
+// Fenwick/BIT pays O(n) for these; this B+-tree pays O(log n) and must stay
+// rebalanced and drift-free. The Virtualizer surface above never inserts/removes
+// in the interior, so these go straight at the tree against a Vec oracle.
 // ===========================================================================
-mod adversarial {
+mod tree_edits {
     use super::super::sumtree::ExtentTree;
     use super::*;
     use proptest::prelude::*;
@@ -780,25 +816,27 @@ mod adversarial {
         }
     }
 
+    /// 200k random point-updates must not let the tree's summarized total drift
+    /// from a fresh sum: summaries recompute from children (not an incremental
+    /// `+= delta`), so error is bounded by f32 round-off, not by accumulation —
+    /// the result is history-independent. A growing drift here would mean
+    /// someone reintroduced incremental-delta summary maintenance.
     #[test]
     fn drift_long_edit_session() {
         let n = 4000usize;
         let mut t = ExtentTree::from_fn(n, |_| measured(0.1));
         let mut o = Vecf(vec![0.1; n]);
         let mut x = 0u64;
-        for k in 0..200_000usize {
-            x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        for _ in 0..200_000usize {
+            x = x
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let i = (x >> 33) as usize % t.len();
             let e = ((x & 0xffff) as f32) / 6553.6;
             t.set(i, measured(e));
             o.set(i, e);
-            if k % 50_000 == 0 {
-                let drift = (t.total_extent() - o.total()).abs();
-                eprintln!("k={k} drift={drift} tree={} oracle={}", t.total_extent(), o.total());
-            }
         }
         let drift = (t.total_extent() - o.total()).abs();
-        eprintln!("FINAL drift={drift} tree={} oracle={}", t.total_extent(), o.total());
         assert!(drift < 5.0, "drift {drift} too large — incremental delta?");
     }
 
@@ -825,20 +863,5 @@ mod adversarial {
         t.insert(2, measured(0.0));
         assert_eq!(t.total_extent(), 40.0);
         assert_eq!(t.seek_offset(20.0), (3, 0.0));
-    }
-
-    // scroll_to_item ordering hazard: stale viewport from a prior query.
-    #[test]
-    fn scroll_to_item_uses_stale_viewport() {
-        let mut v = Virtualizer::new(10, 10.0); // total 100
-        let _ = v.query(&ScrollWindow::new(0.0, 40.0)); // viewport=40 recorded
-        // Now the *real* viewport shrinks to 20, but the consumer calls
-        // scroll_to_item WITHOUT a fresh query (e.g. a "scroll to selected"
-        // button fired between frames). center-align item 5 (start 50, ext 10).
-        // With stale viewport 40: 50 - 0.5*(40-10) = 35.
-        // With true viewport 20: 50 - 0.5*(20-10) = 45.
-        let with_stale = v.scroll_to_item(5, 0.5);
-        assert!((with_stale - 35.0).abs() < 1e-3,
-            "uses stale viewport 40, not the true current viewport: got {with_stale}");
     }
 }

@@ -88,14 +88,14 @@ fn build_virtualizer(count: usize) -> Virtualizer {
 fn bench_seek_offset_to_index(c: &mut Criterion) {
     let mut group = c.benchmark_group("virtualizer/seek_offset_to_index");
     for &n in SIZES {
-        let mut v = build_virtualizer(n);
+        let v = build_virtualizer(n);
         let naive = NaiveExtents::new(n);
         let probe = naive.total() / 2.0; // mid-content offset
 
         group.bench_with_input(BenchmarkId::new("tree_log_n", n), &n, |b, _| {
-            // `query` takes `&mut self` only to record the viewport extent; the
-            // returned range is a pure function of the window, so the captured
-            // `v` is reused across iterations with no per-iter clone.
+            // `query` takes `&self` — the returned range is a pure function of
+            // the window and current extents, so the captured `v` is reused
+            // across iterations with no per-iter clone or mutation.
             b.iter(|| {
                 let r = v.query(&ScrollWindow::new(black_box(probe), 1.0));
                 black_box(r.first)
