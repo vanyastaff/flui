@@ -154,6 +154,8 @@ Per-unit `**Files:**` sections below are authoritative for what each unit create
 
 ### U3 — Lazy `SliverList` consumer
 
+> **U3a (production v1 next-frame backend) SHIPPED** (`f07c33e1`). `build_and_layout_box_child` is now real in the sliver walk: `ErasedSliverLayoutCtx` returns `Ready(BoxChildRef)` for an existing child, parks an absent child's freshly-built object in a `SubtreeBorrows::pending_builds` sink and returns `Scheduled`, or `NoChild` on a declining builder; `layout_dirty_root` drains the sink into `defer_insert_box` after the walk (drop `SubtreeBorrows` first → sound). Unit-tested at the context level; miri-clean on the walk (get_subtree_mut + u20). **U3b remaining = the actual lazy `SliverList` render object** (adapter, Virtualizer drive, the builder closure it passes to the hook, dispose-on-scroll-off by `BoxChildRef.id`, correction policy) + the end-to-end frame-drive harness test + real-frame bench. U3b is the natural driver of U3a's `Scheduled→insert→Ready` cycle.
+
 - **Goal**: a lazy, virtualized `SliverList` that adapts `SliverConstraints → ScrollWindow`, uses the `Virtualizer` for the visible range, builds/lays-out **only** visible-plus-cache children via the U2 hook, disposes children on scroll-off (behind a pluggable hook), and is proven a win against the eager list.
 - **Depends on**: U1 (core) + U2 (build contract).
 - **Files**:
