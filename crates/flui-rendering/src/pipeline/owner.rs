@@ -2353,7 +2353,24 @@ impl PipelineOwner<Layout> {
         // `layout_subtree_borrowed` call reborrows exactly one slot via
         // its NodePtr; distinct call levels reborrow distinct slots
         // (parent ≠ child in a well-formed tree).
-        unsafe { layout_subtree_borrowed(&borrows, id, constraints) }
+        let result = unsafe { layout_subtree_borrowed(&borrows, id, constraints) };
+
+        // Step 5: drain on-demand child builds the walk recorded (the re-entrant
+        // build contract's v1 next-frame backend, ADR-0003 Decision 2). The walk's
+        // tree borrows were frozen, so a lazy sliver that requested a not-yet-built
+        // child parked it in `borrows.pending_builds` rather than mutating the
+        // tree. Take the requests (owned), then DROP `borrows` to release the
+        // `&mut RenderTree` subtree borrow before touching `&mut self`. Enqueueing
+        // only pushes onto the deferred-mutation queue (applied after the layout
+        // pass, which re-marks the parent for layout), so the child is built and
+        // laid out — returning `Ready` — on a subsequent pass.
+        let pending_builds = borrows.take_pending_builds();
+        drop(borrows);
+        for pending in pending_builds {
+            self.defer_insert_box(pending.parent, pending.object, Some(pending.index));
+        }
+
+        result
     }
 }
 
@@ -2438,6 +2455,14 @@ struct SubtreeBorrows<'tree> {
     /// by [`Self::check_thread`], so the Mutex serves only as the
     /// shared-mutability cell, not as actual cross-thread sync.
     currently_laying_out: Mutex<FxHashSet<RenderId>>,
+    /// On-demand child builds requested during this walk that the frozen
+    /// mid-pass borrows could not insert synchronously — the re-entrant build
+    /// contract's v1 next-frame backend (ADR-0003 Decision 2). `layout_dirty_root`
+    /// drains this into the deferred-mutation queue after the walk releases its
+    /// borrows. `Mutex` for the same reason as `currently_laying_out`: the
+    /// layout-child closure requires `&SubtreeBorrows: Send + Sync`. Empty unless
+    /// a lazy sliver requests a not-yet-built child.
+    pending_builds: Mutex<Vec<crate::protocol::sliver_protocol::PendingBuild>>,
     owner_thread: std::thread::ThreadId,
     _lifetime: std::marker::PhantomData<&'tree mut ()>,
 }
@@ -2484,6 +2509,7 @@ impl<'tree> SubtreeBorrows<'tree> {
                 ids.len(),
                 Default::default(),
             )),
+            pending_builds: Mutex::new(Vec::new()),
             owner_thread,
             _lifetime: std::marker::PhantomData,
         }
@@ -2526,6 +2552,15 @@ impl<'tree> SubtreeBorrows<'tree> {
     fn get(&self, id: RenderId) -> Option<NodePtr> {
         self.check_thread();
         self.by_id.get(&id).copied()
+    }
+
+    /// Takes the on-demand child builds recorded during this walk, leaving the
+    /// sink empty. Called by [`PipelineOwner::layout_dirty_root`] once the walk
+    /// has returned, so the requests can be enqueued on the deferred-mutation
+    /// queue (which needs `&mut PipelineOwner`). Touches only the sink — never a
+    /// [`NodePtr`] — so it does not interact with the raw-pointer aliasing.
+    fn take_pending_builds(&self) -> Vec<crate::protocol::sliver_protocol::PendingBuild> {
+        std::mem::take(&mut *self.pending_builds.lock())
     }
 }
 
@@ -3296,6 +3331,8 @@ unsafe fn layout_sliver_subtree_borrowed_impl<'tree>(
         cb_ref,
         box_cb_ref,
         box_intrinsic_cb_ref,
+        id,
+        &borrows.pending_builds,
     );
     let erased: &mut dyn SliverLayoutCtxErased = &mut ctx;
 

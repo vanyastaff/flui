@@ -50,6 +50,30 @@ pub struct BoxChildRef {
     pub size: Size,
 }
 
+impl BoxChildRef {
+    /// Builds a handle for a child laid out at `size`. Centralizes construction
+    /// of this `#[non_exhaustive]` type so a future field addition touches one
+    /// site, not every backend.
+    #[must_use]
+    pub fn new(id: RenderId, size: Size) -> Self {
+        Self { id, size }
+    }
+}
+
+/// A child the re-entrant build contract asked to materialize during layout, but
+/// which the layout walk cannot insert synchronously (its tree borrows are
+/// frozen mid-pass). The pipeline drains these after the walk into the deferred-
+/// mutation queue — the v1 next-frame backend behind
+/// [`SliverLayoutCtxErased::build_and_layout_box_child`].
+pub(crate) struct PendingBuild {
+    /// Sliver parent the child is built under.
+    pub parent: RenderId,
+    /// Index within the parent at which to insert the child.
+    pub index: usize,
+    /// The freshly-built (not-yet-inserted) child render object.
+    pub object: Box<dyn RenderObject<BoxProtocol>>,
+}
+
 // ============================================================================
 // SLIVER PROTOCOL
 // ============================================================================
@@ -847,17 +871,33 @@ pub struct ErasedSliverLayoutCtx<'ctx> {
     layout_child_callback: SliverChildLayoutCallback<'ctx>,
     layout_box_child_callback: BoxChildLayoutCallback<'ctx>,
     box_child_intrinsic_callback: BoxChildIntrinsicCallback<'ctx>,
+    /// Tree id of the sliver being laid out — the parent for on-demand child
+    /// builds recorded in `pending_builds`.
+    node_id: RenderId,
+    /// Sink for the re-entrant build contract's v1 next-frame backend: a child
+    /// the parent asked to materialize that the frozen mid-pass borrows cannot
+    /// insert now. Shared with the dirty-root walk, which drains it into the
+    /// deferred-mutation queue once the walk releases its borrows. Empty unless a
+    /// lazy sliver requests a not-yet-built child.
+    pending_builds: &'ctx parking_lot::Mutex<Vec<PendingBuild>>,
 }
 
 impl<'ctx> ErasedSliverLayoutCtx<'ctx> {
-    /// Creates the walk-side context over pre-built child slots.
-    pub fn new(
+    /// Creates the walk-side context over pre-built child slots. `node_id` is the
+    /// sliver being laid out and `pending_builds` is the walk-owned sink for
+    /// on-demand child builds (see [`PendingBuild`]).
+    ///
+    /// `pub(crate)`: the only constructor caller is the pipeline's sliver layout
+    /// walk; the `PendingBuild` sink type it takes is crate-internal.
+    pub(crate) fn new(
         constraints: SliverConstraints,
         children: &'ctx mut Vec<ErasedSliverChildState>,
         child_ids: &'ctx [RenderId],
         layout_child_callback: SliverChildLayoutCallback<'ctx>,
         layout_box_child_callback: BoxChildLayoutCallback<'ctx>,
         box_child_intrinsic_callback: BoxChildIntrinsicCallback<'ctx>,
+        node_id: RenderId,
+        pending_builds: &'ctx parking_lot::Mutex<Vec<PendingBuild>>,
     ) -> Self {
         Self {
             constraints,
@@ -866,6 +906,8 @@ impl<'ctx> ErasedSliverLayoutCtx<'ctx> {
             layout_child_callback,
             layout_box_child_callback,
             box_child_intrinsic_callback,
+            node_id,
+            pending_builds,
         }
     }
 }
@@ -895,6 +937,37 @@ impl SliverLayoutCtxErased for ErasedSliverLayoutCtx<'_> {
             return Size::ZERO;
         };
         (self.layout_box_child_callback)(child_id, constraints)
+    }
+
+    fn build_and_layout_box_child(
+        &mut self,
+        index: usize,
+        constraints: BoxConstraints,
+        build: &mut dyn FnMut(usize) -> Option<Box<dyn RenderObject<BoxProtocol>>>,
+    ) -> ChildLayout<BoxChildRef> {
+        // Existing child: lay it out through the walk and return its identity +
+        // size — this is the `Ready` (mid-pass) arm.
+        if let Some(&child_id) = self.child_ids.get(index) {
+            let size = (self.layout_box_child_callback)(child_id, constraints);
+            return ChildLayout::Ready(BoxChildRef::new(child_id, size));
+        }
+        // Absent: the layout walk's tree borrows are frozen mid-pass, so a freshly
+        // built child cannot be inserted synchronously. Materialize it and record
+        // the request; the dirty-root walk drains `pending_builds` into the
+        // deferred-mutation queue after it releases its borrows, so the child is
+        // inserted and laid out on a later pass (the v1 next-frame backend). A
+        // `None` from the builder means the data source has no item here.
+        match build(index) {
+            Some(object) => {
+                self.pending_builds.lock().push(PendingBuild {
+                    parent: self.node_id,
+                    index,
+                    object,
+                });
+                ChildLayout::Scheduled
+            }
+            None => ChildLayout::NoChild,
+        }
     }
 
     fn box_child_intrinsic(
@@ -1222,6 +1295,107 @@ mod tests {
             &mut build,
         );
         assert_eq!(outcome, ChildLayout::Unwired);
+    }
+
+    /// The production walk-side context (`ErasedSliverLayoutCtx`) is the real v1
+    /// next-frame backend: an existing child lays out to `Ready(handle)`, an
+    /// absent index materializes via the builder and parks the request in the
+    /// shared sink as `Scheduled`, and a declining builder yields `NoChild`
+    /// without parking anything.
+    #[test]
+    fn erased_sliver_ctx_backend_ready_scheduled_nochild() {
+        use flui_foundation::RenderId;
+        use flui_types::Pixels;
+
+        use crate::objects::RenderSizedBox;
+
+        let constraints = SliverConstraints::new(
+            flui_types::layout::AxisDirection::TopToBottom,
+            crate::constraints::GrowthDirection::Forward,
+            crate::view::ScrollDirection::Idle,
+            0.0,
+            0.0,
+            0.0,
+            600.0,
+            400.0,
+            flui_types::layout::AxisDirection::LeftToRight,
+            600.0,
+            600.0,
+            0.0,
+        );
+
+        let existing = RenderId::new(1);
+        let parent = RenderId::new(99);
+        let mut children = vec![ErasedSliverChildState::new(existing)];
+        let child_ids = [existing];
+        let sink: parking_lot::Mutex<Vec<PendingBuild>> = parking_lot::Mutex::new(Vec::new());
+
+        // Existing-child layout returns a fixed size; sliver/intrinsic callbacks
+        // are unused by this test but required to build the context.
+        let layout_box =
+            |_id: RenderId, _c: BoxConstraints| -> Size { Size::new(px(50.0), px(30.0)) };
+        let layout_sliver =
+            |_id: RenderId, _c: SliverConstraints| -> SliverGeometry { SliverGeometry::ZERO };
+        let intrinsic = |_id: RenderId, _d: IntrinsicDimension, _e: f32| -> f32 { 0.0 };
+
+        let mut ctx = ErasedSliverLayoutCtx::new(
+            constraints,
+            &mut children,
+            &child_ids,
+            &layout_sliver,
+            &layout_box,
+            &intrinsic,
+            parent,
+            &sink,
+        );
+
+        // index 0 exists -> Ready(handle), builder untouched, nothing parked.
+        let mut never = |_idx: usize| -> Option<Box<dyn RenderObject<BoxProtocol>>> {
+            panic!("must not build")
+        };
+        let r0 = SliverLayoutCtxErased::build_and_layout_box_child(
+            &mut ctx,
+            0,
+            BoxConstraints::tight(Size::new(px(50.0), px(30.0))),
+            &mut never,
+        );
+        assert_eq!(
+            r0,
+            ChildLayout::Ready(BoxChildRef::new(existing, Size::new(px(50.0), px(30.0))))
+        );
+        assert!(
+            sink.lock().is_empty(),
+            "existing child must not park a build"
+        );
+
+        // index 1 absent, builder produces -> Scheduled + one parked request.
+        let mut build_one = |_idx: usize| -> Option<Box<dyn RenderObject<BoxProtocol>>> {
+            Some(Box::new(RenderSizedBox::fixed(Pixels(50.0), Pixels(30.0))))
+        };
+        let r1 = SliverLayoutCtxErased::build_and_layout_box_child(
+            &mut ctx,
+            1,
+            BoxConstraints::tight(Size::ZERO),
+            &mut build_one,
+        );
+        assert_eq!(r1, ChildLayout::Scheduled);
+        {
+            let parked = sink.lock();
+            assert_eq!(parked.len(), 1, "absent child must park exactly one build");
+            assert_eq!(parked[0].parent, parent);
+            assert_eq!(parked[0].index, 1);
+        }
+
+        // index 5 absent, builder declines -> NoChild, nothing newly parked.
+        let mut decline = |_idx: usize| -> Option<Box<dyn RenderObject<BoxProtocol>>> { None };
+        let r2 = SliverLayoutCtxErased::build_and_layout_box_child(
+            &mut ctx,
+            5,
+            BoxConstraints::tight(Size::ZERO),
+            &mut decline,
+        );
+        assert_eq!(r2, ChildLayout::NoChild);
+        assert_eq!(sink.lock().len(), 1, "a declined build must not park");
     }
 
     #[test]
